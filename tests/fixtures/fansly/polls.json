@@ -1,0 +1,20 @@
+{
+  "_fixture": "SYNTHETIC. Shape from the 2026-08-21 redacted probe (WP-F9 item 5): 66 rows live, each [{id, accountId, title, description, status, version, createdAt, options: [{id, title, voteCount}], permissions, access}].",
+  "rows": [
+    {
+      "id": "990000000000000001",
+      "accountId": "700000000000000001",
+      "title": "Next set?",
+      "description": "",
+      "status": 1,
+      "version": 2,
+      "createdAt": 1786000000,
+      "options": [
+        { "id": "991000000000000001", "title": "Latex", "voteCount": 412 },
+        { "id": "991000000000000002", "title": "Stockings", "voteCount": 388 }
+      ],
+      "permissions": {},
+      "access": true
+    }
+  ]
+}

@@ -161,7 +161,7 @@ export async function persistRawPayload(
   // discovers a FLOOR can point `capture_coverage.proof_observation_id` at the
   // exact journaled response that proves it. An empty window is the evidence,
   // and evidence with no address is a claim.
-  let journalledObservationId: number | null = null;
+  let journalledObservationId!: number | null;
   // `observedPayload` is hoisted above the CAS write — normalized there so an
   // adapter (or test stub) handing back undefined still hashes and journals
   // deterministically as JSON null, and so the catalog stores exactly the value

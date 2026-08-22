@@ -1,0 +1,15 @@
+{
+  "_fixture": "SYNTHETIC. /message/broadcast/scheduled returned {scheduledBroadcastMessages: [], groups: []} on the live probe — envelope proven, no rows for the sampled subject. This fixture invents the populated form from that envelope; every unnamed key must survive into the event verbatim.",
+  "scheduledBroadcastMessages": [
+    {
+      "id": "970000000000000003",
+      "content": "Queued for tonight",
+      "groupId": "980000000000000003",
+      "senderId": "700000000000000001",
+      "createdAt": 1786930000,
+      "scheduledAt": 1787020000,
+      "someUnnamedFutureField": "kept-verbatim"
+    }
+  ],
+  "groups": []
+}

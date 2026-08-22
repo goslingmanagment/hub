@@ -1,0 +1,8 @@
+{
+  "_fixture": "SYNTHETIC. Shape from a live /account/wallets/earnings/monthlystats capture (2026-08-19). The FIRST row is the `year: 0, month: 0` ROLLING ROLLUP — the creator's Statements header — and it carries neither `timestamp` nor `accountId`. It is kept as a row like any other and is never summed with the real months. `brackets` is an unnamed field that must survive verbatim.",
+  "rows": [
+    { "year": 0, "month": 0, "totalGross": 9886800, "totalNet": 7909440, "before": 1787155073930, "after": 1784563073930, "topPercent": 1.2326951023634092, "maxTopPercent": 100, "brackets": null },
+    { "timestamp": 1785542400000, "accountId": "700000000000000001", "totalGross": 6574840, "totalNet": 5259872, "year": 2026, "month": 8, "before": 1788220799999, "after": 1785542400000, "topPercent": 0, "maxTopPercent": 100 },
+    { "timestamp": 1782864000000, "accountId": "700000000000000001", "totalGross": 7372910, "totalNet": 5918328, "year": 2026, "month": 7, "before": 1785542399999, "after": 1782864000000, "topPercent": 1.7717500709732368, "maxTopPercent": 100, "brackets": null }
+  ]
+}

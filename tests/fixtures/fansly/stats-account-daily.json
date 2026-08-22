@@ -1,0 +1,276 @@
+{
+  "_fixture": "SYNTHETIC. Shape derived from a live /it/amoie/stats?period=86400000 capture (2026-08-19); every id is re-keyed, every name is invented, and the arrays are cut to a handful of rows. The real capture is 768 KB decoded with 31 daily buckets, 50+50 top-media rows, 25 top tags and 85 accountMedia — none of which is committed anywhere.",
+  "dataset": {
+    "period": 86400000,
+    "dateBefore": 1787011200000,
+    "dateAfter": 1786924800000,
+    "datapointLimit": 100,
+    "datapoints": [
+      {
+        "timestamp": 1786924800000,
+        "stats": [
+          {
+            "type": 1,
+            "views": 618,
+            "previewViews": 56,
+            "interactionTime": 3393438,
+            "previewInteractionTime": 183616,
+            "uniqueViewers": 97,
+            "previewUniqueViewers": 6,
+            "videoViews": 209,
+            "totalVideoPercentWatched": 116.01066406189152,
+            "previewVideoViews": 7,
+            "previewTotalVideoPercentWatched": 2.584367049046767
+          },
+          {
+            "type": 0,
+            "views": 335,
+            "previewViews": 0,
+            "interactionTime": 805870,
+            "previewInteractionTime": 0,
+            "uniqueViewers": 204,
+            "previewUniqueViewers": 0,
+            "videoViews": 335,
+            "totalVideoPercentWatched": 134.06506023410034,
+            "previewVideoViews": 0,
+            "previewTotalVideoPercentWatched": 0
+          }
+        ]
+      }
+    ],
+    "profileDatapoints": [
+      {
+        "timestamp": 1786924800000,
+        "stats": [
+          { "type": 10001, "views": 116, "interactionTime": 0, "uniqueViewers": 37 },
+          { "type": 10000, "views": 86, "interactionTime": 2036202, "uniqueViewers": 31 },
+          { "type": 44000, "views": 11, "interactionTime": 368741, "uniqueViewers": 11 },
+          { "type": 44001, "views": 12, "interactionTime": 0, "uniqueViewers": 12 },
+          { "type": 44010, "views": 1, "interactionTime": 9015, "uniqueViewers": 1 },
+          { "type": 44011, "views": 1, "interactionTime": 0, "uniqueViewers": 1 },
+          { "type": 44030, "views": 1, "interactionTime": 35006, "uniqueViewers": 1 },
+          { "type": 44031, "views": 1, "interactionTime": 0, "uniqueViewers": 1 }
+        ]
+      }
+    ],
+    "topMediaOffers": [
+      {
+        "mediaOfferId": "900000000000000001",
+        "mediaOfferBundleId": "0",
+        "views": 929,
+        "previewViews": 0,
+        "interactionTime": 2331980,
+        "previewInteractionTime": 0
+      },
+      {
+        "mediaOfferId": "900000000000000002",
+        "mediaOfferBundleId": "0",
+        "views": 412,
+        "previewViews": 3,
+        "interactionTime": 991200,
+        "previewInteractionTime": 4100
+      }
+    ],
+    "topFypMediaOffers": [
+      {
+        "mediaOfferId": "900000000000000002",
+        "mediaOfferBundleId": "0",
+        "views": 300,
+        "previewViews": 0,
+        "interactionTime": 500000,
+        "previewInteractionTime": 0
+      }
+    ],
+    "topFypTags": [
+      {
+        "tagId": "800000000000000001",
+        "views": 851,
+        "previewViews": 0,
+        "interactionTime": 2301938,
+        "previewInteractionTime": 0
+      },
+      {
+        "tagId": "800000000000000002",
+        "views": 120,
+        "previewViews": 0,
+        "interactionTime": 40000,
+        "previewInteractionTime": 0
+      }
+    ]
+  },
+  "aggregationData": {
+    "accountMedia": [
+      {
+        "id": "900000000000000001",
+        "accountId": "700000000000000001",
+        "mediaId": "910000000000000001",
+        "previewId": "910000000000000002",
+        "permissionFlags": 0,
+        "price": 0,
+        "createdAt": 1784642807,
+        "deletedAt": null,
+        "deleted": false,
+        "permissions": {
+          "permissionFlags": [
+            {
+              "id": "920000000000000001",
+              "accountMediaId": "900000000000000001",
+              "type": 0,
+              "flags": 1,
+              "price": 35000,
+              "metadata": "{\"1\":\"{\\\"price\\\":35000}\"}",
+              "validAfter": null,
+              "validBefore": null,
+              "verificationFlags": 1,
+              "verificationMetadata": "{}"
+            },
+            {
+              "id": "920000000000000002",
+              "accountMediaId": "900000000000000001",
+              "type": 0,
+              "flags": 5,
+              "price": 24990,
+              "metadata": "{\"4\":\"{\\\"subscriptionTierId\\\":\\\"730000000000000001\\\"}\"}",
+              "validAfter": null,
+              "validBefore": null,
+              "verificationFlags": 1,
+              "verificationMetadata": "{}"
+            }
+          ],
+          "accountPermissionFlags": { "flags": 255, "metadata": "{}" }
+        },
+        "bundles": [],
+        "likeCount": 19,
+        "media": {
+          "id": "910000000000000001",
+          "type": 2,
+          "status": 1,
+          "accountId": "700000000000000001",
+          "mimetype": "video/mp4",
+          "flags": 10,
+          "filename": "full.mp4",
+          "location": "/700000000000000001/910000000000000001.mp4",
+          "width": 720,
+          "height": 1280,
+          "metadata": "{\"originalHeight\":1920,\"originalWidth\":1080,\"duration\":613.82,\"resolutionMode\":2,\"frameRate\":30}",
+          "updatedAt": 1784640982,
+          "createdAt": 1784640844,
+          "variants": []
+        },
+        "saleStats": { "sales": 5, "total": 115976, "pending": 0 },
+        "purchased": false,
+        "access": true,
+        "whitelisted": false
+      },
+      {
+        "id": "900000000000000002",
+        "accountId": "700000000000000001",
+        "mediaId": "910000000000000003",
+        "previewId": null,
+        "permissionFlags": 0,
+        "price": 0,
+        "createdAt": 1784600000,
+        "deletedAt": null,
+        "deleted": false,
+        "permissions": { "permissionFlags": [], "accountPermissionFlags": { "flags": 255, "metadata": "{}" } },
+        "bundles": [],
+        "likeCount": 3,
+        "media": {
+          "id": "910000000000000003",
+          "type": 1,
+          "status": 1,
+          "accountId": "700000000000000001",
+          "mimetype": "image/jpeg",
+          "flags": 0,
+          "filename": "full.jpg",
+          "location": "/700000000000000001/910000000000000003.jpg",
+          "width": 1080,
+          "height": 1350,
+          "metadata": "{}",
+          "updatedAt": 1784600100,
+          "createdAt": 1784600000,
+          "variants": []
+        },
+        "saleStats": null,
+        "purchased": false,
+        "access": true,
+        "whitelisted": false
+      }
+    ],
+    "accountMediaBundles": [
+      {
+        "id": "940000000000000001",
+        "accountId": "700000000000000001",
+        "previewId": null,
+        "permissionFlags": 0,
+        "price": 0,
+        "createdAt": 1785871120,
+        "deletedAt": null,
+        "deleted": false,
+        "accountMediaIds": ["900000000000000001", "900000000000000002"],
+        "bundleContent": [
+          { "accountMediaId": "900000000000000001", "pos": 0 },
+          { "accountMediaId": "900000000000000002", "pos": 1 }
+        ],
+        "permissions": {
+          "permissionFlags": [
+            {
+              "id": "920000000000000003",
+              "accountMediaId": "940000000000000001",
+              "type": 0,
+              "flags": 1,
+              "price": 14990,
+              "metadata": "{\"1\":\"{\\\"price\\\":14990}\"}",
+              "validAfter": null,
+              "validBefore": null,
+              "verificationFlags": 1,
+              "verificationMetadata": "{}"
+            }
+          ],
+          "accountPermissionFlags": { "flags": 255, "metadata": "{}" }
+        },
+        "saleStats": null,
+        "purchased": false,
+        "access": true,
+        "whitelisted": false
+      }
+    ],
+    "tags": [
+      {
+        "id": "800000000000000001",
+        "tag": "stockings",
+        "label": null,
+        "description": "",
+        "viewCount": 1436080,
+        "postCount": 32196,
+        "flags": 0,
+        "createdAt": 1665510371000
+      },
+      {
+        "id": "800000000000000002",
+        "tag": "lingerie",
+        "label": null,
+        "description": "",
+        "viewCount": 220041,
+        "postCount": 8811,
+        "flags": 0,
+        "createdAt": 1665510372000
+      }
+    ],
+    "creatorMediaOfferLocations": [
+      {
+        "id": "950000000000000001",
+        "mediaOfferId": "900000000000000001",
+        "mediaOfferType": 2001,
+        "mediaOfferBundleId": null,
+        "mediaId": "910000000000000001",
+        "mediaType": 2,
+        "previewId": null,
+        "accountId": "700000000000000001",
+        "locationId": "700000000000000001",
+        "correlationId": "960000000000000001",
+        "createdAt": 1786916525000
+      }
+    ]
+  }
+}
