@@ -1,0 +1,32 @@
+{
+  "_fixture": "SYNTHETIC — the shape that makes the author-hydration fallback MANDATORY. accounts[] was EMPTY in 2 of the 5 live /post/{id}/replies responses despite a comment existing, so the author's display fields are unavailable and only the ref reaches storage.",
+  "walk": { "postId": "000910000000000002", "before": null },
+  "response": {
+    "posts": [
+      {
+        "id": "000910000000000105",
+        "accountId": "000910000000000205",
+        "content": "no sidecar for me",
+        "fypFlags": 0,
+        "inReplyTo": "000910000000000002",
+        "inReplyToRoot": "000910000000000002",
+        "replyPermissionFlags": 0,
+        "createdAt": 1784581658,
+        "attachments": [],
+        "likeCount": 1,
+        "mediaLikeCount": 0,
+        "totalTipAmount": 0,
+        "attachmentTipAmount": 0,
+        "accountMentions": []
+      }
+    ],
+    "aggregatedPosts": [],
+    "accountMediaBundles": [],
+    "accountMedia": [],
+    "accounts": [],
+    "tips": [],
+    "tipGoals": [],
+    "stories": [],
+    "polls": []
+  }
+}

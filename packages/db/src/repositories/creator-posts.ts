@@ -89,7 +89,8 @@ export interface UpsertCreatorPostResult {
  * FANSLY ONLY, decided in SQL rather than in TypeScript — `/post/{id}/replies`
  * is a Fansly route and an OnlyFans post has no walk to queue. The predicate
  * lives in the statement so the platform seam stays where the ratchet expects
- * it (no new `platform ===` branch outside the adapter packages).
+ * it: no new strict platform comparison outside the adapter packages, which the
+ * Stage 18 budget counts.
  */
 export async function upsertCreatorPost(
   db: Database,

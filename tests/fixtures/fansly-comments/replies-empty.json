@@ -1,0 +1,15 @@
+{
+  "_fixture": "SYNTHETIC — an empty reply list. This is the body missing_since is computed from, and the body that proves why the observation has to carry the walk's request context: posts[] names no post, so the response alone cannot say which post has no comments any more.",
+  "walk": { "postId": "000910000000000001", "before": null },
+  "response": {
+    "posts": [],
+    "aggregatedPosts": [],
+    "accountMediaBundles": [],
+    "accountMedia": [],
+    "accounts": [],
+    "tips": [],
+    "tipGoals": [],
+    "stories": [],
+    "polls": []
+  }
+}

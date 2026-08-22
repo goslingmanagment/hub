@@ -1275,13 +1275,14 @@ export class FanslyAdapter {
    * WP-F5's whole lane, and it is a BARE GET forever.
    *
    * [E1], settled: every observed `GET /post/{id}/replies` in the 2026-08-19
-   * capture was preceded ~40 ms earlier by `POST /postreply/verify` carrying the
-   * same post id (5/5). The probe issued the GET with NO preceding POST and the
-   * comments came back (A25). So the verify POST is a client-side affordance,
-   * not a server-side precondition — and it is never issued from here, because
-   * §1 excludes write-shaped calls to the platform and a POST that "only
-   * verifies" is still a POST to somebody else's server. A test greps this file
-   * for the string `postreply/verify` and fails if it ever appears.
+   * capture was preceded ~40 ms earlier by the browser's reply-verify POST
+   * carrying the same post id (5/5). The probe issued the GET with NO preceding
+   * POST and the comments came back (A25). So that POST is a client-side
+   * affordance, not a server-side precondition — and it is never issued from
+   * here, because §1 excludes write-shaped calls to the platform and a POST that
+   * "only verifies" is still a POST to somebody else's server. A test greps this
+   * WHOLE FILE for that route's path and fails if it ever appears, which is why
+   * the path is not written out even in this comment.
    *
    * ── PAGINATION IS UNPROVEN, and this signature says so ────────────────────
    *
