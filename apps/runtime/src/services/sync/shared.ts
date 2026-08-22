@@ -305,6 +305,9 @@ export const FANSLY_CATALOG_CAPTURE_MAPPER_VERSION =
 /** WP-F5's replies walk, same reasoning again. */
 export const FANSLY_POST_REPLIES_CAPTURE_MAPPER_VERSION =
   `${FANSLY_MAPPER_VERSION}+post-replies-capture-v1`;
+/** WP-F7's payouts lane, same reasoning again. */
+export const FANSLY_PAYOUTS_CAPTURE_MAPPER_VERSION =
+  `${FANSLY_MAPPER_VERSION}+payouts-capture-v1`;
 
 /** Shared by both lanes: pick the allowlisted fields VERBATIM (objects and
  *  arrays keep their served shape), in allowlist order so an unchanged profile

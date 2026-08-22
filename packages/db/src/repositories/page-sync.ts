@@ -45,6 +45,11 @@ export const SYNC_STREAMS = [
   // day, so it is never "fresh" and never urgent; what it must not do is burst.
   // Fansly-only, gated off, seeded PAUSED.
   "post_replies",
+  // WP-F7: the money-out lane. MAINTENANCE class at 86 400 s — two routes, two
+  // calls a day in steady state, and the only thing that ever costs more is the
+  // one-off offset walk of the payout-request history (nine calls on the walked
+  // page). Fansly-only, gated off, seeded PAUSED.
+  "payouts",
 ] as const;
 
 export type SyncStream = typeof SYNC_STREAMS[number];
@@ -85,6 +90,8 @@ export const FANSLY_BULK_SYNC_STREAMS = [
   "catalog",
   // WP-F5: same rule again.
   "post_replies",
+  // WP-F7: same rule again.
+  "payouts",
 ] as const;
 
 export type FanslyBulkSyncStream = typeof FANSLY_BULK_SYNC_STREAMS[number];
@@ -115,6 +122,7 @@ export const SEED_PAUSED_SYNC_STREAMS = [
   "notifications",
   "catalog",
   "post_replies",
+  "payouts",
 ] as const;
 
 export function isSeedPausedSyncStream(stream: string): boolean {
@@ -379,6 +387,28 @@ export const SYNC_STREAM_POLICY: Record<SyncStream, SyncStreamPolicy> = {
     progressStallThresholdMs: 60 * 60_000,
     freshnessSlaSeconds: null,
   },
+  // WP-F7: the payouts lane. MAINTENANCE class at 86 400 s — a payout request
+  // moves in days, and the steady state is exactly two calls: one method
+  // listing and one head page. `domain: "financials"` is where money-out
+  // belongs; like every other gated lane it is deliberately ABSENT from
+  // SYNC_DOMAIN_POLICY's primary/supporting lists, so a shut gate cannot
+  // degrade a page's block-health UX to "catching up".
+  //
+  // basePriority 9 puts it below the comment archive and far below money-IN and
+  // DMs. That is not a judgement about how important payouts are — it is that
+  // this lane reads a HISTORY nobody is waiting on, two calls at a time, and
+  // the plan's pacing rule is "priority yield to DM/tx".
+  payouts: {
+    stream: "payouts",
+    domain: "financials",
+    cadenceSeconds: 86_400,
+    basePriority: 9,
+    streamIndex: 17,
+    defaultWorkClass: "maintenance",
+    queueDelayThresholdMs: 6 * 60 * 60_000,
+    progressStallThresholdMs: 60 * 60_000,
+    freshnessSlaSeconds: null,
+  },
 };
 
 export const SYNC_DOMAIN_POLICY: Record<SyncDomain, SyncDomainPolicy> = {
@@ -447,6 +477,7 @@ const SYNC_STREAM_PRIORITY_BY_SOURCE: Record<SyncRequestSource, Record<SyncStrea
     notifications: 16,
     catalog: 15,
     post_replies: 14,
+    payouts: 13,
   },
   recovery: {
     light: 70,
@@ -465,6 +496,7 @@ const SYNC_STREAM_PRIORITY_BY_SOURCE: Record<SyncRequestSource, Record<SyncStrea
     notifications: 26,
     catalog: 25,
     post_replies: 24,
+    payouts: 23,
   },
   anomaly: {
     light: 70,
@@ -483,6 +515,7 @@ const SYNC_STREAM_PRIORITY_BY_SOURCE: Record<SyncRequestSource, Record<SyncStrea
     notifications: 26,
     catalog: 25,
     post_replies: 24,
+    payouts: 23,
   },
   manual: {
     light: 100,
@@ -501,6 +534,7 @@ const SYNC_STREAM_PRIORITY_BY_SOURCE: Record<SyncRequestSource, Record<SyncStrea
     notifications: 56,
     catalog: 55,
     post_replies: 54,
+    payouts: 53,
   },
   onboarding: {
     light: 100,
@@ -519,6 +553,7 @@ const SYNC_STREAM_PRIORITY_BY_SOURCE: Record<SyncRequestSource, Record<SyncStrea
     notifications: 56,
     catalog: 55,
     post_replies: 54,
+    payouts: 53,
   },
   reset: {
     light: 100,
@@ -537,6 +572,7 @@ const SYNC_STREAM_PRIORITY_BY_SOURCE: Record<SyncRequestSource, Record<SyncStrea
     notifications: 56,
     catalog: 55,
     post_replies: 54,
+    payouts: 53,
   },
 };
 
@@ -687,6 +723,7 @@ function streamOrderSql(columnName: string) {
       when 'notifications' then ${SYNC_STREAM_POLICY.notifications.streamIndex}
       when 'catalog' then ${SYNC_STREAM_POLICY.catalog.streamIndex}
       when 'post_replies' then ${SYNC_STREAM_POLICY.post_replies.streamIndex}
+      when 'payouts' then ${SYNC_STREAM_POLICY.payouts.streamIndex}
       else 999
     end
   `);
@@ -711,6 +748,7 @@ function streamPriorityBySourceSql(streamColumnName: string, sourceColumnName: s
       when 'notifications' then ${SYNC_STREAM_PRIORITY_BY_SOURCE[source].notifications}
       when 'catalog' then ${SYNC_STREAM_PRIORITY_BY_SOURCE[source].catalog}
       when 'post_replies' then ${SYNC_STREAM_PRIORITY_BY_SOURCE[source].post_replies}
+      when 'payouts' then ${SYNC_STREAM_PRIORITY_BY_SOURCE[source].payouts}
       else 0
     end
   `;

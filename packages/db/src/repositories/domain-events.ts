@@ -136,6 +136,18 @@ const PROJECTION_ONLY_DOMAIN_EVENT_TYPES = new Set([
   // It is what makes `missing_since` a REPLAYED fact rather than a sweep-time
   // side effect, and the only event in this family that describes an absence.
   "post.comment_list_observed",
+  // WP-F7, the payouts lane. Money OUT is a fact about the agency's own books,
+  // not business news an SSE v2 client should be handed as it happens — and the
+  // method event carries a MASK of a credential, which makes "never delivered
+  // as news" a privacy property as well as an architectural one. Registering
+  // the types here and declaring `projectionOnly: true` on the `fansly-payouts`
+  // family are ONE decision, never two.
+  "payout.method_observed",
+  "payout.observed",
+  // The ROSTER — "this full method listing named exactly these refs". It is
+  // what makes `missing_since` a REPLAYED fact rather than a sweep-time side
+  // effect, and the only event in this family that describes an absence.
+  "payout.method_list_observed",
 ]);
 
 export function isProjectionOnlyDomainEventType(type: string) {

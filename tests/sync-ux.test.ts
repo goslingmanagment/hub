@@ -384,6 +384,7 @@ describe("sync UX summaries", () => {
       "notifications",
       "catalog",
       "post_replies",
+      "payouts",
     ]);
     expect(isBulkEnrichmentSyncStream("fan_earnings")).toBe(true);
     expect(isBulkEnrichmentSyncStream("purchase_history")).toBe(true);

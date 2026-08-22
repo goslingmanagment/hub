@@ -151,7 +151,8 @@ describe("LIVE_CONFIG_KEYS", () => {
     // WP-F3 added the three `catalog` keys on the same template;
     // WP-F5 added FOUR — the ramp flag, its FAIL-CLOSED page allowlist, the
     // per-lane daily call budget and the re-walk cycle, which is live because
-    // it re-aims a running first pass without a deploy.
-    expect(LIVE_CONFIG_KEYS.size).toBe(53);
+    // it re-aims a running first pass without a deploy;
+    // WP-F7 added the three `payouts` keys on the WP-F3 template.
+    expect(LIVE_CONFIG_KEYS.size).toBe(56);
   });
 });

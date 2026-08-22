@@ -151,6 +151,10 @@ export const syncStreamEnum = pgEnum("sync_stream", [
   // daily budget, and the ONLY lane whose existence had to be probed first
   // ([E1]: the bare GET works, so no POST is ever issued).
   "post_replies",
+  // WP-F7 (migration 0140): the money-out lane — `/payments/payoutmethods` and
+  // `/payments/payout/requests`, two routes, both GET. Maintenance class at
+  // 86 400 s: a payout moves in days, and the whole steady state is two calls.
+  "payouts",
 ]);
 export const pageSyncStatusEnum = pgEnum("page_sync_status", [
   "idle",
@@ -6033,5 +6037,125 @@ export const postComments = pgTable(
       table.occurredAt.desc(),
     ),
     pageAuthorIdx: index("post_comments_page_author_idx").on(table.pageId, table.authorRef),
+  }),
+);
+
+// ── WP-F7, migration 0141: the money-out head ────────────────────────────────
+
+/**
+ * `page_payout_methods` — the creator's own payout methods, MASKED.
+ *
+ * `metadata` arrives as a JSON-ENCODED STRING and the two live providers are
+ * asymmetric in the one way that matters: provider 2 (Paxum — NOT PayPal;
+ * A22-4) returns the FULL email address, provider 30 (USDT) returns a field set
+ * whose `field1` is already server-masked. So the masking is OURS.
+ * `maskedLabel` is the ONLY value derived from `metadata` that ever reaches a
+ * projection, the full processor payload stays raw-journal-only under the
+ * restricted class, and the migration's CHECK enforces the pinned mask shape at
+ * the INSERT rather than trusting the parser.
+ *
+ * `providerLabel` is derived from `providerId` ALONE — never from `metadata` —
+ * so an unknown provider decodes to nothing and still lands a truthful row.
+ */
+export const pagePayoutMethods = pgTable(
+  "page_payout_methods",
+  {
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    platform: platformColumn("platform")
+      .references(() => platforms.key, { onDelete: "restrict" })
+      .notNull(),
+    methodRef: text("method_ref").notNull(),
+    /** RAW platform code. NULL when the served value was not an integer. */
+    providerId: integer("provider_id"),
+    /** `paxum` | `usdt` | `unmapped:<id>`. Derived from `providerId` alone. */
+    providerLabel: text("provider_label").notNull(),
+    /** Observed live as 1 / 0 / 3 with NO rendered label anywhere in the UI.
+     *  RAW integers; naming them would be guesswork. */
+    type: integer("type"),
+    flags: integer("flags"),
+    status: integer("status"),
+    /** OURS, never the provider's. */
+    maskedLabel: text("masked_label"),
+    /** FALSE when `metadata` was a string that did not parse as JSON. */
+    metadataParseOk: boolean("metadata_parse_ok").default(true).notNull(),
+    /** Set when a later FULL listing stops naming this method. NEVER a delete
+     *  (DP 7). */
+    missingSince: timestamp("missing_since", { withTimezone: true }),
+    firstObservedAt: timestamp("first_observed_at", { withTimezone: true }).notNull(),
+    lastObservedAt: timestamp("last_observed_at", { withTimezone: true }).notNull(),
+    contentHash: char("content_hash", { length: 64 }).notNull(),
+    sourceEventId: bigint("source_event_id", { mode: "number" }).notNull(),
+    sourceObservationId: bigint("source_observation_id", { mode: "number" }).notNull(),
+    sourceAccountSeq: bigint("source_account_seq", { mode: "number" }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({
+      name: "page_payout_methods_pkey",
+      columns: [table.pageId, table.methodRef],
+    }),
+  }),
+);
+
+/**
+ * `page_payout_requests` — the payout-request history.
+ *
+ * `amountMills` is MILLS with no scaling: the wire unit IS the kernel unit,
+ * proved against the rendered UI on seven independent fields.
+ *
+ * THE STATUS MAP IS ONE CODE DEEP. All 83 requests on the walked page carried
+ * `status = 8` = `Processed`; every other code is unknown. The integer and the
+ * label are projected together with `statusConfidence`, 8 is never treated as
+ * "the success code" in a conditional, and the capture handler raises one
+ * anomaly the first time it sees a code nobody has mapped.
+ *
+ * `methodRef` has NO foreign key to `page_payout_methods`: a payout can name a
+ * method the creator has since removed, and an FK would make the honest history
+ * unstorable.
+ */
+export const pagePayoutRequests = pgTable(
+  "page_payout_requests",
+  {
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    platform: platformColumn("platform")
+      .references(() => platforms.key, { onDelete: "restrict" })
+      .notNull(),
+    payoutRef: text("payout_ref").notNull(),
+    /** MILLS (Stage 27), through the shared constructors. */
+    amountMills: bigint("amount_mills", { mode: "bigint" }),
+    methodRef: text("method_ref"),
+    /** RAW. 8 is the only code ever observed. */
+    statusCode: integer("status_code"),
+    /** `Processed` for 8, `unmapped:<code>` otherwise. */
+    statusLabel: text("status_label"),
+    /** `mapped` | `unmapped`. */
+    statusConfidence: text("status_confidence").notNull(),
+    /** Provider instants — Unix ms on the wire. */
+    requestedAt: timestamp("requested_at", { withTimezone: true }),
+    updatedAtPlatform: timestamp("updated_at_platform", { withTimezone: true }),
+    version: integer("version"),
+    firstObservedAt: timestamp("first_observed_at", { withTimezone: true }).notNull(),
+    lastObservedAt: timestamp("last_observed_at", { withTimezone: true }).notNull(),
+    contentHash: char("content_hash", { length: 64 }).notNull(),
+    sourceEventId: bigint("source_event_id", { mode: "number" }).notNull(),
+    sourceObservationId: bigint("source_observation_id", { mode: "number" }).notNull(),
+    sourceAccountSeq: bigint("source_account_seq", { mode: "number" }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({
+      name: "page_payout_requests_pkey",
+      columns: [table.pageId, table.payoutRef],
+    }),
+    pageRequestedIdx: index("page_payout_requests_page_requested_idx").on(
+      table.pageId,
+      table.requestedAt.desc(),
+    ),
   }),
 );

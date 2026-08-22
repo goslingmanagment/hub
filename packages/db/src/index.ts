@@ -111,6 +111,7 @@ export * from "./repositories/media-plane.ts";
 export * from "./repositories/fansly-engagement.ts";
 export * from "./repositories/fansly-catalog.ts";
 export * from "./repositories/post-comments.ts";
+export * from "./repositories/page-payouts.ts";
 export * from "./repositories/fansly-stats.ts";
 export * from "./repositories/ai-personas.ts";
 export * from "./repositories/ai-restricted.ts";

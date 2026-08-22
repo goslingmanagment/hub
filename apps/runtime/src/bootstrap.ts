@@ -170,6 +170,25 @@ export type AdapterLike = ProviderAdapter<
     params: { correlationPostIds?: string | null },
   ): Promise<{ items: unknown; raw: unknown }>;
 
+  // WP-F7 — the payouts lane. Two routes, both GET, both loosely typed: the
+  // body is journaled before anything asserts on its shape, and `metadata`
+  // (a JSON-ENCODED STRING that can carry a plaintext email) is decoded in the
+  // canonicalizer, never here and never in SQL.
+  getPayoutMethods(
+    context: FanslyRequestContext,
+  ): Promise<{ items: unknown; raw: unknown }>;
+  getPayoutRequestsPage(
+    context: FanslyRequestContext,
+    params: {
+      /** Present and EMPTY when unbounded — exactly as the app sends it. */
+      before?: string | null;
+      after?: string | null;
+      limit: number;
+      /** Zero-based ROW offset, not a page index. */
+      offset: number;
+    },
+  ): Promise<{ items: unknown; raw: unknown }>;
+
   // Stage 6 replay-probe methods (read-only, loosely typed — Stage 16 hardens).
   getEarningsStatsAccountsPage(
     context: FanslyRequestContext,

@@ -161,6 +161,11 @@ const envSchema = z.object({
   FANSLY_POST_REPLIES_PAGE_ALLOWLIST: z.string().default(""),
   FANSLY_REPLIES_DAILY_CALL_BUDGET: z.coerce.number().int().min(1).max(400).default(100),
   FANSLY_REPLIES_REWALK_CYCLE_DAYS: z.coerce.number().int().min(1).max(365).default(14),
+  // WP-F7. Same fail-closed allowlist semantic; its own keys (S4). 20 is §6.1's
+  // corrected number — the steady state spends 2.
+  FANSLY_PAYOUTS_SYNC_ENABLED: booleanSchema.default(false),
+  FANSLY_PAYOUTS_PAGE_ALLOWLIST: z.string().default(""),
+  FANSLY_PAYOUTS_DAILY_CALL_BUDGET: z.coerce.number().int().min(1).max(100).default(20),
   // WP-F6. Rides the EXISTING `posts` stream, so it has no allowlist of its
   // own; the cap is counted apart from the timeline walk in the same cursor.
   FANSLY_POST_ENGAGEMENT_REFRESH_ENABLED: booleanSchema.default(false),
@@ -449,6 +454,11 @@ export interface AppConfig {
   fanslyRepliesDailyCallBudget?: number;
   /** How stale a post's last walk must be before the round-robin re-reads it. */
   fanslyRepliesRewalkCycleDays?: number;
+  fanslyPayoutsSyncEnabled?: boolean;
+  /** CSV of page labels allowed to read payouts; empty = NONE (fails closed). */
+  fanslyPayoutsPageAllowlist?: string;
+  /** HTTP ATTEMPTS per page per UTC day for the payouts lane; crossing it defers. */
+  fanslyPayoutsDailyCallBudget?: number;
   /** WP-F6: the decayed `GET /post?ids=` phase on the EXISTING posts stream. */
   fanslyPostEngagementRefreshEnabled?: boolean;
   /** HTTP ATTEMPTS per page per UTC day for the engagement phase; crossing it
@@ -745,6 +755,9 @@ export function loadConfig(
     fanslyPostRepliesPageAllowlist: parsed.FANSLY_POST_REPLIES_PAGE_ALLOWLIST,
     fanslyRepliesDailyCallBudget: parsed.FANSLY_REPLIES_DAILY_CALL_BUDGET,
     fanslyRepliesRewalkCycleDays: parsed.FANSLY_REPLIES_REWALK_CYCLE_DAYS,
+    fanslyPayoutsSyncEnabled: parsed.FANSLY_PAYOUTS_SYNC_ENABLED,
+    fanslyPayoutsPageAllowlist: parsed.FANSLY_PAYOUTS_PAGE_ALLOWLIST,
+    fanslyPayoutsDailyCallBudget: parsed.FANSLY_PAYOUTS_DAILY_CALL_BUDGET,
     fanslyPostEngagementRefreshEnabled: parsed.FANSLY_POST_ENGAGEMENT_REFRESH_ENABLED,
     fanslyPostEngagementDailyCallBudget: parsed.FANSLY_POST_ENGAGEMENT_DAILY_CALL_BUDGET,
     fanslyStatsHourlyEnabled: parsed.FANSLY_STATS_HOURLY_ENABLED,

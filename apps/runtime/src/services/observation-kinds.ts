@@ -109,6 +109,15 @@ export const WRITTEN_OBSERVATION_KINDS: readonly WrittenObservationKind[] = [
   // that is precisely the body `missing_since` is computed from. The verbatim
   // response still lands in `sync_raw_payloads.response_payload` unchanged.
   { kind: "post_replies", source: "pull", writer: "services/sync/fansly-post-replies.ts" },
+  // ── WP-F7: the `payouts` lane (services/sync/fansly-payouts.ts) ───────────
+  // ONE kind per route, two routes. Both are RESTRICTED-CLASS bodies:
+  // `payout_methods` carries the creator's payout credentials (provider 2
+  // returns a plaintext email) and `payout_requests` carries the money-out
+  // history. Neither is on `AGENT_OBSERVATION_PAYLOAD_ALLOWLIST` — which is an
+  // ALLOWLIST and fails closed, so absence is the enforcement — and
+  // `tests/fansly-payouts-restricted.test.ts` pins that they stay off it.
+  { kind: "payout_methods", source: "pull", writer: "services/sync/fansly-payouts.ts" },
+  { kind: "payout_requests", source: "pull", writer: "services/sync/fansly-payouts.ts" },
   // BL-C3 itself. Both halves of the pair, so the incident's own kinds are the
   // first thing this registry pins.
   { kind: "link_stats_tracking", source: "pull", writer: "services/ofapi-link-stats-sync.ts" },

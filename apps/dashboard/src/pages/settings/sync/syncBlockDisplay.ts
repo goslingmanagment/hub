@@ -113,6 +113,7 @@ const STREAM_LABELS: Record<string, string> = {
   notifications: "notifications",
   catalog: "content catalog",
   post_replies: "post comments",
+  payouts: "payouts",
 };
 
 const PROGRESS_STREAM_LABELS: Record<string, string> = {
