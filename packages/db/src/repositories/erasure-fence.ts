@@ -97,8 +97,18 @@ export async function isDmArchiveScopeFenced(
 ): Promise<boolean> {
   const refs = [...new Set(input.refs.filter((ref): ref is string => !!ref))];
   const fanScopeRefs = refs.map((ref) => `fan:${input.platform ?? "onlyfans"}:${ref}`);
+  const refsSql = refs.map((ref) => sql`${ref}`);
   const fanArm = fanScopeRefs.length > 0
-    ? sql`(e.scope_type = 'fan' and e.scope_ref in (${sql.join(fanScopeRefs.map((ref) => sql`${ref}`), sql`, `)}))`
+    ? sql`(e.scope_type = 'fan' and (
+        e.scope_ref in (${sql.join(fanScopeRefs.map((ref) => sql`${ref}`), sql`, `)})
+        or exists (
+          select 1
+          from jsonb_array_elements_text(
+            coalesce(e.plan->'resolvedFanGroupIds', '[]'::jsonb)
+          ) as resolved_group(value)
+          where resolved_group.value in (${sql.join(refsSql, sql`, `)})
+        )
+      ))`
     : sql`false`;
   const result = await db.execute<{ fenced: boolean }>(sql`
     select exists (

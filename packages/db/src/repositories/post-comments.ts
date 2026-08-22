@@ -35,6 +35,10 @@
 import { sql, type SQL } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
+import {
+  isDmArchiveScopeFenced,
+  tryAcquireDmArchiveWriterFenceLock,
+} from "./erasure-fence.ts";
 
 export type PostCommentPlatform = "fansly" | "onlyfans";
 
@@ -116,7 +120,39 @@ export interface UpsertPostCommentInput extends PostCommentLineage {
 export async function upsertPostComment(
   db: Database,
   input: UpsertPostCommentInput,
-): Promise<{ applied: boolean }> {
+): Promise<
+  | { status: "applied"; applied: true }
+  | { status: "unchanged" | "deferred" | "erasure_fenced"; applied: false }
+> {
+  return db.transaction(async (tx) => {
+    const database = tx as unknown as Database;
+    if (!(await tryAcquireDmArchiveWriterFenceLock(database, input.pageId))) {
+      return { status: "deferred", applied: false } as const;
+    }
+    const materialAt = input.occurredAt < input.observedAt
+      ? input.occurredAt
+      : input.observedAt;
+    if (
+      await isDmArchiveScopeFenced(database, {
+        pageId: input.pageId,
+        platform: input.platform,
+        refs: [input.authorRef],
+        materialAt,
+      })
+    ) {
+      return { status: "erasure_fenced", applied: false } as const;
+    }
+    return upsertPostCommentUnfenced(database, input);
+  });
+}
+
+async function upsertPostCommentUnfenced(
+  db: Database,
+  input: UpsertPostCommentInput,
+): Promise<
+  | { status: "applied"; applied: true }
+  | { status: "unchanged"; applied: false }
+> {
   const result = await db.execute(sql`
     insert into post_comments (
       page_id, platform, comment_ref, parent_post_ref, root_post_ref, author_ref,
@@ -176,7 +212,9 @@ export async function upsertPostComment(
       updated_at = now()
     returning id
   `);
-  return { applied: (result.rowCount ?? 0) > 0 };
+  return (result.rowCount ?? 0) > 0
+    ? { status: "applied", applied: true }
+    : { status: "unchanged", applied: false };
 }
 
 /**

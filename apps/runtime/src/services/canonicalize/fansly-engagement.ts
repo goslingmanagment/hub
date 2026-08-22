@@ -194,6 +194,12 @@ function readRow(row: Record<string, unknown>): NotificationRowFacts | null {
   };
 }
 
+/** Captured Fansly shapes use the group field for the actor. Follow code 3002
+ * is the one documented exception and carries the actor in correlationId. */
+function notificationActorRef(facts: NotificationRowFacts): string | null {
+  return facts.rawTypeCode === 3002 ? facts.correlationRef : facts.correlationGroupRef;
+}
+
 function notificationDrafts(
   observation: CanonicalizableObservation,
   context?: CanonicalizeRunContext,
@@ -237,6 +243,7 @@ function notificationDrafts(
       type: "notification.observed",
       // RECEIPT TIME. The provider instant is `occurredAtSeconds`, above.
       occurredAt: observation.receivedAt,
+      fanIdentityRef: notificationActorRef(facts),
       data: { ...material, contentHash: hash },
       schemaVersion: SCHEMA_VERSION,
       dedupKey: `notif:v1:${pageRef}:${facts.notificationRef}:${hash}`,
@@ -274,6 +281,7 @@ function notificationDrafts(
       drafts.push({
         type: "media.purchase_notification_observed",
         occurredAt: observation.receivedAt,
+        fanIdentityRef: notificationActorRef(facts),
         data: { ...purchaseMaterial, contentHash: purchaseHash },
         schemaVersion: SCHEMA_VERSION,
         dedupKey: `notifpurchase:v1:${pageRef}:${facts.notificationRef}:${purchaseHash}`,
@@ -300,6 +308,7 @@ function notificationDrafts(
     drafts.push({
       type: "engagement.notification_observed",
       occurredAt: observation.receivedAt,
+      fanIdentityRef: notificationActorRef(facts),
       data: { ...engagementMaterial, contentHash: engagementHash },
       schemaVersion: SCHEMA_VERSION,
       dedupKey: `notifengagement:v1:${pageRef}:${facts.notificationRef}:${engagementHash}`,

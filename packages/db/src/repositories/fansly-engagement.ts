@@ -24,6 +24,10 @@
 import { sql, type SQL } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
+import {
+  isDmArchiveScopeFenced,
+  tryAcquireDmArchiveWriterFenceLock,
+} from "./erasure-fence.ts";
 
 export type EngagementPlatform = "fansly" | "onlyfans";
 
@@ -86,7 +90,42 @@ export interface UpsertPlatformNotificationInput extends EngagementLineage {
 export async function upsertPlatformNotification(
   db: Database,
   input: UpsertPlatformNotificationInput,
-): Promise<{ applied: boolean }> {
+): Promise<
+  | { status: "applied"; applied: true }
+  | { status: "unchanged" | "deferred" | "erasure_fenced"; applied: false }
+> {
+  return db.transaction(async (tx) => {
+    const database = tx as unknown as Database;
+    if (!(await tryAcquireDmArchiveWriterFenceLock(database, input.pageId))) {
+      return { status: "deferred", applied: false } as const;
+    }
+    const materialAt = input.occurredAt < input.observedAt
+      ? input.occurredAt
+      : input.observedAt;
+    const actorRef = input.typeCode === 3002
+      ? input.correlationRef
+      : input.correlationGroupRef;
+    if (
+      await isDmArchiveScopeFenced(database, {
+        pageId: input.pageId,
+        platform: input.platform,
+        refs: [actorRef],
+        materialAt,
+      })
+    ) {
+      return { status: "erasure_fenced", applied: false } as const;
+    }
+    return upsertPlatformNotificationUnfenced(database, input);
+  });
+}
+
+async function upsertPlatformNotificationUnfenced(
+  db: Database,
+  input: UpsertPlatformNotificationInput,
+): Promise<
+  | { status: "applied"; applied: true }
+  | { status: "unchanged"; applied: false }
+> {
   const current = sql.identifier("platform_notifications");
   // The head guard for this table compares `occurred_at` alone: the PK already
   // fixes `notification_ref`, so the ref tie-break can never discriminate here.
@@ -126,7 +165,9 @@ export async function upsertPlatformNotification(
       updated_at = now()
     returning page_id
   `);
-  return { applied: (result.rowCount ?? 0) > 0 };
+  return (result.rowCount ?? 0) > 0
+    ? { status: "applied", applied: true }
+    : { status: "unchanged", applied: false };
 }
 
 // ── post_likes ───────────────────────────────────────────────────────────────

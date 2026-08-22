@@ -12,6 +12,9 @@ import {
   createOrGetOfapiCommand,
   ERASURE_EXECUTION_PROTOCOL,
   insertErasureLog,
+  upsertMessageMediaOffer,
+  upsertPlatformNotification,
+  upsertPostComment,
 } from "@agency_hub_core/db";
 
 import {
@@ -954,12 +957,21 @@ describe("erasure drill (Stage 28 Task 4)", () => {
 
     // PAGE-scope erasure, then a rename: scope_ref is label-based and now
     // stale, but the fence matches the RESOLVED page ids in the plan.
+    await executeErasure(
+      appStub(),
+      { scopeType: "page", pageLabel: "fence-of-2" },
+      { initiatedBy: Number(operator.id) },
+    );
+    await testDb.pool.query("update pages set label = 'fence-renamed' where id = $1", [page.id]);
+    // Simulate a pre-erasure fact that was already in flight and lands after
+    // the erasure transaction. The page erasure itself deletes raw webhook
+    // captures; the writer fence must reject this late replay by resolved id.
     await one<{ id: string }>(
       `insert into ofapi_webhook_events
          (idempotency_key, event_type, ofapi_account_id, platform_account_id, payload,
           status, archive_status, projection_status, received_at, processed_at)
        values ('fence2-replay', 'messages.received', 'acct_fence2', $1, $2::jsonb,
-               'processed', 'failed', 'none', now(), now())
+               'processed', 'failed', 'none', '2026-07-01T09:03:01Z', now())
        returning id::text as id`,
       [
         page.id,
@@ -975,12 +987,6 @@ describe("erasure drill (Stage 28 Task 4)", () => {
         }),
       ],
     );
-    await executeErasure(
-      appStub(),
-      { scopeType: "page", pageLabel: "fence-of-2" },
-      { initiatedBy: Number(operator.id) },
-    );
-    await testDb.pool.query("update pages set label = 'fence-renamed' where id = $1", [page.id]);
     await sweepOfapiDmColdArchives(fenceStub());
     expect(await count(`dm_message_archive where platform_message_id = '50009'`)).toBe(0);
     const replayed = await one<{ archive_status: string; archive_error: string }>(
@@ -1620,26 +1626,35 @@ describe("erasure drill (Stage 28 Task 4)", () => {
     }
 
     const HASH = "f".repeat(64);
-    const seedNotification = async (ref: string, correlation: string, typeCode: number) => {
+    const seedNotification = async (
+      ref: string,
+      correlation: string,
+      correlationGroup: string | null,
+      typeCode: number,
+    ) => {
       await testDb!.pool.query(
         `insert into platform_notifications (
            page_id, platform, notification_ref, type_code, correlation_ref,
            correlation_group_ref, metadata, occurred_at, acknowledged_at,
            first_observed_at, last_observed_at, content_hash,
            source_event_id, source_observation_id, source_account_seq
-         ) values ($1, 'fansly', $2, $3, $4, null, '{}'::jsonb, now(), null,
-                   now(), now(), $5, 5101, 5101, 5101)`,
-        [page.id, ref, typeCode, correlation, HASH],
+         ) values ($1, 'fansly', $2, $3, $4, $5, '{}'::jsonb, now(), null,
+                   now(), now(), $6, 5101, 5101, 5101)`,
+        [page.id, ref, typeCode, correlation, correlationGroup, HASH],
       );
     };
-    // The fan bought something: the correlation ref IS the fan.
-    await seedNotification("notif-target-purchase", TARGET_FAN, 2007);
-    await seedNotification("notif-target-follow", TARGET_FAN, 3003);
+    // Captured/browser shape: purchases name the bought media/bundle in
+    // correlationId and the buyer in correlationGroupId. Code 3003 uses the
+    // same group field for the follower. The old fixture put the fan in
+    // correlation_ref and therefore passed against the same misconception as
+    // the implementation.
+    await seedNotification("notif-target-purchase", "media-target", TARGET_FAN, 2007);
+    await seedNotification("notif-target-follow", "follow-target-object", TARGET_FAN, 3003);
     // A bystander fan on the same page.
-    await seedNotification("notif-other", OTHER_FAN, 2007);
+    await seedNotification("notif-other", "media-other", OTHER_FAN, 2007);
     // The creator's OWN content: an engagement notification whose correlation
     // ref is a post id, not a fan. Erasing a fan must not delete it.
-    await seedNotification("notif-creator-post", CREATOR_POST, 1004);
+    await seedNotification("notif-creator-post", CREATOR_POST, null, 1004);
 
     const seedLike = async (subjectRef: string, liker: string) => {
       await testDb!.pool.query(
@@ -1922,5 +1937,112 @@ describe("erasure drill (Stage 28 Task 4)", () => {
     releaseFirst();
     await Promise.all([first, otherScope]);
     expect(otherScopeEntered).toBe(true);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("projection writers reject pre-erasure comments, notifications, and message offers loaded before the tombstone", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const model = await createModel(testDb.db, {
+      slug: "endpoint-scour-fence",
+      name: "Endpoint scour fence",
+    });
+    if (!model) throw new Error("Expected endpoint-scour fence model");
+    const page = await createFanslyPage(testDb.db, {
+      modelId: model.id,
+      label: "endpoint-scour-fence-page",
+    });
+    if (!page) throw new Error("Expected endpoint-scour fence page");
+    const fenceOwnerId = Number((await one<{ id: string }>(
+      `insert into users (username, role)
+       values ('endpoint-scour-fence-owner', 'owner') returning id::text as id`,
+    )).id);
+
+    const fanRef = "880880880";
+    await executeErasure(
+      appStub(),
+      { scopeType: "fan", platform: "fansly", fanRef },
+      { initiatedBy: fenceOwnerId },
+    );
+
+    // Simulate projection work that loaded a source event before erasure and
+    // reaches its repository writer only after the tombstone committed.
+    const old = new Date("2026-01-01T00:00:00.000Z");
+    const hash = "e".repeat(64);
+    const comment = await upsertPostComment(testDb.db, {
+      pageId: page.id,
+      platform: "fansly",
+      commentRef: "comment-before-erasure",
+      parentPostRef: "post-before-erasure",
+      rootPostRef: "post-before-erasure",
+      authorRef: fanRef,
+      authorUsername: null,
+      authorDisplayName: null,
+      textPlain: "must not come back",
+      likeCount: 0,
+      mediaLikeCount: 0,
+      tipTotalMills: null,
+      attachmentTipMills: null,
+      attachmentCount: 0,
+      pinned: false,
+      occurredAt: old,
+      discoveredVia: "replies_walk",
+      possiblyTruncated: false,
+      observedAt: old,
+      contentHash: hash,
+      sourceEventId: 91_001,
+      sourceObservationId: 91_001,
+      sourceAccountSeq: 91_001,
+    });
+    const notification = await upsertPlatformNotification(testDb.db, {
+      pageId: page.id,
+      platform: "fansly",
+      notificationRef: "notification-before-erasure",
+      typeCode: 2007,
+      correlationRef: "media-before-erasure",
+      correlationGroupRef: fanRef,
+      metadata: {},
+      occurredAt: old,
+      acknowledgedAt: null,
+      observedAt: old,
+      contentHash: hash,
+      sourceEventId: 91_002,
+      sourceObservationId: 91_002,
+      sourceAccountSeq: 91_002,
+    });
+    const offer = await upsertMessageMediaOffer(testDb.db, {
+      pageId: page.id,
+      platform: "fansly",
+      messageRef: "message-before-erasure",
+      offerOrdinal: 0,
+      mediaOfferRef: "media-before-erasure",
+      bundleRef: null,
+      conversationRef: "group-before-erasure",
+      fanPlatformUserId: fanRef,
+      messageCreatedAt: old,
+      offerType: 1,
+      mimeType: null,
+      durationMs: null,
+      priceMills: null,
+      permissionEntries: [],
+      purchaseState: "purchased",
+      orderRef: null,
+      salesCount: null,
+      salesNetMills: null,
+      salesPendingMills: null,
+      observedAt: old,
+      contentHash: hash,
+      sourceEventId: 91_003,
+      sourceObservationId: 91_003,
+      sourceAccountSeq: 91_003,
+    });
+
+    expect(comment).toMatchObject({ status: "erasure_fenced", applied: false });
+    expect(notification).toMatchObject({ status: "erasure_fenced", applied: false });
+    expect(offer).toMatchObject({ status: "erasure_fenced", applied: false });
+    expect(await count(`post_comments where page_id = ${page.id}`)).toBe(0);
+    expect(await count(`platform_notifications where page_id = ${page.id}`)).toBe(0);
+    expect(await count(`message_media_offers where page_id = ${page.id}`)).toBe(0);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });
