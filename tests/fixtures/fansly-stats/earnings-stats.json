@@ -1,0 +1,40 @@
+{
+  "_fixture": "SYNTHETIC. Shape from a live /account/wallets/earnings/stats capture (2026-08-19): a FLAT array whose rows carry exactly {type, totalGross, totalNet, accountId, timestamp}. `timestamp` is MILLISECONDS. Types observed live were {15001, 2110, 7101, 2116}; 2010 below is the LEGACY twin of 2110 and is here because keying by label would merge the two (A22-2).",
+  "rows": [
+    {
+      "type": 15001,
+      "totalGross": 50000,
+      "totalNet": 40000,
+      "accountId": "000900000000000003",
+      "timestamp": 1787097600000
+    },
+    {
+      "type": 7101,
+      "totalGross": 250000,
+      "totalNet": 200000,
+      "accountId": "000900000000000003",
+      "timestamp": 1787097600000
+    },
+    {
+      "type": 2110,
+      "totalGross": 240000,
+      "totalNet": 192000,
+      "accountId": "000900000000000003",
+      "timestamp": 1787097600000
+    },
+    {
+      "type": 2010,
+      "totalGross": 19000,
+      "totalNet": 15200,
+      "accountId": "000900000000000003",
+      "timestamp": 1787097600000
+    },
+    {
+      "type": 2116,
+      "totalGross": 15000,
+      "totalNet": 12000,
+      "accountId": "000900000000000003",
+      "timestamp": 1787011200000
+    }
+  ]
+}

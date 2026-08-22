@@ -1,9 +1,9 @@
 {
-  "_fixture": "SYNTHETIC. Shape from a live /trackinglinks capture (2026-08-19). NOTE `totalNet: 0` on every row while `totalGross` is populated — unpopulated, NEVER a real zero, which is what the projection has to preserve. `createdAt` is MILLISECONDS. `metadata` arrives as a JSON STRING.",
+  "_fixture": "SYNTHETIC. Shape from a live /trackinglinks capture (2026-08-19). NOTE `totalNet: 0` on every row while `totalGross` is populated \u2014 unpopulated, NEVER a real zero, which is what the projection has to preserve. `createdAt` is MILLISECONDS. `metadata` arrives as a JSON STRING.",
   "rows": [
     {
-      "id": "750000000000000001",
-      "accountId": "700000000000000001",
+      "id": "000900000000000029",
+      "accountId": "000900000000000003",
       "internalId": "1",
       "type": 1,
       "status": 1,
@@ -19,8 +19,8 @@
       "totalGross": 53916240
     },
     {
-      "id": "750000000000000002",
-      "accountId": "700000000000000001",
+      "id": "000900000000000030",
+      "accountId": "000900000000000003",
       "internalId": "2",
       "type": 1,
       "status": 1,

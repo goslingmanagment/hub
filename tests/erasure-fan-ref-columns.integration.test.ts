@@ -70,6 +70,16 @@ const FAN_REF_COLUMN_PATTERNS = [
  */
 const JUSTIFIED_NON_TARGETS = new Map<string, string>([
   [
+    "media_offer_locations.correlation_ref",
+    "NOT A FAN REF, and it only reaches this list because `correlation_ref` is one of the "
+    + "shapes the pattern list hunts for. On `creatorMediaOfferLocations[]` (WP-F1, A17-5) the "
+    + "column carries the CARRIER object a media offer was placed on — a post id or a message "
+    + "id — while the account on the row is the CREATOR (`owner_account_ref`). Verified against "
+    + "the live shape: all eleven keys are id-relations between the creator's own media, offers, "
+    + "bundles and walls, and no fan appears anywhere in the row. Erasing a fan must not delete "
+    + "the creator's own placement record, which is what a predicate here would do.",
+  ],
+  [
     "ofapi_spend_projection_events.fan_platform_user_id",
     "PRE-EXISTING GAP, surfaced by this ratchet at its introduction and recorded "
     + "rather than silently fixed: migration 0036's shadow/audit projection carries a fan "

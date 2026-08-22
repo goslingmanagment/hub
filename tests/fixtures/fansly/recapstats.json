@@ -1,8 +1,0 @@
-{
-  "_fixture": "SYNTHETIC. Shape from the 2026-08-21 redacted probe (WP-F9 item 4): a yearly recap, 12 rows, [{accountId, recapYear, statName, statId, statValue, generatedAt}]. `statValue` is a STRING and is stored verbatim — NEVER coerced, not even when it looks numeric, because a recap value can be a count, a duration, a name or a formatted phrase.",
-  "rows": [
-    { "accountId": "700000000000000001", "recapYear": 2025, "statName": "topFan", "statId": "recap_top_fan", "statValue": "someone-else", "generatedAt": 1767225600000 },
-    { "accountId": "700000000000000001", "recapYear": 2025, "statName": "messagesSent", "statId": "recap_messages_sent", "statValue": "18402", "generatedAt": 1767225600000 },
-    { "accountId": "700000000000000001", "recapYear": 2025, "statName": "watchTime", "statId": "recap_watch_time", "statValue": "3d 14h 22m", "generatedAt": 1767225600000 }
-  ]
-}

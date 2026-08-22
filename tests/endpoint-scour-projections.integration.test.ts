@@ -75,7 +75,7 @@ beforeEach(async () => {
   resetCanonicalizeSweepCursors();
 });
 
-const FIXTURES = path.resolve("tests/fixtures/fansly");
+const FIXTURES = path.resolve("tests/fixtures/fansly-stats");
 const OWN_REF = "acct-stats-creator";
 
 function fixture(name: string): Record<string, unknown> {
@@ -326,7 +326,11 @@ describe("[sync-critical] WP-F1 statistics projections", () => {
       [page.id],
     );
     expect(broadcasts.length).toBeGreaterThanOrEqual(2);
-    expect(Number(broadcasts[0]!.stats_total)).toBe(1420);
+    const withOffer = broadcasts.find((row) => Number(row.stats_total) === 1420)!;
+    expect(withOffer).toBeDefined();
+    expect(Number(withOffer.stats_read)).toBe(806);
+    // A12: the sale total is the creator's NET share.
+    expect(String(withOffer.sales_net_mills)).toBe("63200");
 
     const polls = await rows(`select poll_ref from page_polls where page_id = $1`, [page.id]);
     expect(polls).toHaveLength(1);

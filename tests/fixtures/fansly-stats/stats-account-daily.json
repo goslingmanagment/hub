@@ -1,5 +1,5 @@
 {
-  "_fixture": "SYNTHETIC. Shape derived from a live /it/amoie/stats?period=86400000 capture (2026-08-19); every id is re-keyed, every name is invented, and the arrays are cut to a handful of rows. The real capture is 768 KB decoded with 31 daily buckets, 50+50 top-media rows, 25 top tags and 85 accountMedia — none of which is committed anywhere.",
+  "_fixture": "SYNTHETIC. Shape derived from a live /it/amoie/stats?period=86400000 capture (2026-08-19); every id is re-keyed, every name is invented, and the arrays are cut to a handful of rows. The real capture is 768 KB decoded with 31 daily buckets, 50+50 top-media rows, 25 top tags and 85 accountMedia \u2014 none of which is committed anywhere.",
   "dataset": {
     "period": 86400000,
     "dateBefore": 1787011200000,
@@ -42,20 +42,60 @@
       {
         "timestamp": 1786924800000,
         "stats": [
-          { "type": 10001, "views": 116, "interactionTime": 0, "uniqueViewers": 37 },
-          { "type": 10000, "views": 86, "interactionTime": 2036202, "uniqueViewers": 31 },
-          { "type": 44000, "views": 11, "interactionTime": 368741, "uniqueViewers": 11 },
-          { "type": 44001, "views": 12, "interactionTime": 0, "uniqueViewers": 12 },
-          { "type": 44010, "views": 1, "interactionTime": 9015, "uniqueViewers": 1 },
-          { "type": 44011, "views": 1, "interactionTime": 0, "uniqueViewers": 1 },
-          { "type": 44030, "views": 1, "interactionTime": 35006, "uniqueViewers": 1 },
-          { "type": 44031, "views": 1, "interactionTime": 0, "uniqueViewers": 1 }
+          {
+            "type": 10001,
+            "views": 116,
+            "interactionTime": 0,
+            "uniqueViewers": 37
+          },
+          {
+            "type": 10000,
+            "views": 86,
+            "interactionTime": 2036202,
+            "uniqueViewers": 31
+          },
+          {
+            "type": 44000,
+            "views": 11,
+            "interactionTime": 368741,
+            "uniqueViewers": 11
+          },
+          {
+            "type": 44001,
+            "views": 12,
+            "interactionTime": 0,
+            "uniqueViewers": 12
+          },
+          {
+            "type": 44010,
+            "views": 1,
+            "interactionTime": 9015,
+            "uniqueViewers": 1
+          },
+          {
+            "type": 44011,
+            "views": 1,
+            "interactionTime": 0,
+            "uniqueViewers": 1
+          },
+          {
+            "type": 44030,
+            "views": 1,
+            "interactionTime": 35006,
+            "uniqueViewers": 1
+          },
+          {
+            "type": 44031,
+            "views": 1,
+            "interactionTime": 0,
+            "uniqueViewers": 1
+          }
         ]
       }
     ],
     "topMediaOffers": [
       {
-        "mediaOfferId": "900000000000000001",
+        "mediaOfferId": "000900000000000006",
         "mediaOfferBundleId": "0",
         "views": 929,
         "previewViews": 0,
@@ -63,7 +103,7 @@
         "previewInteractionTime": 0
       },
       {
-        "mediaOfferId": "900000000000000002",
+        "mediaOfferId": "000900000000000018",
         "mediaOfferBundleId": "0",
         "views": 412,
         "previewViews": 3,
@@ -73,7 +113,7 @@
     ],
     "topFypMediaOffers": [
       {
-        "mediaOfferId": "900000000000000002",
+        "mediaOfferId": "000900000000000018",
         "mediaOfferBundleId": "0",
         "views": 300,
         "previewViews": 0,
@@ -83,14 +123,14 @@
     ],
     "topFypTags": [
       {
-        "tagId": "800000000000000001",
+        "tagId": "000900000000000014",
         "views": 851,
         "previewViews": 0,
         "interactionTime": 2301938,
         "previewInteractionTime": 0
       },
       {
-        "tagId": "800000000000000002",
+        "tagId": "000900000000000019",
         "views": 120,
         "previewViews": 0,
         "interactionTime": 40000,
@@ -101,10 +141,10 @@
   "aggregationData": {
     "accountMedia": [
       {
-        "id": "900000000000000001",
-        "accountId": "700000000000000001",
-        "mediaId": "910000000000000001",
-        "previewId": "910000000000000002",
+        "id": "000900000000000006",
+        "accountId": "000900000000000003",
+        "mediaId": "000900000000000010",
+        "previewId": "000900000000000020",
         "permissionFlags": 0,
         "price": 0,
         "createdAt": 1784642807,
@@ -113,8 +153,8 @@
         "permissions": {
           "permissionFlags": [
             {
-              "id": "920000000000000001",
-              "accountMediaId": "900000000000000001",
+              "id": "000900000000000021",
+              "accountMediaId": "000900000000000006",
               "type": 0,
               "flags": 1,
               "price": 35000,
@@ -125,31 +165,34 @@
               "verificationMetadata": "{}"
             },
             {
-              "id": "920000000000000002",
-              "accountMediaId": "900000000000000001",
+              "id": "000900000000000022",
+              "accountMediaId": "000900000000000006",
               "type": 0,
               "flags": 5,
               "price": 24990,
-              "metadata": "{\"4\":\"{\\\"subscriptionTierId\\\":\\\"730000000000000001\\\"}\"}",
+              "metadata": "{\"4\":\"{\\\"subscriptionTierId\\\":\\\"000900000000000023\\\"}\"}",
               "validAfter": null,
               "validBefore": null,
               "verificationFlags": 1,
               "verificationMetadata": "{}"
             }
           ],
-          "accountPermissionFlags": { "flags": 255, "metadata": "{}" }
+          "accountPermissionFlags": {
+            "flags": 255,
+            "metadata": "{}"
+          }
         },
         "bundles": [],
         "likeCount": 19,
         "media": {
-          "id": "910000000000000001",
+          "id": "000900000000000010",
           "type": 2,
           "status": 1,
-          "accountId": "700000000000000001",
+          "accountId": "000900000000000003",
           "mimetype": "video/mp4",
           "flags": 10,
           "filename": "full.mp4",
-          "location": "/700000000000000001/910000000000000001.mp4",
+          "location": "/000900000000000003/000900000000000010.mp4",
           "width": 720,
           "height": 1280,
           "metadata": "{\"originalHeight\":1920,\"originalWidth\":1080,\"duration\":613.82,\"resolutionMode\":2,\"frameRate\":30}",
@@ -157,33 +200,43 @@
           "createdAt": 1784640844,
           "variants": []
         },
-        "saleStats": { "sales": 5, "total": 115976, "pending": 0 },
+        "saleStats": {
+          "sales": 5,
+          "total": 115976,
+          "pending": 0
+        },
         "purchased": false,
         "access": true,
         "whitelisted": false
       },
       {
-        "id": "900000000000000002",
-        "accountId": "700000000000000001",
-        "mediaId": "910000000000000003",
+        "id": "000900000000000018",
+        "accountId": "000900000000000003",
+        "mediaId": "000900000000000024",
         "previewId": null,
         "permissionFlags": 0,
         "price": 0,
         "createdAt": 1784600000,
         "deletedAt": null,
         "deleted": false,
-        "permissions": { "permissionFlags": [], "accountPermissionFlags": { "flags": 255, "metadata": "{}" } },
+        "permissions": {
+          "permissionFlags": [],
+          "accountPermissionFlags": {
+            "flags": 255,
+            "metadata": "{}"
+          }
+        },
         "bundles": [],
         "likeCount": 3,
         "media": {
-          "id": "910000000000000003",
+          "id": "000900000000000024",
           "type": 1,
           "status": 1,
-          "accountId": "700000000000000001",
+          "accountId": "000900000000000003",
           "mimetype": "image/jpeg",
           "flags": 0,
           "filename": "full.jpg",
-          "location": "/700000000000000001/910000000000000003.jpg",
+          "location": "/000900000000000003/000900000000000024.jpg",
           "width": 1080,
           "height": 1350,
           "metadata": "{}",
@@ -199,24 +252,33 @@
     ],
     "accountMediaBundles": [
       {
-        "id": "940000000000000001",
-        "accountId": "700000000000000001",
+        "id": "000900000000000025",
+        "accountId": "000900000000000003",
         "previewId": null,
         "permissionFlags": 0,
         "price": 0,
         "createdAt": 1785871120,
         "deletedAt": null,
         "deleted": false,
-        "accountMediaIds": ["900000000000000001", "900000000000000002"],
+        "accountMediaIds": [
+          "000900000000000006",
+          "000900000000000018"
+        ],
         "bundleContent": [
-          { "accountMediaId": "900000000000000001", "pos": 0 },
-          { "accountMediaId": "900000000000000002", "pos": 1 }
+          {
+            "accountMediaId": "000900000000000006",
+            "pos": 0
+          },
+          {
+            "accountMediaId": "000900000000000018",
+            "pos": 1
+          }
         ],
         "permissions": {
           "permissionFlags": [
             {
-              "id": "920000000000000003",
-              "accountMediaId": "940000000000000001",
+              "id": "000900000000000026",
+              "accountMediaId": "000900000000000025",
               "type": 0,
               "flags": 1,
               "price": 14990,
@@ -227,7 +289,10 @@
               "verificationMetadata": "{}"
             }
           ],
-          "accountPermissionFlags": { "flags": 255, "metadata": "{}" }
+          "accountPermissionFlags": {
+            "flags": 255,
+            "metadata": "{}"
+          }
         },
         "saleStats": null,
         "purchased": false,
@@ -237,7 +302,7 @@
     ],
     "tags": [
       {
-        "id": "800000000000000001",
+        "id": "000900000000000014",
         "tag": "stockings",
         "label": null,
         "description": "",
@@ -247,7 +312,7 @@
         "createdAt": 1665510371000
       },
       {
-        "id": "800000000000000002",
+        "id": "000900000000000019",
         "tag": "lingerie",
         "label": null,
         "description": "",
@@ -259,16 +324,16 @@
     ],
     "creatorMediaOfferLocations": [
       {
-        "id": "950000000000000001",
-        "mediaOfferId": "900000000000000001",
+        "id": "000900000000000027",
+        "mediaOfferId": "000900000000000006",
         "mediaOfferType": 2001,
         "mediaOfferBundleId": null,
-        "mediaId": "910000000000000001",
+        "mediaId": "000900000000000010",
         "mediaType": 2,
         "previewId": null,
-        "accountId": "700000000000000001",
-        "locationId": "700000000000000001",
-        "correlationId": "960000000000000001",
+        "accountId": "000900000000000003",
+        "locationId": "000900000000000003",
+        "correlationId": "000900000000000028",
         "createdAt": 1786916525000
       }
     ]

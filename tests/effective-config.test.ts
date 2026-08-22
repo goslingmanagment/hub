@@ -140,7 +140,11 @@ describe("LIVE_CONFIG_KEYS", () => {
     // G5 slice 1 added the CAS dual-write canary bound (published to each
     // process by the heartbeat, which reads the live overlay anyway);
     // G5 slice 2 added the payload read mode, published the same way;
-    // G5 slice 3c-1 added the pointer-only bound, published on the same beat.
-    expect(LIVE_CONFIG_KEYS.size).toBe(35);
+    // G5 slice 3c-1 added the pointer-only bound, published on the same beat;
+    // WP-F1 added the six `stats_snapshot` keys — the ramp flag, its FAIL-CLOSED
+    // page allowlist, the per-lane daily call budget (read per chunk, so a
+    // budget flip must not need a deploy), the hourly-bucket switch, the hourly
+    // backfill bound and the backfill continuation delay.
+    expect(LIVE_CONFIG_KEYS.size).toBe(41);
   });
 });

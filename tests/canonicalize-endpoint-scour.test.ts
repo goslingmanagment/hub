@@ -33,7 +33,7 @@ import type {
 // seconds vs milliseconds per field, a `totalNet` that is 0 rather than absent,
 // a rollup row keyed (0, 0), and a `statValue` that is a string.
 
-const FIXTURES = path.resolve("tests/fixtures/fansly");
+const FIXTURES = path.resolve("tests/fixtures/fansly-stats");
 
 function fixture(name: string): Record<string, unknown> {
   return JSON.parse(readFileSync(path.join(FIXTURES, name), "utf8")) as Record<string, unknown>;
@@ -239,7 +239,7 @@ describe("account statistics → events", () => {
     const drafts = ofType(collect("account_stats", accountStats()), "tag.counters_observed");
     expect(drafts).toHaveLength(2);
     expect(drafts[0]!.data).toMatchObject({
-      tagRef: "800000000000000001",
+      tagRef: "000900000000000014",
       tagName: "stockings",
       viewCount: 1436080,
       postCount: 32196,
@@ -256,7 +256,7 @@ describe("account statistics → events", () => {
     // "not served", so it produces no event at all rather than a zero row.
     expect(drafts).toHaveLength(1);
     expect(drafts[0]!.data).toMatchObject({
-      mediaOfferRef: "900000000000000001",
+      mediaOfferRef: "000900000000000006",
       salesCount: 5,
       // A12: saleStats.total is the creator's NET share, as a mills string.
       salesNetMills: "115976",
@@ -272,13 +272,13 @@ describe("account statistics → events", () => {
     const media = drafts.find((draft) => draft.data.subject === "media")!;
     expect(media.data.firstOrigin).toBe("stats_agg");
     expect(media.data.priceMills).toBe("35000");
-    expect(media.dedupKey).toMatch(/^media:v1:11:900000000000000001:[0-9a-f]{64}$/);
+    expect(media.dedupKey).toMatch(/^media:v1:11:000900000000000006:[0-9a-f]{64}$/);
     // accountMedia[].createdAt is SECONDS on these rows — the media-plane rule.
     expect(media.data.createdAtPlatform).toBe("2026-07-21T14:06:47.000Z");
     // Delivery URLs exist in the payload and must never reach an event.
-    expect(JSON.stringify(media.data)).not.toContain("/700000000000000001/");
+    expect(JSON.stringify(media.data)).not.toContain("/000900000000000003/");
     const bundle = drafts.find((draft) => draft.data.subject === "bundle")!;
-    expect(bundle.dedupKey).toMatch(/^mediabundle:v1:11:940000000000000001:[0-9a-f]{64}$/);
+    expect(bundle.dedupKey).toMatch(/^mediabundle:v1:11:000900000000000025:[0-9a-f]{64}$/);
   });
 
   it("stores creatorMediaOfferLocations parsed, as pure id-relations (A17-5)", () => {
@@ -288,12 +288,12 @@ describe("account statistics → events", () => {
     );
     expect(drafts).toHaveLength(1);
     expect(drafts[0]!.data).toMatchObject({
-      locationRef: "950000000000000001",
-      mediaOfferRef: "900000000000000001",
+      locationRef: "000900000000000027",
+      mediaOfferRef: "000900000000000006",
       mediaOfferType: 2001,
-      mediaRef: "910000000000000001",
+      mediaRef: "000900000000000010",
       mediaType: 2,
-      correlationRef: "960000000000000002".replace("2", "1"),
+      correlationRef: "000900000000000028",
     });
     // This row's createdAt is MILLISECONDS, unlike accountMedia's seconds.
     expect(drafts[0]!.data.createdAtPlatform).toBe("2026-08-16T21:42:05.000Z");
@@ -442,7 +442,7 @@ describe("tracking links", () => {
     expect(fyp.data.businessDate).toBe("2026-08-19");
     // createdAt is MILLISECONDS on this route.
     expect(fyp.data.createdAtPlatform).toBe("2025-03-01T00:12:00.000Z");
-    expect(fyp.dedupKey).toMatch(/^tracklink:v1:11:750000000000000001:2026-08-19:[0-9a-f]{64}$/);
+    expect(fyp.dedupKey).toMatch(/^tracklink:v1:11:000900000000000029:2026-08-19:[0-9a-f]{64}$/);
   });
 
   it("promotes totalNet the moment the platform populates it", () => {
@@ -465,7 +465,7 @@ describe("discovery feed", () => {
     expect(drafts[0]!.data.viewCount).toBe(16037372);
     // The same tag observed through both sources on the same day is ONE row per
     // (page, tag, date) — the later capture wins on captured_at.
-    expect(drafts[1]!.data.tagRef).toBe("800000000000000001");
+    expect(drafts[1]!.data.tagRef).toBe("000900000000000014");
   });
 });
 
@@ -478,14 +478,14 @@ describe("mass DM, polls and recap (A28-5)", () => {
     expect(drafts).toHaveLength(2);
     const first = drafts[0]!;
     expect(first.data).toMatchObject({
-      broadcastRef: "970000000000000001",
+      broadcastRef: "000900000000000004",
       sourceList: "live",
-      groupRef: "980000000000000001",
+      groupRef: "000900000000000005",
       statsTotal: 1420,
       statsDelivered: 1391,
       statsRead: 806,
       totalTipAmountMills: "12000",
-      offeredMediaRefs: ["900000000000000001"],
+      offeredMediaRefs: ["000900000000000006"],
     });
     // A12: saleStats.total is NET.
     expect(first.data.salesNetMills).toBe("63200");
@@ -529,8 +529,8 @@ describe("mass DM, polls and recap (A28-5)", () => {
     const drafts = ofType(collect("polls", fixture("polls.json").rows), "poll.observed");
     expect(drafts).toHaveLength(1);
     expect(drafts[0]!.data.options).toEqual([
-      { optionRef: "991000000000000001", optionOrdinal: 0, title: "Latex", voteCount: 412 },
-      { optionRef: "991000000000000002", optionOrdinal: 1, title: "Stockings", voteCount: 388 },
+      { optionRef: "000900000000000016", optionOrdinal: 0, title: "Latex", voteCount: 412 },
+      { optionRef: "000900000000000017", optionOrdinal: 1, title: "Stockings", voteCount: 388 },
     ]);
   });
 
