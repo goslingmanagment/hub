@@ -107,6 +107,9 @@ const STREAM_LABELS: Record<string, string> = {
   followers_reconcile: "follower reconcile",
   dm_conversations: "conversation sync",
   dm_messages: "message history",
+  // The fallback renders an unlabelled stream as "stats snapshot", which is
+  // accurate but says nothing about what it captures.
+  stats_snapshot: "account statistics",
 };
 
 const PROGRESS_STREAM_LABELS: Record<string, string> = {

@@ -27,6 +27,7 @@ export const PLATFORM_STREAMS = [
   "fan_earnings",
   "purchase_history",
   "posts",
+  "stats_snapshot",
 ] as const;
 
 export type CanonicalStream = (typeof PLATFORM_STREAMS)[number];

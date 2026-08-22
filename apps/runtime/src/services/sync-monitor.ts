@@ -35,7 +35,11 @@ const MAX_REQUEST_LIMIT = 500;
 const STALLED_THRESHOLD_MS = 45_000;
 const DEEP_BACKFILL_STALLED_THRESHOLD_MS = 60 * 60 * 1000;
 const RATE_LIMITED_LOOKBACK_MS = 15 * 60 * 1000;
-const MONITORED_SYNC_STREAMS = [
+/** Exported so a pin test can assert MONITORED ⊇ getSyncStreamsForPlatform("fansly").
+ *  A Fansly lane the monitor cannot see is a lane that can wedge unobserved —
+ *  which is exactly what happened to `fan_earnings` before W8.1, and what was
+ *  still true of `posts` until WP-F1 added the pin. */
+export const MONITORED_SYNC_STREAMS = [
   "light",
   "fan_identities",
   "followers",
@@ -52,6 +56,12 @@ const MONITORED_SYNC_STREAMS = [
   "top_spenders",
   "fan_earnings",
   "purchase_history",
+  // WP-F1 adds `stats_snapshot` and repairs the already-missing `posts`; the
+  // pin test is what keeps the next one from going missing too. Both stay OUT
+  // of block health (BLOCK_TASKS / SYNC_DOMAIN_POLICY) for the same reason the
+  // ramp-gated streams do.
+  "posts",
+  "stats_snapshot",
 ] as const satisfies readonly SyncStream[];
 const REQUEST_STREAMS = [
   ...MONITORED_SYNC_STREAMS,

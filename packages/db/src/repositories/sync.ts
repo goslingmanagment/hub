@@ -250,6 +250,17 @@ function streamArraySql(streams: readonly SyncStream[]) {
   return sql`ARRAY[${sql.join(streams.map((stream) => sql`${stream}::sync_stream`), sql`, `)}]::sync_stream[]`;
 }
 
+/**
+ * The ops-ordering ladder — the THIRD hand-written copy of the stream order
+ * (page-sync.ts has two).
+ *
+ * DRIFT FIX (WP-F1): it had silently omitted `fan_earnings` and
+ * `purchase_history` since Stage 16, so both fell to `else 999` and sorted last
+ * in the ops view regardless of their real stream index. A hand-written third
+ * copy of a table is exactly the shape that drifts; the repository schema test
+ * iterates SYNC_STREAMS against every ladder, which is what turns the next
+ * omission into a failure instead of a quiet mis-sort.
+ */
 function streamOrderSql(columnName: string) {
   return sql.raw(`
     case ${columnName}
@@ -262,7 +273,10 @@ function streamOrderSql(columnName: string) {
       when 'followers_reconcile' then ${SYNC_STREAM_POLICY.followers_reconcile.streamIndex}
       when 'dm_conversations' then ${SYNC_STREAM_POLICY.dm_conversations.streamIndex}
       when 'dm_messages' then ${SYNC_STREAM_POLICY.dm_messages.streamIndex}
+      when 'fan_earnings' then ${SYNC_STREAM_POLICY.fan_earnings.streamIndex}
+      when 'purchase_history' then ${SYNC_STREAM_POLICY.purchase_history.streamIndex}
       when 'posts' then ${SYNC_STREAM_POLICY.posts.streamIndex}
+      when 'stats_snapshot' then ${SYNC_STREAM_POLICY.stats_snapshot.streamIndex}
       else 999
     end
   `);

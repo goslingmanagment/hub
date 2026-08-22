@@ -139,6 +139,14 @@ const envSchema = z.object({
   FANSLY_FAN_EARNINGS_SYNC_ENABLED: booleanSchema.default(false),
   FANSLY_PURCHASE_HISTORY_SYNC_ENABLED: booleanSchema.default(false),
   FANSLY_NEW_STREAM_PAGE_ALLOWLIST: z.string().default(""),
+  // WP-F1. FANSLY_STATS_SNAPSHOT_PAGE_ALLOWLIST FAILS CLOSED — empty = NO
+  // pages — the OPPOSITE of FANSLY_NEW_STREAM_PAGE_ALLOWLIST above.
+  FANSLY_STATS_SNAPSHOT_SYNC_ENABLED: booleanSchema.default(false),
+  FANSLY_STATS_SNAPSHOT_PAGE_ALLOWLIST: z.string().default(""),
+  FANSLY_STATS_SNAPSHOT_DAILY_CALL_BUDGET: z.coerce.number().int().min(1).max(500).default(25),
+  FANSLY_STATS_HOURLY_ENABLED: booleanSchema.default(true),
+  FANSLY_STATS_HOURLY_BACKFILL_MAX_DAYS: z.coerce.number().int().min(0).max(400).default(30),
+  FANSLY_BACKFILL_CONTINUATION_DELAY_MS: z.coerce.number().int().min(0).max(600_000).default(20_000),
   FANSLY_DEEP_BACKFILL_IGNORE_RETENTION_LIMIT: booleanSchema.default(false),
   OFAPI_DM_COLD_ARCHIVE_RETENTION_DAYS: z.coerce.number().int().positive().default(36500),
   OFAPI_REST_DELAY_MS: z.coerce.number().int().min(0).default(500),
@@ -398,6 +406,15 @@ export interface AppConfig {
   fanslyFanEarningsSyncEnabled?: boolean;
   fanslyPurchaseHistorySyncEnabled?: boolean;
   fanslyNewStreamPageAllowlist?: string;
+  fanslyStatsSnapshotSyncEnabled?: boolean;
+  /** CSV of page labels allowed to run the stats sweep; empty = NONE (fails closed). */
+  fanslyStatsSnapshotPageAllowlist?: string;
+  /** HTTP ATTEMPTS per page per UTC day for the stats lane; crossing it defers. */
+  fanslyStatsSnapshotDailyCallBudget?: number;
+  fanslyStatsHourlyEnabled?: boolean;
+  fanslyStatsHourlyBackfillMaxDays?: number;
+  /** Delay + 30% jitter between BACKFILL chunk continuations (burst shape). */
+  fanslyBackfillContinuationDelayMs?: number;
   fanslyDeepBackfillIgnoreRetentionLimit?: boolean;
   ofapiDmColdArchiveRetentionDays?: number;
   ofapiRestDelayMs?: number;
@@ -672,6 +689,12 @@ export function loadConfig(
     fanslyFanEarningsSyncEnabled: parsed.FANSLY_FAN_EARNINGS_SYNC_ENABLED,
     fanslyPurchaseHistorySyncEnabled: parsed.FANSLY_PURCHASE_HISTORY_SYNC_ENABLED,
     fanslyNewStreamPageAllowlist: parsed.FANSLY_NEW_STREAM_PAGE_ALLOWLIST,
+    fanslyStatsSnapshotSyncEnabled: parsed.FANSLY_STATS_SNAPSHOT_SYNC_ENABLED,
+    fanslyStatsSnapshotPageAllowlist: parsed.FANSLY_STATS_SNAPSHOT_PAGE_ALLOWLIST,
+    fanslyStatsSnapshotDailyCallBudget: parsed.FANSLY_STATS_SNAPSHOT_DAILY_CALL_BUDGET,
+    fanslyStatsHourlyEnabled: parsed.FANSLY_STATS_HOURLY_ENABLED,
+    fanslyStatsHourlyBackfillMaxDays: parsed.FANSLY_STATS_HOURLY_BACKFILL_MAX_DAYS,
+    fanslyBackfillContinuationDelayMs: parsed.FANSLY_BACKFILL_CONTINUATION_DELAY_MS,
     fanslyDeepBackfillIgnoreRetentionLimit: parsed.FANSLY_DEEP_BACKFILL_IGNORE_RETENTION_LIMIT,
     ofapiDmColdArchiveRetentionDays: parsed.OFAPI_DM_COLD_ARCHIVE_RETENTION_DAYS,
     ofapiRestDelayMs: parsed.OFAPI_REST_DELAY_MS,

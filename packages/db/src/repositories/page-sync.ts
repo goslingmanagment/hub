@@ -25,6 +25,10 @@ export const SYNC_STREAMS = [
   "fan_earnings",
   "purchase_history",
   "posts",
+  // WP-F1: the account-level statistics sweep (maintenance, 6 h cadence; the
+  // daily-slot logic lives inside the handler). Fansly-only, gated off, and
+  // seeded PAUSED like `posts` — see SEED_PAUSED_SYNC_STREAMS below.
+  "stats_snapshot",
 ] as const;
 
 export type SyncStream = typeof SYNC_STREAMS[number];
@@ -51,6 +55,9 @@ export type SyncWorkClass = "live" | "history" | "maintenance";
 export const FANSLY_BULK_SYNC_STREAMS = [
   "fan_earnings",
   "purchase_history",
+  // WP-F1: gate flips must materialize into durable pause/resume (#191/#194)
+  // for this lane too, or opening its flag moves nothing until the next slot.
+  "stats_snapshot",
 ] as const;
 
 export type FanslyBulkSyncStream = typeof FANSLY_BULK_SYNC_STREAMS[number];
@@ -63,6 +70,23 @@ export interface FanslyBulkStreamGateReconcileResult {
 }
 
 export const FANSLY_BULK_STREAM_FEATURE_GATE_BLOCKER_KIND = "feature_gate";
+
+/**
+ * Streams that seed PAUSED, with no blocker (paused-without-a-blocker is
+ * distinguishable from a `feature_gate` pause).
+ *
+ * WP-F1 generalizes what used to be a hard `if (stream === "posts")`. Every
+ * OTHER stream seeds `pending`/recovery, so a gated-off stream added to
+ * SYNC_STREAMS without an entry here would seed one pending row per page,
+ * FLEET-WIDE, on the deploy that ships it — before its flag was ever opened.
+ * Ungating stays an explicit act: the gate reconciler resumes it, or an
+ * operator uses the stream's own sync scope.
+ */
+export const SEED_PAUSED_SYNC_STREAMS = ["posts", "stats_snapshot"] as const;
+
+export function isSeedPausedSyncStream(stream: string): boolean {
+  return (SEED_PAUSED_SYNC_STREAMS as readonly string[]).includes(stream);
+}
 
 export interface SyncStreamPolicy {
   stream: SyncStream;
@@ -238,6 +262,23 @@ export const SYNC_STREAM_POLICY: Record<SyncStream, SyncStreamPolicy> = {
     progressStallThresholdMs: 30 * 60_000,
     freshnessSlaSeconds: null,
   },
+  // WP-F1: the statistics sweep. `domain: "financials"` is where its revenue
+  // mix belongs, but note it is deliberately ABSENT from SYNC_DOMAIN_POLICY's
+  // primary/supporting lists — a flag-gated analytics stream must not degrade a
+  // page's block-health UX to "catching up" while its ramp gate is off.
+  // Cadence 21 600 s so a deferred day resumes within six hours; the handler
+  // decides whether a daily sweep is actually due.
+  stats_snapshot: {
+    stream: "stats_snapshot",
+    domain: "financials",
+    cadenceSeconds: 21600,
+    basePriority: 13,
+    streamIndex: 13,
+    defaultWorkClass: "maintenance",
+    queueDelayThresholdMs: 90 * 60_000,
+    progressStallThresholdMs: 30 * 60_000,
+    freshnessSlaSeconds: null,
+  },
 };
 
 export const SYNC_DOMAIN_POLICY: Record<SyncDomain, SyncDomainPolicy> = {
@@ -302,6 +343,7 @@ const SYNC_STREAM_PRIORITY_BY_SOURCE: Record<SyncRequestSource, Record<SyncStrea
     fan_earnings: 20,
     purchase_history: 19,
     posts: 18,
+    stats_snapshot: 17,
   },
   recovery: {
     light: 70,
@@ -316,6 +358,7 @@ const SYNC_STREAM_PRIORITY_BY_SOURCE: Record<SyncRequestSource, Record<SyncStrea
     fan_earnings: 30,
     purchase_history: 29,
     posts: 28,
+    stats_snapshot: 27,
   },
   anomaly: {
     light: 70,
@@ -330,6 +373,7 @@ const SYNC_STREAM_PRIORITY_BY_SOURCE: Record<SyncRequestSource, Record<SyncStrea
     fan_earnings: 30,
     purchase_history: 29,
     posts: 28,
+    stats_snapshot: 27,
   },
   manual: {
     light: 100,
@@ -344,6 +388,7 @@ const SYNC_STREAM_PRIORITY_BY_SOURCE: Record<SyncRequestSource, Record<SyncStrea
     fan_earnings: 60,
     purchase_history: 59,
     posts: 58,
+    stats_snapshot: 57,
   },
   onboarding: {
     light: 100,
@@ -358,6 +403,7 @@ const SYNC_STREAM_PRIORITY_BY_SOURCE: Record<SyncRequestSource, Record<SyncStrea
     fan_earnings: 60,
     purchase_history: 59,
     posts: 58,
+    stats_snapshot: 57,
   },
   reset: {
     light: 100,
@@ -372,6 +418,7 @@ const SYNC_STREAM_PRIORITY_BY_SOURCE: Record<SyncRequestSource, Record<SyncStrea
     fan_earnings: 60,
     purchase_history: 59,
     posts: 58,
+    stats_snapshot: 57,
   },
 };
 
@@ -518,6 +565,7 @@ function streamOrderSql(columnName: string) {
       when 'fan_earnings' then ${SYNC_STREAM_POLICY.fan_earnings.streamIndex}
       when 'purchase_history' then ${SYNC_STREAM_POLICY.purchase_history.streamIndex}
       when 'posts' then ${SYNC_STREAM_POLICY.posts.streamIndex}
+      when 'stats_snapshot' then ${SYNC_STREAM_POLICY.stats_snapshot.streamIndex}
       else 999
     end
   `);
@@ -538,6 +586,7 @@ function streamPriorityBySourceSql(streamColumnName: string, sourceColumnName: s
       when 'fan_earnings' then ${SYNC_STREAM_PRIORITY_BY_SOURCE[source].fan_earnings}
       when 'purchase_history' then ${SYNC_STREAM_PRIORITY_BY_SOURCE[source].purchase_history}
       when 'posts' then ${SYNC_STREAM_PRIORITY_BY_SOURCE[source].posts}
+      when 'stats_snapshot' then ${SYNC_STREAM_PRIORITY_BY_SOURCE[source].stats_snapshot}
       else 0
     end
   `;
@@ -812,7 +861,7 @@ function buildSeedPageSyncState(
     ? (onboarding ? "onboarding" : "recovery")
     : null;
 
-  if (stream === "posts") {
+  if (isSeedPausedSyncStream(stream)) {
     return {
       pageId: page.id,
       stream,

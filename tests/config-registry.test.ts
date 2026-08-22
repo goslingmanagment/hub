@@ -85,6 +85,13 @@ describe("config registry", () => {
     "fanslyFanEarningsSyncEnabled",
     "fanslyPurchaseHistorySyncEnabled",
     "fanslyNewStreamPageAllowlist",
+    // WP-F1 stats lane (live so a ramp flip and a budget change need no restart).
+    "fanslyStatsSnapshotSyncEnabled",
+    "fanslyStatsSnapshotPageAllowlist",
+    "fanslyStatsSnapshotDailyCallBudget",
+    "fanslyStatsHourlyEnabled",
+    "fanslyStatsHourlyBackfillMaxDays",
+    "fanslyBackfillContinuationDelayMs",
     "fanslyDeepBackfillIgnoreRetentionLimit",
     // Fast-reply freshness PR3: union-read mode, read per generation.
     "aiTranscriptFreshUnionMode",

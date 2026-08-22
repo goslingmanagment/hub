@@ -61,6 +61,7 @@ import {
   requireOwner,
 } from "../../services/auth.ts";
 import { listConnectionStatuses } from "../../services/connections.ts";
+import { isPageAllowlisted } from "../../services/voice-notes.ts";
 import {
   BadRequestError,
   ConflictError,
@@ -181,18 +182,39 @@ type IncidentSummaryRow = {
   count: number | string;
 };
 
-/** The three config keys that make up the Stage 16 Fansly ramp gate. Editing any
- *  of them can OPEN the gate for a page, which is what the wake-up below reacts to. */
+/** The config keys that make up the Fansly ramp gates. Editing any of them can
+ *  OPEN a gate for a page, which is what the wake-up below reacts to.
+ *
+ *  Registering a new gate's keys here is NOT optional: incident #192 was a
+ *  gate-open that moved nothing for up to a day, and an unregistered key
+ *  reproduces it exactly. */
 const GATE_CONFIG_KEYS = new Set([
   "fanslyNewStreamPageAllowlist",
   "fanslyFanEarningsSyncEnabled",
   "fanslyPurchaseHistorySyncEnabled",
+  // WP-F1.
+  "fanslyStatsSnapshotSyncEnabled",
+  "fanslyStatsSnapshotPageAllowlist",
 ]);
 
-/** The two streams the ramp gate governs, each with the flag that enables it. */
+/**
+ * The streams the ramp gate governs, each with the flag that enables it and —
+ * where the lane has one — its OWN allowlist key.
+ *
+ * `allowlistField` is what keeps the two allowlist SEMANTICS apart:
+ * `fanslyNewStreamPageAllowlist` fails OPEN (empty = all pages) and
+ * `fanslyStatsSnapshotPageAllowlist` fails CLOSED (empty = none). Reading the
+ * stats lane through the shared key would report every page as "ramped" the
+ * moment its flag went on, and the wake-up would queue the whole fleet.
+ */
 const GATED_FANSLY_STREAMS = [
-  { stream: "fan_earnings", enabledField: "fanslyFanEarningsSyncEnabled" },
-  { stream: "purchase_history", enabledField: "fanslyPurchaseHistorySyncEnabled" },
+  { stream: "fan_earnings", enabledField: "fanslyFanEarningsSyncEnabled", failClosedAllowlistField: null },
+  { stream: "purchase_history", enabledField: "fanslyPurchaseHistorySyncEnabled", failClosedAllowlistField: null },
+  {
+    stream: "stats_snapshot",
+    enabledField: "fanslyStatsSnapshotSyncEnabled",
+    failClosedAllowlistField: "fanslyStatsSnapshotPageAllowlist",
+  },
 ] as const;
 
 /** Gate verdict per (page, gated stream) at one instant, plus the pages it was
@@ -221,14 +243,24 @@ async function captureFanslyGateStates(appContext: AppContext): Promise<FanslyGa
       // its allowlist primitive (fanslyNewStreamAllowed), but it is not literally the
       // code the executor runs. Using it keeps this verdict aligned with what the
       // `top-spenders` source block tells the extension.
+      const streamEnabled = effective[gated.enabledField] === true;
       states.set(
         gateStateKey(page.id, gated.stream),
-        resolveFanslyNewStreamState({
-          platform: page.platform,
-          pageLabel: page.label,
-          streamEnabled: effective[gated.enabledField] === true,
-          allowlistCsv: effective.fanslyNewStreamPageAllowlist,
-        }),
+        gated.failClosedAllowlistField === null
+          ? resolveFanslyNewStreamState({
+            platform: page.platform,
+            pageLabel: page.label,
+            streamEnabled,
+            allowlistCsv: effective.fanslyNewStreamPageAllowlist,
+          })
+          : !streamEnabled
+          ? "flag_off"
+          : isPageAllowlisted(
+            effective[gated.failClosedAllowlistField] as string | undefined,
+            page.label,
+          )
+          ? "ramped"
+          : "not_allowlisted",
       );
     }
   }
