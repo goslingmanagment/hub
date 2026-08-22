@@ -760,3 +760,144 @@ describe("WP-F6 adapter method: GET /post?ids=", () => {
     expect(POST_BATCH_SIZE).toBe(100);
   });
 });
+
+describe("WP-F7 adapter methods: the two payout routes", () => {
+  it("builds the exact method, path and query for both, through the page's own proxy", async () => {
+    const { FanslyAdapter, fetchMock, proxyDispatchers } = harness;
+    fetchMock.mockResolvedValueOnce(toJsonResponse({ success: true, response: [] }));
+    fetchMock.mockResolvedValueOnce(
+      toJsonResponse({ success: true, response: { total: 0, data: [] } }),
+    );
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    await adapter.getPayoutMethods(context());
+    await adapter.getPayoutRequestsPage(context(), {
+      before: "",
+      after: "",
+      limit: 10,
+      offset: 20,
+    });
+    await adapter.close();
+
+    const methods = fetchMock.mock.calls.map(([, init]) => (init as RequestInit).method);
+    // READ-ONLY, ALWAYS. There is no POST to the platform anywhere in this
+    // initiative, and least of all on the lane that reads payout credentials.
+    expect(new Set(methods)).toEqual(new Set(["GET"]));
+
+    const urls = fetchMock.mock.calls.map(([input]) => new URL(String(input)));
+    expect(urls[0]?.pathname).toBe("/payments/payoutmethods");
+    // No query but the service-worker bypass every Fansly request carries.
+    expect([...urls[0]!.searchParams.keys()]).toEqual(["ngsw-bypass"]);
+
+    expect(urls[1]?.pathname).toBe("/payments/payout/requests");
+    // PRESENT AND EMPTY, both of them — the form the app sends on all nine
+    // observed calls. An omitted parameter is a different request, and only the
+    // empty one has ever been answered.
+    expect(urls[1]?.searchParams.has("before")).toBe(true);
+    expect(urls[1]?.searchParams.get("before")).toBe("");
+    expect(urls[1]?.searchParams.has("after")).toBe(true);
+    expect(urls[1]?.searchParams.get("after")).toBe("");
+    expect(urls[1]?.searchParams.get("limit")).toBe("10");
+    expect(urls[1]?.searchParams.get("offset")).toBe("20");
+    expect(urls[1]?.searchParams.get("ngsw-bypass")).toBe("true");
+
+    // FANSLY PAGES MUST GO THROUGH THEIR OWN PROXY — a direct-IP request risks
+    // a model ban.
+    expect(proxyDispatchers.length).toBeGreaterThan(0);
+    for (const [, init] of fetchMock.mock.calls) {
+      expect((init as { dispatcher?: { label?: string } }).dispatcher?.label).toMatch(/^proxy-/);
+    }
+  });
+
+  it("keeps `before` and `after` present-and-empty when the caller omits them", async () => {
+    const { FanslyAdapter, fetchMock } = harness;
+    fetchMock.mockResolvedValueOnce(
+      toJsonResponse({ success: true, response: { total: 0, data: [] } }),
+    );
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    await adapter.getPayoutRequestsPage(context(), { limit: 10, offset: 0 });
+    await adapter.close();
+    const url = new URL(String(fetchMock.mock.calls[0]?.[0]));
+    expect(url.searchParams.get("before")).toBe("");
+    expect(url.searchParams.get("after")).toBe("");
+    expect(url.searchParams.get("offset")).toBe("0");
+  });
+
+  it("hands the body through VERBATIM — nothing is decoded in transport", async () => {
+    const { FanslyAdapter, fetchMock } = harness;
+    // `metadata` is a JSON-ENCODED STRING carrying a plaintext address. The
+    // adapter is a TRANSPORT: it must not decode it, must not mask it, and must
+    // not drop it. Journal-before-parse is the whole capture rule, and the mask
+    // lives one layer up where a fixture can bite it.
+    const body = [{
+      id: "000900000000009001",
+      accountId: "000900000000000001",
+      providerId: "2",
+      type: 1,
+      flags: 0,
+      status: 3,
+      metadata: "{\"email\":\"fixture.creator@example.invalid\"}",
+      version: 0,
+    }];
+    fetchMock.mockResolvedValueOnce(toJsonResponse({ success: true, response: body }));
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const result = await adapter.getPayoutMethods(context());
+    await adapter.close();
+    expect(result.raw).toEqual(body);
+  });
+
+  it("treats 403 on the method listing as terminal — one attempt, typed failure", async () => {
+    const { FanslyAdapter, fetchMock } = harness;
+    fetchMock.mockResolvedValue(
+      toJsonResponse({ success: false, error: { code: 403, message: "forbidden" } }, {
+        status: 403,
+      }),
+    );
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const { events, requestObserver } = captureEvents();
+    const failure = await adapter.getPayoutMethods(context({ requestObserver }))
+      .then(() => null, (error: unknown) => error as { status?: number });
+    await adapter.close();
+
+    expect(failure?.status).toBe(403);
+    // A dead session that retried three times would triple egress that is
+    // already failing, and it must reach the executor's auth pause unchanged.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(events.filter((event) => event.state === "started")).toHaveLength(1);
+  });
+
+  it("treats 401 on the request walk as terminal — never an empty page", async () => {
+    const { FanslyAdapter, fetchMock } = harness;
+    fetchMock.mockResolvedValue(
+      toJsonResponse({ success: false, error: { code: 401, message: "unauthorized" } }, {
+        status: 401,
+      }),
+    );
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const { events, requestObserver } = captureEvents();
+    const failure = await adapter
+      .getPayoutRequestsPage(context({ requestObserver }), { limit: 10, offset: 0 })
+      .then(() => null, (error: unknown) => error as { status?: number });
+    await adapter.close();
+
+    // LOAD-BEARING: the walk stops when a page comes back SHORT, so an auth
+    // failure that surfaced as an empty page would end the walk and record the
+    // history as exhausted at whatever offset the session died on.
+    expect(failure?.status).toBe(401);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(events.filter((event) => event.state === "started")).toHaveLength(1);
+  });
+
+  it("does NOT soften an empty body on either payout route", async () => {
+    const { FanslyAdapter, fetchMock } = harness;
+    // `emptyStatuses` is WP-F5's opt-in and it is scoped to that one method.
+    // Here an envelope-less body IS a failure: "no payout history" arrives as
+    // `{total, data: []}`, and letting a truncated response read as "no data"
+    // would make an empty walk indistinguishable from a broken one.
+    fetchMock.mockResolvedValue(new Response(null, { status: 204 }));
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const failure = await adapter.getPayoutMethods(context())
+      .then(() => null, (error: unknown) => error as Error);
+    await adapter.close();
+    expect(failure).toBeInstanceOf(Error);
+  });
+});
