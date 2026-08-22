@@ -342,6 +342,10 @@ function tagCounterDrafts(
       continue;
     }
     seen.add(tagRef);
+    // `capturedAt` is deliberately OUTSIDE the hashed material. The counters are
+    // a DAILY sample: two polls on the same day that see the same numbers are
+    // one fact, and hashing the instant would mint a fresh event on every call
+    // forever — the same runaway A21 deleted the capture-window event for.
     const material = {
       tagRef,
       tagName: asString(row.tag),
@@ -353,13 +357,12 @@ function tagCounterDrafts(
       postCount: nonNegativeCount(row.postCount),
       tagCreatedAt: msInstantIso(row.createdAt),
       source,
-      capturedAt: capturedAtIso,
     };
     const hash = contentHash(material);
     drafts.push({
       type: "tag.counters_observed",
       occurredAt: observation.receivedAt,
-      data: { ...material, contentHash: hash },
+      data: { ...material, capturedAt: capturedAtIso, contentHash: hash },
       schemaVersion: SCHEMA_VERSION,
       dedupKey: `tagcount:v1:${pageRef}:${tagRef}:${date}:${hash}`,
     });
@@ -641,13 +644,14 @@ function trackingLinkDrafts(observation: CanonicalizableObservation): CanonicalE
       totalNetMills: servedNet !== null && servedNet > 0 ? millsString(servedNet) : null,
       /** The number the platform actually sent, so "0" and "absent" stay apart. */
       totalNetServed: servedNet,
-      capturedAt: capturedAtIso,
     };
+    // Same rule as the tag counters: the snapshot is per link per DAY, so the
+    // capture instant travels beside the hash rather than inside it.
     const hash = contentHash(material);
     drafts.push({
       type: "tracking_link.snapshot_observed",
       occurredAt: observation.receivedAt,
-      data: { ...material, contentHash: hash },
+      data: { ...material, capturedAt: capturedAtIso, contentHash: hash },
       schemaVersion: SCHEMA_VERSION,
       dedupKey: `tracklink:v1:${pageRef}:${linkRef}:${date}:${hash}`,
     });

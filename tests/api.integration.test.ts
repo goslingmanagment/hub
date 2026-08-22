@@ -462,6 +462,27 @@ function createAutoSyncFanslyAdapter(input: {
     async getVaultMediaPage() {
       return { items: [], raw: [] };
     },
+    // WP-F1: the stats lane's five reads plus the tracking-links call. The stub
+    // grows with the adapter deliberately — the cast is what keeps this fake
+    // honest about the surface the runtime actually depends on.
+    async getTrackingLinks() {
+      return { items: [], contractAccepted: true, raw: [] };
+    },
+    async getAccountStats() {
+      return { items: null, raw: null };
+    },
+    async getMediaOfferStats() {
+      return { items: null, raw: null };
+    },
+    async getEarningsStatsWindow() {
+      return { items: [], raw: [] };
+    },
+    async getEarningsMonthlyStats() {
+      return { items: [], raw: [] };
+    },
+    async getDiscoveryMediaSuggestions() {
+      return { items: null, raw: null };
+    },
     async close() {},
   } as AppContext["adapter"];
 }
