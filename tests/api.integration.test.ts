@@ -396,6 +396,19 @@ function createAutoSyncFanslyAdapter(input: {
         raw: { posts: [] },
       };
     },
+    // WP-F6 — the batch post read. Same envelope as the timeline.
+    async getPostsByIds() {
+      return {
+        items: [],
+        accountId: "",
+        wallId: null,
+        before: "0",
+        nextBefore: null,
+        done: true,
+        contractAccepted: true,
+        raw: { posts: [] },
+      };
+    },
     async getTipsByTargetIds(_context: unknown, targetIds: string[]) {
       return {
         items: [],

@@ -169,7 +169,7 @@ export async function upsertCreatorPost(
     // FANSLY ONLY, decided in SQL and not in TypeScript — `/post/{id}/replies`
     // and `GET /post?ids=` are Fansly routes. The predicate lives in the
     // statement so the platform seam stays where the Stage 18 ratchet expects
-    // it: no new strict `platform ===` comparison outside the adapter packages.
+    // it: no new strict platform equality outside the adapter packages.
     await database.execute(sql`
       insert into subject_refresh_state (
         page_id, plane, subject_ref, refresh_class, next_due_at

@@ -40,14 +40,22 @@ describe("health-floor gauge names", () => {
     const syncPull = CANONICALIZER_FAMILIES.find((family) => family.lane === "sync");
     expect(posts).toBeDefined();
     expect(syncPull).toBeDefined();
-    // The premise of the collision: same source, same version number.
+    // The premise of the collision: same SOURCE. The two families reached v5
+    // together, which is when the old `obs_backlog_${source}_v${version}` shape
+    // made them write one name; WP-F6 has since moved posts to v6, so the
+    // collision is asserted at the version they SHARED rather than at today's
+    // numbers, which happen to differ. It is the LANE, not the version, that
+    // keeps the two series apart — and a future bump that lands sync-pull on
+    // the same number again must not re-open this.
     expect(syncPull!.source).toBe(posts!.source);
+    expect(healthFloorName(posts!.source, posts!.lane, 5)).toBe("obs_backlog_pull_posts_v5");
+    expect(healthFloorName(syncPull!.source, syncPull!.lane, 5)).toBe("obs_backlog_pull_sync_v5");
+    // …and at the versions that are live today.
     expect(syncPull!.version).toBe(5);
-    expect(posts!.version).toBe(5);
-    // …and yet two distinct series.
+    expect(posts!.version).toBe(6);
     const postsName = healthFloorName(posts!.source, posts!.lane, posts!.version);
     const syncName = healthFloorName(syncPull!.source, syncPull!.lane, syncPull!.version);
-    expect(postsName).toBe("obs_backlog_pull_posts_v5");
+    expect(postsName).toBe("obs_backlog_pull_posts_v6");
     expect(syncName).toBe("obs_backlog_pull_sync_v5");
     expect(postsName).not.toBe(syncName);
   });

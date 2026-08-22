@@ -161,6 +161,10 @@ const envSchema = z.object({
   FANSLY_POST_REPLIES_PAGE_ALLOWLIST: z.string().default(""),
   FANSLY_REPLIES_DAILY_CALL_BUDGET: z.coerce.number().int().min(1).max(400).default(100),
   FANSLY_REPLIES_REWALK_CYCLE_DAYS: z.coerce.number().int().min(1).max(365).default(14),
+  // WP-F6. Rides the EXISTING `posts` stream, so it has no allowlist of its
+  // own; the cap is counted apart from the timeline walk in the same cursor.
+  FANSLY_POST_ENGAGEMENT_REFRESH_ENABLED: booleanSchema.default(false),
+  FANSLY_POST_ENGAGEMENT_DAILY_CALL_BUDGET: z.coerce.number().int().min(1).max(200).default(40),
   FANSLY_STATS_HOURLY_ENABLED: booleanSchema.default(true),
   FANSLY_STATS_HOURLY_BACKFILL_MAX_DAYS: z.coerce.number().int().min(0).max(400).default(30),
   FANSLY_BACKFILL_CONTINUATION_DELAY_MS: z.coerce.number().int().min(0).max(600_000).default(20_000),
@@ -445,6 +449,11 @@ export interface AppConfig {
   fanslyRepliesDailyCallBudget?: number;
   /** How stale a post's last walk must be before the round-robin re-reads it. */
   fanslyRepliesRewalkCycleDays?: number;
+  /** WP-F6: the decayed `GET /post?ids=` phase on the EXISTING posts stream. */
+  fanslyPostEngagementRefreshEnabled?: boolean;
+  /** HTTP ATTEMPTS per page per UTC day for the engagement phase; crossing it
+   *  defers. Counted apart from the timeline walk in the same posts cursor. */
+  fanslyPostEngagementDailyCallBudget?: number;
   fanslyStatsHourlyEnabled?: boolean;
   fanslyStatsHourlyBackfillMaxDays?: number;
   /** Delay + 30% jitter between BACKFILL chunk continuations (burst shape). */
@@ -736,6 +745,8 @@ export function loadConfig(
     fanslyPostRepliesPageAllowlist: parsed.FANSLY_POST_REPLIES_PAGE_ALLOWLIST,
     fanslyRepliesDailyCallBudget: parsed.FANSLY_REPLIES_DAILY_CALL_BUDGET,
     fanslyRepliesRewalkCycleDays: parsed.FANSLY_REPLIES_REWALK_CYCLE_DAYS,
+    fanslyPostEngagementRefreshEnabled: parsed.FANSLY_POST_ENGAGEMENT_REFRESH_ENABLED,
+    fanslyPostEngagementDailyCallBudget: parsed.FANSLY_POST_ENGAGEMENT_DAILY_CALL_BUDGET,
     fanslyStatsHourlyEnabled: parsed.FANSLY_STATS_HOURLY_ENABLED,
     fanslyStatsHourlyBackfillMaxDays: parsed.FANSLY_STATS_HOURLY_BACKFILL_MAX_DAYS,
     fanslyBackfillContinuationDelayMs: parsed.FANSLY_BACKFILL_CONTINUATION_DELAY_MS,

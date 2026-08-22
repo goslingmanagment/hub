@@ -109,6 +109,12 @@ describe("config registry", () => {
     "fanslyPostRepliesPageAllowlist",
     "fanslyRepliesDailyCallBudget",
     "fanslyRepliesRewalkCycleDays",
+    // WP-F6 engagement refresh on the EXISTING posts stream. Live for the same
+    // reason as every other lane gate: the phase must be stoppable, and its cap
+    // re-sizable, without a deploy — and without touching the timeline capture
+    // it rides on.
+    "fanslyPostEngagementRefreshEnabled",
+    "fanslyPostEngagementDailyCallBudget",
     "fanslyDeepBackfillIgnoreRetentionLimit",
     // Fast-reply freshness PR3: union-read mode, read per generation.
     "aiTranscriptFreshUnionMode",
