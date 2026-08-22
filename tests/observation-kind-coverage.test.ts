@@ -32,6 +32,7 @@ import {
   type WrittenObservationKind,
 } from "../apps/runtime/src/services/observation-kinds.ts";
 import { CANONICALIZER_FAMILIES } from "../apps/runtime/src/services/canonicalize/index.ts";
+import { OFAPI_WEBHOOK_EVENTS } from "../apps/runtime/src/services/ofapi-webhooks.ts";
 
 const ROOT = join(__dirname, "..");
 
@@ -261,6 +262,40 @@ describe("(2) census — the registry is compared against what the tree writes",
     const unregistered = [...census].filter((kind) => !registered.has(kind));
     expect(unregistered, "namespaced observation kinds written but not registered").toEqual([]);
     expect(census.size).toBeGreaterThan(5);
+  });
+
+  it("registers EVERY subscribed OFAPI webhook event as a written webhook kind", () => {
+    // The seam is `kind: acceptedEnvelope.event` (ofapi-webhook-capture.ts), so
+    // the SUBSCRIPTION list is the census: every event we ask the vendor to
+    // deliver becomes an observations.kind the moment it arrives. Three of them
+    // (users.typing, chat_queue.updated, chat_queue.finished) were subscribed
+    // and journaled while unregistered — invisible to the health-floor registry,
+    // exactly the BL-C3 shape. This pin makes the next edit of
+    // OFAPI_WEBHOOK_EVENTS fail CI until the kind is registered AND owned.
+    const webhookKinds = new Set(
+      WRITTEN_OBSERVATION_KINDS.filter((entry) => entry.source === "webhook")
+        .map((entry) => entry.kind),
+    );
+    const unregistered = OFAPI_WEBHOOK_EVENTS.filter((event) => !webhookKinds.has(event));
+    expect(
+      unregistered,
+      "subscribed OFAPI webhook events that no WRITTEN_OBSERVATION_KINDS entry registers — "
+        + "the capture writer journals kind = the vendor event name, so each one IS a "
+        + "written kind",
+    ).toEqual([]);
+
+    // Registration alone is not the guarantee: each must also be OWNED (family,
+    // off-sweep, dynamic rule, or a justified raw-only entry).
+    for (const event of OFAPI_WEBHOOK_EVENTS) {
+      const entry = WRITTEN_OBSERVATION_KINDS.find((item) =>
+        item.source === "webhook" && item.kind === event
+      )!;
+      expect(claimObservationKind(entry), event).toMatchObject({ claimed: true });
+    }
+
+    // Non-vacuous: the subscription list must actually have been imported.
+    expect(OFAPI_WEBHOOK_EVENTS.length).toBeGreaterThan(15);
+    expect(OFAPI_WEBHOOK_EVENTS).toContain("users.typing");
   });
 
   it("pins the set of files that write observations.kind directly", () => {

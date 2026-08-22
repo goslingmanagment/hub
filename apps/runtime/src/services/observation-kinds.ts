@@ -72,6 +72,7 @@ export const WRITTEN_OBSERVATION_KINDS: readonly WrittenObservationKind[] = [
   { kind: "transactions.new", source: "webhook", writer: "services/ofapi-webhook-capture.ts" },
   { kind: "subscriptions.new", source: "webhook", writer: "services/ofapi-webhook-capture.ts" },
   { kind: "subscriptions.renewed", source: "webhook", writer: "services/ofapi-webhook-capture.ts" },
+  { kind: "users.typing", source: "webhook", writer: "services/ofapi-webhook-capture.ts" },
   { kind: "users.online", source: "webhook", writer: "services/ofapi-webhook-capture.ts" },
   { kind: "users.offline", source: "webhook", writer: "services/ofapi-webhook-capture.ts" },
   { kind: "accounts.connected", source: "webhook", writer: "services/ofapi-webhook-capture.ts" },
@@ -96,6 +97,8 @@ export const WRITTEN_OBSERVATION_KINDS: readonly WrittenObservationKind[] = [
     source: "webhook",
     writer: "services/ofapi-webhook-capture.ts",
   },
+  { kind: "chat_queue.updated", source: "webhook", writer: "services/ofapi-webhook-capture.ts" },
+  { kind: "chat_queue.finished", source: "webhook", writer: "services/ofapi-webhook-capture.ts" },
   // The webhook lane's own rejection witnesses — journaled BEFORE any parse, so
   // a malformed or mis-identified delivery is still a fact we hold.
   {
@@ -384,6 +387,29 @@ export const RAW_ONLY_OBSERVATION_KINDS: readonly RawOnlyObservationKind[] = [
   {
     kind: "link_stats_trial",
     justification: "The second half of the BL-C3 pair — same lane, same reasoning.",
+  },
+  {
+    kind: "users.typing",
+    justification:
+      "SUBSCRIBED and journaled (kind = the vendor event) but outside "
+      + "OFAPI_WEBHOOK_CANONICALIZED_KINDS: a typing indicator is a transient UI signal "
+      + "with a lifetime of seconds, not a durable platform fact — the presence projection "
+      + "claims users.online/offline and deliberately stops there.",
+  },
+  {
+    kind: "chat_queue.updated",
+    justification:
+      "SUBSCRIBED and journaled but claimed by no family: vendor-side send-queue progress "
+      + "for OUR outbound work. The outbox is the kernel's own truth for a send (one "
+      + "attempt, fail closed), so projecting the vendor's queue view would mint a second, "
+      + "racing opinion about a fact we already own.",
+  },
+  {
+    kind: "chat_queue.finished",
+    justification:
+      "The terminal half of the same vendor send-queue lifecycle — see chat_queue.updated. "
+      + "Captured because DP 7 says a fact we received is kept; not projected because the "
+      + "outbox row, not the vendor queue, is what says whether a message was sent.",
   },
   {
     kind: "ofapi.webhook.invalid_identity",
