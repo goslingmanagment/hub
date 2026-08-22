@@ -358,3 +358,178 @@ describe("WP-F2 adapter method: /notifications", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("WP-F3 adapter methods", () => {
+  it("builds the exact method, path and query for every catalog-lane call", async () => {
+    const { FanslyAdapter, fetchMock, proxyDispatchers } = harness;
+    for (let index = 0; index < 9; index += 1) {
+      fetchMock.mockResolvedValueOnce(toJsonResponse({ success: true, response: [] }));
+    }
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+
+    await adapter.getVaultAlbums(context());
+    await adapter.getUserVaultAlbums(context(), { accountId: "account-1" });
+    await adapter.getSubscriptionTiers(context());
+    await adapter.getGiftCodes(context());
+    await adapter.getAutomatedMessages(context());
+    await adapter.getAccountWalls(context(), { correlationPostIds: "" });
+    // THE FIRST PAGE of an album walk, in the app's own form.
+    await adapter.getVaultMediaPage(context(), {
+      albumId: "album-1",
+      mediaType: "",
+      search: "",
+      before: "0",
+      after: "0",
+    });
+    // THE SECOND PAGE: `before` carries the last albumMedia row's id.
+    await adapter.getVaultMediaPage(context(), {
+      albumId: "album-1",
+      mediaType: "",
+      search: "",
+      before: "member-99",
+      after: "0",
+    });
+    await adapter.getAccountMediaByIds(context(), { ids: "a,b,c" });
+    await adapter.close();
+
+    const methods = fetchMock.mock.calls.map(([, init]) => (init as RequestInit).method);
+    // READ-ONLY, ALWAYS. There is no POST to the platform in this lane.
+    expect(new Set(methods)).toEqual(new Set(["GET"]));
+
+    const urls = fetchMock.mock.calls.map(([input]) => new URL(String(input)));
+
+    expect(urls[0]?.pathname).toBe("/vault/albumsnew");
+    expect(urls[1]?.pathname).toBe("/uservault/albumsnew");
+    expect(urls[1]?.searchParams.get("accountId")).toBe("account-1");
+    expect(urls[2]?.pathname).toBe("/subscriptions/tiers");
+    expect(urls[3]?.pathname).toBe("/subscriptions/giftcodes");
+    expect(urls[4]?.pathname).toBe("/message/automated");
+    expect(urls[5]?.pathname).toBe("/account/walls");
+    // Present and EMPTY, exactly as the app sends the bare form.
+    expect(urls[5]?.searchParams.get("correlationPostIds")).toBe("");
+
+    // ── THE `/media/vaultnew` FORM, and it is the load-bearing assertion in
+    // this file. The 2026-08-22 probe sent `before=&after=` for a 4 760-item
+    // album and got `{albumMedia: [], media: []}` — an empty page that looks
+    // exactly like an exhausted album. The app sends the LITERAL "0".
+    expect(urls[6]?.pathname).toBe("/media/vaultnew");
+    expect(urls[6]?.searchParams.get("albumId")).toBe("album-1");
+    expect(urls[6]?.searchParams.get("before")).toBe("0");
+    expect(urls[6]?.searchParams.get("after")).toBe("0");
+    // Present and EMPTY when unfiltered — the app's own getMediaTypeFilter()
+    // returns "" when neither images nor video are hidden. Omitting the key is
+    // a different request.
+    expect(urls[6]?.searchParams.has("mediaType")).toBe(true);
+    expect(urls[6]?.searchParams.get("mediaType")).toBe("");
+    expect(urls[6]?.searchParams.get("search")).toBe("");
+    // PAGINATION: `before` is the last albumMedia row's own id.
+    expect(urls[7]?.searchParams.get("before")).toBe("member-99");
+    expect(urls[7]?.searchParams.get("after")).toBe("0");
+
+    expect(urls[8]?.pathname).toBe("/account/media");
+    expect(urls[8]?.searchParams.get("ids")).toBe("a,b,c");
+
+    for (const url of urls) {
+      // Every URL carries the service-worker bypass the adapter appends.
+      expect(url.searchParams.get("ngsw-bypass")).toBe("true");
+    }
+
+    const headers = fetchMock.mock.calls.map(
+      ([, init]) => (init as RequestInit).headers as Record<string, string>,
+    );
+    for (const header of headers) {
+      expect(header.authorization).toBe("token-abc");
+      expect(header["fansly-client-check"]).toBe("check-1");
+      expect(header["fansly-session-id"]).toBe("session-1");
+    }
+    // FANSLY PAGES MUST GO THROUGH THEIR OWN PROXY — a direct-IP request risks
+    // a model ban. (The harness is shared, so the dispatcher LIST accumulates;
+    // what is pinned is that these calls rode ONE proxy dispatcher and none
+    // rode the default.)
+    const dispatchers = new Set(
+      fetchMock.mock.calls.map(([, init]) => (init as { dispatcher?: unknown }).dispatcher),
+    );
+    expect(dispatchers.size).toBe(1);
+    expect(dispatchers.has(undefined)).toBe(false);
+    expect(proxyDispatchers).toContain([...dispatchers][0]);
+  });
+
+  it("sends the by-TYPE vault form without the album-only keys", async () => {
+    const { FanslyAdapter, fetchMock } = harness;
+    fetchMock.mockResolvedValueOnce(toJsonResponse({ success: true, response: {} }));
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    // The app's second variant: `?type=<vaultType>&before&after`. Kept because
+    // the app has it; the catalog walk does not use it.
+    await adapter.getVaultMediaPage(context(), { type: 1000 });
+    await adapter.close();
+    const url = new URL(String(fetchMock.mock.calls[0]?.[0]));
+    expect(url.searchParams.get("type")).toBe("1000");
+    expect(url.searchParams.has("albumId")).toBe(false);
+    expect(url.searchParams.has("mediaType")).toBe(false);
+    expect(url.searchParams.get("before")).toBe("0");
+  });
+
+  it("batches ids for the bundle route the same way", async () => {
+    const { FanslyAdapter, fetchMock } = harness;
+    fetchMock.mockResolvedValueOnce(toJsonResponse({ success: true, response: [] }));
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    await adapter.getAccountMediaBundlesByIds(context(), { ids: "b1,b2" });
+    await adapter.close();
+    const url = new URL(String(fetchMock.mock.calls[0]?.[0]));
+    expect(url.pathname).toBe("/account/media/bundle");
+    expect(url.searchParams.get("ids")).toBe("b1,b2");
+  });
+
+  it("returns the envelope's response verbatim, signed locations and all", async () => {
+    const { FanslyAdapter, fetchMock } = harness;
+    const body = {
+      albums: [{ id: "1", title: null, type: 38000 }],
+      aggregationData: {
+        // The adapter is a TRANSPORT. It hands the raw media sidecar through —
+        // signed locations included — so `persistRawPayload` can journal it
+        // verbatim (DP 7). Nothing downstream reads these keys.
+        media: [{ id: "2", location: "https://cdn.example/signed", variants: [] }],
+      },
+      someFutureKey: { nested: true },
+    };
+    fetchMock.mockResolvedValueOnce(toJsonResponse({ success: true, response: body }));
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const result = await adapter.getVaultAlbums(context());
+    await adapter.close();
+    expect(result.raw).toEqual(body);
+  });
+
+  it("treats 401/403 as terminal on a catalog call — one attempt, typed failure", async () => {
+    const { FanslyAdapter, fetchMock } = harness;
+    fetchMock.mockResolvedValue(
+      toJsonResponse({ success: false, error: { code: 401, message: "unauthorized" } }, {
+        status: 401,
+      }),
+    );
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const { events, requestObserver } = captureEvents();
+    const failure = await adapter.getSubscriptionTiers(context({ requestObserver }))
+      .then(() => null, (error: unknown) => error as { status?: number });
+    await adapter.close();
+    expect(failure?.status).toBe(401);
+    // A dead session that retried three times would triple egress that is
+    // already failing, and it must reach the executor's auth pause unchanged.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(events.filter((event) => event.state === "started")).toHaveLength(1);
+  });
+
+  it("surfaces a 4xx on the vault walk as a typed error, unretried", async () => {
+    const { FanslyAdapter, fetchMock } = harness;
+    fetchMock.mockResolvedValue(
+      toJsonResponse({ success: false, error: { code: 400, message: "bad album" } }, {
+        status: 400,
+      }),
+    );
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const failure = await adapter.getVaultMediaPage(context(), { albumId: "album-1" })
+      .then(() => null, (error: unknown) => error as { status?: number });
+    await adapter.close();
+    expect(failure?.status).toBe(400);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});

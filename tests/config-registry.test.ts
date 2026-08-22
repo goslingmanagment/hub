@@ -97,6 +97,11 @@ describe("config registry", () => {
     "fanslyNotificationsSyncEnabled",
     "fanslyNotificationsPageAllowlist",
     "fanslyNotificationsDailyCallBudget",
+    // WP-F3 catalog lane (same reasoning again: a ramp flip and a budget
+    // change on the lane that measures M must not wait for a deploy).
+    "fanslyCatalogSyncEnabled",
+    "fanslyCatalogPageAllowlist",
+    "fanslyCatalogDailyCallBudget",
     "fanslyDeepBackfillIgnoreRetentionLimit",
     // Fast-reply freshness PR3: union-read mode, read per generation.
     "aiTranscriptFreshUnionMode",

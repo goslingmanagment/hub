@@ -35,14 +35,17 @@ describe("Fansly bulk-stream scheduling", () => {
       { id: 12, label: "other-page" },
     ]);
     dbMocks.reconcileFanslyBulkStreamGate
-      // Page 11: fan_earnings, purchase_history, stats_snapshot, notifications.
+      // Page 11: fan_earnings, purchase_history, stats_snapshot, notifications,
+      // catalog.
       .mockResolvedValueOnce({ action: "unchanged", createdRecoveryGeneration: false })
       .mockResolvedValueOnce({ action: "paused", createdRecoveryGeneration: false })
       .mockResolvedValueOnce({ action: "unchanged", createdRecoveryGeneration: false })
       .mockResolvedValueOnce({ action: "resumed", createdRecoveryGeneration: true })
-      // Page 12: the same four.
+      .mockResolvedValueOnce({ action: "unchanged", createdRecoveryGeneration: false })
+      // Page 12: the same five.
       .mockResolvedValueOnce({ action: "paused", createdRecoveryGeneration: false })
       .mockResolvedValueOnce({ action: "resumed", createdRecoveryGeneration: true })
+      .mockResolvedValueOnce({ action: "unchanged", createdRecoveryGeneration: false })
       .mockResolvedValueOnce({ action: "unchanged", createdRecoveryGeneration: false })
       .mockResolvedValueOnce({ action: "unchanged", createdRecoveryGeneration: false });
     configMocks.loadEffectiveConfig.mockResolvedValue({
@@ -57,6 +60,9 @@ describe("Fansly bulk-stream scheduling", () => {
       // WP-F2: its OWN fail-closed key, on the same template.
       fanslyNotificationsSyncEnabled: true,
       fanslyNotificationsPageAllowlist: "lora-1",
+      // WP-F3: its OWN fail-closed key, on the same template.
+      fanslyCatalogSyncEnabled: true,
+      fanslyCatalogPageAllowlist: "lora-1",
     });
   });
 
@@ -96,6 +102,12 @@ describe("Fansly bulk-stream scheduling", () => {
         now,
       },
       {
+        pageId: 11,
+        stream: "catalog",
+        gateState: "ramped",
+        now,
+      },
+      {
         pageId: 12,
         stream: "fan_earnings",
         gateState: "not_allowlisted",
@@ -118,6 +130,13 @@ describe("Fansly bulk-stream scheduling", () => {
         // lane is `not_allowlisted` even though its flag is ON.
         pageId: 12,
         stream: "notifications",
+        gateState: "not_allowlisted",
+        now,
+      },
+      {
+        // WP-F3's key, same rule.
+        pageId: 12,
+        stream: "catalog",
         gateState: "not_allowlisted",
         now,
       },

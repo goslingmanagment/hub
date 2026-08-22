@@ -1,0 +1,80 @@
+{
+  "_fixture": "SYNTHETIC. /account/media?ids= — the batch hydration, probed 200 with a full media card on 2026-08-22, a BARE ARRAY. The card is the shape F0(b) already parses, which is why these rows reach creator_media through the SAME mediaObservedDrafts builder with first_origin 'account_media_batch'. THE PRICE PATH: the real price is permissions.permissionFlags[].price; the top-level `price` was 0 on every priced asset observed. `saleStats` is populated on a minority of rows and NULL is never 0. The nested `media.location` placeholder stands in for a signed CDN URL.",
+  "rows": [
+    {
+      "id": "000900000000000611",
+      "accountId": "000900000000000001",
+      "mediaId": "000900000000000612",
+      "previewId": null,
+      "permissionFlags": 0,
+      "price": 0,
+      "createdAt": 1786470514,
+      "deletedAt": null,
+      "deleted": false,
+      "permissions": {
+        "permissionFlags": [
+          {
+            "id": "000900000000000621",
+            "accountMediaId": "000900000000000611",
+            "type": 1,
+            "flags": 0,
+            "price": 79000,
+            "metadata": "{}",
+            "validAfter": null,
+            "validBefore": null
+          },
+          {
+            "id": "000900000000000622",
+            "accountMediaId": "000900000000000611",
+            "type": 2,
+            "flags": 0,
+            "price": 45000,
+            "metadata": "{\"4\":{\"subscriptionTierId\":\"000900000000000301\"}}",
+            "validAfter": null,
+            "validBefore": null
+          }
+        ]
+      },
+      "likeCount": 12,
+      "saleStats": { "sales": 1, "total": 63200, "pending": 63200 },
+      "media": {
+        "id": "000900000000000612",
+        "type": 2,
+        "mimetype": "video/mp4",
+        "width": 1080,
+        "height": 1920,
+        "metadata": "{\"duration\": 42}",
+        "location": "SIGNED-CDN-LOCATION-PLACEHOLDER",
+        "variants": [],
+        "locations": []
+      },
+      "purchased": false,
+      "access": true
+    },
+    {
+      "id": "000900000000000613",
+      "accountId": "000900000000000001",
+      "mediaId": "000900000000000614",
+      "previewId": null,
+      "permissionFlags": 0,
+      "price": 0,
+      "createdAt": 1786470515,
+      "deletedAt": null,
+      "deleted": false,
+      "permissions": { "permissionFlags": [] },
+      "likeCount": 0,
+      "saleStats": null,
+      "media": {
+        "id": "000900000000000614",
+        "type": 1,
+        "mimetype": "image/jpeg",
+        "width": 1080,
+        "height": 1350,
+        "location": "SIGNED-CDN-LOCATION-PLACEHOLDER"
+      },
+      "purchased": false,
+      "access": true,
+      "someUnnamedFutureField": "kept-verbatim"
+    }
+  ]
+}

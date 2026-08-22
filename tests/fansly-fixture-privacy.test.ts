@@ -48,6 +48,19 @@ const STATS_FIXTURE_MAX_BYTES = 16_384;
  */
 const ENGAGEMENT_FIXTURE_DIRECTORY = path.resolve("tests/fixtures/fansly-engagement");
 const ENGAGEMENT_FIXTURE_MAX_BYTES = 98_304;
+/**
+ * WP-F3 catalog fixtures (`tests/fixtures/fansly-catalog/`) — the SAME
+ * structural rule, at the statistics ceiling.
+ *
+ * A real `/vault/albumsnew` response is ~183 KB decoded (27 albums plus a
+ * 25-row raw-media sidecar full of signed CDN URLs), and a real
+ * `/subscriptions/giftcodes` is ~27 KB. A 16 KB ceiling therefore refuses a
+ * pasted capture of either while leaving room for the handful of fabricated
+ * rows each shape needs to be pinned — including the system albums that make
+ * the double-count visible.
+ */
+const CATALOG_FIXTURE_DIRECTORY = path.resolve("tests/fixtures/fansly-catalog");
+const CATALOG_FIXTURE_MAX_BYTES = 16_384;
 
 const SYNTHETIC_SNOWFLAKES = new Set(["863308077229670400"]);
 const SYNTHETIC_IDENTIFIERS = new Set([
@@ -240,6 +253,25 @@ describe("Fansly fixture privacy", () => {
       expect(String(parsed._fixture)).toMatch(/SYNTHETIC/u);
       // The same inspector: no URLs, no emails, no `@`, no credential-shaped
       // keys, and every 15+ digit identifier structurally fabricated.
+      inspectStatsFixtureValue(parsed);
+    }
+  });
+
+  it("keeps every WP-F3 catalog fixture structurally synthetic", async () => {
+    const fixtureNames = await listJsonFiles(CATALOG_FIXTURE_DIRECTORY);
+    expect(fixtureNames.length).toBeGreaterThan(0);
+
+    for (const fixtureName of fixtureNames) {
+      const raw = await readFile(path.join(CATALOG_FIXTURE_DIRECTORY, fixtureName), "utf8");
+      expect(Buffer.byteLength(raw), fixtureName).toBeLessThan(CATALOG_FIXTURE_MAX_BYTES);
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      expect(typeof parsed._fixture, fixtureName).toBe("string");
+      expect(String(parsed._fixture)).toMatch(/SYNTHETIC/u);
+      // The same inspector: no URLs, no emails, no `@`, no credential-shaped
+      // keys, and every 15+ digit identifier structurally fabricated. The
+      // no-URL half is load-bearing HERE and not decorative: two of these
+      // shapes embed raw media rows whose `location`/`locations[]`/`variants[]`
+      // are signed CDN URLs live, and the fixtures carry placeholders instead.
       inspectStatsFixtureValue(parsed);
     }
   });
