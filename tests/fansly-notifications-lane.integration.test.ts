@@ -182,7 +182,10 @@ function telemetryStub() {
   };
 }
 
-function appStub(adapter: ReturnType<typeof adapterStub>) {
+function appStub(
+  adapter: ReturnType<typeof adapterStub>,
+  configOverrides: Record<string, unknown> = {},
+) {
   return {
     db: testDb!.db,
     adapter,
@@ -192,6 +195,7 @@ function appStub(adapter: ReturnType<typeof adapterStub>) {
       fanslyNotificationsPageAllowlist: "notif-lane",
       fanslyNotificationsDailyCallBudget: 96,
       fanslyBackfillContinuationDelayMs: 20_000,
+      ...configOverrides,
     },
   } as never;
 }
@@ -617,10 +621,7 @@ describe("[sync-critical] WP-F2 notifications lane", () => {
     const seeded = await seedPage();
     const adapter = adapterStub();
     const off = await fanslyNotificationsChunk(
-      {
-        ...appStub(adapter),
-        config: { fanslyNotificationsSyncEnabled: false },
-      } as never,
+      appStub(adapter, { fanslyNotificationsSyncEnabled: false }),
       input(seeded.id, telemetryStub(), new SyncChunkBudget()),
     );
     expect(off.gatedSkip).toBe("flag_off");
@@ -628,10 +629,7 @@ describe("[sync-critical] WP-F2 notifications lane", () => {
     // shared new-stream key. Using that one here would open the lane
     // fleet-wide on the deploy that ships it.
     const closed = await fanslyNotificationsChunk(
-      {
-        ...appStub(adapter),
-        config: { fanslyNotificationsSyncEnabled: true, fanslyNotificationsPageAllowlist: "" },
-      } as never,
+      appStub(adapter, { fanslyNotificationsPageAllowlist: "" }),
       input(seeded.id, telemetryStub(), new SyncChunkBudget()),
     );
     expect(closed.gatedSkip).toBe("not_allowlisted");

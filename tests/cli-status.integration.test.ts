@@ -493,12 +493,14 @@ describe("CLI status flows", () => {
     ])).join("\n");
 
     expect(fullOutput).toContain("Sync Monitor 2026-03-20T12:00:00.000Z");
-    // 2 pages x 12 MONITORED streams. WP-F1 added `stats_snapshot` AND repaired
+    // 2 pages x 13 MONITORED streams. WP-F1 added `stats_snapshot` AND repaired
     // the already-missing `posts`, which had been invisible in the monitor since
     // it shipped — the same blind spot a wedged fan_earnings walk had before
-    // W8.1. The new `MONITORED_SYNC_STREAMS ⊇ getSyncStreamsForPlatform("fansly")`
-    // pin is what keeps the next omission from being silent.
-    expect(fullOutput).toContain("Pages=2 Streams=24");
+    // W8.1; WP-F2 added `notifications`, the lane whose wedge costs facts rather
+    // than freshness. The `MONITORED_SYNC_STREAMS ⊇
+    // getSyncStreamsForPlatform("fansly")` pin is what keeps the next omission
+    // from being silent.
+    expect(fullOutput).toContain("Pages=2 Streams=26");
     expect(fullOutput).toContain("Providers: fansly:limited");
     expect(fullOutput).toContain("lana");
     expect(fullOutput).toContain("nova");
@@ -507,7 +509,7 @@ describe("CLI status flows", () => {
     expect(fullOutput).toContain("9 items backfilled");
 
     expect(filteredOutput).toContain("lana");
-    expect(filteredOutput).toContain("Pages=1 Streams=12");
+    expect(filteredOutput).toContain("Pages=1 Streams=13");
     expect(filteredOutput).toContain("Retrying=1");
   });
 });

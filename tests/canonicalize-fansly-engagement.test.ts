@@ -106,6 +106,14 @@ describe("A22-1: the notification label table", () => {
     expect(fanslyNotificationLabel(2002)).toBe("account_media_like");
     expect(fanslyNotificationLabel(15007)).toBe("expired_subscriptions");
     expect(fanslyNotificationLabel(15011)).toBe("promotions");
+    // …and the codes the spec got RIGHT still agree with it, so the two tables
+    // in this repo cannot drift apart on the same client source.
+    expect(fanslyNotificationLabel(5003)).toBe("message_like");
+    expect(fanslyNotificationLabel(3002)).toBe("follow");
+    expect(fanslyNotificationLabel(3003)).toBe("follow");
+    expect(fanslyNotificationLabel(7001)).toBe("tip_received");
+    expect(fanslyNotificationLabel(15006)).toBe("subscription_renew");
+    expect(fanslyNotificationLabel(15016)).toBe("subscription_history_renew");
     // Absent from the spec ENTIRELY, and both are purchases.
     expect(fanslyNotificationLabel(32007)).toBe("locked_text_purchase");
     expect(fanslyNotificationLabel(45012)).toBe("stream_ticket_purchase");
@@ -380,7 +388,7 @@ describe("layer 2: typed derivations, IN ADDITION", () => {
     // It claims NO field-level semantics: the code, the label, the confidence,
     // the refs, and nothing else invented.
     const follow = engagement.find((draft) => draft.data.rawTypeCode === 3003);
-    expect(follow?.data.label).toBe("follow_family");
+    expect(follow?.data.label).toBe("follow");
     expect(follow?.data.confidence).toBe("inferred");
   });
 

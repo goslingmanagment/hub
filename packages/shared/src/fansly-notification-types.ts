@@ -25,6 +25,14 @@
 // the labels being wrong cost nothing but labels. Never import FBuddy's map:
 // both maps are wrong about 2007/2008.
 //
+// ONE TABLE, TWO HOMES, AND THEY MUST AGREE. `reference/fansly_api_spec.md`
+// §3.1 was rewritten from the same client arrays; the labels below are its
+// renderer names in snake_case, except the four purchase codes, which take the
+// platform's own FILTER label ("Media Purchases", "Locked Text Purchases",
+// "Stream Ticket Purchases") because the money is the point and the renderer
+// name buries it. Two tables in one repo disagreeing about these codes is the
+// exact failure this package exists to document.
+//
 // THE PROMOTION RULE, unchanged and binding: `confirmed` requires TWO
 // independent live examples agreeing with a second source. Client code proves
 // the CLIENT's intent, not the SERVER's behaviour — so every client-derived
@@ -145,24 +153,26 @@ export const FANSLY_NOTIFICATION_TYPES: readonly FanslyNotificationTypeRow[] = O
   // ── engagement: follows, tips, subscriptions ────────────────────────────
   {
     code: 3002,
-    label: "follow_family",
+    label: "follow",
     confidence: "inferred",
     citation:
-      `${CLIENT_FILTERS} declares 3002 beside 3003 in the follow filter group; no live `
-      + "example in the 200-row census (§2.3), so the family is all that is claimed.",
+      `${CLIENT_FILTERS} declares 3002 beside 3003 under the Followers filter, both dispatching `
+      + "to the Follow renderer (`reference/fansly_api_spec.md` §3.1); the CODE selects which "
+      + "correlation field holds the follower id. No live example in the 200-row census.",
   },
   {
     code: 3003,
-    label: "follow_family",
+    label: "follow",
     confidence: "inferred",
     citation:
-      "97 live rows in the 200-row census (§2.3), metadata absent, read as follow-family "
-      + `and declared in the follow filter group (${CLIENT_FILTERS}). UNCONFIRMED in `
-      + "meaning: no UI match has been taken against a 3003 row.",
+      "97 live rows in the 200-row census (§2.3), metadata absent, filed under Followers and "
+      + `dispatching to the Follow renderer (${CLIENT_FILTERS}, mirrored in `
+      + "`reference/fansly_api_spec.md` §3.1). UNCONFIRMED in meaning: no UI match has been "
+      + "taken against a 3003 row.",
   },
   {
     code: 7001,
-    label: "tip_family",
+    label: "tip_received",
     confidence: "inferred",
     citation:
       "26 live rows in the 200-row census (§2.3), metadata absent, declared in the tips "
@@ -171,11 +181,12 @@ export const FANSLY_NOTIFICATION_TYPES: readonly FanslyNotificationTypeRow[] = O
   },
   {
     code: 15006,
-    label: "subscription_family",
+    label: "subscription_renew",
     confidence: "inferred",
     citation:
-      `${CLIENT_FILTERS} declares 15006 in the subscription filter group; it also led the `
-      + "UI's own eight-code CSV. No live example in the census.",
+      `${CLIENT_FILTERS} files 15006 under Subscribers, dispatching to the Subscription-renew `
+      + "renderer (`reference/fansly_api_spec.md` §3.1); it also led the UI's own eight-code "
+      + "CSV. No live example in the census.",
   },
   {
     code: 15007,
@@ -195,11 +206,12 @@ export const FANSLY_NOTIFICATION_TYPES: readonly FanslyNotificationTypeRow[] = O
   },
   {
     code: 15016,
-    label: "subscription_streak",
+    label: "subscription_history_renew",
     confidence: "inferred",
     citation:
-      "26 live rows carrying metadata {\"subscriptionStreak\": N} (§2.3), declared in the "
-      + `subscription filter group (${CLIENT_FILTERS}).`,
+      "26 live rows carrying metadata {\"subscriptionStreak\": N} (§2.3), filed under "
+      + `Subscribers and dispatching to the Subscription-history-renew renderer `
+      + `(${CLIENT_FILTERS}, mirrored in \`reference/fansly_api_spec.md\` §3.1).`,
   },
 ]);
 

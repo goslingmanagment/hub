@@ -15139,7 +15139,8 @@
                               "fan_earnings",
                               "purchase_history",
                               "posts",
-                              "stats_snapshot"
+                              "stats_snapshot",
+                              "notifications"
                             ]
                           },
                           "requestedSeq": {
@@ -15383,7 +15384,8 @@
                               "fan_earnings",
                               "purchase_history",
                               "posts",
-                              "stats_snapshot"
+                              "stats_snapshot",
+                              "notifications"
                             ]
                           },
                           "requestedSeq": {
@@ -15656,7 +15658,8 @@
                               "fan_earnings",
                               "purchase_history",
                               "posts",
-                              "stats_snapshot"
+                              "stats_snapshot",
+                              "notifications"
                             ]
                           },
                           "requestedSeq": {
@@ -15900,7 +15903,8 @@
                               "fan_earnings",
                               "purchase_history",
                               "posts",
-                              "stats_snapshot"
+                              "stats_snapshot",
+                              "notifications"
                             ]
                           },
                           "requestedSeq": {
@@ -20989,7 +20993,8 @@
                                 "fan_earnings",
                                 "purchase_history",
                                 "posts",
-                                "stats_snapshot"
+                                "stats_snapshot",
+                                "notifications"
                               ]
                             },
                             "additionalProperties": {
@@ -68969,7 +68974,8 @@
                                           "fan_earnings",
                                           "purchase_history",
                                           "posts",
-                                          "stats_snapshot"
+                                          "stats_snapshot",
+                                          "notifications"
                                         ]
                                       },
                                       "cadenceSeconds": {
@@ -69027,7 +69033,8 @@
                                           "fan_earnings",
                                           "purchase_history",
                                           "posts",
-                                          "stats_snapshot"
+                                          "stats_snapshot",
+                                          "notifications"
                                         ]
                                       },
                                       "role": {
@@ -69531,7 +69538,8 @@
                                           "fan_earnings",
                                           "purchase_history",
                                           "posts",
-                                          "stats_snapshot"
+                                          "stats_snapshot",
+                                          "notifications"
                                         ]
                                       },
                                       "cadenceSeconds": {
@@ -69589,7 +69597,8 @@
                                           "fan_earnings",
                                           "purchase_history",
                                           "posts",
-                                          "stats_snapshot"
+                                          "stats_snapshot",
+                                          "notifications"
                                         ]
                                       },
                                       "role": {
@@ -70093,7 +70102,8 @@
                                           "fan_earnings",
                                           "purchase_history",
                                           "posts",
-                                          "stats_snapshot"
+                                          "stats_snapshot",
+                                          "notifications"
                                         ]
                                       },
                                       "cadenceSeconds": {
@@ -70151,7 +70161,8 @@
                                           "fan_earnings",
                                           "purchase_history",
                                           "posts",
-                                          "stats_snapshot"
+                                          "stats_snapshot",
+                                          "notifications"
                                         ]
                                       },
                                       "role": {
@@ -70655,7 +70666,8 @@
                                           "fan_earnings",
                                           "purchase_history",
                                           "posts",
-                                          "stats_snapshot"
+                                          "stats_snapshot",
+                                          "notifications"
                                         ]
                                       },
                                       "cadenceSeconds": {
@@ -70713,7 +70725,8 @@
                                           "fan_earnings",
                                           "purchase_history",
                                           "posts",
-                                          "stats_snapshot"
+                                          "stats_snapshot",
+                                          "notifications"
                                         ]
                                       },
                                       "role": {
@@ -71217,7 +71230,8 @@
                                           "fan_earnings",
                                           "purchase_history",
                                           "posts",
-                                          "stats_snapshot"
+                                          "stats_snapshot",
+                                          "notifications"
                                         ]
                                       },
                                       "cadenceSeconds": {
@@ -71275,7 +71289,8 @@
                                           "fan_earnings",
                                           "purchase_history",
                                           "posts",
-                                          "stats_snapshot"
+                                          "stats_snapshot",
+                                          "notifications"
                                         ]
                                       },
                                       "role": {
@@ -72052,7 +72067,8 @@
                                   "fan_earnings",
                                   "purchase_history",
                                   "posts",
-                                  "stats_snapshot"
+                                  "stats_snapshot",
+                                  "notifications"
                                 ]
                               },
                               "cadenceSeconds": {
@@ -72110,7 +72126,8 @@
                                   "fan_earnings",
                                   "purchase_history",
                                   "posts",
-                                  "stats_snapshot"
+                                  "stats_snapshot",
+                                  "notifications"
                                 ]
                               },
                               "role": {
@@ -78494,7 +78511,8 @@
                                             "fan_earnings",
                                             "purchase_history",
                                             "posts",
-                                            "stats_snapshot"
+                                            "stats_snapshot",
+                                            "notifications"
                                           ]
                                         },
                                         "cadenceSeconds": {
@@ -78552,7 +78570,8 @@
                                             "fan_earnings",
                                             "purchase_history",
                                             "posts",
-                                            "stats_snapshot"
+                                            "stats_snapshot",
+                                            "notifications"
                                           ]
                                         },
                                         "role": {
@@ -79056,7 +79075,8 @@
                                             "fan_earnings",
                                             "purchase_history",
                                             "posts",
-                                            "stats_snapshot"
+                                            "stats_snapshot",
+                                            "notifications"
                                           ]
                                         },
                                         "cadenceSeconds": {
@@ -79114,7 +79134,8 @@
                                             "fan_earnings",
                                             "purchase_history",
                                             "posts",
-                                            "stats_snapshot"
+                                            "stats_snapshot",
+                                            "notifications"
                                           ]
                                         },
                                         "role": {
@@ -79618,7 +79639,8 @@
                                             "fan_earnings",
                                             "purchase_history",
                                             "posts",
-                                            "stats_snapshot"
+                                            "stats_snapshot",
+                                            "notifications"
                                           ]
                                         },
                                         "cadenceSeconds": {
@@ -79676,7 +79698,8 @@
                                             "fan_earnings",
                                             "purchase_history",
                                             "posts",
-                                            "stats_snapshot"
+                                            "stats_snapshot",
+                                            "notifications"
                                           ]
                                         },
                                         "role": {
@@ -80180,7 +80203,8 @@
                                             "fan_earnings",
                                             "purchase_history",
                                             "posts",
-                                            "stats_snapshot"
+                                            "stats_snapshot",
+                                            "notifications"
                                           ]
                                         },
                                         "cadenceSeconds": {
@@ -80238,7 +80262,8 @@
                                             "fan_earnings",
                                             "purchase_history",
                                             "posts",
-                                            "stats_snapshot"
+                                            "stats_snapshot",
+                                            "notifications"
                                           ]
                                         },
                                         "role": {
@@ -80742,7 +80767,8 @@
                                             "fan_earnings",
                                             "purchase_history",
                                             "posts",
-                                            "stats_snapshot"
+                                            "stats_snapshot",
+                                            "notifications"
                                           ]
                                         },
                                         "cadenceSeconds": {
@@ -80800,7 +80826,8 @@
                                             "fan_earnings",
                                             "purchase_history",
                                             "posts",
-                                            "stats_snapshot"
+                                            "stats_snapshot",
+                                            "notifications"
                                           ]
                                         },
                                         "role": {
@@ -81186,7 +81213,8 @@
                           "fan_earnings",
                           "purchase_history",
                           "posts",
-                          "stats_snapshot"
+                          "stats_snapshot",
+                          "notifications"
                         ]
                       },
                       "operation": {
@@ -81984,7 +82012,8 @@
                                     "fan_earnings",
                                     "purchase_history",
                                     "posts",
-                                    "stats_snapshot"
+                                    "stats_snapshot",
+                                    "notifications"
                                   ]
                                 },
                                 "status": {
@@ -82670,7 +82699,8 @@
                               "fan_earnings",
                               "purchase_history",
                               "posts",
-                              "stats_snapshot"
+                              "stats_snapshot",
+                              "notifications"
                             ]
                           },
                           "eventType": {
