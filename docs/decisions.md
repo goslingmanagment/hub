@@ -233,6 +233,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 229 | Fansly posts widening (WP-F6) — the counters the timeline was already serving | The EXISTING `posts` stream is widened rather than joined by a new one: migration 0139 adds fourteen columns to `creator_posts` (`like_count`, `media_like_count`, `reply_count`, `fyp_flags`, `expires_at`, `in_reply_to_ref`, `in_reply_to_root_ref`, `wall_refs`, `account_mention_refs`, the derived `hashtags`/`hashtags_normalized`/`hashtag_parser_version`, `attachment_refs`, `engagement_observed_at` + its index), `POSTS_CANONICALIZER_VERSION` goes 5 -> 6 and `post.observed` to schemaVersion 3. **EVERY ONE OF THESE FIELDS WAS ALREADY IN THE JOURNAL AND WAS BEING THROWN AWAY** — `/timelinenew` and `GET /post?ids=` have served `likeCount`, `mediaLikeCount`, `replyCount`, `fypFlags`, `expiresAt`, `inReplyTo`, `inReplyToRoot`, `wallIds`, `accountMentions` and `attachments` on the same post objects the lane journals verbatim, so the widening is a version bump plus a replay and costs ZERO platform calls to fill history. **ABSENT IS NULL, NEVER 0, and the payload makes it real**: `replyCount` was PRESENT on 9 and ABSENT on 6 of the 15 timeline posts in the 2026-08-19 capture, and `wallIds` does not appear on the timeline route at all while the batch read serves it as `[]` — a NOT NULL DEFAULT 0 would have recorded "nobody replied" for a post whose count the provider simply did not state, and no re-read distinguishes the two afterwards. **EVERY NEW FIELD ENTERS THE CONTENT HASH**, so a like count that MOVED is a new immutable revision and a new head rather than an in-place edit of the row that recorded the old one — which is the entire point of a refresh lane. **HASHTAGS ARE DERIVED FROM THE CAPTION AND NOTHING ELSE (A8)**: zero structured tag fields on all 60 HAR post objects; tag ids exist only in stats aggregation and the discovery feed. The grammar accepts Unicode letters, numbers and MARKS, `_`, and ONE defensive trailing `+`; the raw token, its NFKC-lowercased form and `HASHTAG_PARSER_VERSION` are stored as one fact in three paired parts (a CHECK enforces the pairing), NFKC folds BEFORE lowercasing so a full-width spelling lands on the ASCII tag, duplicates collapse by folded form, and the parser version participates in the content hash so a grammar change RE-MINTS rather than silently rewriting. **No design or doc may cite `#teen+` as observed — it does not appear in the HAR**; the tolerance is defensive and the fixture that exercises it is labelled synthetic. `attachment_refs` copies THREE KEYS BY NAME (`pos`, `contentType`, `contentId`) — an allowlist, not a redaction, so no delivery URL can reach a serving column whatever the platform starts embedding in `attachments[]`. **THE VERIFIED TRAP:** `POSTS_CANONICALIZER_VERSION` is embedded in the `post.tip_parse_rejected` dedup key, so the bump CHANGES that family's dedup identity — a re-parse of an already-rejected `post_tips` page appends one new parse-debt event under `parser:6` beside the `parser:5` one. It is projection-only debt and the rebuild absorbs it; it is recorded here because nothing else would have noticed. **`post.observed` STAYS PROVIDER-DATED** at `publishedAt` — §3.2b's standing exception, not a new choice — so its pre-2024 fixture asserts the CLAMP branch (`occurredAtClamped` + `occurredAtRaw` preserved, `occurred_at` fallen back to receipt time) while the projected row still holds the true publication date, and the v6 drain across history is covered by §3.2c(ii)'s target-month census, now pinned with a `post.observed` case beside the DM one. **DRAIN ARITHMETIC (production, 2026-08-22):** 1 619 `posts` observations, source `pull`, re-parsed at parse_version < 6; the sweep reads 200 rows per family per page and up to 20 pages per run, so the whole corpus drains in a single `events:replay --kind posts` (minutes) or two ordinary minutely runs. Each observation emits one `post.observed` per post in its page (live pages carry <= 15), an upper bound of ~24 000 appends, every one a NEW event because the dedup key embeds both the v3 content hash and the observation id — no v2 event is touched and no row is overwritten. Provider-dated, so the census applies: prod has every 2026 monthly plus the 2024/2025 yearlies attached, so no month is uncovered and no re-attach is needed. ZERO platform calls. **THE ENGAGEMENT REFRESH is a PHASE, not a stream.** The bounded timeline refresh walks back 14 days, so a post from last spring keeps whatever counters it had the week it was published; `GET /post?ids=<csv>` is the only shape that re-reads a back catalogue by id, and it returns the SAME envelope the timeline does, so it journals under the EXISTING `posts` kind with `{phase:"engagement", ids}` in the request params and the v6 family parses it with no new branch. It runs only once the timeline walk has COMPLETED for the request generation — the timeline is how this system learns a post exists; the refresh only updates numbers on posts it already has. **DECAY WITH THE TIER BOUNDARIES AS CONSTANTS**: fresh (<= 30 d) daily, mid (<= 180 d) weekly, long tail every 30 d round-robin by `last_visited_at ASC`. How engagement decays with a post's age is a property of the platform, not a knob; what is tunable is `fanslyPostEngagementDailyCallBudget` (40, the §6.1 ceiling), which decides how much of the decay the lane can afford. Due-ness is computed from `published_at` and `last_visited_at` against `now`, NEVER read from a stored `next_due_at` — the tier a post is in CHANGES as it ages, and a frozen due date would keep a post that crossed into `mid` on a daily cadence forever. Queue state is `subject_refresh_state` `plane='post_engagement'`, the table's THIRD plane, seeded in bounded keyset batches on first enable and — for everything published afterwards — in the SAME TRANSACTION as the `creator_posts` upsert, alongside WP-F5's `post_replies` row, from ONE statement whose Fansly predicate lives in SQL so no new platform branch appears outside the adapter packages. **`engagement_observed_at` IS DERIVED BY THE PROJECTOR** from the event's own `observedAt` whenever the event carried a counter, never stamped by the capture lane: a lane writing into this rebuildable projection would have it wiped by the next `projection:rebuild`, and the ordinary timeline sighting (which also carries `likeCount`) would not set it at all. It only ever moves forward. **A HEAD WHOSE `reply_count` MOVED MARKS THE WP-F5 WALK DIRTY** (`dirty_reason='reply_count_changed'`) in that same transaction — the only cheap evidence this system gets that a post's comments changed — and only on an EXISTING row, because a first sighting is already never-walked and marking it dirty would DEMOTE it out of the walk's top band. **THE CAP DEFERS, NEVER DROPS**: counted in HTTP ATTEMPTS (retries included) in the posts cursor and SEPARATELY from the timeline walk, which is not capped and must never be starved by a refresh phase; the response already fetched is journaled before the counter is consulted again. `fanslyPostEngagementRefreshEnabled` ships FALSE and with it off the posts lane behaves exactly as before, completion checkpoint included. ONE batch of at most 100 ids per dispatch — the size the app splices for every OTHER `?ids=` route it batches, since its own `getPosts` has no batching loop to read — then WP-F1's `fanslyBackfillContinuationDelayMs` +- 30 % jitter, because burst shape and not daily volume is the ban-risk surface. Only the posts the response NAMED count as refreshed; an id the provider dropped is a failure and is retried, since marking it visited would retire it from the never-refreshed band on the strength of a silence. **MEASURED SIZE, because §6.1's ~1 MB/day row predates the measurement:** the one live `GET /post?ids=` response is 29 375 B uncompressed / 10 232 B on the wire for ONE post, of which 22 357 B is the creator's own `accounts[0]` record (ONE per response whatever the batch size) and 6 287 B its `accountMedia` row. The live `/timelinenew` page gives the same shape at scale (222 726 B for 15 posts, the same `accounts[0]`, 186 119 B of `accountMedia` over 23 media), i.e. ~7-13 KB per post once its media travel with it, so a full 100-id batch is ~0.7-1.4 MB uncompressed / ~0.24-0.41 MB on the wire and 20 calls/day is ~14-28 MB/page/day — NOT the ~1 MB §6.1 books for this row, which must be re-derived. lora-1's steady state (~2 calls/day for 1 318 posts) is ~1.4-2.7 MB/day; its one-off first pass is 14 calls / ~10-19 MB; the cap of 40 bounds the lane at ~28-56 MB/page/day. **The `accounts[0]` sidecar carries `lastSeenAt` and is NOT trimmed** — deliberately, because the EXISTING timeline lane already journals the identical record on every page and trimming one and not the other would make two responses of the same kind un-comparable; it is recorded here as the known dedup-collapse cost of this kind rather than fixed inside a package that was not asked to change the timeline lane. **Rejected, and recorded so it is not re-proposed:** a new stream or a new page allowlist for the phase (it rides `posts`, which already has its own gating; a second allowlist is a switch nobody remembers to look at); tier boundaries as config keys; stamping `engagement_observed_at` from the capture lane; storing the caption's mention offsets or handles (the verbatim caption is in the journal and a handle changes); widening the `posts` or `post_monetization` agent datasets (out of scope — the columns are queryable and the read surface is a separate decision) |
 | 230 | Fansly payouts (WP-F7) — money OUT, and the mask that is ours | The `payouts` stream lands whole (0140 enum, 0141 `page_payout_methods` + `page_payout_requests`): TWO routes, `GET /payments/payoutmethods` and `GET /payments/payout/requests?before=&after=&limit=10&offset=N`, both read-only, both verified live 2026-08-20. **A28-8 cut it to two and A28-1 deleted the third:** `/account/wallets/earnings` is already the adapter's `getEarningsOverview` (so no wallet-balance route and NO `page_wallet_snapshots`), and the wallet earnings LEDGER `/account/wallets/earnings/transactions` is the EXISTING `transactions` stream — settled by matching seven transaction ids out of this lane's own capture HAR against rows the kernel already held, including the oldest row on page 242 of 242. **THE CREDENTIAL RULE, AND WHY THE MASK IS OURS:** `metadata` is a JSON-ENCODED STRING and the two live providers are asymmetric — provider 2 (**Paxum, NOT PayPal**; A22-4 refuted the spec from the app bundle) returns the creator's FULL email in plaintext while provider 30 (USDT) returns a `field1` the server already masked, so masking cannot be "trust the platform". `masked_label` is the ONLY value derived from `metadata` that leaves the family: **`<first char>***@<domain>`** for an address, **`****<four visible>`** for a wallet field, and migration 0141 CHECKs the shape (`@` ⇒ must match `^.\*\*\*@`) so a parser regression fails at the INSERT. **THE DECODE IS PROVIDER-KEYED, NOT SHAPE-KEYED** — a future provider 99 with its own `field0…fieldN` decodes to NOTHING (`unmapped:99`, null label, not one character emitted), where a shape-keyed decoder would have published whatever it chose to put in `field1`. Invalid JSON ⇒ `metadata_parse_ok = false`, null label, one diagnostic, string stays journal-only. Both kinds are restricted-class and refused by the agent read plane's fail-closed allowlist, and named on its denylist so the refusal carries its reason. **THE STATUS MAP IS ONE CODE DEEP:** all 83 observed rows carried `status = 8` = `Processed`; every other integer is projected as `(code, unmapped:<code>, unmapped)` and the handler raises ONE anomaly per unseen code per page, durably. **MILLS WITH NO SCALING** (the wire unit IS the kernel unit, proved against the UI on seven fields), instants 13-digit Unix ms decoded by an ms-ONLY helper, events receipt-time (§3.2b) so a 2025 payout is writable into a monthly-partitioned ledger. **THE WALK:** offset-paged at 10, `total = 83` back to 2025-06-23 ⇒ nine calls, and the daily head read at `offset=0` IS page one of it, so steady state is TWO calls/day against a cap of **20** (§6.1's corrected number). The repeat-request guard gained a second trigger because the first one could not fire: an offset always advances, so what catches a server IGNORING `offset` is a page whose first row is the first row of the page before it. Ships INERT — flag off, allowlist FAILS CLOSED. |
 | 231 | Fansly per-media statistics (WP-F4) — the lane that can overload the platform | The `media_stats` stream lands whole (0142 enum, the §3.3 wiring, four config keys, the handler, the completed parser, the projector reducers): `GET /it/moie/statsnew` over ALL media at an age-decayed cadence — fresh (≤30 d) daily at hourly granularity, mid (31–180 d) weekly, long tail every `fanslyMediaStatsLongTailCycleDays` (30), round-robin by last visit, with WP-F2's purchase signals and the current top-50 jumping the queue. **A16's TABLE IS REPORTED, NEVER RESTATED**: `estimatedCycleDays` is computed on every dispatch from the LIVE class census and the LIVE cap, and the log line says QUARTERLY in words once it passes 90 days — at M = 2 000 the decay wants 294 calls/day and the long tail comes round every 26 days; at M = 5 000 it wants 394 and the cycle is 96 days. Nothing is dropped at any M. The lane is DESIGNED to sit at 100 % of its own 300-attempt cap and is exempt from the 70 %-of-its-own-cap rule by name; raising the cap is a NAMED per-lane owner step, which the registry ceiling of 1 000 makes refusable. **THIRTY-ONE DAYS, NOT A HUNDRED**: the HAR proves this route honours a historical 31-day window exactly, and F1 proved on production what a 100-day one costs. **The queue is `subject_refresh_state` (`plane='media_stats'`), not four columns on `creator_media`** — a rebuild that reset them would re-mark the whole catalogue as first-sight and release a backfill storm bounded only by this lane's own cap, and a test pins the isolation. Video columns stay NULL and unpromised ([E5]).
+| 233 | Fansly history walks corrected against production (amends #225, #231) | **A14 was wrong**: `/it/amoie/stats` honours `beforeDate`/`afterDate` only INSIDE its own trailing window — lora-2 asked for a historical 31-day window and was served the trailing 31 days, and halving to 15 changed nothing, so it was never the span. History on that route is addressed the way the app addresses it: `year`/`month` (the UI's month presets, with the bounds riding along ignored). The daily lane captures the trailing window ONCE and then walks BACKWARDS BY CALENDAR MONTH — same attempt cap, same jittered continuation, repeat guard on `(year, month)`, `monthWasHonoured` in place of the span check (no halve-and-retry: there is no half of a month to ask for), stopping with `month_form_not_honoured` or reaching a floor of two empty months plus the [E10] probe twelve months back. The two pages the date-bound walk stopped SUPERSEDE their `window_not_honoured` coverage row and resume in month mode, once. The HOURLY lane stops walking and declares the trailing 25 hours (`hourly_trailing_window_only`); the EARNINGS lane is untouched because it DID honour historical windows (lora-1 reached 2024-11-29). `endpoint-probe` gains `[F1] GET /it/amoie/stats?year=&month=`, printing the served window, because the month form is not yet proven live. **WP-F4**: `/it/moie/statsnew` honours every window and answers any of them back to 2006 with one ZERO-VALUED bucket, so the empty-window floor never fired — 1 198 calls on eight items, walked 240 windows each. All-zero now counts as empty; no window may end more than one span before `coalesce(created_at_platform, first_observed_at)` (`floorBasis='created_at'`, which also repairs the eight burned cursors); and EVERY visit stamps `last_visited_at`, backfill visits included — that omission is why 5 507 queue rows had never been looked at while the same eight were re-picked daily |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -9670,4 +9671,115 @@ statistics; `readPlanes: []` on any fact dataset; serving `post_replies` journal
 bodies; and any OnlyFans dataset or route in this package (A28-2 — the catalog's
 per-dataset `platforms` says `["fansly"]` rather than offering eight permanently
 empty surfaces).
+
+---
+
+**Decision #233 (2026-08-22, endpoints-cover: the two history walks, corrected
+against production — amends #225 (WP-F1) and #231 (WP-F4)):**
+
+**A14 WAS WRONG, AND THE WAY IT WAS WRONG IS THE INTERESTING PART.**
+`/it/amoie/stats` takes `beforeDate`/`afterDate` and honours them — inside its
+own trailing window, and nowhere else. Two production measurements, a day apart,
+made that unambiguous. On 2026-08-22 04:16 UTC (ari-1, first enable) a 100-day
+window came back as the DEFAULT trailing 31 days, 200 and all; #225's
+`BackfillWindowGuard` was built for exactly that and stopped the loop. Later the
+same day, with the guard live, lora-2 asked for `afterDate 2026-06-21 /
+beforeDate 2026-07-22` — 31 days, historical, the exact span the HAR proves
+honoured on the SISTER route — and was served `dateAfter 2026-07-21 / dateBefore
+2026-08-21`. Halved to 15 days: the same answer. So it was never the span and
+never `datapointLimit`; this route simply has no historical date bounds. The
+guard did its job and wrote `capture_coverage.status='partial_provider_surface',
+reason_code='window_not_honoured'` on lilly-2 and lora-2 — a correct claim about
+a walk that was asking for something the surface does not serve.
+
+**HISTORY IS ADDRESSED THE WAY THE APP ADDRESSES IT: BY CALENDAR MONTH.** The
+bundle's own past-month view (`main.pretty.js` :280600, :196337) sends
+`beforeDate = now`, `afterDate = now − 30 d`, `period = 86 400 000` and lets
+`year`/`month` (non-zero) select the window; `year=0&month=0` is the trailing
+form. So the daily lane captures the trailing window ONCE — the one window whose
+bounds are honoured, because it is the window the route serves anyway — and then
+walks BACKWARDS BY CALENDAR MONTH, newest first, one call per month, keeping
+every property #225 fixed: the attempt cap, the jittered continuation, and a
+repeat guard in the unit the walk steps in (the same `(year, month)` twice stops
+the lane before any egress). The honoured check becomes `monthWasHonoured` — the
+served `dateAfter` must start inside the month named, ±1 day — and there is no
+halve-and-retry, because there is no half of a month to ask for: a month
+answered with something else stops the lane with ONE anomaly and
+`reason_code='month_form_not_honoured'`. Ten years is ~120 calls rather than
+~118, so A29's accepted price is unchanged and the cap does not move. **The
+month form is not yet proven live**; `fansly:endpoint-probe` gains
+`[F1] GET /it/amoie/stats?year=&month=` for the month TWO back (one back
+overlaps the trailing window and would prove nothing), printing the served
+`dateAfter`/`dateBefore` as ISO days and `profileDatapoints.length` beside the
+redacted skeleton, so one run answers it.
+
+**THE TWO STOPPED PAGES RECOVER THEMSELVES.** A daily coverage row still reading
+`window_not_honoured` is SUPERSEDED on the next dispatch: the lane reopens at the
+month before the trailing window and writes its new status immediately, which is
+also what makes the recovery one-shot — the reason code that triggers it is gone
+before the next dispatch reads it, and a lane that stops again stops with
+`month_form_not_honoured`, which is never reopened. The earnings and hourly
+lanes are NOT reopened with it: restarting the earnings walk would re-spend a
+decade of requests it has already made.
+
+**THE HOURLY LANE STOPS PRETENDING TO HAVE HISTORY.** Its 4-day-step walk was
+date bounds on the same route, and the month form has no hourly granularity to
+offer. The plane is now the TRAILING 25 HOURS and says so in `capture_coverage`
+(`reason_code='hourly_trailing_window_only'`) instead of spending calls every day
+to rediscover it. `fanslyStatsHourlyBackfillMaxDays` stays as a config key and is
+reported in the coverage cursor as the depth the lane WOULD have taken.
+
+**THE EARNINGS LANE IS UNTOUCHED, and that is a measurement too:**
+`/account/wallets/earnings/stats` DID honour historical windows on production
+(lora-1 reached 2024-11-29). Two routes on one platform, two behaviours — which
+is why every lane checks what came back against what it asked for, in the unit
+it asked in, rather than inheriting a sibling's answer.
+
+**WP-F4: THE PER-MEDIA WALK HAD NO FLOOR AT ALL.** `/it/moie/statsnew` honours
+every historical 31-day window exactly (#231's premise holds) and answers ANY of
+them, back to 2006, with ONE datapoint row whose counters are all zero. So
+"two consecutive all-empty windows" never fired: 4 pages × 300 calls = 1 198
+calls landed on EIGHT media items, each walked 240 windows to 2006-04, on a
+platform that did not exist. The lane was paused
+(`fanslyMediaStatsSyncEnabled=false`) until this landed. Three rules:
+
+  - **ALL-ZERO IS EMPTY.** A window whose `stats[]` rows carry no non-zero
+    counter — `views`, `previewViews`, `uniqueViewers`, `previewUniqueViewers`,
+    `interactionTime`, `previewInteractionTime` — counts toward the floor. The
+    body is still journaled verbatim: capture-first is not a floor rule, and the
+    zero-valued row is itself the evidence the coverage claim rests on.
+  - **AN ITEM HAS NO TRAFFIC BEFORE IT EXISTED.** No window may end more than one
+    31-day span before `coalesce(created_at_platform, first_observed_at)` — the
+    SAME age basis the tier is computed from, because an item classed by one age
+    and walked by another is two claims about one row. Reaching it closes the
+    cursor with `floorBasis='created_at'`, and that is also the repair for the
+    eight burned cursors: they hit it on their next visit, before any egress.
+  - **EVERY VISIT COUNTS AS A VISIT.** `last_visited_at` now moves on a backfill
+    visit too. It did not before, and the arithmetic of that is the whole defect:
+    an item stayed in the never-visited band until its WHOLE history was walked,
+    the newest-first priority handed the same eight items the budget every day,
+    and 5 507 rows had never been looked at once. The rule chosen, stated
+    plainly: a visit walks up to four backfill windows, then runs the tier's
+    steady window IF the day cap and the chunk budget both still allow it, then
+    stamps the row; the walk resumes from `backfill_cursor` on the item's next
+    turn. A visit that journaled NOTHING (repeat guard, creation floor, failure)
+    stamps nothing, and a steady refresh cut in half by the cap still leaves the
+    item unvisited so tomorrow re-reads it whole rather than half. A
+    backfill-only visit keeps the dirty mark (`clearDirty: false`): old windows
+    do not answer "read this item's numbers today", and losing a purchase signal
+    to a history walk would be a worse trade than the extra call.
+
+The consequence, said out loud because it is a real cost: a long-tail item's deep
+history now arrives over several cycles instead of one burst. That is the trade —
+fairness across the catalogue, bounded by the creation floor, against a
+depth-first walk that spent a day's cap on eight items and found no floor.
+
+**Rejected, and recorded so it is not re-proposed:** deriving the next window
+from the returned bounds on `/it/amoie/stats` (that IS the loop — the month walk
+derives nothing, it names a month); a `period=300000` or hourly month form (#225
+declared 5-minute buckets a non-goal and the month form has no hourly variant);
+reopening the earnings or hourly lane along with the daily one; a per-media
+coverage row per item (#231's §3.4 ruling stands — the creation floor and the
+stop reason live in the item's own cursor, and the page's coverage row counts
+them); and treating a zero-valued bucket as traffic anywhere.
 
