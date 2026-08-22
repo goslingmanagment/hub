@@ -29,6 +29,7 @@ import {
   upsertPagePoll,
   upsertPagePromoLink,
   upsertPageRecapStat,
+  upsertFanslyMediaTagStat,
   upsertPlatformTagDaily,
   upsertRevenueMixDaily,
   upsertRevenueMonthTotal,
@@ -49,6 +50,8 @@ const EVENT_PAGE_SIZE = 500;
 const FANSLY_STATS_EVENT_TYPES = new Set([
   "traffic.datapoint_observed",
   "media_traffic.datapoint_observed",
+  // WP-F4: per-media `topFypTags` rows.
+  "media_tag.stats_observed",
   "stats.window_top_observed",
   "tag.counters_observed",
   "earnings.breakdown_observed",
@@ -76,6 +79,10 @@ export const FANSLY_STATS_PROJECTION_TABLES = [
   "stats_traffic_buckets",
   "stats_top_media",
   "stats_top_tags",
+  // WP-F4. Created by 0132 and left EMPTY by F1 on purpose; the per-media lane
+  // is what fills it, and a rebuild has to be able to reset it like any other
+  // fact projection.
+  "fansly_media_tag_stats",
   "platform_tag_daily",
   "revenue_mix_daily",
   "revenue_month_totals",
@@ -92,6 +99,7 @@ export interface FanslyStatsProjectionResult extends Record<string, unknown> {
   applied: number;
   trafficBuckets: number;
   topRows: number;
+  mediaTagRows: number;
   tagSamples: number;
   revenueDays: number;
   revenueMonths: number;
@@ -181,6 +189,7 @@ export async function runFanslyStatsProjection(
     applied: 0,
     trafficBuckets: 0,
     topRows: 0,
+    mediaTagRows: 0,
     tagSamples: 0,
     revenueDays: 0,
     revenueMonths: 0,
@@ -348,6 +357,44 @@ export async function runFanslyStatsProjection(
                 totals.topRows += 1;
                 totals.applied += 1;
               }
+            }
+            continue;
+          }
+
+          case "media_tag.stats_observed": {
+            // WP-F4. The WINDOW is part of the key: rank 2 of one window is not
+            // the same fact as rank 2 of the next, and a row without its window
+            // would let the newest ranking silently overwrite the history.
+            const mediaOfferRef = asText(data.mediaOfferRef);
+            const tagRef = asText(data.tagRef);
+            const periodMs = asInt(data.periodMs);
+            const requestedStart = isoDate(data.requestedStart);
+            const requestedEnd = isoDate(data.requestedEnd);
+            if (
+              mediaOfferRef === null || tagRef === null || periodMs === null || periodMs <= 0
+              || requestedStart === null || requestedEnd === null
+            ) {
+              continue;
+            }
+            const result = await upsertFanslyMediaTagStat(app.db, {
+              ...base,
+              mediaOfferRef,
+              tagRef,
+              periodMs,
+              requestedStart,
+              requestedEnd,
+              // NULL when the response's own tags[] join missed — never
+              // fabricated from the id.
+              tagName: asText(data.tagName),
+              rank: asInt(data.rank),
+              views: asInt(data.views),
+              previewViews: asInt(data.previewViews),
+              interactionTimeMs: asInt(data.interactionMs),
+              previewInteractionTimeMs: asInt(data.previewInteractionMs),
+            });
+            if (result.applied) {
+              totals.mediaTagRows += 1;
+              totals.applied += 1;
             }
             continue;
           }

@@ -87,6 +87,12 @@ const PROJECTION_ONLY_DOMAIN_EVENT_TYPES = new Set([
   // business news, which is precisely what none of this is.
   "traffic.datapoint_observed",
   "media_traffic.datapoint_observed",
+  // WP-F4's one new type, in the SAME family: per-media `topFypTags` rows —
+  // which tags brought traffic to one item in one window. Registered here for
+  // the same reason as its twelve siblings, and in the same change that taught
+  // the `fansly-stats` parser to mint it: an unregistered type would replay to
+  // SSE v2 clients as business news, which a tag ranking is not.
+  "media_tag.stats_observed",
   "stats.window_top_observed",
   "tag.counters_observed",
   "media.sale_stats_observed",

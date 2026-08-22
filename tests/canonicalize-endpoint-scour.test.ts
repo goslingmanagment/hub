@@ -338,6 +338,185 @@ describe("account statistics → events", () => {
   });
 });
 
+describe("per-media statistics → events (WP-F4)", () => {
+  const mediaStats = () => fixture("media-offer-stats.json");
+
+  it("attributes every bucket to dataset.datasetMediaOfferId", () => {
+    // THE KEY THE ROUTE ACTUALLY SERVES (6/6 live responses). The two other
+    // spellings are accepted after it; a body that names the subject nowhere has
+    // unattributable buckets and yields nothing — it stays in the journal.
+    const drafts = ofType(collect("media_offer_stats", mediaStats()), "media_traffic.datapoint_observed");
+    expect(drafts).toHaveLength(2);
+    for (const draft of drafts) {
+      expect(draft.data.subjectKind).toBe("media_offer");
+      expect(draft.data.subjectRef).toBe("000900000000004001");
+    }
+
+    const anonymous = mediaStats();
+    delete (anonymous.dataset as Record<string, unknown>).datasetMediaOfferId;
+    expect(collect("media_offer_stats", anonymous)).toEqual([]);
+    // …but the shape gate still accepts it, so the row stays UNSTAMPED and
+    // replayable rather than being consumed with zero events.
+    expect(canParseFanslyStatsObservation(observation("media_offer_stats", anonymous))).toBe(true);
+  });
+
+  it("types the seven served keys and leaves every video field NULL [E5]", () => {
+    const drafts = ofType(collect("media_offer_stats", mediaStats()), "media_traffic.datapoint_observed");
+    const first = drafts[0]!;
+    expect(first.data.rawType).toBe(0);
+    expect(first.data.views).toBe(2);
+    expect(first.data.previewViews).toBe(0);
+    expect(first.data.uniqueViewers).toBe(2);
+    expect(first.data.previewUniqueViewers).toBe(0);
+    expect(first.data.interactionMs).toBe(11856);
+    expect(first.data.previewInteractionMs).toBe(0);
+    // ABSENCE IS ABSENCE. All six observed responses carried NO video fields at
+    // all, even for a video asset, so these are NULL and the read layer must not
+    // coalesce them to 0 — that would mint a measurement nobody made.
+    expect(first.data.videoViews).toBeNull();
+    expect(first.data.previewVideoViews).toBeNull();
+    expect(first.data.videoPercentWatchedSum).toBeNull();
+    expect(first.data.previewVideoPercentWatchedSum).toBeNull();
+    // The WINDOW identity travels inline — A21 deleted the per-call window
+    // event, so the row carries its own window or nothing does.
+    expect(first.data.periodMs).toBe(21600000);
+    expect(first.data.requestedStart).toBe("2026-08-12T12:00:00.000Z");
+    expect(first.data.requestedEnd).toBe("2026-08-19T12:00:00.000Z");
+    expect(first.dedupKey).toContain("000900000000004001");
+    expect(first.dedupKey).toContain("21600000");
+  });
+
+  it("preserves an unknown media type code AND raises the anomaly", () => {
+    const payload = mediaStats();
+    const points = (payload.dataset as Record<string, unknown>).datapoints as Array<
+      Record<string, unknown>
+    >;
+    (points[0]!.stats as Array<Record<string, unknown>>)[0]!.type = 4242;
+    const codes: string[] = [];
+    const drafts = ofType(
+      collect("media_offer_stats", payload, { record: (code) => codes.push(code) }),
+      "media_traffic.datapoint_observed",
+    );
+    // A1: the row is written ANYWAY. Dropping it would make a platform change
+    // look like silence, and the RAW code is what makes it re-derivable.
+    expect(drafts.some((draft) => draft.data.rawType === 4242)).toBe(true);
+    expect(drafts.find((draft) => draft.data.rawType === 4242)?.data.knownType).toBe(false);
+    expect(codes).toContain(FANSLY_STATS_UNKNOWN_TYPE_DIAGNOSTIC);
+  });
+
+  it("emits one media_tag event per topFypTags row, name joined or NULL", () => {
+    const drafts = ofType(collect("media_offer_stats", mediaStats()), "media_tag.stats_observed");
+    expect(drafts).toHaveLength(3);
+    expect(drafts.map((draft) => draft.data.tagRef)).toEqual([
+      "000900000000004101",
+      "000900000000004102",
+      "000900000000004199",
+    ]);
+    expect(drafts.map((draft) => draft.data.rank)).toEqual([0, 1, 2]);
+    expect(drafts[0]!.data.tagName).toBe("fixturetag-one");
+    expect(drafts[0]!.data.mediaOfferRef).toBe("000900000000004001");
+    expect(drafts[0]!.data.views).toBe(1);
+    expect(drafts[0]!.data.interactionMs).toBe(5636);
+    // THE JOIN MISSED for the third tag: aggregationData.tags[] does not carry
+    // it. NULL, never fabricated from the id.
+    expect(drafts[2]!.data.tagName).toBeNull();
+    // The WINDOW is part of the identity: rank 2 of one window is not the same
+    // fact as rank 2 of the next.
+    expect(drafts[0]!.data.periodMs).toBe(21600000);
+    expect(drafts[0]!.dedupKey).toContain("2026-08-19T12:00:00.000Z");
+  });
+
+  it("dedups an unchanged re-fetch and mints exactly one event on a change", () => {
+    const first = collect("media_offer_stats", mediaStats());
+    const again = collect("media_offer_stats", mediaStats());
+    expect(again.map((draft) => draft.dedupKey)).toEqual(first.map((draft) => draft.dedupKey));
+
+    const revised = mediaStats();
+    const points = (revised.dataset as Record<string, unknown>).datapoints as Array<
+      Record<string, unknown>
+    >;
+    (points[0]!.stats as Array<Record<string, unknown>>)[0]!.views = 9;
+    const changed = collect("media_offer_stats", revised);
+    const before = new Set(first.map((draft) => draft.dedupKey));
+    const minted = changed.filter((draft) => !before.has(draft.dedupKey));
+    // ONE new event for one changed bucket — which is what makes the head
+    // update a correction rather than a rewrite.
+    expect(minted).toHaveLength(1);
+    expect(minted[0]!.type).toBe("media_traffic.datapoint_observed");
+  });
+
+  it("dates a pre-2024 window at RECEIPT time with no clamp marker", () => {
+    // §3.2b. A receipt-time draft is by construction inside
+    // clampDraftOccurredAt's window, so this family can never carry the marker —
+    // its PRESENCE is the failure signal. The failure it prevents is concrete:
+    // `domain_events` is monthly-partitioned, and a historical append dated at
+    // provider time aims an insert at a cold or detached partition and fails
+    // ExecFindPartition (23514) forever. This lane walks backwards by design, so
+    // it is the one most likely to produce such an append.
+    const payload = mediaStats();
+    const dataset = payload.dataset as Record<string, unknown>;
+    dataset.dateAfter = Date.UTC(2022, 5, 1);
+    dataset.dateBefore = Date.UTC(2022, 6, 2);
+    const points = dataset.datapoints as Array<Record<string, unknown>>;
+    points[0]!.timestamp = Date.UTC(2022, 5, 1);
+    points[1]!.timestamp = Date.UTC(2022, 5, 2);
+
+    const drafts = collect("media_offer_stats", payload);
+    expect(drafts.length).toBeGreaterThan(0);
+    for (const draft of drafts) {
+      expect(draft.occurredAt.toISOString()).toBe(RECEIVED_AT.toISOString());
+      expect(draft.data).not.toHaveProperty("occurredAtClamped");
+      expect(draft.data).not.toHaveProperty("occurredAtRaw");
+    }
+    // The TRUE provider date survives, typed, in `data` — which is what the
+    // projection dates its row from.
+    const traffic = ofType(drafts, "media_traffic.datapoint_observed")[0]!;
+    expect(traffic.data.bucketTs).toBe("2022-06-01T00:00:00.000Z");
+    expect(traffic.dedupKey).toContain("2022-06-01T00:00:00.000Z");
+    expect(ofType(drafts, "media_tag.stats_observed")[0]!.data.requestedEnd).toBe(
+      "2022-07-02T00:00:00.000Z",
+    );
+  });
+
+  it("keeps every per-media event under the 64 KiB sanity ceiling", () => {
+    // The worst case here is a full 100-bucket window (`datapointLimit: 100`)
+    // with the platform's own 25-row tag page. Every event is PER ROW, so the
+    // ceiling is never close — which is exactly what the assertion is for.
+    const payload = mediaStats();
+    const dataset = payload.dataset as Record<string, unknown>;
+    const points = dataset.datapoints as Array<Record<string, unknown>>;
+    while (points.length < 100) {
+      points.push({
+        timestamp: 1787140800000 - points.length * 21_600_000,
+        stats: [{
+          type: 0,
+          views: points.length,
+          previewViews: 0,
+          interactionTime: 1000 * points.length,
+          previewInteractionTime: 0,
+          uniqueViewers: points.length,
+          previewUniqueViewers: 0,
+        }],
+      });
+    }
+    const tags = dataset.topFypTags as Array<Record<string, unknown>>;
+    while (tags.length < 25) {
+      tags.push({
+        tagId: `00090000000042${String(100 + tags.length)}`,
+        views: tags.length,
+        previewViews: 0,
+        interactionTime: 100 * tags.length,
+        previewInteractionTime: 0,
+      });
+    }
+    const drafts = collect("media_offer_stats", payload);
+    expect(drafts.length).toBe(125);
+    for (const draft of drafts) {
+      expect(Buffer.byteLength(JSON.stringify(draft.data), "utf8")).toBeLessThan(64 * 1024);
+    }
+  });
+});
+
 describe("time semantics (§3.2b)", () => {
   // A receipt-time draft is by construction inside clampDraftOccurredAt's
   // window, so this family can NEVER produce a clamp marker. The marker's
