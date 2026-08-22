@@ -50,6 +50,55 @@ export function buildWorkboardRoute(pageLabel: string) {
   return buildPageSectionRoute(pageLabel, "workboard");
 }
 
+/**
+ * The Analytics page's range presets.
+ *
+ * Three, not seven, and 30d is the default because that is the window Fansly's
+ * own widget shows — which is also the ONLY window where the Suggestions
+ * denominator warning applies (A8). Keeping the set small keeps that warning
+ * attached to the one view it is true of.
+ */
+export const ANALYTICS_RANGES = ["7d", "30d", "90d"] as const;
+
+export type AnalyticsRange = (typeof ANALYTICS_RANGES)[number];
+
+const ANALYTICS_RANGE_DAYS: Readonly<Record<AnalyticsRange, number>> = {
+  "7d": 7,
+  "30d": 30,
+  "90d": 90,
+};
+
+/** An unknown or absent value resolves to 30d rather than throwing: a deep link
+ *  someone edited by hand should land on the page, not on an error. */
+export function resolveAnalyticsRange(value: string | null | undefined): AnalyticsRange {
+  return (ANALYTICS_RANGES as readonly string[]).includes(value ?? "")
+    ? value as AnalyticsRange
+    : "30d";
+}
+
+/** `[from, to)` for a range preset, as RFC 3339 instants with an explicit
+ *  offset — the only form the serving routes accept. */
+export function analyticsRange(
+  range: AnalyticsRange,
+  now: Date = new Date(),
+): { from: string; to: string } {
+  const to = new Date(now);
+  const from = new Date(to.getTime() - ANALYTICS_RANGE_DAYS[range] * 24 * 60 * 60 * 1000);
+  return { from: from.toISOString(), to: to.toISOString() };
+}
+
+export function buildAnalyticsRoute(pageLabel?: string | null, range?: AnalyticsRange) {
+  const query = new URLSearchParams();
+  if (pageLabel) {
+    query.set("page", pageLabel);
+  }
+  if (range) {
+    query.set("range", range);
+  }
+  const suffix = query.toString();
+  return suffix.length > 0 ? `/analytics?${suffix}` : "/analytics";
+}
+
 export function buildAiAnalyticsRoute(pageLabel?: string | null) {
   if (!pageLabel) {
     return "/ai-analytics";
