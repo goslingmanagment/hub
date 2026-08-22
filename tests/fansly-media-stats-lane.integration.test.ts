@@ -688,6 +688,13 @@ describe("media_stats lane — the windows and their guards", () => {
       done: true,
       stopReason: "window_not_honoured",
     });
+    // COVERAGE SEES IT. A single item's stopped walk must not flip the whole
+    // page's surface claim — this row is an aggregate over thousands of items —
+    // so the stop is COUNTED rather than promoted, where an operator reads it
+    // instead of writing a bespoke query.
+    const coverage = await coverageRows(page.id);
+    expect(coverage).toHaveLength(1);
+    expect((coverage[0]?.cursor as Record<string, unknown>).backfillStopped).toBe(1);
   });
 
   it("refuses to re-issue an identical window ACROSS chunks", async (ctx) => {

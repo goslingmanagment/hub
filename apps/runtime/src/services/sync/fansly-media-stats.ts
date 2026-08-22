@@ -1130,6 +1130,11 @@ export async function fanslyMediaStatsChunk(
       dueToday: progress.dueNow,
       deferredToday,
       backfillComplete: progress.backfillComplete,
+      // Items whose backfill STOPPED on a window the provider would not
+      // honour. A hole we know about, which is the whole point of stopping
+      // rather than looping — and it belongs where an operator reads, not in a
+      // bespoke query.
+      backfillStopped: progress.backfillStopped,
       // ── the honesty block (A16 item 3) ──
       estimatedCycleDays: cycle.estimatedCycleDays,
       requestsPerDayWanted: cycle.requestsPerDayWanted,
@@ -1212,6 +1217,7 @@ export async function fanslyMediaStatsChunk(
         requestsPerDayWanted: cycle.requestsPerDayWanted,
         longTailWindowMode: state.longTailWindowMode,
         backfillComplete: progress.backfillComplete,
+        backfillStopped: progress.backfillStopped,
       },
     });
 
