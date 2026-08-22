@@ -9540,10 +9540,12 @@ describe("api integration", () => {
     // `stats_snapshot` (WP-F1) + `notifications` (WP-F2 — the lossy lane, and
     // the one whose wedge would be most expensive to miss) + `catalog` (WP-F3 —
     // the lane that measures M) + `post_replies` (WP-F5 — the quietest wedge in
-    // the tree: the queue keeps its rows and the archive simply stops growing).
+    // the tree: the queue keeps its rows and the archive simply stops growing)
+    // + `payouts` (WP-F7 — two calls a day is a volume no dashboard notices
+    // going to zero).
     // Pinned by MONITORED_SYNC_STREAMS ⊇ getSyncStreamsForPlatform("fansly") in
     // fansly-stats-stream-wiring.
-    expect(leadBody.overall.streams).toBe(15);
+    expect(leadBody.overall.streams).toBe(16);
   }, 15_000);
 
   it("enforces sync monitor page scoping and missing-page handling [sync-critical]", async (context) => {
