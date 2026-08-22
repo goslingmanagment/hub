@@ -84,6 +84,24 @@ export const WRITTEN_OBSERVATION_KINDS: readonly WrittenObservationKind[] = [
   // params say which walk produced it. A kind per phase would split one fact
   // across three parse paths for nothing.
   { kind: "notifications", source: "pull", writer: "services/sync/fansly-notifications.ts" },
+  // ── WP-F3: the `catalog` lane (services/sync/fansly-catalog.ts) ────────────
+  // ONE kind PER ROUTE here, and the contrast with WP-F2 above is deliberate:
+  // the notification lane journals one envelope shape from three walks, while
+  // these nine routes serve nine different shapes. A shared kind would force
+  // one parser to sniff which route produced a body it can no longer identify.
+  { kind: "vault_albums", source: "pull", writer: "services/sync/fansly-catalog.ts" },
+  { kind: "uservault_albums", source: "pull", writer: "services/sync/fansly-catalog.ts" },
+  { kind: "subscription_tiers", source: "pull", writer: "services/sync/fansly-catalog.ts" },
+  { kind: "gift_codes", source: "pull", writer: "services/sync/fansly-catalog.ts" },
+  { kind: "automated_messages", source: "pull", writer: "services/sync/fansly-catalog.ts" },
+  { kind: "account_walls", source: "pull", writer: "services/sync/fansly-catalog.ts" },
+  { kind: "vault_media", source: "pull", writer: "services/sync/fansly-catalog.ts" },
+  { kind: "account_media_batch", source: "pull", writer: "services/sync/fansly-catalog.ts" },
+  {
+    kind: "account_media_bundle_batch",
+    source: "pull",
+    writer: "services/sync/fansly-catalog.ts",
+  },
   // BL-C3 itself. Both halves of the pair, so the incident's own kinds are the
   // first thing this registry pins.
   { kind: "link_stats_tracking", source: "pull", writer: "services/ofapi-link-stats-sync.ts" },

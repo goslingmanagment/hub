@@ -111,6 +111,7 @@ const STREAM_LABELS: Record<string, string> = {
   // accurate but says nothing about what it captures.
   stats_snapshot: "account statistics",
   notifications: "notifications",
+  catalog: "content catalog",
 };
 
 const PROGRESS_STREAM_LABELS: Record<string, string> = {

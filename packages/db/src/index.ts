@@ -109,6 +109,7 @@ export * from "./repositories/creator-posts.ts";
 export * from "./repositories/message-archive.ts";
 export * from "./repositories/media-plane.ts";
 export * from "./repositories/fansly-engagement.ts";
+export * from "./repositories/fansly-catalog.ts";
 export * from "./repositories/fansly-stats.ts";
 export * from "./repositories/ai-personas.ts";
 export * from "./repositories/ai-restricted.ts";

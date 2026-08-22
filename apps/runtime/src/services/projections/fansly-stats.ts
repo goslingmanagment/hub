@@ -62,6 +62,16 @@ const FANSLY_STATS_EVENT_TYPES = new Set([
 
 /** The tables this projector truncates on rebuild. `capture_coverage` is
  *  ABSENT and must stay absent (§3.4). */
+/**
+ * WP-F3 made `page_promo_links` a two-writer table: this projector owns the
+ * `tracking` half, the catalog projector owns the `gift_code` half, and the
+ * kind is part of the table's PRIMARY KEY so the two row sets are structurally
+ * disjoint. Both rebuilds therefore scope their delete by kind — an unscoped
+ * one truncates rows the other projector's ledger owns.
+ */
+export const PROMO_LINKS_TABLE = "page_promo_links";
+export const STATS_PROMO_LINK_KIND = "tracking";
+
 export const FANSLY_STATS_PROJECTION_TABLES = [
   "stats_traffic_buckets",
   "stats_top_media",
@@ -590,7 +600,20 @@ export async function rebuildFanslyStatsProjection(
     if (input?.accountId != null) {
       const pageId = input.accountId;
       for (const table of FANSLY_STATS_PROJECTION_TABLES) {
-        await tx.execute(sql`delete from ${sql.identifier(table)} where page_id = ${pageId}`);
+        await tx.execute(
+          table === PROMO_LINKS_TABLE
+            // WP-F3: `page_promo_links` now has TWO writers, one per
+            // `link_kind` — this projector owns 'tracking', the catalog
+            // projector owns 'gift_code'. The kinds are disjoint by the table's
+            // own primary key, so an UNSCOPED delete here would truncate rows
+            // this replay cannot re-derive and leave a page's gift codes gone
+            // until somebody rebuilt the other projection too.
+            ? sql`
+              delete from page_promo_links
+               where page_id = ${pageId} and link_kind = ${STATS_PROMO_LINK_KIND}
+            `
+            : sql`delete from ${sql.identifier(table)} where page_id = ${pageId}`,
+        );
       }
       await tx.execute(sql`
         delete from projection_seq_watermarks
@@ -598,7 +621,11 @@ export async function rebuildFanslyStatsProjection(
       `);
     } else {
       for (const table of FANSLY_STATS_PROJECTION_TABLES) {
-        await tx.execute(sql`delete from ${sql.identifier(table)}`);
+        await tx.execute(
+          table === PROMO_LINKS_TABLE
+            ? sql`delete from page_promo_links where link_kind = ${STATS_PROMO_LINK_KIND}`
+            : sql`delete from ${sql.identifier(table)}`,
+        );
       }
       await tx.execute(sql`
         delete from projection_seq_watermarks where projection = ${FANSLY_STATS_PROJECTION}

@@ -108,6 +108,24 @@ const PROJECTION_ONLY_DOMAIN_EVENT_TYPES = new Set([
   "notification.observed",
   "media.purchase_notification_observed",
   "engagement.notification_observed",
+  // WP-F3, the content catalog. Inventory, prices and automation definitions:
+  // every one of them is a projection input, and none of them is business news
+  // an SSE v2 client should be handed as it happens. `media.observed` is
+  // already registered above (F0(b) minted it) and the vault/batch origins ride
+  // that same type — one decision, never two. Registering the types here and
+  // declaring `projectionOnly: true` on the `fansly-catalog` family are ONE
+  // decision as well.
+  "vault.album_observed",
+  "vault.album_membership_observed",
+  "subscription.tier_observed",
+  "subscription.tier_plan_observed",
+  "promo.gift_code_observed",
+  "automation.definition_observed",
+  "page.wall_observed",
+  // The ROSTER event — "this full listing named exactly these refs". It is what
+  // makes `missing_since` a REPLAYED fact rather than a sweep-time side effect,
+  // and it is the only event in this family that describes an absence.
+  "catalog.listing_observed",
 ]);
 
 export function isProjectionOnlyDomainEventType(type: string) {

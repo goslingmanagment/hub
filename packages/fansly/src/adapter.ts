@@ -71,6 +71,24 @@ type RequestResult<T> = {
 const REQUEST_TIMEOUT_MS = 30_000;
 const GLOBAL_DELAY_SAFETY_MARGIN_MS = 100;
 const EARNINGS_ACCOUNTS_PAGE_LIMIT = 100;
+/**
+ * WP-F3: `/media/vaultnew`'s head cursor is the LITERAL STRING "0", for both
+ * `before` and `after`. An empty `before=` is a cursor the server does not
+ * honour — it answers `{albumMedia: [], media: []}` for an album with 4 760
+ * items, which is indistinguishable from an exhausted album. The app's own
+ * caller sends "0"; so does this adapter.
+ */
+export const VAULT_MEDIA_HEAD_CURSOR = "0";
+/**
+ * WP-F3: ids per `/account/media?ids=` and `/account/media/bundle?ids=` call.
+ *
+ * NOT a guess: the app batches its own hydration at `splice(0, 100)` in both
+ * `requestMediaTick` and `requestBundleTick`, so 100 is the size the server is
+ * known to answer for. A smaller batch would triple the call count of the
+ * hydration step for no benefit; a larger one would be a shape nobody has
+ * observed the server accept.
+ */
+export const ACCOUNT_MEDIA_BATCH_SIZE = 100;
 
 /**
  * Response summary for a route whose shape is NOT yet known (the WP-F9 / [E1]
@@ -1468,7 +1486,98 @@ export class FanslyAdapter {
     return { items: response.parsed, raw: response.raw };
   }
 
-  // ---- WP-F3 catalog routes never observed live (March corpus only) — probe-only ----
+  // ---- WP-F3: the content-catalog lane ----
+
+  /**
+   * `/vault/albumsnew` — the creator's REAL vault: 27 albums on the live
+   * capture, with `aggregationData.media[]` riding along.
+   *
+   * That sidecar carries `location`, `locations[]` and `variants[]` — signed
+   * CDN material. It is journaled verbatim (DP 7) and NOTHING downstream may
+   * put it in an event or a projection; the adapter hands the whole body
+   * through and the handler journals before anything parses it.
+   */
+  async getVaultAlbums(
+    context: FanslyRequestContext,
+  ): Promise<{ items: unknown; raw: unknown }> {
+    const response = await this.request<unknown>(context, "/vault/albumsnew", {
+      operation: "vault_albums",
+      endpointTemplate: "/vault/albumsnew",
+      category: "media",
+      summarizeResponse: summarizeUnknownResponse,
+    });
+    return { items: response.parsed, raw: response.raw };
+  }
+
+  /**
+   * `/uservault/albumsnew?accountId=` — a DIFFERENT resource from the one
+   * above: the account's own Likes/Purchases shelves, whose contents are OTHER
+   * creators' media. Captured for completeness and joined by native id; never
+   * counted into the page's own inventory.
+   *
+   * `accountId` is required by the app's own caller and is passed through
+   * exactly as it is stored on the page.
+   */
+  async getUserVaultAlbums(
+    context: FanslyRequestContext,
+    params: { accountId: string },
+  ): Promise<{ items: unknown; raw: unknown }> {
+    const response = await this.request<unknown>(context, "/uservault/albumsnew", {
+      operation: "uservault_albums",
+      endpointTemplate: "/uservault/albumsnew",
+      category: "media",
+      query: { accountId: params.accountId },
+      requestShape: { hasAccountId: params.accountId.length > 0 },
+      summarizeResponse: summarizeUnknownResponse,
+    });
+    return { items: response.parsed, raw: response.raw };
+  }
+
+  /**
+   * `/subscriptions/tiers` — FEAT-002's source. A flat array of tiers whose
+   * REAL prices live in `plans[].price`; `tier.price` was 5 000 on all five
+   * observed tiers and is a base, not a price.
+   */
+  async getSubscriptionTiers(
+    context: FanslyRequestContext,
+  ): Promise<{ items: unknown; raw: unknown }> {
+    const response = await this.request<unknown>(context, "/subscriptions/tiers", {
+      operation: "subscription_tiers",
+      endpointTemplate: "/subscriptions/tiers",
+      category: "account",
+      summarizeResponse: summarizeUnknownResponse,
+    });
+    return { items: response.parsed, raw: response.raw };
+  }
+
+  /** `/subscriptions/giftcodes` — 73 codes on the live capture; note
+   *  `original_price` arrives snake_case amid otherwise camelCase keys. */
+  async getGiftCodes(
+    context: FanslyRequestContext,
+  ): Promise<{ items: unknown; raw: unknown }> {
+    const response = await this.request<unknown>(context, "/subscriptions/giftcodes", {
+      operation: "gift_codes",
+      endpointTemplate: "/subscriptions/giftcodes",
+      category: "account",
+      summarizeResponse: summarizeUnknownResponse,
+    });
+    return { items: response.parsed, raw: response.raw };
+  }
+
+  /** `/message/automated` — the page's automation definitions.
+   *  `messageTemplate` is a JSON OBJECT in every live value; the string-shape
+   *  fallback lives in the canonicalizer, not here. */
+  async getAutomatedMessages(
+    context: FanslyRequestContext,
+  ): Promise<{ items: unknown; raw: unknown }> {
+    const response = await this.request<unknown>(context, "/message/automated", {
+      operation: "automated_messages",
+      endpointTemplate: "/message/automated",
+      category: "messaging",
+      summarizeResponse: summarizeUnknownResponse,
+    });
+    return { items: response.parsed, raw: response.raw };
+  }
 
   /** `/account/media?ids=` — media rows by id (the app's batch hydration for its own media). */
   async getAccountMediaByIds(
@@ -1519,34 +1628,72 @@ export class FanslyAdapter {
   }
 
   /**
-   * `/media/vaultnew` — the vault's media listing. The app calls it two ways:
-   * by album (`albumId&mediaType&search&before&after`) and by type
-   * (`type&before&after`). Either form is accepted here; the album form is the
-   * one the catalog walk would use.
+   * `/media/vaultnew` — the vault's media listing, in the form the app itself
+   * sends. THIS FORM IS THE WHOLE FIX.
+   *
+   * The 2026-08-22 probe sent `albumId=…&search=&before=&after=` against a
+   * 4 760-item album and got `{albumMedia: [], media: []}` — an empty page that
+   * looks exactly like an exhausted album. Reading the app bundle settled why:
+   * `getVaultAlbumMediaNewOrder` builds
+   *
+   *   /media/vaultnew?albumId=<id>&mediaType=<filter|"">&before=<cursor>&after=<"0">&search=<text|"">
+   *
+   * and its caller passes the LITERAL STRING "0" for both `before` and `after`
+   * on the first page, `mediaType` present-and-empty when unfiltered, and
+   * `before = <id of the last albumMedia row>` for every page after the first.
+   * An empty `before=` is not "start at the head" to this endpoint; it is a
+   * cursor the server does not honour.
+   *
+   * `mediaType` is therefore ALWAYS sent (empty when unfiltered) rather than
+   * omitted, and `search` likewise — the app sends both on every call, and this
+   * lane's job is to be indistinguishable from the app.
+   *
+   * The second variant, `?type=<vaultType>&before&after`, lists by vault type
+   * rather than by album; it is kept because the app has it, and the catalog
+   * walk does not use it.
    */
   async getVaultMediaPage(
     context: FanslyRequestContext,
     params: {
       albumId?: string | null;
       type?: number | null;
-      mediaType?: number | null;
+      /** Present and EMPTY when unfiltered — the app's own `getMediaTypeFilter()`
+       *  returns "" when neither images nor video are hidden. */
+      mediaType?: string | null;
+      /** The LITERAL "0" on the first page; the last row's id afterwards. */
       before?: string | null;
+      /** The literal "0". The app never sends anything else here. */
       after?: string | null;
+      search?: string | null;
     },
   ): Promise<{ items: unknown; raw: unknown }> {
+    const byAlbum = typeof params.albumId === "string" && params.albumId.length > 0;
     const response = await this.request<unknown>(context, "/media/vaultnew", {
-      operation: "vault_media_probe",
+      operation: "vault_media",
       endpointTemplate: "/media/vaultnew",
       category: "media",
-      query: {
-        albumId: params.albumId ?? undefined,
-        type: params.type != null ? String(params.type) : undefined,
-        mediaType: params.mediaType != null ? String(params.mediaType) : undefined,
-        search: params.albumId ? "" : undefined,
-        before: params.before ?? "",
-        after: params.after ?? "",
+      query: byAlbum
+        ? {
+          albumId: params.albumId ?? undefined,
+          // Present-and-empty, never omitted.
+          mediaType: params.mediaType ?? "",
+          search: params.search ?? "",
+          before: params.before ?? VAULT_MEDIA_HEAD_CURSOR,
+          after: params.after ?? VAULT_MEDIA_HEAD_CURSOR,
+        }
+        : {
+          type: params.type != null ? String(params.type) : undefined,
+          before: params.before ?? VAULT_MEDIA_HEAD_CURSOR,
+          after: params.after ?? VAULT_MEDIA_HEAD_CURSOR,
+        },
+      requestShape: {
+        byAlbum,
+        type: params.type ?? null,
+        before: params.before ?? VAULT_MEDIA_HEAD_CURSOR,
       },
-      requestShape: { byAlbum: Boolean(params.albumId), type: params.type ?? null },
+      pagination: {
+        cursorPresent: (params.before ?? VAULT_MEDIA_HEAD_CURSOR) !== VAULT_MEDIA_HEAD_CURSOR,
+      },
       summarizeResponse: summarizeUnknownResponse,
     });
     return { items: response.parsed, raw: response.raw };

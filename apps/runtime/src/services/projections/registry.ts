@@ -53,6 +53,12 @@ import {
   runFanslyEngagementProjection,
 } from "./fansly-engagement.ts";
 import {
+  FANSLY_CATALOG_PROJECTION,
+  FANSLY_CATALOG_PROJECTION_TABLES,
+  rebuildFanslyCatalogProjection,
+  runFanslyCatalogProjection,
+} from "./fansly-catalog.ts";
+import {
   FANSLY_STATS_PROJECTION,
   rebuildFanslyStatsProjection,
   runFanslyStatsProjection,
@@ -252,6 +258,37 @@ export const PROJECTION_REGISTRY: readonly ProjectionDefinition[] = [
     label: "Fansly-engagement projection sweep complete",
     run: async (app, input) => ({ ...await runFanslyEngagementProjection(app, input) }),
     rebuild: async (app, input) => await rebuildFanslyEngagementProjection(app, input),
+    didWork: (result) => count(result, "applied") > 0,
+  },
+  {
+    name: FANSLY_CATALOG_PROJECTION,
+    // WP-F3. Seven types, and the last of them is the one that makes the other
+    // six honest: `catalog.listing_observed` carries the full roster a listing
+    // served, and applying it is what marks a retired tier, a revoked gift code
+    // or a deleted album `missing_since` — including in the case that produces
+    // no row events at all, an EMPTY listing.
+    //
+    // `media.observed` is deliberately NOT declared here even though this
+    // family emits it (vault walk, batch hydration): the media plane is and
+    // stays the SINGLE writer of `creator_media`, and declaring the type on two
+    // projections would make the registry's `eventTypes` a wish rather than a
+    // contract.
+    eventTypes: [
+      "vault.album_observed",
+      "vault.album_membership_observed",
+      "subscription.tier_observed",
+      "subscription.tier_plan_observed",
+      "promo.gift_code_observed",
+      "automation.definition_observed",
+      "page.wall_observed",
+      "catalog.listing_observed",
+    ],
+    tables: [...FANSLY_CATALOG_PROJECTION_TABLES],
+    stateClass: "fact_projection",
+    rebuildKind: "truncate_replay",
+    label: "Fansly-catalog projection sweep complete",
+    run: async (app, input) => ({ ...await runFanslyCatalogProjection(app, input) }),
+    rebuild: async (app, input) => await rebuildFanslyCatalogProjection(app, input),
     didWork: (result) => count(result, "applied") > 0,
   },
 ];

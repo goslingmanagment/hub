@@ -34,6 +34,12 @@ export const SYNC_STREAMS = [
   // quote is announced once and never re-served, so an hour of downtime is an
   // hour of facts nobody can recover. Fansly-only, gated off, seeded PAUSED.
   "notifications",
+  // WP-F3: the daily content-catalog sweep — both vaults, tiers, gift codes,
+  // automated messages, walls, and the vault media walk that MEASURES M. It is
+  // maintenance class at 86 400 s because inventory moves in days, and it runs
+  // BEFORE the per-media lane exists on purpose: M is what sizes that lane.
+  // Fansly-only, gated off, seeded PAUSED.
+  "catalog",
 ] as const;
 
 export type SyncStream = typeof SYNC_STREAMS[number];
@@ -69,6 +75,9 @@ export const FANSLY_BULK_SYNC_STREAMS = [
   // flag would move nothing — the #192 failure, reproduced on production for
   // stats_snapshot on 2026-08-22.
   "notifications",
+  // WP-F3: same rule. Without membership here the lane seeds paused and its
+  // ramp flag moves nothing.
+  "catalog",
 ] as const;
 
 export type FanslyBulkSyncStream = typeof FANSLY_BULK_SYNC_STREAMS[number];
@@ -93,7 +102,12 @@ export const FANSLY_BULK_STREAM_FEATURE_GATE_BLOCKER_KIND = "feature_gate";
  * Ungating stays an explicit act: the gate reconciler resumes it, or an
  * operator uses the stream's own sync scope.
  */
-export const SEED_PAUSED_SYNC_STREAMS = ["posts", "stats_snapshot", "notifications"] as const;
+export const SEED_PAUSED_SYNC_STREAMS = [
+  "posts",
+  "stats_snapshot",
+  "notifications",
+  "catalog",
+] as const;
 
 export function isSeedPausedSyncStream(stream: string): boolean {
   return (SEED_PAUSED_SYNC_STREAMS as readonly string[]).includes(stream);
@@ -312,6 +326,29 @@ export const SYNC_STREAM_POLICY: Record<SyncStream, SyncStreamPolicy> = {
     progressStallThresholdMs: 30 * 60_000,
     freshnessSlaSeconds: null,
   },
+  // WP-F3: the catalog sweep. MAINTENANCE class at 86 400 s — inventory moves
+  // in days, and every step here is deferrable by construction (nothing in this
+  // lane is announced once). `domain: "financials"` is where its subscription
+  // tiers, plan prices and gift codes belong — there is no `content` domain and
+  // inventing one would be a vocabulary change for a label. Like
+  // `stats_snapshot` and `notifications` it is deliberately ABSENT from
+  // SYNC_DOMAIN_POLICY's primary/supporting lists, so a flag-gated lane cannot
+  // degrade a page's block-health UX to "catching up" while its gate is shut.
+  //
+  // basePriority 11 puts it below the notification poll and far below money and
+  // DMs: a daily inventory read can always wait, and the plan's pacing rule is
+  // "priority yield to DM/tx".
+  catalog: {
+    stream: "catalog",
+    domain: "financials",
+    cadenceSeconds: 86_400,
+    basePriority: 11,
+    streamIndex: 15,
+    defaultWorkClass: "maintenance",
+    queueDelayThresholdMs: 6 * 60 * 60_000,
+    progressStallThresholdMs: 60 * 60_000,
+    freshnessSlaSeconds: null,
+  },
 };
 
 export const SYNC_DOMAIN_POLICY: Record<SyncDomain, SyncDomainPolicy> = {
@@ -378,6 +415,7 @@ const SYNC_STREAM_PRIORITY_BY_SOURCE: Record<SyncRequestSource, Record<SyncStrea
     posts: 18,
     stats_snapshot: 17,
     notifications: 16,
+    catalog: 15,
   },
   recovery: {
     light: 70,
@@ -394,6 +432,7 @@ const SYNC_STREAM_PRIORITY_BY_SOURCE: Record<SyncRequestSource, Record<SyncStrea
     posts: 28,
     stats_snapshot: 27,
     notifications: 26,
+    catalog: 25,
   },
   anomaly: {
     light: 70,
@@ -410,6 +449,7 @@ const SYNC_STREAM_PRIORITY_BY_SOURCE: Record<SyncRequestSource, Record<SyncStrea
     posts: 28,
     stats_snapshot: 27,
     notifications: 26,
+    catalog: 25,
   },
   manual: {
     light: 100,
@@ -426,6 +466,7 @@ const SYNC_STREAM_PRIORITY_BY_SOURCE: Record<SyncRequestSource, Record<SyncStrea
     posts: 58,
     stats_snapshot: 57,
     notifications: 56,
+    catalog: 55,
   },
   onboarding: {
     light: 100,
@@ -442,6 +483,7 @@ const SYNC_STREAM_PRIORITY_BY_SOURCE: Record<SyncRequestSource, Record<SyncStrea
     posts: 58,
     stats_snapshot: 57,
     notifications: 56,
+    catalog: 55,
   },
   reset: {
     light: 100,
@@ -458,6 +500,7 @@ const SYNC_STREAM_PRIORITY_BY_SOURCE: Record<SyncRequestSource, Record<SyncStrea
     posts: 58,
     stats_snapshot: 57,
     notifications: 56,
+    catalog: 55,
   },
 };
 
@@ -606,6 +649,7 @@ function streamOrderSql(columnName: string) {
       when 'posts' then ${SYNC_STREAM_POLICY.posts.streamIndex}
       when 'stats_snapshot' then ${SYNC_STREAM_POLICY.stats_snapshot.streamIndex}
       when 'notifications' then ${SYNC_STREAM_POLICY.notifications.streamIndex}
+      when 'catalog' then ${SYNC_STREAM_POLICY.catalog.streamIndex}
       else 999
     end
   `);
@@ -628,6 +672,7 @@ function streamPriorityBySourceSql(streamColumnName: string, sourceColumnName: s
       when 'posts' then ${SYNC_STREAM_PRIORITY_BY_SOURCE[source].posts}
       when 'stats_snapshot' then ${SYNC_STREAM_PRIORITY_BY_SOURCE[source].stats_snapshot}
       when 'notifications' then ${SYNC_STREAM_PRIORITY_BY_SOURCE[source].notifications}
+      when 'catalog' then ${SYNC_STREAM_PRIORITY_BY_SOURCE[source].catalog}
       else 0
     end
   `;

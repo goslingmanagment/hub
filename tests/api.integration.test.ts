@@ -488,6 +488,23 @@ function createAutoSyncFanslyAdapter(input: {
     async getNotificationsPage() {
       return { items: null, raw: null };
     },
+    // WP-F3: the catalog sweep's five listing reads. The four batch/vault
+    // routes are already stubbed above (the WP-F9 probe declared them first).
+    async getVaultAlbums() {
+      return { items: null, raw: null };
+    },
+    async getUserVaultAlbums() {
+      return { items: null, raw: null };
+    },
+    async getSubscriptionTiers() {
+      return { items: [], raw: [] };
+    },
+    async getGiftCodes() {
+      return { items: [], raw: [] };
+    },
+    async getAutomatedMessages() {
+      return { items: [], raw: [] };
+    },
     async close() {},
   } as AppContext["adapter"];
 }
