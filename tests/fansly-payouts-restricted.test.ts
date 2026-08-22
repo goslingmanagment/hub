@@ -4,7 +4,7 @@ import {
   AGENT_OBSERVATION_PAYLOAD_ALLOWLIST,
   AGENT_OBSERVATION_PAYLOAD_DENYLIST,
   agentObservationPayloadAllowed,
-} from "../apps/runtime/src/modules/agent-read/observation-scrub.ts";
+} from "../apps/runtime/src/modules/agent-read/index.ts";
 import { FANSLY_PAYOUTS_CANONICALIZED_KINDS } from "../apps/runtime/src/services/canonicalize/fansly-payouts.ts";
 
 // WP-F7 — where "restricted class" is actually enforced, pinned.
