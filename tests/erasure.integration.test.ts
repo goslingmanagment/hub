@@ -1579,6 +1579,123 @@ describe("erasure drill (Stage 28 Task 4)", () => {
     )).toBe(1);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
+  it("fan-scope erasure purges the fan's notification and like rows; another fan's survive (0134 / §9.3)", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    // §9.3's second half for WP-F2. The column-shape ratchet proves both
+    // columns are NAMED as fan-scope targets; naming is not erasing. Both are
+    // TEXT refs with NO foreign key to `fans`, so nothing but the explicit
+    // predicate reaches them — and a predicate that silently matches nothing
+    // looks exactly like a predicate that works. This drill deletes REAL rows.
+    //
+    // `post_likes` is EMPTY on Fansly today ([E4]) and the OF webhook is its
+    // only writer, which is precisely why the drill seeds it by hand: a table
+    // that arrives populated a year from now arrives with an untested
+    // predicate, and by then nobody remembers to write one.
+    const TARGET_FAN = "551551551";
+    const OTHER_FAN = "442442442";
+    const CREATOR_POST = "0009888888888888"; // a correlation ref that is NOT a fan
+    const model = await createModel(testDb.db, {
+      slug: "erasure-engagement",
+      name: "Erasure Engagement",
+    });
+    const page = model
+      ? await createFanslyPage(testDb.db, { modelId: model.id, label: "erasure-engagement-page" })
+      : undefined;
+    if (!page) {
+      throw new Error("Failed to seed engagement fan erasure page");
+    }
+    const operator = await one<{ id: string }>(
+      `insert into users (username, role) values ('erasure-engagement-owner', 'owner') returning id::text as id`,
+    );
+    for (const partner of [TARGET_FAN, OTHER_FAN]) {
+      await testDb.pool.query(
+        `insert into fans (platform, platform_user_id, username, display_name)
+         values ('fansly', $1, $1, $1)`,
+        [partner],
+      );
+    }
+
+    const HASH = "f".repeat(64);
+    const seedNotification = async (ref: string, correlation: string, typeCode: number) => {
+      await testDb!.pool.query(
+        `insert into platform_notifications (
+           page_id, platform, notification_ref, type_code, correlation_ref,
+           correlation_group_ref, metadata, occurred_at, acknowledged_at,
+           first_observed_at, last_observed_at, content_hash,
+           source_event_id, source_observation_id, source_account_seq
+         ) values ($1, 'fansly', $2, $3, $4, null, '{}'::jsonb, now(), null,
+                   now(), now(), $5, 5101, 5101, 5101)`,
+        [page.id, ref, typeCode, correlation, HASH],
+      );
+    };
+    // The fan bought something: the correlation ref IS the fan.
+    await seedNotification("notif-target-purchase", TARGET_FAN, 2007);
+    await seedNotification("notif-target-follow", TARGET_FAN, 3003);
+    // A bystander fan on the same page.
+    await seedNotification("notif-other", OTHER_FAN, 2007);
+    // The creator's OWN content: an engagement notification whose correlation
+    // ref is a post id, not a fan. Erasing a fan must not delete it.
+    await seedNotification("notif-creator-post", CREATOR_POST, 1004);
+
+    const seedLike = async (subjectRef: string, liker: string) => {
+      await testDb!.pool.query(
+        `insert into post_likes (
+           page_id, platform, subject_kind, subject_ref, liker_platform_user_id,
+           state, occurred_at, notification_ref, discovered_via,
+           first_observed_at, last_observed_at, content_hash,
+           source_event_id, source_observation_id, source_account_seq
+         ) values ($1, 'onlyfans', 'post', $2, $3, 'active', now(), null, 'ofapi_webhook',
+                   now(), now(), $4, 5102, 5102, 5102)`,
+        [page.id, subjectRef, liker, HASH],
+      );
+    };
+    await seedLike("post-alpha", TARGET_FAN);
+    await seedLike("post-beta", TARGET_FAN);
+    await seedLike("post-alpha", OTHER_FAN);
+
+    expect(await count(`platform_notifications where page_id = ${page.id}`)).toBe(4);
+    expect(await count(`post_likes where page_id = ${page.id}`)).toBe(3);
+
+    const fanScope = { scopeType: "fan", platform: "fansly", fanRef: TARGET_FAN } as const;
+    const plan = await planErasure(appStub(), fanScope);
+    expect(plan.targets.find((target) =>
+      target.plane === "hot" && target.target === "platform_notifications"
+    )).toMatchObject({ action: "delete", rows: 2 });
+    expect(plan.targets.find((target) =>
+      target.plane === "hot" && target.target === "post_likes"
+    )).toMatchObject({ action: "delete", rows: 2 });
+
+    const result = await executeErasure(
+      appStub(),
+      fanScope,
+      { initiatedBy: Number(operator.id) },
+    );
+    expect(
+      result.executedCounts["hot:platform_notifications:delete"],
+      "platform_notifications fan target",
+    ).toBe(2);
+    expect(await count(
+      `platform_notifications where notification_ref = 'notif-target-purchase'`,
+    )).toBe(0);
+    expect(await count(`platform_notifications where notification_ref = 'notif-target-follow'`))
+      .toBe(0);
+    // The bystander's row on the same page survives, untouched.
+    expect(await count(`platform_notifications where notification_ref = 'notif-other'`)).toBe(1);
+    // …and so does the CREATOR's own content. A correlation ref is a fan on the
+    // codes that name one, and a post id on the codes that do not; a predicate
+    // that deleted both would erase the page's own history to forget a fan.
+    expect(await count(`platform_notifications where notification_ref = 'notif-creator-post'`))
+      .toBe(1);
+
+    expect(result.executedCounts["hot:post_likes:delete"], "post_likes fan target").toBe(2);
+    expect(await count(`post_likes where liker_platform_user_id = '${TARGET_FAN}'`)).toBe(0);
+    expect(await count(`post_likes where liker_platform_user_id = '${OTHER_FAN}'`)).toBe(1);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
   it("page and model erasure purge sensitive tip projections by resolved page id", async (context) => {
     if (!testDb) {
       context.skip();

@@ -177,6 +177,15 @@ export interface FanslyNotificationsCursorState {
   typeGroupIndex: number;
   /** The one-time "is the unfiltered form actually serving rows?" probe. */
   unfilteredProbeSpent: boolean;
+  /**
+   * Consecutive type-form REFUSALS, durable across chunks.
+   *
+   * It has to survive a chunk boundary for the same reason WP-F1's window
+   * guard does: the loop that burned a day's cap on production spanned five
+   * chunks, so a counter that lived inside one chunk would have watched it
+   * happen five times and said nothing. Reset to 0 by any served call.
+   */
+  filterRefusals: number;
   /** The `post_likes` negative-coverage row has been written for this page. It
    *  is a standing claim, not a per-chunk one. */
   postLikesCoverageWritten: boolean;
@@ -251,6 +260,7 @@ export function parseFanslyNotificationsCursorState(
     filterMode: parseFilterMode(state.filterMode),
     typeGroupIndex: Math.max(0, asInt(state.typeGroupIndex, 0)),
     unfilteredProbeSpent: state.unfilteredProbeSpent === true,
+    filterRefusals: Math.max(0, asInt(state.filterRefusals, 0)),
     postLikesCoverageWritten: state.postLikesCoverageWritten === true,
     forward: parseForwardWalk(state.forward),
     backfill: Object.hasOwn(state, "backfill") && state.backfill === null
@@ -287,6 +297,7 @@ export function emptyFanslyNotificationsCursorState(now: Date): FanslyNotificati
     filterMode: "unfiltered",
     typeGroupIndex: 0,
     unfilteredProbeSpent: false,
+    filterRefusals: 0,
     postLikesCoverageWritten: false,
     forward: emptyForwardWalk(),
     backfill: emptyBackfillWalk(),
@@ -535,9 +546,8 @@ export async function fanslyNotificationsChunk(
    * day's cap was gone — the exact failure WP-F1 shipped and had to hot-fix,
    * in a different costume.
    */
-  let filterRefusals = 0;
   const filterRefusalLimit = FANSLY_NOTIFICATION_TYPE_GROUPS.length + 2;
-  let filterExhausted = false;
+  let filterExhausted = state.filterRefusals >= filterRefusalLimit;
 
   /**
    * Journal FIRST, always, and TRIM ONLY `accounts[]`.
@@ -593,6 +603,16 @@ export async function fanslyNotificationsChunk(
     await input.telemetry.recordCheckpointAdvanced(STREAM, summarizeCheckpoint(advanced));
   };
 
+  /**
+   * A poll made through a NARROWED type form captured part of the provider's
+   * surface, not all of it — so it must not claim `window_captured` or a clean
+   * `in_progress`. Without this the degradation claim would be overwritten by
+   * the very next successful call and the coverage row would read as if
+   * nothing were wrong.
+   */
+  const archiveStatus = (fresh: CaptureCoverageStatus): CaptureCoverageStatus =>
+    state.filterMode === "unfiltered" ? fresh : "partial_provider_surface";
+
   const coverage = async (
     plane: string,
     status: CaptureCoverageStatus,
@@ -647,6 +667,9 @@ export async function fanslyNotificationsChunk(
         filterMode: state.filterMode,
         types: types === null ? null : [...types],
       }, response.raw);
+      if (state.filterRefusals !== 0) {
+        state = { ...state, filterRefusals: 0 };
+      }
       return { payload: response.raw, observationId: persisted.observationId ?? null };
     } catch (error) {
       if (isAuthFailure(error) || !isClientRefusal(error)) {
@@ -655,7 +678,7 @@ export async function fanslyNotificationsChunk(
       }
       // The unfiltered form was REFUSED. Widen to the client's full declared
       // CSV — never the eight-code UI list, which drops two money codes.
-      filterRefusals += 1;
+      const refusals = state.filterRefusals + 1;
       const nextMode: FanslyNotificationsFilterMode = state.filterMode === "unfiltered"
         ? "declared_csv"
         : "type_groups";
@@ -663,7 +686,7 @@ export async function fanslyNotificationsChunk(
       const nextGroupIndex = state.filterMode === "type_groups"
         ? (state.typeGroupIndex + 1) % FANSLY_NOTIFICATION_TYPE_GROUPS.length
         : state.typeGroupIndex;
-      filterExhausted = filterRefusals >= filterRefusalLimit;
+      filterExhausted = refusals >= filterRefusalLimit;
       await input.telemetry.addAnomaly({
         code: "fansly_notifications_type_filter_refused",
         severity: "warn",
@@ -678,7 +701,12 @@ export async function fanslyNotificationsChunk(
           before,
         },
       });
-      state = { ...state, filterMode: nextMode, typeGroupIndex: nextGroupIndex };
+      state = {
+        ...state,
+        filterMode: nextMode,
+        typeGroupIndex: nextGroupIndex,
+        filterRefusals: refusals,
+      };
       await coverage(
         FANSLY_NOTIFICATIONS_COVERAGE_PLANES.notifications,
         // Bounded by the PROVIDER's behaviour: the wide form is not served, so
@@ -893,11 +921,11 @@ export async function fanslyNotificationsChunk(
       };
       await coverage(
         FANSLY_NOTIFICATIONS_COVERAGE_PLANES.notifications,
-        "window_captured",
+        archiveStatus("window_captured"),
         "none",
         {
           newestCapturedAt: now,
-          reasonCode: stopReason,
+          reasonCode: state.filterMode === "unfiltered" ? stopReason : "type_filter_narrowed",
           cursor: {
             newestSeenNotificationId: committedHead,
             filterMode: state.filterMode,
@@ -1038,13 +1066,21 @@ export async function fanslyNotificationsChunk(
       backfill.done = true;
       await coverage(
         FANSLY_NOTIFICATIONS_COVERAGE_PLANES.notifications,
-        "provider_exhausted",
+        // AN EMPTY PAGE MEANS DIFFERENT THINGS IN THE TWO FORMS, and conflating
+        // them would be the worst claim this lane can make. Unfiltered, an
+        // empty page is the archive's FLOOR. Through a narrowed type filter it
+        // only means "no rows of THESE types" — the floor may be years deeper,
+        // and `provider_exhausted` would tell the serving layer we reached the
+        // end of history when we reached the end of a filter.
+        archiveStatus("provider_exhausted"),
         "empty_window",
         {
           oldestCapturedAt: backfill.floorAt === null ? null : new Date(backfill.floorAt),
           newestCapturedAt: now,
           proofObservationId: page.observationId,
-          reasonCode: "empty_window",
+          reasonCode: state.filterMode === "unfiltered"
+            ? "empty_window"
+            : "type_filter_narrowed",
           cursor: {
             notificationFloorAt: backfill.floorAt,
             nextBeforeRef: before,
@@ -1060,12 +1096,14 @@ export async function fanslyNotificationsChunk(
     state = { ...state, backfill };
     await coverage(
       FANSLY_NOTIFICATIONS_COVERAGE_PLANES.notifications,
-      "in_progress",
+      archiveStatus("in_progress"),
       "none",
       {
         oldestCapturedAt: backfill.floorAt === null ? null : new Date(backfill.floorAt),
         newestCapturedAt: now,
-        reasonCode: "backfill_walking",
+        reasonCode: state.filterMode === "unfiltered"
+          ? "backfill_walking"
+          : "type_filter_narrowed",
         cursor: {
           notificationFloorAt: backfill.floorAt,
           nextBeforeRef: backfill.nextBeforeRef,
