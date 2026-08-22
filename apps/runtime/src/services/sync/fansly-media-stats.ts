@@ -456,6 +456,36 @@ export function countMediaStatBuckets(payload: unknown): number {
   return count;
 }
 
+/**
+ * Did the served window actually COVER the span we asked for?
+ *
+ * `windowWasHonoured` is the loop guard, and it is the right one everywhere a
+ * walk DERIVES its next window from what came back: it catches a served window
+ * reaching materially newer than the request, or missing it entirely — the
+ * production signature where the provider answers with its own default trailing
+ * window and the walk re-issues the same request forever.
+ *
+ * It cannot catch THIS case, and the difference is worth stating rather than
+ * discovering: the 90-day long-tail refresh is a TRAILING window, so a provider
+ * that answers it with its default trailing 31 days returns a window with the
+ * SAME END and a nearer start. Nothing reaches newer than we asked, nothing is
+ * disjoint, and `windowWasHonoured` correctly says "no contradiction" — there
+ * is none. What there is, is 59 days we asked for and did not get.
+ *
+ * So the 90-day probe checks coverage as well: the served start must be within
+ * a day of the requested one. Served bounds we did not get are no evidence and
+ * no contradiction — the empty-window rule owns that case, here as everywhere.
+ */
+export function servedWindowCoversRequest(
+  requested: { afterMs: number; beforeMs: number },
+  served: { afterMs: number | null; beforeMs: number | null },
+): boolean {
+  if (served.afterMs === null) {
+    return true;
+  }
+  return served.afterMs - requested.afterMs <= DAY_MS;
+}
+
 function isAuthFailure(error: unknown): boolean {
   return error instanceof FanslyApiError && (error.status === 401 || error.status === 403);
 }
@@ -543,6 +573,11 @@ export async function fanslyMediaStatsChunk(
   let topMarked = 0;
   let deferred: string | null = null;
   let moreWork = false;
+  /** A first-sight backfill that stopped at its per-visit bound rather than at
+   *  its floor. The chunk is NOT done: an item with three years of history
+   *  needs several visits, and without this the lane would take one bounded
+   *  bite per SLOT — six hours per four windows. */
+  let backfillPending = false;
 
   /** Room for one more call today? Crossing this defers; it never drops. */
   const hasDayCapacity = () => state.callsToday < dailyCap;
@@ -930,6 +965,9 @@ export async function fanslyMediaStatsChunk(
       subjectRef: candidate.subjectRef,
       backfillCursor: backfillCursorJson(cursor),
     });
+    if (!cursor.done) {
+      backfillPending = true;
+    }
     await saveProgress();
     return result;
   }
@@ -976,7 +1014,15 @@ export async function fanslyMediaStatsChunk(
       // It runs on the FIRST long-tail window only, and it is durable and
       // page-scoped: the answer is a property of the route, not of one item.
       if (candidate.tier === "long_tail" && index === 0) {
-        if (!outcome.honoured && state.longTailWindowMode !== "split_31") {
+        // BOTH checks. `windowWasHonoured` is the loop guard every call carries;
+        // the coverage check is what sees a same-end, narrower answer, which is
+        // the only shape a refused TRAILING window can take.
+        const covered = outcome.honoured
+          && servedWindowCoversRequest(
+            { afterMs: window.afterMs, beforeMs: window.beforeMs },
+            outcome.served,
+          );
+        if (!covered && state.longTailWindowMode !== "split_31") {
           state = { ...state, longTailWindowMode: "split_31" };
           if (!state.longTailWindowAnnounced) {
             state = { ...state, longTailWindowAnnounced: true };
@@ -1004,7 +1050,7 @@ export async function fanslyMediaStatsChunk(
           // asked for.
           return await runSteady(candidate, cursor, issued);
         }
-        if (outcome.honoured && state.longTailWindowMode === "unproven") {
+        if (covered && state.longTailWindowMode === "unproven") {
           state = { ...state, longTailWindowMode: "ninety" };
           if (!state.longTailWindowAnnounced) {
             state = { ...state, longTailWindowAnnounced: true };
@@ -1191,7 +1237,7 @@ export async function fanslyMediaStatsChunk(
         stats,
       };
     }
-    if (moreWork) {
+    if (moreWork || backfillPending) {
       await saveProgress();
       return {
         satisfied: false,
