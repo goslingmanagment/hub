@@ -39,6 +39,43 @@ export const AGENT_OBSERVATION_PAYLOAD_ALLOWLIST: ReadonlySet<string> = new Set(
   // here and they are exactly what a customs audit needs. Admitted only WITH the
   // signed-URL scrub below, which is pinned by golden fixtures.
   "dm_messages",
+  // ── endpoints-cover (WP-S1) ──────────────────────────────────────────────
+  // Eight kinds admitted, each judged against what the CAPTURE side actually
+  // journals rather than against what the endpoint is called.
+  //
+  //   account_stats                  the profile/media statistics response:
+  //                                  counters and type codes. No fan identity,
+  //                                  no message text, no delivery address.
+  //   media_offer_stats              the per-media statistics response — seven
+  //                                  stat keys and a media id ([E5]).
+  //   earnings_stats_snapshot        the earnings breakdown and the month
+  //   earnings_monthlystats_snapshot totals: business dates, revenue type codes
+  //                                  and the agency's own money.
+  //   tracking_links                 promo-link counters. A link REF is an id
+  //                                  the creator minted, not an address.
+  //   subscription_tiers             tier/plan/promo prices. Public catalogue.
+  //   vault_albums                   album titles, counts and ids. No bytes:
+  //                                  the vault walk fetches no media.
+  //
+  //   notifications                  ADMITTED FOR A REASON THAT LIVES ELSEWHERE.
+  //                                  The kind's `accounts[]` sidecar is ALREADY
+  //                                  [A20]-trimmed at capture, so what reaches
+  //                                  the journal is fan-ACCOUNT state — the
+  //                                  agency's own customer material — with no
+  //                                  message content and no CDN address. That
+  //                                  trim is a property of the capture path,
+  //                                  not of this list, and it is the whole
+  //                                  justification: widen the trim and THIS
+  //                                  line must be re-justified, exactly as
+  //                                  `dm_conversations` above was after [A20].
+  "account_stats",
+  "media_offer_stats",
+  "earnings_stats_snapshot",
+  "earnings_monthlystats_snapshot",
+  "tracking_links",
+  "subscription_tiers",
+  "vault_albums",
+  "notifications",
 ]);
 
 /**
@@ -61,6 +98,17 @@ export const AGENT_OBSERVATION_PAYLOAD_ALLOWLIST: ReadonlySet<string> = new Set(
  *                                customer material the read plane exists to serve, and
  *                                every row names a payout method by ref — serving it
  *                                would make the method listing reachable by join.
+ *   post_replies                 ANOTHER ACCOUNT'S AUTHORED CONTENT, and the one
+ *                                WP-S1 considered and refused. The walk's body carries
+ *                                fans' own reply prose plus an `accounts[]` sidecar of
+ *                                their profiles — material a fan wrote and published
+ *                                under a post, not material this agency produced. The
+ *                                PROJECTION of it IS served (the `comments` dataset,
+ *                                behind `read:messages`, with an audit row per read);
+ *                                the raw journal body is not, because the projection is
+ *                                what the erasure module can reach and a journal row is
+ *                                what it cannot. This line exists so a future widening
+ *                                has to delete a sentence rather than add one.
  *   <endpoint>:failed            error bodies are outside the sink allowlist
  */
 export const AGENT_OBSERVATION_PAYLOAD_DENYLIST: ReadonlySet<string> = new Set([
@@ -73,6 +121,9 @@ export const AGENT_OBSERVATION_PAYLOAD_DENYLIST: ReadonlySet<string> = new Set([
   // here so the refusal carries its reason.
   "payout_methods",
   "payout_requests",
+  // WP-F5 / WP-S1. Refused by absence already; named so the refusal carries its
+  // reason. See the block comment above.
+  "post_replies",
 ]);
 
 export function agentObservationPayloadAllowed(kind: string): boolean {

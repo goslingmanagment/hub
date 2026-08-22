@@ -23,7 +23,7 @@ import {
  * to prevent.
  */
 describe("agent read dataset vocabulary", () => {
-  it("names exactly the sixteen available datasets", () => {
+  it("names exactly the available datasets, in declaration order", () => {
     expect([...AGENT_DATASET_NAMES]).toEqual([
       "fan_memberships",
       "dm_threads",
@@ -40,31 +40,48 @@ describe("agent read dataset vocabulary", () => {
       "post_monetization",
       "post_tips",
       "tip_goals",
+      // endpoints-cover (WP-S1): thirteen datasets over what F1-F7 and F4
+      // capture. Six of the names were RESERVED in the planned list and are
+      // reused rather than renamed, so a caller that read the catalog a year
+      // ago gets data instead of a 400.
+      "traffic_daily",
+      "media_stats",
+      "top_media",
+      "top_tags",
+      "revenue_mix",
+      "message_media_sales",
+      "comments",
+      "likes",
+      "vault_media",
+      "notifications",
+      "subscription_tiers",
+      "payouts",
+      "capture_coverage",
       "sync_streams",
     ]);
   });
 
   it("declares every planned dataset instead of hiding the hole", () => {
     // The catalog must NAME its gaps: an agent that cannot tell "no data" from "no
-    // dataset" cannot reason about absence at all. purchase_history and
-    // fan_earnings sit here deliberately — neither has a serving projection.
+    // dataset" cannot reason about absence at all. `fan_earnings` sits here
+    // deliberately — `fan_earnings_stats` exists in the database but not in the
+    // Drizzle schema, and the endpoints-cover initiative did not adopt it.
     expect([...AGENT_PLANNED_DATASET_NAMES]).toEqual([
-      "purchase_history",
       "fan_earnings",
-      "vault_media",
       "stories",
-      "notifications",
       "fan_lists",
-      "subscription_tiers",
       "livestreams",
       "campaigns",
-      "comments",
-      "likes",
       "polls",
-      "payouts",
       "chargebacks",
       "blocks",
     ]);
+    // `purchase_history` is gone from BOTH lists (WP-S1): it was never a
+    // dataset, only a SYNC STREAM name with no serving table, and
+    // `message_media_sales` answers the question it stood for. Leaving the key
+    // planned would have advertised a second, better one that is never coming.
+    expect([...AGENT_PLANNED_DATASET_NAMES]).not.toContain("purchase_history");
+    expect([...AGENT_DATASET_NAMES]).not.toContain("purchase_history");
   });
 
   it("keeps available and planned names disjoint", () => {
@@ -197,6 +214,15 @@ describe("agent read dataset vocabulary", () => {
       "post_monetization",
       "post_tips",
       "tip_goals",
+      // endpoints-cover: five of the thirteen carry mills. `media_stats` and
+      // `subscription_tiers` are money-bearing for catalogue PRICES rather than
+      // for a fan's spend, and that is still money.
+      "media_stats",
+      "revenue_mix",
+      "message_media_sales",
+      "comments",
+      "subscription_tiers",
+      "payouts",
     ]);
 
     for (const dataset of AGENT_DATASET_NAMES) {

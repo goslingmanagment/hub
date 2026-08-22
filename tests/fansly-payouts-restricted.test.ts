@@ -28,13 +28,21 @@ describe("WP-F7 payout observation kinds stay off the agent read plane", () => {
     // The allowlist is exactly the reviewed contract appendix and nothing else.
     // Pinned as a whole, so a payout kind cannot arrive here as a one-word diff.
     expect([...AGENT_OBSERVATION_PAYLOAD_ALLOWLIST].sort()).toEqual([
+      "account_stats",
       "dm_conversations",
       "dm_messages",
+      "earnings_monthlystats_snapshot",
+      "earnings_stats_snapshot",
       "earnings_transactions",
       "fan_earnings_monthly",
       "fan_earnings_stats",
+      "media_offer_stats",
+      "notifications",
       "purchase_history",
       "subscribers",
+      "subscription_tiers",
+      "tracking_links",
+      "vault_albums",
     ]);
   });
 

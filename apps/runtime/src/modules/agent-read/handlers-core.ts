@@ -117,6 +117,32 @@ const AGENT_DATASET_CATALOG_OVERRIDES: Partial<Record<AgentDataset, {
     platforms: ["fansly"],
     captureState: "unknown",
   },
+  // ── endpoints-cover (WP-S1) ────────────────────────────────────────────────
+  // FANSLY ONLY (A28-2). No OnlyFans lane writes any of these tables, and the
+  // catalog saying `["fansly", "onlyfans"]` — the default — would advertise a
+  // surface that answers empty on every OF page forever.
+  //
+  // `captureState: "unknown"` on all but one: each lane is flag-gated and
+  // page-allowlisted, so the GLOBAL catalog cannot honestly claim `present`
+  // before a page has established its own floor. The page-scoped dataset
+  // response carries the real witness.
+  traffic_daily: { platforms: ["fansly"], captureState: "unknown" },
+  media_stats: { platforms: ["fansly"], captureState: "unknown" },
+  top_media: { platforms: ["fansly"], captureState: "unknown" },
+  top_tags: { platforms: ["fansly"], captureState: "unknown" },
+  revenue_mix: { platforms: ["fansly"], captureState: "unknown" },
+  message_media_sales: { platforms: ["fansly"], captureState: "unknown" },
+  comments: { platforms: ["fansly"], captureState: "unknown" },
+  // THE EXCEPTION, and it is the point of declaring the dataset at all: no
+  // Fansly like code is live-confirmed ([E4]), so WP-F2's layer 2 writes
+  // nothing into `post_likes` and this is `not_captured` GLOBALLY — not
+  // "unknown", which would invite a reader to go looking.
+  likes: { platforms: ["fansly"], captureState: "not_captured" },
+  vault_media: { platforms: ["fansly"], captureState: "unknown" },
+  notifications: { platforms: ["fansly"], captureState: "unknown" },
+  subscription_tiers: { platforms: ["fansly"], captureState: "unknown" },
+  payouts: { platforms: ["fansly"], captureState: "unknown" },
+  capture_coverage: { platforms: ["fansly"], captureState: "unknown" },
 };
 
 type MoneyByType = NonNullable<AgentPersonResponse["money"]>["byType"][number];

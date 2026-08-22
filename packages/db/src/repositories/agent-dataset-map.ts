@@ -23,6 +23,22 @@
  *                 request.
  */
 
+// The SHARED label tables. Imported rather than restated: the `case` expressions
+// this module builds for `sourceLabel`, `typeLabel` and the notification labels
+// are GENERATED from these frozen constants, so a second copy of a code→label
+// map cannot drift away from the first.
+import {
+  FANSLY_MEDIA_STAT_TYPES,
+  FANSLY_NOTIFICATION_ALERT_FAMILY_LABEL,
+  FANSLY_NOTIFICATION_ALERT_FAMILY_MAX,
+  FANSLY_NOTIFICATION_ALERT_FAMILY_MIN,
+  FANSLY_NOTIFICATION_LABEL_VERSION,
+  FANSLY_NOTIFICATION_TYPES,
+  FANSLY_PROFILE_STAT_FAMILIES,
+  FANSLY_REVENUE_LABEL_VERSION,
+  FANSLY_REVENUE_TYPES,
+} from "@agency_hub_core/shared";
+
 export interface AgentDatasetSqlMapping {
   /** A complete `select ...` producing the internal vocabulary above. */
   readonly source: string;
@@ -515,6 +531,464 @@ const SYNC_STREAMS = `
   left join page_sync_cursors c on c.page_id = ss.page_id and c.stream = ss.stream
 `;
 
+// ── endpoints-cover (WP-S1) sources ─────────────────────────────────────────
+//
+// THE LABEL TABLES ARE NOT COPIED HERE. Every `case` below is GENERATED from
+// the frozen table in `@agency_hub_core/shared` at module load, the way
+// `SUBSCRIPTION_STATE_SQL` is generated from `AGENT_SUBSCRIPTION_EXPIRED_STATUSES`
+// above. A second, hand-typed copy of a code→label map inside SQL is exactly the
+// drift that made `reference/fansly_api_spec.md` §3.1 disagree with the client
+// on eight of sixteen notification codes; a generated one cannot disagree.
+//
+// The RAW code is always selected beside its label, because the label is this
+// build's reading and the code is the fact (A22-2).
+
+/** A SQL string literal. The inputs are frozen in-repo constants, never request
+ *  text — this escape exists so that stays true if a label ever gains one. */
+function sqlText(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
+/** `case <expr> when <code> then '<label>' ... else <fallback> end`. */
+function codeCaseSql(
+  expression: string,
+  entries: readonly (readonly [number, string])[],
+  fallback: string,
+): string {
+  const whens = entries
+    .map(([code, label]) => `when ${code} then ${sqlText(label)}`)
+    .join("\n             ");
+  return `case ${expression}\n             ${whens}\n             else ${fallback}\n           end`;
+}
+
+const PROFILE_FAMILY_CODES = Object.keys(FANSLY_PROFILE_STAT_FAMILIES).map(Number);
+
+/** `type - (type % 10)`, as text, for a numeric source code; NULL otherwise. */
+const PROFILE_FAMILY_EXPR =
+  `case when t.source_code ~ '^[0-9]+$'
+             then (t.source_code::bigint - (t.source_code::bigint % 10))::text
+             else null::text end`;
+
+/** True only for a code this label version actually knows: the MEMBERSHIP test
+ *  comes first (members 0 and 1 are the only observed ones), then the family
+ *  lookup — the same guard order `profileStatLabel` pins in TypeScript. A new
+ *  member of a known family (10002, 44002) must read `unknown:<code>`, never be
+ *  absorbed into its family's label. */
+const PROFILE_KNOWN_EXPR =
+  `t.source_code ~ '^[0-9]+$'
+           and (t.source_code::bigint % 10) in (0, 1)
+           and (t.source_code::bigint - (t.source_code::bigint % 10))
+               in (${PROFILE_FAMILY_CODES.join(", ")})`;
+
+const PROFILE_LABEL_SQL = `case
+           when ${PROFILE_KNOWN_EXPR}
+           then (${codeCaseSql(
+  "(t.source_code::bigint - (t.source_code::bigint % 10))",
+  Object.entries(FANSLY_PROFILE_STAT_FAMILIES).map(
+    ([code, label]) => [Number(code), label] as const,
+  ),
+  "null::text",
+)})
+                || (case when (t.source_code::bigint % 10) = 1
+                         then '_visits' else '_dwell' end)
+           else 'unknown:' || t.source_code
+         end`;
+
+const PROFILE_MEASURE_SQL = `case
+           when ${PROFILE_KNOWN_EXPR}
+           then (case when (t.source_code::bigint % 10) = 1 then 'visits' else 'dwell' end)
+           else null::text
+         end`;
+
+const MEDIA_LABEL_SQL = `${codeCaseSql(
+  "case when t.source_code ~ '^[0-9]+$' then t.source_code::bigint else null end",
+  Object.entries(FANSLY_MEDIA_STAT_TYPES).map(
+    ([code, label]) => [Number(code), label] as const,
+  ),
+  "'unknown:' || t.source_code",
+)}`;
+
+/** `account_media` rows carry the 0/1 MEDIA codes; `account_profile` rows carry
+ *  the 8-code profile structure. One table, two vocabularies — branching on the
+ *  subject kind is what keeps a media row from being labelled `unknown:1`. */
+const TRAFFIC_LABEL_SQL = `case
+           when t.subject_kind = 'account_profile' then (${PROFILE_LABEL_SQL})
+           else (${MEDIA_LABEL_SQL})
+         end`;
+
+const TRAFFIC_FAMILY_SQL = `case
+           when t.subject_kind = 'account_profile' then (${PROFILE_FAMILY_EXPR})
+           else null::text
+         end`;
+
+const TRAFFIC_MEASURE_SQL = `case
+           when t.subject_kind = 'account_profile' then (${PROFILE_MEASURE_SQL})
+           else null::text
+         end`;
+
+const REVENUE_LABEL_SQL = codeCaseSql(
+  "r.type_code",
+  FANSLY_REVENUE_TYPES.map((row) => [row.code, row.label] as const),
+  "'unmapped:' || r.type_code::text",
+);
+
+const REVENUE_ERA_SQL = codeCaseSql(
+  "r.type_code",
+  FANSLY_REVENUE_TYPES.map((row) => [row.code, row.era] as const),
+  "null::text",
+);
+
+/** Only rows the table can NAME. A code it declares but gives no label reads
+ *  `unknown:<code>`, because "we cannot name it" is the honest answer. */
+const NOTIFICATION_NAMED_ROWS = FANSLY_NOTIFICATION_TYPES
+  .filter((row): row is typeof row & { label: string } => row.label !== null);
+
+const NOTIFICATION_LABEL_SQL = codeCaseSql(
+  "n.type_code",
+  NOTIFICATION_NAMED_ROWS.map((row) => [row.code, row.label] as const),
+  `case when n.type_code between ${FANSLY_NOTIFICATION_ALERT_FAMILY_MIN}
+                             and ${FANSLY_NOTIFICATION_ALERT_FAMILY_MAX}
+             then ${sqlText(FANSLY_NOTIFICATION_ALERT_FAMILY_LABEL)}
+             else 'unknown:' || n.type_code::text end`,
+);
+
+const NOTIFICATION_CONFIDENCE_SQL = codeCaseSql(
+  "n.type_code",
+  NOTIFICATION_NAMED_ROWS.map((row) => [row.code, row.confidence] as const),
+  `case when n.type_code between ${FANSLY_NOTIFICATION_ALERT_FAMILY_MIN}
+                             and ${FANSLY_NOTIFICATION_ALERT_FAMILY_MAX}
+             then 'inferred'
+             else null::text end`,
+);
+
+/** A stable text key for a bucket row. `to_char` rather than `::text` so the
+ *  key does not change with the session's DateStyle. */
+const BUCKET_KEY_SQL =
+  `to_char(t.bucket_start at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SSOF00')`;
+
+const TRAFFIC_DAILY = `
+  select t.page_id            as k_page_id,
+         p.platform::text     as k_platform,
+         t.page_id::text || ':' || t.subject_kind || ':' || t.subject_ref || ':'
+           || t.period_ms::text || ':' || ${BUCKET_KEY_SQL} || ':' || t.source_code as k_key,
+         t.bucket_start       as k_occurred_at,
+         null::text           as k_fan,
+         p.platform::text     as f_platform,
+         t.subject_kind       as f_subject_kind,
+         t.subject_ref        as f_subject_ref,
+         t.period_ms          as f_period_ms,
+         t.bucket_start       as f_bucket_start,
+         t.source_code        as f_source_code,
+         ${TRAFFIC_LABEL_SQL} as f_source_label,
+         t.mapping_version    as f_mapping_version,
+         ${TRAFFIC_FAMILY_SQL} as f_family,
+         ${TRAFFIC_MEASURE_SQL} as f_measure,
+         t.views              as f_views,
+         t.preview_views      as f_preview_views,
+         t.unique_viewers     as f_unique_viewers,
+         t.preview_unique_viewers as f_preview_unique_viewers,
+         t.interaction_time_ms as f_interaction_time_ms,
+         t.preview_interaction_time_ms as f_preview_interaction_time_ms
+  from stats_traffic_buckets t
+  join pages p on p.id = t.page_id
+  where t.subject_kind in ('account_profile', 'account_media')
+`;
+
+const MEDIA_STATS = `
+  select t.page_id            as k_page_id,
+         p.platform::text     as k_platform,
+         t.page_id::text || ':' || t.subject_ref || ':' || t.period_ms::text || ':'
+           || ${BUCKET_KEY_SQL} || ':' || t.source_code as k_key,
+         t.bucket_start       as k_occurred_at,
+         null::text           as k_fan,
+         p.platform::text     as f_platform,
+         t.subject_ref        as f_media_offer_ref,
+         m.media_type         as f_media_type,
+         m.mime_type          as f_mime_type,
+         m.duration_ms        as f_duration_ms,
+         t.period_ms          as f_period_ms,
+         t.bucket_start       as f_bucket_start,
+         t.source_code        as f_source_code,
+         ${MEDIA_LABEL_SQL}   as f_source_label,
+         t.mapping_version    as f_mapping_version,
+         t.views              as f_views,
+         t.preview_views      as f_preview_views,
+         t.unique_viewers     as f_unique_viewers,
+         t.preview_unique_viewers as f_preview_unique_viewers,
+         t.interaction_time_ms as f_interaction_time_ms,
+         t.preview_interaction_time_ms as f_preview_interaction_time_ms,
+         m.price_mills        as f_price_mills,
+         m.sales_count        as f_sales_count,
+         m.sales_net_mills    as f_sales_net_mills,
+         -- A12: net / 0.8, DERIVED here and never stored. Null in stays null
+         -- out — an unserved sale total is not a sale of zero.
+         case when m.sales_net_mills is null then null
+              else (m.sales_net_mills * 5 + 2) / 4 end as f_sales_gross_mills_derived
+  from stats_traffic_buckets t
+  join pages p on p.id = t.page_id
+  left join creator_media m
+    on m.page_id = t.page_id and m.media_offer_ref = t.subject_ref
+  where t.subject_kind = 'media_offer'
+`;
+
+const TOP_MEDIA = `
+  select tm.page_id           as k_page_id,
+         p.platform::text     as k_platform,
+         tm.page_id::text || ':' || tm.plane || ':' || tm.period_ms::text || ':'
+           || to_char(tm.requested_start at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SSOF00')
+           || ':' || to_char(tm.requested_end at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SSOF00')
+           || ':' || tm.media_offer_ref as k_key,
+         tm.requested_end     as k_occurred_at,
+         null::text           as k_fan,
+         p.platform::text     as f_platform,
+         tm.plane             as f_plane,
+         tm.rank              as f_rank,
+         tm.media_offer_ref   as f_media_offer_ref,
+         tm.bundle_ref        as f_bundle_ref,
+         tm.period_ms         as f_period_ms,
+         tm.requested_start   as f_requested_start,
+         tm.requested_end     as f_requested_end,
+         tm.views             as f_views,
+         tm.preview_views     as f_preview_views,
+         tm.interaction_time_ms as f_interaction_time_ms,
+         tm.preview_interaction_time_ms as f_preview_interaction_time_ms,
+         tm.observed_at       as f_observed_at
+  from stats_top_media tm
+  join pages p on p.id = tm.page_id
+`;
+
+const TOP_TAGS = `
+  select tt.page_id           as k_page_id,
+         p.platform::text     as k_platform,
+         tt.page_id::text || ':' || tt.plane || ':' || tt.period_ms::text || ':'
+           || to_char(tt.requested_start at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SSOF00')
+           || ':' || to_char(tt.requested_end at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SSOF00')
+           || ':' || tt.tag_ref as k_key,
+         tt.requested_end     as k_occurred_at,
+         null::text           as k_fan,
+         p.platform::text     as f_platform,
+         tt.plane             as f_plane,
+         tt.rank              as f_rank,
+         tt.tag_ref           as f_tag_ref,
+         tt.tag_name          as f_tag_name,
+         tt.period_ms         as f_period_ms,
+         tt.requested_start   as f_requested_start,
+         tt.requested_end     as f_requested_end,
+         tt.views             as f_views,
+         tt.preview_views     as f_preview_views,
+         tt.interaction_time_ms as f_interaction_time_ms,
+         tt.preview_interaction_time_ms as f_preview_interaction_time_ms,
+         tt.observed_at       as f_observed_at
+  from stats_top_tags tt
+  join pages p on p.id = tt.page_id
+`;
+
+const REVENUE_MIX = `
+  select r.page_id            as k_page_id,
+         p.platform::text     as k_platform,
+         r.page_id::text || ':' || r.business_date::text || ':' || r.type_code::text as k_key,
+         r.business_date::timestamptz as k_occurred_at,
+         null::text           as k_fan,
+         p.platform::text     as f_platform,
+         r.business_date::text as f_business_date,
+         r.type_code          as f_type_code,
+         ${REVENUE_LABEL_SQL} as f_type_label,
+         ${REVENUE_ERA_SQL}   as f_type_era,
+         ${FANSLY_REVENUE_LABEL_VERSION}::int as f_mapping_version,
+         r.gross_mills        as f_gross_mills,
+         r.net_mills          as f_net_mills,
+         r.last_observed_at   as f_last_observed_at
+  from revenue_mix_daily r
+  join pages p on p.id = r.page_id
+`;
+
+const MESSAGE_MEDIA_SALES = `
+  select o.page_id            as k_page_id,
+         p.platform::text     as k_platform,
+         o.page_id::text || ':' || o.message_ref || ':' || o.offer_ordinal::text as k_key,
+         o.message_created_at as k_occurred_at,
+         o.fan_platform_user_id as k_fan,
+         p.platform::text     as f_platform,
+         o.message_ref        as f_message_ref,
+         o.conversation_ref   as f_conversation_ref,
+         o.offer_ordinal      as f_offer_ordinal,
+         o.media_offer_ref    as f_media_offer_ref,
+         o.bundle_ref         as f_bundle_ref,
+         o.offer_type         as f_offer_type,
+         o.mime_type          as f_mime_type,
+         o.duration_ms        as f_duration_ms,
+         o.price_mills        as f_price_mills,
+         o.purchase_state     as f_purchase_state,
+         o.order_ref          as f_order_ref,
+         o.sales_count        as f_sales_count,
+         o.sales_net_mills    as f_sales_net_mills,
+         o.fan_platform_user_id as f_fan_platform_user_id,
+         o.message_created_at as f_message_created_at,
+         o.last_observed_at   as f_last_observed_at
+  from message_media_offers o
+  join pages p on p.id = o.page_id
+`;
+
+const POST_COMMENTS_DATASET = `
+  select c.page_id            as k_page_id,
+         p.platform::text     as k_platform,
+         c.id::text           as k_key,
+         c.occurred_at        as k_occurred_at,
+         c.author_ref         as k_fan,
+         p.platform::text     as f_platform,
+         c.comment_ref        as f_comment_ref,
+         c.parent_post_ref    as f_parent_post_ref,
+         c.root_post_ref      as f_root_post_ref,
+         c.author_ref         as f_author_ref,
+         c.author_username    as f_author_username,
+         c.text_plain         as f_comment_text,
+         c.like_count         as f_like_count,
+         c.tip_total_mills    as f_tip_total_mills,
+         c.attachment_tip_mills as f_attachment_tip_mills,
+         c.attachment_count   as f_attachment_count,
+         c.occurred_at        as f_occurred_at,
+         c.changed_at         as f_changed_at,
+         c.discovered_via     as f_discovered_via,
+         c.possibly_truncated as f_possibly_truncated,
+         c.missing_since      as f_missing_since
+  from post_comments c
+  join pages p on p.id = c.page_id
+`;
+
+const POST_LIKES_DATASET = `
+  select l.page_id            as k_page_id,
+         p.platform::text     as k_platform,
+         l.page_id::text || ':' || l.subject_kind || ':' || l.subject_ref || ':'
+           || l.liker_platform_user_id as k_key,
+         l.occurred_at        as k_occurred_at,
+         l.liker_platform_user_id as k_fan,
+         p.platform::text     as f_platform,
+         l.subject_kind       as f_subject_kind,
+         l.subject_ref        as f_subject_ref,
+         l.liker_platform_user_id as f_liker_platform_user_id,
+         l.state              as f_state,
+         l.occurred_at        as f_occurred_at,
+         l.discovered_via     as f_discovered_via
+  from post_likes l
+  join pages p on p.id = l.page_id
+`;
+
+const VAULT_MEDIA = `
+  select vm.page_id           as k_page_id,
+         p.platform::text     as k_platform,
+         vm.page_id::text || ':' || vm.album_ref || ':' || vm.media_offer_ref as k_key,
+         vm.first_observed_at as k_occurred_at,
+         null::text           as k_fan,
+         p.platform::text     as f_platform,
+         vm.vault_kind        as f_vault_kind,
+         vm.album_ref         as f_album_ref,
+         vm.media_offer_ref   as f_media_offer_ref,
+         vm.member_ref        as f_member_ref,
+         vm.media_type        as f_media_type,
+         vm.bundle_ref        as f_bundle_ref,
+         vm.created_at_platform as f_created_at_platform,
+         vm.missing_since     as f_missing_since,
+         vm.first_observed_at as f_first_observed_at,
+         vm.last_observed_at  as f_last_observed_at
+  from creator_vault_album_members vm
+  join pages p on p.id = vm.page_id
+  join creator_vault_albums va
+    on va.page_id = vm.page_id and va.vault_kind = vm.vault_kind and va.album_ref = vm.album_ref
+`;
+
+const PLATFORM_NOTIFICATIONS = `
+  select n.page_id            as k_page_id,
+         p.platform::text     as k_platform,
+         n.page_id::text || ':' || n.notification_ref as k_key,
+         n.occurred_at        as k_occurred_at,
+         null::text           as k_fan,
+         p.platform::text     as f_platform,
+         n.notification_ref   as f_notification_ref,
+         n.type_code          as f_type_code,
+         ${NOTIFICATION_LABEL_SQL} as f_type_label,
+         ${NOTIFICATION_CONFIDENCE_SQL} as f_type_confidence,
+         ${FANSLY_NOTIFICATION_LABEL_VERSION}::int as f_mapping_version,
+         n.correlation_ref    as f_correlation_ref,
+         n.correlation_group_ref as f_correlation_group_ref,
+         n.occurred_at        as f_occurred_at,
+         n.acknowledged_at    as f_acknowledged_at
+  from platform_notifications n
+  join pages p on p.id = n.page_id
+`;
+
+const SUBSCRIPTION_TIERS = `
+  select ti.page_id           as k_page_id,
+         p.platform::text     as k_platform,
+         ti.page_id::text || ':' || ti.tier_ref || ':' || coalesce(pl.plan_ref, '') as k_key,
+         coalesce(pl.last_observed_at, ti.last_observed_at) as k_occurred_at,
+         null::text           as k_fan,
+         p.platform::text     as f_platform,
+         ti.tier_ref          as f_tier_ref,
+         ti.name              as f_tier_name,
+         ti.pos               as f_tier_pos,
+         ti.base_price_mills  as f_base_price_mills,
+         ti.max_subscribers   as f_max_subscribers,
+         pl.plan_ref          as f_plan_ref,
+         pl.status            as f_plan_status,
+         pl.duration_days     as f_duration_days,
+         pl.price_mills       as f_price_mills,
+         jsonb_array_length(coalesce(pl.promos, '[]'::jsonb)) as f_promo_count,
+         coalesce(pl.missing_since, ti.missing_since) as f_missing_since,
+         coalesce(pl.last_observed_at, ti.last_observed_at) as f_last_observed_at
+  from page_subscription_tiers ti
+  join pages p on p.id = ti.page_id
+  left join page_subscription_tier_plans pl
+    on pl.page_id = ti.page_id and pl.tier_ref = ti.tier_ref
+`;
+
+const PAYOUTS = `
+  select pr.page_id           as k_page_id,
+         p.platform::text     as k_platform,
+         pr.page_id::text || ':' || pr.payout_ref as k_key,
+         pr.requested_at      as k_occurred_at,
+         null::text           as k_fan,
+         p.platform::text     as f_platform,
+         pr.payout_ref        as f_payout_ref,
+         pr.amount_mills      as f_amount_mills,
+         pr.status_code       as f_status_code,
+         pr.status_label      as f_status_label,
+         pr.status_confidence as f_status_confidence,
+         pr.method_ref        as f_method_ref,
+         pm.provider_id       as f_method_provider_id,
+         pm.provider_label    as f_method_provider_label,
+         -- OURS, never the provider's. \`metadata\` is deliberately not joined:
+         -- provider 2 (Paxum) returns a plaintext email address there.
+         pm.masked_label      as f_method_masked_label,
+         pr.requested_at      as f_requested_at,
+         pr.updated_at_platform as f_updated_at_platform
+  from page_payout_requests pr
+  join pages p on p.id = pr.page_id
+  left join page_payout_methods pm
+    on pm.page_id = pr.page_id and pm.method_ref = pr.method_ref
+`;
+
+const CAPTURE_COVERAGE = `
+  select cc.page_id           as k_page_id,
+         cc.platform::text    as k_platform,
+         cc.page_id::text || ':' || cc.plane || ':' || cc.scope_ref as k_key,
+         cc.updated_at        as k_occurred_at,
+         null::text           as k_fan,
+         cc.platform::text    as f_platform,
+         cc.plane             as f_plane,
+         cc.scope_ref         as f_scope_ref,
+         cc.status            as f_status,
+         cc.acquisition_mode  as f_acquisition_mode,
+         cc.proof             as f_proof,
+         cc.oldest_captured_at as f_oldest_captured_at,
+         cc.newest_captured_at as f_newest_captured_at,
+         cc.expected_count    as f_expected_count,
+         cc.observed_unique_count as f_observed_unique_count,
+         cc.reason_code       as f_reason_code,
+         cc.next_probe_at     as f_next_probe_at,
+         cc.updated_at        as f_updated_at
+  from capture_coverage cc
+`;
+
 export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>> = {
   fan_memberships: {
     source: FAN_MEMBERSHIPS,
@@ -799,6 +1273,312 @@ export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>>
       ingestPath: "k_ingest_path",
       convergence: "k_convergence",
     },
+  },
+  // ── endpoints-cover (WP-S1) ────────────────────────────────────────────────
+  // Every mapping below declares a NON-EMPTY `readPlanes` and a
+  // `captureFloorPlane`. `readPlanes: []` would have been the path of least
+  // resistance and is forbidden for these: it silently turns off the
+  // capture-floor epistemics, and an empty answer with no floor is exactly the
+  // "asked about January, got nothing, concluded nothing happened" failure the
+  // whole plane exists to prevent.
+  traffic_daily: {
+    source: TRAFFIC_DAILY,
+    fields: {
+      platform: "f_platform",
+      subjectKind: "f_subject_kind",
+      subjectRef: "f_subject_ref",
+      periodMs: "f_period_ms",
+      bucketStart: "f_bucket_start",
+      sourceCode: "f_source_code",
+      sourceLabel: "f_source_label",
+      mappingVersion: "f_mapping_version",
+      family: "f_family",
+      measure: "f_measure",
+      views: "f_views",
+      previewViews: "f_preview_views",
+      uniqueViewers: "f_unique_viewers",
+      previewUniqueViewers: "f_preview_unique_viewers",
+      interactionTimeMs: "f_interaction_time_ms",
+      previewInteractionTimeMs: "f_preview_interaction_time_ms",
+    },
+    windowColumn: "k_occurred_at",
+    stableKeyColumns: ["k_key"],
+    readPlanes: ["stats_traffic_buckets"],
+    captureFloorPlane: "stats_traffic_buckets",
+  },
+  media_stats: {
+    source: MEDIA_STATS,
+    fields: {
+      platform: "f_platform",
+      mediaOfferRef: "f_media_offer_ref",
+      mediaType: "f_media_type",
+      mimeType: "f_mime_type",
+      durationMs: "f_duration_ms",
+      periodMs: "f_period_ms",
+      bucketStart: "f_bucket_start",
+      sourceCode: "f_source_code",
+      sourceLabel: "f_source_label",
+      mappingVersion: "f_mapping_version",
+      views: "f_views",
+      previewViews: "f_preview_views",
+      uniqueViewers: "f_unique_viewers",
+      previewUniqueViewers: "f_preview_unique_viewers",
+      interactionTimeMs: "f_interaction_time_ms",
+      previewInteractionTimeMs: "f_preview_interaction_time_ms",
+      priceMills: "f_price_mills",
+      salesCount: "f_sales_count",
+      salesNetMills: "f_sales_net_mills",
+      salesGrossMillsDerived: "f_sales_gross_mills_derived",
+    },
+    windowColumn: "k_occurred_at",
+    stableKeyColumns: ["k_key"],
+    // The catalogue head is a LEFT join and is an inventory store: a bucket can
+    // arrive before the media row exists. The floor therefore belongs to the
+    // temporal plane, and `creator_media` stays a read plane with no floor.
+    readPlanes: ["stats_traffic_buckets", "creator_media"],
+    captureFloorPlane: "stats_traffic_buckets",
+  },
+  top_media: {
+    source: TOP_MEDIA,
+    fields: {
+      platform: "f_platform",
+      plane: "f_plane",
+      rank: "f_rank",
+      mediaOfferRef: "f_media_offer_ref",
+      bundleRef: "f_bundle_ref",
+      periodMs: "f_period_ms",
+      requestedStart: "f_requested_start",
+      requestedEnd: "f_requested_end",
+      views: "f_views",
+      previewViews: "f_preview_views",
+      interactionTimeMs: "f_interaction_time_ms",
+      previewInteractionTimeMs: "f_preview_interaction_time_ms",
+      observedAt: "f_observed_at",
+    },
+    windowColumn: "k_occurred_at",
+    stableKeyColumns: ["k_key"],
+    readPlanes: ["stats_top_media"],
+    captureFloorPlane: "stats_top_media",
+  },
+  top_tags: {
+    source: TOP_TAGS,
+    fields: {
+      platform: "f_platform",
+      plane: "f_plane",
+      rank: "f_rank",
+      tagRef: "f_tag_ref",
+      tagName: "f_tag_name",
+      periodMs: "f_period_ms",
+      requestedStart: "f_requested_start",
+      requestedEnd: "f_requested_end",
+      views: "f_views",
+      previewViews: "f_preview_views",
+      interactionTimeMs: "f_interaction_time_ms",
+      previewInteractionTimeMs: "f_preview_interaction_time_ms",
+      observedAt: "f_observed_at",
+    },
+    windowColumn: "k_occurred_at",
+    stableKeyColumns: ["k_key"],
+    readPlanes: ["stats_top_tags"],
+    captureFloorPlane: "stats_top_tags",
+  },
+  revenue_mix: {
+    source: REVENUE_MIX,
+    fields: {
+      platform: "f_platform",
+      businessDate: "f_business_date",
+      typeCode: "f_type_code",
+      typeLabel: "f_type_label",
+      typeEra: "f_type_era",
+      mappingVersion: "f_mapping_version",
+      grossMills: "f_gross_mills",
+      netMills: "f_net_mills",
+      lastObservedAt: "f_last_observed_at",
+    },
+    windowColumn: "k_occurred_at",
+    stableKeyColumns: ["k_key"],
+    readPlanes: ["revenue_mix_daily"],
+    captureFloorPlane: "revenue_mix_daily",
+  },
+  message_media_sales: {
+    source: MESSAGE_MEDIA_SALES,
+    fields: {
+      platform: "f_platform",
+      messageRef: "f_message_ref",
+      conversationRef: "f_conversation_ref",
+      offerOrdinal: "f_offer_ordinal",
+      mediaOfferRef: "f_media_offer_ref",
+      bundleRef: "f_bundle_ref",
+      offerType: "f_offer_type",
+      mimeType: "f_mime_type",
+      durationMs: "f_duration_ms",
+      priceMills: "f_price_mills",
+      purchaseState: "f_purchase_state",
+      orderRef: "f_order_ref",
+      salesCount: "f_sales_count",
+      salesNetMills: "f_sales_net_mills",
+      fanPlatformUserId: "f_fan_platform_user_id",
+      messageCreatedAt: "f_message_created_at",
+      lastObservedAt: "f_last_observed_at",
+    },
+    windowColumn: "k_occurred_at",
+    stableKeyColumns: ["k_key"],
+    readPlanes: ["message_media_offers"],
+    captureFloorPlane: "message_media_offers",
+  },
+  comments: {
+    source: POST_COMMENTS_DATASET,
+    fields: {
+      platform: "f_platform",
+      commentRef: "f_comment_ref",
+      parentPostRef: "f_parent_post_ref",
+      rootPostRef: "f_root_post_ref",
+      authorRef: "f_author_ref",
+      authorUsername: "f_author_username",
+      commentText: "f_comment_text",
+      likeCount: "f_like_count",
+      tipTotalMills: "f_tip_total_mills",
+      attachmentTipMills: "f_attachment_tip_mills",
+      attachmentCount: "f_attachment_count",
+      occurredAt: "f_occurred_at",
+      changedAt: "f_changed_at",
+      discoveredVia: "f_discovered_via",
+      possiblyTruncated: "f_possibly_truncated",
+      missingSince: "f_missing_since",
+    },
+    windowColumn: "k_occurred_at",
+    stableKeyColumns: ["k_key"],
+    readPlanes: ["post_comments"],
+    captureFloorPlane: "post_comments",
+  },
+  likes: {
+    source: POST_LIKES_DATASET,
+    fields: {
+      platform: "f_platform",
+      subjectKind: "f_subject_kind",
+      subjectRef: "f_subject_ref",
+      likerPlatformUserId: "f_liker_platform_user_id",
+      state: "f_state",
+      occurredAt: "f_occurred_at",
+      discoveredVia: "f_discovered_via",
+    },
+    windowColumn: "k_occurred_at",
+    stableKeyColumns: ["k_key"],
+    // The plane is declared even though the table is EMPTY on Fansly: that is
+    // the difference between "we looked and there is nothing" and "nobody ever
+    // built this", and the floor coming back `unknown` is the honest signal.
+    readPlanes: ["post_likes"],
+    captureFloorPlane: "post_likes",
+  },
+  vault_media: {
+    source: VAULT_MEDIA,
+    fields: {
+      platform: "f_platform",
+      vaultKind: "f_vault_kind",
+      albumRef: "f_album_ref",
+      mediaOfferRef: "f_media_offer_ref",
+      memberRef: "f_member_ref",
+      mediaType: "f_media_type",
+      bundleRef: "f_bundle_ref",
+      createdAtPlatform: "f_created_at_platform",
+      missingSince: "f_missing_since",
+      firstObservedAt: "f_first_observed_at",
+      lastObservedAt: "f_last_observed_at",
+    },
+    windowColumn: "k_occurred_at",
+    stableKeyColumns: ["k_key"],
+    readPlanes: ["creator_vault_album_members", "creator_vault_albums"],
+    captureFloorPlane: "creator_vault_album_members",
+  },
+  notifications: {
+    source: PLATFORM_NOTIFICATIONS,
+    fields: {
+      platform: "f_platform",
+      notificationRef: "f_notification_ref",
+      typeCode: "f_type_code",
+      typeLabel: "f_type_label",
+      typeConfidence: "f_type_confidence",
+      mappingVersion: "f_mapping_version",
+      correlationRef: "f_correlation_ref",
+      correlationGroupRef: "f_correlation_group_ref",
+      occurredAt: "f_occurred_at",
+      acknowledgedAt: "f_acknowledged_at",
+    },
+    windowColumn: "k_occurred_at",
+    stableKeyColumns: ["k_key"],
+    readPlanes: ["platform_notifications"],
+    captureFloorPlane: "platform_notifications",
+  },
+  subscription_tiers: {
+    source: SUBSCRIPTION_TIERS,
+    fields: {
+      platform: "f_platform",
+      tierRef: "f_tier_ref",
+      tierName: "f_tier_name",
+      tierPos: "f_tier_pos",
+      basePriceMills: "f_base_price_mills",
+      maxSubscribers: "f_max_subscribers",
+      planRef: "f_plan_ref",
+      planStatus: "f_plan_status",
+      durationDays: "f_duration_days",
+      priceMills: "f_price_mills",
+      promoCount: "f_promo_count",
+      missingSince: "f_missing_since",
+      lastObservedAt: "f_last_observed_at",
+    },
+    windowColumn: "k_occurred_at",
+    stableKeyColumns: ["k_key"],
+    readPlanes: ["page_subscription_tiers", "page_subscription_tier_plans"],
+    // The PLAN is where the price lives, and a tier with no plan row still
+    // appears (LEFT join) — so the floor is the tier head's, which is the one
+    // store every row of this dataset has.
+    captureFloorPlane: "page_subscription_tiers",
+  },
+  payouts: {
+    source: PAYOUTS,
+    fields: {
+      platform: "f_platform",
+      payoutRef: "f_payout_ref",
+      amountMills: "f_amount_mills",
+      statusCode: "f_status_code",
+      statusLabel: "f_status_label",
+      statusConfidence: "f_status_confidence",
+      methodRef: "f_method_ref",
+      methodProviderId: "f_method_provider_id",
+      methodProviderLabel: "f_method_provider_label",
+      methodMaskedLabel: "f_method_masked_label",
+      requestedAt: "f_requested_at",
+      updatedAtPlatform: "f_updated_at_platform",
+    },
+    windowColumn: "k_occurred_at",
+    stableKeyColumns: ["k_key"],
+    readPlanes: ["page_payout_requests", "page_payout_methods"],
+    captureFloorPlane: "page_payout_requests",
+  },
+  capture_coverage: {
+    source: CAPTURE_COVERAGE,
+    fields: {
+      platform: "f_platform",
+      plane: "f_plane",
+      scopeRef: "f_scope_ref",
+      status: "f_status",
+      acquisitionMode: "f_acquisition_mode",
+      proof: "f_proof",
+      oldestCapturedAt: "f_oldest_captured_at",
+      newestCapturedAt: "f_newest_captured_at",
+      expectedCount: "f_expected_count",
+      observedUniqueCount: "f_observed_unique_count",
+      reasonCode: "f_reason_code",
+      nextProbeAt: "f_next_probe_at",
+      updatedAt: "f_updated_at",
+    },
+    windowColumn: "k_occurred_at",
+    stableKeyColumns: ["k_key"],
+    readPlanes: ["capture_coverage"],
+    // `min(updated_at)` is when THIS page's coverage bookkeeping begins — a real
+    // floor for this plane, and not to be confused with `oldestCapturedAt`,
+    // which is the floor of the plane a row DESCRIBES.
+    captureFloorPlane: "capture_coverage",
   },
   sync_streams: {
     source: SYNC_STREAMS,
