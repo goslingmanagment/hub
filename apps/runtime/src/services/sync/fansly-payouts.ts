@@ -37,10 +37,21 @@
 // and the daily cost is exactly two calls.
 //
 // Whether `limit > 10` is honoured on THIS route has never been measured. So
-// the walk assumes 10 and carries a REPEAT-REQUEST GUARD instead of a belief:
-// the same offset asked twice in one walk is a loop's first visible step (WP-F1
-// spent a whole day's cap on that shape in production), and there is nothing to
-// learn from issuing it. It stops the walk with one anomaly and never loops.
+// the walk assumes 10 and carries a REPEAT-REQUEST GUARD instead of a belief.
+// It has TWO triggers and they answer the same question — "did this request
+// already happen?" — from the two ends it can be asked from:
+//
+//   THE OFFSET. The same offset asked twice in one walk is a loop's first
+//   visible step (WP-F1 spent a whole day's cap on that shape in production).
+//   It is spent before any egress, and on an offset walk it can only fire from
+//   corrupted cursor state — which is exactly what a crash mid-save produces.
+//
+//   THE ANSWER. An offset ALWAYS advances by construction, so the check above
+//   cannot catch the failure this route can actually have: a server that
+//   IGNORES `offset` and serves page one forever. A page whose first row is the
+//   first row of the page before it is that server, and the walk stops on it.
+//
+// Either trigger stops the walk with ONE anomaly and never loops.
 //
 // Everything rides ONE cap of 20 attempts/page/UTC-day (§6.1's corrected
 // number; the pre-A28 8 was sized before the ledger was believed to ride this
@@ -145,8 +156,12 @@ export interface FanslyPayoutsCursorState {
   fixedStepIndex: number;
   /** `offset` for the next request-history page. 0 until the head read seeds it. */
   walkOffset: number;
-  /** Repeat-request guard: the `offset` the previous WALK call carried. */
+  /** Repeat-request guard, first trigger: the `offset` the previous WALK call
+   *  carried. */
   lastRequestedOffset: number | null;
+  /** Repeat-request guard, second trigger: the FIRST row ref of the previous
+   *  page. An offset always advances; the answer to it may not. */
+  lastPageFirstRef: string | null;
   /** Pages the walk has taken across every dispatch. */
   walkPages: number;
   /** `total` as the provider last reported it. */
@@ -197,6 +212,7 @@ export function parseFanslyPayoutsCursorState(
     fixedStepIndex: Math.max(0, asInt(state.fixedStepIndex, 0)),
     walkOffset: Math.max(0, asInt(state.walkOffset, 0)),
     lastRequestedOffset: asNullableInt(state.lastRequestedOffset),
+    lastPageFirstRef: asNullableString(state.lastPageFirstRef),
     walkPages: Math.max(0, asInt(state.walkPages, 0)),
     walkTotal: asNullableInt(state.walkTotal),
     floorMs: asNullableInt(state.floorMs),
@@ -218,6 +234,7 @@ export function emptyFanslyPayoutsCursorState(now: Date): FanslyPayoutsCursorSta
     fixedStepIndex: 0,
     walkOffset: 0,
     lastRequestedOffset: null,
+    lastPageFirstRef: null,
     walkPages: 0,
     walkTotal: null,
     floorMs: null,
@@ -280,6 +297,13 @@ export function payoutRequestRows(payload: unknown): Record<string, unknown>[] {
 export function payoutRequestTotal(payload: unknown): number | null {
   const record = asRecord(payload);
   return record === null ? null : asNullableInt(record.total);
+}
+
+/** The FIRST row's `id` on a page, or null. It is the walk's proof that the
+ *  server honoured `offset`: the same first row twice means it did not. */
+export function firstPayoutRef(rows: readonly Record<string, unknown>[]): string | null {
+  const first = rows[0];
+  return first === undefined ? null : asNullableString(first.id);
 }
 
 /** The oldest `createdAt` (Unix ms) on a page — the floor this walk has reached.
@@ -583,6 +607,9 @@ export async function fanslyPayoutsChunk(
         state = {
           ...state,
           lastRequestedOffset: 0,
+          // The head page is page one of the walk, so it is also what page two
+          // is compared against.
+          lastPageFirstRef: firstPayoutRef(head.rows),
           walkPages: state.walkPages + 1,
           walkOffset: PAYOUT_REQUESTS_PAGE_SIZE,
           walkDone: short || reachedTotal,
@@ -685,6 +712,38 @@ export async function fanslyPayoutsChunk(
     const requestedOffset = state.walkOffset;
     const page = await readRequestPage(requestedOffset);
     walkPagesThisChunk += 1;
+
+    // THE SECOND TRIGGER, spent on the ANSWER. The page is already journaled —
+    // it is evidence about the provider either way — but a page that begins
+    // where the last one began is a server ignoring `offset`, and walking it
+    // further would spend the day's cap re-reading page one.
+    const pageFirstRef = firstPayoutRef(page.rows);
+    if (pageFirstRef !== null && pageFirstRef === state.lastPageFirstRef) {
+      await input.telemetry.addAnomaly({
+        code: "fansly_payouts_offset_repeat",
+        severity: "warn",
+        message:
+          "Fansly served the same payout-request page for a different offset; "
+          + "the walk stopped rather than re-reading page one",
+        details: { offset: requestedOffset, pages: state.walkPages, firstRef: pageFirstRef },
+      });
+      state = { ...state, lastRequestedOffset: requestedOffset, walkDone: true };
+      await coverage(
+        FANSLY_PAYOUTS_COVERAGE_SCOPES.requests,
+        "partial_provider_surface",
+        "terminal_response",
+        {
+          proofObservationId: page.persisted.observationId ?? null,
+          reasonCode: "repeat_request",
+          expectedCount: state.walkTotal,
+          oldestCapturedAt: state.floorMs === null ? null : new Date(state.floorMs),
+          cursor: { offset: requestedOffset, pages: state.walkPages },
+        },
+      );
+      await saveProgress();
+      break;
+    }
+
     const nextOffset = requestedOffset + PAYOUT_REQUESTS_PAGE_SIZE;
     // TWO stop conditions, and the short page is the one that is always true:
     // `total` is a hint the provider may or may not keep honest, while a page
@@ -694,6 +753,7 @@ export async function fanslyPayoutsChunk(
     state = {
       ...state,
       lastRequestedOffset: requestedOffset,
+      lastPageFirstRef: pageFirstRef,
       walkPages: state.walkPages + 1,
       walkOffset: nextOffset,
       walkDone: short || reachedTotal,
