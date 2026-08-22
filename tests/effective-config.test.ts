@@ -147,7 +147,8 @@ describe("LIVE_CONFIG_KEYS", () => {
     // backfill bound and the backfill continuation delay;
     // WP-F2 added the three `notifications` keys — the ramp flag, its
     // FAIL-CLOSED page allowlist and the per-lane daily call budget, all read
-    // per chunk so a ramp on the lossy lane never waits for a deploy.
-    expect(LIVE_CONFIG_KEYS.size).toBe(44);
+    // per chunk so a ramp on the lossy lane never waits for a deploy;
+    // WP-F3 added the three `catalog` keys on the same template.
+    expect(LIVE_CONFIG_KEYS.size).toBe(47);
   });
 });

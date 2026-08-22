@@ -1,0 +1,106 @@
+{
+  "_fixture": "SYNTHETIC. Shape from a live /vault/albumsnew capture (2026-08-19): {albums[], aggregationData.media[]}. `createdAt` on an album is MILLISECONDS. `type` is NULL on creator-made albums and an integer on the system ones — 38000 and 5000 share a `lastItemId` because they are VIEWS over the same media, which is why the sum of `itemCount` (760 here) is NOT the number of distinct media. The aggregationData.media rows carry `location`, `locations[]` and `variants[]`; live those are SIGNED CDN URLs, and the placeholders below stand in for them so the no-URL assertions have something to fail on. One album is dated 2023 on purpose (the receipt-time pin).",
+  "albums": [
+    {
+      "id": "000900000000000101",
+      "accountId": "000900000000000001",
+      "pos": 0,
+      "title": "Lifestyle",
+      "description": "",
+      "type": null,
+      "status": 0,
+      "itemCount": 120,
+      "lastItemId": "000900000000000901",
+      "version": 0,
+      "createdAt": 1690000000000
+    },
+    {
+      "id": "000900000000000102",
+      "accountId": "000900000000000001",
+      "pos": 1,
+      "title": "PPV Teasers",
+      "description": "",
+      "type": null,
+      "status": 0,
+      "itemCount": 80,
+      "lastItemId": "000900000000000902",
+      "version": 0,
+      "createdAt": 1762445904000
+    },
+    {
+      "id": "000900000000000103",
+      "accountId": "000900000000000001",
+      "pos": 2,
+      "title": null,
+      "description": null,
+      "type": 38000,
+      "status": 0,
+      "itemCount": 200,
+      "lastItemId": "000900000000000903",
+      "version": 0,
+      "createdAt": 1738592221000
+    },
+    {
+      "id": "000900000000000104",
+      "accountId": "000900000000000001",
+      "pos": 3,
+      "title": null,
+      "description": null,
+      "type": 5000,
+      "status": 0,
+      "itemCount": 160,
+      "lastItemId": "000900000000000903",
+      "version": 0,
+      "createdAt": 1738592221000
+    },
+    {
+      "id": "000900000000000105",
+      "accountId": "000900000000000001",
+      "pos": 4,
+      "title": null,
+      "description": null,
+      "type": 1000,
+      "status": 0,
+      "itemCount": 200,
+      "lastItemId": "000900000000000904",
+      "version": 0,
+      "createdAt": 1738592221000
+    },
+    {
+      "id": "000900000000000106",
+      "accountId": "000900000000000001",
+      "pos": 5,
+      "title": "Empty shelf",
+      "description": "",
+      "type": null,
+      "status": 0,
+      "itemCount": 0,
+      "lastItemId": null,
+      "version": 0,
+      "createdAt": 1762445904000,
+      "someUnnamedFutureField": "kept-verbatim"
+    }
+  ],
+  "aggregationData": {
+    "media": [
+      {
+        "id": "000900000000000801",
+        "type": 2,
+        "status": 1,
+        "accountId": "000900000000000001",
+        "mimetype": "video/mp4",
+        "flags": 0,
+        "filename": "clip.mp4",
+        "location": "SIGNED-CDN-LOCATION-PLACEHOLDER",
+        "width": 1080,
+        "height": 1920,
+        "metadata": "{\"duration\": 42}",
+        "updatedAt": 1787087232,
+        "createdAt": 1787087230,
+        "variants": [{ "id": "000900000000000802", "location": "SIGNED-VARIANT-PLACEHOLDER" }],
+        "variantHash": {},
+        "locations": [{ "locationId": "000900000000000803", "location": "SIGNED-LOCATION-PLACEHOLDER" }]
+      }
+    ]
+  }
+}

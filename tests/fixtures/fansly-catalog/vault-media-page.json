@@ -1,0 +1,41 @@
+{
+  "_fixture": "SYNTHETIC. One page of /media/vaultnew?albumId=…&mediaType=&search=&before=0&after=0. `albumMedia[]` is the MEMBERSHIP — its rows carry their OWN `id`, which is the next page's `before` cursor and is NOT `mediaOfferId`; paging on the offer id walks nowhere. `media[]` beside it is RAW media with `location`/`locations[]`/`variants[]` — live those are SIGNED CDN URLs; the placeholders below stand in so the no-URL assertions have something to fail on. `createdAt` on a membership row is MILLISECONDS.",
+  "albumMedia": [
+    {
+      "id": "000900000000000911",
+      "mediaOfferId": "000900000000000611",
+      "mediaOfferType": 2001,
+      "mediaOfferBundleId": null,
+      "mediaId": "000900000000000612",
+      "mediaType": 2,
+      "previewId": null,
+      "albumId": "000900000000000101",
+      "accountId": "000900000000000001",
+      "createdAt": 1786556663000
+    },
+    {
+      "id": "000900000000000912",
+      "mediaOfferId": "000900000000000613",
+      "mediaOfferType": 2001,
+      "mediaOfferBundleId": "000900000000000651",
+      "mediaId": "000900000000000614",
+      "mediaType": 1,
+      "previewId": null,
+      "albumId": "000900000000000101",
+      "accountId": "000900000000000001",
+      "createdAt": 1786556664000
+    }
+  ],
+  "media": [
+    {
+      "id": "000900000000000612",
+      "type": 2,
+      "accountId": "000900000000000001",
+      "mimetype": "video/mp4",
+      "location": "SIGNED-CDN-LOCATION-PLACEHOLDER",
+      "variants": [{ "id": "000900000000000615", "location": "SIGNED-VARIANT-PLACEHOLDER" }],
+      "locations": [{ "locationId": "000900000000000616", "location": "SIGNED-LOCATION-PLACEHOLDER" }],
+      "createdAt": 1787087230
+    }
+  ]
+}

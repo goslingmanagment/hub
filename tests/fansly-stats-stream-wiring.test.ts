@@ -83,6 +83,7 @@ describe("stats_snapshot stream wiring", () => {
       "posts",
       "stats_snapshot",
       "notifications",
+      "catalog",
     ]);
   });
 
@@ -223,6 +224,89 @@ describe("notifications stream wiring", () => {
     expect(budget?.kind).toBe("number");
     // 48 head polls + pagination, in HTTP ATTEMPTS.
     expect(budget?.default).toBe("96");
+    expect(budget?.min).toBe(1);
+    expect(budget?.costWarning).toMatch(/ATTEMPTS/);
+  });
+});
+
+// WP-F3 — the same fourteen sites for `catalog`.
+
+describe("catalog stream wiring", () => {
+  it("is a Fansly-only stream, present in every stream vocabulary", () => {
+    expect(SYNC_STREAMS).toContain("catalog");
+    expect([...PLATFORM_STREAMS]).toEqual([...SYNC_STREAMS]);
+    expect(getSyncStreamsForPlatform("fansly")).toContain("catalog");
+    expect(getSyncStreamsForPlatform("onlyfans")).not.toContain("catalog");
+    expect(fanslyPlatformAdapter.capabilities.streams).toContain("catalog");
+    expect(onlyfansPlatformAdapter.capabilities.streams).not.toContain("catalog");
+    // A stream in SYNC_STREAMS with no handler throws "Unsupported executor
+    // stream" on every dispatch, FLEET-WIDE.
+    expect(fanslyPlatformAdapter.pull.catalog).toBeTypeOf("function");
+  });
+
+  it("is a MAINTENANCE lane on a daily cadence that yields to money and DMs", () => {
+    const policy = SYNC_STREAM_POLICY.catalog;
+    // Inventory moves in days. Nothing in this lane is announced once, so
+    // every step is deferrable — the opposite of the notification poll.
+    expect(policy.cadenceSeconds).toBe(86_400);
+    expect(policy.defaultWorkClass).toBe("maintenance");
+    expect(policy.freshnessSlaSeconds).toBeNull();
+    expect(policy.basePriority).toBeLessThan(SYNC_STREAM_POLICY.transactions.basePriority);
+    expect(policy.basePriority).toBeLessThan(SYNC_STREAM_POLICY.dm_messages.basePriority);
+    // Below the notification poll too: a daily inventory read can always wait
+    // for the lane whose downtime costs facts.
+    expect(policy.basePriority).toBeLessThan(SYNC_STREAM_POLICY.notifications.basePriority);
+  });
+
+  it("joins NO domain policy and declares no dependencies", () => {
+    for (const domain of Object.values(SYNC_DOMAIN_POLICY)) {
+      expect(domain.primaryStreams).not.toContain("catalog");
+      expect(domain.supportingStreams).not.toContain("catalog");
+    }
+    // `media_stats -> catalog` is WP-F4's declaration to make, not this
+    // package's: a dependency on a stream whose handler does not exist yet
+    // would block nothing and mislead everything.
+    expect(SYNC_STREAM_DEPENDENCIES.catalog).toBeUndefined();
+  });
+
+  it("is excluded from the manual `all` and `data` scopes", () => {
+    expect(fanslyPlatformAdapter.syncScopes.all).not.toContain("catalog");
+    expect(fanslyPlatformAdapter.syncScopes.data).not.toContain("catalog");
+    expect(fanslyPlatformAdapter.syncScopes.messages).not.toContain("catalog");
+  });
+
+  it("seeds PAUSED and is reachable by the gate reconciler", () => {
+    expect(isSeedPausedSyncStream("catalog")).toBe(true);
+    // BOTH halves: one without the other is a lane that sits paused forever
+    // while its ramp flag moves nothing (#192).
+    expect(FANSLY_BULK_SYNC_STREAMS).toContain("catalog");
+  });
+
+  it("is exempt from the rollup vote and visible in the monitor", () => {
+    expect(isBulkEnrichmentSyncStream("catalog")).toBe(true);
+    expect(BULK_ENRICHMENT_SYNC_STREAMS).toContain("catalog");
+    expect(MONITORED_SYNC_STREAMS).toContain("catalog");
+  });
+
+  it("registers its gate keys so opening the gate wakes the lane (#192)", () => {
+    const byKey = new Map(CONFIG_DESCRIPTORS.map((descriptor) => [descriptor.key, descriptor]));
+    const enabled = byKey.get("fanslyCatalogSyncEnabled");
+    expect(enabled?.kind).toBe("boolean");
+    expect(enabled?.default).toBe("false");
+    expect(enabled?.runtimeApply).toBe("live");
+
+    const allowlist = byKey.get("fanslyCatalogPageAllowlist");
+    expect(allowlist?.kind).toBe("string");
+    expect(allowlist?.default).toBe("");
+    expect(allowlist?.runtimeApply).toBe("live");
+    // Its OWN key, on the FAIL-CLOSED template (S4).
+    expect(allowlist?.note).toMatch(/FAILS CLOSED/);
+
+    const budget = byKey.get("fanslyCatalogDailyCallBudget");
+    expect(budget?.kind).toBe("number");
+    // Six fixed steps plus the vault walk plus the batch hydrations, in
+    // HTTP ATTEMPTS.
+    expect(budget?.default).toBe("60");
     expect(budget?.min).toBe(1);
     expect(budget?.costWarning).toMatch(/ATTEMPTS/);
   });

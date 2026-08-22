@@ -382,6 +382,7 @@ describe("sync UX summaries", () => {
       // vote would make every Fansly page read "Off" from the deploy onward.
       "stats_snapshot",
       "notifications",
+      "catalog",
     ]);
     expect(isBulkEnrichmentSyncStream("fan_earnings")).toBe(true);
     expect(isBulkEnrichmentSyncStream("purchase_history")).toBe(true);

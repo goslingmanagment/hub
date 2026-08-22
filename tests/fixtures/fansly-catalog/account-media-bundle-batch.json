@@ -1,0 +1,33 @@
+{
+  "_fixture": "SYNTHETIC. /account/media/bundle?ids= — probed 200 with a bundle carrying saleStats on 2026-08-22, a BARE ARRAY. `saleStats.total` is the creator's NET (A12: net x 1.25 lands on exact retail price points), so it is stored as sales_net_mills and never summed with a gross figure. Bundle membership comes from `accountMediaIds` (or `bundleContent[]` when the flat list is absent).",
+  "rows": [
+    {
+      "id": "000900000000000651",
+      "accountId": "000900000000000001",
+      "previewId": null,
+      "permissionFlags": 0,
+      "price": 0,
+      "createdAt": 1786470500,
+      "deletedAt": null,
+      "accountMediaIds": ["000900000000000611", "000900000000000613"],
+      "bundleContent": [
+        { "accountMediaId": "000900000000000611", "pos": 0 },
+        { "accountMediaId": "000900000000000613", "pos": 1 }
+      ],
+      "permissions": {
+        "permissionFlags": [
+          {
+            "id": "000900000000000661",
+            "type": 1,
+            "flags": 0,
+            "price": 120000,
+            "metadata": "{}"
+          }
+        ]
+      },
+      "saleStats": { "sales": 10, "total": 360000, "pending": 0 },
+      "purchased": false,
+      "access": true
+    }
+  ]
+}
