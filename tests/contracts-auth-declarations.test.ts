@@ -51,7 +51,18 @@ describe("route auth declarations", () => {
       "agentDatasetQuery",
       "agentHydrationRequestCreate",
       "agentThreadMessages",
+      // WP-S1 (endpoints-cover serving). All eight are `owner-session` +
+      // `scope: "page"`, which is also what gates the two `/money/*` routes:
+      // on the REST surface `owner-session` IS the money scope (the agent
+      // plane's `read:money` capability guards the same data behind a
+      // different principal). Widening any of them to a chatter or agent
+      // principal is its own PR with its own gate — and would have to edit
+      // both this list and the kind assertion below.
+      "contentComments",
+      "contentMedia",
       "createFanNote",
+      "moneyPayouts",
+      "moneyRevenueMix",
       "pageConversationMessages",
       "pageConversationPreview",
       "pageConversationProfile",
@@ -74,6 +85,10 @@ describe("route auth declarations", () => {
       "pageSyncBlocks",
       "pageTopSpenders",
       "pageTransactions",
+      "statsCoverage",
+      "statsMedia",
+      "statsTags",
+      "statsTraffic",
       "upsertFanProfile",
       "voiceNoteAudio",
       "voiceNoteCreate",
@@ -91,6 +106,37 @@ describe("route auth declarations", () => {
       "workboardV2UndoContact",
       "workboardV2Unsnooze",
     ]);
+  });
+
+  it("WP-S1's eight serving routes are owner-session, page-scoped, and read-only", () => {
+    // The three halves of the S1 access story, pinned together because each one
+    // alone is insufficient: `owner-session` (not `session`, not `any`) is what
+    // makes `/money/*` money-gated on the REST surface; `scope: "page"` is what
+    // makes the middleware resolve page access before a handler runs; and GET
+    // with no body is what makes "serving never authorizes capture" structural
+    // rather than a promise in a comment.
+    const s1Routes = [
+      "statsTraffic",
+      "statsMedia",
+      "statsTags",
+      "statsCoverage",
+      "contentMedia",
+      "contentComments",
+      "moneyRevenueMix",
+      "moneyPayouts",
+    ] as const;
+    for (const key of s1Routes) {
+      const schema = routeSchemas[key] as {
+        auth: { kind: string; scope?: string };
+        body?: unknown;
+        tags: readonly string[];
+      };
+      expect(schema.auth.kind, key).toBe("owner-session");
+      expect(schema.auth.scope, key).toBe("page");
+      // A body on a read route is how a "read" quietly becomes a command.
+      expect(schema.body, key).toBeUndefined();
+      expect(schema.tags, key).toContain("insights");
+    }
   });
 
   it("the retired workboard v1 routes stay gone (Stage 23 Task 5)", () => {
