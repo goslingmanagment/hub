@@ -532,7 +532,7 @@ describe("WP-F5 [A20] on the reply-walk sidecar", () => {
   });
 
   it("leaves the REPLIES and every sidecar BYTE-IDENTICAL", () => {
-    const before = replyRaw();
+    const before = replyRaw() as unknown as Record<string, unknown>;
     const trimmed = trimFanslyPostRepliesPayload(replyRaw()) as Record<string, unknown>;
     // The replies are the fact this lane exists for — bodies, threading fields,
     // tips and all. Nothing about them is narrowed.

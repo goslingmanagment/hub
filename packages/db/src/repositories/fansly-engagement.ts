@@ -425,6 +425,15 @@ export interface PostRepliesWalkCandidate {
  * a bare column name in ORDER BY resolves to the alias, a trap that has shipped
  * twice in this tree, so every ordering key here is either a qualified column
  * or the expression itself.
+ *
+ * DUE-NESS IS `last_visited_at` AGAINST A CALLER-SUPPLIED CUTOFF, not
+ * `next_due_at`, and that is deliberate. `fanslyRepliesRewalkCycleDays` is a
+ * LIVE config key: reading `next_due_at` would freeze each row's cycle at the
+ * value in force when it was last walked, so shortening the cycle would only
+ * take effect on posts walked after the flip and lengthening it would never
+ * take effect at all. The column is still maintained — it is the shared table's
+ * contract and what its partial index covers — and the DIRTY path is read
+ * through `dirty_reason`, which no cutoff can suppress.
  */
 export async function listPostRepliesWalkChunk(
   db: Database,
