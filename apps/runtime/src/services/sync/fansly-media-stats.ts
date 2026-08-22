@@ -985,13 +985,13 @@ export async function fanslyMediaStatsChunk(
 
     for (const [index, window] of windows.entries()) {
       if (!hasDayCapacity()) {
-        // Out of the day's budget part way through a multi-window long-tail
-        // refresh. What was fetched is journaled; the item stays UNVISITED so
-        // tomorrow re-reads it whole rather than half.
-        return index === 0 ? "deferred" : "deferred";
+        // Out of the day's budget, possibly part way through a multi-window
+        // long-tail refresh. What was fetched is journaled; the item stays
+        // UNVISITED so tomorrow re-reads it whole rather than half.
+        return "deferred";
       }
       if (!hasChunkCapacity()) {
-        return index === 0 ? "yielded" : "yielded";
+        return "yielded";
       }
       const outcome = await requestWindow(candidate.subjectRef, {
         periodMs: window.periodMs,
