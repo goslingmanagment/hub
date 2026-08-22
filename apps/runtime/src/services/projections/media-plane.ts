@@ -31,6 +31,7 @@ import {
   type MediaPlanePlatform,
   type MessageMediaOfferPurchaseState,
 } from "@agency_hub_core/db";
+import { millsFromInteger, type Mills } from "@agency_hub_core/shared";
 import { sql } from "drizzle-orm";
 
 import type { AppContext } from "../../bootstrap.ts";
@@ -76,13 +77,22 @@ function asInt(value: unknown): number | null {
 }
 
 /** Event mills travel as decimal STRINGS (JSON cannot carry a bigint, and a
- *  float would re-open the 1000x footgun). Anything else is not money. */
-function millsOrNull(value: unknown): bigint | null {
+ *  float would re-open the 1000x footgun). Anything else is not money.
+ *
+ *  Constructed through `millsFromInteger` — the named already-mills constructor
+ *  (Stage 27), never a hand-rolled `BigInt(...)`. The shape guards stay in
+ *  FRONT of it and are not decoration: the constructor THROWS on a non-digit
+ *  string (SyntaxError) and on a non-finite number (RangeError), and a
+ *  projector must skip a malformed money field, never crash the sweep. Digits
+ *  only ⇒ no sign, no fraction, no exponent; safe non-negative integers only on
+ *  the number path, so the constructor's truncation can never silently move a
+ *  value. */
+function millsOrNull(value: unknown): Mills | null {
   if (typeof value === "string" && /^\d+$/.test(value)) {
-    return BigInt(value);
+    return millsFromInteger(value);
   }
   if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) {
-    return BigInt(value);
+    return millsFromInteger(value);
   }
   return null;
 }
