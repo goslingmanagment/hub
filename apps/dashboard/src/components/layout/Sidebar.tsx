@@ -1,10 +1,10 @@
 import { NavLink, useLocation, Link } from "react-router";
-import { BarChart3, Bell, Coins, Settings, Users, Heart, Trophy, MessageSquare, Terminal, ListTodo, Database, AlertTriangle, Droplets, Code2, ChevronDown, UserX, Sparkles } from "lucide-react";
+import { BarChart3, Bell, Coins, LineChart, Settings, Users, Heart, Trophy, MessageSquare, Terminal, ListTodo, Database, AlertTriangle, Droplets, Code2, ChevronDown, UserX, Sparkles } from "lucide-react";
 import { useState } from "react";
 import { useAdminConnections } from "@/api/queries";
 import { PlatformBadge } from "@/components/shared/PlatformBadge";
 import { isAlertState } from "@/components/shared/syncUxDisplay";
-import { buildAiAnalyticsRoute, buildPageRoute, buildPageSectionRoute, buildWorkboardRoute, decodeRouteSegment } from "@/lib/navigation";
+import { buildAiAnalyticsRoute, buildAnalyticsRoute, buildPageRoute, buildPageSectionRoute, buildWorkboardRoute, decodeRouteSegment } from "@/lib/navigation";
 import { useDashboardShell } from "./DashboardShellContext.js";
 
 interface SidebarProps {
@@ -57,6 +57,10 @@ export function Sidebar({ user }: SidebarProps) {
     ? currentAiPageLabel
     : null;
   const aiAnalyticsRoute = buildAiAnalyticsRoute(activeFanslyPageLabel ?? currentFanslyAiPageLabel);
+  // The Analytics link carries the Fansly page already in view, the same way the
+  // AI link does: landing on someone else's page is a worse default than
+  // landing on the first one.
+  const analyticsRoute = buildAnalyticsRoute(activeFanslyPageLabel);
 
   return (
     <nav className="w-[248px] bg-card border-r border-border flex flex-col fixed top-0 bottom-0 z-20">
@@ -224,6 +228,17 @@ export function Sidebar({ user }: SidebarProps) {
           >
             <Coins size={16} />
             OFAPI Credits
+          </NavLink>
+          <NavLink
+            to={analyticsRoute}
+            className={({ isActive }) =>
+              `flex items-center gap-2.5 px-3.5 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+                isActive ? "bg-hover text-text-primary font-semibold" : "text-text-secondary hover:bg-hover hover:text-text-primary"
+              }`
+            }
+          >
+            <LineChart size={16} />
+            Analytics
           </NavLink>
           <NavLink
             to={aiAnalyticsRoute}
