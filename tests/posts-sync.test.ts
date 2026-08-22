@@ -12,18 +12,16 @@ const dbMocks = vi.hoisted(() => ({
   pausePageSync: vi.fn(),
   upsertCheckpoint: vi.fn(),
   upsertCheckpointProgress: vi.fn(),
-  // WP-F6: the engagement refresh phase's queue + the live config read.
-  getConfigOverrides: vi.fn(async () => new Map()),
-  countPostEngagementRefreshProgress: vi.fn(async () => ({
-    subjectsKnown: 0,
-    subjectsRefreshed: 0,
-    subjectsDirty: 0,
-    postsKnown: 0,
-  })),
-  listPostEngagementRefreshChunk: vi.fn(async () => []),
-  recordPostEngagementRefreshFailures: vi.fn(async () => ({ applied: 0 })),
-  recordPostEngagementRefreshVisits: vi.fn(async () => ({ applied: 0 })),
-  seedPostEngagementQueue: vi.fn(async () => ({ scanned: 0, inserted: 0, cursor: null })),
+  // WP-F6: the engagement refresh phase's queue + the live config read. Left
+  // untyped on purpose — every default lives in `resetPostsSyncMocks`, and an
+  // inline implementation here would narrow the mock's return type to the
+  // shape of that one default.
+  getConfigOverrides: vi.fn(),
+  countPostEngagementRefreshProgress: vi.fn(),
+  listPostEngagementRefreshChunk: vi.fn(),
+  recordPostEngagementRefreshFailures: vi.fn(),
+  recordPostEngagementRefreshVisits: vi.fn(),
+  seedPostEngagementQueue: vi.fn(),
   postEngagementIntervalDays: vi.fn(),
 }));
 
@@ -118,38 +116,40 @@ function captureJob(overrides: Record<string, unknown> = {}) {
   };
 }
 
-describe("posts sync handlers", () => {
-  beforeEach(() => {
-    for (const mock of [...Object.values(dbMocks), ...Object.values(sharedMocks)]) {
-      mock.mockReset();
-    }
-    dbMocks.assertOwnedPageSyncLease.mockResolvedValue(undefined);
-    dbMocks.findActiveOfapiCaptureJobBySlot.mockResolvedValue(null);
-    dbMocks.getCheckpoint.mockResolvedValue(null);
-    dbMocks.getOfapiCaptureJob.mockResolvedValue(null);
-    dbMocks.upsertCheckpoint.mockResolvedValue({});
-    dbMocks.upsertCheckpointProgress.mockResolvedValue({});
-    dbMocks.getConfigOverrides.mockResolvedValue(new Map());
-    dbMocks.countPostEngagementRefreshProgress.mockResolvedValue({
-      subjectsKnown: 0,
-      subjectsRefreshed: 0,
-      subjectsDirty: 0,
-      postsKnown: 0,
-    });
-    dbMocks.listPostEngagementRefreshChunk.mockResolvedValue([]);
-    dbMocks.recordPostEngagementRefreshFailures.mockResolvedValue({ applied: 0 });
-    dbMocks.recordPostEngagementRefreshVisits.mockResolvedValue({ applied: 0 });
-    dbMocks.seedPostEngagementQueue.mockResolvedValue({
-      scanned: 0,
-      inserted: 0,
-      cursor: null,
-    });
-    dbMocks.postEngagementIntervalDays.mockImplementation(
-      (tier: string) => (tier === "fresh" ? 1 : tier === "mid" ? 7 : 30),
-    );
-    sharedMocks.persistRawPayload.mockResolvedValue(undefined);
-    sharedMocks.retentionDate.mockReturnValue(new Date("2026-10-31T00:00:00.000Z"));
+function resetPostsSyncMocks() {
+  for (const mock of [...Object.values(dbMocks), ...Object.values(sharedMocks)]) {
+    mock.mockReset();
+  }
+  dbMocks.assertOwnedPageSyncLease.mockResolvedValue(undefined);
+  dbMocks.findActiveOfapiCaptureJobBySlot.mockResolvedValue(null);
+  dbMocks.getCheckpoint.mockResolvedValue(null);
+  dbMocks.getOfapiCaptureJob.mockResolvedValue(null);
+  dbMocks.upsertCheckpoint.mockResolvedValue({});
+  dbMocks.upsertCheckpointProgress.mockResolvedValue({});
+  dbMocks.getConfigOverrides.mockResolvedValue(new Map());
+  dbMocks.countPostEngagementRefreshProgress.mockResolvedValue({
+    subjectsKnown: 0,
+    subjectsRefreshed: 0,
+    subjectsDirty: 0,
+    postsKnown: 0,
   });
+  dbMocks.listPostEngagementRefreshChunk.mockResolvedValue([]);
+  dbMocks.recordPostEngagementRefreshFailures.mockResolvedValue({ applied: 0 });
+  dbMocks.recordPostEngagementRefreshVisits.mockResolvedValue({ applied: 0 });
+  dbMocks.seedPostEngagementQueue.mockResolvedValue({
+    scanned: 0,
+    inserted: 0,
+    cursor: null,
+  });
+  dbMocks.postEngagementIntervalDays.mockImplementation(
+    (tier: string) => (tier === "fresh" ? 1 : tier === "mid" ? 7 : 30),
+  );
+  sharedMocks.persistRawPayload.mockResolvedValue(undefined);
+  sharedMocks.retentionDate.mockReturnValue(new Date("2026-10-31T00:00:00.000Z"));
+}
+
+describe("posts sync handlers", () => {
+  beforeEach(resetPostsSyncMocks);
 
   it("parses only the versioned durable posts cursor shape", () => {
     const state = {
@@ -909,5 +909,337 @@ describe("posts sync handlers", () => {
       config: { ofapiMirrorBackgroundCaptureEnabled: true },
     } as never, onlyfansInput())).rejects.toThrow(/blocked: contract_drift/);
     expect(dbMocks.upsertCheckpoint).not.toHaveBeenCalled();
+  });
+});
+
+// ── WP-F6 — the engagement refresh phase ─────────────────────────────────────
+//
+// It rides the EXISTING `posts` stream, so every case below drives
+// `fanslyPostsChunk` with a checkpoint whose timeline walk is already COMPLETE
+// for this request generation — the only state in which the phase runs.
+
+const COMPLETED_WALK_STATE = {
+  version: 1,
+  platform: "fansly",
+  revision: 3,
+  headPostId: "post-10",
+  anchorPostId: "post-10",
+  capturedHeadPostId: "post-10",
+  before: "0",
+  pageIndex: 4,
+  pendingCaptureJobId: null,
+  fanslyPostTipsCaptureVersion: 1,
+  fanslyPostTipsBackfilledAt: "2026-07-01T00:00:00.000Z",
+  fanslyRecentRefreshCutoffAt: "2026-07-20T12:00:00.000Z",
+  fanslyRecentRefreshAnchorReached: true,
+  completedAt: "2026-08-03T11:00:00.000Z",
+};
+
+function engagementApp(overrides: Record<string, unknown> = {}) {
+  return {
+    db: {},
+    config: {
+      syncSharedRateLimitEnabled: false,
+      fanslyPostEngagementRefreshEnabled: true,
+      fanslyPostEngagementDailyCallBudget: 40,
+      fanslyBackfillContinuationDelayMs: 20_000,
+    },
+    adapter: {
+      getPostsPage: vi.fn(),
+      getTipsByTargetIds: vi.fn(),
+      getPostsByIds: vi.fn(async (_context: unknown, ids: string[]) => ({
+        items: ids.map((id) => ({ id })),
+        accountId: "",
+        wallId: null,
+        before: "0",
+        nextBefore: null,
+        done: true,
+        contractAccepted: true,
+        raw: { posts: ids.map((id) => ({ id })) },
+      })),
+    },
+    ...overrides,
+  } as never;
+}
+
+function engagementCandidates(refs: string[], tier = "fresh") {
+  return refs.map((subjectRef) => ({
+    subjectRef,
+    publishedAt: new Date("2026-08-01T00:00:00.000Z"),
+    lastVisitedAt: null,
+    dirtyReason: null,
+    consecutiveFailures: 0,
+    tier,
+    priorityBand: 0,
+  }));
+}
+
+describe("WP-F6 posts engagement refresh phase", () => {
+  beforeEach(() => {
+    resetPostsSyncMocks();
+    dbMocks.getCheckpoint.mockResolvedValue({ state: COMPLETED_WALK_STATE, cursorText: "post-10" });
+  });
+
+  it("does nothing at all while the flag is off — the posts lane is unchanged", async () => {
+    const app = engagementApp({
+      config: { syncSharedRateLimitEnabled: false, fanslyPostEngagementRefreshEnabled: false },
+    });
+    const result = await fanslyPostsChunk(app, fanslyInput());
+
+    expect(result).toMatchObject({ satisfied: true, yieldReason: null });
+    expect(result.stats).not.toHaveProperty("engagement");
+    expect((app as never as { adapter: { getPostsByIds: ReturnType<typeof vi.fn> } })
+      .adapter.getPostsByIds).not.toHaveBeenCalled();
+    expect(dbMocks.seedPostEngagementQueue).not.toHaveBeenCalled();
+    expect(dbMocks.listPostEngagementRefreshChunk).not.toHaveBeenCalled();
+    // The already-complete early return still writes nothing, exactly as before.
+    expect(dbMocks.upsertCheckpointProgress).not.toHaveBeenCalled();
+  });
+
+  it("seeds from creator_posts, then reads ONE batch as ids=<csv>, journal FIRST", async () => {
+    dbMocks.seedPostEngagementQueue
+      .mockResolvedValueOnce({ scanned: 500, inserted: 500, cursor: "post-500" })
+      .mockResolvedValueOnce({ scanned: 12, inserted: 12, cursor: "post-512" });
+    dbMocks.listPostEngagementRefreshChunk.mockResolvedValue(
+      engagementCandidates(["post-a", "post-b", "post-c"]),
+    );
+    const app = engagementApp();
+    const result = await fanslyPostsChunk(app, fanslyInput());
+
+    // Bounded keyset seeding, zero platform calls, resumed from the cursor the
+    // previous batch returned.
+    expect(dbMocks.seedPostEngagementQueue).toHaveBeenCalledTimes(2);
+    expect(dbMocks.seedPostEngagementQueue.mock.calls[1]?.[1]).toMatchObject({
+      afterSubjectRef: "post-500",
+      limit: 500,
+    });
+
+    const adapter = (app as never as { adapter: { getPostsByIds: ReturnType<typeof vi.fn> } })
+      .adapter;
+    expect(adapter.getPostsByIds).toHaveBeenCalledTimes(1);
+    expect(adapter.getPostsByIds.mock.calls[0]?.[1]).toEqual(["post-a", "post-b", "post-c"]);
+    // At most one batch of the adapter's own limit per dispatch.
+    expect(dbMocks.listPostEngagementRefreshChunk.mock.calls[0]?.[1]).toMatchObject({ limit: 100 });
+
+    // JOURNALED under the EXISTING `posts` kind, with the phase and the ids in
+    // the request params so a future parser can tell an engagement re-read from
+    // a timeline page.
+    expect(sharedMocks.persistRawPayload).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        endpoint: "posts",
+        payloadKind: "posts",
+        requestParams: { phase: "engagement", ids: ["post-a", "post-b", "post-c"] },
+        responsePayload: { posts: [{ id: "post-a" }, { id: "post-b" }, { id: "post-c" }] },
+      }),
+      expect.anything(),
+    );
+
+    // Visits recorded with each row's OWN tier interval.
+    expect(dbMocks.recordPostEngagementRefreshVisits).toHaveBeenCalledTimes(1);
+    const visits = dbMocks.recordPostEngagementRefreshVisits.mock.calls[0]?.[1] as {
+      visits: Array<{ subjectRef: string; tier: string; nextDueAt: Date }>;
+    };
+    expect(visits.visits.map((visit) => visit.subjectRef))
+      .toEqual(["post-a", "post-b", "post-c"]);
+    expect(visits.visits[0]?.nextDueAt.toISOString()).toBe("2026-08-04T12:00:00.000Z");
+    expect(dbMocks.recordPostEngagementRefreshFailures).not.toHaveBeenCalled();
+
+    expect(result.stats).toMatchObject({
+      engagement: expect.objectContaining({
+        journaled: 1,
+        dailyCap: 40,
+        batchSize: 100,
+        seedComplete: true,
+        refreshedThisChunk: 3,
+        tiersThisChunk: { fresh: 3 },
+      }),
+    });
+  });
+
+  it("counts ATTEMPTS, retries included, and defers at the cap without dropping", async () => {
+    dbMocks.seedPostEngagementQueue.mockResolvedValue({ scanned: 0, inserted: 0, cursor: null });
+    dbMocks.listPostEngagementRefreshChunk.mockResolvedValue(engagementCandidates(["post-a"]));
+    const app = engagementApp();
+    // A cap of 2, and a call that RETRIED once: three attempts would be over,
+    // two are exactly at it.
+    (app as never as { config: Record<string, unknown> }).config
+      .fanslyPostEngagementDailyCallBudget = 2;
+    (app as never as { adapter: Record<string, unknown> }).adapter.getPostsByIds = vi.fn(
+      async (context: { requestObserver?: { onRequestEvent: (e: unknown) => Promise<void> } }, ids: string[]) => {
+        await context.requestObserver?.onRequestEvent({ state: "started" });
+        await context.requestObserver?.onRequestEvent({ state: "started" });
+        return {
+          items: ids.map((id) => ({ id })),
+          accountId: "",
+          wallId: null,
+          before: "0",
+          nextBefore: null,
+          done: true,
+          contractAccepted: true,
+          raw: { posts: ids.map((id) => ({ id })) },
+        };
+      },
+    );
+
+    const result = await fanslyPostsChunk(app, fanslyInput());
+
+    // The response ALREADY FETCHED was journaled before the counter was
+    // consulted again — a budget never turns a captured response into a
+    // dropped one.
+    expect(sharedMocks.persistRawPayload).toHaveBeenCalled();
+    expect(dbMocks.recordPostEngagementRefreshVisits).toHaveBeenCalledTimes(1);
+    expect(result.satisfied).toBe(false);
+    // Deferred to the next UTC day, not retried inside it.
+    expect((result.continuationRetryAt as Date).toISOString()).toBe("2026-08-04T00:05:00.000Z");
+    expect(result.stats).toMatchObject({
+      engagement: expect.objectContaining({
+        callsToday: 2,
+        deferred: "engagement_daily_call_budget",
+      }),
+    });
+  });
+
+  it("makes no call at all once the day's cap is already spent", async () => {
+    dbMocks.getCheckpoint.mockResolvedValue({
+      state: {
+        ...COMPLETED_WALK_STATE,
+        fanslyPostEngagement: {
+          utcDay: "2026-08-03",
+          callsToday: 40,
+          seedCursor: null,
+          seedComplete: true,
+        },
+      },
+      cursorText: "post-10",
+    });
+    const app = engagementApp();
+    const result = await fanslyPostsChunk(app, fanslyInput());
+
+    expect((app as never as { adapter: { getPostsByIds: ReturnType<typeof vi.fn> } })
+      .adapter.getPostsByIds).not.toHaveBeenCalled();
+    expect(dbMocks.listPostEngagementRefreshChunk).not.toHaveBeenCalled();
+    expect(result.stats).toMatchObject({
+      engagement: expect.objectContaining({ deferred: "engagement_daily_call_budget" }),
+    });
+  });
+
+  it("resets the counter on a new UTC day and keeps the seeding sweep", async () => {
+    dbMocks.getCheckpoint.mockResolvedValue({
+      state: {
+        ...COMPLETED_WALK_STATE,
+        fanslyPostEngagement: {
+          // Yesterday.
+          utcDay: "2026-08-02",
+          callsToday: 40,
+          seedCursor: "post-500",
+          seedComplete: true,
+        },
+      },
+      cursorText: "post-10",
+    });
+    dbMocks.listPostEngagementRefreshChunk.mockResolvedValue(engagementCandidates(["post-a"]));
+    const app = engagementApp();
+    await fanslyPostsChunk(app, fanslyInput());
+
+    expect((app as never as { adapter: { getPostsByIds: ReturnType<typeof vi.fn> } })
+      .adapter.getPostsByIds).toHaveBeenCalledTimes(1);
+    // A new day resets the ATTEMPT counter and nothing else: a seeding sweep is
+    // durable progress, not a daily allowance.
+    expect(dbMocks.seedPostEngagementQueue).not.toHaveBeenCalled();
+    const saved = dbMocks.upsertCheckpointProgress.mock.calls.at(-1)?.[1] as {
+      state: { fanslyPostEngagement: Record<string, unknown> };
+    };
+    expect(saved.state.fanslyPostEngagement).toMatchObject({
+      utcDay: "2026-08-03",
+      seedCursor: "post-500",
+      seedComplete: true,
+    });
+  });
+
+  it("journals a drifted batch and refuses it as an ANSWER", async () => {
+    dbMocks.seedPostEngagementQueue.mockResolvedValue({ scanned: 0, inserted: 0, cursor: null });
+    dbMocks.listPostEngagementRefreshChunk.mockResolvedValue(
+      engagementCandidates(["post-a", "post-b"]),
+    );
+    const runTelemetry = telemetry();
+    const app = engagementApp();
+    (app as never as { adapter: Record<string, unknown> }).adapter.getPostsByIds = vi.fn(
+      async () => ({
+        items: [],
+        accountId: "",
+        wallId: null,
+        before: "0",
+        nextBefore: null,
+        done: true,
+        contractAccepted: false,
+        raw: { timelineItems: [] },
+      }),
+    );
+
+    await fanslyPostsChunk(app, fanslyInput(new SyncChunkBudget(), runTelemetry));
+
+    expect(sharedMocks.persistRawPayload).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ responsePayload: { timelineItems: [] } }),
+      expect.anything(),
+    );
+    // Recording "these posts were refreshed" from a body we cannot read is how
+    // a decay queue lies about its own coverage.
+    expect(dbMocks.recordPostEngagementRefreshVisits).not.toHaveBeenCalled();
+    expect(dbMocks.recordPostEngagementRefreshFailures).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ subjectRefs: ["post-a", "post-b"] }),
+    );
+    expect(runTelemetry.addAnomaly).toHaveBeenCalledWith(expect.objectContaining({
+      code: "fansly_post_engagement_contract_drift",
+    }));
+  });
+
+  it("counts only the posts the response NAMED as refreshed", async () => {
+    dbMocks.seedPostEngagementQueue.mockResolvedValue({ scanned: 0, inserted: 0, cursor: null });
+    dbMocks.listPostEngagementRefreshChunk.mockResolvedValue(
+      engagementCandidates(["post-a", "post-missing"]),
+    );
+    const app = engagementApp();
+    (app as never as { adapter: Record<string, unknown> }).adapter.getPostsByIds = vi.fn(
+      async () => ({
+        items: [{ id: "post-a" }],
+        accountId: "",
+        wallId: null,
+        before: "0",
+        nextBefore: null,
+        done: true,
+        contractAccepted: true,
+        raw: { posts: [{ id: "post-a" }] },
+      }),
+    );
+
+    await fanslyPostsChunk(app, fanslyInput());
+
+    const visits = dbMocks.recordPostEngagementRefreshVisits.mock.calls[0]?.[1] as {
+      visits: Array<{ subjectRef: string }>;
+    };
+    expect(visits.visits.map((visit) => visit.subjectRef)).toEqual(["post-a"]);
+    // An id the provider dropped is not a post whose counters we have seen;
+    // marking it visited would retire it on the strength of a silence.
+    expect(dbMocks.recordPostEngagementRefreshFailures).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ subjectRefs: ["post-missing"] }),
+    );
+  });
+
+  it("spaces a full batch's continuation with WP-F1's delay and jitter", async () => {
+    dbMocks.seedPostEngagementQueue.mockResolvedValue({ scanned: 0, inserted: 0, cursor: null });
+    dbMocks.listPostEngagementRefreshChunk.mockResolvedValue(
+      engagementCandidates(Array.from({ length: 100 }, (_, index) => `post-${index}`)),
+    );
+    const result = await fanslyPostsChunk(engagementApp(), fanslyInput());
+
+    expect(result.satisfied).toBe(false);
+    const retryAt = (result.continuationRetryAt as Date).getTime();
+    // 20 000 ms +- 30 %: burst shape, not daily volume, is the ban-risk surface.
+    expect(retryAt - FANSLY_NOW.getTime()).toBeGreaterThanOrEqual(14_000);
+    expect(retryAt - FANSLY_NOW.getTime()).toBeLessThanOrEqual(26_000);
   });
 });
