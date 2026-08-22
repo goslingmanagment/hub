@@ -1410,11 +1410,16 @@ describe("[sync-critical] agent read plane operations", () => {
       ]));
     }
 
-    // A later family replay advances the observation stamps. The old bounded
-    // diagnostic remains append-only evidence but is no longer current debt.
+    // A later family replay advances the observation stamps to the CURRENT
+    // family version (POSTS_CANONICALIZER_VERSION, 6 since WP-F6). The old
+    // bounded diagnostic remains append-only evidence but is no longer current
+    // debt, because its `parserVersion` no longer matches the stamp. These
+    // numbers are coupled to the family version on purpose: a bump that forgot
+    // to move them would leave this case asserting that a re-stamped
+    // observation is still owed a replay.
     await testDb!.pool.query(
       `update observations set parse_version = case id
-         when $1 then 5 when $2 then 6 when $3 then 5 else parse_version end
+         when $1 then 6 when $2 then 7 when $3 then 6 else parse_version end
        where id in ($1, $2, $3)`,
       [
         Number(topLevelObservation!.id),
