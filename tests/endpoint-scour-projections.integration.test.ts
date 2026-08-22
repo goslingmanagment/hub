@@ -33,7 +33,9 @@ import {
   createModel,
   ensureDomainEventPartitions,
   insertObservation,
+  listSubjectRefreshState,
   upsertCaptureCoverage,
+  upsertCreatorMedia,
 } from "@agency_hub_core/db";
 
 import {
@@ -46,7 +48,10 @@ import {
   rebuildFanslyStatsProjection,
   runFanslyStatsProjection,
 } from "../apps/runtime/src/services/projections/fansly-stats.ts";
-import { runMediaPlaneProjection } from "../apps/runtime/src/services/projections/media-plane.ts";
+import {
+  rebuildMediaPlaneProjection,
+  runMediaPlaneProjection,
+} from "../apps/runtime/src/services/projections/media-plane.ts";
 import {
   findProjection,
   OPERATIONAL_STATE_TABLES,
@@ -565,5 +570,309 @@ describe("[sync-critical] WP-F1 statistics projections", () => {
       [page.id],
     );
     expect(Number(checkpoints[0]!.n)).toBeGreaterThan(0);
+  });
+});
+
+describe("[sync-critical] WP-F4 per-media statistics projections", () => {
+  const MEDIA_REF = "000900000000004001";
+
+  async function seedMediaStats(pageId: number, generation = "g1", views?: number) {
+    const payload = fixture("media-offer-stats.json");
+    if (views !== undefined) {
+      const dataset = payload.dataset as Record<string, unknown>;
+      const points = dataset.datapoints as Array<Record<string, unknown>>;
+      (points[0]!.stats as Array<Record<string, unknown>>)[0]!.views = views;
+    }
+    await seedObservation(pageId, "media_offer_stats", `media:${generation}`, payload);
+    return payload;
+  }
+
+  async function projectMediaStats(pageId: number) {
+    await runCanonicalization(appStub(), { kinds: ["media_offer_stats"] });
+    return await runFanslyStatsProjection(appStub(), { accountId: pageId });
+  }
+
+  it("lands per-media buckets with subject_kind='media_offer' and NULL video columns", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    await seedMediaStats(page.id);
+    const result = await projectMediaStats(page.id);
+    expect(result.trafficBuckets).toBe(2);
+
+    const buckets = await rows(
+      `select subject_kind, subject_ref, source_code, period_ms, views, preview_views,
+              unique_viewers, video_views, preview_video_views,
+              video_percent_watched_sum, interaction_time_ms, revision_count,
+              requested_start, requested_end
+         from stats_traffic_buckets where page_id = $1 order by bucket_start`,
+      [page.id],
+    );
+    expect(buckets).toHaveLength(2);
+    for (const bucket of buckets) {
+      expect(bucket.subject_kind).toBe("media_offer");
+      expect(bucket.subject_ref).toBe(MEDIA_REF);
+      expect(Number(bucket.period_ms)).toBe(21_600_000);
+      // [E5]: the route serves NO video fields, so these are NULL — never zero.
+      // The columns exist because the ACCOUNT-level media datapoints carry them.
+      expect(bucket.video_views).toBeNull();
+      expect(bucket.preview_video_views).toBeNull();
+      expect(bucket.video_percent_watched_sum).toBeNull();
+      // The window identity travels INLINE (A21 deleted the window event).
+      expect(bucket.requested_start).not.toBeNull();
+      expect(bucket.requested_end).not.toBeNull();
+      // A first sighting is revision ZERO: the counter counts CORRECTIONS.
+      expect(Number(bucket.revision_count)).toBe(0);
+    }
+    // The RAW platform code, as text, never a label.
+    expect(buckets.map((row) => row.source_code)).toEqual(["1", "0"]);
+  });
+
+  it("fills fansly_media_tag_stats, name joined or NULL, window in the key", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    await seedMediaStats(page.id);
+    const result = await projectMediaStats(page.id);
+    expect(result.mediaTagRows).toBe(3);
+
+    const tags = await rows(
+      `select media_offer_ref, tag_ref, tag_name, rank, views, interaction_time_ms,
+              period_ms, requested_start, requested_end
+         from fansly_media_tag_stats where page_id = $1 order by rank`,
+      [page.id],
+    );
+    expect(tags).toHaveLength(3);
+    expect(tags.map((row) => row.tag_name)).toEqual([
+      "fixturetag-one",
+      "fixturetag-two",
+      // THE JOIN MISSED. NULL, never fabricated from the id — the same rule
+      // `stats_top_tags` follows.
+      null,
+    ]);
+    for (const tag of tags) {
+      expect(tag.media_offer_ref).toBe(MEDIA_REF);
+      expect(Number(tag.period_ms)).toBe(21_600_000);
+      // The WINDOW is part of the PK: rank 2 of one window is not the same fact
+      // as rank 2 of the next.
+      expect(tag.requested_start).not.toBeNull();
+      expect(tag.requested_end).not.toBeNull();
+    }
+  });
+
+  it("mints ONE new event and ONE head update when a bucket changes", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    await seedMediaStats(page.id, "g1");
+    await projectMediaStats(page.id);
+    const before = await rows(
+      `select count(*)::int as n from domain_events where account_id = $1
+        and type in ('media_traffic.datapoint_observed','media_tag.stats_observed')`,
+      [page.id],
+    );
+
+    // The SAME window, re-read, with one bucket restated.
+    await seedMediaStats(page.id, "g2", 99);
+    await projectMediaStats(page.id);
+
+    const after = await rows(
+      `select count(*)::int as n from domain_events where account_id = $1
+        and type in ('media_traffic.datapoint_observed','media_tag.stats_observed')`,
+      [page.id],
+    );
+    // EXACTLY ONE. The unchanged bucket and all three tag rows dedup to nothing.
+    expect(Number(after[0]!.n) - Number(before[0]!.n)).toBe(1);
+
+    const buckets = await rows(
+      `select source_code, views, revision_count from stats_traffic_buckets
+        where page_id = $1 order by bucket_start`,
+      [page.id],
+    );
+    // Still TWO rows: a correction updates the head, it does not append one.
+    expect(buckets).toHaveLength(2);
+    const corrected = buckets.find((row) => row.source_code === "0")!;
+    expect(Number(corrected.views)).toBe(99);
+    // ONE correction on the changed bucket, and NONE on the one that did not
+    // move: an unchanged re-fetch dedups to zero events and touches no head.
+    expect(Number(corrected.revision_count)).toBe(1);
+    const untouched = buckets.find((row) => row.source_code === "1")!;
+    expect(Number(untouched.revision_count)).toBe(0);
+  });
+
+  it("REBUILDS the per-media tables from events alone", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    await seedMediaStats(page.id);
+    await projectMediaStats(page.id);
+    const before = await checksum(page.id, { includeObservationTimes: true });
+
+    await rebuildFanslyStatsProjection(appStub(), { accountId: page.id });
+    expect(await checksum(page.id, { includeObservationTimes: true })).toEqual(before);
+    expect(
+      (await rows(`select count(*)::int as n from fansly_media_tag_stats where page_id = $1`, [
+        page.id,
+      ]))[0]!.n,
+    ).toBe(3);
+  });
+});
+
+describe("[sync-critical] WP-F4 rebuild isolation — the queue is not a projection", () => {
+  const MEDIA_REF = "000900000000004050";
+
+  function mediaInput(pageId: number, observedAt: Date) {
+    return {
+      pageId,
+      platform: "fansly" as const,
+      mediaOfferRef: MEDIA_REF,
+      mediaRef: null,
+      previewRef: null,
+      bundleRefs: [],
+      mediaType: 2,
+      mimeType: "video/mp4",
+      width: null,
+      height: null,
+      durationMs: null,
+      priceMills: null,
+      permissionEntries: [],
+      permissionFlags: null,
+      likeCount: null,
+      salesCount: null,
+      salesNetMills: null,
+      salesPendingMills: null,
+      createdAtPlatform: new Date("2024-01-01T00:00:00.000Z"),
+      deletedAtPlatform: null,
+      firstOrigin: "stats_agg",
+      observedAt,
+      contentHash: "a".repeat(64),
+      sourceEventId: 1,
+      sourceObservationId: 1,
+      sourceAccountSeq: 1,
+    };
+  }
+
+  it("queues a newly projected media in the SAME TRANSACTION as its upsert", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    // A media row committed WITHOUT its queue row is an item the per-media lane
+    // never looks at — with a healthy lane, a clean coverage row, and nothing
+    // anywhere reporting a problem. Seeding on a timer leaves the same hole for
+    // however long the timer is, and the seeding sweep is itself bounded by a
+    // daily call budget, so "however long" can be days.
+    await upsertCreatorMedia(testDb.db, mediaInput(page.id, new Date("2026-08-20T00:00:00.000Z")));
+
+    const queue = await listSubjectRefreshState(testDb.db, {
+      pageId: page.id,
+      plane: "media_stats",
+    });
+    expect(queue).toHaveLength(1);
+    expect(queue[0]).toMatchObject({ subjectRef: MEDIA_REF, refreshClass: "fresh" });
+    expect(queue[0]?.lastVisitedAt).toBeNull();
+
+    // Idempotent: the head upsert is guarded, so a replayed older capture writes
+    // nothing — and the queue insert is a no-op the second time and every time
+    // after, which is what keeps a replay from resetting anything.
+    await upsertCreatorMedia(testDb.db, mediaInput(page.id, new Date("2026-08-19T00:00:00.000Z")));
+    expect(
+      await listSubjectRefreshState(testDb.db, { pageId: page.id, plane: "media_stats" }),
+    ).toHaveLength(1);
+  });
+
+  it("survives a creator_media truncate-and-replay and does NOT re-mark first sight", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    // Build `creator_media` the way production does — from journaled bodies,
+    // through the event ledger — so the rebuild below is the REAL rebuild and
+    // not a hand-made row.
+    await seedObservation(
+      page.id,
+      "account_stats",
+      "account:g1",
+      fixture("stats-account-daily.json"),
+    );
+    await runCanonicalization(appStub(), { kinds: ["account_stats"] });
+    await runMediaPlaneProjection(appStub(), { accountId: page.id });
+
+    const seeded = await listSubjectRefreshState(testDb.db, {
+      pageId: page.id,
+      plane: "media_stats",
+    });
+    expect(seeded.length).toBeGreaterThan(0);
+    const subjectRef = seeded[0]!.subjectRef;
+
+    // Now let the lane do its work: this item has been visited, its first-sight
+    // backfill has reached its floor, and it is on a 30-day cycle.
+    const visitedAt = new Date("2026-08-21T00:00:00.000Z");
+    await testDb.pool.query(
+      `update subject_refresh_state
+          set last_visited_at = $3,
+              next_due_at = $3::timestamptz + interval '30 days',
+              refresh_class = 'long_tail',
+              known_count = 31,
+              backfill_cursor = $4::jsonb
+        where page_id = $1 and plane = 'media_stats' and subject_ref = $2`,
+      [
+        page.id,
+        subjectRef,
+        visitedAt,
+        JSON.stringify({
+          version: 1,
+          done: true,
+          floorAt: "2024-01-01T00:00:00.000Z",
+          stopReason: "empty_window_streak",
+        }),
+      ],
+    );
+    const beforeQueue = await listSubjectRefreshState(testDb.db, {
+      pageId: page.id,
+      plane: "media_stats",
+    });
+
+    // THE REBUILD. `creator_media` is a rebuildable fact projection and this
+    // truncates it to the last row, then replays it from the ledger.
+    await testDb.pool.query(`select 1`);
+    const rebuilt = await rebuildMediaPlaneProjection(appStub(), { accountId: page.id });
+    expect(rebuilt.media).toBeGreaterThan(0);
+    expect(
+      (await rows(`select count(*)::int as n from creator_media where page_id = $1`, [page.id]))[0]!
+        .n,
+    ).toBeGreaterThan(0);
+
+    // AND THE QUEUE IS UNTOUCHED. This is the whole reason the four queue
+    // columns are NOT on `creator_media`: a rebuild that reset them would
+    // re-mark the entire catalogue as first-sight and release a per-media
+    // backfill storm bounded only by this lane's own daily cap — [A19] removed
+    // the global per-page cap, so that cap is the whole bound.
+    const afterQueue = await listSubjectRefreshState(testDb.db, {
+      pageId: page.id,
+      plane: "media_stats",
+    });
+    expect(afterQueue).toEqual(beforeQueue);
+
+    const restored = afterQueue.find((row) => row.subjectRef === subjectRef)!;
+    // NOT re-marked as first sight: the visit stands, the cycle stands, and the
+    // backfill is still at its floor.
+    expect(restored.lastVisitedAt?.toISOString()).toBe(visitedAt.toISOString());
+    expect(restored.refreshClass).toBe("long_tail");
+    expect(restored.knownCount).toBe(31);
+    expect(restored.backfillCursor).toMatchObject({ done: true });
+    expect(
+      afterQueue.filter((row) => row.lastVisitedAt === null).length,
+    ).toBe(beforeQueue.filter((row) => row.lastVisitedAt === null).length);
   });
 });
