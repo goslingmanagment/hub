@@ -50,6 +50,17 @@ export const AGENT_OBSERVATION_PAYLOAD_ALLOWLIST: ReadonlySet<string> = new Set(
  *   group_detail                 permission flags and user settings
  *   followers                    trimmed at capture; the journal row is not the fact
  *   earnings_accounts            payout account identifiers
+ *   payout_methods               the creator's OWN payout credentials — provider 2
+ *                                (Paxum) returns a full plaintext email address, and
+ *                                the only sanctioned reader of that field is the
+ *                                WP-F7 canonicalizer, which turns it into a mask.
+ *                                Absence from the allowlist above already refuses it;
+ *                                this line is here so a future widening has to delete
+ *                                a sentence that says why.
+ *   payout_requests              money OUT. No fan appears on these rows, so it is not
+ *                                customer material the read plane exists to serve, and
+ *                                every row names a payout method by ref — serving it
+ *                                would make the method listing reachable by join.
  *   <endpoint>:failed            error bodies are outside the sink allowlist
  */
 export const AGENT_OBSERVATION_PAYLOAD_DENYLIST: ReadonlySet<string> = new Set([
@@ -58,6 +69,10 @@ export const AGENT_OBSERVATION_PAYLOAD_DENYLIST: ReadonlySet<string> = new Set([
   "group_detail",
   "followers",
   "earnings_accounts",
+  // WP-F7. See the note above: both are refused by absence already, and named
+  // here so the refusal carries its reason.
+  "payout_methods",
+  "payout_requests",
 ]);
 
 export function agentObservationPayloadAllowed(kind: string): boolean {

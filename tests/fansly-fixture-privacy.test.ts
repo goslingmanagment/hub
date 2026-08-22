@@ -74,6 +74,26 @@ const CATALOG_FIXTURE_MAX_BYTES = 16_384;
  */
 const COMMENTS_FIXTURE_DIRECTORY = path.resolve("tests/fixtures/fansly-comments");
 const COMMENTS_FIXTURE_MAX_BYTES = 8_192;
+/**
+ * WP-F7 payout fixtures (`tests/fixtures/fansly-payouts/`) — the same
+ * structural rule with ONE deliberate relaxation, and the relaxation is the
+ * reason the directory exists.
+ *
+ * Every other corpus here forbids an `@` outright. This one cannot: the whole
+ * point of the payout-method fixtures is that provider 2 returns a PLAINTEXT
+ * EMAIL, and a mask fixture with nothing to mask proves nothing. So the ban on
+ * `@` is replaced by something STRICTER rather than weaker — every
+ * address-shaped substring must sit on `example.invalid`, the RFC 6761
+ * reserved domain that can never resolve. A pasted live address fails, because
+ * no real payout method is registered on a domain that does not exist.
+ *
+ * The ceiling is small on purpose: a real `/payments/payoutmethods` response is
+ * two rows and a real request page is ten, so there is no volume here that
+ * could justify a paste.
+ */
+const PAYOUTS_FIXTURE_DIRECTORY = path.resolve("tests/fixtures/fansly-payouts");
+const PAYOUTS_FIXTURE_MAX_BYTES = 8_192;
+const PAYOUTS_SYNTHETIC_EMAIL_DOMAIN = "example.invalid";
 
 const SYNTHETIC_SNOWFLAKES = new Set(["863308077229670400"]);
 const SYNTHETIC_IDENTIFIERS = new Set([
@@ -238,6 +258,69 @@ function inspectStatsFixtureValue(value: unknown, key: string | null = null): vo
   }
 }
 
+/**
+ * The stats inspector, with the `@` rule swapped for the address rule above.
+ *
+ * It is applied to every string in the tree, `metadata` included — and
+ * `metadata` is where it earns its keep, because the address is nested inside a
+ * JSON-ENCODED STRING where a naive key-based check would never look.
+ */
+function inspectPayoutFixtureValue(value: unknown, key: string | null = null): void {
+  if (typeof value === "string") {
+    let decoded = value;
+    for (let pass = 0; pass < 2; pass += 1) {
+      try {
+        const next = decodeURIComponent(decoded);
+        if (next === decoded) {
+          break;
+        }
+        decoded = next;
+      } catch {
+        break;
+      }
+    }
+    if (key !== "_fixture") {
+      expect(decoded).not.toMatch(/https?:\/\//iu);
+      expect(decoded).not.toMatch(SIGNED_QUERY_VALUE_PATTERN);
+      // EVERY address-shaped substring must sit on the reserved domain...
+      let residue = decoded;
+      for (const address of decoded.match(/[\w.+-]+@[\w.-]+/gu) ?? []) {
+        expect(address.split("@").pop(), `${key ?? "value"} carries a routable address`)
+          .toBe(PAYOUTS_SYNTHETIC_EMAIL_DOMAIN);
+        residue = residue.split(address).join("");
+      }
+      // ...and nothing that is not an address may carry an `@` at all.
+      expect(residue, `${key ?? "value"} carries a stray @`).not.toContain("@");
+    }
+    for (const candidate of value.match(/\d{15,}/gu) ?? []) {
+      expect(candidate, `${key ?? "value"} carries a non-synthetic identifier`)
+        .toMatch(STATS_SYNTHETIC_ID_PATTERN);
+    }
+    return;
+  }
+
+  if (typeof value === "number") {
+    expect(String(Math.trunc(Math.abs(value)))).not.toMatch(/^\d{15,}$/u);
+    return;
+  }
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      inspectPayoutFixtureValue(item);
+    }
+    return;
+  }
+
+  if (value !== null && typeof value === "object") {
+    for (const [childKey, childValue] of Object.entries(value)) {
+      // `metadata` is a KEY here and it is not a credential name, but what it
+      // CONTAINS is checked above like every other string.
+      expect(childKey).not.toMatch(SIGNED_QUERY_KEY_PATTERN);
+      inspectPayoutFixtureValue(childValue, childKey);
+    }
+  }
+}
+
 describe("Fansly fixture privacy", () => {
   it("keeps the archived live response corpus out of the working tree", async () => {
     expect(await listJsonFiles(LEGACY_RESPONSE_DIRECTORY)).toEqual([]);
@@ -267,6 +350,20 @@ describe("Fansly fixture privacy", () => {
       // The same inspector: no URLs, no emails, no `@`, no credential-shaped
       // keys, and every 15+ digit identifier structurally fabricated.
       inspectStatsFixtureValue(parsed);
+    }
+  });
+
+  it("keeps every WP-F7 payout fixture synthetic, addresses included", async () => {
+    const fixtureNames = await listJsonFiles(PAYOUTS_FIXTURE_DIRECTORY);
+    expect(fixtureNames.length).toBeGreaterThan(0);
+
+    for (const fixtureName of fixtureNames) {
+      const raw = await readFile(path.join(PAYOUTS_FIXTURE_DIRECTORY, fixtureName), "utf8");
+      expect(Buffer.byteLength(raw), fixtureName).toBeLessThan(PAYOUTS_FIXTURE_MAX_BYTES);
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      expect(typeof parsed._fixture, fixtureName).toBe("string");
+      expect(String(parsed._fixture)).toMatch(/SYNTHETIC/u);
+      inspectPayoutFixtureValue(parsed);
     }
   });
 

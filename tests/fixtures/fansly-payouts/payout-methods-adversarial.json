@@ -1,0 +1,35 @@
+{
+  "_fixture": "SYNTHETIC, ADVERSARIAL. Three payout methods that must NOT leak. (1) provider 99 — a provider that does not exist today, carrying an arbitrary `field0..field4` wallet payload including something that looks like a secret: a shape-keyed decoder ('looks like fields, mask field1') would have published whatever this provider chose to put there, and a provider-keyed one publishes nothing. (2) `metadata` that is NOT valid JSON — the journal keeps the string verbatim, the projection gets nulls and `metadata_parse_ok = false`. (3) provider 2 again with a DIFFERENT fabricated address, so the email mask is proven over more than one value. All addresses sit on the reserved, unroutable domain example.invalid.",
+  "rows": [
+    {
+      "id": "000900000000009101",
+      "accountId": "000900000000000001",
+      "providerId": "99",
+      "type": 4,
+      "flags": 2,
+      "status": 1,
+      "metadata": "{\"field0\": \"FUTURECOIN\", \"field1\": \"0xFIXTUREWALLETcafebabedeadbeefcafebabe99\", \"field2\": \"fixture-memo-tag\", \"field3\": \"FIXTURE-RECOVERY-PHRASE-DO-NOT-PUBLISH\", \"field4\": \"fixture-account-holder\"}",
+      "version": 0
+    },
+    {
+      "id": "000900000000009102",
+      "accountId": "000900000000000001",
+      "providerId": "2",
+      "type": 1,
+      "flags": 0,
+      "status": 3,
+      "metadata": "{provider=paxum, acct=fixture, unterminated",
+      "version": 0
+    },
+    {
+      "id": "000900000000009103",
+      "accountId": "000900000000000001",
+      "providerId": "2",
+      "type": 1,
+      "flags": 0,
+      "status": 3,
+      "metadata": "{\"email\": \"a@example.invalid\"}",
+      "version": 0
+    }
+  ]
+}
