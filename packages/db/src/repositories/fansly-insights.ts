@@ -173,9 +173,9 @@ export async function listInsightsTrafficBuckets(
   return result.rows.map(trafficRow);
 }
 
-/** The same buckets, restricted to a set of media offers. Bounded by a TOTAL
- *  row budget rather than per media: a caller must never be able to ask for one
- *  media × a year of hourly buckets and get an unbounded body. */
+/** The same buckets, restricted to a set of media offers. The total response is
+ * bounded, but rows are interleaved by per-media rank so one verbose item cannot
+ * consume the budget before every displayed item gets its newest point. */
 export async function listInsightsMediaTrafficBuckets(
   db: Database,
   input: {
@@ -192,14 +192,21 @@ export async function listInsightsMediaTrafficBuckets(
   }
   const result = await db.execute<Record<string, unknown>>(sql`
     select ${TRAFFIC_COLUMNS}
-    from stats_traffic_buckets t
-    where t.page_id = ${input.pageId}
-      and t.subject_kind = 'media_offer'
-      and t.subject_ref = any(${textArrayParam(input.mediaOfferRefs)})
-      and t.period_ms = ${input.periodMs}
-      and t.bucket_start >= ${input.from}
-      and t.bucket_start < ${input.to}
-    order by t.subject_ref asc, t.bucket_start asc, t.source_code asc
+    from (
+      select source.*,
+             row_number() over (
+               partition by source.subject_ref
+               order by source.bucket_start desc, source.source_code asc
+             ) as media_row_rank
+      from stats_traffic_buckets source
+      where source.page_id = ${input.pageId}
+        and source.subject_kind = 'media_offer'
+        and source.subject_ref = any(${textArrayParam(input.mediaOfferRefs)})
+        and source.period_ms = ${input.periodMs}
+        and source.bucket_start >= ${input.from}
+        and source.bucket_start < ${input.to}
+    ) t
+    order by t.media_row_rank asc, t.subject_ref asc, t.bucket_start desc, t.source_code asc
     limit ${input.limit}
   `);
   return result.rows.map(trafficRow);
@@ -294,6 +301,83 @@ export async function listInsightsMediaHeads(
   return result.rows.map(mediaHeadRow);
 }
 
+/** Newest catalogue heads first for the Analytics landing page. The timestamp
+ * is mutable, so the cursor includes the stable ref as its total-order tie. */
+export async function listInsightsRecentMediaHeads(
+  db: Database,
+  input: {
+    pageId: number;
+    mediaOfferRef?: string | undefined;
+    limit: number;
+    after?: { lastObservedAt: Date; mediaOfferRef: string } | undefined;
+  },
+): Promise<InsightsMediaHeadRow[]> {
+  const clauses = [sql`m.page_id = ${input.pageId}`];
+  if (input.mediaOfferRef !== undefined) {
+    clauses.push(sql`m.media_offer_ref = ${input.mediaOfferRef}`);
+  }
+  if (input.after !== undefined) {
+    clauses.push(sql`(m.last_observed_at, m.media_offer_ref) < (${input.after.lastObservedAt}, ${input.after.mediaOfferRef})`);
+  }
+  const result = await db.execute<Record<string, unknown>>(sql`
+    select m.media_offer_ref as media_offer_ref,
+           m.media_ref as media_ref,
+           m.bundle_refs as bundle_refs,
+           m.media_type as media_type,
+           m.mime_type as mime_type,
+           m.width as width,
+           m.height as height,
+           m.duration_ms as duration_ms,
+           m.price_mills::text as price_mills,
+           m.like_count as like_count,
+           m.sales_count as sales_count,
+           m.sales_net_mills::text as sales_net_mills,
+           m.sales_pending_mills::text as sales_pending_mills,
+           m.created_at_platform as created_at_platform,
+           m.deleted_at_platform as deleted_at_platform,
+           m.first_observed_at as first_observed_at,
+           m.last_observed_at as last_observed_at
+    from creator_media m
+    where ${sql.join(clauses, sql` and `)}
+    order by m.last_observed_at desc, m.media_offer_ref desc
+    limit ${input.limit}
+  `);
+  return result.rows.map(mediaHeadRow);
+}
+
+/** Catalogue sidecars needed by ranked rows that fell outside the landing-page
+ * head limit. Missing heads remain missing and the ranking row is still served. */
+export async function listInsightsMediaHeadsByRefs(
+  db: Database,
+  input: { pageId: number; mediaOfferRefs: readonly string[] },
+): Promise<InsightsMediaHeadRow[]> {
+  if (input.mediaOfferRefs.length === 0) return [];
+  const result = await db.execute<Record<string, unknown>>(sql`
+    select m.media_offer_ref as media_offer_ref,
+           m.media_ref as media_ref,
+           m.bundle_refs as bundle_refs,
+           m.media_type as media_type,
+           m.mime_type as mime_type,
+           m.width as width,
+           m.height as height,
+           m.duration_ms as duration_ms,
+           m.price_mills::text as price_mills,
+           m.like_count as like_count,
+           m.sales_count as sales_count,
+           m.sales_net_mills::text as sales_net_mills,
+           m.sales_pending_mills::text as sales_pending_mills,
+           m.created_at_platform as created_at_platform,
+           m.deleted_at_platform as deleted_at_platform,
+           m.first_observed_at as first_observed_at,
+           m.last_observed_at as last_observed_at
+    from creator_media m
+    where m.page_id = ${input.pageId}
+      and m.media_offer_ref = any(${textArrayParam(input.mediaOfferRefs)})
+    order by m.last_observed_at desc, m.media_offer_ref desc
+  `);
+  return result.rows.map(mediaHeadRow);
+}
+
 // ── window aggregation sidecars ──────────────────────────────────────────────
 
 export interface InsightsTopMediaRow {
@@ -316,6 +400,17 @@ export async function listInsightsTopMedia(
   input: { pageId: number; from: Date; to: Date; limit: number },
 ): Promise<InsightsTopMediaRow[]> {
   const result = await db.execute<Record<string, unknown>>(sql`
+    with freshest_window as (
+      select newest.requested_start, newest.requested_end, newest.period_ms
+      from stats_top_media newest
+      where newest.page_id = ${input.pageId}
+        and newest.requested_end >= ${input.from}
+        and newest.requested_end < ${input.to}
+      order by newest.requested_end desc,
+               newest.requested_start desc,
+               newest.observed_at desc
+      limit 1
+    )
     select t.plane as plane,
            t.rank as rank,
            t.media_offer_ref as media_offer_ref,
@@ -329,10 +424,12 @@ export async function listInsightsTopMedia(
            t.preview_interaction_time_ms as preview_interaction_time_ms,
            t.observed_at as observed_at
     from stats_top_media t
+    inner join freshest_window newest
+      on newest.requested_start = t.requested_start
+     and newest.requested_end = t.requested_end
+     and newest.period_ms = t.period_ms
     where t.page_id = ${input.pageId}
-      and t.requested_end >= ${input.from}
-      and t.requested_end < ${input.to}
-    order by t.requested_end desc, t.plane asc, t.rank asc
+    order by t.plane asc, t.rank asc
     limit ${input.limit}
   `);
   return result.rows.map((row) => ({

@@ -74,6 +74,7 @@ import {
   getCheckpoint,
   listCaptureCoverage,
 } from "@agency_hub_core/db";
+import { CAPTURE_COVERAGE_PLANES } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
 import { loadEffectiveConfig } from "../effective-config.ts";
@@ -169,12 +170,6 @@ const BACKFILL_EMPTY_STREAK_LIMIT = 2;
 const BROADCAST_BACKFILL_PAGES_PER_SWEEP = 3;
 /** `recapstats` — the step that completes the sweep and stamps `lastSweepDay`. */
 const LAST_SWEEP_STEP = 10;
-
-export const FANSLY_STATS_COVERAGE_PLANES = {
-  accountDaily: "stats_account_daily",
-  accountHourly: "stats_account_hourly",
-  earnings: "stats_earnings",
-} as const;
 
 // ── cursor state ─────────────────────────────────────────────────────────────
 
@@ -934,7 +929,7 @@ export async function fanslyStatsSnapshotChunk(
   if (dailyNeedsMonthWalk) {
     const stopped = (await listCaptureCoverage(app.db, {
       pageId,
-      plane: FANSLY_STATS_COVERAGE_PLANES.accountDaily,
+      plane: CAPTURE_COVERAGE_PLANES.statsAccountDaily,
     })).find((row) => row.reasonCode === "window_not_honoured");
     if (stopped !== undefined) {
       const resumeAt = monthIndexOf(now) - 1;
@@ -973,7 +968,7 @@ export async function fanslyStatsSnapshotChunk(
       };
       state = { ...state, mode: "backfill", backfill: reopened };
       await coverage(
-        FANSLY_STATS_COVERAGE_PLANES.accountDaily,
+        CAPTURE_COVERAGE_PLANES.statsAccountDaily,
         "in_progress",
         "none",
         {
@@ -990,7 +985,7 @@ export async function fanslyStatsSnapshotChunk(
           "Fansly daily statistics history resumes by calendar month; the date-bound stop is "
           + "superseded",
         details: {
-          plane: FANSLY_STATS_COVERAGE_PLANES.accountDaily,
+          plane: CAPTURE_COVERAGE_PLANES.statsAccountDaily,
           nextMonth: monthLabel(resumeAt),
         },
       });
@@ -1019,7 +1014,7 @@ export async function fanslyStatsSnapshotChunk(
         ?? backfill.daily.guard.lastObservationId;
       const { year, month } = monthFromIndex(detail.monthIndex);
       await coverage(
-        FANSLY_STATS_COVERAGE_PLANES.accountDaily,
+        CAPTURE_COVERAGE_PLANES.statsAccountDaily,
         // Bounded by the PROVIDER's behaviour, not by us and not by exhaustion:
         // there is older history, and this surface will not serve it in any form
         // this lane knows how to ask for.
@@ -1048,7 +1043,7 @@ export async function fanslyStatsSnapshotChunk(
           "Fansly stats did not answer the calendar month it was asked for; the history walk "
           + "stopped",
         details: {
-          plane: FANSLY_STATS_COVERAGE_PLANES.accountDaily,
+          plane: CAPTURE_COVERAGE_PLANES.statsAccountDaily,
           trigger: detail.trigger,
           requestedMonth: monthLabel(detail.monthIndex),
           servedAfter: detail.served?.afterMs == null
@@ -1085,7 +1080,7 @@ export async function fanslyStatsSnapshotChunk(
           ) {
             await handleUnhonouredWindow(
               backfill.daily,
-              FANSLY_STATS_COVERAGE_PLANES.accountDaily,
+              CAPTURE_COVERAGE_PLANES.statsAccountDaily,
               requested,
               {
                 trigger: "repeat_request",
@@ -1129,7 +1124,7 @@ export async function fanslyStatsSnapshotChunk(
           if (!windowWasHonoured(requested, served)) {
             await handleUnhonouredWindow(
               backfill.daily,
-              FANSLY_STATS_COVERAGE_PLANES.accountDaily,
+              CAPTURE_COVERAGE_PLANES.statsAccountDaily,
               requested,
               {
                 trigger: "served_window",
@@ -1157,7 +1152,7 @@ export async function fanslyStatsSnapshotChunk(
           backfill.daily.trailingCaptured = true;
           backfill.daily.nextMonthIndex = monthIndexOf(now) - 1;
           await coverage(
-            FANSLY_STATS_COVERAGE_PLANES.accountDaily,
+            CAPTURE_COVERAGE_PLANES.statsAccountDaily,
             "in_progress",
             "none",
             {
@@ -1245,7 +1240,7 @@ export async function fanslyStatsSnapshotChunk(
             // The empty response IS the proof, and it is journaled: the
             // coverage row points at the observation rather than restating it.
             await coverage(
-              FANSLY_STATS_COVERAGE_PLANES.accountDaily,
+              CAPTURE_COVERAGE_PLANES.statsAccountDaily,
               "provider_exhausted",
               "empty_window",
               {
@@ -1282,7 +1277,7 @@ export async function fanslyStatsSnapshotChunk(
             backfill.daily.nextMonthIndex = monthIndex - 1;
           }
           await coverage(
-            FANSLY_STATS_COVERAGE_PLANES.accountDaily,
+            CAPTURE_COVERAGE_PLANES.statsAccountDaily,
             "in_progress",
             "none",
             {
@@ -1315,7 +1310,7 @@ export async function fanslyStatsSnapshotChunk(
       if (hourlyEnabled && !backfill.hourly.done) {
         backfill.hourly.done = true;
         await coverage(
-          FANSLY_STATS_COVERAGE_PLANES.accountHourly,
+          CAPTURE_COVERAGE_PLANES.statsAccountHourly,
           // Bounded by the PROVIDER's surface: hourly buckets exist only inside
           // the trailing window, and we captured that window.
           "partial_provider_surface",
@@ -1351,7 +1346,7 @@ export async function fanslyStatsSnapshotChunk(
         ) {
           await handleUnhonouredWindow(
             backfill.earnings,
-            FANSLY_STATS_COVERAGE_PLANES.earnings,
+            CAPTURE_COVERAGE_PLANES.statsEarnings,
             requested,
             { trigger: "repeat_request" },
           );
@@ -1389,7 +1384,7 @@ export async function fanslyStatsSnapshotChunk(
           // nobody served.
           await handleUnhonouredWindow(
             backfill.earnings,
-            FANSLY_STATS_COVERAGE_PLANES.earnings,
+            CAPTURE_COVERAGE_PLANES.statsEarnings,
             requested,
             { trigger: "served_window", served },
           );
@@ -1433,7 +1428,7 @@ export async function fanslyStatsSnapshotChunk(
           } else if (backfill.earnings.emptyStreak >= BACKFILL_EMPTY_STREAK_LIMIT) {
             backfill.earnings.done = true;
             await coverage(
-              FANSLY_STATS_COVERAGE_PLANES.earnings,
+              CAPTURE_COVERAGE_PLANES.statsEarnings,
               "provider_exhausted",
               "empty_window",
               {
@@ -1449,7 +1444,7 @@ export async function fanslyStatsSnapshotChunk(
             backfill.earnings.probeResumeBeforeMs = null;
           }
           await coverage(
-            FANSLY_STATS_COVERAGE_PLANES.earnings,
+            CAPTURE_COVERAGE_PLANES.statsEarnings,
             "in_progress",
             "none",
             { oldestCapturedAt: after, newestCapturedAt: now },
@@ -1538,7 +1533,7 @@ export async function fanslyStatsSnapshotChunk(
         throw new FanslyLaneInvalidResponseError("account_stats");
       }
       await coverage(
-        FANSLY_STATS_COVERAGE_PLANES.accountDaily,
+        CAPTURE_COVERAGE_PLANES.statsAccountDaily,
         "window_captured",
         "none",
         {
@@ -1574,7 +1569,7 @@ export async function fanslyStatsSnapshotChunk(
         throw new FanslyLaneInvalidResponseError("account_stats");
       }
       await coverage(
-        FANSLY_STATS_COVERAGE_PLANES.accountHourly,
+        CAPTURE_COVERAGE_PLANES.statsAccountHourly,
         "window_captured",
         "none",
         {

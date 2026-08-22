@@ -19,6 +19,7 @@ import {
   listInsightsCoverage,
   listInsightsHoldings,
   listInsightsMediaHeads,
+  listInsightsMediaHeadsByRefs,
   listInsightsMediaTrafficBuckets,
   listInsightsPayoutMethods,
   listInsightsPayoutRequests,
@@ -31,6 +32,7 @@ import {
   listInsightsTopMedia,
   listInsightsTopTags,
   listInsightsTrafficBuckets,
+  listInsightsRecentMediaHeads,
   listInsightsVaultAlbums,
   listInsightsWalls,
   countCreatorVaultUniqueMembers,
@@ -39,6 +41,7 @@ import {
   sumCreatorVaultAlbumItemCounts,
 } from "@agency_hub_core/db";
 import {
+  CAPTURE_COVERAGE_PLANES,
   FANSLY_MEDIA_STAT_TYPES,
   FANSLY_PROFILE_STAT_FAMILIES,
   FANSLY_REVENUE_LABEL_VERSION,
@@ -99,6 +102,9 @@ const TOP_WINDOW_LIMIT = 500;
 const PER_POST_ROLLUP_LIMIT = 500;
 const LIKERS_LIMIT = 200;
 const MONTH_TOTALS_LIMIT = 500;
+const COVERAGE_PLANE_ORDER = new Map<string, number>(
+  Object.values(CAPTURE_COVERAGE_PLANES).map((plane, index) => [plane, index]),
+);
 
 /**
  * Every lane whose flag/allowlist state the coverage panel reports.
@@ -410,17 +416,41 @@ export function registerInsightsRoutes(server: ApiServer, ctx: ApiModuleContext)
   }, async (request): Promise<StatsMediaResponse> => {
     const page = await resolveOwnerPage(request);
     const window = parseWindow(request.query.from, request.query.to);
-    const afterRef = request.query.cursor === undefined
+    const after = request.query.cursor === undefined
       ? undefined
-      : decodeCursor(request.query.cursor as string, 1)[0];
+      : (() => {
+        const [lastObservedAt, mediaOfferRef] = decodeCursor(request.query.cursor as string, 2);
+        return {
+          lastObservedAt: parseInstant(lastObservedAt as string, "cursor"),
+          mediaOfferRef: mediaOfferRef as string,
+        };
+      })();
 
     const limit = request.query.limit;
-    const heads = await listInsightsMediaHeads(appContext.db, {
+    const [landingHeads, top, coverage] = await Promise.all([
+      listInsightsRecentMediaHeads(appContext.db, {
+        pageId: page.id,
+        mediaOfferRef: request.query.mediaOfferRef,
+        limit,
+        after,
+      }),
+      listInsightsTopMedia(appContext.db, {
+        pageId: page.id,
+        from: window.from,
+        to: window.to,
+        limit: TOP_WINDOW_LIMIT,
+      }),
+      listInsightsCoverage(appContext.db, { pageId: page.id }),
+    ]);
+    const landingRefs = new Set(landingHeads.map((head) => head.mediaOfferRef));
+    const rankedMissingRefs = request.query.mediaOfferRef === undefined
+      ? [...new Set(top.map((row) => row.mediaOfferRef))].filter((ref) => !landingRefs.has(ref))
+      : [];
+    const rankedHeads = await listInsightsMediaHeadsByRefs(appContext.db, {
       pageId: page.id,
-      mediaOfferRef: request.query.mediaOfferRef,
-      limit,
-      afterRef,
+      mediaOfferRefs: rankedMissingRefs,
     });
+    const heads = [...landingHeads, ...rankedHeads];
     const bucketLimit = request.query.bucketLimit;
     const buckets = await listInsightsMediaTrafficBuckets(appContext.db, {
       pageId: page.id,
@@ -444,16 +474,9 @@ export function registerInsightsRoutes(server: ApiServer, ctx: ApiModuleContext)
       }
     }
 
-    const [top, coverage] = await Promise.all([
-      listInsightsTopMedia(appContext.db, {
-        pageId: page.id,
-        from: window.from,
-        to: window.to,
-        limit: TOP_WINDOW_LIMIT,
-      }),
-      listInsightsCoverage(appContext.db, { pageId: page.id }),
-    ]);
-    const last = heads.length === limit ? heads[heads.length - 1] : undefined;
+    const last = landingHeads.length === limit
+      ? landingHeads[landingHeads.length - 1]
+      : undefined;
 
     return {
       page: { label: page.label, platform: page.platform },
@@ -486,7 +509,9 @@ export function registerInsightsRoutes(server: ApiServer, ctx: ApiModuleContext)
       },
       coverage: coverage.map(coverageRowToWire),
       bucketsTruncated,
-      nextCursor: last === undefined ? null : encodeCursor([last.mediaOfferRef]),
+      nextCursor: last === undefined
+        ? null
+        : encodeCursor([iso(last.lastObservedAt), last.mediaOfferRef]),
     };
   });
 
@@ -579,7 +604,15 @@ export function registerInsightsRoutes(server: ApiServer, ctx: ApiModuleContext)
     return {
       page: { label: page.label, platform: page.platform },
       generatedAt: new Date().toISOString(),
-      planes: planes.map(coverageRowToWire),
+      planes: [...planes]
+        .sort((left, right) => {
+          const leftOrder = COVERAGE_PLANE_ORDER.get(left.plane) ?? Number.MAX_SAFE_INTEGER;
+          const rightOrder = COVERAGE_PLANE_ORDER.get(right.plane) ?? Number.MAX_SAFE_INTEGER;
+          return leftOrder - rightOrder
+            || left.plane.localeCompare(right.plane)
+            || left.scopeRef.localeCompare(right.scopeRef);
+        })
+        .map(coverageRowToWire),
       streams: states.map((state) => {
         const progress = (state.progress ?? {}) as Record<string, unknown>;
         const gate = LANE_GATES[state.stream];

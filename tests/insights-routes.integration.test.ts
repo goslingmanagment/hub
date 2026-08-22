@@ -24,6 +24,7 @@ import {
 } from "@agency_hub_core/db";
 
 import { AGENT_DATASET_SQL } from "@agency_hub_core/db";
+import { CAPTURE_COVERAGE_PLANES } from "@agency_hub_core/shared";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import { createUserAccount } from "../apps/runtime/src/services/auth.ts";
@@ -65,9 +66,9 @@ const WINDOW_FROM = "2026-08-01T00:00:00Z";
 const WINDOW_TO = "2026-09-01T00:00:00Z";
 const OBSERVED_AT = new Date("2026-08-20T12:00:00.000Z");
 
-function lineage(seq: number) {
+function lineage(seq: number, observedAt = OBSERVED_AT) {
   return {
-    observedAt: OBSERVED_AT,
+    observedAt,
     // 64 lowercase hex — the migrations CHECK the shape, so a readable
     // placeholder like `h000…` fails at the INSERT rather than in a review.
     contentHash: seq.toString(16).padStart(64, "0"),
@@ -193,7 +194,7 @@ beforeAll(async () => {
     createdAtPlatform: new Date("2026-08-05T00:00:00.000Z"),
     deletedAtPlatform: null,
     firstOrigin: "stats_agg",
-    ...lineage(seq++),
+    ...lineage(seq++, new Date("2026-08-19T12:00:00.000Z")),
   });
   // A second media with NO sale stats at all: `saleStats` was null on 83 of 85
   // live rows, so the null path is the common one and must not become zero.
@@ -219,7 +220,7 @@ beforeAll(async () => {
     createdAtPlatform: null,
     deletedAtPlatform: null,
     firstOrigin: "stats_agg",
-    ...lineage(seq++),
+    ...lineage(seq++, new Date("2026-08-21T12:00:00.000Z")),
   });
   for (const code of ["0", "1"]) {
     await upsertStatsTrafficBucket(db, {
@@ -247,6 +248,50 @@ beforeAll(async () => {
       ...lineage(seq++),
     });
   }
+
+  await upsertStatsTrafficBucket(db, {
+    pageId,
+    platform: "fansly",
+    subjectKind: "media_offer",
+    subjectRef: "media-2",
+    periodMs: 86_400_000,
+    bucketStart: new Date("2026-08-11T00:00:00.000Z"),
+    sourceCode: "0",
+    mappingVersion: 2,
+    views: 80,
+    previewViews: null,
+    uniqueViewers: null,
+    previewUniqueViewers: null,
+    videoViews: null,
+    previewVideoViews: null,
+    interactionTimeMs: null,
+    previewInteractionTimeMs: null,
+    videoPercentWatchedSum: null,
+    previewVideoPercentWatchedSum: null,
+    requestedStart: null,
+    requestedEnd: null,
+    ...lineage(seq++),
+  });
+
+  // An older ranking window must not be mixed into the current one. Its media
+  // is intentionally the newest catalogue head, so ordering and window
+  // selection are independently observable in the route tests below.
+  await upsertStatsTopMedia(db, {
+    pageId,
+    platform: "fansly",
+    plane: "top_fyp_media",
+    periodMs: 86_400_000,
+    requestedStart: new Date("2026-07-20T00:00:00.000Z"),
+    requestedEnd: new Date("2026-08-15T00:00:00.000Z"),
+    mediaOfferRef: "media-2",
+    bundleRef: null,
+    rank: 1,
+    views: 80,
+    previewViews: null,
+    interactionTimeMs: null,
+    previewInteractionTimeMs: null,
+    ...lineage(seq++),
+  });
 
   await upsertStatsTopMedia(db, {
     pageId,
@@ -317,7 +362,7 @@ beforeAll(async () => {
   await upsertCaptureCoverage(db, {
     pageId,
     platform: "fansly",
-    plane: "stats_snapshot",
+    plane: CAPTURE_COVERAGE_PLANES.statsAccountDaily,
     scopeRef: "account_profile",
     status: "window_captured",
     acquisitionMode: "retroactive",
@@ -725,6 +770,39 @@ describe("WP-S1 serving routes: media, tags and coverage", () => {
     expect(body.bucketsTruncated).toBe(true);
   });
 
+  it("starts from the newest catalogue heads and still unions the ranked media", async (context) => {
+    if (!requireServer(context)) return;
+    const response = await get(
+      `/api/v1/pages/${PAGE}/stats/media?from=${WINDOW_FROM}&to=${WINDOW_TO}&limit=1`,
+    );
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.media.map((row: { mediaOfferRef: string }) => row.mediaOfferRef)).toEqual([
+      "media-2",
+      "media-1",
+    ]);
+    expect(body.top.map((row: { mediaOfferRef: string }) => row.mediaOfferRef)).toEqual([
+      "media-1",
+    ]);
+  });
+
+  it("shares a tight bucket budget fairly between displayed media", async (context) => {
+    if (!requireServer(context)) return;
+    const response = await get(
+      `/api/v1/pages/${PAGE}/stats/media?from=${WINDOW_FROM}&to=${WINDOW_TO}`
+      + "&limit=2&bucketLimit=2",
+    );
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    const bucketCounts = new Map<string, number>(body.media.map((row: {
+      mediaOfferRef: string;
+      buckets: unknown[];
+    }) => [row.mediaOfferRef, row.buckets.length]));
+    expect(bucketCounts.get("media-1")).toBe(1);
+    expect(bucketCounts.get("media-2")).toBe(1);
+    expect(body.bucketsTruncated).toBe(true);
+  });
+
   it("never fabricates a tag name the join missed", async (context) => {
     if (!requireServer(context)) return;
     const response = await get(
@@ -750,7 +828,7 @@ describe("WP-S1 serving routes: media, tags and coverage", () => {
     const planes = new Map<string, { status: string; proof: string }>(
       body.planes.map((row: { plane: string }) => [row.plane, row]),
     );
-    expect(planes.get("stats_snapshot")!.status).toBe("window_captured");
+    expect(planes.get(CAPTURE_COVERAGE_PLANES.statsAccountDaily)!.status).toBe("window_captured");
     expect(planes.get("post_replies")!.proof).toBe("none");
 
     // Every Fansly lane reports its gate. The flags default OFF, so this page
@@ -771,7 +849,7 @@ describe("WP-S1 serving routes: media, tags and coverage", () => {
     const holdings = new Map<string, { rowCount: number }>(
       body.holdings.map((row: { projection: string }) => [row.projection, row]),
     );
-    expect(holdings.get("stats_traffic_buckets")!.rowCount).toBe(7);
+    expect(holdings.get("stats_traffic_buckets")!.rowCount).toBe(8);
     // The liker table is EMPTY on Fansly ([E4]) and the honest report of that is
     // a zero count, not a missing row.
     expect(holdings.get("post_likes")!.rowCount).toBe(0);

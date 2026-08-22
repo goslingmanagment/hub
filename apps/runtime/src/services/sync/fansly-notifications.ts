@@ -64,6 +64,7 @@ import {
 } from "@agency_hub_core/db";
 import { FanslyApiError } from "@agency_hub_core/fansly";
 import {
+  CAPTURE_COVERAGE_PLANES,
   FANSLY_NOTIFICATION_DECLARED_TYPE_CODES,
   FANSLY_NOTIFICATION_TYPE_GROUPS,
 } from "@agency_hub_core/shared";
@@ -118,19 +119,6 @@ const FORWARD_MAX_PAGES_PER_POLL = 20;
  *  the ceiling for a lane that is being re-queued aggressively. */
 const BACKFILL_CALLS_PER_CHUNK = 30;
 
-
-export const FANSLY_NOTIFICATIONS_COVERAGE_PLANES = {
-  /** The notification archive itself — walkable backwards, so RETROACTIVE. */
-  notifications: "notifications",
-  /**
-   * The liker facts. FORWARD_ONLY and `not_started`, and both halves are
-   * deliberate: a liker is announced once (nothing can retro-fetch one), and no
-   * Fansly like code is live-confirmed ([E4]), so `post_likes` stays EMPTY on
-   * this platform and the dashboard must say so rather than render an empty
-   * list as "nobody liked it".
-   */
-  postLikes: "post_likes",
-} as const;
 
 // ── cursor state ─────────────────────────────────────────────────────────────
 
@@ -642,7 +630,7 @@ export async function fanslyNotificationsChunk(
         filterRefusals: refusals,
       };
       await coverage(
-        FANSLY_NOTIFICATIONS_COVERAGE_PLANES.notifications,
+        CAPTURE_COVERAGE_PLANES.notifications,
         // Bounded by the PROVIDER's behaviour: the wide form is not served, so
         // whatever the narrow one omits is a gap we can name.
         "partial_provider_surface",
@@ -702,7 +690,7 @@ export async function fanslyNotificationsChunk(
       details: { before },
     });
     await coverage(
-      FANSLY_NOTIFICATIONS_COVERAGE_PLANES.notifications,
+      CAPTURE_COVERAGE_PLANES.notifications,
       "partial_provider_surface",
       "none",
       {
@@ -719,7 +707,7 @@ export async function fanslyNotificationsChunk(
   // a like code is live-confirmed ([E4]).
   if (!state.postLikesCoverageWritten) {
     await coverage(
-      FANSLY_NOTIFICATIONS_COVERAGE_PLANES.postLikes,
+      CAPTURE_COVERAGE_PLANES.postLikes,
       "not_started",
       "none",
       {
@@ -854,7 +842,7 @@ export async function fanslyNotificationsChunk(
         phase: state.backfill !== null && !state.backfill.done ? "backfill" : "forward",
       };
       await coverage(
-        FANSLY_NOTIFICATIONS_COVERAGE_PLANES.notifications,
+        CAPTURE_COVERAGE_PLANES.notifications,
         archiveStatus("window_captured"),
         "none",
         {
@@ -950,7 +938,7 @@ export async function fanslyNotificationsChunk(
         details: { before, phase: "backfill" },
       });
       await coverage(
-        FANSLY_NOTIFICATIONS_COVERAGE_PLANES.notifications,
+        CAPTURE_COVERAGE_PLANES.notifications,
         // Bounded by the PROVIDER, not by us and not by exhaustion.
         "partial_provider_surface",
         backfill.lastObservationId === null ? "none" : "terminal_response",
@@ -999,7 +987,7 @@ export async function fanslyNotificationsChunk(
       // the coverage row points at the observation rather than restating it.
       backfill.done = true;
       await coverage(
-        FANSLY_NOTIFICATIONS_COVERAGE_PLANES.notifications,
+        CAPTURE_COVERAGE_PLANES.notifications,
         // AN EMPTY PAGE MEANS DIFFERENT THINGS IN THE TWO FORMS, and conflating
         // them would be the worst claim this lane can make. Unfiltered, an
         // empty page is the archive's FLOOR. Through a narrowed type filter it
@@ -1029,7 +1017,7 @@ export async function fanslyNotificationsChunk(
     backfill.nextBeforeRef = bounds.oldest;
     state = { ...state, backfill };
     await coverage(
-      FANSLY_NOTIFICATIONS_COVERAGE_PLANES.notifications,
+      CAPTURE_COVERAGE_PLANES.notifications,
       archiveStatus("in_progress"),
       "none",
       {

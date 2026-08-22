@@ -5,12 +5,17 @@ import type {
   StatsMediaResponse,
   StatsTagsResponse,
 } from "@agency_hub_core/contracts";
+import { ANALYTICS_COVERAGE_PLANES } from "@agency_hub_core/shared";
 
 import { TrendSparkline } from "@/components/shared/TrendSparkline";
 import { formatMills } from "@/lib/format";
 
 import { AnalyticsEmpty, AnalyticsPanel } from "./AnalyticsPanel.js";
-import { coverageVerdict, type CoverageRow } from "./coverage.js";
+import {
+  coverageVerdict,
+  type AnalyticsCoverageWindow,
+  type CoverageRow,
+} from "./coverage.js";
 
 /** `—` rather than `0`: an unserved metric is not a measurement of nothing. */
 function metric(value: number | null): string {
@@ -26,23 +31,27 @@ function money(value: number | null): string {
  *
  * The ranking rows and the series come from the same response but are DIFFERENT
  * facts: `stats_top_media` is what the platform ranked over its window, and the
- * sparkline is what our own per-media buckets hold. A media in the ranking with
- * a flat sparkline has not lost its views — it has not been polled yet.
+ * sparkline is what our own per-media buckets hold. Missing series are labelled
+ * by what the response can actually prove; absence alone never means unpolled.
  */
 export function TopMediaPanel({
   data,
   coverage,
   isLoading,
+  selectedWindow,
 }: {
   data: StatsMediaResponse | undefined;
   coverage: readonly CoverageRow[] | undefined;
   isLoading: boolean;
+  selectedWindow: AnalyticsCoverageWindow;
 }) {
-  const verdict = coverageVerdict(coverage, "media_stats");
+  const verdict = coverageVerdict(coverage, ANALYTICS_COVERAGE_PLANES.topMedia, selectedWindow);
 
   const rows = useMemo(() => {
     const seriesByMedia = new Map<string, number[]>();
+    const mediaWithHeads = new Set<string>();
     for (const media of data?.media ?? []) {
+      mediaWithHeads.add(media.mediaOfferRef);
       const points = media.buckets
         .filter((bucket) => bucket.views !== null)
         .sort((left, right) => left.bucketStart.localeCompare(right.bucketStart))
@@ -52,6 +61,11 @@ export function TopMediaPanel({
     return (data?.top ?? []).slice(0, 15).map((entry) => ({
       ...entry,
       series: seriesByMedia.get(entry.mediaOfferRef) ?? [],
+      missingSeriesLabel: !mediaWithHeads.has(entry.mediaOfferRef)
+        ? "catalogue head unavailable"
+        : data?.bucketsTruncated === true
+          ? "series omitted by response limit"
+          : "no captured buckets in range",
     }));
   }, [data]);
 
@@ -61,8 +75,8 @@ export function TopMediaPanel({
       verdict={verdict}
       footnote={
         "Rank comes from the window Fansly itself ranked; the sparkline comes from our "
-        + "own per-media buckets. A flat sparkline beside a high rank means the media "
-        + "lane has not reached that item yet — the coverage panel says how often it can."
+        + "own per-media buckets. A missing series says whether its catalogue head is "
+        + "absent, the response budget truncated buckets, or no bucket exists in this range."
       }
     >
       {isLoading ? (
@@ -93,7 +107,7 @@ export function TopMediaPanel({
                   <td className="py-2 pl-4">
                     {row.series.length > 0
                       ? <TrendSparkline values={row.series} />
-                      : <span className="text-[11px] text-text-muted">not polled yet</span>}
+                      : <span className="text-[11px] text-text-muted">{row.missingSeriesLabel}</span>}
                   </td>
                 </tr>
               ))}
@@ -118,12 +132,14 @@ export function TopTagsPanel({
   data,
   coverage,
   isLoading,
+  selectedWindow,
 }: {
   data: StatsTagsResponse | undefined;
   coverage: readonly CoverageRow[] | undefined;
   isLoading: boolean;
+  selectedWindow: AnalyticsCoverageWindow;
 }) {
-  const verdict = coverageVerdict(coverage, "stats_snapshot");
+  const verdict = coverageVerdict(coverage, ANALYTICS_COVERAGE_PLANES.topTags, selectedWindow);
 
   const globalByTag = useMemo(() => {
     const map = new Map<string, { viewCount: number | null; postCount: number | null }>();
@@ -212,14 +228,20 @@ export function ContentPerformancePanel({
   coverage,
   isLoading,
   accountWatchPercent,
+  selectedWindow,
 }: {
   data: StatsMediaResponse | undefined;
   coverage: readonly CoverageRow[] | undefined;
   isLoading: boolean;
+  selectedWindow: AnalyticsCoverageWindow;
   /** Null whenever the account-level components were not both served. */
   accountWatchPercent: number | null;
 }) {
-  const verdict = coverageVerdict(coverage, "catalog");
+  const verdict = coverageVerdict(
+    coverage,
+    ANALYTICS_COVERAGE_PLANES.contentPerformance,
+    selectedWindow,
+  );
 
   const rows = useMemo(() => (data?.media ?? []).map((media) => {
     let views: number | null = null;
@@ -303,12 +325,14 @@ export function CommentsPanel({
   data,
   coverage,
   isLoading,
+  selectedWindow,
 }: {
   data: ContentCommentsResponse | undefined;
   coverage: readonly CoverageRow[] | undefined;
   isLoading: boolean;
+  selectedWindow: AnalyticsCoverageWindow;
 }) {
-  const verdict = coverageVerdict(coverage, "post_replies");
+  const verdict = coverageVerdict(coverage, ANALYTICS_COVERAGE_PLANES.comments, selectedWindow);
   const perPost = (data?.perPost ?? []).slice(0, 20);
 
   return (

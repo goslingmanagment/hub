@@ -73,6 +73,7 @@ import {
   sumCreatorVaultAlbumItemCounts,
 } from "@agency_hub_core/db";
 import { ACCOUNT_MEDIA_BATCH_SIZE, VAULT_MEDIA_HEAD_CURSOR } from "@agency_hub_core/fansly";
+import { CAPTURE_COVERAGE_PLANES } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
 import { loadEffectiveConfig } from "../effective-config.ts";
@@ -115,12 +116,6 @@ const OBSERVATION_KINDS = {
 
 /** The coverage planes this lane claims. One per capture surface, so a partial
  *  vault walk cannot make the tier capture look degraded and vice versa. */
-export const FANSLY_CATALOG_COVERAGE_PLANES = {
-  catalog: "catalog",
-  vaultMedia: "catalog_vault_media",
-  mediaHydration: "catalog_media_hydration",
-} as const;
-
 /**
  * Vault-walk pages in ONE dispatch before a jittered continuation.
  *
@@ -503,7 +498,7 @@ export async function fanslyCatalogChunk(
         // A step whose precondition is missing is SKIPPED, loudly. Guessing an
         // account ref would ask the platform about somebody else's vault.
         await coverage(
-          FANSLY_CATALOG_COVERAGE_PLANES.catalog,
+          CAPTURE_COVERAGE_PLANES.catalog,
           "partial_provider_surface",
           "none",
           {
@@ -520,7 +515,7 @@ export async function fanslyCatalogChunk(
       const persisted = await persist(step.kind, step.requestParams, response.raw);
       state = { ...state, fixedStepIndex: state.fixedStepIndex + 1 };
       await coverage(
-        FANSLY_CATALOG_COVERAGE_PLANES.catalog,
+        CAPTURE_COVERAGE_PLANES.catalog,
         // A full listing served in one call IS the provider's whole surface for
         // that kind — there is no deeper page to reach.
         "provider_exhausted",
@@ -612,7 +607,7 @@ export async function fanslyCatalogChunk(
         walk = { ...walk, done: true, completedAtLastItemRef: album.lastItemRef };
         state = { ...state, vaultWalk: { ...state.vaultWalk, [album.albumRef]: walk } };
         await coverage(
-          FANSLY_CATALOG_COVERAGE_PLANES.vaultMedia,
+          CAPTURE_COVERAGE_PLANES.catalogVaultMedia,
           "partial_provider_surface",
           "none",
           {
@@ -636,7 +631,7 @@ export async function fanslyCatalogChunk(
         walk = { ...walk, done: true, completedAtLastItemRef: album.lastItemRef };
         state = { ...state, vaultWalk: { ...state.vaultWalk, [album.albumRef]: walk } };
         await coverage(
-          FANSLY_CATALOG_COVERAGE_PLANES.vaultMedia,
+          CAPTURE_COVERAGE_PLANES.catalogVaultMedia,
           "partial_provider_surface",
           "none",
           {
@@ -701,7 +696,7 @@ export async function fanslyCatalogChunk(
             vaultWalk: { ...state.vaultWalk, [album.albumRef]: walk },
           };
           await coverage(
-            FANSLY_CATALOG_COVERAGE_PLANES.vaultMedia,
+            CAPTURE_COVERAGE_PLANES.catalogVaultMedia,
             "partial_provider_surface",
             "terminal_response",
             {
@@ -723,7 +718,7 @@ export async function fanslyCatalogChunk(
         walk = { ...walk, done: true, completedAtLastItemRef: album.lastItemRef };
         state = { ...state, vaultWalk: { ...state.vaultWalk, [album.albumRef]: walk } };
         await coverage(
-          FANSLY_CATALOG_COVERAGE_PLANES.vaultMedia,
+          CAPTURE_COVERAGE_PLANES.catalogVaultMedia,
           "provider_exhausted",
           "empty_window",
           {
@@ -751,7 +746,7 @@ export async function fanslyCatalogChunk(
         walk = { ...walk, done: true, sawRows: true, completedAtLastItemRef: album.lastItemRef };
         state = { ...state, vaultWalk: { ...state.vaultWalk, [album.albumRef]: walk } };
         await coverage(
-          FANSLY_CATALOG_COVERAGE_PLANES.vaultMedia,
+          CAPTURE_COVERAGE_PLANES.catalogVaultMedia,
           "partial_provider_surface",
           "terminal_response",
           {
@@ -768,7 +763,7 @@ export async function fanslyCatalogChunk(
       walk = { ...walk, sawRows: true, beforeRef: cursor };
       state = { ...state, vaultWalk: { ...state.vaultWalk, [album.albumRef]: walk } };
       await coverage(
-        FANSLY_CATALOG_COVERAGE_PLANES.vaultMedia,
+        CAPTURE_COVERAGE_PLANES.catalogVaultMedia,
         "in_progress",
         "none",
         {
@@ -867,7 +862,7 @@ export async function fanslyCatalogChunk(
 
   if (hydratedMedia > 0 || hydratedBundles > 0) {
     await coverage(
-      FANSLY_CATALOG_COVERAGE_PLANES.mediaHydration,
+      CAPTURE_COVERAGE_PLANES.catalogMediaHydration,
       "in_progress",
       "none",
       { reasonCode: "batch_hydration", cursor: { hydratedMedia, hydratedBundles } },

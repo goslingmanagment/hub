@@ -26,6 +26,8 @@ import {
 import { useDashboardShell } from "@/components/layout/DashboardShellContext.js";
 import { analyticsRange, resolveAnalyticsRange, type AnalyticsRange } from "@/lib/navigation";
 
+import { analyticsQueryState } from "./analytics-query-state.js";
+
 /**
  * WP-S1 — the Analytics page: everything F0–F7 and F4 captured, served.
  *
@@ -66,6 +68,21 @@ export function AnalyticsPage() {
   const coverage = useStatsCoverage(activeLabel, { enabled });
   const comments = useContentComments(activeLabel, window, { enabled });
   const revenue = useMoneyRevenueMix(activeLabel, window, { enabled });
+
+  const analyticsQueries = [
+    { label: "profile traffic", query: profileTraffic },
+    { label: "media traffic", query: mediaTraffic },
+    { label: "media", query: media },
+    { label: "tags", query: tags },
+    { label: "coverage", query: coverage },
+    { label: "comments", query: comments },
+    { label: "revenue", query: revenue },
+  ] as const;
+  const queryState = analyticsQueryState(analyticsQueries.map(({ label, query }) => ({
+    label,
+    isError: query.isError,
+    isSuccess: query.isSuccess,
+  })));
 
   const coverageRows = coverage.data?.planes;
   // The ONLY watch figure on this page, and it comes from account-level
@@ -127,11 +144,40 @@ export function AnalyticsPage() {
         </div>
       </header>
 
+      {queryState.state === "error" ? (
+        <div
+          role="alert"
+          className="rounded-xl border border-warning-dark/60 bg-card px-5 py-8 text-center"
+        >
+          <p className="text-[13px] font-medium text-text-primary">
+            Analytics could not be loaded.
+          </p>
+          <p className="mt-1 text-[12px] text-text-muted">
+            Failed: {queryState.failedLabels.join(", ")}. No empty chart is shown for a failed request.
+          </p>
+          <button
+            type="button"
+            onClick={() => {
+              for (const { query } of analyticsQueries) {
+                if (query.isError) void query.refetch();
+              }
+            }}
+            className="mt-3 rounded-md border border-border px-3 py-1.5 text-[12px] font-medium text-text-secondary hover:text-text-primary"
+          >
+            Retry failed requests
+          </button>
+        </div>
+      ) : queryState.state === "loading" ? (
+        <div className="rounded-xl border border-border bg-card px-4 py-12 text-center text-[13px] text-text-muted">
+          Loading analytics and capture coverage…
+        </div>
+      ) : (
       <div className="space-y-4">
         <TrafficBySourcePanel
           data={profileTraffic.data}
           coverage={coverageRows}
           isLoading={profileTraffic.isLoading}
+          selectedWindow={window}
           // A8: the Suggestions-denominator warning is a property of Fansly's
           // 30-DAY widget. On any other range there is nothing to reconcile,
           // and a permanent footnote is a footnote nobody reads.
@@ -141,27 +187,42 @@ export function AnalyticsPage() {
           data={mediaTraffic.data}
           coverage={coverageRows}
           isLoading={mediaTraffic.isLoading}
+          selectedWindow={window}
         />
-        <TopMediaPanel data={media.data} coverage={coverageRows} isLoading={media.isLoading} />
-        <TopTagsPanel data={tags.data} coverage={coverageRows} isLoading={tags.isLoading} />
+        <TopMediaPanel
+          data={media.data}
+          coverage={coverageRows}
+          isLoading={media.isLoading}
+          selectedWindow={window}
+        />
+        <TopTagsPanel
+          data={tags.data}
+          coverage={coverageRows}
+          isLoading={tags.isLoading}
+          selectedWindow={window}
+        />
         <RevenueMixPanel
           data={revenue.data}
           coverage={coverageRows}
           isLoading={revenue.isLoading}
+          selectedWindow={window}
         />
         <ContentPerformancePanel
           data={media.data}
           coverage={coverageRows}
           isLoading={media.isLoading}
           accountWatchPercent={watchPercent}
+          selectedWindow={window}
         />
         <CommentsPanel
           data={comments.data}
           coverage={coverageRows}
           isLoading={comments.isLoading}
+          selectedWindow={window}
         />
         <CoveragePanel data={coverage.data} isLoading={coverage.isLoading} />
       </div>
+      )}
     </div>
   );
 }
