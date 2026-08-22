@@ -52,7 +52,10 @@ import { runDmCorrectionsReconcile } from "./services/dm-corrections-reconciler.
 import { runOfapiDmReadthroughReconcile } from "./services/ofapi-dm-readthrough.ts";
 import { runOfapiCaptureMaterialization } from "./services/ofapi-capture-materialization.ts";
 import { runAiAcceptanceProjection } from "./services/projections/ai-acceptance.ts";
-import { runProjectionTick } from "./services/projections/registry.ts";
+import {
+  PROJECTION_TICK_BUDGET_MS,
+  runProjectionTick,
+} from "./services/projections/registry.ts";
 import { startDomainEventsSmokeConsumer } from "./services/domain-events-smoke.ts";
 import {
   runWorkboardFanRecompute,
@@ -409,7 +412,20 @@ export async function startWorkerServices(
     // Each entry stays isolated in its own try/catch inside runProjectionTick:
     // every projection owns its watermark, so a poison fact in one must stay
     // retryable without starving the neighbours sharing this pg-boss tick.
-    const outcomes = await runProjectionTick(app);
+    const startedAt = Date.now();
+    const tick = await runProjectionTick(app, {
+      // Defect 2026-08-22: isolation is not fairness. A full pass over the
+      // registry stopped fitting in pg-boss's 900s handler expiration once
+      // WP-F6's v6 drain and the F1..F7 families landed, so the job was killed
+      // mid-pass, restarted at the head and killed again — and the projections
+      // at the END of the registry never ran: `page_payout_requests` stayed
+      // empty with 91 payout.observed events already in the ledger. The budget
+      // ends a long tick BETWEEN projections, well short of the expiration, and
+      // the registry's rotation hands the projections this tick skipped the
+      // head of the next one.
+      maxDurationMs: PROJECTION_TICK_BUDGET_MS,
+    });
+    const outcomes = tick.outcomes;
 
     // [D1]'s NAMED TRIGGER (F1(0).4). The typed ledger read was deferred on the
     // argument that each projector reads only its delta since its own
@@ -428,6 +444,26 @@ export async function startWorkerServices(
             .map((outcome) => ({ projection: outcome.name, durationMs: outcome.durationMs })),
         },
         "Projection tick exceeded its duration budget — [D1] typed ledger read trigger",
+      );
+    }
+
+    if (tick.truncatedByBudget) {
+      // The starvation signal, and the sibling of the canonicalize sweep's
+      // budget warn. A tick that keeps truncating is a minute that no longer
+      // holds the registry, and the named projections are the ones paying for
+      // it. Warn, never a latch — nothing here is broken, every projection that
+      // ran advanced its watermark, and the next tick starts with the skipped
+      // ones. It does NOT replace the [D1] alert above: that one still fires on
+      // the time actually spent, just less often now that the tick has a lid.
+      app.logger.warn(
+        {
+          durationMs: Date.now() - startedAt,
+          budgetMs: PROJECTION_TICK_BUDGET_MS,
+          skippedProjections: tick.skippedProjections,
+          ran: outcomes.map((outcome) => outcome.name),
+        },
+        "Projection tick hit its wall-clock budget; projections skipped this tick take the "
+          + "head of the next one",
       );
     }
 

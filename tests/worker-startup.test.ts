@@ -151,6 +151,16 @@ const aiAcceptanceMocks = vi.hoisted(() => ({
   runAiAcceptanceProjection: vi.fn(),
 }));
 
+/**
+ * The tick itself (defect 2026-08-22), spied but DELEGATING to the real
+ * registry-driven implementation by default — the isolation test below still
+ * needs the real loop. Only the budget test overrides the return value, with
+ * `mockResolvedValueOnce`, to hand the handler a truncated tick.
+ */
+const projectionTickMocks = vi.hoisted(() => ({
+  runProjectionTick: vi.fn(),
+}));
+
 vi.mock("@agency_hub_core/db", () => dbMocks);
 vi.mock("../apps/runtime/src/bootstrap.ts", () => ({
   createAppContext: vi.fn(),
@@ -201,6 +211,14 @@ vi.mock(
 );
 vi.mock("../apps/runtime/src/services/projections/creator-posts.ts", () => creatorPostsMocks);
 vi.mock("../apps/runtime/src/services/projections/ai-acceptance.ts", () => aiAcceptanceMocks);
+// Spread the real registry and keep the real tick as the spy's implementation:
+// PROJECTION_REGISTRY and the rebuild entry points are imported elsewhere in
+// the graph, and the isolation pin below asserts on the real loop's behaviour.
+vi.mock("../apps/runtime/src/services/projections/registry.ts", async (importOriginal) => {
+  const original = await importOriginal<Record<string, unknown>>();
+  projectionTickMocks.runProjectionTick.mockImplementation(original.runProjectionTick as never);
+  return { ...original, runProjectionTick: projectionTickMocks.runProjectionTick };
+});
 vi.mock("../apps/runtime/src/services/ofapi-chargebacks-sync.ts", () => ({
   OFAPI_CHARGEBACKS_RECONCILE_QUEUE: "ofapi.chargebacks.reconcile",
   ensureOfapiChargebacksQueue: vi.fn(),
@@ -660,6 +678,81 @@ describe("worker startup", () => {
     // projectors above have merged this minute's material.
     expect(order).toEqual(["readthrough", "materialization", "corrections"]);
     expect(canonicalizeDriverMocks.runCanonicalization).toHaveBeenCalledTimes(1);
+
+    await runtime.shutdown();
+  });
+
+  // Defect 2026-08-22, the tick half. `runProjectionTick` awaited every
+  // registered projection in registry order with no clock, so once a pass
+  // outran pg-boss's 900s handler expiration the job was killed mid-pass and
+  // the projections at the END of the registry never ran at all —
+  // `page_payout_requests` stayed empty with 91 payout.observed events in the
+  // ledger. The handler now hands the tick a wall-clock budget.
+  it("hands the projection tick its wall-clock budget and warns when it truncates", async () => {
+    const app = {
+      db: {},
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      config: {
+        syncObservabilityRetentionDays: 30,
+        telegramEnabled: false,
+        telegramReportHourUtc: 9,
+      },
+      close: vi.fn(async () => {}),
+    };
+    const boss = {
+      start: vi.fn(async () => {}),
+      stop: vi.fn(async () => {}),
+      schedule: vi.fn(async () => {}),
+      work: vi.fn(async () => {}),
+      complete: vi.fn(),
+      fail: vi.fn(),
+      fetch: vi.fn(),
+      send: vi.fn(),
+      touch: vi.fn(),
+      updateQueue: vi.fn(async () => {}),
+      getQueue: vi.fn(async () => ({
+        name: "notifications.delivery-outbox.sweep",
+        policy: "exclusive",
+        expireInSeconds: 600,
+        heartbeatSeconds: 30,
+        retryLimit: 0,
+      })),
+    };
+    projectionTickMocks.runProjectionTick.mockClear();
+    projectionTickMocks.runProjectionTick.mockResolvedValueOnce({
+      outcomes: [
+        { name: "creator_posts", result: { upserted: 11_000 }, error: null, durationMs: 500_000 },
+      ],
+      truncatedByBudget: true,
+      skippedProjections: ["fansly_catalog", "fansly_comments", "fansly_payouts"],
+    });
+    aiAcceptanceMocks.runAiAcceptanceProjection.mockResolvedValue({ projected: 0 });
+
+    const runtime = await startWorkerServices(app as never, boss as never);
+    await expect(getMessageArchiveSweepHandler(boss)()).resolves.toBeUndefined();
+
+    // THE PIN: the minutely tick is budgeted, at ten minutes — under the 900s
+    // handler expiration that was killing it.
+    expect(projectionTickMocks.runProjectionTick).toHaveBeenCalledWith(app, {
+      maxDurationMs: 600_000,
+    });
+    // Starvation pressure is an operator-visible warn, naming who paid for it.
+    expect(app.logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        budgetMs: 600_000,
+        durationMs: expect.any(Number),
+        skippedProjections: ["fansly_catalog", "fansly_comments", "fansly_payouts"],
+      }),
+      expect.stringContaining("wall-clock budget"),
+    );
+    // …and the [D1] tick-duration alert is UNCHANGED: it still fires on the
+    // time actually spent by the projections that ran.
+    expect(app.logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ tickMs: 500_000, thresholdMs: 45_000 }),
+      expect.stringContaining("[D1] typed ledger read trigger"),
+    );
+    // The inline, non-registry consumer still runs after the tick.
+    expect(aiAcceptanceMocks.runAiAcceptanceProjection).toHaveBeenCalledTimes(1);
 
     await runtime.shutdown();
   });

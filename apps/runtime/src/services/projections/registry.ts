@@ -489,6 +489,99 @@ export interface ProjectionTickOutcome {
   durationMs: number;
 }
 
+export interface ProjectionTickResult {
+  /** One entry per projection that RAN this tick, in the order it ran. */
+  outcomes: ProjectionTickOutcome[];
+  /**
+   * The tick stopped early because `maxDurationMs` ran out. NOT a failure and
+   * not an error: every projection it did run advanced its own watermark, and
+   * the ones it never reached are named in `skippedProjections` and take the
+   * head of the next tick (see the rotation below). It IS starvation pressure,
+   * so the worker logs it at warn level.
+   */
+  truncatedByBudget: boolean;
+  /**
+   * The `name` of every projection that did not run AT ALL this tick because
+   * the budget was already gone when its turn came. The projection that was
+   * running when the budget expired is absent from this list — it ran to
+   * completion and advanced its watermark like any other.
+   */
+  skippedProjections: string[];
+}
+
+export interface ProjectionTickOptions {
+  /**
+   * Wall-clock budget for the WHOLE tick (defect 2026-08-22). Default: none —
+   * the CLI and any non-tick caller keep the unbudgeted, registry-ordered
+   * behaviour. The minutely sweep passes one, because pg-boss kills a handler
+   * that outruns the queue's expiration and a killed tick is strictly worse
+   * than a truncated one: it settles nothing extra and takes down whatever was
+   * scheduled after it.
+   *
+   * The budget is checked BETWEEN PROJECTIONS, never inside one. A projection
+   * that starts gets one whole `run()` call, which bounds itself by paging the
+   * ledger from its own watermark and committing per page — so a tick that
+   * ends here never abandons work mid-page and never rewinds a watermark.
+   */
+  maxDurationMs?: number;
+}
+
+/**
+ * Wall-clock budget the minutely projection tick passes `runProjectionTick`.
+ * Sibling of `CANONICALIZE_SWEEP_BUDGET_MS` rather than a shared constant: the
+ * two ride DIFFERENT queues, and one of them wanting a different minute must
+ * not silently retune the other. Ten minutes sits well under pg-boss's 900s
+ * default handler expiration for this queue — the queue keeps that default on
+ * purpose, so the budget is the thing that ends a long tick and the expiration
+ * stays the backstop. The gap leaves room for the projection in flight when the
+ * budget expires (the check is BETWEEN projections).
+ */
+export const PROJECTION_TICK_BUDGET_MS = 600_000;
+
+/**
+ * Where the NEXT budgeted tick starts its rotation — a projection `name`, or
+ * null for "the registry head" (defect 2026-08-22).
+ *
+ * Why rotate at all: with a wall-clock budget the registry order becomes a
+ * priority order, and the projections at the end of it (`fansly_catalog`,
+ * `fansly_comments`, `fansly_payouts` — the WP-F1..F7 additions) are exactly
+ * the ones that never got a turn while the tick was outrunning pg-boss's
+ * handler expiration: `page_payout_requests` sat empty with 91
+ * `payout.observed` events in the ledger. Each budgeted tick therefore resumes
+ * at the projection AFTER the one that ran the budget out, so every projection
+ * reaches the head within a few ticks.
+ *
+ * Module-level and in-memory, deliberately mirroring the canonicalize driver's
+ * sweep cursors: a worker restart costs one pass that starts at the head, and
+ * the DURABLE "where was I" state — each projection's own watermark — is
+ * untouched by rotation, so a projection resumes exactly where it stopped
+ * whenever its turn comes round.
+ *
+ * Rotation is safe because projections do not read each other's tables: each
+ * one consumes the ledger from its own watermark and writes only the tables it
+ * declares (the registry test pins that no two claim one event type, and that
+ * none of them touch operational state). Run order is scheduling here, never
+ * semantics.
+ */
+let tickRotationName: string | null = null;
+
+/** Test hook: start the next budgeted tick at the registry head. */
+export function resetProjectionTickRotation(): void {
+  tickRotationName = null;
+}
+
+function rotateProjections(
+  projections: readonly ProjectionDefinition[],
+): readonly ProjectionDefinition[] {
+  if (tickRotationName === null) {
+    return projections;
+  }
+  const start = projections.findIndex((projection) => projection.name === tickRotationName);
+  // A name that no longer resolves (registry edited between ticks) means
+  // "start at the head" — never "skip the tick".
+  return start <= 0 ? projections : [...projections.slice(start), ...projections.slice(0, start)];
+}
+
 /**
  * The minutely tick, table-driven.
  *
@@ -496,12 +589,43 @@ export interface ProjectionTickOutcome {
  * retryable without starving the neighbours that share this pg-boss handler —
  * which is why every entry is isolated in its own try/catch, exactly as the six
  * hand-written blocks this replaced were.
+ *
+ * Defect 2026-08-22: isolation was never the same thing as fairness. This loop
+ * awaited every projection to completion in registry order and had no clock, so
+ * once WP-F6's v6 drain and the F1..F7 families made a full pass longer than
+ * the queue's handler expiration, the tail of the registry never ran at all —
+ * pg-boss killed the handler mid-pass, the next tick started at the head, and
+ * it was killed again. `maxDurationMs` + the rotation above are that fix.
  */
 export async function runProjectionTick(
   app: Pick<AppContext, "db" | "logger">,
-): Promise<ProjectionTickOutcome[]> {
+  options: ProjectionTickOptions = {},
+): Promise<ProjectionTickResult> {
   const outcomes: ProjectionTickOutcome[] = [];
-  for (const projection of PROJECTION_REGISTRY) {
+  const deadlineAt = options.maxDurationMs !== undefined && options.maxDurationMs > 0
+    ? Date.now() + options.maxDurationMs
+    : null;
+  // Only a budgeted tick rotates. The CLI and any other caller keep registry
+  // order — they pass no budget, so there is nothing for a rotation to be fair
+  // about, and a rebuild/diagnostic run must stay deterministic.
+  const rotates = deadlineAt !== null;
+  const ordered = rotates ? rotateProjections(PROJECTION_REGISTRY) : PROJECTION_REGISTRY;
+  /** Index in `ordered` the NEXT tick should start at; null = a full pass. */
+  let nextStartIndex: number | null = null;
+  let truncatedByBudget = false;
+  let skippedProjections: string[] = [];
+  for (const [index, projection] of ordered.entries()) {
+    // Checked BETWEEN projections only. The head of `ordered` always runs: the
+    // deadline is taken from `Date.now()` at the top of this function, so it
+    // cannot already be spent when the first turn comes.
+    if (deadlineAt !== null && Date.now() >= deadlineAt) {
+      // The budget died in the PREVIOUS projection: this one and everything
+      // after it did not run at all, and this one heads the next tick.
+      truncatedByBudget = true;
+      skippedProjections = ordered.slice(index).map((skipped) => skipped.name);
+      nextStartIndex = index;
+      break;
+    }
     const startedAt = Date.now();
     try {
       const result = await projection.run(app);
@@ -523,5 +647,10 @@ export async function runProjectionTick(
       });
     }
   }
-  return outcomes;
+  if (rotates) {
+    // A completed pass clears the offset: the next tick starts at the head,
+    // exactly as every tick did before the budget existed.
+    tickRotationName = nextStartIndex === null ? null : ordered[nextStartIndex]!.name;
+  }
+  return { outcomes, truncatedByBudget, skippedProjections };
 }
