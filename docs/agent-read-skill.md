@@ -530,6 +530,114 @@ The wording boundary is literal: `summary.basis` is
 ровно X». This mode computes a windowless page transaction floor and needs no
 cursor; thread hydration has no bearing on it.
 
+### The Fansly statistics, catalogue and money datasets (endpoints-cover)
+
+Thirteen datasets landed with WP-S1, over what the F1–F7 and F4 capture lanes
+write. **All thirteen are Fansly-only.** On an OnlyFans page they answer empty
+forever, and `hub capabilities` says so per dataset — check `platforms` before
+you conclude anything from a zero.
+
+| dataset | what it answers | capabilities |
+|---|---|---|
+| `traffic_daily` | profile and account-media traffic per bucket, by raw source code | `read:datasets` |
+| `media_stats` | one media's buckets with its catalogue head and sale figures | `+ read:money` |
+| `top_media` | what Fansly ranked over a window | `read:datasets` |
+| `top_tags` | this page's top FYP tags per window | `read:datasets` |
+| `revenue_mix` | the platform's own daily earnings breakdown by type code | `+ read:money` |
+| `message_media_sales` | what was offered and bought in DMs | `+ read:money + read:messages` |
+| `comments` | reply bodies over the attempted back catalogue | `+ read:money + read:messages` |
+| `likes` | liker identity — **empty on Fansly**, see below | `read:datasets` |
+| `vault_media` | album ↔ media membership, both vaults | `read:datasets` |
+| `notifications` | every notification row, every code, verbatim | `read:datasets` |
+| `subscription_tiers` | one row per PLAN: the price truth, not the tier base | `+ read:money` |
+| `payouts` | payout requests with masked methods | `+ read:money` |
+| `capture_coverage` | how far back each plane reaches, as data | `read:datasets` |
+
+Two names moved. `purchase_history` is **gone from the catalog entirely** — it
+was never a dataset, only a sync-stream name with no serving table, and
+`message_media_sales` is what answers the question it stood for. `fan_earnings`
+is still planned and still has no serving projection.
+
+**The scope-pairing rule.** `message_media_sales` requires `read:messages` AND
+`read:money` together, and refusing one refuses the query. A row saying "this
+fan bought offer 3 of message X" discloses a conversation as much as a payment:
+a buyer identity, or a per-message sale count, IS a purchase disclosure, and
+there is no threshold below which it stops being one. `comments` rides the same
+capability for the ordinary reason — it hands over prose someone wrote.
+
+**Coverage first, and never read no-rows as zero.** Every one of these datasets
+declares the capture planes it reads, so `capture.planes[]` comes back populated
+and `captureFloor` is real. Before you report a number from any of them, read
+the floor; before you report an ABSENCE, read `capture_coverage` for the same
+page. These lanes are flag-gated and page-allowlisted, and the allowlists FAIL
+CLOSED (empty = no pages). A page that was never enabled holds nothing, and
+nothing is not zero:
+
+```
+hub dataset --page-label lora-1 --dataset capture_coverage \
+  --from 2026-01-01T00:00:00Z --to 2027-01-01T00:00:00Z \
+  --sort updatedAt:desc --limit 100
+```
+
+Read `status` in the `(status, acquisition_mode, proof)` vocabulary. Only
+`provider_exhausted` means "that is all there is". `window_captured` means one
+window was captured and the surface beyond it is unproven. `not_started` and a
+missing row are different again — the first is a lane that has never run, the
+second is nobody having claimed anything at all.
+
+**`likes` is empty on Fansly, on purpose.** No Fansly like code is
+live-confirmed, so the liker lane writes nothing and the catalog reports
+`captureState: not_captured`. The dataset exists so the hole has a name: an
+omitted dataset and an empty one are indistinguishable to a reader, and only one
+of them is honest. Never report "nobody liked this post".
+
+**Raw code + label + mapping version.** Every labelled enum on these datasets is
+served three ways, and the RAW CODE is the fact. `sourceCode='44011'` with
+`sourceLabel='suggestions_visits'` and `mappingVersion=2`; `typeCode=2010` with
+`typeLabel='media'`; `typeCode` on notifications with `typeLabel` and a
+`typeConfidence` of `confirmed` or `inferred`. Filter and group on the CODE.
+The label is this build's reading of it and has been wrong before — the shipped
+notification map was wrong on eight of sixteen codes, including both purchase
+events — and a label can change under you when the mapping version bumps.
+
+Two label traps worth naming:
+
+- **One revenue label, two live codes.** `media` is both `2010` (legacy) and
+  `2110` (current); the same is true of media sets, tips, locked text, stream
+  tickets, subscriptions and referrals, and this ledger reaches back to
+  2025-03-06. `typeEra` tells you which half you are holding. Grouping by
+  `typeLabel` merges the pair — which is what Fansly's own chart does; grouping
+  by `typeCode` keeps them apart. Pick deliberately.
+- **A traffic family has two members and they are not the same metric.** Member
+  1 (`measure: "visits"`) is the count the creator's widget shows and always
+  carries zero interaction time; member 0 (`measure: "dwell"`) carries the dwell
+  time with its OWN, differing view count. **Never sum them.** A code whose
+  `measure` is null is one this label version cannot name — it is served anyway
+  (A1) and must not be folded into a neighbouring family.
+
+**NET is served; GROSS is derived.** Fansly's `saleStats.total` is the
+creator's NET share after the platform's 20 % cut, and that is what
+`salesNetMills` holds, verbatim. `salesGrossMillsDerived` is computed at read
+time (`net / 0.8`) and its name says so. **Never add a net figure to a gross
+one** — not across `revenue_mix` (which stores both separately and never derives
+one from the other), not between `media_stats` and `transactions`, not anywhere.
+When you report a sale, say which basis you are reporting.
+
+**Per-media watch metrics do not exist.** The per-media statistics route serves
+seven stat keys and no video fields at all, for a video asset. `media_stats`
+therefore has no watch columns rather than always-null ones. The account-level
+media datapoints DO carry them, and any average built from those components is
+OURS: the platform serves no averages anywhere in this payload, so a figure of
+that shape was computed by this system and must be reported as such.
+
+**The dashboard's numbers will not match Fansly's own 30-day widget, and that is
+correct.** Fansly leaves the Suggestions visit code (`44011`) out of the
+denominator of its 30-day percentages; we count every raw source. The shares
+differ; neither is wrong; the raw codes are on every row so either can be
+reproduced. This applies to the 30-day view only — the last-24h comparison needs
+no adjustment. If someone asks why a number disagrees with the platform page,
+this is usually the answer, and the answer is an explanation, not a correction.
+
 ### Budgets and limits
 
 Your key has a daily request budget and a daily row budget, and at most two calls
