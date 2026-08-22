@@ -14,15 +14,25 @@
 // and their purchases stay.
 //
 // So: discover the fan-ref-shaped columns from `information_schema` at run
-// time and require each one to be either a fan-scope erasure target or an
-// explicitly justified allowlist entry. A new fan-ref column lands untargeted
-// ⇒ this fails at the PR that introduces it.
+// time and require each one to be either a declared fan-scope erasure target
+// (`FAN_REF_ERASURE_COLUMNS`, in the erasure module itself) or an explicitly
+// justified allowlist entry. A new fan-ref column lands untargeted ⇒ this fails
+// at the PR that introduces it.
+//
+// COLUMN-scoped, not table-scoped, and that is the whole point of the second
+// revision: erasure targets carry only a table name, so collapsing a column to
+// its table would let a NEW fan-ref column on an ALREADY-targeted table pass
+// while no predicate touches it. That is the same silent under-erasure in a
+// place the first version of this ratchet declared safe.
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { createFanslyPage, createModel } from "@agency_hub_core/db";
 
-import { planErasure } from "../apps/runtime/src/services/erasure/index.ts";
+import {
+  FAN_REF_ERASURE_COLUMNS,
+  planErasure,
+} from "../apps/runtime/src/services/erasure/index.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
@@ -54,9 +64,9 @@ const FAN_REF_COLUMN_PATTERNS = [
 ];
 
 /**
- * Columns whose table is NOT a fan-scope erasure target, each with the one line
- * that says why that is lawful. An entry here is a claim a reviewer can check —
- * "no fan reference survives here" — not a way to make the test go green.
+ * Columns that NO fan-scope erasure target reaches, each with the one line that
+ * says why that is lawful — or, where it is not, that says so out loud. An
+ * entry here is a claim a reviewer can check, not a way to make the test green.
  */
 const JUSTIFIED_NON_TARGETS = new Map<string, string>([
   [
@@ -69,12 +79,14 @@ const JUSTIFIED_NON_TARGETS = new Map<string, string>([
   ],
 ]);
 
-/** Erasure targets carry only a TABLE name, so the ratchet is table-scoped: a
- *  table in the plan is assumed to erase every fan ref it holds, which the
- *  per-table integration coverage in erasure.integration.test.ts checks. */
-function tableOf(column: string): string {
-  return column.slice(0, column.lastIndexOf("."));
-}
+/**
+ * The declaration under test, indexed. It is COLUMN-scoped on purpose: erasure
+ * targets carry only a table name, so collapsing a column to its table asks the
+ * wrong question — a NEW fan-ref column on an already-targeted table would pass
+ * a table-scoped check while no predicate touches it, which is the exact shape
+ * of a silent under-erasure.
+ */
+const DECLARED = new Map(FAN_REF_ERASURE_COLUMNS.map((entry) => [entry.column, entry]));
 
 describe("erasure column-shape ratchet (§9.3)", () => {
   it("targets every fan-ref-shaped column in the schema, or justifies the exception", async (context) => {
@@ -115,24 +127,57 @@ describe("erasure column-shape ratchet (§9.3)", () => {
       { db: testDb.db, pool: testDb.pool, config: {}, logger: {} } as never,
       { scopeType: "fan", platform: "fansly", fanRef: "fan-ratchet-probe" },
     );
-    const targeted = new Set(plan.targets.map((target) => target.target));
+    const hotTargets = plan.targets.filter((target) => target.plane === "hot");
+    const targetNames = new Set(hotTargets.map((target) => target.target));
 
-    const untargeted = discovered.filter((column) =>
-      !targeted.has(tableOf(column)) && !JUSTIFIED_NON_TARGETS.has(column)
+    // (1) Every discovered column is DECLARED (a named target reaches it) or
+    // JUSTIFIED (a written reason why nothing does). No third option.
+    const undeclared = discovered.filter((column) =>
+      !DECLARED.has(column) && !JUSTIFIED_NON_TARGETS.has(column)
     );
     expect(
-      untargeted,
-      "fan-ref columns with no erasure target and no justification — an unlisted table "
-        + "UNDER-ERASES SILENTLY",
+      undeclared,
+      "fan-ref columns that are neither a declared erasure target nor justified — an "
+        + "untargeted fan ref UNDER-ERASES SILENTLY (the run reports success and the rows "
+        + "stay). Add it to FAN_REF_ERASURE_COLUMNS with the predicate that reaches it, or "
+        + "to JUSTIFIED_NON_TARGETS with the reason nothing does",
     ).toEqual([]);
 
-    // Orphan check: a justification for a column that no longer exists, or for
-    // one that IS now targeted, is stale and must be deleted rather than left
-    // to make the list look more considered than it is.
+    // (2) Every declaration is honest about the plan it points at: the column
+    // exists, the target is one the fan-scope plan actually emits, and the
+    // stated REACH matches the target's action. A declaration naming a target
+    // that no longer exists would be a promise the plan stopped keeping.
+    expect(new Set(FAN_REF_ERASURE_COLUMNS.map((entry) => entry.column)).size)
+      .toBe(FAN_REF_ERASURE_COLUMNS.length);
+    for (const entry of FAN_REF_ERASURE_COLUMNS) {
+      expect(discovered, `${entry.column}: declared but not present in the schema`)
+        .toContain(entry.column);
+      expect(
+        targetNames.has(entry.target),
+        `${entry.column}: declared target "${entry.target}" is not in the fan-scope plan`,
+      ).toBe(true);
+      const actions = hotTargets.filter((target) => target.target === entry.target)
+        .map((target) => target.action);
+      if (entry.reach === "cascade") {
+        expect(actions, `${entry.column}: declared as cascade-reached`).toContain("cascade");
+      } else {
+        expect(
+          actions.some((action) => action !== "cascade"),
+          `${entry.column}: declared as predicate-reached, but "${entry.target}" is only a `
+            + "counted cascade target — no predicate names this column",
+        ).toBe(true);
+      }
+      expect(
+        JUSTIFIED_NON_TARGETS.has(entry.column),
+        `${entry.column}: declared AND justified — pick one`,
+      ).toBe(false);
+    }
+
+    // (3) Orphan check: a justification for a column that no longer exists, or
+    // for one that IS now declared, is stale and must be deleted rather than
+    // left to make the list look more considered than it is.
     for (const [column, justification] of JUSTIFIED_NON_TARGETS) {
       expect(discovered, `${column}: justified but not present in the schema`).toContain(column);
-      expect(targeted.has(tableOf(column)), `${column}: justified AND targeted — stale entry`)
-        .toBe(false);
       expect(justification.length, `${column}: justification too thin`).toBeGreaterThan(60);
     }
   });

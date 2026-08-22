@@ -616,6 +616,70 @@ async function execCount(tx: Db["db"], query: SQL): Promise<number> {
  * new table joined the fan graph without an erasure decision — fail loudly. */
 const FAN_FK_CURATED = new Set(["transactions", "page_dm_threads", "page_fan_identities", "fan_earnings_stats"]);
 
+/** How the fan-scope plan reaches a fan-ref column's row. */
+export type FanRefErasureReach =
+  /** A predicate in `fanHotTargets` matches THIS column by name. */
+  | "predicate"
+  /** No predicate names the column; the row dies with its parent through an
+   *  ON DELETE CASCADE the plan counts as its own target. */
+  | "cascade";
+
+export interface FanRefErasureColumn {
+  /** `table.column`, exactly as `information_schema.columns` reports it. */
+  column: string;
+  /** The `ErasureTarget.target` in the FAN-scope plan that reaches it. */
+  target: string;
+  reach: FanRefErasureReach;
+}
+
+/**
+ * §9.3 — the COLUMN-level census of fan references the fan-scope plan reaches.
+ *
+ * Erasure targets carry only a table name, so a table-scoped ratchet answers
+ * the wrong question: `media_orders` being in the plan says nothing about
+ * whether a NEW fan-ref column on `media_orders` is in any predicate. Under-
+ * erasure is silent by nature — the run reports success and the fan's rows
+ * stay — so the claim has to be made per column, where a reviewer can check it
+ * against the predicates a few dozen lines below.
+ *
+ * Every entry is a promise a reader can verify by opening `fanHotTargets`.
+ * `tests/erasure-fan-ref-columns.integration.test.ts` discovers the real
+ * columns from `information_schema` and requires each one to appear here (with
+ * a target the plan actually emits) or in that test's justified-exception list.
+ */
+export const FAN_REF_ERASURE_COLUMNS: readonly FanRefErasureColumn[] = [
+  // dmArchivePred: `fan_platform_user_id = ref or platform_conversation_id = ref
+  // or sender_platform_user_id = ref`.
+  { column: "dm_message_archive.fan_platform_user_id", target: "dm_message_archive", reach: "predicate" },
+  { column: "dm_message_archive.sender_platform_user_id", target: "dm_message_archive", reach: "predicate" },
+  // tipContextPred: `sender_platform_user_id = ref or receiver… or conversation…`.
+  {
+    column: "transaction_tip_contexts.sender_platform_user_id",
+    target: "transaction_tip_contexts",
+    reach: "predicate",
+  },
+  // creatorPostTipPred — the precedent this whole ratchet exists for: it had to
+  // be hand-added, and nothing would have noticed its absence.
+  {
+    column: "creator_post_tips.tip_sender_platform_user_id",
+    target: "creator_post_tips",
+    reach: "predicate",
+  },
+  // WP-F0(b) media plane (0130). Both are TEXT refs with no FK to `fans`.
+  { column: "media_orders.buyer_platform_user_id", target: "media_orders", reach: "predicate" },
+  {
+    column: "message_media_offers.fan_platform_user_id",
+    target: "message_media_offers",
+    reach: "predicate",
+  },
+  // No predicate names this column, and none should: a DM message is reachable
+  // only through its thread, and `page_dm_messages.conversation_id` FKs
+  // `page_dm_threads` ON DELETE CASCADE. The plan carries `page_dm_messages` as
+  // an explicit `action: "cascade"` target with its own row count, so the rows
+  // are erased and reported — just not by a predicate on this column.
+  { column: "page_dm_messages.sender_platform_user_id", target: "page_dm_messages", reach: "cascade" },
+];
+
 async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLineage): Promise<WorkTarget[]> {
   const ref = scope.fanRef!;
   const fanId = scope.fanId ?? -1;

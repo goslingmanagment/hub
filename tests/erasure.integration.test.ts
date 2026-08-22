@@ -1455,6 +1455,130 @@ describe("erasure drill (Stage 28 Task 4)", () => {
     expect(await count(`creator_post_tips where platform_tip_id = 'post-tip-other'`)).toBe(1);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
+  it("fan-scope erasure purges the fan's media_orders and message_media_offers rows; another fan's survive (0130 / §9.3)", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    // §9.3's second half. The column-shape ratchet proves the two WP-F0(b)
+    // tables are NAMED as fan-scope targets; naming is not erasing. Both carry
+    // a TEXT fan ref with NO foreign key to `fans`, so nothing but the explicit
+    // predicate reaches them, and a predicate that silently matches nothing
+    // looks exactly like a predicate that works: the run reports success and
+    // the fan's purchases stay. This drill deletes REAL rows.
+    const TARGET_BUYER = "770770770"; // partnerAccountId == fanRef
+    const TARGET_GROUP = "9101910191019"; // item.groupId (the conversation_ref)
+    const OTHER_BUYER = "660660660";
+    const OTHER_GROUP = "8202820282028";
+    const model = await createModel(testDb.db, {
+      slug: "erasure-media-plane",
+      name: "Erasure Media Plane",
+    });
+    const page = model
+      ? await createFanslyPage(testDb.db, { modelId: model.id, label: "erasure-media-plane-page" })
+      : undefined;
+    if (!page) {
+      throw new Error("Failed to seed media-plane fan erasure page");
+    }
+    const operator = await one<{ id: string }>(
+      `insert into users (username, role) values ('erasure-media-plane-owner', 'owner') returning id::text as id`,
+    );
+
+    // Fans + the per-fan page_dm_thread carrying the groupId↔partner linkage,
+    // which is what lets the offer predicate reach a group-keyed row (A49).
+    for (const [partner, group] of [[TARGET_BUYER, TARGET_GROUP], [OTHER_BUYER, OTHER_GROUP]] as const) {
+      await testDb.pool.query(
+        `insert into fans (platform, platform_user_id, username, display_name)
+         values ('fansly', $1, $1, $1)`,
+        [partner],
+      );
+      const fan = await one<{ id: string }>(
+        `select id::text as id from fans where platform = 'fansly' and platform_user_id = $1`,
+        [partner],
+      );
+      await testDb.pool.query(
+        `insert into page_dm_threads (platform_account_id, fan_id, platform_conversation_id, partner_platform_user_id)
+         values ($1, $2, $3, $4)`,
+        [page.id, Number(fan.id), group, partner],
+      );
+    }
+
+    const HASH = "e".repeat(64); // media_orders_content_hash_check
+    const seedOrder = async (mediaOfferRef: string, buyerRef: string) => {
+      await testDb!.pool.query(
+        `insert into media_orders (
+           page_id, platform, media_offer_ref, buyer_platform_user_id, occurred_at,
+           order_ref, bundle_ref, order_type, price_mills, conversation_ref, message_ref,
+           first_observed_at, last_observed_at, content_hash,
+           source_event_id, source_observation_id, source_account_seq
+         ) values ($1, 'fansly', $2, $3, now(), null, null, 1, 25000, null, null,
+                   now(), now(), $4, 4101, 4101, 4101)`,
+        [page.id, mediaOfferRef, buyerRef, HASH],
+      );
+    };
+    await seedOrder("media-order-target", TARGET_BUYER);
+    await seedOrder("media-order-other", OTHER_BUYER);
+
+    const seedOffer = async (
+      messageRef: string,
+      fanRef: string | null,
+      conversationRef: string,
+    ) => {
+      await testDb!.pool.query(
+        `insert into message_media_offers (
+           page_id, platform, message_ref, offer_ordinal, media_offer_ref, bundle_ref,
+           conversation_ref, fan_platform_user_id, message_created_at, offer_type,
+           mime_type, duration_ms, price_mills, purchase_state, order_ref,
+           first_observed_at, last_observed_at, content_hash,
+           source_event_id, source_observation_id, source_account_seq
+         ) values ($1, 'fansly', $2, 0, $2 || '-media', null,
+                   $3, $4, now(), 1, 'video/mp4', 1000, 25000, 'purchased', null,
+                   now(), now(), $5, 4102, 4102, 4102)`,
+        [page.id, messageRef, conversationRef, fanRef, HASH],
+      );
+    };
+    // Reached by the fan ref…
+    await seedOffer("offer-target-fan", TARGET_BUYER, TARGET_GROUP);
+    // …and, with fan_platform_user_id NULL, only by the resolved GROUP id — the
+    // A49 id-space split that a fanRef-only predicate would leave behind.
+    await seedOffer("offer-target-group", null, TARGET_GROUP);
+    await seedOffer("offer-other-fan", OTHER_BUYER, OTHER_GROUP);
+
+    expect(await count(`media_orders where page_id = ${page.id}`)).toBe(2);
+    expect(await count(`message_media_offers where page_id = ${page.id}`)).toBe(3);
+
+    const fanScope = { scopeType: "fan", platform: "fansly", fanRef: TARGET_BUYER } as const;
+    const plan = await planErasure(appStub(), fanScope);
+    expect(plan.targets.find((target) =>
+      target.plane === "hot" && target.target === "media_orders"
+    )).toMatchObject({ action: "delete", rows: 1 });
+    expect(plan.targets.find((target) =>
+      target.plane === "hot" && target.target === "message_media_offers"
+    )).toMatchObject({ action: "delete", rows: 2 });
+
+    const result = await executeErasure(
+      appStub(),
+      fanScope,
+      { initiatedBy: Number(operator.id) },
+    );
+    expect(result.executedCounts["hot:media_orders:delete"], "media_orders fan target").toBe(1);
+    expect(await count(`media_orders where media_offer_ref = 'media-order-target'`)).toBe(0);
+    expect(await count(`media_orders where media_offer_ref = 'media-order-other'`)).toBe(1);
+
+    expect(
+      result.executedCounts["hot:message_media_offers:delete"],
+      "message_media_offers fan target (fan-ref row + group-ref row)",
+    ).toBe(2);
+    expect(await count(`message_media_offers where message_ref = 'offer-target-fan'`)).toBe(0);
+    expect(await count(`message_media_offers where message_ref = 'offer-target-group'`)).toBe(0);
+    // The bystander fan's offer on the same page survives, untouched.
+    expect(await count(`message_media_offers where message_ref = 'offer-other-fan'`)).toBe(1);
+    expect(await count(
+      `message_media_offers where fan_platform_user_id = '${OTHER_BUYER}'`,
+    )).toBe(1);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
   it("page and model erasure purge sensitive tip projections by resolved page id", async (context) => {
     if (!testDb) {
       context.skip();
