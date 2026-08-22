@@ -15,7 +15,6 @@ import {
   createOnlyFansPage,
   deleteUnreferencedCapturePayloadObjects,
   putPayloadObject,
-  verifyCapturePayloadParity,
 } from "@agency_hub_core/db";
 
 import {
@@ -249,7 +248,7 @@ describe("erasure reaches the capture payload catalog (G5 slice 3b)", () => {
     ]);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("keeps — and never rewrites — a body a surviving envelope still references", async (context) => {
+  it("deletes a body after its matching raw capture converges too", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -258,36 +257,23 @@ describe("erasure reaches the capture payload catalog (G5 slice 3b)", () => {
 
     const subjectBody = fanBody(FAN_A, "tip incoming");
     const object = await storeObject(subjectBody);
-    // The observation carries the subject and dies with the erasure...
+    // Both envelope planes carry the subject. Fan erasure must converge both
+    // before the catalog sweep decides that the shared body is unreferenced.
     await seedObservation({ payload: subjectBody, ref: object });
-    // ...while the raw capture envelope does not: erasure has never deleted
-    // sync_raw_payloads rows, so this body still has a fact behind it.
-    await seedRawPayload({ payload: subjectBody, ref: object });
+    const rawPayloadId = await seedRawPayload({ payload: subjectBody, ref: object });
 
     const result = await executeErasure(appStub(), scope, { initiatedBy: ownerId });
-    expect(result.executedCounts["catalog:capture_payload_objects:delete"]).toBe(0);
+    expect(result.executedCounts["hot:sync_raw_payloads:delete"]).toBe(1);
+    expect(result.executedCounts["catalog:capture_payload_objects:delete"]).toBe(1);
 
-    expect(await objectExists(object.objectId)).toBe(true);
-    expect(await bodyExists(object.objectId)).toBe(true);
+    expect(await count("sync_raw_payloads where id = $1", [rawPayloadId])).toBe(0);
+    expect(await objectExists(object.objectId)).toBe(false);
+    expect(await bodyExists(object.objectId)).toBe(false);
 
     const journal = await erasureJournal();
     expect(journal.capturePayloadObjectsExamined).toBe(1);
-    expect(journal.capturePayloadObjectsErased).toBe(0);
-    expect(journal.capturePayloadObjectsKept).toBe(1);
-
-    // NOT REWRITTEN, and this is the assertion that proves it: the surviving
-    // envelope's inline body and its catalog copy still agree octet for octet.
-    // A subject-filtered rewrite would have made them disagree — i.e. paged the
-    // parity latch — which is why this slice does not do one.
-    const parity = await verifyCapturePayloadParity(testDb.db);
-    expect(parity.checked).toBe(1);
-    expect(parity.matched).toBe(1);
-    expect(parity.mismatched).toBe(0);
-    const stored = await one<{ body: { messages: Array<{ fromUser: { id: string } }> } }>(
-      `select body from capture_json_hot_bodies where bucket_month = $1::date and object_id = $2`,
-      [BUCKET_MONTH, object.objectId],
-    );
-    expect(stored!.body.messages[0]!.fromUser.id).toBe(FAN_A);
+    expect(journal.capturePayloadObjectsErased).toBe(1);
+    expect(journal.capturePayloadObjectsKept).toBe(0);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("inherits observation exclusivity: a shared observation's body survives with it", async (context) => {
