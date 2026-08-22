@@ -225,6 +225,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 221 | G5 slice 3c-2: the historical rewrite is a one-time lawful UPDATE, consumed by the reclaim that follows it | Four owner-gated CLI commands (`capture:backfill` / `verify-backfill` / `reclaim` / `drop-parked`), no schedule and no config flag, each dry-run by default and tombstoned in `capture_rewrite_runs` (0129, the `erasure_log` shape — a TABLE because verify must read what backfill concluded hours earlier, and `ops_metric_samples` is deadman-sensitive). THE UPDATE #215 and #218 both forbade is lawful HERE and only here: its bloat does not accumulate, it is CONSUMED — the reclaim copies the surviving tuples into a skinny relation and parks the old one, so the dead versions are exactly the pages that get dropped. A historical body is filed under ITS OWN capture month, never `now()` (0123's ref-closed-cohort law), so the backfill lazily creates the catalog partitions 0123 never made (prod starts 2026-07, 0123 starts 2026-08) and accepts two objects for a raw/observation pair straddling a UTC month boundary. The lane is `platform_capture` for every row and is NOT derived from `source`: `operator` would map to the `system` erasure domain, which #219 never gives a subject sweep, and narrowing erasure reach on a one-way pass over history is not a trade this slice may make. VERIFY PROVES RATHER THAN INFERS — each remaining null-ref row is re-canonicalized and must actually refuse (the backfill's stored count is a printed cross-check, never the authority), every reference is resolved by a TOTAL anti-join (the check the absent FK does not make), and bodies are compared as full canonical octets on a bounded random sample drawn by index probes rather than `order by random()`; it has no `--dry-run` because the verdict row IS its product. observations takes §9.1 whole in two invocable phases — a lock-free resumable skinny copy (inline null where a ref exists, KEPT where the codec refused) that pre-adds the partition-bound CHECK so ATTACH skips its scan and reconciles indexes against the source partition's real `pg_indexes` (0096/0126 are per-leaf), then ONE transaction that detaches, parks, renames the twin into the partition's name and attaches: THE SINGLE TRANSACTION IS THE CRASH PROOF, old-or-new, never neither. Superseded copies park in a NEW `capture_pending_drop` schema, not `tiered_pending_drop`, whose meaning would make the replay guards falsely refuse a live month — and the erasure is taught the new schema explicitly so no under-erasure window opens during grace. `sync_raw_payloads` takes §9.2's OTHER option (null-bodies then VACUUM FULL, writers proven down) because a rename swap would have to re-validate two inbound FKs inside the swap transaction, because its OWNED `bigserial` sequence moves with the table and would break the first capture after the swap, and because unpartitioned means the headroom ask is everything at once — the price, no grace window for that table, is stated rather than discovered. `capture:drop-parked` is the only destroyer, reaches nothing outside the parking schema by construction, and is pinned in `tests/retention-deleters.test.ts` with a STATEMENT-level licence because a `DROP TABLE` is invisible to that file's `delete from` grep. Refusals (current/future month, detached partition, stale-or-overtaken verdict, unconverged erasure, headroom) end the run before the phase body reads anything |
 | 222 | G5 review fix: a stamped reference outliving its object is a lost fact, and the two acts are now ordered | An external review found that #219's accepted race — a capture deduping onto an object the erasure sweep is about to delete — stopped being cosmetic the moment #220 let a row have NO inline body: the envelope then addressed a hole, past the 0128 CHECK (which only asks for a reference), past the deliberately absent FK (#215), and past a parity verifier that skips null-inline rows by design. THE FIX IS AN ORDER, NOT A NARROWER WINDOW: the sweep takes `FOR UPDATE` on its candidates in a statement of its OWN, BEFORE the `not exists` verdict, and every envelope writer holds `FOR KEY SHARE` on the object until the insert that stamps the reference COMMITS. Either the writer got there first — the sweep then waits and its verdict statement, taking a fresh READ COMMITTED snapshot after that wait, SEES the new envelope and keeps the body — or the sweep got there first and the writer's probe finds the object gone and writes the envelope with NO reference and its INLINE body, the pre-G5 shape of a capture, which is always readable. There is no third outcome, so the belt-and-braces alternatives were REJECTED: a two-pass sweep with a delay narrows a race that is now closed and cannot be sized (any bound is a guess about GC pauses) while doubling a break-glass act's fence hold; a durable claim row adds a write to the hottest path in the system plus a cleanup that could itself delete a live claim; the FK #215 rejected would work and every word of that rejection still holds, which is exactly why the ONE lock an FK would have taken is taken by hand instead — no DDL, no index (the catalog PK serves it), no history to validate, and only on a capture that carries a reference at all. IT APPLIES UNIFORMLY to pointer-only and dual-write: a dangling reference in the second case is not a lost fact but it is still a lie the verifier reports as `object_missing`, and one rule beats a special case. `lockCapturePayloadRefAlive` stays OFF the package barrel (pinned) because it is a lock, meaningless unless held to the insert's commit. A standing DANGLING-REFERENCE CENSUS over the head of both envelope tables now runs on EVERY hourly pass, canary or not, and pages under the existing `capture_payload_parity` kind with its own `dangling_reference` subKey (#213/#219's shape) — resolvable only by a zero count, with the measured window travelling in the report so a zero is never read as more than it is; the seam counts `refVanished` and owns no alarm (#217). SECOND FINDING, the swap: `capture:reclaim --phase swap` read its erasure preconditions and its row counts OUTSIDE the transaction, so an erasure committing while the swap waited for locks would park a post-erasure source and attach a PRE-erasure shadow — resurrection through the door the G3 fence does not watch. The transaction now takes its locks EXPLICITLY and FIRST (`LOCK TABLE ONLY observations`, then source, then shadow — `ONLY` so it does not stop every other month) and re-proves everything after them: erasure quiet, both partitions in the state they were in, and source/shadow counts equal. THE RECOUNT AND THE ERASURE PROBE DO NOT SUBSUME EACH OTHER — a committed erasure shows up as a count mismatch (nothing writes into a closed month, so the counts cannot drift back into agreement), an UNCOMMITTED one is invisible to any count and only the mid-flight tombstone and the held fence lock catch it. A `statement_timeout` bounds the recount so a pathological count aborts the swap instead of freezing capture under ACCESS EXCLUSIVE, and a refusal under lock settles the run as `refused` (nothing touched), never as a crash. AMENDS #219: its stated residual — "the worst outcome is a dangling reference the parity verifier reports, never a lost fact" — was true when written and became false at #220; it is superseded by this entry and the sentence is corrected in place in the code that carried it |
 | 223 | G5 review fix: the reclaim's four missing gates — a typed column nobody could fill, an unreadable body that read as an empty one, a headroom law behind the growth it governs, and a ritual its own gate refused | A second external review of the G5 line found four defects, each an act performed in the wrong ORDER relative to the thing that was supposed to gate it. **(1) THE COHORT WITH NO POPULATION PATH.** Slice 1 (#215) started stamping references; slice 3a (#218) added the typed columns three deployments later and put their only population inside the reference-stamping UPDATE — so every row captured BETWEEN those deployments carries a reference, NULL typed columns, and is excluded by construction from the one scan that would fill them (`payload_object_id is null`). `--phase null-bodies` then removes the inline body every `CAS-INLINE-FALLBACK:` arm was reading through, and for a Fansly `dm_messages` row the tip-context reader's `coalesce(response_tips, CASE …)` hands back the nulled column itself: the replay records an INVALID sidecar for a message that had a perfectly good one — a WRONG fact, not a missing one, which is the worse of the two. `capture:backfill` gains a SECOND scan whose predicate is a SQL mirror of the derivation (`jsonb_typeof` in the scalar set for the harvest members, `= 'object'` for the tips slice, which is exact), so a filled row stops matching and the pass resumes with no cursor like the first one; the count rides the census's existing single scan, and `capture:reclaim` refuses `shadow` and `null-bodies` while any row would still be filled. The gate PROVES rather than counts — the SQL mirror can say `number` for a literal `JSON.parse` turns into `Infinity`, and a refusal built out of a value nobody can change would be permanent — so a non-zero count is walked and re-derived in the same TypeScript the capture path runs, bounded exactly as the codec-refusal rescan is. **(2) A CATALOG FAILURE THAT BECAME A PARSED FACT.** #220 let a row have NO inline body; #217's seam answered a failed catalog read for such a row with the inline value it was holding, which is `null` — the same answer it gives for "this envelope captured no body". A transient blip therefore became permanent: four of six canonicalizer families have no `canParse` gate, so zero events fell straight through to `markObservationParsed`; the A22 re-journal hashed `null` and inserted it under a DETERMINISTIC idempotency key, blocking its own repair forever; the OFAPI materializer and the readthrough sweep stamped their own versions; the agent plane told the owner the payload was withheld for its RESTRICTION CLASS. The seam now RAISES `CapturePayloadUnavailableError` for that one case — a sentinel would have to be checked and the whole finding is that nobody checked, while an exception's default behaviour at an unaudited site is loud. All twelve migrated read sites were audited and each is now propagate / catch-and-count / explicit 503, with the audit written into the seam's header as the call-site registry #217 never left. The canonicalize driver counts `skippedUnavailable` APART from `skippedUnparseable` because unparseable is permanent and unavailable is transient, and the number that would otherwise grow is the one an operator reads as "we need a new parser". Two bugs fell out of the audit and are fixed here: the expired-interactive-response recovery passed the UNRESOLVED row to materialization (which stamps `parse_version` when it cannot parse — so a pointer-only row was consumed unread), and the coverage-revoke idempotency proof read an unreadable prior body as somebody else's proof and answered 409. **(3) THE LAW BEHIND THE GROWTH IT GOVERNS.** `capture:backfill` writes a catalog copy of every body it walks plus a heap tuple per stamped row with NO admission check at all; observation headroom was first asked at `shadow` and raw headroom only AFTER `null-bodies` — i.e. after the UPDATEs that only make the relation bigger. The backfill gains a §9.1-shaped pre-flight (the bodies still to copy, the same again for WAL, and a 5 GiB floor it will not touch) and re-checks the floor every 10 batches, stopping the walk where it stands; the raw headroom check moves BEFORE `null-bodies`. `--assume-free-bytes` was a DRILL that an executed run could pass to the real gate — the tombstone recorded the bypass and did not prevent it — so the CLI now rejects it together with `--execute`, before the app context exists. **(4) THE RITUAL ITS OWN GATE REFUSED.** `checkWritersStopped` refuses on ANY heartbeating instance while the runbook stopped only `worker` and `scheduler`, so the raw phases could never pass. The review expected the check to be too broad; the audit found the opposite — THE API IS A CAPTURE WRITER, on more paths than any other role (`recordAudit` journals an observation on every audited admin mutation, `/api/v1/ingest/observations` is the clients' own capture lane, the webhook receiver and the read gateway write their own, and `POST /api/v1/admin/pages/:pageLabel/verify` writes `sync_raw_payloads` itself through `refreshPageMetadata`). So the check stays maximally broad (a role allowlist would go stale silently, and the failure mode of a stale allowlist is a rewrite under a live writer) and the RUNBOOK is fixed: it stops `api` too, with the production compose-file selector it was missing, and states the cost — the dashboard, both clients and every AI generation are down for R2+R3, which `VACUUM FULL`'s ACCESS EXCLUSIVE was going to impose anyway |
+| 224 | Fansly capture widening + the DM media plane (WP-F0) | The Fansly conversation/follower capture stops being a 4-of-25-field stub: `aggregationData.accounts[]` is journaled through a NAMED 18-FIELD ALLOWLIST ([A20]) — `followsYou/following/subscriber/subscriberSubscription/subscriberAutoRenew/notes/containingLists/profileAccess/profileAccessFlags/profileFlags/permissions/statusId/flags/userFlags` on top of `id/username/displayName/createdAt` — while the eight VOLATILE fields (`lastSeenAt`, `followCount`, `subscriberCount`, `postLikes`, `accountMediaLikes`, `timelineStats`, `streaming`, `version`) are never captured, because they change on nearly every response and would destroy the ~11:1 content-address dedup collapse measured on production. That collapse is the whole reason the byte-ceiling mechanism could be DELETED with the ruling: there is no `fanslyUntrimmedCaptureByteCeilingPerDay` key, no lane deferral, and a test pins that nothing in the capture path can defer `dm_conversations` on a byte budget — a storage guard that can stop live chatter work is a worse risk than the runaway it hedged. **The conversation ROWS were never trimmed at all**: `data[]` carries exactly nine fields and the trim keeps all nine, verified by a BYTE-IDENTITY pin on a new verbatim-shaped fixture, because this plan, its v1 and every review pass believed the trim destroyed DM previews, attachments and tips that were never on the route. `groups[].lastMessage` KEEPS its redaction (a duplicate of the verbatim `dm_messages` journal), which is what keeps the agent-read scrub's justification true. **Three new mechanisms.** (1) §3.2a MIXED APPEND: `appendMixedDomainEvents` lets ONE family emit deliverable news and projection-only material for the same observation — deliverables first, then the hidden block, then a checkpoint whose `hiddenCount` counts hidden rows APPENDED (not batch size), because the v2 replay validator requires the row immediately after a seq gap to be the checkpoint covering it. (2) sync-pull v5 parses the DM sale sidecars into four projection-only types (`message.attachments_observed`, `media.observed`, `media.order_observed`, `message.material_observed`) feeding the four rebuildable tables of migration 0130; money is mills, `saleStats.total` is NET (A12), and a sparse `saleStats` is NULL, never 0. `message.ppv_unlocked` keeps running beside `media.order_observed` — two identities for one purchase, never summed, collapsing to ONE `media_orders` row. **A17-4 VARIANT B: `message_archive` gains NO columns** — purchase state is served by joining `message_media_offers` on `(page_id, message_ref)`, so the shadow-rebuild set-equality gate is untouched. (3) §3.2c(ii) the APPEND-side partition census, wired into `runCanonicalization` and not into a command, because that one engine backs both the minutely sweep and the `events:replay` drain: a provider-dated draft aimed at a 2026–2030 month with no ATTACHED partition is REFUSED before any write, the observation keeps its parse debt, and the run reports `partitionBlocked` (a SKIPPED step) with ONE anomaly per (family, month) naming detached-vs-absent and their DIFFERENT recoveries — creating a "missing" partition when the census says detached orphans the facts the detached table holds. Health-floor gauges gain the family LANE (`obs_backlog_<source>_<lane>_v<version>`) because at v5 `sync-pull` and `posts` would have written two different backlogs under one metric name, and the golden-signal threshold map is built with `Object.fromEntries`, where a duplicate key collapses silently. **Two permanent ratchets:** every written `observations.kind` must be claimed by a family, a registered off-sweep claimant or a justified allowlist entry (seeded from a census of the tree, which found five OF capture kinds and one unregistered off-sweep claimant nobody had listed), and every fan-ref-shaped column discovered from `information_schema` must be a fan-scope erasure target or carry a written justification — the FK guard is structurally blind to TEXT platform refs, which is why `tip_sender_platform_user_id` had to be hand-added. The typed write seam ([S2]) is DEFERRED (A28-7): the guarantee is a CI-enforced registry, NOT "structurally impossible". **REPLAY CANNOT RECOVER WHAT WAS NEVER JOURNALED** — pre-fix history stays trimmed, stated through the existing `captureFloor` mechanism (#197); there is no repair re-walk, and the v5 bump re-parses only what the journal already holds |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -8145,3 +8146,182 @@ make the typed-column catch-up run automatically anywhere: it is part of
 `capture:backfill`, which has no schedule and no flag, because a pass that
 rewrites heap tuples on the largest tables in the system runs with someone
 watching (#221).
+
+---
+
+**Decision #224 (2026-08-22, endpoints-cover WP-F0: the Fansly capture stops
+discarding fan state, the DM sale sidecars become a plane, and three gaps that
+had survived every review pass get mechanisms):**
+
+**THE CORRECTION THAT CAME FIRST, because it inverts what everyone believed.**
+This plan, its v1, and every review pass asserted that
+`trimFanslyMessagingGroupsPayload` destroys `lastMessage` content, attachments
+and tips on the conversation rows. Re-verified against a live capture: **there
+is no `lastMessage` object on a conversation row.** Fansly serves exactly nine
+fields per row — `account_id, groupId, partnerAccountId, partnerUsername, flags,
+unreadCount, subscriptionTierId, lastMessageId, lastUnreadMessageId` — and the
+trim keeps all nine. For `data[]` the function is an IDENTITY REWRITE and always
+was. A byte-identity pin on a NEW verbatim-shaped fixture holds that, because
+the belief is the kind that gets re-invented: the committed
+`messaging_groups.json` is already trimmed-shaped and would pass the assertion
+vacuously.
+
+**THE LOSS THAT WAS REAL: `aggregationData.accounts[]`, 4 of ~25 fields kept.**
+That is exactly the fan-evaluation material this initiative exists to capture —
+does the fan follow back, what is their subscription and auto-renew state, our
+notes, our lists, what access they hold, whether the account is alive. It is
+repaired as a NAMED ALLOWLIST of 18 fields, not as a removal, and the eight
+rejected fields are named as loudly as the accepted ones: `lastSeenAt`,
+`followCount`, `subscriberCount`, `postLikes`, `accountMediaLikes`,
+`timelineStats`, `streaming`, `version`. They change on nearly every response.
+Capturing them would make every body unique and destroy the ~11:1 dedup collapse
+measured on production — and THAT collapse is the entire reason the byte-ceiling
+mechanism could be deleted rather than tuned. The deletion is pinned negatively:
+no `fanslyUntrimmedCaptureByteCeilingPerDay` key exists, and nothing in the
+capture path can defer a lane on `response_body_bytes`, which survives as pure
+instrumentation. A storage guard able to stop live chatter work is a worse risk
+than the runaway it hedges.
+
+`lastSeenAt` was contested and rejected explicitly. It is genuinely useful to
+chatters and genuinely destructive to dedup. If it is ever wanted it arrives as
+its own "fan was online at T" fact, never inside a conversation body.
+
+**MECHANISM 1 — THE MIXED APPEND (§3.2a), the one genuinely new protocol here.**
+One `dm_messages` observation must now yield deliverable news AND projection-only
+commerce material. No legal path existed: the projection-only append throws on
+the first deliverable type, and a plain deliverable append passes no checkpoint,
+so the hidden rows take account_seq values nothing covers and
+`validateV2DeliverableReplayBatch` reads the gap as a ledger hole and refuses the
+whole batch — every SSE client stuck at that cursor. `appendMixedDomainEvents`
+requires a checkpoint whenever the batch carries a projection-only type, and the
+ORDER inside the single account-seq transaction is load-bearing: deliverables in
+caller order, then the hidden block, then the checkpoint. A deliverable row
+interleaved between hidden rows splits the gap in two and the batch is refused.
+`hiddenCount` counts hidden rows ACTUALLY APPENDED, dedup hits excluded — which
+is identical to the old value on the pure projection-only path, so that path is
+unchanged by construction rather than by inspection.
+
+**MECHANISM 2 — sync-pull v5 and the media plane.** The journaled DM and
+purchase-history responses have always carried `attachments[]`, `accountMedia[]`
+with `permissions.permissionFlags[].price`, `saleStats`, `accountMediaBundles[]`
+and `accountMediaOrders[]`. v4 read the order rows alone. v5 reads the rest and
+emits four projection-only types into migration 0130's four rebuildable tables.
+Three rules those tables obey, each because breaking it has a named cost: NO
+URLs, locations or variants ever (the payload carries signed CDN addresses; they
+stay raw-journal-only); NO queue columns (refresh scheduling is capture-plane
+operational state, and this table is truncated by `projection:rebuild`); money is
+mills and NULL-or-non-negative, where a sparse `saleStats` means "the platform
+did not serve this", never zero.
+
+`message.ppv_unlocked` keeps running unchanged beside `media.order_observed`.
+They describe the SAME purchase from two identities — fan-purchase and
+order-identity — and are never summed. An inline DM order row and a
+`purchase_history` row for one purchase mint the same composite key and collapse
+to ONE `media_orders` row, because the live order shape carries no order id at
+all; `order_ref` stays nullable until a response is observed supplying one, and
+only then, versioned, may it become the key.
+
+**Purchase state is a JOIN, not a column (A17-4, variant B).** An earlier draft
+added `purchase_state` / `purchased_at` / `purchase_ref` to `message_archive`.
+The media-plane event types are not in `MESSAGE_EVENT_TYPES`, so the
+shadow-rebuild set-equality gate would either fail or be weakened into a future
+purchase-state wipe. Instead the archive gains Fansly coverage through the
+channel it ALREADY understands — `message.material_observed`, filling the
+existing material head, media list and `price_mills` — and purchase state is
+served by joining `message_media_offers` on `(page_id, message_ref)`. The
+archive's column set is pinned from `information_schema` so re-adding those three
+columns fails a test rather than a rebuild.
+
+**MECHANISM 3 — THE APPEND-SIDE PARTITION CENSUS (§3.2c(ii)), the gap two
+earlier passes left live.** `domain_events` is monthly-partitioned by
+`occurred_at`, and two lanes are deliberately provider-dated:
+`message.material_observed` (the archive's `occurred_at` IS the message time) and
+`post.observed`. A v5 bump drains months of DM history through the first of them.
+An append whose target month has no ATTACHED partition fails
+`ExecFindPartition` (23514) **per row, forever** — the observation is never
+stamped, so every subsequent sweep retries it. The pre-existing account-row
+preflight cannot see two of the three failure shapes: an EMPTY detached partition
+hides no rows, and an ABSENT partition involves no detachment at all
+(`ensureDomainEventPartitions` creates the current month + 3; no historical month
+is ever auto-created — that is construction, not forgetfulness, and no runbook
+line a human remembers prevents it).
+
+The gate lives in `runCanonicalization`, NOT in a command. That one engine backs
+both the ordinary minutely sweep and the `events:replay` drain, and a CLI-only
+gate would leave the steady-state sweep that re-reads history after a version
+bump completely unguarded. Refusal semantics are deliberate: the observation is
+NOT stamped (its parse debt must survive the recovery), the run reports a typed
+`partitionBlocked` count distinct from `errored`, and the driver raises ONE
+anomaly per (family, target month) instead of one error per row — a blocked drain
+is thousands of rows, and thousands of identical log lines are how an operator
+stops reading them. **A run reporting `partitionBlocked > 0` is a SKIPPED step,
+not a passed one.**
+
+The check is scoped, and the scoping is pinned so nobody re-generalises it: it
+name-matches `domain_events_YYYY_MM` for **2026–2030 only** and passes everything
+else through. Every other regime is covered by construction —
+`domain_events_pre_2024` spans MINVALUE → 2024-01-01, `_2024` and `_2025` are
+YEARLY partitions migration 0077 named so tiering cannot re-detach them, and the
+0082 catch-all covers 2031+. What the mechanism does NOT need to distinguish, the
+OPERATOR does: the anomaly reports **detached** vs **absent** because the
+recoveries differ, and using the absent recovery on a detached month (creating a
+"missing" partition) orphans the facts the detached table holds. Both recoveries,
+and the three things never to do, are in
+`docs/runbooks/domain-event-partitions.md`.
+
+**THE GAUGE RENAME, which had to ship in the same change.** `healthFloorName`
+was `obs_backlog_${source}_v${version}`. The moment sync-pull reached v5 it
+collided with the `posts` family's existing `obs_backlog_pull_v5` — two different
+backlogs written under one metric name every tick, and the golden-signal
+threshold map is built with `Object.fromEntries`, where a duplicate key collapses
+silently to whichever came last. Every family now declares a stable, version-
+INDEPENDENT `lane`, and the name is `obs_backlog_${source}_${lane}_v${version}`.
+The consequence is stated rather than discovered: every existing series ends at
+the rename and a new one starts. Ops metric samples are plain strings — nothing
+migrates and nothing breaks.
+
+**TWO PERMANENT RATCHETS.** (i) `WRITTEN_OBSERVATION_KINDS` +
+`tests/observation-kind-coverage.test.ts`: every kind this tree journals must be
+claimed by a canonicalizer family, by a REGISTERED off-sweep claimant, by a
+justified dynamic rule, or by an allowlist entry carrying its reason — and no
+allowlist entry may be orphaned in either direction. It is seeded from a census
+of the tree rather than from a list, which is how it found five OF capture kinds
+nobody had enumerated and one off-sweep claimant (the capture materializer) that
+had never been registered. The census half greps the write seams line-wise, so
+BL-C3's own writer — `endpoint: cond ? "link_stats_tracking" : "link_stats_trial"`
+— is caught, and it pins the set of files that call `insertObservation` directly
+so a new writer must come through the registry. (ii) an integration ratchet that
+discovers fan-ref-shaped columns from `information_schema` and requires each to
+be a fan-scope erasure target or justified: the erasure module's only automatic
+guard enumerates non-cascade FKs to `fans`, and every fan reference this
+initiative adds is a TEXT platform ref with no FK — structurally invisible to it.
+The precedent is not hypothetical: `tip_sender_platform_user_id` had to be
+hand-added. An unlisted table UNDER-ERASES SILENTLY.
+
+**THE GUARANTEE, STATED HONESTLY.** The typed write seam ([S2] — making
+`RawPayloadInsertRow.endpoint` a registry-derived union) is DEFERRED by owner
+ruling. So ratchet (i) is a CI-enforced registry, **not** "structurally
+impossible": a string literal at an untyped seam is caught at PR time by a test,
+not by `tsc`. The caveat that keeps that honest: BL-C3 survived intact because
+link-stats had a direct projection-write path, and every family this initiative
+adds is `projectionOnly` and canonicalizer-fed with no such fallback — so the
+same mistake on a new kind shows up as an EMPTY projection, not a redundant one,
+until the kind is claimed and replayed. Recovery stays complete; the gap is
+simply visible as missing data.
+
+**AND THE LIMIT ON ALL OF IT: REPLAY CANNOT RECOVER WHAT WAS NEVER JOURNALED.**
+The widened capture applies forward only. Pre-fix history stays trimmed, stated
+through the existing `captureFloor` mechanism (#197), and there is no repair
+re-walk — a re-walk would knock on Fansly for data we chose not to keep, and the
+fan fields it would return are today's values, not the ones that were true then.
+The v5 bump re-parses only what the journal already holds. The G5 CAS /
+pointer-only machinery is untouched: only the payload handed to
+`persistRawPayload` changes.
+
+**WHAT WAS DELIBERATELY NOT BUILT** (each deleted by an owner ruling, and named
+so it is not re-grown by accident): the §3.5 per-egress-key daily counter,
+`sync_rate_limit_days`, the 2×-of-norm ops signal and the boot/PATCH limiter
+invariants (the report they existed for is one query against
+`sync_http_attempts`); the byte ceiling and its lane-deferral outcome; the typed
+write seam and its negative type-test; and the three `message_archive` purchase
+columns. `response_body_bytes` stays, as a column and as measurement only.

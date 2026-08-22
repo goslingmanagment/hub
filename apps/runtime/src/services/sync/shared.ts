@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { createHash, randomUUID } from "node:crypto";
 
 import {
@@ -6,6 +7,7 @@ import {
   insertObservation,
   insertRawPayload,
   nextPageSyncObservationSeq,
+  recordSyncHttpAttemptResponseBodyBytes,
   updatePageMetadata,
 } from "@agency_hub_core/db";
 import { FANSLY_MAPPER_VERSION } from "@agency_hub_core/fansly";
@@ -195,7 +197,121 @@ export async function persistRawPayload(
     });
   }
 
+  // [E2] measurement, F0(a). Byte length of the payload OBJECT this capture
+  // journaled — the real disk-trend input for the widened Fansly capture. It
+  // is instrumentation and NOTHING else: no ceiling, no deferral, no config
+  // key ([A20] deleted all three), and a failure here can never fail a capture.
+  if (input.syncRunId != null && stream !== null) {
+    try {
+      await recordSyncHttpAttemptResponseBodyBytes(db, {
+        syncRunId: input.syncRunId,
+        platformAccountId: input.platformAccountId,
+        stream,
+        responseBodyBytes: Buffer.byteLength(
+          JSON.stringify(input.responsePayload ?? null),
+          "utf8",
+        ),
+      });
+    } catch {
+      // Measurement only — a missing sample is worth strictly less than the
+      // capture it would have failed.
+    }
+  }
+
   return rawPayload;
+}
+
+/**
+ * [A20] The ONE named allowlist of `aggregationData.accounts[]` fields that
+ * may reach the journal from the Fansly follower and conversation lanes.
+ *
+ * It is an allowlist, not a removal: the owner ruled (2026-08-20) that the
+ * capture is field-SELECTIVE. The 14 fields added to the original four change
+ * on the order of months, so the ~11:1 content-address dedup collapse measured
+ * on production survives the widening — that collapse is the entire reason the
+ * byte-ceiling mechanism could be deleted with this ruling.
+ *
+ * Widening this list is a deliberate edit with a written reason, exactly like
+ * the platform-branch budget. `tests/fansly-capture-allowlist.test.ts` fails
+ * when a field outside it reaches the journal for these two endpoints.
+ */
+export const FANSLY_FAN_ACCOUNT_CAPTURE_ALLOWLIST = [
+  "id",
+  "username",
+  "displayName",
+  "createdAt",
+  "followsYou",
+  "following",
+  "subscriber",
+  "subscriberSubscription",
+  "subscriberAutoRenew",
+  "notes",
+  "containingLists",
+  "profileAccess",
+  "profileAccessFlags",
+  "profileFlags",
+  "permissions",
+  "statusId",
+  "flags",
+  "userFlags",
+] as const;
+
+/**
+ * [A20] The fields the owner ruled NOT needed — named here so the rejection is
+ * as legible as the acceptance. Every one of them changes on nearly every
+ * response (last-seen minute, audience/like/content counters, live flag), so
+ * capturing them would make every body unique and destroy the dedup collapse.
+ * `lastSeenAt` was contested and rejected explicitly: if it is ever wanted it
+ * must arrive as its own "fan was online at T" fact, never inside these bodies.
+ */
+export const FANSLY_FAN_ACCOUNT_NEVER_CAPTURED = [
+  "lastSeenAt",
+  "followCount",
+  "subscriberCount",
+  "postLikes",
+  "accountMediaLikes",
+  "timelineStats",
+  "streaming",
+  "version",
+] as const;
+
+/**
+ * Per-endpoint capture-shape versions. Replay tooling must be able to tell a
+ * pre-[A20] 4-field row from a widened 18-field one, and the shared
+ * `FANSLY_MAPPER_VERSION` cannot say it: every Fansly writer reads that one
+ * constant, so bumping it would re-label unrelated captures (rejected
+ * explicitly). The suffix rides only the two lanes whose capture shape changed.
+ */
+export const FANSLY_FOLLOWERS_CAPTURE_MAPPER_VERSION =
+  `${FANSLY_MAPPER_VERSION}+followers-capture-v2`;
+export const FANSLY_GROUPS_CAPTURE_MAPPER_VERSION =
+  `${FANSLY_MAPPER_VERSION}+groups-capture-v2`;
+
+/** Shared by both lanes: pick the allowlisted fields VERBATIM (objects and
+ *  arrays keep their served shape), in allowlist order so an unchanged profile
+ *  hashes identically even if the platform reorders its keys. A row without a
+ *  usable `id` is dropped — `id` is the flatMap key every consumer joins on. */
+function trimFanslyAggregatedAccounts(accounts: unknown) {
+  if (!Array.isArray(accounts)) {
+    return [];
+  }
+  return accounts.flatMap((item) => {
+    if (!isRecord(item)) {
+      return [];
+    }
+    const id = asNullableString(item.id);
+    if (!id) {
+      return [];
+    }
+    const kept: Record<string, unknown> = { id };
+    for (const field of FANSLY_FAN_ACCOUNT_CAPTURE_ALLOWLIST) {
+      if (field === "id" || !Object.hasOwn(item, field)) {
+        continue;
+      }
+      kept[field] = item[field];
+    }
+    return [kept];
+  });
 }
 
 export function trimFanslyFollowerPayload(raw: unknown) {
@@ -212,34 +328,18 @@ export function trimFanslyFollowerPayload(raw: unknown) {
         return [];
       }
 
+      // [A20]: lastSeenAt is NOT captured — on the relation row either. It
+      // moves every minute, and the replay canonicalizer already excludes it
+      // from its identity hash (canonicalize/fansly-replay.ts), so nothing
+      // downstream loses a fact by its absence.
       return [{
         id,
         followerId,
-        lastSeenAt: asNullableNumber(item.lastSeenAt),
       }];
     })
     : [];
   const aggregationData = isRecord(payload.aggregationData) ? payload.aggregationData : {};
-  const accounts = Array.isArray(aggregationData.accounts)
-    ? aggregationData.accounts.flatMap((item) => {
-      if (!isRecord(item)) {
-        return [];
-      }
-
-      const id = asNullableString(item.id);
-      if (!id) {
-        return [];
-      }
-
-      return [{
-        id,
-        username: asNullableString(item.username),
-        displayName: asNullableString(item.displayName),
-        createdAt: asNullableNumber(item.createdAt),
-        lastSeenAt: asNullableNumber(item.lastSeenAt),
-      }];
-    })
-    : [];
+  const accounts = trimFanslyAggregatedAccounts(aggregationData.accounts);
 
   return {
     followers,
@@ -283,6 +383,24 @@ function redactFanslyMessageLike(raw: unknown) {
   };
 }
 
+/**
+ * [A18], verified against the live capture 2026-08-19/20: for `data[]` — the
+ * conversation rows — this function is an IDENTITY REWRITE. Fansly serves
+ * exactly nine fields per row and all nine are kept; there is no `lastMessage`
+ * object on a conversation row, so no preview text, attachment or tip is lost
+ * there and never was. `tests/fansly-capture-allowlist.test.ts` pins that with
+ * a byte-identity assertion on a verbatim-shaped fixture, so the mistaken
+ * belief cannot be re-invented.
+ *
+ * The real loss was `aggregationData.accounts[]` (4 of ~25 fields kept), and
+ * [A20] repairs it as the named allowlist above.
+ *
+ * `aggregationData.groups[].lastMessage` KEEPS its redaction deliberately: it
+ * is 3.7 % of the payload delta and a duplicate of material the verbatim
+ * `dm_messages` journal already holds (sync/fansly-dm-messages.ts persists
+ * `page.raw` untrimmed) — so the agent-read scrub justification in
+ * modules/agent-read/observation-scrub.ts stays true.
+ */
 export function trimFanslyMessagingGroupsPayload(raw: unknown) {
   const payload = isRecord(raw) ? raw : {};
   const data = Array.isArray(payload.data)
@@ -310,25 +428,7 @@ export function trimFanslyMessagingGroupsPayload(raw: unknown) {
     })
     : [];
   const aggregationData = isRecord(payload.aggregationData) ? payload.aggregationData : {};
-  const accounts = Array.isArray(aggregationData.accounts)
-    ? aggregationData.accounts.flatMap((item) => {
-      if (!isRecord(item)) {
-        return [];
-      }
-
-      const id = asNullableString(item.id);
-      if (!id) {
-        return [];
-      }
-
-      return [{
-        id,
-        username: asNullableString(item.username),
-        displayName: asNullableString(item.displayName),
-        createdAt: asNullableNumber(item.createdAt),
-      }];
-    })
-    : [];
+  const accounts = trimFanslyAggregatedAccounts(aggregationData.accounts);
   const groups = Array.isArray(aggregationData.groups)
     ? aggregationData.groups.flatMap((item) => {
       if (!isRecord(item)) {

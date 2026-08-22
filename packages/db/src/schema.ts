@@ -549,6 +549,12 @@ export const syncHttpAttempts = pgTable("sync_http_attempts",
     durationMs: integer("duration_ms"),
     requestShape: jsonbSafe("request_shape").$type<Record<string, unknown>>().default({}).notNull(),
     responseShape: jsonbSafe("response_shape").$type<Record<string, unknown>>().default({}).notNull(),
+    /** [E2] instrumentation (migration 0130): UTF-8 byte length of the payload
+     * OBJECT handed to capture — never Content-Length, which counts compressed
+     * transport bytes and is absent on a replayed body. NULL when the attempt
+     * journaled nothing. It gates NOTHING: [A20] deleted the byte ceiling and
+     * no code path may defer a lane on a byte budget. */
+    responseBodyBytes: bigint("response_body_bytes", { mode: "number" }),
     errorMessage: text("error_message"),
     startedAt: timestamp("started_at", { withTimezone: true }).defaultNow().notNull(),
     finishedAt: timestamp("finished_at", { withTimezone: true }),
@@ -4526,5 +4532,204 @@ export const capturePayloadLocations = pgTable(
       or (${table.storageTier} = 'cold'
         and ${table.segmentId} is not null and ${table.rowLocator} is not null)
     `),
+  }),
+);
+
+// ── WP-F0(b): the media plane ───────────────────────────────────────────────
+// Four rebuildable projections over the sync-pull v5 projection-only events.
+// Migration 0130 is the authority; these mirrors exist for typed reads/writes.
+// NO url/location/variant column exists here BY DESIGN — those stay in the raw
+// journal. Money is mills and NULL-or-non-negative: a sparse saleStats means
+// "not served", never zero.
+
+export const creatorMedia = pgTable(
+  "creator_media",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    platform: platformColumn("platform")
+      .references(() => platforms.key, { onDelete: "restrict" })
+      .notNull(),
+    /** accountMedia.id — the offer identity attachments and orders point at. */
+    mediaOfferRef: text("media_offer_ref").notNull(),
+    mediaRef: text("media_ref"),
+    previewRef: text("preview_ref"),
+    bundleRefs: text("bundle_refs").array().default([]).notNull(),
+    mediaType: integer("media_type"),
+    mimeType: text("mime_type"),
+    width: integer("width"),
+    height: integer("height"),
+    durationMs: bigint("duration_ms", { mode: "number" }),
+    priceMills: bigint("price_mills", { mode: "bigint" }),
+    /** EVERY permissions.permissionFlags[] row, verbatim. */
+    permissionEntries: jsonbSafe("permission_entries").$type<unknown[]>().default([]).notNull(),
+    permissionFlags: integer("permission_flags"),
+    likeCount: bigint("like_count", { mode: "number" }),
+    salesCount: bigint("sales_count", { mode: "number" }),
+    /** A12: saleStats.total is NET. */
+    salesNetMills: bigint("sales_net_mills", { mode: "bigint" }),
+    salesPendingMills: bigint("sales_pending_mills", { mode: "bigint" }),
+    createdAtPlatform: timestamp("created_at_platform", { withTimezone: true }),
+    deletedAtPlatform: timestamp("deleted_at_platform", { withTimezone: true }),
+    firstOrigin: text("first_origin").notNull(),
+    firstObservedAt: timestamp("first_observed_at", { withTimezone: true }).notNull(),
+    lastObservedAt: timestamp("last_observed_at", { withTimezone: true }).notNull(),
+    contentHash: char("content_hash", { length: 64 }).notNull(),
+    sourceEventId: bigint("source_event_id", { mode: "number" }).notNull(),
+    sourceObservationId: bigint("source_observation_id", { mode: "number" }).notNull(),
+    sourceAccountSeq: bigint("source_account_seq", { mode: "number" }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pageOfferUniq: unique("creator_media_page_offer_uniq").on(
+      table.pageId,
+      table.platform,
+      table.mediaOfferRef,
+    ),
+    pageObservedIdx: index("creator_media_page_observed_idx").on(
+      table.pageId,
+      table.lastObservedAt,
+      table.id,
+    ),
+  }),
+);
+
+export const creatorMediaBundles = pgTable(
+  "creator_media_bundles",
+  {
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    platform: platformColumn("platform")
+      .references(() => platforms.key, { onDelete: "restrict" })
+      .notNull(),
+    bundleRef: text("bundle_ref").notNull(),
+    previewRef: text("preview_ref"),
+    priceMills: bigint("price_mills", { mode: "bigint" }),
+    permissionEntries: jsonbSafe("permission_entries").$type<unknown[]>().default([]).notNull(),
+    permissionFlags: integer("permission_flags"),
+    memberRefs: text("member_refs").array().default([]).notNull(),
+    memberPositions: jsonbSafe("member_positions").$type<unknown[]>().default([]).notNull(),
+    salesCount: bigint("sales_count", { mode: "number" }),
+    salesNetMills: bigint("sales_net_mills", { mode: "bigint" }),
+    salesPendingMills: bigint("sales_pending_mills", { mode: "bigint" }),
+    createdAtPlatform: timestamp("created_at_platform", { withTimezone: true }),
+    deletedAtPlatform: timestamp("deleted_at_platform", { withTimezone: true }),
+    firstObservedAt: timestamp("first_observed_at", { withTimezone: true }).notNull(),
+    lastObservedAt: timestamp("last_observed_at", { withTimezone: true }).notNull(),
+    contentHash: char("content_hash", { length: 64 }).notNull(),
+    sourceEventId: bigint("source_event_id", { mode: "number" }).notNull(),
+    sourceObservationId: bigint("source_observation_id", { mode: "number" }).notNull(),
+    sourceAccountSeq: bigint("source_account_seq", { mode: "number" }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({
+      name: "creator_media_bundles_pkey",
+      columns: [table.pageId, table.bundleRef],
+    }),
+    pageObservedIdx: index("creator_media_bundles_page_observed_idx").on(
+      table.pageId,
+      table.lastObservedAt,
+    ),
+  }),
+);
+
+export const mediaOrders = pgTable(
+  "media_orders",
+  {
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    platform: platformColumn("platform")
+      .references(() => platforms.key, { onDelete: "restrict" })
+      .notNull(),
+    mediaOfferRef: text("media_offer_ref").notNull(),
+    /** Fan-scope erasure target (Stage 28.4) — a TEXT platform ref, no FK. */
+    buyerPlatformUserId: text("buyer_platform_user_id").notNull(),
+    occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
+    /** Null until a response is observed carrying an order id (§2.3). */
+    orderRef: text("order_ref"),
+    bundleRef: text("bundle_ref"),
+    orderType: integer("order_type"),
+    priceMills: bigint("price_mills", { mode: "bigint" }),
+    conversationRef: text("conversation_ref"),
+    messageRef: text("message_ref"),
+    firstObservedAt: timestamp("first_observed_at", { withTimezone: true }).notNull(),
+    lastObservedAt: timestamp("last_observed_at", { withTimezone: true }).notNull(),
+    contentHash: char("content_hash", { length: 64 }).notNull(),
+    sourceEventId: bigint("source_event_id", { mode: "number" }).notNull(),
+    sourceObservationId: bigint("source_observation_id", { mode: "number" }).notNull(),
+    sourceAccountSeq: bigint("source_account_seq", { mode: "number" }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({
+      name: "media_orders_pkey",
+      columns: [table.pageId, table.mediaOfferRef, table.buyerPlatformUserId, table.occurredAt],
+    }),
+    pageOccurredIdx: index("media_orders_page_occurred_idx").on(
+      table.pageId,
+      table.occurredAt,
+    ),
+    pageBuyerOccurredIdx: index("media_orders_page_buyer_occurred_idx").on(
+      table.pageId,
+      table.buyerPlatformUserId,
+      table.occurredAt,
+    ),
+  }),
+);
+
+export const messageMediaOffers = pgTable(
+  "message_media_offers",
+  {
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    platform: platformColumn("platform")
+      .references(() => platforms.key, { onDelete: "restrict" })
+      .notNull(),
+    messageRef: text("message_ref").notNull(),
+    offerOrdinal: integer("offer_ordinal").notNull(),
+    mediaOfferRef: text("media_offer_ref"),
+    bundleRef: text("bundle_ref"),
+    conversationRef: text("conversation_ref"),
+    /** Fan-scope erasure target (Stage 28.4) — a TEXT platform ref, no FK. */
+    fanPlatformUserId: text("fan_platform_user_id"),
+    messageCreatedAt: timestamp("message_created_at", { withTimezone: true }),
+    offerType: integer("offer_type"),
+    mimeType: text("mime_type"),
+    durationMs: bigint("duration_ms", { mode: "number" }),
+    priceMills: bigint("price_mills", { mode: "bigint" }),
+    permissionEntries: jsonbSafe("permission_entries").$type<unknown[]>().default([]).notNull(),
+    /** A17-4 variant B: the archive joins THIS for purchase state. */
+    purchaseState: text("purchase_state").default("unknown").notNull(),
+    orderRef: text("order_ref"),
+    salesCount: bigint("sales_count", { mode: "number" }),
+    salesNetMills: bigint("sales_net_mills", { mode: "bigint" }),
+    salesPendingMills: bigint("sales_pending_mills", { mode: "bigint" }),
+    firstObservedAt: timestamp("first_observed_at", { withTimezone: true }).notNull(),
+    lastObservedAt: timestamp("last_observed_at", { withTimezone: true }).notNull(),
+    contentHash: char("content_hash", { length: 64 }).notNull(),
+    sourceEventId: bigint("source_event_id", { mode: "number" }).notNull(),
+    sourceObservationId: bigint("source_observation_id", { mode: "number" }).notNull(),
+    sourceAccountSeq: bigint("source_account_seq", { mode: "number" }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({
+      name: "message_media_offers_pkey",
+      columns: [table.pageId, table.messageRef, table.offerOrdinal],
+    }),
+    pageMessageIdx: index("message_media_offers_page_message_idx").on(
+      table.pageId,
+      table.messageRef,
+    ),
   }),
 );

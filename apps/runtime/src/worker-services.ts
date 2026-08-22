@@ -54,6 +54,7 @@ import { runOfapiCaptureMaterialization } from "./services/ofapi-capture-materia
 import { runAiAcceptanceProjection } from "./services/projections/ai-acceptance.ts";
 import { runFanEarningsProjection } from "./services/projections/fan-earnings.ts";
 import { runCreatorPostsProjection } from "./services/projections/creator-posts.ts";
+import { runMediaPlaneProjection } from "./services/projections/media-plane.ts";
 import { startDomainEventsSmokeConsumer } from "./services/domain-events-smoke.ts";
 import {
   runWorkboardFanRecompute,
@@ -392,6 +393,17 @@ export async function startWorkerServices(
       }
     } catch (error) {
       app.logger.error({ error }, "Creator-posts projection sweep failed");
+    }
+    try {
+      // WP-F0(b): the media plane rides the same minutely projection tick, and
+      // owns its own watermark — a poison commerce event must stay retryable
+      // without starving the neighbours that share this pg-boss handler.
+      const mediaPlane = await runMediaPlaneProjection(app);
+      if (mediaPlane.media > 0 || mediaPlane.orders > 0 || mediaPlane.offers > 0) {
+        app.logger.info(mediaPlane, "Media-plane projection sweep complete");
+      }
+    } catch (error) {
+      app.logger.error({ error }, "Media-plane projection sweep failed");
     }
     try {
       const acceptance = await runAiAcceptanceProjection(app);

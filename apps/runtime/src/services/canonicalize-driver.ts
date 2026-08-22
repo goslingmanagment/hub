@@ -8,9 +8,14 @@
 
 import {
   appendDomainEvents,
+  appendMixedDomainEvents,
   appendProjectionOnlyDomainEvents,
+  assertDomainEventTargetMonthsAttached,
+  type DomainEventPartitionCoverage,
+  DomainEventTargetMonthsUnattachedError,
   listObservationsForReplay,
   listPageNativeAccountRefs,
+  loadDomainEventPartitionCoverage,
   markObservationParsed,
   type ReplayObservationRow,
 } from "@agency_hub_core/db";
@@ -124,6 +129,23 @@ export interface CanonicalizationRunResult {
    * worth the error-log line it produces every sweep.
    */
   errored: number;
+  /**
+   * §3.2c(ii): rows REFUSED before any write because a draft's target month
+   * has no attached domain_events partition. Deliberately distinct from
+   * `errored`: nothing failed, the engine declined — the observation stays
+   * unstamped, its parse debt survives the recovery, and a run reporting
+   * partitionBlocked > 0 is a SKIPPED step, not a passed one.
+   */
+  partitionBlocked: number;
+  /** ONE entry per (family, target month) per run, naming detached vs absent
+   *  and the recovery each needs — not one line per refused row. */
+  partitionAnomalies: Array<{
+    family: string;
+    month: string;
+    shape: "detached" | "absent";
+    detachedRelations: string[];
+    recovery: string;
+  }>;
   /** Seconds from received_at to processing for the oldest row this run. */
   maxLagSeconds: number;
 }
@@ -185,6 +207,67 @@ export function resetCanonicalizeSweepCursors() {
   sweepCursors.clear();
 }
 
+/**
+ * §3.2c(ii) in the ENGINE, not in a command — this one object backs both the
+ * ordinary minutely sweep and the `events:replay` CLI drain, because both call
+ * `runCanonicalization`. A CLI-only gate would leave the steady-state sweep
+ * that re-reads history after a version bump completely unguarded.
+ *
+ * The census is read ONCE per run and only on first use: a run whose families
+ * emit nothing (or only out-of-regime drafts) issues no catalog query at all.
+ */
+interface PartitionGate {
+  assertTargetsAttached(family: CanonicalizerFamily, targets: readonly Date[]): Promise<void>;
+  recordAnomaly(
+    family: CanonicalizerFamily,
+    error: DomainEventTargetMonthsUnattachedError,
+  ): void;
+}
+
+function createPartitionGate(
+  app: Pick<AppContext, "db" | "logger">,
+  totals: CanonicalizationRunResult,
+): PartitionGate {
+  let coverage: Promise<DomainEventPartitionCoverage> | null = null;
+  const raised = new Set<string>();
+  return {
+    async assertTargetsAttached(_family, targets) {
+      if (targets.length === 0) {
+        return;
+      }
+      coverage ??= loadDomainEventPartitionCoverage(app.db);
+      await assertDomainEventTargetMonthsAttached(app.db, targets, {
+        coverage: await coverage,
+      });
+    },
+    recordAnomaly(family, error) {
+      for (const blocked of error.blocked) {
+        // ONE anomaly per (family, target month) per run — a blocked drain can
+        // be thousands of rows, and thousands of identical log lines are how
+        // an operator stops reading them.
+        const key = `${family.source}:${family.lane}:${blocked.month}`;
+        if (raised.has(key)) {
+          continue;
+        }
+        raised.add(key);
+        const anomaly = {
+          family: `${family.source}:${family.lane}`,
+          month: blocked.month,
+          shape: blocked.shape,
+          detachedRelations: blocked.detachedRelations,
+          recovery: blocked.recovery,
+        };
+        totals.partitionAnomalies.push(anomaly);
+        app.logger.error(
+          anomaly,
+          "Canonicalization REFUSED an append: no attached domain_events partition for the "
+            + "target month; the observation stays unstamped until the recovery runs",
+        );
+      }
+    },
+  };
+}
+
 async function runFamily(
   app: Pick<AppContext, "db" | "logger">,
   family: CanonicalizerFamily,
@@ -195,6 +278,7 @@ async function runFamily(
     accountIdByNativeRef: ReadonlyMap<string, number>;
     diagnostics?: { record: (code: string) => void };
   },
+  partitionGate: PartitionGate,
 ) {
   const kinds = options.kinds !== undefined
     ? (family.kinds === null
@@ -281,18 +365,36 @@ async function runFamily(
 
         if (drafts.length > 0) {
           const inputs = drafts.map((draft) => ({ ...draft, observationId: row.id }));
+          // §3.2c(ii), BEFORE any write: refuse the whole observation when a
+          // draft aims at a month with no attached partition. Receipt-time
+          // drafts are in the current month by construction and never block;
+          // the provider-dated lanes (message.material_observed, post.observed)
+          // are the ones a historical drain aims at cold months.
+          await partitionGate.assertTargetsAttached(
+            family,
+            inputs.map((input) => input.occurredAt),
+          );
           // A projection-only family's material never reaches a client, so its
           // hidden seq range needs the atomic checkpoint the SSE replay
           // validator looks for. The key carries the family version: a version
           // bump that mints EXTRA events for an already-checkpointed
           // observation must claim a fresh checkpoint, not collide with the
           // old one.
+          const checkpoint = {
+            occurredAt: row.receivedAt,
+            observationId: row.id,
+            dedupKey: `${family.source}:v${family.version}:checkpoint:${row.id}`,
+          };
+          // Three shapes, one checkpoint identity. `mixed` (§3.2a) is the
+          // third: a deliverable family that also emits projection-only
+          // material for the same observation. It reuses the SAME checkpoint
+          // key the projection-only branch builds — the family version in the
+          // key is what lets a version bump mint EXTRA events for an
+          // already-checkpointed observation without colliding.
           const result = family.projectionOnly === true
-            ? await appendProjectionOnlyDomainEvents(app.db, accountId!, inputs, {
-              occurredAt: row.receivedAt,
-              observationId: row.id,
-              dedupKey: `${family.source}:v${family.version}:checkpoint:${row.id}`,
-            })
+            ? await appendProjectionOnlyDomainEvents(app.db, accountId!, inputs, checkpoint)
+            : family.mixed === true
+            ? await appendMixedDomainEvents(app.db, accountId!, inputs, checkpoint)
             : await appendDomainEvents(app.db, accountId!, inputs);
           totals.appended += result.appended;
           totals.deduped += result.deduped;
@@ -304,6 +406,14 @@ async function runFamily(
         });
         totals.stamped += 1;
       } catch (error) {
+        // §3.2c(ii): a refusal is not a failure. The observation keeps its
+        // parse debt (unstamped, retried after the recovery) and is counted
+        // apart from `errored` so a blocked drain cannot read as a clean run.
+        if (error instanceof DomainEventTargetMonthsUnattachedError) {
+          totals.partitionBlocked += 1;
+          partitionGate.recordAnomaly(family, error);
+          continue;
+        }
         // #223: an unreadable body is NOT a canonicalization failure and must
         // not be counted as one — a parse error is a bug or a poison row, this
         // is a body that will be there again in a minute. It shares the
@@ -354,8 +464,11 @@ export async function runCanonicalization(
     skippedUnavailable: 0,
     lastObservationId: null,
     errored: 0,
+    partitionBlocked: 0,
+    partitionAnomalies: [],
     maxLagSeconds: 0,
   };
+  const partitionGate = createPartitionGate(app, totals);
   // Per-run context: Fansly DM direction resolves against the page's own
   // native account ref (Stage 17); built once, shared by all families.
   const pages = await listPageNativeAccountRefs(app.db);
@@ -383,7 +496,7 @@ export async function runCanonicalization(
     // Family isolation: a structural failure in one family (e.g. its list
     // query dying on a transient error) must not stall the other sources.
     try {
-      await runFamily(app, family, options, totals, runContext);
+      await runFamily(app, family, options, totals, runContext, partitionGate);
     } catch (error) {
       totals.errored += 1;
       app.logger.error(

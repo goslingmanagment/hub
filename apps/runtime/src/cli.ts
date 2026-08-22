@@ -7,7 +7,9 @@ import { Command, InvalidArgumentError } from "commander";
 import { PgBoss } from "pg-boss";
 
 import {
+  assertDomainEventTargetMonthsAttached,
   createModel,
+  DomainEventTargetMonthsUnattachedError,
   findPageByLabel,
   findUserByUsername,
   getPageDmConversationById,
@@ -639,6 +641,34 @@ function printOfapiTransactionsBackfillResult(result: OfapiTransactionsBackfillR
         + " re-runs converge (upserts add no duplicate rows).",
     );
   }
+}
+
+/**
+ * The month instants an `events:replay --from/--to` window can aim a
+ * provider-dated append at. One instant per month start in the window, which is
+ * all the census needs: it name-matches domain_events_YYYY_MM and passes
+ * everything outside 2026-2030 through. An open-ended window is anchored at the
+ * other bound; a window with neither bound is not checked here at all — the
+ * engine gate inside runCanonicalization still covers it.
+ */
+export function replayWindowMonths(from: Date | null, to: Date | null): Date[] {
+  const start = from ?? to;
+  const end = to ?? from;
+  if (start === null || end === null) {
+    return [];
+  }
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start > end) {
+    return [];
+  }
+  const months: Date[] = [];
+  const cursor = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), 1));
+  const limit = new Date(Date.UTC(end.getUTCFullYear(), end.getUTCMonth(), 1));
+  // 120 months of guard rail: a nonsense window must not build an endless list.
+  for (let index = 0; cursor <= limit && index < 120; index += 1) {
+    months.push(new Date(cursor));
+    cursor.setUTCMonth(cursor.getUTCMonth() + 1);
+  }
+  return months;
 }
 
 export function buildProgram() {
@@ -1808,6 +1838,40 @@ export function buildProgram() {
     .action(async (options) => {
       const app = await createAppContext();
       try {
+        // §3.2c(ii), up front: a drain across history aims PROVIDER-DATED
+        // appends (message.material_observed, post.observed) at the months it
+        // is asked to replay. If one of those months has no attached
+        // domain_events partition, every such row fails ExecFindPartition
+        // (23514) and is retried by every later sweep — so refuse before
+        // dispatching any work, exactly as `fansly:replay` does. The engine
+        // gate inside runCanonicalization still covers the rows this window
+        // check cannot see; this one exists so an operator learns it in one
+        // second instead of after an hour of blocked rows.
+        if (!options.dryRun && (options.from || options.to)) {
+          const months = replayWindowMonths(
+            options.from ? new Date(options.from) : null,
+            options.to ? new Date(options.to) : null,
+          );
+          try {
+            await assertDomainEventTargetMonthsAttached(app.db, months);
+          } catch (error) {
+            if (error instanceof DomainEventTargetMonthsUnattachedError) {
+              console.error(`REFUSED before dispatching work: ${error.message}`);
+              for (const blocked of error.blocked) {
+                console.error(
+                  `  ${blocked.month}: ${blocked.shape}`
+                    + (blocked.detachedRelations.length > 0
+                      ? ` (${blocked.detachedRelations.join(", ")})`
+                      : "")
+                    + ` — recovery: ${blocked.recovery}`,
+                );
+              }
+              process.exitCode = 1;
+              return;
+            }
+            throw error;
+          }
+        }
         const result = await runCanonicalization(app, {
           ...(options.kind.length > 0 ? { kinds: options.kind } : {}),
           ...(options.account !== undefined ? { accountId: options.account } : {}),
@@ -1821,8 +1885,19 @@ export function buildProgram() {
           `${options.dryRun ? "[dry-run] would append" : "appended"} ${result.appended}, ` +
             `deduped ${result.deduped}, stamped ${result.stamped}, ` +
             `scanned ${result.scanned}, skipped-unmapped ${result.skippedUnmapped}, ` +
-            `errored ${result.errored}`,
+            `errored ${result.errored}, partition-blocked ${result.partitionBlocked}`,
         );
+        if (result.partitionBlocked > 0) {
+          // A run reporting partitionBlocked > 0 is a SKIPPED step, not a
+          // passed one (#191/#194).
+          for (const anomaly of result.partitionAnomalies) {
+            console.error(
+              `BLOCKED ${anomaly.family} @ ${anomaly.month} (${anomaly.shape}) — `
+                + `recovery: ${anomaly.recovery}`,
+            );
+          }
+          process.exitCode = 1;
+        }
       } finally {
         await app.close();
       }
@@ -2148,15 +2223,19 @@ export function buildProgram() {
   program
     .command("projection:rebuild")
     .description("Stage 10/W10: rebuild a projection from the domain-event ledger "
-      + "(creator_posts/fan_earnings_stats = truncate scope + replay; "
+      + "(creator_posts/fan_earnings_stats/media_plane = truncate scope + replay; "
       + "message_archive = shadow build, never in-place)")
-    .argument("<projection>", "projection name (creator_posts | fan_earnings_stats | message_archive)")
+    .argument(
+      "<projection>",
+      "projection name (creator_posts | fan_earnings_stats | media_plane | message_archive)",
+    )
     .option("--account <id>", "restrict to one internal account (page) id", (v) => Number.parseInt(v, 10))
     .action(async (projection, options) => {
       if (
         projection !== "message_archive"
         && projection !== "fan_earnings_stats"
         && projection !== "creator_posts"
+        && projection !== "media_plane"
       ) {
         throw new Error(`Unknown projection: ${projection}`);
       }
@@ -2181,6 +2260,15 @@ export function buildProgram() {
               + "then the owner-gated `archive:rebuild-switch --execute` "
               + "(docs/runbooks/message-archive-rebuild.md).",
           );
+          return;
+        }
+        if (projection === "media_plane") {
+          // §3.2c(i): rebuildMediaPlaneProjection runs the detached-partition
+          // preflight itself and REFUSES rather than replay a truncated ledger.
+          const { rebuildMediaPlaneProjection } = await import(
+            "./services/projections/media-plane.ts"
+          );
+          console.log(JSON.stringify(await rebuildMediaPlaneProjection(app, scope)));
           return;
         }
         const result = projection === "creator_posts"

@@ -93,7 +93,12 @@ describe("Fansly replay canonicalizers (slice D)", () => {
     expect(events).toEqual([]);
   });
 
-  describe("followers (journaled TRIMMED)", () => {
+  // [A20] retitle (WP-F0(a)): "TRIMMED" described a journal that kept FOUR of
+  // ~25 served fields on aggregationData.accounts[]. It now keeps eighteen, by
+  // a named allowlist, and lastSeenAt is gone from the relation row too — so
+  // the shape these fixtures build is the allowlisted one, not the old stub.
+  // What is NOT journaled is now a deliberate list, not a leftover.
+  describe("followers (journaled through the [A20] 18-field account allowlist)", () => {
     it("mints one follow per relation and one identity per aggregated account", async () => {
       const response = await loadResponse("followers.json");
       const trimmed = trimFanslyFollowerPayload(response);
@@ -220,7 +225,14 @@ describe("Fansly replay canonicalizers (slice D)", () => {
     });
   });
 
-  describe("dm_conversations (journaled TRIMMED — content redacted away)", () => {
+  // [A18]/[A20] retitle: the conversation ROWS are journaled VERBATIM — the
+  // trim is an identity rewrite over data[] and always was (there is no
+  // lastMessage object on a row). The fan accounts ride the [A20] allowlist.
+  // What IS still redacted is aggregationData.groups[].lastMessage, kept that
+  // way on purpose: it duplicates the verbatim dm_messages journal, and it is
+  // what keeps the agent-read scrub's justification for admitting this kind
+  // true. tests/fansly-capture-allowlist.test.ts pins all three claims.
+  describe("dm_conversations (rows VERBATIM, accounts allowlisted, lastMessage still redacted)", () => {
     it("mints one conversation per row plus identities, without message content", async () => {
       const response = await loadResponse("messaging_groups.json");
       const trimmed = trimFanslyMessagingGroupsPayload(response);

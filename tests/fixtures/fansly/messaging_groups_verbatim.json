@@ -1,0 +1,239 @@
+{
+  "data": {
+    "success": true,
+    "response": {
+      "data": [
+        {
+          "account_id": "acct_creator",
+          "groupId": "group_alpha",
+          "partnerAccountId": "acct_fan_alpha",
+          "partnerUsername": "fixture_fan",
+          "flags": 0,
+          "unreadCount": 1,
+          "subscriptionTierId": "tier_fixture",
+          "lastMessageId": "message_head",
+          "lastUnreadMessageId": "message_head"
+        },
+        {
+          "account_id": "acct_creator",
+          "groupId": "group_beta",
+          "partnerAccountId": "acct_fan_beta",
+          "partnerUsername": "fixture_fan_beta",
+          "flags": 0,
+          "unreadCount": 0,
+          "subscriptionTierId": null,
+          "lastMessageId": "message_beta",
+          "lastUnreadMessageId": null
+        }
+      ],
+      "aggregationData": {
+        "accounts": [
+          {
+            "id": "acct_fan_alpha",
+            "username": "fixture_fan",
+            "displayName": "Fixture Fan",
+            "flags": 0,
+            "version": 7,
+            "createdAt": 1767323045,
+            "followCount": 12,
+            "subscriberCount": 3,
+            "permissions": { "accountPermissionFlags": { "flags": 0 } },
+            "statusId": 3,
+            "lastSeenAt": 1767323105,
+            "streaming": { "accountId": "acct_fan_alpha", "channel": null, "enabled": false },
+            "postLikes": 41,
+            "profileAccessFlags": 0,
+            "profileFlags": 0,
+            "followsYou": true,
+            "following": true,
+            "timelineStats": {
+              "accountId": "acct_fan_alpha",
+              "imageCount": 2,
+              "videoCount": 1,
+              "bundleCount": 0,
+              "bundleImageCount": 0,
+              "bundleVideoCount": 0,
+              "fetchedAt": 1767323100
+            },
+            "containingLists": ["list_vip"],
+            "accountMediaLikes": 9,
+            "profileAccess": true,
+            "userFlags": 0,
+            "notes": [
+              {
+                "id": "note_alpha",
+                "accountId": "acct_fan_alpha",
+                "contentType": 1,
+                "contentId": "acct_fan_alpha",
+                "title": "whale",
+                "note": "prefers evenings",
+                "createdAt": 1767323050,
+                "updatedAt": null
+              }
+            ],
+            "subscriber": true,
+            "subscriberAutoRenew": 1,
+            "subscriberSubscription": {
+              "id": "subscription_alpha",
+              "historyId": "history_alpha",
+              "subscriberId": "acct_fan_alpha",
+              "subscriptionTierId": "tier_fixture",
+              "subscriptionTierName": "Tier One",
+              "subscriptionTierColor": "#101010",
+              "planId": "plan_fixture",
+              "promoId": null,
+              "giftCodeId": null,
+              "paymentMethodId": null,
+              "status": 3,
+              "errorCode": 0,
+              "price": 1234,
+              "renewPrice": 1456,
+              "renewCorrelationId": null,
+              "autoRenew": 1,
+              "billingCycle": 30,
+              "duration": 30,
+              "renewDate": 1769915045,
+              "version": 2,
+              "createdAt": 1767323045,
+              "updatedAt": 1767323045,
+              "endsAt": 1769915045,
+              "promoPrice": null,
+              "promoDuration": null,
+              "promoStatus": null,
+              "promoStartsAt": null,
+              "promoEndsAt": null
+            }
+          },
+          {
+            "id": "acct_fan_beta",
+            "username": "fixture_fan_beta",
+            "displayName": "Fixture Fan Beta",
+            "flags": 0,
+            "version": 3,
+            "createdAt": 1767323046,
+            "followCount": 1,
+            "subscriberCount": 0,
+            "permissions": { "accountPermissionFlags": { "flags": 0 } },
+            "statusId": 0,
+            "lastSeenAt": 1767323106,
+            "streaming": { "accountId": "acct_fan_beta", "channel": null, "enabled": false },
+            "postLikes": 0,
+            "profileAccessFlags": 0,
+            "profileFlags": 0,
+            "followsYou": false,
+            "timelineStats": {
+              "accountId": "acct_fan_beta",
+              "imageCount": 0,
+              "videoCount": 0,
+              "bundleCount": 0,
+              "bundleImageCount": 0,
+              "bundleVideoCount": 0,
+              "fetchedAt": 1767323100
+            },
+            "containingLists": [],
+            "accountMediaLikes": 0,
+            "profileAccess": false,
+            "userFlags": 0,
+            "notes": [],
+            "subscriber": false
+          }
+        ],
+        "groups": [
+          {
+            "id": "group_alpha",
+            "type": 0,
+            "groupFlags": 0,
+            "groupFlagsMetadata": "",
+            "createdBy": "acct_creator",
+            "users": [
+              {
+                "groupId": "group_alpha",
+                "userId": "acct_creator",
+                "type": 0,
+                "permissionFlags": 1,
+                "userSettings": { "customName": "", "hidden": 0 }
+              },
+              {
+                "groupId": "group_alpha",
+                "userId": "acct_fan_alpha",
+                "type": 0,
+                "permissionFlags": 1,
+                "userSettings": { "customName": "", "hidden": 0 }
+              }
+            ],
+            "permissionFlags": [],
+            "recipients": [],
+            "hasDmPermissionFlags": true,
+            "dmPermissionFlags": [
+              {
+                "id": 1,
+                "accountId": "acct_creator",
+                "type": 1,
+                "flags": 0,
+                "metadata": "",
+                "verificationFlags": 0,
+                "verificationMetadata": ""
+              }
+            ],
+            "accountDmPermissionFlags": { "flags": 0, "metadata": "" },
+            "lastMessage": {
+              "id": "message_head",
+              "type": 0,
+              "dataVersion": 1,
+              "content": "",
+              "groupId": "group_alpha",
+              "senderId": "acct_fan_alpha",
+              "correlationId": null,
+              "inReplyTo": null,
+              "inReplyToRoot": null,
+              "createdAt": 1767323105,
+              "attachments": [],
+              "embeds": [],
+              "interactions": [
+                { "userId": "acct_creator", "readAt": 1767323110, "deliveredAt": 1767323106 }
+              ],
+              "likes": [{ "id": "like_alpha", "accountId": "acct_creator", "type": 0 }]
+            }
+          },
+          {
+            "id": "group_beta",
+            "type": 0,
+            "groupFlags": 0,
+            "groupFlagsMetadata": "",
+            "createdBy": "acct_creator",
+            "users": [
+              {
+                "groupId": "group_beta",
+                "userId": "acct_fan_beta",
+                "type": 0,
+                "permissionFlags": 1,
+                "userSettings": { "customName": "", "hidden": 0 }
+              }
+            ],
+            "permissionFlags": [],
+            "recipients": [],
+            "hasDmPermissionFlags": false,
+            "dmPermissionFlags": [],
+            "accountDmPermissionFlags": { "flags": 0, "metadata": "" },
+            "lastMessage": {
+              "id": "message_beta",
+              "type": 0,
+              "dataVersion": 1,
+              "content": "",
+              "groupId": "group_beta",
+              "senderId": "acct_creator",
+              "correlationId": null,
+              "inReplyTo": null,
+              "inReplyToRoot": null,
+              "createdAt": 1767323106,
+              "attachments": [],
+              "embeds": [],
+              "interactions": [],
+              "likes": []
+            }
+          }
+        ]
+      }
+    }
+  }
+}

@@ -175,6 +175,13 @@ export async function applyMessageEventsToArchive(
       const isNew = typeof head.isNew === "boolean" ? head.isNew : null;
       const materialObservedAt = headDate(head.materialObservedAt) ?? event.occurredAt;
       const vendorChangedAt = headDate(head.vendorChangedAt);
+      // The archive dates a material row from the HEAD when the head names the
+      // message time, and only falls back to the event's occurred_at when it
+      // does not (every OFAPI head). This is what keeps a PROVIDER-DATED
+      // historical draft honest: a pre-2024 message trips the driver's
+      // 2024-01-01 clamp, so event.occurredAt becomes the receipt instant while
+      // head.messageCreatedAt still carries the true message time (§3.2b).
+      const occurredAt = headDate(head.messageCreatedAt) ?? event.occurredAt;
       const result = await db.execute(sql`
         insert into ${target} (
           account_id, platform, conversation_ref, message_ref, native_message_id,
@@ -192,7 +199,7 @@ export async function applyMessageEventsToArchive(
           ${event.fanIdentityRef},
           ${head.isSentByMe ? "model" : "fan"},
           ${head.isSentByMe},
-          ${event.occurredAt},
+          ${occurredAt},
           ${normalizeDmMessageText(textHtml)},
           ${textHtml},
           ${headMills(head.priceMills)},
@@ -667,6 +674,158 @@ export async function listDetachedPartitionsHoldingAccount(
     }
   }
   return holding;
+}
+
+// ── §3.2c(ii) WRITE-SIDE target-month census ────────────────────────────────
+//
+// The read-side gate above answers "can this rebuild see all of the account's
+// events". This one answers the opposite question, and it is the one that was
+// still live after two earlier passes: can this APPEND land at all?
+//
+// domain_events is monthly-partitioned by occurred_at. Two lanes are
+// deliberately provider-dated — message.material_observed (the archive dates
+// from the message's own createdAt) and post.observed (publishedAt) — and this
+// initiative drains BOTH across history. An append whose occurred_at falls in
+// a month with no ATTACHED partition fails ExecFindPartition (23514) per row,
+// forever: the observation is never stamped, so every subsequent sweep retries
+// it. The account-row preflight cannot see two of the three failure shapes —
+// an EMPTY detached partition hides no rows, and an ABSENT partition involves
+// no detachment at all (ensureDomainEventPartitions creates the current month
+// + 3 and no historical month is ever auto-created).
+//
+// [S1] SCOPE, deliberately narrow: the check name-matches domain_events_YYYY_MM
+// for 2026–2030 ONLY, and passes everything else through. No relpartbound
+// parsing, because every other regime is covered by construction:
+// domain_events_pre_2024 spans MINVALUE → 2024-01-01; _2024 and _2025 are
+// YEARLY partitions migration 0077 named so tiering cannot re-detach them; the
+// 0082 catch-all covers 2031+. Re-generalising this costs a bound parser with
+// MINVALUE/MAXVALUE cases and buys nothing.
+
+export const DOMAIN_EVENT_MONTHLY_REGIME_MIN_YEAR = 2026;
+export const DOMAIN_EVENT_MONTHLY_REGIME_MAX_YEAR = 2030;
+
+const DOMAIN_EVENT_MONTHLY_PARTITION_PATTERN = /^domain_events_(\d{4})_(\d{2})$/;
+
+/** The monthly partition key an append at `target` would aim at, or null when
+ *  the instant falls OUTSIDE the 2026–2030 monthly regime (covered by
+ *  construction — see the block comment). */
+export function domainEventTargetMonthKey(target: Date): string | null {
+  const time = target.getTime();
+  if (Number.isNaN(time)) {
+    return null;
+  }
+  const year = target.getUTCFullYear();
+  if (
+    year < DOMAIN_EVENT_MONTHLY_REGIME_MIN_YEAR
+    || year > DOMAIN_EVENT_MONTHLY_REGIME_MAX_YEAR
+  ) {
+    return null;
+  }
+  return `${year}_${String(target.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+export interface DomainEventPartitionCoverage {
+  /** Month keys (YYYY_MM) with an ATTACHED monthly partition. */
+  attachedMonths: ReadonlySet<string>;
+  /** Month keys whose partition exists but is DETACHED, with its relations. */
+  detachedMonths: ReadonlyMap<string, string[]>;
+}
+
+/** One census read, reusable for a whole run: resolving it per draft would put
+ *  a catalog query in front of every row the sweep touches. */
+export async function loadDomainEventPartitionCoverage(
+  db: Database,
+): Promise<DomainEventPartitionCoverage> {
+  const census = await listDomainEventPartitionCensus(db);
+  const attachedMonths = new Set<string>();
+  for (const name of census.attached) {
+    const match = DOMAIN_EVENT_MONTHLY_PARTITION_PATTERN.exec(name);
+    if (match) {
+      attachedMonths.add(`${match[1]}_${match[2]}`);
+    }
+  }
+  const detachedMonths = new Map<string, string[]>();
+  for (const partition of census.detached) {
+    const match = DOMAIN_EVENT_MONTHLY_PARTITION_PATTERN.exec(partition.name);
+    if (!match) {
+      continue;
+    }
+    const key = `${match[1]}_${match[2]}`;
+    const relations = detachedMonths.get(key) ?? [];
+    relations.push(`${partition.schema}.${partition.name}`);
+    detachedMonths.set(key, relations);
+  }
+  return { attachedMonths, detachedMonths };
+}
+
+export interface BlockedDomainEventTargetMonth {
+  /** YYYY_MM — the partition name suffix the append would need. */
+  month: string;
+  /** The operator's two recoveries differ; the mechanism's do not. */
+  shape: "detached" | "absent";
+  detachedRelations: string[];
+  recovery: string;
+}
+
+const DETACHED_RECOVERY =
+  "re-attach the month (the 0077 ritual — DETACH/ATTACH only, NEVER DROP: the "
+  + "detached table holds the facts), or replay hot + lake for the range, then re-run";
+const ABSENT_RECOVERY =
+  "create the missing monthly partition (correct ONLY for the absent shape), then re-run";
+
+export class DomainEventTargetMonthsUnattachedError extends Error {
+  readonly blocked: readonly BlockedDomainEventTargetMonth[];
+
+  constructor(blocked: readonly BlockedDomainEventTargetMonth[]) {
+    super(
+      `domain_events has no attached partition for target month(s): ${
+        blocked.map((entry) => `${entry.month} (${entry.shape})`).join(", ")
+      }`,
+    );
+    this.name = "DomainEventTargetMonthsUnattachedError";
+    this.blocked = blocked;
+  }
+}
+
+/**
+ * REFUSES BEFORE ANY WRITE when a draft's target month has no attached
+ * partition. Throws `DomainEventTargetMonthsUnattachedError`, which callers
+ * count as `partitionBlocked` — a skipped step, distinct from an error, and
+ * never a stamped observation (its parse debt must survive the recovery).
+ */
+export async function assertDomainEventTargetMonthsAttached(
+  db: Database,
+  targets: readonly Date[],
+  options?: { coverage?: DomainEventPartitionCoverage },
+): Promise<void> {
+  const months = new Set<string>();
+  for (const target of targets) {
+    const key = domainEventTargetMonthKey(target);
+    if (key !== null) {
+      months.add(key);
+    }
+  }
+  if (months.size === 0) {
+    return;
+  }
+  const coverage = options?.coverage ?? await loadDomainEventPartitionCoverage(db);
+  const blocked: BlockedDomainEventTargetMonth[] = [];
+  for (const month of [...months].sort()) {
+    if (coverage.attachedMonths.has(month)) {
+      continue;
+    }
+    const detachedRelations = coverage.detachedMonths.get(month) ?? [];
+    const shape = detachedRelations.length > 0 ? "detached" as const : "absent" as const;
+    blocked.push({
+      month,
+      shape,
+      detachedRelations,
+      recovery: shape === "detached" ? DETACHED_RECOVERY : ABSENT_RECOVERY,
+    });
+  }
+  if (blocked.length > 0) {
+    throw new DomainEventTargetMonthsUnattachedError(blocked);
+  }
 }
 
 const SHADOW_JOIN = sql`

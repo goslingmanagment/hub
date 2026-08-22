@@ -226,8 +226,10 @@ function readAccountLike(
 }
 
 /** aggregationData.accounts → identity events. The hash covers ONLY the
- *  durable profile fields; `lastSeenAt` (present in the trimmed follower
- *  shape) is excluded so a daily sync of an unchanged profile mints nothing. */
+ *  durable profile fields; `lastSeenAt` is excluded so a daily sync of an
+ *  unchanged profile mints nothing. ([A20] has since dropped `lastSeenAt` from
+ *  the follower capture shape entirely — the exclusion here is what made that
+ *  safe: nothing downstream ever read it.) */
 function identityEvents(
   observation: CanonicalizableObservation,
   accounts: unknown,
@@ -631,6 +633,9 @@ export function canParseFanslyReplayObservation(
 /** Deliberately absent from CANONICALIZER_FAMILIES — see the file header. */
 export const FANSLY_REPLAY_FAMILY: CanonicalizerFamily = {
   source: "pull",
+  // Off-registry, but it still needs a lane: the health-floor gauge name is
+  // built from it, and "replay" must never alias the registered pull families.
+  lane: "replay",
   kinds: FANSLY_REPLAY_CANONICALIZED_KINDS,
   version: FANSLY_REPLAY_CANONICALIZER_VERSION,
   canonicalize: canonicalizeFanslyReplayObservation,
