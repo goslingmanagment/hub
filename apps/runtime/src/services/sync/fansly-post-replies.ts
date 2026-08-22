@@ -498,17 +498,28 @@ export async function fanslyPostRepliesChunk(
     await input.telemetry.recordCheckpointAdvanced(STREAM, summarizeCheckpoint(completed));
   };
 
+  /**
+   * The lane's ONE coverage row, page-scoped.
+   *
+   * `proof` is always `none`, and that is a claim rather than a shortcut. The
+   * schema's rule is that a proof other than `none` must NAME the response that
+   * proves it — and this row's claim is an aggregate over hundreds of walks
+   * ("every root this page knows about has been read"). No single response
+   * proves that, so pointing at the last one would be a lineage that reads as
+   * evidence and is not. The per-walk evidence is in the journal, one
+   * observation per post, which is exactly what A21 says per-look history is:
+   * a query, not a third copy.
+   */
   const coverage = async (
     status: CaptureCoverageStatus,
-    proof: CaptureCoverageProof,
     extra: {
-      proofObservationId?: number | null;
       reasonCode?: string | null;
       observedUniqueCount?: number | null;
       expectedCount?: number | null;
       cursor?: Record<string, unknown>;
     } = {},
   ) => {
+    const proof: CaptureCoverageProof = "none";
     await upsertCaptureCoverage(app.db, {
       pageId,
       platform: "fansly",
@@ -883,20 +894,16 @@ export async function fanslyPostRepliesChunk(
       : everyRootWalked
       ? "window_captured"
       : "in_progress";
-    await coverage(
-      status,
-      status === "provider_exhausted" ? "terminal_response" : "none",
-      {
-        reasonCode: status === "window_captured" ? "pagination_unproven" : null,
-        expectedCount: progress.rootsKnown,
-        observedUniqueCount: progress.rootsWalked,
-        cursor: {
-          paginationMode: state.paginationMode,
-          possiblyTruncated: archive.possiblyTruncated,
-          p99PostsLength: p99PostsLength(state.postsLengthSamples),
-        },
+    await coverage(status, {
+      reasonCode: status === "window_captured" ? "pagination_unproven" : null,
+      expectedCount: progress.rootsKnown,
+      observedUniqueCount: progress.rootsWalked,
+      cursor: {
+        paginationMode: state.paginationMode,
+        possiblyTruncated: archive.possiblyTruncated,
+        p99PostsLength: p99PostsLength(state.postsLengthSamples),
       },
-    );
+    });
 
     if (deferred !== null) {
       await saveProgress();
