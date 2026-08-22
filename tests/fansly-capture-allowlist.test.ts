@@ -38,9 +38,11 @@ import {
   FANSLY_FOLLOWERS_CAPTURE_MAPPER_VERSION,
   FANSLY_GROUPS_CAPTURE_MAPPER_VERSION,
   FANSLY_NOTIFICATIONS_CAPTURE_MAPPER_VERSION,
+  FANSLY_POST_REPLIES_CAPTURE_MAPPER_VERSION,
   trimFanslyFollowerPayload,
   trimFanslyMessagingGroupsPayload,
   trimFanslyNotificationsPayload,
+  trimFanslyPostRepliesPayload,
 } from "../apps/runtime/src/services/sync/shared.ts";
 
 const VERBATIM = JSON.parse(readFileSync(
@@ -453,5 +455,107 @@ describe("[A20] the WP-F2 notification lane trims accounts[] and NOTHING else", 
     );
     // And it never hands the adapter body straight to the journal.
     expect(source).not.toMatch(/responsePayload: payload,/);
+  });
+});
+
+// WP-F5 — [A20] on the reply walk, and the reason the guard is not optional
+// here even though it is the same eight fields as everywhere else.
+//
+// WP-F9's shape probe read a live `/post/{id}/replies` response and found the
+// inline `accounts[]` entry is a FULL account record: `lastSeenAt`, `notes`,
+// `containingLists`, `subscriberSubscription`, `statusId`, `followCount`,
+// `subscriberCount`, and an avatar carrying signed CDN locations. `lastSeenAt`
+// moves every minute. This lane re-reads a back-catalogue of thousands of posts
+// on a cycle, so an untrimmed sidecar is the difference between an archive that
+// costs kilobytes a day and one that grows without bound.
+
+describe("WP-F5 [A20] on the reply-walk sidecar", () => {
+  function replyRaw() {
+    return {
+      posts: [{
+        id: "0009100000000001",
+        accountId: "0009200000000001",
+        content: "",
+        inReplyTo: "0009000000000001",
+        inReplyToRoot: "0009000000000001",
+        createdAt: 1786535102,
+        attachments: [],
+        likeCount: 0,
+        mediaLikeCount: 0,
+        totalTipAmount: 0,
+        attachmentTipAmount: 0,
+      }],
+      accounts: [{
+        id: "0009200000000001",
+        username: "fixture_fan",
+        displayName: "Fixture Fan",
+        createdAt: 1690000000,
+        followsYou: true,
+        notes: [],
+        statusId: 3,
+        lastSeenAt: 1787000123,
+        followCount: 41,
+        subscriberCount: 7,
+        postLikes: 19,
+        accountMediaLikes: 4,
+        timelineStats: { imageCount: 12 },
+        streaming: { enabled: false },
+        version: 3,
+        // A key the platform starts serving tomorrow. It is dropped by the same
+        // rule, without an edit.
+        someFutureField: true,
+      }],
+      aggregatedPosts: [],
+      accountMedia: [],
+      tips: [],
+      tipGoals: [],
+      stories: [],
+      polls: [],
+    };
+  }
+
+  it("keeps the 18 allowlisted fields and drops everything else on the sidecar", () => {
+    const trimmed = trimFanslyPostRepliesPayload(replyRaw()) as Record<string, unknown>;
+    const account = (trimmed.accounts as Record<string, unknown>[])[0]!;
+    for (const field of FANSLY_FAN_ACCOUNT_NEVER_CAPTURED) {
+      expect(Object.hasOwn(account, field), `${field} must never reach the journal`).toBe(false);
+    }
+    const allowed = new Set<string>(FANSLY_FAN_ACCOUNT_CAPTURE_ALLOWLIST);
+    for (const key of Object.keys(account)) {
+      expect(allowed.has(key), `${key} is outside the allowlist`).toBe(true);
+    }
+    expect(Object.hasOwn(account, "someFutureField")).toBe(false);
+    // The identity survives: the ref and the display fields the comment event
+    // carries are exactly what makes the author readable without a lookup.
+    expect(account.id).toBe("0009200000000001");
+    expect(account.username).toBe("fixture_fan");
+  });
+
+  it("leaves the REPLIES and every sidecar BYTE-IDENTICAL", () => {
+    const before = replyRaw();
+    const trimmed = trimFanslyPostRepliesPayload(replyRaw()) as Record<string, unknown>;
+    // The replies are the fact this lane exists for — bodies, threading fields,
+    // tips and all. Nothing about them is narrowed.
+    expect(JSON.stringify(trimmed.posts)).toBe(JSON.stringify(before.posts));
+    for (const key of ["aggregatedPosts", "accountMedia", "tips", "tipGoals", "stories", "polls"]) {
+      expect(JSON.stringify(trimmed[key]), key).toBe(JSON.stringify(before[key]));
+    }
+  });
+
+  it("returns a payload with no `accounts` key untouched", () => {
+    // 2 of the 5 captured responses looked like this — no sidecar at all — and
+    // the trim must add nothing that was not served.
+    const payload = { posts: [{ id: "1" }] };
+    expect(trimFanslyPostRepliesPayload(payload)).toBe(payload);
+    // The adapter's SYNTHETIC empty-answer marker passes through unchanged too.
+    const empty = { __empty: true, httpStatus: 204 };
+    expect(trimFanslyPostRepliesPayload(empty)).toBe(empty);
+    expect(trimFanslyPostRepliesPayload(null)).toBeNull();
+  });
+
+  it("stamps its own capture-shape version rather than bumping the shared one", () => {
+    expect(FANSLY_POST_REPLIES_CAPTURE_MAPPER_VERSION).toMatch(/\+post-replies-capture-v1$/);
+    expect(FANSLY_POST_REPLIES_CAPTURE_MAPPER_VERSION)
+      .not.toBe(FANSLY_NOTIFICATIONS_CAPTURE_MAPPER_VERSION);
   });
 });
