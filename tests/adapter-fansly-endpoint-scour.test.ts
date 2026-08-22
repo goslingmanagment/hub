@@ -901,3 +901,207 @@ describe("WP-F7 adapter methods: the two payout routes", () => {
     expect(failure).toBeInstanceOf(Error);
   });
 });
+
+describe("WP-F4 adapter method: /it/moie/statsnew", () => {
+  it("sends the exact query per tier, through the page's own proxy", async () => {
+    const { FanslyAdapter, fetchMock, proxyDispatchers } = harness;
+    for (let index = 0; index < 3; index += 1) {
+      fetchMock.mockResolvedValueOnce(toJsonResponse({
+        success: true,
+        response: { dataset: { period: 86_400_000, datapoints: [] }, aggregationData: {} },
+      }));
+    }
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const now = new Date("2026-08-22T12:00:00.000Z");
+
+    // FRESH — trailing 24 h at hourly granularity, which is where a new item's
+    // numbers actually move.
+    await adapter.getMediaOfferStats(context(), {
+      mediaOfferId: "935652728804241411",
+      beforeDate: now,
+      afterDate: new Date(now.getTime() - 24 * 60 * 60_000),
+      periodMs: 3_600_000,
+    });
+    // MID — trailing 30 d, daily.
+    await adapter.getMediaOfferStats(context(), {
+      mediaOfferId: "935652728804241411",
+      beforeDate: now,
+      afterDate: new Date(now.getTime() - 30 * 24 * 60 * 60_000),
+      periodMs: 86_400_000,
+    });
+    // BACKFILL — the HISTORICAL 31-day window the HAR proves is honoured
+    // exactly: `beforeDate 2026-08-01 / afterDate 2026-07-01` came back
+    // `dateBefore 2026-07-31 / dateAfter 2026-06-30`. NOT the plan's 100 days,
+    // which is the span `/it/amoie/stats` answered with its own default
+    // trailing window on production and looped a whole day's cap on.
+    const backfillBefore = new Date("2026-08-01T00:00:00.000Z");
+    const backfillAfter = new Date("2026-07-01T00:00:00.000Z");
+    await adapter.getMediaOfferStats(context(), {
+      mediaOfferId: "935652728804241411",
+      beforeDate: backfillBefore,
+      afterDate: backfillAfter,
+      periodMs: 86_400_000,
+    });
+    await adapter.close();
+
+    const methods = fetchMock.mock.calls.map(([, init]) => (init as RequestInit).method);
+    // READ-ONLY, ALWAYS. This is the highest-volume lane in the initiative and
+    // there is still no POST to the platform anywhere in it.
+    expect(new Set(methods)).toEqual(new Set(["GET"]));
+
+    const urls = fetchMock.mock.calls.map(([input]) => new URL(String(input)));
+    for (const url of urls) {
+      expect(url.pathname).toBe("/it/moie/statsnew");
+      expect(url.searchParams.get("mediaOfferId")).toBe("935652728804241411");
+      expect(url.searchParams.get("ngsw-bypass")).toBe("true");
+      // The per-media route takes NO `year`/`month`: those are the account
+      // route's named-month affordance and this one has never been observed
+      // carrying them.
+      expect(url.searchParams.has("year")).toBe(false);
+      expect(url.searchParams.has("month")).toBe(false);
+      // Exactly the five keys the app sends.
+      expect([...url.searchParams.keys()].sort()).toEqual([
+        "afterDate",
+        "beforeDate",
+        "mediaOfferId",
+        "ngsw-bypass",
+        "period",
+      ]);
+    }
+
+    // THE PERIOD PER TIER, in epoch milliseconds, as strings on the wire.
+    expect(urls[0]?.searchParams.get("period")).toBe("3600000");
+    expect(urls[1]?.searchParams.get("period")).toBe("86400000");
+    expect(urls[2]?.searchParams.get("period")).toBe("86400000");
+
+    expect(urls[0]?.searchParams.get("beforeDate")).toBe(String(now.getTime()));
+    expect(urls[0]?.searchParams.get("afterDate")).toBe(
+      String(now.getTime() - 24 * 60 * 60_000),
+    );
+    expect(urls[2]?.searchParams.get("beforeDate")).toBe(String(backfillBefore.getTime()));
+    expect(urls[2]?.searchParams.get("afterDate")).toBe(String(backfillAfter.getTime()));
+    // 31 days, not 100: the span, not the age, is what the provider refuses.
+    const spanDays = (backfillBefore.getTime() - backfillAfter.getTime()) / (24 * 60 * 60_000);
+    expect(spanDays).toBe(31);
+
+    // FANSLY PAGES MUST GO THROUGH THEIR OWN PROXY — a direct-IP request risks
+    // a model ban, and this lane makes 300 requests a page a day.
+    expect(proxyDispatchers.length).toBeGreaterThan(0);
+    for (const [, init] of fetchMock.mock.calls) {
+      expect((init as { dispatcher?: { label?: string } }).dispatcher?.label).toMatch(/^proxy-/);
+    }
+  });
+
+  it("hands the response through VERBATIM, seven stat keys and no video fields", async () => {
+    const { FanslyAdapter, fetchMock } = harness;
+    // The live shape (HAR 2026-08-19, 6/6 responses): the media offer id is
+    // `dataset.datasetMediaOfferId`, and every `stats[]` row carries EXACTLY
+    // seven keys with NO video fields — even for `media.type = 2,
+    // mimetype = video/mp4`. [E5] is what would change that; until it does,
+    // nothing may promise per-media watch metrics.
+    const response = {
+      dataset: {
+        period: 21_600_000,
+        dateBefore: 1_787_140_800_000,
+        dateAfter: 1_786_536_000_000,
+        datapointLimit: 100,
+        datapoints: [{
+          timestamp: 1_787_140_800_000,
+          stats: [{
+            type: 0,
+            views: 2,
+            previewViews: 0,
+            interactionTime: 11_856,
+            previewInteractionTime: 0,
+            uniqueViewers: 2,
+            previewUniqueViewers: 0,
+          }],
+        }],
+        topFypTags: [{
+          tagId: "436274801351335939",
+          views: 1,
+          previewViews: 0,
+          interactionTime: 5_636,
+          previewInteractionTime: 0,
+        }],
+        datasetMediaOfferId: "935652728804241411",
+      },
+      aggregationData: { accountMedia: [], accountMediaBundles: [], tags: [] },
+    };
+    fetchMock.mockResolvedValueOnce(toJsonResponse({ success: true, response }));
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const result = await adapter.getMediaOfferStats(context(), {
+      mediaOfferId: "935652728804241411",
+      beforeDate: new Date(1_787_155_800_000),
+      afterDate: new Date(1_786_551_000_000),
+      periodMs: 21_600_000,
+    });
+    await adapter.close();
+
+    expect(result.raw).toEqual(response);
+    const stats = (result.raw as typeof response).dataset.datapoints[0]?.stats[0] ?? {};
+    expect(Object.keys(stats).sort()).toEqual([
+      "interactionTime",
+      "previewInteractionTime",
+      "previewUniqueViewers",
+      "previewViews",
+      "type",
+      "uniqueViewers",
+      "views",
+    ]);
+  });
+
+  it("treats 403 as terminal — one attempt, typed failure, no retry storm", async () => {
+    const { FanslyAdapter, fetchMock } = harness;
+    fetchMock.mockResolvedValue(
+      toJsonResponse({ success: false, error: { code: 403, message: "forbidden" } }, {
+        status: 403,
+      }),
+    );
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const { events, requestObserver } = captureEvents();
+    const failure = await adapter
+      .getMediaOfferStats(context({ requestObserver }), {
+        mediaOfferId: "media-1",
+        beforeDate: new Date("2026-08-22T00:00:00.000Z"),
+        afterDate: new Date("2026-07-22T00:00:00.000Z"),
+        periodMs: 86_400_000,
+      })
+      .then(() => null, (error: unknown) => error as { status?: number });
+    await adapter.close();
+
+    expect(failure?.status).toBe(403);
+    // LOAD-BEARING ON THIS LANE ABOVE ALL: the cap is counted in ATTEMPTS, so a
+    // dead session that retried three times per media would triple the egress
+    // of the highest-volume lane in the system while failing.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(events.filter((event) => event.state === "started")).toHaveLength(1);
+  });
+
+  it("treats 401 as terminal — never a silently empty window", async () => {
+    const { FanslyAdapter, fetchMock } = harness;
+    fetchMock.mockResolvedValue(
+      toJsonResponse({ success: false, error: { code: 401, message: "unauthorized" } }, {
+        status: 401,
+      }),
+    );
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const { events, requestObserver } = captureEvents();
+    const failure = await adapter
+      .getMediaOfferStats(context({ requestObserver }), {
+        mediaOfferId: "media-1",
+        beforeDate: new Date("2026-08-22T00:00:00.000Z"),
+        afterDate: new Date("2026-07-22T00:00:00.000Z"),
+        periodMs: 86_400_000,
+      })
+      .then(() => null, (error: unknown) => error as { status?: number });
+    await adapter.close();
+
+    // The backfill's stop rule is TWO consecutive all-empty windows. An auth
+    // failure surfacing as an empty body would record a retention floor that
+    // does not exist, per media, for as long as the session stayed dead.
+    expect(failure?.status).toBe(401);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(events.filter((event) => event.state === "started")).toHaveLength(1);
+  });
+});
