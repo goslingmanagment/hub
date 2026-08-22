@@ -12,6 +12,19 @@ const dbMocks = vi.hoisted(() => ({
   pausePageSync: vi.fn(),
   upsertCheckpoint: vi.fn(),
   upsertCheckpointProgress: vi.fn(),
+  // WP-F6: the engagement refresh phase's queue + the live config read.
+  getConfigOverrides: vi.fn(async () => new Map()),
+  countPostEngagementRefreshProgress: vi.fn(async () => ({
+    subjectsKnown: 0,
+    subjectsRefreshed: 0,
+    subjectsDirty: 0,
+    postsKnown: 0,
+  })),
+  listPostEngagementRefreshChunk: vi.fn(async () => []),
+  recordPostEngagementRefreshFailures: vi.fn(async () => ({ applied: 0 })),
+  recordPostEngagementRefreshVisits: vi.fn(async () => ({ applied: 0 })),
+  seedPostEngagementQueue: vi.fn(async () => ({ scanned: 0, inserted: 0, cursor: null })),
+  postEngagementIntervalDays: vi.fn(),
 }));
 
 const sharedMocks = vi.hoisted(() => ({
@@ -116,6 +129,24 @@ describe("posts sync handlers", () => {
     dbMocks.getOfapiCaptureJob.mockResolvedValue(null);
     dbMocks.upsertCheckpoint.mockResolvedValue({});
     dbMocks.upsertCheckpointProgress.mockResolvedValue({});
+    dbMocks.getConfigOverrides.mockResolvedValue(new Map());
+    dbMocks.countPostEngagementRefreshProgress.mockResolvedValue({
+      subjectsKnown: 0,
+      subjectsRefreshed: 0,
+      subjectsDirty: 0,
+      postsKnown: 0,
+    });
+    dbMocks.listPostEngagementRefreshChunk.mockResolvedValue([]);
+    dbMocks.recordPostEngagementRefreshFailures.mockResolvedValue({ applied: 0 });
+    dbMocks.recordPostEngagementRefreshVisits.mockResolvedValue({ applied: 0 });
+    dbMocks.seedPostEngagementQueue.mockResolvedValue({
+      scanned: 0,
+      inserted: 0,
+      cursor: null,
+    });
+    dbMocks.postEngagementIntervalDays.mockImplementation(
+      (tier: string) => (tier === "fresh" ? 1 : tier === "mid" ? 7 : 30),
+    );
     sharedMocks.persistRawPayload.mockResolvedValue(undefined);
     sharedMocks.retentionDate.mockReturnValue(new Date("2026-10-31T00:00:00.000Z"));
   });
@@ -139,6 +170,16 @@ describe("posts sync handlers", () => {
       ...state,
       fanslyRecentRefreshCutoffAt: null,
       fanslyRecentRefreshAnchorReached: false,
+      // WP-F6: a checkpoint written before the engagement phase existed parses
+      // as "never run" rather than failing — refusing the whole cursor here
+      // would restart the timeline walk from the head on the deploy that ships
+      // the phase.
+      fanslyPostEngagement: {
+        utcDay: null,
+        callsToday: 0,
+        seedCursor: null,
+        seedComplete: false,
+      },
     });
     expect(parsePostsCursorState({ ...state, before: "" })).toBeNull();
     expect(parsePostsCursorState({ ...state, revision: -1 })).toBeNull();

@@ -91,6 +91,19 @@ export const VAULT_MEDIA_HEAD_CURSOR = "0";
 export const ACCOUNT_MEDIA_BATCH_SIZE = 100;
 
 /**
+ * WP-F6: ids per `GET /post?ids=` call.
+ *
+ * The app's own `getPosts` joins the id list with no splice of its own — its
+ * two live call sites hydrate one or two ids — so unlike
+ * `ACCOUNT_MEDIA_BATCH_SIZE` this number is NOT read out of a batching loop in
+ * the bundle. It is the size the same app uses for every OTHER `?ids=` route it
+ * batches (`requestedAccountIds_`, `requestedMediaIds_`, `requestedBundleIds_`
+ * are all `splice(0, 100)`), and the refresh lane's arithmetic is sized on it.
+ * A larger batch would be a shape nobody has seen the server accept.
+ */
+export const POST_BATCH_SIZE = 100;
+
+/**
  * WP-F5: the statuses `/post/{postId}/replies` may answer with an empty body.
  *
  * NOT live-proven — no GET anywhere in the 2026-08-19 HAR returned 204 (all 197
@@ -742,6 +755,60 @@ export class FanslyAdapter {
       before,
       nextBefore,
       done: items.length === 0,
+      contractAccepted: Array.isArray(response.parsed?.posts),
+      raw: response.raw,
+    };
+  }
+
+  /**
+   * WP-F6 — `GET /post?ids=<csv>`: the batch post read, and the whole egress of
+   * the engagement refresh phase.
+   *
+   * It returns the SAME envelope the timeline does (`{posts, aggregatedPosts,
+   * accountMedia, accounts, tips, tipGoals, stories, polls}`), which is why the
+   * refresh journals under the existing `posts` kind and the v6 family parses
+   * it with no new branch: one response shape, one parser, one projection.
+   *
+   * It carries strictly MORE than the timeline: `wallIds` appears here and on
+   * no `/timelinenew` post in the 2026-08-19 capture.
+   */
+  async getPostsByIds(
+    context: FanslyRequestContext,
+    ids: string[],
+  ): Promise<FanslyPostsPageResponse> {
+    if (ids.length === 0) {
+      throw new Error("Fansly post batch read requires at least one id");
+    }
+    if (ids.length > POST_BATCH_SIZE) {
+      throw new Error(`Fansly post batch read supports at most ${POST_BATCH_SIZE} ids per request`);
+    }
+    if (ids.some((id) => id.trim().length === 0)) {
+      throw new Error("Fansly post batch read ids must be nonblank");
+    }
+    const response = await this.request<FanslyPostsPage>(context, "/post", {
+      operation: "post_lookup",
+      endpointTemplate: "/post",
+      query: { ids: ids.join(",") },
+      category: "posts",
+      requestShape: {
+        idsCount: ids.length,
+      },
+      summarizeResponse: (parsed) => ({
+        returnedItems: Array.isArray(parsed?.posts) ? parsed.posts.length : null,
+      }),
+    });
+
+    const items = Array.isArray(response.parsed?.posts) ? response.parsed.posts : [];
+    return {
+      items,
+      // This route is keyed on ids, not on an account or a wall, and it does not
+      // page. The response object keeps the shared shape so one journal/parse
+      // path serves both reads; the cursor fields are inert by construction.
+      accountId: "",
+      wallId: null,
+      before: "0",
+      nextBefore: null,
+      done: true,
       contractAccepted: Array.isArray(response.parsed?.posts),
       raw: response.raw,
     };

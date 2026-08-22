@@ -82,6 +82,13 @@ export type AdapterLike = ProviderAdapter<
       pageIndex?: number;
     },
   ): Promise<FanslyPostsPageResponse>;
+  /** WP-F6 — `GET /post?ids=<csv>`, the engagement refresh phase's only egress.
+   *  Same envelope as the timeline, so it journals under the existing `posts`
+   *  kind and the v6 family parses it with no new branch. */
+  getPostsByIds(
+    context: FanslyRequestContext,
+    ids: string[],
+  ): Promise<FanslyPostsPageResponse>;
   getTipsByTargetIds(
     context: FanslyRequestContext,
     targetIds: string[],

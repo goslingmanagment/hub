@@ -584,3 +584,327 @@ export async function countPostRepliesWalkProgress(
     postsKnown: Number(row?.posts ?? 0),
   };
 }
+
+// ── the post_engagement refresh queue (WP-F6) ────────────────────────────────
+//
+// SAME TABLE, THIRD PLANE. Where `post_replies` walks a post's comments once and
+// re-walks on a cycle, this plane RE-READS a post's own counters on a DECAY: the
+// numbers on a post published this morning move all day, and the numbers on a
+// post from two years ago move once a quarter. A flat re-read cycle would spend
+// the day's calls proving that the back catalogue did not change.
+//
+// The tier boundaries below are CONSTANTS, not config keys, and deliberately so:
+// they describe how engagement on a post decays with its age, which is a
+// property of the platform rather than a knob an operator should be turning. The
+// one number that IS tunable is the daily call budget, which decides how much of
+// the decay the lane can afford — exactly the split §6.1 asks for.
+
+/** Fresh: published within 30 days — re-read DAILY. */
+export const POST_ENGAGEMENT_FRESH_DAYS = 30;
+/** Mid: 31–180 days — re-read WEEKLY. */
+export const POST_ENGAGEMENT_MID_DAYS = 180;
+/** Long tail: older than 180 days — re-read every 30 days, round-robin by
+ *  `last_visited_at ASC`. "Monthly" is honest only while the queue is smaller
+ *  than 30 days of batches; the lane reports its own due backlog rather than
+ *  claiming a cycle it cannot fund. */
+export const POST_ENGAGEMENT_FRESH_INTERVAL_DAYS = 1;
+export const POST_ENGAGEMENT_MID_INTERVAL_DAYS = 7;
+export const POST_ENGAGEMENT_LONG_TAIL_INTERVAL_DAYS = 30;
+
+const DAY_MS = 24 * 60 * 60_000;
+
+export type PostEngagementTier = "fresh" | "mid" | "long_tail";
+
+/** The tier a post sits in, from its publication age. Exported because the
+ *  handler needs it to compute the row's next due date after a visit, and
+ *  because a boundary that lives in two places drifts. */
+export function postEngagementTier(publishedAt: Date | null, now: Date): PostEngagementTier {
+  if (publishedAt === null) {
+    // Publication date unknown ⇒ treat it as fresh rather than inventing an age.
+    // The same rule WP-F4 states for media first seen in stats aggregation.
+    return "fresh";
+  }
+  const ageDays = (now.getTime() - publishedAt.getTime()) / DAY_MS;
+  if (ageDays <= POST_ENGAGEMENT_FRESH_DAYS) return "fresh";
+  if (ageDays <= POST_ENGAGEMENT_MID_DAYS) return "mid";
+  return "long_tail";
+}
+
+export function postEngagementIntervalDays(tier: PostEngagementTier): number {
+  return tier === "fresh"
+    ? POST_ENGAGEMENT_FRESH_INTERVAL_DAYS
+    : tier === "mid"
+      ? POST_ENGAGEMENT_MID_INTERVAL_DAYS
+      : POST_ENGAGEMENT_LONG_TAIL_INTERVAL_DAYS;
+}
+
+/**
+ * Seed one bounded batch of engagement rows from `creator_posts`.
+ *
+ * The `post_replies` seeding's twin, and keyset for the same reason: the post
+ * ref is a snowflake, so `> cursor` resumes exactly where the last batch stopped
+ * even as posts are inserted underneath it, and the cursor returned is the last
+ * ref SCANNED rather than the last inserted — a batch that hits only rows
+ * already queued still has to advance or the sweep re-reads the same prefix
+ * forever. Costs ZERO platform calls.
+ */
+export async function seedPostEngagementQueue(
+  db: Database,
+  input: {
+    pageId: number;
+    afterSubjectRef: string | null;
+    limit: number;
+    dueAt: Date;
+  },
+): Promise<{ scanned: number; inserted: number; cursor: string | null }> {
+  const after = input.afterSubjectRef ?? "";
+  const scan = await db.execute<{ platform_post_id: string }>(sql`
+    select p.platform_post_id
+      from creator_posts p
+     where p.account_id = ${input.pageId}
+       and p.platform = 'fansly'
+       and p.platform_post_id > ${after}
+     order by p.platform_post_id asc
+     limit ${input.limit}
+  `);
+  const refs = scan.rows.map((row) => row.platform_post_id);
+  if (refs.length === 0) {
+    return { scanned: 0, inserted: 0, cursor: input.afterSubjectRef };
+  }
+  const inserted = await db.execute(sql`
+    insert into subject_refresh_state (
+      page_id, plane, subject_ref, refresh_class, next_due_at
+    )
+    select ${input.pageId}, 'post_engagement', ref, 'fresh', ${input.dueAt}
+      from unnest(${subjectRefArrayParam(refs)}) as ref
+    on conflict (page_id, plane, subject_ref) do nothing
+  `);
+  return {
+    scanned: refs.length,
+    inserted: inserted.rowCount ?? 0,
+    cursor: refs[refs.length - 1] ?? input.afterSubjectRef,
+  };
+}
+
+export interface PostEngagementRefreshCandidate {
+  subjectRef: string;
+  publishedAt: Date | null;
+  lastVisitedAt: Date | null;
+  dirtyReason: string | null;
+  consecutiveFailures: number;
+  tier: PostEngagementTier;
+  /** 0 never refreshed, 1 dirty, 2 due by its tier's decay. */
+  priorityBand: number;
+}
+
+/**
+ * The chunk's refresh list, in the decay order WP-F6 declares.
+ *
+ * DUE-NESS IS COMPUTED FROM `published_at` AND `last_visited_at` AGAINST `now`,
+ * not read from `next_due_at`. Same reasoning as the replies walk: the tier a
+ * post belongs to changes as the post AGES, so a stored due date freezes each
+ * row's cadence at the tier it was in when it was last visited — a post that
+ * crossed from fresh into mid would keep being re-read daily forever. The column
+ * is still maintained (it is the shared table's contract and what its partial
+ * index covers) and the DIRTY path is read through `dirty_reason`, which no
+ * cutoff can suppress.
+ *
+ * Every ordering key is a qualified column or the expression itself: a bare
+ * column name in ORDER BY resolves to a SELECT alias, a trap that has shipped
+ * twice in this tree.
+ */
+export async function listPostEngagementRefreshChunk(
+  db: Database,
+  input: { pageId: number; limit: number; now: Date },
+): Promise<PostEngagementRefreshCandidate[]> {
+  const tier = sql`
+    case
+      when p.published_at is null then 'fresh'
+      when p.published_at >= ${new Date(input.now.getTime() - POST_ENGAGEMENT_FRESH_DAYS * DAY_MS)}
+        then 'fresh'
+      when p.published_at >= ${new Date(input.now.getTime() - POST_ENGAGEMENT_MID_DAYS * DAY_MS)}
+        then 'mid'
+      else 'long_tail'
+    end
+  `;
+  const dueCutoff = sql`
+    case ${tier}
+      when 'fresh' then ${
+    new Date(input.now.getTime() - POST_ENGAGEMENT_FRESH_INTERVAL_DAYS * DAY_MS)
+  }::timestamptz
+      when 'mid' then ${
+    new Date(input.now.getTime() - POST_ENGAGEMENT_MID_INTERVAL_DAYS * DAY_MS)
+  }::timestamptz
+      else ${
+    new Date(input.now.getTime() - POST_ENGAGEMENT_LONG_TAIL_INTERVAL_DAYS * DAY_MS)
+  }::timestamptz
+    end
+  `;
+  const band = sql`
+    case
+      when s.last_visited_at is null then 0
+      when s.dirty_reason is not null then 1
+      else 2
+    end
+  `;
+  const result = await db.execute<{
+    subject_ref: string;
+    published_at: Date | string | null;
+    last_visited_at: Date | string | null;
+    dirty_reason: string | null;
+    consecutive_failures: number | string;
+    tier: string;
+    priority_band: number | string;
+  }>(sql`
+    select s.subject_ref,
+           p.published_at,
+           s.last_visited_at,
+           s.dirty_reason,
+           s.consecutive_failures,
+           ${tier} as tier,
+           ${band} as priority_band
+      from subject_refresh_state s
+      join creator_posts p
+        on p.account_id = s.page_id
+       and p.platform_post_id = s.subject_ref
+     where s.page_id = ${input.pageId}
+       and s.plane = 'post_engagement'
+       and (
+         s.last_visited_at is null
+         or s.dirty_reason is not null
+         or s.last_visited_at < ${dueCutoff}
+       )
+     order by ${band} asc,
+              case ${tier} when 'fresh' then 0 when 'mid' then 1 else 2 end asc,
+              s.last_visited_at asc nulls first,
+              p.published_at desc nulls last,
+              s.subject_ref desc
+     limit ${input.limit}
+  `);
+  return result.rows.map((row) => ({
+    subjectRef: row.subject_ref,
+    publishedAt: row.published_at === null ? null : new Date(row.published_at),
+    lastVisitedAt: row.last_visited_at === null ? null : new Date(row.last_visited_at),
+    dirtyReason: row.dirty_reason,
+    consecutiveFailures: Number(row.consecutive_failures),
+    tier: row.tier === "mid" ? "mid" : row.tier === "long_tail" ? "long_tail" : "fresh",
+    priorityBand: Number(row.priority_band),
+  }));
+}
+
+/**
+ * Record a completed engagement refresh for one batch of posts.
+ *
+ * ONE statement for the whole batch: a `GET /post?ids=` call answers for up to a
+ * hundred posts at once, and a per-row round trip would make the bookkeeping
+ * cost more than the egress. The visit is what clears the dirty mark — nothing
+ * else does, so a signal can never be lost between "marked" and "fetched".
+ *
+ * `refresh_class` is written as the tier the post is in TODAY, which is how a
+ * post ages out of `fresh` without anything sweeping it.
+ */
+export async function recordPostEngagementRefreshVisits(
+  db: Database,
+  input: {
+    pageId: number;
+    visits: ReadonlyArray<{
+      subjectRef: string;
+      tier: PostEngagementTier;
+      nextDueAt: Date;
+    }>;
+    visitedAt: Date;
+  },
+): Promise<{ applied: number }> {
+  if (input.visits.length === 0) {
+    return { applied: 0 };
+  }
+  const refs = subjectRefArrayParam(input.visits.map((visit) => visit.subjectRef));
+  const tiers = subjectRefArrayParam(input.visits.map((visit) => visit.tier));
+  const dueLiteral = subjectRefArrayParam(
+    input.visits.map((visit) => visit.nextDueAt.toISOString()),
+  );
+  const result = await db.execute(sql`
+    update subject_refresh_state s
+       set refresh_class = v.tier,
+           next_due_at = v.next_due_at,
+           last_visited_at = ${input.visitedAt},
+           dirty_reason = null,
+           consecutive_failures = 0,
+           updated_at = now()
+      from (
+        select ref, tier, next_due_at::timestamptz as next_due_at
+          from unnest(${refs}, ${tiers}, ${dueLiteral}) as t(ref, tier, next_due_at)
+      ) as v
+     where s.page_id = ${input.pageId}
+       and s.plane = 'post_engagement'
+       and s.subject_ref = v.ref
+  `);
+  return { applied: result.rowCount ?? 0 };
+}
+
+/**
+ * Record a batch whose call did NOT produce an answer.
+ *
+ * `last_visited_at` deliberately does NOT move: a failed look is not a look, and
+ * moving it would retire the post from the never-refreshed band on the strength
+ * of an error. What moves is the failure counter — the number an operator reads
+ * to tell "this post is unreachable" from "we have not got to it yet".
+ */
+export async function recordPostEngagementRefreshFailures(
+  db: Database,
+  input: { pageId: number; subjectRefs: readonly string[]; nextDueAt: Date },
+): Promise<{ applied: number }> {
+  if (input.subjectRefs.length === 0) {
+    return { applied: 0 };
+  }
+  const result = await db.execute(sql`
+    update subject_refresh_state s
+       set next_due_at = ${input.nextDueAt},
+           consecutive_failures = s.consecutive_failures + 1,
+           updated_at = now()
+      from unnest(${subjectRefArrayParam(input.subjectRefs)}) as ref
+     where s.page_id = ${input.pageId}
+       and s.plane = 'post_engagement'
+       and s.subject_ref = ref
+  `);
+  return { applied: result.rowCount ?? 0 };
+}
+
+/** Coverage arithmetic for the phase's progress block. `postsKnown` counts
+ *  `creator_posts` so a seeding that has not finished reads as incomplete
+ *  rather than as complete-and-small. */
+export async function countPostEngagementRefreshProgress(
+  db: Database,
+  pageId: number,
+): Promise<{
+  subjectsKnown: number;
+  subjectsRefreshed: number;
+  subjectsDirty: number;
+  postsKnown: number;
+}> {
+  const result = await db.execute<{
+    subjects: string;
+    refreshed: string;
+    dirty: string;
+    posts: string;
+  }>(sql`
+    select
+      (select count(*)::text from subject_refresh_state s
+        where s.page_id = ${pageId} and s.plane = 'post_engagement') as subjects,
+      (select count(*)::text from subject_refresh_state s
+        where s.page_id = ${pageId} and s.plane = 'post_engagement'
+          and s.last_visited_at is not null) as refreshed,
+      (select count(*)::text from subject_refresh_state s
+        where s.page_id = ${pageId} and s.plane = 'post_engagement'
+          and s.dirty_reason is not null) as dirty,
+      (select count(*)::text from creator_posts p
+        where p.account_id = ${pageId} and p.platform = 'fansly') as posts
+  `);
+  const row = result.rows[0];
+  return {
+    subjectsKnown: Number(row?.subjects ?? 0),
+    subjectsRefreshed: Number(row?.refreshed ?? 0),
+    subjectsDirty: Number(row?.dirty ?? 0),
+    postsKnown: Number(row?.posts ?? 0),
+  };
+}

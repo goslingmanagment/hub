@@ -38,7 +38,7 @@ describe("creator-post canonicalizer", () => {
     const family = familyForObservation(observation({ posts: [] }));
     expect(family).toMatchObject({
       source: "pull",
-      version: 5,
+      version: 6,
       projectionOnly: true,
     });
     expect(family?.kinds).toEqual(["posts", "post_tips"]);
@@ -62,7 +62,7 @@ describe("creator-post canonicalizer", () => {
       type: "post.observed",
       postRef: "post-42",
       occurredAt: new Date("2025-08-02T12:00:00.000Z"),
-      schemaVersion: 2,
+      schemaVersion: 3,
       data: {
         platform: "fansly",
         textPlain: "<p>Hello &amp; welcome</p><p>Second line</p>",
@@ -76,7 +76,7 @@ describe("creator-post canonicalizer", () => {
         tipGoalRef: null,
       },
     });
-    expect(events[0]!.dedupKey).toMatch(/^post:v2:fansly:post-42:[0-9a-f]{64}:obs:71$/);
+    expect(events[0]!.dedupKey).toMatch(/^post:v3:fansly:post-42:[0-9a-f]{64}:obs:71$/);
     expect(events[0]!.data.contentHash).toMatch(/^[0-9a-f]{64}$/);
   });
 
@@ -327,7 +327,7 @@ describe("creator-post canonicalizer", () => {
           type: "post.tip_parse_rejected",
           schemaVersion: 1,
           data: expect.objectContaining({
-            parserVersion: 5,
+            parserVersion: 6,
             rejectedItemCount: 1,
           }),
         }),
