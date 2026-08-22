@@ -228,6 +228,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 224 | Fansly capture widening + the DM media plane (WP-F0) | The Fansly conversation/follower capture stops being a 4-of-25-field stub: `aggregationData.accounts[]` is journaled through a NAMED 18-FIELD ALLOWLIST ([A20]) — `followsYou/following/subscriber/subscriberSubscription/subscriberAutoRenew/notes/containingLists/profileAccess/profileAccessFlags/profileFlags/permissions/statusId/flags/userFlags` on top of `id/username/displayName/createdAt` — while the eight VOLATILE fields (`lastSeenAt`, `followCount`, `subscriberCount`, `postLikes`, `accountMediaLikes`, `timelineStats`, `streaming`, `version`) are never captured, because they change on nearly every response and would destroy the ~11:1 content-address dedup collapse measured on production. That collapse is the whole reason the byte-ceiling mechanism could be DELETED with the ruling: there is no `fanslyUntrimmedCaptureByteCeilingPerDay` key, no lane deferral, and a test pins that nothing in the capture path can defer `dm_conversations` on a byte budget — a storage guard that can stop live chatter work is a worse risk than the runaway it hedged. **The conversation ROWS were never trimmed at all**: `data[]` carries exactly nine fields and the trim keeps all nine, verified by a BYTE-IDENTITY pin on a new verbatim-shaped fixture, because this plan, its v1 and every review pass believed the trim destroyed DM previews, attachments and tips that were never on the route. `groups[].lastMessage` KEEPS its redaction (a duplicate of the verbatim `dm_messages` journal), which is what keeps the agent-read scrub's justification true. **Three new mechanisms.** (1) §3.2a MIXED APPEND: `appendMixedDomainEvents` lets ONE family emit deliverable news and projection-only material for the same observation — deliverables first, then the hidden block, then a checkpoint whose `hiddenCount` counts hidden rows APPENDED (not batch size), because the v2 replay validator requires the row immediately after a seq gap to be the checkpoint covering it. (2) sync-pull v5 parses the DM sale sidecars into four projection-only types (`message.attachments_observed`, `media.observed`, `media.order_observed`, `message.material_observed`) feeding the four rebuildable tables of migration 0130; money is mills, `saleStats.total` is NET (A12), and a sparse `saleStats` is NULL, never 0. `message.ppv_unlocked` keeps running beside `media.order_observed` — two identities for one purchase, never summed, collapsing to ONE `media_orders` row. **A17-4 VARIANT B: `message_archive` gains NO columns** — purchase state is served by joining `message_media_offers` on `(page_id, message_ref)`, so the shadow-rebuild set-equality gate is untouched. (3) §3.2c(ii) the APPEND-side partition census, wired into `runCanonicalization` and not into a command, because that one engine backs both the minutely sweep and the `events:replay` drain: a provider-dated draft aimed at a 2026–2030 month with no ATTACHED partition is REFUSED before any write, the observation keeps its parse debt, and the run reports `partitionBlocked` (a SKIPPED step) with ONE anomaly per (family, month) naming detached-vs-absent and their DIFFERENT recoveries — creating a "missing" partition when the census says detached orphans the facts the detached table holds. Health-floor gauges gain the family LANE (`obs_backlog_<source>_<lane>_v<version>`) because at v5 `sync-pull` and `posts` would have written two different backlogs under one metric name, and the golden-signal threshold map is built with `Object.fromEntries`, where a duplicate key collapses silently. **Two permanent ratchets:** every written `observations.kind` must be claimed by a family, a registered off-sweep claimant or a justified allowlist entry (seeded from a census of the tree, which found five OF capture kinds and one unregistered off-sweep claimant nobody had listed), and every fan-ref-shaped column discovered from `information_schema` must be a fan-scope erasure target or carry a written justification — the FK guard is structurally blind to TEXT platform refs, which is why `tip_sender_platform_user_id` had to be hand-added. The typed write seam ([S2]) is DEFERRED (A28-7): the guarantee is a CI-enforced registry, NOT "structurally impossible". **REPLAY CANNOT RECOVER WHAT WAS NEVER JOURNALED** — pre-fix history stays trimmed, stated through the existing `captureFloor` mechanism (#197); there is no repair re-walk, and the v5 bump re-parses only what the journal already holds |
 | 225 | Fansly account statistics (WP-F1) + the projection registry | The `stats_snapshot` sync stream lands as one whole package: the account statistics sweep (`/it/amoie/stats` daily + hourly), the revenue mix (`/account/wallets/earnings/stats` + `/monthlystats`), `/trackinglinks`, the discovery tag counters, and — per **A28-5** — the three mass-DM broadcast routes plus `/polls` and `/recapstats` as STEPS of this lane rather than a `dm_commerce` stream of their own. **THE PROJECTION REGISTRY comes first and is the reusable half.** `ProjectionDefinition {name, eventTypes, tables, stateClass, rebuildKind, run, rebuild}` is now the list the `projection:rebuild` CLI and the worker tick BOTH iterate, replacing a hardcoded three-name if-chain and six hand-written try/catch blocks — two sites nothing checked, on a plan that adds ~10 projections. Every rebuild now runs the §3.2c(i) detached-partition preflight in the ONE function all of them pass through; before this `creator_posts` and `fan_earnings` would have replayed a truncated ledger and called it authoritative without a word. **[D1] the typed ledger read stays DEFERRED**, and the deferral is reopenable rather than a silent drop: every definition declares its `eventTypes` from day one, and a tick-duration alert on the shared queue is the named trigger. §3.4's THIRD STATE CLASS is declared here — `OPERATIONAL_STATE_TABLES` names `capture_coverage`, and a test asserts no projection's `tables` intersects it, so "operational state is never truncated by a rebuild" is checked rather than promised (**A17-6**). **CAPTURE.** The per-lane daily cap is counted in HTTP ATTEMPTS (retries included — a cap in logical calls lets a retry storm multiply real egress by up to 4), lives in the cursor so it survives leases and restarts, and **DEFERS to the next UTC day; it never drops** — a response already fetched is journaled before the cap is consulted again. After **A28-4** that cap is the whole request-count enforcement: no per-egress-key counter, no `sync_rate_limit_days`, no 2×-of-norm signal, and **[A19]** had already removed the global per-page cap. The first-enable backfill derives each next window from the RETURNED `dateAfter`/`dateBefore` — a self-derived walk drifts a bucket per chunk and leaves holes — stops after two empty windows PLUS one probe a year further back (**[E10]**: an empty window on an idle account proves inactivity, not a floor), journals every empty response because the empty window IS the floor evidence, and records the floor in `capture_coverage` with `proof = empty_window` and `proof_observation_id` pointing at it. Backfill continuations carry `fanslyBackfillContinuationDelayMs` ± 30 % jitter: BURST SHAPE, not daily volume, is the ban-risk surface. **EVENTS.** Family `fansly-stats` v1, projection-only, 13 natural-key types, all RECEIPT-TIME (§3.2b) with the provider instant typed in `data` and in the key — so an event from this family can never carry a clamp marker, and its presence is the failure signal. Type codes are stored RAW (**A22-2**: one label maps to two live codes, so keying by label merges legacy into current and keying against a closed set drops legacy rows); an unknown code writes its row AND raises `fansly_stats_unknown_type` (**A1**). `FANSLY_STAT_LABEL_VERSION = 2`, and its unknown guard fires BEFORE the family lookup so 10002/44002/44032 are `unknown:<code>` rather than silently absorbed. Money is mills through the shared constructors, `saleStats.total` is NET (**A12**), and `/trackinglinks.totalNet` served as 0 lands NULL with the served value preserved beside it — unpopulated, never a zero-revenue link. `media.observed` is re-emitted from the aggregation sidecars with `firstOrigin: 'stats_agg'` in F0's EXACT shapes and dedup keys, so `creator_media.first_origin='stats_agg'` names an origin replay can produce; `creatorMediaOfferLocations` is stored PARSED (**A17-5**) and the media-plane projector stays the single writer of `creator_media`. **A21 STANDS**: no `capture.window_observed`, no `stats_capture_windows` — the two top-N tables carry their window identity INLINE, and per-look history is a query over `sync_raw_payloads`. This entry SUPERSEDES #206's clause parking `/trackinglinks`: the route is wired and its snapshot is a first-class daily fact. **5-minute buckets (`period=300000`) are a deliberate NON-GOAL** — reachable, and not worth the calls or the rows. One flag + one FAIL-CLOSED page allowlist per stream (**S4**: a shared allowlist makes a per-stream ramp unexecutable and turns one fat-fingered edit into six broken lanes); the seed pause is generalized from `if (stream === "posts")` so a gated-off stream can never seed pending rows fleet-wide on the deploy that ships it; and the ops-ordering ladder in `repositories/sync.ts`, which had silently omitted `fan_earnings`/`purchase_history` since Stage 16, is repaired |
 | 226 | Fansly notifications (WP-F2) — the verbatim-first engagement core | The `notifications` stream lands whole: the head poll (1 800 s, 48/day), the one-off deep backfill, the `fansly-engagement` canonicalizer family, `platform_notifications` + `post_likes` + `subject_refresh_state` (0133 enum, 0134 tables), and the engagement projector. **IT IS THE ONLY PERMANENTLY-LOSSY LANE IN THE SYSTEM** — a liker, a reply, a quote or a purchase is announced ONCE and served by no other route — which is why it is `live` class rather than maintenance, why it polls the head BEFORE anything else, and why a running deep backfill YIELDS to a due head poll (history keeps; the head does not). **LAYER 1 IS THE WHOLE ARGUMENT.** `notification.observed` is emitted for EVERY row and EVERY code, known or not, and `platform_notifications` rebuilds from that event alone — so a code nobody can name today reaches the table by replay the day somebody names it. Layer 2's typed derivations ride BESIDE it, never instead: 2007/2008/32007/45012 become `media.purchase_notification_observed`, the rest become `engagement.notification_observed`, and an unnameable code gets its verbatim row plus a `fansly_notification_unknown_type` anomaly (**A1**). **THE PAYOFF IS NOT HYPOTHETICAL: A22-1 found the shipped spec wrong on EIGHT of sixteen codes, including BOTH purchase events**, which it filed as "PostLikeUndo/PostLikeRedo" — a design that typed before storing would have lost two live money streams into a like bucket with no way back. `packages/shared/src/fansly-notification-types.ts` (`FANSLY_NOTIFICATION_LABEL_VERSION = 1`) holds the corrected table with a CITATION per row and the promotion rule enforced: `confirmed` needs two independent live examples agreeing with a second source, so 2007's UI↔payload match ($80/$50 ↔ 80 000/50 000) is the only confirmed entry and every client-code label is `inferred`. Its labels are `reference/fansly_api_spec.md` §3.1's renderer names, so the repo's two tables cannot drift. **NO LIKE IS DERIVED**: `post_likes` ships schema-complete and EMPTY on Fansly ([E4] — 1002/2002/5003/1004/1005 had ZERO live occurrences and client code proves the client's intent, not the server's), its coverage row reads `not_started` / `forward_only` so the serving layer never renders an empty list as "nobody liked it", and the v1 plan's "2007/2008 = media-like undo/redo, flip post_likes.state" is REFUTED and deleted. **CAPTURE.** The cursor is a NOTIFICATION ID, not a timestamp. The first call of every poll goes UNFILTERED (**A1** wants the unknown codes); on a 4xx or a visibly filtered page the lane widens to the client's FULL declared 18-code CSV — **never the eight-code UI CSV, which silently drops 32007 and 45012, both money** (**A22**) — then to one filter group per call, then STOPS, with the refusal counter durable in the cursor because WP-F1's loop spanned five chunks unnoticed. A narrowed lane never claims a clean capture: every coverage write reads `partial_provider_surface` while the filter is narrowed, **terminal one included, because an empty page through a filter means "no rows of THESE types", not the end of history**. The deep backfill walks to the floor with the repeat-request guard, journals the empty page BECAUSE the empty page is the floor evidence, and records `notificationFloorAt` (13.65 days is where the 2026-08-19 capture STOPPED, not a platform floor). The 96-attempt daily cap is counted in HTTP ATTEMPTS, defers to the next UTC day and NEVER drops. **[A20] on `accounts[]`:** the response embeds the fan as a FULL account record — `lastSeenAt` and every counter field — so that array, and only that array, goes through the 18-field allowlist before journaling; the 200 notification rows and every other key stay verbatim. **HEAD PRECEDENCE IS THE PROVIDER'S `occurred_at`, NEVER `account_seq`**, because the deep backfill appends OLDER facts at HIGHER seq — the one ordering guaranteed wrong here, pinned by "a higher-seq, older-occurred_at event cannot regress the head". **§3.4's THIRD STATE CLASS GAINS ITS SECOND MEMBER**: `subject_refresh_state` — the shared refresh queue every later per-subject lane schedules from — is declared in `OPERATIONAL_STATE_TABLES`, so a rebuild can never truncate it and re-mark the whole catalogue as first-sight. A 2007 marks the bought media dirty there and FETCHES NOTHING; WP-F4 is the consumer |
+| 227 | Fansly content catalog (WP-F3) — the lane that measures M, and closes FEAT-002 | The `catalog` stream lands whole (0135 enum, 0136 tables): six fixed daily steps — `/vault/albumsnew`, `/uservault/albumsnew?accountId=`, `/subscriptions/tiers`, `/subscriptions/giftcodes`, `/message/automated`, `/account/walls` — then the vault media walk over `/media/vaultnew` per creator album, then the `/account/media?ids=` and `/account/media/bundle?ids=` batch hydrations, all on ONE 60-attempt daily cap that DEFERS to the next UTC day and never drops. **IT SHIPS BEFORE WP-F4 BECAUSE IT MEASURES M**, the count of unique media offers, and WP-F4's whole sizing (300 calls/page/day round-robin, long-tail cycle ≈ M/rate) rests on a number nobody had computed. **Σ `item_count` IS NOT M** — verified: 27 albums, Σ = 16 939, and the system albums type 38000 (7 574) and type 5000 (3 154) share one `lastItemId` because they are VIEWS over the same media. M is `count(distinct media_offer_ref)` over `creator_media`; the lane reports `uniqueMediaCount`, `vaultMemberUniqueCount` and `albumMembershipSum` side by side in its progress block, the last labelled non-unique everywhere it appears (**A16 item 1**). **THE `/media/vaultnew` QUERY FORM IS SETTLED, and it is the one thing that could have shipped this lane silently broken.** The 2026-08-22 probe sent `albumId=…&search=&before=&after=` for a 4 760-item album and got `{albumMedia: [], media: []}`; the app bundle's `getVaultAlbumMediaNewOrder` shows `before` and `after` are the LITERAL STRING `"0"` on the first page, `mediaType` is present-and-EMPTY when unfiltered, and page two carries `before = <last albumMedia row's own id>` (NOT its `mediaOfferId`, a different value that pages nowhere). **The guard stays anyway**: an empty FIRST page on an album the platform says is non-empty is an unhonoured request, not an empty vault — the sublane stops with `partial_provider_surface` plus ONE anomaly and never retries, because "this creator has no media" is the wrong answer to size a lane against and a walk that re-asks spends a day's cap proving it (WP-F1's lesson). **FEAT-002 CLOSES ON `plans[].price`, NEVER `tier.price`**: all five observed tiers carried `tier.price = 5 000` while plan prices ran 10 000 … **499 990**, so the tier head keeps `base_price_mills` under a name that cannot be misread and `page_subscription_tier_plans` is the queryable truth. `duration_days` reads **`billingCycle`** — the live payload has NO `plans[].duration` key at all; `duration` exists one level down on `promos[]`, which is exactly how that field name gets misread (the plan document says `duration`; the payload wins). **THE ROSTER EVENT is the family's one new idea.** Row events say what IS; nothing in them says what ISN'T, and the case that matters most — a listing that comes back EMPTY — produces no row events at all. So each FULL listing emits one `catalog.listing_observed` carrying its complete ref set, keyed per LOOK, and the projector reconciles in BOTH directions: mark the complement `missing_since`, clear the mark on everything the roster still names. `missing_since` is therefore a REPLAYED fact that survives truncate-and-replay, and nothing is ever deleted (DP 7). Keying it on the ref-set hash instead was built, tested and CORRECTED: a gift code revoked and reinstated unchanged hashes to the roster it had before it vanished, so the event dedupes and the row stays marked forever. **ALBUM MEMBERSHIP GETS NO ROSTER** — it arrives from a PAGED walk, and a roster from one page would claim the album holds only what that page showed. **NO MEDIA BYTES, NO DELIVERY URLS**: `/vault/albumsnew` and `/media/vaultnew` both embed raw `media[]` with `location`, `locations[]` and `variants[]`; the bodies are journaled verbatim and read by nothing, pinned on VALUES as well as columns. **SECONDS AND MILLISECONDS PER FIELD** — one response mixes both (`albums[].createdAt` and `albumContent[].createdAt` are ms while `accountMedia[].createdAt` is seconds), so each field is decoded by the helper for ITS unit and never by a shared guess. `original_price` is read by its SNAKE_CASE name amid camelCase keys. The automation `messageTemplate` is a JSON OBJECT in all seven live values; the March STRING shape keeps a tolerant branch with `parse_ok = false` and a NULL text, because an automation with no text and one we could not read must not look alike. Gift codes join WP-F1's `page_promo_links` as its second `link_kind`, so **both** rebuilds now scope their delete by kind — an unscoped one truncates rows only the other projector's ledger can restore. **The sublane-parking machine (`contract_drift`/`unsupported`/`next_probe_at`) is NOT built (A28-6)**: the probe answered the question it existed for, and all four March routes are live. Batch size is 100 ids — the app's own `splice(0, 100)`, read out of its bundle rather than guessed |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -8646,3 +8647,151 @@ fact needs a second rebuild path); queue columns on `creator_media` (truncated b
 an ordinary repair); the eight-code UI CSV as the degraded-path fallback (it
 drops two money codes); and typing a code the label table cannot name (that is
 the mistake the spec made on eight of them).
+
+---
+
+**Decision #227 (2026-08-22, endpoints-cover WP-F3: the content catalog, and the
+number WP-F4 is sized against):**
+
+**WHY THIS LANE SHIPS BEFORE THE PER-MEDIA ONE.** WP-F4 visits every media offer
+a page owns on an age-decayed round-robin under a 300-call daily cap, so its
+long-tail refresh cycle is M / rate — and until now M was a guess. The whole
+argument for this package is that a lane sized against a guessed denominator can
+be honest about its cadence only by accident. `catalog` measures M.
+
+**Σ `item_count` IS NOT M, AND THE DIFFERENCE IS NOT SMALL.** The 2026-08-19
+capture served 27 albums summing to 16 939 items — but the system albums type
+38000 (7 574 items) and type 5000 (3 154 items) carry the SAME `lastItemId`:
+they are views over the same media, not shelves holding different media. Any
+number derived by summing that column is a fiction. M is
+`count(distinct media_offer_ref)` over `creator_media`, and the lane reports
+three figures together in its progress block — `uniqueMediaCount` (M),
+`vaultMemberUniqueCount` (the overlap-aware union the walk itself measures) and
+`albumMembershipSum` (Σ, labelled NON-UNIQUE at every appearance). Publishing Σ
+alone would have been the easiest possible way to size WP-F4 wrong.
+
+**THE `/media/vaultnew` FORM, and the failure it was one commit away from.** The
+2026-08-22 probe asked `albumId=…&search=&before=&after=` for an album the
+platform says holds 4 760 items and got `{albumMedia: [], media: []}`. An empty
+first page is INDISTINGUISHABLE from an exhausted album, so a lane that trusted
+it would have recorded "this creator has no media", sized the media lane against
+zero, and produced no error anywhere. The app bundle settles the form:
+`getVaultAlbumMediaNewOrder` builds
+`?albumId=<id>&mediaType=<filter|"">&search=<text|"">&before=<cursor>&after="0"`,
+and its caller passes the LITERAL STRING `"0"` for both cursors on the first
+page and `before = <the last albumMedia row's own id>` afterwards. Two details
+carry the whole difference: an empty `before=` is a cursor the server does not
+honour, and the paging id is the MEMBERSHIP row's `id`, not its `mediaOfferId`.
+
+**AND THE GUARD STAYS ANYWAY.** An empty page is "end of pages" only after a
+non-empty one, or on the first page of an album whose `itemCount` is 0. An empty
+FIRST page on a non-empty album stops that sublane with
+`partial_provider_surface`, ONE anomaly and no retry — never a loop. WP-F1 spent
+a whole production day's cap re-asking a question it could not answer, across
+five chunks, and nothing said a word; the shape of that failure is what this
+guard is written against.
+
+**FEAT-002 CLOSES ON THE PLAN, NOT THE TIER.** Every one of the five observed
+tiers carried `tier.price = 5 000` while its plans ran from 10 000 to **499 990**
+— a page reported from the tier head would read as a $5 page. So the tier head
+keeps `base_price_mills` under a name no consumer can mistake for a price, the
+verbatim `plans` array rides beside it as proof nothing was dropped, and
+`page_subscription_tier_plans` is the queryable truth. `duration_days` reads
+**`billingCycle`**: the live payload has no `plans[].duration` key at all, and
+`duration` DOES exist one level down on `promos[]` — the plan document names the
+promo's field and calls it the plan's. The payload is the contract; the writer
+accepts either key so a provider rename is survivable, and a fixture pins both.
+
+**THE ROSTER EVENT, and why `missing_since` needs one.** A tier is retired, a
+gift code revoked, an album deleted. DP 7 forbids deleting the row, so the
+projection marks it — and a projector cannot derive a mark from row events,
+because row events say what IS and nothing in them says what ISN'T. The worst
+case is the honest one: a page whose last tier is retired serves an EMPTY
+listing, which produces zero row events and would leave stale tiers reading as
+live forever. So every FULL listing also emits one `catalog.listing_observed`
+carrying its complete ref set, and the projector marks the complement missing and
+CLEARS the mark on everything the roster still names. `missing_since` becomes a
+replayed fact, reproduced byte-for-byte by a truncate-and-replay, rather than a
+sweep-time side effect a rebuild could not reconstruct.
+
+**The first version of that key was wrong, and the correction is the interesting
+part.** Hashing the ref set made an unchanged roster append nothing, which looked
+like the right economy. It is wrong in exactly one direction: a gift code that
+disappears and comes back UNCHANGED hashes to the roster it had before it
+vanished, so the event dedupes, the projector never sees it, and the row stays
+marked `missing_since` while the platform is serving it again. A set returning to
+a previous shape is a different FACT from a set that never changed, and only the
+LOOK tells them apart — so the roster is keyed per observation, the content hash
+stays in `data` as the cheap "did the set move?" read, and replay is still a
+no-op because the same observation replays to the same key. The cost is seven
+small events per page per day against a production ledger that already appends
+~1 971.
+
+**ALBUM MEMBERSHIP GETS NO ROSTER, deliberately.** It arrives from a PAGED walk,
+and a roster built from one page would claim the album contains only what that
+page showed — the walk would spend its life marking and un-marking its own rows.
+A partial listing is not a listing.
+
+**NO MEDIA BYTES, NO DELIVERY URLS (A4-4).** `/vault/albumsnew` and
+`/media/vaultnew` both embed raw `media[]` rows carrying `location`,
+`locations[]` and `variants[]` — signed CDN material. The bodies are journaled
+verbatim (DP 7) and NOTHING downstream reads those keys, pinned on VALUES as well
+as on column names, which is what the fixtures' `SIGNED-…` placeholders exist
+for. The catalog fetches metadata, prices, permissions and membership, and never
+a byte of media.
+
+**SECONDS AND MILLISECONDS, PER FIELD.** One response mixes both: on
+`/uservault/albumsnew`, `albums[].createdAt` and
+`aggregationData.albumContent[].createdAt` are MILLISECONDS while
+`aggregationData.accountMedia[].createdAt` is SECONDS. Gift codes and promos are
+milliseconds. Each field is decoded by the helper for ITS unit; a single
+heuristic that guesses right today is a 1970 row the day the platform changes.
+
+**TWO SMALLER TRAPS, recorded because both are silent when got wrong.**
+`original_price` is snake_case amid otherwise camelCase keys, so reading it by
+the camelCase name returns a NULL list price and no error. And the automation
+`messageTemplate` is a JSON OBJECT in all seven live values — the archived claim
+that it is a single-quoted Python-repr pseudo-JSON STRING is refuted by the
+capture and withdrawn — but the string branch survives with `parse_ok = false`
+and a NULL `message_text`, because an automation with no text and one we could
+not read must never look alike in storage.
+
+**`page_promo_links` BECOMES A TWO-WRITER TABLE, and both rebuilds are scoped.**
+WP-F1 created it with `link_kind IN ('tracking','gift_code')` and this package
+supplies the second kind. The kind is part of the primary key, so the two row
+sets are structurally disjoint — but an UNSCOPED `delete … where page_id = ?` on
+either rebuild would truncate rows the other projector's ledger owns and only the
+other rebuild could restore. Both now delete by kind. The gift-code half adds
+`uses`, `max_uses`, `price_mills`, `original_price_mills`, the two date bounds
+and `missing_since`, rather than borrowing the tracking half's counters: a list
+price and a revenue figure have different bases and §2.3's rule against combining
+them applies inside one table as much as across two.
+
+**THE SUBLANE-PARKING MACHINE IS NOT BUILT (A28-6).** The plan carried a
+per-route `contract_drift | unsupported | not_probed` state with `next_probe_at`
+and a 7-day retry. The probe answered the question it existed for on 2026-08-22:
+all four March-corpus routes are live. A parked-sublane state machine with no
+sublane to park is machinery maintained for a hypothesis that has been settled.
+What survives is the part that earned itself — per-scope `capture_coverage` rows,
+which say what a walk reached and why it stopped without pretending to schedule
+its own recovery.
+
+**Batch size is 100, and it is not a guess.** The app's own `requestMediaTick`
+and `requestBundleTick` both `splice(0, 100)` before calling `/account/media?ids=`
+and `/account/media/bundle?ids=`, so 100 is a size the server is known to answer
+for. The plan's fallback of 25 would have tripled the hydration call count for
+nothing.
+
+**Rejected, and recorded so it is not re-proposed:** a roster keyed on its ref-set
+hash (see above — it makes a returning entity permanently missing); `media.observed`
+declared on this projection (the media plane stays the SINGLE writer of
+`creator_media`, and declaring the type twice would make the registry's ownership
+claim untrue); writing the user vault's `accountMedia[]` into `creator_media` (it
+is the account's PURCHASES from other creators, and counting it would inflate M
+by the size of the page's shopping history); a `content` value in `SyncDomain`
+(there is none, and adding one to the vocabulary for a label is not worth it —
+`financials` is where tiers, plan prices and gift codes belong); and a
+`media_stats -> catalog` dependency declared here rather than by WP-F4 (a
+dependency on a handler that does not exist yet blocks nothing and misleads
+everything).
+
