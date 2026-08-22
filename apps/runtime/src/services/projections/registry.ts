@@ -217,6 +217,8 @@ export const PROJECTION_REGISTRY: readonly ProjectionDefinition[] = [
     eventTypes: [
       "traffic.datapoint_observed",
       "media_traffic.datapoint_observed",
+      // WP-F4: per-media `topFypTags` rows, in the SAME family.
+      "media_tag.stats_observed",
       "stats.window_top_observed",
       "tag.counters_observed",
       "media.sale_stats_observed",
@@ -232,6 +234,10 @@ export const PROJECTION_REGISTRY: readonly ProjectionDefinition[] = [
       "stats_traffic_buckets",
       "stats_top_media",
       "stats_top_tags",
+      // WP-F4. `subject_refresh_state` is deliberately NOT here: this lane
+      // WRITES it, but it is capture-plane operational state and a rebuild that
+      // truncated it would re-mark the whole catalogue as first-sight.
+      "fansly_media_tag_stats",
       "platform_tag_daily",
       "revenue_mix_daily",
       "revenue_month_totals",
