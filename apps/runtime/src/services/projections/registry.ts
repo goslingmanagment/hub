@@ -65,6 +65,12 @@ import {
   runFanslyCommentsProjection,
 } from "./fansly-comments.ts";
 import {
+  FANSLY_PAYOUTS_PROJECTION,
+  FANSLY_PAYOUTS_PROJECTION_TABLES,
+  rebuildFanslyPayoutsProjection,
+  runFanslyPayoutsProjection,
+} from "./fansly-payouts.ts";
+import {
   FANSLY_STATS_PROJECTION,
   rebuildFanslyStatsProjection,
   runFanslyStatsProjection,
@@ -319,6 +325,26 @@ export const PROJECTION_REGISTRY: readonly ProjectionDefinition[] = [
     label: "Fansly-comments projection sweep complete",
     run: async (app, input) => ({ ...await runFanslyCommentsProjection(app, input) }),
     rebuild: async (app, input) => await rebuildFanslyCommentsProjection(app, input),
+    didWork: (result) => count(result, "applied") > 0,
+  },
+  {
+    name: FANSLY_PAYOUTS_PROJECTION,
+    // WP-F7. Three types, and the third is what makes the first honest:
+    // `payout.method_list_observed` carries the full ref set one listing
+    // served, and applying it is what marks a removed payout method
+    // `missing_since` — including in the case that produces no row events at
+    // all, a creator who removed their last method.
+    eventTypes: [
+      "payout.method_observed",
+      "payout.method_list_observed",
+      "payout.observed",
+    ],
+    tables: [...FANSLY_PAYOUTS_PROJECTION_TABLES],
+    stateClass: "fact_projection",
+    rebuildKind: "truncate_replay",
+    label: "Fansly-payouts projection sweep complete",
+    run: async (app, input) => ({ ...await runFanslyPayoutsProjection(app, input) }),
+    rebuild: async (app, input) => await rebuildFanslyPayoutsProjection(app, input),
     didWork: (result) => count(result, "applied") > 0,
   },
 ];

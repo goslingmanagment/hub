@@ -475,6 +475,16 @@ function createAutoSyncFanslyAdapter(input: {
     async getVaultMediaPage() {
       return { items: [], raw: [] };
     },
+    // WP-F7: the payouts lane's two reads. Stubbed empty — this fixture
+    // exercises auto-sync wiring, not the lane. The stub grows with the
+    // adapter deliberately: the cast is what keeps this fake honest about the
+    // surface the runtime actually depends on.
+    async getPayoutMethods() {
+      return { items: [], raw: [] };
+    },
+    async getPayoutRequestsPage() {
+      return { items: [], raw: { total: 0, data: [] } };
+    },
     // WP-F1: the stats lane's five reads plus the tracking-links call. The stub
     // grows with the adapter deliberately — the cast is what keeps this fake
     // honest about the surface the runtime actually depends on.

@@ -111,6 +111,14 @@ const SANCTIONED_DELETER_FILES = [
   // re-run a first-pass crawl of the entire post back-catalogue for a repair
   // that should cost zero platform calls.
   "apps/runtime/src/services/projections/fansly-comments.ts",
+  // WP-F7: projection reset — rebuildable state only, never scheduled.
+  // rebuildFanslyPayoutsProjection clears `page_payout_methods` and
+  // `page_payout_requests` and its own watermark inside ONE transaction, then
+  // replays them from the domain-event ledger. The stream CHECKPOINT is
+  // deliberately untouched: the request walk's offset cursor and its floor are
+  // capture-plane operational state (§3.4), and resetting them would re-walk
+  // the whole payout history for a repair that should cost zero platform calls.
+  "apps/runtime/src/services/projections/fansly-payouts.ts",
   "apps/runtime/src/services/sync/executor.ts",
   "apps/runtime/src/services/sync/observability.ts",
   "apps/runtime/src/services/sync/rate-limiter.ts",

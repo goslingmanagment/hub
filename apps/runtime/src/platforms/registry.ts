@@ -35,6 +35,7 @@ import {
 } from "../services/sync/posts.ts";
 import { fanslyCatalogChunk } from "../services/sync/fansly-catalog.ts";
 import { fanslyNotificationsChunk } from "../services/sync/fansly-notifications.ts";
+import { fanslyPayoutsChunk } from "../services/sync/fansly-payouts.ts";
 import { fanslyPostRepliesChunk } from "../services/sync/fansly-post-replies.ts";
 import { fanslyStatsSnapshotChunk } from "../services/sync/fansly-stats.ts";
 
@@ -91,6 +92,7 @@ const FANSLY_STREAMS: CanonicalStream[] = [
   "notifications",
   "catalog",
   "post_replies",
+  "payouts",
 ];
 
 /** Mirrors getSyncStreamsForPlatform("onlyfans") (OFAPI-era streams). */
@@ -129,6 +131,8 @@ const FANSLY_PULL: Partial<Record<CanonicalStream, ExecutorPullHandler>> = {
   catalog: fanslyCatalogChunk,
   // WP-F5. Same rule again.
   post_replies: fanslyPostRepliesChunk,
+  // WP-F7. Same rule again.
+  payouts: fanslyPayoutsChunk,
 };
 
 const ONLYFANS_PULL: Partial<Record<CanonicalStream, ExecutorPullHandler>> = {

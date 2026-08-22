@@ -85,6 +85,7 @@ describe("stats_snapshot stream wiring", () => {
       "notifications",
       "catalog",
       "post_replies",
+      "payouts",
     ]);
   });
 
@@ -413,5 +414,104 @@ describe("post_replies stream wiring", () => {
     // made — the wording matters because a tunable that looks like a throttle
     // gets edited like one.
     expect(cycle?.costWarning).toMatch(/does not raise egress|NOT change egress/i);
+  });
+});
+
+// WP-F7 — the same fourteen sites for `payouts`.
+
+describe("payouts stream wiring", () => {
+  it("is a Fansly-only stream, present in every stream vocabulary", () => {
+    expect(SYNC_STREAMS).toContain("payouts");
+    expect([...PLATFORM_STREAMS]).toEqual([...SYNC_STREAMS]);
+    expect(getSyncStreamsForPlatform("fansly")).toContain("payouts");
+    expect(getSyncStreamsForPlatform("onlyfans")).not.toContain("payouts");
+    expect(fanslyPlatformAdapter.capabilities.streams).toContain("payouts");
+    expect(onlyfansPlatformAdapter.capabilities.streams).not.toContain("payouts");
+    // A stream in SYNC_STREAMS with no handler throws "Unsupported executor
+    // stream" on every dispatch, FLEET-WIDE.
+    expect(fanslyPlatformAdapter.pull.payouts).toBeTypeOf("function");
+  });
+
+  it("is a maintenance lane on the daily cadence that yields to money-in and DMs", () => {
+    const policy = SYNC_STREAM_POLICY.payouts;
+    // A payout request moves in days and the steady state is two calls; four
+    // dispatches a day would buy nothing but egress.
+    expect(policy.cadenceSeconds).toBe(86_400);
+    expect(policy.defaultWorkClass).toBe("maintenance");
+    expect(policy.freshnessSlaSeconds).toBeNull();
+    expect(policy.basePriority).toBeLessThan(SYNC_STREAM_POLICY.transactions.basePriority);
+    expect(policy.basePriority).toBeLessThan(SYNC_STREAM_POLICY.dm_messages.basePriority);
+    // Below the comment archive, which is already the lowest lane in the tree:
+    // of everything this initiative adds, a payout history nobody is waiting on
+    // can wait the longest.
+    expect(policy.basePriority).toBeLessThan(SYNC_STREAM_POLICY.post_replies.basePriority);
+  });
+
+  it("joins NO domain policy and declares no dependencies", () => {
+    // `domain: "financials"` is where money-out belongs as a LABEL...
+    expect(SYNC_STREAM_POLICY.payouts.domain).toBe("financials");
+    // ...but the lane is deliberately absent from every domain's primary and
+    // supporting list, so a shut gate cannot degrade a page's block-health UX
+    // to "catching up".
+    for (const domain of Object.values(SYNC_DOMAIN_POLICY)) {
+      expect(domain.primaryStreams).not.toContain("payouts");
+      expect(domain.supportingStreams).not.toContain("payouts");
+    }
+    // Nothing this lane reads comes from another stream: both routes are
+    // account-level and take no ids from a projection.
+    expect(SYNC_STREAM_DEPENDENCIES.payouts).toBeUndefined();
+  });
+
+  it("is excluded from the manual `all` and `data` scopes", () => {
+    expect(fanslyPlatformAdapter.syncScopes.all).not.toContain("payouts");
+    expect(fanslyPlatformAdapter.syncScopes.data).not.toContain("payouts");
+    expect(fanslyPlatformAdapter.syncScopes.messages).not.toContain("payouts");
+  });
+
+  it("seeds PAUSED and is reachable by the gate reconciler", () => {
+    expect(isSeedPausedSyncStream("payouts")).toBe(true);
+    expect(SEED_PAUSED_SYNC_STREAMS).toContain("payouts");
+    // BOTH halves: one without the other is a lane that sits paused forever
+    // while its ramp flag moves nothing (#192).
+    expect(FANSLY_BULK_SYNC_STREAMS).toContain("payouts");
+  });
+
+  it("is exempt from the rollup vote and visible in the monitor", () => {
+    expect(isBulkEnrichmentSyncStream("payouts")).toBe(true);
+    expect(BULK_ENRICHMENT_SYNC_STREAMS).toContain("payouts");
+    expect(MONITORED_SYNC_STREAMS).toContain("payouts");
+  });
+
+  it("registers its gate keys so opening the gate wakes the lane (#192)", () => {
+    const byKey = new Map(CONFIG_DESCRIPTORS.map((descriptor) => [descriptor.key, descriptor]));
+    const enabled = byKey.get("fanslyPayoutsSyncEnabled");
+    expect(enabled?.kind).toBe("boolean");
+    expect(enabled?.default).toBe("false");
+    expect(enabled?.runtimeApply).toBe("live");
+
+    const allowlist = byKey.get("fanslyPayoutsPageAllowlist");
+    expect(allowlist?.kind).toBe("string");
+    expect(allowlist?.default).toBe("");
+    expect(allowlist?.runtimeApply).toBe("live");
+    // Its OWN key, on the FAIL-CLOSED template (S4). It matters more here than
+    // anywhere else in the initiative: this lane reads payout credentials, and
+    // the `fanslyNewStreamPageAllowlist` semantic (empty = ALL pages) would
+    // have opened it fleet-wide on the deploy that shipped it.
+    expect(allowlist?.note).toMatch(/FAILS CLOSED/);
+  });
+
+  it("SHIPS AT 20 CALLS A DAY against a steady state of two", () => {
+    const byKey = new Map(CONFIG_DESCRIPTORS.map((descriptor) => [descriptor.key, descriptor]));
+    const budget = byKey.get("fanslyPayoutsDailyCallBudget");
+    expect(budget?.kind).toBe("number");
+    // §6.1's CORRECTED number. The pre-A28 8 was sized for F7 alone and then
+    // kept while the plan believed the wallet ledger rode this lane; the ledger
+    // turned out to be a duplicate of the existing `transactions` stream
+    // (A28-1) and was deleted, but 20 stays — it is what leaves the one-off
+    // nine-call offset walk room to finish on the day the lane is enabled.
+    expect(budget?.default).toBe("20");
+    expect(budget?.min).toBe(1);
+    expect(budget?.max).toBe(100);
+    expect(budget?.costWarning).toMatch(/ATTEMPTS/);
   });
 });

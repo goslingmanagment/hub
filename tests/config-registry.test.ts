@@ -109,6 +109,11 @@ describe("config registry", () => {
     "fanslyPostRepliesPageAllowlist",
     "fanslyRepliesDailyCallBudget",
     "fanslyRepliesRewalkCycleDays",
+    // WP-F7 payouts. Three keys on the same template: the ramp flag, its
+    // FAIL-CLOSED page allowlist, and the per-lane daily call budget.
+    "fanslyPayoutsSyncEnabled",
+    "fanslyPayoutsPageAllowlist",
+    "fanslyPayoutsDailyCallBudget",
     // WP-F6 engagement refresh on the EXISTING posts stream. Live for the same
     // reason as every other lane gate: the phase must be stoppable, and its cap
     // re-sizable, without a deploy — and without touching the timeline capture

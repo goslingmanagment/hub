@@ -116,6 +116,30 @@ export const POST_BATCH_SIZE = 100;
 export const POST_REPLIES_EMPTY_STATUSES = [204] as const;
 
 /**
+ * WP-F7: the page size `/payments/payout/requests` is walked at.
+ *
+ * The wallet UI requests 10 and the server served 10 on eight of nine observed
+ * pages (the ninth, the last, returned 3 of a `total` of 83). Whether a larger
+ * `limit` is honoured on this route was NEVER measured — the one authorized
+ * follow-up probe answered it for `/earnings/transactions`, a different route —
+ * so 10 is assumed rather than believed, which costs nine calls once per page
+ * and buys a walk that cannot silently skip rows.
+ */
+export const PAYOUT_REQUESTS_PAGE_SIZE = 10;
+
+/**
+ * The value `before` and `after` carry on `/payments/payout/requests`: PRESENT
+ * AND EMPTY.
+ *
+ * The app sent them that way on all nine observed calls, and the wallet surface
+ * never exposed a control that would fill them. An OMITTED parameter is a
+ * different request from an empty one, and only the empty one has ever been
+ * answered — the same lesson `/media/vaultnew` taught the catalog lane, where a
+ * guessed cursor form returned an empty page for a 4 760-item album.
+ */
+export const PAYOUT_REQUESTS_UNBOUNDED = "";
+
+/**
  * Response summary for a route whose shape is NOT yet known (the WP-F9 / [E1]
  * liveness probes). Records enough to tell "did this answer, and with what" apart
  * from "this route is dead", without asserting a contract we have no evidence for.
@@ -1803,6 +1827,91 @@ export class FanslyAdapter {
       pagination: {
         cursorPresent: (params.before ?? VAULT_MEDIA_HEAD_CURSOR) !== VAULT_MEDIA_HEAD_CURSOR,
       },
+      summarizeResponse: summarizeUnknownResponse,
+    });
+    return { items: response.parsed, raw: response.raw };
+  }
+
+  // ---------------------------------------------------------------------------
+  // WP-F7 — the payouts lane. TWO routes, both GET, both verified live
+  // 2026-08-20 (`artifacts/fansly-payouts-capture-2026-08-20/`).
+  //
+  // `/account/wallets/earnings` is NOT here: it is `getEarningsOverview` above.
+  // Neither is `/account/wallets/earnings/transactions` — that is the existing
+  // `transactions` stream, and A28-1 settled it by matching seven transaction
+  // ids from this very HAR against rows the kernel already holds.
+  // ---------------------------------------------------------------------------
+
+  /**
+   * `/payments/payoutmethods` — the creator's own payout methods, as a BARE
+   * ARRAY under the envelope. One call, no query, no pagination.
+   *
+   * LOOSELY TYPED ON PURPOSE, like every other route in this initiative: the
+   * body is journaled before anything asserts on its shape, and the decode —
+   * including `metadata`, which arrives as a JSON-ENCODED STRING — happens in
+   * the canonicalizer where a fixture can bite it. The adapter is a transport.
+   *
+   * WHAT IT CARRIES, AND WHY THAT MATTERS HERE MORE THAN ANYWHERE ELSE:
+   * provider 2 (Paxum, per A22-4 — the API spec says PayPal and is wrong)
+   * returns the creator's FULL email address in plaintext. It reaches the raw
+   * journal under the restricted class and goes no further; nothing derived
+   * from it but a mask ever reaches a projection.
+   */
+  async getPayoutMethods(
+    context: FanslyRequestContext,
+  ): Promise<{ items: unknown; raw: unknown }> {
+    const response = await this.request<unknown>(context, "/payments/payoutmethods", {
+      operation: "payout_methods",
+      endpointTemplate: "/payments/payoutmethods",
+      category: "transactions",
+      requestShape: {},
+      summarizeResponse: summarizeUnknownResponse,
+    });
+    return { items: response.parsed, raw: response.raw };
+  }
+
+  /**
+   * `/payments/payout/requests` — the payout-request history, OFFSET-PAGED.
+   *
+   * THE QUERY FORM IS THE APP'S OWN, character for character:
+   *
+   *   ?before=&after=&limit=10&offset=<0,10,20,…>&ngsw-bypass=true
+   *
+   * `before` and `after` are PRESENT AND EMPTY — the app sends them unbounded
+   * on every one of the nine observed calls, and the wallet UI never exposed a
+   * date filter to fill them. They are sent the same way here rather than
+   * omitted, because "the form the app sends" is the only form any of this is
+   * proven against and an omitted parameter is a different request.
+   *
+   * `limit` is 10 because that is what the UI asks for and what the server was
+   * observed to serve. Whether a larger limit is honoured on THIS route has
+   * never been measured, so the caller assumes 10 and the walk carries a
+   * repeat-request guard rather than a belief.
+   */
+  async getPayoutRequestsPage(
+    context: FanslyRequestContext,
+    params: {
+      /** Present and EMPTY when unbounded — exactly as the app sends it. */
+      before?: string | null;
+      after?: string | null;
+      limit: number;
+      /** Zero-based ROW offset, not a page index. */
+      offset: number;
+    },
+  ): Promise<{ items: unknown; raw: unknown }> {
+    const response = await this.request<unknown>(context, "/payments/payout/requests", {
+      operation: "payout_requests",
+      endpointTemplate: "/payments/payout/requests",
+      category: "transactions",
+      query: {
+        // Present-and-empty, never omitted.
+        before: params.before ?? PAYOUT_REQUESTS_UNBOUNDED,
+        after: params.after ?? PAYOUT_REQUESTS_UNBOUNDED,
+        limit: String(params.limit),
+        offset: String(params.offset),
+      },
+      requestShape: { limit: params.limit, offset: params.offset },
+      pagination: { offset: params.offset, limit: params.limit },
       summarizeResponse: summarizeUnknownResponse,
     });
     return { items: response.parsed, raw: response.raw };

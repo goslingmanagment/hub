@@ -74,6 +74,10 @@ export const MONITORED_SYNC_STREAMS = [
   // queue keeps its rows, the page keeps syncing everything else, and the
   // comment archive simply stops growing 3 % into a 14-day first pass.
   "post_replies",
+  // WP-F7. A wedged payouts lane is invisible everywhere else: two calls a day
+  // is a volume no dashboard notices going to zero, and the first thing lost is
+  // the payout-request history the money side reconciles against.
+  "payouts",
 ] as const satisfies readonly SyncStream[];
 const REQUEST_STREAMS = [
   ...MONITORED_SYNC_STREAMS,
