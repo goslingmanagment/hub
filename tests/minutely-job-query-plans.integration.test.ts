@@ -138,6 +138,27 @@ describe("minutely job query plans", () => {
       await pool.query("analyze ofapi_webhook_events");
       await pool.query("analyze ofapi_spend_projection_events");
 
+      // What the sweep actually gets back, not just how it got there: a plan
+      // assertion alone would still pass if the `not exists` anti-join were
+      // lost, and the sweep would then re-project every settled row forever.
+      const candidates = await listOfapiWebhookEventsForSpendProjection(
+        testDb.db,
+        { limit: 200 },
+      );
+      const unprojected = await pool.query<{ id: string }>(`
+        select e.id::text as id
+        from ofapi_webhook_events e
+        where e.event_type in ('transactions.new', 'messages.ppv.unlocked', 'tips.received')
+          and e.status <> 'pending'
+          and e.platform_account_id is not null
+          and e.id % 5 = 0
+        order by e.id
+        limit 200
+      `);
+      expect(unprojected.rows.length).toBeGreaterThan(0);
+      expect(candidates.map((row) => String(row.id)))
+        .toEqual(unprojected.rows.map((row) => row.id));
+
       const statement = await captureStatement(() =>
         listOfapiWebhookEventsForSpendProjection(testDb!.db, { limit: 200 })
       );
@@ -154,6 +175,24 @@ describe("minutely job query plans", () => {
       // The defect this replaces, by name: the PK walk that read every row.
       expect(plan).not.toContain("ofapi_webhook_events_pkey");
       expect(plan).not.toContain("Seq Scan on ofapi_webhook_events");
+
+      // And the steady state the sweep actually lives in: once everything is
+      // projected it must come back empty rather than re-offering the corpus.
+      await pool.query(`
+        insert into ofapi_spend_projection_events (
+          domain_key, projection_status, source_event_type, source_idempotency_key,
+          journal_id, ofapi_account_id, occurred_at
+        )
+        select 'domain_' || e.id, 'projected', e.event_type, e.idempotency_key,
+               e.id, e.ofapi_account_id, e.received_at
+        from ofapi_webhook_events e
+        where e.event_type in ('transactions.new', 'messages.ppv.unlocked', 'tips.received')
+          and e.status <> 'pending'
+          and e.platform_account_id is not null
+          and e.id % 5 = 0
+      `);
+      expect(await listOfapiWebhookEventsForSpendProjection(testDb.db, { limit: 200 }))
+        .toEqual([]);
     },
     INTEGRATION_TEST_TIMEOUT_MS,
   );
@@ -221,6 +260,27 @@ describe("minutely job query plans", () => {
       // filters, so a probe read every row of its kind in every partition.
       expect(plan).not.toContain("observations_kind_received_at_idx");
       expect(plan).not.toMatch(/Seq Scan on observations_/);
+
+      // The kinds:null family had it worse: `source = $s and parse_version < $v`
+      // matched no index at all and was a parallel seq scan of the whole
+      // journal (96 605 buffers, 2.9-4.0 s on prod). It has to be on the index
+      // too, or the sampler keeps a whole-table read in it.
+      const totalStatement = await captureStatement(() =>
+        computeHealthFloorBacklogMs(testDb!.db, {
+          name: "obs_backlog_command_result_result_v1",
+          source: "command_result",
+          lane: "result",
+          kinds: null,
+          version: 1,
+        })
+      );
+      const totalPlan = await explain(totalStatement);
+      expect(totalPlan).toMatch(/observations_\w+_health_floor_idx/);
+      // Empty partitions cost zero either way and PostgreSQL happily seq-scans
+      // them; what must never happen is a seq scan that actually READS rows.
+      const seqScanned = [...totalPlan.matchAll(/Seq Scan on observations_\w+[^\n]*rows=(\d+)/g)]
+        .map((match) => Number(match[1]));
+      expect(seqScanned.filter((rows) => rows > 0)).toEqual([]);
     },
     INTEGRATION_TEST_TIMEOUT_MS,
   );

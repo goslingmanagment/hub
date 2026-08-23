@@ -96,7 +96,7 @@ export const HEALTH_FLOOR_REGISTRY: readonly HealthFloorDescriptor[] = [
  * all block reads on the box.
  *
  * Two changes make it a bounded probe, both leaning on migration 0144's
- * `(source, kind, parse_version, received_at)`:
+ * `(parse_version, source, kind, received_at)`:
  *
  *  1. All three predicate columns are now INDEX conditions, so a caught-up pair
  *     is an empty index range rather than a table walk.
@@ -118,13 +118,21 @@ export async function computeHealthFloorBacklogMs(
 ): Promise<number> {
   if (floor.kinds === null) {
     // A kinds:null family is a total over its source, so `kind` cannot be
-    // pinned and the per-version expansion buys nothing: the probe scans this
-    // source's slice of the index (command_result, the only such family, is
-    // ~5.6 k rows on prod). Still index-only — `source` is the leading column.
+    // pinned — but the per-version expansion still matters, and here it matters
+    // most: `source = $s and parse_version < $v` had NO usable index at all and
+    // was a parallel seq scan of the whole journal (96 605 buffers, 2.9-4.0 s,
+    // prod 2026-08-23). With the version pinned by equality the index's first
+    // two columns are both bound, so the min is taken over just this source's
+    // pending rows (command_result, the only such family, is ~5.6 k rows).
     const result = await db.execute<{ backlog_ms: string | null }>(sql`
-      select coalesce(extract(epoch from (now() - min(o.received_at))) * 1000, 0)::float8 as backlog_ms
-      from observations o
-      where o.source = ${floor.source} and o.parse_version < ${floor.version}
+      select coalesce(max(extract(epoch from (now() - pending.min_received)) * 1000), 0)::float8 as backlog_ms
+      from generate_series(0, ${floor.version - 1}) as below_floor(parse_version)
+      cross join lateral (
+        select min(o.received_at) as min_received
+        from observations o
+        where o.parse_version = below_floor.parse_version
+          and o.source = ${floor.source}
+      ) pending
     `);
     return Number(result.rows[0]?.backlog_ms ?? 0);
   }
@@ -138,9 +146,9 @@ export async function computeHealthFloorBacklogMs(
     cross join lateral (
       select o.received_at
       from observations o
-      where o.source = ${floor.source}
+      where o.parse_version = below_floor.parse_version
+        and o.source = ${floor.source}
         and o.kind = kind_list.kind
-        and o.parse_version = below_floor.parse_version
       order by o.received_at asc
       limit 1
     ) pending

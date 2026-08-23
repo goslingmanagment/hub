@@ -19,11 +19,25 @@
 -- kind of that family got a full walk of its rows in EVERY partition, because
 -- the only thing that could exclude a row was a column the index did not carry.
 --
--- This index carries all four columns, so `(source, kind, parse_version)`
+-- This index carries all four columns, so `(parse_version, source, kind)`
 -- become index conditions and `received_at` is then already in order: the probe
 -- is an index min-scan (`order by received_at limit 1`), and a caught-up pair
 -- is an empty range instead of a table walk. The column ORDER is the whole
 -- point — the three equality columns first, the ordering column last.
+--
+-- `parse_version` LEADS, and that is a deliberate second constraint rather than
+-- a free choice. An earlier revision of this migration led with `source`, and
+-- the planner promptly started using it for the G5 harvest lookup
+-- (`hasHarvestObservationClientEvent`), which carries `source =
+-- 'client_capture'` and nothing else this index could serve: a bounded probe of
+-- 0096/0126's partial indexes turned into a bitmap scan of every
+-- `client_capture` row with the real predicate demoted to a heap filter
+-- (caught by tests/capture-queryable-columns.integration.test.ts). Leading with
+-- `parse_version` makes that impossible by construction — the harvest lookup
+-- has no `parse_version` clause, so this index cannot even be considered for
+-- it, and the same holds for every other reader of `observations` that is not
+-- asking "what is still pending". A future column reorder here must re-check
+-- that test.
 --
 -- `observations` is PARTITIONED and PostgreSQL cannot CREATE INDEX CONCURRENTLY
 -- on a partitioned parent; an ordinary CREATE INDEX would hold ACCESS EXCLUSIVE
@@ -38,7 +52,7 @@
 
 -- agency-hub:statement
 create index if not exists observations_health_floor_idx
-  on only observations (source, kind, parse_version, received_at);
+  on only observations (parse_version, source, kind, received_at);
 
 -- A backend/process failure during CREATE INDEX CONCURRENTLY can leave an
 -- invalid leaf index behind. IF NOT EXISTS would otherwise keep skipping that
@@ -73,7 +87,7 @@ order by child.relname;
 select format(
   $index$
     create index concurrently if not exists %I
-    on %I.%I (source, kind, parse_version, received_at)
+    on %I.%I (parse_version, source, kind, received_at)
   $index$,
   child.relname || '_health_floor_idx',
   namespace.nspname,
