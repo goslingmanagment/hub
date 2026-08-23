@@ -1,30 +1,9 @@
-// WP-F3 — the `catalog` capture lane, against a real database.
-//
-// The lane that MEASURES M, so what is pinned here is what decides whether M is
-// a number or a fiction:
-//
-//  - THE `/media/vaultnew` FORM. `before`/`after` are the LITERAL "0" on the
-//    first page and `mediaType` is present-and-empty; the probe's `before=`
-//    got an empty page for a 4 760-item album and an empty page is
-//    indistinguishable from an exhausted one.
-//  - THE EMPTY-FIRST-PAGE GUARD. An empty first page on an album the platform
-//    says is non-empty stops the sublane with `partial_provider_surface` and
-//    ONE anomaly. It never loops (WP-F1 spent a whole day's cap on that shape
-//    on production), and it never records "this creator has no media".
-//  - THE 60-ATTEMPT CAP, counted in ATTEMPTS and deferring to the next UTC
-//    day — and the response already fetched when it crosses is still journaled.
-//  - THE WALK'S DURABLE CURSOR: a first-enable exhaustion crawl resumes at the
-//    page it deferred on, across chunks and across days.
-//  - M IN THE PROGRESS BLOCK, beside Σ `item_count` labelled non-unique.
-//  - [A20] on the row that actually lands in `observations`.
+// WP-F3 — catalog form, paging, coverage and physical-attempt invariants.
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
-  createFanslyPage,
-  createModel,
   getCheckpoint,
-  startSyncRun,
 } from "@agency_hub_core/db";
 import { FanslyApiError } from "@agency_hub_core/fansly";
 
@@ -41,6 +20,13 @@ import {
   startIntegrationTestDatabase,
   type StartedTestDatabase,
 } from "./helpers/db.ts";
+import {
+  fanslyLaneAppStub,
+  fanslyLaneInput,
+  fanslyLaneTelemetryStub as telemetryStub,
+  observeFanslyLaneAttempts,
+  seedFanslyLanePage,
+} from "./helpers/fansly-lane-harness.ts";
 
 let testDb: StartedTestDatabase | null = null;
 
@@ -113,16 +99,12 @@ function adapterStub(options: {
   ) {
     const index = calls.length;
     calls.push({ route, params });
-    for (let attempt = 0; attempt < attemptsPerCall; attempt += 1) {
-      await context.requestObserver?.onRequestEvent({
-        requestId: `${route}:${index}:${attempt}`,
-        state: "started",
-        operation: route,
-        endpointTemplate: route,
-        method: "GET",
-        attemptNumber: attempt + 1,
-      });
-    }
+    await observeFanslyLaneAttempts(context, {
+      attempts: attemptsPerCall,
+      requestId: `${route}:${index}`,
+      operation: route,
+      endpointTemplate: route,
+    });
     const failure = options.fail?.(route) ?? null;
     if (failure !== null) {
       throw failure;
@@ -176,29 +158,13 @@ function adapterStub(options: {
   };
 }
 
-function telemetryStub() {
-  const anomalies: Array<Record<string, unknown>> = [];
-  return {
-    anomalies,
-    recordPhaseStarted: vi.fn(async () => {}),
-    recordCheckpointLoaded: vi.fn(async () => {}),
-    recordCheckpointAdvanced: vi.fn(async () => {}),
-    addNote: vi.fn(async () => {}),
-    addAnomaly: vi.fn(async (input: Record<string, unknown>) => {
-      anomalies.push(input);
-    }),
-    getRequestObserver: vi.fn(() => null),
-  };
-}
-
 function appStub(
   adapter: ReturnType<typeof adapterStub>,
   configOverrides: Record<string, unknown> = {},
 ) {
-  return {
-    db: testDb!.db,
+  return fanslyLaneAppStub({
+    database: testDb!,
     adapter,
-    logger: { info: () => {}, warn: () => {}, error: () => {} },
     config: {
       fanslyCatalogSyncEnabled: true,
       fanslyCatalogPageAllowlist: "catalog-lane",
@@ -206,28 +172,21 @@ function appStub(
       fanslyBackfillContinuationDelayMs: 20_000,
       ...configOverrides,
     },
-  } as never;
+  });
 }
 
 let syncRunId = 0;
 
 async function seedPage() {
-  const model = await createModel(testDb!.db, { slug: "catalog", name: "Catalog" });
-  if (!model) throw new Error("Expected the catalog test model to be created");
-  const page = await createFanslyPage(testDb!.db, { modelId: model.id, label: "catalog-lane" });
-  if (!page) throw new Error("Expected the catalog test page to be created");
-  await testDb!.pool.query("update pages set external_page_id = $1 where id = $2", [
-    "acct-catalog",
-    page.id,
-  ]);
-  const run = await startSyncRun(testDb!.db, {
-    platformAccountId: page.id,
+  const seeded = await seedFanslyLanePage(testDb!, {
+    slug: "catalog",
+    name: "Catalog",
+    label: "catalog-lane",
+    accountRef: "acct-catalog",
     stream: "catalog",
-    trigger: "scheduled",
   });
-  if (!run) throw new Error("Expected the catalog test sync run to be created");
-  syncRunId = run.id;
-  return page;
+  syncRunId = seeded.syncRunId;
+  return seeded.page;
 }
 
 /** The walk reads albums from the PROJECTION, so a walk test seeds it there. */
@@ -253,20 +212,16 @@ function input(
   budget = new SyncChunkBudget(),
   now = NOW,
 ) {
-  return {
-    budget,
-    pageContext: {
-      platform: "fansly",
-      page: { id: pageId, label: "catalog-lane", platformAccountId: "acct-catalog", metadata: {} },
-      session: { authorization: "token" },
-      proxy: { url: "socks5://proxy.example:1080" },
-      egressKey: "fansly:catalog",
-    },
+  return fanslyLaneInput({
+    pageId,
+    label: "catalog-lane",
+    accountRef: "acct-catalog",
+    egressKey: "fansly:catalog",
     telemetry,
-    streamState: { requestSeq: 1 },
     syncRunId,
     now,
-  } as never;
+    budget,
+  }) as never;
 }
 
 async function cursor(pageId: number) {

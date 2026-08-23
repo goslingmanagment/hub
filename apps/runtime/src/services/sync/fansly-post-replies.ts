@@ -84,14 +84,9 @@ import {
   recordPostRepliesWalkFailure,
   recordPostRepliesWalkVisit,
   seedPostRepliesWalkQueue,
-  upsertCaptureCoverage,
-  upsertCheckpoint,
-  upsertCheckpointProgress,
-  type CaptureCoverageProof,
   type CaptureCoverageStatus,
 } from "@agency_hub_core/db";
 import { FanslyApiError } from "@agency_hub_core/fansly";
-import type { HttpRequestEvent, HttpRequestObserver } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
 import { REPLIES_FULL_PAGE_THRESHOLD } from "../canonicalize/fansly-comments.ts";
@@ -99,11 +94,21 @@ import { loadEffectiveConfig } from "../effective-config.ts";
 import { isPageAllowlisted } from "../voice-notes.ts";
 import { composeRequestObservers } from "./chunk-budget.ts";
 import type { ExecutorRequestContext, StreamChunkResult } from "./executor-handlers.ts";
+import {
+  classifyFanslyResponse,
+  createFanslyLaneCoverageWriter,
+  createFanslyLaneJournal,
+  createFanslyLaneRuntime,
+  fanslyUtcDayKey,
+  isRepeatedRequest,
+  nextFanslyUtcDayStart,
+  rollFanslyUtcDay,
+  spreadFanslyContinuation,
+} from "./fansly-lane.ts";
 import { summarizeCheckpoint } from "./observability.ts";
 import { createSyncRateLimitWaiter } from "./rate-limiter.ts";
 import {
   FANSLY_POST_REPLIES_CAPTURE_MAPPER_VERSION,
-  persistRawPayload,
   retentionDate,
   trimFanslyPostRepliesPayload,
 } from "./shared.ts";
@@ -155,7 +160,6 @@ const HYDRATED_AUTHOR_MEMORY = 1_000;
  *  this is where the measurement comes from. */
 const POSTS_LENGTH_SAMPLE_LIMIT = 200;
 
-const BACKFILL_JITTER_FRACTION = 0.3;
 
 // ── cursor state ─────────────────────────────────────────────────────────────
 
@@ -248,40 +252,11 @@ export function emptyFanslyPostRepliesCursorState(now: Date): FanslyPostRepliesC
   };
 }
 
-export function utcDayKey(instant: Date): string {
-  return instant.toISOString().slice(0, 10);
-}
+export const utcDayKey = fanslyUtcDayKey;
 
 /** A new UTC day resets the attempt counter and NOTHING else: a walk queue is
  *  durable state and a pagination discovery is a fact, not a daily allowance. */
-export function rollUtcDay(
-  state: FanslyPostRepliesCursorState,
-  now: Date,
-): FanslyPostRepliesCursorState {
-  const today = utcDayKey(now);
-  return state.utcDay === today ? state : { ...state, utcDay: today, callsToday: 0 };
-}
-
-// ── attempt counting ─────────────────────────────────────────────────────────
-
-/** Counts HTTP ATTEMPTS, retries included — the unit the cap is enforced in.
- *  `SyncChunkBudget` counts the same events but is scoped to one chunk; the day
- *  counter has to survive chunks, leases and restarts. */
-class AttemptCounter implements HttpRequestObserver {
-  private attempts = 0;
-
-  async onRequestEvent(event: HttpRequestEvent) {
-    if (event.state === "started") {
-      this.attempts += 1;
-    }
-  }
-
-  take(): number {
-    const attempts = this.attempts;
-    this.attempts = 0;
-    return attempts;
-  }
-}
+export const rollUtcDay = rollFanslyUtcDay;
 
 // ── shape helpers over the journaled bodies ──────────────────────────────────
 
@@ -305,6 +280,13 @@ export function replyRows(payload: unknown): Record<string, unknown>[] | null {
     return null;
   }
   return record.posts.filter((row): row is Record<string, unknown> => asRecord(row) !== null);
+}
+
+export function classifyPostRepliesResponse(payload: unknown) {
+  return classifyFanslyResponse(payload, {
+    isValid: (value) => replyRows(value) !== null,
+    isEmpty: (value) => replyRows(value)?.length === 0,
+  });
 }
 
 /** The cursor the NEXT page would carry: the last reply's own id. Replies come
@@ -357,19 +339,7 @@ export function walkContinuationAt(
   delayMs: number,
   random: () => number = Math.random,
 ): Date {
-  const jitter = 1 + (random() * 2 - 1) * BACKFILL_JITTER_FRACTION;
-  return new Date(now.getTime() + Math.max(0, Math.round(delayMs * jitter)));
-}
-
-function nextUtcDayStart(now: Date): Date {
-  return new Date(Date.UTC(
-    now.getUTCFullYear(),
-    now.getUTCMonth(),
-    now.getUTCDate() + 1,
-    0,
-    5,
-    0,
-  ));
+  return spreadFanslyContinuation(now, delayMs, random);
 }
 
 function isAuthFailure(error: unknown): boolean {
@@ -417,25 +387,44 @@ export async function fanslyPostRepliesChunk(
     now,
   );
 
-  const attempts = new AttemptCounter();
-  const requestContext = {
+  const lane = createFanslyLaneRuntime({
+    db: app.db,
+    pageId,
+    stream: STREAM,
+    cursorText: () => state.paginationMode,
+    dailyCap,
+    telemetry: input.telemetry,
+    downstreamObserver: composeRequestObservers(
+      input.telemetry.getRequestObserver(),
+      input.budget,
+    ),
+    getState: () => state,
+    setState: (next) => {
+      state = next;
+    },
     session: input.pageContext.session,
     proxy: input.pageContext.proxy,
     egressKey: input.pageContext.egressKey,
-    requestObserver: composeRequestObservers(
-      input.telemetry.getRequestObserver(),
-      input.budget,
-      attempts,
-    ),
     rateLimitWaiter: createSyncRateLimitWaiter(app, input.pageContext),
-  };
+  });
+  const { attemptBudget, complete: completeLane, requestContext, saveProgress } = lane;
 
   let journaled = 0;
   let walked = 0;
   let repliesSeen = 0;
   let truncatedPages = 0;
   let hydratedAuthors = 0;
+  let invalidResponses = 0;
   let deferred: string | null = null;
+  const journal = createFanslyLaneJournal({
+    db: app.db,
+    pageId,
+    syncRunId: input.syncRunId,
+    mapperVersion: FANSLY_POST_REPLIES_CAPTURE_MAPPER_VERSION,
+    payloadKind: "mapping_critical",
+    retainUntil: retentionDate(),
+    onJournal: () => { journaled += 1; },
+  });
 
   /**
    * Journal FIRST, always, and apply the [A20] allowlist to the embedded
@@ -454,88 +443,22 @@ export async function fanslyPostRepliesChunk(
     payload: unknown,
   ) => {
     const trimmed = trimFanslyPostRepliesPayload(payload);
-    const result = await persistRawPayload(app.db, {
-      platformAccountId: pageId,
-      syncRunId: input.syncRunId,
-      endpoint: OBSERVATION_KINDS.postReplies,
-      requestParams: { postId, before },
-      responsePayload: trimmed,
-      mapperVersion: FANSLY_POST_REPLIES_CAPTURE_MAPPER_VERSION,
-      payloadKind: "mapping_critical",
-      retainUntil: retentionDate(),
-    }, {
-      action: "inserting Fansly post replies raw payload",
-      platform: "fansly",
+    return journal(OBSERVATION_KINDS.postReplies, { postId, before }, trimmed, {
       observationPayload: { walk: { postId, before }, response: trimmed },
     });
-    journaled += 1;
-    // The cap is counted in ATTEMPTS, folded in AFTER the response is safe.
-    state = { ...state, callsToday: state.callsToday + attempts.take() };
-    return result;
   };
 
   /** Room for one more call today? Crossing this defers; it never drops. */
-  const hasDayCapacity = () => state.callsToday < dailyCap;
+  const hasDayCapacity = attemptBudget.hasCapacity;
 
-  const saveProgress = async () => {
-    const advanced = await upsertCheckpointProgress(app.db, {
-      platformAccountId: pageId,
-      stream: STREAM,
-      cursorText: state.paginationMode,
-      state: { ...state } as unknown as Record<string, unknown>,
-    });
-    await input.telemetry.recordCheckpointAdvanced(STREAM, summarizeCheckpoint(advanced));
-  };
 
-  const completeSlot = async () => {
-    const completed = await upsertCheckpoint(app.db, {
-      platformAccountId: pageId,
-      stream: STREAM,
-      cursorText: state.paginationMode,
-      state: { ...state } as unknown as Record<string, unknown>,
-      lastSuccessfulRunId: input.syncRunId,
-    });
-    await input.telemetry.recordCheckpointAdvanced(STREAM, summarizeCheckpoint(completed));
-  };
-
-  /**
-   * The lane's ONE coverage row, page-scoped.
-   *
-   * `proof` is always `none`, and that is a claim rather than a shortcut. The
-   * schema's rule is that a proof other than `none` must NAME the response that
-   * proves it — and this row's claim is an aggregate over hundreds of walks
-   * ("every root this page knows about has been read"). No single response
-   * proves that, so pointing at the last one would be a lineage that reads as
-   * evidence and is not. The per-walk evidence is in the journal, one
-   * observation per post, which is exactly what A21 says per-look history is:
-   * a query, not a third copy.
-   */
-  const coverage = async (
-    status: CaptureCoverageStatus,
-    extra: {
-      reasonCode?: string | null;
-      observedUniqueCount?: number | null;
-      expectedCount?: number | null;
-      cursor?: Record<string, unknown>;
-    } = {},
-  ) => {
-    const proof: CaptureCoverageProof = "none";
-    await upsertCaptureCoverage(app.db, {
-      pageId,
-      platform: "fansly",
-      plane: FANSLY_POST_REPLIES_COVERAGE_PLANE,
-      // Page-scoped: the archive's progress over THIS page's roots. `page_id` is
-      // already in the key; the ref makes the scope legible in a raw query.
-      scopeRef: String(pageId),
-      status,
-      // Comments that exist today can be re-read tomorrow: nothing on this lane
-      // is announced once, unlike the notification poll.
-      acquisitionMode: "retroactive",
-      proof,
-      newestCapturedAt: now,
-      ...extra,
-    });
-  };
+  const writeCoverage = createFanslyLaneCoverageWriter({
+    db: app.db,
+    pageId,
+    plane: FANSLY_POST_REPLIES_COVERAGE_PLANE,
+    acquisitionMode: "retroactive",
+    newestCapturedAt: now,
+  });
 
   // ── SEEDING ────────────────────────────────────────────────────────────────
   //
@@ -568,6 +491,7 @@ export async function fanslyPostRepliesChunk(
     pageId,
     limit: WALK_POSTS_PER_CHUNK,
     rewalkBefore,
+    now,
   });
 
   // A full chunk almost certainly means more roots are owed; the continuation
@@ -597,7 +521,7 @@ export async function fanslyPostRepliesChunk(
       // REPEAT-REQUEST GUARD, spent before any egress. The identical `before`
       // twice in one walk is a loop's first visible step, and there is nothing
       // to learn from issuing it.
-      if (before !== null && before === lastRequestedBefore) {
+      if (isRepeatedRequest(lastRequestedBefore, before)) {
         await input.telemetry.addAnomaly({
           code: "fansly_replies_cursor_repeat",
           severity: "warn",
@@ -633,7 +557,6 @@ export async function fanslyPostRepliesChunk(
         if (isAuthFailure(error)) {
           throw error;
         }
-        state = { ...state, callsToday: state.callsToday + attempts.take() };
         await input.telemetry.addAnomaly({
           code: "fansly_replies_post_failed",
           severity: "warn",
@@ -656,8 +579,10 @@ export async function fanslyPostRepliesChunk(
       const persisted = await persistWalk(candidate.subjectRef, requestedBefore, raw);
       pages += 1;
 
+      const responseClass = classifyPostRepliesResponse(raw);
       const rows = replyRows(raw);
-      if (rows === null) {
+      if (responseClass === "invalid" || rows === null) {
+        invalidResponses += 1;
         // A body that is neither a reply page nor an honest empty answer. It is
         // journaled (above, before this check) and refused as an ANSWER:
         // recording "no comments" from a shape we cannot read is how an archive
@@ -821,24 +746,17 @@ export async function fanslyPostRepliesChunk(
     if (pending.length > 0) {
       await assertOwnedPageSyncLease(app.db);
       const response = await app.adapter.getAccountsByIdsPage(requestContext, pending);
-      await persistRawPayload(app.db, {
-        platformAccountId: pageId,
-        syncRunId: input.syncRunId,
-        endpoint: OBSERVATION_KINDS.accountLookup,
-        requestParams: { idCount: pending.length, origin: STREAM },
-        responsePayload: response.raw,
-        mapperVersion: FANSLY_POST_REPLIES_CAPTURE_MAPPER_VERSION,
-        payloadKind: "mapping_critical",
-        retainUntil: retentionDate(),
-      }, {
+      await journal(
+        OBSERVATION_KINDS.accountLookup,
+        { idCount: pending.length, origin: STREAM },
+        response.raw,
+        {
         action: "inserting Fansly comment author lookup raw payload",
-        platform: "fansly",
-      });
-      journaled += 1;
+        },
+      );
       hydratedAuthors = pending.length;
       state = {
         ...state,
-        callsToday: state.callsToday + attempts.take(),
         hydratedAuthorRefs: [...state.hydratedAuthorRefs, ...pending]
           .slice(-HYDRATED_AUTHOR_MEMORY),
       };
@@ -894,16 +812,28 @@ export async function fanslyPostRepliesChunk(
       : everyRootWalked
       ? "window_captured"
       : "in_progress";
-    await coverage(status, {
-      reasonCode: status === "window_captured" ? "pagination_unproven" : null,
-      expectedCount: progress.rootsKnown,
-      observedUniqueCount: progress.rootsWalked,
-      cursor: {
-        paginationMode: state.paginationMode,
-        possiblyTruncated: archive.possiblyTruncated,
-        p99PostsLength: p99PostsLength(state.postsLengthSamples),
-      },
-    });
+    if (invalidResponses === 0 || walked > 0) {
+      await writeCoverage(String(pageId), status, "none", {
+        reasonCode: status === "window_captured" ? "pagination_unproven" : null,
+        expectedCount: progress.rootsKnown,
+        observedUniqueCount: progress.rootsWalked,
+        cursor: {
+          paginationMode: state.paginationMode,
+          possiblyTruncated: archive.possiblyTruncated,
+          p99PostsLength: p99PostsLength(state.postsLengthSamples),
+        },
+      });
+    }
+
+    if (invalidResponses > 0 && walked === 0) {
+      await saveProgress();
+      return {
+        satisfied: false,
+        yieldReason: null,
+        continuationRetryAt: nextFanslyUtcDayStart(now),
+        stats,
+      };
+    }
 
     if (deferred !== null) {
       await saveProgress();
@@ -911,7 +841,7 @@ export async function fanslyPostRepliesChunk(
         satisfied: false,
         yieldReason: null,
         // Deferred at the cap: come back after the UTC roll.
-        continuationRetryAt: nextUtcDayStart(now),
+        continuationRetryAt: nextFanslyUtcDayStart(now),
         stats,
       };
     }
@@ -935,7 +865,7 @@ export async function fanslyPostRepliesChunk(
         stats,
       };
     }
-    await completeSlot();
+    await completeLane(input.syncRunId);
     return { satisfied: true, yieldReason: null, stats };
   }
 }

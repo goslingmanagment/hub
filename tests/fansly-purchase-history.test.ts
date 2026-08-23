@@ -80,17 +80,21 @@ describe("Fansly purchase-history transaction discovery", () => {
   });
 });
 
-describe("Fansly purchase-history cursor v4", () => {
+describe("Fansly purchase-history cursor v5", () => {
+  const now = new Date("2026-08-23T00:00:00.000Z");
+
   it("migrates a valid v2 cursor without losing raw progress or pending targets", () => {
     expect(parseFanslyPurchaseHistoryCursorState({
       version: 2,
       rawPayloadCursorId: 987,
       pendingTargets: [{ kind: "bundle", contentId: "bundle-9" }],
-    })).toEqual({
-      version: 4,
+    }, now)).toEqual({
+      version: 5,
       transactionCursorId: 0,
       rawPayloadCursorId: 987,
       pendingTargets: [{ kind: "bundle", contentId: "bundle-9", before: null }],
+      utcDay: "2026-08-23",
+      callsToday: 0,
     });
   });
 
@@ -100,11 +104,13 @@ describe("Fansly purchase-history cursor v4", () => {
       transactionCursorId: 456,
       rawPayloadCursorId: 987,
       pendingTargets: [{ kind: "single", contentId: "media-9" }],
-    })).toEqual({
-      version: 4,
+    }, now)).toEqual({
+      version: 5,
       transactionCursorId: 456,
       rawPayloadCursorId: 987,
       pendingTargets: [{ kind: "single", contentId: "media-9", before: null }],
+      utcDay: "2026-08-23",
+      callsToday: 0,
     });
   });
 
@@ -114,11 +120,13 @@ describe("Fansly purchase-history cursor v4", () => {
       transactionCursorId: 456,
       rawPayloadCursorId: 987,
       pendingTargets: [{ kind: "single", contentId: "media-9", before: "order-100" }],
-    })).toEqual({
-      version: 4,
+    }, now)).toEqual({
+      version: 5,
       transactionCursorId: 456,
       rawPayloadCursorId: 987,
       pendingTargets: [{ kind: "single", contentId: "media-9", before: "order-100" }],
+      utcDay: "2026-08-23",
+      callsToday: 0,
     });
   });
 

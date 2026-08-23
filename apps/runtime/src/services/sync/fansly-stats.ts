@@ -73,22 +73,29 @@ import {
   assertOwnedPageSyncLease,
   getCheckpoint,
   listCaptureCoverage,
-  upsertCaptureCoverage,
-  upsertCheckpoint,
-  upsertCheckpointProgress,
-  type CaptureCoverageProof,
-  type CaptureCoverageStatus,
 } from "@agency_hub_core/db";
-import type { HttpRequestEvent, HttpRequestObserver } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
 import { loadEffectiveConfig } from "../effective-config.ts";
 import { isPageAllowlisted } from "../voice-notes.ts";
 import { composeRequestObservers } from "./chunk-budget.ts";
 import type { ExecutorRequestContext, StreamChunkResult } from "./executor-handlers.ts";
+import {
+  advanceOffsetPage,
+  classifyFanslyResponse,
+  createFanslyLaneCoverageWriter,
+  createFanslyLaneJournal,
+  createFanslyLaneRuntime,
+  fanslyUtcDayKey,
+  FanslyLaneInvalidResponseError,
+  isRepeatedRequest,
+  nextFanslyUtcDayStart,
+  rollFanslyUtcDay,
+  spreadFanslyContinuation,
+} from "./fansly-lane.ts";
 import { summarizeCheckpoint } from "./observability.ts";
 import { createSyncRateLimitWaiter } from "./rate-limiter.ts";
-import { persistRawPayload, retentionDate } from "./shared.ts";
+import { retentionDate } from "./shared.ts";
 
 const STREAM = "stats_snapshot" as const;
 const MAPPER_VERSION = "fansly-stats-v1";
@@ -146,6 +153,7 @@ const MONTH_FORM_TRAILING_DAYS = 30;
 /** Two consecutive empty MONTHS, then ONE probe this many months further back —
  *  [E10] in the unit this walk actually steps in. */
 const BACKFILL_PROBE_JUMP_MONTHS = 12;
+const BACKFILL_PROBE_JUMP_DAYS = 365;
 /** The same 31 days for `/account/wallets/earnings/stats`, chosen on LESS
  *  evidence: the one observed call carried a 30-day window and nothing anywhere
  *  shows this route answering a longer one. The unhonoured-window guard below is
@@ -157,7 +165,6 @@ const BACKFILL_EARNINGS_WINDOW_DAYS = 31;
 const BACKFILL_NARROW_FLOOR_DAYS = 7;
 /** Two consecutive empty windows (or months), then ONE probe further back. */
 const BACKFILL_EMPTY_STREAK_LIMIT = 2;
-const BACKFILL_JITTER_FRACTION = 0.3;
 /** Pages of mass-DM history the first-enable walk takes per daily sweep. */
 const BROADCAST_BACKFILL_PAGES_PER_SWEEP = 3;
 /** `recapstats` — the step that completes the sweep and stamps `lastSweepDay`. */
@@ -242,7 +249,14 @@ interface HourlyBackfillState {
 
 interface EarningsBackfillState {
   nextBeforeMs: number;
+  /** Offset within the current date window. A full page holds the window and
+   * resumes at the next offset instead of skipping the remaining rows. */
+  offset: number;
+  lastOffset: number | null;
+  windowRows: number;
   emptyStreak: number;
+  probeSpent: boolean;
+  probeResumeBeforeMs: number | null;
   done: boolean;
   guard: BackfillWindowGuard;
 }
@@ -361,7 +375,12 @@ function parseEarningsBackfill(value: unknown, now: Date): EarningsBackfillState
   const record = asRecord(value);
   return {
     nextBeforeMs: asInt(record?.nextBeforeMs, now.getTime()),
+    offset: Math.max(0, asInt(record?.offset, 0)),
+    lastOffset: asNullableInt(record?.lastOffset),
+    windowRows: Math.max(0, asInt(record?.windowRows, 0)),
     emptyStreak: asInt(record?.emptyStreak, 0),
+    probeSpent: record?.probeSpent === true,
+    probeResumeBeforeMs: asNullableInt(record?.probeResumeBeforeMs),
     done: record?.done === true,
     guard: parseWindowGuard(record?.guard, BACKFILL_EARNINGS_WINDOW_DAYS),
   };
@@ -526,7 +545,7 @@ export function isEmptyStatsMonth(payload: unknown): boolean {
   }
   const dataset = statsDataset(payload);
   if (dataset === null) {
-    return true;
+    return false;
   }
   for (const key of ["datapoints", "profileDatapoints"] as const) {
     const points = Array.isArray(dataset[key]) ? dataset[key] as unknown[] : [];
@@ -567,7 +586,12 @@ export function emptyFanslyStatsCursorState(now: Date): FanslyStatsCursorState {
       },
       earnings: {
         nextBeforeMs: now.getTime(),
+        offset: 0,
+        lastOffset: null,
+        windowRows: 0,
         emptyStreak: 0,
+        probeSpent: false,
+        probeResumeBeforeMs: null,
         done: false,
         guard: emptyWindowGuard(BACKFILL_EARNINGS_WINDOW_DAYS),
       },
@@ -575,45 +599,11 @@ export function emptyFanslyStatsCursorState(now: Date): FanslyStatsCursorState {
   };
 }
 
-export function utcDayKey(instant: Date): string {
-  return instant.toISOString().slice(0, 10);
-}
+export const utcDayKey = fanslyUtcDayKey;
 
 /** A new UTC day resets the attempt counter. Nothing else about the cursor
  *  changes: a sweep that deferred mid-step resumes at exactly that step. */
-export function rollUtcDay(
-  state: FanslyStatsCursorState,
-  now: Date,
-): FanslyStatsCursorState {
-  const today = utcDayKey(now);
-  return state.utcDay === today ? state : { ...state, utcDay: today, callsToday: 0 };
-}
-
-// ── attempt counting ─────────────────────────────────────────────────────────
-
-/**
- * Counts HTTP ATTEMPTS, retries included — the unit the cap is enforced in.
- *
- * `SyncChunkBudget` counts the same events but is scoped to one chunk; the day
- * counter has to survive across chunks, leases and restarts, which is why it
- * lives in the cursor and is fed from here.
- */
-class AttemptCounter implements HttpRequestObserver {
-  private attempts = 0;
-
-  async onRequestEvent(event: HttpRequestEvent) {
-    if (event.state === "started") {
-      this.attempts += 1;
-    }
-  }
-
-  /** Read and reset — the caller folds the delta into `callsToday`. */
-  take(): number {
-    const attempts = this.attempts;
-    this.attempts = 0;
-    return attempts;
-  }
-}
+export const rollUtcDay = rollFanslyUtcDay;
 
 // ── shape helpers over the journaled bodies ──────────────────────────────────
 
@@ -626,13 +616,19 @@ function statsDataset(payload: unknown): Record<string, unknown> | null {
  *  signal the backfill's stop rule reads. Journaled either way: an empty
  *  window IS the retention-floor evidence. */
 export function isEmptyStatsWindow(payload: unknown): boolean {
-  const dataset = statsDataset(payload);
-  if (dataset === null) {
-    return true;
-  }
-  const datapoints = Array.isArray(dataset.datapoints) ? dataset.datapoints : [];
-  const profile = Array.isArray(dataset.profileDatapoints) ? dataset.profileDatapoints : [];
-  return datapoints.length === 0 && profile.length === 0;
+  return classifyStatsWindow(payload) === "empty";
+}
+
+export function classifyStatsWindow(payload: unknown) {
+  return classifyFanslyResponse(payload, {
+    isValid: (value) => statsDataset(value) !== null,
+    isEmpty: (value) => {
+      const dataset = statsDataset(value)!;
+      const datapoints = Array.isArray(dataset.datapoints) ? dataset.datapoints : [];
+      const profile = Array.isArray(dataset.profileDatapoints) ? dataset.profileDatapoints : [];
+      return datapoints.length === 0 && profile.length === 0;
+    },
+  });
 }
 
 /** The provider's OWN returned bounds. The next window is derived from these,
@@ -759,8 +755,7 @@ export function backfillContinuationAt(
   delayMs: number,
   random: () => number = Math.random,
 ): Date {
-  const jitter = 1 + (random() * 2 - 1) * BACKFILL_JITTER_FRACTION;
-  return new Date(now.getTime() + Math.max(0, Math.round(delayMs * jitter)));
+  return spreadFanslyContinuation(now, delayMs, random);
 }
 
 export async function fanslyStatsSnapshotChunk(
@@ -797,87 +792,51 @@ export async function fanslyStatsSnapshotChunk(
     now,
   );
 
-  const attempts = new AttemptCounter();
-  const requestContext = {
+  const lane = createFanslyLaneRuntime({
+    db: app.db,
+    pageId,
+    stream: STREAM,
+    cursorText: () => state.lastSweepDay,
+    dailyCap,
+    telemetry: input.telemetry,
+    downstreamObserver: composeRequestObservers(
+      input.telemetry.getRequestObserver(),
+      input.budget,
+    ),
+    getState: () => state,
+    setState: (next) => {
+      state = next;
+    },
     session: input.pageContext.session,
     proxy: input.pageContext.proxy,
     egressKey: input.pageContext.egressKey,
-    requestObserver: composeRequestObservers(
-      input.telemetry.getRequestObserver(),
-      input.budget,
-      attempts,
-    ),
     rateLimitWaiter: createSyncRateLimitWaiter(app, input.pageContext),
-  };
+  });
+  const { attemptBudget, complete: completeLane, requestContext, saveProgress } = lane;
 
   let journaled = 0;
   let deferred: string | null = null;
 
-  const persist = async (
-    kind: string,
-    requestParams: Record<string, unknown>,
-    payload: unknown,
-  ) => {
-    // Journal FIRST, always. Everything after this line — the shape reads, the
-    // cap check, the cursor advance — happens with the bytes already durable.
-    const result = await persistRawPayload(app.db, {
-      platformAccountId: pageId,
-      syncRunId: input.syncRunId,
-      endpoint: kind,
-      requestParams,
-      responsePayload: payload,
-      mapperVersion: MAPPER_VERSION,
-      payloadKind: "mapping_critical",
-      retainUntil: retentionDate(),
-    }, {
-      action: `inserting Fansly ${kind} raw payload`,
-      platform: "fansly",
-    });
-    journaled += 1;
-    // The cap is counted in ATTEMPTS, folded in AFTER the response is safe.
-    state = { ...state, callsToday: state.callsToday + attempts.take() };
-    return result;
-  };
+  const persist = createFanslyLaneJournal({
+    db: app.db,
+    pageId,
+    syncRunId: input.syncRunId,
+    mapperVersion: MAPPER_VERSION,
+    payloadKind: "mapping_critical",
+    retainUntil: retentionDate(),
+    onJournal: () => { journaled += 1; },
+  });
 
   /** Room for one more call today? The chunk budget is the per-chunk guard;
    *  this is the per-DAY one, and crossing it defers rather than fails. */
-  const hasDayCapacity = () => state.callsToday < dailyCap;
+  const hasDayCapacity = attemptBudget.hasCapacity;
 
-  const saveProgress = async () => {
-    const advanced = await upsertCheckpointProgress(app.db, {
-      platformAccountId: pageId,
-      stream: STREAM,
-      cursorText: state.lastSweepDay,
-      state: { ...state } as unknown as Record<string, unknown>,
-    });
-    await input.telemetry.recordCheckpointAdvanced(STREAM, summarizeCheckpoint(advanced));
-  };
-
-  const coverage = async (
-    plane: string,
-    status: CaptureCoverageStatus,
-    proof: CaptureCoverageProof,
-    extra: {
-      oldestCapturedAt?: Date | null;
-      newestCapturedAt?: Date | null;
-      proofObservationId?: number | null;
-      reasonCode?: string | null;
-      cursor?: Record<string, unknown>;
-    } = {},
-  ) => {
-    await upsertCaptureCoverage(app.db, {
-      pageId,
-      platform: "fansly",
-      plane,
-      scopeRef: "",
-      status,
-      // Statistics windows are addressable backwards in time, so this lane is
-      // RETROACTIVE: what it has not captured yet, it still can.
-      acquisitionMode: "retroactive",
-      proof,
-      ...extra,
-    });
-  };
+  const coverage = createFanslyLaneCoverageWriter({
+    db: app.db,
+    pageId,
+    scopeRef: "",
+    acquisitionMode: "retroactive",
+  });
 
   /**
    * THE UNHONOURED-WINDOW ACTION, shared by all three backfill lanes.
@@ -992,7 +951,12 @@ export async function fanslyStatsSnapshotChunk(
         },
         earnings: {
           nextBeforeMs: now.getTime(),
+          offset: 0,
+          lastOffset: null,
+          windowRows: 0,
           emptyStreak: 0,
+          probeSpent: false,
+          probeResumeBeforeMs: null,
           done: true,
           guard: emptyWindowGuard(BACKFILL_EARNINGS_WINDOW_DAYS),
         },
@@ -1151,6 +1115,13 @@ export async function fanslyStatsSnapshotChunk(
             afterDate: afterDate.toISOString(),
           }, response.raw);
           guard.lastObservationId = persisted.observationId ?? guard.lastObservationId;
+          if (classifyStatsWindow(response.raw) === "invalid") {
+            guard.lastBeforeMs = null;
+            guard.lastAfterMs = null;
+            state = { ...state, backfill: { ...backfill } };
+            await saveProgress();
+            throw new FanslyLaneInvalidResponseError("account_stats");
+          }
 
           const served = servedWindow(response.raw);
           // Journal first, THEN judge: the bytes are already durable, and what
@@ -1239,6 +1210,12 @@ export async function fanslyStatsSnapshotChunk(
           afterDate: monthAfter.toISOString(),
         }, response.raw);
         guard.lastObservationId = persisted.observationId ?? guard.lastObservationId;
+        if (classifyStatsWindow(response.raw) === "invalid") {
+          backfill.daily.lastMonthIndex = null;
+          state = { ...state, backfill: { ...backfill } };
+          await saveProgress();
+          throw new FanslyLaneInvalidResponseError("account_stats");
+        }
 
         const served = servedWindow(response.raw);
         if (!monthWasHonoured(monthIndex, served)) {
@@ -1362,6 +1339,7 @@ export async function fanslyStatsSnapshotChunk(
 
       if (!backfill.earnings.done) {
         const earningsGuard = backfill.earnings.guard;
+        const offset = backfill.earnings.offset;
         const requested = {
           beforeMs: backfill.earnings.nextBeforeMs,
           afterMs: backfill.earnings.nextBeforeMs - earningsGuard.spanDays * DAY_MS,
@@ -1369,6 +1347,7 @@ export async function fanslyStatsSnapshotChunk(
         if (
           earningsGuard.lastBeforeMs === requested.beforeMs
           && earningsGuard.lastAfterMs === requested.afterMs
+          && isRepeatedRequest(backfill.earnings.lastOffset, offset)
         ) {
           await handleUnhonouredWindow(
             backfill.earnings,
@@ -1384,19 +1363,20 @@ export async function fanslyStatsSnapshotChunk(
         const after = new Date(requested.afterMs);
         earningsGuard.lastBeforeMs = requested.beforeMs;
         earningsGuard.lastAfterMs = requested.afterMs;
+        backfill.earnings.lastOffset = offset;
         await assertOwnedPageSyncLease(app.db);
         const response = await app.adapter.getEarningsStatsWindow(requestContext, {
           before,
           after,
           limit: EARNINGS_PAGE_LIMIT,
-          offset: 0,
+          offset,
         });
         const persisted = await persist("earnings_stats_snapshot", {
           mode: "backfill",
           before: before.toISOString(),
           after: after.toISOString(),
           limit: EARNINGS_PAGE_LIMIT,
-          offset: 0,
+          offset,
         }, response.raw);
         earningsGuard.lastObservationId = persisted.observationId
           ?? earningsGuard.lastObservationId;
@@ -1418,10 +1398,39 @@ export async function fanslyStatsSnapshotChunk(
           continue;
         }
         const rows = rowCount(response.raw);
+        backfill.earnings.windowRows += rows;
+        const page = advanceOffsetPage({
+          offset,
+          pageSize: EARNINGS_PAGE_LIMIT,
+          rowCount: rows,
+        });
+        if (!page.done) {
+          backfill.earnings.offset = page.nextOffset;
+          state = { ...state, backfill: { ...backfill } };
+          await saveProgress();
+          continue;
+        }
+
+        const windowRows = backfill.earnings.windowRows;
         backfill.earnings.nextBeforeMs = after.getTime();
-        if (rows === 0) {
+        backfill.earnings.offset = 0;
+        backfill.earnings.lastOffset = null;
+        backfill.earnings.windowRows = 0;
+        earningsGuard.lastBeforeMs = null;
+        earningsGuard.lastAfterMs = null;
+        if (windowRows === 0) {
           backfill.earnings.emptyStreak += 1;
-          if (backfill.earnings.emptyStreak >= BACKFILL_EMPTY_STREAK_LIMIT) {
+          if (
+            backfill.earnings.emptyStreak >= BACKFILL_EMPTY_STREAK_LIMIT
+            && !backfill.earnings.probeSpent
+          ) {
+            // Empty windows prove inactivity, not a retention floor. Bookmark
+            // the ordinary walk and spend one probe substantially further
+            // back, matching the daily month walk's probe-and-resume rule.
+            backfill.earnings.probeSpent = true;
+            backfill.earnings.probeResumeBeforeMs = backfill.earnings.nextBeforeMs;
+            backfill.earnings.nextBeforeMs -= BACKFILL_PROBE_JUMP_DAYS * DAY_MS;
+          } else if (backfill.earnings.emptyStreak >= BACKFILL_EMPTY_STREAK_LIMIT) {
             backfill.earnings.done = true;
             await coverage(
               FANSLY_STATS_COVERAGE_PLANES.earnings,
@@ -1435,6 +1444,10 @@ export async function fanslyStatsSnapshotChunk(
           }
         } else {
           backfill.earnings.emptyStreak = 0;
+          if (backfill.earnings.probeResumeBeforeMs !== null) {
+            backfill.earnings.nextBeforeMs = backfill.earnings.probeResumeBeforeMs;
+            backfill.earnings.probeResumeBeforeMs = null;
+          }
           await coverage(
             FANSLY_STATS_COVERAGE_PLANES.earnings,
             "in_progress",
@@ -1467,14 +1480,7 @@ export async function fanslyStatsSnapshotChunk(
         // does not.
         continuationRetryAt: deferred === null
           ? backfillContinuationAt(now, continuationDelayMs)
-          : new Date(Date.UTC(
-            now.getUTCFullYear(),
-            now.getUTCMonth(),
-            now.getUTCDate() + 1,
-            0,
-            5,
-            0,
-          )),
+          : nextFanslyUtcDayStart(now),
         stats: {
           mode: "backfill",
           journaled,
@@ -1528,6 +1534,9 @@ export async function fanslyStatsSnapshotChunk(
         beforeDate: beforeDate.toISOString(),
         afterDate: afterDate.toISOString(),
       }, response.raw);
+      if (classifyStatsWindow(response.raw) === "invalid") {
+        throw new FanslyLaneInvalidResponseError("account_stats");
+      }
       await coverage(
         FANSLY_STATS_COVERAGE_PLANES.accountDaily,
         "window_captured",
@@ -1561,6 +1570,9 @@ export async function fanslyStatsSnapshotChunk(
         beforeDate: beforeDate.toISOString(),
         afterDate: afterDate.toISOString(),
       }, response.raw);
+      if (classifyStatsWindow(response.raw) === "invalid") {
+        throw new FanslyLaneInvalidResponseError("account_stats");
+      }
       await coverage(
         FANSLY_STATS_COVERAGE_PLANES.accountHourly,
         "window_captured",
@@ -1750,14 +1762,7 @@ export async function fanslyStatsSnapshotChunk(
       const response = await app.adapter.getRecapStats(requestContext);
       await persist("recapstats", {}, response.raw);
       state = { ...state, stepIndex: 0, lastSweepDay: today };
-      const completed = await upsertCheckpoint(app.db, {
-        platformAccountId: pageId,
-        stream: STREAM,
-        cursorText: today,
-        state: { ...state } as unknown as Record<string, unknown>,
-        lastSuccessfulRunId: input.syncRunId,
-      });
-      await input.telemetry.recordCheckpointAdvanced(STREAM, summarizeCheckpoint(completed));
+      await completeLane(input.syncRunId);
       return {
         satisfied: true,
         yieldReason: null,
@@ -1774,14 +1779,7 @@ export async function fanslyStatsSnapshotChunk(
     yieldReason: deferred === null ? input.budget.resolveYieldReason(1) : null,
     ...(deferred === null ? {} : {
       // Deferred at the cap: come back after the UTC roll, not sooner.
-      continuationRetryAt: new Date(Date.UTC(
-        now.getUTCFullYear(),
-        now.getUTCMonth(),
-        now.getUTCDate() + 1,
-        0,
-        5,
-        0,
-      )),
+      continuationRetryAt: nextFanslyUtcDayStart(now),
     }),
     stats: {
       mode: "steady",

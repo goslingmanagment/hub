@@ -378,9 +378,10 @@ describe("the month form — the only history /it/amoie/stats serves", () => {
     // `type` is identity, not a counter: a non-zero type must not read as data.
     const typeOnly = JSON.parse(JSON.stringify(zeroMonth)) as typeof zeroMonth;
     expect(isEmptyStatsMonth(typeOnly)).toBe(true);
-    // No arrays at all is empty, as it always was.
+    // A valid dataset with no rows is empty; a missing envelope is INVALID and
+    // must not be mistaken for evidence that the provider has no older data.
     expect(isEmptyStatsMonth({ dataset: { datapoints: [], profileDatapoints: [] } })).toBe(true);
-    expect(isEmptyStatsMonth(null)).toBe(true);
+    expect(isEmptyStatsMonth(null)).toBe(false);
   });
 });
 

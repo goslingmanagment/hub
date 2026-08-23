@@ -60,10 +60,6 @@
 import {
   assertOwnedPageSyncLease,
   getCheckpoint,
-  upsertCaptureCoverage,
-  upsertCheckpoint,
-  upsertCheckpointProgress,
-  type CaptureCoverageProof,
   type CaptureCoverageStatus,
 } from "@agency_hub_core/db";
 import { FanslyApiError } from "@agency_hub_core/fansly";
@@ -71,18 +67,27 @@ import {
   FANSLY_NOTIFICATION_DECLARED_TYPE_CODES,
   FANSLY_NOTIFICATION_TYPE_GROUPS,
 } from "@agency_hub_core/shared";
-import type { HttpRequestEvent, HttpRequestObserver } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
 import { loadEffectiveConfig } from "../effective-config.ts";
 import { isPageAllowlisted } from "../voice-notes.ts";
 import { composeRequestObservers } from "./chunk-budget.ts";
 import type { ExecutorRequestContext, StreamChunkResult } from "./executor-handlers.ts";
+import {
+  classifyFanslyResponse,
+  createFanslyLaneCoverageWriter,
+  createFanslyLaneJournal,
+  createFanslyLaneRuntime,
+  fanslyUtcDayKey,
+  FanslyLaneInvalidResponseError,
+  nextFanslyUtcDayStart,
+  rollFanslyUtcDay,
+  spreadFanslyContinuation,
+} from "./fansly-lane.ts";
 import { summarizeCheckpoint } from "./observability.ts";
 import { createSyncRateLimitWaiter } from "./rate-limiter.ts";
 import {
   FANSLY_NOTIFICATIONS_CAPTURE_MAPPER_VERSION,
-  persistRawPayload,
   retentionDate,
   trimFanslyNotificationsPayload,
 } from "./shared.ts";
@@ -113,7 +118,6 @@ const FORWARD_MAX_PAGES_PER_POLL = 20;
  *  the ceiling for a lane that is being re-queued aggressively. */
 const BACKFILL_CALLS_PER_CHUNK = 30;
 
-const BACKFILL_JITTER_FRACTION = 0.3;
 
 export const FANSLY_NOTIFICATIONS_COVERAGE_PLANES = {
   /** The notification archive itself — walkable backwards, so RETROACTIVE. */
@@ -304,40 +308,11 @@ export function emptyFanslyNotificationsCursorState(now: Date): FanslyNotificati
   };
 }
 
-export function utcDayKey(instant: Date): string {
-  return instant.toISOString().slice(0, 10);
-}
+export const utcDayKey = fanslyUtcDayKey;
 
 /** A new UTC day resets the attempt counter. Nothing else about the cursor
  *  changes: a walk that deferred mid-page resumes at exactly that page. */
-export function rollUtcDay(
-  state: FanslyNotificationsCursorState,
-  now: Date,
-): FanslyNotificationsCursorState {
-  const today = utcDayKey(now);
-  return state.utcDay === today ? state : { ...state, utcDay: today, callsToday: 0 };
-}
-
-// ── attempt counting ─────────────────────────────────────────────────────────
-
-/** Counts HTTP ATTEMPTS, retries included — the unit the cap is enforced in.
- *  `SyncChunkBudget` counts the same events but is scoped to one chunk; the day
- *  counter has to survive chunks, leases and restarts. */
-class AttemptCounter implements HttpRequestObserver {
-  private attempts = 0;
-
-  async onRequestEvent(event: HttpRequestEvent) {
-    if (event.state === "started") {
-      this.attempts += 1;
-    }
-  }
-
-  take(): number {
-    const attempts = this.attempts;
-    this.attempts = 0;
-    return attempts;
-  }
-}
+export const rollUtcDay = rollFanslyUtcDay;
 
 // ── shape helpers over the journaled bodies ──────────────────────────────────
 
@@ -351,6 +326,16 @@ export function notificationRows(payload: unknown): Record<string, unknown>[] {
   return Array.isArray(record.notifications)
     ? record.notifications.filter((row): row is Record<string, unknown> => asRecord(row) !== null)
     : [];
+}
+
+export function classifyNotificationResponse(payload: unknown) {
+  return classifyFanslyResponse(payload, {
+    isValid: (value) => {
+      const record = asRecord(value);
+      return record !== null && Array.isArray(record.notifications);
+    },
+    isEmpty: (value) => notificationRows(value).length === 0,
+  });
 }
 
 /**
@@ -462,19 +447,7 @@ export function backfillContinuationAt(
   delayMs: number,
   random: () => number = Math.random,
 ): Date {
-  const jitter = 1 + (random() * 2 - 1) * BACKFILL_JITTER_FRACTION;
-  return new Date(now.getTime() + Math.max(0, Math.round(delayMs * jitter)));
-}
-
-function nextUtcDayStart(now: Date): Date {
-  return new Date(Date.UTC(
-    now.getUTCFullYear(),
-    now.getUTCMonth(),
-    now.getUTCDate() + 1,
-    0,
-    5,
-    0,
-  ));
+  return spreadFanslyContinuation(now, delayMs, random);
 }
 
 /** Is a head poll due? Used ONLY to interrupt a running backfill — a lane that
@@ -524,18 +497,27 @@ export async function fanslyNotificationsChunk(
     now,
   );
 
-  const attempts = new AttemptCounter();
-  const requestContext = {
+  const lane = createFanslyLaneRuntime({
+    db: app.db,
+    pageId,
+    stream: STREAM,
+    cursorText: () => state.newestSeenNotificationId,
+    dailyCap,
+    telemetry: input.telemetry,
+    downstreamObserver: composeRequestObservers(
+      input.telemetry.getRequestObserver(),
+      input.budget,
+    ),
+    getState: () => state,
+    setState: (next) => {
+      state = next;
+    },
     session: input.pageContext.session,
     proxy: input.pageContext.proxy,
     egressKey: input.pageContext.egressKey,
-    requestObserver: composeRequestObservers(
-      input.telemetry.getRequestObserver(),
-      input.budget,
-      attempts,
-    ),
     rateLimitWaiter: createSyncRateLimitWaiter(app, input.pageContext),
-  };
+  });
+  const { attemptBudget, complete: completeLane, requestContext, saveProgress } = lane;
 
   let journaled = 0;
   let deferred: string | null = null;
@@ -557,51 +539,21 @@ export async function fanslyNotificationsChunk(
    * transport and must hand the whole body through, and the ONE place that
    * decides what reaches the journal should be the one place a test can pin.
    */
-  const persist = async (requestParams: Record<string, unknown>, payload: unknown) => {
-    const result = await persistRawPayload(app.db, {
-      platformAccountId: pageId,
-      syncRunId: input.syncRunId,
-      endpoint: OBSERVATION_KIND,
-      requestParams,
-      responsePayload: trimFanslyNotificationsPayload(payload),
-      mapperVersion: FANSLY_NOTIFICATIONS_CAPTURE_MAPPER_VERSION,
-      payloadKind: "mapping_critical",
-      retainUntil: retentionDate(),
-    }, {
-      action: "inserting Fansly notifications raw payload",
-      platform: "fansly",
-    });
-    journaled += 1;
-    // The cap is counted in ATTEMPTS, folded in AFTER the response is safe.
-    state = { ...state, callsToday: state.callsToday + attempts.take() };
-    return result;
-  };
+  const journal = createFanslyLaneJournal({
+    db: app.db,
+    pageId,
+    syncRunId: input.syncRunId,
+    mapperVersion: FANSLY_NOTIFICATIONS_CAPTURE_MAPPER_VERSION,
+    payloadKind: "mapping_critical",
+    retainUntil: retentionDate(),
+    onJournal: () => { journaled += 1; },
+  });
+  const persist = (requestParams: Record<string, unknown>, payload: unknown) =>
+    journal(OBSERVATION_KIND, requestParams, trimFanslyNotificationsPayload(payload));
 
   /** Room for one more call today? Crossing this defers; it never drops. */
-  const hasDayCapacity = () => state.callsToday < dailyCap;
+  const hasDayCapacity = attemptBudget.hasCapacity;
 
-  /** A completed slot writes the FULL checkpoint, `lastSuccessfulRunId` and all
-   *  — the same shape every other stream uses to say "this run finished". */
-  const completeSlot = async () => {
-    const completed = await upsertCheckpoint(app.db, {
-      platformAccountId: pageId,
-      stream: STREAM,
-      cursorText: state.newestSeenNotificationId,
-      state: { ...state } as unknown as Record<string, unknown>,
-      lastSuccessfulRunId: input.syncRunId,
-    });
-    await input.telemetry.recordCheckpointAdvanced(STREAM, summarizeCheckpoint(completed));
-  };
-
-  const saveProgress = async () => {
-    const advanced = await upsertCheckpointProgress(app.db, {
-      platformAccountId: pageId,
-      stream: STREAM,
-      cursorText: state.newestSeenNotificationId,
-      state: { ...state } as unknown as Record<string, unknown>,
-    });
-    await input.telemetry.recordCheckpointAdvanced(STREAM, summarizeCheckpoint(advanced));
-  };
 
   /**
    * A poll made through a NARROWED type form captured part of the provider's
@@ -613,33 +565,12 @@ export async function fanslyNotificationsChunk(
   const archiveStatus = (fresh: CaptureCoverageStatus): CaptureCoverageStatus =>
     state.filterMode === "unfiltered" ? fresh : "partial_provider_surface";
 
-  const coverage = async (
-    plane: string,
-    status: CaptureCoverageStatus,
-    proof: CaptureCoverageProof,
-    extra: {
-      acquisitionMode?: "retroactive" | "forward_only";
-      oldestCapturedAt?: Date | null;
-      newestCapturedAt?: Date | null;
-      proofObservationId?: number | null;
-      reasonCode?: string | null;
-      cursor?: Record<string, unknown>;
-    } = {},
-  ) => {
-    const { acquisitionMode, ...rest } = extra;
-    await upsertCaptureCoverage(app.db, {
-      pageId,
-      platform: "fansly",
-      plane,
-      scopeRef: "",
-      status,
-      // The ARCHIVE is walkable backwards, so it is retroactive. The LIKER
-      // facts are not, and their row says so.
-      acquisitionMode: acquisitionMode ?? "retroactive",
-      proof,
-      ...rest,
-    });
-  };
+  const coverage = createFanslyLaneCoverageWriter({
+    db: app.db,
+    pageId,
+    scopeRef: "",
+    acquisitionMode: "retroactive",
+  });
 
   /**
    * One journaled call, with the type fork attached.
@@ -667,6 +598,9 @@ export async function fanslyNotificationsChunk(
         filterMode: state.filterMode,
         types: types === null ? null : [...types],
       }, response.raw);
+      if (classifyNotificationResponse(response.raw) === "invalid") {
+        throw new FanslyLaneInvalidResponseError(OBSERVATION_KIND);
+      }
       if (state.filterRefusals !== 0) {
         state = { ...state, filterRefusals: 0 };
       }
@@ -934,7 +868,7 @@ export async function fanslyNotificationsChunk(
       );
       if (state.phase === "forward") {
         // Head polled, no backfill left: the slot is satisfied.
-        await completeSlot();
+        await completeLane(input.syncRunId);
         return {
           satisfied: true,
           yieldReason: null,
@@ -970,7 +904,7 @@ export async function fanslyNotificationsChunk(
     return {
       satisfied: false,
       yieldReason: deferred === null ? input.budget.resolveYieldReason(1) : null,
-      ...(deferred === null ? {} : { continuationRetryAt: nextUtcDayStart(now) }),
+      ...(deferred === null ? {} : { continuationRetryAt: nextFanslyUtcDayStart(now) }),
       stats: {
         phase: "forward",
         journaled,
@@ -987,7 +921,7 @@ export async function fanslyNotificationsChunk(
   const backfill = state.backfill;
   if (backfill === null || backfill.done) {
     state = { ...state, phase: "forward" };
-    await completeSlot();
+    await completeLane(input.syncRunId);
     return {
       satisfied: true,
       yieldReason: null,
@@ -1116,7 +1050,7 @@ export async function fanslyNotificationsChunk(
   if (backfill.done) {
     // `backfill: null` is what "the one-off walk is over" looks like durably.
     state = { ...state, phase: "forward", backfill: null };
-    await completeSlot();
+    await completeLane(input.syncRunId);
     return {
       satisfied: true,
       yieldReason: null,
@@ -1139,7 +1073,7 @@ export async function fanslyNotificationsChunk(
     // continuation, because burst shape is the ban-risk surface.
     continuationRetryAt: deferred === null
       ? backfillContinuationAt(now, continuationDelayMs)
-      : nextUtcDayStart(now),
+      : nextFanslyUtcDayStart(now),
     stats: {
       phase: "backfill",
       journaled,

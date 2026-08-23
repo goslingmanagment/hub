@@ -81,14 +81,8 @@ import {
   assertOwnedPageSyncLease,
   countPagePayouts,
   getCheckpoint,
-  upsertCaptureCoverage,
-  upsertCheckpoint,
-  upsertCheckpointProgress,
-  type CaptureCoverageProof,
-  type CaptureCoverageStatus,
 } from "@agency_hub_core/db";
 import { PAYOUT_REQUESTS_PAGE_SIZE, PAYOUT_REQUESTS_UNBOUNDED } from "@agency_hub_core/fansly";
-import type { HttpRequestEvent, HttpRequestObserver } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
 import { isMappedPayoutStatus } from "../canonicalize/fansly-payouts.ts";
@@ -96,11 +90,23 @@ import { loadEffectiveConfig } from "../effective-config.ts";
 import { isPageAllowlisted } from "../voice-notes.ts";
 import { composeRequestObservers } from "./chunk-budget.ts";
 import type { ExecutorRequestContext, StreamChunkResult } from "./executor-handlers.ts";
+import {
+  advanceOffsetPage,
+  classifyFanslyResponse,
+  createFanslyLaneCoverageWriter,
+  createFanslyLaneJournal,
+  createFanslyLaneRuntime,
+  fanslyUtcDayKey,
+  FanslyLaneInvalidResponseError,
+  isRepeatedRequest,
+  nextFanslyUtcDayStart,
+  rollFanslyUtcDay,
+  spreadFanslyContinuation,
+} from "./fansly-lane.ts";
 import { summarizeCheckpoint } from "./observability.ts";
 import { createSyncRateLimitWaiter } from "./rate-limiter.ts";
 import {
   FANSLY_PAYOUTS_CAPTURE_MAPPER_VERSION,
-  persistRawPayload,
   retentionDate,
 } from "./shared.ts";
 
@@ -140,7 +146,6 @@ const REQUEST_WALK_PAGES_PER_CHUNK = 5;
  */
 const REQUEST_WALK_MAX_PAGES = 400;
 
-const BACKFILL_JITTER_FRACTION = 0.3;
 
 // ── cursor state ─────────────────────────────────────────────────────────────
 
@@ -243,41 +248,12 @@ export function emptyFanslyPayoutsCursorState(now: Date): FanslyPayoutsCursorSta
   };
 }
 
-export function utcDayKey(instant: Date): string {
-  return instant.toISOString().slice(0, 10);
-}
+export const utcDayKey = fanslyUtcDayKey;
 
 /** A new UTC day resets the attempt counter and re-arms the fixed steps.
  *  Nothing else changes: a request walk that deferred mid-history resumes at
  *  exactly the offset it stopped on. */
-export function rollUtcDay(
-  state: FanslyPayoutsCursorState,
-  now: Date,
-): FanslyPayoutsCursorState {
-  const today = utcDayKey(now);
-  return state.utcDay === today ? state : { ...state, utcDay: today, callsToday: 0 };
-}
-
-// ── attempt counting ─────────────────────────────────────────────────────────
-
-/** Counts HTTP ATTEMPTS, retries included — the unit the cap is enforced in.
- *  `SyncChunkBudget` counts the same events but is scoped to one chunk; the day
- *  counter has to survive chunks, leases and restarts. */
-class AttemptCounter implements HttpRequestObserver {
-  private attempts = 0;
-
-  async onRequestEvent(event: HttpRequestEvent) {
-    if (event.state === "started") {
-      this.attempts += 1;
-    }
-  }
-
-  take(): number {
-    const attempts = this.attempts;
-    this.attempts = 0;
-    return attempts;
-  }
-}
+export const rollUtcDay = rollFanslyUtcDay;
 
 // ── shape helpers over the journaled bodies ──────────────────────────────────
 
@@ -290,6 +266,24 @@ export function payoutRequestRows(payload: unknown): Record<string, unknown>[] {
   return Array.isArray(record.data)
     ? record.data.filter((row): row is Record<string, unknown> => asRecord(row) !== null)
     : [];
+}
+
+function classifyPayoutResponse(kind: string, payload: unknown) {
+  return classifyFanslyResponse(payload, {
+    isValid: (value) => {
+      const record = asRecord(value);
+      if (kind === OBSERVATION_KINDS.payoutRequests) {
+        return record !== null && Array.isArray(record.data);
+      }
+      return Array.isArray(value)
+        || (record !== null && Object.values(record).some((member) => Array.isArray(member)));
+    },
+    isEmpty: (value) => kind === OBSERVATION_KINDS.payoutRequests
+      ? payoutRequestRows(value).length === 0
+      : Array.isArray(value)
+      ? value.length === 0
+      : Object.values(asRecord(value)!).every((member) => !Array.isArray(member) || member.length === 0),
+  });
 }
 
 /** `total` as the page reported it, or null. It is a HINT for the walk's stop
@@ -328,19 +322,7 @@ export function walkContinuationAt(
   delayMs: number,
   random: () => number = Math.random,
 ): Date {
-  const jitter = 1 + (random() * 2 - 1) * BACKFILL_JITTER_FRACTION;
-  return new Date(now.getTime() + Math.max(0, Math.round(delayMs * jitter)));
-}
-
-function nextUtcDayStart(now: Date): Date {
-  return new Date(Date.UTC(
-    now.getUTCFullYear(),
-    now.getUTCMonth(),
-    now.getUTCDate() + 1,
-    0,
-    5,
-    0,
-  ));
+  return spreadFanslyContinuation(now, delayMs, random);
 }
 
 // ── the handler ──────────────────────────────────────────────────────────────
@@ -381,18 +363,27 @@ export async function fanslyPayoutsChunk(
     now,
   );
 
-  const attempts = new AttemptCounter();
-  const requestContext = {
+  const lane = createFanslyLaneRuntime({
+    db: app.db,
+    pageId,
+    stream: STREAM,
+    cursorText: () => state.fixedStepsDay,
+    dailyCap,
+    telemetry: input.telemetry,
+    downstreamObserver: composeRequestObservers(
+      input.telemetry.getRequestObserver(),
+      input.budget,
+    ),
+    getState: () => state,
+    setState: (next) => {
+      state = next;
+    },
     session: input.pageContext.session,
     proxy: input.pageContext.proxy,
     egressKey: input.pageContext.egressKey,
-    requestObserver: composeRequestObservers(
-      input.telemetry.getRequestObserver(),
-      input.budget,
-      attempts,
-    ),
     rateLimitWaiter: createSyncRateLimitWaiter(app, input.pageContext),
-  };
+  });
+  const { attemptBudget, complete: completeLane, requestContext, saveProgress } = lane;
 
   let journaled = 0;
   let deferred: string | null = null;
@@ -407,82 +398,38 @@ export async function fanslyPayoutsChunk(
    * the page's own payouts. Both are small, both are stable between sweeps, and
    * both content-address to the same object until something actually changes.
    */
+  const journal = createFanslyLaneJournal({
+    db: app.db,
+    pageId,
+    syncRunId: input.syncRunId,
+    mapperVersion: FANSLY_PAYOUTS_CAPTURE_MAPPER_VERSION,
+    payloadKind: "mapping_critical",
+    retainUntil: retentionDate(),
+    onJournal: () => { journaled += 1; },
+  });
   const persist = async (
     kind: string,
     requestParams: Record<string, unknown>,
     payload: unknown,
   ) => {
-    const result = await persistRawPayload(app.db, {
-      platformAccountId: pageId,
-      syncRunId: input.syncRunId,
-      endpoint: kind,
-      requestParams,
-      responsePayload: payload,
-      mapperVersion: FANSLY_PAYOUTS_CAPTURE_MAPPER_VERSION,
-      payloadKind: "mapping_critical",
-      retainUntil: retentionDate(),
-    }, {
-      action: `inserting Fansly ${kind} raw payload`,
-      platform: "fansly",
-    });
-    journaled += 1;
-    // The cap is counted in ATTEMPTS, folded in AFTER the response is safe.
-    state = { ...state, callsToday: state.callsToday + attempts.take() };
+    const result = await journal(kind, requestParams, payload);
+    if (classifyPayoutResponse(kind, payload) === "invalid") {
+      throw new FanslyLaneInvalidResponseError(kind);
+    }
     return result;
   };
 
   /** Room for one more call today? Crossing this defers; it never drops. */
-  const hasDayCapacity = () => state.callsToday < dailyCap;
+  const hasDayCapacity = attemptBudget.hasCapacity;
 
-  const saveProgress = async () => {
-    const advanced = await upsertCheckpointProgress(app.db, {
-      platformAccountId: pageId,
-      stream: STREAM,
-      cursorText: state.fixedStepsDay,
-      state: { ...state } as unknown as Record<string, unknown>,
-    });
-    await input.telemetry.recordCheckpointAdvanced(STREAM, summarizeCheckpoint(advanced));
-  };
 
-  const completeSlot = async () => {
-    const completed = await upsertCheckpoint(app.db, {
-      platformAccountId: pageId,
-      stream: STREAM,
-      cursorText: state.fixedStepsDay,
-      state: { ...state } as unknown as Record<string, unknown>,
-      lastSuccessfulRunId: input.syncRunId,
-    });
-    await input.telemetry.recordCheckpointAdvanced(STREAM, summarizeCheckpoint(completed));
-  };
-
-  const coverage = async (
-    scopeRef: string,
-    status: CaptureCoverageStatus,
-    proof: CaptureCoverageProof,
-    extra: {
-      proofObservationId?: number | null;
-      reasonCode?: string | null;
-      observedUniqueCount?: number | null;
-      expectedCount?: number | null;
-      oldestCapturedAt?: Date | null;
-      cursor?: Record<string, unknown>;
-    } = {},
-  ) => {
-    await upsertCaptureCoverage(app.db, {
-      pageId,
-      platform: "fansly",
-      plane: FANSLY_PAYOUTS_COVERAGE_PLANE,
-      scopeRef,
-      status,
-      // Both surfaces are re-readable: the method listing is served whole every
-      // time, and the request history is offset-paged with no cursor that
-      // expires. Nothing here is forward-only.
-      acquisitionMode: "retroactive",
-      proof,
-      newestCapturedAt: now,
-      ...extra,
-    });
-  };
+  const coverage = createFanslyLaneCoverageWriter({
+    db: app.db,
+    pageId,
+    plane: FANSLY_PAYOUTS_COVERAGE_PLANE,
+    acquisitionMode: "retroactive",
+    newestCapturedAt: now,
+  });
 
   /**
    * ONE anomaly per unseen payout status code, per page, DURABLY.
@@ -663,7 +610,7 @@ export async function fanslyPayoutsChunk(
 
     // REPEAT-REQUEST GUARD, spent before any egress. The identical offset twice
     // in one walk is a loop, and issuing it teaches nothing.
-    if (state.lastRequestedOffset === state.walkOffset) {
+    if (isRepeatedRequest(state.lastRequestedOffset, state.walkOffset)) {
       await input.telemetry.addAnomaly({
         code: "fansly_payouts_offset_repeat",
         severity: "warn",
@@ -744,11 +691,16 @@ export async function fanslyPayoutsChunk(
       break;
     }
 
-    const nextOffset = requestedOffset + PAYOUT_REQUESTS_PAGE_SIZE;
+    const offsetPage = advanceOffsetPage({
+      offset: requestedOffset,
+      pageSize: PAYOUT_REQUESTS_PAGE_SIZE,
+      rowCount: page.rows.length,
+    });
+    const nextOffset = offsetPage.nextOffset;
     // TWO stop conditions, and the short page is the one that is always true:
     // `total` is a hint the provider may or may not keep honest, while a page
     // that returned fewer rows than it was asked for IS the end.
-    const short = page.rows.length < PAYOUT_REQUESTS_PAGE_SIZE;
+    const short = offsetPage.done;
     const reachedTotal = page.total !== null && nextOffset >= page.total;
     state = {
       ...state,
@@ -813,7 +765,7 @@ export async function fanslyPayoutsChunk(
         satisfied: false,
         yieldReason: null,
         // Deferred at the cap: come back after the UTC roll.
-        continuationRetryAt: nextUtcDayStart(now),
+        continuationRetryAt: nextFanslyUtcDayStart(now),
         stats,
       };
     }
@@ -838,7 +790,7 @@ export async function fanslyPayoutsChunk(
         stats,
       };
     }
-    await completeSlot();
+  await completeLane(input.syncRunId);
     return { satisfied: true, yieldReason: null, stats };
   }
 }

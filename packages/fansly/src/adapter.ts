@@ -1981,7 +1981,8 @@ export class FanslyAdapter {
     }
 
     const url = `${this.options.baseUrl}${pathname}?${query.toString()}`;
-    const retries = options.retries ?? 3;
+    const retryAllowance = Math.max(0, context.remainingAttempts?.() ?? Number.MAX_SAFE_INTEGER);
+    const retries = Math.min(options.retries ?? 3, Math.max(0, retryAllowance - 1));
     const minDelayMs = options.minDelayMs ?? 0;
     const requestId = `${options.operation}:${randomUUID()}`;
 

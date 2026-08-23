@@ -437,7 +437,7 @@ export interface PostRepliesWalkCandidate {
  */
 export async function listPostRepliesWalkChunk(
   db: Database,
-  input: { pageId: number; limit: number; rewalkBefore: Date },
+  input: { pageId: number; limit: number; rewalkBefore: Date; now?: Date },
 ): Promise<PostRepliesWalkCandidate[]> {
   const band = sql`
     case
@@ -466,6 +466,10 @@ export async function listPostRepliesWalkChunk(
        and p.platform_post_id = s.subject_ref
      where s.page_id = ${input.pageId}
        and s.plane = 'post_replies'
+       and (
+         s.consecutive_failures = 0
+         or s.next_due_at <= ${input.now ?? new Date()}
+       )
        and (
          s.last_visited_at is null
          or s.dirty_reason is not null

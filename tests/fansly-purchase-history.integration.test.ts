@@ -26,6 +26,7 @@ import {
   startIntegrationTestDatabase,
   type StartedTestDatabase,
 } from "./helpers/db.ts";
+import { fanslyLaneTelemetryStub as fakeTelemetry } from "./helpers/fansly-lane-harness.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 
 let testDb: StartedTestDatabase | null = null;
@@ -47,17 +48,6 @@ beforeEach(async (context) => {
   await resetIntegrationDatabase(testDb.pool);
   appContext = createTestAppContext(testDb, { fanslyPurchaseHistorySyncEnabled: true });
 });
-
-function fakeTelemetry() {
-  return {
-    recordPhaseStarted: vi.fn(async () => {}),
-    recordCheckpointLoaded: vi.fn(async () => {}),
-    recordCheckpointAdvanced: vi.fn(async () => {}),
-    addAnomaly: vi.fn(async () => {}),
-    addNote: vi.fn(async () => {}),
-    getRequestObserver: () => null,
-  };
-}
 
 async function seedPage() {
   const model = await createModel(appContext.db, { slug: "ph-model", name: "PH" });
@@ -229,7 +219,7 @@ describe("Stage 16 media-scoped purchase-history walk", () => {
     });
     const checkpoint = await getCheckpoint(appContext.db, page.id, "purchase_history");
     expect(checkpoint?.state).toMatchObject({
-      version: 4,
+      version: 5,
       transactionCursorId: expect.any(Number),
       pendingTargets: [],
     });
@@ -640,7 +630,7 @@ describe("Stage 16 media-scoped purchase-history walk", () => {
     ).rejects.toThrow("invalid params");
     const checkpoint = await getCheckpoint(appContext.db, page.id, "purchase_history");
     expect(checkpoint?.state).toMatchObject({
-      version: 4,
+      version: 5,
       pendingTargets: [
         { kind: "bundle", contentId: "bundle-1", before: null },
         { kind: "single", contentId: "media-1", before: null },
@@ -756,7 +746,7 @@ describe("Stage 16 media-scoped purchase-history walk", () => {
     ]);
     const checkpoint = await getCheckpoint(appContext.db, page.id, "purchase_history");
     expect(checkpoint?.state).toMatchObject({
-      version: 4,
+      version: 5,
       pendingTargets: [],
     });
   });

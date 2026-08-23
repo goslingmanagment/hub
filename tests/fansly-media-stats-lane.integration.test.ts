@@ -1,39 +1,13 @@
-// WP-F4 — the `media_stats` capture lane, against a real database.
-//
-// This is the one lane in the initiative that can overload the platform: one
-// call per media per window, over the WHOLE catalogue, deliberately sized to sit
-// at 100 % of its own daily cap. So what is pinned here is everything that
-// decides how much egress it makes and where it stops:
-//
-//  - THE QUEUE. Seeded from `creator_media` in bounded keyset batches on first
-//    enable, and — for anything projected afterwards — in the SAME TRANSACTION
-//    as the media upsert. A media row committed without its queue row is an item
-//    the lane never looks at, with a healthy lane and a clean coverage row.
-//  - THE AGE CLASSES, from `created_at_platform` and — when the platform served
-//    none — from first sight, classed FRESH for 30 days. Never an invented date.
-//  - THE PRIORITY. Dirty first (WP-F2's purchase signals and the top-50 marks),
-//    then never-visited newest first, then due by class.
-//  - THE 300-ATTEMPT CAP, counted in ATTEMPTS, deferring to the next UTC day —
-//    and a lane crossed MID-CHUNK still journals the response already fetched.
-//  - THE 31-DAY WINDOW AND ITS TWO GUARDS. `/it/amoie/stats` answered a 100-day
-//    window with its own default trailing 31 days on production and the walk
-//    looped until the day's cap was gone. Here an unhonoured window halves ONCE
-//    and then stops that item, with one anomaly; a repeated window never leaves
-//    the process at all.
-//  - THE FIRST-SIGHT BACKFILL, backwards in 31-day windows to the empty floor.
-//  - THE CYCLE ESTIMATE, against A16's binding table.
+// WP-F4 — media-stats queue, window, coverage and physical-attempt invariants.
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   countMediaStatsRefreshProgress,
-  createFanslyPage,
-  createModel,
   getCheckpoint,
   listMediaStatsRefreshChunk,
   listSubjectRefreshState,
   markSubjectRefreshDirty,
-  startSyncRun,
 } from "@agency_hub_core/db";
 
 import { SyncChunkBudget } from "../apps/runtime/src/services/sync/chunk-budget.ts";
@@ -52,6 +26,13 @@ import {
   startIntegrationTestDatabase,
   type StartedTestDatabase,
 } from "./helpers/db.ts";
+import {
+  fanslyLaneAppStub,
+  fanslyLaneInput,
+  fanslyLaneTelemetryStub as telemetryStub,
+  observeFanslyLaneAttempts,
+  seedFanslyLanePage,
+} from "./helpers/fansly-lane-harness.ts";
 
 let testDb: StartedTestDatabase | null = null;
 
@@ -185,16 +166,12 @@ function adapterStub(options: {
     ) => {
       const index = calls.length;
       calls.push(params);
-      for (let attempt = 0; attempt < attemptsPerCall; attempt += 1) {
-        await context.requestObserver?.onRequestEvent({
-          requestId: `media_offer_stats:${index}:${attempt}`,
-          state: "started",
-          operation: "media_offer_stats",
-          endpointTemplate: "/it/moie/statsnew",
-          method: "GET",
-          attemptNumber: attempt + 1,
-        });
-      }
+      await observeFanslyLaneAttempts(context, {
+        attempts: attemptsPerCall,
+        requestId: `media_offer_stats:${index}`,
+        operation: "media_offer_stats",
+        endpointTemplate: "/it/moie/statsnew",
+      });
       const failure = options.fail?.(params, index) ?? null;
       if (failure !== null) {
         throw failure;
@@ -210,29 +187,14 @@ function adapterStub(options: {
   };
 }
 
-function telemetryStub() {
-  const anomalies: Array<Record<string, unknown>> = [];
-  return {
-    anomalies,
-    recordPhaseStarted: vi.fn(async () => {}),
-    recordCheckpointLoaded: vi.fn(async () => {}),
-    recordCheckpointAdvanced: vi.fn(async () => {}),
-    addNote: vi.fn(async () => {}),
-    addAnomaly: vi.fn(async (input: Record<string, unknown>) => {
-      anomalies.push(input);
-    }),
-    getRequestObserver: vi.fn(() => null),
-  };
-}
-
 const LOG_LINES: Array<{ message: string; fields: Record<string, unknown> }> = [];
 
 function appStub(
   adapter: ReturnType<typeof adapterStub>,
   configOverrides: Record<string, unknown> = {},
 ) {
-  return {
-    db: testDb!.db,
+  return fanslyLaneAppStub({
+    database: testDb!,
     adapter,
     logger: {
       info: (fields: Record<string, unknown>, message: string) => {
@@ -249,28 +211,21 @@ function appStub(
       fanslyBackfillContinuationDelayMs: 20_000,
       ...configOverrides,
     },
-  } as never;
+  });
 }
 
 let syncRunId = 0;
 
 async function seedPage() {
-  const model = await createModel(testDb!.db, { slug: "media", name: "Media" });
-  if (!model) throw new Error("Expected the media test model to be created");
-  const page = await createFanslyPage(testDb!.db, { modelId: model.id, label: "media-lane" });
-  if (!page) throw new Error("Expected the media test page to be created");
-  await testDb!.pool.query("update pages set external_page_id = $1 where id = $2", [
-    "acct-media",
-    page.id,
-  ]);
-  const run = await startSyncRun(testDb!.db, {
-    platformAccountId: page.id,
+  const seeded = await seedFanslyLanePage(testDb!, {
+    slug: "media",
+    name: "Media",
+    label: "media-lane",
+    accountRef: "acct-media",
     stream: "media_stats",
-    trigger: "scheduled",
   });
-  if (!run) throw new Error("Expected the media test sync run to be created");
-  syncRunId = run.id;
-  return page;
+  syncRunId = seeded.syncRunId;
+  return seeded.page;
 }
 
 /** A per-media backfill cursor already AT its floor. Most cases here are about
@@ -333,20 +288,16 @@ function input(
   budget = new SyncChunkBudget(),
   now = NOW,
 ) {
-  return {
-    budget,
-    pageContext: {
-      platform: "fansly",
-      page: { id: pageId, label: "media-lane", platformAccountId: "acct-media", metadata: {} },
-      session: { authorization: "token" },
-      proxy: { url: "socks5://proxy.example:1080" },
-      egressKey: "fansly:media",
-    },
+  return fanslyLaneInput({
+    pageId,
+    label: "media-lane",
+    accountRef: "acct-media",
+    egressKey: "fansly:media",
     telemetry,
-    streamState: { requestSeq: 1 },
     syncRunId,
     now,
-  } as never;
+    budget,
+  }) as never;
 }
 
 async function cursor(pageId: number) {
@@ -584,6 +535,26 @@ describe("media_stats lane — the queue", () => {
 });
 
 describe("media_stats lane — the windows and their guards", () => {
+  it("journals an invalid stats envelope without advancing coverage", async (ctx) => {
+    if (!testDb) return ctx.skip();
+    const page = await seedPage();
+    await seedMedia(page.id, [{
+      ref: ref(400),
+      createdAtPlatform: new Date(NOW.getTime() - 5 * DAY_MS),
+    }], { queueCursor: BACKFILL_DONE });
+    const adapter = adapterStub({ body: () => ({ aggregationData: {} }) });
+
+    await fanslyMediaStatsChunk(appStub(adapter), input(page.id, telemetryStub()));
+
+    expect(await journaled(page.id)).toHaveLength(1);
+    expect(await coverageRows(page.id)).toEqual([]);
+    const queue = await listSubjectRefreshState(testDb.db, {
+      pageId: page.id,
+      plane: "media_stats",
+    });
+    expect(queue[0]?.lastVisitedAt).toBeNull();
+  });
+
   it("asks the tier's window: 24 h hourly, 30 d daily, 90 d daily", async (ctx) => {
     if (!testDb) return ctx.skip();
     const page = await seedPage();
