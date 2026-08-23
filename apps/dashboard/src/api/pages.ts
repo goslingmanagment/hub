@@ -11,6 +11,22 @@ import { kernel } from "./sdk.js";
 
 type QueryOptions = { enabled?: boolean };
 
+/**
+ * The page catalog, straight from `GET /api/v1/pages`.
+ *
+ * Deliberately NOT `useOverview().pages`: the overview response is a whole
+ * dashboard's worth of aggregates (fan counts, revenue windows, sync state)
+ * and costs seconds on a cold cache, so any surface that only needs "which
+ * pages exist" was paying for all of it before it could fire a single request
+ * of its own. This query is the cheap catalog — id, label, platform.
+ */
+export function usePages() {
+  return useQuery({
+    queryKey: ["pages"],
+    queryFn: () => kernel.pages(),
+  });
+}
+
 export function usePageRevenue(pageLabel: string, period: string, options: QueryOptions = {}) {
   return useQuery({
     queryKey: ["pageRevenue", pageLabel, period],

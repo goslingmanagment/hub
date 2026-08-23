@@ -76,13 +76,28 @@ export function resolveAnalyticsRange(value: string | null | undefined): Analyti
     : "30d";
 }
 
+/** The granularity `now` is truncated to before it becomes a window bound.
+ *
+ *  A millisecond-precise `to` makes every remount a cache miss: the seven
+ *  Analytics queries key on `window.from`/`window.to`, so a fresh `new Date()`
+ *  produced seven new keys and seven refetches on every navigation back to the
+ *  page, `staleTime` notwithstanding. A minute is coarse enough to hit the
+ *  cache and fine enough that nobody can see the difference in a 7–90 day
+ *  window. Keying by the PRESET alone would be wrong the other way — the
+ *  window would never advance for as long as the tab stayed open. */
+const ANALYTICS_WINDOW_GRANULARITY_MS = 60_000;
+
 /** `[from, to)` for a range preset, as RFC 3339 instants with an explicit
- *  offset — the only form the serving routes accept. */
+ *  offset — the only form the serving routes accept. `to` is truncated to the
+ *  minute so the bounds (and therefore the query keys built from them) are
+ *  stable for every call made within the same minute. */
 export function analyticsRange(
   range: AnalyticsRange,
   now: Date = new Date(),
 ): { from: string; to: string } {
-  const to = new Date(now);
+  const to = new Date(
+    Math.floor(now.getTime() / ANALYTICS_WINDOW_GRANULARITY_MS) * ANALYTICS_WINDOW_GRANULARITY_MS,
+  );
   const from = new Date(to.getTime() - ANALYTICS_RANGE_DAYS[range] * 24 * 60 * 60 * 1000);
   return { from: from.toISOString(), to: to.toISOString() };
 }
