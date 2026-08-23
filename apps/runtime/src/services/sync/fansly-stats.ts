@@ -257,7 +257,7 @@ interface EarningsBackfillState {
 }
 
 export interface FanslyStatsCursorState {
-  version: 1;
+  version: 2;
   mode: "backfill" | "steady";
   /** The UTC day `callsToday` belongs to; a different day resets the counter. */
   utcDay: string;
@@ -265,7 +265,11 @@ export interface FanslyStatsCursorState {
   callsToday: number;
   /** The last UTC day a full daily sweep completed. */
   lastSweepDay: string | null;
-  /** Which of the seven steps to resume at within today's sweep. */
+  /** The UTC day the in-progress steady sweep belongs to. It survives a UTC
+   *  rollover so finishing yesterday's tail cannot masquerade as today's full
+   *  sweep. Null when no steady sweep is in progress. */
+  sweepDay: string | null;
+  /** Which step to resume at within `sweepDay`. */
   stepIndex: number;
   earningsOffset: number;
   /** Repeat-cursor guard: the offset the previous page was fetched at. */
@@ -301,6 +305,12 @@ function asNullableString(value: unknown): string | null {
 
 function asNullableInt(value: unknown): number | null {
   return typeof value === "number" && Number.isSafeInteger(value) ? value : null;
+}
+
+function previousUtcDayKey(day: string, fallbackNow: Date): string {
+  const midnightMs = Date.parse(`${day}T00:00:00.000Z`);
+  const baseMs = Number.isNaN(midnightMs) ? fallbackNow.getTime() : midnightMs;
+  return fanslyUtcDayKey(new Date(baseMs - DAY_MS));
 }
 
 /** A cursor written before the guard existed parses as a lane that has asked
@@ -386,7 +396,7 @@ export function parseFanslyStatsCursorState(
   now = new Date(),
 ): FanslyStatsCursorState | null {
   const state = asRecord(value);
-  if (!state || state.version !== 1) {
+  if (!state || (state.version !== 1 && state.version !== 2)) {
     return null;
   }
   const mode = state.mode === "backfill" || state.mode === "steady" ? state.mode : null;
@@ -395,17 +405,32 @@ export function parseFanslyStatsCursorState(
     return null;
   }
   const backfillRecord = asRecord(state.backfill);
+  const stepIndex = Math.min(LAST_SWEEP_STEP, Math.max(0, asInt(state.stepIndex, 0)));
+  const lastSweepDay = asNullableString(state.lastSweepDay);
+  const legacySweepDay = mode === "steady" && stepIndex > 0
+    // A v1 cursor cannot prove whether this tail already crossed midnight. Treat
+    // it as belonging to the last completed day (or yesterday on first enable),
+    // finish it, then force one bounded current-day sweep. That one-time repeat
+    // is safer than preserving the exact stale-head failure this migration fixes.
+    ? lastSweepDay ?? previousUtcDayKey(utcDay, now)
+    : null;
   return {
-    version: 1,
+    version: 2,
     mode,
     utcDay,
     callsToday: Math.max(0, asInt(state.callsToday, 0)),
-    lastSweepDay: asNullableString(state.lastSweepDay),
+    // A completed v1 cursor also cannot prove that step 0 ran on this UTC day.
+    // Clearing the completion marker makes the upgrade self-heal with one
+    // ordinary capped sweep; v2 checkpoints never take this branch again.
+    lastSweepDay: state.version === 1 && mode === "steady" && stepIndex === 0
+      ? null
+      : lastSweepDay,
+    sweepDay: state.version === 1 ? legacySweepDay : asNullableString(state.sweepDay),
     // Clamped to the real step range. A stored value past the last step would
     // otherwise wedge the lane: the sweep loop would fall straight through to
     // its `break` and return "not satisfied, nothing done" on every dispatch,
     // forever, with no call and no error to show for it.
-    stepIndex: Math.min(LAST_SWEEP_STEP, Math.max(0, asInt(state.stepIndex, 0))),
+    stepIndex,
     earningsOffset: Math.max(0, asInt(state.earningsOffset, 0)),
     earningsPreviousOffset: typeof state.earningsPreviousOffset === "number"
       ? state.earningsPreviousOffset
@@ -555,7 +580,7 @@ export function isEmptyStatsMonth(payload: unknown): boolean {
 
 export function emptyFanslyStatsCursorState(now: Date): FanslyStatsCursorState {
   return {
-    version: 1,
+    version: 2,
     // FIRST ENABLE walks history before it settles into the daily sweep. That is
     // the only chance to reach the provider's floor cheaply — ten years of daily
     // buckets is ~118 windows at the 31-day span the provider actually honours,
@@ -564,6 +589,7 @@ export function emptyFanslyStatsCursorState(now: Date): FanslyStatsCursorState {
     utcDay: utcDayKey(now),
     callsToday: 0,
     lastSweepDay: null,
+    sweepDay: null,
     stepIndex: 0,
     earningsOffset: 0,
     earningsPreviousOffset: null,
@@ -597,7 +623,8 @@ export function emptyFanslyStatsCursorState(now: Date): FanslyStatsCursorState {
 export const utcDayKey = fanslyUtcDayKey;
 
 /** A new UTC day resets the attempt counter. Nothing else about the cursor
- *  changes: a sweep that deferred mid-step resumes at exactly that step. */
+ *  changes: a sweep that deferred mid-step resumes at exactly that step and
+ *  keeps the day on which it started. */
 export const rollUtcDay = rollFanslyUtcDay;
 
 // ── shape helpers over the journaled bodies ──────────────────────────────────
@@ -1499,7 +1526,7 @@ export async function fanslyStatsSnapshotChunk(
 
   // ── STEADY DAILY SWEEP ────────────────────────────────────────────────────
   const today = utcDayKey(now);
-  if (state.lastSweepDay === today && state.stepIndex === 0) {
+  if (state.lastSweepDay === today && state.stepIndex === 0 && state.sweepDay === null) {
     return {
       satisfied: true,
       yieldReason: null,
@@ -1514,6 +1541,12 @@ export async function fanslyStatsSnapshotChunk(
       break;
     }
     await assertOwnedPageSyncLease(app.db);
+    if (state.sweepDay === null) {
+      // Bind the sweep to the day on which its first executable step starts.
+      // The binding survives midnight; completion below stamps THIS day, not
+      // whatever day the tail happens to finish on.
+      state = { ...state, sweepDay: today };
+    }
 
     if (state.stepIndex === 0) {
       const beforeDate = now;
@@ -1756,13 +1789,26 @@ export async function fanslyStatsSnapshotChunk(
     if (state.stepIndex === LAST_SWEEP_STEP) {
       const response = await app.adapter.getRecapStats(requestContext);
       await persist("recapstats", {}, response.raw);
-      state = { ...state, stepIndex: 0, lastSweepDay: today };
-      await completeLane(input.syncRunId);
-      return {
-        satisfied: true,
-        yieldReason: null,
-        stats: { mode: "steady", journaled, callsToday: state.callsToday, dailyCap },
+      const completedSweepDay = state.sweepDay ?? today;
+      state = {
+        ...state,
+        stepIndex: 0,
+        lastSweepDay: completedSweepDay,
+        sweepDay: null,
       };
+      if (completedSweepDay === today) {
+        await completeLane(input.syncRunId);
+        return {
+          satisfied: true,
+          yieldReason: null,
+          stats: { mode: "steady", journaled, callsToday: state.callsToday, dailyCap },
+        };
+      }
+      // Yesterday's tail is complete, but today's sweep is still due. Keep the
+      // same chunk moving when it has room; otherwise the durable step-0 cursor
+      // makes the next chunk start at the current head instead of skipping it.
+      await saveProgress();
+      continue;
     }
 
     break;

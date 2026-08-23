@@ -17,6 +17,7 @@ import {
   canonicalizeFanslyStatsObservation,
   canParseFanslyStatsObservation,
   FANSLY_STATS_CANONICALIZED_KINDS,
+  FANSLY_STATS_CANONICALIZER_VERSION,
   FANSLY_STATS_UNKNOWN_TYPE_DIAGNOSTIC,
 } from "../apps/runtime/src/services/canonicalize/fansly-stats.ts";
 import { CANONICALIZER_FAMILIES } from "../apps/runtime/src/services/canonicalize/index.ts";
@@ -86,6 +87,8 @@ describe("fansly-stats family registration", () => {
     expect(stats?.source).toBe("pull");
     expect(stats?.projectionOnly).toBe(true);
     expect(stats?.mixed).toBeUndefined();
+    expect(FANSLY_STATS_CANONICALIZER_VERSION).toBe(2);
+    expect(stats?.version).toBe(2);
     expect([...(stats?.kinds ?? [])]).toEqual([...FANSLY_STATS_CANONICALIZED_KINDS]);
     // The broad `sync` family claims `kinds` of its own, but ordering is what
     // guarantees a stats kind is never swallowed by a wider entry.
@@ -233,6 +236,11 @@ describe("account statistics → events", () => {
     expect(topMedia.data.requestedStart).toBe("2026-08-17T00:00:00.000Z");
     expect(topMedia.data.requestedEnd).toBe("2026-08-18T00:00:00.000Z");
     expect(topMedia.dedupKey).toContain("statstop:v1:11:top_media:86400000:");
+    const topTags = drafts.find((draft) => draft.data.plane === "top_fyp_tags")!;
+    expect(topTags.data.tagNames).toEqual({
+      "000900000000000014": "stockings",
+      "000900000000000019": "lingerie",
+    });
   });
 
   it("samples platform-global tag counters from the aggregation sidecar", () => {

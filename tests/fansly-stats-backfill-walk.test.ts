@@ -46,6 +46,8 @@ describe("stats backfill cursor state", () => {
     expect(state.backfill!.daily.nextMonthIndex).toBeNull();
     expect(state.utcDay).toBe("2026-08-19");
     expect(state.callsToday).toBe(0);
+    expect(state.version).toBe(2);
+    expect(state.sweepDay).toBeNull();
   });
 
   it("round-trips through the checkpoint, including the probe bookmark", () => {
@@ -58,6 +60,7 @@ describe("stats backfill cursor state", () => {
     state.backfill!.daily.floorAt = "2019-01-01T00:00:00.000Z";
     state.callsToday = 7;
     state.stepIndex = 4;
+    state.sweepDay = "2026-08-19";
     // The cursor is the only durable home for any of this: a walk that lost its
     // bookmark on a lease change would re-read from today, forever.
     const parsed = parseFanslyStatsCursorState(JSON.parse(JSON.stringify(state)), NOW);
@@ -69,6 +72,7 @@ describe("stats backfill cursor state", () => {
     expect(parsed!.backfill!.daily.floorAt).toBe("2019-01-01T00:00:00.000Z");
     expect(parsed!.callsToday).toBe(7);
     expect(parsed!.stepIndex).toBe(4);
+    expect(parsed!.sweepDay).toBe("2026-08-19");
   });
 
   it("clamps a step index past the last step instead of wedging the lane", () => {
@@ -85,20 +89,48 @@ describe("stats backfill cursor state", () => {
 
   it("refuses a cursor it does not recognize rather than half-reading it", () => {
     expect(parseFanslyStatsCursorState(null, NOW)).toBeNull();
-    expect(parseFanslyStatsCursorState({ version: 2, mode: "steady", utcDay: "x" }, NOW)).toBeNull();
+    expect(parseFanslyStatsCursorState({ version: 3, mode: "steady", utcDay: "x" }, NOW)).toBeNull();
     expect(parseFanslyStatsCursorState({ version: 1, mode: "nope", utcDay: "x" }, NOW)).toBeNull();
     expect(parseFanslyStatsCursorState({ version: 1, mode: "steady" }, NOW)).toBeNull();
   });
 
   it("rolls the UTC day and nothing else", () => {
-    const state = { ...emptyFanslyStatsCursorState(NOW), callsToday: 25, stepIndex: 6 };
+    const state = {
+      ...emptyFanslyStatsCursorState(NOW),
+      callsToday: 25,
+      sweepDay: "2026-08-19",
+      stepIndex: 6,
+    };
     const same = rollUtcDay(state, new Date("2026-08-19T23:59:59.999Z"));
     expect(same.callsToday).toBe(25);
     const rolled = rollUtcDay(state, new Date("2026-08-20T00:00:00.000Z"));
     expect(rolled.callsToday).toBe(0);
     expect(rolled.utcDay).toBe("2026-08-20");
     expect(rolled.stepIndex).toBe(6);
+    expect(rolled.sweepDay).toBe("2026-08-19");
     expect(utcDayKey(new Date("2026-01-01T00:00:00.000Z"))).toBe("2026-01-01");
+  });
+
+  it("migrates an ambiguous v1 sweep conservatively so the current head is re-read once", () => {
+    const inProgress = {
+      ...emptyFanslyStatsCursorState(NOW),
+      version: 1,
+      mode: "steady",
+      backfill: null,
+      utcDay: "2026-08-20",
+      lastSweepDay: "2026-08-19",
+      stepIndex: 6,
+    };
+    const parsedInProgress = parseFanslyStatsCursorState(inProgress, NOW)!;
+    expect(parsedInProgress.version).toBe(2);
+    // V1 could have rolled the attempt day without running step 0. Finish its
+    // tail as the prior sweep, then the handler must start a fresh current one.
+    expect(parsedInProgress.sweepDay).toBe("2026-08-19");
+
+    const completed = { ...inProgress, stepIndex: 0 };
+    const parsedCompleted = parseFanslyStatsCursorState(completed, NOW)!;
+    expect(parsedCompleted.lastSweepDay).toBeNull();
+    expect(parsedCompleted.sweepDay).toBeNull();
   });
 });
 

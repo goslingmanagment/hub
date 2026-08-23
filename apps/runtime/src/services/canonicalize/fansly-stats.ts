@@ -72,7 +72,10 @@ import {
   saleSummary,
 } from "./sync-pull.ts";
 
-export const FANSLY_STATS_CANONICALIZER_VERSION = 1;
+// v2 joins account-level top-FYP tag ids to aggregationData.tags[]. The version
+// bump replays retained v1 observations so already-projected NULL names repair
+// themselves without another platform call.
+export const FANSLY_STATS_CANONICALIZER_VERSION = 2;
 const SCHEMA_VERSION = 1;
 
 /** The `observations.kind` values this family claims. Every one is registered
@@ -279,6 +282,18 @@ function mediaTrafficDrafts(
   return drafts;
 }
 
+function tagNameIndex(aggregation: Record<string, unknown>): Map<string, string> {
+  const names = new Map<string, string>();
+  for (const tag of recordArray(aggregation.tags)) {
+    const tagRef = asString(tag.id);
+    const name = asString(tag.tag);
+    if (tagRef !== null && name !== null) {
+      names.set(tagRef, name);
+    }
+  }
+  return names;
+}
+
 /**
  * ONE event per top-N plane per capture — the WINDOW is the identity (D-1).
  *
@@ -289,6 +304,7 @@ function mediaTrafficDrafts(
 function windowTopDrafts(
   observation: CanonicalizableObservation,
   dataset: Record<string, unknown>,
+  aggregation: Record<string, unknown>,
   window: StatsWindow,
 ): CanonicalEventDraft[] {
   const pageRef = pageRefOf(observation);
@@ -297,7 +313,7 @@ function windowTopDrafts(
     { plane: "top_fyp_media", rows: recordArray(dataset.topFypMediaOffers) },
     { plane: "top_fyp_tags", rows: recordArray(dataset.topFypTags) },
   ];
-  const tagNames = new Map<string, string>();
+  const tagNames = tagNameIndex(aggregation);
   const drafts: CanonicalEventDraft[] = [];
   for (const plane of planes) {
     if (plane.rows.length === 0) {
@@ -460,7 +476,7 @@ function accountStatsDrafts(
   return [
     ...profileTrafficDrafts(observation, dataset, window, context?.diagnostics),
     ...mediaTrafficDrafts(observation, dataset, window, context?.diagnostics),
-    ...windowTopDrafts(observation, dataset, window),
+    ...windowTopDrafts(observation, dataset, aggregation, window),
     ...tagCounterDrafts(observation, recordArray(aggregation.tags), "stats_agg"),
     ...saleStatsDrafts(observation, sources.media),
     // The SAME shapes and dedup keys F0(b) mints from the DM sidecars, with a
@@ -501,14 +517,7 @@ function mediaTagStatsDrafts(
     return [];
   }
   const pageRef = pageRefOf(observation);
-  const tagNames = new Map<string, string>();
-  for (const tag of recordArray(aggregation.tags)) {
-    const tagRef = asString(tag.id);
-    const name = asString(tag.tag);
-    if (tagRef !== null && name !== null) {
-      tagNames.set(tagRef, name);
-    }
-  }
+  const tagNames = tagNameIndex(aggregation);
   const drafts: CanonicalEventDraft[] = [];
   const seen = new Set<string>();
   for (const [rank, row] of rows.entries()) {

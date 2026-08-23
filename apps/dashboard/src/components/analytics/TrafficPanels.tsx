@@ -20,6 +20,7 @@ import {
   type AnalyticsCoverageWindow,
   type CoverageRow,
 } from "./coverage.js";
+import { buildFypMediaViewSummary } from "./traffic-metrics.js";
 
 type TrafficRow = StatsTrafficResponse["rows"][number];
 
@@ -191,9 +192,9 @@ export function TrafficBySourcePanel({
 /**
  * Panel 2 — FYP against direct, on MEDIA views, plus the FYP share.
  *
- * The share is ours, computed at read time from two served counts, and it says
- * so. A13: the platform serves no averages and no shares; anything of that
- * shape in this system was computed here.
+ * The share is ours, computed at read time from each lane's full + preview
+ * views, and it says so. A13: the platform serves no averages and no shares;
+ * anything of that shape in this system was computed here.
  */
 export function FypSharePanel({
   data,
@@ -208,40 +209,10 @@ export function FypSharePanel({
 }) {
   const verdict = coverageVerdict(coverage, ANALYTICS_COVERAGE_PLANES.fyp, selectedWindow);
 
-  const { series, totals } = useMemo(() => {
-    const buckets = new Map<string, { bucketStart: string; fyp: number; direct: number }>();
-    let fypTotal = 0;
-    let directTotal = 0;
-    let served = false;
-    for (const row of data?.rows ?? []) {
-      if (row.views === null) {
-        continue;
-      }
-      const lane = row.sourceLabel === "fyp" ? "fyp" : row.sourceLabel === "direct" ? "direct" : null;
-      if (lane === null) {
-        continue;
-      }
-      served = true;
-      const bucket = buckets.get(row.bucketStart)
-        ?? { bucketStart: row.bucketStart, fyp: 0, direct: 0 };
-      bucket[lane] += row.views;
-      buckets.set(row.bucketStart, bucket);
-      if (lane === "fyp") {
-        fypTotal += row.views;
-      } else {
-        directTotal += row.views;
-      }
-    }
-    return {
-      series: [...buckets.values()].sort((left, right) =>
-        left.bucketStart.localeCompare(right.bucketStart)),
-      totals: served ? { fyp: fypTotal, direct: directTotal } : null,
-    };
-  }, [data]);
-
-  const share = totals !== null && totals.fyp + totals.direct > 0
-    ? (totals.fyp / (totals.fyp + totals.direct)) * 100
-    : null;
+  const { series, sharePercent: share } = useMemo(
+    () => buildFypMediaViewSummary(data?.rows ?? []),
+    [data],
+  );
 
   return (
     <AnalyticsPanel
@@ -255,8 +226,8 @@ export function FypSharePanel({
         </span>
       )}
       footnote={
-        "The share is computed here from two served counts — Fansly sends no share and "
-        + "no average anywhere in this payload. It is labelled Hub-derived for that reason."
+        "The share is computed here from served full and preview views — Fansly sends no share "
+        + "and no average anywhere in this payload. It is labelled Hub-derived for that reason."
       }
     >
       {isLoading ? (
