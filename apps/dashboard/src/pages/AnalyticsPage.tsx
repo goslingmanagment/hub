@@ -10,6 +10,7 @@ import {
   useStatsTags,
   useStatsTraffic,
 } from "@/api/insights";
+import { usePages } from "@/api/pages";
 import {
   CommentsPanel,
   ContentPerformancePanel,
@@ -23,7 +24,6 @@ import {
   TrafficBySourcePanel,
   accountWatchAverage,
 } from "@/components/analytics/TrafficPanels";
-import { useDashboardShell } from "@/components/layout/DashboardShellContext.js";
 import { analyticsRange, resolveAnalyticsRange, type AnalyticsRange } from "@/lib/navigation";
 
 import { analyticsQueryState } from "./analytics-query-state.js";
@@ -41,11 +41,21 @@ import { analyticsQueryState } from "./analytics-query-state.js";
  * empty chart readable — an empty chart over an exhausted lane and an empty
  * chart over a lane whose flag is off look identical without it, and mean
  * opposite things.
+ *
+ * The page catalog comes from `usePages()` and NOT from the shell's
+ * `useOverview()`: this page fires nothing until it knows which page is
+ * active, so hanging the catalog off the dashboard-wide overview aggregate
+ * meant seven analytics requests waited seconds on a response none of them
+ * needed. The same honesty rule applies to the catalog itself — "no Fansly
+ * pages" is a claim about a SUCCEEDED query, never about a pending one.
  */
 export function AnalyticsPage() {
-  const { pages } = useDashboardShell();
+  const pagesQuery = usePages();
   const [searchParams, setSearchParams] = useSearchParams();
-  const fanslyPages = useMemo(() => pages.filter((page) => page.platform === "fansly"), [pages]);
+  const fanslyPages = useMemo(
+    () => (pagesQuery.data ?? []).filter((page) => page.platform === "fansly"),
+    [pagesQuery.data],
+  );
 
   const requestedPage = searchParams.get("page") ?? "";
   const activeLabel = fanslyPages.some((page) => page.label === requestedPage)
@@ -90,16 +100,6 @@ export function AnalyticsPage() {
   // every per-media surface.
   const watchPercent = accountWatchAverage(mediaTraffic.data?.rows);
 
-  if (fanslyPages.length === 0) {
-    return (
-      <div className="mx-auto max-w-6xl px-4 py-6">
-        <div className="rounded-xl border border-border bg-card px-4 py-12 text-center text-[13px] text-text-muted">
-          No Fansly pages to analyse.
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="mx-auto max-w-6xl px-4 py-6">
       <header className="mb-4 flex flex-wrap items-center justify-between gap-3">
@@ -113,18 +113,20 @@ export function AnalyticsPage() {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
-          <label className="flex items-center gap-2 text-[12px] text-text-secondary">
-            Page
-            <select
-              value={activeLabel}
-              onChange={(event) => setParam("page", event.target.value)}
-              className="rounded-md border border-border bg-card px-2 py-1.5 text-[13px] font-medium text-text-primary"
-            >
-              {fanslyPages.map((page) => (
-                <option key={page.id} value={page.label}>{page.label}</option>
-              ))}
-            </select>
-          </label>
+          {fanslyPages.length > 0 ? (
+            <label className="flex items-center gap-2 text-[12px] text-text-secondary">
+              Page
+              <select
+                value={activeLabel}
+                onChange={(event) => setParam("page", event.target.value)}
+                className="rounded-md border border-border bg-card px-2 py-1.5 text-[13px] font-medium text-text-primary"
+              >
+                {fanslyPages.map((page) => (
+                  <option key={page.id} value={page.label}>{page.label}</option>
+                ))}
+              </select>
+            </label>
+          ) : null}
           <div className="flex gap-1 rounded-lg border border-border p-0.5">
             {(["7d", "30d", "90d"] as const).map((option) => (
               <button
@@ -144,7 +146,34 @@ export function AnalyticsPage() {
         </div>
       </header>
 
-      {queryState.state === "error" ? (
+      {pagesQuery.isPending ? (
+        <div className="rounded-xl border border-border bg-card px-4 py-12 text-center text-[13px] text-text-muted">
+          Loading pages…
+        </div>
+      ) : pagesQuery.isError ? (
+        <div
+          role="alert"
+          className="rounded-xl border border-warning-dark/60 bg-card px-5 py-8 text-center"
+        >
+          <p className="text-[13px] font-medium text-text-primary">
+            The page list could not be loaded.
+          </p>
+          <p className="mt-1 text-[12px] text-text-muted">
+            Without it there is nothing to analyse — this is a failed request, not an empty agency.
+          </p>
+          <button
+            type="button"
+            onClick={() => void pagesQuery.refetch()}
+            className="mt-3 rounded-md border border-border px-3 py-1.5 text-[12px] font-medium text-text-secondary hover:text-text-primary"
+          >
+            Retry
+          </button>
+        </div>
+      ) : fanslyPages.length === 0 ? (
+        <div className="rounded-xl border border-border bg-card px-4 py-12 text-center text-[13px] text-text-muted">
+          No Fansly pages to analyse.
+        </div>
+      ) : queryState.state === "error" ? (
         <div
           role="alert"
           className="rounded-xl border border-warning-dark/60 bg-card px-5 py-8 text-center"
