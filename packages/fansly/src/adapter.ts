@@ -320,8 +320,11 @@ export class FanslyAdapter {
    * top-N planes, and the aggregation sidecars (media, bundles, tags, offer
    * locations).
    *
-   * `datapointLimit` came back 100, which is why the backfill walks windows of
-   * at most 100 buckets. `year`/`month` are the named-month form the UI uses;
+   * `datapointLimit` came back 100 — a window may CARRY 100 buckets, which is
+   * not the same as the route honouring a 100-day one, and on prod (2026-08-22)
+   * it did not: a 100-day request was answered with the DEFAULT trailing 31 days.
+   * The backfill therefore walks 31-day windows, the span the HAR proves is
+   * honoured. `year`/`month` are the named-month form the UI uses;
    * 0/0 means "use beforeDate/afterDate", which is the only form this lane ever
    * sends — the UI exposing three months back is a UI limit, not the API's.
    */
