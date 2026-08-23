@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 
 import { describe, expect, it } from "vitest";
 
+import { OFAPI_SPEND_PROJECTION_EVENT_TYPES } from "@agency_hub_core/db";
 import { ofapiCaptureJobStates } from "@agency_hub_core/shared";
 
 describe("database migration invariants", () => {
@@ -228,5 +229,39 @@ describe("database migration invariants", () => {
     expect(migration).toContain("'suppressed'");
     expect(migration).toContain("'exhausted'");
     expect(migration).not.toMatch(/\bUPDATE\s+"?ai_usage_events"?/i);
+  });
+
+  it("keeps the spend-candidate index predicate equal to the sweep's pinned event types", async () => {
+    const migration = await readFile(
+      "packages/db/migrations/0143_ofapi_webhook_events_spend_candidates_idx.sql",
+      "utf8",
+    );
+
+    // The planner may only use a partial index when the query's clauses IMPLY
+    // its predicate, and implication over a list of constants is structural: a
+    // list that differs in content OR ORDER stops the index being used, and the
+    // only symptom is that the minutely sweep silently goes back to walking the
+    // whole journal. Pin the predicate to the one constant the query is built
+    // from — same members, same order.
+    const predicate = /where event_type in \(([^)]*)\)/.exec(migration)?.[1];
+    expect(predicate).toBeDefined();
+    const indexedEventTypes = predicate!
+      .split(",")
+      .map((value) => value.trim().replace(/^'|'$/g, ""));
+    expect(indexedEventTypes).toEqual([...OFAPI_SPEND_PROJECTION_EVENT_TYPES]);
+
+    // The rest of the predicate is the sweep's other two constant clauses,
+    // verbatim, and the key is `id` alone so the same index serves `order by id`.
+    expect(migration).toContain("on ofapi_webhook_events (id)");
+    expect(migration).toContain("and status <> 'pending'");
+    expect(migration).toContain("and platform_account_id is not null");
+
+    // Capture-first (DP 7): building this index must never lock out the webhook
+    // receiver, so it is non-transactional and CONCURRENTLY.
+    expect(migration.startsWith("-- agency-hub:no-transaction")).toBe(true);
+    expect(migration).toContain("create index concurrently if not exists");
+    expect(migration).toContain(
+      "drop index concurrently if exists %I.%I",
+    );
   });
 });

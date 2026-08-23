@@ -541,22 +541,47 @@ export async function listOfapiSpendProjectionEvents(db: Database) {
     .orderBy(asc(ofapiSpendProjectionEvents.id));
 }
 
+/**
+ * The webhook event types the spend projection sweep consumes. It lives HERE,
+ * beside the only query that reads it, because migration 0143's partial index
+ * (`ofapi_webhook_events_spend_candidates_idx`) repeats this list as its
+ * predicate: the planner may only use a partial index when the query's own
+ * clauses imply the predicate, and an implication over a list of constants is
+ * proven by structural equality — a list that differs in CONTENT OR ORDER
+ * silently stops the index from being used and the sweep goes back to walking
+ * the whole 570k-row journal every minute (19.4 s, 380k buffers on prod
+ * 2026-08-23). `tests/migration-invariants.test.ts` pins the two together.
+ *
+ * The sweep no longer passes the list in: one list, one query, nothing to drift.
+ */
+export const OFAPI_SPEND_PROJECTION_EVENT_TYPES = [
+  "transactions.new",
+  "messages.ppv.unlocked",
+  "tips.received",
+] as const;
+
+/** The pinned list as SQL constants. `inArray` would bind PARAMETERS, and the
+ *  planner cannot prove a parameterised `= any($1)` implies the index
+ *  predicate — the values have to reach the planner as Consts. The members are
+ *  compile-time literals of this module, never caller input; the quote escape
+ *  is belt-and-braces. */
+const OFAPI_SPEND_PROJECTION_EVENT_TYPES_SQL = sql.raw(
+  OFAPI_SPEND_PROJECTION_EVENT_TYPES
+    .map((eventType) => `'${eventType.replaceAll("'", "''")}'`)
+    .join(", "),
+);
+
 export async function listOfapiWebhookEventsForSpendProjection(
   db: Database,
   input: {
-    eventTypes: readonly string[];
     limit: number;
   },
 ) {
-  if (input.eventTypes.length === 0) {
-    return [];
-  }
-
   return db
     .select()
     .from(ofapiWebhookEvents)
     .where(and(
-      inArray(ofapiWebhookEvents.eventType, [...input.eventTypes]),
+      sql`${ofapiWebhookEvents.eventType} in (${OFAPI_SPEND_PROJECTION_EVENT_TYPES_SQL})`,
       sql`${ofapiWebhookEvents.status} <> 'pending'`,
       isNotNull(ofapiWebhookEvents.platformAccountId),
       // The literal below must stay equal to OFAPI_TIPS_RECEIVED_BLOCKED_REASON
