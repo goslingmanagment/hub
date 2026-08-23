@@ -172,6 +172,12 @@ function buildVisiblePage(overrides: Record<string, unknown> = {}) {
 describe("sync status service", () => {
   beforeEach(() => {
     dbMocks.getOfapiFinancialTruthSummaries.mockResolvedValue(new Map());
+    // Read paths never seed: `getSyncStatusSnapshot` serves GETs, so any call
+    // into the seeding/repair writer is a regression, not a slow path. Every
+    // test in this file therefore fails loudly if the read path writes.
+    dbMocks.ensurePageSyncStates.mockImplementation(() => {
+      throw new Error("getSyncStatusSnapshot must not seed page_sync_states");
+    });
   });
 
   afterEach(() => {
@@ -179,7 +185,6 @@ describe("sync status service", () => {
   });
 
   it("aggregates recent monitor counters for health reporting", async () => {
-    dbMocks.ensurePageSyncStates.mockResolvedValue([]);
     dbMocks.listVisiblePages.mockResolvedValue([buildVisiblePage()]);
     dbMocks.listPageSyncStates.mockResolvedValue([]);
     dbMocks.listSyncMonitorStreamRows.mockResolvedValue([
@@ -208,7 +213,6 @@ describe("sync status service", () => {
   });
 
   it("reports physical request health independently from logical run outcomes", async () => {
-    dbMocks.ensurePageSyncStates.mockResolvedValue([]);
     dbMocks.listVisiblePages.mockResolvedValue([buildVisiblePage()]);
     dbMocks.listPageSyncStates.mockResolvedValue([
       buildTaskRow({ stream: "light" }),
@@ -246,7 +250,6 @@ describe("sync status service", () => {
   });
 
   it("marks a lane unhealthy when a physical attempt is stuck past its deadline", async () => {
-    dbMocks.ensurePageSyncStates.mockResolvedValue([]);
     dbMocks.listVisiblePages.mockResolvedValue([buildVisiblePage()]);
     dbMocks.listPageSyncStates.mockResolvedValue([
       buildTaskRow({ stream: "light" }),
@@ -278,7 +281,6 @@ describe("sync status service", () => {
   });
 
   it("does not report message history as up_to_date while backlog remains", async () => {
-    dbMocks.ensurePageSyncStates.mockResolvedValue([]);
     dbMocks.listVisiblePages.mockResolvedValue([{
       id: 7,
       label: "lana",
@@ -342,7 +344,6 @@ describe("sync status service", () => {
     // running between failures and the snapshot nulled its error, so
     // /health/sync read 200/ok mid-wedge. The streak resets only on a real
     // success — the task error must survive every state until then.
-    dbMocks.ensurePageSyncStates.mockResolvedValue([]);
     dbMocks.listVisiblePages.mockResolvedValue([{
       id: 9,
       label: "lora-vip-fansly",
@@ -413,7 +414,6 @@ describe("sync status service", () => {
   });
 
   it("keeps message history catching up while deep backfill pages remain", async () => {
-    dbMocks.ensurePageSyncStates.mockResolvedValue([]);
     dbMocks.listVisiblePages.mockResolvedValue([buildVisiblePage()]);
     dbMocks.listPageSyncStates.mockResolvedValue([
       buildTaskRow({ stream: "light" }),
@@ -465,7 +465,6 @@ describe("sync status service", () => {
   });
 
   it("surfaces an auth blocker as failed connection sync and requires action", async () => {
-    dbMocks.ensurePageSyncStates.mockResolvedValue([]);
     dbMocks.listVisiblePages.mockResolvedValue([{
       id: 7,
       label: "lana",
@@ -523,7 +522,6 @@ describe("sync status service", () => {
   });
 
   it("reports OFAPI-mapped OnlyFans connection as connected without legacy credentials", async () => {
-    dbMocks.ensurePageSyncStates.mockResolvedValue([]);
     dbMocks.listVisiblePages.mockResolvedValue([buildVisiblePage({
       platform: "onlyfans",
       hasCredentials: false,
@@ -573,7 +571,6 @@ describe("sync status service", () => {
   });
 
   it("does not mask credentialed OnlyFans connection failures with OFAPI auth health", async () => {
-    dbMocks.ensurePageSyncStates.mockResolvedValue([]);
     dbMocks.listVisiblePages.mockResolvedValue([buildVisiblePage({
       platform: "onlyfans",
       hasCredentials: true,
@@ -628,7 +625,6 @@ describe("sync status service", () => {
   });
 
   it("reports OFAPI-mapped OnlyFans financials from transaction truth without legacy credentials", async () => {
-    dbMocks.ensurePageSyncStates.mockResolvedValue([]);
     dbMocks.getOfapiFinancialTruthSummaries.mockResolvedValue(new Map([
       [7, {
         pageId: 7,
@@ -685,7 +681,6 @@ describe("sync status service", () => {
   });
 
   it("does not mask credentialed OnlyFans financial failures with OFAPI transaction truth", async () => {
-    dbMocks.ensurePageSyncStates.mockResolvedValue([]);
     dbMocks.getOfapiFinancialTruthSummaries.mockResolvedValue(new Map([
       [7, {
         pageId: 7,
@@ -745,7 +740,6 @@ describe("sync status service", () => {
   });
 
   it("prefers the current dependency blocker over stale last-error fields", async () => {
-    dbMocks.ensurePageSyncStates.mockResolvedValue([]);
     dbMocks.listVisiblePages.mockResolvedValue([{
       id: 7,
       label: "lana",
@@ -813,7 +807,6 @@ describe("sync status service", () => {
   });
 
   it("keeps financials in catching-up mode when only top spenders enrichment is running", async () => {
-    dbMocks.ensurePageSyncStates.mockResolvedValue([]);
     dbMocks.listVisiblePages.mockResolvedValue([buildVisiblePage()]);
     dbMocks.listPageSyncStates.mockResolvedValue([
       buildTaskRow({
@@ -866,7 +859,6 @@ describe("sync status service", () => {
   });
 
   it("surfaces queue-delayed runtime problems on primary financial streams", async () => {
-    dbMocks.ensurePageSyncStates.mockResolvedValue([]);
     dbMocks.listVisiblePages.mockResolvedValue([buildVisiblePage()]);
     dbMocks.listPageSyncStates.mockResolvedValue([
       buildTaskRow({
@@ -911,7 +903,6 @@ describe("sync status service", () => {
   });
 
   it("surfaces OFAPI budget blocks instead of generic queue delays", async () => {
-    dbMocks.ensurePageSyncStates.mockResolvedValue([]);
     dbMocks.listVisiblePages.mockResolvedValue([
       buildVisiblePage({
         platform: "onlyfans",
@@ -970,7 +961,6 @@ describe("sync status service", () => {
   });
 
   it("ignores stale OFAPI budget markers left on completed progress payloads", async () => {
-    dbMocks.ensurePageSyncStates.mockResolvedValue([]);
     dbMocks.listVisiblePages.mockResolvedValue([
       buildVisiblePage({
         platform: "onlyfans",
@@ -1023,7 +1013,6 @@ describe("sync status service", () => {
   });
 
   it("treats fresh queue waits as healthy when a sibling page is actively using the same queue group", async () => {
-    dbMocks.ensurePageSyncStates.mockResolvedValue([]);
     dbMocks.listVisiblePages.mockResolvedValue([
       buildVisiblePage(),
       buildVisiblePage({
@@ -1082,7 +1071,6 @@ describe("sync status service", () => {
   });
 
   it("does not mark a fresh running lease stalled because an older progress timestamp exists", async () => {
-    dbMocks.ensurePageSyncStates.mockResolvedValue([]);
     dbMocks.listVisiblePages.mockResolvedValue([buildVisiblePage()]);
     dbMocks.listPageSyncStates.mockResolvedValue([
       buildTaskRow({ stream: "light" }),
@@ -1121,7 +1109,6 @@ describe("sync status service", () => {
   });
 
   it("keeps page sync UX blue while history backfill runs and fresh siblings wait in queue", async () => {
-    dbMocks.ensurePageSyncStates.mockResolvedValue([]);
     dbMocks.listVisiblePages.mockResolvedValue([buildVisiblePage()]);
     dbMocks.listPageSyncStates.mockResolvedValue([
       buildTaskRow({
@@ -1206,7 +1193,6 @@ describe("sync status service", () => {
   });
 
   it("still marks queue waits as delayed when active siblings are in another queue group", async () => {
-    dbMocks.ensurePageSyncStates.mockResolvedValue([]);
     dbMocks.listVisiblePages.mockResolvedValue([
       buildVisiblePage(),
       buildVisiblePage({
@@ -1255,7 +1241,6 @@ describe("sync status service", () => {
   });
 
   it("does not treat stalled sibling work as an active queue owner", async () => {
-    dbMocks.ensurePageSyncStates.mockResolvedValue([]);
     dbMocks.listVisiblePages.mockResolvedValue([
       buildVisiblePage(),
       buildVisiblePage({
@@ -1299,5 +1284,20 @@ describe("sync status service", () => {
     expect(snapshot.pages[0]?.blocks.financials.statusReason).toMatchObject({
       code: "queue_delayed",
     });
+  });
+
+  it("never seeds page_sync_states, and reports a page that has no state rows", async () => {
+    dbMocks.listVisiblePages.mockResolvedValue([buildVisiblePage()]);
+    dbMocks.listPageSyncStates.mockResolvedValue([]);
+    dbMocks.listSyncMonitorStreamRows.mockResolvedValue([]);
+
+    const snapshot = await getSyncStatusSnapshot({ db: {} } as never, {
+      pageIds: [7],
+      now: new Date("2026-03-24T12:00:00.000Z"),
+    });
+
+    expect(dbMocks.ensurePageSyncStates).not.toHaveBeenCalled();
+    expect(snapshot.pages).toHaveLength(1);
+    expect(snapshot.pages[0]?.pageId).toBe(7);
   });
 });

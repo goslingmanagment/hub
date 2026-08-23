@@ -1,6 +1,5 @@
 import type { SyncUxSummary } from "@agency_hub_core/contracts";
 import {
-  ensurePageSyncStates,
   getSyncStreamsForPlatform,
   listPageSyncStates,
   listVisiblePages,
@@ -14,7 +13,6 @@ import {
   isOfapiAccountHealthEnabled,
   ofapiAuthStatusNeedsAction,
 } from "./ofapi-account-health.ts";
-import { pageSyncDependencyInput } from "./sync/dependencies.ts";
 import { filterOnlyFansAudienceStreams } from "./sync/ofapi-audience-sync.ts";
 import { isOfapiFanIdentitiesEligiblePage } from "./sync/ofapi-fan-identities.ts";
 import { filterOnlyFansDmPollingStreams } from "./sync/onlyfans-dm-polling.ts";
@@ -258,17 +256,13 @@ export async function getSyncStatusSummarySnapshot(
     };
   }
 
-  const dependencyInput = pageSyncDependencyInput(app);
-  if (input?.pageIds || input?.pageLabel || scopedPageIds.length === 1) {
-    await Promise.all(scopedPageIds.map((pageId) => ensurePageSyncStates(app.db, {
-      pageId,
-      now,
-      ...dependencyInput,
-    })));
-  } else {
-    await ensurePageSyncStates(app.db, { now, ...dependencyInput });
-  }
-
+  // Read paths never seed. This snapshot serves GET /overview (and, through
+  // listConnectionStatuses, the Sidebar's /admin/connections on every page), so
+  // seeding here meant an INSERT/UPDATE storm on `page_sync_states` per
+  // dashboard load. Seeding and legacy repair stay where they already run: the
+  // sync planner tick, the executor, and the explicit admin paths
+  // (sync-control.ts, sync-blocks.ts). A page with no state rows is reported as
+  // such — buildPageSummarySyncUx already handles an empty row list.
   const taskRows = await listPageSyncStates(app.db);
   const taskRowsByPageId = new Map<number, PageSyncState[]>();
   for (const task of taskRows) {

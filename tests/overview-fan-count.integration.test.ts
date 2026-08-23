@@ -55,10 +55,10 @@ describe("countDistinctFansForPages", () => {
       return;
     }
 
-    const model = await createModel(testDb.db, { slug: "lana", name: "Lana" });
-    const pageA = await createFanslyPage(testDb.db, { modelId: model.id, label: "lana-a" });
-    const pageB = await createFanslyPage(testDb.db, { modelId: model.id, label: "lana-b" });
-    const pageC = await createFanslyPage(testDb.db, { modelId: model.id, label: "lana-c" });
+    const model = (await createModel(testDb.db, { slug: "lana", name: "Lana" }))!;
+    const pageA = (await createFanslyPage(testDb.db, { modelId: model.id, label: "lana-a" }))!;
+    const pageB = (await createFanslyPage(testDb.db, { modelId: model.id, label: "lana-b" }))!;
+    const pageC = (await createFanslyPage(testDb.db, { modelId: model.id, label: "lana-c" }))!;
 
     const [liveA, liveShared, deletedA, deletedShared, liveC] = await upsertFans(testDb.db, [
       { platform: "fansly", platformUserId: "live-a", username: "live-a" },
