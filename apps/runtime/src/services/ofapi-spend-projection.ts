@@ -6,6 +6,7 @@
 import {
   getOfapiWebhookEventById,
   listOfapiWebhookEventsForSpendProjection,
+  OFAPI_SPEND_PROJECTION_EVENT_TYPES,
   upsertOfapiSpendProjectionEvent,
 } from "@agency_hub_core/db";
 
@@ -30,11 +31,11 @@ import {
   type OfapiSpendProjectionResult,
 } from "./ofapi-spend-projection-contract.ts";
 
-export const OFAPI_SPEND_PROJECTION_EVENT_TYPES = [
-  "transactions.new",
-  "messages.ppv.unlocked",
-  "tips.received",
-] as const;
+/** Re-exported, never redefined: the list and the query that filters on it now
+ *  live in one place (packages/db's ofapi repository), because migration 0143's
+ *  partial index repeats it as a predicate and a second copy here would be a
+ *  drift the planner reports only as a slow query. */
+export { OFAPI_SPEND_PROJECTION_EVENT_TYPES };
 
 const OFAPI_SPEND_PROJECTION_SWEEP_LIMIT = 200;
 
@@ -268,7 +269,6 @@ export async function sweepOfapiSpendProjections(app: AppContext) {
   }
 
   const rows = await listOfapiWebhookEventsForSpendProjection(app.db, {
-    eventTypes: OFAPI_SPEND_PROJECTION_EVENT_TYPES,
     limit: OFAPI_SPEND_PROJECTION_SWEEP_LIMIT,
   });
 

@@ -250,6 +250,16 @@ describe("G5 slice 3a: harvest lookups read the typed machine column", () => {
     // columns is unindexable, and the alternative to an index here is a scan of
     // the largest table in the system. Both arms must reach their own partial
     // index — 0126's typed twin and 0096's expression original.
+    //
+    // THE FIXTURE HAS TO BE BIG ENOUGH TO BE A QUESTION. This pin used to seed
+    // 40 rows, and at 40 rows EVERY access path costs one page: the planner
+    // picks essentially at random, so the pin passed or failed on which indexes
+    // happened to exist rather than on which one is right. Migration 0144 (the
+    // health-floor index) made that visible — it was chosen here purely because
+    // it was the smallest thing to scan. Measured across fixture sizes, the two
+    // harvest indexes win from ~400 rows upward and the margin only grows, so
+    // the background below puts the table past that threshold. If this pin ever
+    // fails again, check the ROW COUNT before believing the plan.
     const page = await seedOfPage();
     for (let index = 0; index < 20; index += 1) {
       await journalHarvest({
@@ -265,6 +275,23 @@ describe("G5 slice 3a: harvest lookups read the typed machine column", () => {
         clientEventId: `ev-plan-legacy-${index}`,
       });
     }
+    // Background traffic of both generations, written straight to SQL because
+    // this is about table SHAPE, not about the write path (the cases above own
+    // that). Half carry the typed column, half are pre-slice rows that only the
+    // expression index can find — the same mix production has mid-backfill.
+    await testDb!.pool.query(`
+      insert into observations (
+        source, producer, platform, kind, payload, payload_hash,
+        idempotency_key, received_at, parse_version, harvest_machine_id
+      )
+      select 'client_capture', 'desktop-harvest@1.4.0', 'onlyfans', 'harvest.messages',
+             jsonb_build_object('machineId', 'machine-bg-' || (n % 40)),
+             '\\x00'::bytea,
+             'machine-bg-' || (n % 40) || ':ev-bg-' || lpad(n::text, 8, '0'),
+             now() - make_interval(secs => n), 2,
+             case when n % 2 = 0 then 'machine-bg-' || (n % 40) else null end
+      from generate_series(1, 800) as n
+    `);
     await testDb!.pool.query("analyze observations");
 
     const client = await testDb!.pool.connect();
@@ -275,7 +302,7 @@ describe("G5 slice 3a: harvest lookups read the typed machine column", () => {
       // what makes the question "IS there an index path" answerable at all.
       await client.query("set local enable_seqscan = off");
       const explained = await client.query<{ "QUERY PLAN": string }>(`
-        explain (costs off)
+        explain (analyze, buffers)
         select 1
         from observations
         where source = 'client_capture'
@@ -297,6 +324,21 @@ describe("G5 slice 3a: harvest lookups read the typed machine column", () => {
     expect(plan).toContain("harvest_machine_typed_idx");
     expect(plan).toContain("harvest_machine_client_event_idx");
     expect(plan).not.toContain("Seq Scan");
+    // A NAME is not the property that matters — "bounded" is. Both arms are
+    // equality probes, so the populated partition must read a handful of pages
+    // and touch a handful of rows no matter how large the table gets. A path
+    // that degraded into "scan every client_capture row and filter" would still
+    // be an index scan and would still carry an index NAME; it would not stay
+    // under these numbers.
+    // Only the EXECUTION half: the trailing "Planning:" block reports the
+    // catalog reads for fourteen partitions and says nothing about the path.
+    const executed = plan.split(/^Planning:$/m)[0] ?? plan;
+    const scanned = [...executed.matchAll(/actual time=[\d.]+\.\.[\d.]+ rows=(\d+)/g)]
+      .map((match) => Number(match[1]));
+    expect(Math.max(...scanned)).toBeLessThanOrEqual(5);
+    const buffers = [...executed.matchAll(/Buffers: shared hit=(\d+)(?: read=(\d+))?/g)]
+      .map((match) => Number(match[1]) + Number(match[2] ?? 0));
+    expect(Math.max(...buffers)).toBeLessThanOrEqual(64);
   });
 });
 
