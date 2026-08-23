@@ -92,6 +92,11 @@ describe("config registry", () => {
     "fanslyStatsHourlyEnabled",
     "fanslyStatsHourlyBackfillMaxDays",
     "fanslyBackfillContinuationDelayMs",
+    // WP-F2 notifications lane (same reasoning: a ramp flip and a budget change
+    // on the only permanently-lossy lane must not wait for a deploy).
+    "fanslyNotificationsSyncEnabled",
+    "fanslyNotificationsPageAllowlist",
+    "fanslyNotificationsDailyCallBudget",
     "fanslyDeepBackfillIgnoreRetentionLimit",
     // Fast-reply freshness PR3: union-read mode, read per generation.
     "aiTranscriptFreshUnionMode",
@@ -163,7 +168,7 @@ describe("config registry", () => {
     "ofapiDmCorrectionsReconcileEnabled",
   ];
 
-  it("wires exactly the thirty-two live keys, the twenty-four boot keys, and nothing else", () => {
+  it("wires exactly the live keys, the boot keys, and nothing else", () => {
     const live = CONFIG_DESCRIPTORS.filter((d) => d.runtimeApply === "live").map((d) => d.key);
     const boot = CONFIG_DESCRIPTORS.filter((d) => d.runtimeApply === "boot").map((d) => d.key);
     const none = CONFIG_DESCRIPTORS.filter((d) => d.runtimeApply === "none").map((d) => d.key);

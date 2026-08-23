@@ -48,6 +48,11 @@ import {
   runFanEarningsProjection,
 } from "./fan-earnings.ts";
 import {
+  FANSLY_ENGAGEMENT_PROJECTION,
+  rebuildFanslyEngagementProjection,
+  runFanslyEngagementProjection,
+} from "./fansly-engagement.ts";
+import {
   FANSLY_STATS_PROJECTION,
   rebuildFanslyStatsProjection,
   runFanslyStatsProjection,
@@ -225,6 +230,30 @@ export const PROJECTION_REGISTRY: readonly ProjectionDefinition[] = [
     rebuild: async (app, input) => await rebuildFanslyStatsProjection(app, input),
     didWork: (result) => count(result, "applied") > 0,
   },
+  {
+    name: FANSLY_ENGAGEMENT_PROJECTION,
+    // WP-F2. `notification.observed` is the VERBATIM row — every code, known
+    // or not — and `media.purchase_notification_observed` is the commerce
+    // signal that marks a media dirty. `engagement.notification_observed` is
+    // deliberately NOT consumed: it carries no field-level semantics anything
+    // can store today, and declaring an event type this projector ignores
+    // would make the registry's `eventTypes` a wish rather than a contract.
+    eventTypes: [
+      "notification.observed",
+      "media.purchase_notification_observed",
+    ],
+    // `subject_refresh_state` is ABSENT on purpose: the projector WRITES it,
+    // but it is capture-plane operational state and a rebuild must never
+    // truncate it. `OPERATIONAL_STATE_TABLES` below names it, and the registry
+    // test asserts the two lists cannot intersect.
+    tables: ["platform_notifications", "post_likes"],
+    stateClass: "fact_projection",
+    rebuildKind: "truncate_replay",
+    label: "Fansly-engagement projection sweep complete",
+    run: async (app, input) => ({ ...await runFanslyEngagementProjection(app, input) }),
+    rebuild: async (app, input) => await rebuildFanslyEngagementProjection(app, input),
+    didWork: (result) => count(result, "applied") > 0,
+  },
 ];
 
 /**
@@ -250,6 +279,19 @@ export const OPERATIONAL_STATE_TABLES: readonly {
       + "EVIDENCE is durable even though the row is not replayable. Truncating it would "
       + "erase every retention floor the backfill paid egress to discover and re-trigger "
       + "the whole first-sight backfill set.",
+  },
+  {
+    table: "subject_refresh_state",
+    stateClass: "operational_state",
+    writer: "services/projections/fansly-engagement.ts",
+    justification:
+      "§3.4: the shared refresh QUEUE — due dates, dirty reasons, walk cursors and failure "
+      + "counts that NO event carries. Rebuild is truncate + replay, so a rebuild that "
+      + "truncated it would clear every pending refresh and re-mark the whole catalogue as "
+      + "first-sight, releasing an egress storm bounded only by the media lane's daily cap "
+      + "against a platform whose failure mode is a model ban. It is written by the capture "
+      + "plane and by the WP-F2 purchase signal; it is replayable by neither, which is "
+      + "exactly why v1's four queue columns on the rebuildable `creator_media` were wrong.",
   },
 ];
 

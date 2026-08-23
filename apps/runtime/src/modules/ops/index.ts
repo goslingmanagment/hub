@@ -195,6 +195,9 @@ const GATE_CONFIG_KEYS = new Set([
   // WP-F1.
   "fanslyStatsSnapshotSyncEnabled",
   "fanslyStatsSnapshotPageAllowlist",
+  // WP-F2.
+  "fanslyNotificationsSyncEnabled",
+  "fanslyNotificationsPageAllowlist",
 ]);
 
 /**
@@ -214,6 +217,11 @@ const GATED_FANSLY_STREAMS = [
     stream: "stats_snapshot",
     enabledField: "fanslyStatsSnapshotSyncEnabled",
     failClosedAllowlistField: "fanslyStatsSnapshotPageAllowlist",
+  },
+  {
+    stream: "notifications",
+    enabledField: "fanslyNotificationsSyncEnabled",
+    failClosedAllowlistField: "fanslyNotificationsPageAllowlist",
   },
 ] as const;
 

@@ -1106,6 +1106,7 @@ describe("sync integration", () => {
         "purchase_history",
         "posts",
         "stats_snapshot",
+        "notifications",
       ]);
       expect(stateRows.every((row) => row.requestSeq === row.appliedSeq)).toBe(true);
       // WP-F1 generalized the seed pause: `posts` was the only stream that
@@ -1114,7 +1115,7 @@ describe("sync integration", () => {
       // one pending row per page, fleet-wide, on the deploy that ships it.
       // Paused WITHOUT a blocker, which is what distinguishes it from a
       // feature_gate pause.
-      for (const stream of ["posts", "stats_snapshot"]) {
+      for (const stream of ["posts", "stats_snapshot", "notifications"]) {
         expect(stateRows.find((row) => row.stream === stream), stream).toMatchObject({
           status: "paused",
           blockerKind: null,

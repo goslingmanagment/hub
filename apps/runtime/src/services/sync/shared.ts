@@ -292,6 +292,13 @@ export const FANSLY_FOLLOWERS_CAPTURE_MAPPER_VERSION =
   `${FANSLY_MAPPER_VERSION}+followers-capture-v2`;
 export const FANSLY_GROUPS_CAPTURE_MAPPER_VERSION =
   `${FANSLY_MAPPER_VERSION}+groups-capture-v2`;
+/** WP-F2's lane is NEW, so it has no pre-[A20] shape to distinguish itself
+ *  from — but it stamps its own version anyway, for the same reason the two
+ *  lanes above do: the shared constant is read by every Fansly writer, so a
+ *  future widening of THIS endpoint's allowlist must be legible without
+ *  re-labelling unrelated captures. */
+export const FANSLY_NOTIFICATIONS_CAPTURE_MAPPER_VERSION =
+  `${FANSLY_MAPPER_VERSION}+notifications-capture-v1`;
 
 /** Shared by both lanes: pick the allowlisted fields VERBATIM (objects and
  *  arrays keep their served shape), in allowlist order so an unchanged profile
@@ -318,6 +325,31 @@ function trimFanslyAggregatedAccounts(accounts: unknown) {
     }
     return [kept];
   });
+}
+
+/**
+ * [A20] on the WP-F2 notification lane, and this response is the sharpest case
+ * of the hazard yet: `/notifications` embeds an `accounts[]` sidecar of FULL
+ * account records — 23 keys in the 2026-08-19 capture, including `lastSeenAt`,
+ * `followCount`, `subscriberCount`, `postLikes`, `accountMediaLikes`,
+ * `timelineStats` and `streaming`. `lastSeenAt` moves every minute; journaling
+ * it makes every body unique and destroys the content-address dedup collapse
+ * the whole disk budget rests on.
+ *
+ * SO: `accounts[]` — and ONLY `accounts[]` — goes through the 18-field
+ * allowlist. `notifications`, `tips`, `accountMedia`, `accountMediaBundles`,
+ * `subscriptions`, `subscriptionHistory` and every key the platform starts
+ * serving tomorrow pass through UNTOUCHED, because DP 7 says journal verbatim
+ * and [A20] narrowed exactly one array, not the response.
+ *
+ * A payload with no `accounts` key comes back byte-identical — the trim adds
+ * nothing that was not served.
+ */
+export function trimFanslyNotificationsPayload(raw: unknown) {
+  if (!isRecord(raw) || !Object.hasOwn(raw, "accounts")) {
+    return raw;
+  }
+  return { ...raw, accounts: trimFanslyAggregatedAccounts(raw.accounts) };
 }
 
 export function trimFanslyFollowerPayload(raw: unknown) {

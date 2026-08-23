@@ -78,6 +78,12 @@ export const WRITTEN_OBSERVATION_KINDS: readonly WrittenObservationKind[] = [
   { kind: "broadcast_scheduled", source: "pull", writer: "services/sync/fansly-stats.ts" },
   { kind: "polls", source: "pull", writer: "services/sync/fansly-stats.ts" },
   { kind: "recapstats", source: "pull", writer: "services/sync/fansly-stats.ts" },
+  // ── WP-F2: the `notifications` lane (services/sync/fansly-notifications.ts) ──
+  // ONE kind for the whole lane: the head poll, the deep backfill and the
+  // type-filter probe all journal the same envelope shape, and the request
+  // params say which walk produced it. A kind per phase would split one fact
+  // across three parse paths for nothing.
+  { kind: "notifications", source: "pull", writer: "services/sync/fansly-notifications.ts" },
   // BL-C3 itself. Both halves of the pair, so the incident's own kinds are the
   // first thing this registry pins.
   { kind: "link_stats_tracking", source: "pull", writer: "services/ofapi-link-stats-sync.ts" },

@@ -36,6 +36,18 @@ const EXPECTED_FIXTURES = [
  */
 const STATS_SYNTHETIC_ID_PATTERN = /^0009\d{14}$/u;
 const STATS_FIXTURE_MAX_BYTES = 16_384;
+/**
+ * WP-F2 engagement fixtures (`tests/fixtures/fansly-engagement/`) — the SAME
+ * structural rule, with a larger ceiling and a reason for it.
+ *
+ * The census fixture carries all 200 rows of the §2.3 census (3003×97, 2007×30,
+ * 15016×26, 7001×26, 15007×15, 2008×6), because a census pin that samples the
+ * census is not a census pin. A real four-page notifications capture is ~252 KB
+ * decoded, so a ceiling of 96 KB still refuses a pasted one while leaving room
+ * for 200 fabricated rows.
+ */
+const ENGAGEMENT_FIXTURE_DIRECTORY = path.resolve("tests/fixtures/fansly-engagement");
+const ENGAGEMENT_FIXTURE_MAX_BYTES = 98_304;
 
 const SYNTHETIC_SNOWFLAKES = new Set(["863308077229670400"]);
 const SYNTHETIC_IDENTIFIERS = new Set([
@@ -213,6 +225,22 @@ describe("Fansly fixture privacy", () => {
       const raw = await readFile(path.join(FIXTURE_DIRECTORY, fixtureName), "utf8");
       expect(Buffer.byteLength(raw)).toBeLessThan(8_192);
       inspectSyntheticValue(JSON.parse(raw) as unknown);
+    }
+  });
+
+  it("keeps every WP-F2 engagement fixture structurally synthetic", async () => {
+    const fixtureNames = await listJsonFiles(ENGAGEMENT_FIXTURE_DIRECTORY);
+    expect(fixtureNames.length).toBeGreaterThan(0);
+
+    for (const fixtureName of fixtureNames) {
+      const raw = await readFile(path.join(ENGAGEMENT_FIXTURE_DIRECTORY, fixtureName), "utf8");
+      expect(Buffer.byteLength(raw), fixtureName).toBeLessThan(ENGAGEMENT_FIXTURE_MAX_BYTES);
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      expect(typeof parsed._fixture, fixtureName).toBe("string");
+      expect(String(parsed._fixture)).toMatch(/SYNTHETIC/u);
+      // The same inspector: no URLs, no emails, no `@`, no credential-shaped
+      // keys, and every 15+ digit identifier structurally fabricated.
+      inspectStatsFixtureValue(parsed);
     }
   });
 

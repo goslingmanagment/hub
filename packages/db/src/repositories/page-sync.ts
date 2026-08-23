@@ -29,6 +29,11 @@ export const SYNC_STREAMS = [
   // daily-slot logic lives inside the handler). Fansly-only, gated off, and
   // seeded PAUSED like `posts` — see SEED_PAUSED_SYNC_STREAMS below.
   "stats_snapshot",
+  // WP-F2: the notification poll. LIVE class on a 1 800 s cadence, because it
+  // is the only PERMANENTLY-LOSSY lane in the system — a liker, a reply or a
+  // quote is announced once and never re-served, so an hour of downtime is an
+  // hour of facts nobody can recover. Fansly-only, gated off, seeded PAUSED.
+  "notifications",
 ] as const;
 
 export type SyncStream = typeof SYNC_STREAMS[number];
@@ -58,6 +63,12 @@ export const FANSLY_BULK_SYNC_STREAMS = [
   // WP-F1: gate flips must materialize into durable pause/resume (#191/#194)
   // for this lane too, or opening its flag moves nothing until the next slot.
   "stats_snapshot",
+  // WP-F2. Membership here is also what makes the never-ran seed-pause fix
+  // (the reconciler's gate-owned pause rule) cover this lane: without it a
+  // `notifications` row seeded paused would sit paused forever and its ramp
+  // flag would move nothing — the #192 failure, reproduced on production for
+  // stats_snapshot on 2026-08-22.
+  "notifications",
 ] as const;
 
 export type FanslyBulkSyncStream = typeof FANSLY_BULK_SYNC_STREAMS[number];
@@ -82,7 +93,7 @@ export const FANSLY_BULK_STREAM_FEATURE_GATE_BLOCKER_KIND = "feature_gate";
  * Ungating stays an explicit act: the gate reconciler resumes it, or an
  * operator uses the stream's own sync scope.
  */
-export const SEED_PAUSED_SYNC_STREAMS = ["posts", "stats_snapshot"] as const;
+export const SEED_PAUSED_SYNC_STREAMS = ["posts", "stats_snapshot", "notifications"] as const;
 
 export function isSeedPausedSyncStream(stream: string): boolean {
   return (SEED_PAUSED_SYNC_STREAMS as readonly string[]).includes(stream);
@@ -279,6 +290,28 @@ export const SYNC_STREAM_POLICY: Record<SyncStream, SyncStreamPolicy> = {
     progressStallThresholdMs: 30 * 60_000,
     freshnessSlaSeconds: null,
   },
+  // WP-F2: the notification poll. LIVE class at 1 800 s — 48 polls a day, and
+  // the cadence is the ONLY thing standing between us and permanent loss: the
+  // provider serves each liker/reply/quote once. `domain: "audience"` labels
+  // what the lane is about (who interacted with the page) and nothing more —
+  // like `stats_snapshot`, it is deliberately ABSENT from SYNC_DOMAIN_POLICY's
+  // primary/supporting lists, so a flag-gated lane cannot degrade a page's
+  // block-health UX to "catching up" while its gate is shut.
+  //
+  // basePriority 12 puts it BELOW transactions and the DM lanes on purpose:
+  // the notification poll is 1–2 calls and can always wait for money and
+  // messages, and the plan's own pacing rule is "priority yield to DM/tx".
+  notifications: {
+    stream: "notifications",
+    domain: "audience",
+    cadenceSeconds: 1800,
+    basePriority: 12,
+    streamIndex: 14,
+    defaultWorkClass: "live",
+    queueDelayThresholdMs: 30 * 60_000,
+    progressStallThresholdMs: 30 * 60_000,
+    freshnessSlaSeconds: null,
+  },
 };
 
 export const SYNC_DOMAIN_POLICY: Record<SyncDomain, SyncDomainPolicy> = {
@@ -344,6 +377,7 @@ const SYNC_STREAM_PRIORITY_BY_SOURCE: Record<SyncRequestSource, Record<SyncStrea
     purchase_history: 19,
     posts: 18,
     stats_snapshot: 17,
+    notifications: 16,
   },
   recovery: {
     light: 70,
@@ -359,6 +393,7 @@ const SYNC_STREAM_PRIORITY_BY_SOURCE: Record<SyncRequestSource, Record<SyncStrea
     purchase_history: 29,
     posts: 28,
     stats_snapshot: 27,
+    notifications: 26,
   },
   anomaly: {
     light: 70,
@@ -374,6 +409,7 @@ const SYNC_STREAM_PRIORITY_BY_SOURCE: Record<SyncRequestSource, Record<SyncStrea
     purchase_history: 29,
     posts: 28,
     stats_snapshot: 27,
+    notifications: 26,
   },
   manual: {
     light: 100,
@@ -389,6 +425,7 @@ const SYNC_STREAM_PRIORITY_BY_SOURCE: Record<SyncRequestSource, Record<SyncStrea
     purchase_history: 59,
     posts: 58,
     stats_snapshot: 57,
+    notifications: 56,
   },
   onboarding: {
     light: 100,
@@ -404,6 +441,7 @@ const SYNC_STREAM_PRIORITY_BY_SOURCE: Record<SyncRequestSource, Record<SyncStrea
     purchase_history: 59,
     posts: 58,
     stats_snapshot: 57,
+    notifications: 56,
   },
   reset: {
     light: 100,
@@ -419,6 +457,7 @@ const SYNC_STREAM_PRIORITY_BY_SOURCE: Record<SyncRequestSource, Record<SyncStrea
     purchase_history: 59,
     posts: 58,
     stats_snapshot: 57,
+    notifications: 56,
   },
 };
 
@@ -566,6 +605,7 @@ function streamOrderSql(columnName: string) {
       when 'purchase_history' then ${SYNC_STREAM_POLICY.purchase_history.streamIndex}
       when 'posts' then ${SYNC_STREAM_POLICY.posts.streamIndex}
       when 'stats_snapshot' then ${SYNC_STREAM_POLICY.stats_snapshot.streamIndex}
+      when 'notifications' then ${SYNC_STREAM_POLICY.notifications.streamIndex}
       else 999
     end
   `);
@@ -587,6 +627,7 @@ function streamPriorityBySourceSql(streamColumnName: string, sourceColumnName: s
       when 'purchase_history' then ${SYNC_STREAM_PRIORITY_BY_SOURCE[source].purchase_history}
       when 'posts' then ${SYNC_STREAM_PRIORITY_BY_SOURCE[source].posts}
       when 'stats_snapshot' then ${SYNC_STREAM_PRIORITY_BY_SOURCE[source].stats_snapshot}
+      when 'notifications' then ${SYNC_STREAM_PRIORITY_BY_SOURCE[source].notifications}
       else 0
     end
   `;

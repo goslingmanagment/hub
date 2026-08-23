@@ -75,6 +75,12 @@ export async function reconcileFanslyBulkStreamScheduling(
         // pages — and open the lane fleet-wide on the deploy that ships it.
         allowlisted: isPageAllowlisted(effective.fanslyStatsSnapshotPageAllowlist, page.label),
       },
+      {
+        stream: "notifications",
+        enabled: effective.fanslyNotificationsSyncEnabled === true,
+        // WP-F2 (S4): its OWN fail-closed allowlist key, for the same reason.
+        allowlisted: isPageAllowlisted(effective.fanslyNotificationsPageAllowlist, page.label),
+      },
     ];
 
     for (const stream of streams) {

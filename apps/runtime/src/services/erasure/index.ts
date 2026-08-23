@@ -678,6 +678,31 @@ export const FAN_REF_ERASURE_COLUMNS: readonly FanRefErasureColumn[] = [
   // an explicit `action: "cascade"` target with its own row count, so the rows
   // are erased and reported — just not by a predicate on this column.
   { column: "page_dm_messages.sender_platform_user_id", target: "page_dm_messages", reach: "cascade" },
+  // WP-F2 engagement core (0134). Both are TEXT refs with no FK to `fans`.
+  //
+  // `platform_notifications.correlation_ref` is the fan for the codes that name
+  // one — the purchase codes (2007/2008/32007/45012), the follow family and the
+  // subscription family all carry the fan's account id there. It is NOT a fan
+  // on every code (an engagement notification's correlation ref can be a post or
+  // a media id), and the predicate is written to that: it erases the rows whose
+  // correlation ref IS this fan, which is exactly the set that says "this fan
+  // did something to this page". A code whose ref is a post id belongs to the
+  // creator's own content and survives, which is the same line
+  // `media_offer_locations.correlation_ref` draws.
+  {
+    column: "platform_notifications.correlation_ref",
+    target: "platform_notifications",
+    reach: "predicate",
+  },
+  // `post_likes.liker_platform_user_id` IS the fan, always. The table is EMPTY
+  // on Fansly today ([E4]) and the OF webhook is its only writer — which is
+  // exactly why it is declared now: a table that arrives empty arrives without
+  // its erasure predicate tested, and by the time it fills nobody remembers.
+  {
+    column: "post_likes.liker_platform_user_id",
+    target: "post_likes",
+    reach: "predicate",
+  },
 ];
 
 async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLineage): Promise<WorkTarget[]> {
@@ -867,6 +892,39 @@ async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLine
     rows: await countOf(app, sql`
       select count(*)::text as n from message_media_offers where ${mediaOfferPred}`),
     run: (tx) => execCount(tx, sql`delete from message_media_offers where ${mediaOfferPred}`),
+  });
+
+  // WP-F2 engagement core (0134). Same shape as the media plane above: TEXT fan
+  // refs with NO FK to `fans`, invisible to the unmapped-non-cascade-FK guard.
+  //
+  // platform_notifications says WHAT THIS FAN DID to the page — bought,
+  // followed, subscribed. The correlation ref is the fan on exactly those
+  // codes, and a predicate on it is the narrow boundary: a notification whose
+  // correlation ref is a post id is the creator's own content and stays.
+  const notificationPred = sql`page_id in ${scope.pageIds}
+    and correlation_ref = ${ref}`;
+  targets.push({
+    plane: "hot",
+    target: "platform_notifications",
+    action: "delete",
+    rows: await countOf(app, sql`
+      select count(*)::text as n from platform_notifications where ${notificationPred}`),
+    run: (tx) => execCount(tx, sql`
+      delete from platform_notifications where ${notificationPred}`),
+  });
+
+  // post_likes says the fan liked something. Empty on Fansly until a like code
+  // is live-confirmed ([E4]); the OF webhook fills it independently, and the
+  // predicate has to be right before that happens, not after.
+  const postLikePred = sql`page_id in ${scope.pageIds}
+    and liker_platform_user_id = ${ref}`;
+  targets.push({
+    plane: "hot",
+    target: "post_likes",
+    action: "delete",
+    rows: await countOf(app, sql`
+      select count(*)::text as n from post_likes where ${postLikePred}`),
+    run: (tx) => execCount(tx, sql`delete from post_likes where ${postLikePred}`),
   });
 
   // Sent-command payloads carry our side of the fan's conversation.

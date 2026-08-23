@@ -496,6 +496,54 @@ export class FanslyAdapter {
     return { items: response.parsed, raw: response.raw };
   }
 
+  /**
+   * `/api/v1/notifications` — WP-F2's whole surface.
+   *
+   * THE CURSOR IS A NOTIFICATION ID, NOT A TIMESTAMP. `before=<id>` walks
+   * BACKWARDS from that row; `before=0` is the head. Every page in the
+   * 2026-08-19 capture carried 50 rows and the next call's `before` was the
+   * oldest id of the previous page. Reading `before` as an epoch would ask for
+   * notifications from 1970 and get an empty page that looks exactly like a
+   * retention floor.
+   *
+   * `types` is OPTIONAL and that is deliberate (A1): the first call of every
+   * poll goes UNFILTERED, because the filtered form can only ever return codes
+   * we already know to ask for, and the unknown ones are the reason this lane
+   * exists. The caller falls back to the client's full declared CSV — never the
+   * eight-code UI CSV, which silently drops 32007 and 45012, both money.
+   *
+   * Loosely typed in and out for the same reason the WP-F1 calls are: the
+   * handler journals the body BEFORE asserting anything about it.
+   */
+  async getNotificationsPage(
+    context: FanslyRequestContext,
+    params: { before?: string | null; after?: string | null; types?: readonly number[] | null },
+  ): Promise<{ items: unknown; raw: unknown }> {
+    const types = params.types ?? null;
+    const response = await this.request<unknown>(context, "/notifications", {
+      operation: "notifications_page",
+      endpointTemplate: "/notifications",
+      category: "account",
+      query: {
+        // "0" is the head, and it is what the UI itself sends first.
+        before: params.before ?? "0",
+        after: params.after ?? "0",
+        // Omitted entirely on the unfiltered form — an empty `type=` is a
+        // filter for nothing, not the absence of a filter.
+        type: types !== null && types.length > 0 ? types.join(",") : undefined,
+      },
+      requestShape: {
+        before: params.before ?? "0",
+        after: params.after ?? "0",
+        types: types === null ? null : [...types],
+      },
+      pagination: { cursorPresent: (params.before ?? "0") !== "0" },
+      summarizeResponse: summarizeUnknownResponse,
+    });
+
+    return { items: response.parsed, raw: response.raw };
+  }
+
   async getListsAccount(
     context: FanslyRequestContext,
     itemId: string | null = null,

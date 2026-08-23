@@ -37,8 +37,10 @@ import {
   FANSLY_FAN_ACCOUNT_NEVER_CAPTURED,
   FANSLY_FOLLOWERS_CAPTURE_MAPPER_VERSION,
   FANSLY_GROUPS_CAPTURE_MAPPER_VERSION,
+  FANSLY_NOTIFICATIONS_CAPTURE_MAPPER_VERSION,
   trimFanslyFollowerPayload,
   trimFanslyMessagingGroupsPayload,
+  trimFanslyNotificationsPayload,
 } from "../apps/runtime/src/services/sync/shared.ts";
 
 const VERBATIM = JSON.parse(readFileSync(
@@ -366,5 +368,90 @@ describe("[A20] negative pins: no byte ceiling exists, anywhere", () => {
           .not.toMatch(/defer|throttle|ceiling|budget|\bcap\b|\blimit\b|config\./i);
       }
     }
+  });
+});
+
+// ── WP-F2 [A20]: the notification lane's `accounts[]` sidecar ────────────────
+//
+// [A27-1] found this hazard on the reply lane and it is sharper here: the
+// `/notifications` response embeds the fan as a FULL account record —
+// `lastSeenAt` and every counter field included. `lastSeenAt` moves every
+// minute, so journaling it verbatim would make every notification body unique
+// and destroy the content-address dedup collapse the disk budget rests on.
+//
+// The trim narrows EXACTLY ONE array. DP 7 says journal verbatim; [A20]
+// narrowed one array, not the response.
+describe("[A20] the WP-F2 notification lane trims accounts[] and NOTHING else", () => {
+  const NOTIFICATION_FIXTURE = JSON.parse(readFileSync(
+    path.resolve("tests/fixtures/fansly-engagement/notifications-census.json"),
+    "utf8",
+  )) as Record<string, unknown>;
+
+  function raw(): Record<string, unknown> {
+    return JSON.parse(JSON.stringify(NOTIFICATION_FIXTURE)) as Record<string, unknown>;
+  }
+
+  it("the fixture is VERBATIM-shaped, or the pin below passes vacuously", () => {
+    const account = (raw().accounts as Record<string, unknown>[])[0]!;
+    // Every one of the eight rejected fields must be PRESENT in the input, or
+    // "the trim dropped them" proves nothing.
+    for (const field of FANSLY_FAN_ACCOUNT_NEVER_CAPTURED) {
+      expect(Object.hasOwn(account, field), field).toBe(true);
+    }
+  });
+
+  it("keeps the 18 allowlisted fields and drops everything else on the sidecar", () => {
+    const trimmed = trimFanslyNotificationsPayload(raw()) as Record<string, unknown>;
+    const account = (trimmed.accounts as Record<string, unknown>[])[0]!;
+    for (const field of FANSLY_FAN_ACCOUNT_NEVER_CAPTURED) {
+      expect(Object.hasOwn(account, field), `${field} must never reach the journal`).toBe(false);
+    }
+    const allowed = new Set<string>(FANSLY_FAN_ACCOUNT_CAPTURE_ALLOWLIST);
+    for (const key of Object.keys(account)) {
+      expect(allowed.has(key), `${key} is outside the allowlist`).toBe(true);
+    }
+    // `ignoring` is served by this endpoint and is outside the allowlist: an
+    // unknown field the platform starts serving tomorrow is dropped by the same
+    // rule, without an edit.
+    expect(Object.hasOwn(account, "ignoring")).toBe(false);
+  });
+
+  it("leaves the notification rows and every other key BYTE-IDENTICAL", () => {
+    const before = raw();
+    const trimmed = trimFanslyNotificationsPayload(raw()) as Record<string, unknown>;
+    // The rows are the fact this lane exists for. Nothing about them is
+    // narrowed — not the 200 rows, not one field of one row.
+    expect(JSON.stringify(trimmed.notifications)).toBe(JSON.stringify(before.notifications));
+    for (const key of ["tips", "accountMedia", "accountMediaBundles", "subscriptions", "subscriptionHistory"]) {
+      expect(JSON.stringify(trimmed[key]), key).toBe(JSON.stringify(before[key]));
+    }
+  });
+
+  it("returns a payload with no `accounts` key untouched", () => {
+    const payload = { notifications: [{ id: "1" }] };
+    expect(trimFanslyNotificationsPayload(payload)).toBe(payload);
+    // A non-object body is not this endpoint's shape; it is journaled as-is.
+    expect(trimFanslyNotificationsPayload(null)).toBeNull();
+  });
+
+  it("stamps its own capture-shape version rather than bumping the shared one", () => {
+    expect(FANSLY_NOTIFICATIONS_CAPTURE_MAPPER_VERSION).toMatch(/\+notifications-capture-v1$/);
+    expect(FANSLY_NOTIFICATIONS_CAPTURE_MAPPER_VERSION)
+      .not.toBe(FANSLY_GROUPS_CAPTURE_MAPPER_VERSION);
+    expect(FANSLY_NOTIFICATIONS_CAPTURE_MAPPER_VERSION)
+      .not.toBe(FANSLY_FOLLOWERS_CAPTURE_MAPPER_VERSION);
+  });
+
+  it("the handler journals through the trim, and stamps that version", () => {
+    // Naming the trim is not calling it. This is the call SITE.
+    const source = readFileSync(
+      path.resolve("apps/runtime/src/services/sync/fansly-notifications.ts"),
+      "utf8",
+    );
+    expect(source).toMatch(
+      /responsePayload: trimFanslyNotificationsPayload\(payload\),\s*\n\s*mapperVersion: FANSLY_NOTIFICATIONS_CAPTURE_MAPPER_VERSION,/,
+    );
+    // And it never hands the adapter body straight to the journal.
+    expect(source).not.toMatch(/responsePayload: payload,/);
   });
 });

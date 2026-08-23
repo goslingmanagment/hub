@@ -144,6 +144,11 @@ const envSchema = z.object({
   FANSLY_STATS_SNAPSHOT_SYNC_ENABLED: booleanSchema.default(false),
   FANSLY_STATS_SNAPSHOT_PAGE_ALLOWLIST: z.string().default(""),
   FANSLY_STATS_SNAPSHOT_DAILY_CALL_BUDGET: z.coerce.number().int().min(1).max(500).default(25),
+  // WP-F2. Same fail-closed allowlist semantic; its own key (S4) so the
+  // notification ramp cannot be widened by an edit meant for another lane.
+  FANSLY_NOTIFICATIONS_SYNC_ENABLED: booleanSchema.default(false),
+  FANSLY_NOTIFICATIONS_PAGE_ALLOWLIST: z.string().default(""),
+  FANSLY_NOTIFICATIONS_DAILY_CALL_BUDGET: z.coerce.number().int().min(1).max(500).default(96),
   FANSLY_STATS_HOURLY_ENABLED: booleanSchema.default(true),
   FANSLY_STATS_HOURLY_BACKFILL_MAX_DAYS: z.coerce.number().int().min(0).max(400).default(30),
   FANSLY_BACKFILL_CONTINUATION_DELAY_MS: z.coerce.number().int().min(0).max(600_000).default(20_000),
@@ -411,6 +416,11 @@ export interface AppConfig {
   fanslyStatsSnapshotPageAllowlist?: string;
   /** HTTP ATTEMPTS per page per UTC day for the stats lane; crossing it defers. */
   fanslyStatsSnapshotDailyCallBudget?: number;
+  fanslyNotificationsSyncEnabled?: boolean;
+  /** CSV of page labels allowed to poll notifications; empty = NONE (fails closed). */
+  fanslyNotificationsPageAllowlist?: string;
+  /** HTTP ATTEMPTS per page per UTC day for the notification lane; crossing it defers. */
+  fanslyNotificationsDailyCallBudget?: number;
   fanslyStatsHourlyEnabled?: boolean;
   fanslyStatsHourlyBackfillMaxDays?: number;
   /** Delay + 30% jitter between BACKFILL chunk continuations (burst shape). */
@@ -692,6 +702,9 @@ export function loadConfig(
     fanslyStatsSnapshotSyncEnabled: parsed.FANSLY_STATS_SNAPSHOT_SYNC_ENABLED,
     fanslyStatsSnapshotPageAllowlist: parsed.FANSLY_STATS_SNAPSHOT_PAGE_ALLOWLIST,
     fanslyStatsSnapshotDailyCallBudget: parsed.FANSLY_STATS_SNAPSHOT_DAILY_CALL_BUDGET,
+    fanslyNotificationsSyncEnabled: parsed.FANSLY_NOTIFICATIONS_SYNC_ENABLED,
+    fanslyNotificationsPageAllowlist: parsed.FANSLY_NOTIFICATIONS_PAGE_ALLOWLIST,
+    fanslyNotificationsDailyCallBudget: parsed.FANSLY_NOTIFICATIONS_DAILY_CALL_BUDGET,
     fanslyStatsHourlyEnabled: parsed.FANSLY_STATS_HOURLY_ENABLED,
     fanslyStatsHourlyBackfillMaxDays: parsed.FANSLY_STATS_HOURLY_BACKFILL_MAX_DAYS,
     fanslyBackfillContinuationDelayMs: parsed.FANSLY_BACKFILL_CONTINUATION_DELAY_MS,

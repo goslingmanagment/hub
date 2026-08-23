@@ -2491,6 +2491,8 @@ const extendedSyncStreamEnum = z.enum([
   // WP-F1: the monitor serves this stream too, so the wire enum has to name
   // it or a stats_snapshot row fails response validation.
   "stats_snapshot",
+  // WP-F2.
+  "notifications",
 ]);
 
 export const syncMonitorStreamItemSchema = z.object({

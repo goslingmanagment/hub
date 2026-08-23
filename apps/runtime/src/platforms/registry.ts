@@ -33,6 +33,7 @@ import {
   fanslyPostsChunk,
   onlyfansPostsChunk,
 } from "../services/sync/posts.ts";
+import { fanslyNotificationsChunk } from "../services/sync/fansly-notifications.ts";
 import { fanslyStatsSnapshotChunk } from "../services/sync/fansly-stats.ts";
 
 // Kernel Stage 18: the two platform adapters, assembled in the app layer
@@ -85,6 +86,7 @@ const FANSLY_STREAMS: CanonicalStream[] = [
   "purchase_history",
   "posts",
   "stats_snapshot",
+  "notifications",
 ];
 
 /** Mirrors getSyncStreamsForPlatform("onlyfans") (OFAPI-era streams). */
@@ -116,6 +118,9 @@ const FANSLY_PULL: Partial<Record<CanonicalStream, ExecutorPullHandler>> = {
   // "Unsupported executor stream" on every dispatch, FLEET-WIDE — and the
   // adapter conformance check makes it a boot crash rather than a 500.
   stats_snapshot: fanslyStatsSnapshotChunk,
+  // WP-F2. Same rule: a stream in SYNC_STREAMS without a handler here throws
+  // "Unsupported executor stream" on every dispatch, FLEET-WIDE.
+  notifications: fanslyNotificationsChunk,
 };
 
 const ONLYFANS_PULL: Partial<Record<CanonicalStream, ExecutorPullHandler>> = {

@@ -110,6 +110,7 @@ const STREAM_LABELS: Record<string, string> = {
   // The fallback renders an unlabelled stream as "stats snapshot", which is
   // accurate but says nothing about what it captures.
   stats_snapshot: "account statistics",
+  notifications: "notifications",
 };
 
 const PROGRESS_STREAM_LABELS: Record<string, string> = {

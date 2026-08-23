@@ -37,6 +37,12 @@ import {
   FANSLY_STATS_CANONICALIZED_KINDS,
   FANSLY_STATS_CANONICALIZER_VERSION,
 } from "./fansly-stats.ts";
+import {
+  canonicalizeFanslyEngagementObservation,
+  canParseFanslyEngagementObservation,
+  FANSLY_ENGAGEMENT_CANONICALIZED_KINDS,
+  FANSLY_ENGAGEMENT_CANONICALIZER_VERSION,
+} from "./fansly-engagement.ts";
 
 export interface CanonicalizerFamily {
   source: "webhook" | "pull" | "command_result" | "client_capture";
@@ -122,6 +128,19 @@ export const CANONICALIZER_FAMILIES: readonly CanonicalizerFamily[] = [
     version: FANSLY_STATS_CANONICALIZER_VERSION,
     canonicalize: canonicalizeFanslyStatsObservation,
     canParse: canParseFanslyStatsObservation,
+    projectionOnly: true,
+  },
+  {
+    // WP-F2: the `notifications` lane. Projection-only, and the ONE family
+    // whose layer 1 emits a verbatim event for a code it cannot name — which
+    // is what lets `platform_notifications` rebuild rows for codes the label
+    // table gets wrong (it got eight of sixteen wrong; A22-1).
+    source: "pull",
+    lane: "engagement",
+    kinds: [...FANSLY_ENGAGEMENT_CANONICALIZED_KINDS],
+    version: FANSLY_ENGAGEMENT_CANONICALIZER_VERSION,
+    canonicalize: canonicalizeFanslyEngagementObservation,
+    canParse: canParseFanslyEngagementObservation,
     projectionOnly: true,
   },
   {

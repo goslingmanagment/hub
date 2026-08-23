@@ -120,6 +120,13 @@ export type AdapterLike = ProviderAdapter<
     params: { limit?: number | null; before?: number | null; offset?: number | null },
   ): Promise<{ items: unknown; raw: unknown }>;
 
+  // WP-F2: the `notifications` lane. `before` is a NOTIFICATION ID, not a
+  // timestamp; `types` omitted is the unfiltered form A1 asks for.
+  getNotificationsPage(
+    context: FanslyRequestContext,
+    params: { before?: string | null; after?: string | null; types?: readonly number[] | null },
+  ): Promise<{ items: unknown; raw: unknown }>;
+
   // Stage 6 replay-probe methods (read-only, loosely typed — Stage 16 hardens).
   getEarningsStatsAccountsPage(
     context: FanslyRequestContext,
