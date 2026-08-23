@@ -19,7 +19,10 @@ import {
   OFAPI_SPEND_PROJECTION_EVENT_TYPES,
 } from "@agency_hub_core/db";
 
-import { computeHealthFloorBacklogMs } from "../apps/runtime/src/services/health-floors.ts";
+import {
+  computeHealthFloorBacklogMs,
+  type HealthFloorDescriptor,
+} from "../apps/runtime/src/services/health-floors.ts";
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { INTEGRATION_TEST_TIMEOUT_MS } from "./helpers/timeouts.ts";
 
@@ -211,11 +214,103 @@ describe("minutely job query plans", () => {
       );
 
       const plan = await explain(statement);
-      expect(plan).toContain("observations_health_floor_idx");
+      // Leaf indexes carry the partition prefix (observations_2026_08_…), so
+      // the parent's own name never appears in a plan.
+      expect(plan).toMatch(/Index Only Scan using observations_\w+_health_floor_idx/);
       // The defect this replaces: `parse_version` and `source` were heap
       // filters, so a probe read every row of its kind in every partition.
       expect(plan).not.toContain("observations_kind_received_at_idx");
       expect(plan).not.toMatch(/Seq Scan on observations_/);
+    },
+    INTEGRATION_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "reports the same backlog the pre-index probe did",
+    async (context) => {
+      if (!testDb) {
+        context.skip();
+        return;
+      }
+      const pool = testDb.pool;
+
+      // The rewrite is an ACCESS-PATH change; the number must not move. Its own
+      // rows, its own source, so this holds standalone: `alpha` is unparsed,
+      // `beta` is stamped part-way up, `gamma` is at the floor (caught up).
+      await pool.query(`
+        insert into observations (
+          source, producer, platform, kind, payload, payload_hash,
+          idempotency_key, received_at, parse_version
+        ) values
+          ('operator', 'floor-test', null, 'alpha', '{}'::jsonb, '\\x00'::bytea, 'floor_a1', now() - interval '9 hours', 0),
+          ('operator', 'floor-test', null, 'alpha', '{}'::jsonb, '\\x00'::bytea, 'floor_a2', now() - interval '5 hours', 0),
+          ('operator', 'floor-test', null, 'beta',  '{}'::jsonb, '\\x00'::bytea, 'floor_b1', now() - interval '7 hours', 2),
+          ('operator', 'floor-test', null, 'beta',  '{}'::jsonb, '\\x00'::bytea, 'floor_b2', now() - interval '3 hours', 2),
+          ('operator', 'floor-test', null, 'gamma', '{}'::jsonb, '\\x00'::bytea, 'floor_g1', now() - interval '8 hours', 5),
+          ('operator', 'floor-test', null, 'gamma', '{}'::jsonb, '\\x00'::bytea, 'floor_g2', now() - interval '2 hours', 5)
+      `);
+
+      /** The probe exactly as it read before migration 0144 — the oracle. */
+      async function previousProbe(floor: HealthFloorDescriptor): Promise<number> {
+        if (floor.kinds === null) {
+          const total = await pool.query<{ backlog_ms: string | null }>(
+            `select coalesce(extract(epoch from (now() - min(o.received_at))) * 1000, 0)::float8 as backlog_ms
+             from observations o
+             where o.source = $1 and o.parse_version < $2`,
+            [floor.source, floor.version],
+          );
+          return Number(total.rows[0]?.backlog_ms ?? 0);
+        }
+        if (floor.kinds.length === 0) {
+          return 0;
+        }
+        const perKind = await pool.query<{ backlog_ms: string | null }>(
+          `select coalesce(max(extract(epoch from (now() - per_kind.min_received)) * 1000), 0)::float8 as backlog_ms
+           from unnest($1::text[]) as kind_list(kind)
+           cross join lateral (
+             select min(o.received_at) as min_received
+             from observations o
+             where o.kind = kind_list.kind and o.source = $2 and o.parse_version < $3
+           ) per_kind`,
+          [[...floor.kinds], floor.source, floor.version],
+        );
+        return Number(perKind.rows[0]?.backlog_ms ?? 0);
+      }
+
+      const floors: HealthFloorDescriptor[] = [
+        // A real backlog spanning two kinds and two parse versions.
+        { name: "t", source: "operator", lane: "t", kinds: ["alpha", "beta"], version: 5 },
+        // Caught up: every row is already at the floor.
+        { name: "t", source: "operator", lane: "t", kinds: ["gamma"], version: 5 },
+        // A version-0 family measures an empty set, never a false backlog.
+        { name: "t", source: "operator", lane: "t", kinds: ["alpha"], version: 0 },
+        // No kinds at all.
+        { name: "t", source: "operator", lane: "t", kinds: [], version: 5 },
+        // kinds:null — the total over the source.
+        { name: "t", source: "operator", lane: "t", kinds: null, version: 5 },
+      ];
+
+      for (const floor of floors) {
+        const expected = await previousProbe(floor);
+        const actual = await computeHealthFloorBacklogMs(testDb.db, floor);
+        if (expected === 0) {
+          expect(actual).toBe(0);
+        } else {
+          // Both read now() at slightly different instants.
+          expect(Math.abs(actual - expected)).toBeLessThan(1_000);
+        }
+      }
+
+      // The oldest unparsed row is 9 hours old, and that is what the family
+      // gauge reports — not the 3-hour or the 5-hour row.
+      const backlogMs = await computeHealthFloorBacklogMs(testDb.db, {
+        name: "t",
+        source: "operator",
+        lane: "t",
+        kinds: ["alpha", "beta"],
+        version: 5,
+      });
+      expect(backlogMs / 3_600_000).toBeCloseTo(9, 1);
     },
     INTEGRATION_TEST_TIMEOUT_MS,
   );
