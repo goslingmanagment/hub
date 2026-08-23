@@ -1063,10 +1063,11 @@ export async function countDistinctFansForPages(db: Database, pageIds: number[])
     return 0;
   }
 
-  // The join to `fans` only ever existed to drop deleted fans (decision #193),
-  // and paying for it meant a seq scan of the whole `fans` heap on every
-  // /overview load. An anti-join asks the far smaller question instead: which
-  // of these page_fans rows point at a fan that IS marked deleted.
+  // The join to `fans` only ever existed to drop deleted fans, and paying for
+  // it meant a seq scan of the whole `fans` heap on every /overview load. An
+  // anti-join asks the far smaller question instead: which of these page_fans
+  // rows point at a fan that IS marked deleted. This preserves the legacy
+  // overview exclusion of deleted fans.
   const [row] = await db.select({
     count: sql<number>`count(distinct ${fanPages.fanId})::int`,
   }).from(fanPages)

@@ -18,7 +18,8 @@ let testDb: StartedTestDatabase | null = null;
 
 // The pre-anti-join query, kept verbatim as the oracle: the rewrite in
 // `countDistinctFansForPages` exists to drop the `fans` seq scan, NOT to change
-// which fans are counted (decision #193 — deleted fans stay excluded).
+// which fans are counted — it preserves the legacy overview exclusion of
+// deleted fans.
 const LEGACY_QUERY = `
   select count(distinct pf.fan_id)::int as count
   from page_fans pf
