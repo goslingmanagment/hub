@@ -6,10 +6,12 @@ import {
   createModel,
   ensurePageSyncStates,
   FANSLY_BULK_STREAM_FEATURE_GATE_BLOCKER_KIND,
+  FANSLY_BULK_SYNC_STREAMS,
   getPageSyncState,
   pausePageSync,
   pausePageSyncForAuth,
   reconcileFanslyBulkStreamGate,
+  requestPageSync,
   clearPageSyncAuthBlock,
   skipPageSync,
 } from "@agency_hub_core/db";
@@ -287,15 +289,28 @@ describe("Fansly bulk-stream durable feature gate", () => {
           blocked_at = $2
       where page_id = $1 and stream = 'fan_earnings'
     `, [protectedPage.id, now]);
+    // An operator pause layered over a lane that HAS RUN: pausePageSync scrubs
+    // the feature-gate marker, so the run columns (applied_seq / started_at /
+    // leased_seq) are the only thing separating operator ownership from an
+    // untouched seed pause. This row must therefore model a real run — a
+    // never-ran blockerless pause is the gate's own shape (the #192 wake-up
+    // bumps request_seq on a paused seed row, so request_seq proves nothing),
+    // and operator-pausing a never-run bulk row is unreachable anyway:
+    // BLOCK_TASKS excludes the bulk streams and soft-deleted pages are
+    // filtered out of the reconciler's page list.
     await testDb.pool.query(`
       update page_sync_states
       set status = 'paused',
+          request_seq = 4,
+          applied_seq = 4,
+          started_at = $2,
+          succeeded_at = $2,
           blocker_kind = null,
           blocker_code = null,
           blocker_message = null,
           progress = '{"skipped":"flag_off"}'::jsonb
       where page_id = $1 and stream = 'purchase_history'
-    `, [protectedPage.id]);
+    `, [protectedPage.id, new Date("2026-07-30T09:00:00.000Z")]);
     await testDb.pool.query(`
       update page_sync_states
       set status = 'blocked',
@@ -382,6 +397,24 @@ describe("Fansly bulk-stream durable feature gate", () => {
     }
 
     const page = await seedFanslyPage("gate-operator-overlay");
+    // The lane must have RUN before the operator parks it. pausePageSync
+    // scrubs the feature-gate marker to claim ownership, so after the overlay
+    // the only difference from an untouched seed pause is the run columns
+    // (applied_seq / started_at / leased_seq) — request_seq proves nothing,
+    // since the #192 config wake-up bumps it on a paused seed row too.
+    // Operator-pausing a never-run bulk row is unreachable by construction
+    // anyway: BLOCK_TASKS excludes the bulk streams, and the only other
+    // pausePageSync caller (page soft-delete) tombstones the page, which the
+    // reconciler's page list filters out.
+    await testDb.pool.query(`
+      update page_sync_states
+      set request_seq = 2,
+          applied_seq = 2,
+          started_at = $2,
+          succeeded_at = $2,
+          finished_at = $2
+      where page_id = $1 and stream = 'fan_earnings'
+    `, [page.id, new Date("2026-08-01T12:00:00.000Z")]);
     await reconcileFanslyBulkStreamGate(testDb.db, {
       pageId: page.id,
       stream: "fan_earnings",
@@ -631,5 +664,328 @@ describe("Fansly bulk-stream durable feature gate", () => {
       createdRecoveryGeneration: false,
     });
     expect((await getPageSyncState(testDb.db, page.id, "purchase_history"))?.requestSeq).toBe(8);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("resumes a seed-paused stream when its gate is already ramped", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const page = await seedFanslyPage("gate-seed-ramped");
+    const now = new Date("2026-08-22T10:00:00.000Z");
+
+    // The shape buildSeedPageSyncState plants for SEED_PAUSED_SYNC_STREAMS:
+    // paused, no blocker, no generation ever requested, never leased.
+    expect(await getPageSyncState(testDb.db, page.id, "stats_snapshot")).toMatchObject({
+      status: "paused",
+      blockerKind: null,
+      requestSeq: 0,
+      appliedSeq: 0,
+      startedAt: null,
+    });
+
+    expect(await reconcileFanslyBulkStreamGate(testDb.db, {
+      pageId: page.id,
+      stream: "stats_snapshot",
+      gateState: "ramped",
+      now,
+    })).toEqual({
+      action: "resumed",
+      createdRecoveryGeneration: true,
+    });
+
+    expect(await getPageSyncState(testDb.db, page.id, "stats_snapshot")).toMatchObject({
+      status: "pending",
+      requestSeq: 1,
+      appliedSeq: 0,
+      requestSource: "recovery",
+      dispatchSource: "recovery",
+      requestPayload: {},
+      requestedAt: now,
+      blockerKind: null,
+      blockerCode: null,
+      blockerMessage: null,
+      blockedAt: null,
+    });
+
+    // Idempotent: the next planner tick must not manufacture a second
+    // generation for the same open gate.
+    expect(await reconcileFanslyBulkStreamGate(testDb.db, {
+      pageId: page.id,
+      stream: "stats_snapshot",
+      gateState: "ramped",
+      now: new Date(now.getTime() + 60_000),
+    })).toEqual({
+      action: "unchanged",
+      createdRecoveryGeneration: false,
+    });
+    expect((await getPageSyncState(testDb.db, page.id, "stats_snapshot"))?.requestSeq).toBe(1);
+
+    // `posts` seeds paused the same way but is NOT a bulk-gate stream, so the
+    // reconciler never sees it and its seed pause stands untouched.
+    expect(FANSLY_BULK_SYNC_STREAMS).not.toContain("posts");
+    expect(await getPageSyncState(testDb.db, page.id, "posts")).toMatchObject({
+      status: "paused",
+      blockerKind: null,
+      requestSeq: 0,
+    });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("labels a seed-paused stream with the feature gate, then resumes it when the gate ramps", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const page = await seedFanslyPage("gate-seed-flag-off");
+    const gatedAt = new Date("2026-08-22T11:00:00.000Z");
+
+    expect(await reconcileFanslyBulkStreamGate(testDb.db, {
+      pageId: page.id,
+      stream: "stats_snapshot",
+      gateState: "flag_off",
+      now: gatedAt,
+    })).toEqual({
+      action: "paused",
+      createdRecoveryGeneration: false,
+    });
+    expect(await getPageSyncState(testDb.db, page.id, "stats_snapshot")).toMatchObject({
+      status: "paused",
+      blockerKind: FANSLY_BULK_STREAM_FEATURE_GATE_BLOCKER_KIND,
+      blockerCode: "flag_off",
+      blockerMessage: "stats_snapshot is disabled by the Fansly bulk-stream feature flag",
+      blockedAt: gatedAt,
+      requestSeq: 0,
+    });
+
+    // Already reconciled: the relabel happens once, not on every tick.
+    expect(await reconcileFanslyBulkStreamGate(testDb.db, {
+      pageId: page.id,
+      stream: "stats_snapshot",
+      gateState: "flag_off",
+      now: new Date(gatedAt.getTime() + 60_000),
+    })).toEqual({
+      action: "unchanged",
+      createdRecoveryGeneration: false,
+    });
+    expect((await getPageSyncState(testDb.db, page.id, "stats_snapshot"))?.blockedAt)
+      .toEqual(gatedAt);
+
+    const rampedAt = new Date("2026-08-22T11:30:00.000Z");
+    expect(await reconcileFanslyBulkStreamGate(testDb.db, {
+      pageId: page.id,
+      stream: "stats_snapshot",
+      gateState: "ramped",
+      now: rampedAt,
+    })).toEqual({
+      action: "resumed",
+      createdRecoveryGeneration: true,
+    });
+    expect(await getPageSyncState(testDb.db, page.id, "stats_snapshot")).toMatchObject({
+      status: "pending",
+      requestSeq: 1,
+      appliedSeq: 0,
+      requestSource: "recovery",
+      requestedAt: rampedAt,
+      blockerKind: null,
+      blockedAt: null,
+    });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("never claims a blockerless pause left behind by a real run", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const ranPage = await seedFanslyPage("gate-ran-before");
+    const failedRunPage = await seedFanslyPage("gate-failed-run");
+    const leasedPage = await seedFanslyPage("gate-outstanding-lease");
+    const startedAt = new Date("2026-08-20T08:00:00.000Z");
+    const now = new Date("2026-08-22T12:00:00.000Z");
+
+    // Ran and applied, then an operator parked it: pausePageSync scrubs the
+    // feature-gate marker, so only the run columns tell the shapes apart.
+    await testDb.pool.query(`
+      update page_sync_states
+      set status = 'paused',
+          request_seq = 3,
+          applied_seq = 3,
+          started_at = $2,
+          succeeded_at = $2,
+          finished_at = $2,
+          blocker_kind = null,
+          blocker_code = null,
+          blocker_message = null,
+          blocked_at = null
+      where page_id = $1 and stream = 'stats_snapshot'
+    `, [ranPage.id, startedAt]);
+    // Ran but never applied a generation (first run failed), then parked:
+    // applied_seq is still 0, and `started_at` alone must keep it out.
+    await testDb.pool.query(`
+      update page_sync_states
+      set status = 'paused',
+          request_seq = 1,
+          applied_seq = 0,
+          started_at = $2,
+          failed_at = $2,
+          consecutive_failures = 1,
+          blocker_kind = null,
+          blocker_code = null,
+          blocker_message = null,
+          blocked_at = null
+      where page_id = $1 and stream = 'stats_snapshot'
+    `, [failedRunPage.id, startedAt]);
+    // Defensive: a lease outstanding over a paused row is somebody else's
+    // in-flight work, whatever the other columns say.
+    await testDb.pool.query(`
+      update page_sync_states
+      set status = 'paused',
+          request_seq = 1,
+          applied_seq = 0,
+          leased_seq = 1,
+          lease_owner = 'reclaim-race-worker',
+          lease_token = 'reclaim-race-token',
+          started_at = null,
+          blocker_kind = null,
+          blocker_code = null,
+          blocker_message = null,
+          blocked_at = null
+      where page_id = $1 and stream = 'stats_snapshot'
+    `, [leasedPage.id]);
+
+    for (const pageId of [ranPage.id, failedRunPage.id, leasedPage.id]) {
+      for (const gateState of ["flag_off", "not_allowlisted", "ramped"] as const) {
+        expect(await reconcileFanslyBulkStreamGate(testDb.db, {
+          pageId,
+          stream: "stats_snapshot",
+          gateState,
+          now,
+        }), `${pageId}:${gateState}`).toEqual({
+          action: "unchanged",
+          createdRecoveryGeneration: false,
+        });
+      }
+    }
+
+    expect(await getPageSyncState(testDb.db, ranPage.id, "stats_snapshot")).toMatchObject({
+      status: "paused",
+      blockerKind: null,
+      requestSeq: 3,
+      appliedSeq: 3,
+      startedAt,
+    });
+    expect(await getPageSyncState(testDb.db, failedRunPage.id, "stats_snapshot")).toMatchObject({
+      status: "paused",
+      blockerKind: null,
+      appliedSeq: 0,
+      startedAt,
+    });
+    expect(await getPageSyncState(testDb.db, leasedPage.id, "stats_snapshot")).toMatchObject({
+      status: "paused",
+      blockerKind: null,
+      leasedSeq: 1,
+      leaseOwner: "reclaim-race-worker",
+    });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("opens the production shape: a seed row the #192 wake-up already requested", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    // Reproduces production 2026-08-22 exactly. The config PATCH that opens the
+    // gate first runs the #192 wake-up (wakeGatedStreamsAfterConfigChange ->
+    // requestPageSync source 'recovery'), and requestPageSync keeps a paused
+    // row paused while bumping request_seq. Every seed row that ever sees a
+    // flag flip therefore reaches the reconciler with request_seq >= 1.
+    const rampedPage = await seedFanslyPage("gate-wakeup-ramped");
+    const gatedPage = await seedFanslyPage("gate-wakeup-flag-off");
+    const patchedAt = new Date("2026-08-22T03:36:00.000Z");
+
+    for (const pageId of [rampedPage.id, gatedPage.id]) {
+      await requestPageSync(testDb.db, {
+        pageId,
+        streams: ["stats_snapshot"],
+        source: "recovery",
+        now: patchedAt,
+      });
+      expect(await getPageSyncState(testDb.db, pageId, "stats_snapshot")).toMatchObject({
+        status: "paused",
+        blockerKind: null,
+        requestSeq: 1,
+        appliedSeq: 0,
+        leasedSeq: null,
+        startedAt: null,
+        requestSource: "recovery",
+        dispatchSource: "recovery",
+        requestedAt: patchedAt,
+      });
+    }
+
+    // The planner tick that follows the PATCH, gate already ramped: the
+    // outstanding wake-up generation is honoured, not duplicated.
+    const rampedAt = new Date("2026-08-22T03:37:00.000Z");
+    expect(await reconcileFanslyBulkStreamGate(testDb.db, {
+      pageId: rampedPage.id,
+      stream: "stats_snapshot",
+      gateState: "ramped",
+      now: rampedAt,
+    })).toEqual({
+      action: "resumed",
+      createdRecoveryGeneration: false,
+    });
+    expect(await getPageSyncState(testDb.db, rampedPage.id, "stats_snapshot")).toMatchObject({
+      status: "pending",
+      requestSeq: 1,
+      appliedSeq: 0,
+      requestSource: "recovery",
+      requestedAt: rampedAt,
+      blockerKind: null,
+      blockedAt: null,
+    });
+    expect(await reconcileFanslyBulkStreamGate(testDb.db, {
+      pageId: rampedPage.id,
+      stream: "stats_snapshot",
+      gateState: "ramped",
+      now: new Date(rampedAt.getTime() + 60_000),
+    })).toEqual({
+      action: "unchanged",
+      createdRecoveryGeneration: false,
+    });
+
+    // Same shape under a shut gate: labelled, then opened on the later ramp.
+    expect(await reconcileFanslyBulkStreamGate(testDb.db, {
+      pageId: gatedPage.id,
+      stream: "stats_snapshot",
+      gateState: "flag_off",
+      now: rampedAt,
+    })).toEqual({
+      action: "paused",
+      createdRecoveryGeneration: false,
+    });
+    expect(await getPageSyncState(testDb.db, gatedPage.id, "stats_snapshot")).toMatchObject({
+      status: "paused",
+      blockerKind: FANSLY_BULK_STREAM_FEATURE_GATE_BLOCKER_KIND,
+      blockerCode: "flag_off",
+      blockedAt: rampedAt,
+      requestSeq: 1,
+    });
+    expect(await reconcileFanslyBulkStreamGate(testDb.db, {
+      pageId: gatedPage.id,
+      stream: "stats_snapshot",
+      gateState: "ramped",
+      now: new Date(rampedAt.getTime() + 120_000),
+    })).toEqual({
+      action: "resumed",
+      createdRecoveryGeneration: false,
+    });
+    expect((await getPageSyncState(testDb.db, gatedPage.id, "stats_snapshot"))).toMatchObject({
+      status: "pending",
+      requestSeq: 1,
+      blockerKind: null,
+    });
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });
