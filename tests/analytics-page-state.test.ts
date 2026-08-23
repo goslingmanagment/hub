@@ -181,6 +181,21 @@ function occurrences(html: string, needle: string): number {
   return html.split(needle).length - 1;
 }
 
+/**
+ * The markup of ONE panel: from its title to the start of the next card.
+ *
+ * Page-wide `toContain` cannot tell which card carries a badge, and the two
+ * P1s of the codex review both lived in a card whose neighbours were already
+ * honest.
+ */
+function panelMarkup(html: string, title: string): string {
+  const start = html.indexOf(`>${title}<`);
+  expect(start, `panel ${title} is not rendered`).toBeGreaterThan(-1);
+  const rest = html.slice(start);
+  const end = rest.indexOf("<section", 1);
+  return end === -1 ? rest : rest.slice(0, end);
+}
+
 const PANEL_FAILED = "This request failed — nothing is shown for it.";
 
 beforeEach(() => {
@@ -446,7 +461,34 @@ describe("AnalyticsPage per-panel states", () => {
     withCatalog();
     withTraffic(ready(EMPTY.traffic), ready(EMPTY.traffic));
 
-    expect(renderAnalyticsPage()).toContain("not served");
+    const html = renderAnalyticsPage();
+
+    expect(html).toContain("not served");
+    expect(html).not.toContain("not served (cached");
+  });
+
+  it("qualifies a cached “not served” whose refresh failed — it is not Fansly's verdict", () => {
+    // `{ data: null, refreshFailed: true }` means "the last response we could
+    // get carried no components", not "Fansly serves none". The panel's own
+    // cached badge is about the `media` query and cannot qualify this figure.
+    withCatalog();
+    withTraffic(ready(EMPTY.traffic), cached(EMPTY.traffic));
+
+    const html = renderAnalyticsPage();
+
+    expect(html).toContain("not served (cached — refresh failed)");
+    // …and no UNQUALIFIED "not served" anywhere: the qualified string is the
+    // only occurrence.
+    expect(occurrences(html, "not served")).toBe(1);
+  });
+
+  it("labels a cached average-watch figure as cached", () => {
+    withCatalog();
+    withTraffic(ready(EMPTY.traffic), cached(WATCHED_MEDIA_TRAFFIC));
+
+    const html = renderAnalyticsPage();
+
+    expect(html).toContain("45.0% (cached — refresh failed)");
   });
 
   it("serves the account-level average when both components arrived", () => {
@@ -526,6 +568,52 @@ describe("AnalyticsPage coverage states", () => {
 
     expect(html).toContain("coverage refresh failed");
     expect(html).not.toContain("Some requests failed.");
+  });
+
+  it("does not let the Likers card state its lane verdict over a pending coverage request", () => {
+    // The verdict is a CONSTANT ([E4]), which is exactly why it slipped the
+    // first time: nothing about it is derived from coverage rows, so nothing
+    // stopped it being rendered definitively while coverage was unknown.
+    withCatalog({ useStatsCoverage: loading() });
+    withTraffic(ready(EMPTY.traffic), ready(EMPTY.traffic));
+
+    const likers = panelMarkup(renderAnalyticsPage(), "Likers");
+
+    expect(likers).toContain("coverage pending");
+    expect(likers).not.toContain(">not started<");
+  });
+
+  it("does not let the Likers card state its lane verdict over a FAILED coverage request", () => {
+    withCatalog({ useStatsCoverage: failed() });
+    withTraffic(ready(EMPTY.traffic), ready(EMPTY.traffic));
+
+    const likers = panelMarkup(renderAnalyticsPage(), "Likers");
+
+    expect(likers).toContain("coverage unavailable");
+    expect(likers).not.toContain(">not started<");
+  });
+
+  it("marks the Likers verdict as cached when the coverage refresh failed", () => {
+    withCatalog({ useStatsCoverage: cached(COVERED) });
+    withTraffic(ready(EMPTY.traffic), ready(EMPTY.traffic));
+
+    const likers = panelMarkup(renderAnalyticsPage(), "Likers");
+
+    expect(likers).toContain("coverage refresh failed");
+    expect(likers).not.toContain(">not started<");
+    // The cached verdict is still reported — in the badge's tooltip, WITH the
+    // failure beside it. Losing it would be losing a fact.
+    expect(likers).toContain("Cached verdict: not started.");
+  });
+
+  it("states the Likers lane verdict once coverage has actually answered", () => {
+    withCatalog();
+    withTraffic(ready(EMPTY.traffic), ready(EMPTY.traffic));
+
+    const likers = panelMarkup(renderAnalyticsPage(), "Likers");
+
+    expect(likers).toContain(">not started<");
+    expect(likers).toContain("Empty by design");
   });
 
   it("falls through to the real capture verdict once coverage answered", () => {

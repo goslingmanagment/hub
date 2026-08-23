@@ -22,9 +22,11 @@ import {
 } from "./AnalyticsPanel.js";
 import {
   coverageBadgeVerdict,
+  coverageRequestVerdict,
   emptyPanelReason,
   type AnalyticsCoverageWindow,
   type CoverageRow,
+  type CoverageVerdict,
 } from "./coverage.js";
 
 /** `—` rather than `0`: an unserved metric is not a measurement of nothing. */
@@ -245,11 +247,19 @@ export function TopTagsPanel({
  * serves no video fields at all — the account-level figure lives on the traffic
  * card, where its components actually exist.
  */
+/** Appended to anything read off a response whose refresh failed. */
+const CACHED_SUFFIX = " (cached — refresh failed)";
+
 /**
  * What the average-watch header says in each state of ITS query.
  *
  * "not served" is a claim about Fansly's payload and is reserved for a
- * SUCCEEDED request that carried no components. Pending and failed say so.
+ * SUCCEEDED request that carried no components. Pending and failed say so —
+ * and so does a CACHED response whose refresh failed, which is why the stale
+ * check comes before the null one: `{ data: null, refreshFailed: true }` means
+ * "the last response we could get carried no components", not "Fansly serves
+ * none". The panel's own `cached` badge is about the `media` query and cannot
+ * qualify this figure, so the qualifier travels with the label.
  */
 function accountWatchLabel(state: AnalyticsPanelState<number | null>): string {
   if (state.status === "loading") {
@@ -258,10 +268,11 @@ function accountWatchLabel(state: AnalyticsPanelState<number | null>): string {
   if (state.status === "error") {
     return "unavailable";
   }
+  const suffix = state.refreshFailed ? CACHED_SUFFIX : "";
   if (state.data === null) {
-    return "not served";
+    return `not served${suffix}`;
   }
-  return `${state.data.toFixed(1)}%${state.refreshFailed ? " (cached)" : ""}`;
+  return `${state.data.toFixed(1)}%${suffix}`;
 }
 
 export function ContentPerformancePanel({
@@ -382,6 +393,15 @@ export function ContentPerformancePanel({
  * was captured, never the whole surface, and the doubt belongs to the row that
  * outlives the sweep that created it.
  */
+/** [E4]: no Fansly like code is live-confirmed, so the lane writes nothing. */
+const LIKERS_LANE_VERDICT: CoverageVerdict = {
+  state: "not_started",
+  label: "not started",
+  detail:
+    "No Fansly like code is live-confirmed ([E4]), so the liker lane writes "
+    + "nothing. The panel is shown empty rather than hidden.",
+};
+
 export function CommentsPanel({
   state,
   coverage,
@@ -394,6 +414,12 @@ export function CommentsPanel({
   onRetry: () => void;
 }) {
   const verdict = coverageBadgeVerdict(coverage, ANALYTICS_COVERAGE_PLANES.comments, selectedWindow);
+  // The liker lane's verdict is a CONSTANT — no capture-coverage row proves it
+  // — but it is still a definitive claim about Fansly, and stating it under a
+  // coverage request that is pending or failed is the same lie as a chart that
+  // quietly reads "complete". So it goes through the same wrapper as every
+  // other badge on the page.
+  const likersVerdict = coverageRequestVerdict(coverage, () => LIKERS_LANE_VERDICT);
   const data = panelData(state);
   const cached = state.status === "ready" && state.refreshFailed;
   const perPost = (data?.perPost ?? []).slice(0, 20);
@@ -464,13 +490,7 @@ export function CommentsPanel({
       <AnalyticsPanel
         title="Likers"
         cached={cached}
-        verdict={{
-          state: "not_started",
-          label: "not started",
-          detail:
-            "No Fansly like code is live-confirmed ([E4]), so the liker lane writes "
-            + "nothing. The panel is shown empty rather than hidden.",
-        }}
+        verdict={likersVerdict}
       >
         {state.status === "loading" ? (
           <AnalyticsLoading />

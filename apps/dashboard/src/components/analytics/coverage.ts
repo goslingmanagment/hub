@@ -131,8 +131,8 @@ export function coverageVerdict(
 }
 
 /**
- * The badge a panel actually renders — the capture verdict wrapped in the
- * state of the request that would have proved it.
+ * The badge a panel actually renders — its verdict wrapped in the state of the
+ * coverage request that would have proved it.
  *
  * `coverageVerdict()` above judges capture from ROWS. It cannot be reached
  * until we hold rows, and the three ways of not holding them are different
@@ -144,11 +144,16 @@ export function coverageVerdict(
  *  - refresh_failed: we hold rows and the refresh failed. The cached verdict
  *    is reported WITH the failure, because an old "complete" is exactly the
  *    badge that would otherwise vanish and leave a confident chart behind.
+ *
+ * `whenAnswered` is a CALLBACK, not a value, because a panel whose verdict is
+ * a constant is wrapped by exactly the same rule: the Likers card's
+ * `not_started` is a fact about Fansly's like lane, and stating it definitively
+ * over a coverage request that failed is the same lie as any other badge that
+ * silently reads "complete".
  */
-export function coverageBadgeVerdict(
+export function coverageRequestVerdict(
   coverage: AnalyticsPanelState<readonly CoverageRow[]>,
-  requiredPlanes: readonly string[],
-  window: AnalyticsCoverageWindow,
+  whenAnswered: (rows: readonly CoverageRow[]) => CoverageVerdict,
 ): CoverageVerdict {
   if (coverage.status === "loading") {
     return {
@@ -168,7 +173,7 @@ export function coverageBadgeVerdict(
     };
   }
 
-  const verdict = coverageVerdict(coverage.data, requiredPlanes, window);
+  const verdict = whenAnswered(coverage.data);
   if (!coverage.refreshFailed) {
     return verdict;
   }
@@ -178,6 +183,18 @@ export function coverageBadgeVerdict(
     detail: `Cached verdict: ${verdict.label}. ${verdict.detail} The refresh of the `
       + "coverage rows failed, so this verdict is as old as the cache.",
   };
+}
+
+/** The plane-judging badge: `coverageVerdict()` under the request's own state. */
+export function coverageBadgeVerdict(
+  coverage: AnalyticsPanelState<readonly CoverageRow[]>,
+  requiredPlanes: readonly string[],
+  window: AnalyticsCoverageWindow,
+): CoverageVerdict {
+  return coverageRequestVerdict(
+    coverage,
+    (rows) => coverageVerdict(rows, requiredPlanes, window),
+  );
 }
 
 /**
