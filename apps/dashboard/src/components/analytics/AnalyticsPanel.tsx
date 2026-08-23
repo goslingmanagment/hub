@@ -5,6 +5,7 @@ import type { CoverageVerdict } from "./coverage.js";
 const BADGE_CLASS: Readonly<Record<CoverageVerdict["state"], string>> = {
   complete: "border-border text-text-muted",
   partial: "border-warning-dark/60 text-warning-dark",
+  stale: "border-warning-dark/60 text-warning-dark",
   not_started: "border-border text-text-muted",
   unknown: "border-warning-dark/60 text-warning-dark",
 };

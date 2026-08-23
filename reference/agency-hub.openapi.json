@@ -2342,6 +2342,25 @@
                           },
                           "fanslySessionId": {
                             "type": "string"
+                          },
+                          "routeChecks": {
+                            "type": "object",
+                            "propertyNames": {
+                              "type": "string",
+                              "enum": [
+                                "message",
+                                "group",
+                                "account",
+                                "earnings",
+                                "messagingGroups",
+                                "subscribers",
+                                "media"
+                              ]
+                            },
+                            "additionalProperties": {
+                              "type": "string",
+                              "minLength": 1
+                            }
                           }
                         },
                         "required": [
@@ -13294,6 +13313,25 @@
                           },
                           "fanslySessionId": {
                             "type": "string"
+                          },
+                          "routeChecks": {
+                            "type": "object",
+                            "propertyNames": {
+                              "type": "string",
+                              "enum": [
+                                "message",
+                                "group",
+                                "account",
+                                "earnings",
+                                "messagingGroups",
+                                "subscribers",
+                                "media"
+                              ]
+                            },
+                            "additionalProperties": {
+                              "type": "string",
+                              "minLength": 1
+                            }
                           }
                         },
                         "required": [
@@ -14275,6 +14313,25 @@
                           },
                           "fanslySessionId": {
                             "type": "string"
+                          },
+                          "routeChecks": {
+                            "type": "object",
+                            "propertyNames": {
+                              "type": "string",
+                              "enum": [
+                                "message",
+                                "group",
+                                "account",
+                                "earnings",
+                                "messagingGroups",
+                                "subscribers",
+                                "media"
+                              ]
+                            },
+                            "additionalProperties": {
+                              "type": "string",
+                              "minLength": 1
+                            }
                           }
                         },
                         "required": [

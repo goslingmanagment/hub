@@ -87,6 +87,7 @@ import {
   type CaptureCoverageStatus,
 } from "@agency_hub_core/db";
 import { FanslyApiError } from "@agency_hub_core/fansly";
+import { CAPTURE_COVERAGE_PLANES } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
 import { REPLIES_FULL_PAGE_THRESHOLD } from "../canonicalize/fansly-comments.ts";
@@ -124,8 +125,6 @@ const OBSERVATION_KINDS = {
 } as const;
 
 /** One plane, page-scoped: the archive's progress over this page's roots. */
-export const FANSLY_POST_REPLIES_COVERAGE_PLANE = "post_replies";
-
 /** Posts walked in ONE dispatch before a jittered continuation. The chunk
  *  budget (5 requests / 45 s) bites long before this on a healthy lane; this is
  *  the ceiling for a lane being re-queued aggressively. */
@@ -455,7 +454,7 @@ export async function fanslyPostRepliesChunk(
   const writeCoverage = createFanslyLaneCoverageWriter({
     db: app.db,
     pageId,
-    plane: FANSLY_POST_REPLIES_COVERAGE_PLANE,
+    plane: CAPTURE_COVERAGE_PLANES.postReplies,
     acquisitionMode: "retroactive",
     newestCapturedAt: now,
   });

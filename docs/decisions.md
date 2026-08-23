@@ -234,7 +234,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 230 | Fansly payouts (WP-F7) — money OUT, and the mask that is ours | The `payouts` stream lands whole (0140 enum, 0141 `page_payout_methods` + `page_payout_requests`): TWO routes, `GET /payments/payoutmethods` and `GET /payments/payout/requests?before=&after=&limit=10&offset=N`, both read-only, both verified live 2026-08-20. **A28-8 cut it to two and A28-1 deleted the third:** `/account/wallets/earnings` is already the adapter's `getEarningsOverview` (so no wallet-balance route and NO `page_wallet_snapshots`), and the wallet earnings LEDGER `/account/wallets/earnings/transactions` is the EXISTING `transactions` stream — settled by matching seven transaction ids out of this lane's own capture HAR against rows the kernel already held, including the oldest row on page 242 of 242. **THE CREDENTIAL RULE, AND WHY THE MASK IS OURS:** `metadata` is a JSON-ENCODED STRING and the two live providers are asymmetric — provider 2 (**Paxum, NOT PayPal**; A22-4 refuted the spec from the app bundle) returns the creator's FULL email in plaintext while provider 30 (USDT) returns a `field1` the server already masked, so masking cannot be "trust the platform". `masked_label` is the ONLY value derived from `metadata` that leaves the family: **`<first char>***@<domain>`** for an address, **`****<four visible>`** for a wallet field, and migration 0141 CHECKs the shape (`@` ⇒ must match `^.\*\*\*@`) so a parser regression fails at the INSERT. **THE DECODE IS PROVIDER-KEYED, NOT SHAPE-KEYED** — a future provider 99 with its own `field0…fieldN` decodes to NOTHING (`unmapped:99`, null label, not one character emitted), where a shape-keyed decoder would have published whatever it chose to put in `field1`. Invalid JSON ⇒ `metadata_parse_ok = false`, null label, one diagnostic, string stays journal-only. Both kinds are restricted-class and refused by the agent read plane's fail-closed allowlist, and named on its denylist so the refusal carries its reason. **THE STATUS MAP IS ONE CODE DEEP:** all 83 observed rows carried `status = 8` = `Processed`; every other integer is projected as `(code, unmapped:<code>, unmapped)` and the handler raises ONE anomaly per unseen code per page, durably. **MILLS WITH NO SCALING** (the wire unit IS the kernel unit, proved against the UI on seven fields), instants 13-digit Unix ms decoded by an ms-ONLY helper, events receipt-time (§3.2b) so a 2025 payout is writable into a monthly-partitioned ledger. **THE WALK:** offset-paged at 10, `total = 83` back to 2025-06-23 ⇒ nine calls, and the daily head read at `offset=0` IS page one of it, so steady state is TWO calls/day against a cap of **20** (§6.1's corrected number). The repeat-request guard gained a second trigger because the first one could not fire: an offset always advances, so what catches a server IGNORING `offset` is a page whose first row is the first row of the page before it. Ships INERT — flag off, allowlist FAILS CLOSED. |
 | 231 | Fansly per-media statistics (WP-F4) — the lane that can overload the platform | The `media_stats` stream lands whole (0142 enum, the §3.3 wiring, four config keys, the handler, the completed parser, the projector reducers): `GET /it/moie/statsnew` over ALL media at an age-decayed cadence — fresh (≤30 d) daily at hourly granularity, mid (31–180 d) weekly, long tail every `fanslyMediaStatsLongTailCycleDays` (30), round-robin by last visit, with WP-F2's purchase signals and the current top-50 jumping the queue. **A16's TABLE IS REPORTED, NEVER RESTATED**: `estimatedCycleDays` is computed on every dispatch from the LIVE class census and the LIVE cap, and the log line says QUARTERLY in words once it passes 90 days — at M = 2 000 the decay wants 294 calls/day and the long tail comes round every 26 days; at M = 5 000 it wants 394 and the cycle is 96 days. Nothing is dropped at any M. The lane is DESIGNED to sit at 100 % of its own 300-attempt cap and is exempt from the 70 %-of-its-own-cap rule by name; raising the cap is a NAMED per-lane owner step, which the registry ceiling of 1 000 makes refusable. **THIRTY-ONE DAYS, NOT A HUNDRED**: the HAR proves this route honours a historical 31-day window exactly, and F1 proved on production what a 100-day one costs. **The queue is `subject_refresh_state` (`plane='media_stats'`), not four columns on `creator_media`** — a rebuild that reset them would re-mark the whole catalogue as first-sight and release a backfill storm bounded only by this lane's own cap, and a test pins the isolation. Video columns stay NULL and unpromised ([E5]).
 | 233 | Fansly history walks corrected against production (amends #225, #231) | **A14 was wrong**: `/it/amoie/stats` honours `beforeDate`/`afterDate` only INSIDE its own trailing window — lora-2 asked for a historical 31-day window and was served the trailing 31 days, and halving to 15 changed nothing, so it was never the span. History on that route is addressed the way the app addresses it: `year`/`month` (the UI's month presets, with the bounds riding along ignored). The daily lane captures the trailing window ONCE and then walks BACKWARDS BY CALENDAR MONTH — same attempt cap, same jittered continuation, repeat guard on `(year, month)`, `monthWasHonoured` in place of the span check (no halve-and-retry: there is no half of a month to ask for), stopping with `month_form_not_honoured` or reaching a floor of two empty months plus the [E10] probe twelve months back. The two pages the date-bound walk stopped SUPERSEDE their `window_not_honoured` coverage row and resume in month mode, once. The HOURLY lane stops walking and declares the trailing 25 hours (`hourly_trailing_window_only`); the EARNINGS lane is untouched because it DID honour historical windows (lora-1 reached 2024-11-29). `endpoint-probe` gains `[F1] GET /it/amoie/stats?year=&month=`, printing the served window, because the month form is not yet proven live. **WP-F4**: `/it/moie/statsnew` honours every window and answers any of them back to 2006 with one ZERO-VALUED bucket, so the empty-window floor never fired — 1 198 calls on eight items, walked 240 windows each. All-zero now counts as empty; no window may end more than one span before `coalesce(created_at_platform, first_observed_at)` (`floorBasis='created_at'`, which also repairs the eight burned cursors); and EVERY visit stamps `last_visited_at`, backfill visits included — that omission is why 5 507 queue rows had never been looked at while the same eight were re-picked daily |
-
+| 234 | Endpoints-cover repair R2 — erasure, analytics truth, agent disclosure, browser headers | The architecture stays journal → canonical events → projections; R2 repairs four point defects around it. Erasure inventory is schema-ratcheted: every direct page child is deleted or explicitly excluded (`audit_events` append-only audit, `user_page_assignments` agency access config); fan erasure reaches messaging-group identity and purchase buyers in notification `correlation_group_ref`, removes matching events/observations/raw captures, and canonical events stamp enough fan identity that rebuild cannot resurrect them. Analytics uses one shared set of real coverage-plane names and judges every required plane against the selected 7/30/90-day floor plus a per-plane fresh-head tolerance; failed/loading requests cannot render as factual emptiness. Top media starts with newest heads, unions current ranked refs, selects one freshest ranking window, shares a bounded bucket budget fairly, and labels missing series by proven cause. Notifications are purchase-disclosing because captured 2007/2008 rows name the buyer in `correlationGroupRef`, so querying them requires `read:datasets` + `read:messages`. Fansly GET headers follow the 2026-08-21 Firefox HAR's safe values and insertion order after transport-owned `Host`; `referer` is spelled correctly. The captured browser has no `sec-ch-*`, so Chromium hints are not invented. `fansly-client-check` is selected only from `FanslySessionBundle.routeChecks` using the extension's seven route families; the legacy pasted scalar remains readable for credential compatibility but is never replayed across routes. The extension-side producer change is out of scope: it must submit `routeChecks: Partial<Record<message | group | account | earnings | messagingGroups | subscribers | media, string>>`. Endpoint probe output prints the ordered header plan with secrets redacted and says `missing`/`route_unclassified` when no check will be sent. No migration and no platform write. |
 | 235 | Fansly lane scaffold and repair R1 | The seven lanes share one runtime for durable physical-attempt reservation, journal/checkpoint ordering, coverage writes, three-way response classification, pagination guards and jitter. A `started` attempt is checkpointed before egress and the adapter clamps retries to the allowance remaining for the UTC day; success, transport failure and auth failure therefore cannot forget attempts or cross the cap. `invalid` responses remain journaled but do not move coverage or cursors. Earnings history keeps a full 100-row page's window while advancing its durable offset and spends an older probe before declaring a floor. Purchase-history cursor v5 joins the same daily-attempt law. Post-replies excludes failed subjects until `next_due_at`, so healthy never-walked posts are no longer starved. One shared integration harness and a source ratchet prevent lane-private copies from returning; no migration or production action is required. |
 
 ## Consensus Decisions
@@ -9784,6 +9784,73 @@ reopening the earnings or hourly lane along with the daily one; a per-media
 coverage row per item (#231's §3.4 ruling stands — the creation floor and the
 stop reason live in the item's own cursor, and the page's coverage row counts
 them); and treating a zero-valued bucket as traffic anywhere.
+
+---
+
+**Decision #234 (2026-08-23, endpoints-cover repair R2: point defects outside
+lane machinery):**
+
+The journal → canonical events → projections architecture stays. The review
+found four defects around it, and none requires a new capture architecture or a
+migration.
+
+**ERASURE IS A CONVERGENCE PROPERTY, NOT A TABLE LIST SOMEONE REMEMBERS TO
+MAINTAIN.** Every direct foreign-key child of `pages` is now discovered by a
+schema ratchet and must be in the page-erasure inventory or in the explicit
+exclusion map. The only exclusions are `audit_events` (append-only proof of the
+erasure itself) and `user_page_assignments` (agency access configuration, not
+captured platform material). Fan erasure resolves messaging-group ids before
+it collects lineage, recognizes the captured purchase-notification shape where
+codes 2007/2008 put the buyer in `correlation_group_ref`, and removes matching
+projection rows, canonical events, observations and raw payload catalog rows.
+The new canonical event families stamp their fan identities; rebuild after an
+erasure therefore converges to the same absent state instead of resurrecting a
+comment or creator-sent message. Projection writers join the existing
+material-time erasure fence, so an in-flight direct writer cannot recreate a
+tombstoned subject after the erasure commits.
+
+**AN ANALYTICS PANEL EARNS “COMPLETE” FOR THE WINDOW THE OWNER SELECTED.** One
+shared exported object names every `capture_coverage.plane`; lanes, the coverage
+route and the dashboard consume it, so the `stats_snapshot` stream name cannot
+masquerade as `stats_account_daily` or `stats_earnings` again. A panel is
+complete only when every required plane reaches the selected 7/30/90-day floor
+and its head is within that plane's freshness tolerance. Missing plane,
+incomplete status, shallow floor and stale head are different visible states.
+The page gates all chart/empty rendering on every query's `isSuccess`; a failed
+request gets a retryable error card, never a zero-looking chart. Top media reads
+newest catalogue heads, unions the media refs needed by the freshest ranking
+window before sidecars, and interleaves per-media bucket ranks under the total
+response budget. “Not polled yet” is gone: the UI says catalogue head missing,
+response budget truncated, or no captured bucket in the selected range — the
+three claims the response can actually support.
+
+**A PURCHASE ACTOR IS A PURCHASE DISCLOSURE EVEN WITHOUT A PRICE.** Captured
+notification codes 2007/2008 carry the buyer in `correlationGroupRef` while
+`correlationRef` is null. The notifications dataset is therefore
+`disclosesPurchase: true` and requires `read:datasets` plus `read:messages`.
+Dataset-only, bare messages, bare money and datasets+money keys are refused;
+the paired datasets+messages key is the narrow successful case.
+
+**REQUEST HEADERS FOLLOW THE CAPTURED BROWSER, AND CLIENT CHECKS HAVE ROUTE
+CUSTODY.** The safe header values and insertion order come from the local
+2026-08-21 Firefox HAR: User-Agent, Accept, Accept-Language, Accept-Encoding,
+Referer, Fansly client fields, Origin, DNT, Sec-GPC, Sec-Fetch fields, then
+Authorization; transport-owned Host/connection fields and cookies are not
+fabricated. The old `referrer` typo is `referer`. All six local HARs contain no
+`sec-ch-*`, so adding Chromium client hints was rejected as false parity.
+
+`FanslySessionBundle.routeChecks` is the extension-facing bundle shape:
+`Partial<Record<message | group | account | earnings | messagingGroups |
+subscribers | media, string>>`, matching the extension's existing route keys.
+The adapter selects only the check captured for the current route family. The
+legacy scalar `fanslyClientCheck` remains readable so old encrypted credentials
+do not fail to decode, but it is never used as a fallback — silence is safer and
+more diagnosable than replaying a known-stale token. The extension-side producer
+change is deliberately outside this repository/package. Until it submits the
+map, a route sends no check. `fansly:endpoint-probe` prints the same ordered
+header plan with every credential redacted and labels each route `present`,
+`missing`, or `route_unclassified`, so that transition is visible before any
+owner-run call.
 
 ---
 

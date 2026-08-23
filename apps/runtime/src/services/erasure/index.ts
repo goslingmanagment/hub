@@ -94,6 +94,9 @@ export interface ErasurePlan {
    * check (isDmArchiveScopeFenced) matches page/model scopes against this
    * list in the stored plan jsonb; fan scopes match by immutable fan ref. */
   resolvedPageIds: number[];
+  /** Fan scope only: Fansly messaging group ids resolved before any thread
+   * deletion. Projection writers may carry only this group id. */
+  resolvedFanGroupIds: string[];
 }
 
 interface ResolvedScope {
@@ -103,6 +106,9 @@ interface ResolvedScope {
   /** fan scope only */
   fanId: number | null;
   fanRef: string | null;
+  /** Fansly messaging group ids linked to the fan. Creator-sent message
+   * events use this id as conversation_ref, not the partner account id. */
+  fanGroupIds: string[];
   /** page/model scope: the pages' vendor-native account refs */
   nativeRefs: string[];
 }
@@ -222,12 +228,27 @@ async function resolveScope(app: Db, input: ErasureScopeInput): Promise<Resolved
       // exist; also keeps every `in (...)` list below non-empty.
       throw new Error(`erasure scope resolves to no pages: ${scopeRef}`);
     }
+    const pageIds = pageRows.map((row) => Number(row.id));
+    const fanId = fanRows[0] ? Number(fanRows[0].id) : null;
+    const fanGroupRows = await rows<{ group_id: string }>(app, sql`
+      select distinct platform_conversation_id as group_id
+      from page_dm_threads
+      where platform_account_id in ${pageIds}
+        and (
+          partner_platform_user_id = ${input.fanRef}
+          or platform_conversation_id = ${input.fanRef}
+          ${fanId === null ? sql`` : sql`or fan_id = ${fanId}`}
+        )
+    `);
     return {
       input,
       scopeRef,
-      pageIds: pageRows.map((row) => Number(row.id)),
-      fanId: fanRows[0] ? Number(fanRows[0].id) : null,
+      pageIds,
+      fanId,
       fanRef: input.fanRef,
+      fanGroupIds: fanGroupRows
+        .map((row) => row.group_id)
+        .filter((id): id is string => !!id && id !== input.fanRef),
       nativeRefs: [],
     };
   }
@@ -253,6 +274,7 @@ async function resolveScope(app: Db, input: ErasureScopeInput): Promise<Resolved
     pageIds: pageRows.map((row) => Number(row.id)),
     fanId: null,
     fanRef: null,
+    fanGroupIds: [],
     nativeRefs: pageRows.flatMap((row) => [row.a, row.b]).filter((ref): ref is string => !!ref),
   };
 }
@@ -264,8 +286,20 @@ async function resolveScope(app: Db, input: ErasureScopeInput): Promise<Resolved
 function eventPredSql(scope: ResolvedScope, alias = ""): SQL {
   const a = alias ? sql.raw(`${alias}.`) : sql.raw("");
   if (scope.input.scopeType === "fan") {
+    const conversationPred = scope.fanGroupIds.length > 0
+      ? sql`(${a}conversation_ref = ${scope.fanRef} or ${a}conversation_ref in ${scope.fanGroupIds})`
+      : sql`${a}conversation_ref = ${scope.fanRef}`;
     return sql`${a}account_id in ${scope.pageIds}
-      and (${a}fan_identity_ref = ${scope.fanRef} or ${a}conversation_ref = ${scope.fanRef})`;
+      and (
+        ${a}fan_identity_ref = ${scope.fanRef}
+        or ${conversationPred}
+        or ${a}data ->> 'authorRef' = ${scope.fanRef}
+        or ${a}data ->> 'correlationGroupRef' = ${scope.fanRef}
+        or (${a}type = 'notification.observed'
+          and ${a}data ->> 'rawTypeCode' = '3002'
+          and ${a}data ->> 'correlationRef' = ${scope.fanRef})
+        or coalesce(${a}data -> 'buyerRefs', '[]'::jsonb) @> jsonb_build_array(${scope.fanRef}::text)
+      )`;
   }
   return sql`${a}account_id in ${scope.pageIds}`;
 }
@@ -290,11 +324,14 @@ function observationPagePredSql(scope: ResolvedScope): SQL {
 // The inline arm stays here because the inline column is still the authority;
 // the arm that reads catalog bodies lives in `collectFanLineage` below, where a
 // catalog match is translated back into the envelopes that reference it.
-function payloadMatchPredSql(fanRef: string): SQL {
+function payloadMatchPredSql(
+  fanRef: string,
+  payloadColumn: SQL = sql.raw("payload"),
+): SQL {
   const subject = capturePayloadErasureSubject(fanRef);
-  const quoted = sql`payload::text like ${subject.quotedLike}`;
+  const quoted = sql`${payloadColumn}::text like ${subject.quotedLike}`;
   if (subject.numericBoundaryRegex !== null) {
-    return sql`(${quoted} or payload::text ~ ${subject.numericBoundaryRegex})`;
+    return sql`(${quoted} or ${payloadColumn}::text ~ ${subject.numericBoundaryRegex})`;
   }
   return quoted;
 }
@@ -307,7 +344,18 @@ function duckdbEventPred(scope: ResolvedScope): string {
   const ids = scope.pageIds.join(", ") || "-1";
   if (scope.input.scopeType === "fan") {
     const ref = duckdbEscape(scope.fanRef!);
-    return `account_id IN (${ids}) AND (fan_identity_ref = '${ref}' OR conversation_ref = '${ref}')`;
+    const conversations = [scope.fanRef!, ...scope.fanGroupIds]
+      .map((value) => `'${duckdbEscape(value)}'`)
+      .join(", ");
+    const jsonRef = duckdbEscape(JSON.stringify(scope.fanRef!));
+    return `account_id IN (${ids}) AND (`
+      + `fan_identity_ref = '${ref}' OR conversation_ref IN (${conversations}) `
+      + `OR coalesce(json_extract_string(data, '$.authorRef') = '${ref}', false) `
+      + `OR coalesce(json_extract_string(data, '$.correlationGroupRef') = '${ref}', false) `
+      + `OR coalesce((type = 'notification.observed' `
+      + `AND json_extract_string(data, '$.rawTypeCode') = '3002' `
+      + `AND json_extract_string(data, '$.correlationRef') = '${ref}'), false) `
+      + `OR coalesce(json_contains(json_extract(data, '$.buyerRefs'), '${jsonRef}'), false))`;
   }
   return `account_id IN (${ids})`;
 }
@@ -443,6 +491,8 @@ interface LedgerLineage {
   eraseObsIds: number[];
   /** observations referenced by the fan AND by others — reported, kept */
   sharedObsIds: number[];
+  /** Retained sync journal envelopes whose body contains the fan. */
+  rawPayloadIds: number[];
 }
 
 async function collectFanLineage(
@@ -455,6 +505,7 @@ async function collectFanLineage(
   const eventIds = new Set<number>();
   const candidates = new Set<number>();
   const shared = new Set<number>();
+  const rawPayloadIds = new Set<number>();
 
   const eventSources = ["domain_events", ...parked.domainEvents];
   for (const source of eventSources) {
@@ -479,6 +530,16 @@ async function collectFanLineage(
     for (const row of matched) {
       candidates.add(Number(row.id));
     }
+  }
+
+  const inlineRaw = await rows<{ id: string }>(app, sql`
+    select id::text as id from sync_raw_payloads
+    where page_id in ${scope.pageIds}
+      and response_payload is not null
+      and ${payloadMatchPredSql(scope.fanRef!, sql.raw("response_payload"))}
+  `);
+  for (const row of inlineRaw) {
+    rawPayloadIds.add(Number(row.id));
   }
 
   // G5 slice 3b: the CATALOG arm of the same subject match. An observation
@@ -511,6 +572,18 @@ async function collectFanLineage(
     `);
     for (const row of referencing) {
       candidates.add(Number(row.id));
+    }
+    const rawReferencing = await rows<{ id: string }>(app, sql`
+      with target (bucket_month, object_id) as (values ${refs})
+      select distinct r.id::text as id
+      from target t
+      join sync_raw_payloads r
+        on r.payload_bucket_month = t.bucket_month
+       and r.payload_object_id = t.object_id
+      where r.page_id in ${scope.pageIds}
+    `);
+    for (const row of rawReferencing) {
+      rawPayloadIds.add(Number(row.id));
     }
   }
 
@@ -595,6 +668,7 @@ async function collectFanLineage(
     eventIds: [...eventIds],
     eraseObsIds: [...candidates].filter((id) => !shared.has(id)),
     sharedObsIds: [...shared],
+    rawPayloadIds: [...rawPayloadIds],
   };
 }
 
@@ -680,17 +754,17 @@ export const FAN_REF_ERASURE_COLUMNS: readonly FanRefErasureColumn[] = [
   { column: "page_dm_messages.sender_platform_user_id", target: "page_dm_messages", reach: "cascade" },
   // WP-F2 engagement core (0134). Both are TEXT refs with no FK to `fans`.
   //
-  // `platform_notifications.correlation_ref` is the fan for the codes that name
-  // one — the purchase codes (2007/2008/32007/45012), the follow family and the
-  // subscription family all carry the fan's account id there. It is NOT a fan
-  // on every code (an engagement notification's correlation ref can be a post or
-  // a media id), and the predicate is written to that: it erases the rows whose
-  // correlation ref IS this fan, which is exactly the set that says "this fan
-  // did something to this page". A code whose ref is a post id belongs to the
-  // creator's own content and survives, which is the same line
-  // `media_offer_locations.correlation_ref` draws.
+  // Captured Fansly purchase/follow/subscription rows name the fan in
+  // correlation_group_ref; correlation_ref names the purchased media/bundle
+  // or another creator-owned subject. Code 3002 is the documented exception:
+  // its follower id uses correlation_ref.
   {
     column: "platform_notifications.correlation_ref",
+    target: "platform_notifications",
+    reach: "predicate",
+  },
+  {
+    column: "platform_notifications.correlation_group_ref",
     target: "platform_notifications",
     reach: "predicate",
   },
@@ -722,6 +796,16 @@ async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLine
   const fanId = scope.fanId ?? -1;
   const targets: WorkTarget[] = [];
 
+  targets.push({
+    plane: "hot",
+    target: "sync_raw_payloads",
+    action: "delete",
+    rows: _lineage.rawPayloadIds.length,
+    run: (tx) => _lineage.rawPayloadIds.length === 0
+      ? Promise.resolve(0)
+      : execCount(tx, sql`delete from sync_raw_payloads where id in ${_lineage.rawPayloadIds}`),
+  });
+
   const fanFks = await rows<{ child: string; del_type: string }>(app, sql`
     select con.conrelid::regclass::text as child, con.confdeltype::text as del_type
     from pg_constraint con
@@ -740,18 +824,9 @@ async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLine
   const threadPred = sql`t.platform_account_id in ${scope.pageIds}
     and (t.fan_id = ${fanId} or t.platform_conversation_id = ${ref})`;
 
-  // Fansly can key fan-owned artifacts by the messaging GROUP id rather than
-  // the partner account id used as fanRef. Resolve those ids once, while the
-  // page_dm_threads linkage still exists, and reuse the static list below: the
-  // thread target runs before the generation and voice-note delete closures.
-  const fanGroupIdRows = await rows<{ group_id: string }>(app, sql`
-    select distinct t.platform_conversation_id as group_id
-    from page_dm_threads t
-    where (${threadPred}) or (t.platform_account_id in ${scope.pageIds}
-      and t.partner_platform_user_id = ${ref})`);
-  const fanGroupIds = fanGroupIdRows
-    .map((row) => row.group_id)
-    .filter((id): id is string => !!id && id !== ref);
+  // Resolved before ledger lineage is collected: creator-sent events use the
+  // messaging group id as conversation_ref and must be deleted with this fan.
+  const fanGroupIds = scope.fanGroupIds;
 
   targets.push({
     plane: "hot",
@@ -910,11 +985,11 @@ async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLine
   // refs with NO FK to `fans`, invisible to the unmapped-non-cascade-FK guard.
   //
   // platform_notifications says WHAT THIS FAN DID to the page — bought,
-  // followed, subscribed. The correlation ref is the fan on exactly those
-  // codes, and a predicate on it is the narrow boundary: a notification whose
-  // correlation ref is a post id is the creator's own content and stays.
+  // followed, subscribed. Captured rows put the actor in correlation_group_ref;
+  // only follow code 3002 names the actor in correlation_ref.
   const notificationPred = sql`page_id in ${scope.pageIds}
-    and correlation_ref = ${ref}`;
+    and (correlation_group_ref = ${ref}
+      or (type_code = 3002 and correlation_ref = ${ref}))`;
   targets.push({
     plane: "hot",
     target: "platform_notifications",
@@ -1063,6 +1138,25 @@ async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLine
   return targets;
 }
 
+export interface PageErasureTableExclusion {
+  table: string;
+  reason: string;
+}
+
+/** Direct page children that intentionally survive a page-data erasure.
+ * This is deliberately tiny: everything not named here must appear as a hot
+ * target, because the page catalog row survives and no FK action will run. */
+export const PAGE_ERASURE_TABLE_EXCLUSIONS: readonly PageErasureTableExclusion[] = [
+  {
+    table: "audit_events",
+    reason: "Agency audit evidence is an append-only governance record, not captured platform data; retaining the page id preserves who authorized and executed the erasure itself.",
+  },
+  {
+    table: "user_page_assignments",
+    reason: "User-to-page authorization is agency catalog configuration, not captured creator or fan data; offboarding access is a separate owner action.",
+  },
+];
+
 async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget[]> {
   const pageIds = scope.pageIds;
   const targets: WorkTarget[] = [];
@@ -1108,6 +1202,67 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
   });
 
   const deletions: Array<[string, string]> = [
+    // Rows that RESTRICT parents below go first.
+    ["creator_vault_album_members", "page_id"],
+    ["page_subscription_tier_plans", "page_id"],
+    ["page_poll_options", "page_id"],
+    ["ofapi_credit_ledger", "page_id"],
+    ["ofapi_request_attempts", "page_id"],
+    ["sync_http_attempts", "page_id"],
+    ["sync_run_events", "page_id"],
+    ["sync_raw_payloads", "page_id"],
+    ["ofapi_spend_projection_events", "page_id"],
+
+    // Endpoints-cover fact projections and capture-plane state (0130–0142).
+    ["media_offer_locations", "page_id"],
+    ["media_orders", "page_id"],
+    ["message_media_offers", "page_id"],
+    ["creator_media_bundles", "page_id"],
+    ["creator_media", "page_id"],
+    ["stats_traffic_buckets", "page_id"],
+    ["stats_top_media", "page_id"],
+    ["stats_top_tags", "page_id"],
+    ["fansly_media_tag_stats", "page_id"],
+    ["platform_tag_daily", "page_id"],
+    ["platform_notifications", "page_id"],
+    ["post_likes", "page_id"],
+    ["post_comments", "page_id"],
+    ["subject_refresh_state", "page_id"],
+    ["creator_vault_albums", "page_id"],
+    ["page_subscription_tiers", "page_id"],
+    ["page_walls", "page_id"],
+    ["page_automated_messages", "page_id"],
+    ["page_promo_links", "page_id"],
+    ["page_polls", "page_id"],
+    ["page_broadcasts", "page_id"],
+    ["page_payout_requests", "page_id"],
+    ["page_payout_methods", "page_id"],
+    ["page_recap_stats", "page_id"],
+    ["capture_coverage", "page_id"],
+
+    // Pre-existing projections and operational surfaces that also own page
+    // data. The schema ratchet makes this list fail closed on future tables.
+    ["creator_posts", "account_id"],
+    ["fan_profiles", "platform_account_id"],
+    ["fan_summaries", "platform_account_id"],
+    ["message_archive_shadow", "account_id"],
+    ["notification_incidents", "platform_account_id"],
+    ["agent_hydration_requests", "page_id"],
+    ["ai_usage_events", "page_id"],
+    ["ofapi_budget_denial_daily", "page_id"],
+    ["ofapi_capture_jobs", "page_id"],
+    ["ofapi_interactive_requests", "page_id"],
+    ["ofapi_message_coverage", "page_id"],
+    ["ofapi_webhook_events", "platform_account_id"],
+    ["page_sync_cursors", "page_id"],
+    ["page_sync_states", "page_id"],
+    ["projection_watermarks", "platform_account_id"],
+    ["revenue_mix_daily", "page_id"],
+    ["revenue_month_totals", "page_id"],
+    ["sync_runs", "page_id"],
+    ["wb_classifier_runs", "platform_account_id"],
+    ["wb_closing_settings", "platform_account_id"],
+    ["wb_llm_usage_daily", "platform_account_id"],
     ["ai_generation_content", "page_id"],
     // Voice-notes lane (0109): both are page-scoped and must be purged
     // explicitly. voice_notes REFERENCES pages WITHOUT cascade (it would block
@@ -1458,6 +1613,7 @@ function workToPlan(work: ErasureWork): ErasurePlan {
     sharedObservations: work.lineage?.sharedObsIds.length ?? 0,
     totalRows: targets.reduce((sum, target) => sum + target.rows, 0),
     resolvedPageIds: [...new Set(work.scope.pageIds)].sort((left, right) => left - right),
+    resolvedFanGroupIds: [...new Set(work.scope.fanGroupIds)].sort(),
   };
 }
 

@@ -137,6 +137,7 @@ import {
   type MediaStatsTier,
 } from "@agency_hub_core/db";
 import { FanslyApiError } from "@agency_hub_core/fansly";
+import { CAPTURE_COVERAGE_PLANES } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
 import { loadEffectiveConfig } from "../effective-config.ts";
@@ -178,8 +179,6 @@ const OBSERVATION_KIND = "media_offer_stats";
 /** One coverage row per page, per §3.4. Deliberately NOT one per media: a
  *  coverage row per item would be a second queue, of the same cardinality, in a
  *  table whose contract is "how far back does this plane reach". */
-export const FANSLY_MEDIA_STATS_COVERAGE_PLANE = "media_stats";
-
 const DAY_MS = 24 * 60 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
 
@@ -1359,7 +1358,7 @@ export async function fanslyMediaStatsChunk(
     if (invalidResponses === 0 || visited > 0) {
       await writeFanslyLaneCoverage({ db: app.db,
         pageId,
-        plane: FANSLY_MEDIA_STATS_COVERAGE_PLANE,
+        plane: CAPTURE_COVERAGE_PLANES.mediaStats,
         // Page-scoped: `page_id` is already in the key; the ref makes the scope
         // legible in a raw query.
         scopeRef: String(pageId),

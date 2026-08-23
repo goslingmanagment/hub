@@ -61,6 +61,7 @@ const FAN_REF_COLUMN_PATTERNS = [
   "%sender_platform_user_id%",
   "author_ref",
   "correlation_ref",
+  "correlation_group_ref",
 ];
 
 /**

@@ -884,6 +884,9 @@ function attachmentDrafts(
     drafts.push({
       type: "message.attachments_observed",
       occurredAt: observation.receivedAt,
+      // The canonical column can carry one actor. Preserve all actors in
+      // data.buyerRefs; stamp the column when this message has one buyer.
+      ...(buyerRefs.length === 1 ? { fanIdentityRef: buyerRefs[0] } : {}),
       ...(conversationRef ? { conversationRef } : {}),
       messageRef: messageId,
       data: { ...material, contentHash: hash },

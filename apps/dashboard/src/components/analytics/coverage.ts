@@ -1,35 +1,28 @@
 import type { StatsCoverageResponse } from "@agency_hub_core/contracts";
-
-/**
- * The one rule every chart on the Analytics page obeys:
- * **partial data is never visually indistinguishable from complete data.**
- *
- * A chart with no badge is a chart claiming its window is fully captured. That
- * claim is only ever earned by a `provider_exhausted` coverage row — the single
- * status that means the platform itself said "that is all there is". Everything
- * else, INCLUDING no coverage row at all, wears a badge.
- */
+import {
+  CAPTURE_COVERAGE_HEAD_TOLERANCE_MS,
+  type CaptureCoveragePlane,
+} from "@agency_hub_core/shared";
 
 export type CoverageRow = StatsCoverageResponse["planes"][number];
 
+export type AnalyticsCoverageWindow = {
+  readonly from: string;
+  readonly to: string;
+};
+
 export type CoverageVerdict = {
-  /** `complete` is what a bare chart silently asserts, so it is the narrow case. */
-  readonly state: "complete" | "partial" | "not_started" | "unknown";
-  /** Short enough for a badge; specific enough to act on. */
+  readonly state: "complete" | "partial" | "stale" | "not_started" | "unknown";
   readonly label: string;
-  /** The longer sentence, shown on hover. */
   readonly detail: string;
 };
 
-/** `provider_exhausted` is the ONLY status that earns a bare chart. A window
- *  the provider merely answered is a window, not a surface. */
-const COMPLETE_STATUSES = new Set(["provider_exhausted"]);
-
+const WINDOW_EVIDENCE_STATUSES = new Set(["provider_exhausted", "window_captured"]);
 const NOT_STARTED_STATUSES = new Set(["not_started"]);
+const DEFAULT_HEAD_TOLERANCE_MS = 48 * 60 * 60 * 1_000;
 
 const STATUS_DETAIL: Readonly<Record<string, string>> = {
   in_progress: "the walk is still reaching backwards — older rows are missing",
-  window_captured: "one window was captured; the surface beyond it is unproven",
   sampled: "sampled rather than walked — this is not every row",
   partial_provider_surface: "the provider served only part of its own surface",
   unsupported_by_observed_surface: "no live route answers for this; nothing was captured",
@@ -39,61 +32,89 @@ const STATUS_DETAIL: Readonly<Record<string, string>> = {
   not_started: "this lane has never run for this page",
 };
 
-/**
- * The verdict for one capture plane.
- *
- * NO ROWS IS NOT ZERO, and this function is where that rule becomes visible: a
- * plane with no coverage row at all returns `unknown`, never `complete`. An
- * absent row means nobody has claimed anything about this surface — which is
- * strictly weaker than a claim of emptiness.
- */
+function instant(value: string | null): number | null {
+  if (value === null) return null;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function selectedWindowDays(window: AnalyticsCoverageWindow): number {
+  return Math.max(1, Math.round((Date.parse(window.to) - Date.parse(window.from)) / 86_400_000));
+}
+
+/** Judge every required plane against the window the user selected. */
 export function coverageVerdict(
   rows: readonly CoverageRow[] | undefined,
-  plane: string,
+  requiredPlanes: readonly string[],
+  window: AnalyticsCoverageWindow,
 ): CoverageVerdict {
-  const planeRows = (rows ?? []).filter((row) => row.plane === plane);
-  if (planeRows.length === 0) {
+  const selectedRows: CoverageRow[] = [];
+  for (const plane of requiredPlanes) {
+    const planeRows = (rows ?? []).filter((row) => row.plane === plane);
+    if (planeRows.length === 0) {
+      return {
+        state: "unknown",
+        label: "coverage unknown",
+        detail: `No capture-coverage row exists for required plane \`${plane}\`.`,
+      };
+    }
+    selectedRows.push(...planeRows);
+  }
+
+  if (selectedRows.every((row) => NOT_STARTED_STATUSES.has(row.status))) {
+    return { state: "not_started", label: "not started", detail: STATUS_DETAIL.not_started! };
+  }
+
+  const blocked = selectedRows.find((row) => !WINDOW_EVIDENCE_STATUSES.has(row.status));
+  if (blocked !== undefined) {
     return {
-      state: "unknown",
-      label: "coverage unknown",
-      detail:
-        "No capture-coverage row exists for this plane, so nothing is known about how "
-        + "far back it reaches. An empty chart here is not evidence of an empty world.",
+      state: "partial",
+      label: `partial — ${blocked.status.replace(/_/g, " ")}`,
+      detail: STATUS_DETAIL[blocked.status]
+        ?? `capture reports \`${blocked.status}\` for scope \`${blocked.scopeRef}\``,
     };
   }
-  if (planeRows.every((row) => COMPLETE_STATUSES.has(row.status))) {
+
+  const windowFrom = Date.parse(window.from);
+  const windowTo = Date.parse(window.to);
+  const stale = selectedRows.find((row) => {
+    const head = instant(row.newestCapturedAt) ?? instant(row.updatedAt);
+    const tolerance = CAPTURE_COVERAGE_HEAD_TOLERANCE_MS[
+      row.plane as CaptureCoveragePlane
+    ] ?? DEFAULT_HEAD_TOLERANCE_MS;
+    return head === null || head < windowTo - tolerance;
+  });
+  if (stale !== undefined) {
     return {
-      state: "complete",
-      label: "complete",
-      detail: "The provider was exhausted for every scope of this plane.",
+      state: "stale",
+      label: "stale head",
+      detail: `Plane \`${stale.plane}\` is not fresh through the selected window.`,
     };
   }
-  if (planeRows.every((row) => NOT_STARTED_STATUSES.has(row.status))) {
+
+  const shallow = selectedRows.find((row) => {
+    if (row.status === "provider_exhausted" && row.oldestCapturedAt === null) {
+      return false;
+    }
+    const floor = instant(row.oldestCapturedAt);
+    return floor === null || floor > windowFrom;
+  });
+  if (shallow !== undefined) {
     return {
-      state: "not_started",
-      label: "not started",
-      detail: STATUS_DETAIL.not_started!,
+      state: "partial",
+      label: "partial — selected window",
+      detail: `Plane \`${shallow.plane}\` does not reach the selected window's start.`,
     };
   }
-  const weakest = planeRows.find((row) => !COMPLETE_STATUSES.has(row.status))!;
+
+  const days = selectedWindowDays(window);
   return {
-    state: "partial",
-    label: `partial — ${weakest.status.replace(/_/g, " ")}`,
-    detail: STATUS_DETAIL[weakest.status]
-      ?? `capture reports \`${weakest.status}\` for scope \`${weakest.scopeRef}\``,
+    state: "complete",
+    label: `complete for ${days}-day window`,
+    detail: "Every required plane reaches the selected floor and has a fresh head.",
   };
 }
 
-/**
- * Fansly's own 30-day widget EXCLUDES the Suggestions visit code (44011) from
- * its percentage denominator; ours includes every raw source. The numbers
- * therefore differ, on purpose, and the difference is explained rather than
- * hidden (A8).
- *
- * It applies to the 30-DAY view only — the last-24h comparison needs no
- * denominator adjustment — so the footnote is a function of the selected range
- * rather than a permanent line of small print nobody reads.
- */
 export const SUGGESTIONS_DENOMINATOR_NOTE =
   "Fansly's own 30-day widget leaves the Suggestions visit code (44011) out of its "
   + "percentage denominator. This chart counts every raw source, so its shares are "

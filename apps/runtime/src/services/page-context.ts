@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 
 import {
+  FANSLY_CLIENT_CHECK_ROUTES,
   buildProxyEgressKey,
   normalizeProxyConfig,
   decryptJsonWithKeyVersion,
@@ -40,11 +41,28 @@ function normalizeOptionalSessionValue(value: unknown, key: string) {
   return value;
 }
 
+function normalizeRouteChecks(value: unknown): FanslySessionBundle["routeChecks"] {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new Error('Session file field "routeChecks" must be an object when provided');
+  }
+  const allowed = new Set<string>(FANSLY_CLIENT_CHECK_ROUTES);
+  const normalized: NonNullable<FanslySessionBundle["routeChecks"]> = {};
+  for (const [route, check] of Object.entries(value)) {
+    if (!allowed.has(route) || typeof check !== "string" || check.length === 0) {
+      throw new Error(`Session file field "routeChecks.${route}" is invalid`);
+    }
+    normalized[route as keyof typeof normalized] = check;
+  }
+  return normalized;
+}
+
 function normalizeSessionBundle(input: Record<string, unknown>): FanslySessionBundle {
   const authorization = input.authorization ?? input.token;
   const fanslyClientId = input.fanslyClientId ?? input["fansly-client-id"];
   const fanslyClientCheck = input.fanslyClientCheck ?? input["fansly-client-check"];
   const fanslySessionId = input.fanslySessionId ?? input["fansly-session-id"];
+  const routeChecks = input.routeChecks;
 
   if (typeof authorization !== "string") {
     throw new Error("Session file must include authorization");
@@ -55,6 +73,7 @@ function normalizeSessionBundle(input: Record<string, unknown>): FanslySessionBu
     fanslyClientId: normalizeOptionalSessionValue(fanslyClientId, "fansly-client-id"),
     fanslyClientCheck: normalizeOptionalSessionValue(fanslyClientCheck, "fansly-client-check"),
     fanslySessionId: normalizeOptionalSessionValue(fanslySessionId, "fansly-session-id"),
+    routeChecks: normalizeRouteChecks(routeChecks),
   };
 }
 

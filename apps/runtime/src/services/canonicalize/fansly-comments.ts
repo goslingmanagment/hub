@@ -251,6 +251,7 @@ export function canonicalizeFanslyCommentsObservation(
       type: "post.comment_observed",
       // RECEIPT TIME (§3.2b) — the provider instant is `publishedAt` above.
       occurredAt: observation.receivedAt,
+      fanIdentityRef: authorRef,
       postRef: parentPostRef,
       data: { ...material, contentHash: hash },
       schemaVersion: SCHEMA_VERSION,

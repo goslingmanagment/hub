@@ -13,6 +13,10 @@
 import { sql, type SQL } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
+import {
+  isDmArchiveScopeFenced,
+  tryAcquireDmArchiveWriterFenceLock,
+} from "./erasure-fence.ts";
 
 export type MediaPlanePlatform = "fansly" | "onlyfans";
 
@@ -342,7 +346,39 @@ export interface UpsertMessageMediaOfferInput {
 export async function upsertMessageMediaOffer(
   db: Database,
   input: UpsertMessageMediaOfferInput,
-): Promise<{ applied: boolean }> {
+): Promise<
+  | { status: "applied"; applied: true }
+  | { status: "unchanged" | "deferred" | "erasure_fenced"; applied: false }
+> {
+  return db.transaction(async (tx) => {
+    const database = tx as unknown as Database;
+    if (!(await tryAcquireDmArchiveWriterFenceLock(database, input.pageId))) {
+      return { status: "deferred", applied: false } as const;
+    }
+    const materialAt = input.messageCreatedAt !== null && input.messageCreatedAt < input.observedAt
+      ? input.messageCreatedAt
+      : input.observedAt;
+    if (
+      await isDmArchiveScopeFenced(database, {
+        pageId: input.pageId,
+        platform: input.platform,
+        refs: [input.fanPlatformUserId, input.conversationRef],
+        materialAt,
+      })
+    ) {
+      return { status: "erasure_fenced", applied: false } as const;
+    }
+    return upsertMessageMediaOfferUnfenced(database, input);
+  });
+}
+
+async function upsertMessageMediaOfferUnfenced(
+  db: Database,
+  input: UpsertMessageMediaOfferInput,
+): Promise<
+  | { status: "applied"; applied: true }
+  | { status: "unchanged"; applied: false }
+> {
   const result = await db.execute(sql`
     insert into message_media_offers (
       page_id, platform, message_ref, offer_ordinal, media_offer_ref, bundle_ref,
@@ -389,7 +425,9 @@ export async function upsertMessageMediaOffer(
       updated_at = now()
     returning page_id
   `);
-  return { applied: (result.rowCount ?? 0) > 0 };
+  return (result.rowCount ?? 0) > 0
+    ? { status: "applied", applied: true }
+    : { status: "unchanged", applied: false };
 }
 
 export interface ArchiveMessagePurchaseStateRow {

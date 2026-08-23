@@ -27,6 +27,10 @@ describe("Fansly adapter Stage 6 replay-probe methods", () => {
         fanslyClientId: "client-1",
         fanslyClientCheck: "check-1",
         fanslySessionId: "session-1",
+        routeChecks: {
+          earnings: "check-earnings",
+          media: "check-media",
+        },
       },
       proxy: { url: "socks5://proxy.example:1080" },
       rateLimitWaiter: vi.fn(async () => 0),
@@ -78,11 +82,15 @@ describe("Fansly adapter Stage 6 replay-probe methods", () => {
     expect(urls[3]?.searchParams.has("accountMediaBundleId")).toBe(false);
     expect(urls[3]?.searchParams.has("before")).toBe(false);
 
-    // Every probe call carries the single pasted check on the same header path.
     for (const header of headers) {
       expect(header.authorization).toBe("token-abc");
-      expect(header["fansly-client-check"]).toBe("check-1");
       expect(header["fansly-session-id"]).toBe("session-1");
     }
+    expect(headers.map((header) => header["fansly-client-check"])).toEqual([
+      "check-earnings",
+      "check-earnings",
+      "check-media",
+      "check-media",
+    ]);
   });
 });

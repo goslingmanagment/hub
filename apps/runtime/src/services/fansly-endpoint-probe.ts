@@ -1,4 +1,8 @@
-import { FanslyApiError } from "@agency_hub_core/fansly";
+import {
+  FanslyApiError,
+  redactedFanslyRequestHeaderPlan,
+  type RedactedFanslyRequestHeaderPlan,
+} from "@agency_hub_core/fansly";
 
 import type { AppContext } from "../bootstrap.ts";
 import { resolvePageContext } from "./page-context.ts";
@@ -68,6 +72,8 @@ export interface EndpointProbeResult {
   note?: string | null;
   wallClockMs: number;
   message: string | null;
+  /** The exact adapter header plan, secret values redacted, in insertion order. */
+  requestHeaders: RedactedFanslyRequestHeaderPlan;
 }
 
 export interface EndpointProbeOptions {
@@ -103,6 +109,7 @@ export interface EndpointProbeOptions {
 
 type ProbeRoute = {
   key: string;
+  pathname: (options: EndpointProbeOptions) => string;
   /** True when the call cannot be made bare because an id is a path segment. */
   requires?: "postId";
   run: (
@@ -185,12 +192,14 @@ export function describeStatsMonthAnswer(
 const ROUTES: ProbeRoute[] = [
   {
     key: "[E1] GET /post/{postId}/replies (BARE — no verify POST)",
+    pathname: (o) => `/post/${o.postId ?? "{postId}"}/replies`,
     requires: "postId",
     run: (app, ctx, o) => app.adapter.getPostRepliesPage(ctx, { postId: o.postId as string }),
     isBare: () => true,
   },
   {
     key: "GET /groups/mediaoffers",
+    pathname: () => "/groups/mediaoffers",
     run: (app, ctx, o) =>
       app.adapter.getGroupMediaOffersPage(ctx, {
         groupId: o.groupId ?? "",
@@ -201,21 +210,25 @@ const ROUTES: ProbeRoute[] = [
   },
   {
     key: "GET /message/broadcast/stats",
+    pathname: () => "/message/broadcast/stats",
     run: (app, ctx) => app.adapter.getBroadcastStatsPage(ctx, { limit: 10 }),
     isBare: () => false,
   },
   {
     key: "GET /message/broadcast/stats/deleted",
+    pathname: () => "/message/broadcast/stats",
     run: (app, ctx) => app.adapter.getBroadcastStatsPage(ctx, { limit: 10, deleted: true }),
     isBare: () => false,
   },
   {
     key: "GET /message/broadcast/scheduled",
+    pathname: () => "/message/broadcast/scheduled",
     run: (app, ctx) => app.adapter.getBroadcastScheduled(ctx),
     isBare: () => false,
   },
   {
     key: "GET /account/media/orders",
+    pathname: () => "/account/media/orders",
     run: (app, ctx) => app.adapter.getAccountMediaOrdersPage(ctx, { limit: 10, offset: 0 }),
     isBare: () => false,
   },
@@ -224,23 +237,27 @@ const ROUTES: ProbeRoute[] = [
   // 10 days to 2026-08-21). It sat on the WP-F9 list until the kernel was checked.
   {
     key: "GET /tips/account",
+    pathname: () => "/tips/account",
     run: (app, ctx, o) =>
       app.adapter.getTipsByAccountIds(ctx, { accountIds: o.fanAccountId ?? null }),
     isBare: (o) => !o.fanAccountId,
   },
   {
     key: "GET /mediastory/views",
+    pathname: () => "/mediastory/views",
     run: (app, ctx, o) =>
       app.adapter.getMediaStoryViewsPage(ctx, { storyId: o.storyId ?? "", limit: 10, offset: 0 }),
     isBare: (o) => !o.storyId,
   },
   {
     key: "GET /polls",
+    pathname: () => "/polls",
     run: (app, ctx) => app.adapter.getPolls(ctx),
     isBare: () => false,
   },
   {
     key: "GET /recapstats",
+    pathname: () => "/recapstats",
     run: (app, ctx) => app.adapter.getRecapStats(ctx),
     isBare: () => false,
   },
@@ -256,6 +273,7 @@ const ROUTES: ProbeRoute[] = [
   // rather than inferred.
   {
     key: "[F1] GET /it/amoie/stats?year=&month= (the month form)",
+    pathname: () => "/it/amoie/stats",
     run: async (app, ctx) => {
       const now = new Date();
       const { year, month } = probeStatsMonth(now);
@@ -274,21 +292,25 @@ const ROUTES: ProbeRoute[] = [
   // ---- WP-F3 catalog routes from the March corpus, never observed live ----
   {
     key: "[F3] GET /account/media?ids=",
+    pathname: () => "/account/media",
     run: (app, ctx, o) => app.adapter.getAccountMediaByIds(ctx, { ids: o.mediaId ?? "" }),
     isBare: (o) => !o.mediaId,
   },
   {
     key: "[F3] GET /account/media/bundle?ids=",
+    pathname: () => "/account/media/bundle",
     run: (app, ctx, o) => app.adapter.getAccountMediaBundlesByIds(ctx, { ids: o.bundleId ?? "" }),
     isBare: (o) => !o.bundleId,
   },
   {
     key: "[F3] GET /account/walls?correlationPostIds=",
+    pathname: () => "/account/walls",
     run: (app, ctx, o) => app.adapter.getAccountWalls(ctx, { correlationPostIds: o.postId ?? null }),
     isBare: (o) => !o.postId,
   },
   {
     key: "[F3] GET /media/vaultnew?albumId=",
+    pathname: () => "/media/vaultnew",
     // WP-F3 settled the query form: `before`/`after` are the LITERAL "0" and
     // `mediaType` is present-and-EMPTY when unfiltered. The probe sends what
     // the lane sends, so a future probe run measures the real request.
@@ -433,6 +455,10 @@ export async function runFanslyEndpointProbe(
 
     for (const route of routes) {
       const bare = route.isBare(options);
+      const requestHeaders = redactedFanslyRequestHeaderPlan(
+        context.session,
+        route.pathname(options),
+      );
 
       if (options.dryRun) {
         results.push({
@@ -446,6 +472,7 @@ export async function runFanslyEndpointProbe(
           bare,
           wallClockMs: 0,
           message: "dry-run (not called)",
+          requestHeaders,
         });
         continue;
       }
@@ -464,6 +491,7 @@ export async function runFanslyEndpointProbe(
           bare,
           wallClockMs: 0,
           message: "no --post <id> supplied; [E1] stays UNANSWERED",
+          requestHeaders,
         });
         continue;
       }
@@ -484,6 +512,7 @@ export async function runFanslyEndpointProbe(
           bare,
           wallClockMs: Date.now() - startedAt,
           message: null,
+          requestHeaders,
         });
       } catch (error) {
         const classified = classify(error);
@@ -498,6 +527,7 @@ export async function runFanslyEndpointProbe(
           bare,
           wallClockMs: Date.now() - startedAt,
           message: classified.message,
+          requestHeaders,
         });
       }
     }
@@ -533,6 +563,22 @@ export function summarizeEndpointProbe(results: EndpointProbeResult[]): string {
 
   lines.push("");
   lines.push(`Fired: ${fired.length}. Live: ${live.length}. Skipped: ${results.length - fired.length}.`);
+
+  lines.push("");
+  lines.push("REQUEST HEADERS (secret values redacted; order is adapter insertion order):");
+  for (const result of results) {
+    const check = result.requestHeaders.clientCheck;
+    lines.push(
+      `${result.page} · ${result.route} · client-check route=${check.route ?? "unclassified"}`
+      + ` state=${check.state}`,
+    );
+    for (const header of result.requestHeaders.headers) {
+      lines.push(`  ${header.name}: ${header.value}`);
+    }
+    if (check.state !== "present") {
+      lines.push("  fansly-client-check: <not sent — no captured check for this route>");
+    }
+  }
 
   if (authRejected.length > 0) {
     // An auth rejection judges the SESSION, not the route — reporting these as

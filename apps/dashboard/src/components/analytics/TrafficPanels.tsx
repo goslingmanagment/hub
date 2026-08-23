@@ -11,9 +11,15 @@ import {
 } from "recharts";
 
 import type { StatsTrafficResponse } from "@agency_hub_core/contracts";
+import { ANALYTICS_COVERAGE_PLANES } from "@agency_hub_core/shared";
 
 import { AnalyticsEmpty, AnalyticsPanel } from "./AnalyticsPanel.js";
-import { SUGGESTIONS_DENOMINATOR_NOTE, coverageVerdict, type CoverageRow } from "./coverage.js";
+import {
+  SUGGESTIONS_DENOMINATOR_NOTE,
+  coverageVerdict,
+  type AnalyticsCoverageWindow,
+  type CoverageRow,
+} from "./coverage.js";
 
 type TrafficRow = StatsTrafficResponse["rows"][number];
 
@@ -73,16 +79,18 @@ export function TrafficBySourcePanel({
   data,
   coverage,
   isLoading,
+  selectedWindow,
   showDenominatorNote,
 }: {
   data: StatsTrafficResponse | undefined;
   coverage: readonly CoverageRow[] | undefined;
   isLoading: boolean;
+  selectedWindow: AnalyticsCoverageWindow;
   /** A8: the footnote belongs to the 30-DAY view and to no other. */
   showDenominatorNote: boolean;
 }) {
   const [measure, setMeasure] = useState<Measure>("visits");
-  const verdict = coverageVerdict(coverage, "stats_snapshot");
+  const verdict = coverageVerdict(coverage, ANALYTICS_COVERAGE_PLANES.traffic, selectedWindow);
 
   const series = useMemo(() => {
     const buckets = new Map<string, Record<string, number | string>>();
@@ -191,12 +199,14 @@ export function FypSharePanel({
   data,
   coverage,
   isLoading,
+  selectedWindow,
 }: {
   data: StatsTrafficResponse | undefined;
   coverage: readonly CoverageRow[] | undefined;
   isLoading: boolean;
+  selectedWindow: AnalyticsCoverageWindow;
 }) {
-  const verdict = coverageVerdict(coverage, "stats_snapshot");
+  const verdict = coverageVerdict(coverage, ANALYTICS_COVERAGE_PLANES.fyp, selectedWindow);
 
   const { series, totals } = useMemo(() => {
     const buckets = new Map<string, { bucketStart: string; fyp: number; direct: number }>();

@@ -3,6 +3,7 @@ import {
   SPENDER_PERIOD_OPTIONS,
   SPENDER_RETENTION_STATUSES,
   SPENDER_SERIES_GRANULARITIES,
+  FANSLY_CLIENT_CHECK_ROUTES,
   aiUsageFeatures,
   creatableUserRoles,
   fanFlagTypes,
@@ -3105,6 +3106,10 @@ const fanslyCredentialsSchema = z.object({
     fanslyClientId: z.string().optional(),
     fanslyClientCheck: z.string().optional(),
     fanslySessionId: z.string().optional(),
+    routeChecks: z.partialRecord(
+      z.enum(FANSLY_CLIENT_CHECK_ROUTES),
+      z.string().min(1),
+    ).optional(),
   }),
   // Decision #124: every standalone Fansly verification/onboarding request
   // must carry the egress route it will actually use. Missing/null may never

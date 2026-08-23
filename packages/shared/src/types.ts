@@ -152,11 +152,25 @@ export const aiUsageFeatures = [
 ] as const;
 export type AiUsageFeature = (typeof aiUsageFeatures)[number];
 
+export const FANSLY_CLIENT_CHECK_ROUTES = [
+  "message",
+  "group",
+  "account",
+  "earnings",
+  "messagingGroups",
+  "subscribers",
+  "media",
+] as const;
+export type FanslyClientCheckRoute = (typeof FANSLY_CLIENT_CHECK_ROUTES)[number];
+
 export interface FanslySessionBundle {
   authorization: string;
   fanslyClientId?: string;
+  /** Legacy pasted value. Retained for credential compatibility, never reused
+   * across routes by the adapter. */
   fanslyClientCheck?: string;
   fanslySessionId?: string;
+  routeChecks?: Partial<Record<FanslyClientCheckRoute, string>>;
 }
 
 export interface OnlyMonsterTokenBundle {

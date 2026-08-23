@@ -683,12 +683,11 @@ export const AGENT_DATASETS = {
   notifications: {
     moneyBearing: false,
     verbatimText: false,
-    // A notification of a media purchase names the buyer through
-    // `correlationRef`, which is why the four purchase codes exist at all. The
-    // row is still an engagement fact rather than a ledger one; the purchase
-    // DISCLOSURE gate is on `message_media_sales`, and a caller reading
-    // purchase codes here gets the code and a ref, never a price or an offer.
-    disclosesPurchase: false,
+    // Captured purchase codes 2007/2008 name the buyer through
+    // `correlationGroupRef` even when `correlationRef` is null. A buyer plus a
+    // purchase code discloses the purchase without needing a price or offer, so
+    // this dataset obeys the same read:messages pairing rule as media sales.
+    disclosesPurchase: true,
     fields: {
       platform: "string",
       notificationRef: "string",

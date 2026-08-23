@@ -83,6 +83,7 @@ import {
   getCheckpoint,
 } from "@agency_hub_core/db";
 import { PAYOUT_REQUESTS_PAGE_SIZE, PAYOUT_REQUESTS_UNBOUNDED } from "@agency_hub_core/fansly";
+import { CAPTURE_COVERAGE_PLANES } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
 import { isMappedPayoutStatus } from "../canonicalize/fansly-payouts.ts";
@@ -121,7 +122,6 @@ const OBSERVATION_KINDS = {
 /** The coverage plane this lane claims, one scope per capture surface — so a
  *  request walk that is still reaching backwards cannot make the method
  *  listing look degraded, or the reverse. */
-export const FANSLY_PAYOUTS_COVERAGE_PLANE = "payouts";
 export const FANSLY_PAYOUTS_COVERAGE_SCOPES = {
   methods: "payout_methods",
   requests: "payout_requests",
@@ -426,7 +426,7 @@ export async function fanslyPayoutsChunk(
   const coverage = createFanslyLaneCoverageWriter({
     db: app.db,
     pageId,
-    plane: FANSLY_PAYOUTS_COVERAGE_PLANE,
+    plane: CAPTURE_COVERAGE_PLANES.payouts,
     acquisitionMode: "retroactive",
     newestCapturedAt: now,
   });

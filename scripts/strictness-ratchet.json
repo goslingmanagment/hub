@@ -86,7 +86,6 @@
   "tests/fan-profiles.repository.integration.test.ts": 30,
   "tests/fansly-dm-tip-normalization.integration.test.ts": 11,
   "tests/fansly-purchase-history.integration.test.ts": 1,
-  "tests/fansly-session.test.ts": 1,
   "tests/harvest-glue.integration.test.ts": 11,
   "tests/helpers/db.ts": 2,
   "tests/identity-grants.integration.test.ts": 2,

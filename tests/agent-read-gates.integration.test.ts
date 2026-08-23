@@ -35,6 +35,8 @@ const FULL_TOKEN = `${AGENT_KEY_TOKEN_PREFIX}gates-full-key-token`;
 const NARROW_TOKEN = `${AGENT_KEY_TOKEN_PREFIX}gates-narrow-key-token`;
 const MESSAGES_TOKEN = `${AGENT_KEY_TOKEN_PREFIX}gates-messages-only-token`;
 const MONEY_TOKEN = `${AGENT_KEY_TOKEN_PREFIX}gates-money-only-token`;
+const BARE_MESSAGES_TOKEN = `${AGENT_KEY_TOKEN_PREFIX}gates-bare-messages-token`;
+const BARE_MONEY_TOKEN = `${AGENT_KEY_TOKEN_PREFIX}gates-bare-money-token`;
 
 let testDb: StartedTestDatabase | null = null;
 let server: Awaited<ReturnType<typeof buildApiServer>> | null = null;
@@ -125,6 +127,20 @@ beforeEach(async (context) => {
     keyPrefix: MONEY_TOKEN.slice(0, AGENT_KEY_TOKEN_PREFIX.length + 6),
     keyDigest: sha256Hex(MONEY_TOKEN),
     capabilities: ["read:money", "read:datasets"],
+  });
+  await insertAgentKey(testDb.db, {
+    ...common,
+    name: "bare-messages",
+    keyPrefix: BARE_MESSAGES_TOKEN.slice(0, AGENT_KEY_TOKEN_PREFIX.length + 6),
+    keyDigest: sha256Hex(BARE_MESSAGES_TOKEN),
+    capabilities: ["read:messages"],
+  });
+  await insertAgentKey(testDb.db, {
+    ...common,
+    name: "bare-money",
+    keyPrefix: BARE_MONEY_TOKEN.slice(0, AGENT_KEY_TOKEN_PREFIX.length + 6),
+    keyDigest: sha256Hex(BARE_MONEY_TOKEN),
+    capabilities: ["read:money"],
   });
 
   await setConfigOverride(testDb.db, {
@@ -254,6 +270,23 @@ async function seedTwoFans() {
        '2026-03-04T12:00:00Z', '2026-03-04T12:01:00Z', '2026-03-05T00:00:00Z',
        repeat('d', 64), 1, 9301, 9302, 201)`,
     [onlyFansPageId],
+  );
+
+  // Captured Fansly shape for purchase codes 2007/2008: the buyer is the
+  // correlation GROUP, while correlationRef is absent. This identity is why
+  // the notifications dataset needs the message-disclosure capability.
+  await pool.query(
+    `insert into platform_notifications (
+       page_id, platform, notification_ref, type_code, correlation_ref,
+       correlation_group_ref, metadata, occurred_at, first_observed_at,
+       last_observed_at, content_hash, source_event_id, source_observation_id,
+       source_account_seq
+     ) values (
+       $1, 'fansly', 'purchase-2007', 2007, null, $2, '{}'::jsonb,
+       '2026-03-06T12:00:00Z', '2026-03-06T12:00:01Z',
+       '2026-03-06T12:00:01Z', repeat('a', 64), 91001, 91002, 91003
+     )`,
+    [pageId, RICK],
   );
 }
 
@@ -928,6 +961,33 @@ describe("[sync-critical] agent read plane: review round 2", () => {
       window,
       NARROW_TOKEN,
     )).statusCode).toBe(200);
+  });
+
+  it("purchase notifications require datasets and messages together", async () => {
+    const request = { from: "2026-01-01T00:00:00Z", to: "2026-04-01T00:00:00Z" };
+    for (const token of [NARROW_TOKEN, BARE_MESSAGES_TOKEN, BARE_MONEY_TOKEN, MONEY_TOKEN]) {
+      const refused = await post(
+        "/api/v1/agent/pages/lora-2/datasets/notifications/query",
+        request,
+        token,
+      );
+      expect(refused.statusCode, token).toBe(403);
+      expect(refused.json().error).toBe("agent_capability_missing");
+    }
+
+    const granted = await post(
+      "/api/v1/agent/pages/lora-2/datasets/notifications/query",
+      request,
+      MESSAGES_TOKEN,
+    );
+    expect(granted.statusCode).toBe(200);
+    expect(granted.json().items).toContainEqual(expect.objectContaining({
+      fields: expect.objectContaining({
+        typeCode: 2007,
+        correlationRef: null,
+        correlationGroupRef: RICK,
+      }),
+    }));
   });
 
   it("Fansly-only post money fields stay structurally not_captured on OnlyFans", async () => {

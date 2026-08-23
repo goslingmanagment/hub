@@ -1,12 +1,17 @@
 import { useMemo } from "react";
 
 import type { MoneyRevenueMixResponse } from "@agency_hub_core/contracts";
+import { ANALYTICS_COVERAGE_PLANES } from "@agency_hub_core/shared";
 
 import { StackedBarChart, type StackedBarChartSeries } from "@/components/shared/StackedBarChart";
 import { formatMills } from "@/lib/format";
 
 import { AnalyticsEmpty, AnalyticsPanel } from "./AnalyticsPanel.js";
-import { coverageVerdict, type CoverageRow } from "./coverage.js";
+import {
+  coverageVerdict,
+  type AnalyticsCoverageWindow,
+  type CoverageRow,
+} from "./coverage.js";
 
 const PALETTE = ["#5b8def", "#4ead6b", "#e0a14f", "#9b7ede", "#d16a8a", "#5fb5c4", "#8b8b9e"];
 
@@ -23,12 +28,14 @@ export function RevenueMixPanel({
   data,
   coverage,
   isLoading,
+  selectedWindow,
 }: {
   data: MoneyRevenueMixResponse | undefined;
   coverage: readonly CoverageRow[] | undefined;
   isLoading: boolean;
+  selectedWindow: AnalyticsCoverageWindow;
 }) {
-  const verdict = coverageVerdict(coverage, "stats_snapshot");
+  const verdict = coverageVerdict(coverage, ANALYTICS_COVERAGE_PLANES.revenue, selectedWindow);
 
   const { rows, series } = useMemo(() => {
     const byDate = new Map<string, Record<string, string | number>>();
