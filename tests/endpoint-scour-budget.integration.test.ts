@@ -330,6 +330,46 @@ describe("[sync-critical] WP-F1 per-lane daily call budget", () => {
     expect(adapter.calls.length).toBeGreaterThan(before);
   });
 
+  it("finishes yesterday's tail without marking today's head as captured", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    const yesterday = new Date("2026-08-19T23:55:00.000Z");
+    const today = new Date("2026-08-20T00:06:00.000Z");
+    const seeded = emptyFanslyStatsCursorState(yesterday);
+    seeded.mode = "steady";
+    seeded.backfill = null;
+    seeded.lastSweepDay = "2026-08-18";
+    seeded.sweepDay = "2026-08-19";
+    seeded.stepIndex = 10;
+    seeded.callsToday = 25;
+    await upsertCheckpointProgress(testDb.db, {
+      platformAccountId: page.id,
+      stream: "stats_snapshot",
+      cursorText: seeded.lastSweepDay,
+      state: seeded as unknown as Record<string, unknown>,
+    });
+
+    const adapter = adapterStub();
+    const telemetry = telemetryStub();
+    await fanslyStatsSnapshotChunk(
+      appStub(adapter),
+      input(page.id, telemetry, new SyncChunkBudget(), today),
+    );
+
+    // The old behavior returned immediately after recap and stamped 2026-08-20
+    // complete even though step 0 had last run on 2026-08-19. The same chunk now
+    // closes that tail under its own day, then starts today's head.
+    expect(adapter.calls.slice(0, 2)).toEqual(["recapstats", "account_stats"]);
+    expect(await journaledKinds(page.id)).toContain("account_stats");
+    const resumed = await cursor(page.id);
+    expect(resumed!.lastSweepDay).toBe("2026-08-19");
+    expect(resumed!.sweepDay).toBe("2026-08-20");
+    expect(resumed!.stepIndex).toBeGreaterThan(0);
+  });
+
   it("skips before ANY egress when the gate is closed", async (context) => {
     if (!testDb) {
       context.skip();

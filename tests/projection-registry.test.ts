@@ -119,6 +119,6 @@ describe("projection registry", () => {
       `obs_backlog_${family.source}_${family.lane}_v${family.version}`
     );
     expect(new Set(names).size).toBe(names.length);
-    expect(names).toContain("obs_backlog_pull_stats_v1");
+    expect(names).toContain("obs_backlog_pull_stats_v2");
   });
 });

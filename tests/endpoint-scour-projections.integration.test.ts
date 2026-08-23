@@ -282,6 +282,16 @@ describe("[sync-critical] WP-F1 statistics projections", () => {
     // "0" is Fansly's sentinel for "no bundle" — stored as NULL, not as an id.
     expect(topMedia.every((row) => row.bundle_ref === null)).toBe(true);
 
+    const topTags = await rows(
+      `select tag_ref, tag_name from stats_top_tags
+        where page_id = $1 order by rank`,
+      [page.id],
+    );
+    expect(topTags).toEqual([
+      { tag_ref: "000900000000000014", tag_name: "stockings" },
+      { tag_ref: "000900000000000019", tag_name: "lingerie" },
+    ]);
+
     const tags = await rows(
       `select tag_ref, view_count, source from platform_tag_daily
         where page_id = $1 order by tag_ref`,
