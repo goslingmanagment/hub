@@ -205,6 +205,39 @@ describe("WP-S1 Analytics: range presets", () => {
     expect(window.from.endsWith("Z")).toBe(true);
   });
 
+  it("truncates `to` to the minute so a remount reuses the cached window", () => {
+    // The seven Analytics queries key on `window.from`/`window.to`. A
+    // millisecond-precise `now` gave every remount seven brand-new keys and
+    // therefore seven refetches, `staleTime` notwithstanding.
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-08-20T12:34:07.321Z"));
+      const first = analyticsRange("30d");
+
+      vi.setSystemTime(new Date("2026-08-20T12:34:59.999Z"));
+      const remountSameMinute = analyticsRange("30d");
+      expect(remountSameMinute).toEqual(first);
+      expect(remountSameMinute.to).toBe("2026-08-20T12:34:00.000Z");
+      expect(remountSameMinute.from).toBe("2026-07-21T12:34:00.000Z");
+
+      // Coarse, not frozen: the window still advances. Keying by the PRESET
+      // alone would pin it for as long as the tab stayed open.
+      vi.setSystemTime(new Date("2026-08-20T12:35:00.000Z"));
+      const nextMinute = analyticsRange("30d");
+      expect(nextMinute.to).toBe("2026-08-20T12:35:00.000Z");
+      expect(nextMinute).not.toEqual(first);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("truncates an explicitly passed `now` the same way", () => {
+    expect(analyticsRange("7d", new Date("2026-08-20T12:34:07.321Z"))).toEqual({
+      from: "2026-08-13T12:34:00.000Z",
+      to: "2026-08-20T12:34:00.000Z",
+    });
+  });
+
   it("builds deep links that survive a page label with a slash", () => {
     expect(buildAnalyticsRoute()).toBe("/analytics");
     expect(buildAnalyticsRoute("lora-1")).toBe("/analytics?page=lora-1");
