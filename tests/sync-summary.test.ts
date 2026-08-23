@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type * as DbModule from "@agency_hub_core/db";
 
@@ -91,12 +91,20 @@ function buildTaskRow(overrides: Record<string, unknown> = {}) {
 }
 
 describe("sync summary service", () => {
+  beforeEach(() => {
+    // Read paths never seed: this snapshot serves GET /overview and (through
+    // listConnectionStatuses) the Sidebar's /admin/connections on every page.
+    // Any call into the seeding/repair writer is a regression.
+    dbMocks.ensurePageSyncStates.mockImplementation(() => {
+      throw new Error("getSyncStatusSummarySnapshot must not seed page_sync_states");
+    });
+  });
+
   afterEach(() => {
     vi.clearAllMocks();
   });
 
   it("builds a page sync summary without monitor aggregate counters", async () => {
-    dbMocks.ensurePageSyncStates.mockResolvedValue([]);
     dbMocks.listVisiblePages.mockResolvedValue([buildVisiblePage()]);
     dbMocks.listPageSyncStates.mockResolvedValue([
       buildTaskRow({ stream: "light" }),
@@ -128,7 +136,6 @@ describe("sync summary service", () => {
   });
 
   it("reports action required from page credentials without monitor metrics", async () => {
-    dbMocks.ensurePageSyncStates.mockResolvedValue([]);
     dbMocks.listVisiblePages.mockResolvedValue([buildVisiblePage({
       hasCredentials: false,
     })]);
@@ -151,7 +158,6 @@ describe("sync summary service", () => {
   });
 
   it("judges OFAPI pages by enabled OFAPI streams, not retired compatibility rows", async () => {
-    dbMocks.ensurePageSyncStates.mockResolvedValue([]);
     dbMocks.listVisiblePages.mockResolvedValue([buildVisiblePage({
       platform: "onlyfans",
       hasCredentials: false,
@@ -191,5 +197,38 @@ describe("sync summary service", () => {
       headline: "Up to date",
       requiresAction: false,
     });
+  });
+
+  it("never seeds page_sync_states, and reports a page that has no state rows", async () => {
+    dbMocks.listVisiblePages.mockResolvedValue([buildVisiblePage()]);
+    dbMocks.listPageSyncStates.mockResolvedValue([]);
+
+    const snapshot = await getSyncStatusSummarySnapshot({
+      db: {},
+      config: {},
+    } as never, {
+      pageIds: [7],
+      now: new Date("2026-03-24T12:00:00.000Z"),
+    });
+
+    expect(dbMocks.ensurePageSyncStates).not.toHaveBeenCalled();
+    expect(snapshot.pages).toHaveLength(1);
+    expect(snapshot.pages[0]?.pageId).toBe(7);
+    expect(snapshot.pages[0]?.syncUx).toBeDefined();
+  });
+
+  it("never seeds page_sync_states when no page scope is given either", async () => {
+    dbMocks.listVisiblePages.mockResolvedValue([
+      buildVisiblePage(),
+      buildVisiblePage({ id: 8, label: "lana-2" }),
+    ]);
+    dbMocks.listPageSyncStates.mockResolvedValue([]);
+
+    await getSyncStatusSummarySnapshot({
+      db: {},
+      config: {},
+    } as never, { now: new Date("2026-03-24T12:00:00.000Z") });
+
+    expect(dbMocks.ensurePageSyncStates).not.toHaveBeenCalled();
   });
 });

@@ -1,6 +1,5 @@
 import type { SyncUxSummary } from "@agency_hub_core/contracts";
 import {
-  ensurePageSyncStates,
   getOfapiFinancialTruthSummaries,
   getLatestSettledOfapiDmEventTimes,
   getSyncStreamsForPlatform,
@@ -30,7 +29,6 @@ import {
   parseFollowersReconcileCursorState,
   parseSubscribersCursorState,
 } from "./sync/cursor-state.ts";
-import { pageSyncDependencyInput } from "./sync/dependencies.ts";
 import { filterOnlyFansAudienceStreams } from "./sync/ofapi-audience-sync.ts";
 import { parseTransactionBackfillState } from "./sync/transaction-backfill.ts";
 
@@ -1533,7 +1531,6 @@ export async function getSyncStatusSnapshot(
   },
 ): Promise<SyncStatusSnapshot> {
   const now = input?.now ?? new Date();
-  const dependencyInput = pageSyncDependencyInput(app);
   const allVisiblePages = await listVisiblePages(app.db);
   const scopedPages = (() => {
     const pageIds = input?.pageIds ? new Set(input.pageIds) : null;
@@ -1556,16 +1553,10 @@ export async function getSyncStatusSnapshot(
     };
   }
 
-  if (input?.pageIds || input?.pageLabel || scopedPageIds.length === 1) {
-    await Promise.all(scopedPageIds.map((pageId) => ensurePageSyncStates(app.db, {
-      pageId,
-      now,
-      ...dependencyInput,
-    })));
-  } else {
-    await ensurePageSyncStates(app.db, { now, ...dependencyInput });
-  }
-
+  // Read paths never seed — same rule as getSyncStatusSummarySnapshot: this is
+  // a GET, and seeding it wrote to `page_sync_states` on every dashboard load.
+  // Seeding/repair stays in the planner tick, the executor and the explicit
+  // admin paths (sync-control.ts, sync-blocks.ts).
   const includeMonitorRows = input?.includeMonitorRows ?? true;
   const monitorStreams = includeMonitorRows
     ? (input?.monitorStreams ?? [...getSyncStreamsForPlatform("fansly")])

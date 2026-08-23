@@ -2385,18 +2385,21 @@ export async function listSyncMonitorRecentEvents(
 export async function getLatestSyncRunPerPage(
   db: Database,
   pageIds: number[],
-  input?: {
-    stream?: SyncStream;
+  input: {
+    stream: SyncStream;
   },
 ) {
   if (pageIds.length === 0) {
     return [];
   }
 
-  const clauses = [inArray(syncRuns.pageId, pageIds)];
-  if (input?.stream) {
-    clauses.push(eq(syncRuns.stream, input.stream));
-  }
+  // One index probe per page instead of `distinct on` over every run of the
+  // stream: `distinct on` had to read (and sort) the whole `(page_id, stream)`
+  // slice — thousands of rows to return eight. The lateral `limit 1` walks
+  // `sync_runs_page_stream_idx (page_id, stream, started_at)` backwards and
+  // stops at the first row per page. `pageIds` is number[], so the array
+  // literal carries no injectable text.
+  const pageIdArrayLiteral = `{${pageIds.map((pageId) => Number(pageId)).join(",")}}`;
 
   const result = await db.execute<{
     platformAccountId: NumericValue;
@@ -2408,21 +2411,33 @@ export async function getLatestSyncRunPerPage(
     finishedAt: TimestampValue;
     errorSummary: string | null;
   }>(sql`
-    select distinct on (${syncRuns.pageId})
-           ${syncRuns.pageId} as "platformAccountId",
-           ${syncRuns.id} as "runId",
-           ${syncRuns.stream} as "stream",
-           case
-             when ${syncRuns.outcome} = 'succeeded' then 'success'
-             else ${syncRuns.outcome}::text
-           end as "status",
-           coalesce(${syncRuns.source}::text, 'scheduled') as "trigger",
-           ${syncRuns.startedAt} as "startedAt",
-           ${syncRuns.finishedAt} as "finishedAt",
-           ${syncRuns.errorSummary} as "errorSummary"
-    from ${syncRuns}
-    where ${and(...clauses)}
-    order by ${syncRuns.pageId}, ${syncRuns.startedAt} desc, ${syncRuns.id} desc
+    select latest."platformAccountId",
+           latest."runId",
+           latest."stream",
+           latest."status",
+           latest."trigger",
+           latest."startedAt",
+           latest."finishedAt",
+           latest."errorSummary"
+    from unnest(${pageIdArrayLiteral}::bigint[]) as scoped(page_id)
+    cross join lateral (
+      select ${syncRuns.pageId} as "platformAccountId",
+             ${syncRuns.id} as "runId",
+             ${syncRuns.stream} as "stream",
+             case
+               when ${syncRuns.outcome} = 'succeeded' then 'success'
+               else ${syncRuns.outcome}::text
+             end as "status",
+             coalesce(${syncRuns.source}::text, 'scheduled') as "trigger",
+             ${syncRuns.startedAt} as "startedAt",
+             ${syncRuns.finishedAt} as "finishedAt",
+             ${syncRuns.errorSummary} as "errorSummary"
+      from ${syncRuns}
+      where ${syncRuns.pageId} = scoped.page_id
+        and ${syncRuns.stream} = ${input.stream}
+      order by ${syncRuns.startedAt} desc, ${syncRuns.id} desc
+      limit 1
+    ) as latest
   `);
 
   return result.rows.map((row) => ({
