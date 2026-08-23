@@ -8,6 +8,9 @@ const BADGE_CLASS: Readonly<Record<CoverageVerdict["state"], string>> = {
   stale: "border-warning-dark/60 text-warning-dark",
   not_started: "border-border text-text-muted",
   unknown: "border-warning-dark/60 text-warning-dark",
+  pending: "border-border text-text-muted",
+  unavailable: "border-warning-dark/60 text-warning-dark",
+  refresh_failed: "border-warning-dark/60 text-warning-dark",
 };
 
 /**
@@ -44,6 +47,7 @@ export function AnalyticsPanel({
   verdict,
   headerExtra,
   footnote,
+  cached = false,
   children,
 }: {
   title: string;
@@ -51,6 +55,8 @@ export function AnalyticsPanel({
   verdict?: CoverageVerdict;
   headerExtra?: ReactNode;
   footnote?: string;
+  /** True when this panel's own data is cached and its refresh failed. */
+  cached?: boolean;
   children: ReactNode;
 }) {
   return (
@@ -61,6 +67,14 @@ export function AnalyticsPanel({
             {title}
           </h2>
           {verdict ? <CoverageBadge verdict={verdict} /> : null}
+          {cached ? (
+            <span
+              title="The refresh of this panel's own data failed. What is shown is the last successful response."
+              className="rounded-full border border-warning-dark/60 px-2 py-0.5 text-[11px] font-medium text-warning-dark"
+            >
+              cached — refresh failed
+            </span>
+          ) : null}
         </div>
         {headerExtra}
       </header>
@@ -83,6 +97,46 @@ export function AnalyticsEmpty({ reason }: { reason: string }) {
   return (
     <div className="rounded-lg border border-dashed border-border px-4 py-8 text-center text-[13px] text-text-muted">
       {reason}
+    </div>
+  );
+}
+
+/** What a panel says while its own request is still in flight. Never an empty
+ *  chart: "we have not been told" and "there is nothing" are different facts,
+ *  and only one of them is a measurement. */
+export function AnalyticsLoading({ what = "Loading…" }: { what?: string }) {
+  return (
+    <div className="rounded-lg border border-dashed border-border px-4 py-8 text-center text-[13px] text-text-muted">
+      {what}
+    </div>
+  );
+}
+
+/** What a panel says when its request FAILED — never an empty dataset, never a
+ *  zero. The retry refetches that one query, not the page. */
+export function AnalyticsError({
+  message,
+  onRetry,
+}: {
+  message: string;
+  onRetry?: () => void;
+}) {
+  return (
+    <div
+      role="alert"
+      className="rounded-lg border border-warning-dark/60 px-4 py-6 text-center text-[13px]"
+    >
+      <p className="font-medium text-text-primary">This request failed — nothing is shown for it.</p>
+      <p className="mt-1 text-[12px] text-text-muted">{message}</p>
+      {onRetry ? (
+        <button
+          type="button"
+          onClick={onRetry}
+          className="mt-3 rounded-md border border-border px-3 py-1.5 text-[12px] font-medium text-text-secondary hover:text-text-primary"
+        >
+          Retry
+        </button>
+      ) : null}
     </div>
   );
 }

@@ -9,12 +9,24 @@ import { ANALYTICS_COVERAGE_PLANES } from "@agency_hub_core/shared";
 
 import { TrendSparkline } from "@/components/shared/TrendSparkline";
 import { formatMills } from "@/lib/format";
-
-import { AnalyticsEmpty, AnalyticsPanel } from "./AnalyticsPanel.js";
 import {
-  coverageVerdict,
+  panelData,
+  type AnalyticsPanelState,
+} from "@/pages/analytics-query-state";
+
+import {
+  AnalyticsEmpty,
+  AnalyticsError,
+  AnalyticsLoading,
+  AnalyticsPanel,
+} from "./AnalyticsPanel.js";
+import {
+  coverageBadgeVerdict,
+  coverageRequestVerdict,
+  emptyPanelReason,
   type AnalyticsCoverageWindow,
   type CoverageRow,
+  type CoverageVerdict,
 } from "./coverage.js";
 
 /** `—` rather than `0`: an unserved metric is not a measurement of nothing. */
@@ -35,17 +47,18 @@ function money(value: number | null): string {
  * by what the response can actually prove; absence alone never means unpolled.
  */
 export function TopMediaPanel({
-  data,
+  state,
   coverage,
-  isLoading,
   selectedWindow,
+  onRetry,
 }: {
-  data: StatsMediaResponse | undefined;
-  coverage: readonly CoverageRow[] | undefined;
-  isLoading: boolean;
+  state: AnalyticsPanelState<StatsMediaResponse>;
+  coverage: AnalyticsPanelState<readonly CoverageRow[]>;
   selectedWindow: AnalyticsCoverageWindow;
+  onRetry: () => void;
 }) {
-  const verdict = coverageVerdict(coverage, ANALYTICS_COVERAGE_PLANES.topMedia, selectedWindow);
+  const verdict = coverageBadgeVerdict(coverage, ANALYTICS_COVERAGE_PLANES.topMedia, selectedWindow);
+  const data = panelData(state);
 
   const rows = useMemo(() => {
     const seriesByMedia = new Map<string, number[]>();
@@ -73,16 +86,21 @@ export function TopMediaPanel({
     <AnalyticsPanel
       title="Top media"
       verdict={verdict}
+      cached={state.status === "ready" && state.refreshFailed}
       footnote={
         "Rank comes from the window Fansly itself ranked; the sparkline comes from our "
         + "own per-media buckets. A missing series says whether its catalogue head is "
         + "absent, the response budget truncated buckets, or no bucket exists in this range."
       }
     >
-      {isLoading ? (
-        <AnalyticsEmpty reason="Loading…" />
+      {state.status === "loading" ? (
+        <AnalyticsLoading />
+      ) : state.status === "error" ? (
+        <AnalyticsError message={state.message} onRetry={onRetry} />
       ) : rows.length === 0 ? (
-        <AnalyticsEmpty reason="No top-media window captured for this range." />
+        <AnalyticsEmpty
+          reason={emptyPanelReason(verdict, "No top-media window captured for this range.")}
+        />
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full text-[13px]">
@@ -129,17 +147,18 @@ export function TopMediaPanel({
  * one where the reverse is true.
  */
 export function TopTagsPanel({
-  data,
+  state,
   coverage,
-  isLoading,
   selectedWindow,
+  onRetry,
 }: {
-  data: StatsTagsResponse | undefined;
-  coverage: readonly CoverageRow[] | undefined;
-  isLoading: boolean;
+  state: AnalyticsPanelState<StatsTagsResponse>;
+  coverage: AnalyticsPanelState<readonly CoverageRow[]>;
   selectedWindow: AnalyticsCoverageWindow;
+  onRetry: () => void;
 }) {
-  const verdict = coverageVerdict(coverage, ANALYTICS_COVERAGE_PLANES.topTags, selectedWindow);
+  const verdict = coverageBadgeVerdict(coverage, ANALYTICS_COVERAGE_PLANES.topTags, selectedWindow);
+  const data = panelData(state);
 
   const globalByTag = useMemo(() => {
     const map = new Map<string, { viewCount: number | null; postCount: number | null }>();
@@ -158,16 +177,21 @@ export function TopTagsPanel({
     <AnalyticsPanel
       title="Top FYP tags"
       verdict={verdict}
+      cached={state.status === "ready" && state.refreshFailed}
       footnote={
         "A blank name is a tag whose name the response's own `tags[]` sidecar did not "
         + "carry. It is left blank rather than reconstructed from the id — a fabricated "
         + "name is indistinguishable from a real one a year from now."
       }
     >
-      {isLoading ? (
-        <AnalyticsEmpty reason="Loading…" />
+      {state.status === "loading" ? (
+        <AnalyticsLoading />
+      ) : state.status === "error" ? (
+        <AnalyticsError message={state.message} onRetry={onRetry} />
       ) : tags.length === 0 ? (
-        <AnalyticsEmpty reason="No tag window captured for this range." />
+        <AnalyticsEmpty
+          reason={emptyPanelReason(verdict, "No tag window captured for this range.")}
+        />
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full text-[13px]">
@@ -223,25 +247,62 @@ export function TopTagsPanel({
  * serves no video fields at all — the account-level figure lives on the traffic
  * card, where its components actually exist.
  */
+/** Appended to anything read off a response whose refresh failed. */
+const CACHED_SUFFIX = " (cached — refresh failed)";
+
+/**
+ * What the average-watch header says in each state of ITS query.
+ *
+ * "not served" is a claim about Fansly's payload and is reserved for a
+ * SUCCEEDED request that carried no components. Pending and failed say so —
+ * and so does a CACHED response whose refresh failed, which is why the stale
+ * check comes before the null one: `{ data: null, refreshFailed: true }` means
+ * "the last response we could get carried no components", not "Fansly serves
+ * none". The panel's own `cached` badge is about the `media` query and cannot
+ * qualify this figure, so the qualifier travels with the label.
+ */
+function accountWatchLabel(state: AnalyticsPanelState<number | null>): string {
+  if (state.status === "loading") {
+    return "loading…";
+  }
+  if (state.status === "error") {
+    return "unavailable";
+  }
+  const suffix = state.refreshFailed ? CACHED_SUFFIX : "";
+  if (state.data === null) {
+    return `not served${suffix}`;
+  }
+  return `${state.data.toFixed(1)}%${suffix}`;
+}
+
 export function ContentPerformancePanel({
-  data,
+  state,
   coverage,
-  isLoading,
-  accountWatchPercent,
+  accountWatch,
   selectedWindow,
+  onRetry,
 }: {
-  data: StatsMediaResponse | undefined;
-  coverage: readonly CoverageRow[] | undefined;
-  isLoading: boolean;
+  state: AnalyticsPanelState<StatsMediaResponse>;
+  coverage: AnalyticsPanelState<readonly CoverageRow[]>;
   selectedWindow: AnalyticsCoverageWindow;
-  /** Null whenever the account-level components were not both served. */
-  accountWatchPercent: number | null;
+  /**
+   * The account-level watch figure, in the state of the query that carries it.
+   *
+   * It comes from a DIFFERENT request than this panel's table (`mediaTraffic`,
+   * not `media`), and that hidden edge is why it is a state and not a number:
+   * `accountWatchPercent === null` used to render "not served" — a verdict
+   * about the platform — while the request was merely in flight or failed.
+   * `null` inside a succeeded state still means "not served", and only then.
+   */
+  accountWatch: AnalyticsPanelState<number | null>;
+  onRetry: () => void;
 }) {
-  const verdict = coverageVerdict(
+  const verdict = coverageBadgeVerdict(
     coverage,
     ANALYTICS_COVERAGE_PLANES.contentPerformance,
     selectedWindow,
   );
+  const data = panelData(state);
 
   const rows = useMemo(() => (data?.media ?? []).map((media) => {
     let views: number | null = null;
@@ -257,11 +318,18 @@ export function ContentPerformancePanel({
     <AnalyticsPanel
       title="Content performance"
       verdict={verdict}
+      cached={state.status === "ready" && state.refreshFailed}
       headerExtra={(
         <span className="text-[12px] text-text-secondary">
           Avg. watch{" "}
-          <span className="font-semibold text-text-primary">
-            {accountWatchPercent === null ? "not served" : `${accountWatchPercent.toFixed(1)}%`}
+          <span
+            className={
+              accountWatch.status === "error"
+                ? "font-semibold text-warning-dark"
+                : "font-semibold text-text-primary"
+            }
+          >
+            {accountWatchLabel(accountWatch)}
           </span>
           <span className="ml-1 text-text-muted">· account level, Hub-derived</span>
         </span>
@@ -273,10 +341,14 @@ export function ContentPerformancePanel({
         + "per-media watch number would be invented rather than measured."
       }
     >
-      {isLoading ? (
-        <AnalyticsEmpty reason="Loading…" />
+      {state.status === "loading" ? (
+        <AnalyticsLoading />
+      ) : state.status === "error" ? (
+        <AnalyticsError message={state.message} onRetry={onRetry} />
       ) : rows.length === 0 ? (
-        <AnalyticsEmpty reason="No media captured for this page yet." />
+        <AnalyticsEmpty
+          reason={emptyPanelReason(verdict, "No media captured for this page yet.")}
+        />
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full text-[13px]">
@@ -321,18 +393,35 @@ export function ContentPerformancePanel({
  * was captured, never the whole surface, and the doubt belongs to the row that
  * outlives the sweep that created it.
  */
+/** [E4]: no Fansly like code is live-confirmed, so the lane writes nothing. */
+const LIKERS_LANE_VERDICT: CoverageVerdict = {
+  state: "not_started",
+  label: "not started",
+  detail:
+    "No Fansly like code is live-confirmed ([E4]), so the liker lane writes "
+    + "nothing. The panel is shown empty rather than hidden.",
+};
+
 export function CommentsPanel({
-  data,
+  state,
   coverage,
-  isLoading,
   selectedWindow,
+  onRetry,
 }: {
-  data: ContentCommentsResponse | undefined;
-  coverage: readonly CoverageRow[] | undefined;
-  isLoading: boolean;
+  state: AnalyticsPanelState<ContentCommentsResponse>;
+  coverage: AnalyticsPanelState<readonly CoverageRow[]>;
   selectedWindow: AnalyticsCoverageWindow;
+  onRetry: () => void;
 }) {
-  const verdict = coverageVerdict(coverage, ANALYTICS_COVERAGE_PLANES.comments, selectedWindow);
+  const verdict = coverageBadgeVerdict(coverage, ANALYTICS_COVERAGE_PLANES.comments, selectedWindow);
+  // The liker lane's verdict is a CONSTANT — no capture-coverage row proves it
+  // — but it is still a definitive claim about Fansly, and stating it under a
+  // coverage request that is pending or failed is the same lie as a chart that
+  // quietly reads "complete". So it goes through the same wrapper as every
+  // other badge on the page.
+  const likersVerdict = coverageRequestVerdict(coverage, () => LIKERS_LANE_VERDICT);
+  const data = panelData(state);
+  const cached = state.status === "ready" && state.refreshFailed;
   const perPost = (data?.perPost ?? []).slice(0, 20);
 
   return (
@@ -340,6 +429,7 @@ export function CommentsPanel({
       <AnalyticsPanel
         title="Comments per post"
         verdict={verdict}
+        cached={cached}
         footnote={
           "A post marked “pagination unproven” had at least one suspiciously full page: "
           + "the reply route has no confirmed cursor, so its completeness is unknown, not "
@@ -347,10 +437,14 @@ export function CommentsPanel({
           + "only an attachment still answered."
         }
       >
-        {isLoading ? (
-          <AnalyticsEmpty reason="Loading…" />
+        {state.status === "loading" ? (
+          <AnalyticsLoading />
+        ) : state.status === "error" ? (
+          <AnalyticsError message={state.message} onRetry={onRetry} />
         ) : perPost.length === 0 ? (
-          <AnalyticsEmpty reason="No comments captured in this window." />
+          <AnalyticsEmpty
+            reason={emptyPanelReason(verdict, "No comments captured in this window.")}
+          />
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-[13px]">
@@ -387,24 +481,31 @@ export function CommentsPanel({
         )}
       </AnalyticsPanel>
 
+      {/*
+        * The second card off the SAME request. "Empty by design" is a claim
+        * about Fansly, and it may only be made once this request has answered
+        * — a failed comments request rendering it would turn a network error
+        * into a statement about the platform.
+        */}
       <AnalyticsPanel
         title="Likers"
-        verdict={{
-          state: "not_started",
-          label: "not started",
-          detail:
-            "No Fansly like code is live-confirmed ([E4]), so the liker lane writes "
-            + "nothing. The panel is shown empty rather than hidden.",
-        }}
+        cached={cached}
+        verdict={likersVerdict}
       >
-        <AnalyticsEmpty
-          reason={
-            data?.likers.rows.length
-              ? `${data.likers.rows.length} liker rows (OnlyFans webhook origin).`
-              : "Empty by design: no Fansly like code is live-confirmed, so nothing is captured. "
-                + "This is a hole we can name, not a page nobody likes."
-          }
-        />
+        {state.status === "loading" ? (
+          <AnalyticsLoading />
+        ) : state.status === "error" ? (
+          <AnalyticsError message={state.message} onRetry={onRetry} />
+        ) : (
+          <AnalyticsEmpty
+            reason={
+              state.data.likers.rows.length
+                ? `${state.data.likers.rows.length} liker rows (OnlyFans webhook origin).`
+                : "Empty by design: no Fansly like code is live-confirmed, so nothing is captured. "
+                  + "This is a hole we can name, not a page nobody likes."
+            }
+          />
+        )}
       </AnalyticsPanel>
     </>
   );

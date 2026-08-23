@@ -21,6 +21,10 @@ const devLinks = [
   { to: "/agent-hydration", label: "Hydration", icon: Droplets },
 ] as const;
 
+function prefetchAnalyticsCatalog() {
+  void import("@/api/pages").then((module) => module.prefetchPages());
+}
+
 export function Sidebar({ user }: SidebarProps) {
   const { pages } = useDashboardShell();
   const location = useLocation();
@@ -231,6 +235,12 @@ export function Sidebar({ user }: SidebarProps) {
           </NavLink>
           <NavLink
             to={analyticsRoute}
+            // Hover/focus is the earliest honest signal that Analytics is
+            // about to be opened, and it buys the catalog request the time the
+            // lazy route chunk spends downloading. The import is dynamic so
+            // this module keeps its current, api-free import graph.
+            onMouseEnter={prefetchAnalyticsCatalog}
+            onFocus={prefetchAnalyticsCatalog}
             className={({ isActive }) =>
               `flex items-center gap-2.5 px-3.5 py-2.5 rounded-lg text-sm font-medium transition-colors ${
                 isActive ? "bg-hover text-text-primary font-semibold" : "text-text-secondary hover:bg-hover hover:text-text-primary"

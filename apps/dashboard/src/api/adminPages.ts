@@ -13,6 +13,11 @@ import { kernel } from "./sdk.js";
 function invalidateAdminCatalog(qc: QueryClient) {
   qc.invalidateQueries({ queryKey: ["admin", "models"] });
   qc.invalidateQueries({ queryKey: ["admin", "pages"] });
+  // The serving catalog behind `usePages()` is the SAME fact under a different
+  // key. It is prefetched at boot and stays fresh for 30 s, so a create /
+  // rename / delete that only invalidated the admin key left Analytics
+  // offering a page that no longer exists for up to half a minute.
+  qc.invalidateQueries({ queryKey: ["pages"] });
   qc.invalidateQueries({ queryKey: ["admin", "connections"] });
   qc.invalidateQueries({ queryKey: ["admin", "users"] });
   qc.invalidateQueries({ queryKey: ["overview"] });

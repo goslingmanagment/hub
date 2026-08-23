@@ -13,10 +13,21 @@ import {
 import type { StatsTrafficResponse } from "@agency_hub_core/contracts";
 import { ANALYTICS_COVERAGE_PLANES } from "@agency_hub_core/shared";
 
-import { AnalyticsEmpty, AnalyticsPanel } from "./AnalyticsPanel.js";
+import {
+  panelData,
+  type AnalyticsPanelState,
+} from "@/pages/analytics-query-state";
+
+import {
+  AnalyticsEmpty,
+  AnalyticsError,
+  AnalyticsLoading,
+  AnalyticsPanel,
+} from "./AnalyticsPanel.js";
 import {
   SUGGESTIONS_DENOMINATOR_NOTE,
-  coverageVerdict,
+  coverageBadgeVerdict,
+  emptyPanelReason,
   type AnalyticsCoverageWindow,
   type CoverageRow,
 } from "./coverage.js";
@@ -77,21 +88,26 @@ function bucketLabel(iso: string): string {
  * member 0's counts is unproven. Adding them would invent a number.
  */
 export function TrafficBySourcePanel({
-  data,
+  state,
   coverage,
-  isLoading,
   selectedWindow,
   showDenominatorNote,
+  onRetry,
 }: {
-  data: StatsTrafficResponse | undefined;
-  coverage: readonly CoverageRow[] | undefined;
-  isLoading: boolean;
+  state: AnalyticsPanelState<StatsTrafficResponse>;
+  coverage: AnalyticsPanelState<readonly CoverageRow[]>;
   selectedWindow: AnalyticsCoverageWindow;
   /** A8: the footnote belongs to the 30-DAY view and to no other. */
   showDenominatorNote: boolean;
+  onRetry: () => void;
 }) {
   const [measure, setMeasure] = useState<Measure>("visits");
-  const verdict = coverageVerdict(coverage, ANALYTICS_COVERAGE_PLANES.traffic, selectedWindow);
+  const verdict = coverageBadgeVerdict(
+    coverage,
+    ANALYTICS_COVERAGE_PLANES.traffic,
+    selectedWindow,
+  );
+  const data = panelData(state);
 
   const series = useMemo(() => {
     const buckets = new Map<string, Record<string, number | string>>();
@@ -120,6 +136,7 @@ export function TrafficBySourcePanel({
       title="Traffic by source"
       subtitle={MEASURE_LABEL[measure]}
       verdict={verdict}
+      cached={state.status === "ready" && state.refreshFailed}
       {...(showDenominatorNote ? { footnote: SUGGESTIONS_DENOMINATOR_NOTE } : {})}
       headerExtra={(
         <div className="flex gap-1 rounded-lg border border-border p-0.5">
@@ -140,15 +157,16 @@ export function TrafficBySourcePanel({
         </div>
       )}
     >
-      {isLoading ? (
-        <AnalyticsEmpty reason="Loading…" />
+      {state.status === "loading" ? (
+        <AnalyticsLoading />
+      ) : state.status === "error" ? (
+        <AnalyticsError message={state.message} onRetry={onRetry} />
       ) : series.length === 0 ? (
         <AnalyticsEmpty
-          reason={
-            verdict.state === "not_started" || verdict.state === "unknown"
-              ? "Nothing captured for this window — and the badge above says why. This is not a reading of zero traffic."
-              : "The statistics lane holds no bucket in this window."
-          }
+          reason={emptyPanelReason(
+            verdict,
+            "The statistics lane holds no bucket in this window.",
+          )}
         />
       ) : (
         <ResponsiveContainer width="100%" height={280}>
@@ -197,17 +215,18 @@ export function TrafficBySourcePanel({
  * anything of that shape in this system was computed here.
  */
 export function FypSharePanel({
-  data,
+  state,
   coverage,
-  isLoading,
   selectedWindow,
+  onRetry,
 }: {
-  data: StatsTrafficResponse | undefined;
-  coverage: readonly CoverageRow[] | undefined;
-  isLoading: boolean;
+  state: AnalyticsPanelState<StatsTrafficResponse>;
+  coverage: AnalyticsPanelState<readonly CoverageRow[]>;
   selectedWindow: AnalyticsCoverageWindow;
+  onRetry: () => void;
 }) {
-  const verdict = coverageVerdict(coverage, ANALYTICS_COVERAGE_PLANES.fyp, selectedWindow);
+  const verdict = coverageBadgeVerdict(coverage, ANALYTICS_COVERAGE_PLANES.fyp, selectedWindow);
+  const data = panelData(state);
 
   const { series, sharePercent: share } = useMemo(
     () => buildFypMediaViewSummary(data?.rows ?? []),
@@ -218,6 +237,7 @@ export function FypSharePanel({
     <AnalyticsPanel
       title="FYP vs direct media views"
       verdict={verdict}
+      cached={state.status === "ready" && state.refreshFailed}
       headerExtra={share === null ? null : (
         <span className="text-[12px] text-text-secondary">
           FYP share{" "}
@@ -230,10 +250,17 @@ export function FypSharePanel({
         + "and no average anywhere in this payload. It is labelled Hub-derived for that reason."
       }
     >
-      {isLoading ? (
-        <AnalyticsEmpty reason="Loading…" />
+      {state.status === "loading" ? (
+        <AnalyticsLoading />
+      ) : state.status === "error" ? (
+        <AnalyticsError message={state.message} onRetry={onRetry} />
       ) : series.length === 0 ? (
-        <AnalyticsEmpty reason="No account-level media datapoints in this window." />
+        <AnalyticsEmpty
+          reason={emptyPanelReason(
+            verdict,
+            "No account-level media datapoints in this window.",
+          )}
+        />
       ) : (
         <ResponsiveContainer width="100%" height={240}>
           <AreaChart data={series} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
