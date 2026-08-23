@@ -26,7 +26,13 @@ import {
 } from "@/components/analytics/TrafficPanels";
 import { analyticsRange, resolveAnalyticsRange, type AnalyticsRange } from "@/lib/navigation";
 
-import { analyticsQueryState } from "./analytics-query-state.js";
+import {
+  analyticsFailureBanner,
+  analyticsPanelState,
+  mapPanelState,
+  retryFailedAnalytics,
+  type AnalyticsQueryEntry,
+} from "./analytics-query-state.js";
 
 /**
  * WP-S1 — the Analytics page: everything F0–F7 and F4 captured, served.
@@ -48,6 +54,14 @@ import { analyticsQueryState } from "./analytics-query-state.js";
  * meant seven analytics requests waited seconds on a response none of them
  * needed. The same honesty rule applies to the catalog itself — "no Fansly
  * pages" is a claim about a SUCCEEDED query, never about a pending one.
+ *
+ * PER PANEL, NOT PER PAGE (PR 4). The seven requests used to share one gate:
+ * the slowest decided when anything rendered and any one failure blanked the
+ * lot. Each panel now waits only on the queries it actually reads — the map is
+ * in `analytics-query-state.ts`, written down because it is not one-to-one and
+ * every hidden edge in it (media traffic feeding Content Performance's average
+ * watch; comments feeding the Likers card; coverage feeding every badge) is a
+ * place where a pending request could have been rendered as a fact.
  */
 export function AnalyticsPage() {
   const pagesQuery = usePages();
@@ -79,26 +93,33 @@ export function AnalyticsPage() {
   const comments = useContentComments(activeLabel, window, { enabled });
   const revenue = useMoneyRevenueMix(activeLabel, window, { enabled });
 
-  const analyticsQueries = [
-    { label: "profile traffic", query: profileTraffic },
-    { label: "media traffic", query: mediaTraffic },
-    { label: "media", query: media },
-    { label: "tags", query: tags },
-    { label: "coverage", query: coverage },
-    { label: "comments", query: comments },
-    { label: "revenue", query: revenue },
-  ] as const;
-  const queryState = analyticsQueryState(analyticsQueries.map(({ label, query }) => ({
-    label,
-    isError: query.isError,
-    isSuccess: query.isSuccess,
-  })));
+  const profileTrafficState = analyticsPanelState(profileTraffic);
+  const mediaTrafficState = analyticsPanelState(mediaTraffic);
+  const mediaState = analyticsPanelState(media);
+  const tagsState = analyticsPanelState(tags);
+  const coverageState = analyticsPanelState(coverage);
+  const commentsState = analyticsPanelState(comments);
+  const revenueState = analyticsPanelState(revenue);
 
-  const coverageRows = coverage.data?.planes;
+  // The badges read the planes; the honesty panel reads the whole response.
+  const coverageRows = mapPanelState(coverageState, (data) => data.planes);
   // The ONLY watch figure on this page, and it comes from account-level
-  // datapoints — the only rows that carry the components. [E5] keeps it off
-  // every per-media surface.
-  const watchPercent = accountWatchAverage(mediaTraffic.data?.rows);
+  // datapoints — the only rows that carry the components ([E5] keeps it off
+  // every per-media surface). It travels with the STATE of the request that
+  // carries it, so "not served" stays a claim about Fansly's payload.
+  const accountWatch = mapPanelState(mediaTrafficState, (data) =>
+    accountWatchAverage(data.rows));
+
+  const queryEntries: readonly AnalyticsQueryEntry[] = [
+    { id: "profileTraffic", failed: profileTrafficState.status === "error", refetch: () => void profileTraffic.refetch() },
+    { id: "mediaTraffic", failed: mediaTrafficState.status === "error", refetch: () => void mediaTraffic.refetch() },
+    { id: "media", failed: mediaState.status === "error", refetch: () => void media.refetch() },
+    { id: "tags", failed: tagsState.status === "error", refetch: () => void tags.refetch() },
+    { id: "coverage", failed: coverageState.status === "error", refetch: () => void coverage.refetch() },
+    { id: "comments", failed: commentsState.status === "error", refetch: () => void comments.refetch() },
+    { id: "revenue", failed: revenueState.status === "error", refetch: () => void revenue.refetch() },
+  ];
+  const failedSurfaces = analyticsFailureBanner(queryEntries);
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-6">
@@ -173,83 +194,86 @@ export function AnalyticsPage() {
         <div className="rounded-xl border border-border bg-card px-4 py-12 text-center text-[13px] text-text-muted">
           No Fansly pages to analyse.
         </div>
-      ) : queryState.state === "error" ? (
-        <div
-          role="alert"
-          className="rounded-xl border border-warning-dark/60 bg-card px-5 py-8 text-center"
-        >
-          <p className="text-[13px] font-medium text-text-primary">
-            Analytics could not be loaded.
-          </p>
-          <p className="mt-1 text-[12px] text-text-muted">
-            Failed: {queryState.failedLabels.join(", ")}. No empty chart is shown for a failed request.
-          </p>
-          <button
-            type="button"
-            onClick={() => {
-              for (const { query } of analyticsQueries) {
-                if (query.isError) void query.refetch();
-              }
-            }}
-            className="mt-3 rounded-md border border-border px-3 py-1.5 text-[12px] font-medium text-text-secondary hover:text-text-primary"
-          >
-            Retry failed requests
-          </button>
-        </div>
-      ) : queryState.state === "loading" ? (
-        <div className="rounded-xl border border-border bg-card px-4 py-12 text-center text-[13px] text-text-muted">
-          Loading analytics and capture coverage…
-        </div>
       ) : (
       <div className="space-y-4">
+        {/*
+          * The compact banner: one line naming the SURFACES behind the failed
+          * requests, and one retry that fires each failed query exactly once —
+          * `media` feeds two panels and `comments` feeds two cards, and a
+          * per-consumer retry would double the load on the box that was
+          * already too slow to answer. Panels that failed say so themselves;
+          * this is the summary, not the report.
+          */}
+        {failedSurfaces.length > 0 ? (
+          <div
+            role="alert"
+            className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-warning-dark/60 bg-card px-4 py-3"
+          >
+            <p className="text-[12px] text-text-secondary">
+              <span className="font-medium text-text-primary">Some requests failed.</span>{" "}
+              Not shown: {failedSurfaces.join(", ")}. Everything else on this page answered.
+            </p>
+            <button
+              type="button"
+              onClick={() => retryFailedAnalytics(queryEntries)}
+              className="rounded-md border border-border px-3 py-1.5 text-[12px] font-medium text-text-secondary hover:text-text-primary"
+            >
+              Retry failed requests
+            </button>
+          </div>
+        ) : null}
+
         <TrafficBySourcePanel
-          data={profileTraffic.data}
+          state={profileTrafficState}
           coverage={coverageRows}
-          isLoading={profileTraffic.isLoading}
           selectedWindow={window}
           // A8: the Suggestions-denominator warning is a property of Fansly's
           // 30-DAY widget. On any other range there is nothing to reconcile,
           // and a permanent footnote is a footnote nobody reads.
           showDenominatorNote={range === "30d"}
+          onRetry={() => void profileTraffic.refetch()}
         />
         <FypSharePanel
-          data={mediaTraffic.data}
+          state={mediaTrafficState}
           coverage={coverageRows}
-          isLoading={mediaTraffic.isLoading}
           selectedWindow={window}
+          onRetry={() => void mediaTraffic.refetch()}
         />
         <TopMediaPanel
-          data={media.data}
+          state={mediaState}
           coverage={coverageRows}
-          isLoading={media.isLoading}
           selectedWindow={window}
+          onRetry={() => void media.refetch()}
         />
         <TopTagsPanel
-          data={tags.data}
+          state={tagsState}
           coverage={coverageRows}
-          isLoading={tags.isLoading}
           selectedWindow={window}
+          onRetry={() => void tags.refetch()}
         />
         <RevenueMixPanel
-          data={revenue.data}
+          state={revenueState}
           coverage={coverageRows}
-          isLoading={revenue.isLoading}
           selectedWindow={window}
+          onRetry={() => void revenue.refetch()}
         />
         <ContentPerformancePanel
-          data={media.data}
+          state={mediaState}
           coverage={coverageRows}
-          isLoading={media.isLoading}
-          accountWatchPercent={watchPercent}
+          accountWatch={accountWatch}
           selectedWindow={window}
+          onRetry={() => void media.refetch()}
         />
         <CommentsPanel
-          data={comments.data}
+          state={commentsState}
           coverage={coverageRows}
-          isLoading={comments.isLoading}
           selectedWindow={window}
+          onRetry={() => void comments.refetch()}
         />
-        <CoveragePanel data={coverage.data} isLoading={coverage.isLoading} />
+        <CoveragePanel
+          state={coverageState}
+          onRetry={() => void coverage.refetch()}
+        />
       </div>
       )}
     </div>

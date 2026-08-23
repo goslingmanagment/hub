@@ -4,6 +4,8 @@ import {
   type CaptureCoveragePlane,
 } from "@agency_hub_core/shared";
 
+import type { AnalyticsPanelState } from "@/pages/analytics-query-state";
+
 export type CoverageRow = StatsCoverageResponse["planes"][number];
 
 export type AnalyticsCoverageWindow = {
@@ -12,7 +14,20 @@ export type AnalyticsCoverageWindow = {
 };
 
 export type CoverageVerdict = {
-  readonly state: "complete" | "partial" | "stale" | "not_started" | "unknown";
+  readonly state:
+    | "complete"
+    | "partial"
+    | "stale"
+    | "not_started"
+    | "unknown"
+    // The three states below are about OUR request for the coverage rows, not
+    // about capture. They exist because coverage is a shared epistemic
+    // dependency: every panel's badge is a claim that rests on it, and a badge
+    // that silently disappears while the coverage request is in flight or
+    // failed is a chart asserting completeness it cannot know.
+    | "pending"
+    | "unavailable"
+    | "refresh_failed";
   readonly label: string;
   readonly detail: string;
 };
@@ -113,6 +128,76 @@ export function coverageVerdict(
     label: `complete for ${days}-day window`,
     detail: "Every required plane reaches the selected floor and has a fresh head.",
   };
+}
+
+/**
+ * The badge a panel actually renders — the capture verdict wrapped in the
+ * state of the request that would have proved it.
+ *
+ * `coverageVerdict()` above judges capture from ROWS. It cannot be reached
+ * until we hold rows, and the three ways of not holding them are different
+ * facts:
+ *
+ *  - pending: nobody knows yet. Not "complete", and never no badge at all.
+ *  - unavailable: the request failed. The panel still shows its data — the
+ *    data is not in doubt — but its completeness is.
+ *  - refresh_failed: we hold rows and the refresh failed. The cached verdict
+ *    is reported WITH the failure, because an old "complete" is exactly the
+ *    badge that would otherwise vanish and leave a confident chart behind.
+ */
+export function coverageBadgeVerdict(
+  coverage: AnalyticsPanelState<readonly CoverageRow[]>,
+  requiredPlanes: readonly string[],
+  window: AnalyticsCoverageWindow,
+): CoverageVerdict {
+  if (coverage.status === "loading") {
+    return {
+      state: "pending",
+      label: "coverage pending",
+      detail:
+        "The capture-coverage request has not answered. Whether this window is "
+        + "fully captured is unknown — it is not a claim that it is.",
+    };
+  }
+  if (coverage.status === "error") {
+    return {
+      state: "unavailable",
+      label: "coverage unavailable",
+      detail: `The capture-coverage request failed (${coverage.message}). Nothing here `
+        + "can be read as complete until it answers.",
+    };
+  }
+
+  const verdict = coverageVerdict(coverage.data, requiredPlanes, window);
+  if (!coverage.refreshFailed) {
+    return verdict;
+  }
+  return {
+    state: "refresh_failed",
+    label: "coverage refresh failed",
+    detail: `Cached verdict: ${verdict.label}. ${verdict.detail} The refresh of the `
+      + "coverage rows failed, so this verdict is as old as the cache.",
+  };
+}
+
+/**
+ * The sentence an EMPTY panel is allowed to say, given what its badge knows.
+ *
+ * An empty chart means one thing when coverage says the lane is ramped and
+ * exhausted, and the opposite when coverage has not answered at all. Panels
+ * pass the sentence that is true of their own lane; this decides how much of
+ * it may be asserted.
+ */
+export function emptyPanelReason(verdict: CoverageVerdict, laneSentence: string): string {
+  if (verdict.state === "not_started" || verdict.state === "unknown") {
+    return "Nothing captured for this window — and the badge above says why. "
+      + "This is not a reading of zero.";
+  }
+  if (verdict.state === "pending" || verdict.state === "unavailable") {
+    return `${laneSentence} Whether anything is missing from it is unknown until the `
+      + "coverage request answers.";
+  }
+  return laneSentence;
 }
 
 export const SUGGESTIONS_DENOMINATOR_NOTE =

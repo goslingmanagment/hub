@@ -6,9 +6,20 @@ import { ANALYTICS_COVERAGE_PLANES } from "@agency_hub_core/shared";
 import { StackedBarChart, type StackedBarChartSeries } from "@/components/shared/StackedBarChart";
 import { formatMills } from "@/lib/format";
 
-import { AnalyticsEmpty, AnalyticsPanel } from "./AnalyticsPanel.js";
 import {
-  coverageVerdict,
+  panelData,
+  type AnalyticsPanelState,
+} from "@/pages/analytics-query-state";
+
+import {
+  AnalyticsEmpty,
+  AnalyticsError,
+  AnalyticsLoading,
+  AnalyticsPanel,
+} from "./AnalyticsPanel.js";
+import {
+  coverageBadgeVerdict,
+  emptyPanelReason,
   type AnalyticsCoverageWindow,
   type CoverageRow,
 } from "./coverage.js";
@@ -25,17 +36,19 @@ const PALETTE = ["#5b8def", "#4ead6b", "#e0a14f", "#9b7ede", "#d16a8a", "#5fb5c4
  * sees the merge that Fansly's own chart performs, and can refuse it.
  */
 export function RevenueMixPanel({
-  data,
+  state,
   coverage,
-  isLoading,
   selectedWindow,
+  onRetry,
 }: {
-  data: MoneyRevenueMixResponse | undefined;
-  coverage: readonly CoverageRow[] | undefined;
-  isLoading: boolean;
+  state: AnalyticsPanelState<MoneyRevenueMixResponse>;
+  coverage: AnalyticsPanelState<readonly CoverageRow[]>;
   selectedWindow: AnalyticsCoverageWindow;
+  onRetry: () => void;
 }) {
-  const verdict = coverageVerdict(coverage, ANALYTICS_COVERAGE_PLANES.revenue, selectedWindow);
+  const verdict = coverageBadgeVerdict(coverage, ANALYTICS_COVERAGE_PLANES.revenue, selectedWindow);
+  const data = panelData(state);
+  const cached = state.status === "ready" && state.refreshFailed;
 
   const { rows, series } = useMemo(() => {
     const byDate = new Map<string, Record<string, string | number>>();
@@ -73,6 +86,7 @@ export function RevenueMixPanel({
       <AnalyticsPanel
         title="Revenue mix"
         verdict={verdict}
+        cached={cached}
         footnote={
           "Stacked by RAW type code, and the legend shows the code beside the label: one "
           + "label maps to two live codes (legacy and current), and this ledger reaches "
@@ -80,10 +94,17 @@ export function RevenueMixPanel({
           + "serves for this breakdown."
         }
       >
-        {isLoading ? (
-          <AnalyticsEmpty reason="Loading…" />
+        {state.status === "loading" ? (
+          <AnalyticsLoading />
+        ) : state.status === "error" ? (
+          <AnalyticsError message={state.message} onRetry={onRetry} />
         ) : rows.length === 0 ? (
-          <AnalyticsEmpty reason="No earnings breakdown captured for this range." />
+          <AnalyticsEmpty
+            reason={emptyPanelReason(
+              verdict,
+              "No earnings breakdown captured for this range.",
+            )}
+          />
         ) : (
           <StackedBarChart
             title=""
@@ -99,14 +120,21 @@ export function RevenueMixPanel({
       <AnalyticsPanel
         title="Month totals"
         verdict={verdict}
+        cached={cached}
         footnote={
           "The rolling rollup is the creator's Statements header, not a month. It is "
           + "shown apart from the months because summing it with them double-counts the "
           + "year — which is exactly what a table that quietly included it would do."
         }
       >
-        {months.length === 0 ? (
-          <AnalyticsEmpty reason="No month totals captured for this page." />
+        {state.status === "loading" ? (
+          <AnalyticsLoading />
+        ) : state.status === "error" ? (
+          <AnalyticsError message={state.message} onRetry={onRetry} />
+        ) : months.length === 0 ? (
+          <AnalyticsEmpty
+            reason={emptyPanelReason(verdict, "No month totals captured for this page.")}
+          />
         ) : (
           <div className="space-y-3">
             <div className="overflow-x-auto">

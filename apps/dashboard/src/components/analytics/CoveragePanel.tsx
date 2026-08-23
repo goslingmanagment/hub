@@ -1,8 +1,14 @@
 import type { StatsCoverageResponse } from "@agency_hub_core/contracts";
 
 import { formatDateTime } from "@/lib/format";
+import type { AnalyticsPanelState } from "@/pages/analytics-query-state";
 
-import { AnalyticsEmpty, AnalyticsPanel } from "./AnalyticsPanel.js";
+import {
+  AnalyticsEmpty,
+  AnalyticsError,
+  AnalyticsLoading,
+  AnalyticsPanel,
+} from "./AnalyticsPanel.js";
 
 type StreamRow = StatsCoverageResponse["streams"][number];
 
@@ -60,33 +66,40 @@ function gateLabel(stream: StreamRow): { text: string; tone: "off" | "on" | "non
  * tell them apart.
  */
 export function CoveragePanel({
-  data,
-  isLoading,
+  state,
+  onRetry,
 }: {
-  data: StatsCoverageResponse | undefined;
-  isLoading: boolean;
+  state: AnalyticsPanelState<StatsCoverageResponse>;
+  onRetry: () => void;
 }) {
-  if (isLoading) {
+  // The old shape took `data | undefined` and mapped `!data` to "No coverage
+  // data for this page" — which read a FAILED request, a pending one and a
+  // genuinely empty response as the same sentence. On the page that exists to
+  // make holes visible, that was the worst possible conflation: the panel that
+  // explains every other panel's emptiness was itself lying about its own.
+  if (state.status === "loading") {
     return (
       <AnalyticsPanel title="Coverage">
-        <AnalyticsEmpty reason="Loading…" />
+        <AnalyticsLoading what="Loading coverage…" />
       </AnalyticsPanel>
     );
   }
-  if (!data) {
+  if (state.status === "error") {
     return (
       <AnalyticsPanel title="Coverage">
-        <AnalyticsEmpty reason="No coverage data for this page." />
+        <AnalyticsError message={state.message} onRetry={onRetry} />
       </AnalyticsPanel>
     );
   }
 
+  const data = state.data;
   const holdings = data.holdings.filter((row) => row.rowCount > 0);
   const empty = data.holdings.filter((row) => row.rowCount === 0);
 
   return (
     <AnalyticsPanel
       title="Coverage — what this page actually holds"
+      cached={state.refreshFailed}
       subtitle={
         "Read this before believing any chart above. An empty chart over a ramped, "
         + "exhausted lane means the world was empty; the same chart over a lane whose "
