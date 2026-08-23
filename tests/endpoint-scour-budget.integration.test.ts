@@ -1,31 +1,12 @@
-// WP-F1 — the per-lane daily call budget, against a real database.
-//
-// After A28-4 this cap is the WHOLE request-count enforcement in the design:
-// the per-egress-key counter, `sync_rate_limit_days`, the 2×-of-trailing-norm
-// ops signal and the boot/PATCH limiter invariants were all deleted, and [A19]
-// had already removed the global per-page cap. So what this file holds is
-// small and load-bearing:
-//
-//  - the cap is counted in HTTP ATTEMPTS, retries included;
-//  - crossing it DEFERS the lane to the next UTC day and NEVER drops — a lane
-//    crossed mid-chunk still journals the response it already fetched;
-//  - the counter survives the checkpoint round-trip, which is why this is an
-//    integration test and not a mocked one: a cap that resets on every lease
-//    is not a cap;
-//  - the UTC roll resets it, and resets nothing else;
-//  - and the negative pins, which are the ones that keep a deleted mechanism
-//    deleted.
+// WP-F1 — durable per-lane physical-attempt budgets and stats history guards.
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { randomUUID } from "node:crypto";
 
 import {
-  createFanslyPage,
-  createModel,
   getCheckpoint,
   setConfigOverride,
-  startSyncRun,
   upsertCaptureCoverage,
   upsertCheckpointProgress,
 } from "@agency_hub_core/db";
@@ -46,6 +27,13 @@ import {
   startIntegrationTestDatabase,
   type StartedTestDatabase,
 } from "./helpers/db.ts";
+import {
+  fanslyLaneAppStub,
+  fanslyLaneInput,
+  fanslyLaneTelemetryStub as telemetryStub,
+  observeFanslyLaneAttempts,
+  seedFanslyLanePage,
+} from "./helpers/fansly-lane-harness.ts";
 
 let testDb: StartedTestDatabase | null = null;
 
@@ -93,16 +81,12 @@ function adapterStub(options: { attemptsPerCall?: number } = {}) {
     body: unknown,
   ) => {
     calls.push(name);
-    for (let attempt = 0; attempt < attemptsPerCall; attempt += 1) {
-      await context.requestObserver?.onRequestEvent({
-        requestId: `${name}:${calls.length}:${attempt}`,
-        state: "started",
-        operation: name,
-        endpointTemplate: `/${name}`,
-        method: "GET",
-        attemptNumber: attempt + 1,
-      });
-    }
+    await observeFanslyLaneAttempts(context, {
+      attempts: attemptsPerCall,
+      requestId: `${name}:${calls.length}`,
+      operation: name,
+      endpointTemplate: `/${name}`,
+    });
     return { items: body, raw: body };
   };
   return {
@@ -129,26 +113,10 @@ function adapterStub(options: { attemptsPerCall?: number } = {}) {
   };
 }
 
-function telemetryStub() {
-  const anomalies: Array<Record<string, unknown>> = [];
-  return {
-    anomalies,
-    recordPhaseStarted: vi.fn(async () => {}),
-    recordCheckpointLoaded: vi.fn(async () => {}),
-    recordCheckpointAdvanced: vi.fn(async () => {}),
-    addNote: vi.fn(async () => {}),
-    addAnomaly: vi.fn(async (input: Record<string, unknown>) => {
-      anomalies.push(input);
-    }),
-    getRequestObserver: vi.fn(() => null),
-  };
-}
-
 function appStub(adapter: ReturnType<typeof adapterStub>) {
-  return {
-    db: testDb!.db,
+  return fanslyLaneAppStub({
+    database: testDb!,
     adapter,
-    logger: { info: () => {}, warn: () => {}, error: () => {} },
     config: {
       fanslyStatsSnapshotSyncEnabled: true,
       fanslyStatsSnapshotPageAllowlist: "stats-budget",
@@ -157,30 +125,21 @@ function appStub(adapter: ReturnType<typeof adapterStub>) {
       fanslyStatsHourlyBackfillMaxDays: 30,
       fanslyBackfillContinuationDelayMs: 20_000,
     },
-  } as never;
+  });
 }
 
 let syncRunId = 0;
 
 async function seedPage() {
-  const model = await createModel(testDb!.db, { slug: "budget", name: "Budget" });
-  if (!model) throw new Error("Expected the budget test model to be created");
-  const page = await createFanslyPage(testDb!.db, { modelId: model.id, label: "stats-budget" });
-  if (!page) throw new Error("Expected the budget test page to be created");
-  await testDb!.pool.query("update pages set external_page_id = $1 where id = $2", [
-    "acct-budget",
-    page.id,
-  ]);
-  // `sync_raw_payloads.sync_run_id` is a real FK: the journal is attributed to
-  // the run that fetched it, and a capture with no run is not a capture.
-  const run = await startSyncRun(testDb!.db, {
-    platformAccountId: page.id,
+  const seeded = await seedFanslyLanePage(testDb!, {
+    slug: "budget",
+    name: "Budget",
+    label: "stats-budget",
+    accountRef: "acct-budget",
     stream: "stats_snapshot",
-    trigger: "scheduled",
   });
-  if (!run) throw new Error("Expected the budget test sync run to be created");
-  syncRunId = run.id;
-  return page;
+  syncRunId = seeded.syncRunId;
+  return seeded.page;
 }
 
 function input(
@@ -189,20 +148,16 @@ function input(
   budget = new SyncChunkBudget(),
   now = NOW,
 ) {
-  return {
-    budget,
-    pageContext: {
-      platform: "fansly",
-      page: { id: pageId, label: "stats-budget", platformAccountId: "acct-budget", metadata: {} },
-      session: { authorization: "token" },
-      proxy: { url: "socks5://proxy.example:1080" },
-      egressKey: "fansly:budget",
-    },
+  return fanslyLaneInput({
+    pageId,
+    label: "stats-budget",
+    accountRef: "acct-budget",
+    egressKey: "fansly:budget",
     telemetry,
-    streamState: { requestSeq: 1 },
     syncRunId,
     now,
-  } as never;
+    budget,
+  }) as never;
 }
 
 async function cursor(pageId: number) {
@@ -219,6 +174,46 @@ async function journaledKinds(pageId: number): Promise<string[]> {
 }
 
 describe("[sync-critical] WP-F1 per-lane daily call budget", () => {
+  it("journals a malformed stats envelope but withholds coverage and cursor progress", async (
+    context,
+  ) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    const adapter = adapterStub();
+    adapter.getAccountStats.mockImplementation(async (requestContext: {
+      requestObserver?: { onRequestEvent: (event: unknown) => Promise<void> } | null;
+    }) => {
+      await requestContext.requestObserver?.onRequestEvent({
+        requestId: "account_stats:malformed:1",
+        state: "started",
+        operation: "account_stats",
+        endpointTemplate: "/it/amoie/stats",
+        method: "GET",
+        attemptNumber: 1,
+      });
+      const malformed = { aggregationData: {}, redactedFixture: "missing dataset" };
+      return { items: malformed, raw: malformed };
+    });
+    const telemetry = telemetryStub();
+
+    await expect(fanslyStatsSnapshotChunk(
+      appStub(adapter),
+      input(page.id, telemetry),
+    )).rejects.toMatchObject({
+      name: "FanslyLaneInvalidResponseError",
+      observationKind: "account_stats",
+    });
+
+    expect(await journaledKinds(page.id)).toEqual(["account_stats"]);
+    expect(await coverageRow(page.id, "stats_account_daily")).toBeNull();
+    const checkpoint = await cursor(page.id);
+    expect(checkpoint?.callsToday).toBe(1);
+    expect(checkpoint?.backfill?.daily.trailingCaptured).toBe(false);
+  });
+
   it("counts ATTEMPTS, not logical calls, and persists the count on the cursor", async (context) => {
     if (!testDb) {
       context.skip();
@@ -1007,6 +1002,45 @@ describe("[sync-critical] WP-F1 per-lane daily call budget", () => {
     expect(row?.proof).toBe("none");
     expect(row?.cursor.trailingHours).toBe(25);
   });
+
+  it("probes older than two empty earnings windows before claiming the floor", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    const adapter = windowAdapterStub({
+      statsFor: (params) => (params.year ?? 0) === 0
+        ? statsBodyFor(
+          { afterMs: params.afterDate.getTime(), beforeMs: params.beforeDate.getTime() },
+          0,
+        )
+        : allZeroMonthBody(params.year!, params.month!),
+      earningsFor: () => [],
+    });
+    const telemetry = telemetryStub();
+    // Four stats calls (trailing, two empty months, older probe), then two
+    // ordinary empty earnings windows and the required older earnings probe.
+    await capDayAt(7);
+
+    await driveChunks(
+      dailyOnlyAppStub(adapter),
+      page.id,
+      telemetry,
+      (current) => current.backfill === null || current.backfill.earnings.done,
+    );
+
+    expect(adapter.earningsRequests).toHaveLength(3);
+    const [first, second, probe] = adapter.earningsRequests;
+    expect(first).toBeDefined();
+    expect(second).toBeDefined();
+    expect(probe).toBeDefined();
+    expect(probe!.beforeMs).toBeLessThan(second!.afterMs - 300 * DAY);
+    const row = await coverageRow(page.id, "stats_earnings");
+    expect(row?.status).toBe("provider_exhausted");
+    expect(row?.proof).toBe("empty_window");
+  });
+
   it("guards the earnings lane on the rows, since that route describes no window", async (context) => {
     if (!testDb) {
       context.skip();

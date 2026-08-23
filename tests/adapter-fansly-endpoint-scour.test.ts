@@ -230,6 +230,25 @@ describe("WP-F1 adapter methods", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it("does not start a retry beyond the lane's remaining durable allowance", async () => {
+    const { FanslyAdapter, fetchMock } = harness;
+    fetchMock
+      .mockResolvedValueOnce(toJsonResponse({ success: false }, { status: 500 }))
+      .mockResolvedValueOnce(toJsonResponse({ success: false }, { status: 500 }))
+      .mockResolvedValueOnce(toJsonResponse({ success: true, response: [] }));
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const { events, requestObserver } = captureEvents();
+
+    await expect(adapter.getTrackingLinks(context({
+      requestObserver,
+      remainingAttempts: () => 2,
+    }))).rejects.toMatchObject({ status: 500 });
+    await adapter.close();
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(events.filter((event) => event.state === "started")).toHaveLength(2);
+  });
+
   it("keeps the tracking-links route wired and contract-checked", async () => {
     const { FanslyAdapter, fetchMock } = harness;
     fetchMock.mockResolvedValueOnce(toJsonResponse({

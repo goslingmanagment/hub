@@ -1,4 +1,5 @@
 import { FanslyPurchaseHistoryContractError } from "./errors.ts";
+import { classifyFanslyResponse } from "./fansly-lane.ts";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -32,15 +33,25 @@ export type FanslyPurchaseHistoryCursorStateV4 = {
   pendingTargets: FanslyPurchaseHistoryPendingTarget[];
 };
 
+export type FanslyPurchaseHistoryCursorStateV5 = {
+  version: 5;
+  transactionCursorId: number;
+  rawPayloadCursorId: number;
+  pendingTargets: FanslyPurchaseHistoryPendingTarget[];
+  utcDay: string;
+  callsToday: number;
+};
+
 /**
  * Older cursor shapes remain readable so a deploy can resume in-flight work.
- * Parsed state is always normalized to v4, which adds a per-target provider
- * cursor and therefore never has to replay an already captured page.
+ * Parsed state is always normalized to v5: v4's per-target provider cursor,
+ * plus the durable UTC-day attempt allowance shared by the other lanes.
  */
 export type FanslyPurchaseHistoryCursorState =
   | FanslyPurchaseHistoryCursorStateV2
   | FanslyPurchaseHistoryCursorStateV3
-  | FanslyPurchaseHistoryCursorStateV4;
+  | FanslyPurchaseHistoryCursorStateV4
+  | FanslyPurchaseHistoryCursorStateV5;
 
 export type FanslyMessagePurchaseTargetSource = {
   rawType: string | number;
@@ -48,6 +59,7 @@ export type FanslyMessagePurchaseTargetSource = {
 };
 
 export const FANSLY_PURCHASE_HISTORY_RESULT_LIMIT = 100;
+export const FANSLY_PURCHASE_HISTORY_DAILY_ATTEMPT_CAP = 100;
 
 export type FanslyPurchaseHistoryCapture = {
   id: number | null;
@@ -388,10 +400,11 @@ export function extractFanslyPurchaseHistoryTargets(
 
 export function parseFanslyPurchaseHistoryCursorState(
   value: unknown,
-): FanslyPurchaseHistoryCursorStateV4 | null {
+  now = new Date(),
+): FanslyPurchaseHistoryCursorStateV5 | null {
   const state = asRecord(value);
   const version = asNumber(state?.version);
-  if (version !== 2 && version !== 3 && version !== 4) {
+  if (version !== 2 && version !== 3 && version !== 4 && version !== 5) {
     return null;
   }
   const rawPayloadCursorId = asNumber(state?.rawPayloadCursorId);
@@ -421,7 +434,7 @@ export function parseFanslyPurchaseHistoryCursorState(
       const target = asRecord(item);
       const kind = target?.kind;
       const contentId = asString(target?.contentId);
-      const rawBefore = version === 4 ? target?.before : null;
+      const rawBefore = version === 4 || version === 5 ? target?.before : null;
       const before = rawBefore === null ? null : asString(rawBefore);
       return (kind === "single" || kind === "bundle") && contentId &&
           (rawBefore === null || before !== null)
@@ -439,10 +452,14 @@ export function parseFanslyPurchaseHistoryCursorState(
   }
 
   return {
-    version: 4,
+    version: 5,
     transactionCursorId,
     rawPayloadCursorId,
     pendingTargets,
+    utcDay: typeof state?.utcDay === "string"
+      ? state.utcDay
+      : now.toISOString().slice(0, 10),
+    callsToday: Math.max(0, asNumber(state?.callsToday) ?? 0),
   };
 }
 
@@ -462,6 +479,16 @@ function fanslyPurchaseHistoryRows(payloadValue: unknown): unknown[] | null {
     return aggregation.accountMediaOrders;
   }
   return null;
+}
+
+export function classifyFanslyPurchaseHistoryResponse(payloadValue: unknown) {
+  return classifyFanslyResponse(payloadValue, {
+    isValid: (value) => {
+      const rows = fanslyPurchaseHistoryRows(value);
+      return rows !== null && rows.every((row) => asRecord(row) !== null);
+    },
+    isEmpty: (value) => fanslyPurchaseHistoryRows(value)?.length === 0,
+  });
 }
 
 export function countFanslyPurchaseHistoryRows(payloadValue: unknown): number | null {
@@ -509,7 +536,10 @@ export function classifyFanslyPurchaseHistoryCapture(
   }
 
   const rawRows = fanslyPurchaseHistoryRows(capture.responsePayload);
-  if (rawRows === null || rawRows.some((row) => asRecord(row) === null)) {
+  if (
+    classifyFanslyPurchaseHistoryResponse(capture.responsePayload) === "invalid"
+    || rawRows === null
+  ) {
     return {
       ...capture,
       contentId,

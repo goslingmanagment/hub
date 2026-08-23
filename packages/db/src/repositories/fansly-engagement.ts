@@ -426,18 +426,17 @@ export interface PostRepliesWalkCandidate {
  * twice in this tree, so every ordering key here is either a qualified column
  * or the expression itself.
  *
- * DUE-NESS IS `last_visited_at` AGAINST A CALLER-SUPPLIED CUTOFF, not
+ * SUCCESS DUE-NESS is `last_visited_at` against a caller-supplied cutoff, not
  * `next_due_at`, and that is deliberate. `fanslyRepliesRewalkCycleDays` is a
- * LIVE config key: reading `next_due_at` would freeze each row's cycle at the
- * value in force when it was last walked, so shortening the cycle would only
- * take effect on posts walked after the flip and lengthening it would never
- * take effect at all. The column is still maintained — it is the shared table's
- * contract and what its partial index covers — and the DIRTY path is read
- * through `dirty_reason`, which no cutoff can suppress.
+ * LIVE config key: reading the success row's stored due time would freeze its
+ * cycle at the value in force when it was last walked. Failure rows are the
+ * exception: success resets `consecutive_failures` to zero, while a failure
+ * must wait for its stored `next_due_at` backoff so dead posts cannot keep band
+ * zero and starve healthy subjects.
  */
 export async function listPostRepliesWalkChunk(
   db: Database,
-  input: { pageId: number; limit: number; rewalkBefore: Date },
+  input: { pageId: number; limit: number; rewalkBefore: Date; now?: Date },
 ): Promise<PostRepliesWalkCandidate[]> {
   const band = sql`
     case
@@ -466,6 +465,10 @@ export async function listPostRepliesWalkChunk(
        and p.platform_post_id = s.subject_ref
      where s.page_id = ${input.pageId}
        and s.plane = 'post_replies'
+       and (
+         s.consecutive_failures = 0
+         or s.next_due_at <= ${input.now ?? new Date()}
+       )
        and (
          s.last_visited_at is null
          or s.dirty_reason is not null

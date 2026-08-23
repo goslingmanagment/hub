@@ -71,25 +71,29 @@ import {
   listUnhydratedVaultBundleRefs,
   listUnhydratedVaultMediaRefs,
   sumCreatorVaultAlbumItemCounts,
-  upsertCaptureCoverage,
-  upsertCheckpoint,
-  upsertCheckpointProgress,
-  type CaptureCoverageProof,
-  type CaptureCoverageStatus,
 } from "@agency_hub_core/db";
 import { ACCOUNT_MEDIA_BATCH_SIZE, VAULT_MEDIA_HEAD_CURSOR } from "@agency_hub_core/fansly";
-import type { HttpRequestEvent, HttpRequestObserver } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
 import { loadEffectiveConfig } from "../effective-config.ts";
 import { isPageAllowlisted } from "../voice-notes.ts";
 import { composeRequestObservers } from "./chunk-budget.ts";
 import type { ExecutorRequestContext, StreamChunkResult } from "./executor-handlers.ts";
+import {
+  classifyFanslyResponse,
+  createFanslyLaneCoverageWriter,
+  createFanslyLaneJournal,
+  createFanslyLaneRuntime,
+  fanslyUtcDayKey,
+  FanslyLaneInvalidResponseError,
+  nextFanslyUtcDayStart,
+  rollFanslyUtcDay,
+  spreadFanslyContinuation,
+} from "./fansly-lane.ts";
 import { summarizeCheckpoint } from "./observability.ts";
 import { createSyncRateLimitWaiter } from "./rate-limiter.ts";
 import {
   FANSLY_CATALOG_CAPTURE_MAPPER_VERSION,
-  persistRawPayload,
   retentionDate,
   trimFanslyCatalogPayload,
 } from "./shared.ts";
@@ -126,7 +130,6 @@ export const FANSLY_CATALOG_COVERAGE_PLANES = {
  */
 const VAULT_WALK_PAGES_PER_CHUNK = 20;
 
-const BACKFILL_JITTER_FRACTION = 0.3;
 
 /**
  * Pages one album's walk may take in a single first-enable crawl before the
@@ -250,20 +253,12 @@ export function emptyFanslyCatalogCursorState(now: Date): FanslyCatalogCursorSta
   };
 }
 
-export function utcDayKey(instant: Date): string {
-  return instant.toISOString().slice(0, 10);
-}
+export const utcDayKey = fanslyUtcDayKey;
 
 /** A new UTC day resets the attempt counter and re-arms the fixed steps.
  *  Nothing else changes: a vault walk that deferred mid-album resumes at
  *  exactly that page. */
-export function rollUtcDay(
-  state: FanslyCatalogCursorState,
-  now: Date,
-): FanslyCatalogCursorState {
-  const today = utcDayKey(now);
-  return state.utcDay === today ? state : { ...state, utcDay: today, callsToday: 0 };
-}
+export const rollUtcDay = rollFanslyUtcDay;
 
 function emptyAlbumWalk(): VaultAlbumWalkState {
   return {
@@ -274,27 +269,6 @@ function emptyAlbumWalk(): VaultAlbumWalkState {
     completedAtLastItemRef: null,
     done: false,
   };
-}
-
-// ── attempt counting ─────────────────────────────────────────────────────────
-
-/** Counts HTTP ATTEMPTS, retries included — the unit the cap is enforced in.
- *  `SyncChunkBudget` counts the same events but is scoped to one chunk; the day
- *  counter has to survive chunks, leases and restarts. */
-class AttemptCounter implements HttpRequestObserver {
-  private attempts = 0;
-
-  async onRequestEvent(event: HttpRequestEvent) {
-    if (event.state === "started") {
-      this.attempts += 1;
-    }
-  }
-
-  take(): number {
-    const attempts = this.attempts;
-    this.attempts = 0;
-    return attempts;
-  }
 }
 
 // ── shape helpers over the journaled bodies ──────────────────────────────────
@@ -309,6 +283,30 @@ export function vaultMediaRows(payload: unknown): Record<string, unknown>[] {
   return Array.isArray(record.albumMedia)
     ? record.albumMedia.filter((row): row is Record<string, unknown> => asRecord(row) !== null)
     : [];
+}
+
+function classifyCatalogResponse(kind: string, payload: unknown) {
+  return classifyFanslyResponse(payload, {
+    isValid: (value) => {
+      const record = asRecord(value);
+      if (kind === OBSERVATION_KINDS.vaultAlbums || kind === OBSERVATION_KINDS.userVaultAlbums) {
+        return record !== null && Array.isArray(record.albums);
+      }
+      if (kind === OBSERVATION_KINDS.vaultMedia) {
+        return record !== null && Array.isArray(record.albumMedia);
+      }
+      return Array.isArray(value)
+        || (record !== null && Object.values(record).some((member) => Array.isArray(member)));
+    },
+    isEmpty: (value) => {
+      if (Array.isArray(value)) {
+        return value.length === 0;
+      }
+      const record = asRecord(value)!;
+      const firstArray = Object.values(record).find((member) => Array.isArray(member));
+      return Array.isArray(firstArray) && firstArray.length === 0;
+    },
+  });
 }
 
 /** The membership id the NEXT page's `before` must carry: the last row's own
@@ -327,19 +325,7 @@ export function walkContinuationAt(
   delayMs: number,
   random: () => number = Math.random,
 ): Date {
-  const jitter = 1 + (random() * 2 - 1) * BACKFILL_JITTER_FRACTION;
-  return new Date(now.getTime() + Math.max(0, Math.round(delayMs * jitter)));
-}
-
-function nextUtcDayStart(now: Date): Date {
-  return new Date(Date.UTC(
-    now.getUTCFullYear(),
-    now.getUTCMonth(),
-    now.getUTCDate() + 1,
-    0,
-    5,
-    0,
-  ));
+  return spreadFanslyContinuation(now, delayMs, random);
 }
 
 // ── the handler ──────────────────────────────────────────────────────────────
@@ -381,18 +367,27 @@ export async function fanslyCatalogChunk(
     now,
   );
 
-  const attempts = new AttemptCounter();
-  const requestContext = {
+  const lane = createFanslyLaneRuntime({
+    db: app.db,
+    pageId,
+    stream: STREAM,
+    cursorText: () => state.fixedStepsDay,
+    dailyCap,
+    telemetry: input.telemetry,
+    downstreamObserver: composeRequestObservers(
+      input.telemetry.getRequestObserver(),
+      input.budget,
+    ),
+    getState: () => state,
+    setState: (next) => {
+      state = next;
+    },
     session: input.pageContext.session,
     proxy: input.pageContext.proxy,
     egressKey: input.pageContext.egressKey,
-    requestObserver: composeRequestObservers(
-      input.telemetry.getRequestObserver(),
-      input.budget,
-      attempts,
-    ),
     rateLimitWaiter: createSyncRateLimitWaiter(app, input.pageContext),
-  };
+  });
+  const { attemptBudget, complete: completeLane, requestContext, saveProgress } = lane;
 
   let journaled = 0;
   let deferred: string | null = null;
@@ -406,82 +401,38 @@ export async function fanslyCatalogChunk(
    * the whole body through, and the ONE place that decides what reaches the
    * journal should be the one place a test can pin.
    */
+  const journal = createFanslyLaneJournal({
+    db: app.db,
+    pageId,
+    syncRunId: input.syncRunId,
+    mapperVersion: FANSLY_CATALOG_CAPTURE_MAPPER_VERSION,
+    payloadKind: "mapping_critical",
+    retainUntil: retentionDate(),
+    onJournal: () => { journaled += 1; },
+  });
   const persist = async (
     kind: string,
     requestParams: Record<string, unknown>,
     payload: unknown,
   ) => {
-    const result = await persistRawPayload(app.db, {
-      platformAccountId: pageId,
-      syncRunId: input.syncRunId,
-      endpoint: kind,
-      requestParams,
-      responsePayload: trimFanslyCatalogPayload(payload),
-      mapperVersion: FANSLY_CATALOG_CAPTURE_MAPPER_VERSION,
-      payloadKind: "mapping_critical",
-      retainUntil: retentionDate(),
-    }, {
-      action: `inserting Fansly ${kind} raw payload`,
-      platform: "fansly",
-    });
-    journaled += 1;
-    // The cap is counted in ATTEMPTS, folded in AFTER the response is safe.
-    state = { ...state, callsToday: state.callsToday + attempts.take() };
+    const result = await journal(kind, requestParams, trimFanslyCatalogPayload(payload));
+    if (classifyCatalogResponse(kind, payload) === "invalid") {
+      throw new FanslyLaneInvalidResponseError(kind);
+    }
     return result;
   };
 
   /** Room for one more call today? Crossing this defers; it never drops. */
-  const hasDayCapacity = () => state.callsToday < dailyCap;
+  const hasDayCapacity = attemptBudget.hasCapacity;
 
-  const saveProgress = async () => {
-    const advanced = await upsertCheckpointProgress(app.db, {
-      platformAccountId: pageId,
-      stream: STREAM,
-      cursorText: state.fixedStepsDay,
-      state: { ...state } as unknown as Record<string, unknown>,
-    });
-    await input.telemetry.recordCheckpointAdvanced(STREAM, summarizeCheckpoint(advanced));
-  };
 
-  const completeSlot = async () => {
-    const completed = await upsertCheckpoint(app.db, {
-      platformAccountId: pageId,
-      stream: STREAM,
-      cursorText: state.fixedStepsDay,
-      state: { ...state } as unknown as Record<string, unknown>,
-      lastSuccessfulRunId: input.syncRunId,
-    });
-    await input.telemetry.recordCheckpointAdvanced(STREAM, summarizeCheckpoint(completed));
-  };
-
-  const coverage = async (
-    plane: string,
-    status: CaptureCoverageStatus,
-    proof: CaptureCoverageProof,
-    extra: {
-      scopeRef?: string;
-      proofObservationId?: number | null;
-      reasonCode?: string | null;
-      observedUniqueCount?: number | null;
-      expectedCount?: number | null;
-      cursor?: Record<string, unknown>;
-    } = {},
-  ) => {
-    const { scopeRef, ...rest } = extra;
-    await upsertCaptureCoverage(app.db, {
-      pageId,
-      platform: "fansly",
-      plane,
-      scopeRef: scopeRef ?? "",
-      status,
-      // Every catalog surface is a FULL listing or a walkable album: what is
-      // there today can be re-read tomorrow, so nothing here is forward-only.
-      acquisitionMode: "retroactive",
-      proof,
-      newestCapturedAt: now,
-      ...rest,
-    });
-  };
+  const coverage = createFanslyLaneCoverageWriter({
+    db: app.db,
+    pageId,
+    scopeRef: "",
+    acquisitionMode: "retroactive",
+    newestCapturedAt: now,
+  });
 
   // ── THE SIX FIXED STEPS ────────────────────────────────────────────────────
   //
@@ -960,7 +911,7 @@ export async function fanslyCatalogChunk(
         satisfied: false,
         yieldReason: null,
         // Deferred at the cap: come back after the UTC roll.
-        continuationRetryAt: nextUtcDayStart(now),
+        continuationRetryAt: nextFanslyUtcDayStart(now),
         stats,
       };
     }
@@ -985,7 +936,7 @@ export async function fanslyCatalogChunk(
         stats,
       };
     }
-    await completeSlot();
+  await completeLane(input.syncRunId);
     return { satisfied: true, yieldReason: null, stats };
   }
 }

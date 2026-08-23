@@ -1,37 +1,9 @@
-// WP-F7 — the `payouts` capture lane, against a real database.
-//
-// The smallest lane in this initiative and the one with the most to lose, so
-// what is pinned here is what decides whether the money-out history is complete
-// and whether a credential can escape:
-//
-//  - THE QUERY FORM. `before=&after=&limit=10&offset=N`, with `before` and
-//    `after` PRESENT AND EMPTY. An omitted parameter is a different request and
-//    only the empty one has ever been answered.
-//  - THE WALK REACHES THE FLOOR IN NINE CALLS, because the daily head read at
-//    `offset=0` IS page one of it on the day the lane is enabled.
-//  - THE STOP CONDITIONS. A SHORT page ends the walk; `total` is a hint beside
-//    it, never the only one.
-//  - THE REPEAT-REQUEST GUARD, and the trigger that can actually fire. An
-//    offset ALWAYS advances by construction, so the same-offset check can only
-//    catch corrupted cursor state; what catches a server IGNORING `offset` is
-//    the page that begins where the last one began. Either stops the walk with
-//    ONE anomaly and never loops (WP-F1 spent a whole day's cap on that shape
-//    on production).
-//  - THE 20-ATTEMPT CAP, counted in ATTEMPTS and deferring to the next UTC day
-//    — and the response already fetched when it crosses is still journaled.
-//  - THE UNKNOWN STATUS ANOMALY, once per code, durably: the map is one code
-//    deep and a page whose history is all `8` must stay quiet.
-//  - STEADY STATE IS TWO CALLS A DAY once the floor has been reached.
-//  - THE JOURNAL IS VERBATIM, credential and all. The mask is a projection
-//    rule; an over-eager scrubber at the journal would destroy the only copy.
+// WP-F7 — payout form, paging, coverage and physical-attempt invariants.
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
-  createFanslyPage,
-  createModel,
   getCheckpoint,
-  startSyncRun,
 } from "@agency_hub_core/db";
 import { FanslyApiError } from "@agency_hub_core/fansly";
 
@@ -49,6 +21,13 @@ import {
   startIntegrationTestDatabase,
   type StartedTestDatabase,
 } from "./helpers/db.ts";
+import {
+  fanslyLaneAppStub,
+  fanslyLaneInput,
+  fanslyLaneTelemetryStub as telemetryStub,
+  observeFanslyLaneAttempts,
+  seedFanslyLanePage,
+} from "./helpers/fansly-lane-harness.ts";
 
 let testDb: StartedTestDatabase | null = null;
 
@@ -156,16 +135,12 @@ function adapterStub(options: {
   ) {
     const index = calls.length;
     calls.push({ route, params });
-    for (let attempt = 0; attempt < attemptsPerCall; attempt += 1) {
-      await context.requestObserver?.onRequestEvent({
-        requestId: `${route}:${index}:${attempt}`,
-        state: "started",
-        operation: route,
-        endpointTemplate: route,
-        method: "GET",
-        attemptNumber: attempt + 1,
-      });
-    }
+    await observeFanslyLaneAttempts(context, {
+      attempts: attemptsPerCall,
+      requestId: `${route}:${index}`,
+      operation: route,
+      endpointTemplate: route,
+    });
     const failure = options.fail?.(route) ?? null;
     if (failure !== null) {
       throw failure;
@@ -191,29 +166,13 @@ function adapterStub(options: {
   };
 }
 
-function telemetryStub() {
-  const anomalies: Array<Record<string, unknown>> = [];
-  return {
-    anomalies,
-    recordPhaseStarted: vi.fn(async () => {}),
-    recordCheckpointLoaded: vi.fn(async () => {}),
-    recordCheckpointAdvanced: vi.fn(async () => {}),
-    addNote: vi.fn(async () => {}),
-    addAnomaly: vi.fn(async (input: Record<string, unknown>) => {
-      anomalies.push(input);
-    }),
-    getRequestObserver: vi.fn(() => null),
-  };
-}
-
 function appStub(
   adapter: ReturnType<typeof adapterStub>,
   configOverrides: Record<string, unknown> = {},
 ) {
-  return {
-    db: testDb!.db,
+  return fanslyLaneAppStub({
+    database: testDb!,
     adapter,
-    logger: { info: () => {}, warn: () => {}, error: () => {} },
     config: {
       fanslyPayoutsSyncEnabled: true,
       fanslyPayoutsPageAllowlist: "payouts-lane",
@@ -221,28 +180,21 @@ function appStub(
       fanslyBackfillContinuationDelayMs: 20_000,
       ...configOverrides,
     },
-  } as never;
+  });
 }
 
 let syncRunId = 0;
 
 async function seedPage() {
-  const model = await createModel(testDb!.db, { slug: "payouts", name: "Payouts" });
-  if (!model) throw new Error("Expected the payouts test model to be created");
-  const page = await createFanslyPage(testDb!.db, { modelId: model.id, label: "payouts-lane" });
-  if (!page) throw new Error("Expected the payouts test page to be created");
-  await testDb!.pool.query("update pages set external_page_id = $1 where id = $2", [
-    "acct-payouts",
-    page.id,
-  ]);
-  const run = await startSyncRun(testDb!.db, {
-    platformAccountId: page.id,
+  const seeded = await seedFanslyLanePage(testDb!, {
+    slug: "payouts",
+    name: "Payouts",
+    label: "payouts-lane",
+    accountRef: "acct-payouts",
     stream: "payouts",
-    trigger: "scheduled",
   });
-  if (!run) throw new Error("Expected the payouts test sync run to be created");
-  syncRunId = run.id;
-  return page;
+  syncRunId = seeded.syncRunId;
+  return seeded.page;
 }
 
 function input(
@@ -251,20 +203,16 @@ function input(
   budget = new SyncChunkBudget(),
   now = NOW,
 ) {
-  return {
-    budget,
-    pageContext: {
-      platform: "fansly",
-      page: { id: pageId, label: "payouts-lane", platformAccountId: "acct-payouts", metadata: {} },
-      session: { authorization: "token" },
-      proxy: { url: "socks5://proxy.example:1080" },
-      egressKey: "fansly:payouts",
-    },
+  return fanslyLaneInput({
+    pageId,
+    label: "payouts-lane",
+    accountRef: "acct-payouts",
+    egressKey: "fansly:payouts",
     telemetry,
-    streamState: { requestSeq: 1 },
     syncRunId,
     now,
-  } as never;
+    budget,
+  }) as never;
 }
 
 async function cursor(pageId: number) {

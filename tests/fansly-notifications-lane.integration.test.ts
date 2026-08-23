@@ -1,32 +1,12 @@
-// WP-F2 — the `notifications` capture lane, against a real database.
-//
-// This is the lane whose downtime costs FACTS rather than freshness, so the
-// things pinned here are the ones that decide whether a fact survives:
-//
-//  - the forward poll stops at OVERLAP (one call in steady state) and never
-//    commits its head until it has;
-//  - the deep backfill walks `before=<id>` — an ID, not a timestamp — to the
-//    floor, journals the empty page BECAUSE the empty page is the floor
-//    evidence, and records `notificationFloorAt`;
-//  - the repeat-request guard stops a walk that would otherwise spend a day's
-//    cap re-asking one question (WP-F1 did exactly that on production
-//    2026-08-22, five chunks deep, and nothing said a word);
-//  - the 96-attempt cap DEFERS to the next UTC day and NEVER drops;
-//  - the type fork falls back to the client's FULL declared CSV, records the
-//    mode durably, and says so in `capture_coverage`;
-//  - and `accounts[]` is allowlisted BEFORE the body reaches the journal — the
-//    [A20] hazard, checked on the row that actually lands in `observations`.
+// WP-F2 — notification overlap, backfill, coverage and attempt invariants.
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { randomUUID } from "node:crypto";
 
 import {
-  createFanslyPage,
-  createModel,
   getCheckpoint,
   setConfigOverride,
-  startSyncRun,
 } from "@agency_hub_core/db";
 import { FanslyApiError } from "@agency_hub_core/fansly";
 import { FANSLY_NOTIFICATION_DECLARED_TYPE_CSV } from "@agency_hub_core/shared";
@@ -45,6 +25,13 @@ import {
   startIntegrationTestDatabase,
   type StartedTestDatabase,
 } from "./helpers/db.ts";
+import {
+  fanslyLaneAppStub,
+  fanslyLaneInput,
+  fanslyLaneTelemetryStub as telemetryStub,
+  observeFanslyLaneAttempts,
+  seedFanslyLanePage,
+} from "./helpers/fansly-lane-harness.ts";
 
 let testDb: StartedTestDatabase | null = null;
 
@@ -147,16 +134,12 @@ function adapterStub(options: {
       const call: AdapterCall = { before: params.before ?? "0", types: params.types ?? null };
       const index = calls.length;
       calls.push(call);
-      for (let attempt = 0; attempt < attemptsPerCall; attempt += 1) {
-        await context.requestObserver?.onRequestEvent({
-          requestId: `notifications:${index}:${attempt}`,
-          state: "started",
-          operation: "notifications_page",
-          endpointTemplate: "/notifications",
-          method: "GET",
-          attemptNumber: attempt + 1,
-        });
-      }
+      await observeFanslyLaneAttempts(context, {
+        attempts: attemptsPerCall,
+        requestId: `notifications:${index}`,
+        operation: "notifications_page",
+        endpointTemplate: "/notifications",
+      });
       const failure = options.fail?.(call, index) ?? null;
       if (failure !== null) {
         throw failure;
@@ -167,29 +150,13 @@ function adapterStub(options: {
   };
 }
 
-function telemetryStub() {
-  const anomalies: Array<Record<string, unknown>> = [];
-  return {
-    anomalies,
-    recordPhaseStarted: vi.fn(async () => {}),
-    recordCheckpointLoaded: vi.fn(async () => {}),
-    recordCheckpointAdvanced: vi.fn(async () => {}),
-    addNote: vi.fn(async () => {}),
-    addAnomaly: vi.fn(async (input: Record<string, unknown>) => {
-      anomalies.push(input);
-    }),
-    getRequestObserver: vi.fn(() => null),
-  };
-}
-
 function appStub(
   adapter: ReturnType<typeof adapterStub>,
   configOverrides: Record<string, unknown> = {},
 ) {
-  return {
-    db: testDb!.db,
+  return fanslyLaneAppStub({
+    database: testDb!,
     adapter,
-    logger: { info: () => {}, warn: () => {}, error: () => {} },
     config: {
       fanslyNotificationsSyncEnabled: true,
       fanslyNotificationsPageAllowlist: "notif-lane",
@@ -197,28 +164,21 @@ function appStub(
       fanslyBackfillContinuationDelayMs: 20_000,
       ...configOverrides,
     },
-  } as never;
+  });
 }
 
 let syncRunId = 0;
 
 async function seedPage() {
-  const model = await createModel(testDb!.db, { slug: "notif", name: "Notif" });
-  if (!model) throw new Error("Expected the notifications test model to be created");
-  const page = await createFanslyPage(testDb!.db, { modelId: model.id, label: "notif-lane" });
-  if (!page) throw new Error("Expected the notifications test page to be created");
-  await testDb!.pool.query("update pages set external_page_id = $1 where id = $2", [
-    "acct-notif",
-    page.id,
-  ]);
-  const run = await startSyncRun(testDb!.db, {
-    platformAccountId: page.id,
+  const seeded = await seedFanslyLanePage(testDb!, {
+    slug: "notif",
+    name: "Notif",
+    label: "notif-lane",
+    accountRef: "acct-notif",
     stream: "notifications",
-    trigger: "scheduled",
   });
-  if (!run) throw new Error("Expected the notifications test sync run to be created");
-  syncRunId = run.id;
-  return page;
+  syncRunId = seeded.syncRunId;
+  return seeded.page;
 }
 
 function input(
@@ -227,20 +187,16 @@ function input(
   budget = new SyncChunkBudget(),
   now = NOW,
 ) {
-  return {
-    budget,
-    pageContext: {
-      platform: "fansly",
-      page: { id: pageId, label: "notif-lane", platformAccountId: "acct-notif", metadata: {} },
-      session: { authorization: "token" },
-      proxy: { url: "socks5://proxy.example:1080" },
-      egressKey: "fansly:notif",
-    },
+  return fanslyLaneInput({
+    pageId,
+    label: "notif-lane",
+    accountRef: "acct-notif",
+    egressKey: "fansly:notif",
     telemetry,
-    streamState: { requestSeq: 1 },
     syncRunId,
     now,
-  } as never;
+    budget,
+  }) as never;
 }
 
 async function cursor(pageId: number) {

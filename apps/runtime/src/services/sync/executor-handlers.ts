@@ -142,16 +142,23 @@ import {
 } from "./ofapi-fan-identities.ts";
 import { fanslyNewStreamAllowed } from "./fansly-stream-gate.ts";
 import {
+  createFanslyLaneRuntime,
+  createFanslyLaneJournal,
+  nextFanslyUtcDayStart,
+  rollFanslyUtcDay,
+} from "./fansly-lane.ts";
+import {
   assertFanslyPurchaseHistoryTargetKindsConsistent,
   classifyFanslyPurchaseHistoryCapture,
   classifyFanslyPurchaseHistoryCaptures,
   extractFanslyPurchaseHistoryTargets,
   extractFanslyPurchaseHistoryTargetsFromTransactions,
+  FANSLY_PURCHASE_HISTORY_DAILY_ATTEMPT_CAP,
   FANSLY_PURCHASE_HISTORY_RESULT_LIMIT,
   fanslyPurchaseHistoryTargetKey,
   parseFanslyPurchaseHistoryCursorState,
   type FanslyPurchaseHistoryCaptureClassification,
-  type FanslyPurchaseHistoryCursorStateV4,
+  type FanslyPurchaseHistoryCursorStateV5,
 } from "./fansly-purchase-history.ts";
 import { isOnlyFansTopSpendersEnabled } from "./onlyfans-top-spenders.ts";
 import {
@@ -4352,14 +4359,6 @@ export async function executePurchaseHistoryChunk(
     return fanslyNewStreamSkip("not_allowlisted");
   }
 
-  const requestContext = {
-    session: input.pageContext.session,
-    proxy: input.pageContext.proxy,
-    egressKey: input.pageContext.egressKey,
-    requestObserver: composeRequestObservers(input.telemetry.getRequestObserver(), input.budget),
-    rateLimitWaiter: createPageRateLimitWaiter(app, input.pageContext),
-  };
-
   // Fansly requires a concrete accountMediaId/accountMediaBundleId. accountIds
   // is only an optional buyer filter, so the old per-fan walk could never be
   // valid. Captured message-purchase transactions are the primary durable
@@ -4368,13 +4367,52 @@ export async function executePurchaseHistoryChunk(
   // use local keysets, while target-specific purchase_history captures are the
   // durable dedupe set.
   const checkpoint = await getCheckpoint(app.db, input.pageContext.page.id, "purchase_history");
-  let state: FanslyPurchaseHistoryCursorStateV4 =
-    parseFanslyPurchaseHistoryCursorState(checkpoint?.state) ?? {
-      version: 4,
+  const now = new Date();
+  let state: FanslyPurchaseHistoryCursorStateV5 = rollFanslyUtcDay(
+    parseFanslyPurchaseHistoryCursorState(checkpoint?.state, now) ?? {
+      version: 5,
       transactionCursorId: 0,
       rawPayloadCursorId: 0,
       pendingTargets: [],
-    };
+      utcDay: now.toISOString().slice(0, 10),
+      callsToday: 0,
+    },
+    now,
+  );
+  const lane = createFanslyLaneRuntime({
+    db: app.db,
+    pageId: input.pageContext.page.id,
+    stream: "purchase_history",
+    cursorText: () => null,
+    dailyCap: FANSLY_PURCHASE_HISTORY_DAILY_ATTEMPT_CAP,
+    telemetry: input.telemetry,
+    downstreamObserver: composeRequestObservers(
+      input.telemetry.getRequestObserver(),
+      input.budget,
+    ),
+    getState: () => state,
+    setState: (next) => {
+      state = next;
+    },
+    session: input.pageContext.session,
+    proxy: input.pageContext.proxy,
+    egressKey: input.pageContext.egressKey,
+    rateLimitWaiter: createPageRateLimitWaiter(app, input.pageContext),
+  });
+  const {
+    attemptBudget,
+    complete,
+    requestContext,
+    saveProgress: savePurchaseHistoryProgress,
+  } = lane;
+  const journalPurchaseHistory = createFanslyLaneJournal({
+    db: app.db,
+    pageId: input.pageContext.page.id,
+    syncRunId: input.syncRunId,
+    mapperVersion: FANSLY_MAPPER_VERSION,
+    payloadKind: "mapping_critical",
+    retainUntil: retentionDate(),
+  });
   // G5 slice 2: every captured body is routed through the read seam before it
   // is classified. Unbounded list read by design (every purchase_history
   // capture for the page), so in shadow/serve it costs one catalog query per
@@ -4430,16 +4468,8 @@ export async function executePurchaseHistoryChunk(
     }
   }
   if (JSON.stringify(reconciledPendingTargets) !== JSON.stringify(state.pendingTargets)) {
-    state = { ...state, version: 4, pendingTargets: reconciledPendingTargets };
-    const progressCheckpoint = await upsertCheckpointProgress(app.db, {
-      platformAccountId: input.pageContext.page.id,
-      stream: "purchase_history",
-      state,
-    });
-    await input.telemetry.recordCheckpointAdvanced(
-      "purchase_history",
-      summarizeCheckpoint(progressCheckpoint),
-    );
+    state = { ...state, version: 5, pendingTargets: reconciledPendingTargets };
+    await savePurchaseHistoryProgress();
   }
 
   // Raw capture is the sole truth. A malformed page or cyclic cursor blocks
@@ -4468,7 +4498,11 @@ export async function executePurchaseHistoryChunk(
   let pagesFetched = 0;
   let orderRowsCaptured = 0;
 
-  while (input.budget.hasRequestCapacity() && input.budget.hasWallClockCapacity()) {
+  while (
+    attemptBudget.hasCapacity()
+    && input.budget.hasRequestCapacity()
+    && input.budget.hasWallClockCapacity()
+  ) {
     await assertOwnedPageSyncLease(app.db);
     if (state.pendingTargets.length === 0) {
       if (!transactionSourceExhausted) {
@@ -4519,21 +4553,13 @@ export async function executePurchaseHistoryChunk(
           transactionTargetsDiscovered += discovered.length;
           state = {
             ...state,
-            version: 4,
+            version: 5,
             transactionCursorId: transactionRows.at(-1)!.id,
             pendingTargets: discovered.map((target) => ({ ...target, before: null })),
           };
           // Persist discovery BEFORE egress: a crash can only replay the safe
           // target GET, never advance the transaction cursor past lost work.
-          const progressCheckpoint = await upsertCheckpointProgress(app.db, {
-            platformAccountId: input.pageContext.page.id,
-            stream: "purchase_history",
-            state,
-          });
-          await input.telemetry.recordCheckpointAdvanced(
-            "purchase_history",
-            summarizeCheckpoint(progressCheckpoint),
-          );
+          await savePurchaseHistoryProgress();
           transactionSourceExhausted =
             transactionRows.length < PURCHASE_HISTORY_TRANSACTION_BATCH_SIZE;
         }
@@ -4572,17 +4598,13 @@ export async function executePurchaseHistoryChunk(
         scanBatches += 1;
         scannedRawPages += rawPages.length;
         if (rawPages.length === 0) {
-          await upsertCheckpoint(app.db, {
-            platformAccountId: input.pageContext.page.id,
-            stream: "purchase_history",
-            cursorTimestamp: new Date(),
-            state: {
-              ...state,
-              pendingTargets: [],
-              completedAt: new Date().toISOString(),
-            },
-            lastSuccessfulRunId: input.syncRunId,
-          });
+          const completedAt = now;
+          state = {
+            ...state,
+            pendingTargets: [],
+            completedAt: completedAt.toISOString(),
+          } as FanslyPurchaseHistoryCursorStateV5;
+          await complete(input.syncRunId, completedAt);
           return {
             satisfied: true,
             yieldReason: null,
@@ -4621,22 +4643,14 @@ export async function executePurchaseHistoryChunk(
         );
         state = {
           ...state,
-          version: 4,
+          version: 5,
           rawPayloadCursorId: rawPages.at(-1)!.id,
           pendingTargets: discovered.map((target) => ({ ...target, before: null })),
         };
         // Advance discovery and persist the whole pending batch BEFORE egress.
         // A worker crash can therefore only replay a safe GET, never lose a
         // discovered media target.
-        const progressCheckpoint = await upsertCheckpointProgress(app.db, {
-          platformAccountId: input.pageContext.page.id,
-          stream: "purchase_history",
-          state,
-        });
-        await input.telemetry.recordCheckpointAdvanced(
-          "purchase_history",
-          summarizeCheckpoint(progressCheckpoint),
-        );
+        await savePurchaseHistoryProgress();
         if (state.pendingTargets.length === 0) {
           continue;
         }
@@ -4669,34 +4683,22 @@ export async function executePurchaseHistoryChunk(
       if (!targetScoped) {
         throw error;
       }
-      await persistRawPayload(app.db, {
-        platformAccountId: input.pageContext.page.id,
-        syncRunId: input.syncRunId,
-        endpoint: "purchase_history",
-        requestParams,
-        responsePayload: {
+      const rejectedPayload = {
           error: {
             status: error.status,
             code: error.code ?? null,
           },
-        },
-        mapperVersion: FANSLY_MAPPER_VERSION,
-        payloadKind: "mapping_critical",
-        statusCode: error.status,
-        errorMessage: error.message,
-        retainUntil: retentionDate(),
-      }, { action: "capturing rejected purchase_history target", platform: "fansly" });
+        };
+      await journalPurchaseHistory("purchase_history", requestParams, rejectedPayload, {
+        action: "capturing rejected purchase_history target",
+        row: { statusCode: error.status, errorMessage: error.message },
+      });
       const capture = classifyFanslyPurchaseHistoryCapture({
         id: null,
         targetKey,
         requestBefore: target.before,
         statusCode: error.status,
-        responsePayload: {
-          error: {
-            status: error.status,
-            code: error.code ?? null,
-          },
-        },
+        responsePayload: rejectedPayload,
       });
       if (!capture.terminal || capture.blocked) {
         throw purchaseHistoryCaptureBlockError(capture);
@@ -4717,27 +4719,12 @@ export async function executePurchaseHistoryChunk(
       capturedTargetKeys.add(targetKey);
       capturedContentIds.add(target.contentId);
       state = { ...state, pendingTargets: state.pendingTargets.slice(1) };
-      const progressCheckpoint = await upsertCheckpointProgress(app.db, {
-        platformAccountId: input.pageContext.page.id,
-        stream: "purchase_history",
-        state,
-      });
-      await input.telemetry.recordCheckpointAdvanced(
-        "purchase_history",
-        summarizeCheckpoint(progressCheckpoint),
-      );
+      await savePurchaseHistoryProgress();
       continue;
     }
-    await persistRawPayload(app.db, {
-      platformAccountId: input.pageContext.page.id,
-      syncRunId: input.syncRunId,
-      endpoint: "purchase_history",
-      requestParams,
-      responsePayload: page.raw,
-      mapperVersion: FANSLY_MAPPER_VERSION,
-      payloadKind: "mapping_critical",
-      retainUntil: retentionDate(),
-    }, { action: "inserting purchase_history raw payload", platform: "fansly" });
+    await journalPurchaseHistory("purchase_history", requestParams, page.raw, {
+      action: "inserting purchase_history raw payload",
+    });
 
     const capture = classifyFanslyPurchaseHistoryCapture({
       id: null,
@@ -4781,15 +4768,7 @@ export async function executePurchaseHistoryChunk(
           ...state.pendingTargets.slice(1),
         ],
       };
-    const progressCheckpoint = await upsertCheckpointProgress(app.db, {
-      platformAccountId: input.pageContext.page.id,
-      stream: "purchase_history",
-      state,
-    });
-    await input.telemetry.recordCheckpointAdvanced(
-      "purchase_history",
-      summarizeCheckpoint(progressCheckpoint),
-    );
+    await savePurchaseHistoryProgress();
     pagesFetched += 1;
     if (capture.terminal) {
       targetsFetched += 1;
@@ -4799,7 +4778,13 @@ export async function executePurchaseHistoryChunk(
 
   return {
     satisfied: false,
-    yieldReason: input.budget.resolveYieldReason(),
+    yieldReason: attemptBudget.hasCapacity() ? input.budget.resolveYieldReason() : null,
+    ...(attemptBudget.hasCapacity()
+      ? {}
+      : {
+        continuationRetryAt: nextFanslyUtcDayStart(now),
+        continuationRequestSource: "scheduled" as const,
+      }),
     stats: {
       transactionCursorId: state.transactionCursorId,
       transactionRowsScanned,

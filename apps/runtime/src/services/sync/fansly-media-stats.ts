@@ -132,15 +132,11 @@ import {
   recordMediaStatsFailure,
   recordMediaStatsVisit,
   seedMediaStatsQueue,
-  upsertCaptureCoverage,
-  upsertCheckpoint,
-  upsertCheckpointProgress,
   type CaptureCoverageStatus,
   type MediaStatsRefreshCandidate,
   type MediaStatsTier,
 } from "@agency_hub_core/db";
 import { FanslyApiError } from "@agency_hub_core/fansly";
-import type { HttpRequestEvent, HttpRequestObserver } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
 import { loadEffectiveConfig } from "../effective-config.ts";
@@ -148,17 +144,25 @@ import { isPageAllowlisted } from "../voice-notes.ts";
 import { composeRequestObservers } from "./chunk-budget.ts";
 import type { ExecutorRequestContext, StreamChunkResult } from "./executor-handlers.ts";
 import {
-  backfillContinuationAt,
-  isEmptyStatsWindow,
+  classifyStatsWindow,
   narrowedSpanDays,
   parseWindowGuard,
   servedWindow,
   windowWasHonoured,
   type BackfillWindowGuard,
 } from "./fansly-stats.ts";
+import {
+  createFanslyLaneJournal,
+  createFanslyLaneRuntime,
+  fanslyUtcDayKey,
+  nextFanslyUtcDayStart,
+  rollFanslyUtcDay,
+  spreadFanslyContinuation,
+  writeFanslyLaneCoverage,
+} from "./fansly-lane.ts";
 import { summarizeCheckpoint } from "./observability.ts";
 import { createSyncRateLimitWaiter } from "./rate-limiter.ts";
-import { persistRawPayload, retentionDate } from "./shared.ts";
+import { retentionDate } from "./shared.ts";
 
 const STREAM = "media_stats" as const;
 
@@ -355,9 +359,7 @@ export function emptyFanslyMediaStatsCursorState(now: Date): FanslyMediaStatsCur
   };
 }
 
-export function utcDayKey(instant: Date): string {
-  return instant.toISOString().slice(0, 10);
-}
+export const utcDayKey = fanslyUtcDayKey;
 
 /** A new UTC day resets the attempt counter and the deferred tally, and NOTHING
  *  else: a refresh queue is durable state and a window-mode discovery is a fact,
@@ -366,10 +368,8 @@ export function rollUtcDay(
   state: FanslyMediaStatsCursorState,
   now: Date,
 ): FanslyMediaStatsCursorState {
-  const today = utcDayKey(now);
-  return state.utcDay === today
-    ? state
-    : { ...state, utcDay: today, callsToday: 0, deferredToday: 0 };
+  const rolled = rollFanslyUtcDay(state, now);
+  return rolled === state ? state : { ...rolled, deferredToday: 0 };
 }
 
 /** A cursor written before this lane existed parses as an item that has walked
@@ -419,7 +419,11 @@ export function mediaBackfillCreationFloorMs(
  * rule, and the zero-valued row IS the evidence the coverage claim rests on.
  */
 export function mediaStatsWindowIsEmpty(payload: unknown): boolean {
-  if (isEmptyStatsWindow(payload)) {
+  const classification = classifyStatsWindow(payload);
+  if (classification === "invalid") {
+    return false;
+  }
+  if (classification === "empty") {
     return true;
   }
   const record = asRecord(payload);
@@ -506,27 +510,6 @@ export function estimateMediaStatsCycle(input: {
  *  the same 7 the repository's tier table uses. */
 const MEDIA_STATS_MID_INTERVAL_DAYS_LOCAL = 7;
 
-// ── attempt counting ─────────────────────────────────────────────────────────
-
-/** Counts HTTP ATTEMPTS, retries included — the unit the cap is enforced in.
- *  `SyncChunkBudget` counts the same events but is scoped to one chunk; the day
- *  counter has to survive chunks, leases and restarts. */
-class AttemptCounter implements HttpRequestObserver {
-  private attempts = 0;
-
-  async onRequestEvent(event: HttpRequestEvent) {
-    if (event.state === "started") {
-      this.attempts += 1;
-    }
-  }
-
-  take(): number {
-    const attempts = this.attempts;
-    this.attempts = 0;
-    return attempts;
-  }
-}
-
 // ── shape helpers over the journaled bodies ──────────────────────────────────
 
 /**
@@ -600,17 +583,6 @@ function isAuthFailure(error: unknown): boolean {
   return error instanceof FanslyApiError && (error.status === 401 || error.status === 403);
 }
 
-function nextUtcDayStart(now: Date): Date {
-  return new Date(Date.UTC(
-    now.getUTCFullYear(),
-    now.getUTCMonth(),
-    now.getUTCDate() + 1,
-    0,
-    5,
-    0,
-  ));
-}
-
 // ── the handler ──────────────────────────────────────────────────────────────
 
 function skip(reason: string): StreamChunkResult {
@@ -663,41 +635,50 @@ export async function fanslyMediaStatsChunk(
     now,
   );
 
-  const attempts = new AttemptCounter();
-  const requestContext = {
+  const lane = createFanslyLaneRuntime({
+    db: app.db,
+    pageId,
+    stream: STREAM,
+    cursorText: () => state.longTailWindowMode,
+    dailyCap,
+    telemetry: input.telemetry,
+    downstreamObserver: composeRequestObservers(
+      input.telemetry.getRequestObserver(),
+      input.budget,
+    ),
+    getState: () => state,
+    setState: (next) => {
+      state = next;
+    },
     session: input.pageContext.session,
     proxy: input.pageContext.proxy,
     egressKey: input.pageContext.egressKey,
-    requestObserver: composeRequestObservers(
-      input.telemetry.getRequestObserver(),
-      input.budget,
-      attempts,
-    ),
     rateLimitWaiter: createSyncRateLimitWaiter(app, input.pageContext),
-  };
+  });
+  const { attemptBudget, complete: completeLane, requestContext, saveProgress } = lane;
 
   let journaled = 0;
   let visited = 0;
   let bucketsSeen = 0;
   let backfillWindows = 0;
   let topMarked = 0;
+  let invalidResponses = 0;
   let deferred: string | null = null;
   let moreWork = false;
+  const journal = createFanslyLaneJournal({
+    db: app.db,
+    pageId,
+    syncRunId: input.syncRunId,
+    mapperVersion: MAPPER_VERSION,
+    payloadKind: "mapping_critical",
+    retainUntil: retentionDate(),
+    onJournal: () => { journaled += 1; },
+  });
 
   /** Room for one more call today? Crossing this defers; it never drops. */
-  const hasDayCapacity = () => state.callsToday < dailyCap;
+  const hasDayCapacity = attemptBudget.hasCapacity;
   const hasChunkCapacity = () =>
     input.budget.hasRequestCapacity(1) && input.budget.hasWallClockCapacity();
-
-  const saveProgress = async () => {
-    const advanced = await upsertCheckpointProgress(app.db, {
-      platformAccountId: pageId,
-      stream: STREAM,
-      cursorText: state.longTailWindowMode,
-      state: { ...state } as unknown as Record<string, unknown>,
-    });
-    await input.telemetry.recordCheckpointAdvanced(STREAM, summarizeCheckpoint(advanced));
-  };
 
   /**
    * ONE window, journaled FIRST and judged afterwards.
@@ -754,7 +735,6 @@ export async function fanslyMediaStatsChunk(
       if (isAuthFailure(error)) {
         throw error;
       }
-      state = { ...state, callsToday: state.callsToday + attempts.take() };
       await input.telemetry.addAnomaly({
         code: "fansly_media_stats_item_failed",
         severity: "warn",
@@ -772,29 +752,29 @@ export async function fanslyMediaStatsChunk(
       return "failed";
     }
 
-    const persisted = await persistRawPayload(app.db, {
-      platformAccountId: pageId,
-      syncRunId: input.syncRunId,
-      endpoint: OBSERVATION_KIND,
-      requestParams: {
+    const persisted = await journal(OBSERVATION_KIND, {
         mediaOfferId: subjectRef,
         beforeDate: beforeDate.toISOString(),
         afterDate: afterDate.toISOString(),
         periodMs: params.periodMs,
         tier: params.tier,
         mode: params.mode,
-      },
-      responsePayload: raw,
-      mapperVersion: MAPPER_VERSION,
-      payloadKind: "mapping_critical",
-      retainUntil: retentionDate(),
-    }, {
-      action: "inserting Fansly media offer stats raw payload",
-      platform: "fansly",
-    });
-    journaled += 1;
-    // The cap is counted in ATTEMPTS, folded in AFTER the response is safe.
-    state = { ...state, callsToday: state.callsToday + attempts.take() };
+      }, raw);
+    if (classifyStatsWindow(raw) === "invalid") {
+      invalidResponses += 1;
+      await input.telemetry.addAnomaly({
+        code: "fansly_media_stats_invalid_response",
+        severity: "warn",
+        message: "Fansly per-media statistics response was journaled but did not match the parser contract",
+        details: { mediaOfferRef: subjectRef },
+      });
+      await recordMediaStatsFailure(app.db, {
+        pageId,
+        subjectRef,
+        nextDueAt: new Date(now.getTime() + DAY_MS),
+      });
+      return "failed";
+    }
 
     const served = servedWindow(raw);
     const buckets = countMediaStatBuckets(raw);
@@ -1376,33 +1356,44 @@ export async function fanslyMediaStatsChunk(
       : everyItemVisited
       ? "window_captured"
       : "in_progress";
-    await upsertCaptureCoverage(app.db, {
-      pageId,
-      platform: "fansly",
-      plane: FANSLY_MEDIA_STATS_COVERAGE_PLANE,
-      // Page-scoped: `page_id` is already in the key; the ref makes the scope
-      // legible in a raw query.
-      scopeRef: String(pageId),
-      status,
-      // Per-media windows are addressable backwards in time (the HAR proves a
-      // historical window is served), so nothing this lane has not captured yet
-      // is lost — it can still be asked for.
-      acquisitionMode: "retroactive",
-      proof: "none",
-      newestCapturedAt: now,
-      expectedCount: progress.queueSize,
-      observedUniqueCount: progress.queueSize - progress.neverVisited,
-      reasonCode: cycle.saturating ? "saturating_by_design" : null,
-      cursor: {
-        dueToday: progress.dueNow,
-        deferredToday,
-        estimatedCycleDays: cycle.estimatedCycleDays,
-        requestsPerDayWanted: cycle.requestsPerDayWanted,
-        longTailWindowMode: state.longTailWindowMode,
-        backfillComplete: progress.backfillComplete,
-        backfillStopped: progress.backfillStopped,
-      },
-    });
+    if (invalidResponses === 0 || visited > 0) {
+      await writeFanslyLaneCoverage({ db: app.db,
+        pageId,
+        plane: FANSLY_MEDIA_STATS_COVERAGE_PLANE,
+        // Page-scoped: `page_id` is already in the key; the ref makes the scope
+        // legible in a raw query.
+        scopeRef: String(pageId),
+        status,
+        // Per-media windows are addressable backwards in time (the HAR proves a
+        // historical window is served), so nothing this lane has not captured yet
+        // is lost — it can still be asked for.
+        acquisitionMode: "retroactive",
+        proof: "none",
+        newestCapturedAt: now,
+        expectedCount: progress.queueSize,
+        observedUniqueCount: progress.queueSize - progress.neverVisited,
+        reasonCode: cycle.saturating ? "saturating_by_design" : null,
+        cursor: {
+          dueToday: progress.dueNow,
+          deferredToday,
+          estimatedCycleDays: cycle.estimatedCycleDays,
+          requestsPerDayWanted: cycle.requestsPerDayWanted,
+          longTailWindowMode: state.longTailWindowMode,
+          backfillComplete: progress.backfillComplete,
+          backfillStopped: progress.backfillStopped,
+        },
+      });
+    }
+
+    if (invalidResponses > 0 && visited === 0) {
+      await saveProgress();
+      return {
+        satisfied: false,
+        yieldReason: null,
+        continuationRetryAt: nextFanslyUtcDayStart(now),
+        stats,
+      };
+    }
 
     if (deferred !== null) {
       await saveProgress();
@@ -1410,7 +1401,7 @@ export async function fanslyMediaStatsChunk(
         satisfied: false,
         yieldReason: null,
         // Deferred at the cap: come back after the UTC roll.
-        continuationRetryAt: nextUtcDayStart(now),
+        continuationRetryAt: nextFanslyUtcDayStart(now),
         stats,
       };
     }
@@ -1422,7 +1413,7 @@ export async function fanslyMediaStatsChunk(
         // SPREAD. At this lane's volume the steady state IS a deep walk, so the
         // continuation is jittered even when no backfill is running: an unspaced
         // 300-call day is ~13 contiguous minutes at ~23 requests a minute.
-        continuationRetryAt: backfillContinuationAt(now, continuationDelayMs),
+        continuationRetryAt: spreadFanslyContinuation(now, continuationDelayMs),
         stats,
       };
     }
@@ -1435,18 +1426,11 @@ export async function fanslyMediaStatsChunk(
       return {
         satisfied: false,
         yieldReason: null,
-        continuationRetryAt: backfillContinuationAt(now, continuationDelayMs),
+        continuationRetryAt: spreadFanslyContinuation(now, continuationDelayMs),
         stats,
       };
     }
-    const completed = await upsertCheckpoint(app.db, {
-      platformAccountId: pageId,
-      stream: STREAM,
-      cursorText: state.longTailWindowMode,
-      state: { ...state } as unknown as Record<string, unknown>,
-      lastSuccessfulRunId: input.syncRunId,
-    });
-    await input.telemetry.recordCheckpointAdvanced(STREAM, summarizeCheckpoint(completed));
+    await completeLane(input.syncRunId);
     return { satisfied: true, yieldReason: null, stats };
   }
 }

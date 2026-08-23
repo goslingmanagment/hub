@@ -445,16 +445,20 @@ describe("[A20] the WP-F2 notification lane trims accounts[] and NOTHING else", 
   });
 
   it("the handler journals through the trim, and stamps that version", () => {
-    // Naming the trim is not calling it. This is the call SITE.
+    // Pin both halves of the shared-journal seam: the lane-specific mapper
+    // version configures the writer, and the call site passes only the trimmed
+    // payload into it.
     const source = readFileSync(
       path.resolve("apps/runtime/src/services/sync/fansly-notifications.ts"),
       "utf8",
     );
     expect(source).toMatch(
-      /responsePayload: trimFanslyNotificationsPayload\(payload\),\s*\n\s*mapperVersion: FANSLY_NOTIFICATIONS_CAPTURE_MAPPER_VERSION,/,
+      /createFanslyLaneJournal\(\{[\s\S]*?mapperVersion: FANSLY_NOTIFICATIONS_CAPTURE_MAPPER_VERSION,[\s\S]*?\}\);/,
     );
-    // And it never hands the adapter body straight to the journal.
-    expect(source).not.toMatch(/responsePayload: payload,/);
+    expect(source).toMatch(
+      /journal\(OBSERVATION_KIND, requestParams, trimFanslyNotificationsPayload\(payload\)\)/,
+    );
+    expect(source).not.toMatch(/journal\(OBSERVATION_KIND, requestParams, payload\)/);
   });
 });
 

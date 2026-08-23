@@ -10,6 +10,9 @@ export interface FanslyRequestContext {
   proxy?: ProxyConfig | null;
   egressKey?: string | null;
   requestObserver?: HttpRequestObserver | null;
+  /** Durable lane allowance remaining before this logical request starts.
+   * The adapter clamps its retry loop to this value. */
+  remainingAttempts?: (() => number) | null;
   rateLimitWaiter?: ((scopes: Array<{
     provider: "fansly" | "onlyfans";
     scope: string;

@@ -235,6 +235,8 @@ appends a row here in the same change (family law: updated-in-change).
 | 231 | Fansly per-media statistics (WP-F4) — the lane that can overload the platform | The `media_stats` stream lands whole (0142 enum, the §3.3 wiring, four config keys, the handler, the completed parser, the projector reducers): `GET /it/moie/statsnew` over ALL media at an age-decayed cadence — fresh (≤30 d) daily at hourly granularity, mid (31–180 d) weekly, long tail every `fanslyMediaStatsLongTailCycleDays` (30), round-robin by last visit, with WP-F2's purchase signals and the current top-50 jumping the queue. **A16's TABLE IS REPORTED, NEVER RESTATED**: `estimatedCycleDays` is computed on every dispatch from the LIVE class census and the LIVE cap, and the log line says QUARTERLY in words once it passes 90 days — at M = 2 000 the decay wants 294 calls/day and the long tail comes round every 26 days; at M = 5 000 it wants 394 and the cycle is 96 days. Nothing is dropped at any M. The lane is DESIGNED to sit at 100 % of its own 300-attempt cap and is exempt from the 70 %-of-its-own-cap rule by name; raising the cap is a NAMED per-lane owner step, which the registry ceiling of 1 000 makes refusable. **THIRTY-ONE DAYS, NOT A HUNDRED**: the HAR proves this route honours a historical 31-day window exactly, and F1 proved on production what a 100-day one costs. **The queue is `subject_refresh_state` (`plane='media_stats'`), not four columns on `creator_media`** — a rebuild that reset them would re-mark the whole catalogue as first-sight and release a backfill storm bounded only by this lane's own cap, and a test pins the isolation. Video columns stay NULL and unpromised ([E5]).
 | 233 | Fansly history walks corrected against production (amends #225, #231) | **A14 was wrong**: `/it/amoie/stats` honours `beforeDate`/`afterDate` only INSIDE its own trailing window — lora-2 asked for a historical 31-day window and was served the trailing 31 days, and halving to 15 changed nothing, so it was never the span. History on that route is addressed the way the app addresses it: `year`/`month` (the UI's month presets, with the bounds riding along ignored). The daily lane captures the trailing window ONCE and then walks BACKWARDS BY CALENDAR MONTH — same attempt cap, same jittered continuation, repeat guard on `(year, month)`, `monthWasHonoured` in place of the span check (no halve-and-retry: there is no half of a month to ask for), stopping with `month_form_not_honoured` or reaching a floor of two empty months plus the [E10] probe twelve months back. The two pages the date-bound walk stopped SUPERSEDE their `window_not_honoured` coverage row and resume in month mode, once. The HOURLY lane stops walking and declares the trailing 25 hours (`hourly_trailing_window_only`); the EARNINGS lane is untouched because it DID honour historical windows (lora-1 reached 2024-11-29). `endpoint-probe` gains `[F1] GET /it/amoie/stats?year=&month=`, printing the served window, because the month form is not yet proven live. **WP-F4**: `/it/moie/statsnew` honours every window and answers any of them back to 2006 with one ZERO-VALUED bucket, so the empty-window floor never fired — 1 198 calls on eight items, walked 240 windows each. All-zero now counts as empty; no window may end more than one span before `coalesce(created_at_platform, first_observed_at)` (`floorBasis='created_at'`, which also repairs the eight burned cursors); and EVERY visit stamps `last_visited_at`, backfill visits included — that omission is why 5 507 queue rows had never been looked at while the same eight were re-picked daily |
 
+| 235 | Fansly lane scaffold and repair R1 | The seven lanes share one runtime for durable physical-attempt reservation, journal/checkpoint ordering, coverage writes, three-way response classification, pagination guards and jitter. A `started` attempt is checkpointed before egress and the adapter clamps retries to the allowance remaining for the UTC day; success, transport failure and auth failure therefore cannot forget attempts or cross the cap. `invalid` responses remain journaled but do not move coverage or cursors. Earnings history keeps a full 100-row page's window while advancing its durable offset and spends an older probe before declaring a floor. Purchase-history cursor v5 joins the same daily-attempt law. Post-replies excludes failed subjects until `next_due_at`, so healthy never-walked posts are no longer starved. One shared integration harness and a source ratchet prevent lane-private copies from returning; no migration or production action is required. |
+
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
 - **Frontend app shell (12/12):** React SPA with Vite and TanStack Query fits a desktop-only internal dashboard without SSR overhead.
@@ -9783,3 +9785,51 @@ coverage row per item (#231's §3.4 ruling stands — the creation floor and the
 stop reason live in the item's own cursor, and the page's coverage row counts
 them); and treating a zero-valued bucket as traffic anywhere.
 
+---
+
+**Decision #235 (2026-08-23, endpoints-cover repair R1: one Fansly lane
+scaffold, amends #225–#231 and #233):**
+
+**A PHYSICAL ATTEMPT IS RESERVED BEFORE IT CAN LEAVE THE PROCESS.** The seven
+Fansly lanes now enter through `fansly-lane.ts`. Its runtime binds the page,
+stream, cursor, telemetry and adapter context once; on every `started` event it
+increments `callsToday` and persists the checkpoint before forwarding the event
+to the chunk observer and before the adapter performs egress. The adapter reads
+`remainingAttempts` at the start of a logical request and converts the remaining
+attempt allowance into a retry ceiling. A cap of three can therefore produce at
+most three physical requests, not the four the old test accepted. Because the
+reservation precedes transport, terminal response and auth handling, all three
+exit shapes retain the attempt. Purchase-history joins the law with cursor v5
+and a 100-attempt daily ceiling; v2–v4 cursors normalize forward without losing
+their discovery or provider cursors.
+
+**CAPTURED IS NOT THE SAME AS VALID.** One classifier returns `nonempty`,
+`empty` or `invalid` for every lane's own response contract. Journaling remains
+first in every path, but an invalid body cannot advance a coverage row, a
+subject visit or a historical cursor. This closes the demonstrated mismatch in
+which `{aggregationData:{}}` was accepted as an empty stats window while the
+canonicalizer correctly refused it. Media-stats and post-replies keep their
+subject-local failure isolation, but if the dispatch captured only invalid
+answers it neither writes aggregate coverage nor stamps the run complete.
+
+**PAGINATION AND FLOOR CLAIMS KEEP THEIR OWN EVIDENCE.** Offset and repeat
+helpers are shared, while each lane retains its domain request decisions. A
+full 100-row earnings page now persists the next offset and holds the same date
+window; only a short page advances the window. Two empty earnings windows are
+inactivity evidence, not a provider floor: the walk bookmarks the ordinary gap,
+probes 365 days further back, resumes at the bookmark if the probe finds data,
+and claims `provider_exhausted` only after the older probe is empty. This is the
+same probe-and-resume law #225 already applied to daily statistics.
+
+**A FAILED POST WAITS WITHOUT OWNING THE QUEUE.** The post-replies selector now
+admits a failed subject only when `next_due_at <= now`; healthy rows with zero
+failures stay eligible. The five-dead-subject reproduction now spends five calls
+once, then the next chunk reaches the healthy older post instead of selecting
+the same dead band-zero rows again.
+
+**THE SHARED SURFACE IS ENFORCED.** Lane files may keep request forms, parsing
+and domain pagination, but may not call the raw checkpoint, coverage or journal
+writers or restore a private attempt counter. A source ratchet pins that rule.
+The seven integration suites share one harness for telemetry, context, seed and
+physical retry behaviour. No database migration, feature-flag change, deploy or
+production access belongs to this repair.

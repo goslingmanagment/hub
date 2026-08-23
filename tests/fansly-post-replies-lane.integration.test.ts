@@ -1,19 +1,4 @@
-// WP-F5 — the `post_replies` capture lane, against a real database.
-//
-// What is pinned here is what decides whether the comment archive is honest:
-//
-//  - THE BARE GET. No `before` on the first call, ever, and no POST anywhere.
-//  - THE WALK QUEUE. Seeded from `creator_posts` on first enable, and seeded in
-//    the SAME TRANSACTION as the post itself for anything published afterwards.
-//    A post committed without its walk row is a post whose comments are never
-//    read, with a healthy lane and a clean coverage row saying nothing is wrong.
-//  - THE PRIORITY ORDER: never-walked newest-first, then dirty, then the
-//    round-robin re-walk.
-//  - THE 100-ATTEMPT CAP, counted in ATTEMPTS and deferring to the next UTC
-//    day — with the response it already fetched still journaled.
-//  - PAGINATION DISCOVERY and the repeat-cursor guard: settled once, announced
-//    once, never looped.
-//  - [A20] on the row that actually lands in `observations`.
+// WP-F5 — post-replies queue, paging, coverage and attempt invariants.
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -22,7 +7,6 @@ import {
   createModel,
   getCheckpoint,
   listSubjectRefreshState,
-  startSyncRun,
   upsertCreatorPost,
 } from "@agency_hub_core/db";
 import { FanslyApiError } from "@agency_hub_core/fansly";
@@ -44,6 +28,13 @@ import {
   startIntegrationTestDatabase,
   type StartedTestDatabase,
 } from "./helpers/db.ts";
+import {
+  fanslyLaneAppStub,
+  fanslyLaneInput,
+  fanslyLaneTelemetryStub as telemetryStub,
+  observeFanslyLaneAttempts,
+  seedFanslyLanePage,
+} from "./helpers/fansly-lane-harness.ts";
 
 let testDb: StartedTestDatabase | null = null;
 
@@ -141,25 +132,28 @@ function adapterStub(options: {
 } = {}) {
   const attemptsPerCall = options.attemptsPerCall ?? 1;
   const calls: AdapterCall[] = [];
+  let physicalAttempts = 0;
   let replyIndex = 0;
 
   async function observe(
-    context: { requestObserver?: { onRequestEvent: (event: unknown) => Promise<void> } | null },
+    context: {
+      requestObserver?: { onRequestEvent: (event: unknown) => Promise<void> } | null;
+      remainingAttempts?: (() => number) | null;
+    },
     route: string,
     params: Record<string, unknown>,
   ) {
     const index = calls.length;
     calls.push({ route, params });
-    for (let attempt = 0; attempt < attemptsPerCall; attempt += 1) {
-      await context.requestObserver?.onRequestEvent({
-        requestId: `${route}:${index}:${attempt}`,
-        state: "started",
-        operation: route,
-        endpointTemplate: route,
-        method: "GET",
-        attemptNumber: attempt + 1,
-      });
-    }
+    await observeFanslyLaneAttempts(context, {
+      attempts: attemptsPerCall,
+      requestId: `${route}:${index}`,
+      operation: route,
+      endpointTemplate: route,
+      onAttempt: () => {
+        physicalAttempts += 1;
+      },
+    });
     const failure = options.fail?.(route, index) ?? null;
     if (failure !== null) {
       throw failure;
@@ -170,6 +164,9 @@ function adapterStub(options: {
 
   return {
     calls,
+    get physicalAttempts() {
+      return physicalAttempts;
+    },
     getPostRepliesPage: vi.fn(async (context: never, params: Record<string, unknown>) => {
       await observe(context, "post_replies", params);
       const index = replyIndex;
@@ -186,29 +183,13 @@ function adapterStub(options: {
   };
 }
 
-function telemetryStub() {
-  const anomalies: Array<Record<string, unknown>> = [];
-  return {
-    anomalies,
-    recordPhaseStarted: vi.fn(async () => {}),
-    recordCheckpointLoaded: vi.fn(async () => {}),
-    recordCheckpointAdvanced: vi.fn(async () => {}),
-    addNote: vi.fn(async () => {}),
-    addAnomaly: vi.fn(async (input: Record<string, unknown>) => {
-      anomalies.push(input);
-    }),
-    getRequestObserver: vi.fn(() => null),
-  };
-}
-
 function appStub(
   adapter: ReturnType<typeof adapterStub>,
   configOverrides: Record<string, unknown> = {},
 ) {
-  return {
-    db: testDb!.db,
+  return fanslyLaneAppStub({
+    database: testDb!,
     adapter,
-    logger: { info: () => {}, warn: () => {}, error: () => {} },
     config: {
       fanslyPostRepliesSyncEnabled: true,
       fanslyPostRepliesPageAllowlist: "replies-lane",
@@ -217,28 +198,21 @@ function appStub(
       fanslyBackfillContinuationDelayMs: 20_000,
       ...configOverrides,
     },
-  } as never;
+  });
 }
 
 let syncRunId = 0;
 
 async function seedPage() {
-  const model = await createModel(testDb!.db, { slug: "replies", name: "Replies" });
-  if (!model) throw new Error("Expected the replies test model to be created");
-  const page = await createFanslyPage(testDb!.db, { modelId: model.id, label: "replies-lane" });
-  if (!page) throw new Error("Expected the replies test page to be created");
-  await testDb!.pool.query("update pages set external_page_id = $1 where id = $2", [
-    "acct-replies",
-    page.id,
-  ]);
-  const run = await startSyncRun(testDb!.db, {
-    platformAccountId: page.id,
+  const seeded = await seedFanslyLanePage(testDb!, {
+    slug: "replies",
+    name: "Replies",
+    label: "replies-lane",
+    accountRef: "acct-replies",
     stream: "post_replies",
-    trigger: "scheduled",
   });
-  if (!run) throw new Error("Expected the replies test sync run to be created");
-  syncRunId = run.id;
-  return page;
+  syncRunId = seeded.syncRunId;
+  return seeded.page;
 }
 
 /** A root post, written the way the creator-posts projector writes it — which
@@ -288,20 +262,16 @@ function input(
   budget = new SyncChunkBudget(),
   now = NOW,
 ) {
-  return {
-    budget,
-    pageContext: {
-      platform: "fansly",
-      page: { id: pageId, label: "replies-lane", platformAccountId: "acct-replies", metadata: {} },
-      session: { authorization: "token" },
-      proxy: { url: "socks5://proxy.example:1080" },
-      egressKey: "fansly:replies",
-    },
+  return fanslyLaneInput({
+    pageId,
+    label: "replies-lane",
+    accountRef: "acct-replies",
+    egressKey: "fansly:replies",
     telemetry,
-    streamState: { requestSeq: 1 },
     syncRunId,
     now,
-  } as never;
+    budget,
+  }) as never;
 }
 
 async function cursor(pageId: number) {
@@ -667,6 +637,7 @@ describe("[sync-critical] WP-F5 post_replies lane", () => {
     // it would retire the post from the never-walked band on an error.
     expect(rows[0]?.lastVisitedAt).toBeNull();
     expect(rows[0]?.consecutiveFailures).toBe(1);
+    expect(await coverageRows(page.id)).toEqual([]);
   });
 
   it("scopes a per-post failure to that post and re-raises 401 untouched", async (context) => {
@@ -693,6 +664,7 @@ describe("[sync-critical] WP-F5 post_replies lane", () => {
 
     // A dead session is the executor's business: it must reach the auth pause
     // unchanged rather than being counted as one bad post.
+    await seedPost(page.id, ref(3), "2026-06-01T00:00:00.000Z");
     const authDead = adapterStub({
       fail: (route) => route === "post_replies" ? new FanslyApiError("unauthorized", 401) : null,
     });
@@ -700,6 +672,52 @@ describe("[sync-critical] WP-F5 post_replies lane", () => {
       appStub(authDead),
       input(page.id, telemetryStub()),
     )).rejects.toMatchObject({ status: 401 });
+  });
+
+  it("lets a healthy post run while failed posts wait for their retry due time", async (
+    context,
+  ) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    const healthyRef = ref(1);
+    await seedPost(page.id, healthyRef, "2026-08-01T00:00:00.000Z");
+    const deadRefs: string[] = [];
+    for (let index = 0; index < 5; index += 1) {
+      const deadRef = ref(index + 10);
+      deadRefs.push(deadRef);
+      await seedPost(
+        page.id,
+        deadRef,
+        `2026-08-${String(index + 10).padStart(2, "0")}T00:00:00.000Z`,
+      );
+    }
+
+    const adapter = adapterStub({
+      fail: (route, index) =>
+        route === "post_replies" && index < 5 ? new FanslyApiError("gone", 404) : null,
+    });
+    const telemetry = telemetryStub();
+    await fanslyPostRepliesChunk(
+      appStub(adapter),
+      input(page.id, telemetry, new SyncChunkBudget(5)),
+    );
+    expect(adapter.calls.slice(0, 5).map((call) => call.params.postId)).toEqual(
+      [...deadRefs].reverse(),
+    );
+
+    const before = adapter.calls.length;
+    await fanslyPostRepliesChunk(
+      appStub(adapter),
+      input(page.id, telemetry, new SyncChunkBudget(5)),
+    );
+    const secondChunkPosts = adapter.calls.slice(before)
+      .filter((call) => call.route === "post_replies")
+      .map((call) => call.params.postId);
+    expect(secondChunkPosts).toContain(healthyRef);
+    expect(secondChunkPosts.some((postId) => deadRefs.includes(String(postId)))).toBe(false);
   });
 
   it("DEFERS at the 100-attempt cap and keeps the response it already fetched", async (
@@ -729,11 +747,13 @@ describe("[sync-critical] WP-F5 post_replies lane", () => {
     expect(result.continuationRetryAt?.toISOString()).toBe("2026-08-23T00:05:00.000Z");
 
     const state = await cursor(page.id);
-    expect(state?.callsToday).toBe(4);
-    // NEVER DROPS: the two responses already fetched are journaled, and their
-    // walk rows are recorded.
-    expect(await requestParams(page.id, "post_replies")).toHaveLength(2);
-    expect((await walkRows(page.id)).filter((row) => row.lastVisitedAt !== null)).toHaveLength(2);
+    expect(state?.callsToday).toBe(3);
+    expect(adapter.physicalAttempts).toBe(3);
+    // NEVER DROPS means every response that DID finish is journaled. The
+    // fourth retry is refused before egress, so the second logical call has no
+    // response to journal and its queue row remains due.
+    expect(await requestParams(page.id, "post_replies")).toHaveLength(1);
+    expect((await walkRows(page.id)).filter((row) => row.lastVisitedAt !== null)).toHaveLength(1);
   });
 
   it("resets the day counter across the UTC roll and keeps the queue", async (context) => {
