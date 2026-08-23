@@ -13,6 +13,13 @@ import { kernel } from "./sdk.js";
 
 type QueryOptions = { enabled?: boolean };
 
+/**
+ * The Analytics page renders every one of these failures itself, per panel,
+ * with a retry. A global toast on top of that is the same news twice — and on
+ * a cold, contended box it is seven of them at once.
+ */
+const ANALYTICS_QUERY_META = { suppressGlobalError: true } as const;
+
 export function useStatsTraffic(
   pageLabel: string,
   window: { from: string; to: string },
@@ -20,6 +27,7 @@ export function useStatsTraffic(
   options: QueryOptions = {},
 ) {
   return useQuery({
+    meta: ANALYTICS_QUERY_META,
     queryKey: ["statsTraffic", pageLabel, window.from, window.to, subjectKind],
     queryFn: () => kernel.statsTraffic({
       params: { pageLabel },
@@ -35,6 +43,7 @@ export function useStatsMedia(
   options: QueryOptions = {},
 ) {
   return useQuery({
+    meta: ANALYTICS_QUERY_META,
     queryKey: ["statsMedia", pageLabel, window.from, window.to],
     queryFn: () => kernel.statsMedia({
       params: { pageLabel },
@@ -52,6 +61,7 @@ export function useStatsTags(
   options: QueryOptions = {},
 ) {
   return useQuery({
+    meta: ANALYTICS_QUERY_META,
     queryKey: ["statsTags", pageLabel, window.from, window.to],
     queryFn: () => kernel.statsTags({ params: { pageLabel }, query: { ...window, limit: 50 } }),
     enabled: (options.enabled ?? true) && pageLabel.length > 0,
@@ -60,6 +70,7 @@ export function useStatsTags(
 
 export function useStatsCoverage(pageLabel: string, options: QueryOptions = {}) {
   return useQuery({
+    meta: ANALYTICS_QUERY_META,
     queryKey: ["statsCoverage", pageLabel],
     queryFn: () => kernel.statsCoverage({ params: { pageLabel } }),
     enabled: (options.enabled ?? true) && pageLabel.length > 0,
@@ -68,6 +79,7 @@ export function useStatsCoverage(pageLabel: string, options: QueryOptions = {}) 
 
 export function useContentMedia(pageLabel: string, options: QueryOptions = {}) {
   return useQuery({
+    meta: ANALYTICS_QUERY_META,
     queryKey: ["contentMedia", pageLabel],
     queryFn: () => kernel.contentMedia({ params: { pageLabel }, query: { limit: 100 } }),
     enabled: (options.enabled ?? true) && pageLabel.length > 0,
@@ -80,6 +92,7 @@ export function useContentComments(
   options: QueryOptions = {},
 ) {
   return useQuery({
+    meta: ANALYTICS_QUERY_META,
     queryKey: ["contentComments", pageLabel, window.from, window.to],
     queryFn: () => kernel.contentComments({
       params: { pageLabel },
@@ -95,6 +108,7 @@ export function useMoneyRevenueMix(
   options: QueryOptions = {},
 ) {
   return useQuery({
+    meta: ANALYTICS_QUERY_META,
     queryKey: ["moneyRevenueMix", pageLabel, window.from, window.to],
     queryFn: () => kernel.moneyRevenueMix({
       params: { pageLabel },
