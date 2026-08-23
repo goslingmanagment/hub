@@ -82,6 +82,13 @@ export type AdapterLike = ProviderAdapter<
       pageIndex?: number;
     },
   ): Promise<FanslyPostsPageResponse>;
+  /** WP-F6 — `GET /post?ids=<csv>`, the engagement refresh phase's only egress.
+   *  Same envelope as the timeline, so it journals under the existing `posts`
+   *  kind and the v6 family parses it with no new branch. */
+  getPostsByIds(
+    context: FanslyRequestContext,
+    ids: string[],
+  ): Promise<FanslyPostsPageResponse>;
   getTipsByTargetIds(
     context: FanslyRequestContext,
     targetIds: string[],
@@ -99,9 +106,18 @@ export type AdapterLike = ProviderAdapter<
   // WP-F1: the `stats_snapshot` lane. Loosely typed in and out on purpose —
   // the handler journals before it asserts, so a typed parse here would refuse
   // bytes DP 7 requires us to keep.
+  // `year`/`month` are the named-month form (1–12); 0/0 — the default — means
+  // "read the bounds". The bounds are honoured only inside the route's own
+  // trailing window, so every window OLDER than that is asked for by month.
   getAccountStats(
     context: FanslyRequestContext,
-    params: { beforeDate: Date; afterDate: Date; periodMs: number },
+    params: {
+      beforeDate: Date;
+      afterDate: Date;
+      periodMs: number;
+      year?: number;
+      month?: number;
+    },
   ): Promise<{ items: unknown; raw: unknown }>;
   getMediaOfferStats(
     context: FanslyRequestContext,
@@ -127,6 +143,61 @@ export type AdapterLike = ProviderAdapter<
     params: { before?: string | null; after?: string | null; types?: readonly number[] | null },
   ): Promise<{ items: unknown; raw: unknown }>;
 
+  // WP-F3: the `catalog` lane. Loosely typed in and out — every one of these
+  // responses is journaled BEFORE anything asserts a shape about it.
+  getVaultAlbums(context: FanslyRequestContext): Promise<{ items: unknown; raw: unknown }>;
+  getUserVaultAlbums(
+    context: FanslyRequestContext,
+    params: { accountId: string },
+  ): Promise<{ items: unknown; raw: unknown }>;
+  getSubscriptionTiers(context: FanslyRequestContext): Promise<{ items: unknown; raw: unknown }>;
+  getGiftCodes(context: FanslyRequestContext): Promise<{ items: unknown; raw: unknown }>;
+  getAutomatedMessages(context: FanslyRequestContext): Promise<{ items: unknown; raw: unknown }>;
+  // `before`/`after` are the LITERAL string "0" on the first page (§ the app
+  // bundle); `mediaType` is present and empty when unfiltered.
+  getVaultMediaPage(
+    context: FanslyRequestContext,
+    params: {
+      albumId?: string | null;
+      type?: number | null;
+      mediaType?: string | null;
+      before?: string | null;
+      after?: string | null;
+      search?: string | null;
+    },
+  ): Promise<{ items: unknown; raw: unknown }>;
+  getAccountMediaByIds(
+    context: FanslyRequestContext,
+    params: { ids: string },
+  ): Promise<{ items: unknown; raw: unknown }>;
+  getAccountMediaBundlesByIds(
+    context: FanslyRequestContext,
+    params: { ids: string },
+  ): Promise<{ items: unknown; raw: unknown }>;
+  getAccountWalls(
+    context: FanslyRequestContext,
+    params: { correlationPostIds?: string | null },
+  ): Promise<{ items: unknown; raw: unknown }>;
+
+  // WP-F7 — the payouts lane. Two routes, both GET, both loosely typed: the
+  // body is journaled before anything asserts on its shape, and `metadata`
+  // (a JSON-ENCODED STRING that can carry a plaintext email) is decoded in the
+  // canonicalizer, never here and never in SQL.
+  getPayoutMethods(
+    context: FanslyRequestContext,
+  ): Promise<{ items: unknown; raw: unknown }>;
+  getPayoutRequestsPage(
+    context: FanslyRequestContext,
+    params: {
+      /** Present and EMPTY when unbounded — exactly as the app sends it. */
+      before?: string | null;
+      after?: string | null;
+      limit: number;
+      /** Zero-based ROW offset, not a page index. */
+      offset: number;
+    },
+  ): Promise<{ items: unknown; raw: unknown }>;
+
   // Stage 6 replay-probe methods (read-only, loosely typed — Stage 16 hardens).
   getEarningsStatsAccountsPage(
     context: FanslyRequestContext,
@@ -150,9 +221,13 @@ export type AdapterLike = ProviderAdapter<
   // Liveness probes — WP-F9 (`dm_commerce`) + [E1]. Bundle-derived routes, never
   // yet served to us; deliberately `unknown` in and out until a real response has
   // been inspected. See services/fansly-endpoint-probe.ts. All read-only GETs.
+  // WP-F5's own lane calls this one now (the probe declared it first). BARE
+  // GET, always — `POST /postreply/verify` is never issued. `before` is offered
+  // because every other paginated Fansly route uses it, and is sent only after
+  // a page looks suspiciously full.
   getPostRepliesPage(
     context: FanslyRequestContext,
-    params: { postId: string },
+    params: { postId: string; before?: string | null },
   ): Promise<{ items: unknown; raw: unknown }>;
   getGroupMediaOffersPage(
     context: FanslyRequestContext,
@@ -186,13 +261,10 @@ export type AdapterLike = ProviderAdapter<
   ): Promise<{ items: unknown; raw: unknown }>;
   getPolls(context: FanslyRequestContext): Promise<{ items: unknown; raw: unknown }>;
   getRecapStats(context: FanslyRequestContext): Promise<{ items: unknown; raw: unknown }>;
-  getAccountMediaByIds(context: FanslyRequestContext, params: { ids: string }): Promise<{ items: unknown; raw: unknown }>;
-  getAccountMediaBundlesByIds(context: FanslyRequestContext, params: { ids: string }): Promise<{ items: unknown; raw: unknown }>;
-  getAccountWalls(context: FanslyRequestContext, params: { correlationPostIds?: string | null }): Promise<{ items: unknown; raw: unknown }>;
-  getVaultMediaPage(
-    context: FanslyRequestContext,
-    params: { albumId?: string | null; type?: number | null; mediaType?: number | null; before?: string | null; after?: string | null },
-  ): Promise<{ items: unknown; raw: unknown }>;
+  // (The WP-F9 probe's declarations of the four catalog routes moved up to the
+  // WP-F3 block above when the lane that CALLS them landed — one declaration
+  // per method, and `getVaultMediaPage`'s `mediaType` is a STRING there because
+  // the app sends it present-and-empty when unfiltered.)
 
   close?(): Promise<void>;
 };

@@ -43,6 +43,24 @@ import {
   FANSLY_ENGAGEMENT_CANONICALIZED_KINDS,
   FANSLY_ENGAGEMENT_CANONICALIZER_VERSION,
 } from "./fansly-engagement.ts";
+import {
+  canonicalizeFanslyCatalogObservation,
+  canParseFanslyCatalogObservation,
+  FANSLY_CATALOG_CANONICALIZED_KINDS,
+  FANSLY_CATALOG_CANONICALIZER_VERSION,
+} from "./fansly-catalog.ts";
+import {
+  canonicalizeFanslyCommentsObservation,
+  canParseFanslyCommentsObservation,
+  FANSLY_COMMENTS_CANONICALIZED_KINDS,
+  FANSLY_COMMENTS_CANONICALIZER_VERSION,
+} from "./fansly-comments.ts";
+import {
+  canonicalizeFanslyPayoutsObservation,
+  canParseFanslyPayoutsObservation,
+  FANSLY_PAYOUTS_CANONICALIZED_KINDS,
+  FANSLY_PAYOUTS_CANONICALIZER_VERSION,
+} from "./fansly-payouts.ts";
 
 export interface CanonicalizerFamily {
   source: "webhook" | "pull" | "command_result" | "client_capture";
@@ -141,6 +159,51 @@ export const CANONICALIZER_FAMILIES: readonly CanonicalizerFamily[] = [
     version: FANSLY_ENGAGEMENT_CANONICALIZER_VERSION,
     canonicalize: canonicalizeFanslyEngagementObservation,
     canParse: canParseFanslyEngagementObservation,
+    projectionOnly: true,
+  },
+  {
+    // WP-F3: the `catalog` lane. Projection-only, and the ONE family that emits
+    // an event about an ABSENCE — `catalog.listing_observed` carries the full
+    // roster a listing served, which is what lets a rebuild derive
+    // `missing_since` from the ledger instead of from whatever the sweep
+    // happened to notice at the time.
+    source: "pull",
+    lane: "catalog",
+    kinds: [...FANSLY_CATALOG_CANONICALIZED_KINDS],
+    version: FANSLY_CATALOG_CANONICALIZER_VERSION,
+    canonicalize: canonicalizeFanslyCatalogObservation,
+    canParse: canParseFanslyCatalogObservation,
+    projectionOnly: true,
+  },
+  {
+    // WP-F5: the `post_replies` lane. Projection-only — a comment is a fact
+    // about the archive, not news an SSE v2 client should be handed as it
+    // happens. It is the one family whose observation payload is an ENVELOPE
+    // (`{walk, response}`): the post id lives in the request PATH, so the
+    // response that matters most — the empty one — cannot say which post it is
+    // about, and a parser that could not answer that could never mark a
+    // deleted comment missing.
+    source: "pull",
+    lane: "comments",
+    kinds: [...FANSLY_COMMENTS_CANONICALIZED_KINDS],
+    version: FANSLY_COMMENTS_CANONICALIZER_VERSION,
+    canonicalize: canonicalizeFanslyCommentsObservation,
+    canParse: canParseFanslyCommentsObservation,
+    projectionOnly: true,
+  },
+  {
+    // WP-F7: the `payouts` lane. Projection-only — money OUT is a fact about
+    // the agency's own books, never news an SSE v2 client should be handed as
+    // it happens. It is also the family with the strictest read on what it may
+    // emit: `/payments/payoutmethods` carries the creator's payout CREDENTIALS
+    // (provider 2 returns a plaintext email), and the ONLY thing derived from
+    // that field which ever leaves this family is a mask this repository owns.
+    source: "pull",
+    lane: "payouts",
+    kinds: [...FANSLY_PAYOUTS_CANONICALIZED_KINDS],
+    version: FANSLY_PAYOUTS_CANONICALIZER_VERSION,
+    canonicalize: canonicalizeFanslyPayoutsObservation,
+    canParse: canParseFanslyPayoutsObservation,
     projectionOnly: true,
   },
   {

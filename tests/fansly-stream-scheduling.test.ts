@@ -35,14 +35,23 @@ describe("Fansly bulk-stream scheduling", () => {
       { id: 12, label: "other-page" },
     ]);
     dbMocks.reconcileFanslyBulkStreamGate
-      // Page 11: fan_earnings, purchase_history, stats_snapshot, notifications.
+      // Page 11: fan_earnings, purchase_history, stats_snapshot, notifications,
+      // catalog, post_replies, payouts, media_stats.
       .mockResolvedValueOnce({ action: "unchanged", createdRecoveryGeneration: false })
       .mockResolvedValueOnce({ action: "paused", createdRecoveryGeneration: false })
       .mockResolvedValueOnce({ action: "unchanged", createdRecoveryGeneration: false })
       .mockResolvedValueOnce({ action: "resumed", createdRecoveryGeneration: true })
-      // Page 12: the same four.
+      .mockResolvedValueOnce({ action: "unchanged", createdRecoveryGeneration: false })
+      .mockResolvedValueOnce({ action: "unchanged", createdRecoveryGeneration: false })
+      .mockResolvedValueOnce({ action: "unchanged", createdRecoveryGeneration: false })
+      .mockResolvedValueOnce({ action: "unchanged", createdRecoveryGeneration: false })
+      // Page 12: the same eight.
       .mockResolvedValueOnce({ action: "paused", createdRecoveryGeneration: false })
       .mockResolvedValueOnce({ action: "resumed", createdRecoveryGeneration: true })
+      .mockResolvedValueOnce({ action: "unchanged", createdRecoveryGeneration: false })
+      .mockResolvedValueOnce({ action: "unchanged", createdRecoveryGeneration: false })
+      .mockResolvedValueOnce({ action: "unchanged", createdRecoveryGeneration: false })
+      .mockResolvedValueOnce({ action: "unchanged", createdRecoveryGeneration: false })
       .mockResolvedValueOnce({ action: "unchanged", createdRecoveryGeneration: false })
       .mockResolvedValueOnce({ action: "unchanged", createdRecoveryGeneration: false });
     configMocks.loadEffectiveConfig.mockResolvedValue({
@@ -57,6 +66,19 @@ describe("Fansly bulk-stream scheduling", () => {
       // WP-F2: its OWN fail-closed key, on the same template.
       fanslyNotificationsSyncEnabled: true,
       fanslyNotificationsPageAllowlist: "lora-1",
+      // WP-F3: its OWN fail-closed key, on the same template.
+      fanslyCatalogSyncEnabled: true,
+      fanslyCatalogPageAllowlist: "lora-1",
+      // WP-F5: its OWN fail-closed key, on the same template.
+      fanslyPostRepliesSyncEnabled: true,
+      fanslyPostRepliesPageAllowlist: "lora-1",
+      // WP-F7: its OWN fail-closed key, on the same template.
+      fanslyPayoutsSyncEnabled: true,
+      fanslyPayoutsPageAllowlist: "lora-1",
+      // WP-F4: its OWN fail-closed key, and the lane where the fail-OPEN
+      // semantic would have cost the most.
+      fanslyMediaStatsSyncEnabled: true,
+      fanslyMediaStatsPageAllowlist: "lora-1",
     });
   });
 
@@ -96,6 +118,30 @@ describe("Fansly bulk-stream scheduling", () => {
         now,
       },
       {
+        pageId: 11,
+        stream: "catalog",
+        gateState: "ramped",
+        now,
+      },
+      {
+        pageId: 11,
+        stream: "post_replies",
+        gateState: "ramped",
+        now,
+      },
+      {
+        pageId: 11,
+        stream: "payouts",
+        gateState: "ramped",
+        now,
+      },
+      {
+        pageId: 11,
+        stream: "media_stats",
+        gateState: "ramped",
+        now,
+      },
+      {
         pageId: 12,
         stream: "fan_earnings",
         gateState: "not_allowlisted",
@@ -118,6 +164,35 @@ describe("Fansly bulk-stream scheduling", () => {
         // lane is `not_allowlisted` even though its flag is ON.
         pageId: 12,
         stream: "notifications",
+        gateState: "not_allowlisted",
+        now,
+      },
+      {
+        // WP-F3's key, same rule.
+        pageId: 12,
+        stream: "catalog",
+        gateState: "not_allowlisted",
+        now,
+      },
+      {
+        // WP-F5's key, same rule again.
+        pageId: 12,
+        stream: "post_replies",
+        gateState: "not_allowlisted",
+        now,
+      },
+      {
+        // WP-F7's key, same rule again.
+        pageId: 12,
+        stream: "payouts",
+        gateState: "not_allowlisted",
+        now,
+      },
+      {
+        // WP-F4's key, same rule again — and the one where a fail-OPEN read
+        // would have started a 300-call-a-day per-media walk on `other-page`.
+        pageId: 12,
+        stream: "media_stats",
         gateState: "not_allowlisted",
         now,
       },

@@ -1,0 +1,25 @@
+-- WP-F3 stream vocabulary: `catalog`, the daily inventory sweep.
+--
+-- It is the lane that MEASURES M — the count of unique media offers a page
+-- holds — and M is the only unknown in WP-F4's sizing. That is why `catalog`
+-- ships before the per-media statistics lane rather than beside it: a media
+-- lane sized against a guessed M is a lane whose long-tail refresh cycle is a
+-- number nobody has ever computed.
+--
+-- DDL ONLY, and its own file, for the two reasons 0131 and 0133 state:
+--
+-- 1. `ALTER TYPE ... ADD VALUE` is fine inside a per-file transaction on
+--    PG >= 12, but the new value cannot be USED by a row insert in the same
+--    transaction (the 0060/0120 precedent). Keeping the enum alone in its file
+--    makes that impossible by construction.
+-- 2. §3.3's ordering rule: enum values may land early, but a stream enters the
+--    TS-side SYNC_STREAMS/PLATFORM_STREAMS unions only in the slice that ships
+--    its handler, gate, seed-pause, rollup exemption, monitor entry and gate
+--    registration. Enum-first, TS-last.
+--
+-- The remaining planned streams (media_stats, post_replies, payouts) are
+-- DELIBERATELY not added here: each arrives with the package that ships its
+-- handler, so an enum value can never name a lane that would throw
+-- "Unsupported executor stream" on dispatch, fleet-wide.
+
+ALTER TYPE "sync_stream" ADD VALUE IF NOT EXISTS 'catalog';

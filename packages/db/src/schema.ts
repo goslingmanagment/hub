@@ -143,6 +143,22 @@ export const syncStreamEnum = pgEnum("sync_stream", [
   // WP-F2 (migration 0133): the notification poll — the only permanently-lossy
   // lane, which is why it is `live` rather than maintenance.
   "notifications",
+  // WP-F3 (migration 0135): the daily content-catalog sweep — the lane that
+  // measures M, the media denominator WP-F4 is sized against.
+  "catalog",
+  // WP-F5 (migration 0137): the comment archive walk over
+  // `/post/{postId}/replies`. History class — a big back-catalogue on a small
+  // daily budget, and the ONLY lane whose existence had to be probed first
+  // ([E1]: the bare GET works, so no POST is ever issued).
+  "post_replies",
+  // WP-F7 (migration 0140): the money-out lane — `/payments/payoutmethods` and
+  // `/payments/payout/requests`, two routes, both GET. Maintenance class at
+  // 86 400 s: a payout moves in days, and the whole steady state is two calls.
+  "payouts",
+  // WP-F4 (migration 0142): per-media statistics — `/it/moie/statsnew` over the
+  // WHOLE catalogue at an age-decayed cadence. The highest fan-out lane here,
+  // and the only one designed to run at 100 % of its own cap.
+  "media_stats",
 ]);
 export const pageSyncStatusEnum = pgEnum("page_sync_status", [
   "idle",
@@ -3550,6 +3566,39 @@ export const creatorPosts = pgTable(
     tipGoalTargetMills: bigint("tip_goal_target_mills", { mode: "bigint" }),
     tipGoalCurrentMills: bigint("tip_goal_current_mills", { mode: "bigint" }),
     tipGoalAmountsHidden: boolean("tip_goal_amounts_hidden"),
+    // ── WP-F6 (migration 0139): the widened post head ───────────────────────
+    /** Engagement counters as served. ABSENT IS NULL, NEVER 0 — `replyCount`
+     * was absent on 6 of 15 timeline posts in the 2026-08-19 capture. */
+    likeCount: bigint("like_count", { mode: "bigint" }),
+    /** Likes on the post's ATTACHED MEDIA — a different number from
+     * `likeCount` (30 vs 159 on the one post read through `GET /post?ids=`). */
+    mediaLikeCount: bigint("media_like_count", { mode: "bigint" }),
+    replyCount: bigint("reply_count", { mode: "bigint" }),
+    /** The raw FYP bitfield; no label table exists and inventing one would
+     * repeat A22-2. */
+    fypFlags: integer("fyp_flags"),
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+    /** Thread position, kept apart even though both were null on every observed
+     * creator post: the day a reply-post arrives the difference is the thread. */
+    inReplyToRef: text("in_reply_to_ref"),
+    inReplyToRootRef: text("in_reply_to_root_ref"),
+    /** NULL = the response did not carry the field; `[]` = it carried it empty. */
+    wallRefs: text("wall_refs").array(),
+    /** Caption mentions — CREATOR refs, not fan refs (§9.3 does not reach it). */
+    accountMentionRefs: text("account_mention_refs").array(),
+    /** DERIVED from `textPlain` only (A8). Raw token, NFKC-lowercased form and
+     * the parser version that produced both — one fact in three paired parts. */
+    hashtags: text("hashtags").array(),
+    hashtagsNormalized: text("hashtags_normalized").array(),
+    hashtagParserVersion: integer("hashtag_parser_version"),
+    /** The attachments' id-relations only: `{pos, contentType, contentId}`.
+     * No URL, no CDN path — those stay in the raw journal. */
+    attachmentRefs: jsonbSafe("attachment_refs").$type<
+      Array<{ pos: number | null; contentType: number | null; contentId: string | null }>
+    >(),
+    /** When the counters were last observed. Written by the projector from the
+     * event's own `observedAt`, so a rebuild reproduces it. */
+    engagementObservedAt: timestamp("engagement_observed_at", { withTimezone: true }),
     sourceEventId: bigint("source_event_id", { mode: "number" }).notNull(),
     sourceObservationId: bigint("source_observation_id", { mode: "number" }).notNull(),
     sourceAccountSeq: bigint("source_account_seq", { mode: "number" }).notNull(),
@@ -3629,6 +3678,44 @@ export const creatorPosts = pgTable(
       table.accountId,
       table.lastObservedAt.desc(),
       table.id.desc(),
+    ),
+    // ── WP-F6 (migration 0139) ──────────────────────────────────────────────
+    engagementCountsCheck: check(
+      "creator_posts_engagement_counts_check",
+      sql`(${table.likeCount} is null or ${table.likeCount} >= 0)
+        and (${table.mediaLikeCount} is null or ${table.mediaLikeCount} >= 0)
+        and (${table.replyCount} is null or ${table.replyCount} >= 0)
+        and (${table.fypFlags} is null or ${table.fypFlags} >= 0)`,
+    ),
+    threadRefsCheck: check(
+      "creator_posts_thread_refs_check",
+      sql`(${table.inReplyToRef} is null or length(${table.inReplyToRef}) > 0)
+        and (${table.inReplyToRootRef} is null or length(${table.inReplyToRootRef}) > 0)`,
+    ),
+    refArraysCheck: check(
+      "creator_posts_ref_arrays_check",
+      sql`(${table.wallRefs} is null or array_position(${table.wallRefs}, null) is null)
+        and (
+          ${table.accountMentionRefs} is null
+          or array_position(${table.accountMentionRefs}, null) is null
+        )
+        and (${table.hashtags} is null or array_position(${table.hashtags}, null) is null)
+        and (
+          ${table.hashtagsNormalized} is null
+          or array_position(${table.hashtagsNormalized}, null) is null
+        )`,
+    ),
+    hashtagPairingCheck: check(
+      "creator_posts_hashtag_pairing_check",
+      sql`(${table.hashtags} is null) = (${table.hashtagsNormalized} is null)
+        and (${table.hashtags} is null) = (${table.hashtagParserVersion} is null)
+        and (
+          ${table.hashtags} is null
+          or cardinality(${table.hashtags}) = cardinality(${table.hashtagsNormalized})
+        )`,
+    ),
+    engagementObservedIdx: index("creator_posts_engagement_observed_idx").on(
+      table.engagementObservedAt,
     ),
   }),
 );
@@ -5142,6 +5229,20 @@ export const pagePromoLinks = pgTable(
     subscriptions: bigint("subscriptions", { mode: "number" }),
     totalGrossMills: bigint("total_gross_mills", { mode: "bigint" }),
     totalNetMills: bigint("total_net_mills", { mode: "bigint" }),
+    // ── WP-F3 (0136): the GIFT-CODE half. Added rather than borrowed from the
+    // tracking columns above — `total_gross_mills` is REVENUE and
+    // `original_price_mills` is a LIST PRICE, and money of unknown basis is
+    // never summed with money of known basis (§2.3), inside one table as much
+    // as across two.
+    uses: bigint("uses", { mode: "number" }),
+    maxUses: bigint("max_uses", { mode: "number" }),
+    priceMills: bigint("price_mills", { mode: "bigint" }),
+    /** `original_price` — snake_case on the wire amid camelCase keys. */
+    originalPriceMills: bigint("original_price_mills", { mode: "bigint" }),
+    startsAtPlatform: timestamp("starts_at_platform", { withTimezone: true }),
+    endsAtPlatform: timestamp("ends_at_platform", { withTimezone: true }),
+    /** Set when a later FULL listing stops naming this link. Never deleted. */
+    missingSince: timestamp("missing_since", { withTimezone: true }),
     capturedAt: timestamp("captured_at", { withTimezone: true }).notNull(),
     contentHash: char("content_hash", { length: 64 }).notNull(),
     firstObservedAt: timestamp("first_observed_at", { withTimezone: true }).notNull(),
@@ -5546,6 +5647,519 @@ export const subjectRefreshState = pgTable(
       table.pageId,
       table.plane,
       table.nextDueAt,
+    ),
+  }),
+);
+
+// ── WP-F3, migration 0136: the content catalog ───────────────────────────────
+
+/**
+ * Both vaults, told apart by `vaultKind` — which is in the PRIMARY KEY, not a
+ * nullable label. `/vault/albumsnew` is the creator's inventory;
+ * `/uservault/albumsnew?accountId=` is the account's own Likes/Purchases and
+ * holds OTHER creators' media, so merging the two would make purchases
+ * indistinguishable from inventory.
+ *
+ * `itemCount` is stored AS SERVED and is NON-UNIQUE membership: the system
+ * albums (type 38000 / 5000 / 1000) are views over the same media, so Σ over a
+ * page double-counts. M is `count(distinct media_offer_ref)` over
+ * `creator_media`, never a sum of this column.
+ */
+export const creatorVaultAlbums = pgTable(
+  "creator_vault_albums",
+  {
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    platform: platformColumn("platform")
+      .references(() => platforms.key, { onDelete: "restrict" })
+      .notNull(),
+    /** `creator` | `user`. */
+    vaultKind: text("vault_kind").notNull(),
+    albumRef: text("album_ref").notNull(),
+    ownerAccountRef: text("owner_account_ref"),
+    title: text("title"),
+    description: text("description"),
+    /** RAW platform integer; NULL on creator-made albums. */
+    albumType: integer("album_type"),
+    status: integer("status"),
+    pos: integer("pos"),
+    /** AS SERVED. Non-unique membership — see the note above. */
+    itemCount: bigint("item_count", { mode: "number" }),
+    lastItemRef: text("last_item_ref"),
+    thumbnailRef: text("thumbnail_ref"),
+    public: integer("public"),
+    version: integer("version"),
+    createdAtPlatform: timestamp("created_at_platform", { withTimezone: true }),
+    /** Set when a later FULL listing of the same vault stops naming this
+     *  album. The row is never deleted (DP 7). */
+    missingSince: timestamp("missing_since", { withTimezone: true }),
+    firstObservedAt: timestamp("first_observed_at", { withTimezone: true }).notNull(),
+    lastObservedAt: timestamp("last_observed_at", { withTimezone: true }).notNull(),
+    contentHash: char("content_hash", { length: 64 }).notNull(),
+    sourceEventId: bigint("source_event_id", { mode: "number" }).notNull(),
+    sourceObservationId: bigint("source_observation_id", { mode: "number" }).notNull(),
+    sourceAccountSeq: bigint("source_account_seq", { mode: "number" }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({
+      name: "creator_vault_albums_pkey",
+      columns: [table.pageId, table.vaultKind, table.albumRef],
+    }),
+    pageKindPosIdx: index("creator_vault_albums_page_kind_pos_idx").on(
+      table.pageId,
+      table.vaultKind,
+      table.pos,
+    ),
+  }),
+);
+
+/**
+ * Album ↔ media-offer membership: the overlap-aware evidence behind M. The
+ * union of `mediaOfferRef` over an exhausted CREATOR vault is the honest
+ * inventory size; the gap between that union and Σ `itemCount` is exactly the
+ * double-count the system albums cause.
+ *
+ * `memberRef` is the membership row's OWN id (`albumMedia[].id`) — the vault
+ * walk's `before` cursor, and NOT the same value as `mediaOfferRef`.
+ */
+export const creatorVaultAlbumMembers = pgTable(
+  "creator_vault_album_members",
+  {
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    platform: platformColumn("platform")
+      .references(() => platforms.key, { onDelete: "restrict" })
+      .notNull(),
+    albumRef: text("album_ref").notNull(),
+    mediaOfferRef: text("media_offer_ref").notNull(),
+    memberRef: text("member_ref"),
+    mediaOfferType: integer("media_offer_type"),
+    bundleRef: text("bundle_ref"),
+    mediaRef: text("media_ref"),
+    mediaType: integer("media_type"),
+    previewRef: text("preview_ref"),
+    /** `creator` | `user` — denormalized from the album so the M query does
+     *  not have to join to exclude the purchases shelf. */
+    vaultKind: text("vault_kind").notNull(),
+    createdAtPlatform: timestamp("created_at_platform", { withTimezone: true }),
+    missingSince: timestamp("missing_since", { withTimezone: true }),
+    firstObservedAt: timestamp("first_observed_at", { withTimezone: true }).notNull(),
+    lastObservedAt: timestamp("last_observed_at", { withTimezone: true }).notNull(),
+    contentHash: char("content_hash", { length: 64 }).notNull(),
+    sourceEventId: bigint("source_event_id", { mode: "number" }).notNull(),
+    sourceObservationId: bigint("source_observation_id", { mode: "number" }).notNull(),
+    sourceAccountSeq: bigint("source_account_seq", { mode: "number" }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({
+      name: "creator_vault_album_members_pkey",
+      columns: [table.pageId, table.albumRef, table.mediaOfferRef],
+    }),
+    pageKindOfferIdx: index("creator_vault_album_members_page_kind_offer_idx").on(
+      table.pageId,
+      table.vaultKind,
+      table.mediaOfferRef,
+    ),
+    pageOfferIdx: index("creator_vault_album_members_page_offer_idx").on(
+      table.pageId,
+      table.mediaOfferRef,
+    ),
+  }),
+);
+
+/**
+ * The tier HEAD. `basePriceMills` is `tier.price` — a BASE, not a price: all
+ * five observed tiers carried 5 000 while their plans ranged 10 000 … 499 990.
+ * The queryable price truth is `pageSubscriptionTierPlans` (FEAT-002); `plans`
+ * keeps the served array verbatim beside it as the proof nothing was dropped.
+ */
+export const pageSubscriptionTiers = pgTable(
+  "page_subscription_tiers",
+  {
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    platform: platformColumn("platform")
+      .references(() => platforms.key, { onDelete: "restrict" })
+      .notNull(),
+    tierRef: text("tier_ref").notNull(),
+    name: text("name"),
+    color: text("color"),
+    pos: integer("pos"),
+    /** `tier.price` — a BASE, never the price a subscriber pays. */
+    basePriceMills: bigint("base_price_mills", { mode: "bigint" }),
+    maxSubscribers: bigint("max_subscribers", { mode: "number" }),
+    subscriptionBenefits: jsonbSafe("subscription_benefits").$type<unknown[]>().default([])
+      .notNull(),
+    includedTierRefs: jsonbSafe("included_tier_refs").$type<unknown[]>().default([]).notNull(),
+    /** The served `plans[]` array, VERBATIM. */
+    plans: jsonbSafe("plans").$type<unknown[]>().default([]).notNull(),
+    missingSince: timestamp("missing_since", { withTimezone: true }),
+    firstObservedAt: timestamp("first_observed_at", { withTimezone: true }).notNull(),
+    lastObservedAt: timestamp("last_observed_at", { withTimezone: true }).notNull(),
+    contentHash: char("content_hash", { length: 64 }).notNull(),
+    sourceEventId: bigint("source_event_id", { mode: "number" }).notNull(),
+    sourceObservationId: bigint("source_observation_id", { mode: "number" }).notNull(),
+    sourceAccountSeq: bigint("source_account_seq", { mode: "number" }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({
+      name: "page_subscription_tiers_pkey",
+      columns: [table.pageId, table.tierRef],
+    }),
+    pagePosIdx: index("page_subscription_tiers_page_pos_idx").on(table.pageId, table.pos),
+  }),
+);
+
+/**
+ * THE PRICE TRUTH (FEAT-002). `durationDays` reads `plans[].billingCycle` —
+ * verified on the live capture, where every plan carried `billingCycle` and no
+ * `duration` key at all (`duration` exists one level down, on `promos[]`).
+ * Maximum plan price observed live is 499 990.
+ */
+export const pageSubscriptionTierPlans = pgTable(
+  "page_subscription_tier_plans",
+  {
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    platform: platformColumn("platform")
+      .references(() => platforms.key, { onDelete: "restrict" })
+      .notNull(),
+    tierRef: text("tier_ref").notNull(),
+    planRef: text("plan_ref").notNull(),
+    status: integer("status"),
+    durationDays: integer("duration_days"),
+    priceMills: bigint("price_mills", { mode: "bigint" }),
+    useAmounts: integer("use_amounts"),
+    /** The nested promo array, verbatim: discounted price, window, max uses. */
+    promos: jsonbSafe("promos").$type<unknown[]>().default([]).notNull(),
+    missingSince: timestamp("missing_since", { withTimezone: true }),
+    firstObservedAt: timestamp("first_observed_at", { withTimezone: true }).notNull(),
+    lastObservedAt: timestamp("last_observed_at", { withTimezone: true }).notNull(),
+    contentHash: char("content_hash", { length: 64 }).notNull(),
+    sourceEventId: bigint("source_event_id", { mode: "number" }).notNull(),
+    sourceObservationId: bigint("source_observation_id", { mode: "number" }).notNull(),
+    sourceAccountSeq: bigint("source_account_seq", { mode: "number" }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({
+      name: "page_subscription_tier_plans_pkey",
+      columns: [table.pageId, table.tierRef, table.planRef],
+    }),
+    pagePriceIdx: index("page_subscription_tier_plans_page_price_idx").on(
+      table.pageId,
+      table.durationDays,
+      table.priceMills,
+    ),
+  }),
+);
+
+/**
+ * The profile's content sections. `pages.metadata.walls` already holds a
+ * current-state hint from `/account`; this table is the LINEAGE — the first
+ * captured `/account/walls` read is the projection baseline, and a renamed or
+ * deleted wall keeps its row and gains `missingSince`.
+ */
+export const pageWalls = pgTable(
+  "page_walls",
+  {
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    platform: platformColumn("platform")
+      .references(() => platforms.key, { onDelete: "restrict" })
+      .notNull(),
+    wallRef: text("wall_ref").notNull(),
+    name: text("name"),
+    description: text("description"),
+    pos: integer("pos"),
+    /** Two independent flags on the wire; one wall can be neither. */
+    mainWall: boolean("main_wall"),
+    defaultWall: boolean("default_wall"),
+    private: integer("private"),
+    metadata: jsonbSafe("metadata").$type<Record<string, unknown>>().default({}).notNull(),
+    missingSince: timestamp("missing_since", { withTimezone: true }),
+    firstObservedAt: timestamp("first_observed_at", { withTimezone: true }).notNull(),
+    lastObservedAt: timestamp("last_observed_at", { withTimezone: true }).notNull(),
+    contentHash: char("content_hash", { length: 64 }).notNull(),
+    sourceEventId: bigint("source_event_id", { mode: "number" }).notNull(),
+    sourceObservationId: bigint("source_observation_id", { mode: "number" }).notNull(),
+    sourceAccountSeq: bigint("source_account_seq", { mode: "number" }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ name: "page_walls_pkey", columns: [table.pageId, table.wallRef] }),
+    pagePosIdx: index("page_walls_page_pos_idx").on(table.pageId, table.pos),
+  }),
+);
+
+/**
+ * What the page says without a human. `messageTemplate` is a JSON OBJECT in
+ * every live value (verified 2026-08-19); the tolerant fallback for the
+ * March-corpus STRING shape sets `parseOk = false` and leaves the raw in the
+ * journal, because an unparsed template and an automation with no text must
+ * never look alike.
+ */
+export const pageAutomatedMessages = pgTable(
+  "page_automated_messages",
+  {
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    platform: platformColumn("platform")
+      .references(() => platforms.key, { onDelete: "restrict" })
+      .notNull(),
+    automationRef: text("automation_ref").notNull(),
+    /** RAW platform code (3 and 15 observed live). Never a label. */
+    triggerType: integer("trigger_type"),
+    /** Served as a JSON STRING; parsed when it parses, `{"raw": …}` when not. */
+    triggerMetadata: jsonbSafe("trigger_metadata").$type<Record<string, unknown>>().default({})
+      .notNull(),
+    delaySeconds: bigint("delay_seconds", { mode: "number" }),
+    cooldownSeconds: bigint("cooldown_seconds", { mode: "number" }),
+    templateType: integer("template_type"),
+    senderRef: text("sender_ref"),
+    messageText: text("message_text"),
+    /** `[{contentType, contentId}]` — id-relations only, never a URL. */
+    attachmentRefs: jsonbSafe("attachment_refs").$type<unknown[]>().default([]).notNull(),
+    parseOk: boolean("parse_ok").default(true).notNull(),
+    missingSince: timestamp("missing_since", { withTimezone: true }),
+    firstObservedAt: timestamp("first_observed_at", { withTimezone: true }).notNull(),
+    lastObservedAt: timestamp("last_observed_at", { withTimezone: true }).notNull(),
+    contentHash: char("content_hash", { length: 64 }).notNull(),
+    sourceEventId: bigint("source_event_id", { mode: "number" }).notNull(),
+    sourceObservationId: bigint("source_observation_id", { mode: "number" }).notNull(),
+    sourceAccountSeq: bigint("source_account_seq", { mode: "number" }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({
+      name: "page_automated_messages_pkey",
+      columns: [table.pageId, table.automationRef],
+    }),
+    pageTriggerIdx: index("page_automated_messages_page_trigger_idx").on(
+      table.pageId,
+      table.triggerType,
+    ),
+  }),
+);
+
+// ── WP-F5, migration 0138: the comment archive ───────────────────────────────
+
+/**
+ * `post_comments` — full comment bodies, PLATFORM-NEUTRAL by construction.
+ *
+ * Fansly's `/post/{id}/replies` walk writes it today; a comment-signal
+ * notification and the OnlyFans comment list are the other two declared
+ * origins, and `discoveredVia` is what tells them apart. "Where did this row
+ * come from" is the question a partial archive must be able to answer, and it
+ * must never be guessable from the row's shape.
+ *
+ * `textPlain` defaults to `''` and EMPTY-CONTENT REPLIES ARE STORED: one of the
+ * four replies in the 18 KB live capture has `content: ""`, and a fan who
+ * replied with only an attachment still replied.
+ *
+ * `possiblyTruncated` is truthfulness about pagination. `/post/{id}/replies` has
+ * NO established pagination — no observed response carried more than four
+ * replies and no cursor form is proven — so a suspiciously full page marks its
+ * rows and the lane's coverage reads `window_captured`, never complete. The
+ * doubt belongs to the ROW, because it outlives the sweep that created it.
+ */
+export const postComments = pgTable(
+  "post_comments",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    platform: platformColumn("platform")
+      .references(() => platforms.key, { onDelete: "restrict" })
+      .notNull(),
+    commentRef: text("comment_ref").notNull(),
+    /** `inReplyTo`. */
+    parentPostRef: text("parent_post_ref").notNull(),
+    /** `inReplyToRoot`. Stored separately even though it equalled
+     *  `parentPostRef` in every observed reply: the day a nested reply arrives,
+     *  the difference is what reconstructs the thread. */
+    rootPostRef: text("root_post_ref"),
+    /** The author. A TEXT platform ref with NO FK to `fans`, so only the
+     *  explicit erasure predicate reaches it (FAN_REF_ERASURE_COLUMNS). */
+    authorRef: text("author_ref").notNull(),
+    /** From the `accounts[]` sidecar — EMPTY in 2 of 5 captured responses,
+     *  which is why these are nullable and why the hydration fallback exists. */
+    authorUsername: text("author_username"),
+    authorDisplayName: text("author_display_name"),
+    textPlain: text("text_plain").default("").notNull(),
+    likeCount: integer("like_count"),
+    mediaLikeCount: integer("media_like_count"),
+    /** MILLS, two bases, never summed (§2.3). */
+    tipTotalMills: bigint("tip_total_mills", { mode: "bigint" }),
+    attachmentTipMills: bigint("attachment_tip_mills", { mode: "bigint" }),
+    attachmentCount: integer("attachment_count"),
+    pinned: boolean("pinned"),
+    /** The provider instant (SECONDS on the wire for this route). */
+    occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
+    /** When the stored content last CHANGED — an edit moves it, a
+     *  re-observation of the same bytes does not. */
+    changedAt: timestamp("changed_at", { withTimezone: true }).notNull(),
+    /** `replies_walk` | `notification` | `ofapi_list`. */
+    discoveredVia: text("discovered_via").notNull(),
+    possiblyTruncated: boolean("possibly_truncated").default(false).notNull(),
+    /** Set when a later FULL walk of the parent stops naming this comment.
+     *  NEVER a delete (DP 7). */
+    missingSince: timestamp("missing_since", { withTimezone: true }),
+    firstObservedAt: timestamp("first_observed_at", { withTimezone: true }).notNull(),
+    lastObservedAt: timestamp("last_observed_at", { withTimezone: true }).notNull(),
+    contentHash: char("content_hash", { length: 64 }).notNull(),
+    sourceEventId: bigint("source_event_id", { mode: "number" }).notNull(),
+    sourceObservationId: bigint("source_observation_id", { mode: "number" }).notNull(),
+    sourceAccountSeq: bigint("source_account_seq", { mode: "number" }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pageCommentUniq: unique("post_comments_page_comment_uniq").on(
+      table.pageId,
+      table.commentRef,
+    ),
+    pageParentOccurredIdx: index("post_comments_page_parent_occurred_idx").on(
+      table.pageId,
+      table.parentPostRef,
+      table.occurredAt.desc(),
+    ),
+    pageAuthorIdx: index("post_comments_page_author_idx").on(table.pageId, table.authorRef),
+  }),
+);
+
+// ── WP-F7, migration 0141: the money-out head ────────────────────────────────
+
+/**
+ * `page_payout_methods` — the creator's own payout methods, MASKED.
+ *
+ * `metadata` arrives as a JSON-ENCODED STRING and the two live providers are
+ * asymmetric in the one way that matters: provider 2 (Paxum — NOT PayPal;
+ * A22-4) returns the FULL email address, provider 30 (USDT) returns a field set
+ * whose `field1` is already server-masked. So the masking is OURS.
+ * `maskedLabel` is the ONLY value derived from `metadata` that ever reaches a
+ * projection, the full processor payload stays raw-journal-only under the
+ * restricted class, and the migration's CHECK enforces the pinned mask shape at
+ * the INSERT rather than trusting the parser.
+ *
+ * `providerLabel` is derived from `providerId` ALONE — never from `metadata` —
+ * so an unknown provider decodes to nothing and still lands a truthful row.
+ */
+export const pagePayoutMethods = pgTable(
+  "page_payout_methods",
+  {
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    platform: platformColumn("platform")
+      .references(() => platforms.key, { onDelete: "restrict" })
+      .notNull(),
+    methodRef: text("method_ref").notNull(),
+    /** RAW platform code. NULL when the served value was not an integer. */
+    providerId: integer("provider_id"),
+    /** `paxum` | `usdt` | `unmapped:<id>`. Derived from `providerId` alone. */
+    providerLabel: text("provider_label").notNull(),
+    /** Observed live as 1 / 0 / 3 with NO rendered label anywhere in the UI.
+     *  RAW integers; naming them would be guesswork. */
+    type: integer("type"),
+    flags: integer("flags"),
+    status: integer("status"),
+    /** OURS, never the provider's. */
+    maskedLabel: text("masked_label"),
+    /** FALSE when `metadata` was a string that did not parse as JSON. */
+    metadataParseOk: boolean("metadata_parse_ok").default(true).notNull(),
+    /** Set when a later FULL listing stops naming this method. NEVER a delete
+     *  (DP 7). */
+    missingSince: timestamp("missing_since", { withTimezone: true }),
+    firstObservedAt: timestamp("first_observed_at", { withTimezone: true }).notNull(),
+    lastObservedAt: timestamp("last_observed_at", { withTimezone: true }).notNull(),
+    contentHash: char("content_hash", { length: 64 }).notNull(),
+    sourceEventId: bigint("source_event_id", { mode: "number" }).notNull(),
+    sourceObservationId: bigint("source_observation_id", { mode: "number" }).notNull(),
+    sourceAccountSeq: bigint("source_account_seq", { mode: "number" }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({
+      name: "page_payout_methods_pkey",
+      columns: [table.pageId, table.methodRef],
+    }),
+  }),
+);
+
+/**
+ * `page_payout_requests` — the payout-request history.
+ *
+ * `amountMills` is MILLS with no scaling: the wire unit IS the kernel unit,
+ * proved against the rendered UI on seven independent fields.
+ *
+ * THE STATUS MAP IS ONE CODE DEEP. All 83 requests on the walked page carried
+ * `status = 8` = `Processed`; every other code is unknown. The integer and the
+ * label are projected together with `statusConfidence`, 8 is never treated as
+ * "the success code" in a conditional, and the capture handler raises one
+ * anomaly the first time it sees a code nobody has mapped.
+ *
+ * `methodRef` has NO foreign key to `page_payout_methods`: a payout can name a
+ * method the creator has since removed, and an FK would make the honest history
+ * unstorable.
+ */
+export const pagePayoutRequests = pgTable(
+  "page_payout_requests",
+  {
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    platform: platformColumn("platform")
+      .references(() => platforms.key, { onDelete: "restrict" })
+      .notNull(),
+    payoutRef: text("payout_ref").notNull(),
+    /** MILLS (Stage 27), through the shared constructors. */
+    amountMills: bigint("amount_mills", { mode: "bigint" }),
+    methodRef: text("method_ref"),
+    /** RAW. 8 is the only code ever observed. */
+    statusCode: integer("status_code"),
+    /** `Processed` for 8, `unmapped:<code>` otherwise. */
+    statusLabel: text("status_label"),
+    /** `mapped` | `unmapped`. */
+    statusConfidence: text("status_confidence").notNull(),
+    /** Provider instants — Unix ms on the wire. */
+    requestedAt: timestamp("requested_at", { withTimezone: true }),
+    updatedAtPlatform: timestamp("updated_at_platform", { withTimezone: true }),
+    version: integer("version"),
+    firstObservedAt: timestamp("first_observed_at", { withTimezone: true }).notNull(),
+    lastObservedAt: timestamp("last_observed_at", { withTimezone: true }).notNull(),
+    contentHash: char("content_hash", { length: 64 }).notNull(),
+    sourceEventId: bigint("source_event_id", { mode: "number" }).notNull(),
+    sourceObservationId: bigint("source_observation_id", { mode: "number" }).notNull(),
+    sourceAccountSeq: bigint("source_account_seq", { mode: "number" }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({
+      name: "page_payout_requests_pkey",
+      columns: [table.pageId, table.payoutRef],
+    }),
+    pageRequestedIdx: index("page_payout_requests_page_requested_idx").on(
+      table.pageId,
+      table.requestedAt.desc(),
     ),
   }),
 );

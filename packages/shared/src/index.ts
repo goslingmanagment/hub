@@ -7,6 +7,7 @@ export * from "./dm-text.ts";
 export * from "./error-sanitizer.ts";
 export * from "./fans.ts";
 export * from "./fansly-notification-types.ts";
+export * from "./fansly-revenue-types.ts";
 export * from "./fansly-stat-types.ts";
 export * from "./http-client.ts";
 export * from "./http-request.ts";

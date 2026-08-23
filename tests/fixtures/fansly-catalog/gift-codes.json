@@ -1,0 +1,46 @@
+{
+  "_fixture": "SYNTHETIC. Shape from a live /subscriptions/giftcodes capture (2026-08-19), a BARE ARRAY of 73 rows. THE CASING TRAP: `original_price` is snake_case amid otherwise camelCase keys, and reading it by the camelCase name returns a silent NULL list price. Timestamps are MILLISECONDS; `startsAt`/`endsAt` are frequently null. `price: 0` is a real full-comp code, not an unpopulated field.",
+  "rows": [
+    {
+      "id": "000900000000001101",
+      "type": 1,
+      "label": "",
+      "accountId": "000900000000000001",
+      "code": "REDACTEDGIFTCODEALPHA",
+      "planId": "000900000000000401",
+      "status": 1,
+      "price": 0,
+      "original_price": 50000,
+      "paymentMethodRequired": 0,
+      "duration": 30,
+      "maxUses": 100,
+      "uses": 0,
+      "newSubscribersOnly": 0,
+      "version": 0,
+      "createdAt": 1785692041000,
+      "startsAt": null,
+      "endsAt": null
+    },
+    {
+      "id": "000900000000001102",
+      "type": 1,
+      "label": "Birthday",
+      "accountId": "000900000000000001",
+      "code": "REDACTEDGIFTCODEBETA",
+      "planId": "000900000000000403",
+      "status": 2,
+      "price": 24990,
+      "original_price": 499990,
+      "paymentMethodRequired": 1,
+      "duration": 90,
+      "maxUses": 1,
+      "uses": 1,
+      "newSubscribersOnly": 1,
+      "version": 0,
+      "createdAt": 1785692041000,
+      "startsAt": 1785692041000,
+      "endsAt": 1786692041000,
+      "someUnnamedFutureField": "kept-verbatim"
+    }
+  ]
+}

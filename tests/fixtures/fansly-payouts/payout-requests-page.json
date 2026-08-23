@@ -1,0 +1,38 @@
+{
+  "_fixture": "SYNTHETIC. Shape from a live /payments/payout/requests capture (2026-08-20): {total, data[]}, offset-paged at 10 with `before`/`after` present-and-empty. `total` was 83 on every one of the nine walked pages. `amount` is ALREADY MILLS — 131000 rendered as $131 in the UI. `createdAt`/`updatedAt` are 13-digit Unix ms. THE TRAPS: row 2 carries status 4, a code NOBODY has a label for (all 83 live rows were status 8 = Processed), and row 3 is dated 2023 so the receipt-time rule has something to prove — its event must still be dated at RECEIPT and carry no clamp marker, because domain_events is monthly-partitioned and a provider-dated 2023 row would fail ExecFindPartition forever.",
+  "page": {
+    "total": 83,
+    "data": [
+      {
+        "id": "000900000000008001",
+        "accountId": "000900000000000001",
+        "amount": 131000,
+        "payoutMethodId": "000900000000009001",
+        "status": 8,
+        "version": 2,
+        "createdAt": 1785692041000,
+        "updatedAt": 1785778441000
+      },
+      {
+        "id": "000900000000008002",
+        "accountId": "000900000000000001",
+        "amount": 2102632,
+        "payoutMethodId": "000900000000009002",
+        "status": 4,
+        "version": 1,
+        "createdAt": 1785433441000,
+        "updatedAt": 1785519841000
+      },
+      {
+        "id": "000900000000008003",
+        "accountId": "000900000000000001",
+        "amount": 1600,
+        "payoutMethodId": "000900000000009001",
+        "status": 8,
+        "version": 3,
+        "createdAt": 1687500000000,
+        "updatedAt": 1687586400000
+      }
+    ]
+  }
+}

@@ -198,6 +198,18 @@ const GATE_CONFIG_KEYS = new Set([
   // WP-F2.
   "fanslyNotificationsSyncEnabled",
   "fanslyNotificationsPageAllowlist",
+  // WP-F3.
+  "fanslyCatalogSyncEnabled",
+  "fanslyCatalogPageAllowlist",
+  // WP-F5.
+  "fanslyPostRepliesSyncEnabled",
+  "fanslyPostRepliesPageAllowlist",
+  // WP-F7.
+  "fanslyPayoutsSyncEnabled",
+  "fanslyPayoutsPageAllowlist",
+  // WP-F4.
+  "fanslyMediaStatsSyncEnabled",
+  "fanslyMediaStatsPageAllowlist",
 ]);
 
 /**
@@ -222,6 +234,26 @@ const GATED_FANSLY_STREAMS = [
     stream: "notifications",
     enabledField: "fanslyNotificationsSyncEnabled",
     failClosedAllowlistField: "fanslyNotificationsPageAllowlist",
+  },
+  {
+    stream: "catalog",
+    enabledField: "fanslyCatalogSyncEnabled",
+    failClosedAllowlistField: "fanslyCatalogPageAllowlist",
+  },
+  {
+    stream: "post_replies",
+    enabledField: "fanslyPostRepliesSyncEnabled",
+    failClosedAllowlistField: "fanslyPostRepliesPageAllowlist",
+  },
+  {
+    stream: "payouts",
+    enabledField: "fanslyPayoutsSyncEnabled",
+    failClosedAllowlistField: "fanslyPayoutsPageAllowlist",
+  },
+  {
+    stream: "media_stats",
+    enabledField: "fanslyMediaStatsSyncEnabled",
+    failClosedAllowlistField: "fanslyMediaStatsPageAllowlist",
   },
 ] as const;
 

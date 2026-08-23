@@ -81,6 +81,33 @@ export async function reconcileFanslyBulkStreamScheduling(
         // WP-F2 (S4): its OWN fail-closed allowlist key, for the same reason.
         allowlisted: isPageAllowlisted(effective.fanslyNotificationsPageAllowlist, page.label),
       },
+      {
+        stream: "catalog",
+        enabled: effective.fanslyCatalogSyncEnabled === true,
+        // WP-F3 (S4): its OWN fail-closed allowlist key, for the same reason.
+        allowlisted: isPageAllowlisted(effective.fanslyCatalogPageAllowlist, page.label),
+      },
+      {
+        stream: "post_replies",
+        enabled: effective.fanslyPostRepliesSyncEnabled === true,
+        // WP-F5 (S4): its OWN fail-closed allowlist key, for the same reason.
+        allowlisted: isPageAllowlisted(effective.fanslyPostRepliesPageAllowlist, page.label),
+      },
+      {
+        stream: "payouts",
+        enabled: effective.fanslyPayoutsSyncEnabled === true,
+        // WP-F7 (S4): its OWN fail-closed allowlist key, for the same reason.
+        allowlisted: isPageAllowlisted(effective.fanslyPayoutsPageAllowlist, page.label),
+      },
+      {
+        stream: "media_stats",
+        enabled: effective.fanslyMediaStatsSyncEnabled === true,
+        // WP-F4 (S4): its OWN fail-closed allowlist key, and the lane where the
+        // wrong semantic would cost the most — reading it through the
+        // fail-OPEN shared key would start a 300-call-a-day per-media walk on
+        // every Fansly page at once.
+        allowlisted: isPageAllowlisted(effective.fanslyMediaStatsPageAllowlist, page.label),
+      },
     ];
 
     for (const stream of streams) {

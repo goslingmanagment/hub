@@ -53,6 +53,24 @@ import {
   runFanslyEngagementProjection,
 } from "./fansly-engagement.ts";
 import {
+  FANSLY_CATALOG_PROJECTION,
+  FANSLY_CATALOG_PROJECTION_TABLES,
+  rebuildFanslyCatalogProjection,
+  runFanslyCatalogProjection,
+} from "./fansly-catalog.ts";
+import {
+  FANSLY_COMMENTS_PROJECTION,
+  FANSLY_COMMENTS_PROJECTION_TABLES,
+  rebuildFanslyCommentsProjection,
+  runFanslyCommentsProjection,
+} from "./fansly-comments.ts";
+import {
+  FANSLY_PAYOUTS_PROJECTION,
+  FANSLY_PAYOUTS_PROJECTION_TABLES,
+  rebuildFanslyPayoutsProjection,
+  runFanslyPayoutsProjection,
+} from "./fansly-payouts.ts";
+import {
   FANSLY_STATS_PROJECTION,
   rebuildFanslyStatsProjection,
   runFanslyStatsProjection,
@@ -199,6 +217,8 @@ export const PROJECTION_REGISTRY: readonly ProjectionDefinition[] = [
     eventTypes: [
       "traffic.datapoint_observed",
       "media_traffic.datapoint_observed",
+      // WP-F4: per-media `topFypTags` rows, in the SAME family.
+      "media_tag.stats_observed",
       "stats.window_top_observed",
       "tag.counters_observed",
       "media.sale_stats_observed",
@@ -214,6 +234,10 @@ export const PROJECTION_REGISTRY: readonly ProjectionDefinition[] = [
       "stats_traffic_buckets",
       "stats_top_media",
       "stats_top_tags",
+      // WP-F4. `subject_refresh_state` is deliberately NOT here: this lane
+      // WRITES it, but it is capture-plane operational state and a rebuild that
+      // truncated it would re-mark the whole catalogue as first-sight.
+      "fansly_media_tag_stats",
       "platform_tag_daily",
       "revenue_mix_daily",
       "revenue_month_totals",
@@ -254,6 +278,81 @@ export const PROJECTION_REGISTRY: readonly ProjectionDefinition[] = [
     rebuild: async (app, input) => await rebuildFanslyEngagementProjection(app, input),
     didWork: (result) => count(result, "applied") > 0,
   },
+  {
+    name: FANSLY_CATALOG_PROJECTION,
+    // WP-F3. Seven types, and the last of them is the one that makes the other
+    // six honest: `catalog.listing_observed` carries the full roster a listing
+    // served, and applying it is what marks a retired tier, a revoked gift code
+    // or a deleted album `missing_since` — including in the case that produces
+    // no row events at all, an EMPTY listing.
+    //
+    // `media.observed` is deliberately NOT declared here even though this
+    // family emits it (vault walk, batch hydration): the media plane is and
+    // stays the SINGLE writer of `creator_media`, and declaring the type on two
+    // projections would make the registry's `eventTypes` a wish rather than a
+    // contract.
+    eventTypes: [
+      "vault.album_observed",
+      "vault.album_membership_observed",
+      "subscription.tier_observed",
+      "subscription.tier_plan_observed",
+      "promo.gift_code_observed",
+      "automation.definition_observed",
+      "page.wall_observed",
+      "catalog.listing_observed",
+    ],
+    tables: [...FANSLY_CATALOG_PROJECTION_TABLES],
+    stateClass: "fact_projection",
+    rebuildKind: "truncate_replay",
+    label: "Fansly-catalog projection sweep complete",
+    run: async (app, input) => ({ ...await runFanslyCatalogProjection(app, input) }),
+    rebuild: async (app, input) => await rebuildFanslyCatalogProjection(app, input),
+    didWork: (result) => count(result, "applied") > 0,
+  },
+  {
+    name: FANSLY_COMMENTS_PROJECTION,
+    // WP-F5. Two types, and the second is what makes the first honest:
+    // `post.comment_list_observed` carries the full ref set one walk served, and
+    // applying it is what marks a deleted comment `missing_since` — including
+    // in the case that produces no row events at all, a post whose comments
+    // were ALL deleted.
+    eventTypes: [
+      "post.comment_observed",
+      "post.comment_list_observed",
+    ],
+    // `subject_refresh_state` is ABSENT on purpose: the walk queue for
+    // `plane='post_replies'` is written by the capture handler and by the
+    // creator-posts seeding hook, and a rebuild that truncated it would re-run a
+    // first-pass crawl of the whole post back-catalogue for a repair that should
+    // cost zero platform calls.
+    tables: [...FANSLY_COMMENTS_PROJECTION_TABLES],
+    stateClass: "fact_projection",
+    rebuildKind: "truncate_replay",
+    label: "Fansly-comments projection sweep complete",
+    run: async (app, input) => ({ ...await runFanslyCommentsProjection(app, input) }),
+    rebuild: async (app, input) => await rebuildFanslyCommentsProjection(app, input),
+    didWork: (result) => count(result, "applied") > 0,
+  },
+  {
+    name: FANSLY_PAYOUTS_PROJECTION,
+    // WP-F7. Three types, and the third is what makes the first honest:
+    // `payout.method_list_observed` carries the full ref set one listing
+    // served, and applying it is what marks a removed payout method
+    // `missing_since` — including in the case that produces no row events at
+    // all, a creator who removed their last method.
+    eventTypes: [
+      "payout.method_observed",
+      "payout.method_list_observed",
+      "payout.observed",
+    ],
+    tables: [...FANSLY_PAYOUTS_PROJECTION_TABLES],
+    stateClass: "fact_projection",
+    rebuildKind: "truncate_replay",
+    label: "Fansly-payouts projection sweep complete",
+    run: async (app, input) => ({ ...await runFanslyPayoutsProjection(app, input) }),
+    rebuild: async (app, input) => await rebuildFanslyPayoutsProjection(app, input),
+    didWork: (result) => count(result, "applied") > 0,
+  },
 ];
 
 /**
@@ -291,7 +390,11 @@ export const OPERATIONAL_STATE_TABLES: readonly {
       + "first-sight, releasing an egress storm bounded only by the media lane's daily cap "
       + "against a platform whose failure mode is a model ban. It is written by the capture "
       + "plane and by the WP-F2 purchase signal; it is replayable by neither, which is "
-      + "exactly why v1's four queue columns on the rebuildable `creator_media` were wrong.",
+      + "exactly why v1's four queue columns on the rebuildable `creator_media` were wrong. "
+      + "WP-F5 added its second plane (`post_replies`): one row per root post, written by "
+      + "the replies handler and by the creator-posts projector's same-transaction seeding "
+      + "hook, and truncating it would re-run a first-pass crawl of the entire post "
+      + "back-catalogue for a repair that should cost zero platform calls.",
   },
 ];
 
@@ -392,6 +495,99 @@ export interface ProjectionTickOutcome {
   durationMs: number;
 }
 
+export interface ProjectionTickResult {
+  /** One entry per projection that RAN this tick, in the order it ran. */
+  outcomes: ProjectionTickOutcome[];
+  /**
+   * The tick stopped early because `maxDurationMs` ran out. NOT a failure and
+   * not an error: every projection it did run advanced its own watermark, and
+   * the ones it never reached are named in `skippedProjections` and take the
+   * head of the next tick (see the rotation below). It IS starvation pressure,
+   * so the worker logs it at warn level.
+   */
+  truncatedByBudget: boolean;
+  /**
+   * The `name` of every projection that did not run AT ALL this tick because
+   * the budget was already gone when its turn came. The projection that was
+   * running when the budget expired is absent from this list — it ran to
+   * completion and advanced its watermark like any other.
+   */
+  skippedProjections: string[];
+}
+
+export interface ProjectionTickOptions {
+  /**
+   * Wall-clock budget for the WHOLE tick (defect 2026-08-22). Default: none —
+   * the CLI and any non-tick caller keep the unbudgeted, registry-ordered
+   * behaviour. The minutely sweep passes one, because pg-boss kills a handler
+   * that outruns the queue's expiration and a killed tick is strictly worse
+   * than a truncated one: it settles nothing extra and takes down whatever was
+   * scheduled after it.
+   *
+   * The budget is checked BETWEEN PROJECTIONS, never inside one. A projection
+   * that starts gets one whole `run()` call, which bounds itself by paging the
+   * ledger from its own watermark and committing per page — so a tick that
+   * ends here never abandons work mid-page and never rewinds a watermark.
+   */
+  maxDurationMs?: number;
+}
+
+/**
+ * Wall-clock budget the minutely projection tick passes `runProjectionTick`.
+ * Sibling of `CANONICALIZE_SWEEP_BUDGET_MS` rather than a shared constant: the
+ * two ride DIFFERENT queues, and one of them wanting a different minute must
+ * not silently retune the other. Ten minutes sits well under pg-boss's 900s
+ * default handler expiration for this queue — the queue keeps that default on
+ * purpose, so the budget is the thing that ends a long tick and the expiration
+ * stays the backstop. The gap leaves room for the projection in flight when the
+ * budget expires (the check is BETWEEN projections).
+ */
+export const PROJECTION_TICK_BUDGET_MS = 600_000;
+
+/**
+ * Where the NEXT budgeted tick starts its rotation — a projection `name`, or
+ * null for "the registry head" (defect 2026-08-22).
+ *
+ * Why rotate at all: with a wall-clock budget the registry order becomes a
+ * priority order, and the projections at the end of it (`fansly_catalog`,
+ * `fansly_comments`, `fansly_payouts` — the WP-F1..F7 additions) are exactly
+ * the ones that never got a turn while the tick was outrunning pg-boss's
+ * handler expiration: `page_payout_requests` sat empty with 91
+ * `payout.observed` events in the ledger. Each budgeted tick therefore resumes
+ * at the projection AFTER the one that ran the budget out, so every projection
+ * reaches the head within a few ticks.
+ *
+ * Module-level and in-memory, deliberately mirroring the canonicalize driver's
+ * sweep cursors: a worker restart costs one pass that starts at the head, and
+ * the DURABLE "where was I" state — each projection's own watermark — is
+ * untouched by rotation, so a projection resumes exactly where it stopped
+ * whenever its turn comes round.
+ *
+ * Rotation is safe because projections do not read each other's tables: each
+ * one consumes the ledger from its own watermark and writes only the tables it
+ * declares (the registry test pins that no two claim one event type, and that
+ * none of them touch operational state). Run order is scheduling here, never
+ * semantics.
+ */
+let tickRotationName: string | null = null;
+
+/** Test hook: start the next budgeted tick at the registry head. */
+export function resetProjectionTickRotation(): void {
+  tickRotationName = null;
+}
+
+function rotateProjections(
+  projections: readonly ProjectionDefinition[],
+): readonly ProjectionDefinition[] {
+  if (tickRotationName === null) {
+    return projections;
+  }
+  const start = projections.findIndex((projection) => projection.name === tickRotationName);
+  // A name that no longer resolves (registry edited between ticks) means
+  // "start at the head" — never "skip the tick".
+  return start <= 0 ? projections : [...projections.slice(start), ...projections.slice(0, start)];
+}
+
 /**
  * The minutely tick, table-driven.
  *
@@ -399,12 +595,43 @@ export interface ProjectionTickOutcome {
  * retryable without starving the neighbours that share this pg-boss handler —
  * which is why every entry is isolated in its own try/catch, exactly as the six
  * hand-written blocks this replaced were.
+ *
+ * Defect 2026-08-22: isolation was never the same thing as fairness. This loop
+ * awaited every projection to completion in registry order and had no clock, so
+ * once WP-F6's v6 drain and the F1..F7 families made a full pass longer than
+ * the queue's handler expiration, the tail of the registry never ran at all —
+ * pg-boss killed the handler mid-pass, the next tick started at the head, and
+ * it was killed again. `maxDurationMs` + the rotation above are that fix.
  */
 export async function runProjectionTick(
   app: Pick<AppContext, "db" | "logger">,
-): Promise<ProjectionTickOutcome[]> {
+  options: ProjectionTickOptions = {},
+): Promise<ProjectionTickResult> {
   const outcomes: ProjectionTickOutcome[] = [];
-  for (const projection of PROJECTION_REGISTRY) {
+  const deadlineAt = options.maxDurationMs !== undefined && options.maxDurationMs > 0
+    ? Date.now() + options.maxDurationMs
+    : null;
+  // Only a budgeted tick rotates. The CLI and any other caller keep registry
+  // order — they pass no budget, so there is nothing for a rotation to be fair
+  // about, and a rebuild/diagnostic run must stay deterministic.
+  const rotates = deadlineAt !== null;
+  const ordered = rotates ? rotateProjections(PROJECTION_REGISTRY) : PROJECTION_REGISTRY;
+  /** Index in `ordered` the NEXT tick should start at; null = a full pass. */
+  let nextStartIndex: number | null = null;
+  let truncatedByBudget = false;
+  let skippedProjections: string[] = [];
+  for (const [index, projection] of ordered.entries()) {
+    // Checked BETWEEN projections only. The head of `ordered` always runs: the
+    // deadline is taken from `Date.now()` at the top of this function, so it
+    // cannot already be spent when the first turn comes.
+    if (deadlineAt !== null && Date.now() >= deadlineAt) {
+      // The budget died in the PREVIOUS projection: this one and everything
+      // after it did not run at all, and this one heads the next tick.
+      truncatedByBudget = true;
+      skippedProjections = ordered.slice(index).map((skipped) => skipped.name);
+      nextStartIndex = index;
+      break;
+    }
     const startedAt = Date.now();
     try {
       const result = await projection.run(app);
@@ -426,5 +653,10 @@ export async function runProjectionTick(
       });
     }
   }
-  return outcomes;
+  if (rotates) {
+    // A completed pass clears the offset: the next tick starts at the head,
+    // exactly as every tick did before the budget existed.
+    tickRotationName = nextStartIndex === null ? null : ordered[nextStartIndex]!.name;
+  }
+  return { outcomes, truncatedByBudget, skippedProjections };
 }

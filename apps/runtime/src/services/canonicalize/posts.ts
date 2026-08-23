@@ -13,7 +13,82 @@ import {
   type CanonicalizableObservation,
 } from "./types.ts";
 
-export const POSTS_CANONICALIZER_VERSION = 5;
+export const POSTS_CANONICALIZER_VERSION = 6;
+
+/**
+ * The hashtag tokenizer's own version, stored beside every derived token.
+ *
+ * SEPARATE from the family version on purpose: a family bump re-parses the
+ * journal, while this number answers "which grammar produced THESE tokens" for
+ * a row already in the table. It participates in the post content hash, so
+ * raising it mints a new material revision for every post — which is the point:
+ * a re-derivation must be visible as a new head, not a silent overwrite.
+ */
+export const HASHTAG_PARSER_VERSION = 1;
+
+/**
+ * Hashtags on Fansly arrive ONLY as caption text (A8): zero structured tag
+ * fields on all 60 post objects in the 2026-08-19 capture; tag ids exist only
+ * in stats aggregation and the discovery feed. So this grammar is the whole
+ * definition of "a hashtag on this platform", and it is deliberately WIDER than
+ * `\w+`:
+ *
+ *   - Unicode letters, numbers and MARKS (`\p{L}\p{N}\p{M}`) — `#кисуля`,
+ *     `#日本語` and a combining-mark spelling are all tags people type, and an
+ *     ASCII-only class would silently drop every non-Latin caption;
+ *   - `_`, which `\w` covers and the Unicode classes do not;
+ *   - ONE optional trailing `+`, defensively. Fansly's own discovery UI shows
+ *     tags in that shape, and a caption that ends a tag with `+` should not
+ *     lose the character. **`#teen+` does NOT appear in the HAR** and nothing
+ *     here may be read as a claim that it was observed (A8).
+ *
+ * The `#` is not part of the stored token.
+ */
+const HASHTAG_PATTERN = /#([\p{L}\p{N}\p{M}_]+\+?)/gu;
+
+export interface DerivedHashtags {
+  raw: string[];
+  normalized: string[];
+  parserVersion: number;
+}
+
+/**
+ * Derive the caption's tags: raw token exactly as written, plus its
+ * NFKC-lowercased form.
+ *
+ * NFKC before lowercasing, not after: the compatibility fold is what makes a
+ * full-width `＃ＦＩＴ` and an ASCII `#fit` the same tag, and folding after
+ * lowercasing leaves the two apart. De-duplicated BY NORMALIZED FORM with the
+ * first raw spelling kept — a caption that writes `#Viral #viral` names one
+ * tag twice, not two tags — which also keeps the two arrays the same length,
+ * the pairing the table's CHECK constraint enforces.
+ */
+export function deriveHashtags(text: string): DerivedHashtags {
+  const raw: string[] = [];
+  const normalized: string[] = [];
+  const seen = new Set<string>();
+  for (const match of text.matchAll(HASHTAG_PATTERN)) {
+    const token = match[1];
+    if (token === undefined) continue;
+    const folded = token.normalize("NFKC").toLowerCase();
+    if (seen.has(folded)) continue;
+    seen.add(folded);
+    raw.push(token);
+    normalized.push(folded);
+  }
+  return { raw, normalized, parserVersion: HASHTAG_PARSER_VERSION };
+}
+
+/** The attachments' id-relations, and NOTHING else. The three keys are an
+ *  ALLOWLIST rather than a redaction: a delivery URL cannot reach a serving
+ *  column through a key nobody copies, whatever the platform starts embedding
+ *  in `attachments[]` tomorrow. */
+export interface CanonicalPostAttachmentRef {
+  pos: number | null;
+  contentType: number | null;
+  contentId: string | null;
+}
+
 export const POSTS_CANONICALIZED_KINDS: ReadonlySet<string> = new Set([
   "posts",
   "post_tips",
@@ -42,6 +117,21 @@ export interface CanonicalPostMaterial {
   tipGoalTargetMills?: number | null;
   tipGoalCurrentMills?: number | null;
   tipGoalAmountsHidden?: boolean | null;
+  // ── WP-F6 (v6): the engagement/thread/placement material ───────────────────
+  // Every one of these is OPTIONAL in the type (the OFAPI post seam supplies
+  // none of them) and NULLABLE in the value (Fansly served the key and it was
+  // empty, or did not serve it). Absent is null, never 0 — `replyCount` was
+  // absent on 6 of 15 live timeline posts and present on the other 9.
+  likeCount?: number | null;
+  mediaLikeCount?: number | null;
+  replyCount?: number | null;
+  fypFlags?: number | null;
+  expiresAt?: Date | null;
+  inReplyToRef?: string | null;
+  inReplyToRootRef?: string | null;
+  wallRefs?: string[] | null;
+  accountMentionRefs?: string[] | null;
+  attachmentRefs?: CanonicalPostAttachmentRef[] | null;
 }
 
 export type PostTipGoalAttribution = "goal" | "direct" | "unknown";
@@ -91,14 +181,61 @@ function normalizedPostMoney(input: CanonicalPostMaterial): NormalizedPostMoney 
   };
 }
 
+type NormalizedPostEngagement = {
+  likeCount: number | null;
+  mediaLikeCount: number | null;
+  replyCount: number | null;
+  fypFlags: number | null;
+  expiresAt: string | null;
+  inReplyToRef: string | null;
+  inReplyToRootRef: string | null;
+  wallRefs: string[] | null;
+  accountMentionRefs: string[] | null;
+  attachmentRefs: CanonicalPostAttachmentRef[] | null;
+  hashtags: string[];
+  hashtagsNormalized: string[];
+  hashtagParserVersion: number;
+};
+
+/** WP-F6's half of the material, normalized once so the hash, the event data
+ *  and the projector all read the same shape. Hashtags are DERIVED here rather
+ *  than passed in: they are a pure function of `textPlain`, and deriving them at
+ *  the one seam every post draft passes through is what makes the OFAPI post
+ *  path get them too the day its captions carry tags. */
+function normalizedPostEngagement(input: CanonicalPostMaterial): NormalizedPostEngagement {
+  const hashtags = deriveHashtags(input.textPlain);
+  return {
+    likeCount: input.likeCount ?? null,
+    mediaLikeCount: input.mediaLikeCount ?? null,
+    replyCount: input.replyCount ?? null,
+    fypFlags: input.fypFlags ?? null,
+    expiresAt: input.expiresAt?.toISOString() ?? null,
+    inReplyToRef: input.inReplyToRef ?? null,
+    inReplyToRootRef: input.inReplyToRootRef ?? null,
+    wallRefs: input.wallRefs ?? null,
+    accountMentionRefs: input.accountMentionRefs ?? null,
+    attachmentRefs: input.attachmentRefs ?? null,
+    hashtags: hashtags.raw,
+    hashtagsNormalized: hashtags.normalized,
+    hashtagParserVersion: hashtags.parserVersion,
+  };
+}
+
 function postContentHash(input: CanonicalPostMaterial): string {
   const money = normalizedPostMoney(input);
-  // Fixed-position v2 material tuple: deterministic without depending on
+  const engagement = normalizedPostEngagement(input);
+  // Fixed-position v3 material tuple: deterministic without depending on
   // object key order. All monetization fields participate, so a money-only
-  // change creates a new immutable event and advances the current head.
+  // change creates a new immutable event and advances the current head — and
+  // from v3 so does every engagement counter, which is the whole point of the
+  // refresh lane: a like count that moved is a NEW material revision and a new
+  // head, not an in-place edit of the row that recorded the old one.
+  //
+  // The hashtag PARSER VERSION participates too, so a grammar change re-mints
+  // every post rather than silently rewriting tokens under the old lineage.
   return createHash("sha256")
     .update(JSON.stringify([
-      "post-material-v2",
+      "post-material-v3",
       input.textPlain,
       input.publishedAt.toISOString(),
       input.attachmentCount,
@@ -111,6 +248,19 @@ function postContentHash(input: CanonicalPostMaterial): string {
       money.tipGoalTargetMills,
       money.tipGoalCurrentMills,
       money.tipGoalAmountsHidden,
+      engagement.likeCount,
+      engagement.mediaLikeCount,
+      engagement.replyCount,
+      engagement.fypFlags,
+      engagement.expiresAt,
+      engagement.inReplyToRef,
+      engagement.inReplyToRootRef,
+      engagement.wallRefs,
+      engagement.accountMentionRefs,
+      engagement.attachmentRefs,
+      engagement.hashtags,
+      engagement.hashtagsNormalized,
+      engagement.hashtagParserVersion,
     ]))
     .digest("hex");
 }
@@ -121,8 +271,15 @@ function postContentHash(input: CanonicalPostMaterial): string {
 export function buildPostObservedDraft(input: CanonicalPostMaterial): CanonicalEventDraft {
   const contentHash = postContentHash(input);
   const money = normalizedPostMoney(input);
+  const engagement = normalizedPostEngagement(input);
   return {
     type: "post.observed",
+    // PROVIDER-DATED, and deliberately so — the §3.2b exception this family has
+    // always been. The post's own publication instant IS this event's
+    // occurred_at, which is why the driver's [2024-01-01, now+2mo] clamp can
+    // fire here (and why the v6 drain across history is covered by §3.2c(ii)'s
+    // target-month census). The projected row still dates from
+    // `data.publishedAt`, never from `event.occurredAt`.
     occurredAt: input.publishedAt,
     postRef: input.postId,
     data: {
@@ -132,13 +289,14 @@ export function buildPostObservedDraft(input: CanonicalPostMaterial): CanonicalE
       observedAt: input.observedAt.toISOString(),
       attachmentCount: input.attachmentCount,
       ...money,
+      ...engagement,
       contentHash,
     },
-    schemaVersion: 2,
+    schemaVersion: 3,
     // Account-scoped, source-observation idempotency: one parser retry is
-    // stable; later captures are distinct sightings; corrected v2 material
-    // from an old raw observation does not collide with the v1 event.
-    dedupKey: `post:v2:${input.platform}:${input.postId}:${contentHash}:obs:${input.observationId}`,
+    // stable; later captures are distinct sightings; corrected v3 material
+    // from an old raw observation does not collide with the v1/v2 event.
+    dedupKey: `post:v3:${input.platform}:${input.postId}:${contentHash}:obs:${input.observationId}`,
   };
 }
 
@@ -285,7 +443,77 @@ type ParsedFanslyPost = {
   publishedAt: Date;
   attachmentCount: number;
   money: NormalizedPostMoney;
+  engagement: ParsedFanslyPostEngagement;
 };
+
+type ParsedFanslyPostEngagement = {
+  likeCount: number | null;
+  mediaLikeCount: number | null;
+  replyCount: number | null;
+  fypFlags: number | null;
+  expiresAt: Date | null;
+  inReplyToRef: string | null;
+  inReplyToRootRef: string | null;
+  wallRefs: string[] | null;
+  accountMentionRefs: string[] | null;
+  attachmentRefs: CanonicalPostAttachmentRef[] | null;
+};
+
+/** A ref list: absent/null means the response did not carry the field, `[]`
+ *  means it carried it empty. `/timelinenew` does not serve `wallIds` at all
+ *  while `GET /post?ids=` serves it as `[]` — two different facts, and
+ *  collapsing them would let the batch read's "no walls" be manufactured from
+ *  the timeline's silence. */
+function nullableRefList(value: unknown): NullableField<string[]> {
+  if (value === undefined || value === null) {
+    return { valid: true, value: null };
+  }
+  if (!Array.isArray(value)) return { valid: false };
+  const refs: string[] = [];
+  for (const item of value) {
+    const ref = asString(item);
+    if (ref === null) return { valid: false };
+    if (!refs.includes(ref)) refs.push(ref);
+  }
+  return { valid: true, value: refs };
+}
+
+/** `accountMentions[]` rows are `{start, end, handle, accountId}`. Only the
+ *  ACCOUNT REF is kept: the offsets belong to the verbatim caption (which the
+ *  journal holds) and the handle is a display name that changes. */
+function nullableAccountMentionRefs(value: unknown): NullableField<string[]> {
+  if (value === undefined || value === null) {
+    return { valid: true, value: null };
+  }
+  if (!Array.isArray(value)) return { valid: false };
+  const refs: string[] = [];
+  for (const item of value) {
+    if (!isRecord(item)) return { valid: false };
+    const ref = asString(item.accountId);
+    if (ref === null) return { valid: false };
+    if (!refs.includes(ref)) refs.push(ref);
+  }
+  return { valid: true, value: refs };
+}
+
+/** The attachments' id-relations. Built from an ALLOWLIST of three keys, so a
+ *  `location`, `variants[]` or any future URL-bearing key the platform adds to
+ *  `attachments[]` cannot reach a serving column — it stays in the raw journal,
+ *  read by nothing. `postId` is dropped as redundant with the row's own key. */
+function attachmentRefsFrom(
+  attachments: readonly Record<string, unknown>[],
+): CanonicalPostAttachmentRef[] {
+  return attachments.map((attachment) => ({
+    pos: typeof attachment.pos === "number" && Number.isSafeInteger(attachment.pos)
+      ? attachment.pos
+      : null,
+    contentType:
+      typeof attachment.contentType === "number" && Number.isSafeInteger(attachment.contentType)
+        ? attachment.contentType
+        : null,
+    contentId: asString(attachment.contentId),
+  }));
+}
 
 function parseFanslyPostsPayload(payload: unknown): ParsedFanslyPost[] | null {
   if (!isRecord(payload) || !Array.isArray(payload.posts)) return null;
@@ -335,6 +563,32 @@ function parseFanslyPostsPayload(payload: unknown): ParsedFanslyPost[] | null {
       return null;
     }
 
+    // ── WP-F6 (v6) engagement/thread/placement fields ─────────────────────
+    // Each one refuses the WHOLE page on a shape it cannot read, which is the
+    // house law: a drifted response stays UNSTAMPED and replayable rather than
+    // being half-parsed into a serving table.
+    const likeCount = nullableNonnegativeSafeInteger(post.likeCount);
+    const mediaLikeCount = nullableNonnegativeSafeInteger(post.mediaLikeCount);
+    const replyCount = nullableNonnegativeSafeInteger(post.replyCount);
+    const fypFlags = nullableNonnegativeSafeInteger(post.fypFlags);
+    const inReplyToRef = nullableNonemptyString(post.inReplyTo);
+    const inReplyToRootRef = nullableNonemptyString(post.inReplyToRoot);
+    const wallRefs = nullableRefList(post.wallIds);
+    const accountMentionRefs = nullableAccountMentionRefs(post.accountMentions);
+    // `expiresAt` shares `createdAt`'s encoding (seconds in every observed
+    // response); an explicit null is "this post does not expire".
+    const expiresAt = post.expiresAt === undefined || post.expiresAt === null
+      ? null
+      : fanslyPublishedAt(post.expiresAt);
+    if (
+      !likeCount.valid || !mediaLikeCount.valid || !replyCount.valid || !fypFlags.valid
+      || !inReplyToRef.valid || !inReplyToRootRef.valid
+      || !wallRefs.valid || !accountMentionRefs.valid
+      || (post.expiresAt !== undefined && post.expiresAt !== null && expiresAt === null)
+    ) {
+      return null;
+    }
+
     const tipGoalRef = [...goalRefs][0] ?? null;
     const goal = tipGoalRef === null ? null : goals.get(tipGoalRef) ?? null;
     parsed.push({
@@ -342,6 +596,20 @@ function parseFanslyPostsPayload(payload: unknown): ParsedFanslyPost[] | null {
       textPlain: typeof post.content === "string" ? post.content : "",
       publishedAt,
       attachmentCount: attachments.length,
+      engagement: {
+        likeCount: likeCount.value,
+        mediaLikeCount: mediaLikeCount.value,
+        replyCount: replyCount.value,
+        fypFlags: fypFlags.value,
+        expiresAt,
+        inReplyToRef: inReplyToRef.value,
+        inReplyToRootRef: inReplyToRootRef.value,
+        wallRefs: wallRefs.value,
+        accountMentionRefs: accountMentionRefs.value,
+        // An ABSENT `attachments` field cannot prove the post has no
+        // attachments — the same distinction `tipGoalLinked` already makes.
+        attachmentRefs: attachmentsProvided ? attachmentRefsFrom(attachments) : null,
+      },
       money: {
         tipAmountMills: tipAmount.value,
         attachmentTipAmountMills: attachmentTipAmount.value,
@@ -583,6 +851,7 @@ export function canonicalizePostsObservation(
       observedAt: observation.receivedAt,
       attachmentCount: post.attachmentCount,
       ...post.money,
+      ...post.engagement,
     }));
   }
 

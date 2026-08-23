@@ -1,0 +1,30 @@
+-- WP-F4 stream vocabulary: `media_stats`, the per-media statistics lane.
+--
+-- ONE route, `GET /it/moie/statsnew?mediaOfferId&beforeDate&afterDate&period`,
+-- asked once per media per window over the WHOLE catalogue at an age-decayed
+-- cadence (A5/A6, A28-3: all media, nothing dropped). It is the highest
+-- fan-out lane in this initiative and the only one deliberately designed to sit
+-- at 100 % of its own daily cap when M is large, which is why it gets its own
+-- stream: it must be throttleable and pausable alone.
+--
+-- NO NEW TABLES. The queue is `subject_refresh_state` (`plane='media_stats'`,
+-- migration 0134 — capture-plane operational state that no rebuild truncates),
+-- the buckets land in `stats_traffic_buckets` with `subject_kind='media_offer'`
+-- and the per-media tag rankings in `fansly_media_tag_stats` (both migration
+-- 0132), and the coverage row is one per page in `capture_coverage`.
+--
+-- DDL ONLY, and its own file, for the two reasons 0131/0133/0135/0137/0140
+-- state:
+--
+-- 1. `ALTER TYPE ... ADD VALUE` is fine inside a per-file transaction on
+--    PG >= 12, but the new value cannot be USED by a row insert in the same
+--    transaction (the 0060/0120 precedent). Keeping the enum alone in its file
+--    makes that impossible by construction.
+-- 2. §3.3's ordering rule: enum values may land early, but a stream enters the
+--    TS-side SYNC_STREAMS/PLATFORM_STREAMS unions only in the slice that ships
+--    its handler, gate, seed-pause, rollup exemption, monitor entry and gate
+--    registration. Enum-first, TS-last — and both halves land together here,
+--    so an enum value can never name a lane that would throw "Unsupported
+--    executor stream" on dispatch, fleet-wide.
+
+ALTER TYPE "sync_stream" ADD VALUE IF NOT EXISTS 'media_stats';

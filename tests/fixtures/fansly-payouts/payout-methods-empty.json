@@ -1,0 +1,4 @@
+{
+  "_fixture": "SYNTHETIC. The EMPTY method listing — a creator who removed their last payout method. It produces zero row events, which is exactly why the roster event exists: without it nothing could ever mark the old rows missing, and a removed payout method would read as live forever.",
+  "rows": []
+}

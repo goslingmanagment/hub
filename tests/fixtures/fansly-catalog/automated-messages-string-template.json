@@ -1,0 +1,23 @@
+{
+  "_fixture": "SYNTHETIC. The MARCH-CORPUS shape, kept as one fixture because A27's caveat holds: one response is one example. Row 1 is a single-quoted pseudo-JSON string that JSON.parse cannot read — it lands with parse_ok FALSE and NO message text, and the raw stays in the journal. Row 2 is the SAME template encoded as a valid JSON string: the encoding changed, the content did not, so it parses and parse_ok stays TRUE. The two rows are what make parse_ok a column worth having.",
+  "rows": [
+    {
+      "id": "000900000000001301",
+      "accountId": "000900000000000001",
+      "triggerType": 3,
+      "triggerMetadata": "not json either",
+      "delay": 0,
+      "cooldown": 0,
+      "messageTemplate": "{'type': 1, 'content': 'hi', 'attachments': [], 'senderId': '000900000000000001'}"
+    },
+    {
+      "id": "000900000000001302",
+      "accountId": "000900000000000001",
+      "triggerType": 3,
+      "triggerMetadata": "",
+      "delay": 0,
+      "cooldown": 0,
+      "messageTemplate": "{\"type\":1,\"content\":\"hi again\",\"attachments\":[{\"contentType\":1,\"contentId\":\"000900000000000601\"}],\"senderId\":\"000900000000000001\"}"
+    }
+  ]
+}

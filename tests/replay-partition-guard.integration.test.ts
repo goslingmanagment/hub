@@ -173,6 +173,51 @@ async function seedPage() {
   return page;
 }
 
+/**
+ * WP-F6. A timeline page whose post was PUBLISHED in the target month.
+ *
+ * `post.observed` is the OTHER provider-dated family (`canonicalize/posts.ts`
+ * dates it at `publishedAt`), and WP-F6's v6 bump re-parses the whole posts
+ * corpus across history — so it aims appends at months the DM drain never
+ * touches. The census covers it by construction; this fixture is what proves
+ * "by construction" rather than asserting it.
+ */
+function postsPayload(postId: string, publishedAt: Date) {
+  return {
+    posts: [{
+      id: postId,
+      accountId: OWN_REF,
+      content: "#viral",
+      createdAt: Math.floor(publishedAt.getTime() / 1000),
+      attachments: [],
+      likeCount: 3,
+      mediaLikeCount: 0,
+      replyCount: 0,
+      fypFlags: 0,
+      expiresAt: null,
+      inReplyTo: null,
+      inReplyToRoot: null,
+      wallIds: [],
+      accountMentions: [],
+    }],
+    tipGoals: [],
+  };
+}
+
+async function seedPosts(pageId: number, key: string, publishedAt: Date) {
+  const payload = postsPayload(key, publishedAt);
+  await insertObservation(testDb!.db, {
+    source: "pull",
+    producer: "sync:fansly:posts",
+    platform: "fansly",
+    accountId: pageId,
+    kind: "posts",
+    payload,
+    payloadHash: sha256(`posts:${key}`),
+    idempotencyKey: `guard:${key}`,
+  });
+}
+
 async function seedDm(pageId: number, key: string, messageAt: Date) {
   const payload = dmPayload(key, messageAt);
   await insertObservation(testDb!.db, {
@@ -298,6 +343,67 @@ describe("§3.2c(ii) partition census on the SWEEP path", () => {
     // lines are how an operator stops reading them.
     expect(result.partitionAnomalies).toHaveLength(1);
     expect(errors).toHaveLength(1);
+  });
+
+  it("covers the OTHER provider-dated family too — a post.observed aimed at a cold month", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    await detachMonth(DETACHED_MONTH);
+    // A post PUBLISHED in the detached month. WP-F6's v6 bump re-parses the
+    // whole posts corpus, so this is the exact shape its drain produces.
+    const publishedAt = new Date(
+      Date.UTC(DETACHED_MONTH.year, DETACHED_MONTH.month - 1, 9, 15, 0, 0),
+    );
+    await seedPosts(page.id, "post-cold", publishedAt);
+
+    const { app, errors } = appStub();
+    const result = await runCanonicalization(app, { kinds: ["posts"] });
+
+    expect(result.partitionBlocked).toBe(1);
+    expect(result.errored).toBe(0);
+    expect(result.appended).toBe(0);
+    expect(await listEventsSince(testDb.db, { accountId: page.id, afterSeq: 0 })).toHaveLength(0);
+    // The observation keeps its parse debt, so the v6 drain is replayable after
+    // the re-attach rather than needing the capture again.
+    expect(await parseVersionOf("post-cold")).toBe(0);
+    expect(result.partitionAnomalies).toHaveLength(1);
+    expect(result.partitionAnomalies[0]).toMatchObject({
+      month: `${DETACHED_MONTH.year}_${String(DETACHED_MONTH.month).padStart(2, "0")}`,
+      shape: "detached",
+    });
+    expect(errors).toHaveLength(1);
+  });
+
+  it("POSITIVE CONTROL: a post.observed appends at its publication month once attached", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    const publishedAt = new Date(
+      Date.UTC(DETACHED_MONTH.year, DETACHED_MONTH.month - 1, 9, 15, 0, 0),
+    );
+    await createMonthPartition(DETACHED_MONTH);
+    await seedPosts(page.id, "post-warm", publishedAt);
+
+    const result = await runCanonicalization(appStub().app, { kinds: ["posts"] });
+    expect(result.partitionBlocked).toBe(0);
+    expect(result.stamped).toBe(1);
+
+    const events = await listEventsSince(testDb.db, { accountId: page.id, afterSeq: 0 });
+    const observed = events.find((event) => event.type === "post.observed")!;
+    expect(observed).toBeDefined();
+    // Provider-dated at the post's own publication instant — §3.2b's exception,
+    // and the reason this family needs the census at all.
+    expect(observed.occurredAt.toISOString()).toBe(publishedAt.toISOString());
+    const placed = await testDb.pool.query<{ tableoid: string }>(
+      "select tableoid::regclass::text as tableoid from domain_events where dedup_key = $1",
+      [observed.dedupKey],
+    );
+    expect(placed.rows[0]?.tableoid).toBe(monthName(DETACHED_MONTH));
   });
 
   it("POSITIVE CONTROL: the same draft appends normally once the month is attached", async (context) => {

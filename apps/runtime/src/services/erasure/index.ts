@@ -703,6 +703,18 @@ export const FAN_REF_ERASURE_COLUMNS: readonly FanRefErasureColumn[] = [
     target: "post_likes",
     reach: "predicate",
   },
+  // WP-F5 comment archive (0138). A TEXT ref with no FK to `fans`, like every
+  // other entry on this list, and the one that carries the fan's own WORDS: a
+  // comment row holds `text_plain` verbatim, so an under-erasure here leaves
+  // the fan quoted on the page after they asked to be forgotten. The predicate
+  // is exact — `author_ref` IS the fan on every row, with none of
+  // `platform_notifications.correlation_ref`'s ambiguity, because a comment
+  // always has exactly one author and it is never the creator's own content.
+  {
+    column: "post_comments.author_ref",
+    target: "post_comments",
+    reach: "predicate",
+  },
 ];
 
 async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLineage): Promise<WorkTarget[]> {
@@ -925,6 +937,21 @@ async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLine
     rows: await countOf(app, sql`
       select count(*)::text as n from post_likes where ${postLikePred}`),
     run: (tx) => execCount(tx, sql`delete from post_likes where ${postLikePred}`),
+  });
+
+  // WP-F5 comment archive (0138). The fan's own words, stored verbatim: this is
+  // the fan-ref column on this list whose under-erasure is most visible, since
+  // the row holds text the fan wrote. `author_ref` IS the fan on every row —
+  // no code-dependent ambiguity, unlike the notification correlation ref above.
+  const commentPred = sql`page_id in ${scope.pageIds}
+    and author_ref = ${ref}`;
+  targets.push({
+    plane: "hot",
+    target: "post_comments",
+    action: "delete",
+    rows: await countOf(app, sql`
+      select count(*)::text as n from post_comments where ${commentPred}`),
+    run: (tx) => execCount(tx, sql`delete from post_comments where ${commentPred}`),
   });
 
   // Sent-command payloads carry our side of the fan's conversation.

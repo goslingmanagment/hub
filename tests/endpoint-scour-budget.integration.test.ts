@@ -26,12 +26,15 @@ import {
   getCheckpoint,
   setConfigOverride,
   startSyncRun,
+  upsertCaptureCoverage,
+  upsertCheckpointProgress,
 } from "@agency_hub_core/db";
 import { CONFIG_DESCRIPTORS } from "@agency_hub_core/shared";
 
 import { SyncChunkBudget } from "../apps/runtime/src/services/sync/chunk-budget.ts";
 import {
   backfillContinuationAt,
+  emptyFanslyStatsCursorState,
   fanslyStatsSnapshotChunk,
   parseFanslyStatsCursorState,
   rollUtcDay,
@@ -274,8 +277,9 @@ describe("[sync-critical] WP-F1 per-lane daily call budget", () => {
     // Deferral is "come back after the UTC roll", not a failure.
     expect(result?.satisfied).toBe(false);
     expect(result?.continuationRetryAt?.toISOString()).toBe("2026-08-20T00:05:00.000Z");
-    // …and there is still work left, which is what makes the deferral real.
-    expect(state!.mode === "backfill" || state!.stepIndex > 0).toBe(true);
+    // …and there is still work left, which is what makes the deferral real:
+    // either a backfill lane is mid-walk or today's sweep has not completed.
+    expect(state!.mode === "backfill" || state!.lastSweepDay !== "2026-08-19").toBe(true);
 
     // NEVER DROPS: every attempt spent produced a journaled body, and the lane
     // stopped only once the last one was safe.
@@ -459,11 +463,15 @@ describe("[sync-critical] WP-F1 per-lane daily call budget", () => {
    * production loop happen and reported five healthy chunks.
    */
   function windowAdapterStub(options: {
-    statsFor: (params: { beforeDate: Date; afterDate: Date; periodMs: number }) => unknown;
+    statsFor: (
+      params: { beforeDate: Date; afterDate: Date; periodMs: number; year?: number; month?: number },
+    ) => unknown;
     earningsFor?: (params: { before: Date; after: Date }) => unknown;
   }) {
     const calls: string[] = [];
-    const statsRequests: Array<{ afterMs: number; beforeMs: number; periodMs: number }> = [];
+    const statsRequests: Array<
+      { afterMs: number; beforeMs: number; periodMs: number; year: number; month: number }
+    > = [];
     const earningsRequests: Array<{ afterMs: number; beforeMs: number }> = [];
     const answer = async (
       name: string,
@@ -487,12 +495,22 @@ describe("[sync-critical] WP-F1 per-lane daily call budget", () => {
       earningsRequests,
       getAccountStats: vi.fn(async (
         context: never,
-        params: { beforeDate: Date; afterDate: Date; periodMs: number },
+        params: {
+          beforeDate: Date;
+          afterDate: Date;
+          periodMs: number;
+          year?: number;
+          month?: number;
+        },
       ) => {
         statsRequests.push({
           afterMs: params.afterDate.getTime(),
           beforeMs: params.beforeDate.getTime(),
           periodMs: params.periodMs,
+          // The MONTH is what selects the window on this route; 0/0 means "read
+          // the bounds", which only works inside the trailing window.
+          year: params.year ?? 0,
+          month: params.month ?? 0,
         });
         return answer("account_stats", context, options.statsFor(params));
       }),
@@ -586,19 +604,52 @@ describe("[sync-critical] WP-F1 per-lane daily call budget", () => {
     return await cursor(pageId);
   }
 
-  it("stops the daily walk when the provider ignores the window — never loops", async (context) => {
+  /** The month index the walk asks for FIRST: the month before the trailing
+   *  window, which the trailing window only partly covers. */
+  const JULY_2026 = 2026 * 12 + 6;
+
+  /** A body for a NAMED MONTH — served bounds are the month's own, which is
+   *  what "the month form was honoured" looks like on the wire. */
+  function monthBodyFor(year: number, month: number, datapoints: number) {
+    return statsBodyFor(
+      { afterMs: Date.UTC(year, month - 1, 1), beforeMs: Date.UTC(year, month, 1) },
+      datapoints,
+    );
+  }
+
+  /** A month the account had no traffic in: the rows exist and every counter in
+   *  them is zero, which is what the floor rule has to read as empty. */
+  function allZeroMonthBody(year: number, month: number) {
+    return {
+      dataset: {
+        period: 86_400_000,
+        dateBefore: Date.UTC(year, month, 1),
+        dateAfter: Date.UTC(year, month - 1, 1),
+        datapointLimit: 100,
+        datapoints: [{ timestamp: Date.UTC(year, month - 1, 1), views: 0, uniqueViewers: 0 }],
+        profileDatapoints: [{
+          timestamp: Date.UTC(year, month - 1, 1),
+          stats: [{ type: 10001, views: 0, interactionTime: 0, uniqueViewers: 0 }],
+        }],
+      },
+      aggregationData: {},
+    };
+  }
+
+  it("stops the MONTH walk when the provider answers the trailing window instead", async (context) => {
     if (!testDb) {
       context.skip();
       return;
     }
     const page = await seedPage();
-    // THE PRODUCTION PROVIDER: whatever you ask for, you get the default
+    // THE PRODUCTION PROVIDER (lora-2, 2026-08-22): whatever you ask for —
+    // historical bounds, a halved span, or a named month — you get the default
     // trailing 31 days, 200 OK, with data in it.
     const defaultTrailing = { afterMs: NOW.getTime() - 31 * DAY, beforeMs: NOW.getTime() };
     const adapter = windowAdapterStub({ statsFor: () => statsBodyFor(defaultTrailing, 28) });
     const telemetry = telemetryStub();
-    // Three, the number the fixed walk is allowed to spend. On prod this lane
-    // spent twenty-five and asked for the same window in twenty-four of them.
+    // Three: the trailing window, and the two months it takes to see that the
+    // month form is not being honoured either.
     await capDayAt(3);
 
     const state = await driveChunks(
@@ -609,63 +660,86 @@ describe("[sync-critical] WP-F1 per-lane daily call budget", () => {
     );
 
     const daily = adapter.statsRequests.filter((request) => request.periodMs === 86_400_000);
-    // THREE requests, and the third is the last: ask, halve, give up. The
-    // production sequence spent twenty-five.
     expect(daily).toHaveLength(3);
-    expect(daily.map((request) => [request.afterMs, request.beforeMs])).toEqual([
-      // 1 — the trailing window, which the provider's default happens to match.
-      [NOW.getTime() - 31 * DAY, NOW.getTime()],
-      // 2 — the first HISTORICAL window, answered with the trailing one again.
-      [NOW.getTime() - 61 * DAY, NOW.getTime() - 30 * DAY],
-      // 3 — the same upper bound at half the span: the one retry.
-      [NOW.getTime() - 45 * DAY, NOW.getTime() - 30 * DAY],
+    // 1 — the TRAILING window, by date bounds, with year/month at 0: the one
+    // window this route honours bounds for, because it serves it by default.
+    expect(daily[0]).toMatchObject({
+      afterMs: NOW.getTime() - 31 * DAY,
+      beforeMs: NOW.getTime(),
+      year: 0,
+      month: 0,
+    });
+    // 2 and 3 — the MONTH form, newest month first, with the app's own trailing
+    // bounds riding along ignored.
+    expect(daily.slice(1).map((request) => [request.year, request.month])).toEqual([
+      [2026, 7],
+      [2026, 6],
     ]);
-    // NEVER THE SAME WINDOW TWICE, which is the loop stated as an invariant.
-    expect(new Set(daily.map((request) => `${request.afterMs}:${request.beforeMs}`)).size)
-      .toBe(daily.length);
+    for (const request of daily.slice(1)) {
+      expect(request.beforeMs).toBe(NOW.getTime());
+      expect(request.afterMs).toBe(NOW.getTime() - 30 * DAY);
+    }
+    // NEVER THE SAME MONTH TWICE, which is the loop stated as an invariant.
+    // (July passes the honoured check because the trailing window really does
+    // start inside July; June is where a server ignoring year/month is caught,
+    // and that costs exactly one extra request.)
+    expect(new Set(daily.slice(1).map((request) => `${request.year}-${request.month}`)).size)
+      .toBe(2);
 
     expect(state!.backfill!.daily.done).toBe(true);
-    expect(state!.backfill!.daily.guard.spanDays).toBe(15);
-    expect(state!.backfill!.daily.guard.narrowed).toBe(true);
+    expect(state!.backfill!.daily.trailingCaptured).toBe(true);
 
-    // The claim is written down, with the response that proves it.
+    // The claim is written down, with the response that proves it, and it says
+    // MONTH FORM — not the superseded `window_not_honoured`, which was about a
+    // walk that no longer exists.
     const row = await coverageRow(page.id, "stats_account_daily");
     expect(row?.status).toBe("partial_provider_surface");
     expect(row?.proof).toBe("terminal_response");
-    expect(row?.reason_code).toBe("window_not_honoured");
+    expect(row?.reason_code).toBe("month_form_not_honoured");
     expect(row?.acquisition_mode).toBe("retroactive");
     expect(row?.proof_observation_id).not.toBeNull();
+    expect(row?.cursor.requestedYear).toBe(2026);
+    expect(row?.cursor.requestedMonth).toBe(6);
 
     // ONE anomaly for the plane — a loop that shouted once per iteration would
     // be its own kind of incident.
     const raised = telemetry.anomalies.filter(
-      (anomaly) => anomaly.code === "fansly_stats_window_not_honoured"
-        && (anomaly.details as { plane?: string } | undefined)?.plane === "stats_account_daily",
+      (anomaly) => anomaly.code === "fansly_stats_month_form_not_honoured",
     );
     expect(raised).toHaveLength(1);
     expect((raised[0]!.details as { trigger?: string }).trigger).toBe("served_window");
+    // Every response is journaled, refusals included: the body that ignored our
+    // month IS the evidence for the coverage row above.
+    expect(await journaledKinds(page.id)).toHaveLength(3);
   });
 
-  it("walks backwards contiguously to the floor when windows ARE honoured", async (context) => {
+  it("walks backwards by CALENDAR MONTH to the floor when months are honoured", async (context) => {
     if (!testDb) {
       context.skip();
       return;
     }
     const page = await seedPage();
-    // A provider that answers what it was asked, snapping to its bucket grid,
-    // and has a hundred days of history. This is the walk the guard must not
-    // have broken.
-    const floorMs = NOW.getTime() - 100 * DAY;
+    // A provider that answers the month it was named, has traffic through May
+    // 2026, and serves all-zero rows for everything older. The all-zero months
+    // are the case that matters: a walk that read a zero-valued bucket as data
+    // would never find a floor at all (WP-F4 found that out on production).
     const adapter = windowAdapterStub({
       statsFor: (params) => {
-        const window = { afterMs: params.afterDate.getTime(), beforeMs: params.beforeDate.getTime() };
-        const covered = Math.min(window.beforeMs, NOW.getTime()) - Math.max(window.afterMs, floorMs);
-        return statsBodyFor(window, covered > 0 ? Math.ceil(covered / DAY) : 0);
+        if ((params.year ?? 0) === 0) {
+          return statsBodyFor(
+            { afterMs: params.afterDate.getTime(), beforeMs: params.beforeDate.getTime() },
+            28,
+          );
+        }
+        const index = params.year! * 12 + (params.month! - 1);
+        return index >= 2026 * 12 + 4
+          ? monthBodyFor(params.year!, params.month!, 30)
+          : allZeroMonthBody(params.year!, params.month!);
       },
     });
     const telemetry = telemetryStub();
-    // Four windows of history, two empties, one [E10] probe: seven requests to
-    // walk a hundred days and prove the floor.
+    // The trailing window, three months of traffic, two empty months, and ONE
+    // [E10] probe a year further back: seven requests to reach a floor.
     await capDayAt(7);
 
     const state = await driveChunks(
@@ -675,44 +749,264 @@ describe("[sync-critical] WP-F1 per-lane daily call budget", () => {
       (current) => current.backfill !== null && current.backfill.daily.done,
     );
 
-    const daily = adapter.statsRequests.filter((request) => request.periodMs === 86_400_000);
-    // Every window is 31 days — the span the provider was shown to honour —
-    // and never narrower, because nothing was ever refused.
-    for (const request of daily) {
-      expect(request.beforeMs - request.afterMs).toBe(31 * DAY);
-    }
-    // CONTIGUOUS, with the one-day overlap: adjacent windows must touch, and
-    // the union must have no hole between the newest bound and the floor.
-    const ordinary = daily.filter((request) => request.beforeMs >= floorMs - 31 * DAY);
-    for (let index = 1; index < ordinary.length; index += 1) {
-      expect(windowsAreContiguous(
-        { afterMs: ordinary[index]!.afterMs, beforeMs: ordinary[index]!.beforeMs },
-        { afterMs: ordinary[index - 1]!.afterMs, beforeMs: ordinary[index - 1]!.beforeMs },
-      )).toBe(true);
-      expect(ordinary[index - 1]!.afterMs - ordinary[index]!.beforeMs).toBe(-DAY);
-    }
-    expect(ordinary[0]!.beforeMs).toBe(NOW.getTime());
-    expect(ordinary[ordinary.length - 1]!.afterMs).toBeLessThanOrEqual(floorMs);
+    const months = adapter.statsRequests
+      .filter((request) => request.year !== 0)
+      .map((request) => `${request.year}-${String(request.month).padStart(2, "0")}`);
+    // NEWEST MONTH FIRST, one call per month, no gaps and no repeats — then the
+    // probe, a year past the two empty months.
+    expect(months).toEqual([
+      "2026-07",
+      "2026-06",
+      "2026-05",
+      "2026-04",
+      "2026-03",
+      "2025-03",
+    ]);
+    expect(new Set(months).size).toBe(months.length);
 
-    // It reached the floor the way the design says: empty windows, then ONE
+    // It reached the floor the way the design says: two empty months, then ONE
     // probe a year further back ([E10]), then a floor claim — not a refusal.
     expect(state!.backfill!.daily.done).toBe(true);
     expect(state!.backfill!.daily.probeSpent).toBe(true);
-    // The floor is what the PROVIDER described, not what we know the fixture
-    // holds: this one echoes the bounds it was asked for (as the HAR's honoured
-    // window did), so the floor claim is the oldest bound it ever answered with.
-    expect(state!.backfill!.daily.floorAt)
-      .toBe(new Date(NOW.getTime() - 121 * DAY).toISOString());
-    expect(new Date(state!.backfill!.daily.floorAt!).getTime()).toBeLessThan(floorMs);
+    // The floor is what the PROVIDER described — the oldest served `dateAfter`,
+    // which is May 2026's own start, not the empty months after it.
+    expect(state!.backfill!.daily.floorAt).toBe(new Date(Date.UTC(2026, 4, 1)).toISOString());
+
     const row = await coverageRow(page.id, "stats_account_daily");
     expect(row?.status).toBe("provider_exhausted");
     expect(row?.proof).toBe("empty_window");
     expect(row?.reason_code).toBe("empty_window_streak");
     expect(telemetry.anomalies.filter(
-      (anomaly) => anomaly.code === "fansly_stats_window_not_honoured",
+      (anomaly) => anomaly.code === "fansly_stats_month_form_not_honoured",
     )).toHaveLength(0);
+    // Every empty month is journaled: the empty month IS the floor evidence.
+    expect(await journaledKinds(page.id)).toHaveLength(7);
   });
 
+  it("resumes at the BOOKMARK when the [E10] probe finds older history", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    // Traffic in July 2026 and in May 2025, nothing between: the long-idle
+    // account [E10] exists for. The probe proves there IS older history, so the
+    // eleven months it jumped over are unexamined rather than absent.
+    const adapter = windowAdapterStub({
+      statsFor: (params) => {
+        if ((params.year ?? 0) === 0) {
+          return statsBodyFor(
+            { afterMs: params.afterDate.getTime(), beforeMs: params.beforeDate.getTime() },
+            28,
+          );
+        }
+        const index = params.year! * 12 + (params.month! - 1);
+        return index === JULY_2026 || index === 2025 * 12 + 4
+          ? monthBodyFor(params.year!, params.month!, 30)
+          : allZeroMonthBody(params.year!, params.month!);
+      },
+    });
+    const telemetry = telemetryStub();
+    // Trailing, July (data), June and May (empty), the probe at 2025-05 (data).
+    await capDayAt(5);
+
+    const state = await driveChunks(
+      dailyOnlyAppStub(adapter),
+      page.id,
+      telemetry,
+      (current) => current.callsToday >= 5,
+    );
+
+    const months = adapter.statsRequests
+      .filter((request) => request.year !== 0)
+      .map((request) => `${request.year}-${String(request.month).padStart(2, "0")}`);
+    expect(months).toEqual(["2026-07", "2026-06", "2026-05", "2025-05"]);
+    // BACK TO THE GAP, not onwards from the probe: without the bookmark the
+    // eleven months the probe jumped would be a hole nobody notices for a year.
+    expect(state!.backfill!.daily.nextMonthIndex).toBe(2026 * 12 + 3);
+    expect(state!.backfill!.daily.probeResumeMonthIndex).toBeNull();
+    expect(state!.backfill!.daily.done).toBe(false);
+    // The floor claim follows the OLDEST bound ever served, which is the probe's.
+    expect(state!.backfill!.daily.floorAt).toBe(new Date(Date.UTC(2025, 4, 1)).toISOString());
+  });
+
+  it("refuses to ask for the same MONTH twice, before any egress", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    // A cursor that has ALREADY asked for exactly the month it is about to ask
+    // for — a derivation that came back where it started, or corrupted state.
+    // The guard is durable because the production loop spanned five chunks.
+    const seeded = emptyFanslyStatsCursorState(NOW);
+    seeded.backfill!.daily.trailingCaptured = true;
+    seeded.backfill!.daily.nextMonthIndex = JULY_2026;
+    seeded.backfill!.daily.lastMonthIndex = JULY_2026;
+    await upsertCheckpointProgress(testDb.db, {
+      platformAccountId: page.id,
+      stream: "stats_snapshot",
+      cursorText: null,
+      state: seeded as unknown as Record<string, unknown>,
+    });
+
+    const adapter = windowAdapterStub({
+      statsFor: (params) => monthBodyFor(params.year ?? 2026, params.month ?? 7, 30),
+    });
+    const telemetry = telemetryStub();
+    await capDayAt(1);
+
+    const state = await driveChunks(
+      dailyOnlyAppStub(adapter),
+      page.id,
+      telemetry,
+      (current) => current.backfill !== null && current.backfill.daily.done,
+    );
+
+    // SPENT BEFORE ANY EGRESS. There is nothing to learn from issuing it.
+    expect(adapter.statsRequests).toHaveLength(0);
+    expect(state!.backfill!.daily.done).toBe(true);
+    const raised = telemetry.anomalies.filter(
+      (anomaly) => anomaly.code === "fansly_stats_month_form_not_honoured",
+    );
+    expect(raised).toHaveLength(1);
+    expect((raised[0]!.details as { trigger?: string }).trigger).toBe("repeat_request");
+    const row = await coverageRow(page.id, "stats_account_daily");
+    expect(row?.status).toBe("partial_provider_surface");
+    // No journaled response to point at, so the honest proof is none.
+    expect(row?.proof).toBe("none");
+    expect(row?.reason_code).toBe("month_form_not_honoured");
+  });
+
+  it("SUPERSEDES a lane the date-bound walk stopped and resumes it by month", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    // EXACTLY THE TWO PAGES ON PRODUCTION (lilly-2, lora-2): the guard stopped
+    // the daily lane with `window_not_honoured`, all three walks were marked
+    // done, and the cursor settled into the steady sweep. The claim was correct
+    // about the walk it stopped and wrong about the surface: history is served
+    // by month, and this lane never asked.
+    const stoppedCursor = emptyFanslyStatsCursorState(NOW);
+    stoppedCursor.mode = "steady";
+    stoppedCursor.backfill = null;
+    await upsertCheckpointProgress(testDb.db, {
+      platformAccountId: page.id,
+      stream: "stats_snapshot",
+      cursorText: null,
+      state: stoppedCursor as unknown as Record<string, unknown>,
+    });
+    await upsertCaptureCoverage(testDb.db, {
+      pageId: page.id,
+      platform: "fansly",
+      plane: "stats_account_daily",
+      scopeRef: "",
+      status: "partial_provider_surface",
+      acquisitionMode: "retroactive",
+      // `proof: none` because this fixture has no journaled body to point at;
+      // production's row points at the response that ignored the window, and
+      // the supersede reads the REASON CODE either way.
+      proof: "none",
+      reasonCode: "window_not_honoured",
+      proofObservationId: null,
+    });
+
+    const adapter = windowAdapterStub({
+      statsFor: (params) => (params.year ?? 0) === 0
+        ? statsBodyFor(
+          { afterMs: params.afterDate.getTime(), beforeMs: params.beforeDate.getTime() },
+          28,
+        )
+        : monthBodyFor(params.year!, params.month!, 30),
+    });
+    const telemetry = telemetryStub();
+    await capDayAt(2);
+
+    const state = await driveChunks(
+      dailyOnlyAppStub(adapter),
+      page.id,
+      telemetry,
+      (current) => current.callsToday >= 2,
+    );
+
+    // The lane is walking again, by month, starting at the month before the
+    // trailing window — and it does NOT re-capture the trailing window it
+    // already had, nor reopen the earnings walk, which honoured its own history.
+    expect(state!.mode).toBe("backfill");
+    expect(state!.backfill!.daily.trailingCaptured).toBe(true);
+    expect(state!.backfill!.earnings.done).toBe(true);
+    const months = adapter.statsRequests
+      .filter((request) => request.year !== 0)
+      .map((request) => `${request.year}-${String(request.month).padStart(2, "0")}`);
+    expect(months).toEqual(["2026-07", "2026-06"]);
+
+    // The superseded claim is GONE from the row — replaced, not accumulated.
+    const row = await coverageRow(page.id, "stats_account_daily");
+    expect(row?.status).toBe("in_progress");
+    expect(row?.reason_code).toBeNull();
+    expect(telemetry.anomalies.filter(
+      (anomaly) => anomaly.code === "fansly_stats_month_walk_resumed",
+    )).toHaveLength(1);
+
+    // AND IT DOES NOT REOPEN AGAIN. The reason code that triggers the supersede
+    // is gone, so the next dispatch is an ordinary continuation, not a reset.
+    const before = adapter.statsRequests.length;
+    await fanslyStatsSnapshotChunk(
+      dailyOnlyAppStub(adapter) as never,
+      input(page.id, telemetry, new SyncChunkBudget()),
+    );
+    expect(adapter.statsRequests.length).toBe(before);
+    expect(telemetry.anomalies.filter(
+      (anomaly) => anomaly.code === "fansly_stats_month_walk_resumed",
+    )).toHaveLength(1);
+  });
+
+  it("gives the HOURLY plane the trailing window and no history walk at all", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    // The hourly walk used to step backwards in 4-day windows. Those are DATE
+    // BOUNDS on the same route the month walk exists because of, and the month
+    // form has no hourly granularity to offer — so the plane is the trailing 25
+    // hours and it says so, rather than spending calls proving it every day.
+    // An account with a trailing window and no older months at all, so the
+    // daily walk reaches its floor immediately and the hourly lane behind it
+    // gets its turn inside one day's cap.
+    const adapter = windowAdapterStub({
+      statsFor: (params) => (params.year ?? 0) === 0
+        ? statsBodyFor(
+          { afterMs: params.afterDate.getTime(), beforeMs: params.beforeDate.getTime() },
+          28,
+        )
+        : allZeroMonthBody(params.year!, params.month!),
+    });
+    const telemetry = telemetryStub();
+    // Five: the trailing window, two empty months, the [E10] probe, and one for
+    // the earnings lane behind it — the hourly lane costs NOTHING, which is the
+    // whole point, so the cap has to leave room for the lane AFTER it.
+    await capDayAt(5);
+
+    // The hourly lane is ENABLED here — the point is that it makes no backfill
+    // call even so.
+    await driveChunks(
+      appStub(adapter as never),
+      page.id,
+      telemetry,
+      (current) => current.backfill !== null && current.backfill.hourly.done,
+    );
+
+    expect(adapter.statsRequests.filter((request) => request.periodMs === 3_600_000))
+      .toHaveLength(0);
+    const row = await coverageRow(page.id, "stats_account_hourly");
+    expect(row?.status).toBe("partial_provider_surface");
+    expect(row?.reason_code).toBe("hourly_trailing_window_only");
+    expect(row?.proof).toBe("none");
+    expect(row?.cursor.trailingHours).toBe(25);
+  });
   it("guards the earnings lane on the rows, since that route describes no window", async (context) => {
     if (!testDb) {
       context.skip();

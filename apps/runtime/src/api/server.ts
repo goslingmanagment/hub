@@ -61,6 +61,7 @@ import { registerEventsRoutes } from "../modules/events/index.ts";
 import { registerFinanceRoutes } from "../modules/finance/index.ts";
 import { registerIdentityRoutes } from "../modules/identity/index.ts";
 import { registerIngestRoutes } from "../modules/ingest/index.ts";
+import { registerInsightsRoutes } from "../modules/insights/index.ts";
 import { registerOpsRoutes } from "../modules/ops/index.ts";
 import { registerVoiceRoutes } from "../modules/voice/index.ts";
 import { registerWorkboardRoutes } from "../modules/workboard/index.ts";
@@ -543,6 +544,11 @@ export async function buildApiServer(appContext: AppContext) {
   // --- Phase 4: Dashboard + Admin routes ---
 
   // --- OFAPI webhook receiver + SSE sync-event fanout (ChatMuse real-time) ---
+
+  // --- Insights (WP-S1 endpoints-cover serving: stats/content/money reads) ---
+  // (module: apps/runtime/src/modules/insights). READ-ONLY: serving never
+  // authorizes capture.
+  registerInsightsRoutes(server, moduleContext);
 
   // --- Agent Read Plane (operations 1-10) --- (module: apps/runtime/src/modules/agent-read)
   registerAgentReadRoutes(server, moduleContext);

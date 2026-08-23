@@ -147,7 +147,17 @@ describe("LIVE_CONFIG_KEYS", () => {
     // backfill bound and the backfill continuation delay;
     // WP-F2 added the three `notifications` keys — the ramp flag, its
     // FAIL-CLOSED page allowlist and the per-lane daily call budget, all read
-    // per chunk so a ramp on the lossy lane never waits for a deploy.
-    expect(LIVE_CONFIG_KEYS.size).toBe(44);
+    // per chunk so a ramp on the lossy lane never waits for a deploy;
+    // WP-F3 added the three `catalog` keys on the same template;
+    // WP-F5 added FOUR — the ramp flag, its FAIL-CLOSED page allowlist, the
+    // per-lane daily call budget and the re-walk cycle, which is live because
+    // it re-aims a running first pass without a deploy;
+    // WP-F7 added the three `payouts` keys on the WP-F3 template;
+    // WP-F4 added FOUR — the ramp flag, its FAIL-CLOSED page allowlist, the
+    // per-lane daily call budget (the ONE number a cap-raise step moves, and
+    // the whole request-count enforcement on the highest-volume lane in the
+    // system) and the long-tail cycle, live because it re-aims a running
+    // round-robin without a deploy.
+    expect(LIVE_CONFIG_KEYS.size).toBe(60);
   });
 });

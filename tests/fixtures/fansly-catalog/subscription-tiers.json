@@ -1,0 +1,77 @@
+{
+  "_fixture": "SYNTHETIC. Shape from a live /subscriptions/tiers capture (2026-08-19), a BARE ARRAY once the envelope is unwrapped. THE PRICE TRAP: every observed tier carried `price: 5000` — a BASE — while the real prices sit in `plans[].price`, up to 499990. THE FIELD-NAME TRAP: the plan's length is `billingCycle`; the live payload has NO `plans[].duration` key at all, and `duration` exists one level down on `promos[]`. Promo timestamps are MILLISECONDS.",
+  "rows": [
+    {
+      "id": "000900000000000301",
+      "accountId": "000900000000000001",
+      "name": "Basic",
+      "color": "#FF69B4",
+      "pos": 0,
+      "price": 5000,
+      "maxSubscribers": 0,
+      "subscriptionBenefits": ["Weekly updates", "Chatting"],
+      "includedTierIds": [],
+      "plans": [
+        {
+          "id": "000900000000000401",
+          "status": 1,
+          "billingCycle": 30,
+          "price": 10000,
+          "useAmounts": 0,
+          "promos": [
+            {
+              "id": "000900000000000501",
+              "status": 1,
+              "price": 7770,
+              "duration": 30,
+              "maxUses": 1,
+              "maxUsesBefore": 1769712873000,
+              "newSubscribersOnly": 0,
+              "description": "Valentine promo",
+              "startsAt": 1769712854000,
+              "endsAt": 1769903280000
+            }
+          ]
+        },
+        {
+          "id": "000900000000000402",
+          "status": 1,
+          "billingCycle": 90,
+          "price": 16500,
+          "useAmounts": 0,
+          "promos": []
+        }
+      ]
+    },
+    {
+      "id": "000900000000000302",
+      "accountId": "000900000000000001",
+      "name": "Master",
+      "color": "#111111",
+      "pos": 1,
+      "price": 5000,
+      "maxSubscribers": 0,
+      "subscriptionBenefits": [],
+      "includedTierIds": ["000900000000000301"],
+      "plans": [
+        {
+          "id": "000900000000000403",
+          "status": 1,
+          "billingCycle": 30,
+          "price": 499990,
+          "useAmounts": 0,
+          "promos": [],
+          "someUnnamedFutureField": "kept-verbatim"
+        },
+        {
+          "id": "000900000000000404",
+          "status": 2,
+          "billingCycle": 60,
+          "price": 40000,
+          "useAmounts": 0,
+          "promos": []
+        }
+      ]
+    }
+  ]
+}

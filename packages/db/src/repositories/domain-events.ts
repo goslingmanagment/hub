@@ -87,6 +87,12 @@ const PROJECTION_ONLY_DOMAIN_EVENT_TYPES = new Set([
   // business news, which is precisely what none of this is.
   "traffic.datapoint_observed",
   "media_traffic.datapoint_observed",
+  // WP-F4's one new type, in the SAME family: per-media `topFypTags` rows —
+  // which tags brought traffic to one item in one window. Registered here for
+  // the same reason as its twelve siblings, and in the same change that taught
+  // the `fansly-stats` parser to mint it: an unregistered type would replay to
+  // SSE v2 clients as business news, which a tag ranking is not.
+  "media_tag.stats_observed",
   "stats.window_top_observed",
   "tag.counters_observed",
   "media.sale_stats_observed",
@@ -108,6 +114,46 @@ const PROJECTION_ONLY_DOMAIN_EVENT_TYPES = new Set([
   "notification.observed",
   "media.purchase_notification_observed",
   "engagement.notification_observed",
+  // WP-F3, the content catalog. Inventory, prices and automation definitions:
+  // every one of them is a projection input, and none of them is business news
+  // an SSE v2 client should be handed as it happens. `media.observed` is
+  // already registered above (F0(b) minted it) and the vault/batch origins ride
+  // that same type — one decision, never two. Registering the types here and
+  // declaring `projectionOnly: true` on the `fansly-catalog` family are ONE
+  // decision as well.
+  "vault.album_observed",
+  "vault.album_membership_observed",
+  "subscription.tier_observed",
+  "subscription.tier_plan_observed",
+  "promo.gift_code_observed",
+  "automation.definition_observed",
+  "page.wall_observed",
+  // The ROSTER event — "this full listing named exactly these refs". It is what
+  // makes `missing_since` a REPLAYED fact rather than a sweep-time side effect,
+  // and it is the only event in this family that describes an absence.
+  "catalog.listing_observed",
+  // WP-F5, the comment archive. A comment is a fact about the archive, not
+  // business news an SSE v2 client should be handed as it happens — and the
+  // walk that finds it may be reading a post from two years ago. Registering
+  // the types here and declaring `projectionOnly: true` on the
+  // `fansly-comments` family are ONE decision, never two.
+  "post.comment_observed",
+  // The ROSTER — "this walk of this post served exactly these comment refs".
+  // It is what makes `missing_since` a REPLAYED fact rather than a sweep-time
+  // side effect, and the only event in this family that describes an absence.
+  "post.comment_list_observed",
+  // WP-F7, the payouts lane. Money OUT is a fact about the agency's own books,
+  // not business news an SSE v2 client should be handed as it happens — and the
+  // method event carries a MASK of a credential, which makes "never delivered
+  // as news" a privacy property as well as an architectural one. Registering
+  // the types here and declaring `projectionOnly: true` on the `fansly-payouts`
+  // family are ONE decision, never two.
+  "payout.method_observed",
+  "payout.observed",
+  // The ROSTER — "this full method listing named exactly these refs". It is
+  // what makes `missing_since` a REPLAYED fact rather than a sweep-time side
+  // effect, and the only event in this family that describes an absence.
+  "payout.method_list_observed",
 ]);
 
 export function isProjectionOnlyDomainEventType(type: string) {

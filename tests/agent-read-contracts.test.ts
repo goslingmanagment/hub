@@ -8,6 +8,7 @@ import {
   AGENT_CLAIM_FIELDS,
   AGENT_DATASETS,
   AGENT_DATASET_NAMES,
+  AGENT_PLANNED_DATASET_NAMES,
   AGENT_PLANE_COUNT,
   AGENT_PLANE_NAMES,
   AGENT_POST_MUTATION_OPERATIONS,
@@ -372,13 +373,38 @@ describe("agent read plane: the B2 window/cursor law", () => {
   });
 
   it("only AVAILABLE datasets are addressable; planned ones are a boundary 400", () => {
-    expect(agentDatasetEnum.options).not.toContain("purchase_history");
     expect(agentDatasetEnum.options).not.toContain("fan_earnings");
     expect(agentDatasetEnum.options).toContain("posts");
     expect(agentDatasetEnum.options).toContain("post_monetization");
     expect(agentDatasetEnum.options).toContain("post_tips");
     expect(agentDatasetEnum.options).toContain("tip_transactions");
     expect(agentDatasetEnum.options).toContain("tip_goals");
+  });
+
+  it("WP-S1 consumed its reserved keys and superseded purchase_history", () => {
+    // The six reserved names are now ADDRESSABLE rather than planned: a caller
+    // that read the catalog a year ago and wrote `--dataset comments` gets data
+    // instead of a 400, which is the whole reason the keys were reserved.
+    for (const promoted of [
+      "comments",
+      "likes",
+      "vault_media",
+      "notifications",
+      "subscription_tiers",
+      "payouts",
+    ] as const) {
+      expect(agentDatasetEnum.options, promoted).toContain(promoted);
+      expect(AGENT_PLANNED_DATASET_NAMES, promoted).not.toContain(promoted);
+    }
+    // `purchase_history` was never a dataset — it is a SYNC STREAM name with no
+    // serving table. It is gone from BOTH lists: `message_media_sales` answers
+    // the question it stood for, and leaving the stale key beside its real
+    // answer would have advertised a second, better one that is never coming.
+    expect(agentDatasetEnum.options).not.toContain("purchase_history");
+    expect(AGENT_PLANNED_DATASET_NAMES).not.toContain("purchase_history");
+    expect(agentDatasetEnum.options).toContain("message_media_sales");
+    // `fan_earnings` stays planned, untouched by this initiative.
+    expect(AGENT_PLANNED_DATASET_NAMES).toContain("fan_earnings");
   });
 });
 
@@ -430,6 +456,68 @@ describe("agent read plane: dataset registry <-> SQL mapping, both directions", 
     }
   });
 
+  it("every endpoints-cover dataset declares a NON-EMPTY plane set and a floor", () => {
+    // `readPlanes: []` is legal — `sync_streams` uses it honestly, because no
+    // claim class answers for sync state — and it is FORBIDDEN for these:
+    // silently, it disables the capture-floor epistemics, and an empty result
+    // with no floor is the "asked about January, got nothing, concluded nothing
+    // happened" failure the whole plane exists to prevent.
+    const s1Datasets = [
+      "traffic_daily",
+      "media_stats",
+      "top_media",
+      "top_tags",
+      "revenue_mix",
+      "message_media_sales",
+      "comments",
+      "likes",
+      "vault_media",
+      "notifications",
+      "subscription_tiers",
+      "payouts",
+      "capture_coverage",
+    ] as const;
+    for (const dataset of s1Datasets) {
+      const mapping = AGENT_DATASET_SQL[dataset];
+      expect(mapping, dataset).toBeDefined();
+      expect(mapping!.readPlanes.length, dataset).toBeGreaterThan(0);
+      expect(mapping!.captureFloorPlane, dataset).toBeDefined();
+      // A floor may only be claimed for a plane the dataset actually reads.
+      expect(mapping!.readPlanes, dataset).toContain(mapping!.captureFloorPlane);
+    }
+    // And `sync_streams` keeps its honest emptiness — this test must never be
+    // "made to pass" by giving it a plane it does not read.
+    expect(AGENT_DATASET_SQL.sync_streams!.readPlanes).toEqual([]);
+  });
+
+  it("the scope-pairing rule: a purchase-disclosing dataset needs BOTH capabilities", () => {
+    // A row saying "this fan bought offer 3 of message X" discloses a
+    // conversation as much as a payment, so `read:money` alone must not reach
+    // it. The flag is declared, not inferred: no field name or scalar kind can
+    // tell `salesCount` on a message offer (a purchase) from `salesCount` on a
+    // catalogue item (an inventory statistic).
+    const disclosing = AGENT_DATASET_NAMES
+      .filter((dataset) => AGENT_DATASETS[dataset].disclosesPurchase)
+      .sort();
+    expect(disclosing).toEqual(["message_media_sales"]);
+    expect(agentDatasetRequiredCapabilities("message_media_sales"))
+      .toEqual(["read:datasets", "read:money", "read:messages"]);
+    for (const dataset of AGENT_DATASET_NAMES) {
+      const definition = AGENT_DATASETS[dataset];
+      const needsMessages = definition.verbatimText || definition.disclosesPurchase;
+      expect(
+        agentDatasetRequiredCapabilities(dataset).includes("read:messages"),
+        dataset,
+      ).toBe(needsMessages);
+    }
+    // The catalogue's own sale counts are NOT a purchase disclosure: no fan
+    // appears on a `media_stats` row, and neither does a payout.
+    expect(AGENT_DATASETS.media_stats.disclosesPurchase).toBe(false);
+    expect(AGENT_DATASETS.payouts.disclosesPurchase).toBe(false);
+    expect(agentDatasetRequiredCapabilities("payouts"))
+      .toEqual(["read:datasets", "read:money"]);
+  });
+
   it("a money-bearing dataset is exactly one carrying a mills field", () => {
     for (const dataset of AGENT_DATASET_NAMES) {
       const definition = AGENT_DATASETS[dataset];
@@ -448,8 +536,11 @@ describe("agent read plane: dataset registry <-> SQL mapping, both directions", 
       const definition = AGENT_DATASETS[dataset];
       const carriesText = Object.keys(definition.fields).some(agentDatasetFieldIsVerbatimText);
       expect(definition.verbatimText, dataset).toBe(carriesText);
+      // `read:messages` is now reachable by TWO independent routes — free text
+      // and the purchase-disclosure pairing rule — so the assertion names both
+      // rather than pretending text is the only one.
       expect(agentDatasetRequiredCapabilities(dataset).includes("read:messages"), dataset)
-        .toBe(carriesText);
+        .toBe(carriesText || definition.disclosesPurchase);
     }
     expect(agentDatasetRequiredCapabilities("fan_notes")).toContain("read:messages");
     expect(agentDatasetRequiredCapabilities("posts")).toEqual(["read:datasets", "read:messages"]);

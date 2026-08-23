@@ -103,6 +103,24 @@ export type AgentDatasetDefinition = {
    * body cannot inherit the narrower requirement.
    */
   readonly verbatimText: boolean;
+  /**
+   * Datasets whose ROWS DISCLOSE A PURCHASE additionally require
+   * `read:messages` — the endpoints-cover scope-pairing rule.
+   *
+   * The rule exists because a purchase is a fact about a CONVERSATION as much
+   * as about money: a row saying "this fan bought offer 3 of message X" tells a
+   * `read:money`-only key who was talking to whom and what they bought, which
+   * is exactly the disclosure `read:messages` guards. A buyer identity or a
+   * per-message sale count discloses a purchase on its own — there is no
+   * threshold below which it does not.
+   *
+   * Declared rather than inferred: unlike `verbatimText`, no field NAME or
+   * scalar KIND can tell `salesCount` on a message offer (a purchase) from
+   * `salesCount` on a catalogue item (an inventory statistic). The flag is
+   * REQUIRED on every dataset so the question has to be answered rather than
+   * defaulted, and a test pins the derivation.
+   */
+  readonly disclosesPurchase: boolean;
   /** Wire field -> scalar kind. This map IS the filter/sort allowlist. */
   readonly fields: Readonly<Record<string, AgentDatasetFieldKind>>;
   readonly defaultSort: AgentDatasetSort;
@@ -129,6 +147,7 @@ export const AGENT_DATASETS = {
     // read:datasets-only key a fan's lifetime spend without read:money.
     moneyBearing: true,
     verbatimText: false,
+    disclosesPurchase: false,
     fields: {
       platform: "string",
       platformUserId: "string",
@@ -145,6 +164,7 @@ export const AGENT_DATASETS = {
   dm_threads: {
     moneyBearing: false,
     verbatimText: false,
+    disclosesPurchase: false,
     fields: {
       platform: "string",
       platformUserId: "string",
@@ -160,6 +180,7 @@ export const AGENT_DATASETS = {
   subscriptions: {
     moneyBearing: true,
     verbatimText: false,
+    disclosesPurchase: false,
     fields: {
       platform: "string",
       platformUserId: "string",
@@ -176,6 +197,7 @@ export const AGENT_DATASETS = {
   subscription_events: {
     moneyBearing: false,
     verbatimText: false,
+    disclosesPurchase: false,
     fields: {
       occurredAt: "timestamp",
       fanId: "string",
@@ -188,6 +210,7 @@ export const AGENT_DATASETS = {
   transactions: {
     moneyBearing: true,
     verbatimText: false,
+    disclosesPurchase: false,
     fields: {
       platform: "string",
       platformUserId: "string",
@@ -213,6 +236,7 @@ export const AGENT_DATASETS = {
     // intentionally returns ledger money and captured context together, so all
     // three dataset/money/messages capabilities are mandatory.
     verbatimText: true,
+    disclosesPurchase: false,
     fields: {
       platform: "string",
       platformUserId: "string",
@@ -235,6 +259,7 @@ export const AGENT_DATASETS = {
   fan_spend_daily: {
     moneyBearing: true,
     verbatimText: false,
+    disclosesPurchase: false,
     fields: {
       platform: "string",
       platformUserId: "string",
@@ -250,6 +275,7 @@ export const AGENT_DATASETS = {
   follows: {
     moneyBearing: false,
     verbatimText: false,
+    disclosesPurchase: false,
     fields: {
       platform: "string",
       platformUserId: "string",
@@ -263,6 +289,7 @@ export const AGENT_DATASETS = {
   followers_daily: {
     moneyBearing: false,
     verbatimText: false,
+    disclosesPurchase: false,
     fields: {
       platform: "string",
       businessDate: "date",
@@ -274,6 +301,7 @@ export const AGENT_DATASETS = {
   fan_aliases: {
     moneyBearing: false,
     verbatimText: false,
+    disclosesPurchase: false,
     fields: {
       platform: "string",
       platformUserId: "string",
@@ -288,6 +316,7 @@ export const AGENT_DATASETS = {
   fan_notes: {
     moneyBearing: false,
     verbatimText: true,
+    disclosesPurchase: false,
     fields: {
       platform: "string",
       platformUserId: "string",
@@ -305,6 +334,7 @@ export const AGENT_DATASETS = {
     // the transcript disclosure class: a read:datasets-only key must not gain a
     // side door to content text.
     verbatimText: true,
+    disclosesPurchase: false,
     fields: {
       platform: "string",
       postRef: "string",
@@ -323,6 +353,7 @@ export const AGENT_DATASETS = {
     // dataset behind the same read:messages disclosure gate as creator posts so
     // the label cannot become a side door around the text capability.
     verbatimText: true,
+    disclosesPurchase: false,
     fields: {
       platform: "string",
       postRef: "string",
@@ -347,6 +378,7 @@ export const AGENT_DATASETS = {
     // is fan-written transcript-grade material, so the whole dataset stays
     // behind read:messages in addition to its money gate.
     verbatimText: true,
+    disclosesPurchase: false,
     fields: {
       platform: "string",
       postTipPostRef: "string",
@@ -366,6 +398,7 @@ export const AGENT_DATASETS = {
     // The goal label is creator-written verbatim copy. This remains true even
     // though the dataset deduplicates shared goals to one latest snapshot.
     verbatimText: true,
+    disclosesPurchase: false,
     fields: {
       platform: "string",
       tipGoalRef: "string",
@@ -379,9 +412,396 @@ export const AGENT_DATASETS = {
     defaultSort: { field: "lastObservedAt", dir: "desc", nullsLast: false },
     stableKey: ["tipGoalRef"],
   },
+  // ── endpoints-cover (WP-S1): the thirteen datasets over what F1-F7 and F4
+  // capture. FANSLY ONLY (A28-2) — the catalog's per-dataset `platforms` says
+  // so, and no OnlyFans lane writes any of these tables.
+  //
+  // Every one of them declares a NON-EMPTY `readPlanes` in the SQL mapping,
+  // minted by a claim field this initiative added to the matching class.
+  // `readPlanes: []` is legal (`sync_streams` uses it honestly) and is
+  // FORBIDDEN here: it silently disables the capture-floor epistemics the whole
+  // coverage story rests on, and an empty-result answer would then carry no
+  // evidence about whether anything was ever captured.
+  traffic_daily: {
+    moneyBearing: false,
+    verbatimText: false,
+    disclosesPurchase: false,
+    fields: {
+      platform: "string",
+      subjectKind: "string",
+      subjectRef: "string",
+      periodMs: "int",
+      bucketStart: "timestamp",
+      /** RAW platform code as text (A22-2). Key on THIS. */
+      sourceCode: "string",
+      /** This build's reading of the code; `unknown:<code>` when it has none. */
+      sourceLabel: "string",
+      mappingVersion: "int",
+      /** `type - (type % 10)` for a profile row; null for the 0/1 media codes,
+       *  which are not a family/member structure at all. */
+      family: "string",
+      /** Member 1 is the creator widget's visit count; anything else is the
+       *  dwell-bearing series, whose own view counts differ. */
+      measure: "string",
+      views: "int",
+      previewViews: "int",
+      uniqueViewers: "int",
+      previewUniqueViewers: "int",
+      interactionTimeMs: "int",
+      previewInteractionTimeMs: "int",
+    },
+    defaultSort: { field: "bucketStart", dir: "desc", nullsLast: false },
+    stableKey: ["bucketKey"],
+  },
+  media_stats: {
+    // The catalogue head travels with the buckets, so the sale figures make it
+    // money-bearing. `salesNetMills` is A12's NET verbatim; the gross beside it
+    // is DERIVED and named accordingly, and the two are never summed.
+    moneyBearing: true,
+    verbatimText: false,
+    // Catalogue sale COUNTS are inventory statistics about the creator's own
+    // shelf, not a disclosure of who bought what — no fan appears on a row
+    // here. The purchase-disclosing dataset is `message_media_sales`.
+    disclosesPurchase: false,
+    fields: {
+      platform: "string",
+      mediaOfferRef: "string",
+      mediaType: "int",
+      mimeType: "string",
+      durationMs: "int",
+      periodMs: "int",
+      bucketStart: "timestamp",
+      sourceCode: "string",
+      sourceLabel: "string",
+      mappingVersion: "int",
+      views: "int",
+      previewViews: "int",
+      uniqueViewers: "int",
+      previewUniqueViewers: "int",
+      interactionTimeMs: "int",
+      previewInteractionTimeMs: "int",
+      priceMills: "mills",
+      salesCount: "int",
+      salesNetMills: "mills",
+      /** DERIVED from net at read time (net / 0.8, A12). The name carries the
+       *  warning because a wire field cannot carry a footnote. */
+      salesGrossMillsDerived: "mills",
+    },
+    // NO VIDEO FIELDS, and their absence is deliberate: [E5] found all six live
+    // per-media responses carrying seven stat keys and no video metrics at all,
+    // for a video asset. Declaring always-null columns would promise a metric
+    // the route does not serve.
+    defaultSort: { field: "bucketStart", dir: "desc", nullsLast: false },
+    stableKey: ["mediaBucketKey"],
+  },
+  top_media: {
+    moneyBearing: false,
+    verbatimText: false,
+    disclosesPurchase: false,
+    fields: {
+      platform: "string",
+      plane: "string",
+      rank: "int",
+      mediaOfferRef: "string",
+      bundleRef: "string",
+      periodMs: "int",
+      requestedStart: "timestamp",
+      requestedEnd: "timestamp",
+      views: "int",
+      previewViews: "int",
+      interactionTimeMs: "int",
+      previewInteractionTimeMs: "int",
+      observedAt: "timestamp",
+    },
+    // The WINDOW is part of a row's identity: rank 2 of one window is not the
+    // same fact as rank 2 of the next, so the sort is by window, not by rank.
+    defaultSort: { field: "requestedEnd", dir: "desc", nullsLast: false },
+    stableKey: ["topMediaKey"],
+  },
+  top_tags: {
+    moneyBearing: false,
+    verbatimText: false,
+    disclosesPurchase: false,
+    fields: {
+      platform: "string",
+      plane: "string",
+      rank: "int",
+      tagRef: "string",
+      /** NULL when the response's own `tags[]` join missed — never fabricated
+       *  from the id, and never read as "the tag has no name". */
+      tagName: "string",
+      periodMs: "int",
+      requestedStart: "timestamp",
+      requestedEnd: "timestamp",
+      views: "int",
+      previewViews: "int",
+      interactionTimeMs: "int",
+      previewInteractionTimeMs: "int",
+      observedAt: "timestamp",
+    },
+    defaultSort: { field: "requestedEnd", dir: "desc", nullsLast: false },
+    stableKey: ["topTagKey"],
+  },
+  revenue_mix: {
+    moneyBearing: true,
+    verbatimText: false,
+    disclosesPurchase: false,
+    fields: {
+      platform: "string",
+      businessDate: "date",
+      /** RAW. ONE visible label maps to TWO live codes, legacy and current
+       *  (A22-2), and this ledger reaches back to 2025-03-06 — well into legacy
+       *  territory. Group by `typeCode` for the truth, by `typeLabel` for the
+       *  grouping the platform's own chart shows. */
+      typeCode: "int",
+      typeLabel: "string",
+      typeEra: "string",
+      mappingVersion: "int",
+      /** Stored separately, NEVER derived across bases. */
+      grossMills: "mills",
+      netMills: "mills",
+      lastObservedAt: "timestamp",
+    },
+    defaultSort: { field: "businessDate", dir: "desc", nullsLast: false },
+    stableKey: ["revenueMixKey"],
+  },
+  message_media_sales: {
+    // THE SCOPE-PAIRING RULE'S ONE DATASET. It supersedes the planned
+    // `purchase_history` key (removed below): that name was a SYNC STREAM with
+    // no serving table, while these rows are the real answer to "what was
+    // offered and what was bought in DMs".
+    moneyBearing: true,
+    verbatimText: false,
+    disclosesPurchase: true,
+    fields: {
+      platform: "string",
+      messageRef: "string",
+      conversationRef: "string",
+      offerOrdinal: "int",
+      mediaOfferRef: "string",
+      bundleRef: "string",
+      offerType: "int",
+      mimeType: "string",
+      durationMs: "int",
+      priceMills: "mills",
+      /** The archive joins THIS for purchase state (A17-4 variant B); it is not
+       *  a column on the message row. `unknown` is a real value, not a null. */
+      purchaseState: "string",
+      orderRef: "string",
+      salesCount: "int",
+      salesNetMills: "mills",
+      fanPlatformUserId: "string",
+      messageCreatedAt: "timestamp",
+      lastObservedAt: "timestamp",
+    },
+    defaultSort: { field: "messageCreatedAt", dir: "desc", nullsLast: true },
+    stableKey: ["messageOfferKey"],
+  },
+  comments: {
+    // Fan- and creator-written reply bodies: transcript-grade material, so the
+    // whole dataset rides `read:messages` exactly as `posts` does.
+    moneyBearing: true,
+    verbatimText: true,
+    disclosesPurchase: false,
+    fields: {
+      platform: "string",
+      commentRef: "string",
+      parentPostRef: "string",
+      rootPostRef: "string",
+      authorRef: "string",
+      authorUsername: "string",
+      /** `''` is a REPLY, not a missing one: a fan who replied with only an
+       *  attachment still replied, and one of the four live captured replies
+       *  had empty content. */
+      commentText: "string",
+      likeCount: "int",
+      /** TWO BASES, never summed. */
+      tipTotalMills: "mills",
+      attachmentTipMills: "mills",
+      attachmentCount: "int",
+      occurredAt: "timestamp",
+      changedAt: "timestamp",
+      discoveredVia: "string",
+      /** The walk route has no established pagination, so a suspiciously full
+       *  page marks its rows. A true here means per-post completeness is
+       *  UNKNOWN for that post — never that the comment is suspect. */
+      possiblyTruncated: "bool",
+      /** A later FULL walk stopped naming this comment. Never a delete (DP 7). */
+      missingSince: "timestamp",
+    },
+    defaultSort: { field: "occurredAt", dir: "desc", nullsLast: false },
+    stableKey: ["commentKey"],
+  },
+  likes: {
+    // SHIPS EMPTY ON FANSLY, and the catalog says so rather than omitting the
+    // dataset: no like code is live-confirmed ([E4]), so WP-F2's layer 2 writes
+    // nothing here and `captureState` is `not_captured`. An omitted dataset and
+    // an empty one are indistinguishable to a reader, which is the confusion
+    // this plane exists to remove. The OnlyFans `posts.liked` webhook populates
+    // the same table independently.
+    moneyBearing: false,
+    verbatimText: false,
+    disclosesPurchase: false,
+    fields: {
+      platform: "string",
+      subjectKind: "string",
+      subjectRef: "string",
+      likerPlatformUserId: "string",
+      /** `active` | `undone`. An undo sets the state; it never deletes. */
+      state: "string",
+      occurredAt: "timestamp",
+      discoveredVia: "string",
+    },
+    defaultSort: { field: "occurredAt", dir: "desc", nullsLast: false },
+    stableKey: ["likeKey"],
+  },
+  vault_media: {
+    moneyBearing: false,
+    verbatimText: false,
+    disclosesPurchase: false,
+    fields: {
+      platform: "string",
+      /** `creator` | `user`. The user vault is the account's OWN Likes and
+       *  Purchases and holds OTHER creators' media, so merging the two would
+       *  make purchases indistinguishable from inventory. */
+      vaultKind: "string",
+      albumRef: "string",
+      mediaOfferRef: "string",
+      /** The membership row's OWN id — the vault walk's cursor, and NOT the
+       *  same value as `mediaOfferRef`. */
+      memberRef: "string",
+      mediaType: "int",
+      bundleRef: "string",
+      createdAtPlatform: "timestamp",
+      missingSince: "timestamp",
+      firstObservedAt: "timestamp",
+      lastObservedAt: "timestamp",
+    },
+    defaultSort: { field: "firstObservedAt", dir: "desc", nullsLast: false },
+    stableKey: ["vaultMemberKey"],
+  },
+  notifications: {
+    moneyBearing: false,
+    verbatimText: false,
+    // A notification of a media purchase names the buyer through
+    // `correlationRef`, which is why the four purchase codes exist at all. The
+    // row is still an engagement fact rather than a ledger one; the purchase
+    // DISCLOSURE gate is on `message_media_sales`, and a caller reading
+    // purchase codes here gets the code and a ref, never a price or an offer.
+    disclosesPurchase: false,
+    fields: {
+      platform: "string",
+      notificationRef: "string",
+      /** RAW. The shipped spec was wrong on EIGHT of sixteen codes, including
+       *  both purchase events (A22-1) — which is why storage keys on this and
+       *  the label below carries its own confidence. */
+      typeCode: "int",
+      typeLabel: "string",
+      /** `confirmed` requires two independent live examples agreeing with a
+       *  second source; everything client-derived is `inferred`. */
+      typeConfidence: "string",
+      mappingVersion: "int",
+      correlationRef: "string",
+      correlationGroupRef: "string",
+      occurredAt: "timestamp",
+      acknowledgedAt: "timestamp",
+    },
+    defaultSort: { field: "occurredAt", dir: "desc", nullsLast: false },
+    stableKey: ["notificationKey"],
+  },
+  subscription_tiers: {
+    // ONE ROW PER PLAN, not per tier: `tier.price` is a BASE, not a price (all
+    // five observed tiers carried 5 000 while their plans ranged 10 000 …
+    // 499 990), so a tier-grained dataset would serve a number no subscriber
+    // ever paid as if it were the price.
+    moneyBearing: true,
+    verbatimText: false,
+    disclosesPurchase: false,
+    fields: {
+      platform: "string",
+      tierRef: "string",
+      tierName: "string",
+      tierPos: "int",
+      /** The tier HEAD's `price`. A base, never what a subscriber pays. */
+      basePriceMills: "mills",
+      maxSubscribers: "int",
+      planRef: "string",
+      planStatus: "int",
+      /** Reads `plans[].billingCycle` — verified live; `duration` exists one
+       *  level down, on `promos[]`, and is a different thing. */
+      durationDays: "int",
+      /** THE PRICE TRUTH. */
+      priceMills: "mills",
+      promoCount: "int",
+      missingSince: "timestamp",
+      lastObservedAt: "timestamp",
+    },
+    defaultSort: { field: "lastObservedAt", dir: "desc", nullsLast: false },
+    stableKey: ["tierPlanKey"],
+  },
+  payouts: {
+    // RESTRICTED: money OUT. `read:money` comes from the mills fields; the
+    // method identity comes back MASKED and the full processor payload stays
+    // raw-journal-only under the restricted class — provider 2 (Paxum) returns
+    // a plaintext email address and the only sanctioned reader of that field is
+    // the WP-F7 canonicalizer that produced the mask.
+    moneyBearing: true,
+    verbatimText: false,
+    // No fan appears on a payout row: this is the agency paying itself, not a
+    // purchase, so the pairing rule does not reach it.
+    disclosesPurchase: false,
+    fields: {
+      platform: "string",
+      payoutRef: "string",
+      /** MILLS with no scaling: the wire unit IS the kernel unit here. */
+      amountMills: "mills",
+      /** RAW. 8 is the ONLY code ever observed and is never treated as "the
+       *  success code" — `statusConfidence` is how a reader learns that. */
+      statusCode: "int",
+      statusLabel: "string",
+      statusConfidence: "string",
+      methodRef: "string",
+      methodProviderId: "int",
+      methodProviderLabel: "string",
+      /** OURS, never the provider's. */
+      methodMaskedLabel: "string",
+      requestedAt: "timestamp",
+      updatedAtPlatform: "timestamp",
+    },
+    defaultSort: { field: "requestedAt", dir: "desc", nullsLast: true },
+    stableKey: ["payoutKey"],
+  },
+  capture_coverage: {
+    // The honesty plane as a dataset: the `(status, acquisition_mode, proof)`
+    // vocabulary an agent needs to tell "we hold nothing" from "we never
+    // looked". It reads CAPTURE-PLANE OPERATIONAL STATE, which no
+    // `projection:rebuild` truncates — so the answer survives a repair that
+    // wipes and replays every projection beside it.
+    moneyBearing: false,
+    verbatimText: false,
+    disclosesPurchase: false,
+    fields: {
+      platform: "string",
+      plane: "string",
+      scopeRef: "string",
+      status: "string",
+      acquisitionMode: "string",
+      proof: "string",
+      oldestCapturedAt: "timestamp",
+      newestCapturedAt: "timestamp",
+      expectedCount: "int",
+      observedUniqueCount: "int",
+      reasonCode: "string",
+      nextProbeAt: "timestamp",
+      updatedAt: "timestamp",
+    },
+    defaultSort: { field: "updatedAt", dir: "desc", nullsLast: false },
+    stableKey: ["coverageKey"],
+  },
   sync_streams: {
     moneyBearing: false,
     verbatimText: false,
+    disclosesPurchase: false,
     fields: {
       stream: "string",
       syncStatus: "string",
@@ -402,26 +822,33 @@ export type AgentDataset = keyof typeof AGENT_DATASETS;
  * that an absent answer is distinguishable from an absent capability, so a hole in
  * the data is declared, not omitted.
  *
- * `purchase_history` and `fan_earnings` were DEMOTED from available while the
- * contract was being written: `purchase_history` is a sync-stream name with no
- * serving table at all (its canonicalization produces `message.ppv_unlocked`, but
- * no dataset exposes that event), and `fan_earnings_stats` exists in the database
- * (migration 0061) but not in the Drizzle schema and is read only by raw SQL.
+ * `fan_earnings` stays planned and untouched: `fan_earnings_stats` exists in the
+ * database (migration 0061) but not in the Drizzle schema and is read only by raw
+ * SQL. The endpoints-cover initiative deliberately did not adopt it.
+ *
+ * WHAT LEFT THIS LIST, AND WHERE IT WENT (WP-S1):
+ *   `vault_media`, `notifications`, `subscription_tiers`, `comments`, `likes`,
+ *   `payouts` — PROMOTED to available above, each over the projection its
+ *   capture package landed. Reusing the reserved key rather than minting a new
+ *   name is deliberate: a caller that read the catalog a year ago and wrote
+ *   `--dataset comments` now gets data instead of a 400.
+ *
+ *   `purchase_history` — SUPERSEDED by `message_media_sales`. It was never a
+ *   dataset: it is a SYNC STREAM name whose canonicalization produces
+ *   `message.ppv_unlocked` and which has no serving table at all. The question
+ *   it stood for — what was offered and what was bought in DMs — is answered by
+ *   `message_media_offers`, which `message_media_sales` serves under the
+ *   `read:messages` + `read:money` pairing rule. Keeping the stale key beside
+ *   its real answer would have advertised a second, better `purchase_history`
+ *   that is never coming.
  */
 export const AGENT_PLANNED_DATASETS = {
-  purchase_history: {},
   fan_earnings: {},
-  vault_media: {},
   stories: {},
-  notifications: {},
   fan_lists: {},
-  subscription_tiers: {},
   livestreams: {},
   campaigns: {},
-  comments: {},
-  likes: {},
   polls: {},
-  payouts: {},
   chargebacks: {},
   blocks: {},
 } as const;
@@ -589,7 +1016,10 @@ export function agentDatasetRequiredCapabilities(
   if (definition.moneyBearing) {
     capabilities.push("read:money");
   }
-  if (definition.verbatimText) {
+  if (definition.verbatimText || definition.disclosesPurchase) {
+    // The pairing rule and the free-text rule land on the SAME capability, and
+    // deliberately so: both disclose the content of a conversation, one as
+    // prose and one as the fact that a purchase happened inside it.
     capabilities.push("read:messages");
   }
   return capabilities;

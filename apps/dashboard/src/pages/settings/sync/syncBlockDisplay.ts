@@ -111,6 +111,14 @@ const STREAM_LABELS: Record<string, string> = {
   // accurate but says nothing about what it captures.
   stats_snapshot: "account statistics",
   notifications: "notifications",
+  catalog: "content catalog",
+  post_replies: "post comments",
+  // The fallback would render this "payouts", which reads like a balance
+  // rather than the thing the lane actually captures.
+  payouts: "payout history",
+  // The fallback would render this "media stats", which reads like a summary
+  // of one number rather than the per-item traffic history it captures.
+  media_stats: "per-media statistics",
 };
 
 const PROGRESS_STREAM_LABELS: Record<string, string> = {

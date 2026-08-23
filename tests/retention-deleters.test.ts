@@ -93,6 +93,32 @@ const SANCTIONED_DELETER_FILES = [
   // that truncated it would re-mark the whole catalogue as first-sight and
   // release an egress storm.
   "apps/runtime/src/services/projections/fansly-engagement.ts",
+  // WP-F3: projection reset — rebuildable state only, never scheduled.
+  // rebuildFanslyCatalogProjection clears the six catalog tables plus the
+  // GIFT-CODE half of `page_promo_links` (scoped by `link_kind`, because the
+  // tracking half belongs to the statistics projector's ledger) and its own
+  // watermark, inside ONE transaction, then replays them from the
+  // domain-event ledger. The stream CHECKPOINT is deliberately untouched: the
+  // vault walk's per-album cursors live there, they are capture-plane
+  // operational state (§3.4), and resetting them would re-run a first-enable
+  // exhaustion crawl of every album on every page.
+  "apps/runtime/src/services/projections/fansly-catalog.ts",
+  // WP-F5: projection reset — rebuildable state only, never scheduled.
+  // rebuildFanslyCommentsProjection clears `post_comments` and its own
+  // watermark inside ONE transaction, then replays them from the domain-event
+  // ledger. `subject_refresh_state` is deliberately untouched: the reply walk's
+  // queue is capture-plane operational state (§3.4), and resetting it would
+  // re-run a first-pass crawl of the entire post back-catalogue for a repair
+  // that should cost zero platform calls.
+  "apps/runtime/src/services/projections/fansly-comments.ts",
+  // WP-F7: projection reset — rebuildable state only, never scheduled.
+  // rebuildFanslyPayoutsProjection clears `page_payout_methods` and
+  // `page_payout_requests` and its own watermark inside ONE transaction, then
+  // replays them from the domain-event ledger. The stream CHECKPOINT is
+  // deliberately untouched: the request walk's offset cursor and its floor are
+  // capture-plane operational state (§3.4), and resetting them would re-walk
+  // the whole payout history for a repair that should cost zero platform calls.
+  "apps/runtime/src/services/projections/fansly-payouts.ts",
   "apps/runtime/src/services/sync/executor.ts",
   "apps/runtime/src/services/sync/observability.ts",
   "apps/runtime/src/services/sync/rate-limiter.ts",

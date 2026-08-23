@@ -1,8 +1,17 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  describeStatsMonthAnswer,
+  probeStatsMonth,
+} from "../apps/runtime/src/services/fansly-endpoint-probe.ts";
+import {
   backfillContinuationAt,
   emptyFanslyStatsCursorState,
+  isEmptyStatsMonth,
+  monthFromIndex,
+  monthIndexOf,
+  monthLabel,
+  monthWasHonoured,
   narrowedSpanDays,
   parseFanslyStatsCursorState,
   rollUtcDay,
@@ -30,7 +39,11 @@ describe("stats backfill cursor state", () => {
     expect(state.backfill!.hourly.done).toBe(false);
     expect(state.backfill!.earnings.done).toBe(false);
     expect(state.backfill!.daily.probeSpent).toBe(false);
-    expect(state.backfill!.daily.probeResumeMs).toBeNull();
+    expect(state.backfill!.daily.probeResumeMonthIndex).toBeNull();
+    // The history walk starts at the TRAILING window and names no month until
+    // that window lands: the date bounds only work inside it.
+    expect(state.backfill!.daily.trailingCaptured).toBe(false);
+    expect(state.backfill!.daily.nextMonthIndex).toBeNull();
     expect(state.utcDay).toBe("2026-08-19");
     expect(state.callsToday).toBe(0);
   });
@@ -38,7 +51,10 @@ describe("stats backfill cursor state", () => {
   it("round-trips through the checkpoint, including the probe bookmark", () => {
     const state = emptyFanslyStatsCursorState(NOW);
     state.backfill!.daily.probeSpent = true;
-    state.backfill!.daily.probeResumeMs = 1_700_000_000_000;
+    state.backfill!.daily.trailingCaptured = true;
+    state.backfill!.daily.nextMonthIndex = monthIndexOf(NOW) - 4;
+    state.backfill!.daily.lastMonthIndex = monthIndexOf(NOW) - 3;
+    state.backfill!.daily.probeResumeMonthIndex = monthIndexOf(NOW) - 3;
     state.backfill!.daily.floorAt = "2019-01-01T00:00:00.000Z";
     state.callsToday = 7;
     state.stepIndex = 4;
@@ -46,7 +62,10 @@ describe("stats backfill cursor state", () => {
     // bookmark on a lease change would re-read from today, forever.
     const parsed = parseFanslyStatsCursorState(JSON.parse(JSON.stringify(state)), NOW);
     expect(parsed).not.toBeNull();
-    expect(parsed!.backfill!.daily.probeResumeMs).toBe(1_700_000_000_000);
+    expect(parsed!.backfill!.daily.probeResumeMonthIndex).toBe(monthIndexOf(NOW) - 3);
+    expect(parsed!.backfill!.daily.nextMonthIndex).toBe(monthIndexOf(NOW) - 4);
+    expect(parsed!.backfill!.daily.lastMonthIndex).toBe(monthIndexOf(NOW) - 3);
+    expect(parsed!.backfill!.daily.trailingCaptured).toBe(true);
     expect(parsed!.backfill!.daily.floorAt).toBe("2019-01-01T00:00:00.000Z");
     expect(parsed!.callsToday).toBe(7);
     expect(parsed!.stepIndex).toBe(4);
@@ -274,5 +293,134 @@ describe("the unhonoured-window guard", () => {
       lastBeforeMs: null,
       lastObservationId: null,
     });
+    // A DATE-BOUND cursor names no month, which is exactly what it is: a walk
+    // that has not started the only form of history this route serves.
+    expect(parsed!.backfill!.daily.trailingCaptured).toBe(false);
+    expect(parsed!.backfill!.daily.nextMonthIndex).toBeNull();
+  });
+});
+
+describe("the month form — the only history /it/amoie/stats serves", () => {
+  // PROD 2026-08-22, lora-2, with the unhonoured-window guard already live:
+  // `afterDate 2026-06-21 / beforeDate 2026-07-22` (31 days, historical) came
+  // back `dateAfter 2026-07-21 / dateBefore 2026-08-21` — the trailing window.
+  // Halving the span to 15 days changed nothing. A14 said these bounds reached
+  // history; they do not, and the walk now names a CALENDAR MONTH instead.
+
+  it("indexes months as one integer, so a step back is arithmetic", () => {
+    expect(monthIndexOf(new Date("2026-08-22T09:00:00.000Z")))
+      .toBe(2026 * 12 + 7);
+    // The year boundary is the case a month-by-month walk gets wrong; here it
+    // is subtraction and there is nothing to get wrong.
+    const january = monthIndexOf(new Date("2026-01-14T00:00:00.000Z"));
+    expect(monthFromIndex(january)).toEqual({ year: 2026, month: 1 });
+    expect(monthFromIndex(january - 1)).toEqual({ year: 2025, month: 12 });
+    expect(monthFromIndex(january - 13)).toEqual({ year: 2024, month: 12 });
+    expect(monthLabel(january - 1)).toBe("2025-12");
+  });
+
+  it("accepts a served window that starts inside the month it named", () => {
+    const june = monthIndexOf(new Date("2026-06-15T00:00:00.000Z"));
+    expect(monthWasHonoured(june, {
+      afterMs: Date.UTC(2026, 5, 1),
+      beforeMs: Date.UTC(2026, 6, 1),
+    })).toBe(true);
+    // A day of slack for the provider's own bucket snapping, both ways.
+    expect(monthWasHonoured(june, {
+      afterMs: Date.UTC(2026, 4, 31, 12),
+      beforeMs: Date.UTC(2026, 6, 1),
+    })).toBe(true);
+    expect(monthWasHonoured(june, {
+      afterMs: Date.UTC(2026, 5, 30),
+      beforeMs: Date.UTC(2026, 6, 1),
+    })).toBe(true);
+  });
+
+  it("rejects the trailing window served against a named month", () => {
+    // THE PRODUCTION BODY, against the month the walk would have asked for.
+    const june = monthIndexOf(new Date("2026-06-15T00:00:00.000Z"));
+    expect(monthWasHonoured(june, {
+      afterMs: Date.UTC(2026, 6, 21),
+      beforeMs: Date.UTC(2026, 7, 21),
+    })).toBe(false);
+    // Older than the month is just as wrong as newer: it is not our month.
+    expect(monthWasHonoured(june, {
+      afterMs: Date.UTC(2026, 2, 1),
+      beforeMs: Date.UTC(2026, 3, 1),
+    })).toBe(false);
+    // No served bounds is no evidence, and no evidence is no contradiction —
+    // the empty-month rule owns that case, here as everywhere.
+    expect(monthWasHonoured(june, { afterMs: null, beforeMs: null })).toBe(true);
+  });
+
+  it("counts an ALL-ZERO month as empty, so a floor can exist at all", () => {
+    // WP-F4's per-media walk found this the expensive way: `/it/moie/statsnew`
+    // answers ANY window back to 2006 with one zero-valued bucket, so "no
+    // datapoints" never happened and the walk never stopped. Zero counters are
+    // not traffic.
+    const zeroMonth = {
+      dataset: {
+        dateAfter: Date.UTC(2026, 5, 1),
+        dateBefore: Date.UTC(2026, 6, 1),
+        datapoints: [{ timestamp: Date.UTC(2026, 5, 1), views: 0, uniqueViewers: 0 }],
+        profileDatapoints: [{
+          timestamp: Date.UTC(2026, 5, 1),
+          stats: [{ type: 10001, views: 0, interactionTime: 0, uniqueViewers: 0 }],
+        }],
+      },
+    };
+    expect(isEmptyStatsMonth(zeroMonth)).toBe(true);
+    // ANY non-zero counter anywhere is traffic — including one inside a
+    // profileDatapoints row, which is where an idle month's evidence lives.
+    const oneView = JSON.parse(JSON.stringify(zeroMonth)) as typeof zeroMonth;
+    oneView.dataset.profileDatapoints[0]!.stats[0]!.views = 1;
+    expect(isEmptyStatsMonth(oneView)).toBe(false);
+    // `type` is identity, not a counter: a non-zero type must not read as data.
+    const typeOnly = JSON.parse(JSON.stringify(zeroMonth)) as typeof zeroMonth;
+    expect(isEmptyStatsMonth(typeOnly)).toBe(true);
+    // No arrays at all is empty, as it always was.
+    expect(isEmptyStatsMonth({ dataset: { datapoints: [], profileDatapoints: [] } })).toBe(true);
+    expect(isEmptyStatsMonth(null)).toBe(true);
+  });
+});
+
+describe("the [F1] probe route", () => {
+  it("asks for the month TWO back, which the trailing window cannot reach", () => {
+    // One month back overlaps the trailing window, so a served window that
+    // happened to cover it would prove nothing.
+    expect(probeStatsMonth(new Date("2026-08-22T09:00:00.000Z")))
+      .toEqual({ year: 2026, month: 6 });
+    expect(probeStatsMonth(new Date("2026-01-05T00:00:00.000Z")))
+      .toEqual({ year: 2025, month: 11 });
+  });
+
+  it("prints the served window and the verdict, not the numbers", () => {
+    const honoured = describeStatsMonthAnswer({ year: 2026, month: 6 }, {
+      dataset: {
+        dateAfter: Date.UTC(2026, 5, 1),
+        dateBefore: Date.UTC(2026, 6, 1),
+        datapoints: [],
+        profileDatapoints: new Array(30).fill({ timestamp: 1, stats: [] }),
+      },
+    });
+    expect(honoured).toContain("asked year=2026 month=6");
+    // ISO DAYS, not values to redact: the served window IS the answer.
+    expect(honoured).toContain("served dateAfter=2026-06-01 dateBefore=2026-07-01");
+    expect(honoured).toContain("profileDatapoints=30");
+    expect(honoured).toContain("MONTH FORM HONOURED");
+
+    const refused = describeStatsMonthAnswer({ year: 2026, month: 6 }, {
+      dataset: {
+        dateAfter: Date.UTC(2026, 6, 21),
+        dateBefore: Date.UTC(2026, 7, 21),
+        datapoints: [],
+        profileDatapoints: [],
+      },
+    });
+    expect(refused).toContain("MONTH FORM NOT HONOURED");
+    // A response describing no window judges nothing, the way a 401 judges no
+    // route: absence of evidence is not evidence.
+    expect(describeStatsMonthAnswer({ year: 2026, month: 6 }, { dataset: {} }))
+      .toContain("UNJUDGED");
   });
 });

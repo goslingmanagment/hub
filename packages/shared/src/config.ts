@@ -149,6 +149,37 @@ const envSchema = z.object({
   FANSLY_NOTIFICATIONS_SYNC_ENABLED: booleanSchema.default(false),
   FANSLY_NOTIFICATIONS_PAGE_ALLOWLIST: z.string().default(""),
   FANSLY_NOTIFICATIONS_DAILY_CALL_BUDGET: z.coerce.number().int().min(1).max(500).default(96),
+  // WP-F3. Same fail-closed allowlist semantic; its own key (S4) so a catalog
+  // ramp cannot be widened by an edit meant for another lane.
+  FANSLY_CATALOG_SYNC_ENABLED: booleanSchema.default(false),
+  FANSLY_CATALOG_PAGE_ALLOWLIST: z.string().default(""),
+  FANSLY_CATALOG_DAILY_CALL_BUDGET: z.coerce.number().int().min(1).max(500).default(60),
+  // WP-F5. Same fail-closed allowlist semantic; its own keys (S4). The budget
+  // ships at 100 and its ceiling is 400 — the raise to 300 is a separate,
+  // criteria-gated flip with its own window (A29), not a default.
+  FANSLY_POST_REPLIES_SYNC_ENABLED: booleanSchema.default(false),
+  FANSLY_POST_REPLIES_PAGE_ALLOWLIST: z.string().default(""),
+  FANSLY_REPLIES_DAILY_CALL_BUDGET: z.coerce.number().int().min(1).max(400).default(100),
+  FANSLY_REPLIES_REWALK_CYCLE_DAYS: z.coerce.number().int().min(1).max(365).default(14),
+  // WP-F7. Same fail-closed allowlist semantic; its own keys (S4). 20 is §6.1's
+  // corrected number — the steady state spends 2.
+  FANSLY_PAYOUTS_SYNC_ENABLED: booleanSchema.default(false),
+  FANSLY_PAYOUTS_PAGE_ALLOWLIST: z.string().default(""),
+  FANSLY_PAYOUTS_DAILY_CALL_BUDGET: z.coerce.number().int().min(1).max(100).default(20),
+  // WP-F4. Same fail-closed allowlist semantic; its own keys (S4). 300 is the
+  // cap A16 sized the age decay against, and this lane is DESIGNED to spend it:
+  // at M = 2 000 the decay wants 294 calls a day. 1 000 is the registry ceiling
+  // — a raise toward what the decay wants is a named per-lane owner step. The
+  // long-tail cycle is the one cadence A6 asks to be tunable; the fresh/mid
+  // boundaries are constants in the code.
+  FANSLY_MEDIA_STATS_SYNC_ENABLED: booleanSchema.default(false),
+  FANSLY_MEDIA_STATS_PAGE_ALLOWLIST: z.string().default(""),
+  FANSLY_MEDIA_STATS_DAILY_CALL_BUDGET: z.coerce.number().int().min(1).max(1000).default(300),
+  FANSLY_MEDIA_STATS_LONG_TAIL_CYCLE_DAYS: z.coerce.number().int().min(1).max(365).default(30),
+  // WP-F6. Rides the EXISTING `posts` stream, so it has no allowlist of its
+  // own; the cap is counted apart from the timeline walk in the same cursor.
+  FANSLY_POST_ENGAGEMENT_REFRESH_ENABLED: booleanSchema.default(false),
+  FANSLY_POST_ENGAGEMENT_DAILY_CALL_BUDGET: z.coerce.number().int().min(1).max(200).default(40),
   FANSLY_STATS_HOURLY_ENABLED: booleanSchema.default(true),
   FANSLY_STATS_HOURLY_BACKFILL_MAX_DAYS: z.coerce.number().int().min(0).max(400).default(30),
   FANSLY_BACKFILL_CONTINUATION_DELAY_MS: z.coerce.number().int().min(0).max(600_000).default(20_000),
@@ -421,6 +452,38 @@ export interface AppConfig {
   fanslyNotificationsPageAllowlist?: string;
   /** HTTP ATTEMPTS per page per UTC day for the notification lane; crossing it defers. */
   fanslyNotificationsDailyCallBudget?: number;
+  fanslyCatalogSyncEnabled?: boolean;
+  /** CSV of page labels allowed to sweep the catalog; empty = NONE (fails closed). */
+  fanslyCatalogPageAllowlist?: string;
+  /** HTTP ATTEMPTS per page per UTC day for the catalog lane; crossing it defers. */
+  fanslyCatalogDailyCallBudget?: number;
+  fanslyPostRepliesSyncEnabled?: boolean;
+  /** CSV of page labels allowed to walk post replies; empty = NONE (fails closed). */
+  fanslyPostRepliesPageAllowlist?: string;
+  /** HTTP ATTEMPTS per page per UTC day for the replies walk; crossing it defers. */
+  fanslyRepliesDailyCallBudget?: number;
+  /** How stale a post's last walk must be before the round-robin re-reads it. */
+  fanslyRepliesRewalkCycleDays?: number;
+  fanslyPayoutsSyncEnabled?: boolean;
+  /** CSV of page labels allowed to read payouts; empty = NONE (fails closed). */
+  fanslyPayoutsPageAllowlist?: string;
+  /** HTTP ATTEMPTS per page per UTC day for the payouts lane; crossing it defers. */
+  fanslyPayoutsDailyCallBudget?: number;
+  /** WP-F4: the per-media statistics lane over `/it/moie/statsnew`. */
+  fanslyMediaStatsSyncEnabled?: boolean;
+  /** CSV of page labels allowed to walk per-media stats; empty = NONE (fails closed). */
+  fanslyMediaStatsPageAllowlist?: string;
+  /** HTTP ATTEMPTS per page per UTC day for the per-media lane; crossing it defers.
+   *  The lane is DESIGNED to spend all of it when M is large (A16). */
+  fanslyMediaStatsDailyCallBudget?: number;
+  /** How stale a long-tail media item's last visit must be before the
+   *  round-robin re-reads it (A6's one explicitly tunable cadence). */
+  fanslyMediaStatsLongTailCycleDays?: number;
+  /** WP-F6: the decayed `GET /post?ids=` phase on the EXISTING posts stream. */
+  fanslyPostEngagementRefreshEnabled?: boolean;
+  /** HTTP ATTEMPTS per page per UTC day for the engagement phase; crossing it
+   *  defers. Counted apart from the timeline walk in the same posts cursor. */
+  fanslyPostEngagementDailyCallBudget?: number;
   fanslyStatsHourlyEnabled?: boolean;
   fanslyStatsHourlyBackfillMaxDays?: number;
   /** Delay + 30% jitter between BACKFILL chunk continuations (burst shape). */
@@ -705,6 +768,22 @@ export function loadConfig(
     fanslyNotificationsSyncEnabled: parsed.FANSLY_NOTIFICATIONS_SYNC_ENABLED,
     fanslyNotificationsPageAllowlist: parsed.FANSLY_NOTIFICATIONS_PAGE_ALLOWLIST,
     fanslyNotificationsDailyCallBudget: parsed.FANSLY_NOTIFICATIONS_DAILY_CALL_BUDGET,
+    fanslyCatalogSyncEnabled: parsed.FANSLY_CATALOG_SYNC_ENABLED,
+    fanslyCatalogPageAllowlist: parsed.FANSLY_CATALOG_PAGE_ALLOWLIST,
+    fanslyCatalogDailyCallBudget: parsed.FANSLY_CATALOG_DAILY_CALL_BUDGET,
+    fanslyPostRepliesSyncEnabled: parsed.FANSLY_POST_REPLIES_SYNC_ENABLED,
+    fanslyPostRepliesPageAllowlist: parsed.FANSLY_POST_REPLIES_PAGE_ALLOWLIST,
+    fanslyRepliesDailyCallBudget: parsed.FANSLY_REPLIES_DAILY_CALL_BUDGET,
+    fanslyRepliesRewalkCycleDays: parsed.FANSLY_REPLIES_REWALK_CYCLE_DAYS,
+    fanslyPayoutsSyncEnabled: parsed.FANSLY_PAYOUTS_SYNC_ENABLED,
+    fanslyPayoutsPageAllowlist: parsed.FANSLY_PAYOUTS_PAGE_ALLOWLIST,
+    fanslyPayoutsDailyCallBudget: parsed.FANSLY_PAYOUTS_DAILY_CALL_BUDGET,
+    fanslyMediaStatsSyncEnabled: parsed.FANSLY_MEDIA_STATS_SYNC_ENABLED,
+    fanslyMediaStatsPageAllowlist: parsed.FANSLY_MEDIA_STATS_PAGE_ALLOWLIST,
+    fanslyMediaStatsDailyCallBudget: parsed.FANSLY_MEDIA_STATS_DAILY_CALL_BUDGET,
+    fanslyMediaStatsLongTailCycleDays: parsed.FANSLY_MEDIA_STATS_LONG_TAIL_CYCLE_DAYS,
+    fanslyPostEngagementRefreshEnabled: parsed.FANSLY_POST_ENGAGEMENT_REFRESH_ENABLED,
+    fanslyPostEngagementDailyCallBudget: parsed.FANSLY_POST_ENGAGEMENT_DAILY_CALL_BUDGET,
     fanslyStatsHourlyEnabled: parsed.FANSLY_STATS_HOURLY_ENABLED,
     fanslyStatsHourlyBackfillMaxDays: parsed.FANSLY_STATS_HOURLY_BACKFILL_MAX_DAYS,
     fanslyBackfillContinuationDelayMs: parsed.FANSLY_BACKFILL_CONTINUATION_DELAY_MS,

@@ -18,6 +18,14 @@ export const BULK_ENRICHMENT_SYNC_STREAMS: readonly SyncStream[] = [
   "stats_snapshot",
   // WP-F2: same default, same consequence.
   "notifications",
+  // WP-F3: same default, same consequence.
+  "catalog",
+  // WP-F5: same default, same consequence.
+  "post_replies",
+  // WP-F7: same default, same consequence.
+  "payouts",
+  // WP-F4: same default, same consequence.
+  "media_stats",
 ];
 
 export function isBulkEnrichmentSyncStream(stream: string) {

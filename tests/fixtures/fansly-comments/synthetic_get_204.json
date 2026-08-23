@@ -1,0 +1,5 @@
+{
+  "_fixture": "SYNTHETIC, and the name says so on purpose: NO GET anywhere in the 2026-08-19 capture returned 204 (all 197 are OPTIONS preflights). This is the adapter's honest empty-answer marker for a 204 or a zero-length body, and it has never been observed live.",
+  "walk": { "postId": "000910000000000003", "before": null },
+  "response": { "__empty": true, "httpStatus": 204 }
+}

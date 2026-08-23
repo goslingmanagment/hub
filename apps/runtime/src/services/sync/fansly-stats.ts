@@ -24,26 +24,44 @@
 // This cap is the whole request-count enforcement in this design (A28-4 deleted
 // the per-egress-key counter, the 2×-of-norm signal and the global page cap).
 //
-// THE BACKFILL, and the one thing about it that is not obvious: each next
-// window is derived from the RETURNED `dateAfter`/`dateBefore`, not from the
-// bounds we asked for. The provider snaps windows to its own bucket grid, so
-// asking for [t-30d, t] and then walking back 30 d from OUR t would drift a
-// bucket per chunk and silently leave holes. It stops after two consecutive
-// all-empty windows PLUS one extra probe window about a year further back — an
-// empty window on a long-idle account proves inactivity, not a retention floor
-// ([E10]) — and it journals every empty response, because an empty window IS
-// the floor evidence.
+// THE BACKFILL, and the thing about it that took two production days to learn:
+// `/it/amoie/stats` HAS NO HISTORICAL DATE BOUNDS. A14 said it did. It does not.
 //
-// DERIVING FROM THE RETURNED BOUNDS IS ONLY SAFE WHILE THE PROVIDER HONOURS THE
-// REQUESTED ONES, and on 2026-08-22 (first enable, ari-1 and lilly-1) it did
-// not: a 100-day window came back as the provider's DEFAULT trailing 31 days,
-// the walk derived its next window from THAT, asked again, got the same body —
-// and spent all 25 attempts of the day's cap on 25 byte-identical responses.
-// So every backfill lane now checks the RETURNED window against the REQUESTED
-// one, halves its span once when they disagree, and STOPS the lane rather than
-// re-deriving: an unwalked span is a hole we know about, a loop is a day of
-// egress spent proving nothing. Same rule catches a repeated request before it
-// is ever issued.
+//   - 2026-08-22, first enable (ari-1, lilly-1): a 100-day window came back as
+//     the provider's DEFAULT trailing 31 days, the walk derived its next window
+//     from THAT, asked again, got the same body — 25 byte-identical responses,
+//     the whole day's cap. The `BackfillWindowGuard` below ended that.
+//   - 2026-08-22, with the guard live (lora-2): `afterDate 2026-06-21 /
+//     beforeDate 2026-07-22` — 31 days, historical, exactly the span the HAR
+//     shows honoured on the SISTER route — was served `dateAfter 2026-07-21 /
+//     dateBefore 2026-08-21`. Halving to 15 days changed nothing. The guard
+//     correctly stopped the lane with `window_not_honoured`; the walk it was
+//     guarding was asking for something this route does not serve.
+//
+// So THE DATE BOUNDS WORK ONLY INSIDE THE TRAILING WINDOW, and history on this
+// route is addressed the way the app itself addresses it: `year`/`month`, the
+// UI's "Jul / Jun / May 2026" presets, with the trailing bounds riding along
+// ignored (bundle `main.pretty.js` :280600, :196337). The daily backfill
+// therefore captures the trailing window ONCE — the one window the bounds are
+// honoured for, because it is the window the route would have served anyway —
+// and then walks BACKWARDS BY CALENDAR MONTH, newest month first, one call per
+// month. It stops after two consecutive empty months PLUS one probe about a
+// year further back ([E10]: an empty month on a long-idle account proves
+// inactivity, not a retention floor), and it journals every empty response,
+// because an empty month IS the floor evidence.
+//
+// EVERY LANE STILL CHECKS WHAT CAME BACK AGAINST WHAT IT ASKED FOR, in the unit
+// it asked in: the trailing and earnings windows against their bounds
+// (`windowWasHonoured`, halve once then stop), the month walk against the month
+// it named (`monthWasHonoured`, stop — there is no half of a month to retry).
+// An unwalked span is a hole we know about; a loop is a day of egress spent
+// proving nothing. The same rule catches a repeated request before it is issued.
+//
+// THE EARNINGS LANE IS UNTOUCHED BY ALL OF THIS: `/account/wallets/earnings/
+// stats` DID honour historical windows on production (lora-1 walked back to
+// 2024-11-29), so it keeps its date-bound walk and its derived-from-the-rows
+// guard. Two routes, two behaviours, and the difference is measured rather than
+// assumed.
 //
 // BURST SHAPE, not daily volume, is the real ban-risk surface: a chunk spends
 // its 5 requests in ~13 s and is re-queued immediately, so a deep walk would
@@ -54,6 +72,7 @@
 import {
   assertOwnedPageSyncLease,
   getCheckpoint,
+  listCaptureCoverage,
   upsertCaptureCoverage,
   upsertCheckpoint,
   upsertCheckpointProgress,
@@ -94,29 +113,39 @@ const DISCOVERY_PAGE_LIMIT = 10;
 const DISCOVERY_PAGES_PER_SWEEP = 2;
 
 /**
- * THE PROVEN SPAN, in days. `datapointLimit: 100` says a window may CARRY up to
- * 100 buckets; it never said the provider would honour a 100-day one, and on the
- * wire it does not. Both facts, so the next person does not re-infer the first:
+ * THE TRAILING WINDOW'S SPAN, in days — and the ONE window this route's date
+ * bounds are honoured for, because it is the window the route serves by default.
+ *
+ * Three measurements, so the next person does not re-infer any of them:
  *
  *   - PROD 2026-08-22 04:16 UTC (ari-1, first enable): `afterDate 2026-05-14 /
  *     beforeDate 2026-08-22` (100 d) came back `dataset.dateAfter 2026-07-21 /
- *     dateBefore 2026-08-22` — the provider's DEFAULT trailing 31 days, our
- *     bounds ignored.
- *   - HAR `/it/moie/statsnew?beforeDate=1785542400000&afterDate=1782864000000`
- *     came back `dateAfter 2026-06-30 / dateBefore 2026-07-31`, EXACT — so a
- *     HISTORICAL window is honoured at 31 days; the span, not the age, is what
- *     the provider refuses.
+ *     dateBefore 2026-08-22` — the DEFAULT trailing 31 days, our bounds ignored.
+ *   - PROD 2026-08-22 (lora-2, with the guard live): `afterDate 2026-06-21 /
+ *     beforeDate 2026-07-22` — 31 days, HISTORICAL — came back `2026-07-21 →
+ *     2026-08-21`. Halved to 15 days: the same answer. So it is not the span.
+ *   - HAR `/it/moie/statsnew` (the SISTER route, per media) DOES honour a
+ *     historical 31-day window exactly. Two routes, two behaviours.
  *
- * Ten years of daily buckets is therefore ~118 windows rather than ~37; at the
- * 25-attempts/day lane cap that is ~5 days of first enable per page, which is
- * the accepted price (A29) and NOT a reason to raise the cap.
- *
- * One day of OVERLAP between adjacent windows is what lets the contiguity
- * assertion below have something to check.
+ * Everything older than this window is asked for by CALENDAR MONTH, which is how
+ * the app asks for it. Ten years is ~120 month calls; at the 25-attempts/day
+ * lane cap that is ~5 days of first enable per page — the accepted price (A29)
+ * and NOT a reason to raise the cap.
  */
 const BACKFILL_DAILY_WINDOW_DAYS = 31;
-const BACKFILL_DAILY_OVERLAP_DAYS = 1;
 const BACKFILL_HOURLY_STEP_DAYS = 4;
+/**
+ * The bounds the MONTH form carries, which the server ignores.
+ *
+ * The app sends `beforeDate = now`, `afterDate = now − 30 d`, `period =
+ * 86 400 000` with EVERY month preset and lets `year`/`month` decide the window
+ * (bundle `main.pretty.js` :280600). We send the same thing: a request the
+ * client never makes is a request nothing has ever seen answered.
+ */
+const MONTH_FORM_TRAILING_DAYS = 30;
+/** Two consecutive empty MONTHS, then ONE probe this many months further back —
+ *  [E10] in the unit this walk actually steps in. */
+const BACKFILL_PROBE_JUMP_MONTHS = 12;
 /** The same 31 days for `/account/wallets/earnings/stats`, chosen on LESS
  *  evidence: the one observed call carried a 30-day window and nothing anywhere
  *  shows this route answering a longer one. The unhonoured-window guard below is
@@ -126,9 +155,8 @@ const BACKFILL_EARNINGS_WINDOW_DAYS = 31;
  *  up — and never below this floor, because a span this short buys nothing that
  *  a stopped lane and a `capture_coverage` row do not say more honestly. */
 const BACKFILL_NARROW_FLOOR_DAYS = 7;
-/** Two consecutive empty windows, then ONE probe this far further back. */
+/** Two consecutive empty windows (or months), then ONE probe further back. */
 const BACKFILL_EMPTY_STREAK_LIMIT = 2;
-const BACKFILL_PROBE_JUMP_DAYS = 365;
 const BACKFILL_JITTER_FRACTION = 0.3;
 /** Pages of mass-DM history the first-enable walk takes per daily sweep. */
 const BROADCAST_BACKFILL_PAGES_PER_SWEEP = 3;
@@ -149,8 +177,12 @@ export const FANSLY_STATS_COVERAGE_PLANES = {
  * All of it has to survive a chunk boundary: the loop that burned a day's cap on
  * prod spanned five chunks, so a guard that lived only inside one chunk would
  * have watched it happen five times and said nothing.
+ *
+ * EXPORTED because WP-F4's per-media backfill needs exactly this, per media,
+ * inside `subject_refresh_state.backfill_cursor`. A second copy of the same
+ * three fields is a second place for the halve-once rule to drift.
  */
-interface BackfillWindowGuard {
+export interface BackfillWindowGuard {
   /** Span of the NEXT request, in days. Halved once when a window comes back
    *  unhonoured, never below `BACKFILL_NARROW_FLOOR_DAYS`, and never restored:
    *  a narrower window that works is worth more than a wider one that might. */
@@ -168,18 +200,33 @@ interface BackfillWindowGuard {
 }
 
 interface DailyBackfillState {
-  /** Exclusive upper bound of the NEXT window, in epoch ms. */
+  /** Exclusive upper bound of the TRAILING window, in epoch ms. Read once, for
+   *  the one window whose date bounds this route honours. */
   nextBeforeMs: number;
+  /** That window has been captured; everything older is a calendar month. */
+  trailingCaptured: boolean;
+  /**
+   * The month the walk asks for NEXT, as `year * 12 + (month - 1)`.
+   *
+   * ONE INTEGER because every operation on it is arithmetic: one month back is
+   * −1 and the [E10] probe is −12, with no month-length or year-boundary cases
+   * to get wrong. `null` until the trailing window lands.
+   */
+  nextMonthIndex: number | null;
+  /** The month this walk last ASKED for. The same `(year, month)` twice IS the
+   *  loop, seen before any egress. */
+  lastMonthIndex: number | null;
   emptyStreak: number;
-  /** The one extra probe window ~1 year further back has been spent. */
+  /** The one extra probe ~12 months further back has been spent. */
   probeSpent: boolean;
   /**
    * Where the ORDINARY walk was when the probe jumped over it, so a probe that
    * finds data resumes at the gap instead of continuing from the probe.
-   * Otherwise a probe that proved "there IS older history" would leave the ~265
-   * days it jumped over unwalked — a hole nobody would notice for a year.
+   * Otherwise a probe that proved "there IS older history" would leave the
+   * eleven months it jumped over unwalked — a hole nobody would notice for a
+   * year.
    */
-  probeResumeMs: number | null;
+  probeResumeMonthIndex: number | null;
   done: boolean;
   /** ISO instant of the oldest bucket the provider ever served. */
   floorAt: string | null;
@@ -249,7 +296,7 @@ function asNullableInt(value: unknown): number | null {
 
 /** A cursor written before the guard existed parses as a lane that has asked
  *  for nothing yet at the full span — which is exactly what it is. */
-function parseWindowGuard(value: unknown, defaultSpanDays: number): BackfillWindowGuard {
+export function parseWindowGuard(value: unknown, defaultSpanDays: number): BackfillWindowGuard {
   const record = asRecord(value);
   const spanDays = asInt(record?.spanDays, defaultSpanDays);
   return {
@@ -261,7 +308,7 @@ function parseWindowGuard(value: unknown, defaultSpanDays: number): BackfillWind
   };
 }
 
-function emptyWindowGuard(spanDays: number): BackfillWindowGuard {
+export function emptyWindowGuard(spanDays: number): BackfillWindowGuard {
   return {
     spanDays,
     narrowed: false,
@@ -285,12 +332,15 @@ function parseDailyBackfill(value: unknown, now: Date): DailyBackfillState {
   const record = asRecord(value);
   return {
     nextBeforeMs: asInt(record?.nextBeforeMs, now.getTime()),
+    // A cursor written by the DATE-BOUND walk carries neither field: it parses
+    // as a lane that has not captured its trailing window and has named no
+    // month, which is what the month walk has to start from anyway.
+    trailingCaptured: record?.trailingCaptured === true,
+    nextMonthIndex: asNullableInt(record?.nextMonthIndex),
+    lastMonthIndex: asNullableInt(record?.lastMonthIndex),
     emptyStreak: asInt(record?.emptyStreak, 0),
     probeSpent: record?.probeSpent === true,
-    probeResumeMs: typeof record?.probeResumeMs === "number"
-      && Number.isSafeInteger(record.probeResumeMs)
-      ? record.probeResumeMs
-      : null,
+    probeResumeMonthIndex: asNullableInt(record?.probeResumeMonthIndex),
     done: record?.done === true,
     floorAt: asNullableString(record?.floorAt),
     guard: parseWindowGuard(record?.guard, BACKFILL_DAILY_WINDOW_DAYS),
@@ -358,6 +408,137 @@ export function parseFanslyStatsCursorState(
   };
 }
 
+function emptyDailyBackfill(now: Date): DailyBackfillState {
+  return {
+    nextBeforeMs: now.getTime(),
+    trailingCaptured: false,
+    nextMonthIndex: null,
+    lastMonthIndex: null,
+    emptyStreak: 0,
+    probeSpent: false,
+    probeResumeMonthIndex: null,
+    done: false,
+    floorAt: null,
+    guard: emptyWindowGuard(BACKFILL_DAILY_WINDOW_DAYS),
+  };
+}
+
+/** `year * 12 + (month - 1)` for an instant, in UTC — the unit the daily
+ *  history walk steps in. */
+export function monthIndexOf(instant: Date): number {
+  return instant.getUTCFullYear() * 12 + instant.getUTCMonth();
+}
+
+/** The `year`/`month` (1–12) pair the request carries. */
+export function monthFromIndex(index: number): { year: number; month: number } {
+  return { year: Math.floor(index / 12), month: (index % 12) + 1 };
+}
+
+/** `2026-06`, for a log line, an anomaly and a coverage cursor. */
+export function monthLabel(index: number): string {
+  const { year, month } = monthFromIndex(index);
+  return `${year}-${String(month).padStart(2, "0")}`;
+}
+
+/**
+ * Did the provider answer the MONTH we named?
+ *
+ * The failure this exists for is the one the date-bound walk kept hitting: the
+ * response is the DEFAULT TRAILING WINDOW, 200 and all. Against a named month
+ * that is visible in one number — the served `dateAfter` lands nowhere near the
+ * month's start — so the served start is what is checked, with a day of slack
+ * for the provider's own bucket snapping.
+ *
+ * There is no halve-and-retry here and there could not be: a month is not a span
+ * we chose, so there is no narrower one to ask for. A month that comes back
+ * wrong stops the walk.
+ *
+ * NOTE the one case this cannot catch, because nothing can: the FIRST month the
+ * walk asks for is the month before the trailing window, and the trailing
+ * window's own `dateAfter` usually falls inside it. A server ignoring `year`/
+ * `month` therefore passes that one check and fails the next — one extra request
+ * before the lane stops, and no loop.
+ *
+ * Served bounds we did not get are no evidence, and no evidence is no
+ * contradiction: the empty-month rule owns that case.
+ */
+export function monthWasHonoured(
+  index: number,
+  served: { afterMs: number | null; beforeMs: number | null },
+): boolean {
+  if (served.afterMs === null) {
+    return true;
+  }
+  const { year, month } = monthFromIndex(index);
+  const startMs = Date.UTC(year, month - 1, 1);
+  const endMs = Date.UTC(year, month, 1);
+  return served.afterMs >= startMs - DAY_MS && served.afterMs < endMs + DAY_MS;
+}
+
+/** Identity, not traffic. Everything else in a `stats[]` row is a counter. */
+const STAT_IDENTITY_KEYS = new Set(["type", "timestamp", "period"]);
+
+function pointCarriesTraffic(point: unknown): boolean {
+  const row = asRecord(point);
+  if (row === null) {
+    return false;
+  }
+  const carries = (values: Record<string, unknown>): boolean => {
+    for (const [key, value] of Object.entries(values)) {
+      if (STAT_IDENTITY_KEYS.has(key)) {
+        continue;
+      }
+      if (typeof value === "number" && value !== 0) {
+        return true;
+      }
+    }
+    return false;
+  };
+  // Both shapes: the served bodies nest counters under `stats[]`, and the
+  // fixtures the walk is pinned against carry them on the point itself.
+  if (carries(row)) {
+    return true;
+  }
+  for (const stat of Array.isArray(row.stats) ? row.stats : []) {
+    const values = asRecord(stat);
+    if (values !== null && carries(values)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Is this MONTH empty — the floor signal the month walk reads?
+ *
+ * Wider than `isEmptyStatsWindow` on purpose: a month can come back with rows
+ * that are all zeros, and a walk that treated a zero-valued bucket as evidence
+ * of traffic would never find a floor (which is exactly what WP-F4's per-media
+ * walk did on production — 240 windows back to 2006 on one zero-valued row).
+ * ANY non-zero counter anywhere in the body is traffic; nothing else is.
+ *
+ * The response is journaled either way — capture first; only the floor decision
+ * reads this.
+ */
+export function isEmptyStatsMonth(payload: unknown): boolean {
+  if (isEmptyStatsWindow(payload)) {
+    return true;
+  }
+  const dataset = statsDataset(payload);
+  if (dataset === null) {
+    return true;
+  }
+  for (const key of ["datapoints", "profileDatapoints"] as const) {
+    const points = Array.isArray(dataset[key]) ? dataset[key] as unknown[] : [];
+    for (const point of points) {
+      if (pointCarriesTraffic(point)) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
 export function emptyFanslyStatsCursorState(now: Date): FanslyStatsCursorState {
   return {
     version: 1,
@@ -377,15 +558,7 @@ export function emptyFanslyStatsCursorState(now: Date): FanslyStatsCursorState {
     broadcastFloorReached: false,
     broadcastPagesInSweep: 0,
     backfill: {
-      daily: {
-        nextBeforeMs: now.getTime(),
-        emptyStreak: 0,
-        probeSpent: false,
-        probeResumeMs: null,
-        done: false,
-        floorAt: null,
-        guard: emptyWindowGuard(BACKFILL_DAILY_WINDOW_DAYS),
-      },
+      daily: emptyDailyBackfill(now),
       hourly: {
         nextBeforeMs: now.getTime(),
         daysWalked: 0,
@@ -452,7 +625,7 @@ function statsDataset(payload: unknown): Record<string, unknown> | null {
 /** True when the response carried no datapoints at all — the empty-window
  *  signal the backfill's stop rule reads. Journaled either way: an empty
  *  window IS the retention-floor evidence. */
-function isEmptyStatsWindow(payload: unknown): boolean {
+export function isEmptyStatsWindow(payload: unknown): boolean {
   const dataset = statsDataset(payload);
   if (dataset === null) {
     return true;
@@ -465,7 +638,7 @@ function isEmptyStatsWindow(payload: unknown): boolean {
 /** The provider's OWN returned bounds. The next window is derived from these,
  *  never from what we asked for (§7) — the provider snaps to its bucket grid
  *  and a self-derived walk would drift a bucket per chunk. */
-function servedWindow(payload: unknown): { afterMs: number | null; beforeMs: number | null } {
+export function servedWindow(payload: unknown): { afterMs: number | null; beforeMs: number | null } {
   const dataset = statsDataset(payload);
   if (dataset === null) {
     return { afterMs: null, beforeMs: null };
@@ -784,9 +957,145 @@ export async function fanslyStatsSnapshotChunk(
     return "stopped";
   };
 
+  // ── RECOVERY: the lanes the DATE-BOUND walk stopped (Defect A) ─────────────
+  //
+  // `window_not_honoured` on the daily plane is a claim about a walk that no
+  // longer exists. That walk was asking `/it/amoie/stats` for historical DATE
+  // BOUNDS; this route serves history only by MONTH. So the claim is SUPERSEDED
+  // rather than left standing: the row is replaced with the month walk's own
+  // status and the lane reopens at the month before the trailing window.
+  //
+  // ONCE, and self-limiting: the reopen writes the new coverage row immediately,
+  // so the reason code that triggers it is gone before the next dispatch reads
+  // it. A lane that stops again stops with `month_form_not_honoured`, which this
+  // never reopens — the month form failing is a different fact about a different
+  // request, and reopening on it would be the loop this whole file is about.
+  const dailyNeedsMonthWalk = state.backfill === null
+    || (state.backfill.daily.done && state.backfill.daily.nextMonthIndex === null);
+  if (dailyNeedsMonthWalk) {
+    const stopped = (await listCaptureCoverage(app.db, {
+      pageId,
+      plane: FANSLY_STATS_COVERAGE_PLANES.accountDaily,
+    })).find((row) => row.reasonCode === "window_not_honoured");
+    if (stopped !== undefined) {
+      const resumeAt = monthIndexOf(now) - 1;
+      const reopened = state.backfill ?? {
+        daily: emptyDailyBackfill(now),
+        // The other two lanes are NOT reopened. Their walks finished or stopped
+        // on their own evidence, and restarting the earnings walk would re-spend
+        // a decade of requests it has already made.
+        hourly: {
+          nextBeforeMs: now.getTime(),
+          daysWalked: 0,
+          done: true,
+          guard: emptyWindowGuard(BACKFILL_HOURLY_STEP_DAYS),
+        },
+        earnings: {
+          nextBeforeMs: now.getTime(),
+          emptyStreak: 0,
+          done: true,
+          guard: emptyWindowGuard(BACKFILL_EARNINGS_WINDOW_DAYS),
+        },
+      };
+      reopened.daily = {
+        ...reopened.daily,
+        done: false,
+        // The trailing window is what that walk DID capture — it was its first
+        // call, and the steady sweep re-captures it every day regardless.
+        trailingCaptured: true,
+        nextMonthIndex: resumeAt,
+        lastMonthIndex: null,
+        emptyStreak: 0,
+      };
+      state = { ...state, mode: "backfill", backfill: reopened };
+      await coverage(
+        FANSLY_STATS_COVERAGE_PLANES.accountDaily,
+        "in_progress",
+        "none",
+        {
+          newestCapturedAt: now,
+          reasonCode: "month_form_supersedes_window_not_honoured",
+          cursor: { mode: "backfill_month", nextMonth: monthLabel(resumeAt) },
+        },
+      );
+      await saveProgress();
+      await input.telemetry.addAnomaly({
+        code: "fansly_stats_month_walk_resumed",
+        severity: "info",
+        message:
+          "Fansly daily statistics history resumes by calendar month; the date-bound stop is "
+          + "superseded",
+        details: {
+          plane: FANSLY_STATS_COVERAGE_PLANES.accountDaily,
+          nextMonth: monthLabel(resumeAt),
+        },
+      });
+    }
+  }
+
   // ── BACKFILL (first enable) ────────────────────────────────────────────────
   if (state.mode === "backfill" && state.backfill !== null) {
     const backfill = state.backfill;
+
+    /**
+     * THE MONTH FORM REFUSED — the end of this lane's history walk.
+     *
+     * No halve-and-retry, because there is no half of a month to ask for: a
+     * month either came back or something else did. The stop is durable in the
+     * cursor, so the coverage row and the anomaly happen exactly ONCE.
+     */
+    const stopMonthWalk = async (detail: {
+      trigger: "served_window" | "repeat_request";
+      monthIndex: number;
+      served?: { afterMs: number | null; beforeMs: number | null };
+      proofObservationId?: number | null;
+    }): Promise<void> => {
+      backfill.daily.done = true;
+      const proofObservationId = detail.proofObservationId
+        ?? backfill.daily.guard.lastObservationId;
+      const { year, month } = monthFromIndex(detail.monthIndex);
+      await coverage(
+        FANSLY_STATS_COVERAGE_PLANES.accountDaily,
+        // Bounded by the PROVIDER's behaviour, not by us and not by exhaustion:
+        // there is older history, and this surface will not serve it in any form
+        // this lane knows how to ask for.
+        "partial_provider_surface",
+        proofObservationId === null ? "none" : "terminal_response",
+        {
+          oldestCapturedAt: backfill.daily.floorAt === null
+            ? null
+            : new Date(backfill.daily.floorAt),
+          newestCapturedAt: now,
+          proofObservationId,
+          reasonCode: "month_form_not_honoured",
+          cursor: {
+            mode: "backfill_month",
+            requestedYear: year,
+            requestedMonth: month,
+            servedAfterMs: detail.served?.afterMs ?? null,
+            servedBeforeMs: detail.served?.beforeMs ?? null,
+          },
+        },
+      );
+      await input.telemetry.addAnomaly({
+        code: "fansly_stats_month_form_not_honoured",
+        severity: "warn",
+        message:
+          "Fansly stats did not answer the calendar month it was asked for; the history walk "
+          + "stopped",
+        details: {
+          plane: FANSLY_STATS_COVERAGE_PLANES.accountDaily,
+          trigger: detail.trigger,
+          requestedMonth: monthLabel(detail.monthIndex),
+          servedAfter: detail.served?.afterMs == null
+            ? null
+            : new Date(detail.served.afterMs).toISOString(),
+          servedBefore: detail.served?.beforeMs == null
+            ? null
+            : new Date(detail.served.beforeMs).toISOString(),
+        },
+      });
+    };
 
     while (
       input.budget.hasRequestCapacity(1) && input.budget.hasWallClockCapacity()
@@ -794,85 +1103,167 @@ export async function fanslyStatsSnapshotChunk(
     ) {
       if (!backfill.daily.done) {
         const guard = backfill.daily.guard;
-        const requested = {
-          beforeMs: backfill.daily.nextBeforeMs,
-          afterMs: backfill.daily.nextBeforeMs - guard.spanDays * DAY_MS,
-        };
-        // REPEAT-REQUEST GUARD, spent before any egress: the identical
-        // `(afterDate, beforeDate, period)` twice in one walk is the loop's
-        // first visible step, and there is nothing to learn from issuing it.
-        if (
-          guard.lastBeforeMs === requested.beforeMs && guard.lastAfterMs === requested.afterMs
-        ) {
-          await handleUnhonouredWindow(
-            backfill.daily,
+
+        // ── STEP 1: THE TRAILING WINDOW ────────────────────────────────────
+        //
+        // The one window whose DATE BOUNDS this route honours — because it is
+        // the window the route would have served anyway.
+        if (!backfill.daily.trailingCaptured) {
+          const requested = {
+            beforeMs: backfill.daily.nextBeforeMs,
+            afterMs: backfill.daily.nextBeforeMs - guard.spanDays * DAY_MS,
+          };
+          // REPEAT-REQUEST GUARD, spent before any egress: the identical
+          // `(afterDate, beforeDate, period)` twice in one walk is the loop's
+          // first visible step, and there is nothing to learn from issuing it.
+          if (
+            guard.lastBeforeMs === requested.beforeMs && guard.lastAfterMs === requested.afterMs
+          ) {
+            await handleUnhonouredWindow(
+              backfill.daily,
+              FANSLY_STATS_COVERAGE_PLANES.accountDaily,
+              requested,
+              {
+                trigger: "repeat_request",
+                oldestCapturedAt: backfill.daily.floorAt === null
+                  ? null
+                  : new Date(backfill.daily.floorAt),
+              },
+            );
+            state = { ...state, backfill: { ...backfill } };
+            await saveProgress();
+            continue;
+          }
+          const beforeDate = new Date(requested.beforeMs);
+          const afterDate = new Date(requested.afterMs);
+          guard.lastBeforeMs = requested.beforeMs;
+          guard.lastAfterMs = requested.afterMs;
+          await assertOwnedPageSyncLease(app.db);
+          const response = await app.adapter.getAccountStats(requestContext, {
+            beforeDate,
+            afterDate,
+            periodMs: DAILY_PERIOD_MS,
+          });
+          const persisted = await persist("account_stats", {
+            mode: "backfill",
+            periodMs: DAILY_PERIOD_MS,
+            beforeDate: beforeDate.toISOString(),
+            afterDate: afterDate.toISOString(),
+          }, response.raw);
+          guard.lastObservationId = persisted.observationId ?? guard.lastObservationId;
+
+          const served = servedWindow(response.raw);
+          // Journal first, THEN judge: the bytes are already durable, and what
+          // follows only decides whether this walk has anywhere left to go.
+          if (!windowWasHonoured(requested, served)) {
+            await handleUnhonouredWindow(
+              backfill.daily,
+              FANSLY_STATS_COVERAGE_PLANES.accountDaily,
+              requested,
+              {
+                trigger: "served_window",
+                served,
+                oldestCapturedAt: backfill.daily.floorAt === null
+                  ? null
+                  : new Date(backfill.daily.floorAt),
+              },
+            );
+            state = { ...state, backfill: { ...backfill } };
+            await saveProgress();
+            continue;
+          }
+          if (served.afterMs !== null) {
+            const servedFloor = new Date(served.afterMs).toISOString();
+            backfill.daily.floorAt = backfill.daily.floorAt === null
+              || servedFloor < backfill.daily.floorAt
+              ? servedFloor
+              : backfill.daily.floorAt;
+          }
+          // EVERYTHING OLDER IS A CALENDAR MONTH. The first one is the month
+          // BEFORE the trailing window: the trailing window covers this month
+          // and only part of the previous one, so the previous month is the
+          // first that the month form can complete.
+          backfill.daily.trailingCaptured = true;
+          backfill.daily.nextMonthIndex = monthIndexOf(now) - 1;
+          await coverage(
             FANSLY_STATS_COVERAGE_PLANES.accountDaily,
-            requested,
+            "in_progress",
+            "none",
             {
-              trigger: "repeat_request",
               oldestCapturedAt: backfill.daily.floorAt === null
                 ? null
                 : new Date(backfill.daily.floorAt),
+              newestCapturedAt: now,
+              cursor: {
+                mode: "backfill_month",
+                nextMonth: monthLabel(backfill.daily.nextMonthIndex),
+              },
             },
           );
           state = { ...state, backfill: { ...backfill } };
           await saveProgress();
           continue;
         }
-        const beforeDate = new Date(requested.beforeMs);
-        const afterDate = new Date(requested.afterMs);
-        guard.lastBeforeMs = requested.beforeMs;
-        guard.lastAfterMs = requested.afterMs;
+
+        // ── STEP 2: THE MONTH WALK, newest month first ─────────────────────
+        const monthIndex = backfill.daily.nextMonthIndex ?? monthIndexOf(now) - 1;
+        // The same repeat guard, in the unit this walk steps in: the same
+        // `(year, month)` twice is the loop, and it costs nothing to see it
+        // before the request rather than after 24 identical bodies.
+        if (backfill.daily.lastMonthIndex === monthIndex) {
+          await stopMonthWalk({ trigger: "repeat_request", monthIndex });
+          state = { ...state, backfill: { ...backfill } };
+          await saveProgress();
+          continue;
+        }
+        backfill.daily.lastMonthIndex = monthIndex;
+        const { year, month } = monthFromIndex(monthIndex);
+        // THE APP'S OWN REQUEST: the trailing bounds ride along and the server
+        // ignores them; `year`/`month` are what select the window.
+        const monthBefore = now;
+        const monthAfter = new Date(now.getTime() - MONTH_FORM_TRAILING_DAYS * DAY_MS);
         await assertOwnedPageSyncLease(app.db);
         const response = await app.adapter.getAccountStats(requestContext, {
-          beforeDate,
-          afterDate,
+          beforeDate: monthBefore,
+          afterDate: monthAfter,
           periodMs: DAILY_PERIOD_MS,
+          year,
+          month,
         });
         const persisted = await persist("account_stats", {
-          mode: "backfill",
+          mode: "backfill_month",
+          year,
+          month,
           periodMs: DAILY_PERIOD_MS,
-          beforeDate: beforeDate.toISOString(),
-          afterDate: afterDate.toISOString(),
+          beforeDate: monthBefore.toISOString(),
+          afterDate: monthAfter.toISOString(),
         }, response.raw);
         guard.lastObservationId = persisted.observationId ?? guard.lastObservationId;
 
         const served = servedWindow(response.raw);
-        // Journal first, THEN judge: the bytes are already durable, and what
-        // follows only decides whether this walk has anywhere left to go.
-        if (!windowWasHonoured(requested, served)) {
-          await handleUnhonouredWindow(
-            backfill.daily,
-            FANSLY_STATS_COVERAGE_PLANES.accountDaily,
-            requested,
-            {
-              trigger: "served_window",
-              served,
-              oldestCapturedAt: backfill.daily.floorAt === null
-                ? null
-                : new Date(backfill.daily.floorAt),
-            },
-          );
+        if (!monthWasHonoured(monthIndex, served)) {
+          await stopMonthWalk({
+            trigger: "served_window",
+            monthIndex,
+            served,
+            proofObservationId: persisted.observationId,
+          });
           state = { ...state, backfill: { ...backfill } };
           await saveProgress();
           continue;
         }
-        const empty = isEmptyStatsWindow(response.raw);
-        if (empty) {
+        if (isEmptyStatsMonth(response.raw)) {
           const streak = backfill.daily.emptyStreak + 1;
+          backfill.daily.emptyStreak = streak;
           if (streak >= BACKFILL_EMPTY_STREAK_LIMIT && !backfill.daily.probeSpent) {
-            // [E10]: an empty window on a long-idle account proves INACTIVITY,
+            // [E10]: an empty month on a long-idle account proves INACTIVITY,
             // not a retention floor. Spend one probe a year further back before
-            // calling it a floor.
-            backfill.daily.emptyStreak = streak;
+            // calling it a floor, and remember where the ordinary walk was so a
+            // probe that finds data can come back and fill what it jumped over.
             backfill.daily.probeSpent = true;
-            // Remember where the ordinary walk would have gone next, so a probe
-            // that finds data can come back and fill the span it jumped over.
-            backfill.daily.probeResumeMs = backfill.daily.nextBeforeMs
-              - guard.spanDays * DAY_MS;
-            backfill.daily.nextBeforeMs -= BACKFILL_PROBE_JUMP_DAYS * DAY_MS;
+            backfill.daily.probeResumeMonthIndex = monthIndex - 1;
+            backfill.daily.nextMonthIndex = monthIndex - BACKFILL_PROBE_JUMP_MONTHS;
           } else if (streak >= BACKFILL_EMPTY_STREAK_LIMIT) {
-            backfill.daily.emptyStreak = streak;
             backfill.daily.done = true;
             // The empty response IS the proof, and it is journaled: the
             // coverage row points at the observation rather than restating it.
@@ -886,18 +1277,17 @@ export async function fanslyStatsSnapshotChunk(
                   : new Date(backfill.daily.floorAt),
                 proofObservationId: persisted.observationId,
                 reasonCode: "empty_window_streak",
-                cursor: { nextBeforeMs: backfill.daily.nextBeforeMs },
+                cursor: { mode: "backfill_month", lastMonth: monthLabel(monthIndex) },
               },
             );
           } else {
-            backfill.daily.emptyStreak = streak;
-            backfill.daily.nextBeforeMs -= guard.spanDays * DAY_MS;
+            backfill.daily.nextMonthIndex = monthIndex - 1;
           }
         } else {
           backfill.daily.emptyStreak = 0;
-          // The floor only ever moves BACKWARDS: a probe window that reached
+          // The floor only ever moves BACKWARDS: a probe month that reached
           // further than the ordinary walk must not be undone by the next
-          // ordinary window, which is nearer to today.
+          // ordinary month, which is nearer to today.
           if (served.afterMs !== null) {
             const servedFloor = new Date(served.afterMs).toISOString();
             backfill.daily.floorAt = backfill.daily.floorAt === null
@@ -905,17 +1295,14 @@ export async function fanslyStatsSnapshotChunk(
               ? servedFloor
               : backfill.daily.floorAt;
           }
-          if (backfill.daily.probeResumeMs !== null) {
-            // The probe PROVED there is older history, so the span it jumped
-            // over is unexamined rather than absent. Resume at the gap; the
-            // walk will reach the probe window again on its own.
-            backfill.daily.nextBeforeMs = backfill.daily.probeResumeMs;
-            backfill.daily.probeResumeMs = null;
-          } else if (served.afterMs !== null) {
-            // DERIVED FROM THE RETURNED BOUNDS, with one day of overlap.
-            backfill.daily.nextBeforeMs = served.afterMs + BACKFILL_DAILY_OVERLAP_DAYS * DAY_MS;
+          if (backfill.daily.probeResumeMonthIndex !== null) {
+            // The probe PROVED there is older history, so the eleven months it
+            // jumped over are unexamined rather than absent. Resume at the gap;
+            // the walk will reach the probe month again on its own.
+            backfill.daily.nextMonthIndex = backfill.daily.probeResumeMonthIndex;
+            backfill.daily.probeResumeMonthIndex = null;
           } else {
-            backfill.daily.nextBeforeMs -= guard.spanDays * DAY_MS;
+            backfill.daily.nextMonthIndex = monthIndex - 1;
           }
           await coverage(
             FANSLY_STATS_COVERAGE_PLANES.accountDaily,
@@ -926,7 +1313,10 @@ export async function fanslyStatsSnapshotChunk(
                 ? null
                 : new Date(backfill.daily.floorAt),
               newestCapturedAt: now,
-              cursor: { nextBeforeMs: backfill.daily.nextBeforeMs },
+              cursor: {
+                mode: "backfill_month",
+                nextMonth: monthLabel(backfill.daily.nextMonthIndex),
+              },
             },
           );
         }
@@ -935,80 +1325,33 @@ export async function fanslyStatsSnapshotChunk(
         continue;
       }
 
+      // ── THE HOURLY LANE HAS NO HISTORY WALK ──────────────────────────────
+      //
+      // It used to step backwards in 4-day windows. It cannot: those are DATE
+      // BOUNDS on the same route the month walk above exists because of, and the
+      // month form has no hourly granularity to offer — `period` is a bucket
+      // size, and a month of hourly buckets is not something this route has ever
+      // been seen serving. So the hourly plane is the TRAILING 25 HOURS and
+      // nothing else, and it says so in `capture_coverage` rather than walking
+      // to prove it every day. `fanslyStatsHourlyBackfillMaxDays` is kept, and
+      // reported here, as the depth this lane WOULD have taken.
       if (hourlyEnabled && !backfill.hourly.done) {
-        if (backfill.hourly.daysWalked >= hourlyBackfillMaxDays) {
-          backfill.hourly.done = true;
-          await coverage(
-            FANSLY_STATS_COVERAGE_PLANES.accountHourly,
-            // Bounded BY US, not by the platform: the honest status is that we
-            // captured part of the surface, with a config value as the reason.
-            "partial_provider_surface",
-            "none",
-            { reasonCode: "hourly_backfill_max_days", newestCapturedAt: now },
-          );
-          state = { ...state, backfill: { ...backfill } };
-          await saveProgress();
-          continue;
-        }
-        const hourlyGuard = backfill.hourly.guard;
-        const requested = {
-          beforeMs: backfill.hourly.nextBeforeMs,
-          afterMs: backfill.hourly.nextBeforeMs - hourlyGuard.spanDays * DAY_MS,
-        };
-        // Same repeat guard as the daily lane. This one derives its next bound
-        // from the served `dateAfter` too, so the same ignored window would
-        // stall it in exactly the same way.
-        if (
-          hourlyGuard.lastBeforeMs === requested.beforeMs
-          && hourlyGuard.lastAfterMs === requested.afterMs
-        ) {
-          await handleUnhonouredWindow(
-            backfill.hourly,
-            FANSLY_STATS_COVERAGE_PLANES.accountHourly,
-            requested,
-            { trigger: "repeat_request" },
-          );
-          state = { ...state, backfill: { ...backfill } };
-          await saveProgress();
-          continue;
-        }
-        const beforeDate = new Date(requested.beforeMs);
-        const afterDate = new Date(requested.afterMs);
-        hourlyGuard.lastBeforeMs = requested.beforeMs;
-        hourlyGuard.lastAfterMs = requested.afterMs;
-        await assertOwnedPageSyncLease(app.db);
-        const response = await app.adapter.getAccountStats(requestContext, {
-          beforeDate,
-          afterDate,
-          periodMs: HOURLY_PERIOD_MS,
-        });
-        const persistedHourly = await persist("account_stats", {
-          mode: "backfill_hourly",
-          periodMs: HOURLY_PERIOD_MS,
-          beforeDate: beforeDate.toISOString(),
-          afterDate: afterDate.toISOString(),
-        }, response.raw);
-        hourlyGuard.lastObservationId = persistedHourly.observationId
-          ?? hourlyGuard.lastObservationId;
-        const served = servedWindow(response.raw);
-        if (!windowWasHonoured(requested, served)) {
-          // A 4-day step is already at the narrowing floor, so this lane has no
-          // halve-and-retry to spend: it stops on the first disagreement.
-          await handleUnhonouredWindow(
-            backfill.hourly,
-            FANSLY_STATS_COVERAGE_PLANES.accountHourly,
-            requested,
-            { trigger: "served_window", served },
-          );
-          state = { ...state, backfill: { ...backfill } };
-          await saveProgress();
-          continue;
-        }
-        backfill.hourly.nextBeforeMs = served.afterMs ?? afterDate.getTime();
-        backfill.hourly.daysWalked += hourlyGuard.spanDays;
-        if (isEmptyStatsWindow(response.raw)) {
-          backfill.hourly.done = true;
-        }
+        backfill.hourly.done = true;
+        await coverage(
+          FANSLY_STATS_COVERAGE_PLANES.accountHourly,
+          // Bounded by the PROVIDER's surface: hourly buckets exist only inside
+          // the trailing window, and we captured that window.
+          "partial_provider_surface",
+          "none",
+          {
+            reasonCode: "hourly_trailing_window_only",
+            newestCapturedAt: now,
+            cursor: {
+              trailingHours: HOURLY_TRAILING_HOURS,
+              configuredBackfillMaxDays: hourlyBackfillMaxDays,
+            },
+          },
+        );
         state = { ...state, backfill: { ...backfill } };
         await saveProgress();
         continue;
@@ -1140,6 +1483,12 @@ export async function fanslyStatsSnapshotChunk(
           deferred,
           dailyFloorAt: backfill.daily.floorAt,
           dailyDone: backfill.daily.done,
+          // Where the daily history walk actually IS, in the unit it walks in —
+          // "nextBeforeMs: 1750000000000" told an operator nothing.
+          dailyTrailingCaptured: backfill.daily.trailingCaptured,
+          dailyNextMonth: backfill.daily.nextMonthIndex === null
+            ? null
+            : monthLabel(backfill.daily.nextMonthIndex),
           hourlyDone: backfill.hourly.done,
           earningsDone: backfill.earnings.done,
         },

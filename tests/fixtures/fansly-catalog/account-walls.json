@@ -1,0 +1,35 @@
+{
+  "_fixture": "SYNTHETIC. Shape from the `walls[]` array the live /post envelope carries, which is the same record /account/walls?correlationPostIds= serves (probed 200 with ten walls, 2026-08-22). `mainWall` and `defaultWall` are two INDEPENDENT optional flags — most walls carry neither — so collapsing them into one boolean loses which. `metadata` is a string on the wire and is empty on every observed row.",
+  "rows": [
+    {
+      "id": "000900000000001401",
+      "accountId": "000900000000000001",
+      "pos": 0,
+      "name": "Main Feed",
+      "description": "",
+      "private": 0,
+      "metadata": "",
+      "defaultWall": true
+    },
+    {
+      "id": "000900000000001402",
+      "accountId": "000900000000000001",
+      "pos": 1,
+      "name": "Premium videos",
+      "description": "",
+      "private": 0,
+      "metadata": ""
+    },
+    {
+      "id": "000900000000001403",
+      "accountId": "000900000000000001",
+      "pos": 7,
+      "name": "Posts",
+      "description": "",
+      "private": 1,
+      "metadata": "",
+      "mainWall": true,
+      "someUnnamedFutureField": "kept-verbatim"
+    }
+  ]
+}

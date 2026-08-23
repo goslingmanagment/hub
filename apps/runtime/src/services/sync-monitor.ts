@@ -66,6 +66,23 @@ export const MONITORED_SYNC_STREAMS = [
   // exists to prevent, and the notification lane is the one whose downtime
   // costs facts rather than freshness.
   "notifications",
+  // WP-F3. A wedged catalog sweep is invisible in every other surface — the
+  // page keeps syncing DMs and money while its inventory silently ages, and M
+  // (the number WP-F4 is sized against) quietly stops moving.
+  "catalog",
+  // WP-F5. A wedged replies walk is the quietest failure in this tree: the
+  // queue keeps its rows, the page keeps syncing everything else, and the
+  // comment archive simply stops growing 3 % into a 14-day first pass.
+  "post_replies",
+  // WP-F7. A wedged payouts lane is invisible everywhere else: two calls a day
+  // is a volume no dashboard notices going to zero, and the first thing lost is
+  // the payout-request history the money side reconciles against.
+  "payouts",
+  // WP-F4. The loudest lane in the tree by call volume and therefore the one
+  // whose wedge is most worth seeing: it is designed to run at 100 % of its own
+  // daily cap, so "calls went to zero" is the signal, and nothing else in the
+  // monitor would show it.
+  "media_stats",
 ] as const satisfies readonly SyncStream[];
 const REQUEST_STREAMS = [
   ...MONITORED_SYNC_STREAMS,

@@ -22,7 +22,7 @@ body remain handler-checked and are noted per route in the service layer.
 | `agentKey` | Agent Read Plane key only; no human principal is admitted |
 | `any` | any authenticated principal except an agent key |
 
-## Routes (196)
+## Routes (204)
 
 | Method | Path | Route key | Kind | Roles | Page scope |
 | --- | --- | --- | --- | --- | --- |
@@ -173,6 +173,8 @@ body remain handler-checked and are noted per route in the service layer.
 | GET | `/api/v1/overview/revenue/by-model` | `overviewRevenueByModel` | `session` | — | — |
 | GET | `/api/v1/overview/revenue/daily` | `overviewRevenueDaily` | `session` | — | — |
 | GET | `/api/v1/pages` | `pages` | `any` | — | — |
+| GET | `/api/v1/pages/:pageLabel/content/comments` | `contentComments` | `owner-session` | — | page |
+| GET | `/api/v1/pages/:pageLabel/content/media` | `contentMedia` | `owner-session` | — | page |
 | GET | `/api/v1/pages/:pageLabel/conversations/:conversationId/messages` | `pageConversationMessages` | `session` | — | page |
 | GET | `/api/v1/pages/:pageLabel/conversations/:conversationId/profile` | `pageConversationProfile` | `any` | — | page |
 | GET | `/api/v1/pages/:pageLabel/conversations/:platformConversationId/preview` | `pageConversationPreview` | `session` | — | page |
@@ -187,10 +189,16 @@ body remain handler-checked and are noted per route in the service layer.
 | GET | `/api/v1/pages/:pageLabel/fans/:platformUserId/transactions` | `pageFanTransactions` | `session` | — | page |
 | GET | `/api/v1/pages/:pageLabel/followers` | `pageFollowers` | `any` | — | page |
 | GET | `/api/v1/pages/:pageLabel/followers/daily` | `pageFollowersDaily` | `any` | — | page |
+| GET | `/api/v1/pages/:pageLabel/money/payouts` | `moneyPayouts` | `owner-session` | — | page |
+| GET | `/api/v1/pages/:pageLabel/money/revenue-mix` | `moneyRevenueMix` | `owner-session` | — | page |
 | GET | `/api/v1/pages/:pageLabel/revenue` | `pageRevenue` | `session` | — | page |
 | GET | `/api/v1/pages/:pageLabel/revenue/daily` | `pageRevenueDaily` | `session` | — | page |
 | GET | `/api/v1/pages/:pageLabel/spender-autolists` | `pageSpenderAutoLists` | `any` | — | page |
 | GET | `/api/v1/pages/:pageLabel/spender-autolists/:bucketKey` | `pageSpenderAutoListDetail` | `any` | — | page |
+| GET | `/api/v1/pages/:pageLabel/stats/coverage` | `statsCoverage` | `owner-session` | — | page |
+| GET | `/api/v1/pages/:pageLabel/stats/media` | `statsMedia` | `owner-session` | — | page |
+| GET | `/api/v1/pages/:pageLabel/stats/tags` | `statsTags` | `owner-session` | — | page |
+| GET | `/api/v1/pages/:pageLabel/stats/traffic` | `statsTraffic` | `owner-session` | — | page |
 | GET | `/api/v1/pages/:pageLabel/subscribers` | `pageSubscribers` | `any` | — | page |
 | GET | `/api/v1/pages/:pageLabel/subscribers/daily` | `pageSubscribersDaily` | `any` | — | page |
 | GET | `/api/v1/pages/:pageLabel/sync/blocks` | `pageSyncBlocks` | `any` | — | page |

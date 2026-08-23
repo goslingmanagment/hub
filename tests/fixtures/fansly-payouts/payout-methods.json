@@ -1,0 +1,25 @@
+{
+  "_fixture": "SYNTHETIC. Shape from a live /payments/payoutmethods capture (2026-08-20), a BARE ARRAY of 2 rows. THE TRAP: `metadata` is a JSON-ENCODED STRING, not an object, and the two providers are asymmetric — provider 2 (Paxum, NOT PayPal per A22-4) returns the creator's FULL email in plaintext while provider 30 (USDT) returns a `field1` the server has ALREADY masked (38 X plus four visible characters). The address here is fabricated on the reserved, unroutable domain example.invalid, and it is present ON PURPOSE: a mask fixture with nothing to mask proves nothing. `providerId` is a STRING on the wire. `type`, `flags` and `status` had NO rendered label anywhere in the UI and stay raw.",
+  "rows": [
+    {
+      "id": "000900000000009001",
+      "accountId": "000900000000000001",
+      "providerId": "2",
+      "type": 1,
+      "flags": 0,
+      "status": 3,
+      "metadata": "{\"email\": \"fixture.creator@example.invalid\"}",
+      "version": 0
+    },
+    {
+      "id": "000900000000009002",
+      "accountId": "000900000000000001",
+      "providerId": "30",
+      "type": 1,
+      "flags": 0,
+      "status": 3,
+      "metadata": "{\"field0\": \"USDT\", \"field1\": \"XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX1a2b\", \"field2\": \"TRC20\", \"field3\": \"\", \"field4\": \"\", \"field5\": \"\", \"field6\": \"\", \"field7\": \"\", \"field8\": \"\", \"field9\": \"\", \"field10\": \"\"}",
+      "version": 0
+    }
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "_fixture": "SYNTHETIC. Shape from a live /message/automated capture (2026-08-19), seven rows, a BARE ARRAY. `messageTemplate` is a plain JSON OBJECT in every live value — the superseded claim that it is a Python-repr pseudo-JSON STRING is refuted by the capture. `triggerMetadata` IS a JSON string: empty on the trigger-3 band, an object literal on the per-tier trigger-15 band. `delay`/`cooldown` are stored as served.",
+  "rows": [
+    {
+      "id": "000900000000001201",
+      "accountId": "000900000000000001",
+      "triggerType": 3,
+      "triggerMetadata": "",
+      "delay": 0,
+      "cooldown": 0,
+      "messageTemplate": {
+        "type": 1,
+        "content": "hi, welcome",
+        "attachments": [
+          { "contentType": 1, "contentId": "000900000000000601" },
+          { "contentType": 1, "contentId": "000900000000000602" }
+        ],
+        "senderId": "000900000000000001"
+      }
+    },
+    {
+      "id": "000900000000001202",
+      "accountId": "000900000000000001",
+      "triggerType": 15,
+      "triggerMetadata": "{\"subscriptionTierId\":\"000900000000000301\",\"subscriptionTierName\":\"Basic\"}",
+      "delay": 25000,
+      "cooldown": 3600,
+      "messageTemplate": {
+        "type": 1,
+        "content": "thanks for subscribing",
+        "attachments": [],
+        "senderId": "000900000000000001"
+      },
+      "someUnnamedFutureField": "kept-verbatim"
+    }
+  ]
+}

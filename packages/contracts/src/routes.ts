@@ -2493,6 +2493,14 @@ const extendedSyncStreamEnum = z.enum([
   "stats_snapshot",
   // WP-F2.
   "notifications",
+  // WP-F3.
+  "catalog",
+  // WP-F5.
+  "post_replies",
+  // WP-F7.
+  "payouts",
+  // WP-F4.
+  "media_stats",
 ]);
 
 export const syncMonitorStreamItemSchema = z.object({
@@ -4761,6 +4769,573 @@ export const opsMetricsResponseSchema = z.object({
     duplicateCount: z.number().int(),
     updatedAt: isoTimestamp.nullable(),
   }).nullable(),
+});
+
+// ── WP-S1: the endpoints-cover SERVING surface (Fansly only, A28-2) ──────────
+//
+// Eight owner-session, page-scoped read routes over the projections F1–F7 and F4
+// fill. THE ONE LAW THESE SCHEMAS ENCODE: **serving never authorizes capture**.
+// Nothing here triggers a fetch, nothing here is a write, and every route is a
+// pure read of what the projections already hold.
+//
+// Three shape rules that are not style:
+//   * Every labelled platform enum is served as RAW CODE + LABEL + MAPPING
+//     VERSION (A22-2). The code is the truth; the label is this build's reading
+//     of it and can be wrong (`fansly-notification-types.ts` was wrong on eight
+//     of sixteen codes once already).
+//   * A metric the platform did not serve is `null`, NEVER 0 — a read layer that
+//     coalesces turns "unserved" into "zero views", which is a different fact.
+//   * Money is integer mills and NET is never silently turned into gross. A12
+//     settled that `saleStats.total` is the creator's net share; a gross figure
+//     derived from it travels inside a `derived` envelope that names its basis.
+//
+// No provider raw JSON crosses these routes (raw drill-down stays on the
+// governed journal surface) and no delivery/CDN address appears in any response:
+// media are identified by REF only, which is an id, not an address.
+
+/** `[from, to)` on every windowed insights route. Both bounds are required —
+ *  the plane's original incident was a silent default window. */
+const insightsInstant = z.string().regex(
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?(Z|[+-]\d{2}:\d{2})$/,
+  "Expected an RFC 3339 timestamp with an explicit offset",
+);
+
+/** Every list route is bounded. 500 is the ceiling everywhere; no route has an
+ *  unbounded mode and none takes an offset (keyset only). */
+const insightsLimitSchema = z.coerce.number().int().min(1).max(500);
+
+/** Opaque keyset position, minted by the previous response. It carries only a
+ *  sort position inside the SAME page's SAME query — never a scope. */
+const insightsCursorSchema = z.string().min(1).max(512);
+
+const insightsSubjectKindEnum = z.enum([
+  "account_profile",
+  "account_media",
+  "media_offer",
+  "post",
+]);
+
+const insightsPageSchema = z.object({
+  label: z.string(),
+  platform: platformEnum,
+});
+
+/** The `(status, acquisition_mode, proof)` vocabulary, verbatim from
+ *  `capture_coverage`. Serving it is how a chart says "partial", and the panel
+ *  that reads it is the honesty panel. */
+const insightsCoverageRowSchema = z.object({
+  plane: z.string(),
+  scopeRef: z.string(),
+  status: z.string(),
+  acquisitionMode: z.string(),
+  proof: z.string(),
+  oldestCapturedAt: isoTimestamp.nullable(),
+  newestCapturedAt: isoTimestamp.nullable(),
+  expectedCount: z.number().int().nullable(),
+  observedUniqueCount: z.number().int().nullable(),
+  reasonCode: z.string().nullable(),
+  nextProbeAt: isoTimestamp.nullable(),
+  updatedAt: isoTimestamp,
+});
+
+/** A figure Hub COMPUTED. A13: the platform serves no averages and no gross,
+ *  so anything of that shape is ours and says so, with the components it was
+ *  built from named in `basis`. */
+function insightsDerived<T extends z.ZodTypeAny>(value: T) {
+  return z.object({
+    value,
+    derived: z.literal(true),
+    /** What the value was computed FROM, in words a reader can check. */
+    basis: z.string(),
+  });
+}
+
+const insightsTrafficRowSchema = z.object({
+  subjectKind: z.string(),
+  subjectRef: z.string(),
+  periodMs: z.number().int(),
+  bucketStart: isoTimestamp,
+  /** RAW, as text — the integer the platform sent. */
+  sourceCode: z.string(),
+  /** THIS BUILD'S reading of the code. `unknown:<code>` when it has none. */
+  sourceLabel: z.string(),
+  mappingVersion: z.number().int(),
+  /** `type - (type % 10)` as text for a profile row; null for a media row,
+   *  whose 0/1 codes are not a family/member structure at all. */
+  family: z.string().nullable(),
+  familyLabel: z.string().nullable(),
+  /** Member 1 is the creator widget's visit counter; every other member is the
+   *  dwell-bearing series. Null for media rows, for the same reason. */
+  measure: z.enum(["visits", "dwell"]).nullable(),
+  /** Metrics: NULL means the platform did not serve it. Never 0. */
+  views: z.number().int().nullable(),
+  previewViews: z.number().int().nullable(),
+  uniqueViewers: z.number().int().nullable(),
+  previewUniqueViewers: z.number().int().nullable(),
+  videoViews: z.number().int().nullable(),
+  previewVideoViews: z.number().int().nullable(),
+  interactionTimeMs: z.number().int().nullable(),
+  previewInteractionTimeMs: z.number().int().nullable(),
+  /** A SUM over views on the wire; divided at read time or not at all. */
+  videoPercentWatchedSum: z.string().nullable(),
+  previewVideoPercentWatchedSum: z.string().nullable(),
+  revisionCount: z.number().int(),
+  lastObservedAt: isoTimestamp,
+});
+
+export const statsTrafficQuerySchema = z.object({
+  from: insightsInstant,
+  to: insightsInstant,
+  periodMs: z.coerce.number().int().min(1).default(86_400_000),
+  subjectKind: insightsSubjectKindEnum.default("account_profile"),
+  subjectRef: z.string().max(64).optional(),
+  limit: insightsLimitSchema.default(500),
+  cursor: insightsCursorSchema.optional(),
+});
+
+export const statsTrafficResponseSchema = z.object({
+  page: insightsPageSchema,
+  window: z.object({
+    from: isoTimestamp,
+    to: isoTimestamp,
+    periodMs: z.number().int(),
+    subjectKind: z.string(),
+    subjectRef: z.string().nullable(),
+  }),
+  rows: z.array(insightsTrafficRowSchema),
+  coverage: z.array(insightsCoverageRowSchema),
+  nextCursor: z.string().nullable(),
+});
+
+const insightsMediaSalesSchema = z.object({
+  count: z.number().int().nullable(),
+  /** A12: `saleStats.total` is the creator's NET share. Stored verbatim. */
+  netMills: mills.nullable(),
+  pendingMills: mills.nullable(),
+  /** DERIVED from `netMills`. Fansly's cut is 20 %, so gross = net / 0.8 — a
+   *  factor that can change, which is exactly why net is what is stored and
+   *  gross is what is computed here and labelled. Never summed with net. */
+  grossMills: insightsDerived(mills).nullable(),
+});
+
+const insightsMediaRowSchema = z.object({
+  mediaOfferRef: z.string(),
+  mediaRef: z.string().nullable(),
+  bundleRefs: z.array(z.string()),
+  mediaType: z.number().int().nullable(),
+  mimeType: z.string().nullable(),
+  width: z.number().int().nullable(),
+  height: z.number().int().nullable(),
+  durationMs: z.number().int().nullable(),
+  priceMills: mills.nullable(),
+  likeCount: z.number().int().nullable(),
+  sales: insightsMediaSalesSchema,
+  createdAtPlatform: isoTimestamp.nullable(),
+  deletedAtPlatform: isoTimestamp.nullable(),
+  firstObservedAt: isoTimestamp,
+  lastObservedAt: isoTimestamp,
+  buckets: z.array(insightsTrafficRowSchema),
+});
+
+const insightsTopMediaRowSchema = z.object({
+  plane: z.string(),
+  rank: z.number().int(),
+  mediaOfferRef: z.string(),
+  bundleRef: z.string().nullable(),
+  periodMs: z.number().int(),
+  requestedStart: isoTimestamp,
+  requestedEnd: isoTimestamp,
+  views: z.number().int().nullable(),
+  previewViews: z.number().int().nullable(),
+  interactionTimeMs: z.number().int().nullable(),
+  previewInteractionTimeMs: z.number().int().nullable(),
+  observedAt: isoTimestamp,
+});
+
+export const statsMediaQuerySchema = z.object({
+  from: insightsInstant,
+  to: insightsInstant,
+  periodMs: z.coerce.number().int().min(1).default(86_400_000),
+  mediaOfferRef: z.string().max(64).optional(),
+  limit: insightsLimitSchema.default(50),
+  /** Total bucket rows across the whole response, not per media. */
+  bucketLimit: insightsLimitSchema.default(200),
+  cursor: insightsCursorSchema.optional(),
+});
+
+export const statsMediaResponseSchema = z.object({
+  page: insightsPageSchema,
+  window: z.object({
+    from: isoTimestamp,
+    to: isoTimestamp,
+    periodMs: z.number().int(),
+  }),
+  media: z.array(insightsMediaRowSchema),
+  /** `stats_top_media` for the freshest window the page holds. Window identity
+   *  is part of a row: rank 2 of one window is not rank 2 of the next. */
+  top: z.array(insightsTopMediaRowSchema),
+  /** [E5]: the per-media statistics route serves SEVEN stat keys and no video
+   *  fields at all, even for a video asset. Watch metrics are therefore not
+   *  claimable per media — stated here so a caller cannot read their absence as
+   *  zero watch time. The account-level media datapoints DO carry them, and
+   *  those rows arrive under `subjectKind: "account_media"`. */
+  watchMetrics: z.object({
+    perMediaAvailable: z.literal(false),
+    reason: z.literal("not_served_per_media_e5"),
+  }),
+  coverage: z.array(insightsCoverageRowSchema),
+  bucketsTruncated: z.boolean(),
+  nextCursor: z.string().nullable(),
+});
+
+export const statsTagsQuerySchema = z.object({
+  from: insightsInstant,
+  to: insightsInstant,
+  limit: insightsLimitSchema.default(100),
+  cursor: insightsCursorSchema.optional(),
+});
+
+export const statsTagsResponseSchema = z.object({
+  page: insightsPageSchema,
+  window: z.object({ from: isoTimestamp, to: isoTimestamp }),
+  /** Top FYP tags per captured window. `tagName` is NULL when the response's
+   *  own `tags[]` join missed — never fabricated from the id. */
+  topTags: z.array(z.object({
+    plane: z.string(),
+    rank: z.number().int(),
+    tagRef: z.string(),
+    tagName: z.string().nullable(),
+    periodMs: z.number().int(),
+    requestedStart: isoTimestamp,
+    requestedEnd: isoTimestamp,
+    views: z.number().int().nullable(),
+    previewViews: z.number().int().nullable(),
+    interactionTimeMs: z.number().int().nullable(),
+    previewInteractionTimeMs: z.number().int().nullable(),
+    observedAt: isoTimestamp,
+  })),
+  /** Platform-GLOBAL counters, sampled per page. The global value is derived at
+   *  READ time: latest `captured_at` wins, ties break on `page_id` ascending —
+   *  `account_seq` is incomparable across pages. */
+  platformTags: z.array(z.object({
+    tagRef: z.string(),
+    tagName: z.string().nullable(),
+    businessDate: businessDate,
+    viewCount: z.number().int().nullable(),
+    postCount: z.number().int().nullable(),
+    source: z.string(),
+    capturedAt: isoTimestamp,
+  })),
+  coverage: z.array(insightsCoverageRowSchema),
+  nextCursor: z.string().nullable(),
+});
+
+/** One lane's live operating state, read straight off `page_sync_states`. Every
+ *  field is nullable because every field is written by ONE lane's progress
+ *  block and no lane writes them all. */
+const insightsLaneProgressSchema = z.object({
+  journaled: z.number().int().nullable(),
+  callsToday: z.number().int().nullable(),
+  calledToday: z.number().int().nullable(),
+  dailyCap: z.number().int().nullable(),
+  deferred: z.string().nullable(),
+  // WP-F4's queue + honesty block.
+  mediaKnown: z.number().int().nullable(),
+  queueSize: z.number().int().nullable(),
+  dueToday: z.number().int().nullable(),
+  deferredToday: z.number().int().nullable(),
+  neverVisited: z.number().int().nullable(),
+  backfillComplete: z.number().int().nullable(),
+  backfillStopped: z.number().int().nullable(),
+  /** A16 item 3: the LIVE long-tail cycle, computed by the lane from the live
+   *  class census and the live cap. Never a documentation constant. */
+  estimatedCycleDays: z.number().nullable(),
+  requestsPerDayWanted: z.number().nullable(),
+  saturating: z.boolean().nullable(),
+  longTailCycleDays: z.number().nullable(),
+  // WP-F3's M block.
+  uniqueMediaCount: z.number().int().nullable(),
+  vaultMemberUniqueCount: z.number().int().nullable(),
+  /** Σ `item_count`. NON-UNIQUE by construction — the system albums are views
+   *  over the same media, so this double-counts. Labelled, never used as M. */
+  albumMembershipSum: z.number().int().nullable(),
+  vaultWalkStatus: z.string().nullable(),
+  // WP-F5's walk + truncation block.
+  rootsKnown: z.number().int().nullable(),
+  rootsWalked: z.number().int().nullable(),
+  rootsDirty: z.number().int().nullable(),
+  postsKnown: z.number().int().nullable(),
+  commentsSeen: z.number().int().nullable(),
+  commentsMissing: z.number().int().nullable(),
+  possiblyTruncated: z.number().int().nullable(),
+  paginationMode: z.string().nullable(),
+  phase: z.string().nullable(),
+  seedComplete: z.boolean().nullable(),
+});
+
+export const statsCoverageResponseSchema = z.object({
+  page: insightsPageSchema,
+  generatedAt: isoTimestamp,
+  /** Every `capture_coverage` row this page holds: the floors, in the
+   *  `(status, acquisition_mode, proof)` vocabulary. */
+  planes: z.array(insightsCoverageRowSchema),
+  /** Per lane: is its gate open, is this page on its allowlist, and what did it
+   *  last report. A lane whose flag is off holds no data for a reason, and a
+   *  panel that cannot tell that apart from "no activity" is the panel this one
+   *  replaces. */
+  streams: z.array(z.object({
+    stream: z.string(),
+    status: z.string(),
+    phase: z.string().nullable(),
+    succeededAt: isoTimestamp.nullable(),
+    failedAt: isoTimestamp.nullable(),
+    consecutiveFailures: z.number().int(),
+    blockerKind: z.string().nullable(),
+    blockerCode: z.string().nullable(),
+    /** null when this lane has no ramp flag of its own. */
+    flagEnabled: z.boolean().nullable(),
+    /** null when this lane has no page allowlist of its own. FAIL-CLOSED on
+     *  every lane this initiative shipped: empty allowlist = NO pages. */
+    allowlisted: z.boolean().nullable(),
+    progress: insightsLaneProgressSchema,
+  })),
+  /** What we actually hold, per projection: row count and the range it spans.
+   *  A zero count next to an open floor is a real answer; a zero count with no
+   *  coverage row is "never started" and reads that way. */
+  holdings: z.array(z.object({
+    projection: z.string(),
+    rowCount: z.number().int(),
+    oldestAt: isoTimestamp.nullable(),
+    newestAt: isoTimestamp.nullable(),
+  })),
+});
+
+export const contentMediaQuerySchema = z.object({
+  limit: insightsLimitSchema.default(100),
+  cursor: insightsCursorSchema.optional(),
+});
+
+export const contentMediaResponseSchema = z.object({
+  page: insightsPageSchema,
+  generatedAt: isoTimestamp,
+  /** Catalog heads. IDs ONLY — `mediaRef`/`previewRef` are platform ids, and no
+   *  delivery or CDN address exists anywhere in this response by construction. */
+  media: z.array(insightsMediaRowSchema.omit({ buckets: true })),
+  vaultAlbums: z.array(z.object({
+    vaultKind: z.string(),
+    albumRef: z.string(),
+    title: z.string().nullable(),
+    albumType: z.number().int().nullable(),
+    status: z.number().int().nullable(),
+    pos: z.number().int().nullable(),
+    /** AS SERVED, and NON-UNIQUE across albums: the system albums are views
+     *  over the same media. M is `count(distinct media_offer_ref)`. */
+    itemCount: z.number().int().nullable(),
+    missingSince: isoTimestamp.nullable(),
+    lastObservedAt: isoTimestamp,
+  })),
+  tiers: z.array(z.object({
+    tierRef: z.string(),
+    name: z.string().nullable(),
+    color: z.string().nullable(),
+    pos: z.number().int().nullable(),
+    /** `tier.price` — a BASE, never the price a subscriber pays. The price
+     *  truth is the plan rows below. */
+    basePriceMills: mills.nullable(),
+    maxSubscribers: z.number().int().nullable(),
+    missingSince: isoTimestamp.nullable(),
+    plans: z.array(z.object({
+      planRef: z.string(),
+      status: z.number().int().nullable(),
+      durationDays: z.number().int().nullable(),
+      priceMills: mills.nullable(),
+      useAmounts: z.number().int().nullable(),
+      promoCount: z.number().int(),
+      missingSince: isoTimestamp.nullable(),
+    })),
+  })),
+  walls: z.array(z.object({
+    wallRef: z.string(),
+    name: z.string().nullable(),
+    description: z.string().nullable(),
+    pos: z.number().int().nullable(),
+    mainWall: z.boolean().nullable(),
+    defaultWall: z.boolean().nullable(),
+    private: z.number().int().nullable(),
+    missingSince: isoTimestamp.nullable(),
+  })),
+  automations: z.array(z.object({
+    automationRef: z.string(),
+    /** RAW platform code (3 and 15 observed live). Never a label. */
+    triggerType: z.number().int().nullable(),
+    delaySeconds: z.number().int().nullable(),
+    cooldownSeconds: z.number().int().nullable(),
+    templateType: z.number().int().nullable(),
+    senderRef: z.string().nullable(),
+    messageText: z.string().nullable(),
+    attachmentCount: z.number().int(),
+    /** FALSE when the served template did not parse. An unparsed template and
+     *  an automation with no text must never look alike. */
+    parseOk: z.boolean(),
+    missingSince: isoTimestamp.nullable(),
+  })),
+  /** M and the numbers M is not. */
+  inventory: z.object({
+    uniqueMediaCount: z.number().int(),
+    vaultMemberUniqueCount: z.number().int(),
+    albumMembershipSum: insightsDerived(z.number().int()),
+  }),
+  coverage: z.array(insightsCoverageRowSchema),
+  nextCursor: z.string().nullable(),
+});
+
+export const contentCommentsQuerySchema = z.object({
+  from: insightsInstant,
+  to: insightsInstant,
+  postRef: z.string().max(64).optional(),
+  limit: insightsLimitSchema.default(200),
+  cursor: insightsCursorSchema.optional(),
+});
+
+export const contentCommentsResponseSchema = z.object({
+  page: insightsPageSchema,
+  window: z.object({ from: isoTimestamp, to: isoTimestamp }),
+  comments: z.array(z.object({
+    commentRef: z.string(),
+    parentPostRef: z.string(),
+    rootPostRef: z.string().nullable(),
+    authorRef: z.string(),
+    authorUsername: z.string().nullable(),
+    authorDisplayName: z.string().nullable(),
+    /** Empty-content replies ARE stored: a fan who replied with only an
+     *  attachment still replied. `''` is a reply, not a missing one. */
+    textPlain: z.string(),
+    likeCount: z.number().int().nullable(),
+    mediaLikeCount: z.number().int().nullable(),
+    /** TWO BASES, never summed (§2.3). */
+    tipTotalMills: mills.nullable(),
+    attachmentTipMills: mills.nullable(),
+    attachmentCount: z.number().int().nullable(),
+    pinned: z.boolean().nullable(),
+    occurredAt: isoTimestamp,
+    changedAt: isoTimestamp,
+    discoveredVia: z.string(),
+    /** The route has NO established pagination, so a suspiciously full page
+     *  marks its rows. The doubt belongs to the row because it outlives the
+     *  sweep that created it. */
+    possiblyTruncated: z.boolean(),
+    /** A later FULL walk stopped naming this comment. Never a delete. */
+    missingSince: isoTimestamp.nullable(),
+  })),
+  perPost: z.array(z.object({
+    postRef: z.string(),
+    commentCount: z.number().int(),
+    possiblyTruncatedCount: z.number().int(),
+    missingCount: z.number().int(),
+    oldestAt: isoTimestamp.nullable(),
+    newestAt: isoTimestamp.nullable(),
+  })),
+  /** WP-F2 ships `post_likes` EMPTY on Fansly: no like code is live-confirmed
+   *  ([E4]), so layer 2 writes nothing. Declared, not omitted — an omitted
+   *  panel is indistinguishable from a panel with nothing in it. */
+  likers: z.object({
+    state: z.literal("not_started"),
+    reason: z.literal("no_confirmed_like_code_e4"),
+    rows: z.array(z.object({
+      subjectKind: z.string(),
+      subjectRef: z.string(),
+      likerPlatformUserId: z.string(),
+      state: z.string(),
+      occurredAt: isoTimestamp,
+      discoveredVia: z.string(),
+    })),
+  }),
+  coverage: z.array(insightsCoverageRowSchema),
+  nextCursor: z.string().nullable(),
+});
+
+export const moneyRevenueMixQuerySchema = z.object({
+  from: businessDate,
+  to: businessDate,
+  limit: insightsLimitSchema.default(500),
+  cursor: insightsCursorSchema.optional(),
+});
+
+export const moneyRevenueMixResponseSchema = z.object({
+  page: insightsPageSchema,
+  window: z.object({ from: businessDate, to: businessDate }),
+  daily: z.array(z.object({
+    businessDate: businessDate,
+    /** RAW. One visible label maps to TWO live codes, legacy and current
+     *  (A22-2), and the ledger reaches back into legacy territory. */
+    typeCode: z.number().int(),
+    typeLabel: z.string(),
+    /** `legacy` / `current` / `single` — which half of a pair this code is. */
+    typeEra: z.enum(["legacy", "current", "single"]).nullable(),
+    mappingVersion: z.number().int(),
+    /** Stored separately and NEVER derived across bases. */
+    grossMills: mills.nullable(),
+    netMills: mills.nullable(),
+    lastObservedAt: isoTimestamp,
+  })),
+  months: z.array(z.object({
+    year: z.number().int(),
+    month: z.number().int(),
+    /** TRUE for the `(0, 0)` rolling-rollup row — the creator's Statements
+     *  header. It is NEVER summed with the real months, and it is flagged here
+     *  rather than filtered out so a reader sees why the totals differ. */
+    rollup: z.boolean(),
+    totalGrossMills: mills.nullable(),
+    totalNetMills: mills.nullable(),
+    topPercent: z.string().nullable(),
+    maxTopPercent: z.string().nullable(),
+    windowStart: isoTimestamp.nullable(),
+    windowEnd: isoTimestamp.nullable(),
+    lastObservedAt: isoTimestamp,
+  })),
+  coverage: z.array(insightsCoverageRowSchema),
+  nextCursor: z.string().nullable(),
+});
+
+export const moneyPayoutsQuerySchema = z.object({
+  limit: insightsLimitSchema.default(200),
+  cursor: insightsCursorSchema.optional(),
+});
+
+export const moneyPayoutsResponseSchema = z.object({
+  page: insightsPageSchema,
+  generatedAt: isoTimestamp,
+  requests: z.array(z.object({
+    payoutRef: z.string(),
+    /** MILLS with no scaling: the wire unit IS the kernel unit here. */
+    amountMills: mills.nullable(),
+    methodRef: z.string().nullable(),
+    /** RAW. 8 is the only code ever observed, and it is never treated as "the
+     *  success code" in a conditional. */
+    statusCode: z.number().int().nullable(),
+    statusLabel: z.string().nullable(),
+    statusConfidence: z.string(),
+    requestedAt: isoTimestamp.nullable(),
+    updatedAtPlatform: isoTimestamp.nullable(),
+    version: z.number().int().nullable(),
+  })),
+  /** MASKED. The full processor payload stays raw-journal-only under the
+   *  restricted class; provider 2 (Paxum) returns a plaintext email and the
+   *  ONLY sanctioned reader of that field is the WP-F7 canonicalizer, which
+   *  turns it into the mask served here. */
+  methods: z.array(z.object({
+    methodRef: z.string(),
+    providerId: z.number().int().nullable(),
+    providerLabel: z.string(),
+    type: z.number().int().nullable(),
+    flags: z.number().int().nullable(),
+    status: z.number().int().nullable(),
+    maskedLabel: z.string().nullable(),
+    metadataParseOk: z.boolean(),
+    missingSince: isoTimestamp.nullable(),
+  })),
+  coverage: z.array(insightsCoverageRowSchema),
+  nextCursor: z.string().nullable(),
 });
 
 export const routeSchemas = {
@@ -7198,6 +7773,125 @@ export const routeSchemas = {
       409: errorResponseSchema,
     },
   },
+  // --- WP-S1: the endpoints-cover serving surface (Fansly only, A28-2) -------
+  // Every one of the eight is `owner-session` + `scope: "page"`. That pairing is
+  // deliberate and is the whole access story for now: widening any of them to a
+  // chatter or agent principal is its own PR with its own gate. It is also what
+  // gates the money routes — `owner-session` IS the money scope on the REST
+  // surface (there is no separate money capability for cookie sessions; the
+  // `read:money` capability exists on the AGENT plane, whose datasets carry the
+  // same data behind it). `tests/contracts-auth-declarations.test.ts` pins both
+  // halves so a later widening cannot happen quietly.
+  statsTraffic: {
+    auth: { kind: "owner-session", scope: "page" },
+    tags: ["insights"],
+    summary: "Profile/media traffic buckets by RAW source code for one page",
+    params: pageParamsSchema,
+    querystring: statsTrafficQuerySchema,
+    response: {
+      200: statsTrafficResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
+  statsMedia: {
+    auth: { kind: "owner-session", scope: "page" },
+    tags: ["insights"],
+    summary: "Per-media traffic buckets, catalog head and top-media rankings",
+    params: pageParamsSchema,
+    querystring: statsMediaQuerySchema,
+    response: {
+      200: statsMediaResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
+  statsTags: {
+    auth: { kind: "owner-session", scope: "page" },
+    tags: ["insights"],
+    summary: "Top FYP tags per window plus platform-global tag counters",
+    params: pageParamsSchema,
+    querystring: statsTagsQuerySchema,
+    response: {
+      200: statsTagsResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
+  statsCoverage: {
+    auth: { kind: "owner-session", scope: "page" },
+    tags: ["insights"],
+    summary: "Capture coverage, per-lane budget state and the live long-tail cycle",
+    params: pageParamsSchema,
+    response: {
+      200: statsCoverageResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
+  contentMedia: {
+    auth: { kind: "owner-session", scope: "page" },
+    tags: ["insights"],
+    summary: "Content catalog: media, vault albums, tiers/plans, walls, automations",
+    params: pageParamsSchema,
+    querystring: contentMediaQuerySchema,
+    response: {
+      200: contentMediaResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
+  contentComments: {
+    auth: { kind: "owner-session", scope: "page" },
+    tags: ["insights"],
+    summary: "Post comments with pagination/truncation honesty; likers declared empty",
+    params: pageParamsSchema,
+    querystring: contentCommentsQuerySchema,
+    response: {
+      200: contentCommentsResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
+  moneyRevenueMix: {
+    auth: { kind: "owner-session", scope: "page" },
+    tags: ["insights"],
+    summary: "Daily revenue mix by RAW type code plus month totals incl. the rollup row",
+    params: pageParamsSchema,
+    querystring: moneyRevenueMixQuerySchema,
+    response: {
+      200: moneyRevenueMixResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
+  moneyPayouts: {
+    auth: { kind: "owner-session", scope: "page" },
+    tags: ["insights"],
+    summary: "Payout requests and MASKED payout methods (money-gated by owner-session)",
+    params: pageParamsSchema,
+    querystring: moneyPayoutsQuerySchema,
+    response: {
+      200: moneyPayoutsResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
 } as const;
 
 export type RouteSchemas = typeof routeSchemas;
@@ -7434,3 +8128,19 @@ export type DeviceTokenItem = z.infer<typeof deviceTokenItemSchema>;
 export type IssuedDeviceTokenResponse = z.infer<typeof issuedDeviceTokenResponseSchema>;
 export type AccessGrantItem = z.infer<typeof accessGrantItemSchema>;
 export type WorkboardClaimLeaseItem = z.infer<typeof workboardClaimLeaseSchema>;
+
+export type StatsTrafficQuery = z.infer<typeof statsTrafficQuerySchema>;
+export type StatsTrafficResponse = z.infer<typeof statsTrafficResponseSchema>;
+export type StatsMediaQuery = z.infer<typeof statsMediaQuerySchema>;
+export type StatsMediaResponse = z.infer<typeof statsMediaResponseSchema>;
+export type StatsTagsQuery = z.infer<typeof statsTagsQuerySchema>;
+export type StatsTagsResponse = z.infer<typeof statsTagsResponseSchema>;
+export type StatsCoverageResponse = z.infer<typeof statsCoverageResponseSchema>;
+export type ContentMediaQuery = z.infer<typeof contentMediaQuerySchema>;
+export type ContentMediaResponse = z.infer<typeof contentMediaResponseSchema>;
+export type ContentCommentsQuery = z.infer<typeof contentCommentsQuerySchema>;
+export type ContentCommentsResponse = z.infer<typeof contentCommentsResponseSchema>;
+export type MoneyRevenueMixQuery = z.infer<typeof moneyRevenueMixQuerySchema>;
+export type MoneyRevenueMixResponse = z.infer<typeof moneyRevenueMixResponseSchema>;
+export type MoneyPayoutsQuery = z.infer<typeof moneyPayoutsQuerySchema>;
+export type MoneyPayoutsResponse = z.infer<typeof moneyPayoutsResponseSchema>;

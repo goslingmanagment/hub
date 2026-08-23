@@ -1,0 +1,74 @@
+{
+  "_fixture": "SYNTHETIC. Shape from a live /uservault/albumsnew?accountId= capture (2026-08-19). A DIFFERENT resource from /vault/albumsnew: these are the account's own Likes/Purchases shelves, whose contents are OTHER creators' media, and they carry the extra `public`/`thumbnailId` keys plus the `albumContent` + `accountMedia` sidecars. THE UNIT TRAP LIVES HERE: `albums[].createdAt` and `albumContent[].createdAt` are MILLISECONDS while `accountMedia[].createdAt` is SECONDS, in one response. `itemCount` can be NULL.",
+  "albums": [
+    {
+      "id": "000900000000000201",
+      "accountId": "000900000000000001",
+      "public": 0,
+      "pos": 0,
+      "title": "Likes",
+      "description": null,
+      "type": 2002,
+      "status": 0,
+      "itemCount": null,
+      "lastItemId": null,
+      "thumbnailId": null,
+      "version": 0,
+      "createdAt": 1738606833000
+    },
+    {
+      "id": "000900000000000202",
+      "accountId": "000900000000000001",
+      "public": 0,
+      "pos": 1,
+      "title": "Purchases",
+      "description": null,
+      "type": 2007,
+      "status": 0,
+      "itemCount": 1,
+      "lastItemId": "000900000000000701",
+      "thumbnailId": "000900000000000702",
+      "version": 0,
+      "createdAt": 1737227397000
+    }
+  ],
+  "aggregationData": {
+    "media": [],
+    "accountMedia": [
+      {
+        "id": "000900000000000601",
+        "accountId": "000900000000000002",
+        "mediaId": "000900000000000602",
+        "previewId": null,
+        "permissionFlags": 0,
+        "price": 0,
+        "createdAt": 1786470514,
+        "deletedAt": null,
+        "deleted": false,
+        "permissions": { "permissionFlags": [] },
+        "likeCount": 0,
+        "media": {},
+        "liked": false,
+        "purchased": true,
+        "whitelisted": false,
+        "accountPermissionFlags": 0,
+        "access": true
+      }
+    ],
+    "accountMediaBundles": [],
+    "albumContent": [
+      {
+        "id": "000900000000000701",
+        "mediaOfferId": "000900000000000601",
+        "mediaOfferType": 2001,
+        "mediaOfferBundleId": null,
+        "mediaId": "000900000000000602",
+        "mediaType": 2,
+        "previewId": null,
+        "albumId": "000900000000000202",
+        "accountId": "000900000000000002",
+        "createdAt": 1786556663000
+      }
+    ]
+  }
+}

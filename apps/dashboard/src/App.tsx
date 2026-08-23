@@ -18,6 +18,7 @@ const WorkboardV2Page = lazy(() => import("./pages/WorkboardV2Page.js").then((m)
 const UsagePage = lazy(() => import("./pages/UsagePage.js").then((m) => ({ default: m.UsagePage })));
 const OfapiCreditsPage = lazy(() => import("./pages/OfapiCreditsPage.js").then((m) => ({ default: m.OfapiCreditsPage })));
 const AiAnalyticsPage = lazy(() => import("./pages/AiAnalyticsPage.js").then((m) => ({ default: m.AiAnalyticsPage })));
+const AnalyticsPage = lazy(() => import("./pages/AnalyticsPage.js").then((m) => ({ default: m.AnalyticsPage })));
 const AgentHydrationPage = lazy(() => import("./pages/AgentHydrationPage.js").then((m) => ({ default: m.AgentHydrationPage })));
 const SettingsPage = lazy(() => import("./pages/SettingsPage.js").then((m) => ({ default: m.SettingsPage })));
 const NotificationsPage = lazy(() => import("./pages/NotificationsPage.js").then((m) => ({ default: m.NotificationsPage })));
@@ -57,6 +58,9 @@ export function App() {
             <Route path="usage" element={<OwnerRoute><UsagePage /></OwnerRoute>} />
             <Route path="ofapi-credits" element={<OwnerRoute><OfapiCreditsPage /></OwnerRoute>} />
             <Route path="ai-analytics" element={<OwnerRoute><AiAnalyticsPage /></OwnerRoute>} />
+            {/* WP-S1. Owner-only, matching the routes behind it: every serving
+                endpoint this page calls declares `owner-session` + page scope. */}
+            <Route path="analytics" element={<OwnerRoute><AnalyticsPage /></OwnerRoute>} />
             <Route path="notifications" element={<OwnerRoute><NotificationsPage /></OwnerRoute>} />
             <Route path="agent-hydration" element={<OwnerRoute><AgentHydrationPage /></OwnerRoute>} />
             <Route

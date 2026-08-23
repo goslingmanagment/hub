@@ -29,6 +29,7 @@ import {
   upsertPagePoll,
   upsertPagePromoLink,
   upsertPageRecapStat,
+  upsertFanslyMediaTagStat,
   upsertPlatformTagDaily,
   upsertRevenueMixDaily,
   upsertRevenueMonthTotal,
@@ -49,6 +50,8 @@ const EVENT_PAGE_SIZE = 500;
 const FANSLY_STATS_EVENT_TYPES = new Set([
   "traffic.datapoint_observed",
   "media_traffic.datapoint_observed",
+  // WP-F4: per-media `topFypTags` rows.
+  "media_tag.stats_observed",
   "stats.window_top_observed",
   "tag.counters_observed",
   "earnings.breakdown_observed",
@@ -62,10 +65,24 @@ const FANSLY_STATS_EVENT_TYPES = new Set([
 
 /** The tables this projector truncates on rebuild. `capture_coverage` is
  *  ABSENT and must stay absent (§3.4). */
+/**
+ * WP-F3 made `page_promo_links` a two-writer table: this projector owns the
+ * `tracking` half, the catalog projector owns the `gift_code` half, and the
+ * kind is part of the table's PRIMARY KEY so the two row sets are structurally
+ * disjoint. Both rebuilds therefore scope their delete by kind — an unscoped
+ * one truncates rows the other projector's ledger owns.
+ */
+export const PROMO_LINKS_TABLE = "page_promo_links";
+export const STATS_PROMO_LINK_KIND = "tracking";
+
 export const FANSLY_STATS_PROJECTION_TABLES = [
   "stats_traffic_buckets",
   "stats_top_media",
   "stats_top_tags",
+  // WP-F4. Created by 0132 and left EMPTY by F1 on purpose; the per-media lane
+  // is what fills it, and a rebuild has to be able to reset it like any other
+  // fact projection.
+  "fansly_media_tag_stats",
   "platform_tag_daily",
   "revenue_mix_daily",
   "revenue_month_totals",
@@ -82,6 +99,7 @@ export interface FanslyStatsProjectionResult extends Record<string, unknown> {
   applied: number;
   trafficBuckets: number;
   topRows: number;
+  mediaTagRows: number;
   tagSamples: number;
   revenueDays: number;
   revenueMonths: number;
@@ -171,6 +189,7 @@ export async function runFanslyStatsProjection(
     applied: 0,
     trafficBuckets: 0,
     topRows: 0,
+    mediaTagRows: 0,
     tagSamples: 0,
     revenueDays: 0,
     revenueMonths: 0,
@@ -338,6 +357,44 @@ export async function runFanslyStatsProjection(
                 totals.topRows += 1;
                 totals.applied += 1;
               }
+            }
+            continue;
+          }
+
+          case "media_tag.stats_observed": {
+            // WP-F4. The WINDOW is part of the key: rank 2 of one window is not
+            // the same fact as rank 2 of the next, and a row without its window
+            // would let the newest ranking silently overwrite the history.
+            const mediaOfferRef = asText(data.mediaOfferRef);
+            const tagRef = asText(data.tagRef);
+            const periodMs = asInt(data.periodMs);
+            const requestedStart = isoDate(data.requestedStart);
+            const requestedEnd = isoDate(data.requestedEnd);
+            if (
+              mediaOfferRef === null || tagRef === null || periodMs === null || periodMs <= 0
+              || requestedStart === null || requestedEnd === null
+            ) {
+              continue;
+            }
+            const result = await upsertFanslyMediaTagStat(app.db, {
+              ...base,
+              mediaOfferRef,
+              tagRef,
+              periodMs,
+              requestedStart,
+              requestedEnd,
+              // NULL when the response's own tags[] join missed — never
+              // fabricated from the id.
+              tagName: asText(data.tagName),
+              rank: asInt(data.rank),
+              views: asInt(data.views),
+              previewViews: asInt(data.previewViews),
+              interactionTimeMs: asInt(data.interactionMs),
+              previewInteractionTimeMs: asInt(data.previewInteractionMs),
+            });
+            if (result.applied) {
+              totals.mediaTagRows += 1;
+              totals.applied += 1;
             }
             continue;
           }
@@ -590,7 +647,20 @@ export async function rebuildFanslyStatsProjection(
     if (input?.accountId != null) {
       const pageId = input.accountId;
       for (const table of FANSLY_STATS_PROJECTION_TABLES) {
-        await tx.execute(sql`delete from ${sql.identifier(table)} where page_id = ${pageId}`);
+        await tx.execute(
+          table === PROMO_LINKS_TABLE
+            // WP-F3: `page_promo_links` now has TWO writers, one per
+            // `link_kind` — this projector owns 'tracking', the catalog
+            // projector owns 'gift_code'. The kinds are disjoint by the table's
+            // own primary key, so an UNSCOPED delete here would truncate rows
+            // this replay cannot re-derive and leave a page's gift codes gone
+            // until somebody rebuilt the other projection too.
+            ? sql`
+              delete from page_promo_links
+               where page_id = ${pageId} and link_kind = ${STATS_PROMO_LINK_KIND}
+            `
+            : sql`delete from ${sql.identifier(table)} where page_id = ${pageId}`,
+        );
       }
       await tx.execute(sql`
         delete from projection_seq_watermarks
@@ -598,7 +668,11 @@ export async function rebuildFanslyStatsProjection(
       `);
     } else {
       for (const table of FANSLY_STATS_PROJECTION_TABLES) {
-        await tx.execute(sql`delete from ${sql.identifier(table)}`);
+        await tx.execute(
+          table === PROMO_LINKS_TABLE
+            ? sql`delete from page_promo_links where link_kind = ${STATS_PROMO_LINK_KIND}`
+            : sql`delete from ${sql.identifier(table)}`,
+        );
       }
       await tx.execute(sql`
         delete from projection_seq_watermarks where projection = ${FANSLY_STATS_PROJECTION}

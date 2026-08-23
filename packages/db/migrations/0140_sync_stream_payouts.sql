@@ -1,0 +1,29 @@
+-- WP-F7 stream vocabulary: `payouts`, the money-out lane.
+--
+-- Two routes, both GET, both verified live on 2026-08-20
+-- (`artifacts/fansly-payouts-capture-2026-08-20/`):
+--
+--   /payments/payoutmethods       the creator's own payout methods
+--   /payments/payout/requests     the payout-request history, offset-paged
+--
+-- `/account/wallets/earnings` is NOT part of this lane: it is already
+-- `getEarningsOverview` in the adapter, and the wallet earnings LEDGER
+-- (`/account/wallets/earnings/transactions`) is the existing `transactions`
+-- stream — verified by transaction id, not by resemblance (A28-1, A28-8).
+--
+-- DDL ONLY, and its own file, for the two reasons 0131/0133/0135/0137 state:
+--
+-- 1. `ALTER TYPE ... ADD VALUE` is fine inside a per-file transaction on
+--    PG >= 12, but the new value cannot be USED by a row insert in the same
+--    transaction (the 0060/0120 precedent). Keeping the enum alone in its file
+--    makes that impossible by construction.
+-- 2. §3.3's ordering rule: enum values may land early, but a stream enters the
+--    TS-side SYNC_STREAMS/PLATFORM_STREAMS unions only in the slice that ships
+--    its handler, gate, seed-pause, rollup exemption, monitor entry and gate
+--    registration. Enum-first, TS-last.
+--
+-- `media_stats` (WP-F4) is DELIBERATELY not added here: it arrives with the
+-- package that ships its handler, so an enum value can never name a lane that
+-- would throw "Unsupported executor stream" on dispatch, fleet-wide.
+
+ALTER TYPE "sync_stream" ADD VALUE IF NOT EXISTS 'payouts';

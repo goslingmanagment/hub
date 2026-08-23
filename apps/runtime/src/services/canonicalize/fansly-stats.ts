@@ -472,8 +472,97 @@ function accountStatsDrafts(
   ];
 }
 
-/** `/it/moie/statsnew` (WP-F4 calls it; the parser lands with F1 so the
- *  observation kind is claimed the day the capture can write it). */
+/**
+ * Per `dataset.topFypTags[]` row of a PER-MEDIA response — the finest FYP
+ * attribution Fansly exposes: which tags brought traffic to THIS item in THIS
+ * window.
+ *
+ * The rows carry five keys and no name (`{tagId, views, previewViews,
+ * interactionTime, previewInteractionTime}`, HAR 2026-08-19). The name is joined
+ * from the same response's `aggregationData.tags[]` and stays NULL when that
+ * join misses — never fabricated from the id, which is the same rule
+ * `stats_top_tags` follows.
+ *
+ * ONE EVENT PER TAG PER WINDOW, not one per window carrying all the tags: unlike
+ * the account response's ≤50-row top-N rankings, a per-media tag row has stable
+ * identity across captures — `(media, tag, window)` — and the projection is keyed
+ * on exactly that. The window IS part of the key, so rank 2 of one window never
+ * overwrites rank 2 of the next.
+ */
+function mediaTagStatsDrafts(
+  observation: CanonicalizableObservation,
+  dataset: Record<string, unknown>,
+  aggregation: Record<string, unknown>,
+  window: StatsWindow,
+  mediaOfferRef: string,
+): CanonicalEventDraft[] {
+  const rows = recordArray(dataset.topFypTags);
+  if (rows.length === 0) {
+    return [];
+  }
+  const pageRef = pageRefOf(observation);
+  const tagNames = new Map<string, string>();
+  for (const tag of recordArray(aggregation.tags)) {
+    const tagRef = asString(tag.id);
+    const name = asString(tag.tag);
+    if (tagRef !== null && name !== null) {
+      tagNames.set(tagRef, name);
+    }
+  }
+  const drafts: CanonicalEventDraft[] = [];
+  const seen = new Set<string>();
+  for (const [rank, row] of rows.entries()) {
+    const tagRef = asString(row.tagId) ?? asString(row.id);
+    if (tagRef === null || seen.has(tagRef)) {
+      continue;
+    }
+    seen.add(tagRef);
+    const material = {
+      mediaOfferRef,
+      tagRef,
+      // NULL when the join missed. An unnamed tag is a tag we cannot name.
+      tagName: tagNames.get(tagRef) ?? null,
+      rank,
+      periodMs: window.periodMs,
+      requestedStart: window.requestedStartIso,
+      requestedEnd: window.requestedEndIso,
+      // Absent = null. These rows carry no video fields either.
+      views: nonNegativeCount(row.views),
+      previewViews: nonNegativeCount(row.previewViews),
+      interactionMs: nonNegativeCount(row.interactionTime),
+      previewInteractionMs: nonNegativeCount(row.previewInteractionTime),
+    };
+    const hash = contentHash(material);
+    drafts.push({
+      type: "media_tag.stats_observed",
+      occurredAt: observation.receivedAt,
+      data: { ...material, contentHash: hash },
+      schemaVersion: SCHEMA_VERSION,
+      dedupKey: `mediatag:v1:${pageRef}:${mediaOfferRef}:${tagRef}:${window.periodMs}:`
+        + `${window.requestedStartIso}:${window.requestedEndIso}:${hash}`,
+    });
+  }
+  return drafts;
+}
+
+/**
+ * `/it/moie/statsnew` — the WP-F4 per-media response.
+ *
+ * The kind was registered by F1 so it would be parseable the day the capture
+ * could write it; WP-F4 is what completes it. Two event families come out:
+ * `media_traffic.datapoint_observed` per bucket row (the SAME type and shape the
+ * account-level media datapoints mint, with `subjectKind='media_offer'`), and
+ * `media_tag.stats_observed` per `topFypTags` row.
+ *
+ * THE SUBJECT IS `dataset.datasetMediaOfferId` — that is the key the route
+ * actually serves (6/6 live responses). The other two spellings are tried after
+ * it because a body that cannot be attributed has unusable buckets and
+ * tolerating a rename costs nothing.
+ *
+ * VIDEO FIELDS ARE ABSENT BY CONSTRUCTION HERE. All six observed responses
+ * carried exactly seven stat keys and no video keys, even for a video asset, so
+ * those columns come out NULL — absence, never zero ([E5]).
+ */
 function mediaOfferStatsDrafts(
   observation: CanonicalizableObservation,
   context: CanonicalizeRunContext | undefined,
@@ -481,25 +570,32 @@ function mediaOfferStatsDrafts(
   if (!isRecord(observation.payload)) {
     return [];
   }
-  const dataset = isRecord(observation.payload.dataset) ? observation.payload.dataset : null;
+  const payload = observation.payload;
+  const dataset = isRecord(payload.dataset) ? payload.dataset : null;
   if (dataset === null) {
     return [];
   }
-  const subjectRef = asString(observation.payload.mediaOfferId)
+  const subjectRef = asString(dataset.datasetMediaOfferId)
     ?? asString(dataset.mediaOfferId)
+    ?? asString(payload.mediaOfferId)
     ?? "";
   if (subjectRef === "") {
     // Without the subject the buckets are unattributable. The body stays in the
     // journal and a later version can attribute it from request_params.
     return [];
   }
-  return mediaTrafficDrafts(
-    observation,
-    dataset,
-    statsWindow(dataset),
-    context?.diagnostics,
-    subjectRef,
-  );
+  const aggregation = isRecord(payload.aggregationData) ? payload.aggregationData : {};
+  const window = statsWindow(dataset);
+  return [
+    ...mediaTrafficDrafts(
+      observation,
+      dataset,
+      window,
+      context?.diagnostics,
+      subjectRef,
+    ),
+    ...mediaTagStatsDrafts(observation, dataset, aggregation, window, subjectRef),
+  ];
 }
 
 // ── earnings ─────────────────────────────────────────────────────────────────

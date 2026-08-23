@@ -299,6 +299,15 @@ export const FANSLY_GROUPS_CAPTURE_MAPPER_VERSION =
  *  re-labelling unrelated captures. */
 export const FANSLY_NOTIFICATIONS_CAPTURE_MAPPER_VERSION =
   `${FANSLY_MAPPER_VERSION}+notifications-capture-v1`;
+/** WP-F3's catalog lane, same reasoning as WP-F2's. */
+export const FANSLY_CATALOG_CAPTURE_MAPPER_VERSION =
+  `${FANSLY_MAPPER_VERSION}+catalog-capture-v1`;
+/** WP-F5's replies walk, same reasoning again. */
+export const FANSLY_POST_REPLIES_CAPTURE_MAPPER_VERSION =
+  `${FANSLY_MAPPER_VERSION}+post-replies-capture-v1`;
+/** WP-F7's payouts lane, same reasoning again. */
+export const FANSLY_PAYOUTS_CAPTURE_MAPPER_VERSION =
+  `${FANSLY_MAPPER_VERSION}+payouts-capture-v1`;
 
 /** Shared by both lanes: pick the allowlisted fields VERBATIM (objects and
  *  arrays keep their served shape), in allowlist order so an unchanged profile
@@ -346,6 +355,81 @@ function trimFanslyAggregatedAccounts(accounts: unknown) {
  * nothing that was not served.
  */
 export function trimFanslyNotificationsPayload(raw: unknown) {
+  if (!isRecord(raw) || !Object.hasOwn(raw, "accounts")) {
+    return raw;
+  }
+  return { ...raw, accounts: trimFanslyAggregatedAccounts(raw.accounts) };
+}
+
+/**
+ * [A20] on the WP-F3 catalog lane.
+ *
+ * NONE of the six catalog responses carried an `accounts[]` sidecar in the
+ * 2026-08-19 capture — and the trim runs anyway, on BOTH the shapes Fansly uses
+ * for it (`accounts` at the top level, and `aggregationData.accounts`). That is
+ * deliberate. A27's standing caveat is that one response is one example:
+ * optional sidecars are invisible in a single sample, `/post` and
+ * `/notifications` both serve `accounts[]` from the same envelope family, and
+ * the day this lane's `/account/media?ids=` starts returning one, `lastSeenAt`
+ * would enter the journal on a DAILY sweep and quietly cost the dedup collapse
+ * the disk budget rests on. A no-op guard is cheaper than that discovery.
+ *
+ * Everything else passes through UNTOUCHED — `albums`, `albumMedia`, `media`
+ * (with its signed `location`/`variants`, journal-only), `accountMedia`,
+ * `albumContent`, `plans`, `promos` and every key the platform starts serving
+ * tomorrow. DP 7 says journal verbatim; [A20] narrowed exactly one array.
+ *
+ * A payload with neither shape comes back BYTE-IDENTICAL — the trim adds
+ * nothing that was not served.
+ */
+export function trimFanslyCatalogPayload(raw: unknown) {
+  if (!isRecord(raw)) {
+    return raw;
+  }
+  const hasTopLevel = Object.hasOwn(raw, "accounts");
+  const aggregation = isRecord(raw.aggregationData) ? raw.aggregationData : null;
+  const hasNested = aggregation !== null && Object.hasOwn(aggregation, "accounts");
+  if (!hasTopLevel && !hasNested) {
+    return raw;
+  }
+  return {
+    ...raw,
+    ...(hasTopLevel ? { accounts: trimFanslyAggregatedAccounts(raw.accounts) } : {}),
+    ...(hasNested && aggregation !== null
+      ? {
+        aggregationData: {
+          ...aggregation,
+          accounts: trimFanslyAggregatedAccounts(aggregation.accounts),
+        },
+      }
+      : {}),
+  };
+}
+
+/**
+ * [A20] on the WP-F5 replies walk.
+ *
+ * WP-F9's shape probe read a `/post/{id}/replies` response and found the
+ * embedded `accounts[]` entry is a FULL account record — `lastSeenAt`, `notes`,
+ * `containingLists`, `subscriberSubscription`, `statusId`, `followCount`,
+ * `subscriberCount`, and an `avatar` carrying signed CDN locations.
+ * `lastSeenAt` changes every minute; journaling it would make every body unique
+ * and destroy the content-address dedup collapse the whole disk budget rests
+ * on. On a lane that re-reads a back-catalogue of thousands of posts, that is
+ * the difference between an archive that costs kilobytes a day and one that
+ * grows without bound.
+ *
+ * So `accounts[]` — and ONLY `accounts[]` — goes through the 18-field
+ * allowlist. `posts` (the replies themselves, bodies and all), `aggregatedPosts`,
+ * `accountMedia`, `accountMediaBundles`, `tips`, `tipGoals`, `stories`, `polls`
+ * and every key the platform starts serving tomorrow pass through UNTOUCHED:
+ * DP 7 says journal verbatim and [A20] narrowed exactly one array.
+ *
+ * A payload with no `accounts` key — which is 2 of the 5 captured responses, and
+ * the reason the author-hydration fallback is mandatory — comes back
+ * BYTE-IDENTICAL. So does the adapter's `{__empty: true}` marker.
+ */
+export function trimFanslyPostRepliesPayload(raw: unknown) {
   if (!isRecord(raw) || !Object.hasOwn(raw, "accounts")) {
     return raw;
   }

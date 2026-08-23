@@ -1,5 +1,6 @@
 import {
   assertOwnedPageSyncLease,
+  countPostEngagementRefreshProgress,
   createOrGetOfapiCaptureJob,
   findActiveOfapiCaptureJobBySlot,
   findPageById,
@@ -7,13 +8,22 @@ import {
   getOfapiCaptureJob,
   listPagesByPlatform,
   listPageSyncStates,
+  listPostEngagementRefreshChunk,
   pausePageSync,
+  postEngagementIntervalDays,
+  recordPostEngagementRefreshFailures,
+  recordPostEngagementRefreshVisits,
+  seedPostEngagementQueue,
   upsertCheckpoint,
   upsertCheckpointProgress,
   type PageSyncLease,
+  type PostEngagementRefreshCandidate,
 } from "@agency_hub_core/db";
+import { POST_BATCH_SIZE } from "@agency_hub_core/fansly";
+import type { HttpRequestEvent, HttpRequestObserver } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
+import { loadEffectiveConfig } from "../effective-config.ts";
 import { resolveFanslyPlatformAccountId } from "../fansly.ts";
 import { isOfapiBackgroundCaptureRunnable } from "../ofapi-capture-jobs.ts";
 import type { ResolvedPageContext } from "../page-context.ts";
@@ -137,7 +147,63 @@ export type PostsCursorState = {
   /** Durable because a refresh may cross chunk or request-generation bounds. */
   fanslyRecentRefreshAnchorReached: boolean;
   completedAt: string | null;
+  /** WP-F6. The engagement refresh phase's own state, carried ACROSS request
+   *  generations: the timeline walk restarts every cadence, the day's call
+   *  count and the seeding sweep must not. */
+  fanslyPostEngagement: PostsEngagementCursor;
 };
+
+/** WP-F6: the engagement phase's durable state, nested inside the posts cursor
+ *  because the phase rides the EXISTING `posts` stream and a stream has one
+ *  checkpoint. Its call counter is SEPARATE from the timeline walk's budget by
+ *  construction — the timeline is not capped, and capping it here would let a
+ *  refresh phase starve the capture the whole system depends on. */
+export type PostsEngagementCursor = {
+  /** The UTC day `callsToday` belongs to; a different day resets the counter. */
+  utcDay: string | null;
+  /** HTTP ATTEMPTS this phase spent on `utcDay`. Retries included. */
+  callsToday: number;
+  /** Keyset cursor of the first-enable seeding sweep over `creator_posts`. */
+  seedCursor: string | null;
+  seedComplete: boolean;
+};
+
+export function emptyPostsEngagementCursor(): PostsEngagementCursor {
+  return { utcDay: null, callsToday: 0, seedCursor: null, seedComplete: false };
+}
+
+function parsePostsEngagementCursor(value: unknown): PostsEngagementCursor {
+  const state = asRecord(value);
+  if (!state) {
+    // Legacy checkpoints predate the phase. An absent block is "never run",
+    // not a parse failure: refusing the whole cursor here would restart the
+    // timeline walk from the head on the deploy that ships WP-F6.
+    return emptyPostsEngagementCursor();
+  }
+  const utcDay = typeof state.utcDay === "string" && state.utcDay.length > 0
+    ? state.utcDay
+    : null;
+  const callsToday = typeof state.callsToday === "number"
+      && Number.isSafeInteger(state.callsToday) && state.callsToday >= 0
+    ? state.callsToday
+    : 0;
+  const seedCursor = typeof state.seedCursor === "string" && state.seedCursor.length > 0
+    ? state.seedCursor
+    : null;
+  return { utcDay, callsToday, seedCursor, seedComplete: state.seedComplete === true };
+}
+
+/** A new UTC day resets the attempt counter and NOTHING else: a seeding sweep
+ *  is durable progress, not a daily allowance. */
+export function rollPostsEngagementUtcDay(
+  engagement: PostsEngagementCursor,
+  now: Date,
+): PostsEngagementCursor {
+  const today = now.toISOString().slice(0, 10);
+  return engagement.utcDay === today
+    ? engagement
+    : { ...engagement, utcDay: today, callsToday: 0 };
+}
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -240,6 +306,7 @@ export function parsePostsCursorState(value: unknown): PostsCursorState | null {
       ? state.fanslyRecentRefreshAnchorReached
       : undefined;
   const completedAt = nullableString(state.completedAt);
+  const fanslyPostEngagement = parsePostsEngagementCursor(state.fanslyPostEngagement);
   if (
     typeof revision !== "number" || !Number.isSafeInteger(revision) || revision < 0 ||
     headPostId === undefined || anchorPostId === undefined || capturedHeadPostId === undefined ||
@@ -270,6 +337,7 @@ export function parsePostsCursorState(value: unknown): PostsCursorState | null {
     fanslyRecentRefreshCutoffAt,
     fanslyRecentRefreshAnchorReached,
     completedAt,
+    fanslyPostEngagement,
   };
 }
 
@@ -318,6 +386,11 @@ function freshState(
   fanslyPostTipsBackfilledAt: string | null = null,
   fanslyPostTipsCaptureVersion: 1 | null = null,
   fanslyRecentRefreshCutoffAt: string | null = null,
+  // WP-F6: a new request generation restarts the TIMELINE walk. It must not
+  // restart the engagement phase's day counter (which would double the day's
+  // egress at every cadence boundary) or its seeding sweep (which would
+  // re-scan the whole back catalogue).
+  fanslyPostEngagement: PostsEngagementCursor = emptyPostsEngagementCursor(),
 ): PostsCursorState {
   return {
     version: 1,
@@ -334,6 +407,7 @@ function freshState(
     fanslyRecentRefreshCutoffAt,
     fanslyRecentRefreshAnchorReached: false,
     completedAt: null,
+    fanslyPostEngagement,
   };
 }
 
@@ -366,6 +440,302 @@ function fanslyRecentRefreshCutoff(now: Date) {
   return new Date(
     now.getTime() - FANSLY_RECENT_POST_REFRESH_LOOKBACK_DAYS * DAY_MS,
   ).toISOString();
+}
+
+// ── WP-F6: the engagement refresh phase ──────────────────────────────────────
+//
+// ONE decayed `GET /post?ids=<csv>` read per dispatch, on the EXISTING `posts`
+// stream, journaled under the EXISTING `posts` kind so the v6 family parses it
+// exactly like a timeline page. No new stream, no new flag on the lane, no new
+// dataset — the phase's whole job is to make the counters this system already
+// stores STAY true after publication.
+//
+// WHY IT IS A SEPARATE PHASE AND NOT MORE TIMELINE PAGES. The timeline is
+// newest-first and the bounded refresh only walks back 14 days: a post from
+// last spring is never re-read by it, so its like count is frozen at whatever it
+// was the week it was published. `GET /post?ids=` reads any hundred posts by id,
+// which is the only shape that can re-read a back catalogue at all.
+//
+// WHY IT RUNS AFTER THE WALK. The timeline is how this system learns a post
+// EXISTS; the refresh only updates numbers on posts it already has. So the
+// phase runs only once the walk has completed for this request generation, and
+// takes whatever chunk budget is left. A page whose timeline is still being
+// backfilled spends nothing here.
+//
+// BURST SHAPE, NOT DAILY VOLUME, IS THE BAN-RISK SURFACE (§6.1). One batch per
+// dispatch, then a jittered continuation — the same discipline WP-F5's walk
+// uses, reusing WP-F1's `fanslyBackfillContinuationDelayMs` ± 30 %.
+
+/** Roots seeded per dispatch on first enable. Bounded so a page with thousands
+ *  of posts does not hold a write lock for a second, and keyset so the next
+ *  batch resumes exactly where this one stopped. Costs ZERO platform calls. */
+const ENGAGEMENT_SEED_BATCH_SIZE = 500;
+
+/** WP-F1's continuation spread, restated here rather than imported so the posts
+ *  lane does not take a runtime dependency on the replies lane's module. */
+const ENGAGEMENT_JITTER_FRACTION = 0.3;
+
+export function engagementContinuationAt(
+  now: Date,
+  delayMs: number,
+  random: () => number = Math.random,
+): Date {
+  const jitter = 1 + (random() * 2 - 1) * ENGAGEMENT_JITTER_FRACTION;
+  return new Date(now.getTime() + Math.max(0, Math.round(delayMs * jitter)));
+}
+
+function nextUtcDayStart(now: Date): Date {
+  return new Date(Date.UTC(
+    now.getUTCFullYear(),
+    now.getUTCMonth(),
+    now.getUTCDate() + 1,
+    0,
+    5,
+    0,
+  ));
+}
+
+/** Counts HTTP ATTEMPTS, retries included — the unit the cap is enforced in.
+ *  `SyncChunkBudget` counts the same events but is scoped to one chunk; the day
+ *  counter has to survive chunks, leases and restarts, so it lives in the
+ *  cursor and this observer is what feeds it. */
+class EngagementAttemptCounter implements HttpRequestObserver {
+  private attempts = 0;
+
+  async onRequestEvent(event: HttpRequestEvent) {
+    if (event.state === "started") {
+      this.attempts += 1;
+    }
+  }
+
+  take(): number {
+    const attempts = this.attempts;
+    this.attempts = 0;
+    return attempts;
+  }
+}
+
+type EngagementPhaseOutcome = {
+  engagement: PostsEngagementCursor;
+  stats: Record<string, unknown>;
+  /** Set when the phase stopped at its daily cap. */
+  deferred: string | null;
+  /** True when posts are still due and there is budget to reach them. */
+  moreWork: boolean;
+};
+
+type EngagementPhaseInput = {
+  pageId: number;
+  syncRunId: number;
+  budget: SyncChunkBudget;
+  telemetry: SyncRunTelemetry;
+  requestContext: Parameters<AppContext["adapter"]["getPostsByIds"]>[0];
+  attempts: EngagementAttemptCounter;
+  now: Date;
+  dailyCap: number;
+};
+
+async function runPostEngagementPhase(
+  app: AppContext,
+  input: EngagementPhaseInput,
+  previous: PostsEngagementCursor,
+): Promise<EngagementPhaseOutcome> {
+  let engagement = rollPostsEngagementUtcDay(previous, input.now);
+  let journaled = 0;
+  let refreshed = 0;
+  let failed = 0;
+  let deferred: string | null = null;
+  let moreWork = false;
+  const tiers: Record<string, number> = {};
+
+  // ── SEEDING ────────────────────────────────────────────────────────────────
+  // First enable only, bounded and keyset, ZERO platform calls: `creator_posts`
+  // is already in the database. Everything published AFTERWARDS is queued by the
+  // creator-posts projector in the same transaction as its own upsert, so the
+  // sweep never has to run twice.
+  if (!engagement.seedComplete) {
+    for (;;) {
+      const seeded = await seedPostEngagementQueue(app.db, {
+        pageId: input.pageId,
+        afterSubjectRef: engagement.seedCursor,
+        limit: ENGAGEMENT_SEED_BATCH_SIZE,
+        dueAt: input.now,
+      });
+      engagement = { ...engagement, seedCursor: seeded.cursor };
+      if (seeded.scanned < ENGAGEMENT_SEED_BATCH_SIZE) {
+        engagement = { ...engagement, seedComplete: true };
+        break;
+      }
+      if (!input.budget.hasWallClockCapacity()) {
+        break;
+      }
+    }
+  }
+
+  const finish = async (): Promise<EngagementPhaseOutcome> => {
+    const progress = await countPostEngagementRefreshProgress(app.db, input.pageId);
+    return {
+      engagement,
+      deferred,
+      moreWork,
+      stats: {
+        journaled,
+        callsToday: engagement.callsToday,
+        dailyCap: input.dailyCap,
+        batchSize: POST_BATCH_SIZE,
+        seedComplete: engagement.seedComplete,
+        refreshedThisChunk: refreshed,
+        failedThisChunk: failed,
+        tiersThisChunk: tiers,
+        subjectsKnown: progress.subjectsKnown,
+        subjectsRefreshed: progress.subjectsRefreshed,
+        subjectsDirty: progress.subjectsDirty,
+        postsKnown: progress.postsKnown,
+        ...(deferred === null ? {} : { deferred }),
+      },
+    };
+  };
+
+  if (engagement.callsToday >= input.dailyCap) {
+    deferred = "engagement_daily_call_budget";
+    return finish();
+  }
+  if (!input.budget.hasRequestCapacity(1) || !input.budget.hasWallClockCapacity()) {
+    moreWork = true;
+    return finish();
+  }
+
+  const candidates: PostEngagementRefreshCandidate[] = await listPostEngagementRefreshChunk(
+    app.db,
+    { pageId: input.pageId, limit: POST_BATCH_SIZE, now: input.now },
+  );
+  if (candidates.length === 0) {
+    return finish();
+  }
+  // A full batch almost certainly means more posts are due; the continuation is
+  // jittered either way.
+  moreWork = candidates.length >= POST_BATCH_SIZE;
+
+  const ids = candidates.map((candidate) => candidate.subjectRef);
+  await assertOwnedPageSyncLease(app.db);
+  let response: Awaited<ReturnType<AppContext["adapter"]["getPostsByIds"]>>;
+  try {
+    response = await app.adapter.getPostsByIds(input.requestContext, ids);
+  } catch (error) {
+    // The attempts are spent whether or not a body came back; fold them in
+    // before anything else so a failing batch cannot be retried for free.
+    engagement = {
+      ...engagement,
+      callsToday: engagement.callsToday + input.attempts.take(),
+    };
+    // A dead session is the executor's business: re-raise it untouched so the
+    // auth pause fires. Everything else is scoped to ONE batch — the timeline
+    // walk has already completed and must not be undone by a refresh failure.
+    if (isFanslyAuthFailure(error)) {
+      throw error;
+    }
+    failed = ids.length;
+    await input.telemetry.addAnomaly({
+      code: "fansly_post_engagement_batch_failed",
+      severity: "warn",
+      message: "Fansly post engagement refresh failed for one batch; the queue continues",
+      details: { idCount: ids.length },
+    });
+    await recordPostEngagementRefreshFailures(app.db, {
+      pageId: input.pageId,
+      subjectRefs: ids,
+      nextDueAt: new Date(input.now.getTime() + DAY_MS),
+    });
+    return finish();
+  }
+
+  // JOURNAL FIRST, ALWAYS — before the contract is inspected and before any
+  // queue row moves. The request params name the phase and the ids so a future
+  // parser can tell an engagement re-read from a timeline page in the same kind.
+  await persistRawPayload(app.db, {
+    platformAccountId: input.pageId,
+    syncRunId: input.syncRunId,
+    endpoint: "posts",
+    requestParams: { phase: "engagement", ids },
+    responsePayload: response.raw,
+    mapperVersion: FANSLY_POSTS_MAPPER_VERSION,
+    payloadKind: "posts",
+    retainUntil: retentionDate(),
+  }, {
+    action: "inserting Fansly post engagement refresh raw payload",
+    platform: "fansly",
+  });
+  journaled += 1;
+  engagement = {
+    ...engagement,
+    callsToday: engagement.callsToday + input.attempts.take(),
+  };
+
+  if (!response.contractAccepted) {
+    // Journaled above, refused as an ANSWER: recording "these posts were
+    // refreshed" from a body we cannot read is how a decay queue lies about its
+    // own coverage. The batch is retried tomorrow.
+    failed = ids.length;
+    await input.telemetry.addAnomaly({
+      code: "fansly_post_engagement_contract_drift",
+      severity: "warn",
+      message: "Fansly post batch read drifted away from {posts: [...]}; raw capture retained",
+      details: { idCount: ids.length },
+    });
+    await recordPostEngagementRefreshFailures(app.db, {
+      pageId: input.pageId,
+      subjectRefs: ids,
+      nextDueAt: new Date(input.now.getTime() + DAY_MS),
+    });
+    return finish();
+  }
+
+  // Only the posts the response actually NAMED count as refreshed. An id the
+  // provider dropped from the batch is not a post whose counters we have seen,
+  // and marking it visited would retire it from the never-refreshed band on the
+  // strength of a silence.
+  const served = new Set(
+    response.items
+      .map((post) => (typeof post.id === "string" ? post.id : null))
+      .filter((id): id is string => id !== null),
+  );
+  const visits = candidates
+    .filter((candidate) => served.has(candidate.subjectRef))
+    .map((candidate) => {
+      tiers[candidate.tier] = (tiers[candidate.tier] ?? 0) + 1;
+      return {
+        subjectRef: candidate.subjectRef,
+        tier: candidate.tier,
+        nextDueAt: new Date(
+          input.now.getTime() + postEngagementIntervalDays(candidate.tier) * DAY_MS,
+        ),
+      };
+    });
+  const unserved = ids.filter((id) => !served.has(id));
+  await recordPostEngagementRefreshVisits(app.db, {
+    pageId: input.pageId,
+    visits,
+    visitedAt: input.now,
+  });
+  if (unserved.length > 0) {
+    failed = unserved.length;
+    await recordPostEngagementRefreshFailures(app.db, {
+      pageId: input.pageId,
+      subjectRefs: unserved,
+      nextDueAt: new Date(input.now.getTime() + DAY_MS),
+    });
+  }
+  refreshed = visits.length;
+
+  if (engagement.callsToday >= input.dailyCap) {
+    deferred = "engagement_daily_call_budget";
+  }
+  return finish();
+}
+
+function isFanslyAuthFailure(error: unknown): boolean {
+  const status = (error as { status?: unknown } | null)?.status;
+  return status === 401 || status === 403;
 }
 
 export async function fanslyPostsChunk(
@@ -407,19 +777,113 @@ export async function fanslyPostsChunk(
         fanslyPostTipsBackfilledAt === null
           ? null
           : fanslyRecentRefreshCutoff(now),
+        // Durable across request generations — see freshState's note.
+        previous?.fanslyPostEngagement ?? emptyPostsEngagementCursor(),
       );
 
+  // ── WP-F6: the engagement refresh phase's gate, read LIVE per chunk ────────
+  // Deliberately NOT a gate on the timeline walk: the flag being off must leave
+  // the `posts` lane behaving exactly as it did before this package.
+  const effective = await loadEffectiveConfig(app.db, app.config);
+  const engagementEnabled = effective.fanslyPostEngagementRefreshEnabled === true;
+  const engagementDailyCap = Math.max(1, effective.fanslyPostEngagementDailyCallBudget ?? 40);
+  const engagementDelayMs = Math.max(0, effective.fanslyBackfillContinuationDelayMs ?? 20_000);
+
+  const engagementAttempts = new EngagementAttemptCounter();
+  const requestContext = {
+    session: input.pageContext.session,
+    proxy: input.pageContext.proxy,
+    egressKey: input.pageContext.egressKey,
+    requestObserver: composeRequestObservers(
+      input.telemetry.getRequestObserver(),
+      input.budget,
+      engagementAttempts,
+    ),
+    rateLimitWaiter: createSyncRateLimitWaiter(app, input.pageContext),
+  };
+  const accountId = resolveFanslyPlatformAccountId(input.pageContext.page);
+
+  /**
+   * The ONE exit for a chunk whose timeline walk is done.
+   *
+   * Every such path runs the refresh phase (when enabled) and then reports both
+   * halves — walk stats and engagement stats — from one place, so a dispatch
+   * that only refreshed counters still says what the walk's position is.
+   */
+  const finishWithEngagement = async (
+    walkStats: Record<string, unknown>,
+    persist: "complete" | "progress",
+  ): Promise<StreamChunkResult> => {
+    // The phase is the only thing the flag gates. A completed walk still writes
+    // its completion checkpoint exactly as it did before this package — turning
+    // the flag off must not change one byte of the timeline lane's behaviour.
+    const phase = engagementEnabled
+      ? await runPostEngagementPhase(app, {
+        pageId: input.pageContext.page.id,
+        syncRunId: input.syncRunId,
+        budget: input.budget,
+        telemetry: input.telemetry,
+        requestContext,
+        attempts: engagementAttempts,
+        now,
+        dailyCap: engagementDailyCap,
+      }, state.fanslyPostEngagement)
+      : null;
+    if (phase !== null) {
+      state = { ...state, fanslyPostEngagement: phase.engagement };
+    }
+    if (persist === "complete") {
+      const completed = await upsertCheckpoint(app.db, {
+        platformAccountId: input.pageContext.page.id,
+        stream: "posts",
+        cursorText: state.headPostId,
+        state,
+        lastSuccessfulRunId: input.syncRunId,
+      });
+      await input.telemetry.recordCheckpointAdvanced("posts", summarizeCheckpoint(completed));
+    } else if (phase !== null) {
+      // The already-complete early return wrote nothing before; it writes now
+      // only because the phase moved the day counter or the seeding cursor.
+      const advanced = await upsertCheckpointProgress(app.db, {
+        platformAccountId: input.pageContext.page.id,
+        stream: "posts",
+        cursorText: state.headPostId,
+        state,
+      });
+      await input.telemetry.recordCheckpointAdvanced("posts", summarizeCheckpoint(advanced));
+    }
+    if (phase === null) {
+      return { satisfied: true, yieldReason: null, stats: walkStats };
+    }
+    const stats = { ...walkStats, engagement: phase.stats };
+    if (phase.deferred !== null) {
+      // Crossed the cap: come back after the UTC roll. The response already
+      // fetched was journaled before the counter was consulted.
+      return {
+        satisfied: false,
+        yieldReason: null,
+        continuationRetryAt: nextUtcDayStart(now),
+        stats,
+      };
+    }
+    if (phase.moreWork) {
+      return {
+        satisfied: false,
+        yieldReason: null,
+        continuationRetryAt: engagementContinuationAt(now, engagementDelayMs),
+        stats,
+      };
+    }
+    return { satisfied: true, yieldReason: null, stats };
+  };
+
   if (state.completedAt !== null) {
-    return {
-      satisfied: true,
-      yieldReason: null,
-      stats: {
-        pages: state.pageIndex,
-        headPostId: state.headPostId,
-        anchorReached: state.fanslyRecentRefreshAnchorReached,
-        recentRefreshCutoffAt: state.fanslyRecentRefreshCutoffAt,
-      },
-    };
+    return finishWithEngagement({
+      pages: state.pageIndex,
+      headPostId: state.headPostId,
+      anchorReached: state.fanslyRecentRefreshAnchorReached,
+      recentRefreshCutoffAt: state.fanslyRecentRefreshCutoffAt,
+    }, "progress");
   }
   if (state.pageIndex === 0 && state.before === "0") {
     const initialized = await upsertCheckpointProgress(app.db, {
@@ -431,14 +895,6 @@ export async function fanslyPostsChunk(
     await input.telemetry.recordCheckpointAdvanced("posts", summarizeCheckpoint(initialized));
   }
 
-  const requestContext = {
-    session: input.pageContext.session,
-    proxy: input.pageContext.proxy,
-    egressKey: input.pageContext.egressKey,
-    requestObserver: composeRequestObservers(input.telemetry.getRequestObserver(), input.budget),
-    rateLimitWaiter: createSyncRateLimitWaiter(app, input.pageContext),
-  };
-  const accountId = resolveFanslyPlatformAccountId(input.pageContext.page);
   let captured = 0;
   let postTipsContractDrifts = 0;
   let postTipsScopeDrifts = 0;
@@ -571,29 +1027,17 @@ export async function fanslyPostsChunk(
         fanslyRecentRefreshAnchorReached: anchorReached,
         completedAt,
       };
-      const completed = await upsertCheckpoint(app.db, {
-        platformAccountId: input.pageContext.page.id,
-        stream: "posts",
-        cursorText: state.headPostId,
-        state,
-        lastSuccessfulRunId: input.syncRunId,
-      });
-      await input.telemetry.recordCheckpointAdvanced("posts", summarizeCheckpoint(completed));
-      return {
-        satisfied: true,
-        yieldReason: null,
-        stats: {
-          pages: state.pageIndex,
-          captured,
-          postTipsContractDrifts,
-          postTipsScopeDrifts,
-          anchorReached,
-          recentRefreshCutoffAt: state.fanslyRecentRefreshCutoffAt,
-          recentRefreshCutoffReached,
-          timelineExhausted,
-          headPostId: state.headPostId,
-        },
-      };
+      return finishWithEngagement({
+        pages: state.pageIndex,
+        captured,
+        postTipsContractDrifts,
+        postTipsScopeDrifts,
+        anchorReached,
+        recentRefreshCutoffAt: state.fanslyRecentRefreshCutoffAt,
+        recentRefreshCutoffReached,
+        timelineExhausted,
+        headPostId: state.headPostId,
+      }, "complete");
     }
 
     if (!page.nextBefore || page.nextBefore === state.before) {

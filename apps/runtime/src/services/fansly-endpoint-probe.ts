@@ -4,7 +4,8 @@ import type { AppContext } from "../bootstrap.ts";
 import { resolvePageContext } from "./page-context.ts";
 import { createSyncRateLimitWaiter } from "./sync/rate-limiter.ts";
 
-// Liveness probe for the endpoints-cover initiative: WP-F9 (`dm_commerce`) + [E1].
+// Liveness probe for the endpoints-cover initiative: WP-F9 (`dm_commerce`), [E1],
+// the WP-F3 catalog routes, and [F1]'s month form.
 //
 // WHY THIS EXISTS. Every route below came from the 2026-08-20 static bundle
 // extraction — the Fansly web client builds these requests. That is client-code
@@ -57,6 +58,14 @@ export interface EndpointProbeResult {
    * should not put fan PII into a terminal or a transcript to learn a shape.
    */
   shape: string | null;
+  /**
+   * One route-specific line beside the skeleton, for the questions a skeleton
+   * cannot answer. Only a route that declares one gets one, and what it may
+   * carry is the same class of thing the skeleton is: WINDOW BOUNDS and COUNTS.
+   * A served `dateAfter`/`dateBefore` is a window identity, not a value to
+   * redact — it is the entire answer to "was the month we asked for served".
+   */
+  note?: string | null;
   wallClockMs: number;
   message: string | null;
 }
@@ -100,9 +109,74 @@ type ProbeRoute = {
     app: AppContext,
     ctx: Parameters<AppContext["adapter"]["getPostRepliesPage"]>[0],
     options: EndpointProbeOptions,
-  ) => Promise<{ items: unknown }>;
+  ) => Promise<{ items: unknown; note?: string | null }>;
   isBare: (options: EndpointProbeOptions) => boolean;
 };
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * The month the [F1] probe asks for: TWO calendar months back from today, UTC.
+ *
+ * Two rather than one because last month is partly inside the route's own
+ * trailing window — a served window that happens to overlap it would prove
+ * nothing. Two months back cannot be reached by the trailing window at all, so
+ * the served bounds answer the question on their own.
+ */
+export function probeStatsMonth(now: Date): { year: number; month: number } {
+  const index = now.getUTCFullYear() * 12 + now.getUTCMonth() - 2;
+  return { year: Math.floor(index / 12), month: (index % 12) + 1 };
+}
+
+function isoDay(value: unknown): string | null {
+  return typeof value === "number" && Number.isFinite(value)
+    ? new Date(value).toISOString().slice(0, 10)
+    : null;
+}
+
+function arrayLength(value: unknown): number | null {
+  return Array.isArray(value) ? value.length : null;
+}
+
+/**
+ * The [F1] answer in one line: what we named, what came back, and the verdict.
+ *
+ * The verdict is the same predicate the capture lane's month walk uses — the
+ * served `dateAfter` must fall inside the requested month — so a probe run and
+ * a lane run cannot disagree about what "honoured" means.
+ */
+export function describeStatsMonthAnswer(
+  requested: { year: number; month: number },
+  items: unknown,
+): string {
+  const record = items && typeof items === "object" ? items as Record<string, unknown> : null;
+  const dataset = record && typeof record.dataset === "object" && record.dataset !== null
+    ? record.dataset as Record<string, unknown>
+    : null;
+  const servedAfter = isoDay(dataset?.dateAfter);
+  const servedBefore = isoDay(dataset?.dateBefore);
+  const monthStart = Date.UTC(requested.year, requested.month - 1, 1);
+  const monthEnd = Date.UTC(requested.year, requested.month, 1);
+  const after = typeof dataset?.dateAfter === "number" ? dataset.dateAfter : null;
+  const honoured = after === null
+    ? null
+    : after >= monthStart - DAY_MS && after < monthEnd + DAY_MS;
+  const profile = arrayLength(dataset?.profileDatapoints);
+  const points = arrayLength(dataset?.datapoints);
+  return [
+    `asked year=${requested.year} month=${requested.month}`
+    + ` (${new Date(monthStart).toISOString().slice(0, 10)} → `
+    + `${new Date(monthEnd - DAY_MS).toISOString().slice(0, 10)})`,
+    `served dateAfter=${servedAfter ?? "-"} dateBefore=${servedBefore ?? "-"}`,
+    `profileDatapoints=${profile ?? "-"} datapoints=${points ?? "-"}`,
+    honoured === null
+      ? "UNJUDGED — the response described no window"
+      : honoured
+      ? "MONTH FORM HONOURED — the served window starts inside the month we named"
+      : "MONTH FORM NOT HONOURED — the server answered a different window "
+        + "(the trailing one, if dateBefore is near today)",
+  ].join(" · ");
+}
 
 /**
  * Order matters only for readability of the report. [E1] runs first because it is
@@ -170,6 +244,33 @@ const ROUTES: ProbeRoute[] = [
     run: (app, ctx) => app.adapter.getRecapStats(ctx),
     isBare: () => false,
   },
+  // ---- [F1] the month form: the only way this route serves history ----
+  //
+  // WHY IT IS HERE. WP-F1's history walk asked `/it/amoie/stats` for historical
+  // DATE BOUNDS and production answered every one of them with its own trailing
+  // 31 days (lora-2, 2026-08-22: `afterDate 2026-06-21 / beforeDate 2026-07-22`
+  // came back `2026-07-21 → 2026-08-21`; halving to 15 days changed nothing).
+  // The app's own past-month view sends `year`/`month` instead and lets the
+  // server resolve the month. ONE run of this route answers whether that form
+  // is honoured — the served bounds are printed, so the answer is readable
+  // rather than inferred.
+  {
+    key: "[F1] GET /it/amoie/stats?year=&month= (the month form)",
+    run: async (app, ctx) => {
+      const now = new Date();
+      const { year, month } = probeStatsMonth(now);
+      // EXACTLY the app's request: the trailing bounds ride along ignored.
+      const { items } = await app.adapter.getAccountStats(ctx, {
+        beforeDate: now,
+        afterDate: new Date(now.getTime() - 30 * DAY_MS),
+        periodMs: 86_400_000,
+        year,
+        month,
+      });
+      return { items, note: describeStatsMonthAnswer({ year, month }, items) };
+    },
+    isBare: () => false,
+  },
   // ---- WP-F3 catalog routes from the March corpus, never observed live ----
   {
     key: "[F3] GET /account/media?ids=",
@@ -188,7 +289,17 @@ const ROUTES: ProbeRoute[] = [
   },
   {
     key: "[F3] GET /media/vaultnew?albumId=",
-    run: (app, ctx, o) => app.adapter.getVaultMediaPage(ctx, { albumId: o.albumId ?? null, mediaType: 0 }),
+    // WP-F3 settled the query form: `before`/`after` are the LITERAL "0" and
+    // `mediaType` is present-and-EMPTY when unfiltered. The probe sends what
+    // the lane sends, so a future probe run measures the real request.
+    run: (app, ctx, o) =>
+      app.adapter.getVaultMediaPage(ctx, {
+        albumId: o.albumId ?? null,
+        mediaType: "",
+        search: "",
+        before: "0",
+        after: "0",
+      }),
     isBare: (o) => !o.albumId,
   },
 ];
@@ -359,7 +470,7 @@ export async function runFanslyEndpointProbe(
 
       const startedAt = Date.now();
       try {
-        const { items } = await route.run(app, requestContext, options);
+        const { items, note } = await route.run(app, requestContext, options);
         results.push({
           page: pageLabel,
           route: route.key,
@@ -369,6 +480,7 @@ export async function runFanslyEndpointProbe(
           itemCount: countItems(items),
           ids: options.ids ? extractIds(items) : null,
           shape: describeShape(items),
+          note: note ?? null,
           bare,
           wallClockMs: Date.now() - startedAt,
           message: null,
@@ -397,7 +509,7 @@ export async function runFanslyEndpointProbe(
 /** Collapse the results into something an owner can read without a schema in hand. */
 export function summarizeEndpointProbe(results: EndpointProbeResult[]): string {
   const lines: string[] = [];
-  lines.push("VERDICT TABLE — fansly:endpoint-probe (WP-F9 liveness + [E1])");
+  lines.push("VERDICT TABLE — fansly:endpoint-probe (WP-F9 liveness + [E1] + [F3] + [F1])");
   lines.push("page | route | verdict | http | code | items | bare | ms | note");
   for (const r of results) {
     lines.push(
@@ -464,7 +576,16 @@ export function summarizeEndpointProbe(results: EndpointProbeResult[]): string {
     for (const r of shaped) {
       lines.push(`${r.route}`);
       lines.push(`  ${r.shape}`);
+      if (r.note) {
+        lines.push(`  ${r.note}`);
+      }
     }
+  }
+
+  const f1 = results.find((r) => r.route.startsWith("[F1]"));
+  if (f1?.note) {
+    lines.push("");
+    lines.push(`→ [F1] ${f1.note}`);
   }
 
   lines.push("");

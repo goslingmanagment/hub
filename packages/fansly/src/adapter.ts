@@ -71,6 +71,73 @@ type RequestResult<T> = {
 const REQUEST_TIMEOUT_MS = 30_000;
 const GLOBAL_DELAY_SAFETY_MARGIN_MS = 100;
 const EARNINGS_ACCOUNTS_PAGE_LIMIT = 100;
+/**
+ * WP-F3: `/media/vaultnew`'s head cursor is the LITERAL STRING "0", for both
+ * `before` and `after`. An empty `before=` is a cursor the server does not
+ * honour — it answers `{albumMedia: [], media: []}` for an album with 4 760
+ * items, which is indistinguishable from an exhausted album. The app's own
+ * caller sends "0"; so does this adapter.
+ */
+export const VAULT_MEDIA_HEAD_CURSOR = "0";
+/**
+ * WP-F3: ids per `/account/media?ids=` and `/account/media/bundle?ids=` call.
+ *
+ * NOT a guess: the app batches its own hydration at `splice(0, 100)` in both
+ * `requestMediaTick` and `requestBundleTick`, so 100 is the size the server is
+ * known to answer for. A smaller batch would triple the call count of the
+ * hydration step for no benefit; a larger one would be a shape nobody has
+ * observed the server accept.
+ */
+export const ACCOUNT_MEDIA_BATCH_SIZE = 100;
+
+/**
+ * WP-F6: ids per `GET /post?ids=` call.
+ *
+ * The app's own `getPosts` joins the id list with no splice of its own — its
+ * two live call sites hydrate one or two ids — so unlike
+ * `ACCOUNT_MEDIA_BATCH_SIZE` this number is NOT read out of a batching loop in
+ * the bundle. It is the size the same app uses for every OTHER `?ids=` route it
+ * batches (`requestedAccountIds_`, `requestedMediaIds_`, `requestedBundleIds_`
+ * are all `splice(0, 100)`), and the refresh lane's arithmetic is sized on it.
+ * A larger batch would be a shape nobody has seen the server accept.
+ */
+export const POST_BATCH_SIZE = 100;
+
+/**
+ * WP-F5: the statuses `/post/{postId}/replies` may answer with an empty body.
+ *
+ * NOT live-proven — no GET anywhere in the 2026-08-19 HAR returned 204 (all 197
+ * are OPTIONS preflights), so this is the honest handling of a case we have
+ * never seen rather than a contract we have observed. It is scoped to that ONE
+ * method deliberately: everywhere else an envelope-less body is a failure, and
+ * a global softening would let a truncated response read as "no data" on every
+ * lane at once.
+ */
+export const POST_REPLIES_EMPTY_STATUSES = [204] as const;
+
+/**
+ * WP-F7: the page size `/payments/payout/requests` is walked at.
+ *
+ * The wallet UI requests 10 and the server served 10 on eight of nine observed
+ * pages (the ninth, the last, returned 3 of a `total` of 83). Whether a larger
+ * `limit` is honoured on this route was NEVER measured — the one authorized
+ * follow-up probe answered it for `/earnings/transactions`, a different route —
+ * so 10 is assumed rather than believed, which costs nine calls once per page
+ * and buys a walk that cannot silently skip rows.
+ */
+export const PAYOUT_REQUESTS_PAGE_SIZE = 10;
+
+/**
+ * The value `before` and `after` carry on `/payments/payout/requests`: PRESENT
+ * AND EMPTY.
+ *
+ * The app sent them that way on all nine observed calls, and the wallet surface
+ * never exposed a control that would fill them. An OMITTED parameter is a
+ * different request from an empty one, and only the empty one has ever been
+ * answered — the same lesson `/media/vaultnew` taught the catalog lane, where a
+ * guessed cursor form returned an empty page for a 4 760-item album.
+ */
+export const PAYOUT_REQUESTS_UNBOUNDED = "";
 
 /**
  * Response summary for a route whose shape is NOT yet known (the WP-F9 / [E1]
@@ -320,18 +387,39 @@ export class FanslyAdapter {
    * top-N planes, and the aggregation sidecars (media, bundles, tags, offer
    * locations).
    *
-   * `datapointLimit` came back 100 — a window may CARRY 100 buckets, which is
-   * not the same as the route honouring a 100-day one, and on prod (2026-08-22)
-   * it did not: a 100-day request was answered with the DEFAULT trailing 31 days.
-   * The backfill therefore walks 31-day windows, the span the HAR proves is
-   * honoured. `year`/`month` are the named-month form the UI uses;
-   * 0/0 means "use beforeDate/afterDate", which is the only form this lane ever
-   * sends — the UI exposing three months back is a UI limit, not the API's.
+   * TWO FORMS, and the difference between them is where all this route's history
+   * lives:
+   *
+   *   - `year = 0, month = 0` — the server reads `beforeDate`/`afterDate`, and
+   *     it honours them ONLY INSIDE ITS OWN TRAILING WINDOW. Production
+   *     2026-08-22 (lora-2) asked for `afterDate 2026-06-21 / beforeDate
+   *     2026-07-22` and was served `dateAfter 2026-07-21 / dateBefore
+   *     2026-08-21` — the trailing 31 days, 200 and all; halving the span to 15
+   *     changed nothing. `datapointLimit: 100` was never the constraint.
+   *   - `year`/`month` NON-ZERO — the server resolves the calendar month itself.
+   *     This is the UI's "Jul / Jun / May 2026" preset, and the app sends the
+   *     trailing bounds ALONGSIDE it unchanged: `beforeDate = now`,
+   *     `afterDate = now − 30 d`, `period = 86 400 000` (bundle
+   *     `main.pretty.js` :280600 and :196337). The bounds ride along ignored.
+   *
+   * So the caller supplies the bounds either way and adds `year`/`month` when it
+   * wants a month; this method sends exactly what the client sends and nothing
+   * clever of its own.
    */
   async getAccountStats(
     context: FanslyRequestContext,
-    params: { beforeDate: Date; afterDate: Date; periodMs: number },
+    params: {
+      beforeDate: Date;
+      afterDate: Date;
+      periodMs: number;
+      /** Calendar year of the named-month form; 0 (the default) = use the bounds. */
+      year?: number;
+      /** 1–12 for the named-month form; 0 (the default) = use the bounds. */
+      month?: number;
+    },
   ): Promise<{ items: unknown; raw: unknown }> {
+    const year = params.year ?? 0;
+    const month = params.month ?? 0;
     const response = await this.request<unknown>(context, "/it/amoie/stats", {
       operation: "account_stats",
       endpointTemplate: "/it/amoie/stats",
@@ -340,13 +428,15 @@ export class FanslyAdapter {
         beforeDate: String(params.beforeDate.getTime()),
         afterDate: String(params.afterDate.getTime()),
         period: String(params.periodMs),
-        year: "0",
-        month: "0",
+        year: String(year),
+        month: String(month),
       },
       requestShape: {
         beforeDate: params.beforeDate.toISOString(),
         afterDate: params.afterDate.toISOString(),
         periodMs: params.periodMs,
+        year,
+        month,
       },
       summarizeResponse: summarizeUnknownResponse,
     });
@@ -712,6 +802,60 @@ export class FanslyAdapter {
       before,
       nextBefore,
       done: items.length === 0,
+      contractAccepted: Array.isArray(response.parsed?.posts),
+      raw: response.raw,
+    };
+  }
+
+  /**
+   * WP-F6 — `GET /post?ids=<csv>`: the batch post read, and the whole egress of
+   * the engagement refresh phase.
+   *
+   * It returns the SAME envelope the timeline does (`{posts, aggregatedPosts,
+   * accountMedia, accounts, tips, tipGoals, stories, polls}`), which is why the
+   * refresh journals under the existing `posts` kind and the v6 family parses
+   * it with no new branch: one response shape, one parser, one projection.
+   *
+   * It carries strictly MORE than the timeline: `wallIds` appears here and on
+   * no `/timelinenew` post in the 2026-08-19 capture.
+   */
+  async getPostsByIds(
+    context: FanslyRequestContext,
+    ids: string[],
+  ): Promise<FanslyPostsPageResponse> {
+    if (ids.length === 0) {
+      throw new Error("Fansly post batch read requires at least one id");
+    }
+    if (ids.length > POST_BATCH_SIZE) {
+      throw new Error(`Fansly post batch read supports at most ${POST_BATCH_SIZE} ids per request`);
+    }
+    if (ids.some((id) => id.trim().length === 0)) {
+      throw new Error("Fansly post batch read ids must be nonblank");
+    }
+    const response = await this.request<FanslyPostsPage>(context, "/post", {
+      operation: "post_lookup",
+      endpointTemplate: "/post",
+      query: { ids: ids.join(",") },
+      category: "posts",
+      requestShape: {
+        idsCount: ids.length,
+      },
+      summarizeResponse: (parsed) => ({
+        returnedItems: Array.isArray(parsed?.posts) ? parsed.posts.length : null,
+      }),
+    });
+
+    const items = Array.isArray(response.parsed?.posts) ? response.parsed.posts : [];
+    return {
+      items,
+      // This route is keyed on ids, not on an account or a wall, and it does not
+      // page. The response object keeps the shared shape so one journal/parse
+      // path serves both reads; the cursor fields are inert by construction.
+      accountId: "",
+      wallId: null,
+      before: "0",
+      nextBefore: null,
+      done: true,
       contractAccepted: Array.isArray(response.parsed?.posts),
       raw: response.raw,
     };
@@ -1242,26 +1386,56 @@ export class FanslyAdapter {
   // ---------------------------------------------------------------------------
 
   /**
-   * [E1] — the load-bearing one. Every observed `GET /post/{id}/replies` in the
-   * capture was preceded ~40 ms earlier by `POST /postreply/verify` with the same
-   * post id. This method deliberately issues the BARE GET with no preceding POST,
-   * because that is the whole question: if the bare GET fails, WP-F5 (the comment
-   * archive, a large slice of the plan) does not exist and must be cut before
-   * anything is built on it. The route takes no query parameters — verified
-   * against all five observed GETs in the 2026-08-19/21 HARs.
+   * WP-F5's whole lane, and it is a BARE GET forever.
+   *
+   * [E1], settled: every observed `GET /post/{id}/replies` in the 2026-08-19
+   * capture was preceded ~40 ms earlier by the browser's reply-verify POST
+   * carrying the same post id (5/5). The probe issued the GET with NO preceding
+   * POST and the comments came back (A25). So that POST is a client-side
+   * affordance, not a server-side precondition — and it is never issued from
+   * here, because §1 excludes write-shaped calls to the platform and a POST that
+   * "only verifies" is still a POST to somebody else's server. A test greps this
+   * WHOLE FILE for that route's path and fails if it ever appears, which is why
+   * the path is not written out even in this comment.
+   *
+   * ── PAGINATION IS UNPROVEN, and this signature says so ────────────────────
+   *
+   * No observed response carried more than four replies, so no cursor has ever
+   * been exercised. `before` is offered because it is the convention every
+   * other paginated Fansly route uses (`/timelinenew`, `/message`,
+   * `/notifications`) and because replies came back descending by id — but the
+   * caller only sends it after a page looks suspiciously full, and it carries
+   * its own repeat-cursor guard. Until a second page is actually served, the
+   * lane records `possiblyTruncated` and refuses to call the walk complete.
+   *
+   * ── `emptyStatuses: [204]`, on THIS METHOD ONLY ───────────────────────────
+   *
+   * "No replies" has never been observed live in any form: NO GET anywhere in
+   * the HAR returned 204 (all 197 are OPTIONS preflights). 200 with an empty
+   * `posts[]`, a 204, and an empty body are therefore all handled as the same
+   * honest answer, and none of the three is live-proven. The 204 branch returns
+   * `{__empty: true, httpStatus}` rather than throwing, so the walk can journal
+   * "this post has no comments" instead of recording a lane failure.
    */
   async getPostRepliesPage(
     context: FanslyRequestContext,
-    params: { postId: string },
+    params: { postId: string; before?: string | null },
   ): Promise<{ items: unknown; raw: unknown }> {
+    const before = params.before ?? null;
     const response = await this.request<unknown>(
       context,
       `/post/${encodeURIComponent(params.postId)}/replies`,
       {
-        operation: "post_replies_probe",
+        operation: "post_replies",
         endpointTemplate: "/post/{postId}/replies",
         category: "posts",
-        requestShape: { postId: params.postId, verifyPosted: false },
+        // OMITTED entirely on the first call — the bare form is the only one
+        // five live responses prove. `before` appears only once the caller has
+        // a reason to suspect a second page exists.
+        query: before === null ? {} : { before },
+        requestShape: { postId: params.postId, verifyPosted: false, before },
+        pagination: { cursorPresent: before !== null },
+        emptyStatuses: POST_REPLIES_EMPTY_STATUSES,
         summarizeResponse: summarizeUnknownResponse,
       },
     );
@@ -1468,7 +1642,98 @@ export class FanslyAdapter {
     return { items: response.parsed, raw: response.raw };
   }
 
-  // ---- WP-F3 catalog routes never observed live (March corpus only) — probe-only ----
+  // ---- WP-F3: the content-catalog lane ----
+
+  /**
+   * `/vault/albumsnew` — the creator's REAL vault: 27 albums on the live
+   * capture, with `aggregationData.media[]` riding along.
+   *
+   * That sidecar carries `location`, `locations[]` and `variants[]` — signed
+   * CDN material. It is journaled verbatim (DP 7) and NOTHING downstream may
+   * put it in an event or a projection; the adapter hands the whole body
+   * through and the handler journals before anything parses it.
+   */
+  async getVaultAlbums(
+    context: FanslyRequestContext,
+  ): Promise<{ items: unknown; raw: unknown }> {
+    const response = await this.request<unknown>(context, "/vault/albumsnew", {
+      operation: "vault_albums",
+      endpointTemplate: "/vault/albumsnew",
+      category: "media",
+      summarizeResponse: summarizeUnknownResponse,
+    });
+    return { items: response.parsed, raw: response.raw };
+  }
+
+  /**
+   * `/uservault/albumsnew?accountId=` — a DIFFERENT resource from the one
+   * above: the account's own Likes/Purchases shelves, whose contents are OTHER
+   * creators' media. Captured for completeness and joined by native id; never
+   * counted into the page's own inventory.
+   *
+   * `accountId` is required by the app's own caller and is passed through
+   * exactly as it is stored on the page.
+   */
+  async getUserVaultAlbums(
+    context: FanslyRequestContext,
+    params: { accountId: string },
+  ): Promise<{ items: unknown; raw: unknown }> {
+    const response = await this.request<unknown>(context, "/uservault/albumsnew", {
+      operation: "uservault_albums",
+      endpointTemplate: "/uservault/albumsnew",
+      category: "media",
+      query: { accountId: params.accountId },
+      requestShape: { hasAccountId: params.accountId.length > 0 },
+      summarizeResponse: summarizeUnknownResponse,
+    });
+    return { items: response.parsed, raw: response.raw };
+  }
+
+  /**
+   * `/subscriptions/tiers` — FEAT-002's source. A flat array of tiers whose
+   * REAL prices live in `plans[].price`; `tier.price` was 5 000 on all five
+   * observed tiers and is a base, not a price.
+   */
+  async getSubscriptionTiers(
+    context: FanslyRequestContext,
+  ): Promise<{ items: unknown; raw: unknown }> {
+    const response = await this.request<unknown>(context, "/subscriptions/tiers", {
+      operation: "subscription_tiers",
+      endpointTemplate: "/subscriptions/tiers",
+      category: "account",
+      summarizeResponse: summarizeUnknownResponse,
+    });
+    return { items: response.parsed, raw: response.raw };
+  }
+
+  /** `/subscriptions/giftcodes` — 73 codes on the live capture; note
+   *  `original_price` arrives snake_case amid otherwise camelCase keys. */
+  async getGiftCodes(
+    context: FanslyRequestContext,
+  ): Promise<{ items: unknown; raw: unknown }> {
+    const response = await this.request<unknown>(context, "/subscriptions/giftcodes", {
+      operation: "gift_codes",
+      endpointTemplate: "/subscriptions/giftcodes",
+      category: "account",
+      summarizeResponse: summarizeUnknownResponse,
+    });
+    return { items: response.parsed, raw: response.raw };
+  }
+
+  /** `/message/automated` — the page's automation definitions.
+   *  `messageTemplate` is a JSON OBJECT in every live value; the string-shape
+   *  fallback lives in the canonicalizer, not here. */
+  async getAutomatedMessages(
+    context: FanslyRequestContext,
+  ): Promise<{ items: unknown; raw: unknown }> {
+    const response = await this.request<unknown>(context, "/message/automated", {
+      operation: "automated_messages",
+      endpointTemplate: "/message/automated",
+      category: "messaging",
+      summarizeResponse: summarizeUnknownResponse,
+    });
+    return { items: response.parsed, raw: response.raw };
+  }
 
   /** `/account/media?ids=` — media rows by id (the app's batch hydration for its own media). */
   async getAccountMediaByIds(
@@ -1519,34 +1784,157 @@ export class FanslyAdapter {
   }
 
   /**
-   * `/media/vaultnew` — the vault's media listing. The app calls it two ways:
-   * by album (`albumId&mediaType&search&before&after`) and by type
-   * (`type&before&after`). Either form is accepted here; the album form is the
-   * one the catalog walk would use.
+   * `/media/vaultnew` — the vault's media listing, in the form the app itself
+   * sends. THIS FORM IS THE WHOLE FIX.
+   *
+   * The 2026-08-22 probe sent `albumId=…&search=&before=&after=` against a
+   * 4 760-item album and got `{albumMedia: [], media: []}` — an empty page that
+   * looks exactly like an exhausted album. Reading the app bundle settled why:
+   * `getVaultAlbumMediaNewOrder` builds
+   *
+   *   /media/vaultnew?albumId=<id>&mediaType=<filter|"">&before=<cursor>&after=<"0">&search=<text|"">
+   *
+   * and its caller passes the LITERAL STRING "0" for both `before` and `after`
+   * on the first page, `mediaType` present-and-empty when unfiltered, and
+   * `before = <id of the last albumMedia row>` for every page after the first.
+   * An empty `before=` is not "start at the head" to this endpoint; it is a
+   * cursor the server does not honour.
+   *
+   * `mediaType` is therefore ALWAYS sent (empty when unfiltered) rather than
+   * omitted, and `search` likewise — the app sends both on every call, and this
+   * lane's job is to be indistinguishable from the app.
+   *
+   * The second variant, `?type=<vaultType>&before&after`, lists by vault type
+   * rather than by album; it is kept because the app has it, and the catalog
+   * walk does not use it.
    */
   async getVaultMediaPage(
     context: FanslyRequestContext,
     params: {
       albumId?: string | null;
       type?: number | null;
-      mediaType?: number | null;
+      /** Present and EMPTY when unfiltered — the app's own `getMediaTypeFilter()`
+       *  returns "" when neither images nor video are hidden. */
+      mediaType?: string | null;
+      /** The LITERAL "0" on the first page; the last row's id afterwards. */
       before?: string | null;
+      /** The literal "0". The app never sends anything else here. */
       after?: string | null;
+      search?: string | null;
     },
   ): Promise<{ items: unknown; raw: unknown }> {
+    const byAlbum = typeof params.albumId === "string" && params.albumId.length > 0;
     const response = await this.request<unknown>(context, "/media/vaultnew", {
-      operation: "vault_media_probe",
+      operation: "vault_media",
       endpointTemplate: "/media/vaultnew",
       category: "media",
-      query: {
-        albumId: params.albumId ?? undefined,
-        type: params.type != null ? String(params.type) : undefined,
-        mediaType: params.mediaType != null ? String(params.mediaType) : undefined,
-        search: params.albumId ? "" : undefined,
-        before: params.before ?? "",
-        after: params.after ?? "",
+      query: byAlbum
+        ? {
+          albumId: params.albumId ?? undefined,
+          // Present-and-empty, never omitted.
+          mediaType: params.mediaType ?? "",
+          search: params.search ?? "",
+          before: params.before ?? VAULT_MEDIA_HEAD_CURSOR,
+          after: params.after ?? VAULT_MEDIA_HEAD_CURSOR,
+        }
+        : {
+          type: params.type != null ? String(params.type) : undefined,
+          before: params.before ?? VAULT_MEDIA_HEAD_CURSOR,
+          after: params.after ?? VAULT_MEDIA_HEAD_CURSOR,
+        },
+      requestShape: {
+        byAlbum,
+        type: params.type ?? null,
+        before: params.before ?? VAULT_MEDIA_HEAD_CURSOR,
       },
-      requestShape: { byAlbum: Boolean(params.albumId), type: params.type ?? null },
+      pagination: {
+        cursorPresent: (params.before ?? VAULT_MEDIA_HEAD_CURSOR) !== VAULT_MEDIA_HEAD_CURSOR,
+      },
+      summarizeResponse: summarizeUnknownResponse,
+    });
+    return { items: response.parsed, raw: response.raw };
+  }
+
+  // ---------------------------------------------------------------------------
+  // WP-F7 — the payouts lane. TWO routes, both GET, both verified live
+  // 2026-08-20 (`artifacts/fansly-payouts-capture-2026-08-20/`).
+  //
+  // `/account/wallets/earnings` is NOT here: it is `getEarningsOverview` above.
+  // Neither is `/account/wallets/earnings/transactions` — that is the existing
+  // `transactions` stream, and A28-1 settled it by matching seven transaction
+  // ids from this very HAR against rows the kernel already holds.
+  // ---------------------------------------------------------------------------
+
+  /**
+   * `/payments/payoutmethods` — the creator's own payout methods, as a BARE
+   * ARRAY under the envelope. One call, no query, no pagination.
+   *
+   * LOOSELY TYPED ON PURPOSE, like every other route in this initiative: the
+   * body is journaled before anything asserts on its shape, and the decode —
+   * including `metadata`, which arrives as a JSON-ENCODED STRING — happens in
+   * the canonicalizer where a fixture can bite it. The adapter is a transport.
+   *
+   * WHAT IT CARRIES, AND WHY THAT MATTERS HERE MORE THAN ANYWHERE ELSE:
+   * provider 2 (Paxum, per A22-4 — the API spec says PayPal and is wrong)
+   * returns the creator's FULL email address in plaintext. It reaches the raw
+   * journal under the restricted class and goes no further; nothing derived
+   * from it but a mask ever reaches a projection.
+   */
+  async getPayoutMethods(
+    context: FanslyRequestContext,
+  ): Promise<{ items: unknown; raw: unknown }> {
+    const response = await this.request<unknown>(context, "/payments/payoutmethods", {
+      operation: "payout_methods",
+      endpointTemplate: "/payments/payoutmethods",
+      category: "transactions",
+      requestShape: {},
+      summarizeResponse: summarizeUnknownResponse,
+    });
+    return { items: response.parsed, raw: response.raw };
+  }
+
+  /**
+   * `/payments/payout/requests` — the payout-request history, OFFSET-PAGED.
+   *
+   * THE QUERY FORM IS THE APP'S OWN, character for character:
+   *
+   *   ?before=&after=&limit=10&offset=<0,10,20,…>&ngsw-bypass=true
+   *
+   * `before` and `after` are PRESENT AND EMPTY — the app sends them unbounded
+   * on every one of the nine observed calls, and the wallet UI never exposed a
+   * date filter to fill them. They are sent the same way here rather than
+   * omitted, because "the form the app sends" is the only form any of this is
+   * proven against and an omitted parameter is a different request.
+   *
+   * `limit` is 10 because that is what the UI asks for and what the server was
+   * observed to serve. Whether a larger limit is honoured on THIS route has
+   * never been measured, so the caller assumes 10 and the walk carries a
+   * repeat-request guard rather than a belief.
+   */
+  async getPayoutRequestsPage(
+    context: FanslyRequestContext,
+    params: {
+      /** Present and EMPTY when unbounded — exactly as the app sends it. */
+      before?: string | null;
+      after?: string | null;
+      limit: number;
+      /** Zero-based ROW offset, not a page index. */
+      offset: number;
+    },
+  ): Promise<{ items: unknown; raw: unknown }> {
+    const response = await this.request<unknown>(context, "/payments/payout/requests", {
+      operation: "payout_requests",
+      endpointTemplate: "/payments/payout/requests",
+      category: "transactions",
+      query: {
+        // Present-and-empty, never omitted.
+        before: params.before ?? PAYOUT_REQUESTS_UNBOUNDED,
+        after: params.after ?? PAYOUT_REQUESTS_UNBOUNDED,
+        limit: String(params.limit),
+        offset: String(params.offset),
+      },
+      requestShape: { limit: params.limit, offset: params.offset },
+      pagination: { offset: params.offset, limit: params.limit },
       summarizeResponse: summarizeUnknownResponse,
     });
     return { items: response.parsed, raw: response.raw };
@@ -1569,6 +1957,19 @@ export class FanslyAdapter {
       };
       minDelayMs?: number;
       retries?: number;
+      /**
+       * WP-F5. HTTP statuses this route answers with an EMPTY BODY, which are a
+       * legitimate "nothing here" rather than a broken envelope.
+       *
+       * Opt-in per method, and deliberately not a global rule: everywhere else
+       * in this adapter a body that carries no `{success, response}` envelope
+       * IS a failure, and softening that globally would let a truncated
+       * response read as "no data" on every lane at once. When a status
+       * matches, the call succeeds with `FANSLY_EMPTY_RESPONSE`-shaped material
+       * — `{__empty: true, httpStatus}` — so the caller can tell an empty
+       * answer from an absent one and the journal records which.
+       */
+      emptyStatuses?: readonly number[];
       summarizeResponse?: (parsed: T) => Record<string, unknown>;
     },
   ): Promise<RequestResult<T>> {
@@ -1656,6 +2057,24 @@ export class FanslyAdapter {
               envelope?.error?.code,
               responseSnippet,
             ),
+          };
+        }
+
+        // WP-F5's opt-in empty answer. It sits AFTER the auth check (a 401 is
+        // never "no replies") and before the envelope check, because a 204 —
+        // or an ok response with a zero-length body — carries no envelope to
+        // parse and would otherwise fail as `provider` drift.
+        const emptyStatuses = options.emptyStatuses ?? [];
+        if (
+          emptyStatuses.includes(response.status)
+          || (emptyStatuses.length > 0 && response.ok && text.trim().length === 0)
+        ) {
+          const empty = { __empty: true, httpStatus: response.status } as const;
+          return {
+            kind: "success",
+            value: { parsed: empty as unknown as T, raw: empty as unknown as T },
+            httpStatus: response.status,
+            responseMetadata: { responseKind: "empty", bodyLength: text.length },
           };
         }
 

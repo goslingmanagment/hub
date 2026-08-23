@@ -396,6 +396,19 @@ function createAutoSyncFanslyAdapter(input: {
         raw: { posts: [] },
       };
     },
+    // WP-F6 — the batch post read. Same envelope as the timeline.
+    async getPostsByIds() {
+      return {
+        items: [],
+        accountId: "",
+        wallId: null,
+        before: "0",
+        nextBefore: null,
+        done: true,
+        contractAccepted: true,
+        raw: { posts: [] },
+      };
+    },
     async getTipsByTargetIds(_context: unknown, targetIds: string[]) {
       return {
         items: [],
@@ -462,6 +475,16 @@ function createAutoSyncFanslyAdapter(input: {
     async getVaultMediaPage() {
       return { items: [], raw: [] };
     },
+    // WP-F7: the payouts lane's two reads. Stubbed empty — this fixture
+    // exercises auto-sync wiring, not the lane. The stub grows with the
+    // adapter deliberately: the cast is what keeps this fake honest about the
+    // surface the runtime actually depends on.
+    async getPayoutMethods() {
+      return { items: [], raw: [] };
+    },
+    async getPayoutRequestsPage() {
+      return { items: [], raw: { total: 0, data: [] } };
+    },
     // WP-F1: the stats lane's five reads plus the tracking-links call. The stub
     // grows with the adapter deliberately — the cast is what keeps this fake
     // honest about the surface the runtime actually depends on.
@@ -487,6 +510,23 @@ function createAutoSyncFanslyAdapter(input: {
     // auto-sync wiring, not the lane.
     async getNotificationsPage() {
       return { items: null, raw: null };
+    },
+    // WP-F3: the catalog sweep's five listing reads. The four batch/vault
+    // routes are already stubbed above (the WP-F9 probe declared them first).
+    async getVaultAlbums() {
+      return { items: null, raw: null };
+    },
+    async getUserVaultAlbums() {
+      return { items: null, raw: null };
+    },
+    async getSubscriptionTiers() {
+      return { items: [], raw: [] };
+    },
+    async getGiftCodes() {
+      return { items: [], raw: [] };
+    },
+    async getAutomatedMessages() {
+      return { items: [], raw: [] };
     },
     async close() {},
   } as AppContext["adapter"];
@@ -9498,10 +9538,16 @@ describe("api integration", () => {
     // made monitor-visible (top_spenders, fan_earnings, purchase_history)
     // + `posts` (monitor-visible since WP-F1 repaired the missing entry) +
     // `stats_snapshot` (WP-F1) + `notifications` (WP-F2 — the lossy lane, and
-    // the one whose wedge would be most expensive to miss). Pinned by
-    // MONITORED_SYNC_STREAMS ⊇ getSyncStreamsForPlatform("fansly") in
+    // the one whose wedge would be most expensive to miss) + `catalog` (WP-F3 —
+    // the lane that measures M) + `post_replies` (WP-F5 — the quietest wedge in
+    // the tree: the queue keeps its rows and the archive simply stops growing)
+    // + `payouts` (WP-F7 — two calls a day is a volume no dashboard notices
+    // going to zero) + `media_stats` (WP-F4 — the loudest lane by call volume
+    // and therefore the one whose wedge is most worth seeing: it is designed to
+    // run at 100 % of its own cap, so "calls went to zero" IS the signal).
+    // Pinned by MONITORED_SYNC_STREAMS ⊇ getSyncStreamsForPlatform("fansly") in
     // fansly-stats-stream-wiring.
-    expect(leadBody.overall.streams).toBe(13);
+    expect(leadBody.overall.streams).toBe(17);
   }, 15_000);
 
   it("enforces sync monitor page scoping and missing-page handling [sync-critical]", async (context) => {
