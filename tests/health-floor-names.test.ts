@@ -35,7 +35,7 @@ describe("health-floor gauge names", () => {
     expect(new Set(names).size).toBe(names.length);
   });
 
-  it("sync-pull v5 and posts v5 no longer share a gauge name", () => {
+  it("sync-pull v5 and the current posts family no longer share a gauge name", () => {
     const posts = CANONICALIZER_FAMILIES.find((family) => family.lane === "posts");
     const syncPull = CANONICALIZER_FAMILIES.find((family) => family.lane === "sync");
     expect(posts).toBeDefined();
@@ -52,10 +52,10 @@ describe("health-floor gauge names", () => {
     expect(healthFloorName(syncPull!.source, syncPull!.lane, 5)).toBe("obs_backlog_pull_sync_v5");
     // …and at the versions that are live today.
     expect(syncPull!.version).toBe(5);
-    expect(posts!.version).toBe(6);
+    expect(posts!.version).toBe(7);
     const postsName = healthFloorName(posts!.source, posts!.lane, posts!.version);
     const syncName = healthFloorName(syncPull!.source, syncPull!.lane, syncPull!.version);
-    expect(postsName).toBe("obs_backlog_pull_posts_v6");
+    expect(postsName).toBe("obs_backlog_pull_posts_v7");
     expect(syncName).toBe("obs_backlog_pull_sync_v5");
     expect(postsName).not.toBe(syncName);
   });
