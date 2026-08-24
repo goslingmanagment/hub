@@ -31,6 +31,13 @@ type FollowersReconcileCursorState = {
   verificationPending: boolean;
 };
 
+type FollowersReconcileProgressState = Omit<
+  FollowersReconcileCursorState,
+  "fullSweepStartedAt"
+> & {
+  fullSweepStartedAt: string | null;
+};
+
 /**
  * G3 (checkpoint cutover): scalars only. Version 1 carried
  * `snapshotConversationIds` — every group id the sweep had seen, rewritten in
@@ -229,10 +236,10 @@ export function parseFollowersCursorState(
   };
 }
 
-export function parseFollowersReconcileCursorState(
+export function parseFollowersReconcileProgressState(
   value: unknown,
   revision: number | null | undefined,
-): FollowersReconcileCursorState | null {
+): FollowersReconcileProgressState | null {
   const expectedRevision = parseRevision(revision);
   if (expectedRevision === null) {
     return null;
@@ -264,7 +271,6 @@ export function parseFollowersReconcileCursorState(
   const verificationPending = state.verificationPending === true;
   if (
     generation === null ||
-    fullSweepStartedAt === null ||
     offset === null ||
     observedCount === null ||
     pageCount === null ||
@@ -285,6 +291,24 @@ export function parseFollowersReconcileCursorState(
     snapshotRestartCount,
     restartReason,
     verificationPending,
+  };
+}
+
+/** Execution must never resume a legacy sweep that predates the retirement
+ * time fence. Read-only progress consumers may still display its counters via
+ * parseFollowersReconcileProgressState without fabricating a start time. */
+export function parseFollowersReconcileCursorState(
+  value: unknown,
+  revision: number | null | undefined,
+): FollowersReconcileCursorState | null {
+  const state = parseFollowersReconcileProgressState(value, revision);
+  if (!state?.fullSweepStartedAt) {
+    return null;
+  }
+
+  return {
+    ...state,
+    fullSweepStartedAt: state.fullSweepStartedAt,
   };
 }
 
@@ -596,6 +620,7 @@ export type {
   DmMessagesCursorState,
   FollowersCursorState,
   FollowersReconcileCursorState,
+  FollowersReconcileProgressState,
   OfapiDmConversationCursorState,
   SubscribersCursorState,
   TopSpendersCursorState,

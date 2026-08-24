@@ -16,7 +16,7 @@ import {
   parseDmConversationCursorState,
   parseDmMessagesCursorState,
   parseFollowersCursorState,
-  parseFollowersReconcileCursorState,
+  parseFollowersReconcileProgressState,
   parseSubscribersCursorState,
 } from "./sync/cursor-state.ts";
 import {
@@ -559,7 +559,7 @@ function buildFollowersReconcileProgress(
   row: SyncMonitorStreamRow,
   status: SyncMonitorStatus,
 ): SyncMonitorProgress | null {
-  const state = parseFollowersReconcileCursorState(
+  const state = parseFollowersReconcileProgressState(
     row.checkpointState,
     row.requestSeq ?? row.appliedSeq,
   );

@@ -26,7 +26,7 @@ import {
 import {
   parseDmConversationCursorState,
   parseFollowersCursorState,
-  parseFollowersReconcileCursorState,
+  parseFollowersReconcileProgressState,
   parseSubscribersCursorState,
 } from "./sync/cursor-state.ts";
 import { filterOnlyFansAudienceStreams } from "./sync/ofapi-audience-sync.ts";
@@ -740,7 +740,10 @@ function buildProgressFromPayload(
     }
 
     if (task.stream === "followers_reconcile") {
-      const state = parseFollowersReconcileCursorState(monitorRow.checkpointState, checkpointRevision);
+      const state = parseFollowersReconcileProgressState(
+        monitorRow.checkpointState,
+        checkpointRevision,
+      );
       if (state) {
         const total = state.sourceFollowerCount;
         const current = completed ? total : clampProgress(state.offset, total);
