@@ -147,8 +147,9 @@ function input(
   telemetry: ReturnType<typeof telemetryStub>,
   budget = new SyncChunkBudget(),
   now = NOW,
+  metadata: Record<string, unknown> = {},
 ) {
-  return fanslyLaneInput({
+  const laneInput = fanslyLaneInput({
     pageId,
     label: "stats-budget",
     accountRef: "acct-budget",
@@ -157,7 +158,9 @@ function input(
     syncRunId,
     now,
     budget,
-  }) as never;
+  });
+  laneInput.pageContext.page.metadata = metadata;
+  return laneInput as never;
 }
 
 async function cursor(pageId: number) {
@@ -816,6 +819,104 @@ describe("[sync-critical] WP-F1 per-lane daily call budget", () => {
     )).toHaveLength(0);
     // Every empty month is journaled: the empty month IS the floor evidence.
     expect(await journaledKinds(page.id)).toHaveLength(7);
+  });
+
+  it("stops before a month earlier than the account creation month without egress", async (
+    context,
+  ) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    const seeded = emptyFanslyStatsCursorState(NOW);
+    seeded.backfill!.daily.trailingCaptured = true;
+    seeded.backfill!.daily.nextMonthIndex = 2024 * 12 + 11;
+    seeded.backfill!.daily.emptyStreak = 2;
+    seeded.backfill!.daily.probeSpent = true;
+    seeded.backfill!.daily.probeResumeMonthIndex = 2025 * 12;
+    await upsertCheckpointProgress(testDb.db, {
+      platformAccountId: page.id,
+      stream: "stats_snapshot",
+      cursorText: null,
+      state: seeded as unknown as Record<string, unknown>,
+    });
+
+    const adapter = windowAdapterStub({
+      statsFor: () => ({ aggregationData: {}, redactedFixture: "must not be requested" }),
+    });
+    const telemetry = telemetryStub();
+    await capDayAt(1);
+
+    await fanslyStatsSnapshotChunk(
+      dailyOnlyAppStub(adapter),
+      input(
+        page.id,
+        telemetry,
+        new SyncChunkBudget(),
+        NOW,
+        { accountCreatedAt: "2025-02-06T12:00:00.000Z" },
+      ),
+    );
+
+    expect(adapter.statsRequests.filter((request) => request.year !== 0)).toHaveLength(0);
+    const state = await cursor(page.id);
+    expect(state!.backfill!.daily.done).toBe(true);
+    const row = await coverageRow(page.id, "stats_account_daily");
+    expect(row?.status).toBe("provider_exhausted");
+    expect(row?.proof).toBe("none");
+    expect(row?.reason_code).toBe("account_creation_floor");
+    expect(row?.cursor.requestedMonth).toBe("2024-12");
+    expect(row?.cursor.accountCreatedAt).toBe("2025-02-06T12:00:00.000Z");
+  });
+
+  it("stops a probe on an invalid response instead of retrying it every day", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    const seeded = emptyFanslyStatsCursorState(NOW);
+    seeded.backfill!.daily.trailingCaptured = true;
+    seeded.backfill!.daily.nextMonthIndex = 2024 * 12 + 11;
+    seeded.backfill!.daily.emptyStreak = 2;
+    seeded.backfill!.daily.probeSpent = true;
+    seeded.backfill!.daily.probeResumeMonthIndex = 2025 * 12;
+    await upsertCheckpointProgress(testDb.db, {
+      platformAccountId: page.id,
+      stream: "stats_snapshot",
+      cursorText: null,
+      state: seeded as unknown as Record<string, unknown>,
+    });
+
+    const adapter = windowAdapterStub({
+      statsFor: () => ({ aggregationData: {}, redactedFixture: "missing dataset" }),
+    });
+    const telemetry = telemetryStub();
+    await capDayAt(1);
+
+    await expect(fanslyStatsSnapshotChunk(
+      dailyOnlyAppStub(adapter),
+      input(page.id, telemetry),
+    )).resolves.toBeDefined();
+
+    expect(adapter.statsRequests.filter((request) => request.year !== 0)).toHaveLength(1);
+    expect((await cursor(page.id))!.backfill!.daily.done).toBe(true);
+    const row = await coverageRow(page.id, "stats_account_daily");
+    expect(row?.status).toBe("partial_provider_surface");
+    expect(row?.proof).toBe("terminal_response");
+    expect(row?.proof_observation_id).not.toBeNull();
+    expect(row?.reason_code).toBe("probe_response_invalid");
+    expect(telemetry.anomalies.filter(
+      (anomaly) => anomaly.code === "fansly_stats_probe_response_invalid",
+    )).toHaveLength(1);
+
+    const tomorrow = new Date(NOW.getTime() + DAY);
+    await fanslyStatsSnapshotChunk(
+      dailyOnlyAppStub(adapter),
+      input(page.id, telemetry, new SyncChunkBudget(), tomorrow),
+    );
+    expect(adapter.statsRequests.filter((request) => request.year !== 0)).toHaveLength(1);
   });
 
   it("resumes at the BOOKMARK when the [E10] probe finds older history", async (context) => {
