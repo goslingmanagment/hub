@@ -27,6 +27,7 @@ import {
   PROJECTION_DEBT_KIND_PAGE_DM_THREAD_SUMMARY,
   recordProjectionDebt,
   requestPageSync,
+  readPageFollowReconcileActivity,
   rebuildFollowerRollups,
   rebuildSubscriberRollups,
   selectNextPageDmMessageDeepBackfillCandidate,
@@ -146,6 +147,7 @@ import {
   createFanslyLaneJournal,
   nextFanslyUtcDayStart,
   rollFanslyUtcDay,
+  spreadFanslyContinuation,
 } from "./fansly-lane.ts";
 import {
   assertFanslyPurchaseHistoryTargetKindsConsistent,
@@ -209,11 +211,24 @@ const DM_CONVERSATIONS_ERASURE_FENCE_RETRY_DELAY_MS = 60_000;
  *  an unthrottled loop would spend the page's whole DM request budget proving
  *  the same thing against the provider over and over. */
 const DM_CONVERSATIONS_MEMBERSHIP_RETRY_DELAY_MS = 15 * 60_000;
+const FOLLOWERS_RECONCILE_PAGE_SIZE = 100;
+const FOLLOWERS_RECONCILE_MAX_SNAPSHOT_RESTARTS = 2;
+const FOLLOWERS_RECONCILE_RETRY_DELAY_MS = 15 * 60_000;
 const PURCHASE_HISTORY_RAW_BATCH_SIZE = 500;
 const PURCHASE_HISTORY_MAX_SCAN_BATCHES_PER_CHUNK = 4;
 const PURCHASE_HISTORY_TRANSACTION_BATCH_SIZE = 500;
 const PURCHASE_HISTORY_MAX_TRANSACTION_SCAN_BATCHES_PER_CHUNK = 4;
 const TOP_SPENDERS_STEADY_STATE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
+function expectedFollowersReconcileTerminalPageCount(observedCount: number) {
+  // `done` means the terminal page is short. An exact multiple therefore has
+  // one final empty page; every other count ends on its last partial page.
+  return Math.floor(observedCount / FOLLOWERS_RECONCILE_PAGE_SIZE) + 1;
+}
+
+function followersReconcileDeactivationLimit(activeFollowerCount: number) {
+  return Math.max(50, Math.floor(activeFollowerCount / 100));
+}
 
 function purchaseHistoryCaptureBlockError(
   capture: FanslyPurchaseHistoryCaptureClassification,
@@ -2152,11 +2167,13 @@ export async function executeFollowersReconcileChunk(
   if (existingState) {
     state = existingState;
   } else {
+    const fullSweepStartedAt = new Date().toISOString();
     const accountMe = await refreshPageMetadata(app, input.pageContext, undefined, input.telemetry);
     const storedGeneration = await maxPageFollowGeneration(app.db, input.pageContext.page.id);
     state = {
       revision: input.streamState.requestSeq,
       generation: Math.max(previousGeneration, storedGeneration) + 1,
+      fullSweepStartedAt,
       offset: 0,
       observedCount: 0,
       pageCount: 0,
@@ -2205,17 +2222,106 @@ export async function executeFollowersReconcileChunk(
         platformAccountId: input.pageContext.page.id,
         generation: state.generation,
       })) ?? 0;
-      if (generationObservedCount !== finalizationFollowerCount) {
+      const fullSweepStartedAt = new Date(state.fullSweepStartedAt);
+      const activity = await readPageFollowReconcileActivity(dbTx, {
+        platformAccountId: input.pageContext.page.id,
+        generation: state.generation,
+        fullSweepStartedAt,
+      });
+      const expectedTerminalPageCount = expectedFollowersReconcileTerminalPageCount(
+        state.observedCount,
+      );
+      const terminalPageShapeComplete = state.pageCount === expectedTerminalPageCount;
+      const terminalDelta = finalizationFollowerCount - generationObservedCount;
+      const explainedByNewFollowers = terminalDelta > 0
+        && terminalPageShapeComplete
+        && state.observedCount >= generationObservedCount
+        && terminalDelta === activity.firstSeenDuringSweepOutsideGeneration;
+      const membershipProof = generationObservedCount === finalizationFollowerCount
+        ? "exact_generation" as const
+        : explainedByNewFollowers
+          ? "new_followers_seen_during_sweep" as const
+          : null;
+
+      if (membershipProof === null) {
+        if (state.snapshotRestartCount < FOLLOWERS_RECONCILE_MAX_SNAPSHOT_RESTARTS) {
+          return {
+            kind: "restart" as const,
+            checkpoint: await upsertCheckpointProgress(dbTx, {
+              platformAccountId: input.pageContext.page.id,
+              stream: "followers_reconcile",
+              state: {
+                revision: state.revision,
+                generation: state.generation,
+                snapshotRestartCount: state.snapshotRestartCount + 1,
+                restartReason: "snapshot_mismatch",
+                verificationPending: false,
+              },
+            }),
+            generationObservedCount,
+            finalizationFollowerCount,
+            expectedTerminalPageCount,
+            terminalPageShapeComplete,
+            terminalDelta,
+            ...activity,
+          };
+        }
+
+        await rebuildFollowerRollups(
+          dbTx,
+          input.pageContext.page.id,
+          finalizationFollowerCount,
+        );
         return {
-          kind: "blocked" as const,
+          kind: "non_destructive_complete" as const,
+          checkpoint: await upsertCheckpoint(dbTx, {
+            platformAccountId: input.pageContext.page.id,
+            stream: "followers_reconcile",
+            state: {
+              revision: state.revision,
+              generation: state.generation,
+              fullSweepStartedAt: state.fullSweepStartedAt,
+              observedCount: state.observedCount,
+              pageCount: state.pageCount,
+              sourceFollowerCount: finalizationFollowerCount,
+              generationObservedCount,
+              snapshotRestartCount: 0,
+              verificationPending: false,
+              destructiveFinalization: false,
+              membershipCertified: false,
+            },
+            lastSuccessfulRunId: input.syncRunId,
+          }),
           generationObservedCount,
           finalizationFollowerCount,
+          expectedTerminalPageCount,
+          terminalPageShapeComplete,
+          terminalDelta,
+          ...activity,
+        };
+      }
+
+      const deactivationLimit = followersReconcileDeactivationLimit(
+        activity.activeFollowerCount,
+      );
+      if (activity.deactivationCandidateCount > deactivationLimit) {
+        return {
+          kind: "blast_radius_blocked" as const,
+          generationObservedCount,
+          finalizationFollowerCount,
+          membershipProof,
+          expectedTerminalPageCount,
+          terminalPageShapeComplete,
+          terminalDelta,
+          deactivationLimit,
+          ...activity,
         };
       }
 
       await deactivatePageFollowsByGeneration(dbTx, {
         platformAccountId: input.pageContext.page.id,
         generation: state.generation,
+        lastSeenBefore: fullSweepStartedAt,
       });
       await refreshFanPageFollowerState(dbTx, input.pageContext.page.id);
       await rebuildFollowerRollups(
@@ -2235,6 +2341,7 @@ export async function executeFollowersReconcileChunk(
           state: {
             revision: state.revision,
             generation: state.generation,
+            fullSweepStartedAt: state.fullSweepStartedAt,
             offset: state.offset,
             observedCount: state.observedCount,
             pageCount: state.pageCount,
@@ -2246,14 +2353,24 @@ export async function executeFollowersReconcileChunk(
         }),
         generationObservedCount,
         finalizationFollowerCount,
+        membershipProof,
+        expectedTerminalPageCount,
+        terminalPageShapeComplete,
+        terminalDelta,
+        deactivationLimit,
+        ...activity,
       };
     });
 
-    if (verification.kind === "blocked") {
+    if (
+      verification.kind === "restart"
+      || verification.kind === "non_destructive_complete"
+    ) {
       await input.telemetry.addAnomaly({
         code: "followers_reconcile_generation_guard",
         severity: "warn",
-        message: "Follower reconcile generation did not match the source follower count; refusing destructive finalization",
+        message:
+          "Follower reconcile generation did not reproduce a complete terminal membership; destructive finalization withheld",
         details: {
           sourceFollowerCount: verification.finalizationFollowerCount,
           ...(state.sourceFollowerCount !== verification.finalizationFollowerCount
@@ -2262,47 +2379,102 @@ export async function executeFollowersReconcileChunk(
           observedCount: state.observedCount,
           generationObservedCount: verification.generationObservedCount,
           pageCount: state.pageCount,
+          expectedTerminalPageCount: verification.expectedTerminalPageCount,
+          terminalPageShapeComplete: verification.terminalPageShapeComplete,
+          terminalDelta: verification.terminalDelta,
+          firstSeenDuringSweepOutsideGeneration:
+            verification.firstSeenDuringSweepOutsideGeneration,
+          snapshotRestartCount: state.snapshotRestartCount,
+          destructiveFinalization: false,
         },
       });
-      if (state.snapshotRestartCount < 1) {
-        await upsertCheckpointProgress(app.db, {
-          platformAccountId: input.pageContext.page.id,
-          stream: "followers_reconcile",
-          state: {
-            revision: state.revision,
+      await input.telemetry.recordCheckpointAdvanced(
+        "followers_reconcile",
+        summarizeCheckpoint(verification.checkpoint),
+      );
+      if (verification.kind === "restart") {
+        return {
+          satisfied: false,
+          yieldReason: null,
+          continuationRetryAt: spreadFanslyContinuation(
+            new Date(),
+            FOLLOWERS_RECONCILE_RETRY_DELAY_MS,
+          ),
+          continuationRequestSource: "scheduled",
+          stats: {
             generation: state.generation,
+            pageCount: state.pageCount,
+            processedThisChunk,
+            sourceFollowerCount: verification.finalizationFollowerCount,
+            startingSourceFollowerCount: state.sourceFollowerCount,
+            generationObservedCount: verification.generationObservedCount,
             snapshotRestartCount: state.snapshotRestartCount + 1,
-            restartReason: "snapshot_mismatch",
-            verificationPending: false,
+            destructiveFinalization: false,
+            finalizationWithheld: true,
           },
-        });
-        throw new FollowersReconcileConsistencyError({
-          code: "followers_reconcile_snapshot_drift",
-          message:
-            `Follower reconcile moved during the scan (${verification.generationObservedCount} unique rows ` +
-            `for terminal count ${verification.finalizationFollowerCount}, ` +
-            `starting count ${state.sourceFollowerCount}); restarting one fresh generation`,
-          retryable: true,
-        });
+        } satisfies StreamChunkResult;
       }
-      throw new FollowersReconcileConsistencyError({
-        code: "followers_reconcile_inconsistent_snapshot",
+      await input.telemetry.addNote(
+        "Follower reconcile completed non-destructively after two fresh generations could not certify terminal membership",
+        {
+          code: "followers_reconcile_nondestructive_close",
+          generation: state.generation,
+          sourceFollowerCount: verification.finalizationFollowerCount,
+          generationObservedCount: verification.generationObservedCount,
+          snapshotRestartCount: state.snapshotRestartCount,
+        },
+      );
+      return {
+        satisfied: true,
+        yieldReason: null,
+        stats: {
+          generation: state.generation,
+          pageCount: state.pageCount,
+          processedThisChunk,
+          sourceFollowerCount: verification.finalizationFollowerCount,
+          startingSourceFollowerCount: state.sourceFollowerCount,
+          generationObservedCount: verification.generationObservedCount,
+          destructiveFinalization: false,
+          finalizationWithheld: true,
+          nonDestructiveClose: true,
+        },
+      } satisfies StreamChunkResult;
+    }
+
+    if (verification.kind === "blast_radius_blocked") {
+      await input.telemetry.addAnomaly({
+        code: "followers_reconcile_deactivation_blast_radius",
+        severity: "error",
         message:
-          `Follower reconcile generation contained ${verification.generationObservedCount} unique rows ` +
-          `for terminal source count ${verification.finalizationFollowerCount} ` +
-          `(starting count ${state.sourceFollowerCount}); refusing destructive finalization`,
+          "Follower reconcile certified membership but would deactivate more rows than the safety ceiling",
+        details: {
+          sourceFollowerCount: verification.finalizationFollowerCount,
+          generationObservedCount: verification.generationObservedCount,
+          membershipProof: verification.membershipProof,
+          activeFollowerCount: verification.activeFollowerCount,
+          deactivationCandidateCount: verification.deactivationCandidateCount,
+          deactivationLimit: verification.deactivationLimit,
+          fullSweepStartedAt: state.fullSweepStartedAt,
+        },
+      });
+      throw new FollowersReconcileConsistencyError({
+        code: "followers_reconcile_deactivation_blast_radius",
+        message:
+          `Follower reconcile would deactivate ${verification.deactivationCandidateCount} active rows ` +
+          `(limit ${verification.deactivationLimit}); refusing destructive finalization`,
       });
     }
 
     if (state.sourceFollowerCount !== verification.finalizationFollowerCount) {
       await input.telemetry.addNote(
-        "Follower headline changed during reconcile; terminal exact-count guard passed",
+        "Follower headline changed during reconcile; terminal membership proof passed",
         {
           code: "followers_reconcile_terminal_headline_changed",
           startingSourceFollowerCount: state.sourceFollowerCount,
           terminalSourceFollowerCount: verification.finalizationFollowerCount,
           generationObservedCount: verification.generationObservedCount,
           pageCount: state.pageCount,
+          membershipProof: verification.membershipProof,
         },
       );
     }
@@ -2310,7 +2482,7 @@ export async function executeFollowersReconcileChunk(
       await input.telemetry.addAnomaly({
         code: "followers_reconcile_offset_drift_tolerated",
         severity: "warn",
-        message: "Follower reconcile raw row count drifted while the unique generation count remained complete",
+        message: "Follower reconcile raw row count drifted while terminal membership remained certified",
         details: {
           sourceFollowerCount: verification.finalizationFollowerCount,
           ...(state.sourceFollowerCount !== verification.finalizationFollowerCount
@@ -2319,6 +2491,7 @@ export async function executeFollowersReconcileChunk(
           observedCount: state.observedCount,
           generationObservedCount: verification.generationObservedCount,
           pageCount: state.pageCount,
+          membershipProof: verification.membershipProof,
         },
       });
     }
@@ -2336,6 +2509,10 @@ export async function executeFollowersReconcileChunk(
         sourceFollowerCount: verification.finalizationFollowerCount,
         startingSourceFollowerCount: state.sourceFollowerCount,
         generationObservedCount: verification.generationObservedCount,
+        membershipProof: verification.membershipProof,
+        deactivationCandidateCount: verification.deactivationCandidateCount,
+        deactivationLimit: verification.deactivationLimit,
+        destructiveFinalization: true,
       },
     } satisfies StreamChunkResult;
   };
@@ -2353,7 +2530,7 @@ export async function executeFollowersReconcileChunk(
       resolveFanslyPlatformAccountId(input.pageContext.page),
       {
         offset: state.offset,
-        limit: 100,
+        limit: FOLLOWERS_RECONCILE_PAGE_SIZE,
         minDelayMs: app.config.followerPageDelayMs,
       },
     );
@@ -2366,7 +2543,11 @@ export async function executeFollowersReconcileChunk(
       platformAccountId: input.pageContext.page.id,
       syncRunId: input.syncRunId,
       endpoint: "followers",
-      requestParams: { offset: state.offset, limit: 100, mode: "reconcile" },
+      requestParams: {
+        offset: state.offset,
+        limit: FOLLOWERS_RECONCILE_PAGE_SIZE,
+        mode: "reconcile",
+      },
       responsePayload: trimFanslyFollowerPayload(page.raw),
       mapperVersion: FANSLY_FOLLOWERS_CAPTURE_MAPPER_VERSION,
       payloadKind: "mapping_critical",
@@ -2401,7 +2582,7 @@ export async function executeFollowersReconcileChunk(
       ? state
       : {
         ...state,
-        offset: state.offset + 100,
+        offset: state.offset + FOLLOWERS_RECONCILE_PAGE_SIZE,
         observedCount: state.observedCount + page.items.length,
       };
     const finalObservedCount = state.observedCount + page.items.length;

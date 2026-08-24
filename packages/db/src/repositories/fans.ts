@@ -498,6 +498,19 @@ export interface UpsertPageFollowInput {
   lastSeenGeneration?: number | null;
 }
 
+/** A live incremental upsert carries no reconcile generation. Preserve the
+ * row's sweep witness in that case, and make explicit generations monotonic so
+ * an older concurrent writer cannot move a row back into the retire set. */
+function monotonicPageFollowGeneration() {
+  return sql`
+    case
+      when excluded.last_seen_generation is null then ${pageFollows.lastSeenGeneration}
+      when ${pageFollows.lastSeenGeneration} is null then excluded.last_seen_generation
+      else greatest(${pageFollows.lastSeenGeneration}, excluded.last_seen_generation)
+    end
+  `;
+}
+
 export async function upsertPageFollows(db: Database, inputs: UpsertPageFollowInput[]) {
   if (inputs.length === 0) {
     return;
@@ -525,7 +538,7 @@ export async function upsertPageFollows(db: Database, inputs: UpsertPageFollowIn
       set: {
         lastSeenAt,
         isActive: true,
-        lastSeenGeneration: sql`excluded.last_seen_generation`,
+        lastSeenGeneration: monotonicPageFollowGeneration(),
       },
     });
 }
@@ -550,7 +563,7 @@ export async function upsertPageFollow(
       set: {
         lastSeenAt,
         isActive: true,
-        lastSeenGeneration: input.lastSeenGeneration ?? null,
+        lastSeenGeneration: monotonicPageFollowGeneration(),
       },
     })
     .returning();
@@ -601,6 +614,52 @@ export async function countPageFollowsByGeneration(
   `);
 
   return result.rows[0]?.count ?? 0;
+}
+
+export interface PageFollowReconcileActivity {
+  /** Active rows first inserted after the sweep started but not stamped by it. */
+  firstSeenDuringSweepOutsideGeneration: number;
+  activeFollowerCount: number;
+  /** Rows the guarded destructive statement could currently retire. */
+  deactivationCandidateCount: number;
+}
+
+/** Transactional witnesses for the terminal follower-reconcile decision. */
+export async function readPageFollowReconcileActivity(
+  db: Database,
+  input: {
+    platformAccountId: number;
+    generation: number;
+    fullSweepStartedAt: Date;
+  },
+): Promise<PageFollowReconcileActivity> {
+  const result = await db.execute(sql`
+    select
+      count(*) filter (
+        where is_active = true
+          and first_seen_at >= ${input.fullSweepStartedAt}
+          and last_seen_generation is distinct from ${input.generation}
+      )::int as first_seen_during_sweep_outside_generation,
+      count(*) filter (where is_active = true)::int as active_follower_count,
+      count(*) filter (
+        where is_active = true
+          and last_seen_at < ${input.fullSweepStartedAt}
+          and (
+            last_seen_generation is null
+            or last_seen_generation < ${input.generation - 1}
+          )
+      )::int as deactivation_candidate_count
+    from page_follows
+    where platform_account_id = ${input.platformAccountId}
+  `);
+  const row = result.rows[0];
+  return {
+    firstSeenDuringSweepOutsideGeneration: Number(
+      row?.first_seen_during_sweep_outside_generation ?? 0,
+    ),
+    activeFollowerCount: Number(row?.active_follower_count ?? 0),
+    deactivationCandidateCount: Number(row?.deactivation_candidate_count ?? 0),
+  };
 }
 
 export async function deactivatePageFollowsMissingFromSnapshot(
@@ -904,6 +963,12 @@ export async function deactivatePageFollowsByGeneration(
   input: {
     platformAccountId: number;
     generation: number;
+    // A live follower inserted or touched while the sweep was in flight was
+    // not necessarily reachable by its already-passed offset. It must survive
+    // this generation and prove absent on a later one before retirement. A
+    // row seen by the immediately preceding generation receives the same
+    // two-generation grace even when it was not touched live.
+    lastSeenBefore: Date;
   },
 ) {
   await db.execute(sql`
@@ -912,7 +977,11 @@ export async function deactivatePageFollowsByGeneration(
         last_seen_at = now()
     where platform_account_id = ${input.platformAccountId}
       and is_active = true
-      and (last_seen_generation is null or last_seen_generation < ${input.generation})
+      and (
+        last_seen_generation is null
+        or last_seen_generation < ${input.generation - 1}
+      )
+      and last_seen_at < ${input.lastSeenBefore}
   `);
 }
 

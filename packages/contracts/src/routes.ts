@@ -2807,6 +2807,18 @@ export const adminSyncBlockResponseSchema = z.object({
   requests: z.array(adminSyncBlockRequestSchema).optional(),
 });
 
+export const adminFollowersReconcileResetBodySchema = z.object({
+  pageLabel: z.string().min(1),
+});
+
+export const adminFollowersReconcileResetResponseSchema = z.object({
+  accepted: z.literal(true),
+  action: z.literal("reset"),
+  pageLabel: z.string(),
+  stream: z.literal("followers_reconcile"),
+  requests: z.array(adminSyncBlockRequestSchema),
+});
+
 export const syncTriggerBodySchema = z.object({
   pageLabel: z.string().min(1),
   scope: syncTriggerScopeEnum,
@@ -7417,6 +7429,20 @@ export const routeSchemas = {
       503: errorResponseSchema,
     },
   },
+  adminFollowersReconcileReset: {
+    auth: { kind: "owner-session" },
+    tags: ["admin"],
+    summary: "Reset only the Fansly follower-reconcile stream without deleting its cursor",
+    body: adminFollowersReconcileResetBodySchema,
+    response: {
+      200: adminFollowersReconcileResetResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+      503: errorResponseSchema,
+    },
+  },
   adminSyncTriggerAll: {
     auth: { kind: "owner-session" },
     tags: ["admin"],
@@ -8071,6 +8097,12 @@ export type PageSyncBlocksResponse = z.infer<typeof pageSyncBlocksResponseSchema
 export type PageMessagesBlockResponse = z.infer<typeof pageMessagesBlockResponseSchema>;
 export type AdminSyncBlockBody = z.infer<typeof adminSyncBlockBodySchema>;
 export type AdminSyncBlockResponse = z.infer<typeof adminSyncBlockResponseSchema>;
+export type AdminFollowersReconcileResetBody = z.infer<
+  typeof adminFollowersReconcileResetBodySchema
+>;
+export type AdminFollowersReconcileResetResponse = z.infer<
+  typeof adminFollowersReconcileResetResponseSchema
+>;
 export type SyncTriggerBody = z.infer<typeof syncTriggerBodySchema>;
 export type SyncTriggerResponse = z.infer<typeof syncTriggerResponseSchema>;
 export type SyncTriggerAllResponse = z.infer<typeof syncTriggerAllResponseSchema>;

@@ -634,3 +634,58 @@ export async function resetSyncBlock(
     })),
   };
 }
+
+/** Unblock only the follower membership walk. Unlike the dashboard's audience
+ * reset, this keeps the incremental followers/subscribers checkpoints and the
+ * reconcile cursor itself; the new request revision makes the next handler
+ * seed a fresh generation from offset zero. */
+export async function resetFollowersReconcileStream(
+  app: AppContext,
+  boss: Pick<PgBoss, "send">,
+  input: { pageLabel: string; now?: Date },
+) {
+  const now = input.now ?? new Date();
+  const stored = await getPageOrThrow(app, input.pageLabel);
+  if (stored.page.platform !== "fansly") {
+    throw new BadRequestError("Follower reconcile is available only on Fansly pages");
+  }
+  const dependencyInput = pageSyncDependencyInput(app);
+  const streams: SyncStream[] = ["followers_reconcile"];
+  await ensurePageSyncStates(app.db, {
+    pageId: stored.page.id,
+    now,
+    ...dependencyInput,
+  });
+  const requests = await app.db.transaction(async (tx) => {
+    const dbTx = tx as typeof app.db;
+    await resetPageSync(dbTx, {
+      pageId: stored.page.id,
+      streams,
+      now,
+    });
+    return requestPageSyncRows(dbTx, {
+      pageId: stored.page.id,
+      streams,
+      source: "reset",
+      now,
+      ...dependencyInput,
+    });
+  });
+  await enqueueBlockWakeup(boss, {
+    platformAccountId: stored.page.id,
+    platform: stored.page.platform,
+    egressKey: resolveStoredProxyEgressKey(stored.proxy),
+    tasks: streams,
+    reason: "reset",
+  });
+  return {
+    accepted: true as const,
+    action: "reset" as const,
+    pageLabel: stored.page.label,
+    stream: "followers_reconcile" as const,
+    requests: requests.map((request) => ({
+      stream: request.stream,
+      requestedSeq: request.requestedSeq,
+    })),
+  };
+}

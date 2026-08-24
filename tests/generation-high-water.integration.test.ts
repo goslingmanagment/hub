@@ -10,6 +10,7 @@ import {
   maxPageSubscriptionGeneration,
   upsertFans,
   upsertPageFollow,
+  upsertPageFollows,
   upsertPageSubscription,
 } from "@agency_hub_core/db";
 
@@ -121,6 +122,7 @@ describe("projection generation high-water", () => {
     await deactivatePageFollowsByGeneration(testDb.db, {
       platformAccountId: page.id,
       generation,
+      lastSeenBefore: new Date("2099-01-01T00:00:00.000Z"),
     });
     const { rows: followRows } = await testDb.pool.query<{
       platform_follow_id: string;
@@ -140,6 +142,91 @@ describe("projection generation high-water", () => {
         "stale-a": false,
         "stale-b": false,
       });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("preserves follower generations across live upserts and spares rows touched during a sweep", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const page = await createGenerationPage(testDb, "generation-live-race");
+    const fans = await upsertFans(testDb.db, [
+      { platform: "fansly", platformUserId: "live-race" },
+      { platform: "fansly", platformUserId: "touched-race" },
+      { platform: "fansly", platformUserId: "stale-race" },
+    ]);
+    const followedAt = new Date("2026-07-01T00:00:00.000Z");
+    await upsertPageFollow(testDb.db, {
+      platformAccountId: page.id,
+      fanId: fans[0]!.id,
+      platformFollowId: "live-race",
+      followedAt,
+      lastSeenGeneration: 10,
+    });
+    await upsertPageFollow(testDb.db, {
+      platformAccountId: page.id,
+      fanId: fans[1]!.id,
+      platformFollowId: "touched-race",
+      followedAt,
+      lastSeenGeneration: 9,
+    });
+    await upsertPageFollow(testDb.db, {
+      platformAccountId: page.id,
+      fanId: fans[2]!.id,
+      platformFollowId: "stale-race",
+      followedAt,
+      lastSeenGeneration: 9,
+    });
+
+    // Incremental followers carries no generation; it may refresh liveness but
+    // must not erase or regress the reconcile witness.
+    await upsertPageFollows(testDb.db, [{
+      platformAccountId: page.id,
+      fanId: fans[0]!.id,
+      platformFollowId: "live-race",
+      followedAt,
+    }]);
+    await upsertPageFollows(testDb.db, [{
+      platformAccountId: page.id,
+      fanId: fans[0]!.id,
+      platformFollowId: "live-race",
+      followedAt,
+      lastSeenGeneration: 8,
+    }]);
+
+    const sweepStartedAt = new Date("2026-08-24T20:00:00.000Z");
+    await testDb.pool.query(
+      `update page_follows
+       set last_seen_at = case platform_follow_id
+         when 'touched-race' then $2::timestamptz + interval '1 second'
+         else $2::timestamptz - interval '1 second'
+       end
+       where platform_account_id = $1`,
+      [page.id, sweepStartedAt],
+    );
+    await deactivatePageFollowsByGeneration(testDb.db, {
+      platformAccountId: page.id,
+      generation: 11,
+      lastSeenBefore: sweepStartedAt,
+    });
+
+    const rows = await testDb.pool.query<{
+      platform_follow_id: string;
+      last_seen_generation: string | null;
+      is_active: boolean;
+    }>(
+      `select platform_follow_id, last_seen_generation::text, is_active
+       from page_follows
+       where platform_account_id = $1
+       order by platform_follow_id`,
+      [page.id],
+    );
+    expect(rows.rows).toEqual([
+      { platform_follow_id: "live-race", last_seen_generation: "10", is_active: true },
+      { platform_follow_id: "stale-race", last_seen_generation: "9", is_active: false },
+      { platform_follow_id: "touched-race", last_seen_generation: "9", is_active: true },
+    ]);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("reads subscription and DM-thread high-waters from inactive and hidden rows", async (context) => {

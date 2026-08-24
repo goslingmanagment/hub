@@ -21,6 +21,7 @@ type FollowersCursorState = {
 type FollowersReconcileCursorState = {
   revision: number;
   generation: number;
+  fullSweepStartedAt: string;
   offset: number;
   observedCount: number;
   pageCount: number;
@@ -243,6 +244,10 @@ export function parseFollowersReconcileCursorState(
   }
 
   const generation = asNumber(state.generation);
+  const fullSweepStartedAt = typeof state.fullSweepStartedAt === "string"
+    && Number.isFinite(Date.parse(state.fullSweepStartedAt))
+    ? state.fullSweepStartedAt
+    : null;
   const offset = asNumber(state.offset);
   const observedCount = asNumber(state.observedCount) ?? offset;
   const pageCount = asNumber(state.pageCount);
@@ -252,13 +257,14 @@ export function parseFollowersReconcileCursorState(
     : null;
   // Counts from older completed checkpoints were lifetime-shaped. Only a
   // cursor explicitly scoped to the active mismatch may consume this
-  // revision's one-restart allowance.
+  // revision's bounded restart allowance.
   const snapshotRestartCount = restartReason === "snapshot_mismatch"
     ? asNumber(state.snapshotRestartCount) ?? 0
     : 0;
   const verificationPending = state.verificationPending === true;
   if (
     generation === null ||
+    fullSweepStartedAt === null ||
     offset === null ||
     observedCount === null ||
     pageCount === null ||
@@ -271,6 +277,7 @@ export function parseFollowersReconcileCursorState(
   return {
     revision: expectedRevision,
     generation,
+    fullSweepStartedAt,
     offset,
     observedCount,
     pageCount,
