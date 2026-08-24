@@ -238,6 +238,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 235 | Fansly lane scaffold and repair R1 | The seven lanes share one runtime for durable physical-attempt reservation, journal/checkpoint ordering, coverage writes, three-way response classification, pagination guards and jitter. A `started` attempt is checkpointed before egress and the adapter clamps retries to the allowance remaining for the UTC day; success, transport failure and auth failure therefore cannot forget attempts or cross the cap. `invalid` responses remain journaled but do not move coverage or cursors. Earnings history keeps a full 100-row page's window while advancing its durable offset and spends an older probe before declaring a floor. Purchase-history cursor v5 joins the same daily-attempt law. Post-replies excludes failed subjects until `next_due_at`, so healthy never-walked posts are no longer starved. One shared integration harness and a source ratchet prevent lane-private copies from returning; no migration or production action is required. |
 | 236 | Fansly id-less post mentions and replay diagnostics | Retained production `posts` pages prove a legitimate `accountMentions[]` variant with `{start,end,handle}` and no `accountId`. The posts canonicalizer advances 6 -> 7 and accepts that shape only when its coordinates are ordered non-negative safe integers and its handle is non-empty; `account_mention_refs` becomes NULL for the whole post rather than a partial or fabricated list. Shape-gate refusals remain unstamped and replayable, but now report a bounded content-free sample of observation id, family, kind, fixed rejection code and optional post index. The three known lora-1 rows parse under v7 and replay locally with zero platform calls. |
 | 237 | Fansly follower reconcile under concurrent joins and hourly touches | The incremental `followers` upsert preserves and monotonically advances `page_follows.last_seen_generation`; a NULL live write can no longer erase the full-sweep witness. Every reconcile generation records `fullSweepStartedAt`. Destructive close requires either exact generation=headline equality or a positive delta exactly explained by active rows first inserted during that window plus the terminal short-page shape; retirement additionally excludes every row touched since the sweep began or seen in the immediately prior generation. Two mismatches re-walk after a jittered 15-minute delay, then close non-destructively instead of permanently blocking. Even certified membership cannot deactivate more than `max(50, floor(active/100))` rows. An owner-only stream reset unblocks only `followers_reconcile`, preserves all audience checkpoints/cursors, increments the request revision and emits an audit event. |
+| 238 | Creator-vault membership is raw-media identity, not offer identity | Production `/media/vaultnew` bodies contain `albumMedia[].mediaId` and no `mediaOfferId`; the v1 parser therefore captured pages but emitted zero creator membership events. Catalog v2 keys membership by `(page, vault_kind, album, media_ref)`, keeps `media_offer_ref` optional, counts distinct raw files, exposes `mediaRef` in `vault_media`, and replays retained observations without new Fansly calls. This narrowly supersedes #227's claim that the vault walk measures media offers or supplies their hydration ids. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -9992,3 +9993,43 @@ subscribers and reconcile checkpoints, wakes the page queue, and records
 old blocked cursor non-resumable and seeds a fresh generation. The existing
 audience-block reset keeps its broader semantics; no code path silently turns
 that destructive checkpoint reset into this narrow recovery.
+
+---
+
+**Decision #238 (2026-08-25, creator-vault membership uses raw media identity;
+amends #227):**
+
+The live projection failure was downstream of successful capture. Production
+held 717 `vault_media` observations, all stamped catalog parse version 1, while
+`creator_vault_album_members` held only nine user-vault rows. Reading the
+retained pointer-only bodies through `capture_json_hot_bodies` found 26,637
+creator membership rows across the six pages. Every row had `albumId`, its own
+cursor `id`, and `mediaId`; ZERO had `mediaOfferId`. Every `mediaId` matched the
+sibling raw `media[].id`. The v1 canonicalizer required `mediaOfferId`, emitted
+no event, then lawfully stamped the observation because the surrounding array
+shape was valid. Coverage could therefore reach `walk_exhausted` while the
+serving dataset stayed empty.
+
+`mediaId` is not an alternate spelling of an offer id. It matches
+`creator_media.media_ref`, and production contains raw files that back as many
+as eighteen distinct `creator_media.media_offer_ref` values. Substituting it
+into `media_offer_ref` would merge different identities and send file ids to an
+offer-id hydration route. Creator-vault membership is therefore keyed by
+`(page_id, vault_kind, album_ref, media_ref)`. `media_ref` is required;
+`media_offer_ref` remains optional metadata for shapes such as user-vault
+`albumContent[]` that actually serve it. The optional-offer hydration queue
+explicitly excludes nulls.
+
+Catalog canonicalization advances 1 -> 2 and membership events advance to
+schema/key v2. The ordinary sweep can reread the retained bodies and append the
+missing facts without any Fansly request. A non-empty vault page is now left
+unstamped unless every membership row carries both `albumId` and `mediaId`, so
+another identity drift cannot silently repeat v1's loss. Migration 0146 changes
+only the rebuildable projection's identity and indexes; the nine existing rows were
+preflighted with zero null `media_ref` values and zero collisions under the new
+key. `vault_media` exposes `mediaRef` and uses it in its stable key.
+`vaultMemberUniqueCount` now means distinct raw files across creator albums;
+`uniqueMediaCount` remains distinct offers in `creator_media`, and equality
+between the two is not an invariant. This narrowly supersedes #227's
+media-offer identity, reconciliation, and hydration premise; its capture form,
+cursor, empty-first-page guard, no-roster rule, and URL custody remain intact.

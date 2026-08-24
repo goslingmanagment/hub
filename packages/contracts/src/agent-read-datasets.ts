@@ -666,6 +666,9 @@ export const AGENT_DATASETS = {
        *  make purchases indistinguishable from inventory. */
       vaultKind: "string",
       albumRef: "string",
+      /** Raw file identity. This is the membership key on the live creator
+       *  vault and remains distinct from an optional offer id. */
+      mediaRef: "string",
       mediaOfferRef: "string",
       /** The membership row's OWN id — the vault walk's cursor, and NOT the
        *  same value as `mediaOfferRef`. */

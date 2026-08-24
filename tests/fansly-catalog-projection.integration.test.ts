@@ -11,9 +11,10 @@
 //  - THE PLAN PRICE IS THE TRUTH. `page_subscription_tier_plans.price_mills`
 //    reaches 499 990 while every tier head sits at 5 000, and a rebuild must
 //    reproduce both.
-//  - M RECONCILES, OVERLAP-AWARE. Σ `item_count` over-counts because the
-//    system albums are views over the same media; the distinct union of
-//    membership does not. Both are reported, and the test asserts the gap.
+//  - VAULT MEMBERSHIP IS OVERLAP-AWARE. Σ `item_count` over-counts because the
+//    system albums are views over the same media; the distinct raw-file union
+//    does not. It remains separate from the offer census because one file can
+//    back several offers.
 //
 // Plus the ordinary ones: replay is a no-op, nothing is ever deleted, the media
 // plane stays the single writer of `creator_media`, and no delivery URL reaches
@@ -181,6 +182,13 @@ async function seedAll(pageId: number) {
   await seedObservation(pageId, "automated_messages", "a1", fixture("automated-messages"));
   await seedObservation(pageId, "account_walls", "w1", fixture("account-walls"));
   await seedObservation(pageId, "vault_media", "m1", fixture("vault-media-page"));
+  // Production rows were already stamped by catalog v1. The v2 bump must make
+  // the ordinary sweep revisit them; no manual payload rewrite or vendor call.
+  await testDb!.pool.query(
+    `update observations set parse_version = 1
+      where account_id = $1 and kind = 'vault_media'`,
+    [pageId],
+  );
   await seedObservation(pageId, "account_media_batch", "b1", fixture("account-media-batch"));
   await seedObservation(
     pageId,
@@ -408,7 +416,7 @@ describe("[sync-critical] WP-F3 catalog projection", () => {
     ).toHaveLength(0);
   });
 
-  it("reconciles M against per-album membership, overlap-aware", async (context) => {
+  it("counts raw vault membership across albums without conflating offers", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -424,15 +432,27 @@ describe("[sync-critical] WP-F3 catalog projection", () => {
     // views over the same media.
     expect(census.albumMembershipSum).toBe(760);
     // The overlap-aware count from the walk's own membership. The vault page
-    // named two distinct offers; the uservault's member is on the USER shelf
+    // named two distinct raw files; the uservault's member is on the USER shelf
     // and is deliberately not counted.
     expect(census.vaultMemberUniqueCount).toBe(2);
-    // M itself: distinct media offers in `creator_media`, hydrated by the batch
-    // route. THE RECONCILIATION: M and the membership union agree, and both are
-    // far below Σ — which is the whole reason Σ is never reported as M.
+    // The offer census happens to also be two in this fixture, but it is a
+    // separate metric. Production proves one raw file can back several offers,
+    // so equality is not an invariant and must not be asserted.
     expect(census.uniqueMediaCount).toBe(2);
-    expect(census.uniqueMediaCount).toBe(census.vaultMemberUniqueCount);
     expect(census.albumMembershipSum).toBeGreaterThan(census.uniqueMediaCount);
+
+    const creatorMembers = await rows<{
+      media_ref: string;
+      media_offer_ref: string | null;
+    }>(
+      `select media_ref, media_offer_ref from creator_vault_album_members
+        where page_id = $1 and vault_kind = 'creator' order by media_ref`,
+      [page.id],
+    );
+    expect(creatorMembers).toEqual([
+      { media_ref: "000900000000000612", media_offer_ref: null },
+      { media_ref: "000900000000000614", media_offer_ref: null },
+    ]);
 
     // And the user shelf's purchases are NOT in the creator vault's count.
     const userMembers = await rows(

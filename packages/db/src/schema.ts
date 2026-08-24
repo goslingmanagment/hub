@@ -5717,10 +5717,10 @@ export const creatorVaultAlbums = pgTable(
 );
 
 /**
- * Album ↔ media-offer membership: the overlap-aware evidence behind M. The
- * union of `mediaOfferRef` over an exhausted CREATOR vault is the honest
- * inventory size; the gap between that union and Σ `itemCount` is exactly the
- * double-count the system albums cause.
+ * Album ↔ raw-media membership. Live creator-vault rows name `mediaId` and do
+ * not carry a media-offer id; user-vault rows may carry both. `mediaRef` is the
+ * identity and `mediaOfferRef` is optional metadata because one raw file can
+ * back several offers.
  *
  * `memberRef` is the membership row's OWN id (`albumMedia[].id`) — the vault
  * walk's `before` cursor, and NOT the same value as `mediaOfferRef`.
@@ -5735,15 +5735,15 @@ export const creatorVaultAlbumMembers = pgTable(
       .references(() => platforms.key, { onDelete: "restrict" })
       .notNull(),
     albumRef: text("album_ref").notNull(),
-    mediaOfferRef: text("media_offer_ref").notNull(),
+    mediaOfferRef: text("media_offer_ref"),
     memberRef: text("member_ref"),
     mediaOfferType: integer("media_offer_type"),
     bundleRef: text("bundle_ref"),
-    mediaRef: text("media_ref"),
+    mediaRef: text("media_ref").notNull(),
     mediaType: integer("media_type"),
     previewRef: text("preview_ref"),
-    /** `creator` | `user` — denormalized from the album so the M query does
-     *  not have to join to exclude the purchases shelf. */
+    /** `creator` | `user` — part of membership identity and the discriminator
+     *  that keeps the purchases shelf out of creator-vault counts. */
     vaultKind: text("vault_kind").notNull(),
     createdAtPlatform: timestamp("created_at_platform", { withTimezone: true }),
     missingSince: timestamp("missing_since", { withTimezone: true }),
@@ -5759,17 +5759,17 @@ export const creatorVaultAlbumMembers = pgTable(
   (table) => ({
     pk: primaryKey({
       name: "creator_vault_album_members_pkey",
-      columns: [table.pageId, table.albumRef, table.mediaOfferRef],
+      columns: [table.pageId, table.vaultKind, table.albumRef, table.mediaRef],
     }),
-    pageKindOfferIdx: index("creator_vault_album_members_page_kind_offer_idx").on(
+    pageKindMediaIdx: index("creator_vault_album_members_page_kind_media_idx").on(
       table.pageId,
       table.vaultKind,
-      table.mediaOfferRef,
+      table.mediaRef,
     ),
     pageOfferIdx: index("creator_vault_album_members_page_offer_idx").on(
       table.pageId,
       table.mediaOfferRef,
-    ),
+    ).where(sql`${table.mediaOfferRef} is not null`),
   }),
 );
 
