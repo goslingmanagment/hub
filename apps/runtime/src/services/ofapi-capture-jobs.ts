@@ -1408,7 +1408,11 @@ export async function executeOfapiCaptureJobChunk(
     }
 
     let raw: OfapiGovernedRawResponse;
-    const indeterminateRetryAt = requestPlan.operation === "ofapi_export_quote_status"
+    // Retry policy follows the declared request semantics, not an operation
+    // name allowlist. Every safe GET is repeatable after conservatively
+    // settling the uncertain attempt as billed; stateful requests remain
+    // parked for operator reconciliation.
+    const indeterminateRetryAt = requestPlan.requestSemantics === "safe_read"
       ? new Date(Date.now() + 60_000)
       : null;
     try {

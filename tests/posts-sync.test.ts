@@ -43,6 +43,7 @@ import {
   fanslyPostsChunk,
   onlyfansPostsChunk,
   parsePostsCursorState,
+  PostsCaptureJobBlockedError,
   PostsCaptureConfigurationError,
 } from "../apps/runtime/src/services/sync/posts.ts";
 
@@ -907,7 +908,9 @@ describe("posts sync handlers", () => {
     await expect(onlyfansPostsChunk({
       db: {},
       config: { ofapiMirrorBackgroundCaptureEnabled: true },
-    } as never, onlyfansInput())).rejects.toThrow(/blocked: contract_drift/);
+    } as never, onlyfansInput())).rejects.toEqual(
+      new PostsCaptureJobBlockedError(blocked.id, "contract_drift"),
+    );
     expect(dbMocks.upsertCheckpoint).not.toHaveBeenCalled();
   });
 });

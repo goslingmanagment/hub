@@ -56,7 +56,10 @@ import {
 import { executeStreamChunk, resolveExecutorPageContext } from "./executor-handlers.ts";
 import { SyncChunkBudget } from "./chunk-budget.ts";
 import { pauseDisabledOnlyFansDmPollingForPage } from "./onlyfans-dm-polling.ts";
-import { PostsCaptureConfigurationError } from "./posts.ts";
+import {
+  PostsCaptureConfigurationError,
+  PostsCaptureJobBlockedError,
+} from "./posts.ts";
 import { SyncRunTelemetry } from "./observability.ts";
 import { persistFailedSyncPayload } from "./shared.ts";
 
@@ -217,6 +220,15 @@ function classifyTaskFailure(
   blockerCode?: string;
   blockerReason?: string;
 } {
+  if (error instanceof PostsCaptureJobBlockedError) {
+    return {
+      mode: "blocked",
+      blockerType: "manual_action_required",
+      blockerCode: `ofapi_capture_job_${error.reasonCode}`,
+      blockerReason: failure.summary,
+    };
+  }
+
   if (error instanceof PostsCaptureConfigurationError) {
     return {
       mode: "retry",

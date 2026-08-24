@@ -7,7 +7,10 @@ import { PageSyncLeaseLostError } from "@agency_hub_core/db";
 import { FanslyApiError } from "@agency_hub_core/fansly";
 
 import { ProxyMissingError } from "../apps/runtime/src/services/errors.ts";
-import { PostsCaptureConfigurationError } from "../apps/runtime/src/services/sync/posts.ts";
+import {
+  PostsCaptureConfigurationError,
+  PostsCaptureJobBlockedError,
+} from "../apps/runtime/src/services/sync/posts.ts";
 
 const dbMocks = vi.hoisted(() => ({
   acquirePageSyncLease: vi.fn(),
@@ -1335,6 +1338,36 @@ describe("sync executor", () => {
       runId: 777,
       needsContinuation: false,
     });
+  });
+
+  it("parks a stream immediately when its governed OFAPI capture job is blocked", async () => {
+    const app = {
+      db: {},
+      logger: { warn: vi.fn(), error: vi.fn() },
+    } as never;
+
+    dbMocks.acquirePageSyncLease.mockResolvedValueOnce({
+      ...taskLease,
+      stream: "posts",
+      platform: "onlyfans",
+    });
+    handlerMocks.executeStreamChunk.mockRejectedValue(
+      new PostsCaptureJobBlockedError("job-1", "indeterminate"),
+    );
+
+    await executeNextSyncPageChunk(app, 55);
+
+    expect(dbMocks.retryPageSync).not.toHaveBeenCalled();
+    expect(dbMocks.blockPageSync).toHaveBeenCalledWith({}, expect.objectContaining({
+      pageId: 55,
+      stream: "posts",
+      blockerKind: "manual_action_required",
+      blockerCode: "ofapi_capture_job_indeterminate",
+    }));
+    expect(notificationMocks.notifySyncChunkFailureIncident).toHaveBeenCalledWith(
+      app,
+      expect.objectContaining({ forceOpen: true }),
+    );
   });
 
   it.each([

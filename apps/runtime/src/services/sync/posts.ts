@@ -56,6 +56,16 @@ export class PostsCaptureConfigurationError extends Error {
   }
 }
 
+export class PostsCaptureJobBlockedError extends Error {
+  constructor(
+    readonly jobId: string,
+    readonly reasonCode: string,
+  ) {
+    super(`OFAPI posts capture job ${jobId} blocked: ${reasonCode}`);
+    this.name = "PostsCaptureJobBlockedError";
+  }
+}
+
 export function getOnlyFansPostsCaptureIneligibility(
   config: Pick<AppContext["config"], "ofapiMirrorBackgroundCaptureEnabled"> | undefined,
   page: { platform: string; ofapiAccountId?: string | null },
@@ -1184,9 +1194,7 @@ export async function onlyfansPostsChunk(
     };
   }
   if (job.state === "blocked") {
-    throw new Error(
-      `OFAPI posts capture job ${job.id} blocked: ${job.reasonCode ?? "unknown"}`,
-    );
+    throw new PostsCaptureJobBlockedError(job.id, job.reasonCode ?? "unknown");
   }
 
   return {
