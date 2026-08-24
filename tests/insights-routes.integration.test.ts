@@ -550,7 +550,7 @@ beforeAll(async () => {
       memberRef: `member-${ref}`,
       mediaOfferType: 1,
       bundleRef: null,
-      mediaRef: null,
+      mediaRef: `raw-${ref}`,
       mediaType: 1,
       previewRef: null,
       vaultKind: "creator",

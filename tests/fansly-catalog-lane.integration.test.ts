@@ -420,8 +420,8 @@ describe("[sync-critical] WP-F3 catalog lane", () => {
         index === 0
           ? {
             albumMedia: [
-              { id: ref(901), mediaOfferId: ref(601), albumId: ref(101), createdAt: 1786556663000 },
-              { id: ref(902), mediaOfferId: ref(602), albumId: ref(101), createdAt: 1786556664000 },
+              { id: ref(901), mediaId: ref(601), albumId: ref(101), createdAt: 1786556663000 },
+              { id: ref(902), mediaId: ref(602), albumId: ref(101), createdAt: 1786556664000 },
             ],
             media: [],
           }
@@ -449,7 +449,7 @@ describe("[sync-critical] WP-F3 catalog lane", () => {
       before: "0",
       after: "0",
     });
-    // PAGE TWO carries the last albumMedia row's OWN id — not its mediaOfferId,
+    // PAGE TWO carries the last albumMedia row's OWN id — not its mediaId,
     // which is a different value and pages nowhere.
     expect(walkCalls[1]?.params.before).toBe(ref(902));
 
@@ -537,7 +537,7 @@ describe("[sync-critical] WP-F3 catalog lane", () => {
     // A provider that keeps serving the same last row: the cursor never moves.
     const adapter = adapterStub({
       vaultPage: () => ({
-        albumMedia: [{ id: ref(901), mediaOfferId: ref(601), albumId: ref(101) }],
+        albumMedia: [{ id: ref(901), mediaId: ref(601), albumId: ref(101) }],
         media: [],
       }),
     });
@@ -565,7 +565,7 @@ describe("[sync-critical] WP-F3 catalog lane", () => {
     const adapter = adapterStub({
       vaultPage: (params) =>
         params.before === "0"
-          ? { albumMedia: [{ id: ref(901), mediaOfferId: ref(601), albumId: ref(101) }], media: [] }
+          ? { albumMedia: [{ id: ref(901), mediaId: ref(601), albumId: ref(101) }], media: [] }
           : { albumMedia: [], media: [] },
     });
     const telemetry = telemetryStub();
@@ -606,7 +606,7 @@ describe("[sync-critical] WP-F3 catalog lane", () => {
     const adapter = adapterStub({
       attemptsPerCall: 3,
       vaultPage: (_params, index) => ({
-        albumMedia: [{ id: ref(900 + index), mediaOfferId: ref(600 + index), albumId: ref(101) }],
+        albumMedia: [{ id: ref(900 + index), mediaId: ref(600 + index), albumId: ref(101) }],
         media: [],
       }),
     });
@@ -659,7 +659,7 @@ describe("[sync-critical] WP-F3 catalog lane", () => {
           ? {
             albumMedia: [{
               id: ref(901),
-              mediaOfferId: ref(601),
+              mediaId: ref(601),
               albumId: String(params.albumId),
             }],
             media: [],
@@ -682,7 +682,7 @@ describe("[sync-critical] WP-F3 catalog lane", () => {
     expect(stats.dailyCap).toBe(60);
   });
 
-  it("hydrates media the walk named but creator_media has no row for", async (context) => {
+  it("hydrates optional offer ids when membership actually names them", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -691,13 +691,13 @@ describe("[sync-critical] WP-F3 catalog lane", () => {
     await seedAlbum(page.id, ref(101), 0, null);
     await testDb!.pool.query(
       `insert into creator_vault_album_members (
-         page_id, platform, album_ref, media_offer_ref, bundle_ref, vault_kind,
+         page_id, platform, album_ref, media_offer_ref, media_ref, bundle_ref, vault_kind,
          first_observed_at, last_observed_at, content_hash, source_event_id,
          source_observation_id, source_account_seq
        ) values
-         ($1, 'fansly', $2, $3, $5, 'creator', now(), now(), repeat('a', 64), 1, 1, 1),
-         ($1, 'fansly', $2, $4, null, 'creator', now(), now(), repeat('b', 64), 1, 1, 1)`,
-      [page.id, ref(101), ref(601), ref(602), ref(651)],
+         ($1, 'fansly', $2, $3, $6, $5, 'creator', now(), now(), repeat('a', 64), 1, 1, 1),
+         ($1, 'fansly', $2, $4, $7, null, 'creator', now(), now(), repeat('b', 64), 1, 1, 1)`,
+      [page.id, ref(101), ref(601), ref(602), ref(651), ref(611), ref(612)],
     );
     const adapter = adapterStub();
     const telemetry = telemetryStub();
@@ -747,11 +747,11 @@ describe("WP-F3 catalog lane helpers", () => {
   });
 
   it("takes the next cursor from the LAST row's own id", () => {
-    expect(nextVaultCursor([{ id: "1", mediaOfferId: "x" }, { id: "2", mediaOfferId: "y" }]))
+    expect(nextVaultCursor([{ id: "1", mediaId: "x" }, { id: "2", mediaId: "y" }]))
       .toBe("2");
     // A page of rows with no usable id cannot advance the walk, and saying so
     // is better than pretending it did.
-    expect(nextVaultCursor([{ mediaOfferId: "x" }])).toBeNull();
+    expect(nextVaultCursor([{ mediaId: "x" }])).toBeNull();
     expect(nextVaultCursor([])).toBeNull();
   });
 

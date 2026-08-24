@@ -81,7 +81,7 @@ import {
   recordArray,
 } from "./sync-pull.ts";
 
-export const FANSLY_CATALOG_CANONICALIZER_VERSION = 1;
+export const FANSLY_CATALOG_CANONICALIZER_VERSION = 2;
 const SCHEMA_VERSION = 1;
 
 /** The `observations.kind` values this family claims. Registered in
@@ -290,10 +290,13 @@ function albumDrafts(
 /**
  * Album membership, from either shape: `aggregationData.albumContent[]` on the
  * uservault listing, or `albumMedia[]` on a `/media/vaultnew` page. The two
- * carry the same keys.
+ * carry related, but not identical, keys. Live creator-vault rows name the raw
+ * file with `mediaId` and carry no `mediaOfferId`; user-vault rows may carry
+ * both. The file id is therefore the membership identity and the offer id is
+ * optional metadata.
  *
  * The dedup key carries NO hash — membership is binary. An album either
- * contains an offer or it does not, and re-observing it must not mint an event
+ * contains a file or it does not, and re-observing it must not mint an event
  * every time a neighbouring field moves.
  */
 function membershipDrafts(
@@ -305,20 +308,23 @@ function membershipDrafts(
   const drafts: CanonicalEventDraft[] = [];
   for (const row of rows) {
     const albumRef = asString(row.albumId);
-    const mediaOfferRef = asString(row.mediaOfferId);
-    if (albumRef === null || mediaOfferRef === null) {
+    const mediaRef = asString(row.mediaId);
+    if (albumRef === null || mediaRef === null) {
       continue;
     }
     const material = {
       vaultKind,
       albumRef,
-      mediaOfferRef,
+      // Present on user-vault albumContent rows, absent on the live creator
+      // vault walk. Never substitute mediaId: one raw file can back several
+      // offers, so the ids are not interchangeable.
+      mediaOfferRef: asString(row.mediaOfferId),
       // The membership row's OWN id — the vault walk's `before` cursor, and a
       // different value from `mediaOfferRef`.
       memberRef: asString(row.id),
       mediaOfferType: asNumber(row.mediaOfferType),
       bundleRef: asString(row.mediaOfferBundleId),
-      mediaRef: asString(row.mediaId),
+      mediaRef,
       mediaType: asNumber(row.mediaType),
       previewRef: asString(row.previewId),
       // MILLISECONDS on this field.
@@ -329,8 +335,8 @@ function membershipDrafts(
       type: "vault.album_membership_observed",
       occurredAt: observation.receivedAt,
       data: { ...material, contentHash: hash },
-      schemaVersion: SCHEMA_VERSION,
-      dedupKey: `albummem:v1:${pageRef}:${albumRef}:${mediaOfferRef}`,
+      schemaVersion: 2,
+      dedupKey: `albummem:v2:${pageRef}:${vaultKind}:${albumRef}:${mediaRef}`,
     });
   }
   return drafts;
@@ -737,7 +743,16 @@ export function canParseFanslyCatalogObservation(
     case "uservault_albums":
       return isRecord(observation.payload) && Array.isArray(observation.payload.albums);
     case "vault_media":
-      return isRecord(observation.payload) && Array.isArray(observation.payload.albumMedia);
+      return isRecord(observation.payload)
+        && Array.isArray(observation.payload.albumMedia)
+        // Empty is a valid exhausted page. A non-empty page is parseable only
+        // when every membership has the identity the projector requires; this
+        // is the row-level guard v1 lacked when it silently stamped live rows.
+        && observation.payload.albumMedia.every((row) => (
+          isRecord(row)
+          && asString(row.albumId) !== null
+          && asString(row.mediaId) !== null
+        ));
     default:
       // The five array-shaped listings and the two batch routes. An object that
       // wraps its array is accepted too — `envelopeArray` reads either.

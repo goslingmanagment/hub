@@ -248,15 +248,18 @@ describe("fansly-catalog: vaults", () => {
 describe("fansly-catalog: the vault media walk", () => {
   const list = drafts("vault_media", fixture("vault-media-page"));
 
-  it("emits membership from albumMedia, keyed without a hash", () => {
+  it("emits live-shaped membership from mediaId, keyed without a hash", () => {
     const members = ofType(list, "vault.album_membership_observed");
     expect(members).toHaveLength(2);
     // NO hash in the key: membership is binary. An album either contains an
-    // offer or it does not, and a neighbouring field moving must not mint a
+    // raw file or it does not, and a neighbouring field moving must not mint a
     // second event for the same fact.
     expect(members[0]?.dedupKey)
-      .toBe("albummem:v1:7:000900000000000101:000900000000000611");
+      .toBe("albummem:v2:7:creator:000900000000000101:000900000000000612");
     expect(members[0]?.data.vaultKind).toBe("creator");
+    expect(members[0]?.data.mediaRef).toBe("000900000000000612");
+    expect(members[0]?.data.mediaOfferRef).toBeNull();
+    expect(members[0]?.schemaVersion).toBe(2);
   });
 
   it("has NO roster — a paged walk cannot assert what an album does not hold", () => {
@@ -593,6 +596,11 @@ describe("fansly-catalog: the parse gate", () => {
     expect(canParseFanslyCatalogObservation({
       kind: "vault_media",
       payload: { media: [] },
+      accountId: 7,
+    })).toBe(false);
+    expect(canParseFanslyCatalogObservation({
+      kind: "vault_media",
+      payload: { albumMedia: [{ id: "cursor", albumId: "album-without-media" }] },
       accountId: 7,
     })).toBe(false);
   });

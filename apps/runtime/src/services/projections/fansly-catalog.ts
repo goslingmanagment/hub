@@ -309,17 +309,17 @@ export async function runFanslyCatalogProjection(
 
           case "vault.album_membership_observed": {
             const albumRef = asText(data.albumRef);
-            const mediaOfferRef = asText(data.mediaOfferRef);
-            if (albumRef === null || mediaOfferRef === null) continue;
+            const mediaRef = asText(data.mediaRef);
+            if (albumRef === null || mediaRef === null) continue;
             const result = await upsertCreatorVaultAlbumMember(app.db, {
               pageId: accountId,
               platform: catalogPlatform,
               albumRef,
-              mediaOfferRef,
+              mediaOfferRef: asText(data.mediaOfferRef),
               memberRef: asText(data.memberRef),
               mediaOfferType: asInt(data.mediaOfferType),
               bundleRef: asText(data.bundleRef),
-              mediaRef: asText(data.mediaRef),
+              mediaRef,
               mediaType: asInt(data.mediaType),
               previewRef: asText(data.previewRef),
               vaultKind: vaultKind(data.vaultKind),
@@ -560,18 +560,16 @@ async function reconcileListingPresence(
 }
 
 /**
- * **M, and the number M is not** — the catalog lane's named output (A16 item 1).
+ * The catalog lane's three media censuses (A16 item 1).
  *
  * `uniqueMediaCount` is M: `count(distinct media_offer_ref)` over
- * `creator_media`. `vaultMemberUniqueCount` is the same count taken over the
- * creator vault's own membership — the overlap-aware inventory size the walk
- * measures. `albumMembershipSum` is Σ `item_count`, which DOUBLE-COUNTS and is
- * labelled non-unique everywhere it appears.
+ * `creator_media`. `vaultMemberUniqueCount` is the distinct raw-file union the
+ * creator-vault walk measures. These are separate identities: one raw file can
+ * back several offers. `albumMembershipSum` is Σ `item_count`, which
+ * DOUBLE-COUNTS and is labelled non-unique everywhere it appears.
  *
- * All three are reported together on purpose. Σ was 16 939 on the live capture
- * against 27 albums whose real distinct inventory is far smaller, and a lane
- * that published only Σ would have sized WP-F4 against a number that does not
- * exist.
+ * All three are reported together on purpose, but no equality between the raw
+ * file and offer counts is claimed.
  */
 export interface FanslyCatalogMediaCensus {
   uniqueMediaCount: number;

@@ -547,7 +547,7 @@ you conclude anything from a zero.
 | `message_media_sales` | what was offered and bought in DMs | `+ read:money + read:messages` |
 | `comments` | reply bodies over the attempted back catalogue | `+ read:money + read:messages` |
 | `likes` | liker identity — **empty on Fansly**, see below | `read:datasets` |
-| `vault_media` | album ↔ media membership, both vaults | `read:datasets` |
+| `vault_media` | album ↔ raw-media membership (`mediaRef`); optional `mediaOfferRef`, both vaults | `read:datasets` |
 | `notifications` | every notification row, every code, verbatim | `read:datasets` |
 | `subscription_tiers` | one row per PLAN: the price truth, not the tier base | `+ read:money` |
 | `payouts` | payout requests with masked methods | `+ read:money` |

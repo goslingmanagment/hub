@@ -22,12 +22,11 @@
 // because its content hash is the one it had before. Only the roster can
 // un-mark it. Without that, "gone" would be a tombstone rather than a state.
 //
-// THE MEASUREMENT — `countPageUniqueCreatorMedia` and
-// `sumCreatorVaultAlbumItemCounts`, the two halves of M. The first is M itself
-// (`count(distinct media_offer_ref)`); the second is Σ `item_count`, which
-// DOUBLE-COUNTS and is reported only as explicitly non-unique membership. They
-// live here rather than in the media-plane repository because the catalog lane
-// is the only caller and the pair is meaningless apart.
+// THE MEASUREMENT — `countPageUniqueCreatorMedia` is the offer census;
+// `countCreatorVaultUniqueMembers` is the raw-file union observed in the vault;
+// `sumCreatorVaultAlbumItemCounts` is the explicitly non-unique served sum.
+// They are related diagnostics, not interchangeable denominators: one raw file
+// can back several offers.
 
 import { sql, type SQL } from "drizzle-orm";
 
@@ -203,12 +202,12 @@ export interface UpsertCreatorVaultAlbumMemberInput extends CatalogLineage {
   pageId: number;
   platform: FanslyCatalogPlatform;
   albumRef: string;
-  mediaOfferRef: string;
+  mediaOfferRef: string | null;
   /** The membership row's own id — the walk cursor, NOT the media offer id. */
   memberRef: string | null;
   mediaOfferType: number | null;
   bundleRef: string | null;
-  mediaRef: string | null;
+  mediaRef: string;
   mediaType: number | null;
   previewRef: string | null;
   vaultKind: CatalogVaultKind;
@@ -232,14 +231,13 @@ export async function upsertCreatorVaultAlbumMember(
       null, ${input.observedAt}, ${input.observedAt}, ${input.contentHash},
       ${input.sourceEventId}, ${input.sourceObservationId}, ${input.sourceAccountSeq}
     )
-    on conflict (page_id, album_ref, media_offer_ref) do update set
+    on conflict (page_id, vault_kind, album_ref, media_ref) do update set
+      media_offer_ref = ${pick("creator_vault_album_members", "media_offer_ref")},
       member_ref = ${pick("creator_vault_album_members", "member_ref")},
       media_offer_type = ${pick("creator_vault_album_members", "media_offer_type")},
       bundle_ref = ${pick("creator_vault_album_members", "bundle_ref")},
-      media_ref = ${pick("creator_vault_album_members", "media_ref")},
       media_type = ${pick("creator_vault_album_members", "media_type")},
       preview_ref = ${pick("creator_vault_album_members", "preview_ref")},
-      vault_kind = ${pick("creator_vault_album_members", "vault_kind")},
       created_at_platform = ${pick("creator_vault_album_members", "created_at_platform")},
       content_hash = ${pick("creator_vault_album_members", "content_hash")},
       source_event_id = ${pick("creator_vault_album_members", "source_event_id")},
@@ -725,8 +723,9 @@ export async function countPageUniqueCreatorMedia(
 }
 
 /**
- * The count of DISTINCT media offers the creator vault's membership names —
- * the overlap-aware inventory size, and the number that reconciles against M.
+ * The count of DISTINCT raw media files the creator vault's membership names.
+ * It is overlap-aware across albums, but it is not the offer census: one raw
+ * file can back several rows in `creator_media`.
  *
  * The user vault is excluded by `vault_kind`: it holds the account's PURCHASES
  * from other creators, and counting them would inflate the page's own
@@ -737,7 +736,7 @@ export async function countCreatorVaultUniqueMembers(
   pageId: number,
 ): Promise<number> {
   const result = await db.execute(sql`
-    select count(distinct media_offer_ref)::bigint as "count"
+    select count(distinct media_ref)::bigint as "count"
       from creator_vault_album_members
      where page_id = ${pageId}
        and vault_kind = 'creator'
@@ -772,9 +771,10 @@ export async function sumCreatorVaultAlbumItemCounts(
 }
 
 /**
- * The hydration queue: creator-vault media offers with NO `creator_media` row
- * yet. The batch hydration reads this, in id order so a deferred chunk resumes
- * deterministically rather than re-drawing a random slice each time.
+ * The hydration queue for the optional media-offer ids some membership shapes
+ * carry. Live creator-vault rows currently carry only raw `mediaId`; those rows
+ * are deliberately excluded rather than sending a raw file id to an offer-id
+ * endpoint.
  */
 export async function listUnhydratedVaultMediaRefs(
   db: Database,
@@ -785,6 +785,7 @@ export async function listUnhydratedVaultMediaRefs(
       from creator_vault_album_members m
      where m.page_id = ${input.pageId}
        and m.vault_kind = 'creator'
+       and m.media_offer_ref is not null
        and not exists (
          select 1
            from creator_media c
