@@ -104,6 +104,7 @@ import {
   getPageSyncBlocks,
   getSyncBlocksOverview,
   pauseSyncBlock,
+  resetFollowersReconcileStream,
   resetSyncBlock,
   resumeSyncBlock,
   triggerSyncBlock,
@@ -1015,6 +1016,23 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
       ...auditCtx(principal),
       eventType: "admin.sync_block_reset",
       metadata: { ...request.body },
+    });
+    return result;
+  });
+
+  server.post("/api/v1/admin/sync/followers-reconcile/reset", {
+    schema: routeSchemas.adminFollowersReconcileReset,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    if (!boss) {
+      throw new ServiceUnavailableError("Job queue not available");
+    }
+    const result = await resetFollowersReconcileStream(appContext, boss, request.body);
+    await recordAudit(appContext, {
+      ...auditCtx(principal),
+      eventType: "admin.followers_reconcile_reset",
+      metadata: { ...request.body, stream: "followers_reconcile" },
     });
     return result;
   });

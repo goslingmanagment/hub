@@ -11,6 +11,7 @@ import {
   monthFromIndex,
   monthIndexOf,
   monthLabel,
+  monthPredatesAccountCreation,
   monthWasHonoured,
   narrowedSpanDays,
   parseFanslyStatsCursorState,
@@ -131,6 +132,20 @@ describe("stats backfill cursor state", () => {
     const parsedCompleted = parseFanslyStatsCursorState(completed, NOW)!;
     expect(parsedCompleted.lastSweepDay).toBeNull();
     expect(parsedCompleted.sweepDay).toBeNull();
+  });
+});
+
+describe("account creation floor", () => {
+  const accountCreatedAt = new Date("2025-02-06T12:00:00.000Z");
+
+  it("stops only before the creation month", () => {
+    expect(monthPredatesAccountCreation(2025 * 12, accountCreatedAt)).toBe(true);
+    expect(monthPredatesAccountCreation(2025 * 12 + 1, accountCreatedAt)).toBe(false);
+    expect(monthPredatesAccountCreation(2025 * 12 + 2, accountCreatedAt)).toBe(false);
+  });
+
+  it("does not invent a floor when account metadata is absent", () => {
+    expect(monthPredatesAccountCreation(2020 * 12, null)).toBe(false);
   });
 });
 

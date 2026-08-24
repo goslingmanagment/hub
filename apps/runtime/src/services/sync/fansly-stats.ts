@@ -78,6 +78,7 @@ import { CAPTURE_COVERAGE_PLANES } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
 import { loadEffectiveConfig } from "../effective-config.ts";
+import { parseFanslyMetadataAccountCreatedAt } from "../fansly.ts";
 import { isPageAllowlisted } from "../voice-notes.ts";
 import { composeRequestObservers } from "./chunk-budget.ts";
 import type { ExecutorRequestContext, StreamChunkResult } from "./executor-handlers.ts";
@@ -468,6 +469,16 @@ export function monthIndexOf(instant: Date): number {
   return instant.getUTCFullYear() * 12 + instant.getUTCMonth();
 }
 
+/** A monthly stats request cannot contain account data before the month in
+ *  which the account itself was created. The creation month remains eligible:
+ *  it can contain a partial month of real activity. */
+export function monthPredatesAccountCreation(
+  monthIndex: number,
+  accountCreatedAt: Date | null,
+): boolean {
+  return accountCreatedAt !== null && monthIndex < monthIndexOf(accountCreatedAt);
+}
+
 /** The `year`/`month` (1–12) pair the request carries. */
 export function monthFromIndex(index: number): { year: number; month: number } {
   return { year: Math.floor(index / 12), month: (index % 12) + 1 };
@@ -802,6 +813,9 @@ export async function fanslyStatsSnapshotChunk(
 
   const now = input.now ?? new Date();
   const pageId = input.pageContext.page.id;
+  const accountCreatedAt = parseFanslyMetadataAccountCreatedAt(
+    input.pageContext.page.metadata,
+  );
   const dailyCap = Math.max(1, effective.fanslyStatsSnapshotDailyCallBudget ?? 25);
   const hourlyEnabled = effective.fanslyStatsHourlyEnabled !== false;
   const hourlyBackfillMaxDays = Math.max(0, effective.fanslyStatsHourlyBackfillMaxDays ?? 30);
@@ -1200,6 +1214,35 @@ export async function fanslyStatsSnapshotChunk(
 
         // ── STEP 2: THE MONTH WALK, newest month first ─────────────────────
         const monthIndex = backfill.daily.nextMonthIndex ?? monthIndexOf(now) - 1;
+        // Do not spend the probe on a month in which the account did not yet
+        // exist. This is a hard, page-local floor already captured from the
+        // account response, and it also heals cursors that were previously
+        // left retrying the same pre-creation probe every day.
+        if (monthPredatesAccountCreation(monthIndex, accountCreatedAt)) {
+          backfill.daily.done = true;
+          await coverage(
+            CAPTURE_COVERAGE_PLANES.statsAccountDaily,
+            "provider_exhausted",
+            // The floor comes from page metadata rather than this lane's
+            // journal, so there is no observation id to claim as lineage.
+            "none",
+            {
+              oldestCapturedAt: backfill.daily.floorAt === null
+                ? null
+                : new Date(backfill.daily.floorAt),
+              newestCapturedAt: now,
+              reasonCode: "account_creation_floor",
+              cursor: {
+                mode: "backfill_month",
+                requestedMonth: monthLabel(monthIndex),
+                accountCreatedAt: accountCreatedAt!.toISOString(),
+              },
+            },
+          );
+          state = { ...state, backfill: { ...backfill } };
+          await saveProgress();
+          continue;
+        }
         // The same repeat guard, in the unit this walk steps in: the same
         // `(year, month)` twice is the loop, and it costs nothing to see it
         // before the request rather than after 24 identical bodies.
@@ -1233,6 +1276,46 @@ export async function fanslyStatsSnapshotChunk(
         }, response.raw);
         guard.lastObservationId = persisted.observationId ?? guard.lastObservationId;
         if (classifyStatsWindow(response.raw) === "invalid") {
+          if (backfill.daily.probeResumeMonthIndex !== null) {
+            // A malformed answer to the one-off deep probe is evidence only
+            // about that probe surface. Retrying it tomorrow cannot advance
+            // the walk and was the production hot loop; stop conservatively
+            // without converting it into a false empty-window claim.
+            backfill.daily.done = true;
+            await coverage(
+              CAPTURE_COVERAGE_PLANES.statsAccountDaily,
+              "partial_provider_surface",
+              "terminal_response",
+              {
+                oldestCapturedAt: backfill.daily.floorAt === null
+                  ? null
+                  : new Date(backfill.daily.floorAt),
+                newestCapturedAt: now,
+                proofObservationId: persisted.observationId,
+                reasonCode: "probe_response_invalid",
+                cursor: {
+                  mode: "backfill_month_probe",
+                  requestedMonth: monthLabel(monthIndex),
+                  resumeMonth: monthLabel(backfill.daily.probeResumeMonthIndex),
+                },
+              },
+            );
+            await input.telemetry.addAnomaly({
+              code: "fansly_stats_probe_response_invalid",
+              severity: "warn",
+              message:
+                "Fansly stats returned an invalid response to the deep month probe; "
+                + "the history walk stopped",
+              details: {
+                plane: CAPTURE_COVERAGE_PLANES.statsAccountDaily,
+                requestedMonth: monthLabel(monthIndex),
+                resumeMonth: monthLabel(backfill.daily.probeResumeMonthIndex),
+              },
+            });
+            state = { ...state, backfill: { ...backfill } };
+            await saveProgress();
+            continue;
+          }
           backfill.daily.lastMonthIndex = null;
           state = { ...state, backfill: { ...backfill } };
           await saveProgress();

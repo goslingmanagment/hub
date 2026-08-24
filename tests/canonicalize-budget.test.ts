@@ -285,6 +285,42 @@ describe("canonicalization sweep wall-clock budget", () => {
     expect(scannedKinds()).toEqual(["kind_a", "kind_b", "kind_c"]);
     expect(cli).toMatchObject({ truncatedByBudget: false, skippedFamilies: [] });
   });
+
+  it("returns bounded content-free diagnostics for shape-gate refusals", async () => {
+    dbMocks.listObservationsForReplay
+      .mockResolvedValueOnce([row(77, "posts")])
+      .mockResolvedValueOnce([]);
+    const diagnostics: string[] = [];
+    const result = await runCanonicalization(appStub(), {
+      families: [{
+        source: "pull",
+        lane: "posts",
+        kinds: ["posts"],
+        version: 6,
+        canonicalize: () => [],
+        canParse: () => false,
+        parseRejection: () => ({ code: "like_count_invalid", itemIndex: 4 }),
+      }],
+      diagnostics: { record: (code) => void diagnostics.push(code) },
+    });
+
+    expect(result).toMatchObject({
+      scanned: 1,
+      skippedUnparseable: 1,
+      stamped: 0,
+      unparseableSamples: [{
+        observationId: 77,
+        family: "pull:posts",
+        kind: "posts",
+        reasonCode: "like_count_invalid",
+        itemIndex: 4,
+      }],
+    });
+    expect(diagnostics).toEqual([
+      "canonicalize_rejected:posts:like_count_invalid",
+    ]);
+    expect(dbMocks.markObservationParsed).not.toHaveBeenCalled();
+  });
 });
 
 describe("canonicalize queue lifecycle", () => {

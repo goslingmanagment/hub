@@ -52,6 +52,7 @@ import {
   getPageMessagesSyncBlock,
   getSyncBlocksOverview,
   pauseSyncBlock,
+  resetFollowersReconcileStream,
   resetSyncBlock,
   resumeSyncBlock,
   triggerSyncBlock,
@@ -670,5 +671,54 @@ describe("sync blocks service", () => {
     expect(db.transaction).not.toHaveBeenCalled();
     expect(dbMocks.resetPageDmSyncState).not.toHaveBeenCalled();
     expect(dbMocks.resetPageSync).not.toHaveBeenCalled();
+  });
+
+  it("resets only follower reconcile without deleting audience checkpoints", async () => {
+    const tx = {};
+    const db = {
+      transaction: vi.fn(async (callback: (dbTx: object) => Promise<unknown>) => callback(tx)),
+    };
+    dbMocks.findPageByLabel.mockResolvedValue({
+      page: { id: 7, label: "lana", platform: "fansly" },
+      proxy: null,
+    });
+    dbMocks.ensurePageSyncStates.mockResolvedValue(undefined);
+    dbMocks.requestPageSync.mockResolvedValue([
+      { stream: "followers_reconcile", requestedSeq: 2052 },
+    ]);
+    queueMocks.sendSyncPageWakeup.mockResolvedValue("job-followers-reconcile");
+
+    const response = await resetFollowersReconcileStream({ db } as never, {
+      send: vi.fn(),
+    } as never, {
+      pageLabel: "lana",
+      now: new Date("2026-08-25T00:00:00.000Z"),
+    });
+
+    expect(response).toEqual({
+      accepted: true,
+      action: "reset",
+      pageLabel: "lana",
+      stream: "followers_reconcile",
+      requests: [{ stream: "followers_reconcile", requestedSeq: 2052 }],
+    });
+    expect(dbMocks.resetPageSync).toHaveBeenCalledWith(tx, {
+      pageId: 7,
+      streams: ["followers_reconcile"],
+      now: new Date("2026-08-25T00:00:00.000Z"),
+    });
+    expect(dbMocks.deleteCheckpoints).not.toHaveBeenCalled();
+    expect(dbMocks.requestPageSync).toHaveBeenCalledWith(tx, expect.objectContaining({
+      pageId: 7,
+      streams: ["followers_reconcile"],
+      source: "reset",
+    }));
+    expect(queueMocks.sendSyncPageWakeup).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        platformAccountId: 7,
+        provider: "fansly",
+      }),
+    );
   });
 });

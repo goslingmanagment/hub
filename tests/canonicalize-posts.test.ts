@@ -15,6 +15,7 @@ import {
   canParsePostsObservation,
   canonicalizePostsObservation,
   deriveHashtags,
+  diagnosePostsObservationRejection,
   HASHTAG_PARSER_VERSION,
 } from "../apps/runtime/src/services/canonicalize/posts.ts";
 import type { CanonicalizableObservation } from "../apps/runtime/src/services/canonicalize/types.ts";
@@ -44,7 +45,7 @@ describe("creator-post canonicalizer", () => {
     const family = familyForObservation(observation({ posts: [] }));
     expect(family).toMatchObject({
       source: "pull",
-      version: 6,
+      version: 7,
       projectionOnly: true,
     });
     expect(family?.kinds).toEqual(["posts", "post_tips"]);
@@ -333,7 +334,7 @@ describe("creator-post canonicalizer", () => {
           type: "post.tip_parse_rejected",
           schemaVersion: 1,
           data: expect.objectContaining({
-            parserVersion: 6,
+            parserVersion: 7,
             rejectedItemCount: 1,
           }),
         }),
@@ -652,6 +653,18 @@ describe("WP-F6 the engagement/thread/placement material", () => {
     expect(zeroed!.data).toMatchObject({ likeCount: 0, replyCount: 0, mediaLikeCount: 0 });
   });
 
+  it("accepts the observed id-less account mention shape without inventing a ref", () => {
+    const payload = {
+      posts: [widePost({
+        accountMentions: [{ start: 0, end: 7, handle: "loravie" }],
+      })],
+    };
+    expect(canParsePostsObservation(observation(payload))).toBe(true);
+    expect(diagnosePostsObservationRejection(observation(payload))).toBeNull();
+    const [event] = canonicalizePostsObservation(observation(payload));
+    expect(event!.data.accountMentionRefs).toBeNull();
+  });
+
   it("stores inReplyTo and inReplyToRoot separately", () => {
     const [event] = canonicalizePostsObservation(observation({
       posts: [widePost({ inReplyTo: "parent-1", inReplyToRoot: "root-1" })],
@@ -680,6 +693,8 @@ describe("WP-F6 the engagement/thread/placement material", () => {
         { fypFlags: 1.5 },
         { wallIds: [{ id: "wall-1" }] },
         { accountMentions: [{ handle: "loravie" }] },
+        { accountMentions: [{ start: 0, end: 7, handle: "loravie", accountId: null }] },
+        { accountMentions: [{ start: 7, end: 0, handle: "loravie" }] },
         { inReplyTo: "" },
         { expiresAt: "not-a-date" },
       ]
@@ -690,6 +705,22 @@ describe("WP-F6 the engagement/thread/placement material", () => {
       expect(canParsePostsObservation(observation(payload)), JSON.stringify(drift)).toBe(false);
       expect(canonicalizePostsObservation(observation(payload))).toEqual([]);
     }
+  });
+
+  it("names the first rejected predicate and post index without exposing values", () => {
+    const payload = {
+      posts: [
+        widePost({ id: "valid" }),
+        widePost({ id: "refused", likeCount: "30" }),
+      ],
+    };
+    expect(diagnosePostsObservationRejection(observation(payload))).toEqual({
+      code: "like_count_invalid",
+      itemIndex: 1,
+    });
+    expect(diagnosePostsObservationRejection(observation({ posts: "not-an-array" }))).toEqual({
+      code: "posts_not_array",
+    });
   });
 
   it("puts no delivery URL anywhere near the event, whatever the attachment carries", () => {

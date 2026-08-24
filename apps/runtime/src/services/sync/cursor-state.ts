@@ -21,6 +21,7 @@ type FollowersCursorState = {
 type FollowersReconcileCursorState = {
   revision: number;
   generation: number;
+  fullSweepStartedAt: string;
   offset: number;
   observedCount: number;
   pageCount: number;
@@ -28,6 +29,13 @@ type FollowersReconcileCursorState = {
   snapshotRestartCount: number;
   restartReason: "snapshot_mismatch" | null;
   verificationPending: boolean;
+};
+
+type FollowersReconcileProgressState = Omit<
+  FollowersReconcileCursorState,
+  "fullSweepStartedAt"
+> & {
+  fullSweepStartedAt: string | null;
 };
 
 /**
@@ -228,10 +236,10 @@ export function parseFollowersCursorState(
   };
 }
 
-export function parseFollowersReconcileCursorState(
+export function parseFollowersReconcileProgressState(
   value: unknown,
   revision: number | null | undefined,
-): FollowersReconcileCursorState | null {
+): FollowersReconcileProgressState | null {
   const expectedRevision = parseRevision(revision);
   if (expectedRevision === null) {
     return null;
@@ -243,6 +251,10 @@ export function parseFollowersReconcileCursorState(
   }
 
   const generation = asNumber(state.generation);
+  const fullSweepStartedAt = typeof state.fullSweepStartedAt === "string"
+    && Number.isFinite(Date.parse(state.fullSweepStartedAt))
+    ? state.fullSweepStartedAt
+    : null;
   const offset = asNumber(state.offset);
   const observedCount = asNumber(state.observedCount) ?? offset;
   const pageCount = asNumber(state.pageCount);
@@ -252,7 +264,7 @@ export function parseFollowersReconcileCursorState(
     : null;
   // Counts from older completed checkpoints were lifetime-shaped. Only a
   // cursor explicitly scoped to the active mismatch may consume this
-  // revision's one-restart allowance.
+  // revision's bounded restart allowance.
   const snapshotRestartCount = restartReason === "snapshot_mismatch"
     ? asNumber(state.snapshotRestartCount) ?? 0
     : 0;
@@ -271,6 +283,7 @@ export function parseFollowersReconcileCursorState(
   return {
     revision: expectedRevision,
     generation,
+    fullSweepStartedAt,
     offset,
     observedCount,
     pageCount,
@@ -278,6 +291,24 @@ export function parseFollowersReconcileCursorState(
     snapshotRestartCount,
     restartReason,
     verificationPending,
+  };
+}
+
+/** Execution must never resume a legacy sweep that predates the retirement
+ * time fence. Read-only progress consumers may still display its counters via
+ * parseFollowersReconcileProgressState without fabricating a start time. */
+export function parseFollowersReconcileCursorState(
+  value: unknown,
+  revision: number | null | undefined,
+): FollowersReconcileCursorState | null {
+  const state = parseFollowersReconcileProgressState(value, revision);
+  if (!state?.fullSweepStartedAt) {
+    return null;
+  }
+
+  return {
+    ...state,
+    fullSweepStartedAt: state.fullSweepStartedAt,
   };
 }
 
@@ -589,6 +620,7 @@ export type {
   DmMessagesCursorState,
   FollowersCursorState,
   FollowersReconcileCursorState,
+  FollowersReconcileProgressState,
   OfapiDmConversationCursorState,
   SubscribersCursorState,
   TopSpendersCursorState,

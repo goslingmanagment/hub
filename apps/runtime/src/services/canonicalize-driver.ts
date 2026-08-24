@@ -138,6 +138,16 @@ export interface CanonicalizationRunResult {
    * Distinct from a legitimately EMPTY snapshot, which is consumed normally.
    */
   skippedUnparseable: number;
+  /** Bounded, content-free reasons for shape-gate refusals. These make an
+   * `events:replay` result actionable without exposing the captured payload or
+   * emitting one repetitive log line per poison row on every sweep. */
+  unparseableSamples: Array<{
+    observationId: number;
+    family: string;
+    kind: string;
+    reasonCode: string;
+    itemIndex?: number;
+  }>;
   /**
    * Rows whose captured body could not be READ at all (#223) — a pointer-only
    * envelope whose single catalog copy was momentarily out of reach. Left
@@ -457,6 +467,23 @@ async function runFamily(
         // failure the parse_version contract exists to prevent.
         if (family.canParse !== undefined && !family.canParse(observation)) {
           totals.skippedUnparseable += 1;
+          const rejection = family.parseRejection?.(observation) ?? null;
+          const reasonCode = rejection?.code ?? "unclassified";
+          // The worker logs the whole run result. Bound this list so a broad
+          // version bump over a poison corpus cannot turn diagnostics into its
+          // own log-volume incident.
+          if (totals.unparseableSamples.length < 20) {
+            totals.unparseableSamples.push({
+              observationId: row.id,
+              family: familyLabel(family),
+              kind: row.kind,
+              reasonCode,
+              ...(rejection?.itemIndex === undefined
+                ? {}
+                : { itemIndex: rejection.itemIndex }),
+            });
+          }
+          runContext.diagnostics?.record(`canonicalize_rejected:${family.lane}:${reasonCode}`);
           continue;
         }
         const drafts = family.canonicalize(observation, runContext)
@@ -581,6 +608,7 @@ export async function runCanonicalization(
     stamped: 0,
     skippedUnmapped: 0,
     skippedUnparseable: 0,
+    unparseableSamples: [],
     skippedUnavailable: 0,
     lastObservationId: null,
     errored: 0,

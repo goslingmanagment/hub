@@ -209,7 +209,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 205 | Creator-post capture and Agent read | Creator posts use one default-paused ordinary `posts` sync stream: Fansly account timeline payloads are journaled before canonicalization and governed OFAPI `post_paginate` jobs commit exact response bytes before parsing; both then append projection-only `post.observed` events into the rebuildable `creator_posts` current-head projection. Existing Agent operation #10 and `hub dataset` expose verbatim post text under the existing `read:datasets` + `read:messages` rights; no new route, capability, command or FTS, and capture floors never prove vendor absence |
 | 206 | Fansly reverse evidence and fail-closed completeness | Executable reverse behavior may define pagination and observed response shapes, but every adopted path remains raw-first and refuses false completeness: purchase history follows `before=last orderId` to an empty page; transaction/DM totals and DM unique ids are mandatory; earnings rejects partial money aggregates and cursor jumps. Standalone Fansly onboarding requires a proxy at every boundary. New earnings/tracking/list reads remain adapter-only until an honest storage model exists. Agent transaction results serve active rows while their capture floor remains the physical oldest retained row |
 | 207 | Smoke consumer projection checkpoints | The permanent v2 smoke consumer applies `stream.projection_checkpoint.hiddenCount` through the same monotonic guard as real v2 clients, so intentionally hidden projection-only rows advance its cursor without false GAP errors; malformed or mismatched checkpoints still fail closed, and the historical persisted counter is retained as an ops baseline rather than reset |
-| 208 | Live-list terminal verification and optional DM totals | Fansly follower reconcile compares its unique generation with a freshly captured terminal headline, checkpointing a budgeted verification-only continuation when necessary; one restart then durable block remains. PARTIALLY supersedes #206 only for DM totals: consistently absent/null totals allow a captured, unique-id-guarded but non-destructive completion, while a present total remains stable/exact and is the sole authority for hiding unseen conversations |
+| 208 | Live-list terminal verification and optional DM totals | Fansly follower reconcile compares its unique generation with a freshly captured terminal headline, checkpointing a budgeted verification-only continuation when necessary; its one-restart/durable-block follower recovery is superseded by #237. PARTIALLY supersedes #206 only for DM totals: consistently absent/null totals allow a captured, unique-id-guarded but non-destructive completion, while a present total remains stable/exact and is the sole authority for hiding unseen conversations |
 | 209 | Fansly post monetization | Fansly timeline money and linked-goal fields become a latest-observed `post_monetization` snapshot, while raw-first `/tips?targetIds` capture supplies donor-to-post rows with exact type-7100 goal attribution and verbatim tip notes in `post_tips`. The rendered post total is `tipAmount + attachmentTipAmount`, never `totalTipAmount`; `tip_goals` deduplicates shared goals. Companion drift cannot wedge posts, malformed tip items become explicit parse debt, and migration 0121/posts canonicalizer v4 preserve replay without claiming continuous refresh or tipped-reply-donor completeness |
 | 210 | Fansly live post-tip contract correction | Post-deploy acceptance supersedes #209 narrowly on the undocumented `/tips` item shape and null semantics: live items carry a flat `targetId` that proves donor-to-post attribution but no per-tip goal discriminator or transaction refs. Canonicalizer v5/schema v3 replays them with internal `tipGoalAttribution='unknown'`; a null `postTipGoalRef` means source-did-not-provide, never direct. Nested typed targets remain accepted when actually observed. No migration or inferred goal split |
 | 211 | Exact transaction tip context | Fansly DM `tips[]` sidecars project exact, message-gated `tip_transactions` note/conversation context by provider tip id while `transactions` remains money-only. Mandatory sender/time facts, a Stage-28 material-time erasure fence, and field-specific raw lineage prevent false nulls, resurrection, and unverifiable verbatim text; OnlyFans stays visible as `not_captured` |
@@ -236,6 +236,8 @@ appends a row here in the same change (family law: updated-in-change).
 | 233 | Fansly history walks corrected against production (amends #225, #231) | **A14 was wrong**: `/it/amoie/stats` honours `beforeDate`/`afterDate` only INSIDE its own trailing window — lora-2 asked for a historical 31-day window and was served the trailing 31 days, and halving to 15 changed nothing, so it was never the span. History on that route is addressed the way the app addresses it: `year`/`month` (the UI's month presets, with the bounds riding along ignored). The daily lane captures the trailing window ONCE and then walks BACKWARDS BY CALENDAR MONTH — same attempt cap, same jittered continuation, repeat guard on `(year, month)`, `monthWasHonoured` in place of the span check (no halve-and-retry: there is no half of a month to ask for), stopping with `month_form_not_honoured` or reaching a floor of two empty months plus the [E10] probe twelve months back. The two pages the date-bound walk stopped SUPERSEDE their `window_not_honoured` coverage row and resume in month mode, once. The HOURLY lane stops walking and declares the trailing 25 hours (`hourly_trailing_window_only`); the EARNINGS lane is untouched because it DID honour historical windows (lora-1 reached 2024-11-29). `endpoint-probe` gains `[F1] GET /it/amoie/stats?year=&month=`, printing the served window, because the month form is not yet proven live. **WP-F4**: `/it/moie/statsnew` honours every window and answers any of them back to 2006 with one ZERO-VALUED bucket, so the empty-window floor never fired — 1 198 calls on eight items, walked 240 windows each. All-zero now counts as empty; no window may end more than one span before `coalesce(created_at_platform, first_observed_at)` (`floorBasis='created_at'`, which also repairs the eight burned cursors); and EVERY visit stamps `last_visited_at`, backfill visits included — that omission is why 5 507 queue rows had never been looked at while the same eight were re-picked daily |
 | 234 | Endpoints-cover repair R2 — erasure, analytics truth, agent disclosure, browser headers | The architecture stays journal → canonical events → projections; R2 repairs four point defects around it. Erasure inventory is schema-ratcheted: every direct page child is deleted or explicitly excluded (`audit_events` append-only audit, `user_page_assignments` agency access config); fan erasure reaches messaging-group identity and purchase buyers in notification `correlation_group_ref`, removes matching events/observations/raw captures, and canonical events stamp enough fan identity that rebuild cannot resurrect them. Analytics uses one shared set of real coverage-plane names and judges every required plane against the selected 7/30/90-day floor plus a per-plane fresh-head tolerance; failed/loading requests cannot render as factual emptiness. Top media starts with newest heads, unions current ranked refs, selects one freshest ranking window, shares a bounded bucket budget fairly, and labels missing series by proven cause. Notifications are purchase-disclosing because captured 2007/2008 rows name the buyer in `correlationGroupRef`, so querying them requires `read:datasets` + `read:messages`. Fansly GET headers follow the 2026-08-21 Firefox HAR's safe values and insertion order after transport-owned `Host`; `referer` is spelled correctly. The captured browser has no `sec-ch-*`, so Chromium hints are not invented. `fansly-client-check` is selected only from `FanslySessionBundle.routeChecks` using the extension's seven route families; the legacy pasted scalar remains readable for credential compatibility but is never replayed across routes. The extension-side producer change is out of scope: it must submit `routeChecks: Partial<Record<message | group | account | earnings | messagingGroups | subscribers | media, string>>`. Endpoint probe output prints the ordered header plan with secrets redacted and says `missing`/`route_unclassified` when no check will be sent. No migration and no platform write. |
 | 235 | Fansly lane scaffold and repair R1 | The seven lanes share one runtime for durable physical-attempt reservation, journal/checkpoint ordering, coverage writes, three-way response classification, pagination guards and jitter. A `started` attempt is checkpointed before egress and the adapter clamps retries to the allowance remaining for the UTC day; success, transport failure and auth failure therefore cannot forget attempts or cross the cap. `invalid` responses remain journaled but do not move coverage or cursors. Earnings history keeps a full 100-row page's window while advancing its durable offset and spends an older probe before declaring a floor. Purchase-history cursor v5 joins the same daily-attempt law. Post-replies excludes failed subjects until `next_due_at`, so healthy never-walked posts are no longer starved. One shared integration harness and a source ratchet prevent lane-private copies from returning; no migration or production action is required. |
+| 236 | Fansly id-less post mentions and replay diagnostics | Retained production `posts` pages prove a legitimate `accountMentions[]` variant with `{start,end,handle}` and no `accountId`. The posts canonicalizer advances 6 -> 7 and accepts that shape only when its coordinates are ordered non-negative safe integers and its handle is non-empty; `account_mention_refs` becomes NULL for the whole post rather than a partial or fabricated list. Shape-gate refusals remain unstamped and replayable, but now report a bounded content-free sample of observation id, family, kind, fixed rejection code and optional post index. The three known lora-1 rows parse under v7 and replay locally with zero platform calls. |
+| 237 | Fansly follower reconcile under concurrent joins and hourly touches | The incremental `followers` upsert preserves and monotonically advances `page_follows.last_seen_generation`; a NULL live write can no longer erase the full-sweep witness. Every reconcile generation records `fullSweepStartedAt`. Destructive close requires either exact generation=headline equality or a positive delta exactly explained by active rows first inserted during that window plus the terminal short-page shape; retirement additionally excludes every row touched since the sweep began or seen in the immediately prior generation. Two mismatches re-walk after a jittered 15-minute delay, then close non-destructively instead of permanently blocking. Even certified membership cannot deactivate more than `max(50, floor(active/100))` rows. An owner-only stream reset unblocks only `followers_reconcile`, preserves all audience checkpoints/cursors, increments the request revision and emits an audit event. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -9900,3 +9902,93 @@ writers or restore a private attempt counter. A source ratchet pins that rule.
 The seven integration suites share one harness for telemetry, context, seed and
 physical retry behaviour. No database migration, feature-flag change, deploy or
 production access belongs to this repair.
+
+---
+
+**Decision #236 (2026-08-25, retained Fansly post pages settle the id-less
+account-mention variant):**
+
+Three current lora-1 parse-debt observations failed the same v6 predicate. A
+read-only structural check of their retained bodies found one mention on the
+first rejected post in each page, always shaped `{start,end,handle}`: the
+coordinates were ordered non-negative integers and the handle was non-empty,
+but `accountId` was absent. This is one provider variant repeated across two
+inline captures and one content-addressed capture, not arbitrary malformed
+JSON.
+
+The posts canonicalizer advances 6 -> 7 and admits that exact id-less variant.
+It does not store the mutable handle and it does not infer an account identity
+from it. If ANY otherwise-valid mention in a post lacks `accountId`, the whole
+`accountMentionRefs` fact is NULL: a partial list would omit a real mention and
+an empty list would falsely say that the provider served none. An explicit
+null id, missing or invalid coordinates, an empty handle, or an inverted range
+still refuses the whole page, leaves the observation unstamped, and waits for a
+future parser.
+
+Shape-gate refusal is now diagnosable without widening raw-data access. Every
+posts predicate has a fixed content-free code and an optional post index. A
+canonicalization run returns at most twenty samples containing observation id,
+family, kind, code and index; counts-only diagnostics use the same code. No
+provider value, caption, handle or payload fragment is logged. The normal
+minutely worker already logs the bounded run result, while CLI replay prints it
+as JSON.
+
+Running the v7 parser locally against all three retained production bodies
+accepts all three. Deployment therefore needs no Fansly request and no manual
+retirement: the ordinary canonicalization sweep replays the journal, appends or
+deduplicates its projection-only events, and advances their parse stamps to 7.
+
+---
+
+**Decision #237 (2026-08-25, follower reconcile remains destructive only under
+a membership proof that survives concurrent live writes):**
+
+The two production blocks were not new-follower races. Their terminal runs each
+contained one fewer generation-stamped row than the fresh headline, but a
+read-only check found ZERO `page_follows.first_seen_at` rows inside either run
+window. The incremental `followers` writer supplied the missing mechanism: its
+conflict update always assigned `excluded.last_seen_generation`, and an
+incremental input carries NULL. Touching an existing follower during the
+31/76-minute full walk therefore erased that row's current generation, lowered
+the terminal set count, and made the same active row eligible for retirement.
+
+`page_follows.last_seen_generation` is now monotonic. A NULL live input keeps
+the stored witness; an explicit generation may only advance it. Every reconcile
+cursor also persists `fullSweepStartedAt`. Even after membership is certified,
+the destructive statement can touch only rows whose `last_seen_at` predates
+that instant AND whose generation is older than the immediately preceding one
+(NULL legacy/new rows use the time guard). A row inserted or refreshed after
+the walk passed its offset is spared, and every stamped row must be missed by
+two complete generations before retirement.
+
+The equality rule is NOT weakened into tolerance. Destructive membership has
+two proofs: (1) current-generation rows equal the terminal `account_me`
+headline exactly; or (2) the positive difference equals active rows first
+inserted during this sweep but outside its generation, the raw count is not
+shorter than the generation set, and the terminal page count matches the
+offset contract (`floor(observed/100)+1`, including the extra empty page after
+an exact multiple). A bare `+1` is never evidence. This second proof handles a
+new follower inserted at the head after offset zero without pretending that a
+dropped page and a join are interchangeable.
+
+An uncertified walk writes a non-resumable restart marker and yields for a
+15-minute continuation with the shared +/-30 percent Fansly jitter. Two fresh
+retries are allowed. A third uncertified walk records the mismatch, updates the
+non-destructive headline rollup, writes a successful checkpoint explicitly
+marked `destructiveFinalization:false`, and waits for the normal next cadence;
+it does not deactivate anyone and does not leave the page permanently blocked.
+
+Exact membership alone cannot authorize a mass wipe. The transaction counts
+the rows its guarded update could retire and blocks before mutation when that
+count exceeds `max(50, floor(activeFollowerCount/100))`. This is a deliberate
+manual-investigation boundary: a provider can return a self-consistent short
+list and headline, so equality does not bound blast radius.
+
+The owner recovery surface is stream-precise:
+`POST /api/v1/admin/sync/followers-reconcile/reset`. It accepts a page label,
+resets and requests only `followers_reconcile`, preserves the followers,
+subscribers and reconcile checkpoints, wakes the page queue, and records
+`admin.followers_reconcile_reset`. The incremented request revision makes the
+old blocked cursor non-resumable and seeds a fresh generation. The existing
+audience-block reset keeps its broader semantics; no code path silently turns
+that destructive checkpoint reset into this narrow recovery.

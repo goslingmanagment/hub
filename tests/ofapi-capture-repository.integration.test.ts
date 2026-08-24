@@ -358,7 +358,7 @@ function postsPage(input: {
 }
 
 async function createPostCaptureExecutionFixture(input: {
-  responses: Buffer[];
+  responses: Array<Buffer | Error>;
   anchorPostId?: string | null;
   maxCalls: number;
   maxPages: number;
@@ -381,11 +381,12 @@ async function createPostCaptureExecutionFixture(input: {
     if (!await request.beforeDispatch()) {
       throw new Error("durable dispatch fence was not acquired");
     }
-    const bodyBytes = responses.shift();
-    if (!bodyBytes) throw new Error("unexpected extra OFAPI posts request");
+    const outcome = responses.shift();
+    if (!outcome) throw new Error("unexpected extra OFAPI posts request");
+    if (outcome instanceof Error) throw outcome;
     return {
       status: 200,
-      bodyBytes,
+      bodyBytes: outcome,
       headers: { "content-type": "application/json" },
       receivedAt: new Date(),
     };
@@ -1896,6 +1897,59 @@ describe("OFAPI capture correctness repository", () => {
     `, [terminalKey, fixture.page.id, `anchor-race-coverage:${repair.job.id}`]);
     expect(forbidden.rows[0]).toEqual({ observations: "0", events: "0" });
     expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("idle");
+  });
+
+  it("retries an indeterminate OFAPI posts GET as a billed safe read", async () => {
+    if (!testDb) return;
+    const fixture = await createPostCaptureExecutionFixture({
+      maxCalls: 2,
+      maxPages: 2,
+      responses: [
+        new OfapiGovernedRequestError(
+          "scripted uncertain posts read",
+          "post_dispatch",
+          "transport",
+        ),
+        postsPage({
+          items: [{ id: "101", postedAt: "2026-08-01T01:00:00.000Z", rawText: "post" }],
+          hasMore: false,
+        }),
+      ],
+    });
+
+    expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("failed");
+    expect(await getOfapiCaptureJob(testDb.db, fixture.job.id)).toMatchObject({
+      state: "retry_wait",
+      reasonCode: "indeterminate_safe_read_retry",
+      attemptCount: 1,
+      dispatchCount: 1,
+      spentCredits: 1,
+    });
+    const uncertainRead = await testDb.pool.query<{
+      state: string;
+      credit_state: string;
+      settled_credits: number | null;
+      certainty_resolution: string | null;
+    }>(`
+      select state, credit_state, settled_credits, certainty_resolution
+      from ofapi_request_attempts
+      where capture_job_id = $1
+      order by owner_attempt_no desc
+      limit 1
+    `, [fixture.job.id]);
+    expect(uncertainRead.rows[0]).toEqual({
+      state: "indeterminate",
+      credit_state: "settled",
+      settled_credits: 1,
+      certainty_resolution: "safe_read_retry_assumed_billed",
+    });
+
+    await testDb.pool.query(
+      "update ofapi_capture_jobs set next_attempt_at = now() - interval '1 second' where id = $1",
+      [fixture.job.id],
+    );
+    expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("success");
+    expect(fixture.dispatchGovernedRaw).toHaveBeenCalledTimes(2);
   });
 
   it("materializes only accepted OFAPI posts and completes initial head verification at the exact cap", async () => {
