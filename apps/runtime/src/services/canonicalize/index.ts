@@ -24,6 +24,7 @@ import {
 import {
   canParsePostsObservation,
   canonicalizePostsObservation,
+  diagnosePostsObservationRejection,
   POSTS_CANONICALIZED_KINDS,
   POSTS_CANONICALIZER_VERSION,
 } from "./posts.ts";
@@ -86,6 +87,11 @@ export interface CanonicalizerFamily {
    * becomes "capture now, never parse". Families without drift risk omit it.
    */
   canParse?: (observation: CanonicalizableObservation) => boolean;
+  /** Optional fixed-code detail for a shape-gate refusal. Called only after
+   * `canParse` returns false; values must never contain provider content. */
+  parseRejection?: (
+    observation: CanonicalizableObservation,
+  ) => { code: string; itemIndex?: number } | null;
   /**
    * The family's events are projection material, not client-deliverable news
    * (every type it emits must be in PROJECTION_ONLY_DOMAIN_EVENT_TYPES). The
@@ -123,6 +129,7 @@ export const CANONICALIZER_FAMILIES: readonly CanonicalizerFamily[] = [
     version: POSTS_CANONICALIZER_VERSION,
     canonicalize: canonicalizePostsObservation,
     canParse: canParsePostsObservation,
+    parseRejection: diagnosePostsObservationRejection,
     projectionOnly: true,
   },
   {

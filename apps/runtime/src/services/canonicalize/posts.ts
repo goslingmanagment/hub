@@ -13,7 +13,7 @@ import {
   type CanonicalizableObservation,
 } from "./types.ts";
 
-export const POSTS_CANONICALIZER_VERSION = 6;
+export const POSTS_CANONICALIZER_VERSION = 7;
 
 /**
  * The hashtag tokenizer's own version, stored beside every derived token.
@@ -478,22 +478,49 @@ function nullableRefList(value: unknown): NullableField<string[]> {
   return { valid: true, value: refs };
 }
 
-/** `accountMentions[]` rows are `{start, end, handle, accountId}`. Only the
- *  ACCOUNT REF is kept: the offsets belong to the verbatim caption (which the
- *  journal holds) and the handle is a display name that changes. */
+/** `accountMentions[]` rows normally include `{start, end, handle, accountId}`,
+ *  but retained production pages also contain the provider's legitimate
+ *  `{start, end, handle}` form. Only the ACCOUNT REF is kept: offsets belong to
+ *  the verbatim caption (which the journal holds) and a handle is a mutable
+ *  display name. If any structurally valid mention omits `accountId`, the whole
+ *  ref field is unknown (`null`) rather than a partial list or a fabricated
+ *  empty list. */
 function nullableAccountMentionRefs(value: unknown): NullableField<string[]> {
   if (value === undefined || value === null) {
     return { valid: true, value: null };
   }
   if (!Array.isArray(value)) return { valid: false };
   const refs: string[] = [];
+  let refsComplete = true;
   for (const item of value) {
     if (!isRecord(item)) return { valid: false };
     const ref = asString(item.accountId);
-    if (ref === null) return { valid: false };
+    if (ref === null) {
+      // The only id-less shape admitted here is the one verified in retained
+      // production observations. Validating its caption coordinates and handle
+      // keeps a genuinely drifted object replayable instead of blessing every
+      // object that happens not to contain `accountId`.
+      const start = item.start;
+      const end = item.end;
+      if (
+        item.accountId !== undefined
+        || typeof start !== "number"
+        || !Number.isSafeInteger(start)
+        || start < 0
+        || typeof end !== "number"
+        || !Number.isSafeInteger(end)
+        || end < start
+        || typeof item.handle !== "string"
+        || item.handle.length === 0
+      ) {
+        return { valid: false };
+      }
+      refsComplete = false;
+      continue;
+    }
     if (!refs.includes(ref)) refs.push(ref);
   }
-  return { valid: true, value: refs };
+  return { valid: true, value: refsComplete ? refs : null };
 }
 
 /** The attachments' id-relations. Built from an ALLOWLIST of three keys, so a
@@ -515,27 +542,83 @@ function attachmentRefsFrom(
   }));
 }
 
-function parseFanslyPostsPayload(payload: unknown): ParsedFanslyPost[] | null {
-  if (!isRecord(payload) || !Array.isArray(payload.posts)) return null;
+export type PostsObservationParseRejectionCode =
+  | "platform_not_fansly"
+  | "kind_not_supported"
+  | "payload_not_object"
+  | "posts_not_array"
+  | "tip_goals_invalid"
+  | "post_not_object"
+  | "post_id_invalid"
+  | "created_at_invalid"
+  | "content_invalid"
+  | "attachments_invalid"
+  | "attachment_not_object"
+  | "goal_attachment_ref_invalid"
+  | "multiple_goal_attachments"
+  | "tip_amount_invalid"
+  | "attachment_tip_amount_invalid"
+  | "post_tip_total_overflow"
+  | "like_count_invalid"
+  | "media_like_count_invalid"
+  | "reply_count_invalid"
+  | "fyp_flags_invalid"
+  | "in_reply_to_invalid"
+  | "in_reply_to_root_invalid"
+  | "wall_ids_invalid"
+  | "account_mentions_invalid"
+  | "expires_at_invalid"
+  | "post_tips_not_array";
+
+export type PostsObservationParseRejection = {
+  code: PostsObservationParseRejectionCode;
+  /** Index in payload.posts. No provider content is exposed. */
+  itemIndex?: number;
+};
+
+type ParsedFanslyPostsPayloadResult =
+  | { accepted: true; posts: ParsedFanslyPost[] }
+  | { accepted: false; rejection: PostsObservationParseRejection };
+
+function rejectPostsPayload(
+  code: PostsObservationParseRejectionCode,
+  itemIndex?: number,
+): ParsedFanslyPostsPayloadResult {
+  return {
+    accepted: false,
+    rejection: {
+      code,
+      ...(itemIndex === undefined ? {} : { itemIndex }),
+    },
+  };
+}
+
+function parseFanslyPostsPayloadDetailed(payload: unknown): ParsedFanslyPostsPayloadResult {
+  if (!isRecord(payload)) return rejectPostsPayload("payload_not_object");
+  if (!Array.isArray(payload.posts)) return rejectPostsPayload("posts_not_array");
   const goals = parseTipGoals(payload);
-  if (goals === null) return null;
+  if (goals === null) return rejectPostsPayload("tip_goals_invalid");
 
   const parsed: ParsedFanslyPost[] = [];
-  for (const post of payload.posts) {
-    if (!isRecord(post)) return null;
+  for (const [itemIndex, rawPost] of payload.posts.entries()) {
+    if (!isRecord(rawPost)) return rejectPostsPayload("post_not_object", itemIndex);
+    const post = rawPost;
     const postId = asString(post.id);
     const publishedAt = fanslyPublishedAt(post.createdAt);
-    if (
-      postId === null || publishedAt === null
-      || (post.content != null && typeof post.content !== "string")
-      || (post.attachments != null && !Array.isArray(post.attachments))
-    ) {
-      return null;
+    if (postId === null) return rejectPostsPayload("post_id_invalid", itemIndex);
+    if (publishedAt === null) return rejectPostsPayload("created_at_invalid", itemIndex);
+    if (post.content != null && typeof post.content !== "string") {
+      return rejectPostsPayload("content_invalid", itemIndex);
+    }
+    if (post.attachments != null && !Array.isArray(post.attachments)) {
+      return rejectPostsPayload("attachments_invalid", itemIndex);
     }
 
     const attachmentsProvided = Array.isArray(post.attachments);
     const attachments = attachmentsProvided ? post.attachments as unknown[] : [];
-    if (!attachments.every(isRecord)) return null;
+    if (!attachments.every(isRecord)) {
+      return rejectPostsPayload("attachment_not_object", itemIndex);
+    }
     const goalRefs = new Set<string>();
     let attachmentTypesComplete = true;
     for (const attachment of attachments) {
@@ -545,22 +628,29 @@ function parseFanslyPostsPayload(payload: unknown): ParsedFanslyPost[] | null {
       }
       if (attachment.contentType !== 7100) continue;
       const goalRef = asString(attachment.contentId);
-      if (goalRef === null) return null;
+      if (goalRef === null) {
+        return rejectPostsPayload("goal_attachment_ref_invalid", itemIndex);
+      }
       goalRefs.add(goalRef);
     }
     // Fansly currently exposes one goal attachment per post. Refuse ambiguity
     // instead of silently choosing one; the raw page remains replayable.
-    if (goalRefs.size > 1) return null;
+    if (goalRefs.size > 1) {
+      return rejectPostsPayload("multiple_goal_attachments", itemIndex);
+    }
 
     const tipAmount = nullableNonnegativeSafeInteger(post.tipAmount);
     const attachmentTipAmount = nullableNonnegativeSafeInteger(post.attachmentTipAmount);
-    if (!tipAmount.valid || !attachmentTipAmount.valid) return null;
+    if (!tipAmount.valid) return rejectPostsPayload("tip_amount_invalid", itemIndex);
+    if (!attachmentTipAmount.valid) {
+      return rejectPostsPayload("attachment_tip_amount_invalid", itemIndex);
+    }
     const hasPostTipTotal = tipAmount.value !== null || attachmentTipAmount.value !== null;
     const postTipTotalMills = hasPostTipTotal
       ? (tipAmount.value ?? 0) + (attachmentTipAmount.value ?? 0)
       : null;
     if (postTipTotalMills !== null && !Number.isSafeInteger(postTipTotalMills)) {
-      return null;
+      return rejectPostsPayload("post_tip_total_overflow", itemIndex);
     }
 
     // ── WP-F6 (v6) engagement/thread/placement fields ─────────────────────
@@ -580,13 +670,22 @@ function parseFanslyPostsPayload(payload: unknown): ParsedFanslyPost[] | null {
     const expiresAt = post.expiresAt === undefined || post.expiresAt === null
       ? null
       : fanslyPublishedAt(post.expiresAt);
-    if (
-      !likeCount.valid || !mediaLikeCount.valid || !replyCount.valid || !fypFlags.valid
-      || !inReplyToRef.valid || !inReplyToRootRef.valid
-      || !wallRefs.valid || !accountMentionRefs.valid
-      || (post.expiresAt !== undefined && post.expiresAt !== null && expiresAt === null)
-    ) {
-      return null;
+    if (!likeCount.valid) return rejectPostsPayload("like_count_invalid", itemIndex);
+    if (!mediaLikeCount.valid) {
+      return rejectPostsPayload("media_like_count_invalid", itemIndex);
+    }
+    if (!replyCount.valid) return rejectPostsPayload("reply_count_invalid", itemIndex);
+    if (!fypFlags.valid) return rejectPostsPayload("fyp_flags_invalid", itemIndex);
+    if (!inReplyToRef.valid) return rejectPostsPayload("in_reply_to_invalid", itemIndex);
+    if (!inReplyToRootRef.valid) {
+      return rejectPostsPayload("in_reply_to_root_invalid", itemIndex);
+    }
+    if (!wallRefs.valid) return rejectPostsPayload("wall_ids_invalid", itemIndex);
+    if (!accountMentionRefs.valid) {
+      return rejectPostsPayload("account_mentions_invalid", itemIndex);
+    }
+    if (post.expiresAt !== undefined && post.expiresAt !== null && expiresAt === null) {
+      return rejectPostsPayload("expires_at_invalid", itemIndex);
     }
 
     const tipGoalRef = [...goalRefs][0] ?? null;
@@ -631,7 +730,12 @@ function parseFanslyPostsPayload(payload: unknown): ParsedFanslyPost[] | null {
       },
     });
   }
-  return parsed;
+  return { accepted: true, posts: parsed };
+}
+
+function parseFanslyPostsPayload(payload: unknown): ParsedFanslyPost[] | null {
+  const result = parseFanslyPostsPayloadDetailed(payload);
+  return result.accepted ? result.posts : null;
 }
 
 type ParsedFanslyTip = Omit<CanonicalPostTipMaterial, "observationId" | "observedAt">;
@@ -819,7 +923,7 @@ function buildPostTipParseRejectedDraft(
 export function canParsePostsObservation(observation: CanonicalizableObservation): boolean {
   if (observation.platform !== "fansly") return false;
   if (observation.kind === "posts") {
-    return parseFanslyPostsPayload(observation.payload) !== null;
+    return parseFanslyPostsPayloadDetailed(observation.payload).accepted;
   }
   if (observation.kind === "post_tips") {
     // Recognizing the array envelope is enough to isolate item-level drift:
@@ -829,6 +933,25 @@ export function canParsePostsObservation(observation: CanonicalizableObservation
     return Array.isArray(observation.payload);
   }
   return false;
+}
+
+/** Fixed-code explanation for the first predicate that refused an observation.
+ * The driver exposes this beside the observation id; no provider text or raw
+ * field value leaves the journal. */
+export function diagnosePostsObservationRejection(
+  observation: CanonicalizableObservation,
+): PostsObservationParseRejection | null {
+  if (observation.platform !== "fansly") {
+    return { code: "platform_not_fansly" };
+  }
+  if (observation.kind === "posts") {
+    const result = parseFanslyPostsPayloadDetailed(observation.payload);
+    return result.accepted ? null : result.rejection;
+  }
+  if (observation.kind === "post_tips") {
+    return Array.isArray(observation.payload) ? null : { code: "post_tips_not_array" };
+  }
+  return { code: "kind_not_supported" };
 }
 
 export function canonicalizePostsObservation(

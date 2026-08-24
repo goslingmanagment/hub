@@ -236,6 +236,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 233 | Fansly history walks corrected against production (amends #225, #231) | **A14 was wrong**: `/it/amoie/stats` honours `beforeDate`/`afterDate` only INSIDE its own trailing window — lora-2 asked for a historical 31-day window and was served the trailing 31 days, and halving to 15 changed nothing, so it was never the span. History on that route is addressed the way the app addresses it: `year`/`month` (the UI's month presets, with the bounds riding along ignored). The daily lane captures the trailing window ONCE and then walks BACKWARDS BY CALENDAR MONTH — same attempt cap, same jittered continuation, repeat guard on `(year, month)`, `monthWasHonoured` in place of the span check (no halve-and-retry: there is no half of a month to ask for), stopping with `month_form_not_honoured` or reaching a floor of two empty months plus the [E10] probe twelve months back. The two pages the date-bound walk stopped SUPERSEDE their `window_not_honoured` coverage row and resume in month mode, once. The HOURLY lane stops walking and declares the trailing 25 hours (`hourly_trailing_window_only`); the EARNINGS lane is untouched because it DID honour historical windows (lora-1 reached 2024-11-29). `endpoint-probe` gains `[F1] GET /it/amoie/stats?year=&month=`, printing the served window, because the month form is not yet proven live. **WP-F4**: `/it/moie/statsnew` honours every window and answers any of them back to 2006 with one ZERO-VALUED bucket, so the empty-window floor never fired — 1 198 calls on eight items, walked 240 windows each. All-zero now counts as empty; no window may end more than one span before `coalesce(created_at_platform, first_observed_at)` (`floorBasis='created_at'`, which also repairs the eight burned cursors); and EVERY visit stamps `last_visited_at`, backfill visits included — that omission is why 5 507 queue rows had never been looked at while the same eight were re-picked daily |
 | 234 | Endpoints-cover repair R2 — erasure, analytics truth, agent disclosure, browser headers | The architecture stays journal → canonical events → projections; R2 repairs four point defects around it. Erasure inventory is schema-ratcheted: every direct page child is deleted or explicitly excluded (`audit_events` append-only audit, `user_page_assignments` agency access config); fan erasure reaches messaging-group identity and purchase buyers in notification `correlation_group_ref`, removes matching events/observations/raw captures, and canonical events stamp enough fan identity that rebuild cannot resurrect them. Analytics uses one shared set of real coverage-plane names and judges every required plane against the selected 7/30/90-day floor plus a per-plane fresh-head tolerance; failed/loading requests cannot render as factual emptiness. Top media starts with newest heads, unions current ranked refs, selects one freshest ranking window, shares a bounded bucket budget fairly, and labels missing series by proven cause. Notifications are purchase-disclosing because captured 2007/2008 rows name the buyer in `correlationGroupRef`, so querying them requires `read:datasets` + `read:messages`. Fansly GET headers follow the 2026-08-21 Firefox HAR's safe values and insertion order after transport-owned `Host`; `referer` is spelled correctly. The captured browser has no `sec-ch-*`, so Chromium hints are not invented. `fansly-client-check` is selected only from `FanslySessionBundle.routeChecks` using the extension's seven route families; the legacy pasted scalar remains readable for credential compatibility but is never replayed across routes. The extension-side producer change is out of scope: it must submit `routeChecks: Partial<Record<message | group | account | earnings | messagingGroups | subscribers | media, string>>`. Endpoint probe output prints the ordered header plan with secrets redacted and says `missing`/`route_unclassified` when no check will be sent. No migration and no platform write. |
 | 235 | Fansly lane scaffold and repair R1 | The seven lanes share one runtime for durable physical-attempt reservation, journal/checkpoint ordering, coverage writes, three-way response classification, pagination guards and jitter. A `started` attempt is checkpointed before egress and the adapter clamps retries to the allowance remaining for the UTC day; success, transport failure and auth failure therefore cannot forget attempts or cross the cap. `invalid` responses remain journaled but do not move coverage or cursors. Earnings history keeps a full 100-row page's window while advancing its durable offset and spends an older probe before declaring a floor. Purchase-history cursor v5 joins the same daily-attempt law. Post-replies excludes failed subjects until `next_due_at`, so healthy never-walked posts are no longer starved. One shared integration harness and a source ratchet prevent lane-private copies from returning; no migration or production action is required. |
+| 236 | Fansly id-less post mentions and replay diagnostics | Retained production `posts` pages prove a legitimate `accountMentions[]` variant with `{start,end,handle}` and no `accountId`. The posts canonicalizer advances 6 -> 7 and accepts that shape only when its coordinates are ordered non-negative safe integers and its handle is non-empty; `account_mention_refs` becomes NULL for the whole post rather than a partial or fabricated list. Shape-gate refusals remain unstamped and replayable, but now report a bounded content-free sample of observation id, family, kind, fixed rejection code and optional post index. The three known lora-1 rows parse under v7 and replay locally with zero platform calls. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -9900,3 +9901,38 @@ writers or restore a private attempt counter. A source ratchet pins that rule.
 The seven integration suites share one harness for telemetry, context, seed and
 physical retry behaviour. No database migration, feature-flag change, deploy or
 production access belongs to this repair.
+
+---
+
+**Decision #236 (2026-08-25, retained Fansly post pages settle the id-less
+account-mention variant):**
+
+Three current lora-1 parse-debt observations failed the same v6 predicate. A
+read-only structural check of their retained bodies found one mention on the
+first rejected post in each page, always shaped `{start,end,handle}`: the
+coordinates were ordered non-negative integers and the handle was non-empty,
+but `accountId` was absent. This is one provider variant repeated across two
+inline captures and one content-addressed capture, not arbitrary malformed
+JSON.
+
+The posts canonicalizer advances 6 -> 7 and admits that exact id-less variant.
+It does not store the mutable handle and it does not infer an account identity
+from it. If ANY otherwise-valid mention in a post lacks `accountId`, the whole
+`accountMentionRefs` fact is NULL: a partial list would omit a real mention and
+an empty list would falsely say that the provider served none. An explicit
+null id, missing or invalid coordinates, an empty handle, or an inverted range
+still refuses the whole page, leaves the observation unstamped, and waits for a
+future parser.
+
+Shape-gate refusal is now diagnosable without widening raw-data access. Every
+posts predicate has a fixed content-free code and an optional post index. A
+canonicalization run returns at most twenty samples containing observation id,
+family, kind, code and index; counts-only diagnostics use the same code. No
+provider value, caption, handle or payload fragment is logged. The normal
+minutely worker already logs the bounded run result, while CLI replay prints it
+as JSON.
+
+Running the v7 parser locally against all three retained production bodies
+accepts all three. Deployment therefore needs no Fansly request and no manual
+retirement: the ordinary canonicalization sweep replays the journal, appends or
+deduplicates its projection-only events, and advances their parse stamps to 7.
