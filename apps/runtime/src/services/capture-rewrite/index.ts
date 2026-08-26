@@ -44,9 +44,17 @@ import {
 
 import type { AppContext } from "../../bootstrap.ts";
 import { readDiskFreeBytes } from "../db-disk-alert.ts";
+import { type SettleGuardHooks, settleRunOnSignal } from "./settle-on-signal.ts";
 import {
+  type BackfillCopyMeasurement,
+  measureBackfillCopy,
+  readWalEnvironment,
+} from "./measure.ts";
+import {
+  type CaptureRewriteForecast,
   backfillHeadroomVerdict,
   captureBackfillMidRunVerdict,
+  captureRewriteForecast,
   type HeadroomVerdict,
 } from "./scope.ts";
 
@@ -99,6 +107,9 @@ export interface CaptureBackfillOptions {
    * inventing a flag that would also exist in production.
    */
   readFreeBytes?: () => Promise<number>;
+  /** Test seam for the #239 signal settle: a test cannot send its own process a
+   *  real SIGTERM and survive to assert on it. Not reachable from the CLI. */
+  settleGuardHooks?: SettleGuardHooks;
 }
 
 export interface CaptureBackfillResult {
@@ -127,12 +138,23 @@ export interface CaptureBackfillResult {
    *  pre-created). */
   monthsCreated: string[];
   lastId: number;
-  stoppedBecause: "scope_complete" | "batch_limit" | "headroom_exhausted" | "refused";
+  stoppedBecause:
+    | "scope_complete"
+    | "batch_limit"
+    | "headroom_exhausted"
+    | "refused"
+    /** #239: SIGTERM/SIGINT reached the walk; the ledger row is settled `failed`. */
+    | "signalled";
   /** #223: rows the typed-column catch-up walked (the slice-1-to-slice-3a
    *  cohort, which the reference scan cannot see). */
   typedColumnsScanned: number;
   /** Of those, the ones whose typed columns this pass actually filled. */
   typedColumnsFilled: number;
+  /** #239: what the two bounded probes measured, so the tombstone carries the
+   *  inputs to the verdict and not only its answer. */
+  copyMeasurement: BackfillCopyMeasurement | null;
+  /** #239: what finishing the whole ritual for this scope is worth. */
+  forecast: CaptureRewriteForecast | null;
   /** The §9.1-shaped admission verdict. Null only when the scope's relation
    *  could not be sized (which is itself a refusal). */
   headroom: HeadroomVerdict | null;
@@ -185,6 +207,8 @@ export async function runCaptureBackfill(
     stoppedBecause: "scope_complete",
     typedColumnsScanned: 0,
     typedColumnsFilled: 0,
+    copyMeasurement: null,
+    forecast: null,
     headroom: null,
     refusals: [],
   };
@@ -200,13 +224,32 @@ export async function runCaptureBackfill(
   if (sizes === null) {
     result.refusals.push(`${relation} does not exist`);
   } else {
+    // #239: the two terms that used to be assumed are measured here. Both
+    // probes are bounded and the whole pair costs a fraction of a second on the
+    // 21 GB table — a gate that cost more than the batch it admits would be
+    // its own reason to skip the gate.
+    const copy = await measureBackfillCopy(
+      app.db,
+      options.scope,
+      relation,
+      census.unreferencedWithBody,
+    );
+    const wal = await readWalEnvironment(app.db);
+    result.copyMeasurement = copy;
     result.headroom = backfillHeadroomVerdict({
       freeBytes: await readFreeBytes(),
       sourceTotalBytes: sizes.total,
+      inlineBytesToCopy: copy.inlineBytesToCopy,
+      copyRatio: copy.copyRatio,
+      maxWalSizeBytes: wal.maxWalSizeBytes,
+      archiveModeOff: wal.archiveModeOff,
+      replicationSlots: wal.replicationSlots,
+    });
+    result.forecast = captureRewriteForecast({
+      census,
+      copyBytes: result.headroom.shadowEstimateBytes,
+      sourceTotalBytes: sizes.total,
       sourceIndexBytes: sizes.indexes,
-      unreferencedFraction: census.rows === 0
-        ? 0
-        : census.unreferencedWithBody / census.rows,
     });
     if (!result.headroom.ok) {
       result.refusals.push(`§9.1 headroom: ${result.headroom.reason}`);
@@ -224,6 +267,8 @@ export async function runCaptureBackfill(
         relation,
         wouldStamp: census.unreferencedWithBody,
         wouldFillTypedColumns: census.typedColumnGaps,
+        copyMeasurement: result.copyMeasurement,
+        forecast: result.forecast,
         headroom: result.headroom,
       },
       "capture:backfill dry run",
@@ -264,8 +309,21 @@ export async function runCaptureBackfill(
   const ensuredMonths = new Set<string>();
   let afterId = 0;
 
+  // #239: run 1 died `running` because the #87 deploy recreated its container,
+  // and eight days later the ledger still said a backfill was in flight. A
+  // signal is not a throw and never reaches the catch below; this does.
+  const settleGuard = settleRunOnSignal(app, {
+    runId: result.runId,
+    scopeRef,
+    summary: () => backfillSummary(result),
+  }, options.settleGuardHooks ?? {});
+
   try {
     for (;;) {
+      if (settleGuard.stopRequested()) {
+        result.stoppedBecause = "signalled";
+        break;
+      }
       if (options.maxBatches > 0 && result.batches >= options.maxBatches) {
         result.stoppedBecause = "batch_limit";
         break;
@@ -320,7 +378,9 @@ export async function runCaptureBackfill(
 
     await settleCaptureRewriteRun(app.db, {
       id: result.runId,
-      verdict: result.refusals.length === 0 ? "ok" : "refused",
+      verdict: result.stoppedBecause === "signalled"
+        ? "failed"
+        : result.refusals.length === 0 ? "ok" : "refused",
       summary: backfillSummary(result),
     });
   } catch (error) {
@@ -333,6 +393,8 @@ export async function runCaptureBackfill(
       },
     }).catch(() => {});
     throw error;
+  } finally {
+    settleGuard.release();
   }
 
   return result;
@@ -353,6 +415,8 @@ function backfillSummary(result: CaptureBackfillResult): Record<string, unknown>
     stoppedBecause: result.stoppedBecause,
     typedColumnsScanned: result.typedColumnsScanned,
     typedColumnsFilled: result.typedColumnsFilled,
+    copyMeasurement: result.copyMeasurement,
+    forecast: result.forecast,
     headroom: result.headroom,
     refusals: result.refusals,
   };

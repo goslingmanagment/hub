@@ -165,8 +165,11 @@ export interface HeadroomVerdict {
   sourceTotalBytes: number;
   /** What the skinny twin is expected to occupy once built. */
   shadowEstimateBytes: number;
-  /** What the copy is expected to write to WAL. */
+  /** What the operation is expected to leave RESIDENT in pg_wal. */
   walReserveBytes: number;
+  /** How that WAL number was arrived at (decision #239). Absent on the
+   *  verdicts that still budget the copy again by construction. */
+  walBasis?: WalReserve["basis"];
   /** The inequality's right-hand side. */
   requiredBytes: number;
   reason: string;
@@ -197,21 +200,25 @@ export function reclaimHeadroomVerdict(input: HeadroomInput): HeadroomVerdict {
   const fraction = Math.min(1, Math.max(0, input.referencedFraction));
   const heapToastBytes = Math.max(0, input.sourceTotalBytes - input.sourceIndexBytes);
   const shadowEstimateBytes = Math.round(heapToastBytes * (1 - fraction)) + input.sourceIndexBytes;
-  const walReserveBytes = shadowEstimateBytes;
-  const requiredBytes = input.sourceTotalBytes + shadowEstimateBytes + walReserveBytes;
+  // Deliberately NOT the #239 bounded term: this verdict already counts the
+  // source a second time as its safety margin, and layering a second relaxation
+  // on top of a budget that is generous by construction buys nothing. It is
+  // also the one verdict that has never refused a scope in production.
+  const shadowWalBytes = shadowEstimateBytes;
+  const requiredBytes = input.sourceTotalBytes + shadowEstimateBytes + shadowWalBytes;
   const ok = input.freeBytes >= requiredBytes;
   return {
     ok,
     freeBytes: input.freeBytes,
     sourceTotalBytes: input.sourceTotalBytes,
     shadowEstimateBytes,
-    walReserveBytes,
+    walReserveBytes: shadowWalBytes,
     requiredBytes,
     reason: ok
       ? `free ${gib(input.freeBytes)} >= required ${gib(requiredBytes)}`
       : `free ${gib(input.freeBytes)} < required ${gib(requiredBytes)} `
         + `(source ${gib(input.sourceTotalBytes)} + skinny ${gib(shadowEstimateBytes)} `
-        + `+ WAL ${gib(walReserveBytes)})`,
+        + `+ WAL ${gib(shadowWalBytes)})`,
   };
 }
 
@@ -231,6 +238,80 @@ export function reclaimHeadroomVerdict(input: HeadroomInput): HeadroomVerdict {
  */
 export const CAPTURE_REWRITE_FREE_FLOOR_BYTES = 5 * 1024 ** 3;
 
+// ---------------------------------------------------------------------------
+// The WAL term (decision #239)
+
+/**
+ * How much WAL a bulk copy can leave ON DISK at once, expressed in
+ * `max_wal_size`.
+ *
+ * The old model reserved the size of the copy itself, on the stated ground that
+ * `wal_level = replica` makes every insert fully logged. That sentence is true
+ * and the conclusion does not follow: full logging says how many WAL BYTES ARE
+ * WRITTEN, not how many are RESIDENT. WAL is resident only until the segment
+ * that holds it is no longer needed, and on this box nothing holds a segment
+ * back — `archive_mode` is off, so no archiver is behind; there are no
+ * replication slots, so no consumer is behind; there is no standby. The only
+ * thing that keeps a segment is the checkpointer, which is bounded by
+ * `max_wal_size`.
+ *
+ * `max_wal_size` is a SOFT target, not a cap: a burst that outruns the
+ * checkpointer overshoots it, and the observed overshoot on this box during a
+ * heavy delete was 168 MB → 772 MB against a 1 GiB target. Four times the
+ * target is comfortably above that and is still measured in gigabytes rather
+ * than the tens of gigabytes the 1:1 reserve asked for.
+ *
+ * THE ASSERTION IS PART OF THE ARITHMETIC. If the archiver or a slot ever
+ * appears, segments accumulate without bound and the only honest reserve is the
+ * whole copy again — so this falls back to exactly the old term rather than to
+ * a smaller guess.
+ */
+export const WAL_RESERVE_MAX_WAL_SIZE_FACTOR = 4;
+
+export interface WalReserveInput {
+  /** Bytes the operation is about to write. */
+  copyBytes: number;
+  /** `max_wal_size` from `pg_settings`, in bytes. */
+  maxWalSizeBytes: number;
+  /** `archive_mode = off`? */
+  archiveModeOff: boolean;
+  /** `select count(*) from pg_replication_slots` */
+  replicationSlots: number;
+}
+
+export interface WalReserve {
+  bytes: number;
+  /** Why this number — it travels into the tombstone and the refusal text. */
+  basis: "bounded_by_max_wal_size" | "full_copy_fallback";
+  reason: string;
+}
+
+export function walReserveBytes(input: WalReserveInput): WalReserve {
+  const copyBytes = Math.max(0, input.copyBytes);
+  if (!input.archiveModeOff || input.replicationSlots > 0 || input.maxWalSizeBytes <= 0) {
+    return {
+      bytes: copyBytes,
+      basis: "full_copy_fallback",
+      reason: !input.archiveModeOff
+        ? "archive_mode is not off — WAL segments are retained until archived, so the reserve is the "
+          + "whole copy again"
+        : input.replicationSlots > 0
+          ? `${input.replicationSlots} replication slot(s) exist — a lagging consumer pins WAL, so the `
+            + "reserve is the whole copy again"
+          : "max_wal_size is unreadable — falling back to the whole copy again",
+    };
+  }
+  const bounded = WAL_RESERVE_MAX_WAL_SIZE_FACTOR * input.maxWalSizeBytes;
+  const bytes = Math.min(copyBytes, bounded);
+  return {
+    bytes,
+    basis: "bounded_by_max_wal_size",
+    reason: `archive_mode off, 0 replication slots: resident WAL is bounded by the checkpointer at `
+      + `${WAL_RESERVE_MAX_WAL_SIZE_FACTOR} x max_wal_size (${gib(bounded)}), so the reserve is `
+      + `min(copy ${gib(copyBytes)}, ${gib(bounded)}) = ${gib(bytes)}`,
+  };
+}
+
 /**
  * §9.1's law, applied to the act that RUNS FIRST and used to have no gate at
  * all: the backfill.
@@ -243,18 +324,31 @@ export const CAPTURE_REWRITE_FREE_FLOOR_BYTES = 5 * 1024 ** 3;
  * refusal it eventually meets is the reclaim declining to clean up the mess the
  * backfill made.
  *
- * WHAT IT ASKS FOR, and why each term is there:
+ * WHAT IT ASKS FOR, and why each term is what it is (decision #239):
  *
- *   * THE BODIES STILL TO COPY. Only the unreferenced share of the scope's
- *     heap+TOAST — the referenced share is already in the catalog and the
- *     dedup means this is a worst case, not an estimate. Indexes are excluded:
- *     the catalog's own indexes are over digests, not bodies, and do not scale
- *     with this.
- *   * THE SAME AGAIN FOR WAL. `wal_level = replica` in production, so every one
- *     of those inserts is fully logged; assuming the `minimal` optimisation
- *     would be assuming a setting this project does not control (the same
- *     sentence reclaimHeadroomVerdict makes, for the same reason).
+ *   * THE BODIES STILL TO COPY, MEASURED. The old term prorated the scope's
+ *     whole heap+TOAST by the unreferenced ROW fraction and then assumed the
+ *     catalog copy would be the same size as the source. Both halves were
+ *     wrong in the same direction. The row fraction is not the byte fraction
+ *     (the referenced rows are the ones a previous run already walked, and a
+ *     partial walk is ordered by id, not by size); and the catalog copy is
+ *     content-addressed and pglz-compressed, so it is SMALLER — production run
+ *     1 turned ~4.2 GB of inline July bodies into 1.81 GB of catalog, a
+ *     measured 0.43x. The term is now `inlineBytesToCopy x copyRatio`, where
+ *     both come from bounded SQL probes at gate time (`measureBackfillCopy` in
+ *     ./index.ts): a sampled average body size times the census's own
+ *     unreferenced count, and a ratio observed over rows THIS SCOPE has already
+ *     had copied. A scope with no sample to learn from gets 1.0 — the old
+ *     assumption, kept as the fallback rather than as the rule.
+ *   * WAL, BOUNDED BY WHAT CAN ACTUALLY STAY ON DISK. See walReserveBytes.
  *   * THE FLOOR, untouched. See above.
+ *
+ * WHAT THIS IS NOT. It is not a bypass and it does not weaken the inequality:
+ * every term is still a conservative PEAK, and the two that changed are now
+ * MEASURED where they used to be assumed. The old arithmetic asked 40.41 GiB
+ * free for `sync_raw_payloads` on a 79 GiB disk holding a 55 GiB database —
+ * a gate no amount of lawful reclaiming could ever satisfy, which is a gate
+ * that has stopped governing and started forbidding.
  *
  * The UPDATE's dead tuples are deliberately NOT budgeted separately: an UPDATE
  * that changes only narrow columns reuses the row's TOAST pointer rather than
@@ -264,28 +358,43 @@ export const CAPTURE_REWRITE_FREE_FLOOR_BYTES = 5 * 1024 ** 3;
 export function backfillHeadroomVerdict(input: {
   freeBytes: number;
   sourceTotalBytes: number;
-  sourceIndexBytes: number;
-  /** Fraction of the scope's rows that still need a catalog copy. 0..1. */
-  unreferencedFraction: number;
+  /** Measured inline body bytes the walk still has to copy. */
+  inlineBytesToCopy: number;
+  /** Observed stored-catalog / inline ratio for this scope; 1.0 with no sample. */
+  copyRatio: number;
+  maxWalSizeBytes: number;
+  archiveModeOff: boolean;
+  replicationSlots: number;
 }): HeadroomVerdict {
-  const fraction = Math.min(1, Math.max(0, input.unreferencedFraction));
-  const heapToastBytes = Math.max(0, input.sourceTotalBytes - input.sourceIndexBytes);
-  const catalogCopyBytes = Math.round(heapToastBytes * fraction);
-  const walReserveBytes = catalogCopyBytes;
-  const requiredBytes = catalogCopyBytes + walReserveBytes + CAPTURE_REWRITE_FREE_FLOOR_BYTES;
+  // An unusable ratio is not a reason to guess: fall back to the OLD
+  // assumption (byte-for-byte parity), never to something smaller.
+  const copyRatio = Number.isFinite(input.copyRatio) && input.copyRatio > 0
+    ? input.copyRatio
+    : 1;
+  const catalogCopyBytes = Math.round(Math.max(0, input.inlineBytesToCopy) * copyRatio);
+  const wal = walReserveBytes({
+    copyBytes: catalogCopyBytes,
+    maxWalSizeBytes: input.maxWalSizeBytes,
+    archiveModeOff: input.archiveModeOff,
+    replicationSlots: input.replicationSlots,
+  });
+  const requiredBytes = catalogCopyBytes + wal.bytes + CAPTURE_REWRITE_FREE_FLOOR_BYTES;
   const ok = input.freeBytes >= requiredBytes;
   return {
     ok,
     freeBytes: input.freeBytes,
     sourceTotalBytes: input.sourceTotalBytes,
     shadowEstimateBytes: catalogCopyBytes,
-    walReserveBytes,
+    walReserveBytes: wal.bytes,
+    walBasis: wal.basis,
     requiredBytes,
     reason: ok
-      ? `free ${gib(input.freeBytes)} >= required ${gib(requiredBytes)}`
+      ? `free ${gib(input.freeBytes)} >= required ${gib(requiredBytes)} `
+        + `(catalog copy ${gib(catalogCopyBytes)} at ratio ${copyRatio.toFixed(2)} `
+        + `+ WAL ${gib(wal.bytes)} + ${gib(CAPTURE_REWRITE_FREE_FLOOR_BYTES)} floor)`
       : `free ${gib(input.freeBytes)} < required ${gib(requiredBytes)} `
-        + `(catalog copy ${gib(catalogCopyBytes)} + WAL ${gib(walReserveBytes)} `
-        + `+ ${gib(CAPTURE_REWRITE_FREE_FLOOR_BYTES)} floor)`,
+        + `(catalog copy ${gib(catalogCopyBytes)} at ratio ${copyRatio.toFixed(2)} `
+        + `+ WAL ${gib(wal.bytes)} + ${gib(CAPTURE_REWRITE_FREE_FLOOR_BYTES)} floor)`,
   };
 }
 
@@ -314,30 +423,141 @@ export function captureBackfillMidRunVerdict(freeBytes: number): FreshnessVerdic
 }
 
 /**
- * The `sync_raw_payloads` variant. `VACUUM FULL` writes a complete new copy of
- * the relation and its indexes before dropping the old one, so the requirement
- * is the whole relation twice over plus the WAL of the rewrite.
+ * The safety factor over the measured compact estimate.
+ *
+ * The estimate is a projection: `sum(pg_column_size(...))` over the columns a
+ * post-`null-bodies` row still carries, plus the current index size, plus the
+ * inline bodies the codec refused. It cannot see page fill, per-tuple and
+ * per-page overhead, TOAST chunking of the survivors, or the fact that the
+ * rebuilt indexes are built fresh and pack differently. Doubling it is the
+ * cheapest honest answer to all of that at once, and it keeps the shape of the
+ * sentence this verdict was born with ("the whole thing twice over") while
+ * applying it to WHAT IS ACTUALLY WRITTEN.
+ */
+export const VACUUM_FULL_COMPACT_SAFETY_FACTOR = 2;
+
+/**
+ * The `sync_raw_payloads` variant, re-derived in decision #239.
+ *
+ * WHAT WAS WRONG. `VACUUM FULL` writes a complete new copy of the relation and
+ * its indexes before dropping the old one — true — and the old model therefore
+ * budgeted `relationTotalBytes x 2`, i.e. the CURRENT size of the relation
+ * twice. But this verdict gates the rewrite that runs AFTER
+ * `--phase null-bodies`, whose entire purpose is that the surviving tuples no
+ * longer carry their bodies. The new copy is sized by the LIVE tuples, and
+ * `pg_total_relation_size` of the old relation is sized by the live tuples PLUS
+ * every dead version the nulling UPDATE just created PLUS the TOAST those
+ * bodies used to occupy. Measured on production 2026-08-26: `sync_raw_payloads`
+ * is 22.13 GB and its body-free compact estimate is ~0.57 GB — a factor of 39.
+ * So the gate asked for 44.26 GiB free on a 79 GiB disk holding a 55 GiB
+ * database, and `--phase null-bodies` checks the SAME verdict before it nulls
+ * anything (#223), which means the route was closed at both ends: unsatisfiable
+ * by any amount of lawful reclaiming, and therefore not a gate at all.
+ *
+ * WHAT IT ASKS FOR NOW: the measured compact estimate with a safety factor,
+ * the #239 WAL term, and the same 5 GiB floor the rest of the slice keeps
+ * clear — which this verdict never had, and which is exactly the containment
+ * threshold an ACCESS EXCLUSIVE rewrite on a starved box should be holding.
+ * `relationTotalBytes` stays in the verdict for the journal, not the
+ * inequality: it is the number the operator wants when reading the tombstone.
  */
 export function vacuumFullHeadroomVerdict(input: {
   freeBytes: number;
   relationTotalBytes: number;
+  /** Measured bytes the rewritten relation is expected to occupy: body-free
+   *  heap + indexes + the inline bodies that survive. */
+  compactEstimateBytes: number;
+  maxWalSizeBytes: number;
+  archiveModeOff: boolean;
+  replicationSlots: number;
 }): HeadroomVerdict {
-  const shadowEstimateBytes = input.relationTotalBytes;
-  const walReserveBytes = input.relationTotalBytes;
-  const requiredBytes = input.relationTotalBytes + walReserveBytes;
+  const compact = Math.max(0, input.compactEstimateBytes);
+  // A compact estimate that came back larger than the relation is a measurement
+  // that has gone wrong; take the relation, which is the number that cannot be.
+  const budgeted = Math.round(
+    Math.min(input.relationTotalBytes, compact) * VACUUM_FULL_COMPACT_SAFETY_FACTOR,
+  );
+  const wal = walReserveBytes({
+    copyBytes: budgeted,
+    maxWalSizeBytes: input.maxWalSizeBytes,
+    archiveModeOff: input.archiveModeOff,
+    replicationSlots: input.replicationSlots,
+  });
+  const requiredBytes = budgeted + wal.bytes + CAPTURE_REWRITE_FREE_FLOOR_BYTES;
   const ok = input.freeBytes >= requiredBytes;
+  const terms = `(compact ${gib(compact)} x${VACUUM_FULL_COMPACT_SAFETY_FACTOR} `
+    + `+ WAL ${gib(wal.bytes)} + ${gib(CAPTURE_REWRITE_FREE_FLOOR_BYTES)} floor; `
+    + `relation on disk ${gib(input.relationTotalBytes)})`;
   return {
     ok,
     freeBytes: input.freeBytes,
     sourceTotalBytes: input.relationTotalBytes,
-    shadowEstimateBytes,
-    walReserveBytes,
+    shadowEstimateBytes: budgeted,
+    walReserveBytes: wal.bytes,
+    walBasis: wal.basis,
     requiredBytes,
     reason: ok
-      ? `free ${gib(input.freeBytes)} >= required ${gib(requiredBytes)}`
-      : `free ${gib(input.freeBytes)} < required ${gib(requiredBytes)} `
-        + `(a VACUUM FULL writes a full new copy of ${gib(input.relationTotalBytes)} before `
-        + "dropping the old one)",
+      ? `free ${gib(input.freeBytes)} >= required ${gib(requiredBytes)} ${terms}`
+      : `free ${gib(input.freeBytes)} < required ${gib(requiredBytes)} ${terms}`,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// The completion forecast (decision #239)
+
+export interface CaptureRewriteForecast {
+  /** Rows the backfill still has to stamp. */
+  rowsToStamp: number;
+  /** Bytes the backfill is expected to ADD (the catalog copy). */
+  backfillGrowthBytes: number;
+  /** Bytes the reclaim is expected to RETURN once the parked copy is dropped. */
+  reclaimReturnBytes: number;
+  /** reclaimReturn - backfillGrowth: what the whole ritual is worth. */
+  netBytes: number;
+  /** One line an operator can read without doing arithmetic. */
+  line: string;
+}
+
+/**
+ * WHY A FORECAST BELONGS IN THE CENSUS.
+ *
+ * The gate answers "may this step run". It has never answered "is finishing
+ * this worth starting", and the difference is what stranded July: run 1 was
+ * admitted, wrote 1.8 GB of catalog, was interrupted, and the reclaim that was
+ * supposed to CONSUME those bytes was refused the next morning — so the ritual's
+ * one executed step left the box strictly worse off, permanently, and nothing
+ * in its output had said that was the risk.
+ *
+ * Both halves are honest about what they are. The growth is the same measured
+ * copy the gate just budgeted. The return is the source relation minus what the
+ * skinny twin will weigh (its indexes come across whole; no index here indexes a
+ * body) — the drop of the parked copy is where the bytes actually come back, so
+ * a net that is negative until O5 is stated rather than discovered.
+ */
+export function captureRewriteForecast(input: {
+  census: { rows: number; referenced: number; unreferencedWithBody: number };
+  copyBytes: number;
+  sourceTotalBytes: number;
+  sourceIndexBytes: number;
+}): CaptureRewriteForecast {
+  const rowsToStamp = Math.max(0, input.census.unreferencedWithBody);
+  const backfillGrowthBytes = Math.max(0, input.copyBytes);
+  // After a complete backfill every row is referenced, so the skinny twin is
+  // its indexes plus the bodies the codec refused — which this cannot know
+  // before the walk, and which are a rounding error when it can (3 rows in the
+  // July run). Indexes alone is the conservative floor on what stays.
+  const skinnyBytes = Math.min(input.sourceTotalBytes, Math.max(0, input.sourceIndexBytes));
+  const reclaimReturnBytes = Math.max(0, input.sourceTotalBytes - skinnyBytes);
+  const netBytes = reclaimReturnBytes - backfillGrowthBytes;
+  return {
+    rowsToStamp,
+    backfillGrowthBytes,
+    reclaimReturnBytes,
+    netBytes,
+    line: `forecast: backfill stamps ${rowsToStamp} row(s) and ADDS ~${gib(backfillGrowthBytes)}; `
+      + `the reclaim then RETURNS ~${gib(reclaimReturnBytes)} when the parked copy is dropped; `
+      + `net ${netBytes >= 0 ? "+" : "-"}${gib(Math.abs(netBytes))}. Until that drop the scope is `
+      + "BIGGER on disk, not smaller — run the steps as one sitting.",
   };
 }
 

@@ -53,6 +53,11 @@ import {
   proveCaptureTypedColumnGaps,
 } from "./index.ts";
 import {
+  type CompactMeasurement,
+  measureSyncRawPayloadsCompact,
+  readWalEnvironment,
+} from "./measure.ts";
+import {
   CAPTURE_PARKING_SCHEMA,
   currentMonthVerdict,
   gib,
@@ -862,6 +867,35 @@ async function swapObservationPartition(
  *     the answer while the table is still exactly as it was, instead of after
  *     hours of UPDATEs that only made the relation bigger.
  */
+/**
+ * The one place the §9.2 verdict is computed, so `null-bodies` and
+ * `vacuum-full` cannot disagree about what the rewrite will cost (#239).
+ *
+ * Both phases ask the SAME question — "does the volume hold the relation this
+ * table is about to become" — and before #239 both answered it with
+ * `pg_total_relation_size x 2`, which measures the relation this table already
+ * IS, dead body versions and all. The compact estimate is measured instead; see
+ * measure.ts for what each of its terms is and why the survivor sum is the one
+ * that is counted exactly rather than probed.
+ */
+async function syncRawPayloadsVacuumFullVerdict(
+  app: Ctx,
+  options: CaptureReclaimOptions,
+  sizes: { total: number; indexes: number },
+): Promise<{ verdict: HeadroomVerdict; compact: CompactMeasurement }> {
+  const compact = await measureSyncRawPayloadsCompact(app.db, sizes.indexes);
+  const wal = await readWalEnvironment(app.db);
+  const verdict = vacuumFullHeadroomVerdict({
+    freeBytes: await freeBytesOnDataVolume(options.freeBytesOverride),
+    relationTotalBytes: sizes.total,
+    compactEstimateBytes: compact.compactEstimateBytes,
+    maxWalSizeBytes: wal.maxWalSizeBytes,
+    archiveModeOff: wal.archiveModeOff,
+    replicationSlots: wal.replicationSlots,
+  });
+  return { verdict, compact };
+}
+
 async function nullSyncRawPayloadBodies(
   app: Ctx,
   options: CaptureReclaimOptions,
@@ -884,14 +918,12 @@ async function nullSyncRawPayloadBodies(
     ctx.refusals.push("sync_raw_payloads does not exist");
     return detail;
   }
-  const headroom = vacuumFullHeadroomVerdict({
-    freeBytes: await freeBytesOnDataVolume(options.freeBytesOverride),
-    relationTotalBytes: sizes.total,
-  });
-  detail.headroom = headroom;
-  if (!headroom.ok) {
+  const headroom = await syncRawPayloadsVacuumFullVerdict(app, options, sizes);
+  detail.headroom = headroom.verdict;
+  detail.compactMeasurement = headroom.compact;
+  if (!headroom.verdict.ok) {
     ctx.refusals.push(
-      `§9.2 headroom: ${headroom.reason} — checked HERE, before the UPDATEs, because the `
+      `§9.2 headroom: ${headroom.verdict.reason} — checked HERE, before the UPDATEs, because the `
         + "rewrite this phase exists to enable needs that room and nulling bodies first only "
         + "makes the relation bigger",
     );
@@ -954,13 +986,11 @@ async function vacuumFullSyncRawPayloads(
     return detail;
   }
 
-  const headroom = vacuumFullHeadroomVerdict({
-    freeBytes: await freeBytesOnDataVolume(options.freeBytesOverride),
-    relationTotalBytes: before.total,
-  });
-  detail.headroom = headroom;
-  if (!headroom.ok) {
-    ctx.refusals.push(`§9.2 headroom: ${headroom.reason}`);
+  const headroom = await syncRawPayloadsVacuumFullVerdict(app, options, before);
+  detail.headroom = headroom.verdict;
+  detail.compactMeasurement = headroom.compact;
+  if (!headroom.verdict.ok) {
+    ctx.refusals.push(`§9.2 headroom: ${headroom.verdict.reason}`);
   }
 
   const remaining = await app.db.execute<{ n: string }>(sql`

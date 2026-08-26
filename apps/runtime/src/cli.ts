@@ -962,6 +962,15 @@ export function buildProgram() {
           maxBatches: options.limit,
         });
         console.log(JSON.stringify(result, null, 2));
+        if (result.forecast !== null) {
+          // #239: the gate says whether this step MAY run; the forecast says
+          // whether finishing is worth starting. July learned the difference
+          // the expensive way.
+          console.log(`\n${result.forecast.line}`);
+        }
+        if (result.headroom !== null) {
+          console.log(`headroom: ${result.headroom.reason}`);
+        }
         if (result.dryRun) {
           console.log(
             `\nDRY RUN — nothing written. ${result.census.unreferencedWithBody} row(s) in `
