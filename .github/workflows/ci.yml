@@ -68,9 +68,11 @@ jobs:
 
   # The sync-critical suite is ~120 database acquisitions over ~104 files and is
   # the whole reason a PR used to wait ~18 minutes. Splitting it across runners
-  # is the cheap win: separate machines, so each shard keeps
-  # --no-file-parallelism and its own containers — no shared cluster, no new
-  # isolation hazards. Sharding is by resolved FILE, so it is applied to the
+  # is the cheap win: separate machines, each keeping --no-file-parallelism.
+  # Since #240 a shard runs ONE cluster and clones a database per acquisition,
+  # so "no shared cluster" no longer holds: queries against cluster-global views
+  # (pg_locks, pg_stat_activity) must scope themselves to current_database().
+  # Sharding is by resolved FILE, so it is applied to the
   # :db half directly; `test:prerequisites` is a compound `A && B` and trailing
   # args would land only on B.
   integration:

@@ -129,8 +129,15 @@ export async function startTestDatabase(input?: {
         // drop and leave the clone behind for the rest of the run. The 57P01
         // this raises in the leaked pool is absorbed by createPool's background
         // error handler (the decision #188 blocker, fixed since).
+        // A drop that fails leaves the clone on the shared cluster for the
+        // rest of the run, so it is reported rather than swallowed.
         await adminPool.query(`drop database if exists "${databaseName}" with (force)`)
-          .catch(() => undefined);
+          .catch((error: unknown) => {
+            console.warn(
+              `[test-db] could not drop ${databaseName}: `
+              + `${error instanceof Error ? error.message : String(error)}`,
+            );
+          });
         await adminPool.end().catch(() => undefined);
       },
     };
