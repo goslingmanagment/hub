@@ -285,21 +285,57 @@ export async function startWorkerServices(
   });
 
   await boss.work(RAW_PAYLOAD_CLEANUP_QUEUE, { batchSize: 1 }, async () => {
+    // THIS HANDLER IS TIMED, SUBSTEP BY SUBSTEP, because it failed four
+    // consecutive nights (2026-08-22..25) with `handler execution exceeded
+    // 900s` and nothing in the log said WHICH of its five acts was the cost.
+    // The pg-boss expiry (900 s, the queue's default) is unchanged: the sweep
+    // now bounds ITSELF (SYNC_OBSERVABILITY_PRUNE_BUDGET_MS) so the cap is a
+    // backstop rather than the thing that decides the outcome.
     const now = new Date();
-    await deleteExpiredRawPayloads(app.db, now);
+    const timings: Record<string, number> = {};
+    const timed = async <T>(step: string, body: () => Promise<T>): Promise<T> => {
+      const startedAt = Date.now();
+      try {
+        return await body();
+      } finally {
+        timings[`${step}Ms`] = Date.now() - startedAt;
+      }
+    };
+
+    const rawPayloads = await timed("rawPayloads", () => deleteExpiredRawPayloads(app.db, now));
     // Pending device credentials are deliberately short-lived custody, not an
     // audit fact. Reuse the already-scheduled nightly retention job so crashed
     // Desktop reservations cannot accumulate forever.
-    await deleteExpiredPendingDeviceTokens(app.db, now);
-    await deleteExpiredSyncObservability(
+    await timed("pendingDeviceTokens", () => deleteExpiredPendingDeviceTokens(app.db, now));
+    const observability = await timed("syncObservability", () => deleteExpiredSyncObservability(
       app.db,
       new Date(now.getTime() - app.config.syncObservabilityRetentionDays * 24 * 60 * 60 * 1000),
-    );
+    ));
     // Voice-notes retention rides the nightly cleanup: purge audio bytes older
     // than 7 days and release the reservations of long-stale indeterminate rows.
-    const voiceRetention = await runVoiceNotesNightlyRetention(app, now);
-    if (voiceRetention.audioPurged > 0 || voiceRetention.budgetsReleased > 0) {
-      app.logger.info(voiceRetention, "Voice notes nightly retention complete");
+    const voiceRetention = await timed("voiceNotes", () => runVoiceNotesNightlyRetention(app, now));
+
+    const summary = {
+      ...timings,
+      totalMs: Object.values(timings).reduce((sum, value) => sum + value, 0),
+      rawPayloadsDeleted: rawPayloads.rowCount ?? 0,
+      syncObservability: {
+        cutoff: observability.cutoff.toISOString(),
+        deletedAttempts: observability.deletedAttempts,
+        deletedEvents: observability.deletedEvents,
+        deletedRuns: observability.deletedRuns,
+        budgetExhausted: observability.budgetExhausted,
+        steps: observability.steps,
+      },
+      voiceRetention,
+    };
+    if (observability.budgetExhausted) {
+      // Not a failure — the sweep is resumable and tomorrow finds less to do.
+      // It IS the one outcome worth a warning, because a budget exhausted every
+      // night means the backlog is growing faster than the window removes it.
+      app.logger.warn(summary, "Nightly retention sweep hit its wall-clock budget");
+    } else {
+      app.logger.info(summary, "Nightly retention sweep complete");
     }
   });
 
