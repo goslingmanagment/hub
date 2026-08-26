@@ -722,6 +722,43 @@ SQL'")" || return 1
   [[ "$unsafe_count" == "0" ]]
 }
 
+# Decision #239: a deploy recreates the runtime containers, and a
+# `capture:backfill --execute` running inside one of them dies with them.
+# That is exactly how production run 1 ended on 2026-08-18 — the #87 deploy
+# killed a walk that had stamped 362,804 rows, and its `capture_rewrite_runs`
+# row still said `verdict = running, completed_at NULL` eight days later. The
+# runtime now settles its own row on SIGTERM, but the better outcome is that the
+# two acts never overlap: an hours-long owner-run rewrite and a deploy are both
+# owner-initiated, so "not at the same time" is a schedule, not a race.
+#
+# This refuses BEFORE the build, because the build is the expensive half and
+# there is nothing to learn from paying for it first.
+verify_remote_no_capture_rewrite_in_flight() {
+  local in_flight
+  in_flight="$(run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}; ${REMOTE_COMPOSE} exec -T postgres sh -c 'set -eu
+export PGPASSWORD=\"\$POSTGRES_PASSWORD\"
+psql -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" -v ON_ERROR_STOP=1 -Atq <<'\''SQL'\''
+SELECT CASE
+  WHEN to_regclass('\''public.capture_rewrite_runs'\'') IS NULL THEN 0
+  ELSE (
+    SELECT count(*) FROM capture_rewrite_runs
+    WHERE verdict = '\''running'\'' AND dry_run = false AND completed_at IS NULL
+  )
+END;
+SQL'")" || return 1
+
+  if [[ "$in_flight" != "0" ]]; then
+    printf '[deploy] %s capture_rewrite_runs row(s) are still `running`.\n' "$in_flight" >&2
+    printf '[deploy] A deploy recreates the runtime containers and would kill an in-flight\n' >&2
+    printf '[deploy] capture:backfill / capture:reclaim mid-walk. Let it finish, or settle a\n' >&2
+    printf '[deploy] row that is stale:\n' >&2
+    printf '[deploy]   select id, operation, scope_table, scope_month, phase, started_at\n' >&2
+    printf '[deploy]     from capture_rewrite_runs where verdict = %s;\n' "'running'" >&2
+    return 1
+  fi
+  log "No capture rewrite run is in flight"
+}
+
 rollback_remote_stack() {
   if [[ "${ROLLBACK_FORBIDDEN:-0}" == "1" ]]; then
     log "Rollback skipped; ${ROLLBACK_FORBIDDEN_REASON:-a pre-recreate migration made rollback unsafe}"
@@ -1473,6 +1510,8 @@ acquire_remote_deploy_lock
 
 log "Validating remote Docker access"
 run_remote "set -euo pipefail; docker version >/dev/null"
+verify_remote_no_capture_rewrite_in_flight \
+  || fail "A capture rewrite run is in flight on ${REMOTE}; deploying would kill it mid-walk"
 capture_remote_rollback_image
 capture_remote_release_files
 
