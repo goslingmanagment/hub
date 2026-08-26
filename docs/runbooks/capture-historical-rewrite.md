@@ -36,7 +36,29 @@ that is backfilled and never reclaimed is a month with permanent bloat.
    reaches it. `capture:reclaim --phase null-bodies` now checks §9.2's
    inequality BEFORE it nulls anything, not afterwards. Check it first with a
    dry run; it is the precondition most likely to say no.
-6. **First prod run on the SMALLEST closed month**, output reviewed before the
+
+   **Decision #239 changed how three of those terms are SIZED, not what they
+   are.** The backfill's catalog copy is a bounded probe of the bodies still to
+   walk times a ratio observed on the rows this scope already had copied (July
+   measured 0.43x — dedup plus pglz — and a scope with no sample falls back to
+   byte-for-byte parity). The `sync_raw_payloads` `VACUUM FULL` budget is the
+   relation's measured body-free COMPACT estimate doubled, not
+   `pg_total_relation_size x 2` — that phase runs after `null-bodies`, so the
+   relation on disk is mostly the dead versions the nulling just minted. And
+   WAL is reserved at `min(copy, 4 x max_wal_size)`, asserted against
+   `archive_mode = off` and zero replication slots at gate time and collapsing
+   back to the old whole-copy reserve if either stops being true. **The 5 GiB
+   floor and the mid-walk re-check are unchanged**, and the floor is now a term
+   of the `VACUUM FULL` verdict too. A dry run prints all of it.
+
+6. **No capture rewrite already in flight, and no deploy about to start.**
+   `select id, operation, scope_table, scope_month, phase, started_at from
+   capture_rewrite_runs where verdict = 'running';` should be empty. Since #239
+   `scripts/deploy-production.sh` refuses to start while it is not — a deploy
+   recreates the runtime containers and killed run 1 mid-walk on 2026-08-18 —
+   and an executed backfill settles its own row to `failed` on SIGTERM/SIGINT
+   instead of leaving it `running` forever.
+7. **First prod run on the SMALLEST closed month**, output reviewed before the
    next one.
 
 Check the disk before you start:
@@ -60,6 +82,20 @@ Prints the scope census: total rows, how many already carry a catalog
 reference, and how many carry a body and no reference (the work). A dry run
 leaves **no** journal row — an act that did not happen must not be readable
 later as one that did.
+
+It also prints the #239 **completion forecast** and the headroom verdict:
+
+    forecast: backfill stamps 548350 row(s) and ADDS ~2.71 GiB; the reclaim then
+    RETURNS ~9.86 GiB when the parked copy is dropped; net +7.15 GiB. Until that
+    drop the scope is BIGGER on disk, not smaller — run the steps as one sitting.
+    headroom: free 19.02 GiB >= required 10.42 GiB (catalog copy 2.71 GiB at
+    ratio 0.43 + WAL 2.71 GiB + 5.00 GiB floor)
+
+Read the forecast before the gate. The gate answers "may this step run"; the
+forecast answers "is finishing it worth starting", and July is the month that
+proves those are different questions — run 1 was admitted, wrote 1.8 GB of
+catalog, was interrupted, and the reclaim that was supposed to consume those
+bytes was refused the next morning.
 
 **Abort if:** `census.rows` is 0 (wrong month), or the month is not the one you
 meant. Nothing was written, so there is nothing to undo.
