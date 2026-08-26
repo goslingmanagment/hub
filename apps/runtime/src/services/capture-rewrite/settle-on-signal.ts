@@ -24,8 +24,16 @@
 //
 // The exit code is the conventional 128 + signal number: a killed process must
 // not look successful to whatever launched it.
+//
+// THE WRITE IS CONDITIONAL ON THE ROW STILL BEING `running`. A signal can arrive
+// in the window between the walk's own settle and this guard being released, and
+// an unconditional write there would rewrite a COMPLETED run as `failed` —
+// inventing a failure, which is a worse lie than the stale `running` row this
+// mechanism exists to prevent. `settleRunningCaptureRewriteRun` carries the
+// predicate; a `false` return means the run had already settled itself and this
+// handler correctly did nothing.
 
-import { settleCaptureRewriteRun } from "@agency_hub_core/db";
+import { settleRunningCaptureRewriteRun } from "@agency_hub_core/db";
 
 import type { AppContext } from "../../bootstrap.ts";
 
@@ -92,7 +100,7 @@ export function settleRunOnSignal(
         { scope: input.scopeRef, runId: input.runId, signal },
         "capture rewrite run signalled — settling its ledger row to failed",
       );
-      void settleCaptureRewriteRun(app.db, {
+      void settleRunningCaptureRewriteRun(app.db, {
         id: input.runId,
         verdict: "failed",
         summary: {
@@ -100,6 +108,14 @@ export function settleRunOnSignal(
           killedBySignal: signal,
         },
       })
+        .then((settled) => {
+          if (!settled) {
+            app.logger.info(
+              { scope: input.scopeRef, runId: input.runId, signal },
+              "capture rewrite run had already settled itself — signal handler left it alone",
+            );
+          }
+        })
         .catch((error: unknown) => {
           app.logger.error(
             { scope: input.scopeRef, runId: input.runId, signal, err: error },

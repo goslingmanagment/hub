@@ -25,41 +25,59 @@ export const COMPACT_PROBE_ROWS = 500;
 
 export interface WalEnvironment {
   maxWalSizeBytes: number;
+  /** NULL when `pg_settings` has no such row — a legitimate 0 is a value. */
+  walKeepSizeBytes: number | null;
   archiveModeOff: boolean;
   replicationSlots: number;
 }
 
 /**
- * The three facts the #239 WAL term rests on, read fresh at gate time.
+ * The four facts the #239 WAL term rests on, read fresh at gate time.
  *
  * They are read rather than assumed because the term COLLAPSES BACK to the old
  * 1:1 reserve if any of them stops being true — an archiver or a replication
  * slot pins WAL segments without bound, and a bound that is not there any more
- * is not a bound.
+ * is not a bound. `wal_keep_size` is the fourth: it holds segments back
+ * INDEPENDENTLY of the checkpointer, so a term built only on `max_wal_size`
+ * cannot see the retention it adds.
+ *
+ * A SETTING THAT IS ABSENT IS NOT A SETTING THAT IS ZERO. `walKeepSizeBytes`
+ * comes back null only when `pg_settings` has no such row, which is the one
+ * case the reserve must refuse to bound.
  */
 export async function readWalEnvironment(db: Database): Promise<WalEnvironment> {
   const settings = await db.execute<{ name: string; setting: string; unit: string | null }>(sql`
-    select name, setting, unit from pg_settings where name in ('max_wal_size', 'archive_mode')
+    select name, setting, unit from pg_settings
+    where name in ('max_wal_size', 'wal_keep_size', 'archive_mode')
   `);
   const slots = await db.execute<{ n: string }>(sql`
     select count(*)::text as n from pg_replication_slots
   `);
+  // pg_settings reports sizes in the setting's own unit; multiply rather than
+  // trust a bare number.
+  const toBytes = (setting: string, unit: string | null): number => {
+    const unitBytes = unit === "MB"
+      ? 1024 ** 2
+      : unit === "kB"
+        ? 1024
+        : unit === "GB"
+          ? 1024 ** 3
+          : unit === "8kB"
+            ? 8 * 1024
+            : unit === "16MB"
+              ? 16 * 1024 ** 2
+              : 1;
+    return Number(setting) * unitBytes;
+  };
   let maxWalSizeBytes = 0;
+  let walKeepSizeBytes: number | null = null;
   let archiveModeOff = false;
   for (const row of settings.rows) {
     if (row.name === "max_wal_size") {
-      // pg_settings reports max_wal_size in its unit (`MB` in every supported
-      // build); multiply rather than trust a bare number.
-      const unitBytes = row.unit === "MB"
-        ? 1024 ** 2
-        : row.unit === "kB"
-          ? 1024
-          : row.unit === "GB"
-            ? 1024 ** 3
-            : row.unit === "8kB"
-              ? 8 * 1024
-              : 1;
-      maxWalSizeBytes = Number(row.setting) * unitBytes;
+      maxWalSizeBytes = toBytes(row.setting, row.unit);
+    }
+    if (row.name === "wal_keep_size") {
+      walKeepSizeBytes = toBytes(row.setting, row.unit);
     }
     if (row.name === "archive_mode") {
       archiveModeOff = row.setting === "off";
@@ -67,6 +85,7 @@ export async function readWalEnvironment(db: Database): Promise<WalEnvironment> 
   }
   return {
     maxWalSizeBytes,
+    walKeepSizeBytes,
     archiveModeOff,
     replicationSlots: Number(slots.rows[0]?.n ?? 0),
   };
@@ -79,8 +98,9 @@ export interface BackfillCopyMeasurement {
   probeRows: number;
   /** avgInlineBytes x the census's unreferenced count. */
   inlineBytesToCopy: number;
-  /** compressionRatio x dedupFactor — what one inline byte costs in the
-   *  catalog. 1.0 when there is nothing to learn from. */
+  /** What ONE inline byte is budgeted to cost in the catalog: the compression
+   *  ratio and nothing else. 1.0 when there is nothing to learn from.
+   *  Deliberately takes no dedup credit — see below. */
   copyRatio: number;
   /** Catalog bytes per inline byte for ONE body, sampled 1:1. */
   compressionRatio: number | null;
@@ -89,7 +109,8 @@ export interface BackfillCopyMeasurement {
   compressionRatioNarrow: number | null;
   compressionSampleRows: number;
   /** distinctObjects / referencedRows over the whole already-copied cohort.
-   *  EXACT, not sampled — see below. */
+   *  EXACT, not sampled — and REPORTED ONLY: it never enters the budget,
+   *  because the cohort it is measured on is not the cohort it would price. */
   dedupFactor: number | null;
   dedupReferencedRows: number;
   dedupDistinctObjects: number;
@@ -120,25 +141,32 @@ export interface BackfillCopyMeasurement {
  * jsonb it came from compress to the same size, which is worth knowing — the
  * saving in this system is not compression.)
  *
- * **Dedup, and it is EXACT because a sample cannot see it.** Two envelopes
- * carrying identical bytes collapse onto one catalog object, and that collapse
- * is the entire saving: July's 362,804 referenced rows hold **206,659** distinct
- * objects, a factor of **0.5696**. A row sample cannot measure it — 500 picks
- * spread over 362,804 rows almost never draw two rows sharing an object, so the
- * sampled ratio came back **0.99 against a true 0.49**. So the dedup factor is
- * counted rather than sampled: `count(distinct (bucket_month, object_id)) /
- * count(*)` over the already-copied rows, which is an aggregate over two narrow
- * columns and measured 2.1 s on the July partition and 0.67 s on
- * `sync_raw_payloads` (index-only). A gate guarding an hours-long walk can
- * afford two seconds.
+ * **Dedup is MEASURED AND THEN NOT SPENT, and that is deliberate.** Two
+ * envelopes carrying identical bytes collapse onto one catalog object, and on
+ * the part of July already copied that collapse is large: 362,804 referenced
+ * rows hold **206,659** distinct objects, a factor of **0.5696**. It is counted
+ * rather than sampled — `count(distinct (bucket_month, object_id)) / count(*)`,
+ * an aggregate over two narrow columns, 2.1 s on the July partition and 0.67 s
+ * on `sync_raw_payloads` (index-only) — because a row sample structurally
+ * CANNOT see it: 500 picks spread over 362,804 rows almost never draw two rows
+ * sharing an object, and a sampled ratio came back **0.99 against a true 0.49**.
  *
- * The product over-budgets the July cohort by ~16 % against its measured truth
- * (0.5701 modelled vs 0.4915 actual), which is the direction a gate should err.
+ * **BUT THE BUDGET TAKES NO CREDIT FOR IT, because it is learned from the wrong
+ * cohort.** The factor is measured over the rows a previous walk ALREADY
+ * copied — the id-ordered PREFIX of the scope — and would be applied to the
+ * unreferenced REMAINDER, which is a different population. A scope whose prefix
+ * happens to be duplicate-heavy and whose suffix is unique would drive the ratio
+ * toward the floor while the walk's real growth is ~1.0x, and the gate would
+ * admit a run it cannot pay for. Dedup is a saving the operation MIGHT deliver,
+ * not one the disk can be promised, so it rides in the tombstone and the census
+ * where an operator can see it, and the inequality is sized on compression
+ * alone. The floor and the mid-walk re-check are what stand behind the
+ * difference.
  *
- * NO SAMPLE MEANS 1.0. A scope nothing has copied yet has no dedup factor and
- * no compression sample, and it gets byte-for-byte parity — the assumption this
- * whole change replaced, kept as the FALLBACK rather than as the rule. So does
- * any factor that comes back zero, negative, NaN or infinite.
+ * NO SAMPLE MEANS 1.0. A scope nothing has copied yet has no compression sample
+ * and gets byte-for-byte parity — the assumption this whole change replaced,
+ * kept as the FALLBACK rather than as the rule. So does a ratio that comes back
+ * zero, negative, NaN or infinite.
  *
  * THE RATIO HAS A FLOOR AND NO CEILING. `MIN_COPY_RATIO` stops a measurement
  * that has gone wrong from producing a budget near zero; nothing caps it from
@@ -264,10 +292,11 @@ export async function measureBackfillCopy(
       : null,
   );
 
-  const observed = compressionRatio !== null && dedupFactor !== null
-    ? compressionRatio * dedupFactor
-    : null;
-  const copyRatio = observed === null ? 1 : Math.max(MIN_COPY_RATIO, observed);
+  // THE BUDGET TAKES NO DEDUP CREDIT. See the doc comment: the factor is
+  // learned from the wrong cohort and is kept for the journal alone.
+  const copyRatio = compressionRatio === null
+    ? 1
+    : Math.max(MIN_COPY_RATIO, compressionRatio);
 
   return {
     avgInlineBytes,
@@ -280,7 +309,7 @@ export async function measureBackfillCopy(
     dedupFactor,
     dedupReferencedRows,
     dedupDistinctObjects,
-    ratioBasis: observed === null ? "no_sample" : "observed",
+    ratioBasis: compressionRatio === null ? "no_sample" : "observed",
   };
 }
 

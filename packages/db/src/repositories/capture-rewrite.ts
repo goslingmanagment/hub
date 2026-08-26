@@ -817,6 +817,37 @@ export async function settleCaptureRewriteRun(
 }
 
 /**
+ * Settle a run ONLY IF it is still `running`.
+ *
+ * The unconditional `settleCaptureRewriteRun` above is what the walk itself
+ * calls, and it is right to be unconditional: the walk owns its row and knows
+ * what happened to it. A SIGNAL HANDLER OWNS NOTHING. It fires at an arbitrary
+ * instant, including the window between the normal settle and the handler being
+ * torn down, and an unconditional write there turns a run that COMPLETED into
+ * one that reads `failed` — inventing a failure, which is a worse lie than the
+ * `running` row this whole mechanism exists to prevent.
+ *
+ * So the signal path writes through a predicate instead: `verdict = 'running'`
+ * is the claim it is allowed to make, and if that is no longer true it did not
+ * happen. The boolean says whether the row was actually taken, so the caller can
+ * log the difference rather than assume.
+ */
+export async function settleRunningCaptureRewriteRun(
+  db: Database,
+  input: { id: number; verdict: Exclude<CaptureRewriteVerdict, "running">; summary: Record<string, unknown> },
+): Promise<boolean> {
+  const rows = await db.execute<{ id: string }>(sql`
+    update capture_rewrite_runs
+    set verdict = ${input.verdict},
+        summary = ${JSON.stringify(input.summary)}::jsonb,
+        completed_at = now()
+    where id = ${input.id} and verdict = 'running'
+    returning id::text as id
+  `);
+  return rows.rows.length > 0;
+}
+
+/**
  * The most recent SETTLED run of one operation over one scope.
  *
  * `running` rows are excluded: an unfinished run is not a verdict, and a

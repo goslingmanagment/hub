@@ -12,8 +12,11 @@
 
 import { describe, expect, it, vi } from "vitest";
 
-const settleCaptureRewriteRun = vi.hoisted(() => vi.fn(async () => {}));
-vi.mock("@agency_hub_core/db", () => ({ settleCaptureRewriteRun }));
+// The signal path writes through the GUARDED variant: it may only settle a row
+// that is still `running`, so a signal arriving after the walk settled itself
+// cannot rewrite a completed run as `failed`.
+const settleRunningCaptureRewriteRun = vi.hoisted(() => vi.fn(async () => true));
+vi.mock("@agency_hub_core/db", () => ({ settleRunningCaptureRewriteRun }));
 
 const { settleRunOnSignal, SETTLE_ON_SIGNALS } = await import(
   "../apps/runtime/src/services/capture-rewrite/settle-on-signal.ts"
@@ -40,7 +43,7 @@ function harness() {
 
 describe("settleRunOnSignal", () => {
   it("settles the ledger row to failed and names the signal", async () => {
-    settleCaptureRewriteRun.mockClear();
+    settleRunningCaptureRewriteRun.mockClear();
     const { handlers, exit, app, hooks } = harness();
     settleRunOnSignal(
       app as never,
@@ -51,7 +54,7 @@ describe("settleRunOnSignal", () => {
     handlers.get("SIGTERM")?.[0]?.();
     await vi.waitFor(() => expect(exit).toHaveBeenCalled());
 
-    expect(settleCaptureRewriteRun).toHaveBeenCalledWith(app.db, {
+    expect(settleRunningCaptureRewriteRun).toHaveBeenCalledWith(app.db, {
       id: 41,
       verdict: "failed",
       summary: { referenced: 362_804, killedBySignal: "SIGTERM" },
@@ -61,7 +64,7 @@ describe("settleRunOnSignal", () => {
   });
 
   it("reads the summary AT THE MOMENT of the signal, not when it was armed", async () => {
-    settleCaptureRewriteRun.mockClear();
+    settleRunningCaptureRewriteRun.mockClear();
     const { handlers, exit, app, hooks } = harness();
     const progress = { referenced: 0 };
     settleRunOnSignal(
@@ -74,7 +77,7 @@ describe("settleRunOnSignal", () => {
     handlers.get("SIGINT")?.[0]?.();
     await vi.waitFor(() => expect(exit).toHaveBeenCalled());
 
-    expect(settleCaptureRewriteRun).toHaveBeenCalledWith(app.db, {
+    expect(settleRunningCaptureRewriteRun).toHaveBeenCalledWith(app.db, {
       id: 1,
       verdict: "failed",
       summary: { referenced: 359_000, killedBySignal: "SIGINT" },
@@ -83,7 +86,7 @@ describe("settleRunOnSignal", () => {
   });
 
   it("arms both SIGTERM and SIGINT, and stopRequested tells the walk to stop", async () => {
-    settleCaptureRewriteRun.mockClear();
+    settleRunningCaptureRewriteRun.mockClear();
     const { handlers, exit, app, hooks } = harness();
     const guard = settleRunOnSignal(
       app as never,
@@ -100,7 +103,7 @@ describe("settleRunOnSignal", () => {
   });
 
   it("settles ONCE however many signals arrive", async () => {
-    settleCaptureRewriteRun.mockClear();
+    settleRunningCaptureRewriteRun.mockClear();
     const { handlers, exit, app, hooks } = harness();
     settleRunOnSignal(
       app as never,
@@ -111,12 +114,34 @@ describe("settleRunOnSignal", () => {
     handlers.get("SIGTERM")?.[0]?.();
     handlers.get("SIGINT")?.[0]?.();
     await vi.waitFor(() => expect(exit).toHaveBeenCalled());
-    expect(settleCaptureRewriteRun).toHaveBeenCalledTimes(1);
+    expect(settleRunningCaptureRewriteRun).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves a run that already settled itself ALONE, and says so", async () => {
+    // The guarded UPDATE matched no row: the walk got there first. Inventing a
+    // `failed` verdict for a run that completed is a worse lie than the stale
+    // `running` row this whole mechanism exists to prevent.
+    settleRunningCaptureRewriteRun.mockClear();
+    settleRunningCaptureRewriteRun.mockResolvedValueOnce(false);
+    const { handlers, exit, app, hooks } = harness();
+    settleRunOnSignal(
+      app as never,
+      { runId: 3, scopeRef: "s", summary: () => ({}) },
+      hooks as never,
+    );
+    handlers.get("SIGTERM")?.[0]?.();
+    await vi.waitFor(() => expect(exit).toHaveBeenCalled());
+    expect(app.logger.info).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: 3, signal: "SIGTERM" }),
+      expect.stringContaining("already settled itself"),
+    );
+    expect(app.logger.error).not.toHaveBeenCalled();
+    expect(exit).toHaveBeenCalledWith(143);
   });
 
   it("still exits when the settle itself fails, and says the row stayed `running`", async () => {
-    settleCaptureRewriteRun.mockClear();
-    settleCaptureRewriteRun.mockRejectedValueOnce(new Error("connection terminated"));
+    settleRunningCaptureRewriteRun.mockClear();
+    settleRunningCaptureRewriteRun.mockRejectedValueOnce(new Error("connection terminated"));
     const { handlers, exit, app, hooks } = harness();
     settleRunOnSignal(
       app as never,

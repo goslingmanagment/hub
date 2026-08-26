@@ -731,8 +731,12 @@ SQL'")" || return 1
 # two acts never overlap: an hours-long owner-run rewrite and a deploy are both
 # owner-initiated, so "not at the same time" is a schedule, not a race.
 #
-# This refuses BEFORE the build, because the build is the expensive half and
-# there is nothing to learn from paying for it first.
+# IT IS ASKED TWICE. Once before the build, because the build is the expensive
+# half and there is nothing to learn from paying for it first; and again
+# immediately before `up -d --force-recreate`, because a ~6 minute build is
+# plenty of window for an owner to start a walk in, and the recreate is the
+# statement that would actually kill it. The second call is on the MAIN path
+# only — a rollback is already an emergency and must not be blocked.
 verify_remote_no_capture_rewrite_in_flight() {
   local in_flight
   in_flight="$(run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}; ${REMOTE_COMPOSE} exec -T postgres sh -c 'set -eu
@@ -1548,6 +1552,13 @@ if [[ "$LIFECYCLE_FIRST_ENABLE" == "1" ]]; then
   ROLLBACK_FORBIDDEN_REASON="desktop-lifecycle-v2 was enabled; capability rollback is unsafe"
   log "Automatic rollback disabled before the one-way desktop-lifecycle-v2 transition"
 fi
+# The pre-build check is minutes old by now — a full build takes ~6 min and an
+# owner can start a capture:backfill inside that window. THIS is the statement
+# that would kill it, so this is where the question has to be asked again.
+# Deliberately NOT in the rollback path: a rollback is already an emergency and
+# must not be blocked by a rewrite it is arguably rescuing.
+verify_remote_no_capture_rewrite_in_flight \
+  || fail_after_release_sync "A capture rewrite run started during the build on ${REMOTE}; recreating the containers now would kill it mid-walk"
 run_remote "set -euo pipefail; docker tag $(printf '%q' "$IMAGE_CANDIDATE_TAG") $(printf '%q' "$IMAGE_TAG")" \
   || fail_after_release_sync "Unable to promote candidate image tag after validation"
 STACK_RECREATED=1

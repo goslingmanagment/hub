@@ -890,6 +890,7 @@ async function syncRawPayloadsVacuumFullVerdict(
     relationTotalBytes: sizes.total,
     compactEstimateBytes: compact.compactEstimateBytes,
     maxWalSizeBytes: wal.maxWalSizeBytes,
+    walKeepSizeBytes: wal.walKeepSizeBytes,
     archiveModeOff: wal.archiveModeOff,
     replicationSlots: wal.replicationSlots,
   });

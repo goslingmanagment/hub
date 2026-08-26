@@ -257,14 +257,31 @@ export const CAPTURE_REWRITE_FREE_FLOOR_BYTES = 5 * 1024 ** 3;
  *
  * `max_wal_size` is a SOFT target, not a cap: a burst that outruns the
  * checkpointer overshoots it, and the observed overshoot on this box during a
- * heavy delete was 168 MB → 772 MB against a 1 GiB target. Four times the
+ * heavy delete was 168 MB → 1.00 GiB against a 1 GiB target. Four times the
  * target is comfortably above that and is still measured in gigabytes rather
  * than the tens of gigabytes the 1:1 reserve asked for.
  *
- * THE ASSERTION IS PART OF THE ARITHMETIC. If the archiver or a slot ever
+ * `wal_keep_size` IS ADDED ON TOP, not folded in. It is a floor on retention
+ * that the checkpointer does not get to remove — segments are kept for a
+ * would-be standby whether or not `max_wal_size` says they could go — so it is
+ * resident WAL that exists in ADDITION to the checkpointer's working set, and
+ * `min(copy, 4 × max_wal_size + wal_keep_size)` is the honest shape. On this box
+ * it reads 0 today; the term exists so that setting it later cannot silently
+ * invalidate a gate nobody re-derived.
+ *
+ * THE ASSERTIONS ARE PART OF THE ARITHMETIC. If the archiver or a slot ever
  * appears, segments accumulate without bound and the only honest reserve is the
  * whole copy again — so this falls back to exactly the old term rather than to
- * a smaller guess.
+ * a smaller guess, and it does the same if either setting cannot be READ at all
+ * (a missing `pg_settings` row; a legitimate zero is a value, not a failure).
+ *
+ * AND IT IS A BUDGET, NOT A GUARANTEE. Nothing here can promise what the
+ * checkpointer will actually leave on the volume — only what it is reasonable
+ * to reserve for. The thing that actually stops a walk eating the disk is the
+ * mid-run floor check (`captureBackfillMidRunVerdict`), which now reads the
+ * volume EVERY batch once free space is below
+ * `CAPTURE_BACKFILL_TIGHT_RECHECK_FREE_BYTES`. That is the hard backstop; this
+ * term is the estimate it stands behind.
  */
 export const WAL_RESERVE_MAX_WAL_SIZE_FACTOR = 4;
 
@@ -273,6 +290,9 @@ export interface WalReserveInput {
   copyBytes: number;
   /** `max_wal_size` from `pg_settings`, in bytes. */
   maxWalSizeBytes: number;
+  /** `wal_keep_size` from `pg_settings`, in bytes. NULL means the setting could
+   *  not be READ (no such row) — a legitimate 0 is a value, not a failure. */
+  walKeepSizeBytes: number | null;
   /** `archive_mode = off`? */
   archiveModeOff: boolean;
   /** `select count(*) from pg_replication_slots` */
@@ -288,7 +308,15 @@ export interface WalReserve {
 
 export function walReserveBytes(input: WalReserveInput): WalReserve {
   const copyBytes = Math.max(0, input.copyBytes);
-  if (!input.archiveModeOff || input.replicationSlots > 0 || input.maxWalSizeBytes <= 0) {
+  const keepUnreadable = input.walKeepSizeBytes === null
+    || !Number.isFinite(input.walKeepSizeBytes)
+    || input.walKeepSizeBytes < 0;
+  if (
+    !input.archiveModeOff
+    || input.replicationSlots > 0
+    || input.maxWalSizeBytes <= 0
+    || keepUnreadable
+  ) {
     return {
       bytes: copyBytes,
       basis: "full_copy_fallback",
@@ -298,17 +326,22 @@ export function walReserveBytes(input: WalReserveInput): WalReserve {
         : input.replicationSlots > 0
           ? `${input.replicationSlots} replication slot(s) exist — a lagging consumer pins WAL, so the `
             + "reserve is the whole copy again"
-          : "max_wal_size is unreadable — falling back to the whole copy again",
+          : input.maxWalSizeBytes <= 0
+            ? "max_wal_size is unreadable — falling back to the whole copy again"
+            : "wal_keep_size is unreadable — it retains WAL independently of the checkpointer, so a "
+              + "bound that cannot see it is not a bound; falling back to the whole copy again",
     };
   }
-  const bounded = WAL_RESERVE_MAX_WAL_SIZE_FACTOR * input.maxWalSizeBytes;
+  const keepBytes = input.walKeepSizeBytes ?? 0;
+  const bounded = WAL_RESERVE_MAX_WAL_SIZE_FACTOR * input.maxWalSizeBytes + keepBytes;
   const bytes = Math.min(copyBytes, bounded);
   return {
     bytes,
     basis: "bounded_by_max_wal_size",
     reason: `archive_mode off, 0 replication slots: resident WAL is bounded by the checkpointer at `
-      + `${WAL_RESERVE_MAX_WAL_SIZE_FACTOR} x max_wal_size (${gib(bounded)}), so the reserve is `
-      + `min(copy ${gib(copyBytes)}, ${gib(bounded)}) = ${gib(bytes)}`,
+      + `${WAL_RESERVE_MAX_WAL_SIZE_FACTOR} x max_wal_size plus wal_keep_size ${gib(keepBytes)} `
+      + `(${gib(bounded)}), so the reserve is min(copy ${gib(copyBytes)}, ${gib(bounded)}) `
+      + `= ${gib(bytes)}. A BUDGET, NOT A GUARANTEE — the mid-run floor check is the backstop`,
   };
 }
 
@@ -363,6 +396,7 @@ export function backfillHeadroomVerdict(input: {
   /** Observed stored-catalog / inline ratio for this scope; 1.0 with no sample. */
   copyRatio: number;
   maxWalSizeBytes: number;
+  walKeepSizeBytes: number | null;
   archiveModeOff: boolean;
   replicationSlots: number;
 }): HeadroomVerdict {
@@ -375,6 +409,7 @@ export function backfillHeadroomVerdict(input: {
   const wal = walReserveBytes({
     copyBytes: catalogCopyBytes,
     maxWalSizeBytes: input.maxWalSizeBytes,
+    walKeepSizeBytes: input.walKeepSizeBytes,
     archiveModeOff: input.archiveModeOff,
     replicationSlots: input.replicationSlots,
   });
@@ -396,6 +431,46 @@ export function backfillHeadroomVerdict(input: {
         + `(catalog copy ${gib(catalogCopyBytes)} at ratio ${copyRatio.toFixed(2)} `
         + `+ WAL ${gib(wal.bytes)} + ${gib(CAPTURE_REWRITE_FREE_FLOOR_BYTES)} floor)`,
   };
+}
+
+/**
+ * Free space below which the walk stops trusting a ten-batch gap.
+ *
+ * The floor is 5 GiB and the cadence is what decides how much can be spent
+ * BETWEEN two readings of it. Ten batches at `--batch 2000` on the raw table is
+ * tens of thousands of bodies — comfortable when the volume has room, and
+ * exactly the wrong bet when it does not, because the size the walk consumes per
+ * batch is the one thing this system has repeatedly measured wrong (a 3.4x
+ * probe bias, dedup that does not transfer between cohorts). Three GiB of
+ * margin over the floor is the point past which a stale reading stops being a
+ * detail: below it every batch pays one `statvfs` — microseconds against a
+ * batch measured in seconds — and above it the cheap cadence stands.
+ */
+export const CAPTURE_BACKFILL_TIGHT_RECHECK_FREE_BYTES = 8 * 1024 ** 3;
+
+/**
+ * Is the walk due to re-read the volume?
+ *
+ * `lastFreeBytes` is the most recent reading — the pre-flight's on the first
+ * batch, and every mid-walk check's after that. An UNKNOWN reading is treated as
+ * tight, not as roomy: a gate whose input is missing must not be the reason a
+ * check was skipped.
+ */
+export function headroomRecheckDue(input: {
+  batchesDone: number;
+  lastFreeBytes: number | null;
+  cadenceBatches: number;
+}): boolean {
+  if (input.batchesDone <= 0) {
+    return false;
+  }
+  if (input.lastFreeBytes === null || !Number.isFinite(input.lastFreeBytes)) {
+    return true;
+  }
+  if (input.lastFreeBytes < CAPTURE_BACKFILL_TIGHT_RECHECK_FREE_BYTES) {
+    return true;
+  }
+  return input.batchesDone % Math.max(1, input.cadenceBatches) === 0;
 }
 
 /**
@@ -468,6 +543,7 @@ export function vacuumFullHeadroomVerdict(input: {
    *  heap + indexes + the inline bodies that survive. */
   compactEstimateBytes: number;
   maxWalSizeBytes: number;
+  walKeepSizeBytes: number | null;
   archiveModeOff: boolean;
   replicationSlots: number;
 }): HeadroomVerdict {
@@ -480,6 +556,7 @@ export function vacuumFullHeadroomVerdict(input: {
   const wal = walReserveBytes({
     copyBytes: budgeted,
     maxWalSizeBytes: input.maxWalSizeBytes,
+    walKeepSizeBytes: input.walKeepSizeBytes,
     archiveModeOff: input.archiveModeOff,
     replicationSlots: input.replicationSlots,
   });
