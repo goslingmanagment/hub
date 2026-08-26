@@ -124,7 +124,8 @@ async function crashSimulatedBackend(control: StartedTestDatabase["pool"]) {
   await control.query(
     `select pg_terminate_backend(pid)
      from pg_stat_activity
-     where application_name = $1 and pid <> pg_backend_pid()`,
+     where application_name = $1 and pid <> pg_backend_pid()
+       and datname = current_database()`,
     [CRASH_APP_NAME],
   );
   const deadline = Date.now() + 5_000;
@@ -132,7 +133,8 @@ async function crashSimulatedBackend(control: StartedTestDatabase["pool"]) {
     const alive = await control.query<{ n: string }>(
       `select count(*)::text as n
        from pg_stat_activity
-       where application_name = $1 and pid <> pg_backend_pid()`,
+       where application_name = $1 and pid <> pg_backend_pid()
+         and datname = current_database()`,
       [CRASH_APP_NAME],
     );
     if (alive.rows[0]!.n === "0") {

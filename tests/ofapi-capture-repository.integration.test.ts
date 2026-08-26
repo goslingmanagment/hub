@@ -896,6 +896,8 @@ describe("OFAPI capture correctness repository", () => {
         where relation = 'ofapi_capture_controls'::regclass
           and mode = 'RowExclusiveLock'
           and granted = false
+          -- Clones share a cluster AND inherit the template's relation OIDs.
+          and database = (select oid from pg_database where datname = current_database())
       `);
       blockedWriters = blocked.rows[0]?.count ?? 0;
       if (blockedWriters === 2) break;
