@@ -62,6 +62,20 @@ export default async function setup({ provide }: {
         POSTGRES_USER: "postgres",
         POSTGRES_PASSWORD: "postgres",
       })
+      // Durability is worthless here — the cluster is thrown away at the end of
+      // the run — and its cost is not: a shared, long-lived cluster answers a
+      // write slower than the fresh container each file used to get, which
+      // showed up as egress-resolver's pacing test seeing 1 of 6 pacers claim a
+      // slot in 60ms instead of 6. #188 measured this class of tuning at ~40%
+      // and dropped it only because stopping a container under a live pool
+      // raised FATAL 57P01 into a pool with no listener; createPool absorbs
+      // that now, which is the same precondition #239 rests on.
+      .withCommand([
+        "postgres",
+        "-c", "fsync=off",
+        "-c", "synchronous_commit=off",
+        "-c", "full_page_writes=off",
+      ])
       .withStartupTimeout(INTEGRATION_TEST_TIMEOUT_MS)
       .withExposedPorts(5432)
       .start();
