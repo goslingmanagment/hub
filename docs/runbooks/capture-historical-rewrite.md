@@ -38,10 +38,13 @@ that is backfilled and never reclaimed is a month with permanent bloat.
    dry run; it is the precondition most likely to say no.
 
    **Decision #239 changed how three of those terms are SIZED, not what they
-   are.** The backfill's catalog copy is a bounded probe of the bodies still to
-   walk times a ratio observed on the rows this scope already had copied (July
-   measured 0.43x — dedup plus pglz — and a scope with no sample falls back to
-   byte-for-byte parity). The `sync_raw_payloads` `VACUUM FULL` budget is the
+   are.** The backfill's catalog copy is a SPREAD probe of the bodies still
+   to walk (picks spaced across the remaining id range — the head of the queue
+   under-measured July by 3.4x) times a ratio that is compression sampled 1:1
+   AND dedup counted exactly, because a row sample cannot see dedup: July's
+   362,804 referenced rows hold 206,659 objects (0.5696) and a 500-row sample
+   read that same collapse as 0.99. A scope with nothing copied yet falls back
+   to byte-for-byte parity. The `sync_raw_payloads` `VACUUM FULL` budget is the
    relation's measured body-free COMPACT estimate doubled, not
    `pg_total_relation_size x 2` — that phase runs after `null-bodies`, so the
    relation on disk is mostly the dead versions the nulling just minted. And
@@ -85,11 +88,11 @@ later as one that did.
 
 It also prints the #239 **completion forecast** and the headroom verdict:
 
-    forecast: backfill stamps 548350 row(s) and ADDS ~2.71 GiB; the reclaim then
-    RETURNS ~9.86 GiB when the parked copy is dropped; net +7.15 GiB. Until that
+    forecast: backfill stamps 548350 row(s) and ADDS ~3.47 GiB; the reclaim then
+    RETURNS ~9.85 GiB when the parked copy is dropped; net +6.38 GiB. Until that
     drop the scope is BIGGER on disk, not smaller — run the steps as one sitting.
-    headroom: free 19.02 GiB >= required 10.42 GiB (catalog copy 2.71 GiB at
-    ratio 0.43 + WAL 2.71 GiB + 5.00 GiB floor)
+    headroom: free 17.87 GiB >= required 11.95 GiB (catalog copy 3.47 GiB at
+    ratio 0.57 + WAL 3.47 GiB + 5.00 GiB floor)
 
 Read the forecast before the gate. The gate answers "may this step run"; the
 forecast answers "is finishing it worth starting", and July is the month that
