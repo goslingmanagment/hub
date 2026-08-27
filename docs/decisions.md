@@ -10247,9 +10247,14 @@ longer holds, and its recorded re-entry condition is what allowed the change:
 #188 dropped its tmpfs experiment because stopping a container under a live pool
 raised FATAL 57P01 into a pool with no `error` listener. `createPool` grew a
 background-error absorber since (`packages/db/src/client.ts`, proven by
-`tests/db-pool-error-handling.integration.test.ts`), so teardown is now
-`pool.end()` then `DROP DATABASE ... WITH (FORCE)`. A failed drop is warned
-about, never swallowed: it would leave the clone on the shared cluster.
+`tests/db-pool-error-handling.integration.test.ts`), so the harness's own pools
+survive teardown. The drop is deliberately NOT `WITH (FORCE)`: FORCE terminates
+connections this harness never created — pg-boss opens its own, outside
+createPool and so outside that absorber — and CI proved it, failing a shard
+whose 51 files and 510 tests all passed on an unhandled FATAL 57P01 from a
+pg-boss client. Teardown is `pool.end()` then a plain `DROP DATABASE`, which
+reclaims the clone when nothing holds it and warns when something does; the
+leftover costs disk until the container dies with the run.
 
 **The standing hazard this creates:** clones share one cluster, so any query
 against a cluster-global view (`pg_locks`, `pg_stat_activity`) sees siblings

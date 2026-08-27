@@ -129,12 +129,21 @@ export async function startTestDatabase(input?: {
         // drop and leave the clone behind for the rest of the run. The 57P01
         // this raises in the leaked pool is absorbed by createPool's background
         // error handler (the decision #188 blocker, fixed since).
-        // A drop that fails leaves the clone on the shared cluster for the
-        // rest of the run, so it is reported rather than swallowed.
-        await adminPool.query(`drop database if exists "${databaseName}" with (force)`)
+        // Deliberately NOT `with (force)`. FORCE terminates whatever is still
+        // connected, and a connection this harness did not create — pg-boss
+        // opens its own, outside createPool and so outside its background-error
+        // absorber — turns that into an unhandled FATAL 57P01 that fails a job
+        // where every test passed. That is the #188 hazard, and createPool's
+        // absorber does not cover it.
+        //
+        // So the drop is polite: it reclaims the clone when nothing holds it,
+        // and when something does it reports and moves on. The leftover
+        // database costs disk until the container dies with the run; a red run
+        // on a green suite costs a great deal more.
+        await adminPool.query(`drop database if exists "${databaseName}"`)
           .catch((error: unknown) => {
             console.warn(
-              `[test-db] could not drop ${databaseName}: `
+              `[test-db] ${databaseName} left behind (something still holds it): `
               + `${error instanceof Error ? error.message : String(error)}`,
             );
           });
@@ -143,7 +152,7 @@ export async function startTestDatabase(input?: {
     };
   } catch (error) {
     await pool.end().catch(() => undefined);
-    await adminPool.query(`drop database if exists "${databaseName}" with (force)`)
+    await adminPool.query(`drop database if exists "${databaseName}"`)
       .catch(() => undefined);
     await adminPool.end().catch(() => undefined);
     throw error;
