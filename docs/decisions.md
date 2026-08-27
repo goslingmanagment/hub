@@ -239,6 +239,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 236 | Fansly id-less post mentions and replay diagnostics | Retained production `posts` pages prove a legitimate `accountMentions[]` variant with `{start,end,handle}` and no `accountId`. The posts canonicalizer advances 6 -> 7 and accepts that shape only when its coordinates are ordered non-negative safe integers and its handle is non-empty; `account_mention_refs` becomes NULL for the whole post rather than a partial or fabricated list. Shape-gate refusals remain unstamped and replayable, but now report a bounded content-free sample of observation id, family, kind, fixed rejection code and optional post index. The three known lora-1 rows parse under v7 and replay locally with zero platform calls. |
 | 237 | Fansly follower reconcile under concurrent joins and hourly touches | The incremental `followers` upsert preserves and monotonically advances `page_follows.last_seen_generation`; a NULL live write can no longer erase the full-sweep witness. Every reconcile generation records `fullSweepStartedAt`. Destructive close requires either exact generation=headline equality or a positive delta exactly explained by active rows first inserted during that window plus the terminal short-page shape; retirement additionally excludes every row touched since the sweep began or seen in the immediately prior generation. Two mismatches re-walk after a jittered 15-minute delay, then close non-destructively instead of permanently blocking. Even certified membership cannot deactivate more than `max(50, floor(active/100))` rows. An owner-only stream reset unblocks only `followers_reconcile`, preserves all audience checkpoints/cursors, increments the request revision and emits an audit event. |
 | 238 | Creator-vault membership is raw-media identity, not offer identity | Production `/media/vaultnew` bodies contain `albumMedia[].mediaId` and no `mediaOfferId`; the v1 parser therefore captured pages but emitted zero creator membership events. Catalog v2 keys membership by `(page, vault_kind, album, media_ref)`, keeps `media_offer_ref` optional, counts distinct raw files, exposes `mediaRef` in `vault_media`, and replays retained observations without new Fansly calls. This narrowly supersedes #227's claim that the vault walk measures media offers or supplies their hydration ids. |
+| 239 | The G5 headroom law is measured, not assumed (amends #221, #223) | The three gates that decide whether the historical rewrite may run were sized by assumption and one of them had become unsatisfiable: `capture:backfill --table sync_raw_payloads` demanded **40.41 GiB free on a 79 GiB disk holding a 55 GiB database**, and `--phase vacuum-full` demanded 44.26 GiB, which `--phase null-bodies` also checks — so the raw route was closed at both ends by arithmetic no amount of lawful reclaiming could satisfy. A gate that cannot be satisfied has stopped governing and started forbidding. THREE TERMS ARE NOW MEASURED AT GATE TIME AND THE INEQUALITY IS OTHERWISE UNCHANGED: the backfill's copy is a SPREAD probe of the bodies still to walk (the head of the queue under-measured July by 3.4x — 3,264 B/row against a true 11,072 B — so the picks are spaced across the whole remaining id range) times the COMPRESSION ratio alone, sampled 1:1 (no sample -> byte-for-byte parity, the old assumption); dedup is measured exactly (`count(distinct (bucket_month, object_id)) / count(*)` — July's 362,804 referenced rows hold 206,659 objects, 0.5696) and REPORTED ONLY, never spent, because it is learned from the already-copied PREFIX and would be applied to a different population; the `VACUUM FULL` budget is the relation's body-free COMPACT estimate (22.13 GB on disk vs ~0.57 GB compact) doubled, because that phase runs AFTER `null-bodies` and `pg_total_relation_size` measures the dead versions the nulling just minted; and the WAL reserve is `min(copy, 4 x max_wal_size + wal_keep_size)` read from `pg_settings`, justified by `archive_mode = off` and zero replication slots ASSERTED at gate time — full logging says how many WAL bytes are WRITTEN, never how many stay RESIDENT, and nothing on this box holds a segment back except the checkpointer. If an archiver or a slot ever appears the term COLLAPSES BACK to the old 1:1 reserve rather than to a smaller guess. The 5 GiB floor is untouched and is now also a term of the `VACUUM FULL` verdict, which never had one; the mid-walk re-check reads the volume EVERY batch once free space falls below 8 GiB (ten batches above it) and is the HARD BACKSTOP — every term above is a budget, not a guarantee. Two operational fixes ride along, both from the same production failure: `capture:backfill --execute` settles its `capture_rewrite_runs` row to `failed` on SIGTERM/SIGINT (run 1 was killed by the #87 deploy on 2026-08-18 and the ledger still said `running` eight days later), and `scripts/deploy-production.sh` refuses to start while any row is `running`, before the build. The census gains a completion forecast for backfill AND reclaim, because the gate answers `may this step run` and has never answered `is finishing this worth starting` — which is exactly how July ended up permanently 1.8 GB worse off after its one admitted step. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -10033,3 +10034,197 @@ key. `vault_media` exposes `mediaRef` and uses it in its stable key.
 between the two is not an invariant. This narrowly supersedes #227's
 media-offer identity, reconciliation, and hydration premise; its capture form,
 cursor, empty-first-page guard, no-roster rule, and URL custody remain intact.
+
+---
+
+**Decision #239 (2026-08-27, the G5 headroom law is measured, not assumed;
+amends #221 and #223):**
+
+Three gates decide whether the historical capture rewrite may run, and by
+2026-08-26 one of them had become impossible to satisfy. `capture:backfill
+--table sync_raw_payloads` (dry run, measured on production) demanded **40.41
+GiB free** on a 79 GiB disk holding a 55 GiB database. `capture:reclaim --phase
+vacuum-full` demanded **44.26 GiB**, and since #223 `--phase null-bodies` checks
+that same verdict before it nulls anything — so the raw route was closed at both
+ends. No amount of lawful reclaiming reaches those numbers. A gate nothing can
+satisfy has stopped governing and started forbidding, and the honest response is
+to fix the arithmetic rather than to add a bypass beside it.
+
+**What was actually wrong was three assumptions, each of which had a measurement
+available and took a guess instead.**
+
+**(1) THE BACKFILL'S COPY WAS PRORATED AND ASSUMED TO BE 1:1.** The old term was
+`(sourceTotal - sourceIndex) x unreferencedFraction`, where the fraction is a
+count of ROWS. Both halves are wrong in the same direction. A row fraction is not
+a byte fraction — the referenced rows are the ones a previous partial run
+already walked, and a partial walk is ordered by id, not by size. And the catalog
+copy is content-addressed, so a body two envelopes share is stored once:
+production run 1 turned 3.61 GB of inline July bodies into 1.77 GB of catalog, a
+measured **0.4915x**. The term is now `inlineBytesToCopy x copyRatio`, and every
+part of it comes from bounded SQL at gate time
+(`services/capture-rewrite/measure.ts`).
+
+**The size probe SPREADS, and the reason is a measurement, not a preference.**
+The obvious probe reads the head of the remaining work in id order — the same
+order the walk itself uses. On production `observations_2026_07` the first 200
+unreferenced rows average **3,264 B** while the whole 548,350-row remainder
+averages **11,072 B**: a 3.4x under-estimate, because a previous partial walk
+stopped in the middle of a month whose body mix changes over time. A gate that
+under-budgets by 3.4x is worse than no gate, because it admits with confidence.
+So the probe spaces its 200 picks evenly across the remaining id range — each an
+`id >= target … limit 1` index probe — which measured **11,935 B, 7.8 % HIGH**.
+High is the side to be wrong on. The same correction applies to the row-width
+probe behind the `VACUUM FULL` estimate: its tail-of-table version read the
+newest rows, which are the pointer-only ones (267 B/row against 226 B/row
+spread). That bias happened to be conservative, and a bias that is only
+accidentally in the right direction is not a property to build a gate on.
+
+**THE RATIO IS COMPRESSION ONLY, AND DEDUP IS MEASURED BUT NOT SPENT.**
+*Compression* — catalog bytes per inline byte for ONE body — is sampled 1:1
+across the already-copied part of the scope, in two windows, and the LARGER
+ratio wins so a wider sample can only make the budget bigger. On July it is
+**~1.00**, which is itself worth knowing: the canonical body and the jsonb it
+came from compress to the same size, so compression is not where this system
+saves anything.
+
+*Dedup* is where it saves — July's 362,804 referenced rows hold **206,659**
+distinct objects, a factor of **0.5696** — and it is measured EXACTLY rather
+than sampled, because a row sample structurally cannot see it: 500 picks spread
+over 362,804 rows almost never draw two rows sharing an object, and a sampled
+ratio came back **0.99 against a true 0.4915**. `count(distinct (bucket_month,
+object_id)) / count(*)` is an aggregate over two narrow columns and measured
+2.1 s on the July partition, 0.67 s on `sync_raw_payloads` (index-only).
+
+**BUT THE BUDGET TAKES NO CREDIT FOR IT.** The factor is measured over the rows
+a previous walk ALREADY copied — the id-ordered PREFIX — and would be applied to
+the unreferenced REMAINDER, which is a different population. A scope whose
+prefix is duplicate-heavy and whose suffix is unique would drive the ratio
+toward the floor while the walk's real growth is ~1.0x, and the gate would admit
+a run it cannot pay for. Dedup is a saving the operation MIGHT deliver, not one
+the disk can be promised. So it rides in the tombstone and the census where an
+operator can see it, and the inequality is sized on compression alone. **A scope
+with nothing copied yet has no compression sample and gets 1.0 — the old
+assumption, kept as the FALLBACK rather than as the rule** — and so does a ratio
+that comes back zero, negative, NaN or infinite.
+
+**(2) THE `VACUUM FULL` BUDGET MEASURED THE RELATION THAT EXISTS, NOT THE ONE
+THAT WILL.** `relationTotalBytes x 2` is a true sentence about a rewrite of the
+table as it stands. But this verdict gates the phase that runs AFTER
+`--phase null-bodies`, whose entire purpose is that the surviving tuples no
+longer carry their bodies, and `pg_total_relation_size` at that moment is live
+tuples PLUS every dead version the nulling UPDATE minted PLUS the TOAST the
+removed bodies used to occupy. Measured on production: `sync_raw_payloads` is
+22.13 GB on disk and its body-free compact estimate is ~0.57 GB — a factor of
+39. The budget is now that measured compact estimate (body-free heap + indexes +
+the inline bodies that survive, with the survivor sum counted EXACTLY rather
+than probed, because it is the one term where being wrong makes the copy bigger
+than budgeted) times a safety factor of 2, which keeps the "twice over"
+sentence the verdict was born with and applies it to what is actually written. A
+compact estimate that comes back larger than the relation is a measurement that
+has gone wrong, and the relation — the number that cannot be — is used instead.
+
+**(3) THE WAL RESERVE CONFUSED BYTES WRITTEN WITH BYTES RESIDENT.** The old term
+reserved the whole copy again, on the stated ground that `wal_level = replica`
+makes every insert fully logged. That is true and the conclusion does not
+follow. Full logging says how many WAL bytes are WRITTEN; the disk holds only
+what is still NEEDED, and on this box nothing holds a segment back —
+`archive_mode` is off so no archiver is behind, there are no replication slots
+so no consumer is behind, and there is no standby. The only thing that keeps a
+segment is the checkpointer, bounded by `max_wal_size`. The reserve is now
+`min(copy, 4 x max_wal_size + wal_keep_size)`, both read from `pg_settings`.
+`max_wal_size` is a soft target rather than a cap and a burst that outruns the
+checkpointer overshoots it — observed on this box during a heavy delete on
+2026-08-26, `pg_wal` went 168 MB to 1.00 GiB against a 1 GiB target — so the
+factor is four rather than one. `wal_keep_size` is ADDED rather than folded in:
+it is a retention floor the checkpointer does not get to remove, so it is
+resident WAL existing in ADDITION to the checkpointer's working set. It reads 0
+on this box today; the term exists so that setting it later cannot silently
+invalidate a gate nobody re-derived. **THE ASSERTIONS ARE PART OF THE
+ARITHMETIC:** the archiver, the slot count and both settings are read at gate
+time, and if any of them stops being true — or if either setting cannot be READ
+at all (an absent `pg_settings` row; a legitimate 0 is a value, not a failure) —
+the term COLLAPSES BACK to the old whole-copy reserve rather than to a smaller
+guess.
+
+**AND IT IS A BUDGET, NOT A GUARANTEE.** Nothing in this arithmetic can promise
+what the checkpointer will actually leave on the volume, any more than the copy
+ratio can promise what the walk will actually write.
+
+**THE HARD BACKSTOP IS THE MID-RUN FLOOR CHECK**, and it is the one part of this
+slice that measures rather than models: it reads the volume and stops the walk
+where it stands if free space has reached the 5 GiB floor. Ten batches between
+readings is fine while the volume has room and is the wrong bet when it does not
+— the bytes consumed per batch are precisely what this system has repeatedly
+modelled wrong (a 3.4x probe bias; a dedup factor that does not transfer between
+cohorts). So below **8 GiB free the walk re-reads the volume EVERY batch**, at
+both scan sites, and keeps the cheap ten-batch cadence above it. An unknown
+reading counts as tight, never as roomy.
+
+**WHAT DID NOT CHANGE, DELIBERATELY.** The 5 GiB free floor (#223) is untouched,
+and so is the mid-walk check's job of stopping a walk where it stands. The floor is
+now ALSO a term of the `VACUUM FULL` verdict, which never had one — an ACCESS
+EXCLUSIVE rewrite on a starved box is exactly the act that containment threshold
+exists for. `reclaimHeadroomVerdict` (the observations shadow copy) keeps its
+1:1 WAL term and keeps counting the source partition a second time: it already
+carries its safety margin by construction, it has never refused a scope in
+production, and layering a second relaxation onto a budget that is generous by
+design buys nothing. Every term is still a conservative PEAK; the two that
+changed are now MEASURED where they used to be assumed, and the inequality
+itself is the same inequality.
+
+**TWO OPERATIONAL FIXES RIDE ALONG, BOTH FROM THE SAME PRODUCTION FAILURE.**
+Backfill run 1 was killed on 2026-08-18 when the #87 deploy recreated its
+container, and its `capture_rewrite_runs` row still read `verdict = running,
+completed_at NULL` eight days later — the one table the runbook tells an
+operator to read was asserting an in-flight run that had not existed for a week.
+The existing `catch` settles a run that THROWS; a signal is not a throw, and
+SIGTERM's default action terminates the process before anything in the try/catch
+runs. So `capture:backfill --execute` now arms SIGTERM and SIGINT and settles
+its row to `failed` naming the signal, then exits 128+N. **THAT WRITE IS
+CONDITIONAL ON THE ROW STILL BEING `running`** (`settleRunningCaptureRewriteRun`,
+a guarded twin of the unconditional one the walk itself uses): a signal can
+arrive in the window between the walk's own settle and the handler being torn
+down, and an unconditional write there would rewrite a COMPLETED run as
+`failed` — inventing a failure, which is a worse lie than the stale `running`
+row the mechanism exists to prevent. The guard is also disarmed BEFORE the
+normal settle rather than in a `finally` after it, so the window is closed from
+both sides. It settles IMMEDIATELY
+rather than asking the walk to stop, because Docker follows SIGTERM with SIGKILL
+after ten seconds and a batch in the middle of a slow UPDATE does not come back
+inside that window; a `stopRequested` flag is exposed as well, so a fast walk
+still stops cleanly. And `scripts/deploy-production.sh` now refuses to start
+while any `capture_rewrite_runs` row is `running` — two owner-initiated acts
+that must not overlap are a schedule, not a race. **IT ASKS TWICE**: once before
+the build, because the build is the expensive half and there is nothing to learn
+from paying for it first, and again immediately before `up -d
+--force-recreate`, because a ~6 minute build is ample window for an owner to
+start a walk in and the recreate is the statement that would actually kill it.
+The second check is on the MAIN path only — a rollback is already an emergency
+and must not be blocked by a rewrite it is arguably rescuing.
+
+**THE CENSUS GAINS A COMPLETION FORECAST**, for the backfill AND the reclaim.
+The gate answers "may this step run" and has never answered "is finishing this
+worth starting", and the difference is what stranded July: run 1 was admitted,
+wrote 1.8 GB of catalog, was interrupted, and the reclaim that was supposed to
+CONSUME those bytes was refused the next morning — so the ritual's one executed
+step left the box permanently worse off and nothing in its output had said that
+was the risk. The forecast states the growth and the return side by side, and
+says in as many words that the scope is BIGGER on disk until the parked copy is
+dropped.
+
+Migration 0147 rides with this change for the adjacent reason that the same
+sweep exposed it: `sync_raw_payloads(sync_run_id)` and
+`page_sync_cursors(last_succeeded_run_id)` are `ON DELETE SET NULL` children of
+`sync_runs` and neither referencing column was indexed, so every deleted run
+cost a parallel sequential scan of a 607 MB heap. That is why
+`fansly.raw-payload-cleanup` failed four consecutive nights (2026-08-22..25)
+with `handler execution exceeded 900s`. Both indexes are partial on `IS NOT
+NULL` — a `SET NULL` action only ever probes for equality, so a null row can
+never match, and 920,153 of 1,670,260 `sync_raw_payloads` rows carry no run link
+at all. The deleter itself is now batched, sequential (children before the
+parent), timed per substep, and bounded by its own wall-clock budget so the
+pg-boss 900 s cap is a backstop rather than the thing deciding the outcome; its
+two `coalesce(finished_at, started_at) < cutoff` predicates now LEAD with
+`started_at < cutoff`, which the coalesce implies (`finished_at >= started_at`
+for every row) and which the existing indexes can actually serve. **The
+retention window is unchanged at 30 days and no new deleter exists.**

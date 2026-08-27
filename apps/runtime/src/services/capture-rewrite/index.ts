@@ -44,9 +44,18 @@ import {
 
 import type { AppContext } from "../../bootstrap.ts";
 import { readDiskFreeBytes } from "../db-disk-alert.ts";
+import { type SettleGuardHooks, settleRunOnSignal } from "./settle-on-signal.ts";
 import {
+  type BackfillCopyMeasurement,
+  measureBackfillCopy,
+  readWalEnvironment,
+} from "./measure.ts";
+import {
+  type CaptureRewriteForecast,
   backfillHeadroomVerdict,
   captureBackfillMidRunVerdict,
+  captureRewriteForecast,
+  headroomRecheckDue,
   type HeadroomVerdict,
 } from "./scope.ts";
 
@@ -72,14 +81,26 @@ export const CAPTURE_BACKFILL_MAX_BATCH = 2000;
 export const CAPTURE_VERIFY_REFUSED_RESCAN_LIMIT = 10_000;
 
 /**
- * How often the walk re-asks the volume how much room is left.
+ * How often the walk re-asks the volume how much room is left, WHEN THE VOLUME
+ * HAS ROOM.
  *
  * Every batch would be a syscall per 200 rows for a number that moves in
  * minutes, not milliseconds; never would be the bug this constant exists to
  * close. Ten batches is at most a few thousand rows of exposure between checks
  * — small beside the floor the check defends.
+ *
+ * BELOW `CAPTURE_BACKFILL_TIGHT_RECHECK_FREE_BYTES` THIS CADENCE IS ABANDONED
+ * and the walk reads the volume every batch (`headroomRecheckDue`). Near the
+ * floor the exposure between two readings stops being small beside anything,
+ * and the mid-walk floor check is the HARD BACKSTOP behind every estimate in
+ * this slice — the WAL term and the copy ratio are budgets, this is the thing
+ * that actually stops the walk.
  */
 export const CAPTURE_BACKFILL_HEADROOM_RECHECK_BATCHES = 10;
+
+/** The walk's most recent reading of the volume, shared by both scans so the
+ *  cadence decision does not reset when the typed-column catch-up starts. */
+interface FreeSpaceTracker { lastFreeBytes: number | null }
 
 export interface CaptureBackfillOptions {
   scope: CaptureRewriteScope;
@@ -99,6 +120,9 @@ export interface CaptureBackfillOptions {
    * inventing a flag that would also exist in production.
    */
   readFreeBytes?: () => Promise<number>;
+  /** Test seam for the #239 signal settle: a test cannot send its own process a
+   *  real SIGTERM and survive to assert on it. Not reachable from the CLI. */
+  settleGuardHooks?: SettleGuardHooks;
 }
 
 export interface CaptureBackfillResult {
@@ -127,12 +151,23 @@ export interface CaptureBackfillResult {
    *  pre-created). */
   monthsCreated: string[];
   lastId: number;
-  stoppedBecause: "scope_complete" | "batch_limit" | "headroom_exhausted" | "refused";
+  stoppedBecause:
+    | "scope_complete"
+    | "batch_limit"
+    | "headroom_exhausted"
+    | "refused"
+    /** #239: SIGTERM/SIGINT reached the walk; the ledger row is settled `failed`. */
+    | "signalled";
   /** #223: rows the typed-column catch-up walked (the slice-1-to-slice-3a
    *  cohort, which the reference scan cannot see). */
   typedColumnsScanned: number;
   /** Of those, the ones whose typed columns this pass actually filled. */
   typedColumnsFilled: number;
+  /** #239: what the two bounded probes measured, so the tombstone carries the
+   *  inputs to the verdict and not only its answer. */
+  copyMeasurement: BackfillCopyMeasurement | null;
+  /** #239: what finishing the whole ritual for this scope is worth. */
+  forecast: CaptureRewriteForecast | null;
   /** The §9.1-shaped admission verdict. Null only when the scope's relation
    *  could not be sized (which is itself a refusal). */
   headroom: HeadroomVerdict | null;
@@ -185,6 +220,8 @@ export async function runCaptureBackfill(
     stoppedBecause: "scope_complete",
     typedColumnsScanned: 0,
     typedColumnsFilled: 0,
+    copyMeasurement: null,
+    forecast: null,
     headroom: null,
     refusals: [],
   };
@@ -200,13 +237,33 @@ export async function runCaptureBackfill(
   if (sizes === null) {
     result.refusals.push(`${relation} does not exist`);
   } else {
+    // #239: the two terms that used to be assumed are measured here. Both
+    // probes are bounded and the whole pair costs a fraction of a second on the
+    // 21 GB table — a gate that cost more than the batch it admits would be
+    // its own reason to skip the gate.
+    const copy = await measureBackfillCopy(
+      app.db,
+      options.scope,
+      relation,
+      census.unreferencedWithBody,
+    );
+    const wal = await readWalEnvironment(app.db);
+    result.copyMeasurement = copy;
     result.headroom = backfillHeadroomVerdict({
       freeBytes: await readFreeBytes(),
       sourceTotalBytes: sizes.total,
+      inlineBytesToCopy: copy.inlineBytesToCopy,
+      copyRatio: copy.copyRatio,
+      maxWalSizeBytes: wal.maxWalSizeBytes,
+      walKeepSizeBytes: wal.walKeepSizeBytes,
+      archiveModeOff: wal.archiveModeOff,
+      replicationSlots: wal.replicationSlots,
+    });
+    result.forecast = captureRewriteForecast({
+      census,
+      copyBytes: result.headroom.shadowEstimateBytes,
+      sourceTotalBytes: sizes.total,
       sourceIndexBytes: sizes.indexes,
-      unreferencedFraction: census.rows === 0
-        ? 0
-        : census.unreferencedWithBody / census.rows,
     });
     if (!result.headroom.ok) {
       result.refusals.push(`§9.1 headroom: ${result.headroom.reason}`);
@@ -224,6 +281,8 @@ export async function runCaptureBackfill(
         relation,
         wouldStamp: census.unreferencedWithBody,
         wouldFillTypedColumns: census.typedColumnGaps,
+        copyMeasurement: result.copyMeasurement,
+        forecast: result.forecast,
         headroom: result.headroom,
       },
       "capture:backfill dry run",
@@ -263,17 +322,38 @@ export async function runCaptureBackfill(
 
   const ensuredMonths = new Set<string>();
   let afterId = 0;
+  // Seeded from the pre-flight's own reading, so batch 1 already knows whether
+  // it is on a roomy volume or a tight one.
+  const freeSpace: FreeSpaceTracker = {
+    lastFreeBytes: result.headroom?.freeBytes ?? null,
+  };
+
+  // #239: run 1 died `running` because the #87 deploy recreated its container,
+  // and eight days later the ledger still said a backfill was in flight. A
+  // signal is not a throw and never reaches the catch below; this does.
+  const settleGuard = settleRunOnSignal(app, {
+    runId: result.runId,
+    scopeRef,
+    summary: () => backfillSummary(result),
+  }, options.settleGuardHooks ?? {});
 
   try {
     for (;;) {
+      if (settleGuard.stopRequested()) {
+        result.stoppedBecause = "signalled";
+        break;
+      }
       if (options.maxBatches > 0 && result.batches >= options.maxBatches) {
         result.stoppedBecause = "batch_limit";
         break;
       }
       if (
-        result.batches > 0
-        && result.batches % CAPTURE_BACKFILL_HEADROOM_RECHECK_BATCHES === 0
-        && !(await stillHasHeadroom(app, readFreeBytes, result))
+        headroomRecheckDue({
+          batchesDone: result.batches,
+          lastFreeBytes: freeSpace.lastFreeBytes,
+          cadenceBatches: CAPTURE_BACKFILL_HEADROOM_RECHECK_BATCHES,
+        })
+        && !(await stillHasHeadroom(app, readFreeBytes, result, freeSpace))
       ) {
         break;
       }
@@ -315,12 +395,23 @@ export async function runCaptureBackfill(
     }
 
     if (result.stoppedBecause === "scope_complete") {
-      await runTypedColumnCatchUp(app, options, batch, readFreeBytes, result);
+      await runTypedColumnCatchUp(app, options, batch, readFreeBytes, result, freeSpace);
     }
+
+    // Disarm BEFORE the settle, not in the `finally` after it. The walk is over
+    // and its verdict is about to be written; a signal from here on is the
+    // process's own business, and the handler racing this statement is exactly
+    // the window that would rewrite a completed run as `failed`. The handler's
+    // own `where verdict = 'running'` predicate is the second lock on that door
+    // — belt and braces, because a signal delivered one instruction before this
+    // line is still possible.
+    settleGuard.release();
 
     await settleCaptureRewriteRun(app.db, {
       id: result.runId,
-      verdict: result.refusals.length === 0 ? "ok" : "refused",
+      verdict: result.stoppedBecause === "signalled"
+        ? "failed"
+        : result.refusals.length === 0 ? "ok" : "refused",
       summary: backfillSummary(result),
     });
   } catch (error) {
@@ -333,6 +424,8 @@ export async function runCaptureBackfill(
       },
     }).catch(() => {});
     throw error;
+  } finally {
+    settleGuard.release();
   }
 
   return result;
@@ -353,6 +446,8 @@ function backfillSummary(result: CaptureBackfillResult): Record<string, unknown>
     stoppedBecause: result.stoppedBecause,
     typedColumnsScanned: result.typedColumnsScanned,
     typedColumnsFilled: result.typedColumnsFilled,
+    copyMeasurement: result.copyMeasurement,
+    forecast: result.forecast,
     headroom: result.headroom,
     refusals: result.refusals,
   };
@@ -384,8 +479,11 @@ async function stillHasHeadroom(
   app: Ctx,
   readFreeBytes: () => Promise<number>,
   result: CaptureBackfillResult,
+  freeSpace: FreeSpaceTracker,
 ): Promise<boolean> {
-  const verdict = captureBackfillMidRunVerdict(await readFreeBytes());
+  const freeBytes = await readFreeBytes();
+  freeSpace.lastFreeBytes = freeBytes;
+  const verdict = captureBackfillMidRunVerdict(freeBytes);
   if (verdict.ok) {
     return true;
   }
@@ -415,6 +513,7 @@ async function runTypedColumnCatchUp(
   batch: number,
   readFreeBytes: () => Promise<number>,
   result: CaptureBackfillResult,
+  freeSpace: FreeSpaceTracker,
 ): Promise<void> {
   let afterId = 0;
   for (;;) {
@@ -423,9 +522,12 @@ async function runTypedColumnCatchUp(
       return;
     }
     if (
-      result.batches > 0
-      && result.batches % CAPTURE_BACKFILL_HEADROOM_RECHECK_BATCHES === 0
-      && !(await stillHasHeadroom(app, readFreeBytes, result))
+      headroomRecheckDue({
+        batchesDone: result.batches,
+        lastFreeBytes: freeSpace.lastFreeBytes,
+        cadenceBatches: CAPTURE_BACKFILL_HEADROOM_RECHECK_BATCHES,
+      })
+      && !(await stillHasHeadroom(app, readFreeBytes, result, freeSpace))
     ) {
       return;
     }

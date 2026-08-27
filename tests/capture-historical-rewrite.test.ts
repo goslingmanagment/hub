@@ -9,7 +9,12 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  backfillHeadroomVerdict,
+  captureRewriteForecast,
+  CAPTURE_REWRITE_FREE_FLOOR_BYTES,
   currentMonthVerdict,
+  headroomRecheckDue,
+  CAPTURE_BACKFILL_TIGHT_RECHECK_FREE_BYTES,
   monthUtcRange,
   normalizeIndexDef,
   observationPartitionName,
@@ -18,6 +23,9 @@ import {
   reclaimHeadroomVerdict,
   shadowRelationName,
   vacuumFullHeadroomVerdict,
+  VACUUM_FULL_COMPACT_SAFETY_FACTOR,
+  walReserveBytes,
+  WAL_RESERVE_MAX_WAL_SIZE_FACTOR,
   VERIFY_VERDICT_MAX_AGE_MS,
   verifyVerdictFreshness,
 } from "../apps/runtime/src/services/capture-rewrite/scope.ts";
@@ -158,11 +166,286 @@ describe("§9.1's headroom law", () => {
     }).shadowEstimateBytes).toBe(10 * GIB);
   });
 
-  it("a VACUUM FULL budgets the whole relation twice over", () => {
-    expect(vacuumFullHeadroomVerdict({ freeBytes: 25 * GIB, relationTotalBytes: 10 * GIB }).ok)
-      .toBe(true);
-    expect(vacuumFullHeadroomVerdict({ freeBytes: 15 * GIB, relationTotalBytes: 10 * GIB }).ok)
-      .toBe(false);
+});
+
+// ---------------------------------------------------------------------------
+// Decision #239 — the arithmetic that made the gate satisfiable again.
+//
+// Production numbers, all measured 2026-08-26 on the box these tests describe:
+//   sync_raw_payloads   22.13 GB on disk, ~0.57 GB body-free compact
+//   observations 2026-07 10.87 GB on disk, 0.29 GB indexes
+//   July run 1          ~4.2 GB inline -> 1.81 GB catalog = 0.43x
+//   max_wal_size 1 GiB, archive_mode off, 0 replication slots
+const MB = 1024 ** 2;
+const PROD = {
+  rawTotal: 22.13e9,
+  rawCompact: 0.57e9,
+  julyTotal: 10.87e9,
+  julyIndexes: 0.29e9,
+  maxWalSize: 1 * GIB,
+  // What ONE body costs in the catalog (spread sample, production 2026-08-26).
+  julyCompression: 1.0009,
+  // Measured but NOT spent: 362,804 referenced rows -> 206,659 objects.
+  julyDedup: 0.5696,
+};
+const WAL_ENV_OK = {
+  maxWalSizeBytes: PROD.maxWalSize,
+  // Production reads 0 today; the term exists so that setting it later cannot
+  // silently invalidate a gate nobody re-derived.
+  walKeepSizeBytes: 0,
+  archiveModeOff: true,
+  replicationSlots: 0,
+};
+
+describe("#239 — the WAL term", () => {
+  it("bounds the reserve by max_wal_size when nothing can pin a segment", () => {
+    const reserve = walReserveBytes({ copyBytes: 40 * GIB, ...WAL_ENV_OK });
+    expect(reserve.basis).toBe("bounded_by_max_wal_size");
+    expect(reserve.bytes).toBe(WAL_RESERVE_MAX_WAL_SIZE_FACTOR * PROD.maxWalSize);
+  });
+
+  it("ADDS wal_keep_size on top — it retains WAL the checkpointer does not control", () => {
+    const keep = 512 * MB;
+    const reserve = walReserveBytes({ copyBytes: 40 * GIB, ...WAL_ENV_OK, walKeepSizeBytes: keep });
+    expect(reserve.basis).toBe("bounded_by_max_wal_size");
+    expect(reserve.bytes).toBe(WAL_RESERVE_MAX_WAL_SIZE_FACTOR * PROD.maxWalSize + keep);
+  });
+
+  it("treats an UNREADABLE wal_keep_size as no bound at all, but a legitimate 0 as a value", () => {
+    expect(walReserveBytes({ copyBytes: 40 * GIB, ...WAL_ENV_OK, walKeepSizeBytes: null }).basis)
+      .toBe("full_copy_fallback");
+    expect(walReserveBytes({ copyBytes: 40 * GIB, ...WAL_ENV_OK, walKeepSizeBytes: 0 }).basis)
+      .toBe("bounded_by_max_wal_size");
+  });
+
+  it("never reserves MORE than the copy itself", () => {
+    // A tiny copy on a box with a huge max_wal_size still only writes the copy.
+    expect(walReserveBytes({ copyBytes: 100 * MB, ...WAL_ENV_OK }).bytes).toBe(100 * MB);
+  });
+
+  it("falls back to the OLD 1:1 reserve the moment an archiver could be behind", () => {
+    const archiving = walReserveBytes({
+      copyBytes: 40 * GIB,
+      maxWalSizeBytes: PROD.maxWalSize,
+      walKeepSizeBytes: 0,
+      archiveModeOff: false,
+      replicationSlots: 0,
+    });
+    expect(archiving.basis).toBe("full_copy_fallback");
+    expect(archiving.bytes).toBe(40 * GIB);
+  });
+
+  it("falls back the moment a replication slot exists", () => {
+    const slotted = walReserveBytes({
+      copyBytes: 40 * GIB,
+      maxWalSizeBytes: PROD.maxWalSize,
+      walKeepSizeBytes: 0,
+      archiveModeOff: true,
+      replicationSlots: 1,
+    });
+    expect(slotted.basis).toBe("full_copy_fallback");
+    expect(slotted.bytes).toBe(40 * GIB);
+  });
+
+  it("falls back when max_wal_size could not be read", () => {
+    expect(walReserveBytes({
+      copyBytes: 40 * GIB,
+      maxWalSizeBytes: 0,
+      walKeepSizeBytes: 0,
+      archiveModeOff: true,
+      replicationSlots: 0,
+    }).basis).toBe("full_copy_fallback");
+  });
+});
+
+describe("#239 — the backfill admission gate", () => {
+  const july = (freeBytes: number, overrides: Partial<Parameters<typeof backfillHeadroomVerdict>[0]> = {}) =>
+    backfillHeadroomVerdict({
+      freeBytes,
+      sourceTotalBytes: PROD.julyTotal,
+      // 548,350 rows left x 11,934.7 B, as the spread probe measured it on
+      // production 2026-08-26 (ground truth 11,071.8 B — the probe is 7.8% high).
+      inlineBytesToCopy: 6.545e9,
+      // Compression alone — #239 R3: the budget takes NO dedup credit, because
+      // the factor is learned from the already-copied prefix and would be spent
+      // on a different population.
+      copyRatio: PROD.julyCompression,
+      ...WAL_ENV_OK,
+      ...overrides,
+    });
+
+  it("ADMITS the July scope at the free space Phase A actually produces", () => {
+    // copy 6.545 GB x 1.0009 = 6.55 GB (no dedup credit — R3);
+    // WAL min(6.55 GB, 4 x 1 GiB + 0) = 4.295 GB; + 5 GiB floor = 15.10 GiB.
+    // Phase A left 17.87 GiB free, so it admits with ~2.8 GiB of margin.
+    const verdict = july(17.87 * GIB);
+    expect(verdict.ok).toBe(true);
+    expect(verdict.requiredBytes).toBeLessThan(16 * GIB);
+    expect(verdict.walBasis).toBe("bounded_by_max_wal_size");
+  });
+
+  it("REFUSES the same scope at the free space that stranded run 1", () => {
+    expect(july(9.46 * GIB).ok).toBe(false);
+    expect(july(9.46 * GIB).reason).toMatch(/< required/);
+  });
+
+  it("makes the raw whole-table scope reachable, which the old arithmetic did not", () => {
+    // The old term asked 40.41 GiB free on a 79 GiB disk holding 55 GiB of
+    // database: unsatisfiable by ANY amount of lawful reclaiming.
+    const raw = backfillHeadroomVerdict({
+      freeBytes: 30 * GIB,
+      sourceTotalBytes: PROD.rawTotal,
+      inlineBytesToCopy: 18e9,
+      copyRatio: 1,
+      ...WAL_ENV_OK,
+    });
+    // 18 GB copy + WAL capped at 4 x 1 GiB + 5 GiB floor = ~26.6 GiB, against
+    // the old term's 40.41 GiB. The WAL cap is what makes it reachable at all.
+    expect(raw.requiredBytes).toBeLessThan(28 * GIB);
+    expect(raw.walBasis).toBe("bounded_by_max_wal_size");
+  });
+
+  it("still REFUSES the raw scope on the free space this job started with", () => {
+    expect(backfillHeadroomVerdict({
+      freeBytes: 9.46 * GIB,
+      sourceTotalBytes: PROD.rawTotal,
+      inlineBytesToCopy: 18e9,
+      copyRatio: 1,
+      ...WAL_ENV_OK,
+    }).ok).toBe(false);
+  });
+
+  it("takes NO dedup credit: the same inline bytes cost the same however they dedupe", () => {
+    // R3: the dedup factor is learned from the already-copied PREFIX and would
+    // be spent on the unreferenced REMAINDER — a different population. A
+    // duplicate-heavy prefix must not buy the walk a budget it cannot pay for.
+    const asMeasured = july(17.87 * GIB, { copyRatio: PROD.julyCompression });
+    const withDedupCredit = july(17.87 * GIB, {
+      copyRatio: PROD.julyCompression * PROD.julyDedup,
+    });
+    expect(withDedupCredit.requiredBytes).toBeLessThan(asMeasured.requiredBytes);
+    // What the gate actually uses is the one WITHOUT the credit.
+    expect(asMeasured.shadowEstimateBytes)
+      .toBe(Math.round(6.545e9 * PROD.julyCompression));
+  });
+
+  it("falls back to byte-for-byte parity when no sample taught it a ratio", () => {
+    const parity = july(40 * GIB, { copyRatio: 1 });
+    expect(parity.shadowEstimateBytes).toBe(6.545e9);
+  });
+
+  it("treats a nonsense ratio as no ratio at all rather than as a small one", () => {
+    for (const copyRatio of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(july(40 * GIB, { copyRatio }).shadowEstimateBytes).toBe(6.545e9);
+    }
+  });
+
+  it("keeps the 5 GiB floor as a term nothing can measure away", () => {
+    // Nothing left to copy at all still asks for the floor.
+    const empty = july(40 * GIB, { inlineBytesToCopy: 0 });
+    expect(empty.requiredBytes).toBe(CAPTURE_REWRITE_FREE_FLOOR_BYTES);
+    expect(july(4 * GIB, { inlineBytesToCopy: 0 }).ok).toBe(false);
+  });
+});
+
+describe("#239 — the VACUUM FULL gate", () => {
+  const raw = (freeBytes: number, compactEstimateBytes = PROD.rawCompact) =>
+    vacuumFullHeadroomVerdict({
+      freeBytes,
+      relationTotalBytes: PROD.rawTotal,
+      compactEstimateBytes,
+      ...WAL_ENV_OK,
+    });
+
+  it("sizes on what the rewrite WRITES, not on what the bloated relation weighs", () => {
+    const verdict = raw(20 * GIB);
+    // 0.57 GB x2 = 1.14 GB, WAL min(1.14 GB, 4 GiB) = 1.14 GB, + 5 GiB floor.
+    expect(verdict.shadowEstimateBytes)
+      .toBe(Math.round(PROD.rawCompact * VACUUM_FULL_COMPACT_SAFETY_FACTOR));
+    expect(verdict.requiredBytes).toBeLessThan(8 * GIB);
+    expect(verdict.ok).toBe(true);
+  });
+
+  it("ADMITS the rewrite at the free space Phase A + C2 produce", () => {
+    expect(raw(14 * GIB).ok).toBe(true);
+  });
+
+  it("REFUSES when the volume cannot even hold the compact copy plus the floor", () => {
+    expect(raw(5 * GIB).ok).toBe(false);
+    expect(raw(5 * GIB).reason).toMatch(/< required/);
+  });
+
+  it("refuses to believe a compact estimate larger than the relation", () => {
+    const nonsense = raw(100 * GIB, PROD.rawTotal * 4);
+    expect(nonsense.shadowEstimateBytes)
+      .toBe(Math.round(PROD.rawTotal * VACUUM_FULL_COMPACT_SAFETY_FACTOR));
+  });
+
+  it("keeps the floor: a zero-byte relation still asks for it", () => {
+    expect(raw(4 * GIB, 0).ok).toBe(false);
+    expect(raw(4 * GIB, 0).requiredBytes).toBe(CAPTURE_REWRITE_FREE_FLOOR_BYTES);
+  });
+
+  it("reports the relation's real size for the journal even though the inequality ignores it", () => {
+    expect(raw(20 * GIB).sourceTotalBytes).toBe(PROD.rawTotal);
+  });
+});
+
+describe("#239 — the mid-walk floor re-check cadence", () => {
+  const roomy = CAPTURE_BACKFILL_TIGHT_RECHECK_FREE_BYTES + GIB;
+  const tight = CAPTURE_BACKFILL_TIGHT_RECHECK_FREE_BYTES - 1;
+  const due = (batchesDone: number, lastFreeBytes: number | null) =>
+    headroomRecheckDue({ batchesDone, lastFreeBytes, cadenceBatches: 10 });
+
+  it("keeps the cheap ten-batch cadence while the volume has room", () => {
+    expect(due(1, roomy)).toBe(false);
+    expect(due(9, roomy)).toBe(false);
+    expect(due(10, roomy)).toBe(true);
+    expect(due(20, roomy)).toBe(true);
+  });
+
+  it("re-reads the volume EVERY batch once free space is below the threshold", () => {
+    for (const batchesDone of [1, 2, 3, 7, 11]) {
+      expect(due(batchesDone, tight)).toBe(true);
+    }
+  });
+
+  it("treats an UNKNOWN reading as tight, never as roomy", () => {
+    // A gate whose input is missing must not be the reason a check was skipped.
+    expect(due(1, null)).toBe(true);
+    expect(due(1, Number.NaN)).toBe(true);
+  });
+
+  it("never fires before the first batch has run", () => {
+    expect(due(0, tight)).toBe(false);
+    expect(due(0, null)).toBe(false);
+  });
+});
+
+describe("#239 — the completion forecast", () => {
+  it("says the scope gets BIGGER before it gets smaller", () => {
+    const forecast = captureRewriteForecast({
+      census: { rows: 911_154, referenced: 362_804, unreferencedWithBody: 548_350 },
+      copyBytes: 2.71e9,
+      sourceTotalBytes: PROD.julyTotal,
+      sourceIndexBytes: PROD.julyIndexes,
+    });
+    expect(forecast.rowsToStamp).toBe(548_350);
+    expect(forecast.backfillGrowthBytes).toBe(2.71e9);
+    expect(forecast.reclaimReturnBytes).toBe(PROD.julyTotal - PROD.julyIndexes);
+    expect(forecast.netBytes).toBeGreaterThan(0);
+    expect(forecast.line).toMatch(/BIGGER on disk/);
+  });
+
+  it("reports a NEGATIVE net when the copy costs more than the reclaim returns", () => {
+    const forecast = captureRewriteForecast({
+      census: { rows: 10, referenced: 0, unreferencedWithBody: 10 },
+      copyBytes: 5e9,
+      sourceTotalBytes: 1e9,
+      sourceIndexBytes: 0.9e9,
+      });
+    expect(forecast.netBytes).toBeLessThan(0);
+    expect(forecast.line).toMatch(/net -/);
   });
 });
 

@@ -1,4 +1,4 @@
-import { and, eq, inArray, is, lt, ne, sql } from "drizzle-orm";
+import { type SQL, and, eq, inArray, is, lt, sql } from "drizzle-orm";
 import { PgTransaction } from "drizzle-orm/pg-core";
 
 import { FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY, type Platform } from "@agency_hub_core/shared";
@@ -1101,21 +1101,198 @@ export async function deleteExpiredRawPayloads(db: Database, now = new Date()) {
   return db.delete(syncRawPayloads).where(lt(syncRawPayloads.retainUntil, now));
 }
 
-export async function deleteExpiredSyncObservability(db: Database, cutoff: Date) {
-  const [deletedAttempts, deletedEvents] = await Promise.all([
-    db.delete(syncHttpAttempts).where(lt(sql`coalesce(${syncHttpAttempts.finishedAt}, ${syncHttpAttempts.startedAt})`, cutoff)),
-    db.delete(syncRunEvents).where(lt(syncRunEvents.emittedAt, cutoff)),
-  ]);
-  // Stage 28: sync_runs joins the bounded sweep (it grew unbounded before).
-  // Children cascade (attempts/events — already swept above); raw payloads
-  // keep their rows and SET NULL their run link. Still-running rows are
-  // never deleted, however stale — a wedged run is diagnostic evidence.
-  const deletedRuns = await db.delete(syncRuns).where(and(
-    lt(sql`coalesce(${syncRuns.finishedAt}, ${syncRuns.startedAt})`, cutoff),
-    ne(syncRuns.outcome, "running"),
-  ));
+/** Rows one retention DELETE statement may remove. */
+export const SYNC_OBSERVABILITY_PRUNE_BATCH_ROWS = 5_000;
+/**
+ * Wall-clock budget for the whole sweep. The pg-boss handler cap is 900 s and
+ * the nightly job does four other things inside it, so the prune stops well
+ * short of that and leaves the remainder for tomorrow: telemetry retention is
+ * a floor that gets re-applied every night, not a deadline.
+ */
+export const SYNC_OBSERVABILITY_PRUNE_BUDGET_MS = 480_000;
+/** Ceiling on ONE batch. A batch that cannot finish inside this is a batch
+ *  whose rows are pathologically large; the sweep should give the lock back
+ *  and try a fresh one rather than hold it open. */
+export const SYNC_OBSERVABILITY_PRUNE_STATEMENT_TIMEOUT_MS = 120_000;
 
-  return { deletedAttempts, deletedEvents, deletedRuns };
+export interface SyncObservabilityPruneOptions {
+  batchRows?: number;
+  budgetMs?: number;
+  statementTimeoutMs?: number;
+  /** Injectable clock, so the budget is testable without waiting for it. */
+  monotonicNowMs?: () => number;
+}
+
+export interface SyncObservabilityPruneStep {
+  table: "sync_http_attempts" | "sync_run_events" | "sync_runs";
+  deleted: number;
+  batches: number;
+  durationMs: number;
+  /** The budget ran out while this table still had matching rows. */
+  budgetExhausted: boolean;
+}
+
+export interface SyncObservabilityPruneResult {
+  cutoff: Date;
+  steps: SyncObservabilityPruneStep[];
+  deletedAttempts: number;
+  deletedEvents: number;
+  deletedRuns: number;
+  durationMs: number;
+  budgetExhausted: boolean;
+}
+
+/**
+ * The bounded telemetry sweep (#102, Stage 28), rewritten to be BATCHED and
+ * INDEX-BACKED after it failed four consecutive nights in production
+ * (2026-08-22..25, `handler execution exceeded 900s`).
+ *
+ * THREE THINGS WERE WRONG AND ALL THREE WERE ABOUT SHAPE, NOT POLICY. The
+ * retention window itself is unchanged and stays `syncObservabilityRetentionDays`
+ * (30) — no captured fact is in reach of this function and none of the three
+ * tables is one.
+ *
+ *   1. ONE UNBOUNDED STATEMENT PER TABLE. A single `delete from sync_run_events
+ *      where …` over a backlog holds its locks and its dead tuples for the
+ *      whole run, and either finishes or wastes everything it did. Batched, the
+ *      sweep is resumable by construction — the predicate IS the resume point,
+ *      exactly like the capture backfill — so a night that runs out of budget
+ *      leaves the next night less to do instead of nothing done.
+ *
+ *   2. `coalesce(finished_at, started_at) < cutoff` IS NOT AN INDEXABLE CLAUSE.
+ *      `sync_http_attempts_retention_idx (started_at)` and `sync_runs_started_idx
+ *      (started_at)` both existed and neither was used; production planned a
+ *      Seq Scan for both tables. The fix leads with `started_at < cutoff`, which
+ *      is IMPLIED by the coalesce and therefore narrows nothing: `finished_at`
+ *      is only ever written when a run/attempt ends, so `finished_at >=
+ *      started_at` holds for every row, and `coalesce(finished_at, started_at)
+ *      < cutoff` ⟹ `started_at < cutoff`. The coalesce is KEPT as the second
+ *      conjunct — it is the actual policy (a long-running attempt is retained by
+ *      when it FINISHED) and dropping it would delete rows the window still
+ *      covers.
+ *
+ *   3. THE THREE DELETES RAN CONCURRENTLY. They share a parent (`sync_runs`)
+ *      and its cascades, so the parallelism bought contention and a deadlock
+ *      surface, and it made a shared wall-clock budget impossible. They are
+ *      sequential now, children first, so the `sync_runs` delete finds its
+ *      cascade sets already empty.
+ *
+ * Each batch runs in its own transaction under `SET LOCAL statement_timeout`,
+ * so a pathological batch gives its locks back instead of holding the capture
+ * lane. `sync_runs` still refuses to delete a `running` row however stale — a
+ * wedged run is diagnostic evidence (Stage 28).
+ */
+export async function deleteExpiredSyncObservability(
+  db: Database,
+  cutoff: Date,
+  options: SyncObservabilityPruneOptions = {},
+): Promise<SyncObservabilityPruneResult> {
+  const batchRows = Math.max(1, options.batchRows ?? SYNC_OBSERVABILITY_PRUNE_BATCH_ROWS);
+  const budgetMs = Math.max(0, options.budgetMs ?? SYNC_OBSERVABILITY_PRUNE_BUDGET_MS);
+  const statementTimeoutMs = Math.max(
+    1_000,
+    options.statementTimeoutMs ?? SYNC_OBSERVABILITY_PRUNE_STATEMENT_TIMEOUT_MS,
+  );
+  const nowMs = options.monotonicNowMs ?? (() => Date.now());
+  const startedMs = nowMs();
+  const deadlineMs = startedMs + budgetMs;
+
+  const pruneBatch = async (statement: SQL): Promise<number> =>
+    db.transaction(async (tx) => {
+      await tx.execute(
+        sql`set local statement_timeout = ${sql.raw(String(Math.trunc(statementTimeoutMs)))}`,
+      );
+      const result = await tx.execute<{ n: string }>(statement);
+      return Number(result.rows[0]?.n ?? 0);
+    });
+
+  const pruneTable = async (
+    table: SyncObservabilityPruneStep["table"],
+    statement: SQL,
+  ): Promise<SyncObservabilityPruneStep> => {
+    const tableStartedMs = nowMs();
+    const step: SyncObservabilityPruneStep = {
+      table,
+      deleted: 0,
+      batches: 0,
+      durationMs: 0,
+      budgetExhausted: false,
+    };
+    for (;;) {
+      if (nowMs() >= deadlineMs) {
+        // Unknown whether rows remain — say so rather than guess. The caller
+        // logs it and the next night finds out for free.
+        step.budgetExhausted = true;
+        break;
+      }
+      const deleted = await pruneBatch(statement);
+      step.batches += 1;
+      step.deleted += deleted;
+      if (deleted < batchRows) {
+        // A short batch is the end of the scope: the bound was not reached.
+        break;
+      }
+    }
+    step.durationMs = nowMs() - tableStartedMs;
+    return step;
+  };
+
+  // Children first, so the sync_runs delete has no cascade work left to do.
+  const attempts = await pruneTable(
+    "sync_http_attempts",
+    sql`
+      with doomed as (
+        select id from sync_http_attempts
+         where started_at < ${cutoff}
+           and coalesce(finished_at, started_at) < ${cutoff}
+         limit ${batchRows}
+      ), removed as (
+        delete from sync_http_attempts a using doomed where a.id = doomed.id returning 1
+      )
+      select count(*)::text as n from removed
+    `,
+  );
+  const events = await pruneTable(
+    "sync_run_events",
+    sql`
+      with doomed as (
+        select id from sync_run_events where emitted_at < ${cutoff} limit ${batchRows}
+      ), removed as (
+        delete from sync_run_events e using doomed where e.id = doomed.id returning 1
+      )
+      select count(*)::text as n from removed
+    `,
+  );
+  // Stage 28: sync_runs joins the bounded sweep (it grew unbounded before).
+  // Children cascade (attempts/events — already swept above); raw payloads and
+  // page_sync_cursors keep their rows and SET NULL their run link, which is
+  // index-backed since 0147.
+  const runs = await pruneTable(
+    "sync_runs",
+    sql`
+      with doomed as (
+        select id from sync_runs
+         where started_at < ${cutoff}
+           and coalesce(finished_at, started_at) < ${cutoff}
+           and outcome <> 'running'
+         limit ${batchRows}
+      ), removed as (
+        delete from sync_runs r using doomed where r.id = doomed.id returning 1
+      )
+      select count(*)::text as n from removed
+    `,
+  );
+
+  const steps = [attempts, events, runs];
+  return {
+    cutoff,
+    steps,
+    deletedAttempts: attempts.deleted,
+    deletedEvents: events.deleted,
+    deletedRuns: runs.deleted,
+    durationMs: nowMs() - startedMs,
+    budgetExhausted: steps.some((step) => step.budgetExhausted),
+  };
 }
 
 type SyncRunRow = {

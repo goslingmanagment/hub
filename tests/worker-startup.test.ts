@@ -3,8 +3,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const dbMocks = vi.hoisted(() => ({
   closeOrphanedSyncRuns: vi.fn(),
   deleteExpiredPendingDeviceTokens: vi.fn(),
-  deleteExpiredRawPayloads: vi.fn(),
-  deleteExpiredSyncObservability: vi.fn(),
+  // These two return values the nightly handler now reads for its timing line,
+  // so the mocks return the real shapes rather than undefined.
+  deleteExpiredRawPayloads: vi.fn(async () => ({ rowCount: 0 })),
+  deleteExpiredSyncObservability: vi.fn(async (_db: unknown, cutoff: Date) => ({
+    cutoff,
+    steps: [],
+    deletedAttempts: 0,
+    deletedEvents: 0,
+    deletedRuns: 0,
+    durationMs: 0,
+    budgetExhausted: false,
+  })),
   getLatestScheduledReportDateOnOrBefore: vi.fn(),
   getTelegramSettings: vi.fn(),
   // Voice-notes recovery jobs (Task 7): the nightly raw-payload cleanup handler
