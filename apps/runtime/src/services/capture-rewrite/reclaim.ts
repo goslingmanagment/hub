@@ -209,6 +209,10 @@ async function probeErasureQuiet(db: Ctx["db"]): Promise<ErasureQuietProbe> {
       and l.classid = ${DM_ARCHIVE_ERASURE_FENCE_LOCK_NS}
       and l.objsubid = 2
       and l.granted
+      -- pg_locks spans the whole cluster, but an advisory lock is database-local:
+      -- a row for another database can never be THIS fence. The sibling
+      -- probe below already scopes itself the same way.
+      and l.database = (select oid from pg_database where datname = current_database())
   `);
   const fenceLocksHeld = Number(held.rows[0]?.n ?? 0);
 

@@ -240,6 +240,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 237 | Fansly follower reconcile under concurrent joins and hourly touches | The incremental `followers` upsert preserves and monotonically advances `page_follows.last_seen_generation`; a NULL live write can no longer erase the full-sweep witness. Every reconcile generation records `fullSweepStartedAt`. Destructive close requires either exact generation=headline equality or a positive delta exactly explained by active rows first inserted during that window plus the terminal short-page shape; retirement additionally excludes every row touched since the sweep began or seen in the immediately prior generation. Two mismatches re-walk after a jittered 15-minute delay, then close non-destructively instead of permanently blocking. Even certified membership cannot deactivate more than `max(50, floor(active/100))` rows. An owner-only stream reset unblocks only `followers_reconcile`, preserves all audience checkpoints/cursors, increments the request revision and emits an audit event. |
 | 238 | Creator-vault membership is raw-media identity, not offer identity | Production `/media/vaultnew` bodies contain `albumMedia[].mediaId` and no `mediaOfferId`; the v1 parser therefore captured pages but emitted zero creator membership events. Catalog v2 keys membership by `(page, vault_kind, album, media_ref)`, keeps `media_offer_ref` optional, counts distinct raw files, exposes `mediaRef` in `vault_media`, and replays retained observations without new Fansly calls. This narrowly supersedes #227's claim that the vault walk measures media offers or supplies their hydration ids. |
 | 239 | The G5 headroom law is measured, not assumed (amends #221, #223) | The three gates that decide whether the historical rewrite may run were sized by assumption and one of them had become unsatisfiable: `capture:backfill --table sync_raw_payloads` demanded **40.41 GiB free on a 79 GiB disk holding a 55 GiB database**, and `--phase vacuum-full` demanded 44.26 GiB, which `--phase null-bodies` also checks — so the raw route was closed at both ends by arithmetic no amount of lawful reclaiming could satisfy. A gate that cannot be satisfied has stopped governing and started forbidding. THREE TERMS ARE NOW MEASURED AT GATE TIME AND THE INEQUALITY IS OTHERWISE UNCHANGED: the backfill's copy is a SPREAD probe of the bodies still to walk (the head of the queue under-measured July by 3.4x — 3,264 B/row against a true 11,072 B — so the picks are spaced across the whole remaining id range) times the COMPRESSION ratio alone, sampled 1:1 (no sample -> byte-for-byte parity, the old assumption); dedup is measured exactly (`count(distinct (bucket_month, object_id)) / count(*)` — July's 362,804 referenced rows hold 206,659 objects, 0.5696) and REPORTED ONLY, never spent, because it is learned from the already-copied PREFIX and would be applied to a different population; the `VACUUM FULL` budget is the relation's body-free COMPACT estimate (22.13 GB on disk vs ~0.57 GB compact) doubled, because that phase runs AFTER `null-bodies` and `pg_total_relation_size` measures the dead versions the nulling just minted; and the WAL reserve is `min(copy, 4 x max_wal_size + wal_keep_size)` read from `pg_settings`, justified by `archive_mode = off` and zero replication slots ASSERTED at gate time — full logging says how many WAL bytes are WRITTEN, never how many stay RESIDENT, and nothing on this box holds a segment back except the checkpointer. If an archiver or a slot ever appears the term COLLAPSES BACK to the old 1:1 reserve rather than to a smaller guess. The 5 GiB floor is untouched and is now also a term of the `VACUUM FULL` verdict, which never had one; the mid-walk re-check reads the volume EVERY batch once free space falls below 8 GiB (ten batches above it) and is the HARD BACKSTOP — every term above is a budget, not a guarantee. Two operational fixes ride along, both from the same production failure: `capture:backfill --execute` settles its `capture_rewrite_runs` row to `failed` on SIGTERM/SIGINT (run 1 was killed by the #87 deploy on 2026-08-18 and the ledger still said `running` eight days later), and `scripts/deploy-production.sh` refuses to start while any row is `running`, before the build. The census gains a completion forecast for backfill AND reclaim, because the gate answers `may this step run` and has never answered `is finishing this worth starting` — which is exactly how July ended up permanently 1.8 GB worse off after its one admitted step. |
+| 240 | Test databases are clones of a migrated template | One Postgres per vitest run (per CI shard); the template is built ONCE by the PRODUCTION `runMigrations()` and each acquisition takes a `CREATE DATABASE ... TEMPLATE` clone (1.77s -> 0.06s; 20 files 527.65s -> 451.58s). The test-only `applyTestMigrations` fork is deleted, so the deploy migrator's asserts are now what installs the chain. Supersedes #188's per-acquisition-container isolation clause, unblocked by the `createPool` background-error absorber that #188 named as its re-entry condition. Standing hazard: clones share a cluster, so any query on `pg_locks`/`pg_stat_activity` must filter `current_database()` — four sites fixed, one of them production (the erasure fence probe in `reclaim.ts`). `seedHealthyStorageSample` runs per clone, never into the template. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -5596,6 +5597,8 @@ The nightly went red on 2026-07-25 and stayed red through 07-27 with this as
 its single failure. Both rate-limit tests now carry the tag, so the PR gate
 catches this class. A red nightly is not coverage; it is an unread alarm.
 
+**Superseded in part by #240 (shared cluster, template clones).**
+
 **Decision #188 (2026-07-28, the PR gate is sharded):** The sync-critical
 suite is ~120 database acquisitions over 104 files and is why a pull request
 waited. `ci.yml` becomes three jobs: `Static checks` (typecheck, lint, contract
@@ -10228,3 +10231,52 @@ two `coalesce(finished_at, started_at) < cutoff` predicates now LEAD with
 `started_at < cutoff`, which the coalesce implies (`finished_at >= started_at`
 for every row) and which the existing indexes can actually serve. **The
 retention window is unchanged at 30 days and no new deleter exists.**
+**Decision #240 (2026-08-26, test databases are clones of a migrated template):**
+Every acquisition used to start a private `postgres:16` container and replay all
+145 migrations. Measured on warm Docker: 1.77s per acquisition, ~309 per full
+run. `tests/helpers/global-setup.ts` now starts ONE cluster per vitest run (per
+CI shard) and each acquisition takes a `CREATE DATABASE ... TEMPLATE` clone of a
+pre-migrated template: 0.06s. Measured on 20 integration files, 527.65s ->
+451.58s (14%); the cold-start 6.5s figure that motivated this predicted far
+more, and is recorded here so the next reader does not re-derive it — the
+remaining time is test bodies, not setup.
+
+**This supersedes the isolation clause of #188.** That entry's "every
+acquisition keeps its own throwaway container — byte-identical behaviour" no
+longer holds, and its recorded re-entry condition is what allowed the change:
+#188 dropped its tmpfs experiment because stopping a container under a live pool
+raised FATAL 57P01 into a pool with no `error` listener. `createPool` grew a
+background-error absorber since (`packages/db/src/client.ts`, proven by
+`tests/db-pool-error-handling.integration.test.ts`), so the harness's own pools
+survive teardown. The drop is deliberately NOT `WITH (FORCE)`: FORCE terminates
+connections this harness never created — pg-boss opens its own, outside
+createPool and so outside that absorber — and CI proved it, failing a shard
+whose 51 files and 510 tests all passed on an unhandled FATAL 57P01 from a
+pg-boss client. Teardown is `pool.end()` then a plain `DROP DATABASE`, which
+reclaims the clone when nothing holds it and warns when something does; the
+leftover costs disk until the container dies with the run.
+
+**The standing hazard this creates:** clones share one cluster, so any query
+against a cluster-global view (`pg_locks`, `pg_stat_activity`) sees siblings
+unless it filters on `current_database()`. Four sites needed it — three tests
+(`scheduler-leader`, which also TERMINATED the backends it found;
+`ofapi-capture-repository`, whose relation-lock probe is by OID and template
+clones inherit the template's OIDs, so that collision would have been systematic
+rather than accidental; `observations.repository`) and one in PRODUCTION code
+(the erasure fence probe in `apps/runtime/src/services/capture-rewrite/reclaim.ts`,
+found by the codex review of this change — advisory locks are database-local, so
+the filter is a correctness fix there, not a test accommodation). New code
+reading those views must scope itself the same way.
+
+**Migration coverage moved, and grew.** The deleted `applyTestMigrations` was a
+hand-kept fork of `runMigrations` without its unique-prefix, contiguous-prefix
+and filename asserts, so 309 replays per run never proved the DEPLOY migrator
+installs the chain. The template is built by the production `runMigrations()`,
+so one build per shard now proves what 309 replays did not. Its dead `from`
+option had zero callers and went with it; `through` keeps its single caller
+(`db-pool-error-handling`), served by `runMigrations` against an empty database
+on the shared cluster — that test kills backends by exact pid.
+
+Docker being absent stays non-fatal: global setup provides no admin URL and
+`tests/helpers/prerequisites.ts` skips-or-throws exactly as before.
+

@@ -1,14 +1,16 @@
-import { readFile, readdir } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import path from "node:path";
 
 import { createDb, createFanslyPage, createModel, createPool, storeFanslySession } from "@agency_hub_core/db";
 import { createLogger, encryptJson, type FanslySessionBundle } from "@agency_hub_core/shared";
 import type { PoolClient } from "pg";
-import { GenericContainer } from "testcontainers";
+import { inject } from "vitest";
 
+import { runMigrations } from "../../packages/db/src/migrate-runner.ts";
+
+import { TEMPLATE_DATABASE, TEST_DB_ADMIN_URL_KEY } from "./global-setup.ts";
 import { acquireTestPrerequisite } from "./prerequisites.ts";
-import { INTEGRATION_TEST_TIMEOUT_MS } from "./timeouts.ts";
 
 const DATABASE_READY_TIMEOUT_MS = 10_000;
 const DATABASE_READY_POLL_MS = 100;
@@ -56,42 +58,103 @@ async function seedHealthyStorageSample(pool: ReturnType<typeof createPool>) {
   `);
 }
 
+/** Hands the caller its own database. A `CREATE DATABASE ... TEMPLATE` clone of
+ * the already-migrated template built once per run in helpers/global-setup.ts —
+ * ~0.2s, against ~6.5s when every acquisition started a private container and
+ * replayed all 145 migrations.
+ *
+ * `through` still needs a partially-migrated schema, which no template can
+ * provide, so that one caller gets an empty database migrated to its bound by
+ * the production runner. It stays on the shared cluster: it kills backends by
+ * exact pid, not by anything cluster-wide. */
 export async function startTestDatabase(input?: {
-  from?: string;
   through?: string;
 }) {
-  const container = await new GenericContainer("postgres:16")
-    .withEnvironment({
-      POSTGRES_DB: "testdb",
-      POSTGRES_USER: "postgres",
-      POSTGRES_PASSWORD: "postgres",
-    })
-    .withStartupTimeout(INTEGRATION_TEST_TIMEOUT_MS)
-    .withExposedPorts(5432)
-    .start();
-  const connectionString = `postgres://postgres:postgres@${container.getHost()}:${container.getMappedPort(5432)}/testdb`;
-  const pool = createPool(connectionString);
+  const adminUrl = inject(TEST_DB_ADMIN_URL_KEY);
+  if (typeof adminUrl !== "string") {
+    throw new Error(
+      "No test Postgres was provided. helpers/global-setup.ts could not start a "
+      + "container — is Docker running?",
+    );
+  }
+
+  const databaseName = `hub_test_${randomUUID().replaceAll("-", "")}`;
+  const connectionString = new URL(adminUrl);
+  connectionString.pathname = `/${databaseName}`;
+
+  const adminPool = createPool(adminUrl);
+  try {
+    await adminPool.query(
+      input?.through === undefined
+        ? `create database "${databaseName}" template "${TEMPLATE_DATABASE}"`
+        : `create database "${databaseName}" template template0`,
+    );
+  } catch (error) {
+    await adminPool.end().catch(() => undefined);
+    throw error;
+  }
+
+  const pool = createPool(connectionString.toString());
   try {
     await waitForDatabaseReady(pool);
 
+    if (input?.through !== undefined) {
+      // A single session: withMigrationLock's advisory lock is session-scoped.
+      const client = await pool.connect();
+      try {
+        await runMigrations({
+          db: client,
+          migrationsDir: path.resolve("packages/db/migrations"),
+          through: input.through,
+        });
+      } finally {
+        (client as PoolClient).release();
+      }
+    }
+
     const db = createDb(pool);
-    await applyTestMigrations(pool, input);
+    // Seeded per clone, never into the template: checked_at is compared against
+    // OFAPI_STORAGE_HEALTH_MAX_AGE_MS, so a value frozen at template-build time
+    // would age out mid-run and fail governed transports closed.
     await seedHealthyStorageSample(pool);
 
     return {
-      container,
-      connectionString,
+      connectionString: connectionString.toString(),
       pool,
       db,
       logger: createLogger("silent"),
       async stop() {
-        await pool.end();
-        await container.stop();
+        await pool.end().catch(() => undefined);
+        // FORCE: a test that leaked a runtime pool would otherwise block the
+        // drop and leave the clone behind for the rest of the run. The 57P01
+        // this raises in the leaked pool is absorbed by createPool's background
+        // error handler (the decision #188 blocker, fixed since).
+        // Deliberately NOT `with (force)`. FORCE terminates whatever is still
+        // connected, and a connection this harness did not create — pg-boss
+        // opens its own, outside createPool and so outside its background-error
+        // absorber — turns that into an unhandled FATAL 57P01 that fails a job
+        // where every test passed. That is the #188 hazard, and createPool's
+        // absorber does not cover it.
+        //
+        // So the drop is polite: it reclaims the clone when nothing holds it,
+        // and when something does it reports and moves on. The leftover
+        // database costs disk until the container dies with the run; a red run
+        // on a green suite costs a great deal more.
+        await adminPool.query(`drop database if exists "${databaseName}"`)
+          .catch((error: unknown) => {
+            console.warn(
+              `[test-db] ${databaseName} left behind (something still holds it): `
+              + `${error instanceof Error ? error.message : String(error)}`,
+            );
+          });
+        await adminPool.end().catch(() => undefined);
       },
     };
   } catch (error) {
     await pool.end().catch(() => undefined);
-    await container.stop().catch(() => undefined);
+    await adminPool.query(`drop database if exists "${databaseName}"`)
+      .catch(() => undefined);
+    await adminPool.end().catch(() => undefined);
     throw error;
   }
 }
@@ -99,7 +162,6 @@ export async function startTestDatabase(input?: {
 export type StartedTestDatabase = Awaited<ReturnType<typeof startTestDatabase>>;
 
 export async function startIntegrationTestDatabase(input?: {
-  from?: string;
   through?: string;
 }) {
   return acquireTestPrerequisite(
@@ -138,81 +200,6 @@ export async function resetIntegrationDatabase(pool: ReturnType<typeof createPoo
   // fixtures get an explicit fresh healthy sample; tests for missing/stale/
   // breached storage delete or replace this singleton themselves.
   await seedHealthyStorageSample(pool);
-}
-
-export async function applyTestMigrations(
-  pool: ReturnType<typeof createPool>,
-  input?: {
-    from?: string;
-    through?: string;
-  },
-) {
-  const client = await pool.connect();
-
-  try {
-    await client.query(`
-      create table if not exists schema_migrations (
-        id text primary key,
-        applied_at timestamptz not null default now()
-      )
-    `);
-
-    const migrationsDir = path.resolve("packages/db/migrations");
-    const files = (await readdir(migrationsDir))
-      .filter((file) => file.endsWith(".sql"))
-      .sort();
-
-    if (input?.from && !files.includes(input.from)) {
-      throw new Error(`Migration "${input.from}" was not found`);
-    }
-    if (input?.through && !files.includes(input.through)) {
-      throw new Error(`Migration "${input.through}" was not found`);
-    }
-
-    const selected = files.filter((file) => (
-      (input?.from ? file >= input.from : true) &&
-      (input?.through ? file <= input.through : true)
-    ));
-
-    for (const file of selected) {
-      const migration = await readFile(path.join(migrationsDir, file), "utf8");
-      if (migration.startsWith("-- agency-hub:no-transaction")) {
-        const statements = migration.split("-- agency-hub:statement")
-          .slice(1)
-          .map((statement) => statement.trim())
-          .filter(Boolean);
-        if (statements.length === 0) {
-          throw new Error(`Non-transactional test migration ${file} has no delimited statements`);
-        }
-        for (const statement of statements) {
-          const generatorMarker = "-- agency-hub:execute-returned-statements";
-          if (statement.startsWith(generatorMarker)) {
-            const generated = await client.query<{ statement: string }>(
-              statement.slice(generatorMarker.length).trim(),
-            );
-            for (const row of generated.rows) {
-              await client.query(row.statement);
-            }
-          } else {
-            await client.query(statement);
-          }
-        }
-        await client.query("insert into schema_migrations (id) values ($1)", [file]);
-        continue;
-      }
-      await client.query("begin");
-      try {
-        await client.query(migration);
-        await client.query("insert into schema_migrations (id) values ($1)", [file]);
-        await client.query("commit");
-      } catch (error) {
-        await client.query("rollback");
-        throw error;
-      }
-    }
-  } finally {
-    (client as PoolClient).release();
-  }
 }
 
 export async function seedFanslyPage(

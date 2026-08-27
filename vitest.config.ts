@@ -21,6 +21,9 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["tests/**/*.test.ts"],
+    // One Postgres per run; every acquisition clones its own database from the
+    // template built here. See tests/helpers/global-setup.ts.
+    globalSetup: ["tests/helpers/global-setup.ts"],
     hookTimeout: INTEGRATION_TEST_TIMEOUT_MS,
     testTimeout: INTEGRATION_TEST_TIMEOUT_MS,
     coverage: {

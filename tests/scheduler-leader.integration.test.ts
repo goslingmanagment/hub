@@ -53,7 +53,9 @@ describe("scheduler leader election", () => {
 
     // Exactly one session holds the lock now.
     const locks = await harness.pool.query(
-      "select count(*)::int as held from pg_locks where locktype = 'advisory' and classid = $1 and objid = $2",
+      "select count(*)::int as held from pg_locks where locktype = 'advisory' and classid = $1 and objid = $2 "
+      // pg_locks spans the whole cluster; sibling test databases share it.
+      + "and database = (select oid from pg_database where datname = current_database())",
       [SCHEDULER_LEADER_LOCK_NS, SCHEDULER_LEADER_LOCK_KEY],
     );
     expect(locks.rows[0].held).toBe(1);
@@ -75,7 +77,10 @@ describe("scheduler leader election", () => {
     await harness.pool.query(
       `select pg_terminate_backend(pid)
        from pg_locks
-       where locktype = 'advisory' and classid = $1 and objid = $2`,
+       where locktype = 'advisory' and classid = $1 and objid = $2
+         -- pg_locks spans the whole cluster: without this a sibling test
+         -- database's leader would be killed too.
+         and database = (select oid from pg_database where datname = current_database())`,
       [SCHEDULER_LEADER_LOCK_NS, SCHEDULER_LEADER_LOCK_KEY],
     );
     await sleep(300);
