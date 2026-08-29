@@ -241,6 +241,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 238 | Creator-vault membership is raw-media identity, not offer identity | Production `/media/vaultnew` bodies contain `albumMedia[].mediaId` and no `mediaOfferId`; the v1 parser therefore captured pages but emitted zero creator membership events. Catalog v2 keys membership by `(page, vault_kind, album, media_ref)`, keeps `media_offer_ref` optional, counts distinct raw files, exposes `mediaRef` in `vault_media`, and replays retained observations without new Fansly calls. This narrowly supersedes #227's claim that the vault walk measures media offers or supplies their hydration ids. |
 | 239 | The G5 headroom law is measured, not assumed (amends #221, #223) | The three gates that decide whether the historical rewrite may run were sized by assumption and one of them had become unsatisfiable: `capture:backfill --table sync_raw_payloads` demanded **40.41 GiB free on a 79 GiB disk holding a 55 GiB database**, and `--phase vacuum-full` demanded 44.26 GiB, which `--phase null-bodies` also checks — so the raw route was closed at both ends by arithmetic no amount of lawful reclaiming could satisfy. A gate that cannot be satisfied has stopped governing and started forbidding. THREE TERMS ARE NOW MEASURED AT GATE TIME AND THE INEQUALITY IS OTHERWISE UNCHANGED: the backfill's copy is a SPREAD probe of the bodies still to walk (the head of the queue under-measured July by 3.4x — 3,264 B/row against a true 11,072 B — so the picks are spaced across the whole remaining id range) times the COMPRESSION ratio alone, sampled 1:1 (no sample -> byte-for-byte parity, the old assumption); dedup is measured exactly (`count(distinct (bucket_month, object_id)) / count(*)` — July's 362,804 referenced rows hold 206,659 objects, 0.5696) and REPORTED ONLY, never spent, because it is learned from the already-copied PREFIX and would be applied to a different population; the `VACUUM FULL` budget is the relation's body-free COMPACT estimate (22.13 GB on disk vs ~0.57 GB compact) doubled, because that phase runs AFTER `null-bodies` and `pg_total_relation_size` measures the dead versions the nulling just minted; and the WAL reserve is `min(copy, 4 x max_wal_size + wal_keep_size)` read from `pg_settings`, justified by `archive_mode = off` and zero replication slots ASSERTED at gate time — full logging says how many WAL bytes are WRITTEN, never how many stay RESIDENT, and nothing on this box holds a segment back except the checkpointer. If an archiver or a slot ever appears the term COLLAPSES BACK to the old 1:1 reserve rather than to a smaller guess. The 5 GiB floor is untouched and is now also a term of the `VACUUM FULL` verdict, which never had one; the mid-walk re-check reads the volume EVERY batch once free space falls below 8 GiB (ten batches above it) and is the HARD BACKSTOP — every term above is a budget, not a guarantee. Two operational fixes ride along, both from the same production failure: `capture:backfill --execute` settles its `capture_rewrite_runs` row to `failed` on SIGTERM/SIGINT (run 1 was killed by the #87 deploy on 2026-08-18 and the ledger still said `running` eight days later), and `scripts/deploy-production.sh` refuses to start while any row is `running`, before the build. The census gains a completion forecast for backfill AND reclaim, because the gate answers `may this step run` and has never answered `is finishing this worth starting` — which is exactly how July ended up permanently 1.8 GB worse off after its one admitted step. |
 | 240 | Test databases are clones of a migrated template | One Postgres per vitest run (per CI shard); the template is built ONCE by the PRODUCTION `runMigrations()` and each acquisition takes a `CREATE DATABASE ... TEMPLATE` clone (1.77s -> 0.06s; 20 files 527.65s -> 451.58s). The test-only `applyTestMigrations` fork is deleted, so the deploy migrator's asserts are now what installs the chain. Supersedes #188's per-acquisition-container isolation clause, unblocked by the `createPool` background-error absorber that #188 named as its re-entry condition. Standing hazard: clones share a cluster, so any query on `pg_locks`/`pg_stat_activity` must filter `current_database()` — four sites fixed, one of them production (the erasure fence probe in `reclaim.ts`). `seedHealthyStorageSample` runs per clone, never into the template. |
+| 241 | G5 compact survivors are reference-less bodies only | Production on 2026-08-29 exposed a predicate mismatch in #239: the `sync_raw_payloads` compact measurement counted every non-null inline body, including CAS-backed duplicates that `null-bodies` removes before `VACUUM FULL`. With all 1,733,069 rows referenced, that made the measured survivor term 19,705,839,907 B instead of 0 B and falsely raised required headroom from ~7.49 GiB to 46.95 GiB on a volume with 23.14 GiB free. The exact survivor sum is now restricted to `response_payload IS NOT NULL AND payload_object_id IS NULL`; the x2 compact safety factor, bounded WAL reserve, and 5 GiB floor are unchanged. The raw completion forecast now names `VACUUM FULL`, not the parked-copy drop used only by `observations`. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -10280,3 +10281,34 @@ on the shared cluster — that test kills backends by exact pid.
 Docker being absent stays non-fatal: global setup provides no admin URL and
 `tests/helpers/prerequisites.ts` skips-or-throws exactly as before.
 
+**Decision #241 (2026-08-29, G5 compact survivors are reference-less bodies only):**
+Decision #239 defined the `sync_raw_payloads` `VACUUM FULL` budget as twice the
+measured compact relation, plus the bounded WAL reserve and 5 GiB floor. Its
+implementation measured the survivor-body term with only
+`response_payload IS NOT NULL`, however, so it counted every CAS-backed inline
+duplicate that the immediately preceding `null-bodies` phase removes. The
+comment described the post-nulling relation; the SQL measured the pre-nulling
+one.
+
+Production made the mismatch decisive on 2026-08-29: all 1,733,069 rows were
+referenced, yet the measurement called 19,705,839,907 B of inline duplicates
+"survivors". That produced a 20,373,847,002 B compact estimate and a 46.95 GiB
+headroom requirement on a volume with 23.14 GiB free. The exact post-nulling
+survivor sum is 0 B, the compact estimate is 668,007,095 B, and the unchanged
+#239 inequality requires approximately 7.49 GiB. This was a false refusal in
+the measurement predicate, not evidence that the safety factor, WAL law, or
+floor should be relaxed.
+
+The survivor sum is therefore restricted to rows where
+`response_payload IS NOT NULL AND payload_object_id IS NULL`. Those are the
+only bodies `null-bodies` cannot remove: rows not yet referenced and rows the
+codec refused. The query stays exact rather than sampled, and a mixed-state
+integration test proves both halves by excluding referenced inline duplicates
+while retaining an unreferenced inline body.
+
+The same production review found that the completion forecast used the
+`observations` phrase "when the parked copy is dropped" for both scopes.
+`sync_raw_payloads` has no parked copy or grace window; its space returns when
+`VACUUM FULL` finishes. Forecast wording is now selected by table so the two
+physical reclaim mechanisms cannot be confused. No gate, destructive-confirm
+boundary, or maintenance-window requirement changes here.

@@ -317,7 +317,9 @@ blessed, instead of incidentally.
     pnpm cli capture:verify-backfill --table sync_raw_payloads --sample 500
 
 Same three proofs, same abort criteria as O2. `--month` is rejected rather than
-ignored: a month-scoped verdict cannot gate a whole-table act.
+ignored: a month-scoped verdict cannot gate a whole-table act. The completion
+forecast for this route names `VACUUM FULL`: there is no parked copy, and the
+space is not returned until that rewrite finishes.
 
 ### R2 — stop the writers, then null the bodies
 
@@ -376,7 +378,10 @@ had already made the relation bigger.
 
 Refuses unless every referenced row has already had its body nulled (otherwise
 the rewrite copies the bytes it was meant to remove), unless free space holds
-the whole relation twice over, and unless `--confirm` names the table.
+twice the measured compact survivor estimate plus the bounded WAL reserve and
+the 5 GiB floor, and unless `--confirm` names the table. The survivor term
+contains only inline bodies with no catalog reference: referenced inline bodies
+are duplicates that R2 removes and therefore are not part of the rewritten copy.
 
 `VACUUM FULL` holds ACCESS EXCLUSIVE for the whole rewrite. Measure the table
 first and budget the window:

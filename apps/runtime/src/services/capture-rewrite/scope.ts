@@ -587,7 +587,7 @@ export interface CaptureRewriteForecast {
   rowsToStamp: number;
   /** Bytes the backfill is expected to ADD (the catalog copy). */
   backfillGrowthBytes: number;
-  /** Bytes the reclaim is expected to RETURN once the parked copy is dropped. */
+  /** Bytes the reclaim is expected to RETURN when its physical step completes. */
   reclaimReturnBytes: number;
   /** reclaimReturn - backfillGrowth: what the whole ritual is worth. */
   netBytes: number;
@@ -606,12 +606,16 @@ export interface CaptureRewriteForecast {
  * in its output had said that was the risk.
  *
  * Both halves are honest about what they are. The growth is the same measured
- * copy the gate just budgeted. The return is the source relation minus what the
- * skinny twin will weigh (its indexes come across whole; no index here indexes a
- * body) — the drop of the parked copy is where the bytes actually come back, so
- * a net that is negative until O5 is stated rather than discovered.
+ * copy the gate just budgeted. Before the walk, indexes are the only component
+ * of the body-free relation known here (no index in either schema indexes a
+ * body), so the return is a forecast rather than the reclaim gate's exact
+ * compact measurement. The physical completion step differs: observations
+ * returns the bytes when O5 drops the parked copy, while sync_raw_payloads
+ * returns them when VACUUM FULL finishes. The output names the applicable step
+ * so the temporary negative net is stated rather than discovered.
  */
 export function captureRewriteForecast(input: {
+  table: CaptureRewriteScope["table"];
   census: { rows: number; referenced: number; unreferencedWithBody: number };
   copyBytes: number;
   sourceTotalBytes: number;
@@ -626,14 +630,23 @@ export function captureRewriteForecast(input: {
   const skinnyBytes = Math.min(input.sourceTotalBytes, Math.max(0, input.sourceIndexBytes));
   const reclaimReturnBytes = Math.max(0, input.sourceTotalBytes - skinnyBytes);
   const netBytes = reclaimReturnBytes - backfillGrowthBytes;
+  const completion = input.table === "observations"
+    ? {
+        return: "when the parked copy is dropped",
+        pending: "Until that drop",
+      }
+    : {
+        return: "when VACUUM FULL finishes",
+        pending: "Until that rewrite completes",
+      };
   return {
     rowsToStamp,
     backfillGrowthBytes,
     reclaimReturnBytes,
     netBytes,
     line: `forecast: backfill stamps ${rowsToStamp} row(s) and ADDS ~${gib(backfillGrowthBytes)}; `
-      + `the reclaim then RETURNS ~${gib(reclaimReturnBytes)} when the parked copy is dropped; `
-      + `net ${netBytes >= 0 ? "+" : "-"}${gib(Math.abs(netBytes))}. Until that drop the scope is `
+      + `the reclaim then RETURNS ~${gib(reclaimReturnBytes)} ${completion.return}; `
+      + `net ${netBytes >= 0 ? "+" : "-"}${gib(Math.abs(netBytes))}. ${completion.pending} the scope is `
       + "BIGGER on disk, not smaller — run the steps as one sitting.",
   };
 }

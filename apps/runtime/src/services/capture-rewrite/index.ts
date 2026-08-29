@@ -260,6 +260,7 @@ export async function runCaptureBackfill(
       replicationSlots: wal.replicationSlots,
     });
     result.forecast = captureRewriteForecast({
+      table: options.scope.table,
       census,
       copyBytes: result.headroom.shadowEstimateBytes,
       sourceTotalBytes: sizes.total,

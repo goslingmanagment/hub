@@ -43,6 +43,9 @@ import {
   runCaptureVerifyBackfill,
 } from "../apps/runtime/src/services/capture-rewrite/index.ts";
 import {
+  measureSyncRawPayloadsCompact,
+} from "../apps/runtime/src/services/capture-rewrite/measure.ts";
+import {
   listCaptureParkedRelations,
   runCaptureDropParked,
   runCaptureReclaim,
@@ -1352,6 +1355,35 @@ describe("C — capture:reclaim, sync_raw_payloads (the maintenance-rewrite rout
     const census = await censusCaptureRewriteScope(testDb.db, RAW_SCOPE);
     expect(census.pointerOnly).toBe(4);
     expect(census.referenced).toBe(4);
+  });
+
+  it("counts only reference-less inline bodies as compact survivors", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await seedPage("raw-compact-survivors");
+    await seedRawPayloads(page.id, 4);
+    await runCaptureBackfill(appStub(), {
+      scope: RAW_SCOPE, dryRun: false, batch: 10, pauseMs: 0, maxBatches: 0,
+    });
+    // This fifth row has not been walked. Its body survives null-bodies; the
+    // four CAS-backed inline duplicates above do not.
+    await seedRawPayloads(page.id, 1);
+
+    const expected = await testDb.pool.query<{ bytes: string }>(`
+      select coalesce(sum(pg_column_size(response_payload)), 0)::text as bytes
+      from sync_raw_payloads
+      where response_payload is not null and payload_object_id is null
+    `);
+    const allInline = await testDb.pool.query<{ bytes: string }>(`
+      select coalesce(sum(pg_column_size(response_payload)), 0)::text as bytes
+      from sync_raw_payloads
+      where response_payload is not null
+    `);
+    const expectedBytes = Number(expected.rows[0]!.bytes);
+    expect(expectedBytes).toBeGreaterThan(0);
+    expect(Number(allInline.rows[0]!.bytes)).toBeGreaterThan(expectedBytes);
+
+    const measured = await measureSyncRawPayloadsCompact(testDb.db, 0);
+    expect(measured.survivingInlineBytes).toBe(expectedBytes);
   });
 
   it("0128's CHECK makes a body-less, reference-less row unrepresentable", async (context) => {
