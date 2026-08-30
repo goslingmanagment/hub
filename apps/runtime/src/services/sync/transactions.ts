@@ -675,6 +675,7 @@ async function syncTransactionsIncremental(
     olderThanBoundaryItems: state.olderThanBoundaryItems,
     olderThanBoundaryPages: state.olderThanBoundaryPages,
     earlyStoppedBeyondBoundary: state.earlyStoppedBeyondBoundary,
+    boundarySentToProvider: false,
   });
   input.telemetry.setScanSummary({
     transactionPages: state.transactionPages,
@@ -693,7 +694,11 @@ async function syncTransactionsIncremental(
       const requestOffset = state.offset;
       const page = await app.adapter.getTransactionsPage(
         input.requestContext,
-        { after, limit: 100, offset: requestOffset },
+        // `after` is a LOCAL boundary only. Fansly's own client never sends a
+        // non-empty bound on this route, and live A/B evidence shows that one
+        // makes `total` disagree with (or even suppress) the returned rows.
+        // The unbounded offset shape is also what the backfill path uses.
+        { limit: 100, offset: requestOffset },
       );
 
       await persistRawPayload(app.db, {
@@ -701,7 +706,8 @@ async function syncTransactionsIncremental(
         syncRunId: input.syncRunId,
         endpoint: "earnings_transactions",
         requestParams: {
-          after: after?.toISOString() ?? null,
+          after: null,
+          localLowerBound: after?.toISOString() ?? null,
           offset: requestOffset,
           limit: 100,
         },
@@ -851,10 +857,9 @@ async function syncTransactionsIncremental(
       }
 
       // The upstream API returns transactions newest-first. If we see two
-      // consecutive full pages where every item is older than the requested
-      // lower bound, the API is not honoring the `after` filter and all
-      // subsequent pages will only contain even older data. Stop early to
-      // avoid exhaustively scanning the full transaction history.
+      // consecutive full pages where every item is older than our LOCAL lower
+      // bound, all subsequent pages will only contain even older data. Stop
+      // early to avoid exhaustively scanning the full transaction history.
       if (earlyStoppedBeyondBoundary) {
         app.logger.warn(
           {
@@ -865,7 +870,7 @@ async function syncTransactionsIncremental(
             olderThanBoundaryItems: state.olderThanBoundaryItems,
             olderThanBoundaryPages: state.olderThanBoundaryPages,
           },
-          "Early-stopping transaction scan: upstream API is not honoring the after filter",
+          "Early-stopping transaction scan beyond the local lower bound",
         );
         break;
       }
@@ -888,6 +893,7 @@ async function syncTransactionsIncremental(
           olderThanBoundaryItems: state.olderThanBoundaryItems,
           olderThanBoundaryPages: state.olderThanBoundaryPages,
           earlyStoppedBeyondBoundary: state.earlyStoppedBeyondBoundary,
+          boundarySentToProvider: false,
         });
         return {
           satisfied: false,
@@ -994,6 +1000,7 @@ async function syncTransactionsIncremental(
     olderThanBoundaryItems: state.olderThanBoundaryItems,
     olderThanBoundaryPages: state.olderThanBoundaryPages,
     earlyStoppedBeyondBoundary: state.earlyStoppedBeyondBoundary,
+    boundarySentToProvider: false,
   });
   input.telemetry.setScanSummary({
     transactionPages: state.transactionPages,
@@ -1024,15 +1031,10 @@ async function syncTransactionsIncremental(
     newestSeenAt.getTime() <= checkpoint.cursorTimestamp.getTime() &&
     state.processedTransactions > 0
   ) {
-    // When the scan was early-stopped because the upstream API ignored the
-    // `after` filter, a stalled checkpoint is the expected outcome — all the
-    // scanned items were older than the checkpoint so there is nothing to
-    // advance. Downgrade to warn so it doesn't page.
-    const severity = state.earlyStoppedBeyondBoundary ? "warn" : "error";
     await input.telemetry.addAnomaly({
       code: "checkpoint_stalled",
-      severity,
-      message: "Transaction checkpoint did not advance despite processing transaction pages",
+      severity: "warn",
+      message: "Local transaction rescan completed without a newer checkpoint row",
       details: {
         checkpointTimestamp: checkpoint.cursorTimestamp.toISOString(),
         newestSeenAt: newestSeenAt.toISOString(),
@@ -1056,13 +1058,13 @@ async function syncTransactionsIncremental(
       )
     )
   ) {
-    const severity = state.earlyStoppedBeyondBoundary ? "warn" : "error";
     await input.telemetry.addAnomaly({
       code: "after_ineffective",
-      severity,
-      message: "The lower-bound transaction filter behaved ineffectively and scanned materially old data",
+      severity: "warn",
+      message: "Transaction scan walked materially past the local lower bound before stopping",
       details: {
         after: after.toISOString(),
+        boundarySentToProvider: false,
         firstPageOlderThanBoundaryItems: state.firstPageOlderThanBoundaryItems,
         olderThanBoundaryItems: state.olderThanBoundaryItems,
         olderThanBoundaryPages: state.olderThanBoundaryPages,
@@ -1081,6 +1083,7 @@ async function syncTransactionsIncremental(
         providerReportedTotal: state.providerReportedTotal,
         fetchedRows: state.processedTransactions,
         pageCount: state.transactionPages,
+        earlyStoppedBeyondBoundary: state.earlyStoppedBeyondBoundary,
       },
     });
   }

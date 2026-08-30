@@ -43,6 +43,11 @@ const {
   resetCanonicalizeSweepCursors,
   runCanonicalization,
 } = await import("../apps/runtime/src/services/canonicalize-driver.ts");
+const {
+  canonicalizeFanslyStatsObservation,
+  canParseFanslyStatsObservation,
+  diagnoseFanslyStatsObservationRejection,
+} = await import("../apps/runtime/src/services/canonicalize/fansly-stats.ts");
 
 const START = new Date("2026-08-22T12:00:00.000Z");
 
@@ -58,7 +63,7 @@ function spend(ms: number) {
   vi.setSystemTime(new Date(Date.now() + ms));
 }
 
-function row(id: number, kind: string) {
+function row(id: number, kind: string, payload: unknown = {}) {
   return {
     id,
     source: "pull",
@@ -67,7 +72,7 @@ function row(id: number, kind: string) {
     accountId: 3,
     nativeAccountRef: null,
     kind,
-    payload: {},
+    payload,
     observedAt: null,
     receivedAt: START,
     parseVersion: 0,
@@ -320,6 +325,42 @@ describe("canonicalization sweep wall-clock budget", () => {
       "canonicalize_rejected:posts:like_count_invalid",
     ]);
     expect(dbMocks.markObservationParsed).not.toHaveBeenCalled();
+  });
+
+  it("stamps an exact terminal-null account-stats row without minting events", async () => {
+    dbMocks.listObservationsForReplay
+      .mockResolvedValueOnce([row(88, "account_stats", {
+        dataset: null,
+        aggregationData: null,
+      })])
+      .mockResolvedValueOnce([]);
+
+    const result = await runCanonicalization(appStub(), {
+      families: [{
+        source: "pull",
+        lane: "stats",
+        kinds: ["account_stats"],
+        version: 2,
+        canonicalize: canonicalizeFanslyStatsObservation,
+        canParse: canParseFanslyStatsObservation,
+        parseRejection: diagnoseFanslyStatsObservationRejection,
+        projectionOnly: true,
+      }],
+    });
+
+    expect(result).toMatchObject({
+      scanned: 1,
+      stamped: 1,
+      appended: 0,
+      skippedUnparseable: 0,
+      unparseableSamples: [],
+    });
+    expect(dbMocks.markObservationParsed).toHaveBeenCalledWith(expect.anything(), {
+      observationId: 88,
+      receivedAt: START,
+      parseVersion: 2,
+    });
+    expect(dbMocks.appendProjectionOnlyDomainEvents).not.toHaveBeenCalled();
   });
 });
 

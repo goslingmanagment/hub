@@ -18,8 +18,6 @@ export interface ProviderFollowersPageResponse<TAccount, TFollower, TRaw = unkno
 }
 
 export interface ProviderTransactionsPageParams {
-  after?: Date | null;
-  before?: Date | null;
   limit?: number;
   offset?: number;
 }

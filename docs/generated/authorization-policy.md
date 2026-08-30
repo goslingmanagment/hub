@@ -22,7 +22,7 @@ body remain handler-checked and are noted per route in the service layer.
 | `agentKey` | Agent Read Plane key only; no human principal is admitted |
 | `any` | any authenticated principal except an agent key |
 
-## Routes (205)
+## Routes (207)
 
 | Method | Path | Route key | Kind | Roles | Page scope |
 | --- | --- | --- | --- | --- | --- |
@@ -86,6 +86,8 @@ body remain handler-checked and are noted per route in the service layer.
 | POST | `/api/v1/admin/sync/blocks/reset` | `adminSyncBlockReset` | `owner-session` | — | — |
 | POST | `/api/v1/admin/sync/blocks/resume` | `adminSyncBlockResume` | `owner-session` | — | — |
 | POST | `/api/v1/admin/sync/blocks/trigger` | `adminSyncBlockTrigger` | `owner-session` | — | — |
+| POST | `/api/v1/admin/sync/followers-reconcile/blast-radius/apply` | `adminFollowersReconcileOverrideApply` | `owner-session` | — | — |
+| POST | `/api/v1/admin/sync/followers-reconcile/blast-radius/preview` | `adminFollowersReconcileOverridePreview` | `owner-session` | — | — |
 | POST | `/api/v1/admin/sync/followers-reconcile/reset` | `adminFollowersReconcileReset` | `owner-session` | — | — |
 | GET | `/api/v1/admin/sync/runs` | `adminSyncRuns` | `owner-session` | — | — |
 | GET | `/api/v1/admin/sync/runs/:runId` | `adminSyncRunDetail` | `owner-session` | — | — |

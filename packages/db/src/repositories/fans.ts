@@ -624,6 +624,47 @@ export interface PageFollowReconcileActivity {
   deactivationCandidateCount: number;
 }
 
+export interface PageFollowDeactivationCandidate {
+  id: number;
+  lastSeenGeneration: number | null;
+}
+
+export interface PageFollowDeactivationGenerationBucket {
+  lastSeenGeneration: number | null;
+  count: number;
+}
+
+type PageFollowDeactivationCandidateInput = {
+  platformAccountId: number;
+  generation: number;
+  fullSweepStartedAt: Date;
+};
+
+/** The one destructive predicate shared by count, preview and apply. Keeping
+ *  it as one SQL fragment is load-bearing: an owner approval must hash exactly
+ *  the rows the existing finalizer can update, not a look-alike population. */
+function pageFollowDeactivationCandidatePredicate(
+  input: PageFollowDeactivationCandidateInput,
+) {
+  return sql`
+    platform_account_id = ${input.platformAccountId}
+    and is_active = true
+    and last_seen_at < ${input.fullSweepStartedAt}
+    and (
+      last_seen_generation is null
+      or last_seen_generation < ${input.generation - 1}
+    )
+  `;
+}
+
+function pageFollowIdFromText(value: string) {
+  const normalized = Number(value);
+  if (!Number.isSafeInteger(normalized) || normalized <= 0) {
+    throw new Error("page_follows.id is outside the safe integer range");
+  }
+  return normalized;
+}
+
 /** Transactional witnesses for the terminal follower-reconcile decision. */
 export async function readPageFollowReconcileActivity(
   db: Database,
@@ -642,12 +683,7 @@ export async function readPageFollowReconcileActivity(
       )::int as first_seen_during_sweep_outside_generation,
       count(*) filter (where is_active = true)::int as active_follower_count,
       count(*) filter (
-        where is_active = true
-          and last_seen_at < ${input.fullSweepStartedAt}
-          and (
-            last_seen_generation is null
-            or last_seen_generation < ${input.generation - 1}
-          )
+        where ${pageFollowDeactivationCandidatePredicate(input)}
       )::int as deactivation_candidate_count
     from page_follows
     where platform_account_id = ${input.platformAccountId}
@@ -660,6 +696,58 @@ export async function readPageFollowReconcileActivity(
     activeFollowerCount: Number(row?.active_follower_count ?? 0),
     deactivationCandidateCount: Number(row?.deactivation_candidate_count ?? 0),
   };
+}
+
+/** Exact, stable-order candidate set for the owner blast-radius override.
+ *  `lock` is required by apply: it prevents an existing candidate from being
+ *  touched between the approval re-check and the guarded UPDATE. */
+export async function listPageFollowDeactivationCandidates(
+  db: Database,
+  input: PageFollowDeactivationCandidateInput,
+  options?: { lock?: boolean },
+): Promise<PageFollowDeactivationCandidate[]> {
+  const result = await db.execute<{ id: string; lastSeenGeneration: string | null }>(sql`
+    select id::text as id,
+           last_seen_generation::text as "lastSeenGeneration"
+    from page_follows
+    where ${pageFollowDeactivationCandidatePredicate(input)}
+    order by id asc
+    ${options?.lock ? sql`for update` : sql``}
+  `);
+
+  return result.rows.map((row) => ({
+    id: pageFollowIdFromText(row.id),
+    lastSeenGeneration: row.lastSeenGeneration === null
+      ? null
+      : Number(row.lastSeenGeneration),
+  }));
+}
+
+/** Aggregate-only blocker telemetry. A corrupt/self-consistent provider list
+ *  could make the candidate set enormous; the automatic guard must not load
+ *  every surrogate id merely to explain why it refused the UPDATE. */
+export async function readPageFollowDeactivationGenerationBuckets(
+  db: Database,
+  input: PageFollowDeactivationCandidateInput,
+): Promise<PageFollowDeactivationGenerationBucket[]> {
+  const result = await db.execute<{
+    lastSeenGeneration: string | null;
+    count: number | string;
+  }>(sql`
+    select last_seen_generation::text as "lastSeenGeneration",
+           count(*)::int as count
+    from page_follows
+    where ${pageFollowDeactivationCandidatePredicate(input)}
+    group by last_seen_generation
+    order by last_seen_generation asc nulls first
+  `);
+
+  return result.rows.map((row) => ({
+    lastSeenGeneration: row.lastSeenGeneration === null
+      ? null
+      : Number(row.lastSeenGeneration),
+    count: Number(row.count),
+  }));
 }
 
 export async function deactivatePageFollowsMissingFromSnapshot(
@@ -971,18 +1059,18 @@ export async function deactivatePageFollowsByGeneration(
     lastSeenBefore: Date;
   },
 ) {
-  await db.execute(sql`
+  const result = await db.execute<{ id: string }>(sql`
     update page_follows
     set is_active = false,
         last_seen_at = now()
-    where platform_account_id = ${input.platformAccountId}
-      and is_active = true
-      and (
-        last_seen_generation is null
-        or last_seen_generation < ${input.generation - 1}
-      )
-      and last_seen_at < ${input.lastSeenBefore}
+    where ${pageFollowDeactivationCandidatePredicate({
+      platformAccountId: input.platformAccountId,
+      generation: input.generation,
+      fullSweepStartedAt: input.lastSeenBefore,
+    })}
+    returning id::text as id
   `);
+  return result.rows.map((row) => pageFollowIdFromText(row.id));
 }
 
 export async function deactivatePageSubscriptionsByGeneration(

@@ -205,7 +205,69 @@ describe("syncTransactions", () => {
     );
   });
 
-  it("early-stops when the upstream after filter is ignored and downgrades a stalled checkpoint", async () => {
+  it("keeps the incremental time boundary local so an Ari-shaped page retains exact totals", async () => {
+    const checkpoint = {
+      cursorTimestamp: new Date("2026-03-14T00:00:00.000Z"),
+      state: {},
+    };
+    dbMocks.getCheckpoint.mockResolvedValue(checkpoint);
+    const items = [
+      buildTransaction("tx-1", "2026-03-14T12:00:00.000Z"),
+      buildTransaction("tx-2", "2026-03-13T12:00:00.000Z"),
+      buildTransaction("tx-3", "2026-03-12T12:00:00.000Z"),
+      buildTransaction("tx-4", "2026-03-11T12:00:00.000Z"),
+    ];
+    const getTransactionsPage = vi.fn(async (_context: unknown, params: object) => ({
+      items,
+      // Production evidence: the same four rows carried total=0 only when a
+      // non-empty `after` was sent. This test fails if that bound leaks back.
+      total: Object.prototype.hasOwnProperty.call(params, "after") ? 0 : items.length,
+      done: true,
+      raw: { data: items, total: items.length },
+    }));
+    const telemetry = createTelemetry();
+    const app = {
+      db: {
+        transaction: vi.fn(async (callback: (tx: object) => Promise<unknown>) => callback({})),
+      },
+      config: {
+        transactionLookbackDays: 7,
+        transactionRescanCapDays: 30,
+      },
+      adapter: { getTransactionsPage },
+      logger: { info: vi.fn(), warn: vi.fn() },
+    } as never;
+
+    const result = await syncTransactions(app, {
+      pageLabel: "fansly-page",
+      platformAccountId: 1,
+      commissionRate: 0,
+      requestContext: {
+        session: { authorization: "token" },
+        proxy: null,
+        requestObserver: null,
+      } as never,
+      syncRunId: 123,
+      telemetry: telemetry as never,
+    });
+
+    expect(result).toMatchObject({ satisfied: true, processedTransactions: 4 });
+    expect(getTransactionsPage).toHaveBeenCalledTimes(1);
+    expect(getTransactionsPage.mock.calls[0]?.[1]).not.toHaveProperty("after");
+    expect(getTransactionsPage.mock.calls[0]?.[1]).not.toHaveProperty("before");
+    expect(sharedMocks.persistRawPayload.mock.calls[0]?.[1].requestParams).toEqual({
+      after: null,
+      localLowerBound: "2026-03-07T00:00:00.000Z",
+      offset: 0,
+      limit: 100,
+    });
+    expect(dbMocks.upsertTransaction).toHaveBeenCalledTimes(4);
+    expect(telemetry.addAnomaly).not.toHaveBeenCalledWith(expect.objectContaining({
+      code: "incremental_total_mismatch",
+    }));
+  });
+
+  it("early-stops against the local lower bound and downgrades a stalled checkpoint", async () => {
     const checkpoint = {
       cursorTimestamp: new Date("2026-03-14T00:00:00.000Z"),
       state: {},
@@ -272,12 +334,13 @@ describe("syncTransactions", () => {
         olderThanBoundaryItems: 2,
         olderThanBoundaryPages: 2,
       }),
-      "Early-stopping transaction scan: upstream API is not honoring the after filter",
+      "Early-stopping transaction scan beyond the local lower bound",
     );
     expect(telemetry.setBoundarySummary).toHaveBeenCalledWith(expect.objectContaining({
       olderThanBoundaryItems: 2,
       olderThanBoundaryPages: 2,
       earlyStoppedBeyondBoundary: true,
+      boundarySentToProvider: false,
     }));
     expect(telemetry.setScanSummary).toHaveBeenCalledWith(expect.objectContaining({
       transactionPages: 2,
@@ -298,6 +361,7 @@ describe("syncTransactions", () => {
       code: "after_ineffective",
       severity: "warn",
       details: expect.objectContaining({
+        boundarySentToProvider: false,
         earlyStoppedBeyondBoundary: true,
         olderThanBoundaryPages: 2,
       }),
@@ -703,10 +767,10 @@ describe("syncTransactions", () => {
     expect(getTransactionsPage).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
-        after: new Date("2026-03-07T00:00:00.000Z"),
         offset: 1,
       }),
     );
+    expect(getTransactionsPage.mock.calls[0]?.[1]).not.toHaveProperty("after");
     expect(getTransactionsPage.mock.calls[0]?.[1]).not.toHaveProperty("before");
     expect(dbMocks.upsertCheckpointProgress.mock.calls.at(-1)?.[1]).toMatchObject({
       platformAccountId: 1,
@@ -1018,13 +1082,14 @@ describe("syncTransactions", () => {
       1,
       expect.anything(),
       expect.objectContaining({
-        after: new Date("2026-03-07T00:00:00.000Z"),
         offset: 0,
       }),
     );
+    expect(getTransactionsPage.mock.calls[0]?.[1]).not.toHaveProperty("after");
     expect(getTransactionsPage.mock.calls[0]?.[1]).not.toHaveProperty("before");
     expect(sharedMocks.persistRawPayload.mock.calls[0]?.[1].requestParams).toEqual({
-      after: "2026-03-07T00:00:00.000Z",
+      after: null,
+      localLowerBound: "2026-03-07T00:00:00.000Z",
       offset: 0,
       limit: 100,
     });
@@ -1075,6 +1140,7 @@ describe("syncTransactions", () => {
         offset: 1,
       }),
     );
+    expect(getTransactionsPage.mock.calls[1]?.[1]).not.toHaveProperty("after");
     expect(getTransactionsPage.mock.calls[1]?.[1]).not.toHaveProperty("before");
     expect(dbMocks.upsertCheckpoint).toHaveBeenCalledWith(
       expect.anything(),

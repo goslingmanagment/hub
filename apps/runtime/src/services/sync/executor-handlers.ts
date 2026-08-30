@@ -28,6 +28,7 @@ import {
   recordProjectionDebt,
   requestPageSync,
   readPageFollowReconcileActivity,
+  readPageFollowDeactivationGenerationBuckets,
   rebuildFollowerRollups,
   rebuildSubscriberRollups,
   selectNextPageDmMessageDeepBackfillCandidate,
@@ -189,6 +190,9 @@ import {
   FanslyPurchaseHistoryContractError,
   FollowersReconcileConsistencyError,
 } from "./errors.ts";
+import {
+  followersReconcileDeactivationLimit,
+} from "./followers-reconcile-safety.ts";
 
 export type ExecutorRequestContext = {
   budget: SyncChunkBudget;
@@ -224,10 +228,6 @@ function expectedFollowersReconcileTerminalPageCount(observedCount: number) {
   // `done` means the terminal page is short. An exact multiple therefore has
   // one final empty page; every other count ends on its last partial page.
   return Math.floor(observedCount / FOLLOWERS_RECONCILE_PAGE_SIZE) + 1;
-}
-
-function followersReconcileDeactivationLimit(activeFollowerCount: number) {
-  return Math.max(50, Math.floor(activeFollowerCount / 100));
 }
 
 function purchaseHistoryCaptureBlockError(
@@ -2305,6 +2305,12 @@ export async function executeFollowersReconcileChunk(
         activity.activeFollowerCount,
       );
       if (activity.deactivationCandidateCount > deactivationLimit) {
+        const candidateGenerationBuckets =
+          await readPageFollowDeactivationGenerationBuckets(dbTx, {
+            platformAccountId: input.pageContext.page.id,
+            generation: state.generation,
+            fullSweepStartedAt,
+          });
         return {
           kind: "blast_radius_blocked" as const,
           generationObservedCount,
@@ -2314,6 +2320,7 @@ export async function executeFollowersReconcileChunk(
           terminalPageShapeComplete,
           terminalDelta,
           deactivationLimit,
+          candidateGenerationBuckets,
           ...activity,
         };
       }
@@ -2454,6 +2461,7 @@ export async function executeFollowersReconcileChunk(
           activeFollowerCount: verification.activeFollowerCount,
           deactivationCandidateCount: verification.deactivationCandidateCount,
           deactivationLimit: verification.deactivationLimit,
+          candidateGenerationBuckets: verification.candidateGenerationBuckets,
           fullSweepStartedAt: state.fullSweepStartedAt,
         },
       });
@@ -2547,6 +2555,8 @@ export async function executeFollowersReconcileChunk(
         offset: state.offset,
         limit: FOLLOWERS_RECONCILE_PAGE_SIZE,
         mode: "reconcile",
+        generation: state.generation,
+        fullSweepStartedAt: state.fullSweepStartedAt,
       },
       responsePayload: trimFanslyFollowerPayload(page.raw),
       mapperVersion: FANSLY_FOLLOWERS_CAPTURE_MAPPER_VERSION,

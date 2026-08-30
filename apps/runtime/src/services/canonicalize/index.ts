@@ -35,6 +35,7 @@ import {
 import {
   canonicalizeFanslyStatsObservation,
   canParseFanslyStatsObservation,
+  diagnoseFanslyStatsObservationRejection,
   FANSLY_STATS_CANONICALIZED_KINDS,
   FANSLY_STATS_CANONICALIZER_VERSION,
 } from "./fansly-stats.ts";
@@ -153,6 +154,7 @@ export const CANONICALIZER_FAMILIES: readonly CanonicalizerFamily[] = [
     version: FANSLY_STATS_CANONICALIZER_VERSION,
     canonicalize: canonicalizeFanslyStatsObservation,
     canParse: canParseFanslyStatsObservation,
+    parseRejection: diagnoseFanslyStatsObservationRejection,
     projectionOnly: true,
   },
   {

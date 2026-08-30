@@ -14,7 +14,11 @@ import { createSyncRateLimitWaiter } from "./sync/rate-limiter.ts";
 export type ReplayProbeFamily =
   | "earnings/stats/accounts"
   | "earnings/monthlystats/accounts"
-  | "media/orderhistory";
+  | "media/orderhistory"
+  | "earnings/transactions?bounds=omitted"
+  | "earnings/transactions?bounds=after-only"
+  | "earnings/transactions?bounds=after-before-empty"
+  | "earnings/transactions?bounds=after-before-now";
 
 export type ReplayProbeVerdict =
   | "replayable"
@@ -32,6 +36,9 @@ export interface ReplayProbeResult {
   httpStatus: number | null;
   errorCode: number | null;
   itemCount: number | null;
+  reportedTotal: number | null;
+  done: boolean | null;
+  contractAccepted: boolean | null;
   wallClockMs: number;
   message: string | null;
 }
@@ -40,6 +47,9 @@ export interface ReplayProbeOptions {
   pageLabels: string[];
   calls?: number;
   dryRun?: boolean;
+  /** Run only the transaction bound-shape matrix around one non-empty lower bound. */
+  transactionsParity?: boolean;
+  transactionsAfter?: Date;
   // Optional well-formed-call inputs (a page's own fan / media ids). When absent
   // the calls still fire (bare) — a bare call distinguishes auth rejection from
   // route-level rejection, which is the load-bearing signal. Supplying them makes
@@ -54,6 +64,13 @@ const FAMILIES: ReplayProbeFamily[] = [
   "earnings/stats/accounts",
   "earnings/monthlystats/accounts",
   "media/orderhistory",
+];
+
+const TRANSACTION_PARITY_FAMILIES: ReplayProbeFamily[] = [
+  "earnings/transactions?bounds=omitted",
+  "earnings/transactions?bounds=after-only",
+  "earnings/transactions?bounds=after-before-empty",
+  "earnings/transactions?bounds=after-before-now",
 ];
 
 /**
@@ -94,8 +111,12 @@ export async function runFanslyReplayProbe(
     // the green "no auth rejections" line — a false gate signal (review R1-5).
     throw new Error("replay-probe calls must be a positive integer");
   }
+  if (options.transactionsParity && !options.transactionsAfter) {
+    throw new Error("transactions parity requires a non-empty --transactions-after bound");
+  }
   const now = new Date();
   const results: ReplayProbeResult[] = [];
+  const families = options.transactionsParity ? TRANSACTION_PARITY_FAMILIES : FAMILIES;
 
   for (const pageLabel of options.pageLabels) {
     const context = await resolvePageContext(app, pageLabel);
@@ -112,7 +133,7 @@ export async function runFanslyReplayProbe(
     };
 
     for (let attempt = 1; attempt <= calls; attempt += 1) {
-      for (const family of FAMILIES) {
+      for (const family of families) {
         if (options.dryRun) {
           results.push({
             page: pageLabel,
@@ -122,6 +143,9 @@ export async function runFanslyReplayProbe(
             httpStatus: null,
             errorCode: null,
             itemCount: null,
+            reportedTotal: null,
+            done: null,
+            contractAccepted: null,
             wallClockMs: 0,
             message: "dry-run (not called)",
           });
@@ -131,6 +155,9 @@ export async function runFanslyReplayProbe(
         const startedAt = Date.now();
         try {
           let items: unknown;
+          let reportedTotal: number | null = null;
+          let done: boolean | null = null;
+          let contractAccepted: boolean | null = null;
           if (family === "earnings/stats/accounts") {
             ({ items } = await app.adapter.getEarningsStatsAccountsPage(requestContext, {
               correlationAccountId: options.correlationAccountId ?? null,
@@ -143,13 +170,33 @@ export async function runFanslyReplayProbe(
               after: new Date(0),
               before: now,
             }));
-          } else {
+          } else if (family === "media/orderhistory") {
             ({ items } = await app.adapter.getMediaOrderHistoryPage(requestContext, {
               accountIds: options.mediaAccountIds ?? null,
               accountMediaId: options.accountMediaId ?? null,
               accountMediaBundleId: options.accountMediaBundleId ?? null,
               limit: 100,
             }));
+          } else {
+            const transactionParams = {
+              limit: 10,
+              offset: 0,
+              ...(family !== "earnings/transactions?bounds=omitted"
+                ? { after: options.transactionsAfter }
+                : {}),
+              ...(family === "earnings/transactions?bounds=after-before-now"
+                ? { before: now }
+                : {}),
+              unboundedQueryShape:
+                family === "earnings/transactions?bounds=after-before-empty"
+                  ? "present-empty" as const
+                  : "omitted" as const,
+            };
+            const page = await app.adapter.getTransactionsPage(requestContext, transactionParams);
+            ({ items } = page);
+            reportedTotal = page.total ?? null;
+            done = page.done ?? null;
+            contractAccepted = page.contractAccepted ?? null;
           }
 
           results.push({
@@ -160,6 +207,9 @@ export async function runFanslyReplayProbe(
             httpStatus: 200,
             errorCode: null,
             itemCount: Array.isArray(items) ? items.length : null,
+            reportedTotal,
+            done,
+            contractAccepted,
             wallClockMs: Date.now() - startedAt,
             message: null,
           });
@@ -173,6 +223,9 @@ export async function runFanslyReplayProbe(
             httpStatus: classified.httpStatus,
             errorCode: classified.errorCode,
             itemCount: null,
+            reportedTotal: null,
+            done: null,
+            contractAccepted: null,
             wallClockMs: Date.now() - startedAt,
             message: classified.message,
           });
@@ -188,7 +241,7 @@ export async function runFanslyReplayProbe(
 export function summarizeReplayProbe(results: ReplayProbeResult[]): string {
   const lines: string[] = [];
   lines.push("VERDICT TABLE — Stage 6 fansly:replay-probe");
-  lines.push("page | family | verdict | http | code | items | ms | note");
+  lines.push("page | family | verdict | http | code | items | total | done | contract | ms | note");
   for (const r of results) {
     lines.push(
       [
@@ -198,6 +251,9 @@ export function summarizeReplayProbe(results: ReplayProbeResult[]): string {
         r.httpStatus ?? "—",
         r.errorCode ?? "—",
         r.itemCount ?? "—",
+        r.reportedTotal ?? "—",
+        r.done ?? "—",
+        r.contractAccepted ?? "—",
         r.wallClockMs,
         r.message ?? "",
       ].join(" | "),

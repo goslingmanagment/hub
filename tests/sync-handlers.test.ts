@@ -35,6 +35,7 @@ const dbMocks = vi.hoisted(() => ({
   maxPageSubscriptionGeneration: vi.fn(),
   rebuildFollowerRollups: vi.fn(),
   rebuildSubscriberRollups: vi.fn(),
+  readPageFollowDeactivationGenerationBuckets: vi.fn(),
   readPageFollowReconcileActivity: vi.fn(),
   requestPageSync: vi.fn(),
   selectNextPageDmMessageDeepBackfillCandidate: vi.fn(),
@@ -268,6 +269,7 @@ describe("sync executor handlers", () => {
     dbMocks.maxPageSubscriptionGeneration.mockResolvedValue(0);
     dbMocks.countRecentTerminalDmMessageConversationFailureStreak.mockResolvedValue(0);
     dbMocks.countPageFollowsByGeneration.mockResolvedValue(0);
+    dbMocks.readPageFollowDeactivationGenerationBuckets.mockResolvedValue([]);
     dbMocks.readPageFollowReconcileActivity.mockResolvedValue({
       firstSeenDuringSweepOutsideGeneration: 0,
       activeFollowerCount: 0,
@@ -1568,6 +1570,19 @@ it("finalizes follower reconcile against a freshly captured terminal headline", 
   expect(telemetry.addAnomaly).not.toHaveBeenCalledWith(expect.objectContaining({
     code: "followers_reconcile_generation_guard",
   }));
+  expect(sharedMocks.persistRawPayload).toHaveBeenCalledWith(
+    expect.anything(),
+    expect.objectContaining({
+      requestParams: {
+        offset: 100,
+        limit: 100,
+        mode: "reconcile",
+        generation: 613,
+        fullSweepStartedAt: FOLLOWER_SWEEP_STARTED_AT,
+      },
+    }),
+    expect.anything(),
+  );
 });
 
 it("resumes terminal follower verification without refetching the list and charges its request", async () => {
@@ -1743,6 +1758,10 @@ it("blocks a certified follower wipe above the one-percent safety ceiling", asyn
     activeFollowerCount: 1_000,
     deactivationCandidateCount: 51,
   });
+  dbMocks.readPageFollowDeactivationGenerationBuckets.mockResolvedValue([
+    { lastSeenGeneration: null, count: 40 },
+    { lastSeenGeneration: 610, count: 11 },
+  ]);
 
   await expect(executeFollowersReconcileChunk(app, {
     pageContext: {
@@ -1771,6 +1790,10 @@ it("blocks a certified follower wipe above the one-percent safety ceiling", asyn
     details: expect.objectContaining({
       deactivationCandidateCount: 51,
       deactivationLimit: 50,
+      candidateGenerationBuckets: [
+        { lastSeenGeneration: null, count: 40 },
+        { lastSeenGeneration: 610, count: 11 },
+      ],
     }),
   }));
 });

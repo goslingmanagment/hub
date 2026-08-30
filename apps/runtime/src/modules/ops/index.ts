@@ -71,6 +71,10 @@ import {
 } from "../../services/errors.ts";
 import { getPublicSyncHealth, getSystemHealth } from "../../services/health.ts";
 import {
+  applyFollowersReconcileBlastRadiusOverride,
+  previewFollowersReconcileBlastRadiusOverride,
+} from "../../services/followers-reconcile-override.ts";
+import {
   getChatterOfapiCreditsSummary,
   getOfapiCreditsDaily,
   getOfapiCreditsLedger,
@@ -1035,6 +1039,26 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
       metadata: { ...request.body, stream: "followers_reconcile" },
     });
     return result;
+  });
+
+  server.post("/api/v1/admin/sync/followers-reconcile/blast-radius/preview", {
+    schema: routeSchemas.adminFollowersReconcileOverridePreview,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    return previewFollowersReconcileBlastRadiusOverride(appContext, request.body);
+  });
+
+  server.post("/api/v1/admin/sync/followers-reconcile/blast-radius/apply", {
+    schema: routeSchemas.adminFollowersReconcileOverrideApply,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    return applyFollowersReconcileBlastRadiusOverride(
+      appContext,
+      request.body,
+      auditCtx(principal),
+    );
   });
 
   // Connection management

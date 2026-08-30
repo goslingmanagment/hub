@@ -22,6 +22,8 @@ export const kernelOperations = {
   adminDeleteModel: { method: "DELETE", path: "/api/v1/admin/models/:modelSlug" },
   adminDeletePage: { method: "DELETE", path: "/api/v1/admin/pages/:pageLabel" },
   adminDeviceTokenAdoption: { method: "GET", path: "/api/v1/admin/device-token-adoption" },
+  adminFollowersReconcileOverrideApply: { method: "POST", path: "/api/v1/admin/sync/followers-reconcile/blast-radius/apply" },
+  adminFollowersReconcileOverridePreview: { method: "POST", path: "/api/v1/admin/sync/followers-reconcile/blast-radius/preview" },
   adminFollowersReconcileReset: { method: "POST", path: "/api/v1/admin/sync/followers-reconcile/reset" },
   adminGrantModel: { method: "POST", path: "/api/v1/admin/users/:username/models" },
   adminIncidents: { method: "GET", path: "/api/v1/admin/incidents" },

@@ -16,6 +16,7 @@ import {
 import {
   canonicalizeFanslyStatsObservation,
   canParseFanslyStatsObservation,
+  diagnoseFanslyStatsObservationRejection,
   FANSLY_STATS_CANONICALIZED_KINDS,
   FANSLY_STATS_CANONICALIZER_VERSION,
   FANSLY_STATS_UNKNOWN_TYPE_DIAGNOSTIC,
@@ -87,6 +88,7 @@ describe("fansly-stats family registration", () => {
     expect(stats?.source).toBe("pull");
     expect(stats?.projectionOnly).toBe(true);
     expect(stats?.mixed).toBeUndefined();
+    expect(stats?.parseRejection).toBe(diagnoseFanslyStatsObservationRejection);
     expect(FANSLY_STATS_CANONICALIZER_VERSION).toBe(2);
     expect(stats?.version).toBe(2);
     expect([...(stats?.kinds ?? [])]).toEqual([...FANSLY_STATS_CANONICALIZED_KINDS]);
@@ -113,6 +115,33 @@ describe("fansly-stats family registration", () => {
     expect(canParseFanslyStatsObservation(observation("account_stats", accountStats(), {
       accountId: null,
     }))).toBe(false);
+  });
+
+  it("consumes only the exact content-free account-stats terminal-null shape", () => {
+    const terminalNull = { dataset: null, aggregationData: null };
+    expect(canParseFanslyStatsObservation(observation("account_stats", terminalNull))).toBe(true);
+    expect(collect("account_stats", terminalNull)).toEqual([]);
+    expect(diagnoseFanslyStatsObservationRejection(
+      observation("account_stats", terminalNull),
+    )).toBeNull();
+
+    const nearMisses = [
+      { dataset: null },
+      { dataset: null, aggregationData: {} },
+      { dataset: null, aggregationData: null, futureField: null },
+      { dataset: [], aggregationData: null },
+    ];
+    for (const payload of nearMisses) {
+      expect(canParseFanslyStatsObservation(observation("account_stats", payload))).toBe(false);
+      expect(diagnoseFanslyStatsObservationRejection(
+        observation("account_stats", payload),
+      )).not.toBeNull();
+    }
+
+    // The live proof is account-scoped; per-media nulls remain replayable drift.
+    expect(canParseFanslyStatsObservation(
+      observation("media_offer_stats", terminalNull),
+    )).toBe(false);
   });
 });
 

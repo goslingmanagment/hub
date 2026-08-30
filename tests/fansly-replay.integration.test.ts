@@ -921,13 +921,65 @@ describe("Fansly replay runner (slice D)", () => {
     expect(await knownTotal()).toBe(470);
     // Today's value is still the live one — the two writers own different days.
     const today = new Date().toISOString().slice(0, 10);
-    const todayRow = await testDb.pool.query<{ known_total_followers: number | null }>(
-      "select known_total_followers from daily_followers where platform_account_id = $1 and business_date = $2",
+    const todayRow = await testDb.pool.query<{
+      new_followers: number;
+      known_total_followers: number | null;
+    }>(
+      `select new_followers, known_total_followers
+       from daily_followers
+       where platform_account_id = $1 and business_date = $2`,
       [pageId, today],
     );
-    if (todayRow.rows.length > 0) {
-      expect(todayRow.rows[0]!.known_total_followers).toBe(999);
+    expect(todayRow.rows).toEqual([{ new_followers: 0, known_total_followers: 999 }]);
+  });
+
+  it("P1-D: live follower totals mint today's zero-new row without weakening unknown totals", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
     }
+    const pageId = await seedPage();
+    const todayRows = () => testDb!.pool.query<{
+      new_followers: number;
+      known_total_followers: number | null;
+    }>(
+      `select new_followers, known_total_followers
+       from daily_followers
+       where platform_account_id = $1
+         and business_date = (now() at time zone 'UTC')::date`,
+      [pageId],
+    );
+
+    await rebuildFollowerRollups(testDb.db, pageId, 42);
+    expect((await todayRows()).rows).toEqual([
+      { new_followers: 0, known_total_followers: 42 },
+    ]);
+
+    await rebuildFollowerRollups(testDb.db, pageId, 43);
+    expect((await todayRows()).rows).toEqual([
+      { new_followers: 0, known_total_followers: 43 },
+    ]);
+
+    // Null still means unknown: it must not manufacture a zero-new day.
+    await rebuildFollowerRollups(testDb.db, pageId, null);
+    expect((await todayRows()).rows).toEqual([]);
+
+    const fan = await testDb.pool.query<{ id: string }>(
+      `insert into fans (platform, platform_user_id, first_seen_at, last_seen_at)
+       values ('fansly', 'today-rollup-fan', now(), now())
+       returning id::text as id`,
+    );
+    await testDb.pool.query(
+      `insert into page_follows (
+         platform_account_id, fan_id, platform_follow_id, followed_at
+       ) values ($1, $2, 'today-rollup-follow', now())`,
+      [pageId, fan.rows[0]!.id],
+    );
+
+    await rebuildFollowerRollups(testDb.db, pageId, 44);
+    expect((await todayRows()).rows).toEqual([
+      { new_followers: 1, known_total_followers: 44 },
+    ]);
   });
 
   it("P2-1: a later same-day witness replaces an earlier one across bounded runs", async (context) => {

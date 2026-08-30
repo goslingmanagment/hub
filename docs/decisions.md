@@ -242,6 +242,8 @@ appends a row here in the same change (family law: updated-in-change).
 | 239 | The G5 headroom law is measured, not assumed (amends #221, #223) | The three gates that decide whether the historical rewrite may run were sized by assumption and one of them had become unsatisfiable: `capture:backfill --table sync_raw_payloads` demanded **40.41 GiB free on a 79 GiB disk holding a 55 GiB database**, and `--phase vacuum-full` demanded 44.26 GiB, which `--phase null-bodies` also checks — so the raw route was closed at both ends by arithmetic no amount of lawful reclaiming could satisfy. A gate that cannot be satisfied has stopped governing and started forbidding. THREE TERMS ARE NOW MEASURED AT GATE TIME AND THE INEQUALITY IS OTHERWISE UNCHANGED: the backfill's copy is a SPREAD probe of the bodies still to walk (the head of the queue under-measured July by 3.4x — 3,264 B/row against a true 11,072 B — so the picks are spaced across the whole remaining id range) times the COMPRESSION ratio alone, sampled 1:1 (no sample -> byte-for-byte parity, the old assumption); dedup is measured exactly (`count(distinct (bucket_month, object_id)) / count(*)` — July's 362,804 referenced rows hold 206,659 objects, 0.5696) and REPORTED ONLY, never spent, because it is learned from the already-copied PREFIX and would be applied to a different population; the `VACUUM FULL` budget is the relation's body-free COMPACT estimate (22.13 GB on disk vs ~0.57 GB compact) doubled, because that phase runs AFTER `null-bodies` and `pg_total_relation_size` measures the dead versions the nulling just minted; and the WAL reserve is `min(copy, 4 x max_wal_size + wal_keep_size)` read from `pg_settings`, justified by `archive_mode = off` and zero replication slots ASSERTED at gate time — full logging says how many WAL bytes are WRITTEN, never how many stay RESIDENT, and nothing on this box holds a segment back except the checkpointer. If an archiver or a slot ever appears the term COLLAPSES BACK to the old 1:1 reserve rather than to a smaller guess. The 5 GiB floor is untouched and is now also a term of the `VACUUM FULL` verdict, which never had one; the mid-walk re-check reads the volume EVERY batch once free space falls below 8 GiB (ten batches above it) and is the HARD BACKSTOP — every term above is a budget, not a guarantee. Two operational fixes ride along, both from the same production failure: `capture:backfill --execute` settles its `capture_rewrite_runs` row to `failed` on SIGTERM/SIGINT (run 1 was killed by the #87 deploy on 2026-08-18 and the ledger still said `running` eight days later), and `scripts/deploy-production.sh` refuses to start while any row is `running`, before the build. The census gains a completion forecast for backfill AND reclaim, because the gate answers `may this step run` and has never answered `is finishing this worth starting` — which is exactly how July ended up permanently 1.8 GB worse off after its one admitted step. |
 | 240 | Test databases are clones of a migrated template | One Postgres per vitest run (per CI shard); the template is built ONCE by the PRODUCTION `runMigrations()` and each acquisition takes a `CREATE DATABASE ... TEMPLATE` clone (1.77s -> 0.06s; 20 files 527.65s -> 451.58s). The test-only `applyTestMigrations` fork is deleted, so the deploy migrator's asserts are now what installs the chain. Supersedes #188's per-acquisition-container isolation clause, unblocked by the `createPool` background-error absorber that #188 named as its re-entry condition. Standing hazard: clones share a cluster, so any query on `pg_locks`/`pg_stat_activity` must filter `current_database()` — four sites fixed, one of them production (the erasure fence probe in `reclaim.ts`). `seedHealthyStorageSample` runs per clone, never into the template. |
 | 241 | G5 compact survivors are reference-less bodies only | Production on 2026-08-29 exposed a predicate mismatch in #239: the `sync_raw_payloads` compact measurement counted every non-null inline body, including CAS-backed duplicates that `null-bodies` removes before `VACUUM FULL`. With all 1,733,069 rows referenced, that made the measured survivor term 19,705,839,907 B instead of 0 B and falsely raised required headroom from ~7.49 GiB to 46.95 GiB on a volume with 23.14 GiB free. The exact survivor sum is now restricted to `response_payload IS NOT NULL AND payload_object_id IS NULL`; the x2 compact safety factor, bounded WAL reserve, and 5 GiB floor are unchanged. The raw completion forecast now names `VACUUM FULL`, not the parked-copy drop used only by `observations`. |
+| 242 | Follower blast-radius override is a hash-bound owner act | The `max(50, floor(active/100))` automatic ceiling remains unchanged and no blocked generation auto-retries. A two-step owner-session preview/apply surface binds approval to the exact blocked request and timestamp, cursor generation and `fullSweepStartedAt`, and SHA-256 of the sorted guarded candidate row ids. Apply runs SERIALIZABLE, locks the page, all three audience states, the reconcile cursor and candidate rows; requires the whole audience block paused with no lease; recomputes and rejects stale or now-within-limit sets; invokes the same guarded deactivation helper; refreshes follower projections and rollups; and writes the audit event atomically. It never advances the stream state, cursor, checkpoint, success run or follower-sync timestamp. Reconcile raw pages now retain generation and sweep-start lineage in existing `request_params` (no migration), and the blocker anomaly reports candidate counts by prior generation. |
+| 243 | A known live follower total always materializes UTC today | `rebuildFollowerRollups` derives `new_followers` from relationship dates, but a day with zero such rows still has a known live headline. After the aggregate rebuild, a non-null `knownTotalFollowers` therefore upserts UTC today's row with zero new followers only when absent; on conflict it updates only the known total and timestamp, preserving the derived new-follower count. A null total still creates no zero row, and historical replay semantics are unchanged. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -10312,3 +10314,61 @@ The same production review found that the completion forecast used the
 `VACUUM FULL` finishes. Forecast wording is now selected by table so the two
 physical reclaim mechanisms cannot be confused. No gate, destructive-confirm
 boundary, or maintenance-window requirement changes here.
+
+**Decision #242 (2026-08-30, a follower blast-radius override is one exact,
+hash-bound owner act):**
+
+The automatic follower finalizer keeps its existing
+`max(50, floor(activeFollowerCount/100))` ceiling. A block above it is not a
+new retry class and does not weaken membership proof: it waits for an owner to
+inspect the exact candidate population.
+
+The recovery surface is two owner-session POSTs, preview then apply. Preview
+returns counts, the candidate split by `last_seen_generation`, and a SHA-256
+over the sorted internal `page_follows.id` set; row ids never cross the API.
+The apply request must echo the page, blocked request sequence and `blockedAt`,
+cursor generation and `fullSweepStartedAt`, and candidate hash. Those fields
+are one approval binding: a new request, a changed cursor, or one candidate
+entering or leaving the guarded set makes the approval stale and the mutation
+refuses.
+
+Apply requires `subscribers`, `followers` and `followers_reconcile` all paused
+and every lease field null. In one SERIALIZABLE transaction it locks the page, those three
+state rows, the reconcile cursor and every candidate row; recomputes the same
+predicate the automatic count and UPDATE share; refuses a set that is now at
+or below the normal ceiling; invokes the existing guarded deactivation helper;
+and verifies the returned ids reproduce the approved count and hash before it
+refreshes `page_fans`, rebuilds follower rollups and records
+`admin.followers_reconcile_blast_radius_override_applied`. Audit's observation
+dual-write is inside the same transaction. The audience stays paused and the
+operator separately chooses whether to use #237's narrow reset for a fresh
+generation. Apply never changes `page_sync_states`, `page_sync_cursors`,
+`applied_seq`, `last_succeeded_run_id`, `pages.last_follower_sync_at` or any
+other freshness timestamp.
+
+Raw generation lineage needs no migration: each retained reconcile page's
+existing `sync_raw_payloads.request_params` now carries `generation` and
+`fullSweepStartedAt` beside offset/limit/mode, while the row already carries
+stream, request sequence and run id. The blast-radius anomaly also includes
+the candidate split by prior generation. This is exact linkage to the captured
+pages; a new nullable lineage table/column was rejected as weaker and
+unnecessary.
+
+**Decision #243 (2026-08-30, a known live follower total always materializes
+UTC today):**
+
+`rebuildFollowerRollups` owns two facts with different sources: it derives
+`new_followers` from `page_follows.followed_at`, while a successful live sync
+supplies today's `known_total_followers`. The aggregate rebuild used the first
+fact as the only row population path, so after the UTC date changed it could
+know the live headline and still omit today's row whenever no relationship had
+a `followed_at` date today. A test made that omission invisible by checking the
+headline only if the row happened to exist.
+
+After the aggregate insert, a non-null live total now upserts UTC today. The
+insert value has `new_followers = 0`, which is correct only when the aggregate
+created no row; on conflict it updates only `known_total_followers` and
+`updated_at`, so an actually derived non-zero count cannot be overwritten.
+`knownTotalFollowers = null` still means unknown and does not manufacture a
+zero-new day. Historical replay remains unchanged: it may materialize a past
+total only from its own dated evidence, never from this live-current seam.
