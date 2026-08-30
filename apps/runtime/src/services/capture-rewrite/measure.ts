@@ -336,7 +336,9 @@ const TUPLE_HEADER_BYTES = 28;
  * built from what a surviving ROW costs — probed with the body column excluded
  * — times the row count, plus the indexes (rebuilt at their current logical
  * size; no index in this schema indexes a body), plus the bodies that are still
- * inline because nothing referenced them or the codec refused them.
+ * inline because nothing referenced them or the codec refused them. A body
+ * that already has `payload_object_id` does NOT survive: `null-bodies` removes
+ * that duplicate before `VACUUM FULL` runs.
  *
  * THE PROBE SPREADS, for the same reason the size probe does. An `order by id
  * desc limit 2000` reads the newest rows, which are the pointer-only ones, and
@@ -346,8 +348,9 @@ const TUPLE_HEADER_BYTES = 28;
  * gate on, so both probes spread.
  *
  * The survivor sum is NOT probed. It is a `sum(pg_column_size(...))` over the
- * rows that still carry a body, and it is the one term where being wrong makes
- * the copy BIGGER than budgeted — so it is measured exactly.
+ * rows whose body has no catalog reference and therefore survives
+ * `null-bodies`, and it is the one term where being wrong makes the copy BIGGER
+ * than budgeted — so it is measured exactly.
  */
 export async function measureSyncRawPayloadsCompact(
   db: Database,
@@ -390,6 +393,7 @@ export async function measureSyncRawPayloadsCompact(
     select coalesce(sum(pg_column_size(e.response_payload)), 0)::text as bytes
     from sync_raw_payloads e
     where e.response_payload is not null
+      and e.payload_object_id is null
   `);
   const survivingInlineBytes = Number(surviving.rows[0]?.bytes ?? 0);
 

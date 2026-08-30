@@ -425,6 +425,7 @@ describe("#239 — the mid-walk floor re-check cadence", () => {
 describe("#239 — the completion forecast", () => {
   it("says the scope gets BIGGER before it gets smaller", () => {
     const forecast = captureRewriteForecast({
+      table: "observations",
       census: { rows: 911_154, referenced: 362_804, unreferencedWithBody: 548_350 },
       copyBytes: 2.71e9,
       sourceTotalBytes: PROD.julyTotal,
@@ -435,10 +436,12 @@ describe("#239 — the completion forecast", () => {
     expect(forecast.reclaimReturnBytes).toBe(PROD.julyTotal - PROD.julyIndexes);
     expect(forecast.netBytes).toBeGreaterThan(0);
     expect(forecast.line).toMatch(/BIGGER on disk/);
+    expect(forecast.line).toMatch(/parked copy is dropped/);
   });
 
   it("reports a NEGATIVE net when the copy costs more than the reclaim returns", () => {
     const forecast = captureRewriteForecast({
+      table: "observations",
       census: { rows: 10, referenced: 0, unreferencedWithBody: 10 },
       copyBytes: 5e9,
       sourceTotalBytes: 1e9,
@@ -446,6 +449,19 @@ describe("#239 — the completion forecast", () => {
       });
     expect(forecast.netBytes).toBeLessThan(0);
     expect(forecast.line).toMatch(/net -/);
+  });
+
+  it("names VACUUM FULL, not a parked copy, for sync_raw_payloads", () => {
+    const forecast = captureRewriteForecast({
+      table: "sync_raw_payloads",
+      census: { rows: 10, referenced: 10, unreferencedWithBody: 0 },
+      copyBytes: 0,
+      sourceTotalBytes: 10e9,
+      sourceIndexBytes: 1e9,
+    });
+    expect(forecast.line).toMatch(/when VACUUM FULL finishes/);
+    expect(forecast.line).toMatch(/Until that rewrite completes/);
+    expect(forecast.line).not.toMatch(/parked copy/);
   });
 });
 

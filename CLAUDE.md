@@ -99,7 +99,11 @@ quick-ref table up top), Git tags, and production itself.**
   fetch) run inside the test suite.
 - Tests live in root `tests/`; no drizzle-orm imports inside tests; SSE tests
   need listen+fetch (not inject).
-- Prod access (SSH to the VPS, psql, deploys, flag flips) is **owner-gated**:
+- Prod read-only diagnostics need no permission: the Agent Read Plane
+  (`read_only` role), `/health*`, SSH for logs/status only (`docker ps/logs`,
+  `journalctl`, `df`), psql **only via the `read_only` role — never the app
+  user or superuser**. Everything that mutates prod (deploys, flag flips,
+  restarts, psql writes, editing files on the VPS) stays **owner-gated**:
   prepare everything, then ask with a structured confirmation per gate. DB name
   on prod is `agency_hub_core`. The deploy build context snapshots at launch —
   commits made after a deploy starts need a dist-only follow-up.
