@@ -333,8 +333,14 @@ describe("OFAPI command outbox intake", () => {
     );
     await testDb!.pool.query(migrationSql);
 
+    // The migration uses PostgreSQL's microsecond clock; a JS Date created in
+    // the same millisecond can still precede its strict expiry boundary.
+    // Advance from the database clock without sleeping or changing the row.
+    const { rows: [clock] } = await testDb!.pool.query<{ sweep_at: Date }>(
+      "select clock_timestamp() + interval '1 millisecond' as sweep_at",
+    );
     appContext.config.ofapiDesktopCommandExecutionEnabled = false;
-    await expect(sweepOfapiCommands(appContext, { send: vi.fn() } as never))
+    await expect(sweepOfapiCommands(appContext, { send: vi.fn() } as never, clock!.sweep_at))
       .resolves.toMatchObject({ expired: 1, purged: 1, enqueued: 0 });
     expect((await getCommand(commandId)).statusCode).toBe(404);
   });
