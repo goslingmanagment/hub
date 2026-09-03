@@ -84,6 +84,18 @@ export interface AgentEvidenceInput {
   readonly observedRowFloor: string | null;
   /** When this store's record of the scope begins, or `unknown`. */
   readonly captureFloor: AgentCaptureFloor;
+  /**
+   * Pages in scope whose creator-vault INVENTORY has never been proven complete:
+   * at least one live album with no completed full walk whose expected count
+   * matches the roster it saw.
+   *
+   * `0` for every operation that does not compute it, and that is not a default —
+   * it is the signature refusing a bypass. A reader of `vault_media` is told the
+   * inventory may be partial; a reader of anything else is told nothing, because
+   * nothing was measured. Only the `vault_media` dataset read passes a real
+   * number today.
+   */
+  readonly inventoryUnprovenPages: number;
 }
 
 export interface AgentEvidence {
@@ -185,6 +197,13 @@ export function concludeEnvelope(
   }
   if (input.scopeNarrowing.keyGrantExcludedPages > 0) {
     add("key_grant_narrowed_scope");
+  }
+  if (input.inventoryUnprovenPages > 0) {
+    // The rows are real; the INVENTORY they are drawn from was never completed,
+    // so a count is a lower bound and `missingSince` on a member is not an
+    // absence claim. The catalog lane's daily call cap is smaller than a large
+    // Vault, and neither `/health` nor `succeeded_at` says so.
+    add("vault_inventory_unproven");
   }
 
   const requiredPlanes = claimFields === null ? null : requiredPlanesForClaimFields(claimFields);

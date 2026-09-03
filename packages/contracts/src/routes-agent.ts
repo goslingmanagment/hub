@@ -536,6 +536,26 @@ export const agentBlockerEnum = z.enum([
   /** R-008: this response consumed a cursor, so its traversal crossed pages of a
    *  mutable sort key and rows can have moved between them. */
   "mutable_sort_key_traversal",
+  /**
+   * The `vault_media` dataset is serving an inventory NO FULL WALK HAS EVER
+   * PROVEN. At least one live creator-vault album in scope (`vaultKind =
+   * creator`, no `missingSince`) has no completed full walk whose expected count
+   * equals the roster it actually saw, so the rows returned are a lower bound on
+   * what the album holds and `missingSince` on a member is not an absence claim.
+   *
+   * WHY IT EXISTS: the catalog lane walks albums under a daily call cap, and a
+   * page whose Vault exceeds one day's cap never finishes the lane in a day.
+   * `/health` is green (catalog is excluded from sync-health by design) and
+   * `succeeded_at` never moves, so nothing else in the system told a reader that
+   * the inventory it was reading had never been completed.
+   *
+   * Emitted by the `vault_media` dataset read only; a scope holding ≥1 unproven
+   * page raises it. STALENESS OF AN OLD PROOF IS NOT PART OF IT (v1, #245): a
+   * walk completed a year ago still counts as proven, and the per-album
+   * `lastFullWalkAt` / `fullWalkRef` / `fullWalkObservedCount` on the rows are
+   * where a reader judges age.
+   */
+  "vault_inventory_unproven",
 ]);
 
 export const agentConclusionSchema = z.object({

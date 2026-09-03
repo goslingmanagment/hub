@@ -55,7 +55,7 @@ async function capture(kind: string, payload: unknown, day = 1) {
     idempotencyKey: randomUUID(), receivedAt: date(day) });
 }
 async function project() {
-  await runCanonicalization(app(), { kinds: ["vault_media", "posts", "vault_album_walk_completed"] });
+  await runCanonicalization(app(), { kinds: ["vault_media", "posts", "vault_album_walk_completed", "vault_albums"] });
   await runFanslyCatalogProjection(app(), { accountId: pageId });
   await runMediaPlaneProjection(app(), { accountId: pageId });
   await runCreatorPostsProjection(app(), { accountId: pageId });
@@ -66,6 +66,16 @@ async function query(dataset: string, extra: Record<string, unknown> = {}, label
     payload: { ...(!extra.cursor ? { from: "2026-01-01T00:00:00Z", to: "2026-10-01T00:00:00Z" } : {}), limit: 100, ...extra } });
   expect(response.statusCode, response.body).toBe(200);
   return response.json<AgentDatasetQueryResponse>();
+}
+/** The creator-vault ALBUM HEADS. This is also the roster: an album the listing
+ *  stops naming is stamped `missing_since` and stops being live inventory. */
+async function albumHeads(ids: string[], day = 1) {
+  await capture("vault_albums", {
+    albums: ids.map((id, pos) => ({
+      id, accountId: "creator-1", title: `Album ${id}`, description: "",
+      type: null, status: 0, pos, itemCount: 2, version: 0, createdAt: date(day).getTime(),
+    })),
+  }, day);
 }
 async function scan(refs: string[], day: number, walkRef = randomUUID()) {
   await capture("vault_album_walk_completed", { valid: true, vaultKind: "creator", albumRef: "album-1", walkRef,
@@ -264,6 +274,55 @@ describe("[sync-critical] content media raw to agent API", () => {
     expect((await query("vault_media")).items.every((i) => i.fields.missingSince === null)).toBe(true);
     await scan([], 6); await project();
     expect((await query("vault_media")).items.every((i) => i.fields.missingSince !== null)).toBe(true);
+  });
+
+  it("blocks vault_media on an inventory no full walk has proven, and only that dataset", async () => {
+    // THE PRODUCTION FACT (#245): the catalog lane walks albums under a daily
+    // call cap, so a Vault bigger than one day's cap never finishes the lane in a
+    // day. `/health` is green (catalog is excluded from sync-health) and
+    // `succeeded_at` never moves, so before this blocker nothing in the system
+    // told a reader the inventory it was reading might be partial.
+    const blockers = async (dataset = "vault_media") => (await query(dataset)).conclusion.blockers;
+
+    // (a) a live album with no completed walk at all.
+    await capture("vault_media", fixture); await albumHeads(["album-1"]); await project();
+    expect(await blockers()).toContain("vault_inventory_unproven");
+    // The question belongs to `vault_media`. No other dataset pays for the scan
+    // or reports its answer.
+    expect(await blockers("raw_media")).not.toContain("vault_inventory_unproven");
+    expect(await blockers("posts")).not.toContain("vault_inventory_unproven");
+
+    // (b) a completed walk whose expected count equals the roster it saw.
+    await scan(["file-1", "file-2"], 2); await project();
+    expect(await blockers()).not.toContain("vault_inventory_unproven");
+
+    // (c) a walk that stopped short: it completed, and its own two numbers
+    // disagree. Forged by hand ON PURPOSE — the canonicalizer refuses such an
+    // observation (`seenMediaRefs.length === expectedCount` is a parse gate), so
+    // the lane cannot mint this row and only the repository predicate stands
+    // between a truncated walk and a page reported as proven.
+    await db.pool.query(
+      "update creator_vault_album_scans set expected_count = expected_count + 1 where page_id = $1",
+      [pageId],
+    );
+    expect(await blockers()).toContain("vault_inventory_unproven");
+    await db.pool.query(
+      "update creator_vault_album_scans set expected_count = expected_count - 1 where page_id = $1",
+      [pageId],
+    );
+    expect(await blockers()).not.toContain("vault_inventory_unproven");
+
+    // (d) an album the platform stopped naming is absent BY EVIDENCE, and
+    // demanding a fresh walk of it would make the blocker permanent. It appears
+    // unwalked, raises the blocker, and stops counting once the roster drops it.
+    await albumHeads(["album-1", "album-2"], 3); await project();
+    expect(await blockers()).toContain("vault_inventory_unproven");
+    await albumHeads(["album-1"], 4); await project();
+    expect((await db.pool.query(
+      "select missing_since from creator_vault_albums where page_id = $1 and album_ref = 'album-2'",
+      [pageId],
+    )).rows[0]?.missing_since).not.toBeNull();
+    expect(await blockers()).not.toContain("vault_inventory_unproven");
   });
 
   it("preserves OF accepted media ids, rejects overlap as fresh material, and exposes direct file links", async () => {

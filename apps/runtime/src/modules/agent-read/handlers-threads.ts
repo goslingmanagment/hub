@@ -329,6 +329,7 @@ export async function handleAgentPersonTimeline(
       scopeNarrowing: scope.scopeNarrowing,
       observedRowFloor: observedRowFloorOf(timeline.rows.map((row) => row.occurredAt)),
       captureFloor: { at: null, kind: "unknown" },
+      inventoryUnprovenPages: 0,
     });
 
     const response: AgentPersonTimelineResponse = {
@@ -612,6 +613,7 @@ export async function handleAgentThreads(
       scopeNarrowing: scope.scopeNarrowing,
       observedRowFloor: null,
       captureFloor: { at: null, kind: "unknown" },
+      inventoryUnprovenPages: 0,
     });
 
     const response: AgentThreadsResponse = {
@@ -898,6 +900,7 @@ export async function handleAgentThreadMessages(
         at: isoOrNull(archiveFloor),
         kind: archiveFloor === null ? "unknown" : "oldest_stored_row",
       },
+      inventoryUnprovenPages: 0,
     });
 
     // Every transcript read leaves an audit row. This is not decorative: the
@@ -1160,6 +1163,7 @@ export async function handleAgentSearchMessages(
       // The hits ARE dated, and a hardcoded null threw that away.
       observedRowFloor: observedRowFloorOf(result.rows.map((row) => row.occurredAt)),
       captureFloor: { at: null, kind: "unknown" },
+      inventoryUnprovenPages: 0,
     });
 
     if (body.includeSnippet) {
@@ -1423,6 +1427,7 @@ export async function handleAgentCoverage(
       scopeNarrowing: scope.scopeNarrowing,
       observedRowFloor: null,
       captureFloor: { at: null, kind: "unknown" },
+      inventoryUnprovenPages: 0,
     });
 
     const items = scopes.rows.map((entry) => {
@@ -1464,6 +1469,7 @@ export async function handleAgentCoverage(
         scopeNarrowing: scope.scopeNarrowing,
         observedRowFloor: isoOrNull(entry.observedRowFloor),
         captureFloor: { at: floorAt, kind: floorAt === null ? "unknown" : "oldest_stored_row" },
+        inventoryUnprovenPages: 0,
       });
       return {
         pageLabel: entry.pageLabel,

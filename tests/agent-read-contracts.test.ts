@@ -192,6 +192,13 @@ describe("agent read plane: the vocabulary is derived, never restated", () => {
     expect(agentBlockerEnum.options).toContain("read_only_mode");
   });
 
+  it("an unproven Vault inventory is sayable on the wire", () => {
+    // #245. Without it, a consumer of `vault_media` reading `missingSince` as an
+    // absence claim had nothing in the response to warn them that the inventory
+    // itself had never been walked to completion.
+    expect(agentBlockerEnum.options).toContain("vault_inventory_unproven");
+  });
+
   it("the absence-proof machinery is GONE from the wire", () => {
     // Owner ruling 2026-08-01. It was unreachable on every real route and its
     // supporting reads were the slowest queries in the slice, so it was removed

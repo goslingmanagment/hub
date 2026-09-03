@@ -47,3 +47,46 @@ export async function upsertVaultAlbumScan(db: Database, input: VaultAlbumScanIn
   `);
   if ((result.rowCount ?? 0) > 0) await reconcileVaultAlbumScan(db, input.pageId, input.albumRef);
 }
+
+/**
+ * How many of these pages are serving a creator-vault inventory NO FULL WALK HAS
+ * EVER PROVEN.
+ *
+ * An album is PROVEN when a scan row exists for its exact `(page, vault_kind,
+ * album_ref)` with a `completed_at` and an `expected_count` equal to the roster
+ * it actually saw — a walk that stopped short leaves a row whose counts disagree,
+ * and that is not proof. A page is UNPROVEN when at least one LIVE creator album
+ * (`vault_kind = 'creator'`, no `missing_since`) has no such row. Albums the
+ * platform stopped naming are excluded: they are absent by evidence, and
+ * demanding a fresh walk of them would make the blocker permanent.
+ *
+ * STALENESS IS DELIBERATELY NOT MEASURED (v1, decision #245). A walk completed a
+ * year ago counts as proven; the per-album `lastFullWalkAt` already on every
+ * `vault_media` row is where a reader judges age.
+ */
+export async function countPagesWithUnprovenCreatorVaultInventory(
+  db: Database,
+  pageIds: number[],
+): Promise<number> {
+  if (pageIds.length === 0) {
+    return 0;
+  }
+  const ids = sql`(${sql.join(pageIds.map(id => sql`${id}`), sql`, `)})`;
+  // ONE statement, and every column qualified: a bare name here would resolve
+  // against the outer SELECT's alias list before the table's (the house trap).
+  const result = await db.execute<{ count: string }>(sql`
+    select count(distinct a.page_id)::text as count
+      from creator_vault_albums a
+      left join creator_vault_album_scans s
+        on s.page_id = a.page_id
+       and s.vault_kind = a.vault_kind
+       and s.album_ref = a.album_ref
+       and s.completed_at is not null
+       and s.expected_count = cardinality(s.seen_media_refs)
+     where a.page_id in ${ids}
+       and a.vault_kind = 'creator'
+       and a.missing_since is null
+       and s.page_id is null
+  `);
+  return Number(result.rows[0]?.count ?? 0);
+}

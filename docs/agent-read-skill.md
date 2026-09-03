@@ -156,6 +156,14 @@ Read the blocker, then act on it instead of retrying blindly.
 - `claim_field_unobservable` / `field_state_insufficient`: the field you declared
   a claim on cannot be observed for this scope. The answer cannot support that
   claim, whatever the rows say.
+- `vault_inventory_unproven`: on `vault_media` only. At least one live album on
+  this page has never been walked all the way through, so what you got is a lower
+  bound on what the Vault holds. Do not say "this file is not in the Vault", do
+  not count the Vault, and do not read a member's `missingSince` as a deletion.
+  The catalog lane walks albums under a daily call cap and a big Vault takes more
+  than a day, so `/health` being green says nothing about this. Per album, the
+  rows carry `lastFullWalkAt`, `fullWalkRef` and `fullWalkObservedCount` — read
+  those to see which albums are proven and how old the proof is.
 
 ## Declare your claim
 

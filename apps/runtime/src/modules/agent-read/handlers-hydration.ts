@@ -217,6 +217,7 @@ function hydrationEvidence(input: {
     scopeNarrowing: input.scopeNarrowing,
     observedRowFloor: null,
     captureFloor: { at: null, kind: "unknown" },
+    inventoryUnprovenPages: 0,
   });
 }
 
