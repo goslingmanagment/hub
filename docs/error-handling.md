@@ -334,6 +334,13 @@ diagnostic text:
   summaries. Provider/transport logging retains its established cause-chain
   shape.
 
+The failed-payload journal is the one sink that keeps provider body text:
+since decision #248 a normalized sync failure's `error` object carries a
+`responseSnippet` — the provider's response redacted through
+`redactSensitiveText` and bounded to 400 characters — and it reaches only the
+failed raw payload, the `<endpoint>:failed` observation and run telemetry,
+never an SSE frame, an incident summary or a client wire.
+
 Query detection does not erase SQL automatically when the caller supplies no
 replacement. Shape-based redaction is defense in depth, not proof that
 arbitrary provider, user, or database text is safe. Ordinary non-secret text

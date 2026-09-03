@@ -970,12 +970,23 @@ describe("sync executor", () => {
 
     dbMocks.acquirePageSyncLease.mockResolvedValueOnce(taskLease);
     handlerMocks.executeStreamChunk.mockRejectedValue(
-      new FanslyApiError("expired session", 401),
+      new FanslyApiError("expired session", 401, undefined, '{"success":false,"error":{"code":401}}'),
     );
 
     const result = await executeNextSyncPageChunk(app, 55);
 
     expect(sharedMocks.persistFailedSyncPayload).toHaveBeenCalledTimes(1);
+    // Decision #248: the provider's response body rides into the `:failed`
+    // observation payload, which persistFailedSyncPayload writes verbatim from
+    // `failure.error`.
+    expect(sharedMocks.persistFailedSyncPayload).toHaveBeenCalledWith(app, expect.objectContaining({
+      failure: expect.objectContaining({
+        summary: "expired session",
+        error: expect.objectContaining({
+          responseSnippet: '{"success":false,"error":{"code":401}}',
+        }),
+      }),
+    }));
     expect(dbMocks.blockPageSync).toHaveBeenCalledWith({}, expect.objectContaining({
       pageId: 55,
       stream: "followers",
