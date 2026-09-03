@@ -193,7 +193,7 @@ describe("agent read plane: the vocabulary is derived, never restated", () => {
   });
 
   it("an unproven Vault inventory is sayable on the wire", () => {
-    // #245. Without it, a consumer of `vault_media` reading `missingSince` as an
+    // #247. Without it, a consumer of `vault_media` reading `missingSince` as an
     // absence claim had nothing in the response to warn them that the inventory
     // itself had never been walked to completion.
     expect(agentBlockerEnum.options).toContain("vault_inventory_unproven");

@@ -60,7 +60,7 @@ export async function upsertVaultAlbumScan(db: Database, input: VaultAlbumScanIn
  * platform stopped naming are excluded: they are absent by evidence, and
  * demanding a fresh walk of them would make the blocker permanent.
  *
- * STALENESS IS DELIBERATELY NOT MEASURED (v1, decision #245). A walk completed a
+ * STALENESS IS DELIBERATELY NOT MEASURED (v1, decision #247). A walk completed a
  * year ago counts as proven; the per-album `lastFullWalkAt` already on every
  * `vault_media` row is where a reader judges age.
  */

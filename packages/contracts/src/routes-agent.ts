@@ -550,7 +550,7 @@ export const agentBlockerEnum = z.enum([
    * the inventory it was reading had never been completed.
    *
    * Emitted by the `vault_media` dataset read only; a scope holding ≥1 unproven
-   * page raises it. STALENESS OF AN OLD PROOF IS NOT PART OF IT (v1, #245): a
+   * page raises it. STALENESS OF AN OLD PROOF IS NOT PART OF IT (v1, #247): a
    * walk completed a year ago still counts as proven, and the per-album
    * `lastFullWalkAt` / `fullWalkRef` / `fullWalkObservedCount` on the rows are
    * where a reader judges age.

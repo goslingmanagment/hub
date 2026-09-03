@@ -277,7 +277,7 @@ describe("[sync-critical] content media raw to agent API", () => {
   });
 
   it("blocks vault_media on an inventory no full walk has proven, and only that dataset", async () => {
-    // THE PRODUCTION FACT (#245): the catalog lane walks albums under a daily
+    // THE PRODUCTION FACT (#247): the catalog lane walks albums under a daily
     // call cap, so a Vault bigger than one day's cap never finishes the lane in a
     // day. `/health` is green (catalog is excluded from sync-health) and
     // `succeeded_at` never moves, so before this blocker nothing in the system
