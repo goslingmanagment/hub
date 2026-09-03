@@ -99,6 +99,8 @@ const AGENT_DATASET_CATALOG_OVERRIDES: Partial<Record<AgentDataset, {
     platforms: ["fansly", "onlyfans"],
     captureState: "unknown",
   },
+  raw_media: { platforms: ["fansly", "onlyfans"], captureState: "unknown" },
+  post_attachments: { platforms: ["fansly", "onlyfans"], captureState: "unknown" },
   post_monetization: {
     platforms: ["fansly"],
     captureState: "unknown",

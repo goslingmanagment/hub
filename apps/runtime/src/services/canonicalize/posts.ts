@@ -4,6 +4,8 @@
 // governed capture contract passes.
 
 import { createHash } from "node:crypto";
+import { fanslyRawMediaDrafts } from "./raw-media.ts";
+import { buildMediaPlaneIndex, mediaObservedDrafts, mediaPlaneSources } from "./sync-pull.ts";
 
 import {
   asString,
@@ -13,7 +15,7 @@ import {
   type CanonicalizableObservation,
 } from "./types.ts";
 
-export const POSTS_CANONICALIZER_VERSION = 7;
+export const POSTS_CANONICALIZER_VERSION = 8;
 
 /**
  * The hashtag tokenizer's own version, stored beside every derived token.
@@ -963,7 +965,7 @@ export function canonicalizePostsObservation(
   if (observation.kind === "posts") {
     const posts = parseFanslyPostsPayload(observation.payload);
     if (posts === null) return [];
-    return posts.map((post) => buildPostObservedDraft({
+    const drafts = posts.map((post) => buildPostObservedDraft({
       platform: "fansly",
       observationId: observation.id,
       postId: post.postId,
@@ -976,6 +978,12 @@ export function canonicalizePostsObservation(
       ...post.money,
       ...post.engagement,
     }));
+    if (isRecord(observation.payload)) {
+      const sources = mediaPlaneSources(observation.payload);
+      drafts.push(...mediaObservedDrafts(observation, sources, buildMediaPlaneIndex(sources), "post"));
+      drafts.push(...fanslyRawMediaDrafts(observation, "post"));
+    }
+    return drafts;
   }
 
   if (observation.kind === "post_tips") {

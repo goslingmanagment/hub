@@ -244,6 +244,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 241 | G5 compact survivors are reference-less bodies only | Production on 2026-08-29 exposed a predicate mismatch in #239: the `sync_raw_payloads` compact measurement counted every non-null inline body, including CAS-backed duplicates that `null-bodies` removes before `VACUUM FULL`. With all 1,733,069 rows referenced, that made the measured survivor term 19,705,839,907 B instead of 0 B and falsely raised required headroom from ~7.49 GiB to 46.95 GiB on a volume with 23.14 GiB free. The exact survivor sum is now restricted to `response_payload IS NOT NULL AND payload_object_id IS NULL`; the x2 compact safety factor, bounded WAL reserve, and 5 GiB floor are unchanged. The raw completion forecast now names `VACUUM FULL`, not the parked-copy drop used only by `observations`. |
 | 242 | Follower blast-radius override is a hash-bound owner act | The `max(50, floor(active/100))` automatic ceiling remains unchanged and no blocked generation auto-retries. A two-step owner-session preview/apply surface binds approval to the exact blocked request and timestamp, cursor generation and `fullSweepStartedAt`, and SHA-256 of the sorted guarded candidate row ids. Apply runs SERIALIZABLE, locks the page, all three audience states, the reconcile cursor and candidate rows; requires the whole audience block paused with no lease; recomputes and rejects stale or now-within-limit sets; invokes the same guarded deactivation helper; refreshes follower projections and rollups; and writes the audit event atomically. It never advances the stream state, cursor, checkpoint, success run or follower-sync timestamp. Reconcile raw pages now retain generation and sweep-start lineage in existing `request_params` (no migration), and the blocker anomaly reports candidate counts by prior generation. |
 | 243 | A known live follower total always materializes UTC today | `rebuildFollowerRollups` derives `new_followers` from relationship dates, but a day with zero such rows still has a known live headline. After the aggregate rebuild, a non-null `knownTotalFollowers` therefore upserts UTC today's row with zero new followers only when absent; on conflict it updates only the known total and timestamp, preserving the derived new-follower count. A null total still creates no zero row, and historical replay semantics are unchanged. |
+| 244 | Content media identity and complete Vault walks | Separate raw files from offers in the existing media projector; expose flattened post attachments with preview roles and unresolved rows. Full unfiltered walk evidence alone may mark album membership missing. Preserve source times and require full history reconciliation; ship the strict API plane change with matching CLI builds. Hub-only scope, no upload extension changes. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -10372,3 +10373,46 @@ created no row; on conflict it updates only `known_total_followers` and
 `knownTotalFollowers = null` still means unknown and does not manufacture a
 zero-new day. Historical replay remains unchanged: it may materialize a past
 total only from its own dated evidence, never from this live-current seam.
+
+**Decision #244 (2026-09-03, Hub content media identity and full Vault inventory):**
+
+Migration 0148 adds `creator_raw_media` keyed by `(page_id, media_ref)` and
+`creator_vault_album_scans`, and records the membership-specific `custom_filename`.
+The existing `media_plane` projector remains the sole writer of offers and now
+also consumes `media.file_observed`; `fansly_catalog` owns album walk evidence.
+Catalog v3 and posts v8 replay retained technical metadata, never delivery URLs.
+Names require the existing text-reading capability. New observations advance
+freshness even when the material is unchanged; retries of one observation dedupe.
+
+`raw_media` and `post_attachments` are agent datasets. Post slots expand through
+all bundle members, with main/offer-preview/bundle-preview roles and source refs.
+Missing relations remain visible with a link state and capture gap. A preview
+becomes a raw media id only after its file is observed. `vault_media` adds file
+metadata, labels and last complete walk evidence; `posts` exposes raw FYP flags,
+reply and wall refs without interpreting platform flags as publication proof.
+Three agent planes are newly declared: raw files, bundles and album scans. The
+exact-plane-count validator stays intact: deploy requires matching pinned CLI
+builds. Generated SDK/OpenAPI/hash are updated together.
+
+A completed unfiltered walk journals its generation, dates, distinct member
+roster and observation references. Counts, scope and terminal response must agree;
+errors, duplicate rows, unknown counts, capped/repeated cursors and legacy tails
+are insufficient. Unchanged albums become eligible for rechecking after seven
+days, under the existing budgets. The roster is replayed into absence facts;
+later/during-walk sightings win, older replays cannot resurrect absent members.
+`missingSince` is absence from that walk, never a provider deletion claim.
+
+Source `lastObservedAt` is not a CDC position. Retained raw parsed today can add
+old-dated rows, so the consumer must periodically traverse complete history and
+reconcile by stable keys. The API promises neither a frozen snapshot nor every
+intermediate state. OnlyFans accepted posts preserve direct media IDs and native
+string `providerType`; old materialized captures replay only their original
+accepted post IDs from the attached event ledger. Unsettled capture jobs retain
+ownership of their pages. OF Vault and stories remain unsupported here.
+
+The owner explicitly scoped this work to Hub readiness. Upload receipts in
+fansly-ext, ContentOps app/spec changes and local-file identity matching are
+outside this change. Production raw readability and the blocked lora-of posts
+job require separate verification: the permitted read_only DB role was absent
+on 03.09.2026. Implementation and local tests do not assert production readiness.
+See `docs/plans/2026-09-03-contentops-media-identity.md` for status and rollout gates.

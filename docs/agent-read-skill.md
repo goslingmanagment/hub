@@ -638,6 +638,49 @@ reproduced. This applies to the 30-day view only — the last-24h comparison nee
 no adjustment. If someone asks why a number disagrees with the platform page,
 this is usually the answer, and the answer is an explanation, not a correction.
 
+### Files and post attachments
+
+`raw_media` identifies a platform file by `(page, mediaRef)` independently of
+offers. `filename` is the provider filename; `vault_media.customFilename` is
+the album membership label. Duration is milliseconds and `frameRateMilli` is
+FPS × 1000. Original dimensions and delivery dimensions have separate fields.
+Missing metadata is null. These datasets require `read:messages` because names
+and album titles can contain user-written text; signed delivery URLs are absent.
+
+```sh
+hub dataset --page-label lora-1 --dataset raw_media --from 2024-01-01T00:00:00Z --to 2026-10-01T00:00:00Z --claim-field rawMedia --pretty
+hub dataset --page-label lora-1 --dataset post_attachments --from 2024-01-01T00:00:00Z --to 2026-10-01T00:00:00Z --filter postRef:eq:951216338532048896 --claim-field postAttachment --pretty
+hub dataset --page-label lora-1 --dataset vault_media --from 2024-01-01T00:00:00Z --to 2026-10-01T00:00:00Z --claim-field vaultInventory --pretty
+```
+
+`post_attachments` expands every slot into its bundle members and explicit
+`main`, `offer_preview`, `bundle_preview` roles. Use the returned row `key`;
+`(postRef, pos)` alone is not unique. `attachmentIndex` is zero-based; bundle
+`memberIndex` is one-based, and direct offers use zero. A preview ref becomes
+a media ref only when the corresponding raw file has been observed. Unresolved
+relations remain rows with `linkState`; they also produce an internal capture
+gap. A resolved platform link is not proof that a particular local file matches.
+
+`vault_media.lastFullWalkAt`, `fullWalkRef`, and `fullWalkObservedCount` describe
+the last validated full unfiltered creator-album walk. They are null until one
+has finished. `missingSince` means the member was absent from such a walk,
+not that the provider deleted the file. Partial, capped, malformed, or interrupted
+walks cannot mark membership missing. Unchanged albums are revisited after seven
+days within the existing request budgets; this is not a seven-day freshness SLA.
+
+`lastObservedAt` dates source evidence, **not a change-feed position**. Replaying
+old raw may add a row with an old observation/publication date. Start a new full
+history traversal to reconcile; page through its cursors and upsert by returned
+key. A cursor is pagination, not a frozen inventory or a CDC stream. Post edits
+may remove attachment rows: replace the local attachment set for each post only
+after the corresponding successful full traversal, preserving uncertainty for
+unresolved rows. Do not infer “never posted” from an empty result.
+
+OnlyFans posts point directly to raw media ids, with its string type preserved
+as `providerType`; Fansly numeric `mediaType` is not invented for OF. OF Vault
+and stories remain outside this supported surface. `posts.fypFlags` is the raw
+Fansly value, not a verified publication label or proof of an FYP impression.
+
 ### Budgets and limits
 
 Your key has a daily request budget and a daily row budget, and at most two calls

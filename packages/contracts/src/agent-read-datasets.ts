@@ -343,9 +343,37 @@ export const AGENT_DATASETS = {
       firstObservedAt: "timestamp",
       lastObservedAt: "timestamp",
       attachmentCount: "int",
+      fypFlags: "int",
+      inReplyToRef: "string",
+      wallRefs: "string_array",
     },
     defaultSort: { field: "publishedAt", dir: "desc", nullsLast: false },
     stableKey: ["postId"],
+  },
+  raw_media: {
+    moneyBearing: false, verbatimText: true, disclosesPurchase: false,
+    fields: {
+      platform: "string", mediaRef: "string", ownerAccountRef: "string",
+      filename: "string", mimeType: "string", mediaType: "int", providerType: "string", durationMs: "int",
+      width: "int", height: "int", originalWidth: "int", originalHeight: "int",
+      frameRateMilli: "int", createdAtPlatform: "timestamp", updatedAtPlatform: "timestamp",
+      firstOrigin: "string", sourceKind: "string", firstObservedAt: "timestamp", lastObservedAt: "timestamp",
+    },
+    defaultSort: { field: "firstObservedAt", dir: "asc", nullsLast: false },
+    stableKey: ["mediaRef"],
+  },
+  post_attachments: {
+    moneyBearing: false, verbatimText: true, disclosesPurchase: false,
+    fields: {
+      platform: "string", postRef: "string", publishedAt: "timestamp", attachmentIndex: "int",
+      pos: "int", contentType: "int", contentRef: "string", role: "string", memberIndex: "int",
+      bundleRef: "string", mediaOfferRef: "string", previewRef: "string", mediaRef: "string",
+      linkState: "string", filename: "string", mimeType: "string", durationMs: "int",
+      originalWidth: "int", originalHeight: "int", lastObservedAt: "timestamp",
+      postObservationRef: "int", offerObservationRef: "int", bundleObservationRef: "int", fileObservationRef: "int",
+    },
+    defaultSort: { field: "publishedAt", dir: "asc", nullsLast: false },
+    stableKey: ["postAttachmentKey"],
   },
   post_monetization: {
     moneyBearing: true,
@@ -657,7 +685,7 @@ export const AGENT_DATASETS = {
   },
   vault_media: {
     moneyBearing: false,
-    verbatimText: false,
+    verbatimText: true,
     disclosesPurchase: false,
     fields: {
       platform: "string",
@@ -666,6 +694,16 @@ export const AGENT_DATASETS = {
        *  make purchases indistinguishable from inventory. */
       vaultKind: "string",
       albumRef: "string",
+      albumTitle: "string",
+      lastFullWalkAt: "timestamp",
+      fullWalkRef: "string",
+      fullWalkObservedCount: "int",
+      customFilename: "string",
+      filename: "string",
+      mimeType: "string",
+      durationMs: "int",
+      originalWidth: "int",
+      originalHeight: "int",
       /** Raw file identity. This is the membership key on the live creator
        *  vault and remains distinct from an optional offer id. */
       mediaRef: "string",
@@ -1028,15 +1066,14 @@ export function agentDatasetRequiredCapabilities(
 }
 
 /**
- * The naming convention the pin test enforces: a wire field whose name ends in
- * `Text` carries free-form content someone wrote.
+ * Free-form content includes `*Text` fields and user-written file/album names.
  *
  * A convention rather than a per-field flag because the scalar KIND cannot tell
  * `noteText` from `username` — both are `string` — and the thing that must not
  * drift is "does this dataset hand over prose", which the field name already says.
  */
 export function agentDatasetFieldIsVerbatimText(field: string): boolean {
-  return /Text$/.test(field);
+  return /Text$/.test(field) || ["filename", "customFilename", "albumTitle"].includes(field);
 }
 
 /** Every declared field of a dataset is filterable — the map IS the allowlist. */

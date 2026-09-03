@@ -1,5 +1,8 @@
 export * from "./client.ts";
 export * from "./schema.ts";
+export * from "./repositories/creator-raw-media.ts";
+export * from "./repositories/vault-album-scans.ts";
+export * from "./repositories/ofapi-post-media-replay.ts";
 export * from "./schema-guard.ts";
 export * from "./capture-payload-codec.ts";
 // G5 slice 3a: pure derivations for the typed queryable columns. No database

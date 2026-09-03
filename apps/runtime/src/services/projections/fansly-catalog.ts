@@ -30,14 +30,11 @@
 // upserted (clearing `missing_since` on anything that came back) by the time
 // the complement is marked.
 //
-// ── 2. ALBUM MEMBERSHIP IS NEVER MARKED MISSING ─────────────────────────────
+// ── 2. ALBUM MEMBERSHIP NEEDS A COMPLETE WALK ───────────────────────────────
 //
-// Membership arrives from a PAGED walk. A roster built from one page would
-// claim the album holds only what that page showed, and the walk would spend
-// its life marking and un-marking the same rows. There is no membership roster,
-// and `creator_vault_album_members.missing_since` is written by nothing today —
-// the column exists because the day an album's full membership can be asserted
-// in one read, the mark belongs there and not in a new table.
+// Individual membership pages advance sightings. Only the separate, journaled
+// `vault.album_walk_completed` inventory can mark missing membership. Its
+// projector preserves concurrent sightings and is reproducible from the ledger.
 //
 // ── THE THREE RULES IT SHARES WITH EVERY PROJECTOR IN THIS TREE ─────────────
 //
@@ -68,6 +65,8 @@ import {
   reconcileCatalogTierPlansPresence,
   reconcileCatalogTiersPresence,
   reconcileCatalogWallsPresence,
+  reconcileVaultAlbumScan,
+  upsertVaultAlbumScan,
   setProjectionWatermark,
   sumCreatorVaultAlbumItemCounts,
   upsertCreatorVaultAlbum,
@@ -92,6 +91,7 @@ const EVENT_PAGE_SIZE = 500;
 const FANSLY_CATALOG_EVENT_TYPES = new Set([
   "vault.album_observed",
   "vault.album_membership_observed",
+  "vault.album_walk_completed",
   "subscription.tier_observed",
   "subscription.tier_plan_observed",
   "promo.gift_code_observed",
@@ -119,6 +119,7 @@ export const CATALOG_PROMO_LINK_KIND = "gift_code";
  * `media.observed` events this family mints.
  */
 export const FANSLY_CATALOG_PROJECTION_TABLES = [
+  "creator_vault_album_scans",
   "creator_vault_album_members",
   "creator_vault_albums",
   "page_subscription_tier_plans",
@@ -317,6 +318,7 @@ export async function runFanslyCatalogProjection(
               albumRef,
               mediaOfferRef: asText(data.mediaOfferRef),
               memberRef: asText(data.memberRef),
+              customFilename: typeof data.customFilename === "string" ? data.customFilename : null,
               mediaOfferType: asInt(data.mediaOfferType),
               bundleRef: asText(data.bundleRef),
               mediaRef,
@@ -330,6 +332,24 @@ export async function runFanslyCatalogProjection(
               totals.albumMembers += 1;
               totals.applied += 1;
             }
+            if (data.vaultKind === "creator") await reconcileVaultAlbumScan(app.db, accountId, albumRef);
+            continue;
+          }
+
+          case "vault.album_walk_completed": {
+            const albumRef = asText(data.albumRef);
+            const walkRef = asText(data.walkRef);
+            const startedAt = isoDate(data.startedAt);
+            const completedAt = isoDate(data.completedAt);
+            const expectedCount = asInt(data.expectedCount);
+            const pages = asInt(data.pages);
+            if (!albumRef || !walkRef || !startedAt || !completedAt || expectedCount === null
+              || !pages || data.vaultKind !== "creator" || !Array.isArray(data.seenMediaRefs)
+              || !data.seenMediaRefs.every((ref): ref is string => typeof ref === "string" && ref.length > 0)
+              || new Set(data.seenMediaRefs).size !== expectedCount) continue;
+            await upsertVaultAlbumScan(app.db, { pageId: accountId, albumRef, walkRef,
+              startedAt, completedAt, seenMediaRefs: data.seenMediaRefs, expectedCount, pages, ...lineage });
+            totals.applied += 1;
             continue;
           }
 

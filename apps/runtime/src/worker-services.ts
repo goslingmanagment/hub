@@ -51,6 +51,7 @@ import {
 import { runDmCorrectionsReconcile } from "./services/dm-corrections-reconciler.ts";
 import { runOfapiDmReadthroughReconcile } from "./services/ofapi-dm-readthrough.ts";
 import { runOfapiCaptureMaterialization } from "./services/ofapi-capture-materialization.ts";
+import { runOfapiPostMediaReplay } from "./services/ofapi-post-media-replay.ts";
 import { runAiAcceptanceProjection } from "./services/projections/ai-acceptance.ts";
 import {
   PROJECTION_TICK_BUDGET_MS,
@@ -438,6 +439,8 @@ export async function startWorkerServices(
     if (corrections.scanned > 0) {
       app.logger.info(corrections, "DM corrections reconcile sweep complete");
     }
+    const postMediaReplay = await runOfapiPostMediaReplay(app);
+    if (postMediaReplay.scanned > 0) app.logger.info(postMediaReplay, "OF post media replay complete");
   });
 
   await boss.work(MESSAGE_ARCHIVE_SWEEP_QUEUE, { batchSize: 1 }, async () => {

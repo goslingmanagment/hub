@@ -97,6 +97,7 @@ export const WRITTEN_OBSERVATION_KINDS: readonly WrittenObservationKind[] = [
   { kind: "automated_messages", source: "pull", writer: "services/sync/fansly-catalog.ts" },
   { kind: "account_walls", source: "pull", writer: "services/sync/fansly-catalog.ts" },
   { kind: "vault_media", source: "pull", writer: "services/sync/fansly-catalog.ts" },
+  { kind: "vault_album_walk_completed", source: "pull", writer: "services/sync/fansly-catalog.ts" },
   { kind: "account_media_batch", source: "pull", writer: "services/sync/fansly-catalog.ts" },
   {
     kind: "account_media_bundle_batch",
@@ -497,12 +498,6 @@ export const RAW_ONLY_OBSERVATION_KINDS: readonly RawOnlyObservationKind[] = [
       + "is not itself a new platform fact.",
   },
   {
-    kind: "ofapi.posts_page.v1",
-    justification:
-      "A governed posts-capture page. Its own materializer is not built yet, so it is "
-      + "capture-first evidence with no claimant — recorded here rather than left silent.",
-  },
-  {
     kind: "ofapi.data_export_create.v1",
     justification:
       "The vendor data-export lifecycle: the request we made. Operational evidence for a "
@@ -588,6 +583,11 @@ export const OFF_SWEEP_OBSERVATION_CLAIMANTS: readonly {
       "services/ofapi-capture-materialization.ts drains these two kinds on its own tick "
       + "(the kind list there is the same one, verbatim) — governed capture pages are "
       + "materialized, not swept, so no family claims them and that is correct.",
+  },
+  {
+    id: "OFAPI_POSTS_MATERIALIZATION",
+    kinds: ["ofapi.posts_page.v1"],
+    justification: "The governed capture job materializes accepted posts; ofapi-post-media-replay.ts replays previously materialized captures from that same accepted set.",
   },
   {
     id: "OFAPI_READTHROUGH_OBSERVATION_KIND",

@@ -189,12 +189,14 @@ export const PROJECTION_REGISTRY: readonly ProjectionDefinition[] = [
     name: MEDIA_PLANE_PROJECTION,
     eventTypes: [
       "media.observed",
+      "media.file_observed",
       "media.order_observed",
       "media.offer_location_observed",
       "message.attachments_observed",
     ],
     tables: [
       "creator_media",
+      "creator_raw_media",
       "creator_media_bundles",
       "media_orders",
       "message_media_offers",
@@ -206,7 +208,7 @@ export const PROJECTION_REGISTRY: readonly ProjectionDefinition[] = [
     run: async (app, input) => ({ ...await runMediaPlaneProjection(app, input) }),
     rebuild: async (app, input) => await rebuildMediaPlaneProjection(app, input),
     didWork: (result) =>
-      count(result, "media") > 0 || count(result, "orders") > 0
+      count(result, "media") > 0 || count(result, "rawMedia") > 0 || count(result, "orders") > 0
       || count(result, "offers") > 0 || count(result, "locations") > 0,
   },
   {
@@ -294,6 +296,7 @@ export const PROJECTION_REGISTRY: readonly ProjectionDefinition[] = [
     eventTypes: [
       "vault.album_observed",
       "vault.album_membership_observed",
+      "vault.album_walk_completed",
       "subscription.tier_observed",
       "subscription.tier_plan_observed",
       "promo.gift_code_observed",

@@ -24,8 +24,8 @@ import { OFAPI_MIRROR_BUDGET_DEFAULTS } from "@agency_hub_core/shared";
 import type { AppContext } from "../bootstrap.ts";
 import { resolveCapturePayloadRow } from "./payload-reader.ts";
 import { clampDraftOccurredAt } from "./canonicalize-driver.ts";
+import { buildOnlyFansPostDrafts } from "./canonicalize/onlyfans-post-media.ts";
 import {
-  buildPostObservedDraft,
   POSTS_CANONICALIZER_VERSION,
 } from "./canonicalize/posts.ts";
 import {
@@ -553,28 +553,9 @@ async function parseCapturedPostJob(
     // Rows after either kind of stop are stale for this bounded capture.
     // Appending `items` here would turn accounting-only boundary evidence into
     // fresh post observations and could regress a current projection head.
-    const drafts = page.acceptedItems.map((item) => {
-      const postId = typeof item.id === "string" || typeof item.id === "number"
-        ? String(item.id)
-        : (() => { throw new Error("Strict OFAPI post lost its id"); })();
-      const text = typeof item.rawText === "string"
-        ? item.rawText
-        : typeof item.text === "string" ? item.text : "";
-      const media = Array.isArray(item.media)
-        ? item.media
-        : Array.isArray(item.attachments) ? item.attachments : [];
-      return clampDraftOccurredAt(buildPostObservedDraft({
-        platform: "onlyfans",
-        observationId: observation.id,
-        postId,
-        // Agent postText is provider-verbatim. Do not apply the DM text
-        // normalizer: HTML, entities, whitespace and line endings are data.
-        textPlain: text,
-        publishedAt: new Date(item.postedAt as string),
-        observedAt: observation.receivedAt,
-        attachmentCount: media.length,
-      }), observation.receivedAt, materializedAt);
-    });
+    const drafts = buildOnlyFansPostDrafts({
+      ...observation, platform: "onlyfans", source: "ofapi_capture", observedAt: null,
+    }, page.acceptedItems).map(draft => clampDraftOccurredAt(draft, observation.receivedAt, materializedAt));
     await appendProjectionOnlyDomainEvents(
       app.db,
       job.pageId,

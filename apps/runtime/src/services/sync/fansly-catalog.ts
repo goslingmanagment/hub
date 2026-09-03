@@ -93,6 +93,7 @@ import {
 } from "./fansly-lane.ts";
 import { summarizeCheckpoint } from "./observability.ts";
 import { createSyncRateLimitWaiter } from "./rate-limiter.ts";
+import { newVaultWalkProof, observeVaultWalkPage, parseVaultWalkProof, vaultWalkIsComplete, type VaultWalkProof } from "./vault-walk-proof.ts";
 import {
   FANSLY_CATALOG_CAPTURE_MAPPER_VERSION,
   retentionDate,
@@ -154,6 +155,8 @@ export interface VaultAlbumWalkState {
    *  serves a different one, the album's head is re-walked. */
   completedAtLastItemRef: string | null;
   done: boolean;
+  proof?: VaultWalkProof | undefined;
+  completedOnUtcDay?: string | undefined;
 }
 
 export interface FanslyCatalogCursorState {
@@ -201,6 +204,8 @@ function parseAlbumWalk(value: unknown): VaultAlbumWalkState | null {
     pages: Math.max(0, asInt(record.pages, 0)),
     completedAtLastItemRef: asNullableString(record.completedAtLastItemRef),
     done: record.done === true,
+    proof: parseVaultWalkProof(record.proof),
+    completedOnUtcDay: asNullableString(record.completedOnUtcDay) ?? undefined,
   };
 }
 
@@ -583,14 +588,18 @@ export async function fanslyCatalogChunk(
       // membership upserts are idempotent, so re-reading known rows costs calls
       // and changes nothing.
       if (
-        walk.done && album.lastItemRef !== null
-        && walk.completedAtLastItemRef !== album.lastItemRef
+        walk.done && (walk.completedAtLastItemRef !== album.lastItemRef
+          || walk.proof === undefined || walk.proof.expectedCount !== album.itemCount
+          || walk.completedOnUtcDay === undefined
+          || Date.parse(state.utcDay) - Date.parse(walk.completedOnUtcDay) >= 7 * 86_400_000)
       ) {
         walk = { ...emptyAlbumWalk() };
       }
       if (walk.done) {
         continue;
       }
+      // A legacy tail has no inventory proof. Start that generation at HEAD.
+      if (walk.proof === undefined) walk = { ...emptyAlbumWalk(), proof: newVaultWalkProof(album) };
       exhausted = false;
 
       // REPEAT-REQUEST GUARD, spent before any egress. The identical `before`
@@ -604,7 +613,7 @@ export async function fanslyCatalogChunk(
           message: "Fansly vault pagination did not advance; album walk stopped",
           details: { albumRef: album.albumRef, before: walk.beforeRef },
         });
-        walk = { ...walk, done: true, completedAtLastItemRef: album.lastItemRef };
+        walk = { ...walk, done: true, completedAtLastItemRef: album.lastItemRef, completedOnUtcDay: state.utcDay };
         state = { ...state, vaultWalk: { ...state.vaultWalk, [album.albumRef]: walk } };
         await coverage(
           CAPTURE_COVERAGE_PLANES.catalogVaultMedia,
@@ -628,7 +637,7 @@ export async function fanslyCatalogChunk(
           message: "Fansly vault album walk hit its page cap before exhausting the album",
           details: { albumRef: album.albumRef, pages: walk.pages, itemCount: album.itemCount },
         });
-        walk = { ...walk, done: true, completedAtLastItemRef: album.lastItemRef };
+        walk = { ...walk, done: true, completedAtLastItemRef: album.lastItemRef, completedOnUtcDay: state.utcDay };
         state = { ...state, vaultWalk: { ...state.vaultWalk, [album.albumRef]: walk } };
         await coverage(
           CAPTURE_COVERAGE_PLANES.catalogVaultMedia,
@@ -670,6 +679,8 @@ export async function fanslyCatalogChunk(
       };
 
       const rows = vaultMediaRows(response.raw);
+      walk.proof = observeVaultWalkPage(walk.proof!, album.albumRef, rows, persisted.observationId ?? null);
+      if ((response.raw as { albumMedia: unknown[] }).albumMedia.length !== rows.length) walk.proof.valid = false;
       if (rows.length === 0) {
         const firstPage = requestedBefore === VAULT_MEDIA_HEAD_CURSOR && !walk.sawRows;
         const albumClaimsEmpty = album.itemCount === 0;
@@ -715,17 +726,26 @@ export async function fanslyCatalogChunk(
         // THE END OF THE ALBUM. Either a non-empty page came before it, or the
         // platform itself says the album holds nothing — the empty response IS
         // the evidence, and it is journaled.
-        walk = { ...walk, done: true, completedAtLastItemRef: album.lastItemRef };
+        const complete = vaultWalkIsComplete(walk.proof, album);
+        if (complete) {
+          // Separate derived observation: the original HTTP body stays intact.
+          await journal("vault_album_walk_completed", { albumId: album.albumRef }, {
+            ...walk.proof, albumRef: album.albumRef, vaultKind: "creator",
+            completedAt: new Date().toISOString(), pages: walk.pages,
+          });
+        }
+        walk = { ...walk, done: true, completedAtLastItemRef: album.lastItemRef, completedOnUtcDay: state.utcDay };
         state = { ...state, vaultWalk: { ...state.vaultWalk, [album.albumRef]: walk } };
         await coverage(
           CAPTURE_COVERAGE_PLANES.catalogVaultMedia,
-          "provider_exhausted",
+          complete ? "provider_exhausted" : "partial_provider_surface",
           "empty_window",
           {
             scopeRef: album.albumRef,
             proofObservationId: persisted.observationId ?? null,
-            reasonCode: albumClaimsEmpty ? "album_empty" : "walk_exhausted",
+            reasonCode: !complete ? "walk_inventory_mismatch" : albumClaimsEmpty ? "album_empty" : "walk_exhausted",
             expectedCount: album.itemCount,
+            observedUniqueCount: walk.proof!.seenMediaRefs.length,
             cursor: { pages: walk.pages, lastItemRef: album.lastItemRef },
           },
         );
@@ -743,7 +763,7 @@ export async function fanslyCatalogChunk(
           message: "Fansly vault page carried rows with no id; album walk stopped",
           details: { albumRef: album.albumRef, rows: rows.length },
         });
-        walk = { ...walk, done: true, sawRows: true, completedAtLastItemRef: album.lastItemRef };
+        walk = { ...walk, done: true, sawRows: true, completedAtLastItemRef: album.lastItemRef, completedOnUtcDay: state.utcDay };
         state = { ...state, vaultWalk: { ...state.vaultWalk, [album.albumRef]: walk } };
         await coverage(
           CAPTURE_COVERAGE_PLANES.catalogVaultMedia,

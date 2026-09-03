@@ -62,6 +62,8 @@
 //    `variants[]` — signed CDN material. This file reads none of them. The
 //    bodies are journaled verbatim (DP 7) and the URLs stay there.
 
+import { fanslyRawMediaDrafts } from "./raw-media.ts";
+
 import {
   asFanslyTimestamp,
   asNumber,
@@ -81,7 +83,7 @@ import {
   recordArray,
 } from "./sync-pull.ts";
 
-export const FANSLY_CATALOG_CANONICALIZER_VERSION = 2;
+export const FANSLY_CATALOG_CANONICALIZER_VERSION = 3;
 const SCHEMA_VERSION = 1;
 
 /** The `observations.kind` values this family claims. Registered in
@@ -94,6 +96,7 @@ export const FANSLY_CATALOG_CANONICALIZED_KINDS = [
   "automated_messages",
   "account_walls",
   "vault_media",
+  "vault_album_walk_completed",
   "account_media_batch",
   "account_media_bundle_batch",
 ] as const;
@@ -132,6 +135,7 @@ export type FanslyCatalogListingKind = typeof FANSLY_CATALOG_LISTING_KINDS[numbe
 export const FANSLY_CATALOG_EVENT_TYPES = [
   "vault.album_observed",
   "vault.album_membership_observed",
+  "vault.album_walk_completed",
   "subscription.tier_observed",
   "subscription.tier_plan_observed",
   "promo.gift_code_observed",
@@ -276,6 +280,7 @@ function albumDrafts(
   const aggregation = isRecord(payload.aggregationData) ? payload.aggregationData : {};
   drafts.push(
     ...membershipDrafts(observation, recordArray(aggregation.albumContent), vaultKind),
+    ...fanslyRawMediaDrafts(observation),
   );
 
   // The roster LAST, after the rows it describes.
@@ -295,9 +300,8 @@ function albumDrafts(
  * both. The file id is therefore the membership identity and the offer id is
  * optional metadata.
  *
- * The dedup key carries NO hash — membership is binary. An album either
- * contains a file or it does not, and re-observing it must not mint an event
- * every time a neighbouring field moves.
+ * Each source observation is a sighting: membership identity remains stable,
+ * but a new title or a later sighting must not disappear behind binary dedup.
  */
 function membershipDrafts(
   observation: CanonicalizableObservation,
@@ -322,6 +326,7 @@ function membershipDrafts(
       // The membership row's OWN id — the vault walk's `before` cursor, and a
       // different value from `mediaOfferRef`.
       memberRef: asString(row.id),
+      customFilename: typeof row.customFilename === "string" ? row.customFilename : null,
       mediaOfferType: asNumber(row.mediaOfferType),
       bundleRef: asString(row.mediaOfferBundleId),
       mediaRef,
@@ -335,8 +340,8 @@ function membershipDrafts(
       type: "vault.album_membership_observed",
       occurredAt: observation.receivedAt,
       data: { ...material, contentHash: hash },
-      schemaVersion: 2,
-      dedupKey: `albummem:v2:${pageRef}:${vaultKind}:${albumRef}:${mediaRef}`,
+      schemaVersion: 3,
+      dedupKey: `albummem:v3:${pageRef}:${vaultKind}:${albumRef}:${mediaRef}:${hash}:obs:${observation.id}`,
     });
   }
   return drafts;
@@ -345,18 +350,19 @@ function membershipDrafts(
 /**
  * `/media/vaultnew` — one page of one album's membership.
  *
- * `albumMedia[]` is the membership; `media[]` beside it is RAW media with
- * signed locations and every variant of every file, and this parser does not
- * touch it. If a page ever carries an `accountMedia[]` sidecar (none has been
- * observed — the only live response was empty), those rows reach
- * `creator_media` through F0(b)'s exact shape with `firstOrigin: "vault"`.
+ * `albumMedia[]` is membership; the technical allowlist reads raw `media[]`.
+ * Offer and bundle sidecars reuse the existing media-plane event builder.
+ * Signed locations and variants remain only in the retained capture body.
  */
 function vaultMediaDrafts(observation: CanonicalizableObservation): CanonicalEventDraft[] {
   const payload = observation.payload;
   if (!isRecord(payload)) {
     return [];
   }
-  const drafts = membershipDrafts(observation, recordArray(payload.albumMedia), "creator");
+  const drafts = [
+    ...membershipDrafts(observation, recordArray(payload.albumMedia), "creator"),
+    ...fanslyRawMediaDrafts(observation),
+  ];
   const sources = mediaPlaneSources(payload);
   if (sources.media.length > 0 || sources.bundles.length > 0) {
     drafts.push(
@@ -386,12 +392,12 @@ function accountMediaBatchDrafts(
     ? { accountMedia: rows }
     : { accountMediaBundles: rows };
   const sources = mediaPlaneSources(envelope);
-  return mediaObservedDrafts(
+  return [...mediaObservedDrafts(
     observation,
     sources,
     buildMediaPlaneIndex(sources),
     "account_media_batch",
-  );
+  ), ...fanslyRawMediaDrafts({ ...observation, payload: envelope })];
 }
 
 // ── subscription tiers — FEAT-002 ────────────────────────────────────────────
@@ -753,6 +759,20 @@ export function canParseFanslyCatalogObservation(
           && asString(row.albumId) !== null
           && asString(row.mediaId) !== null
         ));
+    case "vault_album_walk_completed": {
+      const p = observation.payload;
+      return isRecord(p) && p.valid === true && p.vaultKind === "creator"
+        && typeof p.walkRef === "string" && p.walkRef.length > 0
+        && typeof p.albumRef === "string" && p.albumRef.length > 0
+        && typeof p.startedAt === "string" && Number.isFinite(Date.parse(p.startedAt))
+        && typeof p.completedAt === "string" && Date.parse(p.completedAt) >= Date.parse(p.startedAt)
+        && Number.isSafeInteger(p.expectedCount) && Number(p.expectedCount) >= 0
+        && Array.isArray(p.seenMediaRefs) && p.seenMediaRefs.every(x => typeof x === "string" && x.length > 0)
+        && new Set(p.seenMediaRefs).size === p.expectedCount && p.seenMediaRefs.length === p.expectedCount
+        && Array.isArray(p.observationRefs) && p.observationRefs.length === p.pages
+        && Number.isSafeInteger(p.pages) && Number(p.pages) > 0
+        && p.observationRefs.every(x => Number.isSafeInteger(x) && x > 0);
+    }
     default:
       // The five array-shaped listings and the two batch routes. An object that
       // wraps its array is accepted too — `envelopeArray` reads either.
@@ -776,6 +796,19 @@ export function canonicalizeFanslyCatalogObservation(
       return albumDrafts(observation, "user");
     case "vault_media":
       return vaultMediaDrafts(observation);
+    case "vault_album_walk_completed": {
+      if (!canParseFanslyCatalogObservation(observation) || !isRecord(observation.payload)) return [];
+      const p = observation.payload;
+      const data = {
+        vaultKind: p.vaultKind, albumRef: p.albumRef, walkRef: p.walkRef,
+        startedAt: p.startedAt, completedAt: p.completedAt, expectedCount: p.expectedCount,
+        seenMediaRefs: p.seenMediaRefs, observationRefs: p.observationRefs, pages: p.pages,
+        headRef: asString(p.headRef),
+      };
+      return [{ type: "vault.album_walk_completed", schemaVersion: 1,
+        occurredAt: new Date(data.completedAt as string), data: { ...data, contentHash: contentHash(data) },
+        dedupKey: `vaultwalk:v1:${observation.accountId}:${data.walkRef}` }];
+    }
     case "subscription_tiers":
       return tierDrafts(observation);
     case "gift_codes":

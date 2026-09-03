@@ -205,6 +205,7 @@ export interface UpsertCreatorVaultAlbumMemberInput extends CatalogLineage {
   mediaOfferRef: string | null;
   /** The membership row's own id — the walk cursor, NOT the media offer id. */
   memberRef: string | null;
+  customFilename?: string | null;
   mediaOfferType: number | null;
   bundleRef: string | null;
   mediaRef: string;
@@ -220,13 +221,13 @@ export async function upsertCreatorVaultAlbumMember(
 ): Promise<{ applied: boolean }> {
   const result = await db.execute(sql`
     insert into creator_vault_album_members (
-      page_id, platform, album_ref, media_offer_ref, member_ref, media_offer_type,
+      page_id, platform, album_ref, media_offer_ref, member_ref, custom_filename, media_offer_type,
       bundle_ref, media_ref, media_type, preview_ref, vault_kind, created_at_platform,
       missing_since, first_observed_at, last_observed_at, content_hash, source_event_id,
       source_observation_id, source_account_seq
     ) values (
       ${input.pageId}, ${input.platform}, ${input.albumRef}, ${input.mediaOfferRef},
-      ${input.memberRef}, ${input.mediaOfferType}, ${input.bundleRef}, ${input.mediaRef},
+      ${input.memberRef}, ${input.customFilename ?? null}, ${input.mediaOfferType}, ${input.bundleRef}, ${input.mediaRef},
       ${input.mediaType}, ${input.previewRef}, ${input.vaultKind}, ${input.createdAtPlatform},
       null, ${input.observedAt}, ${input.observedAt}, ${input.contentHash},
       ${input.sourceEventId}, ${input.sourceObservationId}, ${input.sourceAccountSeq}
@@ -234,6 +235,7 @@ export async function upsertCreatorVaultAlbumMember(
     on conflict (page_id, vault_kind, album_ref, media_ref) do update set
       media_offer_ref = ${pick("creator_vault_album_members", "media_offer_ref")},
       member_ref = ${pick("creator_vault_album_members", "member_ref")},
+      custom_filename = ${pick("creator_vault_album_members", "custom_filename")},
       media_offer_type = ${pick("creator_vault_album_members", "media_offer_type")},
       bundle_ref = ${pick("creator_vault_album_members", "bundle_ref")},
       media_type = ${pick("creator_vault_album_members", "media_type")},

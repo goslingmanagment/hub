@@ -414,7 +414,7 @@ describe("[sync-critical] WP-F3 catalog lane", () => {
       return;
     }
     const page = await seedPage();
-    await seedAlbum(page.id, ref(101), 3, ref(903));
+    await seedAlbum(page.id, ref(101), 2, ref(903));
     const adapter = adapterStub({
       vaultPage: (_params, index) =>
         index === 0
@@ -464,6 +464,31 @@ describe("[sync-critical] WP-F3 catalog lane", () => {
     expect(coverage?.status).toBe("provider_exhausted");
     expect(coverage?.proof).toBe("empty_window");
     expect(coverage?.reason_code).toBe("walk_exhausted");
+  });
+
+  it("does not certify a terminal page whose inventory count is short", async () => {
+    const page = await seedPage();
+    await seedAlbum(page.id, ref(101), 3, ref(903));
+    const adapter = adapterStub({ vaultPage: (_params, index) => index === 0 ? {
+      albumMedia: [{ id: ref(901), mediaId: ref(601), albumId: ref(101) },
+        { id: ref(902), mediaId: ref(602), albumId: ref(101) }], media: [],
+    } : { albumMedia: [], media: [] } });
+    await drain(page.id, adapter, telemetryStub());
+    expect((await coverageRows(page.id)).find(row => row.plane === "catalog_vault_media"))
+      .toMatchObject({ status: "partial_provider_surface", reason_code: "walk_inventory_mismatch" });
+    expect(await requestParams(page.id, "vault_album_walk_completed")).toEqual([]);
+  });
+
+  it("rechecks an unchanged album after seven days", async () => {
+    const page = await seedPage(); await seedAlbum(page.id, ref(101), 0, null);
+    const adapter = adapterStub(); const telemetry = telemetryStub();
+    await drain(page.id, adapter, telemetry);
+    const before = adapter.calls.filter(call => call.route === "vault_media").length;
+    await fanslyCatalogChunk(appStub(adapter), input(page.id, telemetry, new SyncChunkBudget(), new Date("2026-08-30T09:00:00Z")));
+    // The fixed steps consume a normal chunk first; use the same day to resume.
+    await fanslyCatalogChunk(appStub(adapter), input(page.id, telemetry, new SyncChunkBudget(), new Date("2026-08-30T09:00:00Z")));
+    expect(adapter.calls.filter(call => call.route === "vault_media").length).toBeGreaterThan(before);
+    expect((await cursor(page.id))?.vaultWalk[ref(101)]?.proof?.seenMediaRefs).toEqual([]);
   });
 
   it("stops the sublane on an empty FIRST page for a non-empty album, with ONE anomaly", async (context) => {
