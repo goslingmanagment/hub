@@ -4668,6 +4668,9 @@ export const creatorRawMedia = pgTable(
   (table) => ({
     pk: primaryKey({ name: "creator_raw_media_pkey", columns: [table.pageId, table.mediaRef] }),
     pageObservedIdx: index("creator_raw_media_page_observed_idx").on(table.pageId, table.firstObservedAt, table.mediaRef),
+    pageUpdatedIdx: index("creator_raw_media_page_updated_idx").on(table.pageId, table.updatedAt, table.mediaRef),
+    firstOriginCheck: check("creator_raw_media_first_origin_check", sql`${table.firstOrigin} in ('vault', 'post')`),
+    sourceKindCheck: check("creator_raw_media_source_kind_check", sql`${table.sourceKind} in ('vault_albums', 'uservault_albums', 'vault_media', 'account_media_batch', 'posts', 'ofapi.posts_page.v1')`),
   }),
 );
 
@@ -5713,6 +5716,7 @@ export const creatorVaultAlbumScans = pgTable("creator_vault_album_scans", {
   sourceEventId: bigint("source_event_id", { mode: "number" }).notNull(),
   sourceObservationId: bigint("source_observation_id", { mode: "number" }).notNull(),
   sourceAccountSeq: bigint("source_account_seq", { mode: "number" }).notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, table => [primaryKey({ columns: [table.pageId, table.vaultKind, table.albumRef] })]);
 
 export const creatorVaultAlbums = pgTable(

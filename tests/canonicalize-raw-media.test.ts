@@ -56,7 +56,16 @@ describe("raw media identities", () => {
     expect(events.map((event) => event.type)).toEqual(["post.observed", "media.observed", "media.file_observed"]);
     expect(events[1]?.data).toMatchObject({ mediaOfferRef: "offer-1", mediaRef: "file-1", firstOrigin: "post" });
     expect(events[2]?.data.filename).toBe("8_43 ????????.mp4");
+    expect(events[1]?.data.durationMs).toBe(events[2]?.data.durationMs);
     expect(events[0]?.data.observedAt).toBe("2026-09-01T10:00:00.000Z");
     expect(JSON.stringify(events)).not.toContain("DO_NOT_COPY");
+  });
+
+  it.each([JSON.stringify({ duration: 1.2347 }), { duration: 1.2347 }])("uses the same millisecond rounding for offers and files: %j", (metadata) => {
+    const events = canonicalizePostsObservation(observation({ posts: [], accountMedia: [{
+      id: "offer-1", mediaId: "file-1", media: { ...fixture.media[0], metadata },
+    }] }, "posts"));
+    expect(events.find(event => event.type === "media.observed")?.data.durationMs).toBe(1235);
+    expect(events.find(event => event.type === "media.file_observed")?.data.durationMs).toBe(1235);
   });
 });

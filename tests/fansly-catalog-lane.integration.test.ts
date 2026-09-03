@@ -479,6 +479,32 @@ describe("[sync-critical] WP-F3 catalog lane", () => {
     expect(await requestParams(page.id, "vault_album_walk_completed")).toEqual([]);
   });
 
+  it("rotates 27 unfinished albums across dispatches before any large album finishes", async () => {
+    const page = await seedPage();
+    for (let i = 1; i <= 27; i++) await seedAlbum(page.id, ref(i), 7800, ref(1000));
+    const adapter = adapterStub({ vaultPage: (params, index) => ({
+      albumMedia: [{ id: ref(1000 + index), albumId: params.albumId, mediaId: ref(2000 + index) }], media: [],
+    }) });
+    const telemetry = telemetryStub();
+    // Each invocation reloads the durable cursor. No process-local rotation.
+    await fanslyCatalogChunk(appStub(adapter), input(page.id, telemetry, new SyncChunkBudget(40)));
+    await fanslyCatalogChunk(appStub(adapter), input(page.id, telemetry, new SyncChunkBudget(40)));
+    const calls = adapter.calls.filter(call => call.route === "vault_media");
+    expect(new Set(calls.slice(0, 27).map(call => call.params.albumId)).size).toBe(27);
+    expect(Object.values((await cursor(page.id))!.vaultWalk).every(walk => !walk.done)).toBe(true);
+  });
+
+  it("prioritizes a never-completed album over a due weekly recheck", async () => {
+    const page = await seedPage(); await seedAlbum(page.id, ref(101), 0, null);
+    const adapter = adapterStub(); const telemetry = telemetryStub();
+    await drain(page.id, adapter, telemetry);
+    expect((await cursor(page.id))?.vaultWalk[ref(101)]?.lastCompleteWalkAt).toBeTruthy();
+    await seedAlbum(page.id, ref(102), 0, null);
+    const before = adapter.calls.length;
+    await fanslyCatalogChunk(appStub(adapter), input(page.id, telemetry, new SyncChunkBudget(7), new Date("2026-08-30T09:00:00Z")));
+    expect(adapter.calls.slice(before).filter(call => call.route === "vault_media").map(call => call.params.albumId)).toEqual([ref(102)]);
+  });
+
   it("rechecks an unchanged album after seven days", async () => {
     const page = await seedPage(); await seedAlbum(page.id, ref(101), 0, null);
     const adapter = adapterStub(); const telemetry = telemetryStub();

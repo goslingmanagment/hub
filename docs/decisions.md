@@ -244,7 +244,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 241 | G5 compact survivors are reference-less bodies only | Production on 2026-08-29 exposed a predicate mismatch in #239: the `sync_raw_payloads` compact measurement counted every non-null inline body, including CAS-backed duplicates that `null-bodies` removes before `VACUUM FULL`. With all 1,733,069 rows referenced, that made the measured survivor term 19,705,839,907 B instead of 0 B and falsely raised required headroom from ~7.49 GiB to 46.95 GiB on a volume with 23.14 GiB free. The exact survivor sum is now restricted to `response_payload IS NOT NULL AND payload_object_id IS NULL`; the x2 compact safety factor, bounded WAL reserve, and 5 GiB floor are unchanged. The raw completion forecast now names `VACUUM FULL`, not the parked-copy drop used only by `observations`. |
 | 242 | Follower blast-radius override is a hash-bound owner act | The `max(50, floor(active/100))` automatic ceiling remains unchanged and no blocked generation auto-retries. A two-step owner-session preview/apply surface binds approval to the exact blocked request and timestamp, cursor generation and `fullSweepStartedAt`, and SHA-256 of the sorted guarded candidate row ids. Apply runs SERIALIZABLE, locks the page, all three audience states, the reconcile cursor and candidate rows; requires the whole audience block paused with no lease; recomputes and rejects stale or now-within-limit sets; invokes the same guarded deactivation helper; refreshes follower projections and rollups; and writes the audit event atomically. It never advances the stream state, cursor, checkpoint, success run or follower-sync timestamp. Reconcile raw pages now retain generation and sweep-start lineage in existing `request_params` (no migration), and the blocker anomaly reports candidate counts by prior generation. |
 | 243 | A known live follower total always materializes UTC today | `rebuildFollowerRollups` derives `new_followers` from relationship dates, but a day with zero such rows still has a known live headline. After the aggregate rebuild, a non-null `knownTotalFollowers` therefore upserts UTC today's row with zero new followers only when absent; on conflict it updates only the known total and timestamp, preserving the derived new-follower count. A null total still creates no zero row, and historical replay semantics are unchanged. |
-| 244 | Content media identity and complete Vault walks | Separate raw files from offers in the existing media projector; expose flattened post attachments with preview roles and unresolved rows. Full unfiltered walk evidence alone may mark album membership missing. Preserve source times and require full history reconciliation; ship the strict API plane change with matching CLI builds. Hub-only scope, no upload extension changes. |
+| 244 | Content media identity and complete Vault walks | Separate raw files from offers in the existing media projector; expose flattened post attachments with preview roles and unresolved rows. Full unfiltered walk evidence alone may mark album membership missing. Preserve sightings, reconcile one member per event, rotate album walks, replay OF through the common sweep, and expose rowUpdatedAt for incremental reads with periodic reconciliation; ship the strict API plane change with matching CLI builds. Hub-only scope, no upload extension changes. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -10416,3 +10416,44 @@ outside this change. Production raw readability and the blocked lora-of posts
 job require separate verification: the permitted read_only DB role was absent
 on 03.09.2026. Implementation and local tests do not assert production readiness.
 See `docs/plans/2026-09-03-contentops-media-identity.md` for status and rollout gates.
+
+
+**Decision #244 amendment (2026-09-03, review corrections before deployment):**
+
+Member events reconcile only their own `(page, creator, album, media)` row. Only
+an accepted newer walk scans its full album, and unchanged absence values produce
+no UPDATE. This removes the per-member full-album write amplification. Durable
+rotation serves never-completed albums first and rotates within each cohort;
+weekly rechecks preserve both rotation and the last successful completion.
+
+Retain observation identity in sighting dedup keys. A content hash alone collapses
+A → B → A, while a completed walk cannot certify sightings from interrupted walks
+or post sidecars. The three lora-1 system album sizes reported in review imply
+31,880 member/file events per complete weekly sweep (15,940 × 2), plus checkpoint,
+other albums and post refresh events (roughly 56 observations in a 14-day refresh
+horizon). This is a sizing estimate, not a production measurement. Retrying the
+same observation remains a no-op. Any future batching must preserve these facts.
+
+Newer null technical metadata preserves the previously known value; explicit
+empty strings and zero remain values. Row-level source refs/hash describe the
+latest sighting, not per-field provenance of the merged metadata. Offers and raw
+files share millisecond conversion. Raw origin/source kinds are constrained;
+unknown values are not invented by the projector.
+
+`rowUpdatedAt` is exposed on posts, raw files, Vault members and expanded post
+attachments, using the greatest participating projection write time for composed
+rows. Poll it with overlap over the full source-date window; for every touched
+post, replace its complete attachment set. Poll posts too, including those that
+now have zero attachments. Retain a full reconciliation at bootstrap, rebuild,
+recovery and periodically: transaction timestamps are not commit order, deletes
+have no tombstones, and dataset pagination is not a frozen snapshot. This reduces
+routine export traffic without claiming a lossless change log.
+
+The initial dedicated OF replay function ran in the minutely DM reconcile handler.
+It is now removed: `ofapi_capture:ofapi-posts` is a versioned canonicalizer family
+using the normal sweep and CLI replay, bounded by its shared budget/cursors. Only
+settled `parse_version >= 7` observations qualify; the driver supplies the original
+accepted post set from the complete attached ledger to the pure canonicalizer.
+The backlog gauge uses the same lower floor. No provider calls or capture-boundary
+inference are introduced. Production archive/OF recovery and coordinated CLI
+rollout gates from the original decision remain open.

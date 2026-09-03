@@ -585,11 +585,6 @@ export const OFF_SWEEP_OBSERVATION_CLAIMANTS: readonly {
       + "materialized, not swept, so no family claims them and that is correct.",
   },
   {
-    id: "OFAPI_POSTS_MATERIALIZATION",
-    kinds: ["ofapi.posts_page.v1"],
-    justification: "The governed capture job materializes accepted posts; ofapi-post-media-replay.ts replays previously materialized captures from that same accepted set.",
-  },
-  {
     id: "OFAPI_READTHROUGH_OBSERVATION_KIND",
     kinds: [OFAPI_READTHROUGH_OBSERVATION_KIND],
     justification:

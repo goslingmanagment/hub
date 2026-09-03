@@ -109,7 +109,6 @@ const canonicalizeDriverMocks = vi.hoisted(() => ({
 const dmReconcileMocks = vi.hoisted(() => ({
   runOfapiDmReadthroughReconcile: vi.fn(),
   runOfapiCaptureMaterialization: vi.fn(),
-  runOfapiPostMediaReplay: vi.fn(),
   runDmCorrectionsReconcile: vi.fn(),
 }));
 
@@ -201,9 +200,6 @@ vi.mock(
     runOfapiCaptureMaterialization: dmReconcileMocks.runOfapiCaptureMaterialization,
   }),
 );
-vi.mock("../apps/runtime/src/services/ofapi-post-media-replay.ts", () => ({
-  runOfapiPostMediaReplay: dmReconcileMocks.runOfapiPostMediaReplay,
-}));
 vi.mock("../apps/runtime/src/services/dm-corrections-reconciler.ts", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   runDmCorrectionsReconcile: dmReconcileMocks.runDmCorrectionsReconcile,
@@ -661,7 +657,6 @@ describe("worker startup", () => {
     // sweep that spends its whole tick canonicalizing cannot starve them.
     expect(dmReconcileMocks.runOfapiDmReadthroughReconcile).not.toHaveBeenCalled();
     expect(dmReconcileMocks.runOfapiCaptureMaterialization).not.toHaveBeenCalled();
-    expect(dmReconcileMocks.runOfapiPostMediaReplay).not.toHaveBeenCalled();
     expect(dmReconcileMocks.runDmCorrectionsReconcile).not.toHaveBeenCalled();
     // Starvation pressure is an operator-visible warn, naming who paid for it.
     expect(app.logger.warn).toHaveBeenCalledWith(
@@ -682,9 +677,6 @@ describe("worker startup", () => {
       order.push("materialization");
       return { scanned: 0 };
     });
-    dmReconcileMocks.runOfapiPostMediaReplay.mockImplementation(async () => {
-      order.push("post_media"); return { scanned: 0 };
-    });
     dmReconcileMocks.runDmCorrectionsReconcile.mockImplementation(async () => {
       order.push("corrections");
       return { scanned: 0 };
@@ -694,7 +686,7 @@ describe("worker startup", () => {
       .resolves.toBeUndefined();
     // Order preserved: corrections drain material!=emitted AFTER the two
     // projectors above have merged this minute's material.
-    expect(order).toEqual(["readthrough", "materialization", "corrections", "post_media"]);
+    expect(order).toEqual(["readthrough", "materialization", "corrections"]);
     expect(canonicalizeDriverMocks.runCanonicalization).toHaveBeenCalledTimes(1);
 
     await runtime.shutdown();

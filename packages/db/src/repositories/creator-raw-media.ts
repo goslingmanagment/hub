@@ -40,6 +40,14 @@ const HEAD_COLUMNS = {
   sourceObservationId: "source_observation_id", sourceAccountSeq: "source_account_seq",
 } as const satisfies Partial<Record<keyof UpsertCreatorRawMediaInput, string>>;
 
+// A sparse post sidecar is not evidence that Vault metadata was removed.
+// Empty strings and zero are explicit values; only null means unavailable.
+const NULLABLE_METADATA = new Set<string>([
+  "owner_account_ref", "filename", "provider_type", "media_type", "mime_type", "duration_ms",
+  "original_width", "original_height", "width", "height", "frame_rate_milli",
+  "created_at_platform", "updated_at_platform",
+]);
+
 export async function upsertCreatorRawMedia(
   db: Database,
   input: UpsertCreatorRawMediaInput,
@@ -49,7 +57,9 @@ export async function upsertCreatorRawMedia(
     > (creator_raw_media.last_observed_at, creator_raw_media.source_account_seq)`;
   const assignments = fields.map(([, column]) => {
     const name = sql.identifier(column);
-    return sql`${name} = case when ${newer} then excluded.${name} else creator_raw_media.${name} end`;
+    const incoming = NULLABLE_METADATA.has(column)
+      ? sql`coalesce(excluded.${name}, creator_raw_media.${name})` : sql`excluded.${name}`;
+    return sql`${name} = case when ${newer} then ${incoming} else creator_raw_media.${name} end`;
   });
   const result = await db.execute(sql`
     insert into creator_raw_media (

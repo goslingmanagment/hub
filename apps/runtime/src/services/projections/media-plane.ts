@@ -208,7 +208,11 @@ export async function runMediaPlaneProjection(
 
         if (event.type === "media.file_observed") {
           const mediaRef = asText(data.mediaRef);
-          if (mediaRef === null) continue;
+          const sourceKind = asText(data.sourceKind);
+          const firstOrigin = asText(data.firstOrigin);
+          if (mediaRef === null || (firstOrigin !== "vault" && firstOrigin !== "post")
+            || sourceKind === null || !["vault_albums", "uservault_albums", "vault_media",
+              "account_media_batch", "posts", "ofapi.posts_page.v1"].includes(sourceKind)) continue;
           const result = await upsertCreatorRawMedia(app.db, {
             pageId: accountId, platform: mediaPlatform, mediaRef,
             ownerAccountRef: asText(data.ownerAccountRef),
@@ -220,8 +224,7 @@ export async function runMediaPlaneProjection(
             frameRateMilli: asInt(data.frameRateMilli),
             createdAtPlatform: isoDate(data.createdAtPlatform),
             updatedAtPlatform: isoDate(data.updatedAtPlatform),
-            sourceKind: asText(data.sourceKind) ?? "unknown",
-            firstOrigin: asText(data.firstOrigin) ?? "unknown",
+            sourceKind, firstOrigin,
             ...lineage,
           });
           if (result.applied) totals.rawMedia += 1;

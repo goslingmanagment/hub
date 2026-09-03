@@ -20,6 +20,8 @@ function scaled(value: unknown, scale: number): number | null {
   return Number.isSafeInteger(result) ? result : null;
 }
 
+export const mediaDurationMs = (value: unknown) => scaled(value, 1000);
+
 function timestamp(value: unknown): string | null {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return null;
   const date = new Date(value < 1e12 ? value * 1000 : value);
@@ -36,6 +38,8 @@ function metadata(value: unknown): Record<string, unknown> {
     return {};
   }
 }
+
+export const mediaDurationFromMetadata = (value: unknown) => mediaDurationMs(metadata(value).duration);
 
 function records(value: unknown): Record<string, unknown>[] {
   return Array.isArray(value) ? value.filter(isRecord) : [];
@@ -81,7 +85,7 @@ export function fanslyRawMediaDrafts(
       filename: typeof row.filename === "string" ? row.filename : null,
       mediaType: integer(row.type),
       mimeType: typeof row.mimetype === "string" ? row.mimetype : null,
-      durationMs: scaled(meta.duration, 1000),
+      durationMs: mediaDurationMs(meta.duration),
       originalWidth: integer(meta.originalWidth),
       originalHeight: integer(meta.originalHeight),
       width: integer(row.width),
@@ -111,7 +115,7 @@ export function onlyFansRawMediaDrafts(
       // OF type names have no verified mapping to Fansly's numeric codes.
       mediaType: null, providerType: typeof row.type === "string" ? row.type : null,
       mimeType: typeof row.mimetype === "string" ? row.mimetype : null,
-      durationMs: scaled(row.duration, 1000), width: integer(row.width), height: integer(row.height),
+      durationMs: mediaDurationMs(row.duration), width: integer(row.width), height: integer(row.height),
       originalWidth: null, originalHeight: null, frameRateMilli: null,
       createdAtPlatform: null, updatedAtPlatform: null, sourceKind: observation.kind,
     })];

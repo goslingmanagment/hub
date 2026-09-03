@@ -16,6 +16,7 @@
 //   - subscribers/followers/identity/audience pages: next canonicalizer
 //     version; their observations are already journaled and replayable.
 
+import { mediaDurationFromMetadata } from "./raw-media.ts";
 import { createHash } from "node:crypto";
 
 import { millsFromInteger } from "@agency_hub_core/shared";
@@ -556,19 +557,7 @@ function mediaShape(row: Record<string, unknown>) {
   if (media === null) {
     return { mediaType: null, mimeType: null, width: null, height: null, durationMs: null };
   }
-  let durationMs: number | null = null;
-  if (typeof media.metadata === "string" && media.metadata.length > 0) {
-    try {
-      const metadata: unknown = JSON.parse(media.metadata);
-      const seconds = isRecord(metadata) ? metadata.duration : null;
-      if (typeof seconds === "number" && Number.isFinite(seconds) && seconds >= 0) {
-        durationMs = Math.trunc(seconds * 1000);
-      }
-    } catch {
-      // A metadata blob we cannot read is not a parse failure: the row still
-      // carries its identity, price and sale counters.
-    }
-  }
+  const durationMs = mediaDurationFromMetadata(media.metadata);
   return {
     mediaType: asNumber(media.type),
     mimeType: asString(media.mimetype),

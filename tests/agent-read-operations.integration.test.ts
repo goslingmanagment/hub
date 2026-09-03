@@ -975,6 +975,7 @@ describe("[sync-critical] agent read plane operations", () => {
       "postRef",
       "postText",
       "publishedAt",
+      "rowUpdatedAt",
       "wallRefs",
     ]);
     expect(body.items[0].fields).toMatchObject({

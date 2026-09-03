@@ -16,7 +16,8 @@ export const RAW_MEDIA_DATASET = `
          m.created_at_platform as f_created_at_platform,
          m.updated_at_platform as f_updated_at_platform,
          m.first_origin as f_first_origin, m.source_kind as f_source_kind,
-         m.first_observed_at as f_first_observed_at, m.last_observed_at as f_last_observed_at
+         m.first_observed_at as f_first_observed_at, m.last_observed_at as f_last_observed_at,
+         m.updated_at as f_row_updated_at
     from creator_raw_media m
 `;
 
@@ -37,7 +38,8 @@ export const POST_ATTACHMENTS_DATASET = `
            bm.member_ref, bm.member_index,
            o.media_offer_ref, o.media_ref as offer_media_ref, o.preview_ref as offer_preview_ref,
            o.source_observation_id as offer_observation_ref,
-           greatest(s.last_observed_at, b.last_observed_at, o.last_observed_at) as relation_observed_at
+           greatest(s.last_observed_at, b.last_observed_at, o.last_observed_at) as relation_observed_at,
+           greatest(s.updated_at, b.updated_at, o.updated_at) as relation_updated_at
       from slots s
       left join creator_media_bundles b
         on s.platform::text = 'fansly' and b.page_id = s.account_id and b.bundle_ref = s.content_ref
@@ -80,6 +82,7 @@ export const POST_ATTACHMENTS_DATASET = `
          f.duration_ms as f_duration_ms, f.original_width as f_original_width,
          f.original_height as f_original_height,
          greatest(m.relation_observed_at, f.last_observed_at) as f_last_observed_at,
+         greatest(m.relation_updated_at, f.updated_at) as f_row_updated_at,
          m.source_observation_id as f_post_observation_ref,
          m.offer_observation_ref as f_offer_observation_ref,
          m.bundle_observation_ref as f_bundle_observation_ref,

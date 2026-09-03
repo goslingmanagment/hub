@@ -668,13 +668,23 @@ not that the provider deleted the file. Partial, capped, malformed, or interrupt
 walks cannot mark membership missing. Unchanged albums are revisited after seven
 days within the existing request budgets; this is not a seven-day freshness SLA.
 
-`lastObservedAt` dates source evidence, **not a change-feed position**. Replaying
-old raw may add a row with an old observation/publication date. Start a new full
-history traversal to reconcile; page through its cursors and upsert by returned
-key. A cursor is pagination, not a frozen inventory or a CDC stream. Post edits
-may remove attachment rows: replace the local attachment set for each post only
-after the corresponding successful full traversal, preserving uncertainty for
-unresolved rows. Do not infer “never posted” from an empty result.
+`lastObservedAt` dates source evidence, **not a change-feed position**. Use the
+sortable/filterable `rowUpdatedAt` on `posts`, `raw_media`, `post_attachments` and
+`vault_media` for routine incremental reads, with an overlap on the saved time.
+For joined datasets it is the greatest participating projection write time,
+including the file/offer/bundle or album/scan metadata. Keep `from/to` on the full
+source history you track; narrowing publication/first-observation dates to the
+poll interval would hide old rows repaired today. Use `rowUpdatedAt >= saved time
+minus overlap`, sort ascending, follow all cursors and upsert stable keys.
+
+Collect touched post refs from **both** posts and post_attachments. For each,
+read and replace the complete current attachment set; an empty set removes old
+local attachments. Polling only existing attachment rows misses a post whose last
+slot was removed. A timestamp is not a tombstone or a commit sequence: concurrent
+long transactions, rebuilds and interrupted pagination need reconciliation.
+Traverse complete history initially, after rebuild/recovery and periodically to
+repair discrepancies. Neither time overlap nor pagination proves a frozen snapshot
+or every intermediate state. Do not infer “never posted” from an empty result.
 
 OnlyFans posts point directly to raw media ids, with its string type preserved
 as `providerType`; Fansly numeric `mediaType` is not invented for OF. OF Vault

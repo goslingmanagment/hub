@@ -14,7 +14,6 @@ import { AGENT_KEY_TOKEN_PREFIX } from "../apps/runtime/src/services/auth.ts";
 import { runCanonicalization, resetCanonicalizeSweepCursors } from "../apps/runtime/src/services/canonicalize-driver.ts";
 import { buildOnlyFansPostDrafts } from "../apps/runtime/src/services/canonicalize/onlyfans-post-media.ts";
 import { buildPostObservedDraft } from "../apps/runtime/src/services/canonicalize/posts.ts";
-import { runOfapiPostMediaReplay } from "../apps/runtime/src/services/ofapi-post-media-replay.ts";
 import { parseStrictOfapiPostPage } from "../apps/runtime/src/services/ofapi-capture-contract.ts";
 import { runMediaPlaneProjection, rebuildMediaPlaneProjection } from "../apps/runtime/src/services/projections/media-plane.ts";
 import { runCreatorPostsProjection, rebuildCreatorPostsProjection } from "../apps/runtime/src/services/projections/creator-posts.ts";
@@ -61,8 +60,8 @@ async function project() {
   await runMediaPlaneProjection(app(), { accountId: pageId });
   await runCreatorPostsProjection(app(), { accountId: pageId });
 }
-async function query(dataset: string, extra: Record<string, unknown> = {}) {
-  const response = await server!.inject({ method: "POST", url: `/api/v1/agent/pages/media-page/datasets/${dataset}/query`,
+async function query(dataset: string, extra: Record<string, unknown> = {}, label = "media-page") {
+  const response = await server!.inject({ method: "POST", url: `/api/v1/agent/pages/${label}/datasets/${dataset}/query`,
     headers: { authorization: `Bearer ${TOKEN}` },
     payload: { ...(!extra.cursor ? { from: "2026-01-01T00:00:00Z", to: "2026-10-01T00:00:00Z" } : {}), limit: 100, ...extra } });
   expect(response.statusCode, response.body).toBe(200);
@@ -105,6 +104,93 @@ describe("[sync-critical] content media raw to agent API", () => {
     const refused = await server!.inject({ method: "POST", url: "/api/v1/agent/pages/media-page/datasets/raw_media/query",
       headers: { authorization: `Bearer ${TOKEN}` }, payload: { from: "2026-01-01T00:00:00Z", to: "2026-10-01T00:00:00Z" } });
     expect(refused.statusCode).toBe(403);
+  });
+
+  it("does not rewrite the album on a member sighting or a repeated absence proof", async () => {
+    const members = Array.from({ length: 250 }, (_, i) => ({
+      ...fixture.albumMedia[0], id: `member-${i}`, mediaId: `file-${i}`,
+    }));
+    await capture("vault_media", { albumMedia: members, media: [] }); await project();
+    await scan(members.map(m => m.mediaId), 2); await project();
+    const versions = async () => (await db.pool.query(
+      "select media_ref, xmin::text as version from creator_vault_album_members where page_id = $1", [pageId],
+    )).rows as Array<{ media_ref: string; version: string }>;
+    const before = new Map((await versions()).map(row => [row.media_ref, row.version]));
+    await capture("vault_media", { albumMedia: [{ ...members[0], customFilename: "changed" }], media: [] }, 3);
+    await project();
+    expect((await versions()).filter(row => row.version !== before.get(row.media_ref)).map(row => row.media_ref)).toEqual(["file-0"]);
+    const beforeScan = new Map((await versions()).map(row => [row.media_ref, row.version]));
+    await scan(members.slice(0, -2).map(m => m.mediaId), 4); await project();
+    expect((await versions()).filter(row => row.version !== beforeScan.get(row.media_ref))).toHaveLength(2);
+    const beforeRepeat = await versions();
+    await scan(members.slice(0, -2).map(m => m.mediaId), 5); await project();
+    expect(await versions()).toEqual(beforeRepeat);
+  });
+
+  it("keeps rich metadata across sparse observations and preserves A-B-A sightings without a complete walk", async () => {
+    await capture("vault_media", fixture, 1); await project();
+    const renamed = structuredClone(fixture); renamed.media[0].filename = "B";
+    renamed.albumMedia[0].customFilename = "B";
+    await capture("vault_media", renamed, 2); await project();
+    await capture("vault_media", fixture, 3); await project();
+    expect((await query("raw_media")).items.find(i => i.fields.mediaRef === "file-1")?.fields.filename).toBe(fixture.media[0].filename);
+    expect((await query("vault_media")).items.find(i => i.fields.mediaRef === "file-1")?.fields.customFilename).toBe(fixture.albumMedia[0].customFilename);
+    const sparse = { posts: [], media: [{ id: "file-1" }] };
+    await capture("posts", sparse, 4); await project();
+    expect((await query("raw_media")).items.find(i => i.fields.mediaRef === "file-1")?.fields).toMatchObject({
+      filename: fixture.media[0].filename, durationMs: 522682, originalWidth: 2160,
+      lastObservedAt: date(4).toISOString(), sourceKind: "posts",
+    });
+    await capture("posts", { posts: [], media: [{ id: "file-1", filename: "", metadata: { duration: 0 } }] }, 5); await project();
+    expect((await query("raw_media")).items.find(i => i.fields.mediaRef === "file-1")?.fields).toMatchObject({ filename: "", durationMs: 0, originalWidth: 2160 });
+  });
+
+  it("isolates identically named media, offers and posts on two populated pages", async () => {
+    const firstPage = pageId;
+    const model = (await createModel(db.db, { slug: "other", name: "Other" }))!;
+    const second = (await createFanslyPage(db.db, { modelId: model.id, label: "other-media" }))!;
+    for (const target of [firstPage, second.id]) {
+      pageId = target;
+      const payload = structuredClone(fixture);
+      for (const file of payload.media) file.filename = `page-${target}`;
+      await capture("vault_media", payload);
+      await capture("posts", { posts: [{ id: "same-post", createdAt: date(1).getTime(), content: "caption",
+        attachments: [{ contentType: 1, contentId: "offer-1", pos: 0 }] }],
+        accountMedia: [{ id: "offer-1", accountId: "creator", mediaId: "file-1" }] });
+      await project();
+    }
+    pageId = firstPage;
+    await db.pool.query("update agent_keys set page_ids = ARRAY[$1, $2]::bigint[]", [firstPage, second.id]);
+    for (const [target, label] of [[firstPage, "media-page"], [second.id, "other-media"]] as const) {
+      for (const dataset of ["raw_media", "post_attachments", "vault_media"]) {
+        const result = await query(dataset, {}, label);
+        expect(result.items.length).toBeGreaterThan(0);
+        expect(result.items.every(item => item.fields.filename === `page-${target}`)).toBe(true);
+      }
+    }
+  });
+
+  it("returns historical replay and relation changes through rowUpdatedAt filters", async () => {
+    await capture("vault_media", fixture); await capture("posts", {
+      posts: [{ id: "old-post", createdAt: date(1).getTime(), content: "caption", attachments: [{ pos: 0, contentType: 1, contentId: "offer-1" }] }],
+      accountMedia: [{ id: "offer-1", accountId: "creator", mediaId: "file-1" }],
+    }); await project();
+    // Put the initial projection writes outside the overlap, retaining their source dates.
+    for (const table of ["creator_raw_media", "creator_media", "creator_posts", "creator_vault_album_members"]) {
+      await db.pool.query(`update ${table} set updated_at = '2025-01-01'`);
+    }
+    const extra = { filters: [{ field: "rowUpdatedAt", op: "gte", value: "2026-01-01T00:00:00Z" }],
+      sort: [{ field: "rowUpdatedAt", dir: "asc" }] };
+    expect((await query("post_attachments", extra)).items).toHaveLength(0);
+    const changed = structuredClone(fixture); changed.media[0].filename = "reparsed";
+    await capture("vault_media", changed, 2); await project();
+    expect((await query("post_attachments", extra)).items[0]?.fields).toMatchObject({ filename: "reparsed", postRef: "old-post" });
+    expect((await query("raw_media", extra)).items.length).toBeGreaterThan(0);
+    expect((await query("vault_media", extra)).items.length).toBeGreaterThan(0);
+    // Removing every slot yields no attachment row; the post still signals replacement with an empty set.
+    await capture("posts", { posts: [{ id: "old-post", createdAt: date(1).getTime(), content: "caption", attachments: [] }] }, 3); await project();
+    expect((await query("posts", extra)).items[0]?.fields.postRef).toBe("old-post");
+    expect((await query("post_attachments", extra)).items).toHaveLength(0);
   });
 
   it("audits retained bodies through a read-only role without disclosing their content", async () => {
@@ -167,12 +253,13 @@ describe("[sync-critical] content media raw to agent API", () => {
     let rows = (await query("vault_media")).items.map((i) => i.fields);
     expect(rows.find((f) => f.mediaRef === "file-2")?.missingSince).toBe("2026-09-04T10:01:00.000Z");
     expect(rows.find((f) => f.mediaRef === "file-1")?.customFilename).toBe("");
-    const before = JSON.stringify(rows);
+    const withoutWriteClock = (items: typeof rows) => items.map(({ rowUpdatedAt: _clock, ...fields }) => fields);
+    const before = JSON.stringify(withoutWriteClock(rows));
     await rebuildFanslyCatalogProjection(app(), { accountId: pageId });
     await rebuildMediaPlaneProjection(app(), { accountId: pageId });
     await rebuildCreatorPostsProjection(app(), { accountId: pageId });
     rows = (await query("vault_media")).items.map((i) => i.fields);
-    expect(JSON.stringify(rows)).toBe(before);
+    expect(JSON.stringify(withoutWriteClock(rows))).toBe(before);
     await capture("vault_media", fixture, 5); await project();
     expect((await query("vault_media")).items.every((i) => i.fields.missingSince === null)).toBe(true);
     await scan([], 6); await project();
@@ -229,11 +316,11 @@ describe("[sync-critical] content media raw to agent API", () => {
     await insertObservation(db.db, { source: "ofapi_capture", producer: "test", platform: "onlyfans", accountId: of.id,
       kind: "ofapi.posts_page.v1", payload, payloadHash: createHash("sha256").update("unsettled").digest(),
       idempotencyKey: randomUUID(), receivedAt: date(2) });
-    expect(await runOfapiPostMediaReplay(app())).toEqual({ scanned: 1, stamped: 1, errored: 0 });
+    expect(await runCanonicalization(app(), { kinds: ["ofapi.posts_page.v1"] })).toMatchObject({ scanned: 1, stamped: 1, errored: 0 });
     await runCreatorPostsProjection(app(), { accountId: of.id }); await runMediaPlaneProjection(app(), { accountId: of.id });
     expect((await db.pool.query("select media_ref from creator_raw_media where page_id = $1", [of.id])).rows).toEqual([{ media_ref: "old-file" }]);
     expect((await db.pool.query("select attachment_refs from creator_posts where account_id = $1", [of.id])).rows[0].attachment_refs)
       .toEqual([{ pos: 0, contentType: null, contentId: "old-file" }]);
-    expect(await runOfapiPostMediaReplay(app())).toEqual({ scanned: 0, stamped: 0, errored: 0 });
+    expect(await runCanonicalization(app(), { kinds: ["ofapi.posts_page.v1"] })).toMatchObject({ scanned: 0, stamped: 0, errored: 0 });
   });
 });

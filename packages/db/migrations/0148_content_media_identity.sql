@@ -16,8 +16,8 @@ CREATE TABLE "creator_raw_media" (
   "frame_rate_milli" bigint CHECK ("frame_rate_milli" >= 0),
   "created_at_platform" timestamptz,
   "updated_at_platform" timestamptz,
-  "source_kind" text NOT NULL,
-  "first_origin" text NOT NULL,
+  "source_kind" text NOT NULL CHECK ("source_kind" IN ('vault_albums', 'uservault_albums', 'vault_media', 'account_media_batch', 'posts', 'ofapi.posts_page.v1')),
+  "first_origin" text NOT NULL CHECK ("first_origin" IN ('vault', 'post')),
   "first_observed_at" timestamptz NOT NULL,
   "last_observed_at" timestamptz NOT NULL,
   "content_hash" char(64) NOT NULL,
@@ -30,6 +30,9 @@ CREATE TABLE "creator_raw_media" (
 );
 CREATE INDEX "creator_raw_media_page_observed_idx"
   ON "creator_raw_media" ("page_id", "first_observed_at", "media_ref");
+
+CREATE INDEX "creator_raw_media_page_updated_idx"
+  ON "creator_raw_media" ("page_id", "updated_at", "media_ref");
 
 ALTER TABLE "creator_vault_album_members" ADD COLUMN "custom_filename" text;
 
@@ -47,5 +50,6 @@ CREATE TABLE creator_vault_album_scans (
   source_event_id bigint NOT NULL,
   source_observation_id bigint NOT NULL,
   source_account_seq bigint NOT NULL,
+  updated_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (page_id, vault_kind, album_ref)
 );

@@ -332,7 +332,7 @@ export async function runFanslyCatalogProjection(
               totals.albumMembers += 1;
               totals.applied += 1;
             }
-            if (data.vaultKind === "creator") await reconcileVaultAlbumScan(app.db, accountId, albumRef);
+            if (data.vaultKind === "creator") await reconcileVaultAlbumScan(app.db, accountId, albumRef, mediaRef);
             continue;
           }
 
