@@ -1434,7 +1434,15 @@ export async function executeOfapiCaptureJobChunk(
           attemptId: reservation.attemptId,
           fenceToken: reservation.fenceToken,
           outcome: "transport",
-          details: { error: error instanceof Error ? error.message : String(error) },
+          details: {
+            error: error instanceof Error ? error.message : String(error),
+            // The governed reason is what an operator needs when the bound
+            // parks the job: `body_too_large` is a plan to change,
+            // `transport` is a network to look at.
+            ...(error instanceof OfapiGovernedRequestError
+              ? { reason: error.reason, phase: error.phase }
+              : {}),
+          },
           retrySafeReadAt: indeterminateRetryAt,
         });
       }

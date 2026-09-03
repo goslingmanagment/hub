@@ -246,6 +246,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 243 | A known live follower total always materializes UTC today | `rebuildFollowerRollups` derives `new_followers` from relationship dates, but a day with zero such rows still has a known live headline. After the aggregate rebuild, a non-null `knownTotalFollowers` therefore upserts UTC today's row with zero new followers only when absent; on conflict it updates only the known total and timestamp, preserving the derived new-follower count. A null total still creates no zero row, and historical replay semantics are unchanged. |
 | 244 | Content media identity and complete Vault walks | Separate raw files from offers in the existing media projector; expose flattened post attachments with preview roles and unresolved rows. Full unfiltered walk evidence alone may mark album membership missing. Preserve sightings, reconcile one member per event, rotate album walks, replay OF through the common sweep, and expose rowUpdatedAt for incremental reads with periodic reconciliation; ship the strict API plane change with matching CLI builds. Hub-only scope, no upload extension changes. |
 | 245 | OFAPI sync-read status matrix | `OfapiApiError` is classified by HTTP status in the sync executor instead of falling through to `transient_network`: 402 (credits exhausted; OFAPI does not charge the rejected request) retries under its own class `ofapi_insufficient_credits`, opens the credit-ledger monitor's OWN global latch `ofapi_low_credit:global` (no subKey — one pool, one alarm, either path may close it), suppresses the per-stream `stream_failed_threshold` alert for this class, and resolves the latch only from a later chunk that actually got an OFAPI response (a partial yielded by the credit floor or daily budget before any request proves nothing); 401/403 park the stream `manual_action_required` (`ofapi_http_<status>`) without pausing the page for a re-login it cannot perform; 429 → `rate_limit`; 5xx → `provider_5xx`; other 4xx park as `provider_bad_data`; a status-less transport failure stays `transient_network`. Rejected: a fleet-wide credits latch in the OFAPI client — the free 402 probe under the existing ≤30 min per-stream backoff already bounds the noise and needs no clearing authority. |
+| 246 | Bounded retry of uncaptured OFAPI capture dispatches + owner cancel | A capture job counts consecutive reservations that ended without a captured response (`consecutive_uncaptured`, migration 0149): pre-dispatch releases and indeterminate dispatches alike. The retry delay doubles per step (60 s → 30 min cap) and the FIFTH consecutive uncaptured reservation parks the job (`indeterminate_exhausted` / `pre_dispatch_exhausted`) with the governed reason (`body_too_large`, `transport`, …) in the attempt's ledger details; a captured response resets the streak. A stale safe-read attempt from a crashed capture worker takes the same bounded retry instead of waiting for an owner who has nothing to check (stateful attempts and non-probe interactive reads still park for owner certainty resolution). Recovery is `POST /admin/ofapi/capture/jobs/:jobId/cancel` (owner-session, CAS on state/reason/row version, dry-run first, audited): the row and its attempts stay, the slot is freed, the lane starts a fresh job with fresh allowances on its next request. Never resumed in place — the allowances were the point. Production: one post_paginate job on lora-vip-of dispatched 1 000 times in 40 h (every one uncaptured, 60 s apart) until `job_cap` parked it; lora-of's job has been `blocked/indeterminate` since a stale lease on 2026-08-12. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -10505,3 +10506,51 @@ already honour, a 402 probe costs no credits, and a latch would need its own
 clearing authority; the per-stream backoff plus one global incident gives the
 owner the same information with no new state. Topping up (or enabling OFAPI's
 auto top-up) is an owner action outside the Hub.
+**Decision #246 (2026-09-04, bounded retry of uncaptured OFAPI capture dispatches + owner cancel):**
+
+Two production OF pages lost their posts capture to the same unbounded loop,
+from opposite ends. `lora-vip-of`: a `post_paginate` job created 2026-08-28
+dispatched 1 000 times in 40 hours, every attempt ending without a captured
+response, each safe-read retry scheduled 60 s after the last, until the job cap
+(`attempt_count + 1 > max_calls`) parked it with `job_cap` — while
+`fan_identities`, link stats and DM polling on the same page succeeded all
+along, so the failure was specific to that dispatch (the attempts table, not
+readable under `read_only`, would name it; `body_too_large` on a 10 MB-capped
+posts page is the leading suspect). `lora-of`: a job dispatched on 2026-08-12
+had its lease expire mid-dispatch (a deploy restart, most likely); stale
+recovery marked the safe read `blocked/indeterminate` for owner certainty
+resolution, and no owner ever resolved it, so the page has captured no posts
+for three weeks and holds zero raw media.
+
+The safe-read law (a repeatable GET may be retried after conservatively
+settling the uncertain attempt as billed) stays. What changes is its bound.
+The job now carries `consecutive_uncaptured` — reservations since the last
+captured response that produced none, whether released before dispatch or
+dispatched into uncertainty. The retry delay is `60 s × 2^(n−1)` capped at
+30 min, and the fifth consecutive uncaptured reservation parks the job with
+`indeterminate_exhausted` (or `pre_dispatch_exhausted`) and a message that
+counts the streak; the governed reason and phase of the failing dispatch are
+written into the attempt's credit-ledger details so the operator reads
+`body_too_large` rather than a bare `transport`. A captured response resets the
+streak. Stale recovery applies the same law to a capture job's safe read (it is
+the same uncertainty as a transport failure on that read); stateful attempts
+and interactive reads other than the floor probe still park for the owner.
+
+Recovery is an owner action, not a resume: `POST
+/api/v1/admin/ofapi/capture/jobs/:jobId/cancel` (owner-session, CAS on
+state, reason code and row version, dry-run by default, audited as
+`admin.ofapi_capture_job_cancelled`). The cancelled row keeps every attempt it
+made (append-only), its active slot is freed, and the owning lane creates a
+fresh job with fresh allowances on its next request. Resuming in place was
+rejected: the allowances are the point of the cap, and resetting
+`attempt_count` would rewrite the history the ledger reconciles against.
+
+Rejected: distinguishing `body_too_large` as a determinate block at the first
+occurrence (the bound parks it within five attempts and the ledger names it;
+a separate outcome would need its own settlement semantics), and bounding by
+credits rather than attempts (a pre-dispatch release spends none and would
+loop forever).
+
+Production follow-up (owner-gated, after deploy): cancel the `job_cap` job on
+`lora-vip-of` and resolve or cancel the `indeterminate` job on `lora-of`, then
+request each page's `posts` stream once so the lane creates fresh jobs.

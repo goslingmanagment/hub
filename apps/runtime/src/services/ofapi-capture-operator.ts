@@ -3,6 +3,8 @@ import type {
   OfapiCaptureAttemptResolveResponse,
   OfapiCaptureControlBody,
   OfapiCaptureControlResponse,
+  OfapiCaptureJobCancelBody,
+  OfapiCaptureJobCancelResponse,
   OfapiCaptureJobReplayBody,
   OfapiCaptureJobReplayResponse,
   OfapiCaptureOperatorStatusResponse,
@@ -18,6 +20,7 @@ import {
   OfapiMessageCoverageOperatorConflictError,
   OfapiMessageCoverageUnavailableError,
   reconcileOfapiExportCreate,
+  cancelOfapiCaptureJob,
   replayOfapiCaptureJobParse,
   revokeOfapiMessageCoverage,
   resolveOfapiIndeterminateAttempt,
@@ -186,6 +189,30 @@ export async function replayOwnerOfapiCaptureJob(
         observationReceivedAt: result.next.observationReceivedAt.toISOString(),
       },
     };
+  } catch (error) {
+    if (error instanceof OfapiCaptureInvariantError) {
+      throw new ConflictError(error.message);
+    }
+    throw error;
+  }
+}
+
+export async function cancelOwnerOfapiCaptureJob(
+  app: Pick<AppContext, "db">,
+  input: OfapiCaptureJobCancelBody & { jobId: string; actorUserId: number },
+): Promise<OfapiCaptureJobCancelResponse> {
+  try {
+    const result = await cancelOfapiCaptureJob(app.db, {
+      jobId: input.jobId,
+      expectedState: input.expectedState,
+      expectedReasonCode: input.expectedReasonCode,
+      expectedJobRowVersion: input.expectedJobRowVersion,
+      actorUserId: input.actorUserId,
+      reason: input.reason,
+      execute: input.dryRun === false,
+    });
+    if (!result) throw new NotFoundError(`OFAPI capture job ${input.jobId} was not found`);
+    return result;
   } catch (error) {
     if (error instanceof OfapiCaptureInvariantError) {
       throw new ConflictError(error.message);

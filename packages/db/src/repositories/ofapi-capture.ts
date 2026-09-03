@@ -32,6 +32,53 @@ const OFAPI_STORAGE_HEALTH_RETRY_MS = 5 * 60 * 1000;
 const OFAPI_BUDGET_RECHECK_MS = 15 * 60 * 1000;
 const OFAPI_PAUSE_RECHECK_MS = 24 * 60 * 60 * 1000;
 const OFAPI_DEADLINE_RECHECK_MS = 60 * 1000;
+
+/**
+ * Decision #246 — the bound on retrying uncertainty.
+ *
+ * A capture job's reservation can end without a captured response in two
+ * ways: released before dispatch (lease expired, deadline missed, fence lost)
+ * or dispatched into uncertainty (transport failure, vendor slow, body
+ * unreadable). A safe read may be repeated after settling the uncertain
+ * attempt as billed — but production showed the unbounded form: one
+ * post_paginate job on lora-vip-of dispatched 1 000 times in 40 hours, every
+ * one uncaptured, 60 s apart, until the job cap parked it — while every other
+ * OFAPI call on the same page succeeded. A deterministic failure retried every
+ * minute is not resilience, it is a loop that spends the job's whole allowance
+ * proving one thing.
+ *
+ * So: the job counts consecutive uncaptured reservations, the retry delay
+ * doubles with each one (60 s → 30 min cap), and the fifth consecutive
+ * uncaptured reservation parks the job for an operator with a reason that
+ * names the outcome. A captured response resets the count.
+ */
+export const OFAPI_UNCAPTURED_RETRY_MAX_CONSECUTIVE = 5;
+export const OFAPI_UNCAPTURED_RETRY_BASE_DELAY_MS = 60 * 1000;
+export const OFAPI_UNCAPTURED_RETRY_MAX_DELAY_MS = 30 * 60 * 1000;
+
+export function ofapiUncapturedRetryDelayMs(consecutiveUncaptured: number) {
+  const exponent = Math.max(0, Math.trunc(consecutiveUncaptured) - 1);
+  return Math.min(
+    OFAPI_UNCAPTURED_RETRY_BASE_DELAY_MS * 2 ** exponent,
+    OFAPI_UNCAPTURED_RETRY_MAX_DELAY_MS,
+  );
+}
+
+function laterOf(a: Date, b: Date) {
+  return a.getTime() >= b.getTime() ? a : b;
+}
+
+/** Locks the job row (the caller's transaction already holds the credit-state
+ *  and attempt locks, in that order) and returns its uncaptured streak. */
+async function lockJobUncapturedStreak(database: Database, jobId: string) {
+  const row = await database.execute<{ consecutive_uncaptured: unknown }>(sql`
+    select job.consecutive_uncaptured
+    from ofapi_capture_jobs job
+    where job.id = ${jobId}::uuid
+    for update
+  `);
+  return asNumber(row.rows[0]?.consecutive_uncaptured ?? 0, "consecutive_uncaptured");
+}
 const OFAPI_EXPORT_STATUS_POLL_CREDIT_ALLOWANCE = 4;
 const OFAPI_EXPORT_START_CALL_ALLOWANCE = 1;
 const OFAPI_EXPORT_STARTED_STATUS_POLL_CALL_ALLOWANCE = 288;
@@ -156,6 +203,10 @@ export interface OfapiCaptureJobRecord {
   acceptedItems: number;
   acceptedPages: number;
   zeroProgressCount: number;
+  /** Decision #246: reservations since the last captured response that ended
+   *  without one (pre-dispatch release or indeterminate dispatch). Drives the
+   *  retry backoff and parks the job at the bound. */
+  consecutiveUncaptured: number;
   sourceContractVersion: string;
   parserVersion: string;
   proofPolicyVersion: string;
@@ -211,6 +262,7 @@ function mapCaptureJob(row: Record<string, unknown>): OfapiCaptureJobRecord {
     acceptedItems: asNumber(row.accepted_items, "accepted_items"),
     acceptedPages: asNumber(row.accepted_pages, "accepted_pages"),
     zeroProgressCount: asNumber(row.zero_progress_count, "zero_progress_count"),
+    consecutiveUncaptured: asNumber(row.consecutive_uncaptured, "consecutive_uncaptured"),
     sourceContractVersion: String(row.source_contract_version),
     parserVersion: String(row.parser_version),
     proofPolicyVersion: String(row.proof_policy_version),
@@ -1694,13 +1746,24 @@ export async function releaseOfapiAttemptPreDispatch(
     `);
 
     if (attempt.owner_kind === "capture_job") {
-      const retryAt = input.retryAt ?? null;
+      // Decision #246: a release is one more reservation without a captured
+      // response — back off, and park at the bound instead of spinning.
+      const consecutive = await lockJobUncapturedStreak(database, attempt.owner_id) + 1;
+      const exhausted = consecutive >= OFAPI_UNCAPTURED_RETRY_MAX_CONSECUTIVE;
+      const retryAt = input.retryAt && !exhausted
+        ? laterOf(input.retryAt, new Date(now.getTime() + ofapiUncapturedRetryDelayMs(consecutive)))
+        : null;
+      const reasonCode = retryAt || !input.retryAt ? input.reasonCode : "pre_dispatch_exhausted";
+      const reasonMessage = retryAt || !input.retryAt
+        ? "Attempt released before dispatch"
+        : `Attempt released before dispatch ${consecutive} times in a row: ${input.reasonCode}`;
       await database.execute(sql`
         update ofapi_capture_jobs
         set state = ${retryAt ? "retry_wait" : "blocked"},
             next_attempt_at = coalesce(${retryAt}, next_attempt_at),
-            reason_code = ${input.reasonCode},
-            reason_message = 'Attempt released before dispatch',
+            reason_code = ${reasonCode},
+            reason_message = ${reasonMessage},
+            consecutive_uncaptured = ${consecutive},
             lease_owner = null,
             lease_token = null,
             lease_until = null,
@@ -1821,14 +1884,30 @@ export async function markOfapiAttemptIndeterminate(
       `);
     }
     if (attempt.owner_kind === "capture_job") {
+      // Decision #246: the safe-read retry is bounded. The attempt above is
+      // already settled as billed (the safe-read law); what the bound governs
+      // is whether the JOB asks the vendor again, and how soon.
+      const retryBase = input.retrySafeReadAt ?? null;
+      const consecutive = await lockJobUncapturedStreak(database, attempt.owner_id) + 1;
+      const exhausted = consecutive >= OFAPI_UNCAPTURED_RETRY_MAX_CONSECUTIVE;
+      const retryAt = retryBase && !exhausted
+        ? laterOf(retryBase, new Date(now.getTime() + ofapiUncapturedRetryDelayMs(consecutive)))
+        : null;
+      const reasonCode = retryAt
+        ? "indeterminate_safe_read_retry"
+        : retryBase
+          ? "indeterminate_exhausted"
+          : "indeterminate";
+      const reasonMessage = retryBase && exhausted
+        ? `Dispatch certainty unresolved ${consecutive} times in a row: ${input.outcome}`
+        : `Dispatch certainty unresolved: ${input.outcome}`;
       await database.execute(sql`
         update ofapi_capture_jobs
-        set state = ${input.retrySafeReadAt ? "retry_wait" : "blocked"},
-            next_attempt_at = coalesce(${input.retrySafeReadAt ?? null}, next_attempt_at),
-            reason_code = ${input.retrySafeReadAt
-              ? "indeterminate_safe_read_retry"
-              : "indeterminate"},
-            reason_message = ${`Dispatch certainty unresolved: ${input.outcome}`},
+        set state = ${retryAt ? "retry_wait" : "blocked"},
+            next_attempt_at = coalesce(${retryAt}, next_attempt_at),
+            reason_code = ${reasonCode},
+            reason_message = ${reasonMessage},
+            consecutive_uncaptured = ${consecutive},
             spent_credits = spent_credits + ${reservedCredits},
             dispatch_count = dispatch_count + 1,
             lease_owner = null,
@@ -1911,8 +1990,14 @@ export async function recoverStaleOfapiCaptureWork(
         released += 1;
       }
     } else {
-      const safelyResolveFloorProbe = attempt.is_floor_probe &&
-        attempt.request_semantics === "safe_read";
+      // Decision #246: a stale safe read from a capture job (a worker that died
+      // mid-dispatch — a deploy, most often) is the same uncertainty as a
+      // transport failure on that read, and takes the same bounded retry
+      // instead of waiting for an operator who has nothing to check. Stateful
+      // attempts, and interactive reads other than the floor probe, still park
+      // for owner certainty resolution.
+      const safelyResolveFloorProbe = attempt.request_semantics === "safe_read" &&
+        (attempt.is_floor_probe || attempt.owner_kind === "capture_job");
       if (await markOfapiAttemptIndeterminate(db, {
         attemptId: attempt.id,
         fenceToken: attempt.fence_token,
@@ -2216,6 +2301,7 @@ export async function captureOfapiAttemptResponse(
             pending_observation_received_at = ${observation.receivedAt},
             spent_credits = greatest(0, spent_credits + ${jobCreditDelta}),
             dispatch_count = dispatch_count + ${jobDispatchDelta},
+            consecutive_uncaptured = 0,
             reason_code = null,
             reason_message = null,
             row_version = row_version + 1,
@@ -2947,6 +3033,120 @@ export const OFAPI_LOCAL_PARSE_REPLAY_REASONS = [
 
 export type OfapiLocalParseReplayReason =
   typeof OFAPI_LOCAL_PARSE_REPLAY_REASONS[number];
+
+/**
+ * Decision #246 — the recovery half of parking. A job the bound (or the job
+ * cap, or an operator) parked is not resumed in place: its allowances were
+ * the point, and rewriting `attempt_count` would rewrite history. The owner
+ * cancels it, the row keeps every attempt it made, the active slot is freed,
+ * and the owning lane starts a fresh job with fresh allowances on its next
+ * request. CAS on state, reason code and row version; refuses a leased job or
+ * one with an open (reserved/dispatching) attempt. Nothing is dispatched.
+ */
+export async function cancelOfapiCaptureJob(
+  db: Database,
+  input: {
+    jobId: string;
+    expectedState: "blocked" | "retry_wait";
+    expectedReasonCode: string;
+    expectedJobRowVersion: number;
+    actorUserId: number;
+    reason: string;
+    execute?: boolean;
+    now?: Date;
+  },
+) {
+  const now = input.now ?? new Date();
+  return db.transaction(async (tx) => {
+    const database = tx as unknown as Database;
+    const current = await database.execute<Record<string, unknown>>(sql`
+      select *
+      from ofapi_capture_jobs
+      where id = ${input.jobId}::uuid
+      for update
+    `);
+    const row = current.rows[0];
+    if (!row) return null;
+    const job = mapCaptureJob(row);
+    if (
+      job.state !== input.expectedState ||
+      job.reasonCode !== input.expectedReasonCode ||
+      job.rowVersion !== input.expectedJobRowVersion
+    ) {
+      throw new OfapiCaptureInvariantError(
+        `Capture job ${input.jobId} changed before cancel`,
+      );
+    }
+    if (job.leaseToken !== null) {
+      throw new OfapiCaptureInvariantError(`Capture job ${input.jobId} is leased`);
+    }
+    const open = await database.execute<{ open_attempts: unknown }>(sql`
+      select count(*) as open_attempts
+      from ofapi_request_attempts attempt
+      where attempt.capture_job_id = ${input.jobId}::uuid
+        and attempt.state in ('reserved', 'dispatching')
+    `);
+    if (asNumber(open.rows[0]?.open_attempts ?? 0, "open_attempts") > 0) {
+      throw new OfapiCaptureInvariantError(
+        `Capture job ${input.jobId} still has an open attempt`,
+      );
+    }
+    const previous = {
+      state: job.state as "blocked" | "retry_wait",
+      reasonCode: job.reasonCode,
+      rowVersion: job.rowVersion,
+    };
+    const next = {
+      state: "cancelled" as const,
+      reasonCode: "owner_cancelled" as const,
+      rowVersion: job.rowVersion + 1,
+    };
+    if (input.execute === true) {
+      const updated = await database.execute<{ id: string }>(sql`
+        update ofapi_capture_jobs
+        set state = 'cancelled',
+            reason_code = 'owner_cancelled',
+            reason_message = ${`Cancelled by owner ${input.actorUserId}: ${input.reason}`},
+            completed_at = ${now},
+            row_version = row_version + 1,
+            updated_at = ${now}
+        where id = ${input.jobId}::uuid
+          and row_version = ${input.expectedJobRowVersion}
+        returning id::text as id
+      `);
+      if (updated.rows.length !== 1) {
+        throw new OfapiCaptureInvariantError(`Capture job ${input.jobId} changed during cancel`);
+      }
+    }
+    // Same ledger of operator acts as resolve/replay: dry runs are recorded too.
+    await database.execute(sql`
+      insert into ofapi_capture_operator_actions (
+        action, target_type, target_ref, expected_state,
+        previous_state, resulting_state, dry_run,
+        actor_user_id, reason, occurred_at
+      ) values (
+        'cancel_job',
+        'job',
+        ${input.jobId},
+        ${`${input.expectedState}:${input.expectedReasonCode}:${input.expectedJobRowVersion}`},
+        ${JSON.stringify(previous)}::jsonb,
+        ${JSON.stringify(next)}::jsonb,
+        ${input.execute !== true},
+        ${input.actorUserId},
+        ${input.reason},
+        ${now}
+      )
+    `);
+    return {
+      dryRun: input.execute !== true,
+      status: input.execute === true ? "cancelled" as const : "would_cancel" as const,
+      jobId: job.id,
+      pageId: job.pageId,
+      previous,
+      next,
+    };
+  });
+}
 
 export async function replayOfapiCaptureJobParse(
   db: Database,
