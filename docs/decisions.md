@@ -245,7 +245,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 242 | Follower blast-radius override is a hash-bound owner act | The `max(50, floor(active/100))` automatic ceiling remains unchanged and no blocked generation auto-retries. A two-step owner-session preview/apply surface binds approval to the exact blocked request and timestamp, cursor generation and `fullSweepStartedAt`, and SHA-256 of the sorted guarded candidate row ids. Apply runs SERIALIZABLE, locks the page, all three audience states, the reconcile cursor and candidate rows; requires the whole audience block paused with no lease; recomputes and rejects stale or now-within-limit sets; invokes the same guarded deactivation helper; refreshes follower projections and rollups; and writes the audit event atomically. It never advances the stream state, cursor, checkpoint, success run or follower-sync timestamp. Reconcile raw pages now retain generation and sweep-start lineage in existing `request_params` (no migration), and the blocker anomaly reports candidate counts by prior generation. |
 | 243 | A known live follower total always materializes UTC today | `rebuildFollowerRollups` derives `new_followers` from relationship dates, but a day with zero such rows still has a known live headline. After the aggregate rebuild, a non-null `knownTotalFollowers` therefore upserts UTC today's row with zero new followers only when absent; on conflict it updates only the known total and timestamp, preserving the derived new-follower count. A null total still creates no zero row, and historical replay semantics are unchanged. |
 | 244 | Content media identity and complete Vault walks | Separate raw files from offers in the existing media projector; expose flattened post attachments with preview roles and unresolved rows. Full unfiltered walk evidence alone may mark album membership missing. Preserve sightings, reconcile one member per event, rotate album walks, replay OF through the common sweep, and expose rowUpdatedAt for incremental reads with periodic reconciliation; ship the strict API plane change with matching CLI builds. Hub-only scope, no upload extension changes. |
-| 245 | OFAPI sync-read status matrix | `OfapiApiError` is classified by HTTP status in the sync executor instead of falling through to `transient_network`: 402 (credits exhausted; OFAPI does not charge the rejected request) retries under its own class `ofapi_insufficient_credits`, opens ONE global `ofapi_low_credit` incident (subKey `http_402`) for the owner and resolves it on the first chunk that succeeds afterwards; 401/403 park the stream `manual_action_required` (`ofapi_http_<status>`) without pausing the page for a re-login it cannot perform; 429 → `rate_limit`; 5xx → `provider_5xx`; other 4xx park as `provider_bad_data`; a status-less transport failure stays `transient_network`. Rejected: a fleet-wide credits latch in the OFAPI client — the free 402 probe under the existing ≤30 min per-stream backoff already bounds the noise and needs no clearing authority. |
+| 245 | OFAPI sync-read status matrix | `OfapiApiError` is classified by HTTP status in the sync executor instead of falling through to `transient_network`: 402 (credits exhausted; OFAPI does not charge the rejected request) retries under its own class `ofapi_insufficient_credits`, opens the credit-ledger monitor's OWN global latch `ofapi_low_credit:global` (no subKey — one pool, one alarm, either path may close it), suppresses the per-stream `stream_failed_threshold` alert for this class, and resolves the latch only from a later chunk that actually got an OFAPI response (a partial yielded by the credit floor or daily budget before any request proves nothing); 401/403 park the stream `manual_action_required` (`ofapi_http_<status>`) without pausing the page for a re-login it cannot perform; 429 → `rate_limit`; 5xx → `provider_5xx`; other 4xx park as `provider_bad_data`; a status-less transport failure stays `transient_network`. Rejected: a fleet-wide credits latch in the OFAPI client — the free 402 probe under the existing ≤30 min per-stream backoff already bounds the noise and needs no clearing authority. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -10480,12 +10480,18 @@ does not charge it, so the retry itself was never the cost — the missing parts
 were the name and the alarm.
 
 The executor now classifies OFAPI statuses explicitly. `402` retries under
-`ofapi_insufficient_credits` (the ordinary per-stream backoff, ≤30 min), opens
-one global `ofapi_low_credit` incident with subKey `http_402` — the same
-Telegram latch the credit-ledger monitor uses, so the owner sees one message
-whichever path notices first — and the executor resolves that incident on the
-first successful or partial chunk of a stream whose lease still carries the
-402 retry kind. `401`/`403` park the stream as `manual_action_required`
+`ofapi_insufficient_credits` (the ordinary per-stream backoff, ≤30 min) and
+opens the global `ofapi_low_credit` incident under the credit-ledger monitor's
+OWN latch key (`ofapi_low_credit:global`, deliberately no subKey): one credit
+pool is one condition, so the two paths dedupe against each other, the owner
+sees one Telegram message whichever path notices first, and either path may
+close it. The per-stream `stream_failed_threshold` alert is suppressed for this
+class — "stream failed 3x" per OFAPI stream on top of the pool alarm is noise.
+The executor resolves the latch from the first successful OR partial chunk of
+a stream whose lease still carries the 402 retry kind, but ONLY when that chunk
+recorded at least one OFAPI request on its budget: a partial yielded by the
+credit floor or the daily budget BEFORE any request never consulted the pool
+and must not read as recovery. `401`/`403` park the stream as `manual_action_required`
 (`ofapi_http_401`/`ofapi_http_403`): they mean the Hub's OFAPI key or account
 mapping, never the page's platform session, so the page is NOT paused for a
 re-login the way a Fansly 401 pauses it. `429` → `rate_limit`, `5xx` →

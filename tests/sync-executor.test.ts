@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type * as DbModule from "@agency_hub_core/db";
+import type * as NotificationIncidentsModule from "../apps/runtime/src/services/notification-incidents.ts";
 import type * as SyncSharedModule from "../apps/runtime/src/services/sync/shared.ts";
 
 import { PageSyncLeaseLostError } from "@agency_hub_core/db";
@@ -1746,9 +1747,27 @@ describe("sync executor", () => {
       logger: { warn: vi.fn(), error: vi.fn() },
     }) as never;
 
-    it("retries a 402 under ofapi_insufficient_credits and opens one global incident", async () => {
+    const creditsLease = {
+      ...taskLease,
+      stream: "fan_identities" as const,
+      retryKind: "ofapi_insufficient_credits",
+    };
+    /** A handler outcome that first records one OFAPI request on the chunk
+     *  budget, the way the real client's request observer does. */
+    const outcomeAfterOneRequest = (outcome: Record<string, unknown>) =>
+      async (_app: unknown, input: { budget: { onRequestEvent(event: unknown): Promise<void> } }) => {
+        await input.budget.onRequestEvent({ state: "started" });
+        return outcome;
+      };
+
+    it("retries a 402 under ofapi_insufficient_credits and opens the monitor's own low-credit latch, once", async () => {
       const ctx = app();
-      dbMocks.acquirePageSyncLease.mockResolvedValueOnce({ ...taskLease, stream: "fan_identities" as const });
+      // Third consecutive failure: the per-stream threshold alert would open here.
+      dbMocks.acquirePageSyncLease.mockResolvedValueOnce({
+        ...taskLease,
+        stream: "fan_identities" as const,
+        consecutiveFailures: 2,
+      });
       dbMocks.listRunnablePageSync.mockResolvedValueOnce([]);
       handlerMocks.executeStreamChunk.mockRejectedValue(ofapiError(402));
 
@@ -1764,34 +1783,90 @@ describe("sync executor", () => {
       expect(notificationMocks.notifyOfapiGlobalIncident).toHaveBeenCalledTimes(1);
       expect(notificationMocks.notifyOfapiGlobalIncident).toHaveBeenCalledWith(ctx, expect.objectContaining({
         kind: "ofapi_low_credit",
-        subKey: "http_402",
         errorSummary: expect.stringContaining("402"),
       }));
+      // One pool, one alarm: no "stream failed 3x" on top of the credits incident.
+      expect(notificationMocks.notifySyncChunkFailureIncident).not.toHaveBeenCalled();
+      // The executor's latch IS the credit-ledger monitor's latch (no subKey),
+      // so the two paths dedupe against each other and either can close it.
+      const incident = notificationMocks.notifyOfapiGlobalIncident.mock.calls[0]?.[1] as {
+        kind: "ofapi_low_credit";
+        subKey?: string | null;
+      };
+      expect(incident.subKey ?? null).toBeNull();
+      const { incidentKey } = await vi.importActual<typeof NotificationIncidentsModule>(
+        "../apps/runtime/src/services/notification-incidents.ts",
+      );
+      expect(incidentKey({ kind: incident.kind, platformAccountId: null, subKey: incident.subKey ?? null }))
+        .toBe(incidentKey({ kind: "ofapi_low_credit", platformAccountId: null }));
       expect(result).toMatchObject({ kind: "failed", stream: "fan_identities", needsContinuation: false });
     });
 
-    it("resolves the credits incident on the first chunk that succeeds after a 402", async () => {
+    it("resolves the credits incident on the first successful chunk that got an OFAPI response", async () => {
       const ctx = app();
-      dbMocks.acquirePageSyncLease.mockResolvedValueOnce({
-        ...taskLease,
-        stream: "fan_identities" as const,
-        retryKind: "ofapi_insufficient_credits",
-      });
-      handlerMocks.executeStreamChunk.mockResolvedValue({ satisfied: true, yieldReason: null, stats: {} });
+      dbMocks.acquirePageSyncLease.mockResolvedValueOnce(creditsLease);
+      handlerMocks.executeStreamChunk.mockImplementation(
+        outcomeAfterOneRequest({ satisfied: true, yieldReason: null, stats: {} }) as never,
+      );
 
       const result = await executeNextSyncPageChunk(ctx, 55);
 
       expect(result).toMatchObject({ kind: "success", stream: "fan_identities" });
+      expect(notificationMocks.resolveOfapiGlobalIncident).toHaveBeenCalledTimes(1);
       expect(notificationMocks.resolveOfapiGlobalIncident).toHaveBeenCalledWith(ctx, expect.objectContaining({
         kind: "ofapi_low_credit",
-        subKey: "http_402",
       }));
+      expect((notificationMocks.resolveOfapiGlobalIncident.mock.calls[0]?.[1] as { subKey?: string | null }).subKey ?? null)
+        .toBeNull();
+    });
+
+    it("resolves the credits incident from a partial chunk too, once a request went through", async () => {
+      const ctx = app();
+      dbMocks.acquirePageSyncLease.mockResolvedValueOnce(creditsLease);
+      dbMocks.listRunnablePageSync.mockResolvedValueOnce([]);
+      handlerMocks.executeStreamChunk.mockImplementation(
+        outcomeAfterOneRequest({ satisfied: false, yieldReason: "request_budget", stats: {} }) as never,
+      );
+
+      const result = await executeNextSyncPageChunk(ctx, 55);
+
+      expect(result).toMatchObject({ kind: "yielded", stream: "fan_identities" });
+      expect(notificationMocks.resolveOfapiGlobalIncident).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not resolve the credits incident from a partial that made no request (credit floor, daily budget)", async () => {
+      const ctx = app();
+      dbMocks.acquirePageSyncLease.mockResolvedValueOnce(creditsLease);
+      dbMocks.listRunnablePageSync.mockResolvedValueOnce([]);
+      handlerMocks.executeStreamChunk.mockResolvedValue({
+        satisfied: false,
+        yieldReason: null,
+        continuationRetryAt: new Date("2026-03-14T13:00:00.000Z"),
+        stats: { deferred: "credit_floor" },
+      });
+
+      const result = await executeNextSyncPageChunk(ctx, 55);
+
+      expect(result).toMatchObject({ kind: "yielded", stream: "fan_identities" });
+      expect(notificationMocks.resolveOfapiGlobalIncident).not.toHaveBeenCalled();
+    });
+
+    it("does not resolve the credits incident from a success that made no request", async () => {
+      const ctx = app();
+      dbMocks.acquirePageSyncLease.mockResolvedValueOnce(creditsLease);
+      handlerMocks.executeStreamChunk.mockResolvedValue({ satisfied: true, yieldReason: null, stats: {} });
+
+      await executeNextSyncPageChunk(ctx, 55);
+
+      expect(notificationMocks.resolveOfapiGlobalIncident).not.toHaveBeenCalled();
     });
 
     it("leaves the credits incident alone when the lease was not a credits retry", async () => {
       const ctx = app();
       dbMocks.acquirePageSyncLease.mockResolvedValueOnce({ ...taskLease, retryKind: "transient_network" });
-      handlerMocks.executeStreamChunk.mockResolvedValue({ satisfied: true, yieldReason: null, stats: {} });
+      handlerMocks.executeStreamChunk.mockImplementation(
+        outcomeAfterOneRequest({ satisfied: true, yieldReason: null, stats: {} }) as never,
+      );
 
       await executeNextSyncPageChunk(ctx, 55);
 
@@ -1834,6 +1909,8 @@ describe("sync executor", () => {
       expect(dbMocks.retryPageSync).toHaveBeenCalledWith({}, expect.objectContaining({ retryKind }));
       expect(dbMocks.blockPageSync).not.toHaveBeenCalled();
       expect(notificationMocks.notifyOfapiGlobalIncident).not.toHaveBeenCalled();
+      // Every other class keeps the ordinary per-stream failure alert path.
+      expect(notificationMocks.notifySyncChunkFailureIncident).toHaveBeenCalledTimes(1);
     });
 
     it.each([400, 404, 422])("parks any other 4xx (%s) as provider_bad_data instead of hot-retrying it", async (status) => {

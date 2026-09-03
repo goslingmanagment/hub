@@ -214,12 +214,17 @@ async function resolveSyncPageWakeupTarget(
  * an account-wide operations state, not a network blip. The stream keeps its
  * ordinary bounded retry (OFAPI does not charge a 402-rejected request, so the
  * probe is free and the lane heals itself after a top-up) but under its own
- * retry class so the monitor names the cause, and the executor opens ONE
- * global incident for the owner and resolves it on the first chunk that
- * succeeds afterwards.
+ * retry class so the monitor names the cause. The owner hears about it ONCE:
+ * the executor opens the SAME global latch the credit-ledger monitor uses
+ * (`ofapi_low_credit:global`, deliberately no subKey — two latches for one
+ * pool would mean two Telegram messages and a monitor that cannot close the
+ * executor's), suppresses the per-stream threshold alert for this class, and
+ * resolves the latch only from a chunk that actually got an OFAPI response —
+ * a partial yielded by the credit floor or the daily budget BEFORE any request
+ * proves nothing about the pool and must not read as recovery.
  */
 export const OFAPI_INSUFFICIENT_CREDITS_RETRY_CLASS = "ofapi_insufficient_credits";
-const OFAPI_INSUFFICIENT_CREDITS_INCIDENT = { kind: "ofapi_low_credit", subKey: "http_402" } as const;
+export const OFAPI_INSUFFICIENT_CREDITS_INCIDENT = { kind: "ofapi_low_credit" } as const;
 
 function classifyOfapiApiError(
   error: OfapiApiError,
@@ -265,9 +270,15 @@ function classifyOfapiApiError(
 async function resolveOfapiCreditsIncidentIfRecovered(
   app: Pick<AppContext, "config" | "db" | "logger">,
   taskLease: { retryKind: string | null },
+  budget: Pick<SyncChunkBudget, "totalRequests">,
   recoveredAt: Date,
 ) {
   if (taskLease.retryKind !== OFAPI_INSUFFICIENT_CREDITS_RETRY_CLASS) {
+    return;
+  }
+  if (budget.totalRequests === 0) {
+    // Yielded before the first request (credit floor, daily budget, wall
+    // clock): the pool was never consulted, so nothing recovered.
     return;
   }
   await resolveOfapiGlobalIncident(app, { ...OFAPI_INSUFFICIENT_CREDITS_INCIDENT, recoveredAt });
@@ -664,7 +675,7 @@ export async function executeNextSyncPageChunk(
           recoveredAt,
           stream: taskLease.stream,
         });
-        await resolveOfapiCreditsIncidentIfRecovered(app, taskLease, recoveredAt);
+        await resolveOfapiCreditsIncidentIfRecovered(app, taskLease, budget, recoveredAt);
       }
 
       // Shared tail on purpose: this "success" is the CHUNK SCHEDULER's
@@ -718,7 +729,7 @@ export async function executeNextSyncPageChunk(
       recoveredAt,
       stream: taskLease.stream,
     });
-    await resolveOfapiCreditsIncidentIfRecovered(app, taskLease, recoveredAt);
+    await resolveOfapiCreditsIncidentIfRecovered(app, taskLease, budget, recoveredAt);
     // A newer request OR another stream on this page may already be runnable.
     // Immediate page work wins over this stream's delayed yield; otherwise a
     // deferred retry stays only in page_sync_states for the planner to wake.
@@ -893,23 +904,26 @@ export async function executeNextSyncPageChunk(
     await telemetry.finish("failed", failure, {
       chunkStatus: "failed",
     });
-    await notifySyncChunkFailureIncident(app, {
-      platformAccountId,
-      pageLabel,
-      platform: provider,
-      stream: taskLease.stream,
-      runId: run.id,
-      hasProxy,
-      previousConsecutiveFailures: taskLease.consecutiveFailures,
-      forceOpen: classified.mode === "blocked",
-      errorCode: failure.error.code,
-      errorSummary: failure.summary,
-      occurredAt: failedAt,
-    });
     if (classified.retryClass === OFAPI_INSUFFICIENT_CREDITS_RETRY_CLASS) {
+      // One pool, one alarm: the per-stream threshold alert is skipped so the
+      // owner does not get "stream failed 3x" per OFAPI stream on top of it.
       await notifyOfapiGlobalIncident(app, {
         ...OFAPI_INSUFFICIENT_CREDITS_INCIDENT,
         errorSummary: `OFAPI rejected a request with 402 Payment Required (insufficient credits): ${failure.summary}`,
+        occurredAt: failedAt,
+      });
+    } else {
+      await notifySyncChunkFailureIncident(app, {
+        platformAccountId,
+        pageLabel,
+        platform: provider,
+        stream: taskLease.stream,
+        runId: run.id,
+        hasProxy,
+        previousConsecutiveFailures: taskLease.consecutiveFailures,
+        forceOpen: classified.mode === "blocked",
+        errorCode: failure.error.code,
+        errorSummary: failure.summary,
         occurredAt: failedAt,
       });
     }
