@@ -37,6 +37,8 @@ describe("agent read dataset vocabulary", () => {
       "fan_aliases",
       "fan_notes",
       "posts",
+      "raw_media",
+      "post_attachments",
       "post_monetization",
       "post_tips",
       "tip_goals",

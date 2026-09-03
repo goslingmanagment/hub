@@ -6,6 +6,7 @@
 // the sweep revisit its kinds — replay is the steady-state mechanism.
 
 import type { CanonicalizableObservation, Canonicalizer } from "./types.ts";
+import { canonicalizeOnlyFansPostsObservation, canParseOnlyFansPostsObservation } from "./onlyfans-post-media.ts";
 import {
   canonicalizeClientCaptureObservation,
   CLIENT_CAPTURE_CANONICALIZED_KINDS,
@@ -35,6 +36,7 @@ import {
 import {
   canonicalizeFanslyStatsObservation,
   canParseFanslyStatsObservation,
+  diagnoseFanslyStatsObservationRejection,
   FANSLY_STATS_CANONICALIZED_KINDS,
   FANSLY_STATS_CANONICALIZER_VERSION,
 } from "./fansly-stats.ts";
@@ -64,7 +66,11 @@ import {
 } from "./fansly-payouts.ts";
 
 export interface CanonicalizerFamily {
-  source: "webhook" | "pull" | "command_result" | "client_capture";
+  source: "webhook" | "pull" | "command_result" | "client_capture" | "ofapi_capture";
+  /** Only replay settled material; lower versions remain owned by capture jobs. */
+  minimumParseVersion?: number;
+  /** Load the original post acceptance boundary from the attached ledger. */
+  replayContext?: "accepted_posts";
   /**
    * Stable per-family lane id, unique across the registry and INDEPENDENT of
    * the version. It disambiguates families that share a `source`: the
@@ -113,6 +119,12 @@ export interface CanonicalizerFamily {
 
 export const CANONICALIZER_FAMILIES: readonly CanonicalizerFamily[] = [
   {
+    source: "ofapi_capture", lane: "ofapi-posts", kinds: ["ofapi.posts_page.v1"],
+    version: POSTS_CANONICALIZER_VERSION, minimumParseVersion: 7,
+    replayContext: "accepted_posts", projectionOnly: true,
+    canonicalize: canonicalizeOnlyFansPostsObservation, canParse: canParseOnlyFansPostsObservation,
+  },
+  {
     source: "webhook",
     lane: "ofapi",
     kinds: [...OFAPI_WEBHOOK_CANONICALIZED_KINDS],
@@ -153,6 +165,7 @@ export const CANONICALIZER_FAMILIES: readonly CanonicalizerFamily[] = [
     version: FANSLY_STATS_CANONICALIZER_VERSION,
     canonicalize: canonicalizeFanslyStatsObservation,
     canParse: canParseFanslyStatsObservation,
+    parseRejection: diagnoseFanslyStatsObservationRejection,
     projectionOnly: true,
   },
   {

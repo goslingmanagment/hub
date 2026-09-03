@@ -1,0 +1,12 @@
+{
+  "_fixture": "SYNTHETIC identities and names; technical shape reproduced from the 2026-09-03 creator Vault capture. Original and delivery dimensions deliberately differ. No credentials or real CDN addresses.",
+  "albumMedia": [
+    { "id": "member-1", "albumId": "album-1", "mediaId": "file-1", "mediaType": 2, "customFilename": "Подпись в альбоме", "createdAt": 1786556663000 },
+    { "id": "member-2", "albumId": "album-1", "mediaId": "file-2", "mediaType": 1, "customFilename": "", "createdAt": 1786556664000 }
+  ],
+  "media": [
+    { "id": "file-1", "accountId": "creator-1", "type": 2, "filename": "8_43 ????????.mp4", "mimetype": "video/mp4", "width": 720, "height": 1280, "metadata": "{\"originalHeight\":3840,\"originalWidth\":2160,\"duration\":522.682,\"frameRate\":30.21}", "createdAt": 1788297366, "updatedAt": 1788297785, "location": "DO_NOT_COPY_LOCATION", "variants": [{ "location": "DO_NOT_COPY", "width": 360, "height": 640 }] },
+    { "id": "file-2", "accountId": "creator-1", "type": 1, "filename": "photo.jpg", "mimetype": "image/jpeg", "width": 1200, "height": 1600, "metadata": "{}", "createdAt": 1788297367 },
+    { "id": "preview-1", "type": 1, "filename": "preview.jpg", "mimetype": "image/jpeg", "width": 360, "height": 640 }
+  ]
+}

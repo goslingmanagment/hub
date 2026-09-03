@@ -906,9 +906,14 @@ export class FanslyAdapter {
       before?: Date | null;
       limit?: number;
       offset?: number;
+      /** Diagnostic-only A/B seam. Production sync keeps the historical
+       * omitted form unless a caller explicitly asks for present-empty bounds. */
+      unboundedQueryShape?: "omitted" | "present-empty";
     },
   ) {
     const limit = params.limit ?? 100;
+    const offset = params.offset ?? 0;
+    const unbounded = params.unboundedQueryShape === "present-empty" ? "" : undefined;
     const response = await this.request<unknown>(
       context,
       "/account/wallets/earnings/transactions",
@@ -916,8 +921,8 @@ export class FanslyAdapter {
         operation: "earnings_transactions",
         endpointTemplate: "/account/wallets/earnings/transactions",
         query: {
-          after: params.after ? String(params.after.getTime()) : undefined,
-          before: params.before ? String(params.before.getTime()) : undefined,
+          after: params.after ? String(params.after.getTime()) : unbounded,
+          before: params.before ? String(params.before.getTime()) : unbounded,
           limit: params.limit != null ? String(params.limit) : undefined,
           offset: params.offset != null ? String(params.offset) : undefined,
         },
@@ -925,12 +930,13 @@ export class FanslyAdapter {
         requestShape: {
           after: params.after ? params.after.toISOString() : null,
           before: params.before ? params.before.toISOString() : null,
-          limit: params.limit ?? 100,
-          offset: params.offset ?? 0,
+          limit,
+          offset,
+          unboundedQueryShape: params.unboundedQueryShape ?? "omitted",
         },
         pagination: {
-          offset: params.offset ?? 0,
-          limit: params.limit ?? 100,
+          offset,
+          limit,
         },
         summarizeResponse: (parsed) => {
           const accepted = parseFanslyTransactionsPage(parsed);

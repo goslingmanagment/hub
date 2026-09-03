@@ -94,8 +94,6 @@ export const FANSLY_STATS_CANONICALIZED_KINDS = [
   "recapstats",
 ] as const;
 
-const CANONICALIZED_KIND_SET: ReadonlySet<string> = new Set(FANSLY_STATS_CANONICALIZED_KINDS);
-
 /** Anomaly code raised for a type code the label module does not know. */
 export const FANSLY_STATS_UNKNOWN_TYPE_DIAGNOSTIC = "fansly_stats_unknown_type";
 
@@ -1056,30 +1054,82 @@ function recapDrafts(observation: CanonicalizableObservation): CanonicalEventDra
 export function canParseFanslyStatsObservation(
   observation: Pick<CanonicalizableObservation, "kind" | "payload" | "accountId">,
 ): boolean {
-  if (!CANONICALIZED_KIND_SET.has(observation.kind) || observation.accountId === null) {
-    return false;
+  return diagnoseFanslyStatsObservationRejection(observation) === null;
+}
+
+function hasOwn(record: Record<string, unknown>, key: string) {
+  return Object.prototype.hasOwnProperty.call(record, key);
+}
+
+/**
+ * Proven historical provider shape for an account window that carried no
+ * statistics facts. Keep this deliberately exact: a missing field, a non-null
+ * aggregation, or any future extra key is still drift and remains unstamped
+ * for a parser that understands it.
+ */
+function isExactTerminalNullAccountStatsPayload(
+  payload: Record<string, unknown>,
+): boolean {
+  return Object.keys(payload).length === 2
+    && hasOwn(payload, "dataset")
+    && hasOwn(payload, "aggregationData")
+    && payload.dataset === null
+    && payload.aggregationData === null;
+}
+
+export type FanslyStatsObservationParseRejectionCode =
+  | "account_id_missing"
+  | "kind_not_supported"
+  | "payload_not_object"
+  | "payload_not_collection"
+  | "dataset_missing"
+  | "dataset_not_object"
+  | "account_stats_terminal_null_shape_invalid"
+  | "media_offer_suggestions_invalid";
+
+/** Fixed-code shape-gate detail. It never includes provider values. */
+export function diagnoseFanslyStatsObservationRejection(
+  observation: Pick<CanonicalizableObservation, "kind" | "payload" | "accountId">,
+): { code: FanslyStatsObservationParseRejectionCode } | null {
+  if (observation.accountId === null) {
+    return { code: "account_id_missing" };
   }
   const payload = observation.payload;
   switch (observation.kind) {
-    case "account_stats":
+    case "account_stats": {
+      if (!isRecord(payload)) return { code: "payload_not_object" };
+      if (isRecord(payload.dataset) || isExactTerminalNullAccountStatsPayload(payload)) {
+        return null;
+      }
+      if (!hasOwn(payload, "dataset")) return { code: "dataset_missing" };
+      return {
+        code: payload.dataset === null
+          ? "account_stats_terminal_null_shape_invalid"
+          : "dataset_not_object",
+      };
+    }
     case "media_offer_stats":
-      return isRecord(payload) && isRecord(payload.dataset);
+      if (!isRecord(payload)) return { code: "payload_not_object" };
+      if (!hasOwn(payload, "dataset")) return { code: "dataset_missing" };
+      return isRecord(payload.dataset) ? null : { code: "dataset_not_object" };
     case "earnings_stats_snapshot":
     case "earnings_monthlystats_snapshot":
     case "tracking_links":
     case "polls":
     case "recapstats":
-      return Array.isArray(payload) || isRecord(payload);
-    case "discovery_feed":
-      return isRecord(payload) && Array.isArray(payload.mediaOfferSuggestions);
     case "broadcast_stats":
     case "broadcast_stats_deleted":
     case "broadcast_scheduled":
-      // The skeletons come from a redacted probe, not a contract: accept any
-      // object or array and let the tolerant parser take what it recognizes.
-      return isRecord(payload) || Array.isArray(payload);
+      return Array.isArray(payload) || isRecord(payload)
+        ? null
+        : { code: "payload_not_collection" };
+    case "discovery_feed":
+      if (!isRecord(payload)) return { code: "payload_not_object" };
+      return Array.isArray(payload.mediaOfferSuggestions)
+        ? null
+        : { code: "media_offer_suggestions_invalid" };
     default:
-      return false;
+      return { code: "kind_not_supported" };
   }
 }
 

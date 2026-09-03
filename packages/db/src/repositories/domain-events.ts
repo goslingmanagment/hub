@@ -78,6 +78,7 @@ const PROJECTION_ONLY_DOMAIN_EVENT_TYPES = new Set([
   // ONE decision, never two.
   "message.attachments_observed",
   "media.observed",
+  "media.file_observed",
   "media.order_observed",
   // WP-F1, the statistics core. Analytics telemetry: traffic buckets, top-N
   // rankings, tag counters, the revenue mix, promo-link snapshots and the
@@ -123,6 +124,7 @@ const PROJECTION_ONLY_DOMAIN_EVENT_TYPES = new Set([
   // decision as well.
   "vault.album_observed",
   "vault.album_membership_observed",
+  "vault.album_walk_completed",
   "subscription.tier_observed",
   "subscription.tier_plan_observed",
   "promo.gift_code_observed",
@@ -974,6 +976,7 @@ export async function listObservationsForReplay(
   db: Database,
   input: {
     belowParseVersion: number;
+    atLeastParseVersion?: number;
     source?: string;
     kinds?: readonly string[];
     accountId?: number | null;
@@ -994,6 +997,7 @@ export async function listObservationsForReplay(
 ): Promise<ReplayObservationRow[]> {
   const limit = input.limit ?? 200;
   const conditions = [sql`o.parse_version < ${input.belowParseVersion}`];
+  if (input.atLeastParseVersion !== undefined) conditions.push(sql`o.parse_version >= ${input.atLeastParseVersion}`);
   if (input.source !== undefined) {
     conditions.push(sql`o.source = ${input.source}`);
   }

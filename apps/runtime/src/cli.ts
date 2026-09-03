@@ -1699,6 +1699,15 @@ export function buildProgram() {
     .option("--fan <accountId>", "fan account id → correlationAccountId + order-history accountIds (well-formed call)")
     .option("--media <accountMediaId>", "accountMediaId for order-history (well-formed call)")
     .option("--bundle <accountMediaBundleId>", "accountMediaBundleId for order-history (well-formed call)")
+    .option(
+      "--transactions-parity",
+      "fire only the /earnings/transactions query-bound matrix",
+    )
+    .option(
+      "--transactions-after <iso>",
+      "non-empty lower bound for --transactions-parity",
+      parseDateOption,
+    )
     .option("--dry-run", "resolve contexts and print the plan without calling Fansly")
     .action(async (options) => {
       const pageLabels: string[] = options.page;
@@ -1715,6 +1724,8 @@ export function buildProgram() {
           mediaAccountIds: options.fan ?? null,
           accountMediaId: options.media ?? null,
           accountMediaBundleId: options.bundle ?? null,
+          transactionsParity: Boolean(options.transactionsParity),
+          transactionsAfter: options.transactionsAfter,
         });
         for (const result of results) {
           console.log(JSON.stringify(result));

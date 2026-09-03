@@ -5,9 +5,11 @@ import {
   createFanslyPage,
   createModel,
   deactivatePageFollowsByGeneration,
+  listPageFollowDeactivationCandidates,
   maxPageDmThreadGeneration,
   maxPageFollowGeneration,
   maxPageSubscriptionGeneration,
+  readPageFollowDeactivationGenerationBuckets,
   upsertFans,
   upsertPageFollow,
   upsertPageFollows,
@@ -119,11 +121,26 @@ describe("projection generation high-water", () => {
       generation,
     })).toBe(1);
 
-    await deactivatePageFollowsByGeneration(testDb.db, {
+    const deactivationInput = {
       platformAccountId: page.id,
       generation,
-      lastSeenBefore: new Date("2099-01-01T00:00:00.000Z"),
+      fullSweepStartedAt: new Date("2099-01-01T00:00:00.000Z"),
+    };
+    const exactCandidates = await listPageFollowDeactivationCandidates(
+      testDb.db,
+      deactivationInput,
+    );
+    expect(await readPageFollowDeactivationGenerationBuckets(
+      testDb.db,
+      deactivationInput,
+    )).toEqual([{ lastSeenGeneration: 860, count: 2 }]);
+    const deactivatedIds = await deactivatePageFollowsByGeneration(testDb.db, {
+      platformAccountId: page.id,
+      generation,
+      lastSeenBefore: deactivationInput.fullSweepStartedAt,
     });
+    expect(deactivatedIds).toHaveLength(2);
+    expect(deactivatedIds).toEqual(exactCandidates.map((candidate) => candidate.id));
     const { rows: followRows } = await testDb.pool.query<{
       platform_follow_id: string;
       is_active: boolean;

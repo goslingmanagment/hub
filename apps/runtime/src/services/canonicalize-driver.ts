@@ -14,6 +14,8 @@ import {
   type DomainEventPartitionCoverage,
   DomainEventTargetMonthsUnattachedError,
   listObservationsForReplay,
+  listDetachedPartitionsHoldingAccount,
+  listObservedPostRefsForCapture,
   listPageNativeAccountRefs,
   loadDomainEventPartitionCoverage,
   markObservationParsed,
@@ -416,6 +418,7 @@ async function runFamily(
     : options.afterId ?? null;
   let reachedEnd = false;
   let budgetExhausted = false;
+  const checkedAcceptedLedgers = new Set<number>();
   for (let pageIndex = 0; pageIndex < maxPages; pageIndex += 1) {
     // The budget, checked between PAGES only (never mid-row). `pageIndex > 0`
     // on purpose: the caller already proved the budget was alive when this
@@ -428,6 +431,7 @@ async function runFamily(
     }
     const rows: ReplayObservationRow[] = await listObservationsForReplay(app.db, {
       belowParseVersion,
+      ...(family.minimumParseVersion === undefined ? {} : { atLeastParseVersion: family.minimumParseVersion }),
       source: family.source,
       ...(kinds !== undefined ? { kinds } : {}),
       accountId: options.accountId ?? null,
@@ -486,7 +490,20 @@ async function runFamily(
           runContext.diagnostics?.record(`canonicalize_rejected:${family.lane}:${reasonCode}`);
           continue;
         }
-        const drafts = family.canonicalize(observation, runContext)
+        let acceptedPostRefs: ReadonlySet<string> | undefined;
+        if (family.replayContext === "accepted_posts") {
+          if (row.accountId === null) throw new Error("OF post capture has no mapped page");
+          if (!checkedAcceptedLedgers.has(row.accountId)) {
+            if ((await listDetachedPartitionsHoldingAccount(app.db, row.accountId)).length > 0) {
+              throw new Error("OF post replay requires the complete attached acceptance ledger");
+            }
+            checkedAcceptedLedgers.add(row.accountId);
+          }
+          acceptedPostRefs = new Set(await listObservedPostRefsForCapture(app.db, row.accountId, row.id));
+        }
+        const drafts = family.canonicalize(observation, {
+          ...runContext, ...(acceptedPostRefs === undefined ? {} : { acceptedPostRefs }),
+        })
           .map((draft) => clampDraftOccurredAt(draft, row.receivedAt, now));
         // Capture-first rows (webhook) carry only the vendor account ref;
         // resolve it against the page map before the unmapped check.

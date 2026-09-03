@@ -500,6 +500,33 @@ export async function rebuildFollowerRollups(
         known_total_followers = excluded.known_total_followers,
         updated_at = excluded.updated_at
     `);
+    if (knownTotalFollowers !== null) {
+      // The live sync owns today's headline even when no stored relationship
+      // has a `followed_at` date today. The aggregate INSERT above has no row
+      // to hang that fact on in that case, so mint exactly today's zero-new
+      // bucket. On conflict, preserve the derived `new_followers` count.
+      await tx.execute(sql`
+        insert into daily_followers (
+          platform_account_id,
+          business_date,
+          new_followers,
+          known_total_followers,
+          updated_at
+        ) values (
+          ${platformAccountId},
+          (now() at time zone 'UTC')::date,
+          0,
+          ${knownTotalFollowers},
+          now()
+        )
+        on conflict (
+          platform_account_id,
+          business_date
+        ) do update set
+          known_total_followers = excluded.known_total_followers,
+          updated_at = excluded.updated_at
+      `);
+    }
     if (preserved.rows.length > 0) {
       // Restore only where the rebuild left a hole: today's value stays the
       // live one, and a day that no longer has any follows simply has no row

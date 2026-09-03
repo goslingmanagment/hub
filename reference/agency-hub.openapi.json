@@ -16153,6 +16153,646 @@
         }
       }
     },
+    "/api/v1/admin/sync/followers-reconcile/blast-radius/apply": {
+      "post": {
+        "summary": "Apply a hash-bound follower blast-radius override while audience sync is paused",
+        "tags": [
+          "admin"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "pageLabel": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "blockedRequestSeq": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "blockedAt": {
+                    "type": "string"
+                  },
+                  "generation": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "fullSweepStartedAt": {
+                    "type": "string"
+                  },
+                  "candidateSha256": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  }
+                },
+                "required": [
+                  "pageLabel",
+                  "blockedRequestSeq",
+                  "blockedAt",
+                  "generation",
+                  "fullSweepStartedAt",
+                  "candidateSha256"
+                ]
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "pageLabel": {
+                      "type": "string"
+                    },
+                    "stream": {
+                      "type": "string",
+                      "enum": [
+                        "followers_reconcile"
+                      ]
+                    },
+                    "blockedRequestSeq": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "blockedAt": {
+                      "type": "string"
+                    },
+                    "generation": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "fullSweepStartedAt": {
+                      "type": "string"
+                    },
+                    "activeFollowerCount": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "deactivationLimit": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "candidateCount": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "candidateSha256": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{64}$"
+                    },
+                    "candidateGenerationBuckets": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "lastSeenGeneration": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "count": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          }
+                        },
+                        "required": [
+                          "lastSeenGeneration",
+                          "count"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "accepted": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "action": {
+                      "type": "string",
+                      "enum": [
+                        "apply"
+                      ]
+                    },
+                    "deactivatedCount": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "audienceRemainsPaused": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    }
+                  },
+                  "required": [
+                    "pageLabel",
+                    "stream",
+                    "blockedRequestSeq",
+                    "blockedAt",
+                    "generation",
+                    "fullSweepStartedAt",
+                    "activeFollowerCount",
+                    "deactivationLimit",
+                    "candidateCount",
+                    "candidateSha256",
+                    "candidateGenerationBuckets",
+                    "accepted",
+                    "action",
+                    "deactivatedCount",
+                    "audienceRemainsPaused"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/sync/followers-reconcile/blast-radius/preview": {
+      "post": {
+        "summary": "Preview the exact follower rows behind a blast-radius block",
+        "tags": [
+          "admin"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "pageLabel": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "pageLabel"
+                ]
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "pageLabel": {
+                      "type": "string"
+                    },
+                    "stream": {
+                      "type": "string",
+                      "enum": [
+                        "followers_reconcile"
+                      ]
+                    },
+                    "blockedRequestSeq": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "blockedAt": {
+                      "type": "string"
+                    },
+                    "generation": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "fullSweepStartedAt": {
+                      "type": "string"
+                    },
+                    "activeFollowerCount": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "deactivationLimit": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "candidateCount": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "candidateSha256": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{64}$"
+                    },
+                    "candidateGenerationBuckets": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "lastSeenGeneration": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "count": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          }
+                        },
+                        "required": [
+                          "lastSeenGeneration",
+                          "count"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "accepted": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "action": {
+                      "type": "string",
+                      "enum": [
+                        "preview"
+                      ]
+                    },
+                    "audiencePaused": {
+                      "type": "boolean"
+                    },
+                    "audienceLeaseFree": {
+                      "type": "boolean"
+                    },
+                    "overrideRequired": {
+                      "type": "boolean"
+                    },
+                    "readyToApply": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "pageLabel",
+                    "stream",
+                    "blockedRequestSeq",
+                    "blockedAt",
+                    "generation",
+                    "fullSweepStartedAt",
+                    "activeFollowerCount",
+                    "deactivationLimit",
+                    "candidateCount",
+                    "candidateSha256",
+                    "candidateGenerationBuckets",
+                    "accepted",
+                    "action",
+                    "audiencePaused",
+                    "audienceLeaseFree",
+                    "overrideRequired",
+                    "readyToApply"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/sync/followers-reconcile/reset": {
       "post": {
         "summary": "Reset only the Fansly follower-reconcile stream without deleting its cursor",
@@ -21362,8 +22002,8 @@
                       }
                     },
                     "planes": {
-                      "minItems": 42,
-                      "maxItems": 42,
+                      "minItems": 45,
+                      "maxItems": 45,
                       "type": "array",
                       "items": {
                         "type": "object",
@@ -21398,15 +22038,18 @@
                               "fan_profiles",
                               "fan_flags",
                               "creator_posts",
+                              "creator_raw_media",
+                              "creator_vault_album_members",
+                              "creator_vault_album_scans",
+                              "creator_media",
+                              "creator_media_bundles",
                               "creator_post_tips",
                               "stats_traffic_buckets",
                               "stats_top_media",
                               "stats_top_tags",
                               "fansly_media_tag_stats",
                               "platform_tag_daily",
-                              "creator_media",
                               "creator_vault_albums",
-                              "creator_vault_album_members",
                               "page_subscription_tiers",
                               "page_subscription_tier_plans",
                               "post_comments",
@@ -21452,6 +22095,8 @@
                                   "fan_aliases",
                                   "fan_notes",
                                   "posts",
+                                  "raw_media",
+                                  "post_attachments",
                                   "post_monetization",
                                   "post_tips",
                                   "tip_goals",
@@ -21683,6 +22328,11 @@
                           "firstObservedAt",
                           "lastObservedAt",
                           "attachmentCount",
+                          "fypFlags",
+                          "wallRefs",
+                          "rawMedia",
+                          "vaultInventory",
+                          "postAttachment",
                           "postTargetTipAmountMills",
                           "attachmentTipAmountMills",
                           "postTipTotalMills",
@@ -21807,8 +22457,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 42,
-                          "maxItems": 42,
+                          "minItems": 45,
+                          "maxItems": 45,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -21845,15 +22495,18 @@
                                       "fan_profiles",
                                       "fan_flags",
                                       "creator_posts",
+                                      "creator_raw_media",
+                                      "creator_vault_album_members",
+                                      "creator_vault_album_scans",
+                                      "creator_media",
+                                      "creator_media_bundles",
                                       "creator_post_tips",
                                       "stats_traffic_buckets",
                                       "stats_top_media",
                                       "stats_top_tags",
                                       "fansly_media_tag_stats",
                                       "platform_tag_daily",
-                                      "creator_media",
                                       "creator_vault_albums",
-                                      "creator_vault_album_members",
                                       "page_subscription_tiers",
                                       "page_subscription_tier_plans",
                                       "post_comments",
@@ -21937,15 +22590,18 @@
                                       "fan_profiles",
                                       "fan_flags",
                                       "creator_posts",
+                                      "creator_raw_media",
+                                      "creator_vault_album_members",
+                                      "creator_vault_album_scans",
+                                      "creator_media",
+                                      "creator_media_bundles",
                                       "creator_post_tips",
                                       "stats_traffic_buckets",
                                       "stats_top_media",
                                       "stats_top_tags",
                                       "fansly_media_tag_stats",
                                       "platform_tag_daily",
-                                      "creator_media",
                                       "creator_vault_albums",
-                                      "creator_vault_album_members",
                                       "page_subscription_tiers",
                                       "page_subscription_tier_plans",
                                       "post_comments",
@@ -22070,15 +22726,18 @@
                                   "fan_profiles",
                                   "fan_flags",
                                   "creator_posts",
+                                  "creator_raw_media",
+                                  "creator_vault_album_members",
+                                  "creator_vault_album_scans",
+                                  "creator_media",
+                                  "creator_media_bundles",
                                   "creator_post_tips",
                                   "stats_traffic_buckets",
                                   "stats_top_media",
                                   "stats_top_tags",
                                   "fansly_media_tag_stats",
                                   "platform_tag_daily",
-                                  "creator_media",
                                   "creator_vault_albums",
-                                  "creator_vault_album_members",
                                   "page_subscription_tiers",
                                   "page_subscription_tier_plans",
                                   "post_comments",
@@ -22312,15 +22971,18 @@
                                       "fan_profiles",
                                       "fan_flags",
                                       "creator_posts",
+                                      "creator_raw_media",
+                                      "creator_vault_album_members",
+                                      "creator_vault_album_scans",
+                                      "creator_media",
+                                      "creator_media_bundles",
                                       "creator_post_tips",
                                       "stats_traffic_buckets",
                                       "stats_top_media",
                                       "stats_top_tags",
                                       "fansly_media_tag_stats",
                                       "platform_tag_daily",
-                                      "creator_media",
                                       "creator_vault_albums",
-                                      "creator_vault_album_members",
                                       "page_subscription_tiers",
                                       "page_subscription_tier_plans",
                                       "post_comments",
@@ -22442,6 +23104,11 @@
                               "firstObservedAt",
                               "lastObservedAt",
                               "attachmentCount",
+                              "fypFlags",
+                              "wallRefs",
+                              "rawMedia",
+                              "vaultInventory",
+                              "postAttachment",
                               "postTargetTipAmountMills",
                               "attachmentTipAmountMills",
                               "postTipTotalMills",
@@ -23018,6 +23685,11 @@
                   "firstObservedAt",
                   "lastObservedAt",
                   "attachmentCount",
+                  "fypFlags",
+                  "wallRefs",
+                  "rawMedia",
+                  "vaultInventory",
+                  "postAttachment",
                   "postTargetTipAmountMills",
                   "attachmentTipAmountMills",
                   "postTipTotalMills",
@@ -23137,8 +23809,8 @@
                             ]
                           },
                           "planes": {
-                            "minItems": 42,
-                            "maxItems": 42,
+                            "minItems": 45,
+                            "maxItems": 45,
                             "type": "array",
                             "items": {
                               "anyOf": [
@@ -23175,15 +23847,18 @@
                                         "fan_profiles",
                                         "fan_flags",
                                         "creator_posts",
+                                        "creator_raw_media",
+                                        "creator_vault_album_members",
+                                        "creator_vault_album_scans",
+                                        "creator_media",
+                                        "creator_media_bundles",
                                         "creator_post_tips",
                                         "stats_traffic_buckets",
                                         "stats_top_media",
                                         "stats_top_tags",
                                         "fansly_media_tag_stats",
                                         "platform_tag_daily",
-                                        "creator_media",
                                         "creator_vault_albums",
-                                        "creator_vault_album_members",
                                         "page_subscription_tiers",
                                         "page_subscription_tier_plans",
                                         "post_comments",
@@ -23267,15 +23942,18 @@
                                         "fan_profiles",
                                         "fan_flags",
                                         "creator_posts",
+                                        "creator_raw_media",
+                                        "creator_vault_album_members",
+                                        "creator_vault_album_scans",
+                                        "creator_media",
+                                        "creator_media_bundles",
                                         "creator_post_tips",
                                         "stats_traffic_buckets",
                                         "stats_top_media",
                                         "stats_top_tags",
                                         "fansly_media_tag_stats",
                                         "platform_tag_daily",
-                                        "creator_media",
                                         "creator_vault_albums",
-                                        "creator_vault_album_members",
                                         "page_subscription_tiers",
                                         "page_subscription_tier_plans",
                                         "post_comments",
@@ -23400,15 +24078,18 @@
                                     "fan_profiles",
                                     "fan_flags",
                                     "creator_posts",
+                                    "creator_raw_media",
+                                    "creator_vault_album_members",
+                                    "creator_vault_album_scans",
+                                    "creator_media",
+                                    "creator_media_bundles",
                                     "creator_post_tips",
                                     "stats_traffic_buckets",
                                     "stats_top_media",
                                     "stats_top_tags",
                                     "fansly_media_tag_stats",
                                     "platform_tag_daily",
-                                    "creator_media",
                                     "creator_vault_albums",
-                                    "creator_vault_album_members",
                                     "page_subscription_tiers",
                                     "page_subscription_tier_plans",
                                     "post_comments",
@@ -23663,6 +24344,11 @@
                                 "firstObservedAt",
                                 "lastObservedAt",
                                 "attachmentCount",
+                                "fypFlags",
+                                "wallRefs",
+                                "rawMedia",
+                                "vaultInventory",
+                                "postAttachment",
                                 "postTargetTipAmountMills",
                                 "attachmentTipAmountMills",
                                 "postTipTotalMills",
@@ -24051,8 +24737,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 42,
-                          "maxItems": 42,
+                          "minItems": 45,
+                          "maxItems": 45,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -24089,15 +24775,18 @@
                                       "fan_profiles",
                                       "fan_flags",
                                       "creator_posts",
+                                      "creator_raw_media",
+                                      "creator_vault_album_members",
+                                      "creator_vault_album_scans",
+                                      "creator_media",
+                                      "creator_media_bundles",
                                       "creator_post_tips",
                                       "stats_traffic_buckets",
                                       "stats_top_media",
                                       "stats_top_tags",
                                       "fansly_media_tag_stats",
                                       "platform_tag_daily",
-                                      "creator_media",
                                       "creator_vault_albums",
-                                      "creator_vault_album_members",
                                       "page_subscription_tiers",
                                       "page_subscription_tier_plans",
                                       "post_comments",
@@ -24181,15 +24870,18 @@
                                       "fan_profiles",
                                       "fan_flags",
                                       "creator_posts",
+                                      "creator_raw_media",
+                                      "creator_vault_album_members",
+                                      "creator_vault_album_scans",
+                                      "creator_media",
+                                      "creator_media_bundles",
                                       "creator_post_tips",
                                       "stats_traffic_buckets",
                                       "stats_top_media",
                                       "stats_top_tags",
                                       "fansly_media_tag_stats",
                                       "platform_tag_daily",
-                                      "creator_media",
                                       "creator_vault_albums",
-                                      "creator_vault_album_members",
                                       "page_subscription_tiers",
                                       "page_subscription_tier_plans",
                                       "post_comments",
@@ -24314,15 +25006,18 @@
                                   "fan_profiles",
                                   "fan_flags",
                                   "creator_posts",
+                                  "creator_raw_media",
+                                  "creator_vault_album_members",
+                                  "creator_vault_album_scans",
+                                  "creator_media",
+                                  "creator_media_bundles",
                                   "creator_post_tips",
                                   "stats_traffic_buckets",
                                   "stats_top_media",
                                   "stats_top_tags",
                                   "fansly_media_tag_stats",
                                   "platform_tag_daily",
-                                  "creator_media",
                                   "creator_vault_albums",
-                                  "creator_vault_album_members",
                                   "page_subscription_tiers",
                                   "page_subscription_tier_plans",
                                   "post_comments",
@@ -24556,15 +25251,18 @@
                                       "fan_profiles",
                                       "fan_flags",
                                       "creator_posts",
+                                      "creator_raw_media",
+                                      "creator_vault_album_members",
+                                      "creator_vault_album_scans",
+                                      "creator_media",
+                                      "creator_media_bundles",
                                       "creator_post_tips",
                                       "stats_traffic_buckets",
                                       "stats_top_media",
                                       "stats_top_tags",
                                       "fansly_media_tag_stats",
                                       "platform_tag_daily",
-                                      "creator_media",
                                       "creator_vault_albums",
-                                      "creator_vault_album_members",
                                       "page_subscription_tiers",
                                       "page_subscription_tier_plans",
                                       "post_comments",
@@ -24686,6 +25384,11 @@
                               "firstObservedAt",
                               "lastObservedAt",
                               "attachmentCount",
+                              "fypFlags",
+                              "wallRefs",
+                              "rawMedia",
+                              "vaultInventory",
+                              "postAttachment",
                               "postTargetTipAmountMills",
                               "attachmentTipAmountMills",
                               "postTipTotalMills",
@@ -25663,8 +26366,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 42,
-                          "maxItems": 42,
+                          "minItems": 45,
+                          "maxItems": 45,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -25701,15 +26404,18 @@
                                       "fan_profiles",
                                       "fan_flags",
                                       "creator_posts",
+                                      "creator_raw_media",
+                                      "creator_vault_album_members",
+                                      "creator_vault_album_scans",
+                                      "creator_media",
+                                      "creator_media_bundles",
                                       "creator_post_tips",
                                       "stats_traffic_buckets",
                                       "stats_top_media",
                                       "stats_top_tags",
                                       "fansly_media_tag_stats",
                                       "platform_tag_daily",
-                                      "creator_media",
                                       "creator_vault_albums",
-                                      "creator_vault_album_members",
                                       "page_subscription_tiers",
                                       "page_subscription_tier_plans",
                                       "post_comments",
@@ -25793,15 +26499,18 @@
                                       "fan_profiles",
                                       "fan_flags",
                                       "creator_posts",
+                                      "creator_raw_media",
+                                      "creator_vault_album_members",
+                                      "creator_vault_album_scans",
+                                      "creator_media",
+                                      "creator_media_bundles",
                                       "creator_post_tips",
                                       "stats_traffic_buckets",
                                       "stats_top_media",
                                       "stats_top_tags",
                                       "fansly_media_tag_stats",
                                       "platform_tag_daily",
-                                      "creator_media",
                                       "creator_vault_albums",
-                                      "creator_vault_album_members",
                                       "page_subscription_tiers",
                                       "page_subscription_tier_plans",
                                       "post_comments",
@@ -25926,15 +26635,18 @@
                                   "fan_profiles",
                                   "fan_flags",
                                   "creator_posts",
+                                  "creator_raw_media",
+                                  "creator_vault_album_members",
+                                  "creator_vault_album_scans",
+                                  "creator_media",
+                                  "creator_media_bundles",
                                   "creator_post_tips",
                                   "stats_traffic_buckets",
                                   "stats_top_media",
                                   "stats_top_tags",
                                   "fansly_media_tag_stats",
                                   "platform_tag_daily",
-                                  "creator_media",
                                   "creator_vault_albums",
-                                  "creator_vault_album_members",
                                   "page_subscription_tiers",
                                   "page_subscription_tier_plans",
                                   "post_comments",
@@ -26168,15 +26880,18 @@
                                       "fan_profiles",
                                       "fan_flags",
                                       "creator_posts",
+                                      "creator_raw_media",
+                                      "creator_vault_album_members",
+                                      "creator_vault_album_scans",
+                                      "creator_media",
+                                      "creator_media_bundles",
                                       "creator_post_tips",
                                       "stats_traffic_buckets",
                                       "stats_top_media",
                                       "stats_top_tags",
                                       "fansly_media_tag_stats",
                                       "platform_tag_daily",
-                                      "creator_media",
                                       "creator_vault_albums",
-                                      "creator_vault_album_members",
                                       "page_subscription_tiers",
                                       "page_subscription_tier_plans",
                                       "post_comments",
@@ -26298,6 +27013,11 @@
                               "firstObservedAt",
                               "lastObservedAt",
                               "attachmentCount",
+                              "fypFlags",
+                              "wallRefs",
+                              "rawMedia",
+                              "vaultInventory",
+                              "postAttachment",
                               "postTargetTipAmountMills",
                               "attachmentTipAmountMills",
                               "postTipTotalMills",
@@ -27250,8 +27970,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 42,
-                          "maxItems": 42,
+                          "minItems": 45,
+                          "maxItems": 45,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -27288,15 +28008,18 @@
                                       "fan_profiles",
                                       "fan_flags",
                                       "creator_posts",
+                                      "creator_raw_media",
+                                      "creator_vault_album_members",
+                                      "creator_vault_album_scans",
+                                      "creator_media",
+                                      "creator_media_bundles",
                                       "creator_post_tips",
                                       "stats_traffic_buckets",
                                       "stats_top_media",
                                       "stats_top_tags",
                                       "fansly_media_tag_stats",
                                       "platform_tag_daily",
-                                      "creator_media",
                                       "creator_vault_albums",
-                                      "creator_vault_album_members",
                                       "page_subscription_tiers",
                                       "page_subscription_tier_plans",
                                       "post_comments",
@@ -27380,15 +28103,18 @@
                                       "fan_profiles",
                                       "fan_flags",
                                       "creator_posts",
+                                      "creator_raw_media",
+                                      "creator_vault_album_members",
+                                      "creator_vault_album_scans",
+                                      "creator_media",
+                                      "creator_media_bundles",
                                       "creator_post_tips",
                                       "stats_traffic_buckets",
                                       "stats_top_media",
                                       "stats_top_tags",
                                       "fansly_media_tag_stats",
                                       "platform_tag_daily",
-                                      "creator_media",
                                       "creator_vault_albums",
-                                      "creator_vault_album_members",
                                       "page_subscription_tiers",
                                       "page_subscription_tier_plans",
                                       "post_comments",
@@ -27513,15 +28239,18 @@
                                   "fan_profiles",
                                   "fan_flags",
                                   "creator_posts",
+                                  "creator_raw_media",
+                                  "creator_vault_album_members",
+                                  "creator_vault_album_scans",
+                                  "creator_media",
+                                  "creator_media_bundles",
                                   "creator_post_tips",
                                   "stats_traffic_buckets",
                                   "stats_top_media",
                                   "stats_top_tags",
                                   "fansly_media_tag_stats",
                                   "platform_tag_daily",
-                                  "creator_media",
                                   "creator_vault_albums",
-                                  "creator_vault_album_members",
                                   "page_subscription_tiers",
                                   "page_subscription_tier_plans",
                                   "post_comments",
@@ -27755,15 +28484,18 @@
                                       "fan_profiles",
                                       "fan_flags",
                                       "creator_posts",
+                                      "creator_raw_media",
+                                      "creator_vault_album_members",
+                                      "creator_vault_album_scans",
+                                      "creator_media",
+                                      "creator_media_bundles",
                                       "creator_post_tips",
                                       "stats_traffic_buckets",
                                       "stats_top_media",
                                       "stats_top_tags",
                                       "fansly_media_tag_stats",
                                       "platform_tag_daily",
-                                      "creator_media",
                                       "creator_vault_albums",
-                                      "creator_vault_album_members",
                                       "page_subscription_tiers",
                                       "page_subscription_tier_plans",
                                       "post_comments",
@@ -27885,6 +28617,11 @@
                               "firstObservedAt",
                               "lastObservedAt",
                               "attachmentCount",
+                              "fypFlags",
+                              "wallRefs",
+                              "rawMedia",
+                              "vaultInventory",
+                              "postAttachment",
                               "postTargetTipAmountMills",
                               "attachmentTipAmountMills",
                               "postTipTotalMills",
@@ -28948,8 +29685,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 42,
-                          "maxItems": 42,
+                          "minItems": 45,
+                          "maxItems": 45,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -28986,15 +29723,18 @@
                                       "fan_profiles",
                                       "fan_flags",
                                       "creator_posts",
+                                      "creator_raw_media",
+                                      "creator_vault_album_members",
+                                      "creator_vault_album_scans",
+                                      "creator_media",
+                                      "creator_media_bundles",
                                       "creator_post_tips",
                                       "stats_traffic_buckets",
                                       "stats_top_media",
                                       "stats_top_tags",
                                       "fansly_media_tag_stats",
                                       "platform_tag_daily",
-                                      "creator_media",
                                       "creator_vault_albums",
-                                      "creator_vault_album_members",
                                       "page_subscription_tiers",
                                       "page_subscription_tier_plans",
                                       "post_comments",
@@ -29078,15 +29818,18 @@
                                       "fan_profiles",
                                       "fan_flags",
                                       "creator_posts",
+                                      "creator_raw_media",
+                                      "creator_vault_album_members",
+                                      "creator_vault_album_scans",
+                                      "creator_media",
+                                      "creator_media_bundles",
                                       "creator_post_tips",
                                       "stats_traffic_buckets",
                                       "stats_top_media",
                                       "stats_top_tags",
                                       "fansly_media_tag_stats",
                                       "platform_tag_daily",
-                                      "creator_media",
                                       "creator_vault_albums",
-                                      "creator_vault_album_members",
                                       "page_subscription_tiers",
                                       "page_subscription_tier_plans",
                                       "post_comments",
@@ -29211,15 +29954,18 @@
                                   "fan_profiles",
                                   "fan_flags",
                                   "creator_posts",
+                                  "creator_raw_media",
+                                  "creator_vault_album_members",
+                                  "creator_vault_album_scans",
+                                  "creator_media",
+                                  "creator_media_bundles",
                                   "creator_post_tips",
                                   "stats_traffic_buckets",
                                   "stats_top_media",
                                   "stats_top_tags",
                                   "fansly_media_tag_stats",
                                   "platform_tag_daily",
-                                  "creator_media",
                                   "creator_vault_albums",
-                                  "creator_vault_album_members",
                                   "page_subscription_tiers",
                                   "page_subscription_tier_plans",
                                   "post_comments",
@@ -29453,15 +30199,18 @@
                                       "fan_profiles",
                                       "fan_flags",
                                       "creator_posts",
+                                      "creator_raw_media",
+                                      "creator_vault_album_members",
+                                      "creator_vault_album_scans",
+                                      "creator_media",
+                                      "creator_media_bundles",
                                       "creator_post_tips",
                                       "stats_traffic_buckets",
                                       "stats_top_media",
                                       "stats_top_tags",
                                       "fansly_media_tag_stats",
                                       "platform_tag_daily",
-                                      "creator_media",
                                       "creator_vault_albums",
-                                      "creator_vault_album_members",
                                       "page_subscription_tiers",
                                       "page_subscription_tier_plans",
                                       "post_comments",
@@ -29583,6 +30332,11 @@
                               "firstObservedAt",
                               "lastObservedAt",
                               "attachmentCount",
+                              "fypFlags",
+                              "wallRefs",
+                              "rawMedia",
+                              "vaultInventory",
+                              "postAttachment",
                               "postTargetTipAmountMills",
                               "attachmentTipAmountMills",
                               "postTipTotalMills",
@@ -31116,8 +31870,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 42,
-                          "maxItems": 42,
+                          "minItems": 45,
+                          "maxItems": 45,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -31154,15 +31908,18 @@
                                       "fan_profiles",
                                       "fan_flags",
                                       "creator_posts",
+                                      "creator_raw_media",
+                                      "creator_vault_album_members",
+                                      "creator_vault_album_scans",
+                                      "creator_media",
+                                      "creator_media_bundles",
                                       "creator_post_tips",
                                       "stats_traffic_buckets",
                                       "stats_top_media",
                                       "stats_top_tags",
                                       "fansly_media_tag_stats",
                                       "platform_tag_daily",
-                                      "creator_media",
                                       "creator_vault_albums",
-                                      "creator_vault_album_members",
                                       "page_subscription_tiers",
                                       "page_subscription_tier_plans",
                                       "post_comments",
@@ -31246,15 +32003,18 @@
                                       "fan_profiles",
                                       "fan_flags",
                                       "creator_posts",
+                                      "creator_raw_media",
+                                      "creator_vault_album_members",
+                                      "creator_vault_album_scans",
+                                      "creator_media",
+                                      "creator_media_bundles",
                                       "creator_post_tips",
                                       "stats_traffic_buckets",
                                       "stats_top_media",
                                       "stats_top_tags",
                                       "fansly_media_tag_stats",
                                       "platform_tag_daily",
-                                      "creator_media",
                                       "creator_vault_albums",
-                                      "creator_vault_album_members",
                                       "page_subscription_tiers",
                                       "page_subscription_tier_plans",
                                       "post_comments",
@@ -31379,15 +32139,18 @@
                                   "fan_profiles",
                                   "fan_flags",
                                   "creator_posts",
+                                  "creator_raw_media",
+                                  "creator_vault_album_members",
+                                  "creator_vault_album_scans",
+                                  "creator_media",
+                                  "creator_media_bundles",
                                   "creator_post_tips",
                                   "stats_traffic_buckets",
                                   "stats_top_media",
                                   "stats_top_tags",
                                   "fansly_media_tag_stats",
                                   "platform_tag_daily",
-                                  "creator_media",
                                   "creator_vault_albums",
-                                  "creator_vault_album_members",
                                   "page_subscription_tiers",
                                   "page_subscription_tier_plans",
                                   "post_comments",
@@ -31621,15 +32384,18 @@
                                       "fan_profiles",
                                       "fan_flags",
                                       "creator_posts",
+                                      "creator_raw_media",
+                                      "creator_vault_album_members",
+                                      "creator_vault_album_scans",
+                                      "creator_media",
+                                      "creator_media_bundles",
                                       "creator_post_tips",
                                       "stats_traffic_buckets",
                                       "stats_top_media",
                                       "stats_top_tags",
                                       "fansly_media_tag_stats",
                                       "platform_tag_daily",
-                                      "creator_media",
                                       "creator_vault_albums",
-                                      "creator_vault_album_members",
                                       "page_subscription_tiers",
                                       "page_subscription_tier_plans",
                                       "post_comments",
@@ -31751,6 +32517,11 @@
                               "firstObservedAt",
                               "lastObservedAt",
                               "attachmentCount",
+                              "fypFlags",
+                              "wallRefs",
+                              "rawMedia",
+                              "vaultInventory",
+                              "postAttachment",
                               "postTargetTipAmountMills",
                               "attachmentTipAmountMills",
                               "postTipTotalMills",
@@ -32416,8 +33187,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 42,
-                          "maxItems": 42,
+                          "minItems": 45,
+                          "maxItems": 45,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -32454,15 +33225,18 @@
                                       "fan_profiles",
                                       "fan_flags",
                                       "creator_posts",
+                                      "creator_raw_media",
+                                      "creator_vault_album_members",
+                                      "creator_vault_album_scans",
+                                      "creator_media",
+                                      "creator_media_bundles",
                                       "creator_post_tips",
                                       "stats_traffic_buckets",
                                       "stats_top_media",
                                       "stats_top_tags",
                                       "fansly_media_tag_stats",
                                       "platform_tag_daily",
-                                      "creator_media",
                                       "creator_vault_albums",
-                                      "creator_vault_album_members",
                                       "page_subscription_tiers",
                                       "page_subscription_tier_plans",
                                       "post_comments",
@@ -32546,15 +33320,18 @@
                                       "fan_profiles",
                                       "fan_flags",
                                       "creator_posts",
+                                      "creator_raw_media",
+                                      "creator_vault_album_members",
+                                      "creator_vault_album_scans",
+                                      "creator_media",
+                                      "creator_media_bundles",
                                       "creator_post_tips",
                                       "stats_traffic_buckets",
                                       "stats_top_media",
                                       "stats_top_tags",
                                       "fansly_media_tag_stats",
                                       "platform_tag_daily",
-                                      "creator_media",
                                       "creator_vault_albums",
-                                      "creator_vault_album_members",
                                       "page_subscription_tiers",
                                       "page_subscription_tier_plans",
                                       "post_comments",
@@ -32679,15 +33456,18 @@
                                   "fan_profiles",
                                   "fan_flags",
                                   "creator_posts",
+                                  "creator_raw_media",
+                                  "creator_vault_album_members",
+                                  "creator_vault_album_scans",
+                                  "creator_media",
+                                  "creator_media_bundles",
                                   "creator_post_tips",
                                   "stats_traffic_buckets",
                                   "stats_top_media",
                                   "stats_top_tags",
                                   "fansly_media_tag_stats",
                                   "platform_tag_daily",
-                                  "creator_media",
                                   "creator_vault_albums",
-                                  "creator_vault_album_members",
                                   "page_subscription_tiers",
                                   "page_subscription_tier_plans",
                                   "post_comments",
@@ -32921,15 +33701,18 @@
                                       "fan_profiles",
                                       "fan_flags",
                                       "creator_posts",
+                                      "creator_raw_media",
+                                      "creator_vault_album_members",
+                                      "creator_vault_album_scans",
+                                      "creator_media",
+                                      "creator_media_bundles",
                                       "creator_post_tips",
                                       "stats_traffic_buckets",
                                       "stats_top_media",
                                       "stats_top_tags",
                                       "fansly_media_tag_stats",
                                       "platform_tag_daily",
-                                      "creator_media",
                                       "creator_vault_albums",
-                                      "creator_vault_album_members",
                                       "page_subscription_tiers",
                                       "page_subscription_tier_plans",
                                       "post_comments",
@@ -33051,6 +33834,11 @@
                               "firstObservedAt",
                               "lastObservedAt",
                               "attachmentCount",
+                              "fypFlags",
+                              "wallRefs",
+                              "rawMedia",
+                              "vaultInventory",
+                              "postAttachment",
                               "postTargetTipAmountMills",
                               "attachmentTipAmountMills",
                               "postTipTotalMills",
@@ -33708,6 +34496,11 @@
                             "firstObservedAt",
                             "lastObservedAt",
                             "attachmentCount",
+                            "fypFlags",
+                            "wallRefs",
+                            "rawMedia",
+                            "vaultInventory",
+                            "postAttachment",
                             "postTargetTipAmountMills",
                             "attachmentTipAmountMills",
                             "postTipTotalMills",
@@ -33788,6 +34581,8 @@
                 "fan_aliases",
                 "fan_notes",
                 "posts",
+                "raw_media",
+                "post_attachments",
                 "post_monetization",
                 "post_tips",
                 "tip_goals",
@@ -33840,6 +34635,8 @@
                         "fan_aliases",
                         "fan_notes",
                         "posts",
+                        "raw_media",
+                        "post_attachments",
                         "post_monetization",
                         "post_tips",
                         "tip_goals",
@@ -33908,6 +34705,8 @@
                               "fan_aliases",
                               "fan_notes",
                               "posts",
+                              "raw_media",
+                              "post_attachments",
                               "post_monetization",
                               "post_tips",
                               "tip_goals",
@@ -34042,6 +34841,11 @@
                                 "firstObservedAt",
                                 "lastObservedAt",
                                 "attachmentCount",
+                                "fypFlags",
+                                "wallRefs",
+                                "rawMedia",
+                                "vaultInventory",
+                                "postAttachment",
                                 "postTargetTipAmountMills",
                                 "attachmentTipAmountMills",
                                 "postTipTotalMills",
@@ -34543,8 +35347,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 42,
-                          "maxItems": 42,
+                          "minItems": 45,
+                          "maxItems": 45,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -34581,15 +35385,18 @@
                                       "fan_profiles",
                                       "fan_flags",
                                       "creator_posts",
+                                      "creator_raw_media",
+                                      "creator_vault_album_members",
+                                      "creator_vault_album_scans",
+                                      "creator_media",
+                                      "creator_media_bundles",
                                       "creator_post_tips",
                                       "stats_traffic_buckets",
                                       "stats_top_media",
                                       "stats_top_tags",
                                       "fansly_media_tag_stats",
                                       "platform_tag_daily",
-                                      "creator_media",
                                       "creator_vault_albums",
-                                      "creator_vault_album_members",
                                       "page_subscription_tiers",
                                       "page_subscription_tier_plans",
                                       "post_comments",
@@ -34673,15 +35480,18 @@
                                       "fan_profiles",
                                       "fan_flags",
                                       "creator_posts",
+                                      "creator_raw_media",
+                                      "creator_vault_album_members",
+                                      "creator_vault_album_scans",
+                                      "creator_media",
+                                      "creator_media_bundles",
                                       "creator_post_tips",
                                       "stats_traffic_buckets",
                                       "stats_top_media",
                                       "stats_top_tags",
                                       "fansly_media_tag_stats",
                                       "platform_tag_daily",
-                                      "creator_media",
                                       "creator_vault_albums",
-                                      "creator_vault_album_members",
                                       "page_subscription_tiers",
                                       "page_subscription_tier_plans",
                                       "post_comments",
@@ -34806,15 +35616,18 @@
                                   "fan_profiles",
                                   "fan_flags",
                                   "creator_posts",
+                                  "creator_raw_media",
+                                  "creator_vault_album_members",
+                                  "creator_vault_album_scans",
+                                  "creator_media",
+                                  "creator_media_bundles",
                                   "creator_post_tips",
                                   "stats_traffic_buckets",
                                   "stats_top_media",
                                   "stats_top_tags",
                                   "fansly_media_tag_stats",
                                   "platform_tag_daily",
-                                  "creator_media",
                                   "creator_vault_albums",
-                                  "creator_vault_album_members",
                                   "page_subscription_tiers",
                                   "page_subscription_tier_plans",
                                   "post_comments",
@@ -35048,15 +35861,18 @@
                                       "fan_profiles",
                                       "fan_flags",
                                       "creator_posts",
+                                      "creator_raw_media",
+                                      "creator_vault_album_members",
+                                      "creator_vault_album_scans",
+                                      "creator_media",
+                                      "creator_media_bundles",
                                       "creator_post_tips",
                                       "stats_traffic_buckets",
                                       "stats_top_media",
                                       "stats_top_tags",
                                       "fansly_media_tag_stats",
                                       "platform_tag_daily",
-                                      "creator_media",
                                       "creator_vault_albums",
-                                      "creator_vault_album_members",
                                       "page_subscription_tiers",
                                       "page_subscription_tier_plans",
                                       "post_comments",
@@ -35178,6 +35994,11 @@
                               "firstObservedAt",
                               "lastObservedAt",
                               "attachmentCount",
+                              "fypFlags",
+                              "wallRefs",
+                              "rawMedia",
+                              "vaultInventory",
+                              "postAttachment",
                               "postTargetTipAmountMills",
                               "attachmentTipAmountMills",
                               "postTipTotalMills",
@@ -35762,6 +36583,11 @@
                             "firstObservedAt",
                             "lastObservedAt",
                             "attachmentCount",
+                            "fypFlags",
+                            "wallRefs",
+                            "rawMedia",
+                            "vaultInventory",
+                            "postAttachment",
                             "postTargetTipAmountMills",
                             "attachmentTipAmountMills",
                             "postTipTotalMills",
@@ -36348,8 +37174,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 42,
-                          "maxItems": 42,
+                          "minItems": 45,
+                          "maxItems": 45,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -36386,15 +37212,18 @@
                                       "fan_profiles",
                                       "fan_flags",
                                       "creator_posts",
+                                      "creator_raw_media",
+                                      "creator_vault_album_members",
+                                      "creator_vault_album_scans",
+                                      "creator_media",
+                                      "creator_media_bundles",
                                       "creator_post_tips",
                                       "stats_traffic_buckets",
                                       "stats_top_media",
                                       "stats_top_tags",
                                       "fansly_media_tag_stats",
                                       "platform_tag_daily",
-                                      "creator_media",
                                       "creator_vault_albums",
-                                      "creator_vault_album_members",
                                       "page_subscription_tiers",
                                       "page_subscription_tier_plans",
                                       "post_comments",
@@ -36478,15 +37307,18 @@
                                       "fan_profiles",
                                       "fan_flags",
                                       "creator_posts",
+                                      "creator_raw_media",
+                                      "creator_vault_album_members",
+                                      "creator_vault_album_scans",
+                                      "creator_media",
+                                      "creator_media_bundles",
                                       "creator_post_tips",
                                       "stats_traffic_buckets",
                                       "stats_top_media",
                                       "stats_top_tags",
                                       "fansly_media_tag_stats",
                                       "platform_tag_daily",
-                                      "creator_media",
                                       "creator_vault_albums",
-                                      "creator_vault_album_members",
                                       "page_subscription_tiers",
                                       "page_subscription_tier_plans",
                                       "post_comments",
@@ -36611,15 +37443,18 @@
                                   "fan_profiles",
                                   "fan_flags",
                                   "creator_posts",
+                                  "creator_raw_media",
+                                  "creator_vault_album_members",
+                                  "creator_vault_album_scans",
+                                  "creator_media",
+                                  "creator_media_bundles",
                                   "creator_post_tips",
                                   "stats_traffic_buckets",
                                   "stats_top_media",
                                   "stats_top_tags",
                                   "fansly_media_tag_stats",
                                   "platform_tag_daily",
-                                  "creator_media",
                                   "creator_vault_albums",
-                                  "creator_vault_album_members",
                                   "page_subscription_tiers",
                                   "page_subscription_tier_plans",
                                   "post_comments",
@@ -36853,15 +37688,18 @@
                                       "fan_profiles",
                                       "fan_flags",
                                       "creator_posts",
+                                      "creator_raw_media",
+                                      "creator_vault_album_members",
+                                      "creator_vault_album_scans",
+                                      "creator_media",
+                                      "creator_media_bundles",
                                       "creator_post_tips",
                                       "stats_traffic_buckets",
                                       "stats_top_media",
                                       "stats_top_tags",
                                       "fansly_media_tag_stats",
                                       "platform_tag_daily",
-                                      "creator_media",
                                       "creator_vault_albums",
-                                      "creator_vault_album_members",
                                       "page_subscription_tiers",
                                       "page_subscription_tier_plans",
                                       "post_comments",
@@ -36983,6 +37821,11 @@
                               "firstObservedAt",
                               "lastObservedAt",
                               "attachmentCount",
+                              "fypFlags",
+                              "wallRefs",
+                              "rawMedia",
+                              "vaultInventory",
+                              "postAttachment",
                               "postTargetTipAmountMills",
                               "attachmentTipAmountMills",
                               "postTipTotalMills",
@@ -37657,6 +38500,11 @@
                   "firstObservedAt",
                   "lastObservedAt",
                   "attachmentCount",
+                  "fypFlags",
+                  "wallRefs",
+                  "rawMedia",
+                  "vaultInventory",
+                  "postAttachment",
                   "postTargetTipAmountMills",
                   "attachmentTipAmountMills",
                   "postTipTotalMills",
@@ -38248,15 +39096,18 @@
                               "fan_profiles",
                               "fan_flags",
                               "creator_posts",
+                              "creator_raw_media",
+                              "creator_vault_album_members",
+                              "creator_vault_album_scans",
+                              "creator_media",
+                              "creator_media_bundles",
                               "creator_post_tips",
                               "stats_traffic_buckets",
                               "stats_top_media",
                               "stats_top_tags",
                               "fansly_media_tag_stats",
                               "platform_tag_daily",
-                              "creator_media",
                               "creator_vault_albums",
-                              "creator_vault_album_members",
                               "page_subscription_tiers",
                               "page_subscription_tier_plans",
                               "post_comments",
@@ -38323,6 +39174,11 @@
                                 "firstObservedAt",
                                 "lastObservedAt",
                                 "attachmentCount",
+                                "fypFlags",
+                                "wallRefs",
+                                "rawMedia",
+                                "vaultInventory",
+                                "postAttachment",
                                 "postTargetTipAmountMills",
                                 "attachmentTipAmountMills",
                                 "postTipTotalMills",
@@ -38776,8 +39632,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 42,
-                          "maxItems": 42,
+                          "minItems": 45,
+                          "maxItems": 45,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -38814,15 +39670,18 @@
                                       "fan_profiles",
                                       "fan_flags",
                                       "creator_posts",
+                                      "creator_raw_media",
+                                      "creator_vault_album_members",
+                                      "creator_vault_album_scans",
+                                      "creator_media",
+                                      "creator_media_bundles",
                                       "creator_post_tips",
                                       "stats_traffic_buckets",
                                       "stats_top_media",
                                       "stats_top_tags",
                                       "fansly_media_tag_stats",
                                       "platform_tag_daily",
-                                      "creator_media",
                                       "creator_vault_albums",
-                                      "creator_vault_album_members",
                                       "page_subscription_tiers",
                                       "page_subscription_tier_plans",
                                       "post_comments",
@@ -38906,15 +39765,18 @@
                                       "fan_profiles",
                                       "fan_flags",
                                       "creator_posts",
+                                      "creator_raw_media",
+                                      "creator_vault_album_members",
+                                      "creator_vault_album_scans",
+                                      "creator_media",
+                                      "creator_media_bundles",
                                       "creator_post_tips",
                                       "stats_traffic_buckets",
                                       "stats_top_media",
                                       "stats_top_tags",
                                       "fansly_media_tag_stats",
                                       "platform_tag_daily",
-                                      "creator_media",
                                       "creator_vault_albums",
-                                      "creator_vault_album_members",
                                       "page_subscription_tiers",
                                       "page_subscription_tier_plans",
                                       "post_comments",
@@ -39039,15 +39901,18 @@
                                   "fan_profiles",
                                   "fan_flags",
                                   "creator_posts",
+                                  "creator_raw_media",
+                                  "creator_vault_album_members",
+                                  "creator_vault_album_scans",
+                                  "creator_media",
+                                  "creator_media_bundles",
                                   "creator_post_tips",
                                   "stats_traffic_buckets",
                                   "stats_top_media",
                                   "stats_top_tags",
                                   "fansly_media_tag_stats",
                                   "platform_tag_daily",
-                                  "creator_media",
                                   "creator_vault_albums",
-                                  "creator_vault_album_members",
                                   "page_subscription_tiers",
                                   "page_subscription_tier_plans",
                                   "post_comments",
@@ -39281,15 +40146,18 @@
                                       "fan_profiles",
                                       "fan_flags",
                                       "creator_posts",
+                                      "creator_raw_media",
+                                      "creator_vault_album_members",
+                                      "creator_vault_album_scans",
+                                      "creator_media",
+                                      "creator_media_bundles",
                                       "creator_post_tips",
                                       "stats_traffic_buckets",
                                       "stats_top_media",
                                       "stats_top_tags",
                                       "fansly_media_tag_stats",
                                       "platform_tag_daily",
-                                      "creator_media",
                                       "creator_vault_albums",
-                                      "creator_vault_album_members",
                                       "page_subscription_tiers",
                                       "page_subscription_tier_plans",
                                       "post_comments",
@@ -39411,6 +40279,11 @@
                               "firstObservedAt",
                               "lastObservedAt",
                               "attachmentCount",
+                              "fypFlags",
+                              "wallRefs",
+                              "rawMedia",
+                              "vaultInventory",
+                              "postAttachment",
                               "postTargetTipAmountMills",
                               "attachmentTipAmountMills",
                               "postTipTotalMills",
@@ -39946,6 +40819,11 @@
                   "firstObservedAt",
                   "lastObservedAt",
                   "attachmentCount",
+                  "fypFlags",
+                  "wallRefs",
+                  "rawMedia",
+                  "vaultInventory",
+                  "postAttachment",
                   "postTargetTipAmountMills",
                   "attachmentTipAmountMills",
                   "postTipTotalMills",
@@ -40792,6 +41670,11 @@
                                     "firstObservedAt",
                                     "lastObservedAt",
                                     "attachmentCount",
+                                    "fypFlags",
+                                    "wallRefs",
+                                    "rawMedia",
+                                    "vaultInventory",
+                                    "postAttachment",
                                     "postTargetTipAmountMills",
                                     "attachmentTipAmountMills",
                                     "postTipTotalMills",
@@ -41343,6 +42226,11 @@
                                         "firstObservedAt",
                                         "lastObservedAt",
                                         "attachmentCount",
+                                        "fypFlags",
+                                        "wallRefs",
+                                        "rawMedia",
+                                        "vaultInventory",
+                                        "postAttachment",
                                         "postTargetTipAmountMills",
                                         "attachmentTipAmountMills",
                                         "postTipTotalMills",
@@ -41897,6 +42785,11 @@
                           "firstObservedAt",
                           "lastObservedAt",
                           "attachmentCount",
+                          "fypFlags",
+                          "wallRefs",
+                          "rawMedia",
+                          "vaultInventory",
+                          "postAttachment",
                           "postTargetTipAmountMills",
                           "attachmentTipAmountMills",
                           "postTipTotalMills",
@@ -42272,8 +43165,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 42,
-                          "maxItems": 42,
+                          "minItems": 45,
+                          "maxItems": 45,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -42310,15 +43203,18 @@
                                       "fan_profiles",
                                       "fan_flags",
                                       "creator_posts",
+                                      "creator_raw_media",
+                                      "creator_vault_album_members",
+                                      "creator_vault_album_scans",
+                                      "creator_media",
+                                      "creator_media_bundles",
                                       "creator_post_tips",
                                       "stats_traffic_buckets",
                                       "stats_top_media",
                                       "stats_top_tags",
                                       "fansly_media_tag_stats",
                                       "platform_tag_daily",
-                                      "creator_media",
                                       "creator_vault_albums",
-                                      "creator_vault_album_members",
                                       "page_subscription_tiers",
                                       "page_subscription_tier_plans",
                                       "post_comments",
@@ -42402,15 +43298,18 @@
                                       "fan_profiles",
                                       "fan_flags",
                                       "creator_posts",
+                                      "creator_raw_media",
+                                      "creator_vault_album_members",
+                                      "creator_vault_album_scans",
+                                      "creator_media",
+                                      "creator_media_bundles",
                                       "creator_post_tips",
                                       "stats_traffic_buckets",
                                       "stats_top_media",
                                       "stats_top_tags",
                                       "fansly_media_tag_stats",
                                       "platform_tag_daily",
-                                      "creator_media",
                                       "creator_vault_albums",
-                                      "creator_vault_album_members",
                                       "page_subscription_tiers",
                                       "page_subscription_tier_plans",
                                       "post_comments",
@@ -42535,15 +43434,18 @@
                                   "fan_profiles",
                                   "fan_flags",
                                   "creator_posts",
+                                  "creator_raw_media",
+                                  "creator_vault_album_members",
+                                  "creator_vault_album_scans",
+                                  "creator_media",
+                                  "creator_media_bundles",
                                   "creator_post_tips",
                                   "stats_traffic_buckets",
                                   "stats_top_media",
                                   "stats_top_tags",
                                   "fansly_media_tag_stats",
                                   "platform_tag_daily",
-                                  "creator_media",
                                   "creator_vault_albums",
-                                  "creator_vault_album_members",
                                   "page_subscription_tiers",
                                   "page_subscription_tier_plans",
                                   "post_comments",
@@ -42777,15 +43679,18 @@
                                       "fan_profiles",
                                       "fan_flags",
                                       "creator_posts",
+                                      "creator_raw_media",
+                                      "creator_vault_album_members",
+                                      "creator_vault_album_scans",
+                                      "creator_media",
+                                      "creator_media_bundles",
                                       "creator_post_tips",
                                       "stats_traffic_buckets",
                                       "stats_top_media",
                                       "stats_top_tags",
                                       "fansly_media_tag_stats",
                                       "platform_tag_daily",
-                                      "creator_media",
                                       "creator_vault_albums",
-                                      "creator_vault_album_members",
                                       "page_subscription_tiers",
                                       "page_subscription_tier_plans",
                                       "post_comments",
@@ -42907,6 +43812,11 @@
                               "firstObservedAt",
                               "lastObservedAt",
                               "attachmentCount",
+                              "fypFlags",
+                              "wallRefs",
+                              "rawMedia",
+                              "vaultInventory",
+                              "postAttachment",
                               "postTargetTipAmountMills",
                               "attachmentTipAmountMills",
                               "postTipTotalMills",
@@ -43501,6 +44411,11 @@
                   "firstObservedAt",
                   "lastObservedAt",
                   "attachmentCount",
+                  "fypFlags",
+                  "wallRefs",
+                  "rawMedia",
+                  "vaultInventory",
+                  "postAttachment",
                   "postTargetTipAmountMills",
                   "attachmentTipAmountMills",
                   "postTipTotalMills",
@@ -43981,6 +44896,11 @@
                                 "firstObservedAt",
                                 "lastObservedAt",
                                 "attachmentCount",
+                                "fypFlags",
+                                "wallRefs",
+                                "rawMedia",
+                                "vaultInventory",
+                                "postAttachment",
                                 "postTargetTipAmountMills",
                                 "attachmentTipAmountMills",
                                 "postTipTotalMills",
@@ -44426,8 +45346,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 42,
-                          "maxItems": 42,
+                          "minItems": 45,
+                          "maxItems": 45,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -44464,15 +45384,18 @@
                                       "fan_profiles",
                                       "fan_flags",
                                       "creator_posts",
+                                      "creator_raw_media",
+                                      "creator_vault_album_members",
+                                      "creator_vault_album_scans",
+                                      "creator_media",
+                                      "creator_media_bundles",
                                       "creator_post_tips",
                                       "stats_traffic_buckets",
                                       "stats_top_media",
                                       "stats_top_tags",
                                       "fansly_media_tag_stats",
                                       "platform_tag_daily",
-                                      "creator_media",
                                       "creator_vault_albums",
-                                      "creator_vault_album_members",
                                       "page_subscription_tiers",
                                       "page_subscription_tier_plans",
                                       "post_comments",
@@ -44556,15 +45479,18 @@
                                       "fan_profiles",
                                       "fan_flags",
                                       "creator_posts",
+                                      "creator_raw_media",
+                                      "creator_vault_album_members",
+                                      "creator_vault_album_scans",
+                                      "creator_media",
+                                      "creator_media_bundles",
                                       "creator_post_tips",
                                       "stats_traffic_buckets",
                                       "stats_top_media",
                                       "stats_top_tags",
                                       "fansly_media_tag_stats",
                                       "platform_tag_daily",
-                                      "creator_media",
                                       "creator_vault_albums",
-                                      "creator_vault_album_members",
                                       "page_subscription_tiers",
                                       "page_subscription_tier_plans",
                                       "post_comments",
@@ -44689,15 +45615,18 @@
                                   "fan_profiles",
                                   "fan_flags",
                                   "creator_posts",
+                                  "creator_raw_media",
+                                  "creator_vault_album_members",
+                                  "creator_vault_album_scans",
+                                  "creator_media",
+                                  "creator_media_bundles",
                                   "creator_post_tips",
                                   "stats_traffic_buckets",
                                   "stats_top_media",
                                   "stats_top_tags",
                                   "fansly_media_tag_stats",
                                   "platform_tag_daily",
-                                  "creator_media",
                                   "creator_vault_albums",
-                                  "creator_vault_album_members",
                                   "page_subscription_tiers",
                                   "page_subscription_tier_plans",
                                   "post_comments",
@@ -44931,15 +45860,18 @@
                                       "fan_profiles",
                                       "fan_flags",
                                       "creator_posts",
+                                      "creator_raw_media",
+                                      "creator_vault_album_members",
+                                      "creator_vault_album_scans",
+                                      "creator_media",
+                                      "creator_media_bundles",
                                       "creator_post_tips",
                                       "stats_traffic_buckets",
                                       "stats_top_media",
                                       "stats_top_tags",
                                       "fansly_media_tag_stats",
                                       "platform_tag_daily",
-                                      "creator_media",
                                       "creator_vault_albums",
-                                      "creator_vault_album_members",
                                       "page_subscription_tiers",
                                       "page_subscription_tier_plans",
                                       "post_comments",
@@ -45061,6 +45993,11 @@
                               "firstObservedAt",
                               "lastObservedAt",
                               "attachmentCount",
+                              "fypFlags",
+                              "wallRefs",
+                              "rawMedia",
+                              "vaultInventory",
+                              "postAttachment",
                               "postTargetTipAmountMills",
                               "attachmentTipAmountMills",
                               "postTipTotalMills",
@@ -45622,6 +46559,11 @@
                             "firstObservedAt",
                             "lastObservedAt",
                             "attachmentCount",
+                            "fypFlags",
+                            "wallRefs",
+                            "rawMedia",
+                            "vaultInventory",
+                            "postAttachment",
                             "postTargetTipAmountMills",
                             "attachmentTipAmountMills",
                             "postTipTotalMills",
@@ -45926,6 +46868,11 @@
                                       "firstObservedAt",
                                       "lastObservedAt",
                                       "attachmentCount",
+                                      "fypFlags",
+                                      "wallRefs",
+                                      "rawMedia",
+                                      "vaultInventory",
+                                      "postAttachment",
                                       "postTargetTipAmountMills",
                                       "attachmentTipAmountMills",
                                       "postTipTotalMills",
@@ -46332,8 +47279,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 42,
-                          "maxItems": 42,
+                          "minItems": 45,
+                          "maxItems": 45,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -46370,15 +47317,18 @@
                                       "fan_profiles",
                                       "fan_flags",
                                       "creator_posts",
+                                      "creator_raw_media",
+                                      "creator_vault_album_members",
+                                      "creator_vault_album_scans",
+                                      "creator_media",
+                                      "creator_media_bundles",
                                       "creator_post_tips",
                                       "stats_traffic_buckets",
                                       "stats_top_media",
                                       "stats_top_tags",
                                       "fansly_media_tag_stats",
                                       "platform_tag_daily",
-                                      "creator_media",
                                       "creator_vault_albums",
-                                      "creator_vault_album_members",
                                       "page_subscription_tiers",
                                       "page_subscription_tier_plans",
                                       "post_comments",
@@ -46462,15 +47412,18 @@
                                       "fan_profiles",
                                       "fan_flags",
                                       "creator_posts",
+                                      "creator_raw_media",
+                                      "creator_vault_album_members",
+                                      "creator_vault_album_scans",
+                                      "creator_media",
+                                      "creator_media_bundles",
                                       "creator_post_tips",
                                       "stats_traffic_buckets",
                                       "stats_top_media",
                                       "stats_top_tags",
                                       "fansly_media_tag_stats",
                                       "platform_tag_daily",
-                                      "creator_media",
                                       "creator_vault_albums",
-                                      "creator_vault_album_members",
                                       "page_subscription_tiers",
                                       "page_subscription_tier_plans",
                                       "post_comments",
@@ -46595,15 +47548,18 @@
                                   "fan_profiles",
                                   "fan_flags",
                                   "creator_posts",
+                                  "creator_raw_media",
+                                  "creator_vault_album_members",
+                                  "creator_vault_album_scans",
+                                  "creator_media",
+                                  "creator_media_bundles",
                                   "creator_post_tips",
                                   "stats_traffic_buckets",
                                   "stats_top_media",
                                   "stats_top_tags",
                                   "fansly_media_tag_stats",
                                   "platform_tag_daily",
-                                  "creator_media",
                                   "creator_vault_albums",
-                                  "creator_vault_album_members",
                                   "page_subscription_tiers",
                                   "page_subscription_tier_plans",
                                   "post_comments",
@@ -46837,15 +47793,18 @@
                                       "fan_profiles",
                                       "fan_flags",
                                       "creator_posts",
+                                      "creator_raw_media",
+                                      "creator_vault_album_members",
+                                      "creator_vault_album_scans",
+                                      "creator_media",
+                                      "creator_media_bundles",
                                       "creator_post_tips",
                                       "stats_traffic_buckets",
                                       "stats_top_media",
                                       "stats_top_tags",
                                       "fansly_media_tag_stats",
                                       "platform_tag_daily",
-                                      "creator_media",
                                       "creator_vault_albums",
-                                      "creator_vault_album_members",
                                       "page_subscription_tiers",
                                       "page_subscription_tier_plans",
                                       "post_comments",
@@ -46967,6 +47926,11 @@
                               "firstObservedAt",
                               "lastObservedAt",
                               "attachmentCount",
+                              "fypFlags",
+                              "wallRefs",
+                              "rawMedia",
+                              "vaultInventory",
+                              "postAttachment",
                               "postTargetTipAmountMills",
                               "attachmentTipAmountMills",
                               "postTipTotalMills",
@@ -47566,6 +48530,11 @@
                             "firstObservedAt",
                             "lastObservedAt",
                             "attachmentCount",
+                            "fypFlags",
+                            "wallRefs",
+                            "rawMedia",
+                            "vaultInventory",
+                            "postAttachment",
                             "postTargetTipAmountMills",
                             "attachmentTipAmountMills",
                             "postTipTotalMills",
@@ -47793,6 +48762,11 @@
                                 "firstObservedAt",
                                 "lastObservedAt",
                                 "attachmentCount",
+                                "fypFlags",
+                                "wallRefs",
+                                "rawMedia",
+                                "vaultInventory",
+                                "postAttachment",
                                 "postTargetTipAmountMills",
                                 "attachmentTipAmountMills",
                                 "postTipTotalMills",
@@ -48223,8 +49197,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 42,
-                          "maxItems": 42,
+                          "minItems": 45,
+                          "maxItems": 45,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -48261,15 +49235,18 @@
                                       "fan_profiles",
                                       "fan_flags",
                                       "creator_posts",
+                                      "creator_raw_media",
+                                      "creator_vault_album_members",
+                                      "creator_vault_album_scans",
+                                      "creator_media",
+                                      "creator_media_bundles",
                                       "creator_post_tips",
                                       "stats_traffic_buckets",
                                       "stats_top_media",
                                       "stats_top_tags",
                                       "fansly_media_tag_stats",
                                       "platform_tag_daily",
-                                      "creator_media",
                                       "creator_vault_albums",
-                                      "creator_vault_album_members",
                                       "page_subscription_tiers",
                                       "page_subscription_tier_plans",
                                       "post_comments",
@@ -48353,15 +49330,18 @@
                                       "fan_profiles",
                                       "fan_flags",
                                       "creator_posts",
+                                      "creator_raw_media",
+                                      "creator_vault_album_members",
+                                      "creator_vault_album_scans",
+                                      "creator_media",
+                                      "creator_media_bundles",
                                       "creator_post_tips",
                                       "stats_traffic_buckets",
                                       "stats_top_media",
                                       "stats_top_tags",
                                       "fansly_media_tag_stats",
                                       "platform_tag_daily",
-                                      "creator_media",
                                       "creator_vault_albums",
-                                      "creator_vault_album_members",
                                       "page_subscription_tiers",
                                       "page_subscription_tier_plans",
                                       "post_comments",
@@ -48486,15 +49466,18 @@
                                   "fan_profiles",
                                   "fan_flags",
                                   "creator_posts",
+                                  "creator_raw_media",
+                                  "creator_vault_album_members",
+                                  "creator_vault_album_scans",
+                                  "creator_media",
+                                  "creator_media_bundles",
                                   "creator_post_tips",
                                   "stats_traffic_buckets",
                                   "stats_top_media",
                                   "stats_top_tags",
                                   "fansly_media_tag_stats",
                                   "platform_tag_daily",
-                                  "creator_media",
                                   "creator_vault_albums",
-                                  "creator_vault_album_members",
                                   "page_subscription_tiers",
                                   "page_subscription_tier_plans",
                                   "post_comments",
@@ -48728,15 +49711,18 @@
                                       "fan_profiles",
                                       "fan_flags",
                                       "creator_posts",
+                                      "creator_raw_media",
+                                      "creator_vault_album_members",
+                                      "creator_vault_album_scans",
+                                      "creator_media",
+                                      "creator_media_bundles",
                                       "creator_post_tips",
                                       "stats_traffic_buckets",
                                       "stats_top_media",
                                       "stats_top_tags",
                                       "fansly_media_tag_stats",
                                       "platform_tag_daily",
-                                      "creator_media",
                                       "creator_vault_albums",
-                                      "creator_vault_album_members",
                                       "page_subscription_tiers",
                                       "page_subscription_tier_plans",
                                       "post_comments",
@@ -48858,6 +49844,11 @@
                               "firstObservedAt",
                               "lastObservedAt",
                               "attachmentCount",
+                              "fypFlags",
+                              "wallRefs",
+                              "rawMedia",
+                              "vaultInventory",
+                              "postAttachment",
                               "postTargetTipAmountMills",
                               "attachmentTipAmountMills",
                               "postTipTotalMills",
@@ -49496,6 +50487,11 @@
                   "firstObservedAt",
                   "lastObservedAt",
                   "attachmentCount",
+                  "fypFlags",
+                  "wallRefs",
+                  "rawMedia",
+                  "vaultInventory",
+                  "postAttachment",
                   "postTargetTipAmountMills",
                   "attachmentTipAmountMills",
                   "postTipTotalMills",
@@ -49998,6 +50994,11 @@
                                 "firstObservedAt",
                                 "lastObservedAt",
                                 "attachmentCount",
+                                "fypFlags",
+                                "wallRefs",
+                                "rawMedia",
+                                "vaultInventory",
+                                "postAttachment",
                                 "postTargetTipAmountMills",
                                 "attachmentTipAmountMills",
                                 "postTipTotalMills",
@@ -50440,8 +51441,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 42,
-                          "maxItems": 42,
+                          "minItems": 45,
+                          "maxItems": 45,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -50478,15 +51479,18 @@
                                       "fan_profiles",
                                       "fan_flags",
                                       "creator_posts",
+                                      "creator_raw_media",
+                                      "creator_vault_album_members",
+                                      "creator_vault_album_scans",
+                                      "creator_media",
+                                      "creator_media_bundles",
                                       "creator_post_tips",
                                       "stats_traffic_buckets",
                                       "stats_top_media",
                                       "stats_top_tags",
                                       "fansly_media_tag_stats",
                                       "platform_tag_daily",
-                                      "creator_media",
                                       "creator_vault_albums",
-                                      "creator_vault_album_members",
                                       "page_subscription_tiers",
                                       "page_subscription_tier_plans",
                                       "post_comments",
@@ -50570,15 +51574,18 @@
                                       "fan_profiles",
                                       "fan_flags",
                                       "creator_posts",
+                                      "creator_raw_media",
+                                      "creator_vault_album_members",
+                                      "creator_vault_album_scans",
+                                      "creator_media",
+                                      "creator_media_bundles",
                                       "creator_post_tips",
                                       "stats_traffic_buckets",
                                       "stats_top_media",
                                       "stats_top_tags",
                                       "fansly_media_tag_stats",
                                       "platform_tag_daily",
-                                      "creator_media",
                                       "creator_vault_albums",
-                                      "creator_vault_album_members",
                                       "page_subscription_tiers",
                                       "page_subscription_tier_plans",
                                       "post_comments",
@@ -50703,15 +51710,18 @@
                                   "fan_profiles",
                                   "fan_flags",
                                   "creator_posts",
+                                  "creator_raw_media",
+                                  "creator_vault_album_members",
+                                  "creator_vault_album_scans",
+                                  "creator_media",
+                                  "creator_media_bundles",
                                   "creator_post_tips",
                                   "stats_traffic_buckets",
                                   "stats_top_media",
                                   "stats_top_tags",
                                   "fansly_media_tag_stats",
                                   "platform_tag_daily",
-                                  "creator_media",
                                   "creator_vault_albums",
-                                  "creator_vault_album_members",
                                   "page_subscription_tiers",
                                   "page_subscription_tier_plans",
                                   "post_comments",
@@ -50945,15 +51955,18 @@
                                       "fan_profiles",
                                       "fan_flags",
                                       "creator_posts",
+                                      "creator_raw_media",
+                                      "creator_vault_album_members",
+                                      "creator_vault_album_scans",
+                                      "creator_media",
+                                      "creator_media_bundles",
                                       "creator_post_tips",
                                       "stats_traffic_buckets",
                                       "stats_top_media",
                                       "stats_top_tags",
                                       "fansly_media_tag_stats",
                                       "platform_tag_daily",
-                                      "creator_media",
                                       "creator_vault_albums",
-                                      "creator_vault_album_members",
                                       "page_subscription_tiers",
                                       "page_subscription_tier_plans",
                                       "post_comments",
@@ -51075,6 +52088,11 @@
                               "firstObservedAt",
                               "lastObservedAt",
                               "attachmentCount",
+                              "fypFlags",
+                              "wallRefs",
+                              "rawMedia",
+                              "vaultInventory",
+                              "postAttachment",
                               "postTargetTipAmountMills",
                               "attachmentTipAmountMills",
                               "postTipTotalMills",

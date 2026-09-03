@@ -968,11 +968,15 @@ describe("[sync-critical] agent read plane operations", () => {
     expect(Object.keys(body.items[0].fields).sort()).toEqual([
       "attachmentCount",
       "firstObservedAt",
+      "fypFlags",
+      "inReplyToRef",
       "lastObservedAt",
       "platform",
       "postRef",
       "postText",
       "publishedAt",
+      "rowUpdatedAt",
+      "wallRefs",
     ]);
     expect(body.items[0].fields).toMatchObject({
       platform: "fansly",
@@ -1411,8 +1415,8 @@ describe("[sync-critical] agent read plane operations", () => {
     }
 
     // A later family replay advances the observation stamps to the CURRENT
-    // family version (POSTS_CANONICALIZER_VERSION, 7 since the id-less mention
-    // variant repair). The old
+    // family version (POSTS_CANONICALIZER_VERSION, 8 since the media identity
+    // capture repair). The old
     // bounded diagnostic remains append-only evidence but is no longer current
     // debt, because its `parserVersion` no longer matches the stamp. These
     // numbers are coupled to the family version on purpose: a bump that forgot
@@ -1420,7 +1424,7 @@ describe("[sync-critical] agent read plane operations", () => {
     // observation is still owed a replay.
     await testDb!.pool.query(
       `update observations set parse_version = case id
-         when $1 then 7 when $2 then 8 when $3 then 7 else parse_version end
+         when $1 then 8 when $2 then 9 when $3 then 8 else parse_version end
        where id in ($1, $2, $3)`,
       [
         Number(topLevelObservation!.id),

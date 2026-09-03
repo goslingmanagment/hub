@@ -2819,6 +2819,58 @@ export const adminFollowersReconcileResetResponseSchema = z.object({
   requests: z.array(adminSyncBlockRequestSchema),
 });
 
+const followersReconcileCandidateGenerationBucketSchema = z.object({
+  lastSeenGeneration: z.number().int().nonnegative().nullable(),
+  count: z.number().int().positive(),
+});
+
+const adminFollowersReconcileOverrideEvidenceSchema = z.object({
+  pageLabel: z.string(),
+  stream: z.literal("followers_reconcile"),
+  blockedRequestSeq: z.number().int().nonnegative(),
+  blockedAt: isoTimestamp,
+  generation: z.number().int().positive(),
+  fullSweepStartedAt: isoTimestamp,
+  activeFollowerCount: z.number().int().nonnegative(),
+  deactivationLimit: z.number().int().positive(),
+  candidateCount: z.number().int().nonnegative(),
+  candidateSha256: z.string().regex(/^[0-9a-f]{64}$/),
+  candidateGenerationBuckets: z.array(
+    followersReconcileCandidateGenerationBucketSchema,
+  ),
+});
+
+export const adminFollowersReconcileOverridePreviewBodySchema = z.object({
+  pageLabel: z.string().min(1),
+});
+
+export const adminFollowersReconcileOverridePreviewResponseSchema =
+  adminFollowersReconcileOverrideEvidenceSchema.extend({
+    accepted: z.literal(true),
+    action: z.literal("preview"),
+    audiencePaused: z.boolean(),
+    audienceLeaseFree: z.boolean(),
+    overrideRequired: z.boolean(),
+    readyToApply: z.boolean(),
+  });
+
+export const adminFollowersReconcileOverrideApplyBodySchema = z.object({
+  pageLabel: z.string().min(1),
+  blockedRequestSeq: z.number().int().nonnegative(),
+  blockedAt: isoTimestamp,
+  generation: z.number().int().positive(),
+  fullSweepStartedAt: isoTimestamp,
+  candidateSha256: z.string().regex(/^[0-9a-f]{64}$/),
+});
+
+export const adminFollowersReconcileOverrideApplyResponseSchema =
+  adminFollowersReconcileOverrideEvidenceSchema.extend({
+    accepted: z.literal(true),
+    action: z.literal("apply"),
+    deactivatedCount: z.number().int().positive(),
+    audienceRemainsPaused: z.literal(true),
+  });
+
 export const syncTriggerBodySchema = z.object({
   pageLabel: z.string().min(1),
   scope: syncTriggerScopeEnum,
@@ -7443,6 +7495,34 @@ export const routeSchemas = {
       503: errorResponseSchema,
     },
   },
+  adminFollowersReconcileOverridePreview: {
+    auth: { kind: "owner-session" },
+    tags: ["admin"],
+    summary: "Preview the exact follower rows behind a blast-radius block",
+    body: adminFollowersReconcileOverridePreviewBodySchema,
+    response: {
+      200: adminFollowersReconcileOverridePreviewResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+      409: errorResponseSchema,
+    },
+  },
+  adminFollowersReconcileOverrideApply: {
+    auth: { kind: "owner-session" },
+    tags: ["admin"],
+    summary: "Apply a hash-bound follower blast-radius override while audience sync is paused",
+    body: adminFollowersReconcileOverrideApplyBodySchema,
+    response: {
+      200: adminFollowersReconcileOverrideApplyResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+      409: errorResponseSchema,
+    },
+  },
   adminSyncTriggerAll: {
     auth: { kind: "owner-session" },
     tags: ["admin"],
@@ -8102,6 +8182,18 @@ export type AdminFollowersReconcileResetBody = z.infer<
 >;
 export type AdminFollowersReconcileResetResponse = z.infer<
   typeof adminFollowersReconcileResetResponseSchema
+>;
+export type AdminFollowersReconcileOverridePreviewBody = z.infer<
+  typeof adminFollowersReconcileOverridePreviewBodySchema
+>;
+export type AdminFollowersReconcileOverridePreviewResponse = z.infer<
+  typeof adminFollowersReconcileOverridePreviewResponseSchema
+>;
+export type AdminFollowersReconcileOverrideApplyBody = z.infer<
+  typeof adminFollowersReconcileOverrideApplyBodySchema
+>;
+export type AdminFollowersReconcileOverrideApplyResponse = z.infer<
+  typeof adminFollowersReconcileOverrideApplyResponseSchema
 >;
 export type SyncTriggerBody = z.infer<typeof syncTriggerBodySchema>;
 export type SyncTriggerResponse = z.infer<typeof syncTriggerResponseSchema>;

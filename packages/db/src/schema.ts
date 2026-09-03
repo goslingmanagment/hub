@@ -4634,6 +4634,46 @@ export const capturePayloadLocations = pgTable(
 // journal. Money is mills and NULL-or-non-negative: a sparse saleStats means
 // "not served", never zero.
 
+/** File metadata, independent of commerce offer ids and album membership. */
+export const creatorRawMedia = pgTable(
+  "creator_raw_media",
+  {
+    pageId: bigint("page_id", { mode: "number" }).references(() => pages.id, { onDelete: "restrict" }).notNull(),
+    platform: platformColumn("platform").references(() => platforms.key, { onDelete: "restrict" }).notNull(),
+    mediaRef: text("media_ref").notNull(),
+    ownerAccountRef: text("owner_account_ref"),
+    filename: text("filename"),
+    mediaType: integer("media_type"),
+    providerType: text("provider_type"),
+    mimeType: text("mime_type"),
+    durationMs: bigint("duration_ms", { mode: "number" }),
+    originalWidth: integer("original_width"),
+    originalHeight: integer("original_height"),
+    width: integer("width"),
+    height: integer("height"),
+    frameRateMilli: bigint("frame_rate_milli", { mode: "number" }),
+    createdAtPlatform: timestamp("created_at_platform", { withTimezone: true }),
+    updatedAtPlatform: timestamp("updated_at_platform", { withTimezone: true }),
+    sourceKind: text("source_kind").notNull(),
+    firstOrigin: text("first_origin").notNull(),
+    firstObservedAt: timestamp("first_observed_at", { withTimezone: true }).notNull(),
+    lastObservedAt: timestamp("last_observed_at", { withTimezone: true }).notNull(),
+    contentHash: char("content_hash", { length: 64 }).notNull(),
+    sourceEventId: bigint("source_event_id", { mode: "number" }).notNull(),
+    sourceObservationId: bigint("source_observation_id", { mode: "number" }).notNull(),
+    sourceAccountSeq: bigint("source_account_seq", { mode: "number" }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ name: "creator_raw_media_pkey", columns: [table.pageId, table.mediaRef] }),
+    pageObservedIdx: index("creator_raw_media_page_observed_idx").on(table.pageId, table.firstObservedAt, table.mediaRef),
+    pageUpdatedIdx: index("creator_raw_media_page_updated_idx").on(table.pageId, table.updatedAt, table.mediaRef),
+    firstOriginCheck: check("creator_raw_media_first_origin_check", sql`${table.firstOrigin} in ('vault', 'post')`),
+    sourceKindCheck: check("creator_raw_media_source_kind_check", sql`${table.sourceKind} in ('vault_albums', 'uservault_albums', 'vault_media', 'account_media_batch', 'posts', 'ofapi.posts_page.v1')`),
+  }),
+);
+
 export const creatorMedia = pgTable(
   "creator_media",
   {
@@ -5665,6 +5705,20 @@ export const subjectRefreshState = pgTable(
  * page double-counts. M is `count(distinct media_offer_ref)` over
  * `creator_media`, never a sum of this column.
  */
+export const creatorVaultAlbumScans = pgTable("creator_vault_album_scans", {
+  pageId: bigint("page_id", { mode: "number" }).references(() => pages.id, { onDelete: "restrict" }).notNull(),
+  vaultKind: text("vault_kind").notNull(), albumRef: text("album_ref").notNull(),
+  walkRef: text("walk_ref").notNull(),
+  startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
+  completedAt: timestamp("completed_at", { withTimezone: true }).notNull(),
+  seenMediaRefs: text("seen_media_refs").array().notNull(),
+  expectedCount: integer("expected_count").notNull(), pages: integer("pages").notNull(),
+  sourceEventId: bigint("source_event_id", { mode: "number" }).notNull(),
+  sourceObservationId: bigint("source_observation_id", { mode: "number" }).notNull(),
+  sourceAccountSeq: bigint("source_account_seq", { mode: "number" }).notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, table => [primaryKey({ columns: [table.pageId, table.vaultKind, table.albumRef] })]);
+
 export const creatorVaultAlbums = pgTable(
   "creator_vault_albums",
   {
@@ -5737,6 +5791,7 @@ export const creatorVaultAlbumMembers = pgTable(
     albumRef: text("album_ref").notNull(),
     mediaOfferRef: text("media_offer_ref"),
     memberRef: text("member_ref"),
+    customFilename: text("custom_filename"),
     mediaOfferType: integer("media_offer_type"),
     bundleRef: text("bundle_ref"),
     mediaRef: text("media_ref").notNull(),

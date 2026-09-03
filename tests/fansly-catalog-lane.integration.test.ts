@@ -414,7 +414,7 @@ describe("[sync-critical] WP-F3 catalog lane", () => {
       return;
     }
     const page = await seedPage();
-    await seedAlbum(page.id, ref(101), 3, ref(903));
+    await seedAlbum(page.id, ref(101), 2, ref(903));
     const adapter = adapterStub({
       vaultPage: (_params, index) =>
         index === 0
@@ -464,6 +464,57 @@ describe("[sync-critical] WP-F3 catalog lane", () => {
     expect(coverage?.status).toBe("provider_exhausted");
     expect(coverage?.proof).toBe("empty_window");
     expect(coverage?.reason_code).toBe("walk_exhausted");
+  });
+
+  it("does not certify a terminal page whose inventory count is short", async () => {
+    const page = await seedPage();
+    await seedAlbum(page.id, ref(101), 3, ref(903));
+    const adapter = adapterStub({ vaultPage: (_params, index) => index === 0 ? {
+      albumMedia: [{ id: ref(901), mediaId: ref(601), albumId: ref(101) },
+        { id: ref(902), mediaId: ref(602), albumId: ref(101) }], media: [],
+    } : { albumMedia: [], media: [] } });
+    await drain(page.id, adapter, telemetryStub());
+    expect((await coverageRows(page.id)).find(row => row.plane === "catalog_vault_media"))
+      .toMatchObject({ status: "partial_provider_surface", reason_code: "walk_inventory_mismatch" });
+    expect(await requestParams(page.id, "vault_album_walk_completed")).toEqual([]);
+  });
+
+  it("rotates 27 unfinished albums across dispatches before any large album finishes", async () => {
+    const page = await seedPage();
+    for (let i = 1; i <= 27; i++) await seedAlbum(page.id, ref(i), 7800, ref(1000));
+    const adapter = adapterStub({ vaultPage: (params, index) => ({
+      albumMedia: [{ id: ref(1000 + index), albumId: params.albumId, mediaId: ref(2000 + index) }], media: [],
+    }) });
+    const telemetry = telemetryStub();
+    // Each invocation reloads the durable cursor. No process-local rotation.
+    await fanslyCatalogChunk(appStub(adapter), input(page.id, telemetry, new SyncChunkBudget(40)));
+    await fanslyCatalogChunk(appStub(adapter), input(page.id, telemetry, new SyncChunkBudget(40)));
+    const calls = adapter.calls.filter(call => call.route === "vault_media");
+    expect(new Set(calls.slice(0, 27).map(call => call.params.albumId)).size).toBe(27);
+    expect(Object.values((await cursor(page.id))!.vaultWalk).every(walk => !walk.done)).toBe(true);
+  });
+
+  it("prioritizes a never-completed album over a due weekly recheck", async () => {
+    const page = await seedPage(); await seedAlbum(page.id, ref(101), 0, null);
+    const adapter = adapterStub(); const telemetry = telemetryStub();
+    await drain(page.id, adapter, telemetry);
+    expect((await cursor(page.id))?.vaultWalk[ref(101)]?.lastCompleteWalkAt).toBeTruthy();
+    await seedAlbum(page.id, ref(102), 0, null);
+    const before = adapter.calls.length;
+    await fanslyCatalogChunk(appStub(adapter), input(page.id, telemetry, new SyncChunkBudget(7), new Date("2026-08-30T09:00:00Z")));
+    expect(adapter.calls.slice(before).filter(call => call.route === "vault_media").map(call => call.params.albumId)).toEqual([ref(102)]);
+  });
+
+  it("rechecks an unchanged album after seven days", async () => {
+    const page = await seedPage(); await seedAlbum(page.id, ref(101), 0, null);
+    const adapter = adapterStub(); const telemetry = telemetryStub();
+    await drain(page.id, adapter, telemetry);
+    const before = adapter.calls.filter(call => call.route === "vault_media").length;
+    await fanslyCatalogChunk(appStub(adapter), input(page.id, telemetry, new SyncChunkBudget(), new Date("2026-08-30T09:00:00Z")));
+    // The fixed steps consume a normal chunk first; use the same day to resume.
+    await fanslyCatalogChunk(appStub(adapter), input(page.id, telemetry, new SyncChunkBudget(), new Date("2026-08-30T09:00:00Z")));
+    expect(adapter.calls.filter(call => call.route === "vault_media").length).toBeGreaterThan(before);
+    expect((await cursor(page.id))?.vaultWalk[ref(101)]?.proof?.seenMediaRefs).toEqual([]);
   });
 
   it("stops the sublane on an empty FIRST page for a non-empty album, with ONE anomaly", async (context) => {

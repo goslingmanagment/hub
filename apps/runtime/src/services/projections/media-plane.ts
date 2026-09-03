@@ -42,6 +42,7 @@ import {
   listEventsSince,
   setProjectionWatermark,
   upsertCreatorMedia,
+  upsertCreatorRawMedia,
   upsertCreatorMediaBundle,
   upsertMediaOfferLocation,
   upsertMediaOrder,
@@ -60,6 +61,7 @@ const EVENT_PAGE_SIZE = 500;
 
 const MEDIA_PLANE_EVENT_TYPES = new Set([
   "media.observed",
+  "media.file_observed",
   "media.order_observed",
   "media.offer_location_observed",
   "message.attachments_observed",
@@ -69,6 +71,7 @@ export interface MediaPlaneProjectionResult extends Record<string, unknown> {
   accounts: number;
   eventsSeen: number;
   media: number;
+  rawMedia: number;
   bundles: number;
   orders: number;
   offers: number;
@@ -148,6 +151,7 @@ export async function runMediaPlaneProjection(
     accounts: 0,
     eventsSeen: 0,
     media: 0,
+    rawMedia: 0,
     bundles: 0,
     orders: 0,
     offers: 0,
@@ -199,6 +203,31 @@ export async function runMediaPlaneProjection(
           contentHash: asText(data.contentHash) ?? "",
         };
         if (lineage.contentHash.length !== 64) {
+          continue;
+        }
+
+        if (event.type === "media.file_observed") {
+          const mediaRef = asText(data.mediaRef);
+          const sourceKind = asText(data.sourceKind);
+          const firstOrigin = asText(data.firstOrigin);
+          if (mediaRef === null || (firstOrigin !== "vault" && firstOrigin !== "post")
+            || sourceKind === null || !["vault_albums", "uservault_albums", "vault_media",
+              "account_media_batch", "posts", "ofapi.posts_page.v1"].includes(sourceKind)) continue;
+          const result = await upsertCreatorRawMedia(app.db, {
+            pageId: accountId, platform: mediaPlatform, mediaRef,
+            ownerAccountRef: asText(data.ownerAccountRef),
+            filename: typeof data.filename === "string" ? data.filename : null,
+            mediaType: asInt(data.mediaType), providerType: asText(data.providerType), mimeType: asText(data.mimeType),
+            durationMs: asInt(data.durationMs),
+            originalWidth: asInt(data.originalWidth), originalHeight: asInt(data.originalHeight),
+            width: asInt(data.width), height: asInt(data.height),
+            frameRateMilli: asInt(data.frameRateMilli),
+            createdAtPlatform: isoDate(data.createdAtPlatform),
+            updatedAtPlatform: isoDate(data.updatedAtPlatform),
+            sourceKind, firstOrigin,
+            ...lineage,
+          });
+          if (result.applied) totals.rawMedia += 1;
           continue;
         }
 
@@ -411,6 +440,7 @@ export async function rebuildMediaPlaneProjection(
       await tx.execute(sql`delete from media_orders where page_id = ${pageId}`);
       await tx.execute(sql`delete from creator_media_bundles where page_id = ${pageId}`);
       await tx.execute(sql`delete from creator_media where page_id = ${pageId}`);
+      await tx.execute(sql`delete from creator_raw_media where page_id = ${pageId}`);
       await tx.execute(sql`
         delete from projection_seq_watermarks
         where projection = ${MEDIA_PLANE_PROJECTION} and account_id = ${pageId}
@@ -421,6 +451,7 @@ export async function rebuildMediaPlaneProjection(
       await tx.execute(sql`delete from media_orders`);
       await tx.execute(sql`delete from creator_media_bundles`);
       await tx.execute(sql`delete from creator_media`);
+      await tx.execute(sql`delete from creator_raw_media`);
       await tx.execute(sql`
         delete from projection_seq_watermarks where projection = ${MEDIA_PLANE_PROJECTION}
       `);

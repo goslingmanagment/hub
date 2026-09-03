@@ -45,7 +45,7 @@ describe("creator-post canonicalizer", () => {
     const family = familyForObservation(observation({ posts: [] }));
     expect(family).toMatchObject({
       source: "pull",
-      version: 7,
+      version: 8,
       projectionOnly: true,
     });
     expect(family?.kinds).toEqual(["posts", "post_tips"]);
@@ -334,7 +334,7 @@ describe("creator-post canonicalizer", () => {
           type: "post.tip_parse_rejected",
           schemaVersion: 1,
           data: expect.objectContaining({
-            parserVersion: 7,
+            parserVersion: 8,
             rejectedItemCount: 1,
           }),
         }),

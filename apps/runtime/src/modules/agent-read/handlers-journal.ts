@@ -671,8 +671,7 @@ export async function handleAgentDatasetQuery(
         }]
       : [];
     if (
-      params.dataset === "tip_transactions"
-      && result.internalCaptureGap
+      result.internalCaptureGap
       && mapping.internalCaptureGap !== undefined
     ) {
       gaps.push({
@@ -680,7 +679,9 @@ export async function handleAgentDatasetQuery(
         from,
         to,
         plane: mapping.internalCaptureGap.plane as AgentDatasetQueryResponse["capture"]["gaps"][number]["plane"],
-        remedy: {
+        remedy: params.dataset === "post_attachments" ? {
+          kind: "none", reason: "no_remedy_exists",
+        } : {
           // Retained-raw replay closes only the subset whose original DM page
           // survived. Production contains tip ids with no retained candidate,
           // so the honest next action is a fresh pull, not a replay promise.
@@ -699,7 +700,7 @@ export async function handleAgentDatasetQuery(
         }), "agent_post_tip_parse_debt");
       gaps.push(...postTipParseDebtGaps(parseDebt));
     }
-    if (["posts", "post_monetization", "tip_goals"].includes(params.dataset)) {
+    if (["posts", "post_attachments", "post_monetization", "tip_goals"].includes(params.dataset)) {
       const parseDebt = await withAgentTimeout(scope.db, AGENT_TIMEOUT_MS.short, (tx) =>
         readAgentPostSnapshotParseDebt(tx, {
           pageIds: [page.id],

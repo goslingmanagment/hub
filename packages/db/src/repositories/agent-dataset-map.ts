@@ -27,6 +27,8 @@
 // this module builds for `sourceLabel`, `typeLabel` and the notification labels
 // are GENERATED from these frozen constants, so a second copy of a code→label
 // map cannot drift away from the first.
+import { POST_ATTACHMENTS_DATASET, RAW_MEDIA_DATASET } from "./agent-content-media-sql.ts";
+
 import {
   FANSLY_MEDIA_STAT_TYPES,
   FANSLY_NOTIFICATION_ALERT_FAMILY_LABEL,
@@ -416,7 +418,11 @@ const CREATOR_POSTS = `
          cp.published_at        as f_published_at,
          cp.first_observed_at   as f_first_observed_at,
          cp.last_observed_at    as f_last_observed_at,
-         cp.attachment_count    as f_attachment_count
+         cp.updated_at          as f_row_updated_at,
+         cp.attachment_count    as f_attachment_count,
+         cp.fyp_flags           as f_fyp_flags,
+         cp.in_reply_to_ref     as f_in_reply_to_ref,
+         cp.wall_refs           as f_wall_refs
   from creator_posts cp
 `;
 
@@ -882,6 +888,16 @@ const VAULT_MEDIA = `
          p.platform::text     as f_platform,
          vm.vault_kind        as f_vault_kind,
          vm.album_ref         as f_album_ref,
+         va.title             as f_album_title,
+         scan.completed_at    as f_last_full_walk_at,
+         scan.walk_ref        as f_full_walk_ref,
+         cardinality(scan.seen_media_refs) as f_full_walk_observed_count,
+         vm.custom_filename   as f_custom_filename,
+         rm.filename          as f_filename,
+         rm.mime_type         as f_mime_type,
+         rm.duration_ms       as f_duration_ms,
+         rm.original_width    as f_original_width,
+         rm.original_height   as f_original_height,
          vm.media_ref         as f_media_ref,
          vm.media_offer_ref   as f_media_offer_ref,
          vm.member_ref        as f_member_ref,
@@ -890,11 +906,15 @@ const VAULT_MEDIA = `
          vm.created_at_platform as f_created_at_platform,
          vm.missing_since     as f_missing_since,
          vm.first_observed_at as f_first_observed_at,
-         vm.last_observed_at  as f_last_observed_at
+         vm.last_observed_at  as f_last_observed_at,
+         greatest(vm.updated_at, va.updated_at, rm.updated_at, scan.updated_at) as f_row_updated_at
   from creator_vault_album_members vm
   join pages p on p.id = vm.page_id
-  join creator_vault_albums va
+  left join creator_vault_albums va
     on va.page_id = vm.page_id and va.vault_kind = vm.vault_kind and va.album_ref = vm.album_ref
+  left join creator_raw_media rm on rm.page_id = vm.page_id and rm.media_ref = vm.media_ref
+  left join creator_vault_album_scans scan
+    on scan.page_id = vm.page_id and scan.vault_kind = vm.vault_kind and scan.album_ref = vm.album_ref
 `;
 
 const PLATFORM_NOTIFICATIONS = `
@@ -1187,8 +1207,11 @@ export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>>
       postText: "f_post_text",
       publishedAt: "f_published_at",
       firstObservedAt: "f_first_observed_at",
-      lastObservedAt: "f_last_observed_at",
+      lastObservedAt: "f_last_observed_at", rowUpdatedAt: "f_row_updated_at",
       attachmentCount: "f_attachment_count",
+      fypFlags: "f_fyp_flags",
+      inReplyToRef: "f_in_reply_to_ref",
+      wallRefs: "f_wall_refs",
     },
     windowColumn: "k_occurred_at",
     stableKeyColumns: ["k_key"],
@@ -1199,6 +1222,38 @@ export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>>
       ingestPath: "k_ingest_path",
       convergence: "k_convergence",
     },
+  },
+  raw_media: {
+    source: RAW_MEDIA_DATASET,
+    fields: {
+      platform: "f_platform", mediaRef: "f_media_ref", ownerAccountRef: "f_owner_account_ref",
+      filename: "f_filename", mimeType: "f_mime_type", mediaType: "f_media_type", providerType: "f_provider_type", durationMs: "f_duration_ms",
+      width: "f_width", height: "f_height", originalWidth: "f_original_width", originalHeight: "f_original_height",
+      frameRateMilli: "f_frame_rate_milli", createdAtPlatform: "f_created_at_platform",
+      updatedAtPlatform: "f_updated_at_platform", firstOrigin: "f_first_origin", sourceKind: "f_source_kind",
+      firstObservedAt: "f_first_observed_at", lastObservedAt: "f_last_observed_at", rowUpdatedAt: "f_row_updated_at",
+    },
+    windowColumn: "k_occurred_at", stableKeyColumns: ["k_key"],
+    readPlanes: ["creator_raw_media"],
+    provenanceColumns: { observationRef: "k_observation_ref", ingestPath: "k_ingest_path", convergence: "k_convergence" },
+  },
+  post_attachments: {
+    source: POST_ATTACHMENTS_DATASET,
+    fields: {
+      platform: "f_platform", postRef: "f_post_ref", publishedAt: "f_published_at",
+      attachmentIndex: "f_attachment_index", pos: "f_pos", contentType: "f_content_type", contentRef: "f_content_ref",
+      role: "f_role", memberIndex: "f_member_index", bundleRef: "f_bundle_ref", mediaOfferRef: "f_media_offer_ref",
+      previewRef: "f_preview_ref", mediaRef: "f_media_ref", linkState: "f_link_state",
+      filename: "f_filename", mimeType: "f_mime_type", durationMs: "f_duration_ms",
+      originalWidth: "f_original_width", originalHeight: "f_original_height", lastObservedAt: "f_last_observed_at", rowUpdatedAt: "f_row_updated_at",
+      postObservationRef: "f_post_observation_ref", offerObservationRef: "f_offer_observation_ref",
+      bundleObservationRef: "f_bundle_observation_ref", fileObservationRef: "f_file_observation_ref",
+    },
+    windowColumn: "k_occurred_at", stableKeyColumns: ["k_key"],
+    readPlanes: ["creator_posts", "creator_media", "creator_media_bundles", "creator_raw_media"],
+    captureFloorPlane: "creator_posts",
+    internalCaptureGap: { column: "k_link_complete", plane: "creator_raw_media" },
+    provenanceColumns: { observationRef: "k_observation_ref", ingestPath: "k_ingest_path", convergence: "k_convergence" },
   },
   post_monetization: {
     source: POST_MONETIZATION,
@@ -1477,6 +1532,16 @@ export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>>
       platform: "f_platform",
       vaultKind: "f_vault_kind",
       albumRef: "f_album_ref",
+      albumTitle: "f_album_title",
+      lastFullWalkAt: "f_last_full_walk_at",
+      fullWalkRef: "f_full_walk_ref",
+      fullWalkObservedCount: "f_full_walk_observed_count",
+      customFilename: "f_custom_filename",
+      filename: "f_filename",
+      mimeType: "f_mime_type",
+      durationMs: "f_duration_ms",
+      originalWidth: "f_original_width",
+      originalHeight: "f_original_height",
       mediaRef: "f_media_ref",
       mediaOfferRef: "f_media_offer_ref",
       memberRef: "f_member_ref",
@@ -1485,11 +1550,11 @@ export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>>
       createdAtPlatform: "f_created_at_platform",
       missingSince: "f_missing_since",
       firstObservedAt: "f_first_observed_at",
-      lastObservedAt: "f_last_observed_at",
+      lastObservedAt: "f_last_observed_at", rowUpdatedAt: "f_row_updated_at",
     },
     windowColumn: "k_occurred_at",
     stableKeyColumns: ["k_key"],
-    readPlanes: ["creator_vault_album_members", "creator_vault_albums"],
+    readPlanes: ["creator_vault_album_members", "creator_vault_albums", "creator_raw_media", "creator_vault_album_scans"],
     captureFloorPlane: "creator_vault_album_members",
   },
   notifications: {

@@ -72,6 +72,8 @@ describe("page erasure schema inventory (R2)", () => {
 
     // Non-vacuous pins for the initiative and the pre-existing post projection.
     expect(children).toContain("creator_media");
+    expect(children).toContain("creator_raw_media");
+    expect(children).toContain("creator_vault_album_scans");
     expect(children).toContain("capture_coverage");
     expect(children).toContain("page_payout_methods");
     expect(children).toContain("creator_posts");

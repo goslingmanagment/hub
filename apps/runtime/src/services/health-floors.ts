@@ -25,6 +25,7 @@ export interface HealthFloorDescriptor {
   /** null = every kind of the source (measured via the parse-version index). */
   kinds: readonly string[] | null;
   version: number;
+  minimumParseVersion?: number;
 }
 
 /** M4: one threshold for every family — 10 minutes of unconsumed backlog. */
@@ -78,6 +79,7 @@ export const HEALTH_FLOOR_REGISTRY: readonly HealthFloorDescriptor[] = [
     lane: family.lane,
     kinds: family.kinds,
     version: family.version,
+    ...(family.minimumParseVersion === undefined ? {} : { minimumParseVersion: family.minimumParseVersion }),
   })),
   OFAPI_READTHROUGH_HEALTH_FLOOR,
 ];
@@ -126,7 +128,7 @@ export async function computeHealthFloorBacklogMs(
     // pending rows (command_result, the only such family, is ~5.6 k rows).
     const result = await db.execute<{ backlog_ms: string | null }>(sql`
       select coalesce(max(extract(epoch from (now() - pending.min_received)) * 1000), 0)::float8 as backlog_ms
-      from generate_series(0, ${floor.version - 1}) as below_floor(parse_version)
+      from generate_series(${floor.minimumParseVersion ?? 0}::integer, ${floor.version - 1}::integer) as below_floor(parse_version)
       cross join lateral (
         select min(o.received_at) as min_received
         from observations o
@@ -142,7 +144,7 @@ export async function computeHealthFloorBacklogMs(
   const result = await db.execute<{ backlog_ms: string | null }>(sql`
     select coalesce(max(extract(epoch from (now() - pending.received_at)) * 1000), 0)::float8 as backlog_ms
     from unnest(${sql.raw(`array[${floor.kinds.map((kind) => `'${kind.replaceAll("'", "''")}'`).join(",")}]::text[]`)}) as kind_list(kind)
-    cross join generate_series(0, ${floor.version - 1}) as below_floor(parse_version)
+    cross join generate_series(${floor.minimumParseVersion ?? 0}::integer, ${floor.version - 1}::integer) as below_floor(parse_version)
     cross join lateral (
       select o.received_at
       from observations o

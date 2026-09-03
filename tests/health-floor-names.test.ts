@@ -52,10 +52,10 @@ describe("health-floor gauge names", () => {
     expect(healthFloorName(syncPull!.source, syncPull!.lane, 5)).toBe("obs_backlog_pull_sync_v5");
     // …and at the versions that are live today.
     expect(syncPull!.version).toBe(5);
-    expect(posts!.version).toBe(7);
+    expect(posts!.version).toBe(8);
     const postsName = healthFloorName(posts!.source, posts!.lane, posts!.version);
     const syncName = healthFloorName(syncPull!.source, syncPull!.lane, syncPull!.version);
-    expect(postsName).toBe("obs_backlog_pull_posts_v7");
+    expect(postsName).toBe("obs_backlog_pull_posts_v8");
     expect(syncName).toBe("obs_backlog_pull_sync_v5");
     expect(postsName).not.toBe(syncName);
   });

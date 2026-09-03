@@ -219,6 +219,7 @@ describe("[sync-critical] WP-F3 catalog projection", () => {
     expect(first.catalog.albumMembers).toBe(3);
     // The media plane wrote the batch-hydrated cards, not this projector.
     expect(first.media.media).toBe(2);
+    expect(first.media.rawMedia).toBe(5);
     expect(first.media.bundles).toBe(1);
 
     const before = await checksums(page.id);

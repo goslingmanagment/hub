@@ -49,3 +49,5 @@ apps/dashboard/tsconfig.tsbuildinfo
 *.png
 generated-reports/
 /ofapi-export-artifacts/
+/artifacts/
+/.playwright-cli/

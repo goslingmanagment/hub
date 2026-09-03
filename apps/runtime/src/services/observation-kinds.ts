@@ -97,6 +97,7 @@ export const WRITTEN_OBSERVATION_KINDS: readonly WrittenObservationKind[] = [
   { kind: "automated_messages", source: "pull", writer: "services/sync/fansly-catalog.ts" },
   { kind: "account_walls", source: "pull", writer: "services/sync/fansly-catalog.ts" },
   { kind: "vault_media", source: "pull", writer: "services/sync/fansly-catalog.ts" },
+  { kind: "vault_album_walk_completed", source: "pull", writer: "services/sync/fansly-catalog.ts" },
   { kind: "account_media_batch", source: "pull", writer: "services/sync/fansly-catalog.ts" },
   {
     kind: "account_media_bundle_batch",
@@ -495,12 +496,6 @@ export const RAW_ONLY_OBSERVATION_KINDS: readonly RawOnlyObservationKind[] = [
     justification:
       "The corrections reconciler's lineage witness — it links two EXISTING events; it "
       + "is not itself a new platform fact.",
-  },
-  {
-    kind: "ofapi.posts_page.v1",
-    justification:
-      "A governed posts-capture page. Its own materializer is not built yet, so it is "
-      + "capture-first evidence with no claimant — recorded here rather than left silent.",
   },
   {
     kind: "ofapi.data_export_create.v1",

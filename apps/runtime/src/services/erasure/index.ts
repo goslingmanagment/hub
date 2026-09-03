@@ -1204,6 +1204,7 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
   const deletions: Array<[string, string]> = [
     // Rows that RESTRICT parents below go first.
     ["creator_vault_album_members", "page_id"],
+    ["creator_vault_album_scans", "page_id"],
     ["page_subscription_tier_plans", "page_id"],
     ["page_poll_options", "page_id"],
     ["ofapi_credit_ledger", "page_id"],
@@ -1218,6 +1219,7 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
     ["media_orders", "page_id"],
     ["message_media_offers", "page_id"],
     ["creator_media_bundles", "page_id"],
+    ["creator_raw_media", "page_id"],
     ["creator_media", "page_id"],
     ["stats_traffic_buckets", "page_id"],
     ["stats_top_media", "page_id"],

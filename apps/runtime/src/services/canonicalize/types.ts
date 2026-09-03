@@ -33,6 +33,8 @@ export interface CanonicalEventDraft {
  *  that don't need it simply ignore the argument. */
 export interface CanonicalizeRunContext {
   nativeAccountRefByAccountId: ReadonlyMap<number, string | null>;
+  /** Original governed acceptance boundary, scoped to this observation only. */
+  acceptedPostRefs?: ReadonlySet<string>;
   /**
    * Counts-only sink for parser diagnostics. A canonicalizer that REFUSES a
    * value (rather than guessing one) drops a fact on the floor; with no

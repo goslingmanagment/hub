@@ -34,6 +34,15 @@ describe("route auth declarations", () => {
     })).toEqual(["extraProp"]);
   });
 
+  it("keeps both follower blast-radius steps owner-session only", () => {
+    expect(routeSchemas.adminFollowersReconcileOverridePreview.auth).toEqual({
+      kind: "owner-session",
+    });
+    expect(routeSchemas.adminFollowersReconcileOverrideApply.auth).toEqual({
+      kind: "owner-session",
+    });
+  });
+
   it("page scope is declared only where a :pageLabel path param can carry it", () => {
     // The middleware resolves scope:"page" from params.pageLabel; declaring it on
     // a route without that param would silently skip the check. The path lives in

@@ -102,7 +102,7 @@ function allKeys(value: unknown, out: string[] = []): string[] {
 }
 
 describe("fansly-catalog family registration", () => {
-  it("claims exactly the nine catalog kinds, and every one is a registered writer", () => {
+  it("claims the nine catalog kinds and full-walk evidence, and every one is a registered writer", () => {
     expect([...FANSLY_CATALOG_CANONICALIZED_KINDS]).toEqual([
       "vault_albums",
       "uservault_albums",
@@ -111,6 +111,7 @@ describe("fansly-catalog family registration", () => {
       "automated_messages",
       "account_walls",
       "vault_media",
+      "vault_album_walk_completed",
       "account_media_batch",
       "account_media_bundle_batch",
     ]);
@@ -129,7 +130,7 @@ describe("fansly-catalog family registration", () => {
   });
 
   it("emits only its declared event types, and never mints media.observed itself", () => {
-    const declared = new Set<string>(FANSLY_CATALOG_EVENT_TYPES);
+    const declared = new Set<string>([...FANSLY_CATALOG_EVENT_TYPES, "media.file_observed"]);
     // `media.observed` is F0(b)'s type, reused verbatim by the vault walk and
     // the batch hydration. It is deliberately NOT in this family's declared
     // list, because the MEDIA PLANE owns it — declaring it here would make the
@@ -206,7 +207,7 @@ describe("fansly-catalog: vaults", () => {
 
   it("puts NO delivery URL, location or variant into any event", () => {
     const keys = new Set(allKeys(list.map((draft) => draft.data)));
-    for (const banned of ["location", "locations", "variants", "variantHash", "filename"]) {
+    for (const banned of ["location", "locations", "variants", "variantHash"]) {
       expect(keys.has(banned), `${banned} reached an event`).toBe(false);
     }
     for (const value of allStrings(list.map((draft) => draft.data))) {
@@ -251,22 +252,20 @@ describe("fansly-catalog: the vault media walk", () => {
   it("emits live-shaped membership from mediaId, keyed without a hash", () => {
     const members = ofType(list, "vault.album_membership_observed");
     expect(members).toHaveLength(2);
-    // NO hash in the key: membership is binary. An album either contains an
-    // raw file or it does not, and a neighbouring field moving must not mint a
-    // second event for the same fact.
+    // One immutable sighting per observation + material, including its title.
     expect(members[0]?.dedupKey)
-      .toBe("albummem:v2:7:creator:000900000000000101:000900000000000612");
+      .toMatch(/^albummem:v3:7:creator:000900000000000101:000900000000000612:[a-f0-9]{64}:obs:1$/);
     expect(members[0]?.data.vaultKind).toBe("creator");
     expect(members[0]?.data.mediaRef).toBe("000900000000000612");
     expect(members[0]?.data.mediaOfferRef).toBeNull();
-    expect(members[0]?.schemaVersion).toBe(2);
+    expect(members[0]?.schemaVersion).toBe(3);
   });
 
   it("has NO roster — a paged walk cannot assert what an album does not hold", () => {
     expect(ofType(list, "catalog.listing_observed")).toHaveLength(0);
   });
 
-  it("reads nothing from the raw media[] sidecar", () => {
+  it("reads file metadata without copying delivery locations", () => {
     const keys = new Set(allKeys(list.map((draft) => draft.data)));
     for (const banned of ["location", "locations", "variants"]) {
       expect(keys.has(banned)).toBe(false);
