@@ -34,9 +34,12 @@ import {
   executeOfapiCaptureJobChunk,
   isOfapiBackgroundCaptureRunnable,
 } from "../ofapi-capture-jobs.ts";
+import { OfapiApiError } from "../ofapi.ts";
 import {
   notifyAuthFailedIncident,
+  notifyOfapiGlobalIncident,
   notifySyncChunkFailureIncident,
+  resolveOfapiGlobalIncident,
   resolveSyncChunkRecoveryIncidents,
 } from "../notification-incidents.ts";
 import { resolveStoredProxyEgressKey } from "../page-context.ts";
@@ -206,6 +209,70 @@ async function resolveSyncPageWakeupTarget(
   };
 }
 
+/**
+ * Decision #245: OFAPI `402 Payment Required` is the credit pool running dry —
+ * an account-wide operations state, not a network blip. The stream keeps its
+ * ordinary bounded retry (OFAPI does not charge a 402-rejected request, so the
+ * probe is free and the lane heals itself after a top-up) but under its own
+ * retry class so the monitor names the cause, and the executor opens ONE
+ * global incident for the owner and resolves it on the first chunk that
+ * succeeds afterwards.
+ */
+export const OFAPI_INSUFFICIENT_CREDITS_RETRY_CLASS = "ofapi_insufficient_credits";
+const OFAPI_INSUFFICIENT_CREDITS_INCIDENT = { kind: "ofapi_low_credit", subKey: "http_402" } as const;
+
+function classifyOfapiApiError(
+  error: OfapiApiError,
+  failure: ReturnType<typeof buildNormalizedSyncError>,
+): ReturnType<typeof classifyTaskFailure> {
+  const status = error.status;
+  if (status === null) {
+    // A transport failure before any status: the one shape the old generic
+    // fallback described correctly.
+    return { mode: "retry", retryClass: "transient_network" };
+  }
+  if (status === 402) {
+    return { mode: "retry", retryClass: OFAPI_INSUFFICIENT_CREDITS_RETRY_CLASS };
+  }
+  if (status === 429) {
+    return { mode: "retry", retryClass: "rate_limit" };
+  }
+  if (status >= 500) {
+    return { mode: "retry", retryClass: "provider_5xx" };
+  }
+  if (status === 401 || status === 403) {
+    // Our OFAPI key or the account mapping, never the page's own platform
+    // session: park the stream for an operator, do not pause the page for a
+    // re-login it cannot perform.
+    return {
+      mode: "blocked",
+      blockerType: "manual_action_required",
+      blockerCode: `ofapi_http_${status}`,
+      blockerReason: failure.summary,
+    };
+  }
+  if (status >= 400) {
+    return {
+      mode: "blocked",
+      blockerType: "provider_bad_data",
+      blockerCode: `ofapi_http_${status}`,
+      blockerReason: failure.summary,
+    };
+  }
+  return { mode: "retry", retryClass: "transient_network" };
+}
+
+async function resolveOfapiCreditsIncidentIfRecovered(
+  app: Pick<AppContext, "config" | "db" | "logger">,
+  taskLease: { retryKind: string | null },
+  recoveredAt: Date,
+) {
+  if (taskLease.retryKind !== OFAPI_INSUFFICIENT_CREDITS_RETRY_CLASS) {
+    return;
+  }
+  await resolveOfapiGlobalIncident(app, { ...OFAPI_INSUFFICIENT_CREDITS_INCIDENT, recoveredAt });
+}
+
 function classifyTaskFailure(
   error: unknown,
   failure: ReturnType<typeof buildNormalizedSyncError>,
@@ -314,6 +381,10 @@ function classifyTaskFailure(
         blockerReason: failure.summary,
       };
     }
+  }
+
+  if (error instanceof OfapiApiError) {
+    return classifyOfapiApiError(error, failure);
   }
 
   const lowerCode = failure.error.code?.toLowerCase() ?? "";
@@ -593,6 +664,7 @@ export async function executeNextSyncPageChunk(
           recoveredAt,
           stream: taskLease.stream,
         });
+        await resolveOfapiCreditsIncidentIfRecovered(app, taskLease, recoveredAt);
       }
 
       // Shared tail on purpose: this "success" is the CHUNK SCHEDULER's
@@ -646,6 +718,7 @@ export async function executeNextSyncPageChunk(
       recoveredAt,
       stream: taskLease.stream,
     });
+    await resolveOfapiCreditsIncidentIfRecovered(app, taskLease, recoveredAt);
     // A newer request OR another stream on this page may already be runnable.
     // Immediate page work wins over this stream's delayed yield; otherwise a
     // deferred retry stays only in page_sync_states for the planner to wake.
@@ -833,6 +906,13 @@ export async function executeNextSyncPageChunk(
       errorSummary: failure.summary,
       occurredAt: failedAt,
     });
+    if (classified.retryClass === OFAPI_INSUFFICIENT_CREDITS_RETRY_CLASS) {
+      await notifyOfapiGlobalIncident(app, {
+        ...OFAPI_INSUFFICIENT_CREDITS_INCIDENT,
+        errorSummary: `OFAPI rejected a request with 402 Payment Required (insufficient credits): ${failure.summary}`,
+        occurredAt: failedAt,
+      });
+    }
     const continuationPriority = classified.mode === "retry"
       ? await resolveContinuationPriority(app, platformAccountId)
       : null;

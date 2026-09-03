@@ -7,6 +7,7 @@ import { PageSyncLeaseLostError } from "@agency_hub_core/db";
 import { FanslyApiError } from "@agency_hub_core/fansly";
 
 import { ProxyMissingError } from "../apps/runtime/src/services/errors.ts";
+import { OfapiApiError } from "../apps/runtime/src/services/ofapi.ts";
 import {
   PostsCaptureConfigurationError,
   PostsCaptureJobBlockedError,
@@ -42,7 +43,9 @@ const sharedMocks = vi.hoisted(() => ({
 
 const notificationMocks = vi.hoisted(() => ({
   notifyAuthFailedIncident: vi.fn(),
+  notifyOfapiGlobalIncident: vi.fn(),
   notifySyncChunkFailureIncident: vi.fn(),
+  resolveOfapiGlobalIncident: vi.fn(),
   resolveSyncChunkRecoveryIncidents: vi.fn(),
 }));
 
@@ -1729,5 +1732,123 @@ describe("sync executor", () => {
       expect.objectContaining({ processedThisChunk: 3 }),
     );
     expect(notificationMocks.resolveSyncChunkRecoveryIncidents).toHaveBeenCalledTimes(1);
+  });
+
+  describe("OFAPI status matrix (decision #245)", () => {
+    const ofapiError = (status: number | null) =>
+      new OfapiApiError(
+        `OFAPI request failed: GET /acct_x/tracking-links returned ${status ?? "nothing"}`,
+        status,
+        null,
+      );
+    const app = () => ({
+      db: {},
+      logger: { warn: vi.fn(), error: vi.fn() },
+    }) as never;
+
+    it("retries a 402 under ofapi_insufficient_credits and opens one global incident", async () => {
+      const ctx = app();
+      dbMocks.acquirePageSyncLease.mockResolvedValueOnce({ ...taskLease, stream: "fan_identities" as const });
+      dbMocks.listRunnablePageSync.mockResolvedValueOnce([]);
+      handlerMocks.executeStreamChunk.mockRejectedValue(ofapiError(402));
+
+      const result = await executeNextSyncPageChunk(ctx, 55);
+
+      expect(dbMocks.retryPageSync).toHaveBeenCalledWith({}, expect.objectContaining({
+        pageId: 55,
+        stream: "fan_identities",
+        retryKind: "ofapi_insufficient_credits",
+      }));
+      expect(dbMocks.blockPageSync).not.toHaveBeenCalled();
+      expect(dbMocks.pausePageSyncForAuth).not.toHaveBeenCalled();
+      expect(notificationMocks.notifyOfapiGlobalIncident).toHaveBeenCalledTimes(1);
+      expect(notificationMocks.notifyOfapiGlobalIncident).toHaveBeenCalledWith(ctx, expect.objectContaining({
+        kind: "ofapi_low_credit",
+        subKey: "http_402",
+        errorSummary: expect.stringContaining("402"),
+      }));
+      expect(result).toMatchObject({ kind: "failed", stream: "fan_identities", needsContinuation: false });
+    });
+
+    it("resolves the credits incident on the first chunk that succeeds after a 402", async () => {
+      const ctx = app();
+      dbMocks.acquirePageSyncLease.mockResolvedValueOnce({
+        ...taskLease,
+        stream: "fan_identities" as const,
+        retryKind: "ofapi_insufficient_credits",
+      });
+      handlerMocks.executeStreamChunk.mockResolvedValue({ satisfied: true, yieldReason: null, stats: {} });
+
+      const result = await executeNextSyncPageChunk(ctx, 55);
+
+      expect(result).toMatchObject({ kind: "success", stream: "fan_identities" });
+      expect(notificationMocks.resolveOfapiGlobalIncident).toHaveBeenCalledWith(ctx, expect.objectContaining({
+        kind: "ofapi_low_credit",
+        subKey: "http_402",
+      }));
+    });
+
+    it("leaves the credits incident alone when the lease was not a credits retry", async () => {
+      const ctx = app();
+      dbMocks.acquirePageSyncLease.mockResolvedValueOnce({ ...taskLease, retryKind: "transient_network" });
+      handlerMocks.executeStreamChunk.mockResolvedValue({ satisfied: true, yieldReason: null, stats: {} });
+
+      await executeNextSyncPageChunk(ctx, 55);
+
+      expect(notificationMocks.resolveOfapiGlobalIncident).not.toHaveBeenCalled();
+    });
+
+    it.each([401, 403])("parks a %s for an operator without pausing the page for re-login", async (status) => {
+      const ctx = app();
+      dbMocks.acquirePageSyncLease.mockResolvedValueOnce({ ...taskLease, stream: "fan_identities" as const });
+      dbMocks.listRunnablePageSync.mockResolvedValueOnce([]);
+      handlerMocks.executeStreamChunk.mockRejectedValue(ofapiError(status));
+
+      const result = await executeNextSyncPageChunk(ctx, 55);
+
+      expect(dbMocks.blockPageSync).toHaveBeenCalledWith({}, expect.objectContaining({
+        pageId: 55,
+        stream: "fan_identities",
+        blockerKind: "manual_action_required",
+        blockerCode: `ofapi_http_${status}`,
+      }));
+      expect(dbMocks.pausePageSyncForAuth).not.toHaveBeenCalled();
+      expect(dbMocks.retryPageSync).not.toHaveBeenCalled();
+      expect(notificationMocks.notifyOfapiGlobalIncident).not.toHaveBeenCalled();
+      expect(result).toMatchObject({ kind: "failed", needsContinuation: false });
+    });
+
+    it.each([
+      [429, "rate_limit"],
+      [500, "provider_5xx"],
+      [503, "provider_5xx"],
+      [null, "transient_network"],
+    ])("retries a %s response under %s", async (status, retryKind) => {
+      const ctx = app();
+      dbMocks.acquirePageSyncLease.mockResolvedValueOnce({ ...taskLease, stream: "fan_identities" as const });
+      dbMocks.listRunnablePageSync.mockResolvedValueOnce([]);
+      handlerMocks.executeStreamChunk.mockRejectedValue(ofapiError(status));
+
+      await executeNextSyncPageChunk(ctx, 55);
+
+      expect(dbMocks.retryPageSync).toHaveBeenCalledWith({}, expect.objectContaining({ retryKind }));
+      expect(dbMocks.blockPageSync).not.toHaveBeenCalled();
+      expect(notificationMocks.notifyOfapiGlobalIncident).not.toHaveBeenCalled();
+    });
+
+    it.each([400, 404, 422])("parks any other 4xx (%s) as provider_bad_data instead of hot-retrying it", async (status) => {
+      const ctx = app();
+      dbMocks.acquirePageSyncLease.mockResolvedValueOnce({ ...taskLease, stream: "fan_identities" as const });
+      dbMocks.listRunnablePageSync.mockResolvedValueOnce([]);
+      handlerMocks.executeStreamChunk.mockRejectedValue(ofapiError(status));
+
+      await executeNextSyncPageChunk(ctx, 55);
+
+      expect(dbMocks.blockPageSync).toHaveBeenCalledWith({}, expect.objectContaining({
+        blockerKind: "provider_bad_data",
+        blockerCode: `ofapi_http_${status}`,
+      }));
+      expect(dbMocks.retryPageSync).not.toHaveBeenCalled();
+    });
   });
 });
