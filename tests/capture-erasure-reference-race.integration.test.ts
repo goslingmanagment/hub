@@ -26,7 +26,7 @@
 
 import { setTimeout as sleep } from "node:timers/promises";
 
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   censusCapturePayloadDanglingRefs,
@@ -75,6 +75,8 @@ beforeAll(async () => {
 afterAll(async () => {
   await testDb?.stop();
 });
+
+afterEach(() => vi.useRealTimers());
 
 beforeEach(async () => {
   resetCaptureCasDualWriteForTests();
@@ -348,6 +350,11 @@ describe("erasure vs capture: the reference race (#222)", () => {
       context.skip();
       return;
     }
+    // persistRawPayload takes new Date() for the CAS bucket. Keep it in the
+    // fixture's month, otherwise September captures never dedup onto August's
+    // object and this test stops exercising the race at the month boundary.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(CAPTURE_INSTANT);
     await seedPage("real-seam");
     publishCaptureCasDualWritePages(String(pageId));
     publishCaptureCasPointerOnlyPages(String(pageId));
@@ -365,12 +372,15 @@ describe("erasure vs capture: the reference race (#222)", () => {
     const held = new Promise<void>((resolve) => {
       release = resolve;
     });
+    let signalLocked = () => {};
+    const locked = new Promise<void>(resolve => { signalLocked = resolve; });
     const sweeping = testDb.db.transaction(async (tx) => {
       const result = await deleteUnreferencedCapturePayloadObjects(asDb(tx), [ref]);
+      signalLocked();
       await held;
       return result;
     });
-    await sleep(300);
+    await locked;
 
     const capturing = persistRawPayload(testDb.db, {
       platformAccountId: pageId,
@@ -382,10 +392,22 @@ describe("erasure vs capture: the reference race (#222)", () => {
       retainUntil: retentionDate(),
     }, { platform: "onlyfans" });
 
-    // Long enough for the capture to have committed its CAS transaction (which
-    // deduped onto the doomed object) and to be parked on the liveness lock.
-    await sleep(500);
-    release();
+    // Observe the actual barrier instead of guessing how fast the CI runner is.
+    try {
+      let blocked = false;
+      for (let attempt = 0; attempt < 200 && !blocked; attempt++) {
+        const activity = await testDb.pool.query<{ blocked: boolean }>(`
+          select exists (select 1 from pg_stat_activity
+            where datname = current_database() and wait_event_type = 'Lock'
+              and query ilike '%capture_payload_objects%' and query ilike '%for key share%') as blocked
+        `);
+        blocked = activity.rows[0]?.blocked === true;
+        if (!blocked) await sleep(25);
+      }
+      expect(blocked, "capture must wait on the erasure's object lock").toBe(true);
+    } finally {
+      release();
+    }
     expect((await sweeping).deleted).toHaveLength(1);
     const receipt = await capturing;
 

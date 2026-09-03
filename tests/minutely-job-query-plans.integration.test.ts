@@ -285,6 +285,23 @@ describe("minutely job query plans", () => {
     INTEGRATION_TEST_TIMEOUT_MS,
   );
 
+  it("excludes unsettled captures below the replay family's minimum version", async () => {
+    if (!testDb) throw new Error("PostgreSQL required");
+    await testDb.pool.query(`
+      insert into observations (source, producer, kind, payload, payload_hash, idempotency_key, received_at, parse_version)
+      values
+        ('ofapi_capture', 'floor-test', 'ofapi.posts_page.v1', '{}', '\\x00', 'of-pending', now() - interval '9 hours', 0),
+        ('ofapi_capture', 'floor-test', 'ofapi.posts_page.v1', '{}', '\\x00', 'of-replay', now() - interval '1 hour', 7),
+        ('ofapi_capture', 'floor-test', 'ofapi.posts_page.v1', '{}', '\\x00', 'of-done', now() - interval '3 hours', 8)
+    `);
+    for (const kinds of [["ofapi.posts_page.v1"], null]) {
+      const age = await computeHealthFloorBacklogMs(testDb.db, {
+        name: "of-test", source: "ofapi_capture", lane: "ofapi-posts", kinds, minimumParseVersion: 7, version: 8,
+      });
+      expect(Math.abs(age - 3_600_000)).toBeLessThan(1_000);
+    }
+  });
+
   it(
     "reports the same backlog the pre-index probe did",
     async (context) => {

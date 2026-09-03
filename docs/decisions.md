@@ -10457,3 +10457,11 @@ accepted post set from the complete attached ledger to the pure canonicalizer.
 The backlog gauge uses the same lower floor. No provider calls or capture-boundary
 inference are introduced. Production archive/OF recovery and coordinated CLI
 rollout gates from the original decision remain open.
+
+
+The full-CI follow-up registers both new page-owned tables in the existing
+owner-invoked page-erasure plan; no scheduled deletion is added. Backlog probes
+cast both version-series bounds to integer and retain the indexed access path,
+including the OF minimum-version filter. The CAS erasure race test now fixes its
+capture month to the fixture and observes the actual lock barrier, so a calendar
+month change cannot silently replace its dedup race with two unrelated objects.

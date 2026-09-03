@@ -480,12 +480,14 @@ describe("media plane — registration", () => {
     expect(definition?.stateClass).toBe("fact_projection");
     expect([...(definition?.eventTypes ?? [])]).toEqual([
       "media.observed",
+      "media.file_observed",
       "media.order_observed",
       "media.offer_location_observed",
       "message.attachments_observed",
     ]);
     expect([...(definition?.tables ?? [])]).toEqual([
       "creator_media",
+      "creator_raw_media",
       "creator_media_bundles",
       "media_orders",
       "message_media_offers",
