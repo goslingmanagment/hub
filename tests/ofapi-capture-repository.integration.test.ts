@@ -5,6 +5,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import {
   approveBlockedOfapiExportPilotJob,
   cancelBlockedOfapiExportQuoteJob,
+  cancelOfapiCaptureJob,
   captureOfapiAttemptResponse,
   completeOfapiInteractiveRequest,
   createModel,
@@ -22,6 +23,7 @@ import {
   listRunnableOfapiCapturePages,
   markOfapiAttemptDispatching,
   markOfapiAttemptIndeterminate,
+  OfapiCaptureInvariantError,
   OFAPI_INTERACTIVE_RESPONSE_RECOVERY_GRACE_MS,
   OFAPI_CAPTURE_PARSER_VERSION,
   OFAPI_CAPTURE_SOURCE_CONTRACT_VERSION,
@@ -1926,6 +1928,7 @@ describe("OFAPI capture correctness repository", () => {
       attemptCount: 1,
       dispatchCount: 1,
       spentCredits: 1,
+      consecutiveUncaptured: 1,
     });
     const uncertainRead = await testDb.pool.query<{
       state: string;
@@ -1952,6 +1955,90 @@ describe("OFAPI capture correctness repository", () => {
     );
     expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("success");
     expect(fixture.dispatchGovernedRaw).toHaveBeenCalledTimes(2);
+    // A captured response resets the streak.
+    expect(await getOfapiCaptureJob(testDb.db, fixture.job.id)).toMatchObject({
+      consecutiveUncaptured: 0,
+    });
+  });
+
+  it("parks a safe-read job after five consecutive uncaptured dispatches, backing off exponentially (decision #246)", async () => {
+    if (!testDb) return;
+    const fixture = await createPostCaptureExecutionFixture({
+      maxCalls: 20,
+      maxPages: 20,
+      responses: Array.from({ length: 5 }, () => new OfapiGovernedRequestError(
+        "scripted unreadable posts read",
+        "post_dispatch",
+        "body_too_large",
+      )),
+    });
+
+    const expectedDelaysMs = [60_000, 120_000, 240_000, 480_000];
+    for (const [index, expectedDelayMs] of expectedDelaysMs.entries()) {
+      const before = Date.now();
+      expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("failed");
+      const job = await getOfapiCaptureJob(testDb.db, fixture.job.id);
+      if (!job) throw new Error("job missing");
+      expect(job).toMatchObject({
+        state: "retry_wait",
+        reasonCode: "indeterminate_safe_read_retry",
+        consecutiveUncaptured: index + 1,
+        attemptCount: index + 1,
+        dispatchCount: index + 1,
+      });
+      const delayMs = job.nextAttemptAt.getTime() - before;
+      expect(delayMs).toBeGreaterThanOrEqual(expectedDelayMs - 1_000);
+      expect(delayMs).toBeLessThan(expectedDelayMs + 30_000);
+      await testDb.pool.query(
+        "update ofapi_capture_jobs set next_attempt_at = now() - interval '1 second' where id = $1",
+        [fixture.job.id],
+      );
+    }
+
+    expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("failed");
+    expect(await getOfapiCaptureJob(testDb.db, fixture.job.id)).toMatchObject({
+      state: "blocked",
+      reasonCode: "indeterminate_exhausted",
+      reasonMessage: "Dispatch certainty unresolved 5 times in a row: transport (body_too_large, post_dispatch)",
+      consecutiveUncaptured: 5,
+      attemptCount: 5,
+      dispatchCount: 5,
+      spentCredits: 5,
+    });
+    expect(fixture.dispatchGovernedRaw).toHaveBeenCalledTimes(5);
+
+    // The operator sees the governed reason, not just "transport".
+    const ledger = await testDb.pool.query<{ details: Record<string, unknown> }>(`
+      select entry.details
+      from ofapi_credit_ledger entry
+      join ofapi_request_attempts attempt on attempt.id = entry.attempt_id
+      where attempt.capture_job_id = $1
+      order by attempt.owner_attempt_no desc
+      limit 1
+    `, [fixture.job.id]);
+    expect(ledger.rows[0]?.details).toMatchObject({
+      certainty: "indeterminate",
+      outcome: "transport",
+      reason: "body_too_large",
+      phase: "post_dispatch",
+    });
+
+    // Parked: not runnable, and the vendor is not asked again.
+    await testDb.pool.query(
+      "update ofapi_capture_jobs set next_attempt_at = now() - interval '1 second' where id = $1",
+      [fixture.job.id],
+    );
+    expect(await listRunnableOfapiCapturePages(testDb.db, { now: new Date() })).toEqual([]);
+    expect(fixture.dispatchGovernedRaw).toHaveBeenCalledTimes(5);
+
+    // ...and the cause reaches the operator over the wire, not only the ledger.
+    const status = await getOfapiCaptureOperatorStatus(testDb.db, { jobSampleLimit: 50 });
+    expect(status.jobSamples).toContainEqual(expect.objectContaining({
+      jobId: fixture.job.id,
+      state: "blocked",
+      reasonCode: "indeterminate_exhausted",
+      reasonMessage: expect.stringContaining("body_too_large"),
+    }));
   });
 
   it("materializes only accepted OFAPI posts and completes initial head verification at the exact cap", async () => {
@@ -2783,7 +2870,7 @@ describe("OFAPI capture correctness repository", () => {
     expect(credit.rows[0]?.governed_unsettled_credits).toBe(0);
   });
 
-  it("requeues the same frozen safe-read job only after owner certainty resolution", async () => {
+  it("retries a stale safe-read capture attempt under the uncaptured bound instead of waiting for the owner (decision #246)", async () => {
     if (!testDb) return;
     const seeded = await seed();
     const created = await createOrGetOfapiCaptureJob(testDb.db, {
@@ -2839,6 +2926,106 @@ describe("OFAPI capture correctness repository", () => {
     expect(await recoverStaleOfapiCaptureWork(testDb.db, {
       now: new Date(NOW.getTime() + 2_000),
     })).toEqual({ released: 0, indeterminate: 1, requeued: 0 });
+    // Decision #246: the stale safe read is settled as billed and retried under
+    // the bound — nobody is asked to confirm a charge the ledger already assumes.
+    expect(await getOfapiCaptureJob(testDb.db, created.job.id)).toMatchObject({
+      state: "retry_wait",
+      reasonCode: "indeterminate_safe_read_retry",
+      consecutiveUncaptured: 1,
+      spentCredits: 1,
+      attemptCount: 1,
+      dispatchCount: 1,
+    });
+    expect(await getOfapiRequestAttempt(testDb.db, reservation.attemptId)).toMatchObject({
+      state: "indeterminate",
+      credit_state: "settled",
+      certainty_resolution: "safe_read_retry_assumed_billed",
+    });
+    // Backed off: the 60 s recheck floor and the first backoff step coincide.
+    expect(await listRunnableOfapiCapturePages(testDb.db, {
+      now: new Date(NOW.getTime() + 61_000),
+    })).toEqual([]);
+    expect(await listRunnableOfapiCapturePages(testDb.db, {
+      now: new Date(NOW.getTime() + 62_001),
+    })).toEqual([{
+      pageId: seeded.page.id,
+      priority: 0,
+      requestedAt: new Date(NOW.getTime() + 62_000),
+    }]);
+
+    const released = await leaseNextOfapiCaptureJob(testDb.db, {
+      pageId: seeded.page.id,
+      leaseOwner: "second-crashed-worker",
+      leaseTtlMs: 1_000,
+      now: new Date(NOW.getTime() + 62_001),
+    });
+    expect(released).toMatchObject({ id: created.job.id });
+
+    expect(await recoverStaleOfapiCaptureWork(testDb.db, {
+      now: new Date(NOW.getTime() + 64_000),
+    })).toEqual({ released: 0, indeterminate: 0, requeued: 1 });
+    expect(await getOfapiCaptureJob(testDb.db, created.job.id)).toMatchObject({
+      state: "ready",
+      reasonCode: "lease_expired_before_attempt",
+    });
+  });
+
+  it("requeues a frozen STATEFUL capture attempt only after owner certainty resolution", async () => {
+    if (!testDb) return;
+    const seeded = await seed();
+    const created = await createOrGetOfapiCaptureJob(testDb.db, {
+      pageId: seeded.page.id,
+      ofapiAccountId: seeded.accountId,
+      kind: "chat_paginate",
+      goal: "history_to_exhaustion",
+      activeSlotKey: `page:${seeded.page.id}:chat:expired-stateful`,
+      target: { chatId: "expired-stateful", frozenHeadId: "100" },
+      budgetScope: "bulk",
+      createdBy: "owner",
+      maxCalls: 2,
+      maxCredits: 2,
+      maxPages: 2,
+      now: NOW,
+    });
+    const leased = await leaseNextOfapiCaptureJob(testDb.db, {
+      pageId: seeded.page.id,
+      leaseOwner: "crashed-worker",
+      leaseTtlMs: 1_000,
+      now: NOW,
+    });
+    if (!leased?.leaseToken) throw new Error("lease missing");
+    const reservation = await reserveOfapiRequestAttempt(testDb.db, {
+      ownerKind: "capture_job",
+      ownerId: created.job.id,
+      pageId: seeded.page.id,
+      ofapiAccountId: seeded.accountId,
+      budgetScope: "bulk",
+      operation: "list_messages",
+      endpointClass: "messages",
+      egressKey: `page:${seeded.page.id}`,
+      method: "GET",
+      requestSemantics: "stateful",
+      requestShape: { chatId: "expired-stateful", firstId: "100" },
+      reservedCredits: 1,
+      globalDailyCap: 100,
+      scopeDailyCap: 100,
+      creditFloor: 10,
+      balanceMaxAgeMs: 60 * 60 * 1000,
+      jobLeaseToken: leased.leaseToken,
+      deadlineAt: new Date(NOW.getTime() + 30_000),
+      now: NOW,
+    });
+    if (!reservation.admitted) throw new Error("attempt was not admitted");
+    expect(await markOfapiAttemptDispatching(testDb.db, {
+      attemptId: reservation.attemptId,
+      fenceToken: reservation.fenceToken,
+      jobLeaseToken: leased.leaseToken,
+      now: new Date(NOW.getTime() + 500),
+    })).toBe(true);
+
+    expect(await recoverStaleOfapiCaptureWork(testDb.db, {
+      now: new Date(NOW.getTime() + 2_000),
+    })).toEqual({ released: 0, indeterminate: 1, requeued: 0 });
     expect(await getOfapiCaptureJob(testDb.db, created.job.id)).toMatchObject({
       state: "blocked",
       reasonCode: "indeterminate",
@@ -2855,48 +3042,118 @@ describe("OFAPI capture correctness repository", () => {
       attemptId: reservation.attemptId,
       resolution: "confirmed_billed",
       actorUserId: seeded.owner.id,
-      reason: "vendor console confirmed the safe GET charge",
+      reason: "vendor console confirmed the charge",
       now: new Date(NOW.getTime() + 3_000),
     })).toBe(true);
-    expect(await getOfapiCaptureJob(testDb.db, created.job.id)).toMatchObject({
-      state: "retry_wait",
-      reasonCode: "operator_reconciled_safe_read",
-      target: { chatId: "expired", frozenHeadId: "100" },
+    // Resolving the charge settles the ledger; it does NOT requeue a stateful
+    // dispatch, which is never repeated on the system's own authority.
+    const stillParked = await getOfapiCaptureJob(testDb.db, created.job.id);
+    expect(stillParked).toMatchObject({
+      state: "blocked",
+      reasonCode: "indeterminate",
       spentCredits: 1,
       attemptCount: 1,
       dispatchCount: 1,
     });
     expect(await listRunnableOfapiCapturePages(testDb.db, {
       now: new Date(NOW.getTime() + 3_001),
-    })).toEqual([{
-      pageId: seeded.page.id,
-      priority: 0,
-      requestedAt: new Date(NOW.getTime() + 3_000),
-    }]);
-
-    const released = await leaseNextOfapiCaptureJob(testDb.db, {
-      pageId: seeded.page.id,
-      leaseOwner: "second-crashed-worker",
-      leaseTtlMs: 1_000,
-      now: new Date(NOW.getTime() + 3_001),
-    });
-    expect(released).toMatchObject({ id: created.job.id });
-
-    expect(await recoverStaleOfapiCaptureWork(testDb.db, {
-      now: new Date(NOW.getTime() + 5_000),
-    })).toEqual({ released: 0, indeterminate: 0, requeued: 1 });
+    })).toEqual([]);
+    // The owner's way forward is decision #246's cancel: the row keeps its
+    // history and the lane may start a fresh job.
+    if (!stillParked) throw new Error("job missing");
+    expect(await cancelOfapiCaptureJob(testDb.db, {
+      jobId: created.job.id,
+      expectedState: "blocked",
+      expectedReasonCode: "indeterminate",
+      expectedJobRowVersion: stillParked.rowVersion,
+      actorUserId: seeded.owner.id,
+      reason: "stateful dispatch reconciled by hand; start over",
+      execute: true,
+      now: new Date(NOW.getTime() + 4_000),
+    })).toMatchObject({ dryRun: false, status: "cancelled" });
     expect(await getOfapiCaptureJob(testDb.db, created.job.id)).toMatchObject({
-      state: "ready",
-      reasonCode: "lease_expired_before_attempt",
+      state: "cancelled",
+      reasonCode: "owner_cancelled",
     });
-    const historicalAttempt = await getOfapiRequestAttempt(testDb.db, reservation.attemptId);
-    expect(historicalAttempt).toMatchObject({
-      state: "indeterminate",
-      certainty_resolution: "confirmed_billed",
+  });
+
+  it("cancels a parked job with CAS so the lane can start a fresh one (decision #246)", async () => {
+    if (!testDb) return;
+    const seeded = await seed();
+    const jobInput = {
+      pageId: seeded.page.id,
+      ofapiAccountId: seeded.accountId,
+      kind: "chat_paginate" as const,
+      goal: "history_to_exhaustion" as const,
+      activeSlotKey: `page:${seeded.page.id}:chat:parked`,
+      target: { chatId: "parked", frozenHeadId: "100" },
+      budgetScope: "bulk" as const,
+      createdBy: "owner" as const,
+      maxCalls: 1,
+      maxCredits: 1,
+      maxPages: 1,
+    };
+    const created = await createOrGetOfapiCaptureJob(testDb.db, { ...jobInput, now: NOW });
+    await testDb.pool.query(`
+      update ofapi_capture_jobs
+      set state = 'blocked', reason_code = 'job_cap', reason_message = 'Admission denied: job_cap'
+      where id = $1
+    `, [created.job.id]);
+    const parked = await getOfapiCaptureJob(testDb.db, created.job.id);
+    if (!parked) throw new Error("job missing");
+    const cancelInput = {
+      jobId: created.job.id,
+      expectedState: "blocked" as const,
+      expectedReasonCode: "job_cap",
+      actorUserId: seeded.owner.id,
+      reason: "1000 uncaptured dispatches; let the lane start over",
+    };
+
+    // A stale row version is refused and nothing changes.
+    await expect(cancelOfapiCaptureJob(testDb.db, {
+      ...cancelInput,
+      expectedJobRowVersion: parked.rowVersion + 1,
+      execute: true,
+      now: NOW,
+    })).rejects.toBeInstanceOf(OfapiCaptureInvariantError);
+
+    // Dry run answers without acting.
+    expect(await cancelOfapiCaptureJob(testDb.db, {
+      ...cancelInput,
+      expectedJobRowVersion: parked.rowVersion,
+      execute: false,
+      now: NOW,
+    })).toMatchObject({
+      dryRun: true,
+      status: "would_cancel",
+      pageId: seeded.page.id,
+      previous: { state: "blocked", reasonCode: "job_cap", rowVersion: parked.rowVersion },
+      next: { state: "cancelled", reasonCode: "owner_cancelled", rowVersion: parked.rowVersion + 1 },
     });
-    expect(new Date(String(historicalAttempt?.certainty_resolved_at))).toEqual(
-      new Date(NOW.getTime() + 3_000),
-    );
+    expect(await getOfapiCaptureJob(testDb.db, created.job.id)).toMatchObject({
+      state: "blocked",
+      rowVersion: parked.rowVersion,
+    });
+
+    // Cancel: the row keeps its history, the slot is free, the lane gets a fresh job.
+    expect(await cancelOfapiCaptureJob(testDb.db, {
+      ...cancelInput,
+      expectedJobRowVersion: parked.rowVersion,
+      execute: true,
+      now: new Date(NOW.getTime() + 1_000),
+    })).toMatchObject({ dryRun: false, status: "cancelled" });
+    expect(await getOfapiCaptureJob(testDb.db, created.job.id)).toMatchObject({
+      state: "cancelled",
+      reasonCode: "owner_cancelled",
+      rowVersion: parked.rowVersion + 1,
+      attemptCount: parked.attemptCount,
+    });
+    const fresh = await createOrGetOfapiCaptureJob(testDb.db, {
+      ...jobInput,
+      now: new Date(NOW.getTime() + 2_000),
+    });
+    expect(fresh.job.id).not.toBe(created.job.id);
+    expect(fresh.job).toMatchObject({ state: "ready", consecutiveUncaptured: 0 });
   });
 
   it("does not hot-loop an awaiting-parse job parked after parser failure", async () => {

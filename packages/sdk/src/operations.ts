@@ -37,6 +37,7 @@ export const kernelOperations = {
   adminModels: { method: "GET", path: "/api/v1/admin/models" },
   adminOfapiCaptureAttemptResolve: { method: "POST", path: "/api/v1/admin/ofapi/capture/attempts/:attemptId/resolve" },
   adminOfapiCaptureControl: { method: "POST", path: "/api/v1/admin/ofapi/capture/controls" },
+  adminOfapiCaptureJobCancel: { method: "POST", path: "/api/v1/admin/ofapi/capture/jobs/:jobId/cancel" },
   adminOfapiCaptureJobReplay: { method: "POST", path: "/api/v1/admin/ofapi/capture/jobs/:jobId/replay" },
   adminOfapiCaptureJobsSeed: { method: "POST", path: "/api/v1/admin/ofapi/capture-jobs/seed" },
   adminOfapiCaptureOperatorStatus: { method: "GET", path: "/api/v1/admin/ofapi/capture/operator" },

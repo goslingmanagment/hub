@@ -3922,6 +3922,9 @@ export const ofapiCaptureOperatorStatusResponseSchema = z.object({
     ]),
     state: ofapiExportQuoteJobStateSchema,
     reasonCode: z.string().nullable(),
+    /** Decision #246: the parked job's own words — for an exhausted retry the
+     *  governed cause is here (`... transport (body_too_large, post_dispatch)`). */
+    reasonMessage: z.string().nullable(),
     rowVersion: z.number().int().nonnegative(),
     updatedAt: isoTimestamp,
   })),
@@ -4039,6 +4042,35 @@ export const ofapiCaptureJobReplayResponseSchema = z.object({
     rowVersion: z.number().int().nonnegative(),
     observationId: z.number().int().positive(),
     observationReceivedAt: isoTimestamp,
+  }),
+});
+
+/** Decision #246: a parked capture job is CANCELLED, never resumed in place.
+ *  The row and its attempts stay (append-only history); the active slot is
+ *  freed, so the owning lane starts a fresh job with fresh allowances on its
+ *  next request. Nothing is dispatched by this action. */
+export const ofapiCaptureJobCancelBodySchema = z.object({
+  expectedState: z.enum(["blocked", "retry_wait"]),
+  expectedReasonCode: z.string().trim().min(1).max(100),
+  expectedJobRowVersion: z.number().int().nonnegative(),
+  reason: z.string().trim().min(1).max(500),
+  dryRun: z.boolean().default(true),
+}).strict();
+
+export const ofapiCaptureJobCancelResponseSchema = z.object({
+  dryRun: z.boolean(),
+  status: z.enum(["would_cancel", "cancelled"]),
+  jobId: z.string().uuid(),
+  pageId: z.number().int().positive(),
+  previous: z.object({
+    state: z.enum(["blocked", "retry_wait"]),
+    reasonCode: z.string().nullable(),
+    rowVersion: z.number().int().nonnegative(),
+  }),
+  next: z.object({
+    state: z.literal("cancelled"),
+    reasonCode: z.literal("owner_cancelled"),
+    rowVersion: z.number().int().nonnegative(),
   }),
 });
 
@@ -5743,6 +5775,24 @@ export const routeSchemas = {
     body: ofapiCaptureJobReplayBodySchema,
     response: {
       200: ofapiCaptureJobReplayResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+      409: errorResponseSchema,
+    },
+  },
+  adminOfapiCaptureJobCancel: {
+    auth: { kind: "owner-session" },
+    tags: ["admin"],
+    summary: "Dry-run or cancel one parked OFAPI capture job",
+    description: "Decision #246: frees the job's active slot so the owning lane can start a fresh "
+      + "job with fresh allowances on its next request. The cancelled row and its attempts are "
+      + "kept; nothing is dispatched.",
+    params: ofapiCaptureJobParamsSchema,
+    body: ofapiCaptureJobCancelBodySchema,
+    response: {
+      200: ofapiCaptureJobCancelResponseSchema,
       400: errorResponseSchema,
       401: errorResponseSchema,
       403: errorResponseSchema,
@@ -8052,6 +8102,9 @@ export type OfapiCaptureAttemptResolveResponse =
 export type OfapiCaptureJobReplayBody = z.infer<typeof ofapiCaptureJobReplayBodySchema>;
 export type OfapiCaptureJobReplayResponse =
   z.infer<typeof ofapiCaptureJobReplayResponseSchema>;
+export type OfapiCaptureJobCancelBody = z.infer<typeof ofapiCaptureJobCancelBodySchema>;
+export type OfapiCaptureJobCancelResponse =
+  z.infer<typeof ofapiCaptureJobCancelResponseSchema>;
 export type OfapiCoverageRevokeBody = z.infer<typeof ofapiCoverageRevokeBodySchema>;
 export type OfapiCoverageRevokeResponse = z.infer<typeof ofapiCoverageRevokeResponseSchema>;
 export type OfapiExportCreateReconcileBody =

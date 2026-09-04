@@ -86,6 +86,7 @@ import { seedOwnerOfapiCaptureJobs } from "../../services/ofapi-capture-seed.ts"
 import {
   getOwnerOfapiCaptureOperatorStatus,
   reconcileOwnerOfapiExportCreate,
+  cancelOwnerOfapiCaptureJob,
   replayOwnerOfapiCaptureJob,
   resolveOwnerOfapiCaptureAttempt,
   revokeOwnerOfapiMessageCoverage,
@@ -545,6 +546,32 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
           attemptId: result.attemptId,
           observationId: result.next.observationId,
           previousReasonCode: result.previous.reasonCode,
+        },
+      });
+    }
+    return result;
+  });
+
+  server.post("/api/v1/admin/ofapi/capture/jobs/:jobId/cancel", {
+    schema: routeSchemas.adminOfapiCaptureJobCancel,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    const result = await cancelOwnerOfapiCaptureJob(appContext, {
+      ...request.body,
+      jobId: request.params.jobId,
+      actorUserId: principal.user.id,
+    });
+    if (!result.dryRun) {
+      await recordAudit(appContext, {
+        ...auditCtx(principal),
+        eventType: "admin.ofapi_capture_job_cancelled",
+        platformAccountId: result.pageId,
+        metadata: {
+          jobId: result.jobId,
+          previousState: result.previous.state,
+          previousReasonCode: result.previous.reasonCode,
+          reason: request.body.reason,
         },
       });
     }

@@ -22,7 +22,7 @@ body remain handler-checked and are noted per route in the service layer.
 | `agentKey` | Agent Read Plane key only; no human principal is admitted |
 | `any` | any authenticated principal except an agent key |
 
-## Routes (207)
+## Routes (208)
 
 | Method | Path | Route key | Kind | Roles | Page scope |
 | --- | --- | --- | --- | --- | --- |
@@ -57,6 +57,7 @@ body remain handler-checked and are noted per route in the service layer.
 | POST | `/api/v1/admin/ofapi/capture/attempts/:attemptId/resolve` | `adminOfapiCaptureAttemptResolve` | `owner-session` | — | — |
 | POST | `/api/v1/admin/ofapi/capture/controls` | `adminOfapiCaptureControl` | `owner-session` | — | — |
 | POST | `/api/v1/admin/ofapi/capture/coverage/:pageId/:chatId/revoke` | `adminOfapiCoverageRevoke` | `owner-session` | — | — |
+| POST | `/api/v1/admin/ofapi/capture/jobs/:jobId/cancel` | `adminOfapiCaptureJobCancel` | `owner-session` | — | — |
 | POST | `/api/v1/admin/ofapi/capture/jobs/:jobId/replay` | `adminOfapiCaptureJobReplay` | `owner-session` | — | — |
 | GET | `/api/v1/admin/ofapi/capture/operator` | `adminOfapiCaptureOperatorStatus` | `owner-session` | — | — |
 | GET | `/api/v1/admin/ofapi/credits/daily` | `adminOfapiCreditsDaily` | `owner-session` | — | — |

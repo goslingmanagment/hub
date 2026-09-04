@@ -2718,6 +2718,7 @@ export const ofapiCaptureJobs = pgTable(
     acceptedItems: bigint("accepted_items", { mode: "number" }).default(0).notNull(),
     acceptedPages: bigint("accepted_pages", { mode: "number" }).default(0).notNull(),
     zeroProgressCount: integer("zero_progress_count").default(0).notNull(),
+    consecutiveUncaptured: integer("consecutive_uncaptured").default(0).notNull(),
     sourceContractVersion: text("source_contract_version").notNull(),
     parserVersion: text("parser_version").notNull(),
     proofPolicyVersion: text("proof_policy_version").notNull(),
