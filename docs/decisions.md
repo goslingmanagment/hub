@@ -248,6 +248,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 245 | OFAPI sync-read status matrix | `OfapiApiError` is classified by HTTP status in the sync executor instead of falling through to `transient_network`: 402 (credits exhausted; OFAPI does not charge the rejected request) retries under its own class `ofapi_insufficient_credits`, opens the credit-ledger monitor's OWN global latch `ofapi_low_credit:global` (no subKey — one pool, one alarm, either path may close it), suppresses the per-stream `stream_failed_threshold` alert for this class, and resolves the latch only from a later chunk that actually got an OFAPI response (a partial yielded by the credit floor or daily budget before any request proves nothing); 401/403 park the stream `manual_action_required` (`ofapi_http_<status>`) without pausing the page for a re-login it cannot perform; 429 → `rate_limit`; 5xx → `provider_5xx`; other 4xx park as `provider_bad_data`; a status-less transport failure stays `transient_network`. Rejected: a fleet-wide credits latch in the OFAPI client — the free 402 probe under the existing ≤30 min per-stream backoff already bounds the noise and needs no clearing authority. |
 | 246 | Bounded retry of uncaptured OFAPI capture dispatches + owner cancel | A capture job counts consecutive reservations that ended without a captured response (`consecutive_uncaptured`, migration 0149): pre-dispatch releases and indeterminate dispatches alike. The retry delay doubles per step (60 s → 30 min cap) and the FIFTH consecutive uncaptured reservation parks the job (`indeterminate_exhausted` / `pre_dispatch_exhausted`) with the governed reason (`body_too_large`, `transport`, …) in the attempt's ledger details; a captured response resets the streak. A stale safe-read attempt from a crashed capture worker takes the same bounded retry instead of waiting for an owner who has nothing to check (stateful attempts and non-probe interactive reads still park for owner certainty resolution). Recovery is `POST /admin/ofapi/capture/jobs/:jobId/cancel` (owner-session, CAS on state/reason/row version, dry-run first, audited): the row and its attempts stay, the slot is freed, the lane starts a fresh job with fresh allowances on its next request. Never resumed in place — the allowances were the point. Production: one post_paginate job on lora-vip-of dispatched 1 000 times in 40 h (every one uncaptured, 60 s apart) until `job_cap` parked it; lora-of's job has been `blocked/indeterminate` since a stale lease on 2026-08-12. |
 | 247 | An unproven Vault inventory says so on the wire | The catalog lane walks albums under a 60-calls/day cap, so a page whose Vault exceeds one day's cap (all three Lora pages) never completes the lane in a day — and nothing told a `vault_media` reader that. `/health` is green by design (catalog is excluded from sync-health) and `page_sync_states.succeeded_at` never moves for such a page, so a partial inventory was indistinguishable from a complete one. New blocker `vault_inventory_unproven`, emitted by the `vault_media` dataset read alone: an album is PROVEN by a `creator_vault_album_scans` row for its exact `(page, vault_kind, album_ref)` with a `completed_at` and `expected_count = cardinality(seen_media_refs)`; a page is UNPROVEN when ≥1 live creator album (`vault_kind = 'creator'`, `missing_since is null`) has no such row. Keyed on the DATASET, never on the platform. v1 deliberately omits proof STALENESS and per-page detail in the envelope — the rows already carry `lastFullWalkAt`/`fullWalkRef`/`fullWalkObservedCount` per album. No migration, no lane change, `/health` unchanged. Review correction before merge: a page with NO live creator album row at all is unproven too (the roster was never captured or projected), and the blocker is page-level only — a member's `missingSince`, written solely after a complete walk of its own album, stays an absence-from-that-walk fact. |
+| 248 | Failed sync payloads journal the provider's response snippet | `PersistedSyncError` gains a nullable `responseSnippet` string, taken from `FanslyApiError.responseSnippet` (already redacted and bounded by the adapter) or from `OfapiApiError.body` (redacted with `redactSensitiveText`, then bounded), `null` for everything else, and unwrapped through `SyncPayloadPersistenceError.cause` like the message. It rides inside the existing `error` object into the raw failed payload, the `<endpoint>:failed` observation and run telemetry — no consumer changes and no new field on any wire. The bound is 400 characters; `summary` (and therefore `page_sync_states.last_error_summary`, telemetry and Telegram) is byte-identical to before. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -10616,3 +10617,39 @@ lane that cannot finish in a day would hold the gauge red forever), and this
 change does not move that line — it makes the incompleteness legible to the
 reader who is actually harmed by it, in the response they are already reading. No
 migration, no lane change, no new call to Fansly.
+**Decision #248 (2026-09-04, failed sync payloads journal the provider's
+response snippet):**
+
+On 2026-09-02 `ari-1/purchase_history` was blocked after a Fansly HTTP 422 and
+the journaled failure — `observations` kind `purchase_history:failed` — held
+only `{"error":{"type":"FanslyApiError","summary":"Fansly request failed
+(422)",...}}`. The body Fansly sent with that rejection had already been
+captured by the adapter and was then discarded on the way to the journal, so
+the block could not be diagnosed from the record. Capture-first (DP 7) treats
+that body as a business fact: it is the provider's own statement of why the
+call was refused.
+
+`PersistedSyncError` therefore carries `responseSnippet: string | null`.
+`buildNormalizedSyncError` fills it from `FanslyApiError.responseSnippet`,
+which the adapter already redacts with `redactSensitiveText` and bounds at
+capture, and from `OfapiApiError.body`, which is raw provider text and is
+redacted here before it is bounded — redaction precedes the cut so a
+truncation can never leave half of a secret standing. Every other throwable
+gets `null`, and a `SyncPayloadPersistenceError` is unwrapped to its cause
+first, exactly as the message already is. The bound is 400 characters: enough
+for an error envelope, far short of a body dump.
+
+The snippet rides inside the existing `error` object, so `persistFailedSyncPayload`
+writes it into both the failed raw payload and the `:failed` observation, and
+run telemetry carries it in the finished-run event, with no consumer change and
+no new field on any client wire. `summary` is byte-identical to before —
+`page_sync_states.last_error_summary`, the 1,024-character clamp, incident
+summaries and Telegram delivery are untouched.
+
+Review correction before merge: the Fansly adapter built its snippet as
+`redactSensitiveText(text.slice(0, 400))` — sliced first, so a credential URL cut
+at the 400-char edge became a fragment the redactor no longer recognised, and a
+proxy password survived into raw payloads, observations and telemetry (reproduced
+in review). The order is now redact-then-slice in the adapter, the runtime
+redacts the Fansly snippet once more as a belt, and a boundary test lays a proxy
+URL across the cut and asserts nothing of the password remains.

@@ -2043,7 +2043,9 @@ export class FanslyAdapter {
         const envelopeMessage = envelope?.error?.message === undefined
           ? undefined
           : redactSensitiveText(envelope.error.message);
-        const responseSnippet = redactSensitiveText(text.slice(0, 400));
+        // Redact BEFORE slicing: a cut through a credential URL leaves a
+        // fragment the redactor no longer recognises as one (decision #248).
+        const responseSnippet = redactSensitiveText(text).slice(0, 400);
         const failureResponseMetadata = {
           bodyLength: text.length,
           errorCode: envelope?.error?.code ?? null,
