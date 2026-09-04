@@ -10645,3 +10645,11 @@ run telemetry carries it in the finished-run event, with no consumer change and
 no new field on any client wire. `summary` is byte-identical to before —
 `page_sync_states.last_error_summary`, the 1,024-character clamp, incident
 summaries and Telegram delivery are untouched.
+
+Review correction before merge: the Fansly adapter built its snippet as
+`redactSensitiveText(text.slice(0, 400))` — sliced first, so a credential URL cut
+at the 400-char edge became a fragment the redactor no longer recognised, and a
+proxy password survived into raw payloads, observations and telemetry (reproduced
+in review). The order is now redact-then-slice in the adapter, the runtime
+redacts the Fansly snippet once more as a belt, and a boundary test lays a proxy
+URL across the cut and asserts nothing of the password remains.

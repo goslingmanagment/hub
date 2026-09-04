@@ -98,7 +98,11 @@ function resolveResponseSnippet(source: unknown): string | null {
   // The Fansly adapter redacts and bounds its snippet at capture time
   // (`onResponse` in packages/fansly/src/adapter.ts); take it as captured.
   if (source instanceof FanslyApiError) {
-    return boundResponseSnippet(source.responseSnippet);
+    // The adapter already redacts before it slices; redacting again here is a
+    // belt for a snippet that ever arrives by another path.
+    return source.responseSnippet
+      ? boundResponseSnippet(redactSensitiveText(source.responseSnippet))
+      : null;
   }
 
   // OFAPI keeps the raw body (up to 2000 chars). Redact BEFORE slicing so the

@@ -3,6 +3,7 @@ import path from "node:path";
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+
 import {
   captureEvents,
   cleanupAdapterHarness,
@@ -1181,4 +1182,37 @@ describe("WP-F4 adapter method: /it/moie/statsnew", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(events.filter((event) => event.state === "started")).toHaveLength(1);
   });
+
+  it("redacts a failed response body BEFORE slicing it, so a credential cut at the 400-char edge cannot leak (decision #248)", async () => {
+    const { FanslyAdapter, fetchMock } = harness;
+    // Lay the body out so the 400-char boundary falls INSIDE the proxy password:
+    // sliced first, the fragment `socks5://user:supersecretpassw` is no longer a
+    // URL the redactor recognises and the secret survives into the snippet.
+    const head = '{"success":false,"error":{"code":1,"message":"';
+    const secretUrl = "socks5://user:supersecretpassword@proxy.example:1080";
+    const cutInsidePassword = "socks5://user:supersecretpassw".length;
+    const pad = "x".repeat(400 - head.length - cutInsidePassword);
+    const body = `${head}${pad}${secretUrl} refused"}}`;
+    expect(body.slice(0, 400).endsWith("supersecretpassw")).toBe(true);
+    // 403 is terminal on the adapter (one attempt, no backoff), so the test does not
+    // wait out a retry ladder; a fresh Response per call anyway — a body can be read once and a retried
+    // must not turn into a "body already used" failure that hides the point.
+    fetchMock.mockImplementation(async () =>
+      new Response(body, { status: 403, headers: { "content-type": "application/json" } }));
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+
+    // No static import of the fansly package here: the harness installs the
+    // undici fetch spy BEFORE it loads the adapters, and an import at module
+    // top would bind the adapter to the real fetch for every test in the file.
+    const failure = await adapter.getSubscriptionTiers(context())
+      .then(() => null, (error: unknown) => error as { status?: number; responseSnippet?: string | null });
+    await adapter.close();
+
+    expect(failure?.status).toBe(403);
+    expect(failure?.responseSnippet).toBeTruthy();
+    expect(failure?.responseSnippet?.length).toBeLessThanOrEqual(400);
+    expect(failure?.responseSnippet).not.toContain("supersecret");
+    expect(failure?.responseSnippet).not.toContain("passw");
+  });
+
 });
