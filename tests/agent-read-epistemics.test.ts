@@ -72,6 +72,7 @@ function unrestrictedInput(overrides: Partial<AgentEvidenceInput> = {}): AgentEv
     scopeNarrowing: { keyGrantExcludedPages: 0, totalPagesForQuery: 3 },
     observedRowFloor: null,
     captureFloor: { at: "2026-01-01T00:00:00.000Z", kind: "oldest_stored_row" },
+    inventoryUnprovenPages: 0,
     ...overrides,
   };
 }
@@ -150,6 +151,21 @@ describe("agent read plane: the blockers", () => {
       admissible: false,
       reason: "capability_not_granted",
     });
+  });
+
+  it("an unproven Vault inventory is a blocker; a proven one is silent", () => {
+    // The production fact this exists for: the catalog lane walks albums under a
+    // daily call cap, a Vault bigger than one day's cap never finishes, and
+    // NOTHING else in the response said so — `/health` is green by design and
+    // `succeeded_at` never moves for such a page.
+    expect(buildAgentEvidence(unrestrictedInput({ inventoryUnprovenPages: 0 })).conclusion.blockers)
+      .toEqual([]);
+    expect(buildAgentEvidence(unrestrictedInput({ inventoryUnprovenPages: 1 })).conclusion.blockers)
+      .toEqual(["vault_inventory_unproven"]);
+    // One page or three, the answer is equally unprovable — the blocker is a
+    // yes/no about the scope, not a count leaked onto the wire.
+    expect(buildAgentEvidence(unrestrictedInput({ inventoryUnprovenPages: 3 })).conclusion.blockers)
+      .toEqual(["vault_inventory_unproven"]);
   });
 
   it("a failed source narrows the answer and says so", () => {

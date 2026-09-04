@@ -47,3 +47,62 @@ export async function upsertVaultAlbumScan(db: Database, input: VaultAlbumScanIn
   `);
   if ((result.rowCount ?? 0) > 0) await reconcileVaultAlbumScan(db, input.pageId, input.albumRef);
 }
+
+/**
+ * How many of these pages are serving a creator-vault inventory NO FULL WALK HAS
+ * EVER PROVEN.
+ *
+ * An album is PROVEN when a scan row exists for its exact `(page, vault_kind,
+ * album_ref)` with a `completed_at` and an `expected_count` equal to the roster
+ * it actually saw — a walk that stopped short leaves a row whose counts disagree,
+ * and that is not proof. A page is UNPROVEN when at least one LIVE creator album
+ * (`vault_kind = 'creator'`, no `missing_since`) has no such row. Albums the
+ * platform stopped naming are excluded: they are absent by evidence, and
+ * demanding a fresh walk of them would make the blocker permanent.
+ *
+ * STALENESS IS DELIBERATELY NOT MEASURED (v1, decision #247). A walk completed a
+ * year ago counts as proven; the per-album `lastFullWalkAt` already on every
+ * `vault_media` row is where a reader judges age.
+ */
+export async function countPagesWithUnprovenCreatorVaultInventory(
+  db: Database,
+  pageIds: number[],
+): Promise<number> {
+  if (pageIds.length === 0) {
+    return 0;
+  }
+  // ONE statement, and every column qualified: a bare name here would resolve
+  // against the outer SELECT's alias list before the table's (the house trap).
+  // Two ways to be unproven, and the first is the one a join from the albums
+  // table cannot see: a page with NO live creator album row at all has no
+  // roster to check — the album listing was never captured or never projected
+  // — and that is the least proven inventory there is, not a proven-empty one.
+  // (Fansly always serves the creator's system albums, so an honestly empty
+  // roster does not occur.) The second is a live album without a proving scan.
+  const result = await db.execute<{ count: string }>(sql`
+    select count(*)::text as count
+      from unnest(array[${sql.join(pageIds.map(id => sql`${id}::bigint`), sql`, `)}]) as scope(page_id)
+     where not exists (
+             select 1
+               from creator_vault_albums a
+              where a.page_id = scope.page_id
+                and a.vault_kind = 'creator'
+                and a.missing_since is null
+           )
+        or exists (
+             select 1
+               from creator_vault_albums a
+               left join creator_vault_album_scans s
+                 on s.page_id = a.page_id
+                and s.vault_kind = a.vault_kind
+                and s.album_ref = a.album_ref
+                and s.completed_at is not null
+                and s.expected_count = cardinality(s.seen_media_refs)
+              where a.page_id = scope.page_id
+                and a.vault_kind = 'creator'
+                and a.missing_since is null
+                and s.page_id is null
+           )
+  `);
+  return Number(result.rows[0]?.count ?? 0);
+}

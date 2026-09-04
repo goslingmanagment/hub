@@ -210,6 +210,7 @@ export async function handleAgentCapabilities(
       scopeNarrowing: scope.scopeNarrowing,
       observedRowFloor: null,
       captureFloor: { at: null, kind: "unknown" },
+      inventoryUnprovenPages: 0,
     });
 
     const resetsAt = new Date(Date.UTC(
@@ -462,6 +463,7 @@ export async function handleAgentResolve(
       scopeNarrowing: scope.scopeNarrowing,
       observedRowFloor: null,
       captureFloor: { at: null, kind: "unknown" },
+      inventoryUnprovenPages: 0,
     });
 
     const items = perInput.map((entry) => {
@@ -664,6 +666,7 @@ export async function handleAgentPerson(
       scopeNarrowing: scope.scopeNarrowing,
       observedRowFloor: null,
       captureFloor: { at: null, kind: "unknown" },
+      inventoryUnprovenPages: 0,
     });
 
     // `delivery.returned` counts PEOPLE (one, or none); the row budget counts the

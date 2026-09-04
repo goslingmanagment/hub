@@ -247,6 +247,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 244 | Content media identity and complete Vault walks | Separate raw files from offers in the existing media projector; expose flattened post attachments with preview roles and unresolved rows. Full unfiltered walk evidence alone may mark album membership missing. Preserve sightings, reconcile one member per event, rotate album walks, replay OF through the common sweep, and expose rowUpdatedAt for incremental reads with periodic reconciliation; ship the strict API plane change with matching CLI builds. Hub-only scope, no upload extension changes. |
 | 245 | OFAPI sync-read status matrix | `OfapiApiError` is classified by HTTP status in the sync executor instead of falling through to `transient_network`: 402 (credits exhausted; OFAPI does not charge the rejected request) retries under its own class `ofapi_insufficient_credits`, opens the credit-ledger monitor's OWN global latch `ofapi_low_credit:global` (no subKey — one pool, one alarm, either path may close it), suppresses the per-stream `stream_failed_threshold` alert for this class, and resolves the latch only from a later chunk that actually got an OFAPI response (a partial yielded by the credit floor or daily budget before any request proves nothing); 401/403 park the stream `manual_action_required` (`ofapi_http_<status>`) without pausing the page for a re-login it cannot perform; 429 → `rate_limit`; 5xx → `provider_5xx`; other 4xx park as `provider_bad_data`; a status-less transport failure stays `transient_network`. Rejected: a fleet-wide credits latch in the OFAPI client — the free 402 probe under the existing ≤30 min per-stream backoff already bounds the noise and needs no clearing authority. |
 | 246 | Bounded retry of uncaptured OFAPI capture dispatches + owner cancel | A capture job counts consecutive reservations that ended without a captured response (`consecutive_uncaptured`, migration 0149): pre-dispatch releases and indeterminate dispatches alike. The retry delay doubles per step (60 s → 30 min cap) and the FIFTH consecutive uncaptured reservation parks the job (`indeterminate_exhausted` / `pre_dispatch_exhausted`) with the governed reason (`body_too_large`, `transport`, …) in the attempt's ledger details; a captured response resets the streak. A stale safe-read attempt from a crashed capture worker takes the same bounded retry instead of waiting for an owner who has nothing to check (stateful attempts and non-probe interactive reads still park for owner certainty resolution). Recovery is `POST /admin/ofapi/capture/jobs/:jobId/cancel` (owner-session, CAS on state/reason/row version, dry-run first, audited): the row and its attempts stay, the slot is freed, the lane starts a fresh job with fresh allowances on its next request. Never resumed in place — the allowances were the point. Production: one post_paginate job on lora-vip-of dispatched 1 000 times in 40 h (every one uncaptured, 60 s apart) until `job_cap` parked it; lora-of's job has been `blocked/indeterminate` since a stale lease on 2026-08-12. |
+| 247 | An unproven Vault inventory says so on the wire | The catalog lane walks albums under a 60-calls/day cap, so a page whose Vault exceeds one day's cap (all three Lora pages) never completes the lane in a day — and nothing told a `vault_media` reader that. `/health` is green by design (catalog is excluded from sync-health) and `page_sync_states.succeeded_at` never moves for such a page, so a partial inventory was indistinguishable from a complete one. New blocker `vault_inventory_unproven`, emitted by the `vault_media` dataset read alone: an album is PROVEN by a `creator_vault_album_scans` row for its exact `(page, vault_kind, album_ref)` with a `completed_at` and `expected_count = cardinality(seen_media_refs)`; a page is UNPROVEN when ≥1 live creator album (`vault_kind = 'creator'`, `missing_since is null`) has no such row. Keyed on the DATASET, never on the platform. v1 deliberately omits proof STALENESS and per-page detail in the envelope — the rows already carry `lastFullWalkAt`/`fullWalkRef`/`fullWalkObservedCount` per album. No migration, no lane change, `/health` unchanged. Review correction before merge: a page with NO live creator album row at all is unproven too (the roster was never captured or projected), and the blocker is page-level only — a member's `missingSince`, written solely after a complete walk of its own album, stays an absence-from-that-walk fact. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -10554,3 +10555,64 @@ loop forever).
 Production follow-up (owner-gated, after deploy): cancel the `job_cap` job on
 `lora-vip-of` and resolve or cancel the `indeterminate` job on `lora-of`, then
 request each page's `posts` stream once so the lane creates fresh jobs.
+
+**Decision #247 (2026-09-04, an unproven Vault inventory says so on the wire):**
+
+The Fansly `catalog` stream walks each creator Vault album under a 60-calls/day
+cap. A page whose Vault is bigger than one day's cap — all three Lora pages —
+never completes the lane in a day, and nothing in the system told a consumer of
+the `vault_media` dataset whether the inventory it was reading had ever been
+proven complete. `/health` is green by design (catalog is excluded from
+sync-health), `page_sync_states.succeeded_at` never moves for such a page, and the
+dataset response carried no blocker. ContentOps was reading absence claims
+(`missingSince`) and resolving attachments against an inventory that may be a
+lower bound, with no way to tell.
+
+The proof already existed per album and was simply never read on the way out:
+`creator_vault_album_scans` holds one row per completed full walk. An album is
+PROVEN when a row exists for its exact `(page_id, vault_kind, album_ref)` with a
+non-null `completed_at` and `expected_count = cardinality(seen_media_refs)` — a
+walk that stopped short leaves a row whose own two numbers disagree, and that is
+not proof. A page's inventory is UNPROVEN when at least one album with
+`vault_kind = 'creator'` and `missing_since is null` has no such row, OR when it
+has no live creator album row at all. Albums the platform stopped naming are
+excluded: they are absent by evidence, and demanding a fresh walk of a vanished
+album would make the blocker permanent.
+
+`vault_inventory_unproven` joins `agentBlockerEnum` and is added by
+`concludeEnvelope`, which remains the single writer of blockers — the count enters
+through the SIGNATURE (`inventoryUnprovenPages`, `0` on every operation that does
+not measure it) rather than through a bypass, and the textual single-writer pin
+still holds because no handler names the code. The `vault_media` dataset read is
+the only call site that passes a real number, and it keys on the DATASET NAME, not
+the platform: `platform ===` outside the adapter packages is budgeted, and the
+question belongs to the dataset whoever serves it. One extra statement, and only
+on that dataset.
+
+WHAT IS DELIBERATELY LEFT OUT. Proof STALENESS is not part of v1: a walk completed
+a year ago counts as proven. A page that was fully walked once and has drifted
+since is a different and harder question — it needs a freshness policy per album
+class, and inventing one here would have shipped a blocker that fires on
+everything forever. Per-page or per-album detail is not added to the envelope
+either: the `vault_media` rows already carry `lastFullWalkAt`, `fullWalkRef` and
+`fullWalkObservedCount` per album, which is where a reader judges both which
+albums are proven and how old the proof is. The blocker answers the yes/no the
+envelope is for; the rows answer the rest.
+
+THE EMPTY ROSTER IS UNPROVEN, NOT PROVEN-EMPTY (review correction before merge):
+the first cut started its count from `creator_vault_albums`, so a page with no
+live album row at all — the listing never captured, or never projected — counted
+as clean, which is the least proven inventory there is reported as the most. The
+predicate now walks the SCOPE's page ids and calls a page unproven when it has no
+live creator album OR a live album without a proving scan. Fansly always serves
+the creator's system albums, so an honestly empty roster does not occur; the
+zero-row case is pinned by test. And the blocker is page-level ONLY: a member's
+`missingSince` is written solely after a complete walk of its own album and
+remains an absence-from-that-walk fact while the blocker is up — what the blocker
+denies is any claim about the Vault as a whole.
+
+`/health` STAYS AS IT IS. Catalog is excluded from sync-health deliberately (a
+lane that cannot finish in a day would hold the gauge red forever), and this
+change does not move that line — it makes the incompleteness legible to the
+reader who is actually harmed by it, in the response they are already reading. No
+migration, no lane change, no new call to Fansly.

@@ -18,6 +18,7 @@ import {
 import {
   agentDatasetSqlMapping,
   countAgentReadAuditForSession,
+  countPagesWithUnprovenCreatorVaultInventory,
   findAgentObservationPayload,
   listAgentObservations,
   queryAgentDataset,
@@ -269,6 +270,7 @@ export async function handleAgentObservations(
         at: isoOrNull(floorAt),
         kind: floorAt === null ? "unknown" : "oldest_stored_row",
       },
+      inventoryUnprovenPages: 0,
     });
 
     const response: AgentObservationsResponse = {
@@ -422,6 +424,7 @@ export async function handleAgentObservationPayload(
     scopeNarrowing: { keyGrantExcludedPages: 0, totalPagesForQuery: 0 },
     observedRowFloor: null,
     captureFloor: { at: null, kind: "unknown" },
+    inventoryUnprovenPages: 0,
   });
 
   return {
@@ -595,6 +598,7 @@ export async function handleAgentDatasetQuery(
           at: floorAt,
           kind: floorAt === null ? "unknown" : "oldest_stored_row",
         },
+        inventoryUnprovenPages: 0,
       });
       const groups = result.groups.map((group) => ({
         currency: group.currency,
@@ -714,6 +718,17 @@ export async function handleAgentDatasetQuery(
       dataset: params.dataset,
     });
 
+    // WHETHER THE INVENTORY BEHIND THESE ROWS WAS EVER PROVEN COMPLETE. Keyed on
+    // the DATASET NAME, never on the platform — a platform branch outside the
+    // adapter packages is budgeted, and the question belongs to `vault_media`
+    // regardless of who serves it. One extra statement, and only on this dataset:
+    // no other read pays for a walk-proof scan it would not report.
+    const inventoryUnprovenPages = params.dataset === "vault_media"
+      ? await withAgentTimeout(scope.db, AGENT_TIMEOUT_MS.short, (tx) =>
+        countPagesWithUnprovenCreatorVaultInventory(tx, [page.id]),
+        "agent_vault_inventory_proof")
+      : 0;
+
     const hasMore = result.rows.length === limit;
     const last = result.rows.at(-1);
     const nextCursor = hasMore && last !== undefined
@@ -765,6 +780,7 @@ export async function handleAgentDatasetQuery(
         at: floorAt,
         kind: floorAt === null ? "unknown" : "oldest_stored_row",
       },
+      inventoryUnprovenPages,
     });
 
     // A dataset the REGISTRY declares as carrying verbatim text is audited exactly
