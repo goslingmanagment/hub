@@ -284,6 +284,15 @@ describe("[sync-critical] content media raw to agent API", () => {
     // told a reader the inventory it was reading might be partial.
     const blockers = async (dataset = "vault_media") => (await query(dataset)).conclusion.blockers;
 
+    // (e) no album row at all: the roster was never captured or projected, so
+    // there is nothing to prove against — the LEAST proven inventory, and a join
+    // that starts from the albums table would report it as clean.
+    expect((await db.pool.query(
+      "select count(*)::int as n from creator_vault_albums where page_id = $1",
+      [pageId],
+    )).rows[0]?.n).toBe(0);
+    expect(await blockers()).toContain("vault_inventory_unproven");
+
     // (a) a live album with no completed walk at all.
     await capture("vault_media", fixture); await albumHeads(["album-1"]); await project();
     expect(await blockers()).toContain("vault_inventory_unproven");

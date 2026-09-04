@@ -71,22 +71,38 @@ export async function countPagesWithUnprovenCreatorVaultInventory(
   if (pageIds.length === 0) {
     return 0;
   }
-  const ids = sql`(${sql.join(pageIds.map(id => sql`${id}`), sql`, `)})`;
   // ONE statement, and every column qualified: a bare name here would resolve
   // against the outer SELECT's alias list before the table's (the house trap).
+  // Two ways to be unproven, and the first is the one a join from the albums
+  // table cannot see: a page with NO live creator album row at all has no
+  // roster to check — the album listing was never captured or never projected
+  // — and that is the least proven inventory there is, not a proven-empty one.
+  // (Fansly always serves the creator's system albums, so an honestly empty
+  // roster does not occur.) The second is a live album without a proving scan.
   const result = await db.execute<{ count: string }>(sql`
-    select count(distinct a.page_id)::text as count
-      from creator_vault_albums a
-      left join creator_vault_album_scans s
-        on s.page_id = a.page_id
-       and s.vault_kind = a.vault_kind
-       and s.album_ref = a.album_ref
-       and s.completed_at is not null
-       and s.expected_count = cardinality(s.seen_media_refs)
-     where a.page_id in ${ids}
-       and a.vault_kind = 'creator'
-       and a.missing_since is null
-       and s.page_id is null
+    select count(*)::text as count
+      from unnest(array[${sql.join(pageIds.map(id => sql`${id}::bigint`), sql`, `)}]) as scope(page_id)
+     where not exists (
+             select 1
+               from creator_vault_albums a
+              where a.page_id = scope.page_id
+                and a.vault_kind = 'creator'
+                and a.missing_since is null
+           )
+        or exists (
+             select 1
+               from creator_vault_albums a
+               left join creator_vault_album_scans s
+                 on s.page_id = a.page_id
+                and s.vault_kind = a.vault_kind
+                and s.album_ref = a.album_ref
+                and s.completed_at is not null
+                and s.expected_count = cardinality(s.seen_media_refs)
+              where a.page_id = scope.page_id
+                and a.vault_kind = 'creator'
+                and a.missing_since is null
+                and s.page_id is null
+           )
   `);
   return Number(result.rows[0]?.count ?? 0);
 }

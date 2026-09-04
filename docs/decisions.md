@@ -10575,9 +10575,10 @@ PROVEN when a row exists for its exact `(page_id, vault_kind, album_ref)` with a
 non-null `completed_at` and `expected_count = cardinality(seen_media_refs)` — a
 walk that stopped short leaves a row whose own two numbers disagree, and that is
 not proof. A page's inventory is UNPROVEN when at least one album with
-`vault_kind = 'creator'` and `missing_since is null` has no such row. Albums the
-platform stopped naming are excluded: they are absent by evidence, and demanding a
-fresh walk of a vanished album would make the blocker permanent.
+`vault_kind = 'creator'` and `missing_since is null` has no such row, OR when it
+has no live creator album row at all. Albums the platform stopped naming are
+excluded: they are absent by evidence, and demanding a fresh walk of a vanished
+album would make the blocker permanent.
 
 `vault_inventory_unproven` joins `agentBlockerEnum` and is added by
 `concludeEnvelope`, which remains the single writer of blockers — the count enters
@@ -10599,11 +10600,17 @@ either: the `vault_media` rows already carry `lastFullWalkAt`, `fullWalkRef` and
 albums are proven and how old the proof is. The blocker answers the yes/no the
 envelope is for; the rows answer the rest.
 
-ONE BOUNDARY OF THE v1 DEFINITION, STATED RATHER THAN HIDDEN: it counts ALBUMS,
-so a page holding member rows but no album HEADS at all reports no blocker — there
-is no live album to be unproven. In production the same lane captures the album
-listing and the member pages, so a page with members has heads; if that ever stops
-being true the definition, not the plumbing, is what needs revisiting.
+THE EMPTY ROSTER IS UNPROVEN, NOT PROVEN-EMPTY (review correction before merge):
+the first cut started its count from `creator_vault_albums`, so a page with no
+live album row at all — the listing never captured, or never projected — counted
+as clean, which is the least proven inventory there is reported as the most. The
+predicate now walks the SCOPE's page ids and calls a page unproven when it has no
+live creator album OR a live album without a proving scan. Fansly always serves
+the creator's system albums, so an honestly empty roster does not occur; the
+zero-row case is pinned by test. And the blocker is page-level ONLY: a member's
+`missingSince` is written solely after a complete walk of its own album and
+remains an absence-from-that-walk fact while the blocker is up — what the blocker
+denies is any claim about the Vault as a whole.
 
 `/health` STAYS AS IT IS. Catalog is excluded from sync-health deliberately (a
 lane that cannot finish in a day would hold the gauge red forever), and this
