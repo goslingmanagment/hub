@@ -1999,7 +1999,7 @@ describe("OFAPI capture correctness repository", () => {
     expect(await getOfapiCaptureJob(testDb.db, fixture.job.id)).toMatchObject({
       state: "blocked",
       reasonCode: "indeterminate_exhausted",
-      reasonMessage: "Dispatch certainty unresolved 5 times in a row: transport",
+      reasonMessage: "Dispatch certainty unresolved 5 times in a row: transport (body_too_large, post_dispatch)",
       consecutiveUncaptured: 5,
       attemptCount: 5,
       dispatchCount: 5,
@@ -2030,6 +2030,15 @@ describe("OFAPI capture correctness repository", () => {
     );
     expect(await listRunnableOfapiCapturePages(testDb.db, { now: new Date() })).toEqual([]);
     expect(fixture.dispatchGovernedRaw).toHaveBeenCalledTimes(5);
+
+    // ...and the cause reaches the operator over the wire, not only the ledger.
+    const status = await getOfapiCaptureOperatorStatus(testDb.db, { jobSampleLimit: 50 });
+    expect(status.jobSamples).toContainEqual(expect.objectContaining({
+      jobId: fixture.job.id,
+      state: "blocked",
+      reasonCode: "indeterminate_exhausted",
+      reasonMessage: expect.stringContaining("body_too_large"),
+    }));
   });
 
   it("materializes only accepted OFAPI posts and completes initial head verification at the exact cap", async () => {

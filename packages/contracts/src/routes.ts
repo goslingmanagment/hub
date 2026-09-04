@@ -3922,6 +3922,9 @@ export const ofapiCaptureOperatorStatusResponseSchema = z.object({
     ]),
     state: ofapiExportQuoteJobStateSchema,
     reasonCode: z.string().nullable(),
+    /** Decision #246: the parked job's own words — for an exhausted retry the
+     *  governed cause is here (`... transport (body_too_large, post_dispatch)`). */
+    reasonMessage: z.string().nullable(),
     rowVersion: z.number().int().nonnegative(),
     updatedAt: isoTimestamp,
   })),

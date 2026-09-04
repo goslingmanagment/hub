@@ -1898,9 +1898,14 @@ export async function markOfapiAttemptIndeterminate(
         : retryBase
           ? "indeterminate_exhausted"
           : "indeterminate";
+      // The governed cause travels in the job's own message, where the
+      // operator status can show it — the ledger details are not on the wire.
+      const cause = typeof input.details?.reason === "string"
+        ? ` (${input.details.reason}${typeof input.details.phase === "string" ? `, ${input.details.phase}` : ""})`
+        : "";
       const reasonMessage = retryBase && exhausted
-        ? `Dispatch certainty unresolved ${consecutive} times in a row: ${input.outcome}`
-        : `Dispatch certainty unresolved: ${input.outcome}`;
+        ? `Dispatch certainty unresolved ${consecutive} times in a row: ${input.outcome}${cause}`
+        : `Dispatch certainty unresolved: ${input.outcome}${cause}`;
       await database.execute(sql`
         update ofapi_capture_jobs
         set state = ${retryAt ? "retry_wait" : "blocked"},
@@ -3763,7 +3768,7 @@ export async function getOfapiCaptureOperatorStatus(
         limit 100
       `),
       db.execute<Record<string, unknown>>(sql`
-        select id, page_id, kind, state, reason_code, row_version, updated_at
+        select id, page_id, kind, state, reason_code, reason_message, row_version, updated_at
         from ofapi_capture_jobs
         where state in ('ready', 'leased', 'awaiting_parse', 'retry_wait', 'blocked')
         order by updated_at, id
@@ -3824,6 +3829,9 @@ export async function getOfapiCaptureOperatorStatus(
       kind: String(row.kind) as OfapiCaptureJobKind,
       state: String(row.state) as OfapiCaptureJobState,
       reasonCode: row.reason_code === null ? null : String(row.reason_code),
+      reasonMessage: row.reason_message === null || row.reason_message === undefined
+        ? null
+        : String(row.reason_message),
       rowVersion: asNumber(row.row_version, "job.row_version"),
       updatedAt: asDate(row.updated_at, "job.updated_at"),
     })),

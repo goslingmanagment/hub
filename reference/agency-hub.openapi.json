@@ -7544,6 +7544,16 @@
                               }
                             ]
                           },
+                          "reasonMessage": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
                           "rowVersion": {
                             "type": "integer",
                             "minimum": 0,
@@ -7559,6 +7569,7 @@
                           "kind",
                           "state",
                           "reasonCode",
+                          "reasonMessage",
                           "rowVersion",
                           "updatedAt"
                         ],
