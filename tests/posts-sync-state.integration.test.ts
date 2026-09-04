@@ -65,6 +65,69 @@ describe("posts sync rollout state", () => {
     }
   }, 60_000);
 
+  it("clears a manual_action_required block on an explicit posts request, and only that kind (decision #249)", async () => {
+    const testDb = await startIntegrationTestDatabase();
+    if (!testDb) return;
+
+    try {
+      const model = await createModel(testDb.db, { slug: "posts-unblock", name: "Posts Unblock" });
+      if (!model) throw new Error("Expected model seed");
+      const page = await createFanslyPage(testDb.db, {
+        modelId: model.id,
+        label: "posts-unblock-page",
+      });
+      if (!page) throw new Error("Expected page seed");
+      await ensurePageSyncStates(testDb.db, { pageId: page.id });
+      await resumePageSync(testDb.db, { pageId: page.id, streams: ["posts"] });
+
+      // The production shape: the posts handler parked the stream because its
+      // capture job was parked, the owner cancelled the job, and nothing
+      // clears the stream's own block.
+      const park = (kind: string, code: string) => testDb.pool.query(`
+        update page_sync_states
+        set status = 'blocked', blocker_kind = $2, blocker_code = $3,
+            blocker_message = 'parked', blocked_at = now(), updated_at = now()
+        where page_id = $1 and stream = 'posts'
+      `, [page.id, kind, code]);
+      await park("manual_action_required", "ofapi_capture_job_job_cap");
+      const boss = { send: vi.fn(async () => "posts-wakeup") };
+
+      await requestPageSync(createTestAppContext(testDb), boss as never, {
+        pageLabel: page.label,
+        scope: "posts",
+        reason: "manual",
+      });
+      let [posts] = await listPageSyncStates(testDb.db, { pageId: page.id, streams: ["posts"] });
+      expect(posts).toMatchObject({
+        status: "pending",
+        requestSeq: 1,
+        appliedSeq: 0,
+        blockerKind: null,
+        blockerCode: null,
+        blockerMessage: null,
+        blockedAt: null,
+      });
+
+      // A provider_bad_data block is not the operator's to wave away: the
+      // request is recorded, the block stays.
+      await park("provider_bad_data", "provider_bad_data");
+      await requestPageSync(createTestAppContext(testDb), boss as never, {
+        pageLabel: page.label,
+        scope: "posts",
+        reason: "manual",
+      });
+      [posts] = await listPageSyncStates(testDb.db, { pageId: page.id, streams: ["posts"] });
+      expect(posts).toMatchObject({
+        status: "blocked",
+        requestSeq: 2,
+        blockerKind: "provider_bad_data",
+        blockerCode: "provider_bad_data",
+      });
+    } finally {
+      await testDb.stop();
+    }
+  }, 60_000);
+
   it("preflights OnlyFans prerequisites before opening a page and re-parks it when they disappear", async () => {
     const testDb = await startIntegrationTestDatabase();
     if (!testDb) return;

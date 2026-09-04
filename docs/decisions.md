@@ -249,6 +249,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 246 | Bounded retry of uncaptured OFAPI capture dispatches + owner cancel | A capture job counts consecutive reservations that ended without a captured response (`consecutive_uncaptured`, migration 0149): pre-dispatch releases and indeterminate dispatches alike. The retry delay doubles per step (60 s → 30 min cap) and the FIFTH consecutive uncaptured reservation parks the job (`indeterminate_exhausted` / `pre_dispatch_exhausted`) with the governed reason (`body_too_large`, `transport`, …) in the attempt's ledger details; a captured response resets the streak. A stale safe-read attempt from a crashed capture worker takes the same bounded retry instead of waiting for an owner who has nothing to check (stateful attempts and non-probe interactive reads still park for owner certainty resolution). Recovery is `POST /admin/ofapi/capture/jobs/:jobId/cancel` (owner-session, CAS on state/reason/row version, dry-run first, audited): the row and its attempts stay, the slot is freed, the lane starts a fresh job with fresh allowances on its next request. Never resumed in place — the allowances were the point. Production: one post_paginate job on lora-vip-of dispatched 1 000 times in 40 h (every one uncaptured, 60 s apart) until `job_cap` parked it; lora-of's job has been `blocked/indeterminate` since a stale lease on 2026-08-12. |
 | 247 | An unproven Vault inventory says so on the wire | The catalog lane walks albums under a 60-calls/day cap, so a page whose Vault exceeds one day's cap (all three Lora pages) never completes the lane in a day — and nothing told a `vault_media` reader that. `/health` is green by design (catalog is excluded from sync-health) and `page_sync_states.succeeded_at` never moves for such a page, so a partial inventory was indistinguishable from a complete one. New blocker `vault_inventory_unproven`, emitted by the `vault_media` dataset read alone: an album is PROVEN by a `creator_vault_album_scans` row for its exact `(page, vault_kind, album_ref)` with a `completed_at` and `expected_count = cardinality(seen_media_refs)`; a page is UNPROVEN when ≥1 live creator album (`vault_kind = 'creator'`, `missing_since is null`) has no such row. Keyed on the DATASET, never on the platform. v1 deliberately omits proof STALENESS and per-page detail in the envelope — the rows already carry `lastFullWalkAt`/`fullWalkRef`/`fullWalkObservedCount` per album. No migration, no lane change, `/health` unchanged. Review correction before merge: a page with NO live creator album row at all is unproven too (the roster was never captured or projected), and the blocker is page-level only — a member's `missingSince`, written solely after a complete walk of its own album, stays an absence-from-that-walk fact. |
 | 248 | Failed sync payloads journal the provider's response snippet | `PersistedSyncError` gains a nullable `responseSnippet` string, taken from `FanslyApiError.responseSnippet` (already redacted and bounded by the adapter) or from `OfapiApiError.body` (redacted with `redactSensitiveText`, then bounded), `null` for everything else, and unwrapped through `SyncPayloadPersistenceError.cause` like the message. It rides inside the existing `error` object into the raw failed payload, the `<endpoint>:failed` observation and run telemetry — no consumer changes and no new field on any wire. The bound is 400 characters; `summary` (and therefore `page_sync_states.last_error_summary`, telemetry and Telegram) is byte-identical to before. |
+| 249 | An explicit posts request is the manual action | `POST /admin/sync/trigger {scope: posts}` — the explicit per-page operator action — now clears a `manual_action_required` block on the posts stream (`clearPageSyncManualActionBlock`, that blocker kind only) BEFORE recording the request, so the request lands on a runnable row. Production 2026-09-04: after #128's cancel/resolve the streams stayed `blocked` with the old `ofapi_capture_job_*` codes because `resumePageSync` only lifts `paused` and nothing ever cleared a manual block; the explicit request the code itself calls "an explicit per-page operator action" was a no-op on exactly the state it exists for. `provider_bad_data`/`dependency` blocks are untouched. The posts handler also forgets an owner-cancelled pending job (checkpoint still named it) and seeds a fresh one through the ordinary slot path. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -10653,3 +10654,31 @@ proxy password survived into raw payloads, observations and telemetry (reproduce
 in review). The order is now redact-then-slice in the adapter, the runtime
 redacts the Fansly snippet once more as a belt, and a boundary test lays a proxy
 URL across the cut and asserts nothing of the password remains.
+
+**Decision #249 (2026-09-04, an explicit posts request is the manual action):**
+
+After #128 shipped, the owner cancelled the parked `job_cap` job on
+`lora-vip-of` and resolved the stale attempt on `lora-of`, then issued the
+explicit per-page posts request on both pages. Both `posts` streams stayed
+`blocked / manual_action_required` with the codes of jobs that no longer
+existed in that state. `requestPageSync` records a request on a blocked row
+without touching the block, `resumePageSync` lifts only `paused`, and no
+owner path anywhere cleared a `manual_action_required` block — so the one
+action the code itself names "an explicit per-page operator action" was a
+no-op on exactly the state it exists for, and a page's posts lane could never
+be revived once its job parked.
+
+The explicit posts request now clears a `manual_action_required` block on the
+requested streams first (`clearPageSyncManualActionBlock`), and only that
+kind: a `provider_bad_data` or `dependency` block records a fact about the
+provider or the graph, not an action the operator can claim to have taken. If
+the cause is still there, the next run re-parks the stream under the same
+code and nothing is lost. The posts handler also treats an owner-cancelled
+pending job (the checkpoint still names it because nothing ran in between) as
+absent, so the ordinary slot path finds or seeds the fresh job that #246's
+cancel promised.
+
+Not generalised to every stream or every scope: the other scopes are fleet
+cadences, not per-page operator acts, and a fleet-wide "clear all manual
+blocks" would erase the one signal that says a human still has to do
+something.

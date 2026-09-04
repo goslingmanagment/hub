@@ -5,6 +5,7 @@ import {
   findPageByLabel,
   listPageSyncStates,
   listPlatformAccounts,
+  clearPageSyncManualActionBlock,
   requestPageSync as requestPageSyncRows,
   resumePageSync,
   resolvePageSyncPriority,
@@ -133,6 +134,17 @@ export async function requestPageSync(
       },
     }
     : undefined;
+  if (input.scope === "posts") {
+    // Decision #249: the explicit operator request IS the manual action a
+    // `manual_action_required` block (e.g. a parked OFAPI capture job) asked
+    // for. Clear it BEFORE recording the request, so the request lands on a
+    // runnable row instead of a blocked one that nothing would ever release.
+    await clearPageSyncManualActionBlock(app.db, {
+      pageId: storedPage.page.id,
+      streams,
+      now,
+    });
+  }
   const requests = await requestPageSyncRows(app.db, {
     pageId: storedPage.page.id,
     streams,

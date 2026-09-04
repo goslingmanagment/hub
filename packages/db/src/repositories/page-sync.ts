@@ -2769,6 +2769,49 @@ export async function clearPageSyncAuthBlock(
   `);
 }
 
+/**
+ * Decision #249: an EXPLICIT operator request for a stream is the manual
+ * action a `manual_action_required` block was waiting for. Clears that block
+ * (and only that kind — a provider_bad_data or dependency block is not the
+ * operator's to wave away) on the named streams, so the request that follows
+ * lands on a runnable row. If the cause is still there, the next run re-parks
+ * the stream with the same code; nothing is lost.
+ */
+export async function clearPageSyncManualActionBlock(
+  db: Database,
+  input: {
+    pageId: number;
+    streams: SyncStream[];
+    now?: Date;
+  },
+) {
+  if (input.streams.length === 0) {
+    return 0;
+  }
+  const now = input.now ?? new Date();
+  const streams = normalizePageSyncRequestStreams(input.streams);
+  const result = await db.execute<{ stream: string }>(sql`
+    update ${pageSyncStates}
+    set status = case
+                   when request_seq > applied_seq then 'pending'::page_sync_status
+                   else 'idle'::page_sync_status
+                 end,
+        retry_kind = null,
+        retry_at = null,
+        blocker_kind = null,
+        blocker_code = null,
+        blocker_message = null,
+        blocked_at = null,
+        updated_at = ${now}
+    where page_id = ${input.pageId}
+      and stream in (${sql.join(streams.map((stream) => sql`${stream}`), sql`, `)})
+      and status = 'blocked'
+      and blocker_kind = 'manual_action_required'
+    returning stream
+  `);
+  return result.rows.length;
+}
+
 export async function pausePageSync(
   db: Database,
   input: {

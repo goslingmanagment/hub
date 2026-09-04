@@ -887,6 +887,46 @@ describe("posts sync handlers", () => {
     }));
   });
 
+  it("forgets an owner-cancelled pending job and seeds a fresh one through the slot path (decision #249)", async () => {
+    const cancelled = captureJob({ state: "cancelled", reasonCode: "owner_cancelled" });
+    const fresh = captureJob({ id: "job-fresh" });
+    dbMocks.getCheckpoint.mockResolvedValue({
+      state: {
+        version: 1,
+        platform: "onlyfans",
+        revision: 4,
+        headPostId: "old-head",
+        anchorPostId: "old-head",
+        capturedHeadPostId: null,
+        before: "0",
+        pageIndex: 0,
+        pendingCaptureJobId: cancelled.id,
+        completedAt: null,
+      },
+    });
+    dbMocks.getOfapiCaptureJob.mockResolvedValue(cancelled);
+    dbMocks.findActiveOfapiCaptureJobBySlot.mockResolvedValue(null);
+    dbMocks.createOrGetOfapiCaptureJob.mockResolvedValue({ created: true, job: fresh });
+
+    const result = await onlyfansPostsChunk({
+      db: {},
+      config: { ofapiMirrorBackgroundCaptureEnabled: true },
+    } as never, onlyfansInput());
+
+    expect(result).toMatchObject({
+      satisfied: false,
+      stats: { captureJobId: "job-fresh" },
+    });
+    expect(dbMocks.findActiveOfapiCaptureJobBySlot).toHaveBeenCalledWith(expect.anything(), "page:77:posts");
+    expect(dbMocks.createOrGetOfapiCaptureJob).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      activeSlotKey: "page:77:posts",
+      target: expect.objectContaining({ anchorPostId: "old-head" }),
+    }));
+    expect(dbMocks.upsertCheckpointProgress).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      state: expect.objectContaining({ pendingCaptureJobId: "job-fresh" }),
+    }));
+  });
+
   it("surfaces a blocked OFAPI posts capture job without advancing the checkpoint", async () => {
     const blocked = captureJob({ state: "blocked", reasonCode: "contract_drift" });
     dbMocks.getCheckpoint.mockResolvedValue({
