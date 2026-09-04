@@ -1,6 +1,8 @@
 # Workboard v2 — Priority System Design
 
-> **Status:** design proposal. **Scope:** net-new alongside Workboard v1 (v1 is **not** touched).
+> **Status:** retained design authority for existing Workboard v2 code and
+> schema. The in-core product direction is deprecated by Decision #117; do not
+> treat unimplemented sections as roadmap or approved work.
 > **Unit convention:** all money in **mills** (`1 mill = $0.001`; `$100 = 100 000 mills`). Use `dollarsToMills` / `formatUsdFromMills` (`packages/shared/src/money.ts`). In formulas, `$x` means `mills/1000`.
 > **Operates per model *page*** (`platform_account`), not per model. A model has several pages; cross-page anti-spam is a first-class concern.
 

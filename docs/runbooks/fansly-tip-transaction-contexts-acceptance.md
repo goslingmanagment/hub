@@ -1,5 +1,8 @@
 # Fansly tip transaction context — post-deploy acceptance
 
+> Repeatable acceptance procedure, not deployment status. Decision #211 and
+> current code are authoritative; date windows below are examples.
+
 This is the production gate for decision #211. It verifies the exact bridge
 from a Fansly ledger tip to the optional note and request-scoped conversation
 captured in the `/message` response sidecar. It does **not** infer a concrete

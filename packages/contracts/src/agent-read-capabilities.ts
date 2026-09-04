@@ -7,12 +7,10 @@
  * dropping a typo would mint a key the owner believes is narrower than it is, and
  * silently accepting one would mint a grant nothing in the code can check.
  *
- * The list is normative in the contract appendix (§17.0.5). It is declared here
- * once so that key issuance, the per-operation requirement table, the `agent_keys`
+ * The list is declared here once so that key issuance, the per-operation
+ * requirement table, the `agent_keys`
  * CHECK constraint and the capabilities response all derive from the same literal.
  * Sibling of `agent-read-registry.ts`, which owns the claim/plane vocabulary only.
- *
- * Design reference: `investigations/agent-read-api-design-2026-07-31.md` §8.
  */
 
 /**

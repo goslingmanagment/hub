@@ -4,8 +4,8 @@
 
 Generated, typed client for the kernel API. Every operation is named after
 its `routeSchemas` key; request/response types and runtime validation come
-straight from the Zod contracts, so this package cannot drift from what the
-server enforces.
+straight from the Zod contracts. This generated snapshot is current only
+when the committed contract artifacts pass the core freshness gate.
 
 ```ts
 import { createClient } from "@kernel/sdk";
@@ -15,21 +15,12 @@ const me = await client.me();                       // typed + runtime-validated
 const revenue = await client.pageRevenue({ params: { pageLabel: "lana" }, query: { period: "7d" } });
 ```
 
-## How the SDK is versioned and pinned (DP 10, owner-confirmed)
+## Distribution
 
-Distribution is **git-tag installs** — no npm registry:
+Client repositories receive a compiled vendored snapshot through
+`scripts/vendor-sdk.mjs`; there is no npm or git-tag release channel.
+`KERNEL_CONTRACT_HASH` identifies the snapshot for client drift checks.
 
-```jsonc
-// consumer package.json
-"@kernel/sdk": "github:<org>/core#sdk-vX.Y.Z"
-```
-
-- `KERNEL_CONTRACT_HASH` (in `meta.ts`) is a sha256 over the normalized
-  OpenAPI document. Consumer CI compares its pinned hash against
-  core@main's published hash; a mismatch is contract drift and fails the
-  build.
-- `sdk-vX.Y.Z` tags are published by the core release step; a scheduled
-  bump-PR updates each consumer's pin.
 - Everything in this package is machine-generated. Fix things in
   `packages/contracts` (runtime: `src/sdk-runtime.ts`; generator:
   `src/generate-sdk.ts`) and regenerate.

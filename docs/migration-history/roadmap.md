@@ -2,11 +2,9 @@
 
 **Master document for Pass 3** · Written 2026-07-04 · Produced by `prompts/prompt-3a-roadmap-skeleton.md`
 
-**Provenance.** This is the ordered migration plan from the current architecture (described in
-[`../pass2/pass2-review-current-architecture.md`](../pass2/pass2-review-current-architecture.md))
-to the target ([`../pass2/pass2-target-architecture.md`](../pass2/pass2-target-architecture.md)),
-under the owner's recorded decisions on DP 1–10
-([`../prompts/prompt-3-kernel-roadmap.md`](../prompts/prompt-3-kernel-roadmap.md) §"My decisions").
+**Provenance.** This is the ordered migration plan from the Pass 2 current-architecture review to
+the retained [target architecture](target-architecture.md), under the owner's recorded decisions
+on DP 1–10. The original review and roadmap-prompt inputs were never committed to this repo.
 Ground-truth findings in §2 were re-verified against the three repos on 2026-07-04. Stage
 **passports** here are half-page work orders, not specifications — Passes 3b (kernel-side) and 3c
 (clients + re-documentation) write the full per-stage specs from the template in §6. The owner

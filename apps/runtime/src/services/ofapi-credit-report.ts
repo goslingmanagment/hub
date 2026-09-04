@@ -1,5 +1,5 @@
-// Read models for the owner-only /ofapi-credits dashboard page (Phase 2 of
-// docs/ofapi-parity-plan.md, D7): summary cards + ops strip, daily series for
+// Read models for the owner-only /ofapi-credits dashboard page (Decision #50):
+// summary cards + ops strip, daily series for
 // the two charts plus the breakdown tables, and the filtered ledger listing.
 // Everything is derived from ofapi_credit_ledger / ofapi_credit_state and the
 // notification incidents — no OFAPI requests are made here.

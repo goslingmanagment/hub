@@ -7,8 +7,7 @@ on:
       - main
   workflow_dispatch:
 
-# Superseded PR heads stop burning runners; main always runs to completion so
-# every main commit keeps a finished gate record.
+# Cancel superseded PR runs; keep a finished gate for every main commit.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -36,52 +35,31 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Typecheck
-        run: pnpm typecheck
-
       - name: Lint (family standard + architecture walls)
         run: pnpm lint
 
-      # routes.ts freshness: the sdk determinism test pins openapi↔sdk↔hash
-      # consistency, but editing routes.ts without `pnpm contracts:generate`
-      # kept the committed artifacts mutually consistent yet stale. The
-      # generator boots the API server with a stub config — no DB needed.
+      # The SDK determinism test cannot detect a stale routes.ts source.
       - name: Contracts are regenerated (routes.ts ↔ committed artifacts)
         run: |
           pnpm contracts:generate
           git diff --exit-code reference/agency-hub.openapi.json packages/contracts/src/contract-hash.ts packages/sdk docs/generated/authorization-policy.md
 
-      - name: Production build
-        run: pnpm build:production
-
+      # Dockerfile runs build:production, including the typecheck.
       - name: Production Docker image build
         run: docker build --target runtime -t agency_hub_core/runtime:ci .
 
       - name: Chromium Headless Shell runtime smoke
         run: docker run --rm --entrypoint node agency_hub_core/runtime:ci scripts/smoke-playwright-runtime.mjs
 
-      # NOTE: this step still starts Postgres containers — tests/voice-profiles
-      # and tests/voice-notes-sweep are DB-backed despite not being named
-      # *.integration.test.ts, so they are not in the --exclude list.
+      # Some non-*.integration tests still start Postgres containers.
       - name: Reliable unit tests
         run: pnpm test:unit
 
-  # The sync-critical suite is ~120 database acquisitions over ~104 files and is
-  # the whole reason a PR used to wait ~18 minutes. Splitting it across runners
-  # is the cheap win: separate machines, so each shard keeps
-  # --no-file-parallelism and its own containers — no shared cluster, no new
-  # isolation hazards. Sharding is by resolved FILE, so it is applied to the
-  # :db half directly; `test:prerequisites` is a compound `A && B` and trailing
-  # args would land only on B.
+  # Separate runners keep Testcontainers isolated while cutting the critical path.
   integration:
     name: Integration ${{ matrix.shard }}/3
     runs-on: ubuntu-latest
-    # 30 stopped fitting on 2026-08-17: vitest --shard splits by FILE COUNT,
-    # not duration, and after a week that added four integration files one
-    # shard drew a slow-heavy set and was cancelled at 30:18 with every test
-    # green (the #80 merge push on main was cancelled the same way). 45 lets
-    # the existing gate FINISH — it does not weaken it, and a healthy run
-    # spends nothing extra.
+    # Vitest shards by file count, not duration; slow-heavy shards need this ceiling.
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -107,16 +85,11 @@ jobs:
       - name: Sync-critical DB/schema/network tests (shard ${{ matrix.shard }}/3)
         run: pnpm test:sync-critical:db --shard=${{ matrix.shard }}/3
 
-      # One file, ~36s — it resolves to a single spec so it cannot be sharded.
       - name: Sync-critical API tests
         if: matrix.shard == 1
         run: pnpm test:sync-critical:api
 
-  # Branch protection requires a check named exactly "Quality Gate". A matrix
-  # job publishes "Integration 1/3", "Integration 2/3", … which would satisfy
-  # nothing, so this aggregator keeps the required name and fails unless every
-  # dependency succeeded. `if: always()` is required — without it a skipped
-  # aggregator reports success to the ruleset.
+  # Branch protection requires this exact aggregate check name.
   quality:
     name: Quality Gate
     runs-on: ubuntu-latest

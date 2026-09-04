@@ -1,5 +1,4 @@
-// Gate for the OnlyFans top_spenders stream (Phase 5 of
-// docs/ofapi-parity-plan.md, D10): rankings are computed from the existing
+// Gate for the OnlyFans top_spenders stream: rankings are computed from the existing
 // transactions table — zero external requests — so eligibility is just the
 // flag plus the platform. The executor handler itself lives next to the Fansly
 // one in executor-handlers.ts (it reuses the same window/cursor machinery).

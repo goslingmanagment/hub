@@ -1,4 +1,4 @@
-// OFAPI credit ledger ops (Phase 1 of docs/ofapi-parity-plan.md, D2-D6):
+// OFAPI credit ledger ops (Decision #50):
 // the client's onCreditSpend sink lands every REST response in the append-only
 // ofapi_credit_ledger (+ the ofapi_credit_state day counter, same transaction),
 // a daily job accrues webhook costs from our own journal, an hourly bank-style

@@ -1,7 +1,10 @@
 # Fansly API Specification
 
-> Reverse-engineered from FBuddy browser extension v0.1.129 and Fansly Python SDK.
-> Last updated: 2026-03-05
+> Working reverse-engineered reference. Sources include FBuddy v0.1.129, the
+> Fansly Python SDK, captured fixtures, and later adapter research. Individual
+> endpoint notes carry their own confidence; current implementation contracts
+> live in `packages/fansly` and tests.
+> Last reconciled with this repo: 2026-08-22.
 
 ---
 
@@ -65,21 +68,23 @@ The SDK unwraps the `response` field automatically.
 - **Header**: `authorization: <token>` (raw value, no `Bearer` prefix).
 - **Timestamp header**: `fansly-client-ts: <unix_ms>` (current time in milliseconds).
 
-### Required Headers
+### Headers
 
 | Header | Description | Source |
 |--------|-------------|--------|
 | `authorization` | Auth token (base64-encoded) | localStorage session |
 | `fansly-client-ts` | Current timestamp in ms | Generated client-side |
-| `fansly-client-id` | Client identifier | Injected by Fansly app (opaque) |
-| `fansly-client-check` | Client integrity check | Injected by Fansly app (opaque) |
-| `fansly-session-id` | Session identifier | Injected by Fansly app (opaque) |
+| `fansly-client-id` | Optional captured browser client identifier | Injected by Fansly app (opaque) |
+| `fansly-client-check` | Optional captured browser integrity check | Injected by Fansly app (opaque) |
+| `fansly-session-id` | Optional captured browser session identifier | Injected by Fansly app (opaque) |
 | `Accept` | `application/json, text/plain, */*` | Standard |
 | `Content-Type` | `application/json` (for POST) | Standard |
 | `Referrer` | `https://fansly.com/` | Browser default |
 | `Referrer-Policy` | `strict-origin-when-cross-origin` | Browser default |
 
-The `fansly-client-id`, `fansly-client-check`, and `fansly-session-id` headers are set by the Fansly web application itself. FBuddy intercepts them from network requests via the `fbuddy-network-hook.js` injection script and reuses them for its own API calls.
+Only `authorization` is required for authenticated adapter calls. The three
+`fansly-*` identity/check headers are reused when captured from browser traffic
+and omitted otherwise.
 
 ### Fetch Options
 

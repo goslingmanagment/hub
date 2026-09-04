@@ -3018,7 +3018,7 @@ export const OFAPI_CREDIT_LEDGER_SOURCES = [
   "adjustment",
 ] as const;
 
-// Append-only OFAPI credit movement (docs/ofapi-parity-plan.md D2-D5): the
+// Append-only OFAPI credit movement (Decision #50): the
 // checkbook the bank-statement reconciliation balances against. 'rest' rows
 // are written by the client's onCreditSpend sink (one per response that
 // reached the server, retries included; estimated=true when a 2xx had no

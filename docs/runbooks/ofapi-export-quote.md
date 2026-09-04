@@ -52,7 +52,7 @@ can be checked before an importer or larger cohort exists.
   the vendor. Reconciliation can either adopt the verified vendor export ID or
   confirm that no export was created; it never repeats the create POST.
 
-The vendor contract was rechecked on 2026-07-16 against the official
+The vendor contract was rechecked on 2026-08-23 against the official
 [Create Data Export](https://docs.onlyfansapi.com/api-reference/data-exports/create-data-export),
 [Get Data Export Status](https://docs.onlyfansapi.com/api-reference/data-exports/get-data-export-status),
 and [Start Data Export](https://docs.onlyfansapi.com/api-reference/data-exports/start-data-export)

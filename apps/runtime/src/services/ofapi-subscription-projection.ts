@@ -1,4 +1,4 @@
-// Live subscription projection (Phase 3 of docs/ofapi-parity-plan.md, D8):
+// Live subscription projection:
 // post-settle projection of subscriptions.new / subscriptions.renewed journal
 // rows into page_subscriptions / page_fans for OFAPI-mapped OnlyFans pages,
 // keeping the subscriber set fresh between audience sweeps. Same invariants as

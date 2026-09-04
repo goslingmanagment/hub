@@ -5,9 +5,8 @@ rebuild (delete + event replay) is lossy by construction — the replay reads
 only ATTACHED `domain_events` partitions, and the delete destroys legacy-seed
 rows (`source_event_id IS NULL`, `backfill_source IN
 ('dm_message_archive','hot_table')`) whose hot originals may already be
-pruned; for those rows the archive IS the only copy. The build spec rejected
-in-place rebuild (`docs/fastreply-freshness-build-spec.md`); this ritual is
-the shadow build it chose instead.
+pruned; for those rows the archive IS the only copy. Decision #134 rejects
+in-place rebuild; this is its shadow-build ritual.
 
 ## Preconditions (all of them, every prod run)
 

@@ -1,10 +1,11 @@
 # Project Kernel — Pass 2: Target Architecture
 
-**Deliverable 2 of 3** · Companions: [`pass2-review-current-architecture.md`](pass2-review-current-architecture.md) · [`decision-points.md`](decision-points.md)
+**Deliverable 2 of 3.** The original companion review and `decision-points.md` were never committed
+to this repo; this retained document is historical evidence, not current authority.
 
 **Provenance.** Written 2026-07-04 as Pass 2 of Project Kernel. Grounded in the Pass 2 review
 (whose factual claims were re-verified against source for this document — the handful of
-corrections found are listed in `decision-points.md` §0) and in fresh code verification across all
+corrections found were recorded in the unretained `decision-points.md` §0) and in fresh code verification across all
 three repos (core, ChatGoose Desktop, ChatGoose extension). This is the **end-state design** — the
 architecture the system should have, judged against the mandate's priorities, not against
 migration cost. Pass 3 owns the path.
@@ -13,7 +14,7 @@ migration cost. Pass 3 owns the path.
 heart — it exists to close the review's one-way doors. §4–§9 specify the kernel's planes. §10
 specifies each userspace client. §11–§12 cover analytics and the repository standard. §13 records
 the alternatives that lost and why. §14 is the inventory Pass 3 needs. Ten forks in this design
-are product calls; each is marked `→ DP n` and argued in [`decision-points.md`](decision-points.md)
+are product calls; each is marked `→ DP n` and was argued in the unretained `decision-points.md`
 — the target text below states my recommendation but does not pretend the fork is closed.
 
 ---
@@ -899,7 +900,7 @@ cross-repo file copy.
 ## 13. Alternatives weighed
 
 Each major choice, its serious alternative, and why it lost. (Forks that are *product* calls are
-in `decision-points.md`; these are the engineering calls I am making.)
+in the unretained `decision-points.md`; these are the engineering calls I am making.)
 
 1. **Event-sourced ledger vs. state-first with better retention.** The modest alternative —
    keep today's mutable tables, raise retention windows, add missing capture tables — was
@@ -1021,4 +1022,4 @@ DP 10 (repo topology) gates where the SDK and workboard app land.
 ---
 
 *End of target architecture. The forks are numbered and argued in
-[`decision-points.md`](decision-points.md); nothing above should be read as closing them.*
+the unretained `decision-points.md`; nothing above should be read as closing them.*

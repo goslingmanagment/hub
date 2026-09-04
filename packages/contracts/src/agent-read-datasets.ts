@@ -16,10 +16,8 @@
  * and `captureState` — the two remaining catalog-response columns — are runtime
  * facts about a deployment rather than vocabulary, and join in the same slice.
  *
- * Source: the contract appendix §17 dataset catalog (names, fields, default sorts,
- * stable keys and the money-bearing set are copied from it verbatim; the scalar
- * kinds are the appendix's own closed union). Architecture reference:
- * `investigations/agent-read-api-design-2026-07-31.md` §10.
+ * This registry is the current authority; Decisions #195–200 preserve the
+ * architectural constraints behind it.
  */
 
 import { type AgentCapability } from "./agent-read-capabilities.ts";

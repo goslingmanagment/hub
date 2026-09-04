@@ -7,9 +7,8 @@
 //   R2 verify     — set-difference fidelity proof (shadow ⊇ old) + material
 //                   comparison; nonzero missing rows fails
 //   R3 switch     — one-transaction atomic rename + watermark force-reset
-// The build spec rejected in-place rebuild and hash-equality-as-proof
-// (docs/fastreply-freshness-build-spec.md); operational ritual lives in
-// docs/runbooks/message-archive-rebuild.md.
+// Decision #134 rejects in-place rebuild and hash-equality-as-proof;
+// operational ritual lives in docs/runbooks/message-archive-rebuild.md.
 
 import {
   MESSAGE_ARCHIVE_REBUILD_LOCK_KEY,

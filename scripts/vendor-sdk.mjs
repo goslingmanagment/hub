@@ -209,9 +209,8 @@ node scripts/vendor-sdk.mjs <path-to-this-directory>
 - Core commit: \`${sourceCommit}\`
 
 The contract hash is exported at runtime as \`KERNEL_CONTRACT_HASH\`; drift CI
-compares it against core@main (stage-20 §2). Distribution via git-tag installs
-(DP 10) replaces this vendoring at the Stage 20 release step — the consuming
-import surface (\`@kernel/sdk\`) stays identical.
+compares it against the expected core contract. Vendoring is the distribution
+mechanism; the consuming import surface remains \`@kernel/sdk\`.
 `);
 
 console.log(`Vendored @kernel/sdk → ${target}`);

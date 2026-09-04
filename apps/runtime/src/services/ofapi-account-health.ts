@@ -1,5 +1,5 @@
-// OFAPI account health + credit ops (Phase 3 of docs/ofapi-integration-plan.md,
-// D9): accounts.* webhook events project into pages.ofapi_auth_status
+// OFAPI account health + credit ops (Decision #49): accounts.* webhook events
+// project into pages.ofapi_auth_status
 // (post-settle, never blocking the settle/fanout path), and the minutely OFAPI
 // sweep checks the silent failure modes — low credit balance and webhook
 // silence — opening/resolving debounced Telegram-backed notification incidents.

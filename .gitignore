@@ -20,20 +20,12 @@ drafts/
 .om-token
 *-openclaw-backup.tar.gz
 
-# Documentation (local/generated, not tracked)
-docs/
-!docs/
-docs/*
-!docs/runbooks/
-docs/runbooks/*
-!docs/error-handling.md
-!docs/runbooks/desktop-lifecycle-v2-cutover.md
-# Tracked because a test executes its command lines against the real contract:
-# an enablement runbook whose smoke test has drifted is worse than none.
-!docs/runbooks/agent-read-plane-enablement.md
-# Tracked because this undocumented provider endpoint needs a recorded live
-# acceptance and parse-debt/reconciliation ritual after deployment.
-!docs/runbooks/fansly-post-tips-acceptance.md
+# Generated documentation is ignored except for the committed auth projection.
+/docs/generated/*
+!/docs/generated/authorization-policy.md
+# One-off local audit artifacts.
+/docs/plans/decisions-compression-plan-*.md
+/docs/plans/decisions-compression-classified-*.json
 *.sql.gz
 
 # Local mockup/reference artifacts

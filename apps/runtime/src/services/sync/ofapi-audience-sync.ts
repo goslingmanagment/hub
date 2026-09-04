@@ -1,5 +1,5 @@
-// OFAPI-backed OnlyFans audience sync (Phase 3 of docs/ofapi-parity-plan.md,
-// D6/D8): the subscribers executor stream for OnlyFans pages mapped to an OFAPI
+// OFAPI-backed OnlyFans audience sync: the subscribers executor stream for
+// OnlyFans pages mapped to an OFAPI
 // account, behind OFAPI_AUDIENCE_SYNC_ENABLED. A budgeted fans/active offset
 // sweep (own daily ceiling so it can never starve DM sync) feeds the same
 // page_subscriptions / page_fans tables Fansly fills, with the Fansly

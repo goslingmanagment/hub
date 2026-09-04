@@ -117,6 +117,13 @@ status, code, and intentional message.
 | General | `rate_limit_exceeded` | 429 | Generic API rate limit, distinct from the AI gateway's daily quota and provider SSE rate code. |
 | General | `service_unavailable` | 503 | Intentional temporary service unavailability. Also the OFAPI coverage-revoke idempotency proof when the prior proof's captured body is unreadable (Decision #223) — never the 409 that means the action belongs to a different proof. |
 | Capture | `capture_payload_unavailable` | 503 | The agent plane's owner-only observation payload read (#9b): the envelope has no inline body and its content-addressed copy could not be read right now. Deliberately NOT one of the handler's withholding reasons — `restricted_class` is a decision the kernel made, this is a fetch that failed, and Decision #223 exists because the two were the same answer. Transient and retriable. |
+| Agent | `agent_capability_missing` | 403 | Agent key lacks a capability required by the operation. |
+| Agent | `agent_budget_exhausted` | 429 | Agent key exhausted its daily request or row budget. |
+| Agent | `agent_plane_disabled` | 503 | Agent Read Plane or the operation's sub-gate is disabled. |
+| Agent | `archive_rebuilding` | 503 | Message archive is being rebuilt; retry later. |
+| Agent | `agent_cursor_invalid` | 400 | Cursor is malformed, foreign, forged, or no longer matches the request snapshot. |
+| Agent | `hydration_not_admissible` | 409 | The requested hydration target or platform lane cannot be served. |
+| Agent | `hydration_proposal_stale` | 409 | Coverage changed after the proposal was shown; re-read before deciding. |
 | Egress | `proxy_missing` | 409 | A Fansly page has no stored proxy, so fail-closed egress refuses the request. |
 | AI | `quota_denied` | 429 | Core AI daily budget/quota rejected the generation before provider dispatch. |
 | AI gate | `gate_draft_required` | 400 | Feature policy requires nonblank `draftText`. |
@@ -135,7 +142,7 @@ status, code, and intentional message.
 | Voice | `voice_script_invalid` | 400 | Submitted script fails voice validation. |
 | Voice | `voice_source_invalid` | 400 | Source voice-script generation is missing, ineligible, or not owned by the page. |
 | Voice | `voice_quota_denied` | 429 | Page's daily voice-character budget is exhausted. |
-| Voice | `idempotency_mismatch` | 409 | Voice `clientRequestId` was reused with a different request. |
+| General | `idempotency_mismatch` | 409 | An idempotency key or voice `clientRequestId` was reused with a different normalized request. |
 | Voice | `artifact_expired` | 410 | Stored voice audio passed its retrieval lifetime. |
 | Voice | `voice_retrieval_disabled` | 403 | Voice artifact retrieval is disabled. |
 | Voice | `voice_artifact_corrupt` | 500 | Stored audio bytes fail their SHA-256 integrity check. |

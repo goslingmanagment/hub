@@ -884,8 +884,8 @@ function normalizePageSyncLease(row: Record<string, unknown>): PageSyncLease {
 }
 
 export function getSyncStreamsForPlatform(platform: "fansly" | "onlyfans"): SyncStream[] {
-  // OnlyFans: subscribers is the OFAPI audience sweep (docs/ofapi-parity-plan.md
-  // Phase 3) and top_spenders is computed from the transactions table (Phase 5);
+  // OnlyFans: subscribers is the OFAPI audience sweep and top_spenders is
+  // computed from the transactions table;
   // the planner force-pauses both for pages outside their flags, mirroring the
   // DM-polling gate.
   return platform === "fansly"

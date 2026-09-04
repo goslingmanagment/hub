@@ -1,4 +1,4 @@
-// Presence projection (Phase 4 of docs/ofapi-parity-plan.md, D9): post-settle
+// Presence projection: post-settle
 // projection of users.online / users.offline journal rows into the existing
 // presence store (page_fans.external_presence_*) for KNOWN fans — unknown fan
 // ids are skipped, never looked up over REST. Cost ~0: webhooks are already

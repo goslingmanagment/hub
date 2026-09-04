@@ -15,8 +15,6 @@
  * membership (which operation may speak to which fields) lands together with the
  * operations themselves and must be declared HERE when it does — hand-listing it
  * at each route is exactly the drift this file exists to prevent.
- *
- * Design reference: `investigations/agent-read-api-design-2026-07-31.md` §5.
  */
 
 /**
@@ -61,8 +59,8 @@ export type AgentClaimClassDefinition = {
  * to exactly one class (pinned by test), and the conclusion is evaluated against
  * the union of the REQUIRED planes of the named fields.
  *
- * Field names are the wire names from the contract appendix §17 — not invented
- * ones. A name that does not exist on the wire makes every real claim resolve to
+ * Field names are the contract's wire names, not invented ones. A name that does
+ * not exist on the wire makes every real claim resolve to
  * `claim_field_unobservable`, which silently reduces `absenceProvable` to a
  * constant `false`.
  */

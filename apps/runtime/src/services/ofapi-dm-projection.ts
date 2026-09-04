@@ -1,4 +1,4 @@
-// Live OnlyFans DM projection (Phase 1 of docs/ofapi-integration-plan.md, D1/D2).
+// Live OnlyFans DM projection (Decision #49).
 // Projects settled OFAPI webhook journal rows for mapped OnlyFans pages into the
 // platform-agnostic page_dm_threads / page_dm_messages tables, via the same
 // repository helpers the Fansly sync uses. Runs strictly post-settle and keeps

@@ -4050,7 +4050,7 @@ export const ofapiWebhookRegisterResponseSchema = z.object({
   }),
 });
 
-// --- OFAPI credit ledger schemas (docs/ofapi-parity-plan.md Phase 2) ---
+// --- OFAPI credit ledger schemas (Decision #50) ---
 
 export const ofapiCreditLedgerSourceEnum = z.enum([
   "rest",

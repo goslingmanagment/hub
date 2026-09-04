@@ -1,7 +1,5 @@
 // Client for the onlyfansapi.com API: webhook CRUD + account list (admin flow)
-// plus credit-budgeted, observed chat/message reads for the DM sync (Phase 2 of
-// docs/ofapi-integration-plan.md). Not to be confused with packages/onlyfans,
-// which is the OnlyMonster adapter.
+// plus credit-budgeted, observed chat/message reads for the DM sync.
 
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
@@ -30,9 +28,9 @@ const OFAPI_OBSERVED_RETRIES = 3;
 // fans/active hard-caps limit at 20 per the OpenAPI validation text.
 const OFAPI_FANS_PAGE_LIMIT = 20;
 
-// The only place the OFAPI host may appear in runtime code (D1 of
-// docs/ofapi-parity-plan.md, enforced by a gate test): every OFAPI HTTP call
-// goes through this client, which is also the single _meta/credit-spend tap.
+// The only place the OFAPI host may appear in runtime code, enforced by a gate
+// test: every OFAPI HTTP call goes through this client, which is also the single
+// _meta/credit-spend tap (Decision #50).
 export const OFAPI_DEFAULT_BASE_URL = "https://app.onlyfansapi.com/api";
 
 export class OfapiApiError extends Error {
@@ -233,8 +231,8 @@ export interface OfapiClient {
       retries?: number;
     },
   ): Promise<OfapiListPage>;
-  // GET /api/{account}/fans/active — the audience sweep (docs/ofapi-parity-plan.md
-  // Phase 3). The documented hard cap is 20 fans per request.
+  // GET /api/{account}/fans/active — the audience sweep. The documented hard
+  // cap is 20 fans per request.
   listActiveFans(
     context: OfapiRequestContext,
     accountId: string,
@@ -359,7 +357,7 @@ export interface OfapiClient {
     conversationId: string,
     input: OfapiMediaMessageInput,
   ): Promise<OfapiSentMessage>;
-  // Decision #57: exactly one advisory typing beacon. The endpoint is documented
+  // Decision #58: exactly one advisory typing beacon. The endpoint is documented
   // as free, so an absent/non-charging _meta does not create a permanent credit
   // ledger row; an unexpected provider-reported charge is still recorded.
   startTyping?(

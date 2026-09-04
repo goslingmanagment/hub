@@ -1,10 +1,7 @@
 name: Nightly
 
-# Stage 35 CI floor: the full Testcontainers integration suite — including the
-# projection rebuild-from-fixtures proofs (message-archive, fan-earnings,
-# ofapi-dm) and the ratchet scripts that run inside it — every night. PRs run
-# the sync-critical subset only (see ci.yml); this is the backstop that keeps
-# the rest of the suite honest.
+# PR/main CI already runs every test file except the non-critical cases in the
+# large API integration file. Nightly covers only that remaining surface.
 
 on:
   schedule:
@@ -12,10 +9,10 @@ on:
   workflow_dispatch:
 
 jobs:
-  full-suite:
-    name: Full suite (Testcontainers)
+  full-api:
+    name: Full API integration file
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 45
 
     steps:
       - name: Checkout
@@ -33,5 +30,5 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Full test suite (unit + integration + rebuild proofs + ratchets)
-        run: pnpm test
+      - name: API integration tests (all cases)
+        run: NODE_OPTIONS=--max-old-space-size=8192 pnpm exec vitest run --no-file-parallelism tests/api.integration.test.ts

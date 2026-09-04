@@ -1,5 +1,5 @@
-// OFAPI-backed OnlyFans DM sync (Phase 2 of docs/ofapi-integration-plan.md,
-// D3/D4): the dm_conversations / dm_messages executor streams for OnlyFans
+// OFAPI-backed OnlyFans DM sync (Decision #49): the dm_conversations /
+// dm_messages executor streams for OnlyFans
 // pages mapped to an OFAPI account, behind OFAPI_DM_SYNC_ENABLED. REST is used
 // only for bootstrap + reconcile — live messages arrive through the webhook
 // projection (Phase 1). Every request is credit-budgeted: a per-chunk request

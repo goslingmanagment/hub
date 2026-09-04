@@ -74,7 +74,7 @@ type OfapiDmConversationCursorState = {
   lastReconcileAt: string | null;
 };
 
-// OFAPI-fed OnlyFans subscribers checkpoint (docs/ofapi-parity-plan.md Phase 3):
+// OFAPI-fed OnlyFans subscribers checkpoint:
 // full fans/active offset sweeps on an interval; generation drives the Fansly-
 // style end-of-sweep expiry of subscriptions missing from the sweep.
 type OfapiAudienceCursorState = {

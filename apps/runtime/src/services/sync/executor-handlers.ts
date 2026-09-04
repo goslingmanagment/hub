@@ -1225,7 +1225,7 @@ export async function fanslyTopSpendersChunk(
 }
 
 /**
- * top_spenders for OnlyFans pages (docs/ofapi-parity-plan.md Phase 5, D10):
+ * top_spenders for OnlyFans pages:
  * the same month-window bootstrap + trailing-7-day steady state as Fansly, but
  * computed from the existing transactions table (zero external requests) using
  * the spenders-v2 transaction filter, so rankings reconcile with the spender

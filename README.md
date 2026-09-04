@@ -11,7 +11,8 @@ For v1.0 production:
 - detailed sync health at `/api/v1/health/sync` requires an owner or dashboard session, or a configured `HEALTH_SYNC_MONITORING_TOKEN` sent as `x-monitoring-token`
 - Swagger/OpenAPI docs at `/documentation` and `/api/v1/openapi.json` require an owner dashboard session
 
-Backups are intentionally deferred in this release hardening pass. Do not assume built-in backup or restore scripts exist yet.
+There is no recurring off-box database backup or restore automation. This is an
+explicitly accepted data-loss risk (Decision #161), not a pending release gate.
 
 ## Production Prerequisites
 
@@ -58,8 +59,8 @@ openssl rand -base64 32
 - any optional Telegram values you want enabled
 - the complete `SERVICE_EGRESS_PROXY_URL` / `SERVICE_EGRESS_PROXY_USERNAME` /
   `SERVICE_EGRESS_PROXY_PASSWORD` tuple before enabling Telegram delivery or
-  ElevenLabs voice synthesis (see
-  [`docs/runbooks/service-egress-proxy.md`](docs/runbooks/service-egress-proxy.md))
+  ElevenLabs voice synthesis; `.env.production.example` and the config registry
+  are authoritative
 
 The default production compose file expects the bundled Postgres container and binds the app to `127.0.0.1:3000`. Put a TLS reverse proxy on the same host in front of that loopback port. Compose reads interpolation values from `.env.production`; the API, scheduler, and worker receive the application environment, while Postgres receives only `POSTGRES_*`.
 
@@ -77,17 +78,17 @@ curl http://127.0.0.1:3000/api/v1/health
 
 `/api/v1/health` should return HTTP `200`. If external monitoring needs detailed per-page sync state, set `HEALTH_SYNC_MONITORING_TOKEN` in the runtime environment and call `/api/v1/health/sync` with that value in the `x-monitoring-token` header. That endpoint may return HTTP `200` or `503`, because it reports real per-page sync state rather than simple process liveness.
 
-7. Create the first owner account. Read the password without echoing or embedding it in the command line, then export the already-populated variable:
+7. Create the first owner account. Read the password without echoing or embedding it in the command line, then pipe it to the CLI over stdin:
 
 ```bash
 read -r -s -p 'Initial owner password: ' INITIAL_OWNER_PASSWORD
 printf '\n'
-export INITIAL_OWNER_PASSWORD
-docker compose --env-file .env.production -f docker-compose.production.yml exec api \
+printf '%s' "$INITIAL_OWNER_PASSWORD" | \
+docker compose --env-file .env.production -f docker-compose.production.yml exec -T api \
   node apps/runtime/dist/cli.js user add \
   --username owner \
   --role owner \
-  --password-env INITIAL_OWNER_PASSWORD
+  --password-file /dev/stdin
 unset INITIAL_OWNER_PASSWORD
 ```
 
@@ -230,12 +231,14 @@ Compose keeps `20m` × 5.
 
 ## Backups
 
-Built-in backup automation is not shipped in this release hardening pass. Use your existing VPS or Postgres backup tooling until Agency Hub backup/restore scripts are implemented.
+No recurring off-box backup is configured by Agency Hub. Losing the VPS can
+therefore permanently lose the database. Decision #161 accepts this risk; do
+not treat backup implementation as an implicit release requirement.
 
 ## Monitoring
 
 - API/process health: `GET /api/v1/health`
-- Public sync health: `GET /api/v1/health/sync`
+- Protected detailed sync health: `GET /api/v1/health/sync`
 - Dashboard login: `GET /login`
 
 Examples:

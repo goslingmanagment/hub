@@ -1,5 +1,8 @@
 # Fansly post tips — post-deploy acceptance
 
+> Repeatable acceptance procedure, not deployment status. Decisions #209 and
+> #210 and current code are authoritative; date windows below are examples.
+
 This is an owner-gated verification for decision #209. It establishes what the
 undocumented `GET /tips?targetIds=...` call actually returns in production; it
 does not turn a captured sample into a provider completeness guarantee.
