@@ -4,6 +4,8 @@
 
 **Рабочий результат:** [единый план реализации](../../docs/plans/2026-09-05-ofapi-coverage-refresh.md). Исходный PLAN в investigations теперь доказательное приложение, не конкурирующий актуальный план.
 
+> Основной текст ниже описывает предыдущую проверку. Новые production-факты и уточнения PR #131 приведены в последнем разделе; требования сведены непосредственно в рабочий план.
+
 ## Оценка
 
 Fable plan удобнее как компактная очередь: отдельные desktop-команды/read-пути, конкретный payout/read backlog и набор сценариев приёмки. Он включил важные исправления первого сравнения: историю bindings, существующий subscription.ended, expiry ordering, fractional price, ограничение URL-size, export polling fallback, artifact acceptance и общие Pixels.
@@ -88,3 +90,23 @@ Payout requests принимает limit/offset; marker есть в пример
 ## Итог объединения
 
 Сохраняем глубину контрактов нашего плана и полезное деление Fable на небольшие пользовательские срезы. Приняты уточнения sync telemetry, payout types и callback races; сняты лишние зависимости upload/send и обязательность полного publishing. Scopes и Pixels остаются в целевом обновлении. Все спорные правила отправки, пагинации, расходов и dedup заменены проверенными формулировками в едином рабочем файле.
+
+## Проверка PR 131, 66ded3cb: обновление после переезда
+
+Проверен head `66ded3cbf52c221608df896cd2bfa255907a2e3d` и код Hub `582ef1cf`. Fable прав насчёт состоявшегося перехода и presence ingest. Снимок через PostgreSQL read_only в 14:25–14:26 UTC показывает новые acct обеих страниц, 76 receipts новых подключений за последний час, свежие fans_active/dm_conversations, успешные jobs fan identities/subscribers/chats. За скользящие 72ч: 3984 online, 1961 typing, 4013 offline, 0 invalid_identity observations. Счётчики Fable могли отличаться из-за окна; точные его числа не копируем. Это проверка ingest, не desktop SSE. Контейнеры api/worker/scheduler healthy; состав env/SQL действий, установленный credential и точный remote webhook ID отдельно не проверялись.
+
+У обеих страниц external_page_id и metadata.onlyfansUserId пусты. Исторические receipts старых acct не находят страницу через текущий mapping. Новые posts jobs всё ещё retry_wait: 4 dispatch, 0 accepted items/pages. Attempts и их transport reason read_only не видит; 6.7с/65с остаются операторским наблюдением, не установленной нами причиной. Переход не означает полного восстановления всех потоков.
+
+Семь поправок приняты с уточнениями и внесены в этапы, без второго приоритетного слоя Amendments:
+
+1. S0 — кодовые хвосты выполненного перехода. Нужен top-level onlyfans_id в account DTO. History lookup нельзя слепо включить для auth: поздний authentication_failed старого binding может остановить новый. Для live effects проверяем current binding/generation.
+2. Ручной retry существует, одна попытка относится к command row. Изменённый текст разрешён тестом; общий key всей lineage неверен. Ключ относится к неизменной provider operation с проверкой body/scope/исходного TTL. Отсутствие messages.sent не доказывает неотправку и не разрешает auto-retry.
+3. Нужен конкретный write-test target или ограниченный canary; два ключа не изолируют аккаунты. Fixture acceptance не объявляется live acceptance.
+4. Владелец сообщил об ожидаемом пополнении до 100k: полезные функции не откладываются из-за малого текущего остатка; actual admission не меняется до пополнения. S4a входит в первый релиз, полный usage report его не блокирует.
+5. Старый webhook, desktop после remap и отдельный posts defect сохранены. Узкий binding recovery нужен, но «штатного reset нет» неверно: Reset API существует и удаляет checkpoints. Нужен CAS конкретного binding blocker с сохранением прогресса и пользовательской паузы.
+6. Agent Read — реальный потребитель минимальной статистики. Нужны OF projections/fields: нынешние соседние datasets Fansly-only. Один overview/subscriber snapshot плюс visitors/balances/payouts — обоснованный P2; общего stats_snapshot dataset нет.
+7. Первый релиз уточнён непосредственно в S0/S1/S4a/S5 и общей очереди. Для реализации не нужно сверять противоречащие разделы.
+
+Основания: [retry validator](../../apps/runtime/src/services/ofapi-command-outbox.ts#L208), [edited retry test](../../tests/ofapi-command-outbox.integration.test.ts#L514), [auth consumer](../../apps/runtime/src/services/ofapi-account-health.ts#L84), [reset side effects](../../apps/runtime/src/services/sync-blocks.ts#L593), [Agent Read catalog](../../apps/runtime/src/modules/agent-read/handlers-core.ts#L123), [Send Message](https://docs.onlyfansapi.com/api-reference/chat-messages/send-message), [Delivery rules](https://docs.onlyfansapi.com/webhooks/delivery-and-retries).
+
+Эта проверка не меняла runtime, production, PR или его обсуждение. Поправка подготовлена к точному коммиту PR; runtime test suite для изменения документа не запускался.

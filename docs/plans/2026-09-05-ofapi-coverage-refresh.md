@@ -1,53 +1,31 @@
 # Итоговый план обновления OFAPI в Hub
 
 Дата: 05.09.2026. Исходный Hub: `582ef1cf8a2de52eba6639ef775ddbe3e15ba74c`.
-Статус: **план реализации после проверки обоих аудитов и Fable plan, дополнен второй сверкой 2026-09-05 (раздел «Amendments»); production-переход на новую команду OFAPI выполнен 2026-09-05, код не менялся**. Fansly исключён.
+Статус: **план после проверки PR #131 (`66ded3cb`); поправки сведены непосредственно в этапы. Новые production-подключения и поступление данных подтверждены; кодовые изменения плана ещё не реализованы**. Fansly исключён.
 
 Этот файл — единый рабочий план. [Исходный аудит](../../investigations/ofapi-support-refresh-2026-09-05/PLAN.md), [матрица 294 операций](../../investigations/ofapi-support-refresh-2026-09-05/endpoint-coverage.csv), [изменения схемы](../../investigations/ofapi-support-refresh-2026-09-05/SCHEMA-CHANGES.md) и [проверка Fable plan](../../investigations/ofapi-support-refresh-2026-09-05/FABLE-REVIEW.md) — доказательные приложения. Они не создают параллельную очередь реализации.
 
-Владелец объяснил остановку production сменой аккаунта и ключа OFAPI и передал актуальный ключ. Переход выполнен 2026-09-05 13:43–14:10 UTC вручную по owner-gated шагам (см. Amendments, п. 1): ключ заменён в `.env.production` с пересозданием api/worker/scheduler, обе страницы перепривязаны на новые `acct_`, `external_webhook_id` обнулён и вебхук зарегистрирован в новой команде, блоки `ofapi_http_404` сняты SQL-ом. Прежние 404 были `code: account_not_found` (аккаунты отключены от старой команды), вебхуки молчали с 2026-09-03 20:22 UTC. Значение ключа не сохраняется в документах.
+Владелец объяснил остановку сменой аккаунта/ключа OFAPI. По отчёту оператора, переход выполнен 05.09.2026 в 13:43–14:10 UTC. Независимая проверка через `read_only` в 14:25–14:26 UTC подтверждает новые `acct_` обеих страниц, 76 webhook observations новых подключений за последний час, свежие `fans_active`/`dm_conversations` и успешные jobs fans/subscribers/chats. Старые receipts прекратились 03.09 около 20:22 UTC. Прежний локальный edge 403 в 13:42 больше не описывает состояние production. Полный состав ручных env/SQL действий, fingerprint установленного ключа и remote webhook ID этой read-only проверкой не устанавливались.
+
+Остались хвосты: `external_page_id` и `metadata.onlyfansUserId` обеих страниц пусты; исторические receipts содержат прежние `acct_`, которых нет в текущем mapping. Новые posts jobs имеют 4 dispatch и 0 accepted items в `retry_wait` — отдельный незакрытый дефект capture. Подтверждение перехода не означает восстановления posts или проверки desktop SSE.
+
+Владелец планирует пополнение до 100 000 кредитов. Малый текущий остаток не ограничивает продуктовый состав плана; пополнение пока не подтверждено. До него действует текущее admission, после него дневные бюджеты задаём по полезной частоте/объёму и наблюдаемому расходу. Production-лимиты сам документ не меняет.
 
 Результат первого пакета: правильные подключения и lifecycle, работающие существующие чтения, восстановление доставок, точные расходы/права, расширенная отправка и несколько полезных desktop-команд. Второй пакет: загрузка и каталог медиа, visitors/exports, трафик, Pixels/Postbacks. Третий: выбранные CRM/read-аналитика/история контента. Полный publishing/editor и автоматические кампании — отдельное возможное продолжение.
 
 Архитектура: существующие capture → canonical events → projections, command outbox, управляемые задания, централизованные egress/ACL/credits и генерируемый SDK. Для хранения новых фактов добавляем минимальные структуры к этой инфраструктуре. Длительность в S/M/L или число новых endpoints не считаются доказанной оценкой срока.
 
-## 0. Amendments (вторая сверка, 2026-09-05)
-
-Семь правок по итогам перекрёстной проверки обоих планов и живого переезда на команду goslya. Они имеют приоритет над текстом этапов ниже там, где расходятся.
-
-**1. S0 переписан под факт.** Переход сделан вручную: правка `OFAPI_API_KEY` в `/opt/agency-hub/.env.production` и `docker compose ... up -d --force-recreate --no-build api worker scheduler`; `update pages set ofapi_account_id=…` для страниц 8 и 9; `update ofapi_webhook_config set external_webhook_id=null where id=1`, затем `POST /api/v1/admin/ofapi/webhook`; отмена двух posts-jobs по #246 и триггер `posts`; `update page_sync_states … where blocker_code='ofapi_http_404'` → `pending`. В S0 остаётся код, который сделал бы это одной кнопкой:
-- `code: account_not_found` как отдельный blocker `provider_binding` со своим инцидентом (не `auth` модели, как требует #245): пауза стримов страницы, отказ gateway/команд по этому `acct_`.
-- Таблица истории binding `page_ofapi_accounts(page_id, ofapi_account_id, onlyfans_id, valid_from, valid_to)`; `findPageByOfapiAccountId` и канонизатор/replay смотрят историю. События до 2026-09-03 хранят `acct_9070e38a…` и `acct_b47a5635…`, которых в `pages` больше нет; они вносятся первой строкой истории.
-- Регистрация вебхука проверяет `GET /webhooks/{id}` под текущим ключом и при 404 идёт в `create` вместо `noop` (`prepareOfapiWebhookRegistration`, ветка `stable`).
-- Ремаппинг страниц при регистрации по `onlyfans_id`, а не только для страниц без `ofapi_account_id`.
-- Снятие `provider_bad_data`-блока при восстановлении binding без ручного SQL (`requestPageSync` оставляет `blocked`, планировщик берёт только `blocker_kind is null`).
-- Alarm тишины вебхуков: не 12 ч, а 30–60 мин в дневные часы для страницы с историей трафика.
-
-**2. Idempotency-Key в два шага (уточняет S6).** Шаг 1, в S6: ключ `cmd:<commandId>` на каждый send и тот же ключ на всю retry-lineage команды. Ручной ретрай индетерминированной команды уже разрешён аутбоксом и сегодня может дать дубль; с общим ключом он безопасен во всех случаях, кроме «5xx после фактической публикации». Одна физическая попытка на команду сохраняется. Шаг 2, отдельное решение владельца: автоповтор `indeterminate` только после окна ожидания `messages.sent` без совпадения по чату, времени и тексту. `Idempotent-Replayed` не заменяет проверку статуса и message id.
-
-**3. Тестовая среда.** Ключи «Onboarding» и «hub» принадлежат одной команде goslya, отдельной тестовой команды нет. Живые тесты записи (send, upload, pixel test-event) возможны только с отдельным тестовым OF-аккаунтом в этой команде (решение владельца) или на фикстурах из OpenAPI плюс один контролируемый canary с владельцем.
-
-**4. Кредиты.** Владелец пополняет баланс до ~100k. Это снимает бюджет как ограничение плана, но не отменяет дневные бюджеты лейнов. Бесплатный баланс (S4: `_credits.balance` из `GET /api/webhooks` или `GET /api/usage/credits`, оба `used: 0` подтверждены живыми вызовами) выносится в первый релиз вместо платного ping через `/chats`. До пополнения при балансе <1000 придёт low-credit алерт, <500 паркуются пуллы.
-
-**5. Хвосты переезда, отдельные тикеты.** Удалить вебхук на наш endpoint в старой команде OFAPI. Проверить десктоп одного чаттера после смены `acct_` (`/accounts` отдаёт новые id). Posts capture: `transport, post_dispatch` indeterminate воспроизводится на новом аккаунте при прямом ответе `/posts?limit=100` за 6.7 с и deadline 65 с; разбирать по `ofapi_request_attempts` (роль read_only её не видит), не внутри S0.
-
-**6. Объём статистики (S8/S12).** Потребитель есть: Agent Read датасеты и скилл `hub`, где OF-страницы отвечают `not_captured`. В P2 оставляем минимальный набор с этим потребителем: `statistics/overview`, `subscribers/statistics`, visitors, `payouts/balances`, `payouts/payout-requests`. Остальные статистические семейства не берём без нового потребителя.
-
-**7. Первый релиз** = S0 (кодовые остатки из п. 1) + S1 (совместимость gateway, spenders parser, курсоры по `_pagination.next_page`, ложный `succeeded_at` у noop-стримов, пиновый снимок спеки) + бесплатный баланс из S4. Дальше порядок S2 → S3 → S6/S6b → S1b → S7 → S8 → S9 → S10 → S11.
-
-Что из первой версии Fable plan отклонено после проверки и НЕ переносится: «любая ошибка = 1 кредит кроме 402/429» (резолвер уже читает `_meta._credits.used` при любом статусе; OFAPI-side 404 без вызова OnlyFans бесплатен), `offset += limit` как доказательство полноты, дедуп доставок по `delivery_uuid`, `async` как query-параметр, зависимость vault-upload от send v2, вывод «presence никогда не работал».
-
 ## 1. Очерёдность реализации
 
 | Этап | Приоритет | Результат | Зависимости |
 |---|---|---|---|
-| S0 | P0 | Завершённый переход на новый аккаунт/ключ OFAPI, baseline и fixtures | Первым для live canary; разработка S1 и следующих блоков может идти параллельно |
+| S0 | P0 | Штатная смена binding, сохранение истории и узкое восстановление | Ручной переход выполнен; минимальный preflight S5 входит в этот срез |
 | S1 | P0 | Исправленные существующие read-контракты и маршрутизация | S0 для live-проверки |
 | S1b | P1 | Новые read-пути для desktop | S1 resolver/capture; выпуск по готовому потребителю |
 | S2 | P0 | Ephemeral, expiry, disconnected и история account bindings | S0; собственные schema/replay тесты |
 | S3 | P1 | Delivery history, видимость потерь и redelivery | S2 identity/order; read-часть можно готовить раньше |
-| S4 | P1 | Бесплатный баланс и сверка vendor credits | Независимо от S1–S3 |
-| S5 | P1 | Ограничения API keys и понятные отказы по правам | Используется всеми последующими этапами |
+| S4 | P0/P1 | S4a: бесплатный баланс в первом релизе; S4b: сверка vendor credits | S4a независимо; полный отчёт не блокирует его выпуск |
+| S5 | P0/P1 | Минимальный preflight ключа, scope и понятные отказы | Выпускается с S0 и потребляющими функциями; отдельная IAM-платформа не нужна |
 | S6 | P1 | Send v2, Idempotency-Key, Banned Words, дробный PPV | Существующий outbox + S5 |
 | S6b | P1 | Custom name, like/pin/unread и затем mute/hide | Существующий outbox + S5; не требует всего S6/S10 |
 | S7 | P1 | Upload lifecycle и полноценный OF vault catalog | Upload-handlers S2, credit metadata/admission S4, S5; vault→send v1 возможен до S6 |
@@ -55,35 +33,43 @@
 | S9 | P1/P2 | Tracking/Smart Links analytics, Pixels и Postbacks | S4/S5; S8 добавляет visits в отчёт |
 | S10 | P2 | CRM-аудитория, subscription history, списки и engagement | S1/S2/S5 |
 | S11 | P2 | История posts/stories/кампаний и измерение результата | Read-часть отдельно; публикации — необязательное продолжение |
-| S12 | P3 | Выбранные account/analytics функции по подтверждённой потребности | После основных рабочих сценариев |
+| S12 | P2/P3 | Минимальная OF-статистика для Agent Read; остальные функции по потребности | Visitors переиспользует S8; нужны проверенные OF fields/projections |
 
 S0–S6 — первый обязательный пакет обновления. S7–S9 — второй пакет, закрывающий все названные в запросе новые продуктовые возможности. S10–S11 — расширение старых непокрытых областей, полезное для агентства. Это порядок зависимостей, не требование выпускать один огромный PR.
 
 Небольшой desktop-срез S6b можно выпустить рядом с S6: редактирование custom name, затем like/unlike, pin/unpin и mark-unread. Для него не нужны весь CRM-сегментатор или Smart Links. OF-native notes остаются отдельным opt-in: исторический PRD явно исключал их из v1, а текущий код не подтверждает пересмотр этого решения.
 
-### S0. Завершить переход на новый аккаунт/ключ и закрепить контракт
+### S0. Сделать переход между подключениями штатным
 
-> **2026-09-05:** ручная часть перехода выполнена (Amendments, п. 1). В S0 остаётся только код, который делает такой переход штатным и делает отключение аккаунта видимым сразу, а не через двое суток.
+Ручной переход выполнен; повторно менять действующие ключ/`acct_` ради этого этапа не нужно. Добавляем operator workflow: preflight → проверенное сопоставление → сохранение истории → применение → bounded recovery. До записи видны конкретные old/new bindings; ручной SQL не нужен.
 
 Подключения проверяем через существующий `/api/v1/admin/ofapi/webhook`; новые operator routes добавляем в этот namespace через contracts. До замены `acct_` сохраняем old binding → Hub page → проверенный stable creator и обеспечиваем runtime lookup старых связей для поздних deliveries/replay. Минимальная история bindings из S2 входит в prerequisite remap: один локальный snapshot не заменяет работающий lookup.
 
+Account DTO уже имеет `onlyfansUserId`, но не читает официальный top-level `onlyfans_id`: исправляем parser, проверяем противоречия с nested ID и ответ без nested данных. Mapping должен читать стабильную identity/metadata и разрешать проверенную замену непустого устаревшего binding. На двух проверенных production-страницах оба источника стабильной identity пока пусты: нужен подтверждённый creator seed, не совпадение username. Старые ID берём из исторических receipts и подтверждённых прежних mapping; неизвестным границам истории не приписываем точные даты. [DTO](../../apps/runtime/src/services/ofapi.ts#L468), [mapping](../../apps/runtime/src/services/ofapi-webhooks.ts#L235).
+
+Исторический resolver предназначен для attribution/canonicalization/replay. Auth, commands и gateway проверяют current binding/generation. Нельзя просто расширить общий `findPageByOfapiAccountId`: его использует account-health, и поздний `authentication_failed` старого acct может по новому receivedAt остановить исправленную страницу. Проверяем все account lifecycle events. `valid_to` не запрещает разрешить старый факт по новому времени его повторной доставки. [Health](../../apps/runtime/src/services/ofapi-account-health.ts#L84).
+
+Перед stable noop регистрации читаем существующий remote webhook под проверенной credential/team identity и сверяем endpoint/events/scope. Подтверждённое отсутствие запускает существующую durable create/reconcile процедуру. 401/403, scope-hidden ресурс, edge/transport error не означают отсутствие и не запускают create. Сохраняем provenance старого ID и защиту от неопределённого результата создания. [Preparation](../../packages/db/src/repositories/ofapi.ts#L2350), [noop consumer](../../apps/runtime/src/services/ofapi-webhooks.ts#L356).
+
 `account_not_found` сохраняем как отдельную machine-причину недоступного provider binding. Останавливаем новые обращения/commands к нему и открываем один incident существующим механизмом. Не объявляем любой 404 disconnected и не предлагаем модельный re-login при ошибке ключа/команды. DB-only чтение и вычисления продолжаются; их freshness показывается отдельно.
 
-**Что делаем.** Используем последний предоставленный владельцем ключ. Проверяем upstream whoami, доступные accounts и их стабильные OnlyFans IDs; составляем явное соответствие новых подключений страницам Hub. Для перехода обновляем серверный credential и подтверждённые bindings, сохраняя прежнюю историю; если меняется provider team, обновляем ожидаемую team identity как часть этой явной миграции. Проверяем наличие и настройки webhook в новом аккаунте, затем его доставку и доступность нужных чтений. Production-изменения выполняются отдельным шагом реализации; предоставление нового ключа в рамках планирования не означает, что они уже сделаны.
+После подтверждённого восстановления узкий CAS снимает только blocker прежнего binding/поколения, сохраняя checkpoints и пользовательские паузы. Обычный Resume блок не снимает. Owner Reset API уже есть, но удаляет checkpoints и может сбросить top-spender projection; утверждение «есть только SQL» неверно. Reset не используем как автоматический recovery. [Reset и побочные действия](../../apps/runtime/src/services/sync-blocks.ts#L593).
 
-После успешной проверки подключения возобновляем допустимые read jobs штатной bounded recovery процедурой. Старые неопределённые send-команды не отправляем повторно. Если posts attempt продолжает падать уже на новом рабочем подключении, исследуем его конкретные phase/reason, HTTP status, размер ответа и границы лимита через owner diagnostics. Страница, отсутствующая среди ожидаемых подключений нового аккаунта, получает явный статус, а не ложный успешный пустой sync.
+Операционные хвосты: проверить accounts/чат/историю в desktop одного чаттера после remap; после подтверждения новой регистрации проверить и вывести из эксплуатации только прежний webhook на наш endpoint, сохранив его историю/ID. Для ожидаемого активного потока начальный ориентир page-scoped silence detection — 30–60 минут, с учётом часов активности и remote pause. Тихие страницы не должны давать поток ложных тревог; direct provider errors видны сразу.
 
-В Hub добавляем отдельный снимок **OFAPI** schema с URL/sha/date; не перезаписываем Fansly reference. Небольшой скрипт сравнения method/path, параметров, enum, request fields и важных response variants выдаёт review report. CI работает по закреплённому снимку, без сети и ключа. Обновление снимка — отдельный reviewable diff, не автоматическое открытие новых маршрутов.
+Posts capture ведём отдельным открытым дефектом: на новом подключении есть retry без accepted items. Нужны attempt diagnostics reason/phase/bytes/timeout и сохранённая response boundary. Тезис Fable о 6.7 с/65 с и конкретной transport phase независимо не подтверждён: read_only не видит attempts. Повторная отмена/пересоздание не является исправлением. Дефект не блокирует независимые функции, но общий переход не объявляется восстановлением posts. Старые uncertain sends автоматически не возобновляются.
 
-**Готово когда:** все ожидаемые подключённые страницы дали свежие успешные upstream reads; webhook приходит в Hub; посты сохраняются и материализуются; старые данные остались связаны с теми же Hub pages. Для неперенесённой страницы виден конкретный статус. По каждому исправлению есть обезличенный fixture. Значение `idle` без полученной строки/полного пустого ответа не считается доказательством восстановления.
+Снимок OFAPI schema относится к кодовому срезу S1: URL/sha/date, offline diff method/path/parameters/enums/response variants. Fansly reference не меняется; обновление baseline — отдельный reviewable diff.
+
+**Готово когда:** mapping исправляется штатным workflow без ручного SQL; история остаётся связанной с прежними pages; поздний auth старого binding не выключает новый; recovery сохраняет checkpoints/паузы; stale remote webhook ID, scope denial и indeterminate create различаются. Есть свежие reads/receipts и desktop canary. Computed/retired streams не требуют HTTP для зелёного статуса; posts имеет отдельную приёмку.
 
 ### S1. Совместимость существующих чтений
 
-**Статусы sync.** Transactions pull для OF намеренно пропускается: данные поступают через webhook/backfill. Но handler возвращает `satisfied` без `gatedSkip`, и executor обновляет succeeded_at; то же происходит при выключенном top_spenders. Настоящие skips переводим в штатную skip-ветку. Включённый top_spenders действительно пересчитывает локальные transactions без HTTP — это корректная работа. Разделяем завершение задания, пропуск по политике и свежесть исходных фактов; платный HTTP ради зелёной отметки не добавляем. [Handler](../../apps/runtime/src/services/sync/executor-handlers.ts:1509), [executor](../../apps/runtime/src/services/sync/executor.ts:615), [пробы](../../investigations/ofapi-support-refresh-2026-09-05/fable-probes.json).
+**Статусы sync.** Transactions pull для OF намеренно пропускается: данные поступают через webhook/backfill. Но handler возвращает `satisfied` без `gatedSkip`, и executor обновляет succeeded_at; то же происходит при выключенном top_spenders. Настоящие skips переводим в штатную skip-ветку. Включённый top_spenders действительно пересчитывает локальные transactions без HTTP — это корректная работа. Разделяем завершение задания, пропуск по политике и свежесть исходных фактов; платный HTTP ради зелёной отметки не добавляем. [Handler](../../apps/runtime/src/services/sync/executor-handlers.ts#L1509), [executor](../../apps/runtime/src/services/sync/executor.ts#L615), [пробы](../../investigations/ofapi-support-refresh-2026-09-05/fable-probes.json).
 
-**Подтверждено локальным исполнением валидаторов:** gallery `type=photos`, messages `filter=pinned`, lists `view=queue`, vault lists `lightweight=true`, fans `filter[max_total_spent]=0` отвергаются. При этом `/users/blocked`, `/users/restricted` и `/messages/search` могут ошибочно проходить как динамический user/message path. [Код](../../apps/runtime/src/services/ofapi-read-gateway.ts:195).
+**Подтверждено локальным исполнением валидаторов:** gallery `type=photos`, messages `filter=pinned`, lists `view=queue`, vault lists `lightweight=true`, fans `filter[max_total_spent]=0` отвергаются. При этом `/users/blocked`, `/users/restricted` и `/messages/search` могут ошибочно проходить как динамический user/message path. [Код](../../apps/runtime/src/services/ofapi-read-gateway.ts#L195).
 
-**Ещё два подтверждённых дефекта.** [Tracking spenders parser](../../apps/runtime/src/services/sync/ofapi-fan-identities.ts:79) ожидает `item.id`, хотя этот endpoint возвращает `onlyfans_id`: три строки документированной формы дают ноль identity inserts. Subscribers имеют другую форму с `id`; нужен отдельный typed mapper, а не переименование для всех link users. [Audience sweep](../../apps/runtime/src/services/sync/ofapi-audience-sync.ts:509) при 19 элементах и vendor next offset=20 сохраняет offset=19. Используем проверенный `_pagination.next_page`/`hasMore`, допускаем только тот же account/path и прогресс курсора; фиксированное `+=limit` — fallback только при подтверждённом контракте. Пустая промежуточная страница с continuation не доказывает завершение. `me.subscribersCount` годится для сверки, но не доказывает полный состав аудитории и не разрешает массовое expiry.
+**Ещё два подтверждённых дефекта.** [Tracking spenders parser](../../apps/runtime/src/services/sync/ofapi-fan-identities.ts#L79) ожидает `item.id`, хотя этот endpoint возвращает `onlyfans_id`: три строки документированной формы дают ноль identity inserts. Subscribers имеют другую форму с `id`; нужен отдельный typed mapper, а не переименование для всех link users. [Audience sweep](../../apps/runtime/src/services/sync/ofapi-audience-sync.ts#L509) при 19 элементах и vendor next offset=20 сохраняет offset=19. Используем проверенный `_pagination.next_page`/`hasMore`, допускаем только тот же account/path и прогресс курсора; фиксированное `+=limit` — fallback только при подтверждённом контракте. Пустая промежуточная страница с continuation не доказывает завершение. `me.subscribersCount` годится для сверки, но не доказывает полный состав аудитории и не разрешает массовое expiry.
 
 **Как:**
 
@@ -121,22 +107,22 @@ S1b можно выпускать независимо от этого блок�
 | `subscriptions.expired` | Нет | Исторический lapse + корректное текущее subscriber state |
 | Шесть существующих account events | Есть | Уточнение source-time/recovery semantics |
 | `accounts.disconnected` | Нет | Остановка старого binding, связь с новым аккаунтом |
-| Users typing/online/offline | Есть handlers; production журналирует их как обычные webhook-строки (за 72 ч до остановки: ~4200 `users.online`, ~1900 `users.typing`, карантинных строк нет), то есть idempotency header у них приходит вопреки docs | Ephemeral-исключение оставляем как защиту от смены поведения провайдера, не как исправление дефекта |
+| Users typing/online/offline | Accepted presence подтверждён в production; no-header ветка по коду всё ещё quarantine | Совместимость с отсутствующим header, не диагноз текущего отказа presence |
 | Chat queue updated/finished | Подписаны, capture-only | Progress/reconciliation в S11 |
 | `data_exports.*`, 7 событий | Не подписаны | Статус существующих export jobs в S8 |
 | `media_uploads.*`, 2 события | Нет | Upload lifecycle в S7 |
 | `posts.liked` | Нет | Engagement evidence в S11 |
 | `fan_summary.completed` | Нет | Отложить вместе с provider AI |
 
-**Ephemeral.** После HMAC сохраняем каждое такое поступление с отдельной локальной receipt identity. Отсутствующий vendor event ID допустим только для документированного набора; сообщения/деньги без него остаются quarantine. Не дедуплицируем одинаковые typing pulses навсегда по body hash. Старые typing не воспроизводим как текущую активность. [Проблемное место](../../apps/runtime/src/services/ofapi-webhooks.ts:153).
+**Ephemeral.** За проверенные скользящие 72 часа приняты 3984 online, 1961 typing и 4013 offline observations; invalid-identity observations — 0. Это подтверждает ingest, не отдельную проверку desktop SSE. No-header совместимость всё равно нужна; исторический repair запускаем только для реально найденного quarantine. После HMAC сохраняем каждое такое поступление с отдельной локальной receipt identity. Отсутствующий vendor event ID допустим только для документированного набора; сообщения/деньги без него остаются quarantine. Не дедуплицируем одинаковые typing pulses навсегда по body hash. Старые typing не воспроизводим как текущую активность. [Проблемное место](../../apps/runtime/src/services/ofapi-webhooks.ts#L153).
 
 Исторический repair quarantine выделяем отдельно от штатного replay accepted events: проверяем сохранённое подписанное тело, восстанавливаем только доступные факты с исходным временем. Если одинаковые receipts уже схлопнулись по body hash, отсутствующие времена поступлений восстановить нельзя. Старый online/offline не должен включать сегодняшнюю SSE-активность.
 
-**Expiry.** Используем `payload.user.id`, `expiredAt` и идентичность периода. Храним факт окончания даже при уже случившейся переподписке; текущее состояние изменяет только актуальное lifecycle evidence. Нужен симметричный guard и для запоздалого new/renewed. Согласуем с существующим понятием `subscription.ended`, не вводим два равнозначных публичных типа. Audience sweep сохраняется как reconciliation. Vendor-derived событие и историческая полнота — разные вещи. [Projection](../../apps/runtime/src/services/ofapi-subscription-projection.ts:34).
+**Expiry.** Используем `payload.user.id`, `expiredAt` и идентичность периода. Храним факт окончания даже при уже случившейся переподписке; текущее состояние изменяет только актуальное lifecycle evidence. Нужен симметричный guard и для запоздалого new/renewed. Согласуем с существующим понятием `subscription.ended`, не вводим два равнозначных публичных типа. Audience sweep сохраняется как reconciliation. Vendor-derived событие и историческая полнота — разные вещи. [Projection](../../apps/runtime/src/services/ofapi-subscription-projection.ts#L34).
 
 Документированный ориентир задержки expiry — около 15 минут. Подключение события не догружает всю прежнюю историю; после перерыва провайдер возобновляет обработку в пределах последних 48 часов. Подписки, для которых он никогда не видел актуальный срок окончания, могут отсутствовать в этом потоке.
 
-**Disconnected.** `acct_` — сменяемое подключение, стабильная идентичность — OnlyFans user ID. Заполняем `external_page_id` только из проверенных creator metadata, добавляем небольшую историю old/new vendor bindings к существующему Hub page. Останавливаем новые запросы/commands к disconnected binding, показываем один incident. Поздние события старого `acct_` остаются привязанными к истории, но не выключают новое подключение. Совпадения username недостаточно. Сейчас generic health может записать suffix disconnected, но action-set его не учитывает. [Health](../../apps/runtime/src/services/ofapi-account-health.ts:33), [mapping](../../apps/runtime/src/services/ofapi-webhooks.ts:215).
+**Disconnected.** `acct_` — сменяемое подключение, стабильная идентичность — OnlyFans user ID. Заполняем `external_page_id` только из проверенных creator metadata, добавляем небольшую историю old/new vendor bindings к существующему Hub page. Останавливаем новые запросы/commands к disconnected binding, показываем один incident. Поздние события старого `acct_` остаются привязанными к истории, но не выключают новое подключение. Совпадения username недостаточно. Сейчас generic health может записать suffix disconnected, но action-set его не учитывает. [Health](../../apps/runtime/src/services/ofapi-account-health.ts#L33), [mapping](../../apps/runtime/src/services/ofapi-webhooks.ts#L215).
 
 **Готово когда:** проходят duplicate, reverse-order expiry/renewal и reconnect/late-disconnect; old binding сохраняет lineage; одна страница не останавливает другую; no-header presence доходит до клиента; invalid signature не становится доверенным фактом. Для релиза нужны registration → capture → canonicalization → projection → contracts/SSE → scoped replay, а не только строка в массиве событий.
 
@@ -164,21 +150,23 @@ Delivery history ограничен семью днями. Событий, во�
 
 Если ключу разрешено чтение webhooks, уже запрошенный GET `/webhooks` тоже даёт бесплатную top-level credit/balance metadata. Сохраняем её до unwrap. Основной balance probe — usage; дополнительные права и отдельный poll webhook inventory ради этого не нужны. [List Webhooks](https://docs.onlyfansapi.com/api-reference/webhooks/list-webhooks).
 
-**API:** GET `/api/usage/credits`. Ответ на «куда ушли кредиты» и устранение платного ping через chats.
+**S4a — первый релиз:** бесплатный balance probe GET `/api/usage/credits` вместо paid chats ping, с проверенным response fixture. **S4b:** vendor usage aggregates и отчёт «куда ушли кредиты». Полный отчёт не блокирует выпуск S4a.
 
-Добавляем bounded usage reads с `from/to`, `group_by=day|account|endpoint`, `account_id`, `include_today`. Metadata `_credits.balance` используем для свежего balance observation. Endpoint бесплатный; ему нельзя запретить обновление баланса самим credit floor или приписать fallback в 1 credit. Внедрение замены ping — после live fixture, поскольку новая response shape пока не проверена.
+Добавляем bounded usage reads с `from/to`, `group_by=day|account|endpoint`, `account_id`, `include_today`. Metadata `_credits.balance` используем для свежего balance observation. Endpoint бесплатный; ему нельзя запретить обновление баланса самим credit floor или приписать fallback в 1 credit. Fable сообщает об успешных free-balance probes; сохранённый обезличенный fixture нужен для parser/credit regression test. Прежний локальный edge отказ не является причиной сохранять paid ping после этой проверки.
 
 Храним vendor aggregates как отдельные наблюдения и rebuildable projection. В отчёте рядом: vendor total, локально атрибутированные credits, оценочные/неразнесённые списания, разница и область видимости ключа. **Не складываем vendor usage с локальным ledger** и не распределяем неизвестные расходы по моделям догадкой. Null account/endpoint сохраняется как общекомандная категория.
 
 Сегодня — provisional, законченные дни сверяем после nightly rollup. Локальный ledger остаётся источником actor/feature attribution и онлайн-резервов. Usage не даёт группировку по API key или chatter. Учёт из headers нужен также для 304, ошибок и бинарных ответов. Существующий OFAPI RPM limiter остаётся общим для команды, даже если добавится несколько ключей.
 
-Точный текущий пробел зависит от транспорта: [legacy resolver](../../apps/runtime/src/services/ofapi.ts:183) учитывает non-2xx с `_meta._credits.used`, а без metadata не делает spend claim; [governed capture](../../packages/db/src/repositories/ofapi-capture.ts:2196) уже фиксирует reserved estimate и затем корректирует его по body metadata. Поэтому ошибки могут давать как недоатрибуцию, так и завышенную оценку. Не вводим правило «всем ошибкам 1 credit кроме 402/429». Добавляем общий разбор body/credit headers с явной политикой при противоречии, сохраняем исходные значения. `x-ofapi-is-cached` и `Idempotent-Replayed` включаем в разрешённые capture headers; существующий JSON cache flag не заменяет evidence для bodyless responses. Обновляем legacy, gateway, commands и capture jobs, а не только экран сверки.
+Точный текущий пробел зависит от транспорта: [legacy resolver](../../apps/runtime/src/services/ofapi.ts#L183) учитывает non-2xx с `_meta._credits.used`, а без metadata не делает spend claim; [governed capture](../../packages/db/src/repositories/ofapi-capture.ts#L2196) уже фиксирует reserved estimate и затем корректирует его по body metadata. Поэтому ошибки могут давать как недоатрибуцию, так и завышенную оценку. Без cost evidence фактическое списание unknown; conservative admission/settlement estimate сохраняем отдельно и не называем ни нулём, ни доказанным расходом. Не вводим правило «всем ошибкам 1 credit кроме 402/429». Добавляем общий разбор body/credit headers с явной политикой при противоречии, сохраняем исходные значения. `x-ofapi-is-cached` и `Idempotent-Replayed` включаем в разрешённые capture headers; существующий JSON cache flag не заменяет evidence для bodyless responses. Обновляем legacy, gateway, commands и capture jobs, а не только экран сверки.
 
 **Готово когда:** free balance работает при нулевом остатке; equivalent-scope totals сходятся за закрытый день или разница объяснена; неполная видимость ключа и расходы без account видимы; нет повторного учёта webhook retry/redelivery; включение отчёта не меняет действующие caps.
 
-Источник: [Credit Usage](https://docs.onlyfansapi.com/api-reference/usage/get-credit-usage). Код: [текущий paid ping](../../apps/runtime/src/services/ofapi.ts:308), [credit reports](../../apps/runtime/src/services/ofapi-credit-report.ts:1).
+Источник: [Credit Usage](https://docs.onlyfansapi.com/api-reference/usage/get-credit-usage). Код: [текущий paid ping](../../apps/runtime/src/services/ofapi.ts#L308), [credit reports](../../apps/runtime/src/services/ofapi-credit-report.ts#L1).
 
-### S5. Per-API-key permissions
+### S5. Минимальная поддержка per-API-key permissions
+
+Это небольшой сквозной срез в S0 и последующих workflows: credential/team preflight, configured/observed scope, правильные отказы и roster-aware состояние. Отсутствие публичного CRUD scopes не исключает поддержку ограниченных ключей; отдельный большой IAM-проект не нужен.
 
 Документация подтверждает ограничения ключа по операциям и аккаунтам, но **не описывает публичный CRUD API для scopes**. `whoami` показывает сведения о ключе/команде; поля scopes там не документированы. Синтетический Hub `whoami` нельзя использовать как introspection провайдера.
 
@@ -198,18 +186,20 @@ Readiness показывает configured scope, наблюдаемую дост
 
 Расширяем текущий ChatGoose через существующий outbox.
 
-1. **Provider idempotency.** До dispatch закрепляем ключ от durable command UUID вместе с account/chat/body fingerprint; передаём `Idempotency-Key` в send-message. Сохраняем `Idempotent-Replayed`, message ID и реальные credits. Первый релиз сохраняет одну физическую попытку. 409 in-flight не означает, что сообщение не отправлено; mismatch body/chat — отдельная ошибка. Окно response cache 24 часа, а 408/429/5xx не сохраняются: после timeout нельзя незаметно превратить POST в «проверку состояния». Расширение повторных отправок потребует отдельного доказанного контракта восстановления.
+1. **Provider idempotency и ручное восстановление.** Одна физическая попытка на command row; автоматического повторного POST после timeout нет. Существующий ручной retry сохраняется: новая команда с новым `clientCommandId` и `retryOfCommandId`. До первого dispatch сохраняем provider operation identity, исходный `Idempotency-Key`, team/account, endpoint/chat, время первой попытки и fingerprint фактического vendor body. Ключ наследуется только при явно выбранном ручном повторе этой неизменной операции с проверенными scope и исходным 24-часовым окном; дочерняя row не продлевает TTL. Изменённый draft/binding — новая операция с сохранением retry-history, без обещания cached replay. Старым sends без header защиту задним числом не приписываем. 409 не означает неотправку; cached error не становится успехом. Missing cache, исключённые 408/429/5xx, смена scope или истечение TTL не дают гарантии защиты от дубля.
 2. **Дробные цены.** В новом versioned send contract допускаем цену в центах в разрешённом диапазоне. Внутри — existing branded money; на границе OFAPI — USD. Не используем денежные float-вычисления. Старый v1 не расширяем полями, которые его клиенты отвергают; новый SDK и desktop adoption выпускаем вместе.
 3. **Полноценный composer.** `replyToMessageId`, явно выбираемый `lockedText`, Giphy и release-form references. Сейчас caption платного media-send автоматически становится locked; новое поведение должно дать пользователю осознанный выбор. Numeric vault ID и одноразовый upload ID — разные виды material. Release forms читаем/прикрепляем по подтверждённым типам, не копируем противоречивый string schema поверх документированного массива.
 4. **Banned Words.** GET `/banned-words`, cache/version словаря, подсветка найденного текста и vendor alternatives. Сначала preview в composer; блокирующий `blockBannedWords` включается явной политикой. Результат 422 сохраняет черновик и объясняет конкретное препятствие. Никакого скрытого переписывания текста или автоматической повторной отправки.
 
 Названия уровней Banned Words контринтуитивны: `strict_ban` блокирует все три tiers, `risky` — два нижних, `replace_soften` — только нижний. UI должен объяснять реальное действие. Regex из словаря не выполняем произвольно без ограничений; для первой версии достаточно проверенных правил и серверного screening. Словарь — справочник провайдера, а не гарантия отсутствия любых ограничений OnlyFans.
 
-`Idempotent-Replayed: true` сам по себе не подтверждает send: cached response может быть ошибочным. Нужны успешный HTTP status, валидный message ID и связь с исходным payload. После смены team/account область idempotency меняется; старые uncertain sends не переносим в автоматический retry нового подключения.
+Текущий retry допускает другой текст и не сравнивает старый `ofapiAccountId`; `payloadHash` включает `retryOfCommandId`. Поэтому общий ключ всей lineage без отдельного fingerprint сломает допустимый recovery через 422 mismatch. Связываем исходную/recovery-команды с одним подтверждённым message ID без двойных outcomes. Отсутствие `messages.sent` после окна ожидания или совпадения по text/time/chat не доказывает отсутствие сообщения и не разрешает auto-retry. Возможное расширение автоматического recovery требует нового доказанного контракта, не только дополнительного ожидания. [Retry contract](../../docs/ofapi-command-outbox-contract.md#L184), [validation](../../apps/runtime/src/services/ofapi-command-outbox.ts#L208), [edited retry test](../../tests/ofapi-command-outbox.integration.test.ts#L514), [verifier](../../apps/runtime/src/services/ofapi-command-executor.ts#L691).
+
+`Idempotent-Replayed: true` сам по себе не подтверждает send: нужны успешный HTTP status, валидный message ID и связь с исходным payload. Fixtures: исходный TTL, cached error, edited retry, team/account change, legacy send без key, поздний webhook родителя и несколько похожих recovery-команд.
 
 **Готово когда:** `$6.97` проходит codec без потери точности; новая команда сохраняет reply/price/preview/release forms; повторный receipt не создаёт второй send; timeout по-прежнему не запускает второй POST; заблокированный текст остаётся редактируемым draft; новый SDK не ломает существующие пять command kinds. Отдельные fixtures на TTL, 409, 422 mismatch, zero-credit replay и media token ambiguity.
 
-Источники: [Send Message](https://docs.onlyfansapi.com/api-reference/chat-messages/send-message), [Banned Words](https://docs.onlyfansapi.com/api-reference/banned-words/list-banned-words), [composing](https://docs.onlyfansapi.com/introduction/guides/composing-messages). Код: [sender](../../apps/runtime/src/services/ofapi.ts:1139), [price validation](../../packages/contracts/src/routes.ts:4316).
+Источники: [Send Message](https://docs.onlyfansapi.com/api-reference/chat-messages/send-message), [Banned Words](https://docs.onlyfansapi.com/api-reference/banned-words/list-banned-words), [composing](https://docs.onlyfansapi.com/introduction/guides/composing-messages). Код: [sender](../../apps/runtime/src/services/ofapi.ts#L1139), [price validation](../../packages/contracts/src/routes.ts#L4316).
 
 ### S6b. Небольшой пакет desktop-команд
 
@@ -227,14 +217,14 @@ Custom name нужен для текущей практики агентства
 
 `async=true` передаём полем body/multipart согласно endpoint schema; query-параметр `?async=true` не используем как подтверждённый контракт.
 
-Разделяем S7a upload→vault→готовый media ID и S7b полный catalog. S7a может отправлять результат существующей media-send v1: [schema](../../packages/contracts/src/routes.ts:4316) уже допускает numeric и `ofapi_media_*` IDs. Полный send v2 не prerequisite; ограничения цены/полей v1 сохраняются. Vault reads уже захватываются gateway, поэтому расширяем inventory/materialization/completeness, а не строим capture заново.
+Разделяем S7a upload→vault→готовый media ID и S7b полный catalog. S7a может отправлять результат существующей media-send v1: [schema](../../packages/contracts/src/routes.ts#L4316) уже допускает numeric и `ofapi_media_*` IDs. Полный send v2 не prerequisite; ограничения цены/полей v1 сохраняются. Vault reads уже захватываются gateway, поэтому расширяем inventory/materialization/completeness, а не строим capture заново.
 
 **Как:**
 
 - Небольшая durable upload entity/job на существующей инфраструктуре: principal, page/binding, source artifact identity/hash/bytes, vendor upload ID, numeric media ID, request/response provenance, status, cost и timing. Reuse capture/leases/admission; отдельный универсальный workflow engine не нужен.
 - Отделить pending/processing/completed/failed/indeterminate upload от готовности transcoded media. `completed` с `isReady=false` не делает все rendition URLs готовыми.
 - Status polling и webhook обновляют одну запись идемпотентно. Ограниченный polling — recovery path; он бесплатный по контракту. Webhook может прийти раньше обработки 202.
-- Одноразовый CDN material резервируется за одной send-командой. Неясный send оставляет потребление неясным; не инициируем повторный upload/send автоматически. Reusable vault ID не имеет этого ограничения.
+- Одноразовый CDN material резервируется за одной provider operation; исходная и допустимая recovery-команды сохраняют эту связь и не исполняются одновременно. Неясный send оставляет потребление неясным; не инициируем повторный upload/send автоматически. Reusable vault ID не имеет этого ограничения.
 - Сохраняем источник и стабильные media IDs; URL — обновляемый locator. Полный OF catalog строим по пагинированным vault/lists/items, со scope completeness и связями к уже существующему content-media model. Не приписываем OF готовность лишь потому, что такая таблица уже используется другой платформой.
 - Ограничиваем размер/тип и проверяем file_url до передачи провайдеру; используем разрешённый artifact/source flow, не generic URL fetch. Сохраняем авторизацию page и source access. Direct multipart документирован до 100 MB; URL limits расходятся между guide и тарифной конфигурацией — до live-проверки это capability, а не обещание 1 GB для всех.
 - Чтение/синхронизация release forms и taggable users; типизированные ссылки на подтверждения вместе с материалом. Операции создания формы/приглашения выделить в самостоятельное действие при необходимости.
@@ -267,7 +257,7 @@ Profile Visitors — **агрегаты по аккаунту и дню, а не
 
 **Готово когда:** pilot даёт проверенный account-day dataset, immutable artifact и верный credit outcome; missing/ineligible дни видимы; повторный импорт идемпотентен; completion без артефакта не выглядит как успешный import; export другой страницы не раскрывается заявителю; ежедневный visitors job ограничен бюджетом и не мешает DM.
 
-Источники: [Data Exports](https://docs.onlyfansapi.com/data-exports), [create](https://docs.onlyfansapi.com/api-reference/data-exports/create-data-export), [retry](https://docs.onlyfansapi.com/api-reference/data-exports/retry-failed-data-export), [cancel](https://docs.onlyfansapi.com/api-reference/data-exports/cancel-data-export), [REST Profile Visitors](https://docs.onlyfansapi.com/api-reference/statistics/get-profile-visitors). Код: [существующий узкий export target](../../apps/runtime/src/services/ofapi-export-quotes.ts:35).
+Источники: [Data Exports](https://docs.onlyfansapi.com/data-exports), [create](https://docs.onlyfansapi.com/api-reference/data-exports/create-data-export), [retry](https://docs.onlyfansapi.com/api-reference/data-exports/retry-failed-data-export), [cancel](https://docs.onlyfansapi.com/api-reference/data-exports/cancel-data-export), [REST Profile Visitors](https://docs.onlyfansapi.com/api-reference/statistics/get-profile-visitors). Код: [существующий узкий export target](../../apps/runtime/src/services/ofapi-export-quotes.ts#L35).
 
 ### S9. Привлечение, Smart Links, Pixels и Postbacks
 
@@ -275,7 +265,7 @@ Profile Visitors — **агрегаты по аккаунту и дню, а не
 
 **S9a — данные и отчёт.** Расширяем текущие link identities: бесплатные stored tracking/trial, shared inventories, typed per-link stats, subscribers/spenders и cohort ARPS. Добавляем Smart Links list/get/stats/cohort-arps/clicks/conversions/fans/spenders и tags. Фиксируем upstream IDs, page scope, окно attribution, net/gross, bot/duplicate flags, observed_at и coverage.
 
-Быстрый полезный срез — проекция `cost{}` и `tags` из stored tracking/trial, которые уже попадают в raw, но [normalizeLinkItem](../../apps/runtime/src/services/ofapi-link-stats-sync.ts:107) их не использует. Сохраняем вид cost, единицы/валюту и источник; provider campaign cost не подменяет фактические расходы агентства. Отсутствующий cost не равен нулевому. Бесплатные `stored/*` возвращают inventory/агрегаты ссылок; вложенные related subscribers/spenders URL ведут на обычные платные endpoints. Discovery ссылок можно удешевить через stored inventory, индивидуальный user-walk от этого бесплатным не становится. [Контракт](https://docs.onlyfansapi.com/api-reference/stored-tracking-links/list-stored-tracking-links).
+Быстрый полезный срез — проекция `cost{}` и `tags` из stored tracking/trial, которые уже попадают в raw, но [normalizeLinkItem](../../apps/runtime/src/services/ofapi-link-stats-sync.ts#L107) их не использует. Сохраняем вид cost, единицы/валюту и источник; provider campaign cost не подменяет фактические расходы агентства. Отсутствующий cost не равен нулевому. Бесплатные `stored/*` возвращают inventory/агрегаты ссылок; вложенные related subscribers/spenders URL ведут на обычные платные endpoints. Discovery ссылок можно удешевить через stored inventory, индивидуальный user-walk от этого бесплатным не становится. [Контракт](https://docs.onlyfansapi.com/api-reference/stored-tracking-links/list-stored-tracking-links).
 
 В отчёте: источник/ссылка → валидные клики → новые/повторные подписчики → расходы привлечённых фанов. Revenue из link attribution не прибавляется ещё раз к Hub revenue. Различаем измеренный link LTV, текущий daily revenue и расходы на трафик. Сначала читаем имеющиеся ссылки; создание/изменение tracking/trial/smart link — отдельные типизированные команды с понятным target.
 
@@ -289,7 +279,7 @@ Read inventory выпускаем раньше изменений. Отдель�
 
 **Готово когда:** данные нескольких ссылок сводятся без двойного дохода; organic/bot/duplicate и first/repeat не смешаны; shared pixel patch показывает scope; disconnect не изображает удаление общего pixel; test не отправляется незаметно; конкретный маркетинговый вопрос можно решить из Hub без чтения raw JSON.
 
-Источники: [Smart Links V2](https://docs.onlyfansapi.com/introduction/guides/onlyfans-meta-pixel-smart-links), [pixel update](https://docs.onlyfansapi.com/api-reference/smart-links/update-smart-link-pixel), [pixel disconnect](https://docs.onlyfansapi.com/api-reference/smart-links/disconnect-smart-link-pixel), [pixel test](https://docs.onlyfansapi.com/api-reference/smart-links/send-smart-link-pixel-test-event). Существующая опора: [link sync](../../apps/runtime/src/services/ofapi-link-stats-sync.ts:400).
+Источники: [Smart Links V2](https://docs.onlyfansapi.com/introduction/guides/onlyfans-meta-pixel-smart-links), [pixel update](https://docs.onlyfansapi.com/api-reference/smart-links/update-smart-link-pixel), [pixel disconnect](https://docs.onlyfansapi.com/api-reference/smart-links/disconnect-smart-link-pixel), [pixel test](https://docs.onlyfansapi.com/api-reference/smart-links/send-smart-link-pixel-test-event). Существующая опора: [link sync](../../apps/runtime/src/services/ofapi-link-stats-sync.ts#L400).
 
 ### S10. Аудитория, CRM и эффективность сообщений
 
@@ -297,7 +287,7 @@ Read inventory выпускаем раньше изменений. Отдель�
 
 **Как:** переиспользуем fan identity и page relationship; отчёты/списки проецируем из captured responses. Таблицы provider notes/custom name не подменяют локальные append-only notes: храним source/version, явно выбираем направление синхронизации. Create/edit lists, pin/mute/read-state и moderation commands выпускаем отдельно от чтения; контактные действия не запускаются автоматически.
 
-Для desktop сначала `set_fan_custom_name_v1`, затем like/unlike, pin/unpin, mark-unread; mute/hide — следующим отдельным срезом. Сейчас [FanPanel](../../../of-desktop/apps/desktop/src/renderer/src/features/fan-panel/FanPanel.tsx:137) лишь показывает custom name; [TODO](../../../of-desktop/TODO.md:13) подтверждает практику записи страны в имя, но не достоверную таймзону. OF-native notes не объявляем восстановлением существующего сценария: [историческое решение v1](../../../of-desktop/docs/PRD.md:106) их исключало. Batch `users/list` уже есть в desktop client, но рабочих потребителей не найдено: применять для реально необходимого enrichment с coalescing, не запускать обязательный платный refresh каждого профиля.
+Для desktop сначала `set_fan_custom_name_v1`, затем like/unlike, pin/unpin, mark-unread; mute/hide — следующим отдельным срезом. Сейчас [FanPanel](../../../of-desktop/apps/desktop/src/renderer/src/features/fan-panel/FanPanel.tsx#L137) лишь показывает custom name; [TODO](../../../of-desktop/TODO.md#L13) подтверждает практику записи страны в имя, но не достоверную таймзону. OF-native notes не объявляем восстановлением существующего сценария: [историческое решение v1](../../../of-desktop/docs/PRD.md#L106) их исключало. Batch `users/list` уже есть в desktop client, но рабочих потребителей не найдено: применять для реально необходимого enrichment с coalescing, не запускать обязательный платный refresh каждого профиля.
 
 Для zero-spender/expired сегмента обязательны `_source.is_complete` и `omitted_from_page`. Индекс провайдера может быть неполным, а GET с `max_total_spent` сам запускает backfill. Это не привычный «дешёвый безопасный полный список». Фильтры кодируем bracket syntax; online=0 отличается от отсутствия фильтра. Если потребуются Following reads, не задаём sort ради удобства: он сохраняется на аккаунте; empty page не terminal, следуем `_pagination.next_page`.
 
@@ -327,9 +317,13 @@ Story overlays/mentions/stickers поддерживаются актуальны
 
 ### S12. Что подключать из остального и что отложить
 
-**Первый конкретный read-срез:** balances snapshot + payout requests/statuses, если нужен экран доступного/ожидаемого баланса и истории выплат. Payout requests используют документированные limit/offset; response marker не превращаем в request cursor без проверки. Earning-statistics — временной ряд earnings, не payout methods. Balances, заявки и earnings — разные факты/проекции с собственными status/money codecs. [Payout requests](https://docs.onlyfansapi.com/api-reference/payouts/list-payout-requests), [earning statistics](https://docs.onlyfansapi.com/api-reference/payouts/get-earning-statistics).
+**Payout-срез P2:** balances snapshot + payout requests/statuses для экрана доступного/ожидаемого баланса и истории выплат. Payout requests используют документированные limit/offset; response marker не превращаем в request cursor без проверки. Earning-statistics — временной ряд earnings, не payout methods. Balances, заявки и earnings — разные факты/проекции с собственными status/money codecs. [Payout requests](https://docs.onlyfansapi.com/api-reference/payouts/list-payout-requests), [earning statistics](https://docs.onlyfansapi.com/api-reference/payouts/get-earning-statistics).
 
-После visitors и PPV engagement выбираем одну необходимую financial/subscriber сверку. Ежедневный обход всех overview types, earnings, subscribers и близких analytics сразу не включаем. Для каждого job нужны потребитель, вопрос, период, частота и бюджет; «паритет с Fansly» сам по себе не основание. Стоимость зависит от страниц/окон, а не от обещания 2–3 или 10 credits на страницу в день.
+**Минимальный набор P2 с потребителем Agent Read/`hub`:** один общий `statistics/overview`, `subscribers/statistics`, visitors из S8, balances snapshot и payout requests/statuses. Начинаем с выбранного закрытого окна и ежедневного обновления; дополнительные types/окна — для конкретных вопросов. Пополнение до 100k позволяет не откладывать этот полезный набор из-за малого остатка. Остальные близкие financial endpoints — P3 по потребности; стоимость зависит от окон/страниц, не фиксированных 2–3/10 credits в день.
+
+Готового общего `stats_snapshot` dataset нет: это имя stream. Существующие `traffic_daily`, `revenue_mix`, `payouts` и соседние datasets объявлены Fansly-only, имеют специфические поля/source codes/statuses. Добавляем OF capture/projections и осмысленные поля/capabilities через contracts, а не открываем Fansly datasets для OF одним флагом. Каждый ответ показывает page/source/window/granularity/freshness/coverage; деньги требуют `read:money`. [Catalog](../../apps/runtime/src/modules/agent-read/handlers-core.ts#L123), [fields](../../packages/contracts/src/agent-read-datasets.ts#L453).
+
+Overview имеет общий ответ без type и фильтры fans/visitors/posts/messages: четыре ежедневных запроса не обязательны. Subscriber statistics имеет total/renew/new; значения `total`, `delta`, `subscribers` и earnings требуют проверки семантики и периода сравнения, не подменяют активный roster. Vendor aggregates не суммируем повторно с transaction ledger. Баланс OnlyFans payouts — отдельный платный read, не бесплатный баланс кредитов OFAPI. [Overview](https://docs.onlyfansapi.com/api-reference/statistics/statistics-overview), [Subscriber Statistics](https://docs.onlyfansapi.com/api-reference/statistics/get-subscriber-statistics).
 
 | Семейство | Решение | Причина / минимальная полезная версия |
 |---|---|---|
@@ -379,10 +373,10 @@ Story overlays/mentions/stickers поддерживаются актуальны
 | Риск | Обязательный сценарий |
 |---|---|
 | Expiry ordering | Renewal пришёл первым, старый expired — позже; active остаётся active, история сохраняет оба факта |
-| Account rebinding | Новый acct связан с прежним stable creator; поздний disconnect старого не выключает новый |
+| Account rebinding | History распознаёт старый acct; поздние disconnect/authentication_failed не выключают новый; recovery сохраняет checkpoints/паузы |
 | Webhook recovery | Уже сохранённый event redeliver не удваивает деньги; пропущенный receipt после recovery доходит до проекции |
 | Raw-first | Сбой parser не теряет body; сбой durable capture не выдаёт успешный ACK |
-| Sending | Timeout не запускает второй POST; 409 idempotency conflict не становится «точно не отправлено» |
+| Sending | Одна попытка на row; ручной recovery сохранён; edited retry/rebind/TTL не наследуют обещание cached replay; webhook no-match не разрешает auto-retry |
 | Replay response | Replay header с ошибочным ответом не подтверждает send; remap team/account не возобновляет старые uncertain sends |
 | Freshness | Webhook-sourced skip не имитирует sync; реальный DB top_spenders завершается без HTTP и показывает свежесть исходных фактов |
 | Delivery attempts | Два failed + один successful attempt сохранены отдельно под одной delivery_uuid |
@@ -397,11 +391,13 @@ Story overlays/mentions/stickers поддерживаются актуальны
 
 ## 4. Проверки перед релизом
 
+**Тестовая среда.** Отдельный тестовый OF-аккаунт пока не подтверждён; два ключа одной команды не изолируют реальные действия. Основная приёмка — детерминированные transport/contract fixtures и integration tests. OpenAPI examples не заменяют live fixtures в противоречивых местах. Для записи нужен конкретный тестовый account/recipient/material либо ограниченный согласованный canary на действующем аккаунте. Pixel test-event остаётся реальной внешней отправкой. Code acceptance и live acceptance отмечаем раздельно; самостоятельная тестовая команда не обязательна.
+
 | Вопрос | Почему документации недостаточно | Проверка перед релизом |
 |---|---|---|
 | Vendor key permissions | FAQ говорит full access, новые страницы — restricted; whoami scopes не описаны | Поддерживаемая console-конфигурация + безопасные identity/status reads; записать реально доступную область |
-| Переход на новый аккаунт/ключ | Причина остановки сообщена владельцем; новые bindings и успешный переход ещё не проверены | Whoami/accounts нового ключа, stable IDs, ожидаемые страницы, webhook и свежие reads |
-| No-header users events | Контракт допускает, Hub quarantines; live incidence не установлена | Новые естественные signed deliveries и разрешённая диагностика headers/quarantine |
+| Переход на новый аккаунт/ключ | Новые bindings/ingest подтверждены; stable identity/history и desktop canary ещё не закрыты | Identity seed, historical lookup, stale webhook ID, narrow recovery и desktop одного чаттера |
+| No-header users events | Presence ingest подтверждён, invalid-identity observations за 72ч нет; no-header ветка несовместима по коду | Signed fixture без header для трёх разрешённых типов и проверка projected/SSE outcome |
 | Idempotency при upstream ambiguity | Response cache не покрывает все ошибки/время | Синтетические transport tests; отдельный управляемый test-account pilot перед расширением retry-политики |
 | Export dates/types | Guide допускает отсутствие dates у ряда типов, schema объявляет required | Типовые quote probes с auto_start=false; paid start только в утверждённом pilot |
 | Media size/readiness | URL size и account tariff различаются; completed не readiness | Один небольшой собственный файл, валидировать terminal fields и стоимость |
@@ -414,6 +410,6 @@ Story overlays/mentions/stickers поддерживаются актуальны
 
 ## 5. Первый релиз и граница расширения
 
-Первый релиз предлагаю ограничить **S0 + S1**, с параллельной подготовкой fixtures для S2/S4/S6. S0 — отдельное завершение известного перехода аккаунта/ключа; кодовый срез S1 исправляет воспроизводимые несовместимости и закрепляет OFAPI baseline. Разработку не задерживаем общим расследованием уже объяснённого простоя. Затем выпускаем отдельными срезами lifecycle, delivery, usage, permissions и send v2, завершая первый пакет S0–S6.
+Первый релиз — **S0 (кодовые хвосты выполненного перехода) + S1 + бесплатный баланс S4a**, с минимальным preflight S5. Затем отдельными срезами S2 → S3 → S6/S6b, S1b, S7 → S8 → S9 → S10 → S11. S4b и минимальная статистика S12 идут независимо по готовности потребителей; номера разделов не требуют жёстко последовательной разработки. Posts capture сохраняет отдельную открытую приёмку и не объявляется восстановленным вместе с bindings.
 
 Крупные продуктовые части — uploads/catalog, exports/visitors, traffic/pixels — не объединяем с восстановлением production в один релиз. Все названные пользователем новые функции входят в S2–S9; оставшаяся широкая поверхность разделена на полезные следующие этапы и сознательно отложенные направления. Реализация выбранного этапа должна завершаться рабочим UI/API сценарием и проверкой восстановления, а не галочкой у нового endpoint.

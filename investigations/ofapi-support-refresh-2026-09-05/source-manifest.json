@@ -104,5 +104,32 @@
     "live_claims": "Fable account roster, exact failure timestamps, 4200 presence events and successful balance probes were not independently verified in this comparison.",
     "new_findings": "Intentional sync skips currently reach succeeded_at; actual computed top_spenders needs no vendor HTTP. Existing send_media_message_v1 accepts upload IDs.",
     "simplifications": "First vault upload need not wait for send v2; separate Pixel token vault not required; full publishing optional; payout snapshots targeted by consumer."
+  },
+  "pr131_followup": {
+    "reviewed_head": "66ded3cbf52c221608df896cd2bfa255907a2e3d",
+    "production_snapshot": "2026-09-05T14:25Z to 14:26Z; identity metadata followup in same turn",
+    "access": "SSH docker ps and PostgreSQL read_only in read-only transactions with bounded statement timeout",
+    "production_mutations": false,
+    "new_bindings_observed": true,
+    "new_binding_receipts_last_hour": 76,
+    "new_pull_observations_last_hour": {
+      "fans_active": 360,
+      "dm_conversations": 2
+    },
+    "presence_rolling_72h": {
+      "users.online": 3984,
+      "users.typing": 1961,
+      "users.offline": 4013,
+      "invalid_identity_observations": 0
+    },
+    "identity_seed": "external_page_id and metadata.onlyfansUserId absent on both OF pages",
+    "posts": "Both new post_paginate jobs retry_wait, 4 dispatch, 0 accepted items/pages; exact attempts reason unavailable under read_only",
+    "limitations": [
+      "No desktop SSE canary",
+      "No independent installed credential fingerprint, remote webhook ID, key scopes or current balance verification",
+      "No write API tests"
+    ],
+    "owner_credit_update": "Expected top-up to100000 credits; not verified as completed",
+    "changes": "Fold Amendments into stages; precise manual retry identity; current-binding auth guards; checkpoint-preserving recovery; minimal Agent Read OF statistics; S4a in first release"
   }
 }
