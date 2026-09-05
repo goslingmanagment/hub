@@ -251,6 +251,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 248 | Failed sync payloads journal the provider's response snippet | `PersistedSyncError` gains a nullable `responseSnippet` string, taken from `FanslyApiError.responseSnippet` (already redacted and bounded by the adapter) or from `OfapiApiError.body` (redacted with `redactSensitiveText`, then bounded), `null` for everything else, and unwrapped through `SyncPayloadPersistenceError.cause` like the message. It rides inside the existing `error` object into the raw failed payload, the `<endpoint>:failed` observation and run telemetry — no consumer changes and no new field on any wire. The bound is 400 characters; `summary` (and therefore `page_sync_states.last_error_summary`, telemetry and Telegram) is byte-identical to before. |
 | 249 | An explicit posts request is the manual action | `POST /admin/sync/trigger {scope: posts}` — the explicit per-page operator action — now clears a `manual_action_required` block on the posts stream (`clearPageSyncManualActionBlock`, that blocker kind only) BEFORE recording the request, so the request lands on a runnable row. Production 2026-09-04: after #128's cancel/resolve the streams stayed `blocked` with the old `ofapi_capture_job_*` codes because `resumePageSync` only lifts `paused` and nothing ever cleared a manual block; the explicit request the code itself calls "an explicit per-page operator action" was a no-op on exactly the state it exists for. `provider_bad_data`/`dependency` blocks are untouched. The posts handler also forgets an owner-cancelled pending job (checkpoint still named it) and seeds a fresh one through the ordinary slot path. |
 | 250 | OFAPI UI inherits the existing Anthropic-inspired Hub design | Owner requirement for the OFAPI refresh: use the current dashboard theme, typography, spacing and shared components across collection controls and other new OFAPI screens. The concrete source is globals.css plus Settings and OFAPI Credits; token reuse and visual consistency are acceptance criteria. |
+| 251 | OFAPI collection policy and UI are separate stages | Owner separates backend S-POL from frontend S-UI, each with independent implementation and acceptance. Saved mockups are non-normative references outside the implementation plan. New collection still requires both applicable stages plus explicit staged activation; existing Hub design tokens remain authoritative. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -10699,3 +10700,22 @@ defines the component references and visual acceptance states. Conversation
 mockups illustrate behavior; the existing Hub theme governs implementation.
 This records the owner requirement; application code and production settings
 are unchanged by this documentation update.
+
+## OFAPI collection UI is a separate implementation stage (2026-09-05)
+
+**Decision #251:** At the owner's request, split collection controls into
+S-POL (server-side policies, admission/reservations, pause, versioned API and
+audit) and S-UI (the dashboard interface consuming those contracts). Each
+stage has its own implementation slice and acceptance. S0/S1 fixes, the free
+S4a balance and minimal S5 preflight do not wait for the new interface.
+
+Saved mockups are independent, non-normative design references. They are not
+part of the implementation plan, do not approve a particular layout or add
+required capabilities, and do not prove S-UI is complete. Decision #250's
+existing Hub theme and shared-component requirement remains in force.
+
+New optional collection stays off until the applicable S-POL and S-UI slices
+are ready and the owner explicitly activates one bounded lane through the
+existing staged rollout. Separating the UI does not relax server-side budget
+enforcement, capture-first retention or the activation gate. No application
+code, migration or production configuration is changed by this decision.
