@@ -250,6 +250,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 247 | An unproven Vault inventory says so on the wire | The catalog lane walks albums under a 60-calls/day cap, so a page whose Vault exceeds one day's cap (all three Lora pages) never completes the lane in a day — and nothing told a `vault_media` reader that. `/health` is green by design (catalog is excluded from sync-health) and `page_sync_states.succeeded_at` never moves for such a page, so a partial inventory was indistinguishable from a complete one. New blocker `vault_inventory_unproven`, emitted by the `vault_media` dataset read alone: an album is PROVEN by a `creator_vault_album_scans` row for its exact `(page, vault_kind, album_ref)` with a `completed_at` and `expected_count = cardinality(seen_media_refs)`; a page is UNPROVEN when ≥1 live creator album (`vault_kind = 'creator'`, `missing_since is null`) has no such row. Keyed on the DATASET, never on the platform. v1 deliberately omits proof STALENESS and per-page detail in the envelope — the rows already carry `lastFullWalkAt`/`fullWalkRef`/`fullWalkObservedCount` per album. No migration, no lane change, `/health` unchanged. Review correction before merge: a page with NO live creator album row at all is unproven too (the roster was never captured or projected), and the blocker is page-level only — a member's `missingSince`, written solely after a complete walk of its own album, stays an absence-from-that-walk fact. |
 | 248 | Failed sync payloads journal the provider's response snippet | `PersistedSyncError` gains a nullable `responseSnippet` string, taken from `FanslyApiError.responseSnippet` (already redacted and bounded by the adapter) or from `OfapiApiError.body` (redacted with `redactSensitiveText`, then bounded), `null` for everything else, and unwrapped through `SyncPayloadPersistenceError.cause` like the message. It rides inside the existing `error` object into the raw failed payload, the `<endpoint>:failed` observation and run telemetry — no consumer changes and no new field on any wire. The bound is 400 characters; `summary` (and therefore `page_sync_states.last_error_summary`, telemetry and Telegram) is byte-identical to before. |
 | 249 | An explicit posts request is the manual action | `POST /admin/sync/trigger {scope: posts}` — the explicit per-page operator action — now clears a `manual_action_required` block on the posts stream (`clearPageSyncManualActionBlock`, that blocker kind only) BEFORE recording the request, so the request lands on a runnable row. Production 2026-09-04: after #128's cancel/resolve the streams stayed `blocked` with the old `ofapi_capture_job_*` codes because `resumePageSync` only lifts `paused` and nothing ever cleared a manual block; the explicit request the code itself calls "an explicit per-page operator action" was a no-op on exactly the state it exists for. `provider_bad_data`/`dependency` blocks are untouched. The posts handler also forgets an owner-cancelled pending job (checkpoint still named it) and seeds a fresh one through the ordinary slot path. |
+| 250 | OFAPI UI inherits the existing Anthropic-inspired Hub design | Owner requirement for the OFAPI refresh: use the current dashboard theme, typography, spacing and shared components across collection controls and other new OFAPI screens. The concrete source is globals.css plus Settings and OFAPI Credits; token reuse and visual consistency are acceptance criteria. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -10682,3 +10683,19 @@ Not generalised to every stream or every scope: the other scopes are fleet
 cadences, not per-page operator acts, and a fleet-wide "clear all manual
 blocks" would erase the one signal that says a human still has to do
 something.
+
+## OFAPI UI inherits the existing Anthropic-inspired Hub design (2026-09-05)
+
+**Decision #250:** The owner requires the OFAPI refresh to use the Anthropic
+color and design patterns already adopted in Hub. The implementation source
+is the existing [dashboard theme](../apps/dashboard/src/globals.css),
+Settings and OFAPI Credits, including their shared components. New screens
+reuse the warm neutral surfaces, terracotta accent, typography, spacing,
+control geometry and semantic status colors through the existing tokens.
+
+The [OFAPI refresh plan](plans/2026-09-05-ofapi-coverage-refresh.md) applies
+this to every new Hub UI slice; the [collection-controls specification](plans/2026-09-05-ofapi-collection-controls.md#визуальный-стиль-и-компоненты)
+defines the component references and visual acceptance states. Conversation
+mockups illustrate behavior; the existing Hub theme governs implementation.
+This records the owner requirement; application code and production settings
+are unchanged by this documentation update.
