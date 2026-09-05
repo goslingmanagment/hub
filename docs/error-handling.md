@@ -365,3 +365,28 @@ free-form string on a broader wire.
 `AppError` messages are trusted application output and cross the boundary
 unchanged; the boundary does not sanitize or clamp them. Their constructors and
 call sites therefore own the same no-secret/no-provider-diagnostic rule.
+
+
+## OFAPI binding and credential failures (Decision #252)
+
+An HTTP 404 with the vendor machine code `account_not_found` is a missing
+provider binding; a message/resource 404 is not. Capture the response first,
+mark only the matching current generation unavailable, park its eligible
+streams and open the existing OFAPI auth incident. Later reads and commands
+fail locally until verified recovery. DB-only queries and computations remain
+available. A late response or lifecycle event from a retired binding cannot
+change the replacement's auth state.
+
+`whoami` denial is credential access failure, not a model-session failure.
+JSON 401/403 is `denied`; missing evidence, transport/edge failures and an
+unconfigured expected team are `unknown`; a different observed team is
+`mismatch`. All three block stateful vendor actions and webhook management.
+Restricted account lists are partial/unknown scope, never proof that hidden
+accounts were deleted. Preflight is bound to the key fingerprint and runs at
+boot/adoption; correcting its boot configuration requires an approved rollout.
+
+Owner binding recovery is a preview/apply operation with generation and
+blocker-version checks. It does not use Reset, delete checkpoints, clear user
+pauses, activate collectors or resend indeterminate commands. Unversioned
+legacy blockers are retained for explicit review. The free balance read has no
+paid fallback and never fabricates a zero result after access/transport failure.

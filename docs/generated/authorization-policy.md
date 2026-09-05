@@ -22,7 +22,7 @@ body remain handler-checked and are noted per route in the service layer.
 | `agentKey` | Agent Read Plane key only; no human principal is admitted |
 | `any` | any authenticated principal except an agent key |
 
-## Routes (208)
+## Routes (210)
 
 | Method | Path | Route key | Kind | Roles | Page scope |
 | --- | --- | --- | --- | --- | --- |
@@ -74,6 +74,8 @@ body remain handler-checked and are noted per route in the service layer.
 | GET | `/api/v1/admin/ofapi/spend/comparison` | `adminOfapiSpendComparison` | `owner-session` | — | — |
 | GET | `/api/v1/admin/ofapi/webhook` | `adminOfapiWebhookStatus` | `owner-session` | — | — |
 | POST | `/api/v1/admin/ofapi/webhook` | `adminOfapiWebhookRegister` | `owner-session` | — | — |
+| POST | `/api/v1/admin/ofapi/webhook/bindings` | `adminOfapiBindingRefresh` | `owner-session` | — | — |
+| GET | `/api/v1/admin/ofapi/webhook/preflight` | `adminOfapiCredentialPreflight` | `owner-session` | — | — |
 | POST | `/api/v1/admin/ofapi/webhook/reconcile` | `adminOfapiWebhookReconcile` | `owner-session` | — | — |
 | GET | `/api/v1/admin/pages` | `adminPages` | `owner-session` | — | — |
 | POST | `/api/v1/admin/pages` | `adminCreatePage` | `owner-session` | — | — |

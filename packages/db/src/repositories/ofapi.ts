@@ -2364,6 +2364,7 @@ export async function prepareOfapiWebhookRegistration(
     endpointUrl: string;
     events: string[];
     candidateEncryptedSigningSecret: string;
+    remoteProof?: { id: string; updatedAt: string; state: "match" | "drift" | "missing"; credentialFingerprint: string };
     now?: Date;
   },
 ): Promise<OfapiWebhookRegistrationPreparation> {
@@ -2410,7 +2411,21 @@ export async function prepareOfapiWebhookRegistration(
     }
 
     if (existing.registrationState === "stable") {
-      if (existing.externalWebhookId && sameWebhookRegistrationTarget(existing, desired)) {
+      if (input.remoteProof) {
+        if (existing.externalWebhookId !== input.remoteProof.id || existing.updatedAt.toISOString() !== input.remoteProof.updatedAt) {
+          return { kind: "blocked", reason: "target_conflict" };
+        }
+        if (input.remoteProof.state === "missing") {
+          await database.execute(sql`
+            insert into ofapi_webhook_registration_history(external_webhook_id,endpoint_url,credential_fingerprint,reason)
+            values (${existing.externalWebhookId},${existing.endpointUrl},${input.remoteProof.credentialFingerprint},'confirmed_missing')
+          `);
+          await database.update(ofapiWebhookConfig).set({ externalWebhookId: null }).where(eq(ofapiWebhookConfig.id, 1));
+          existing.externalWebhookId = null;
+        }
+      }
+
+      if (existing.externalWebhookId && input.remoteProof?.state !== "drift" && sameWebhookRegistrationTarget(existing, desired)) {
         return { kind: "noop", encryptedSigningSecret: existing.encryptedSigningSecret };
       }
       const operation: OfapiWebhookRegistrationOperation = existing.externalWebhookId
@@ -2769,6 +2784,9 @@ export async function listOnlyFansPagesForOfapiMapping(db: Database) {
       label: pages.label,
       username: pages.username,
       ofapiAccountId: pages.ofapiAccountId,
+      bindingGeneration: pages.ofapiBindingGeneration,
+      creatorId: pages.platformAccountId,
+      metadata: pages.metadata,
     })
     .from(pages)
     .where(and(eq(pages.platform, "onlyfans"), eq(pages.status, "active")))
@@ -2786,6 +2804,7 @@ export async function setPageOfapiAccountId(
     .update(pages)
     .set({
       ofapiAccountId: input.ofapiAccountId,
+      ofapiBindingGeneration: sql`case when ${pages.ofapiAccountId} is distinct from ${input.ofapiAccountId} then ${pages.ofapiBindingGeneration} + 1 else ${pages.ofapiBindingGeneration} end`,
       // Stage 13: same invariant as the 0055 writer seed — mapping an OFAPI
       // account makes OFAPI the page's transactions writer, but only when no
       // writer was assigned yet (an explicit assignment is never overridden;

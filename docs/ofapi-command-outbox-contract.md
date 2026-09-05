@@ -20,6 +20,17 @@ The v1 boundary remains deliberately narrow:
   Uploading, liking, reply-to sends, and arbitrary vendor write paths remain outside this command
   version.
 
+## Binding and credential dispatch guard (Decision #252)
+
+Migration `0150` records the page binding generation on each outbox row. Before
+any physical vendor attempt, dispatch requires that row's account and generation
+to match the page's current binding and requires verified expected-team adoption
+of the runtime key. A page advisory lock serializes dispatch with replacement
+and lifecycle changes. Outbox state itself commits outside that lock transaction
+so concurrent webhook confirmation can observe and settle the in-flight row.
+Replacing a binding never makes an older queued or indeterminate row sendable.
+This is an internal guard; existing client payloads and retry rules are unchanged.
+
 ## Version 1 Commands
 
 Text send:

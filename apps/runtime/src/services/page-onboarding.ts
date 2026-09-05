@@ -163,6 +163,7 @@ export async function onboardOnlyFansPage(
     throw new BadRequestError("OFAPI is not configured (OFAPI_API_KEY) — OnlyFans onboarding requires it");
   }
 
+  await app.ofapi.assertCredentialReady?.();
   const needle = input.username.trim().toLowerCase().replace(/^@/, "");
   const accounts = await app.ofapi.listAccounts();
   const matches = accounts.filter((account) =>
@@ -178,6 +179,9 @@ export async function onboardOnlyFansPage(
     throw new ConflictError(`Multiple OFAPI accounts match "${input.username}" — resolve manually`);
   }
   const account = matches[0]!;
+  if (!account.onlyfansUserId || account.identityStatus === "conflict") {
+    throw new ConflictError("OFAPI creator identity is unverified; username alone cannot establish a page binding");
+  }
 
   let page;
   try {

@@ -902,6 +902,7 @@ export async function onlyfansTopSpendersChunk(
     satisfied: true,
     yieldReason: null,
     stats: { skipped: "onlyfans_top_spenders_disabled" },
+    gatedSkip: "onlyfans_top_spenders_disabled",
   } satisfies StreamChunkResult;
 }
 
@@ -1525,6 +1526,7 @@ export async function onlyfansTransactionsChunk(
     satisfied: true,
     yieldReason: null,
     stats: { skipped: "onlyfans_transactions_webhook_sourced" },
+    gatedSkip: "onlyfans_transactions_webhook_sourced",
   } satisfies StreamChunkResult;
 }
 

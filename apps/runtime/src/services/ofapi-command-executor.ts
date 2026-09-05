@@ -5,6 +5,8 @@ import {
   expireStaleQueuedOfapiCommands,
   finalizeOfapiCommand,
   findPageById,
+  withOfapiBindingLock,
+  markOfapiBindingUnavailable,
   getOfapiCommandById,
   insertObservation,
   listOfapiCommandVerificationCandidates,
@@ -18,12 +20,13 @@ import { millsFromDollars, normalizeDmMessageText } from "@agency_hub_core/share
 import type { PgBoss } from "pg-boss";
 
 import type { AppContext } from "../bootstrap.ts";
+import { notifyOfapiAuthIncident } from "./notification-incidents.ts";
 import { loadEffectiveConfig } from "./effective-config.ts";
 import {
   isOfapiDmColdArchiveEnabled,
   resolveOfapiDmColdArchiveRetentionDays,
 } from "./ofapi-dm-archive.ts";
-import { OfapiApiError } from "./ofapi.ts";
+import { OfapiApiError, ofapiAccountNotFound } from "./ofapi.ts";
 import {
   isOfapiAccountHealthEnabled,
   ofapiAuthStatusNeedsAction,
@@ -65,6 +68,9 @@ export type OfapiCommandFailure = {
 };
 
 export function classifyOfapiCommandFailure(error: unknown): OfapiCommandFailure {
+  if (error instanceof OfapiApiError && ofapiAccountNotFound(error.status, error.body)) return {
+    state: "failed_terminal" as const, errorCode: "ofapi_account_not_found", errorClass: "terminal" as const, httpStatus: error.status,
+  };
   const status = error instanceof OfapiApiError
     ? error.upstreamStatus ?? error.status
     : null;
@@ -360,10 +366,11 @@ function unsendPayload(command: OfapiCommandRow): { messageId: string } {
   return { messageId: payload.messageId };
 }
 
-export async function executeOfapiCommand(
+async function executeCurrentOfapiCommand(
   app: AppContext,
   commandId: string,
   now = new Date(),
+  bindingLockDb = app.db,
 ) {
   if (!isOfapiCommandExecutionEnabled(app.config)) {
     return { status: "execution_disabled" as const };
@@ -406,7 +413,7 @@ export async function executeOfapiCommand(
         fromStates: ["in_flight"],
         state: "failed_terminal",
         now: failedAt,
-        lastErrorCode: "ofapi_auth_action_required",
+        lastErrorCode: stored.page.ofapiAuthStatus === "account_not_found" ? "ofapi_account_not_found" : "ofapi_auth_action_required",
         lastErrorClass: "terminal",
         verifierResult: {
           source: "auth_gate",
@@ -423,7 +430,7 @@ export async function executeOfapiCommand(
         command,
         state: "failed_terminal",
         outcome: {
-          errorCode: "ofapi_auth_action_required",
+          errorCode: stored.page.ofapiAuthStatus === "account_not_found" ? "ofapi_account_not_found" : "ofapi_auth_action_required",
           errorClass: "terminal",
           authStatus: stored.page.ofapiAuthStatus,
         },
@@ -437,6 +444,13 @@ export async function executeOfapiCommand(
   }
 
   try {
+    const binding = await findPageById(app.db, command.pageId);
+    if (binding?.page.ofapiAuthStatus === "account_not_found") throw new OfapiApiError("OFAPI account binding unavailable", 404, '{"code":"account_not_found"}');
+    if (!binding || ofapiAuthStatusNeedsAction(binding.page.ofapiAuthStatus) || binding.page.ofapiAccountId !== command.ofapiAccountId ||
+        binding.page.ofapiBindingGeneration !== command.bindingGeneration) {
+      throw new OfapiApiError("OFAPI command binding replaced", 409, null);
+    }
+    await app.ofapi?.assertCredentialReady?.();
     let platformMessageId: string | null = null;
     const verifierResult: Record<string, unknown> = {
       source: "ofapi_response",
@@ -516,6 +530,12 @@ export async function executeOfapiCommand(
     );
     return { status: "confirmed" as const, commandId: command.id };
   } catch (error) {
+    if (error instanceof OfapiApiError && ofapiAccountNotFound(error.status, error.body)) {
+      const page = await markOfapiBindingUnavailable(bindingLockDb, command.ofapiAccountId, command.bindingGeneration);
+      if (page) await notifyOfapiAuthIncident({ ...app, db: bindingLockDb }, {
+        platformAccountId: page.id, pageLabel: page.label, platform: "onlyfans", authStatus: "account_not_found",
+      });
+    }
     const failure = classifyOfapiCommandFailure(error);
     const finishedAt = new Date();
     const finalized = await finalizeOfapiCommand(app.db, {
@@ -787,4 +807,11 @@ export async function startOfapiCommandWorker(
       );
     }
   });
+}
+
+export async function executeOfapiCommand(app: AppContext, commandId: string, now = new Date()) {
+  if (!isOfapiCommandExecutionEnabled(app.config)) return { status: "execution_disabled" as const };
+  const command = await getOfapiCommandById(app.db, { commandId });
+  if (!command) return { status: "not_claimed" as const };
+  return withOfapiBindingLock(app.db, command.pageId, db => executeCurrentOfapiCommand(app, commandId, now, db));
 }

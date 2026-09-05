@@ -87,6 +87,7 @@ export function isExplicitOfapiDeepHistoryRead(
   intent: string | null,
 ) {
   return intent === OFAPI_DEEP_HISTORY_READ_INTENT
+    && candidate.query.filter === undefined
     && candidate.query.first_id !== undefined
     && candidate.query.last_id === undefined
     && (candidate.query.order ?? "desc") === "desc"

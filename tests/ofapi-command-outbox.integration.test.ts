@@ -649,6 +649,19 @@ describe("OFAPI command outbox intake", () => {
     expect(markReadRetry.statusCode, markReadRetry.body).toBe(400);
   });
 
+  it("refuses a queued command from an earlier binding generation without sending", async () => {
+    appContext.config.ofapiDesktopCommandExecutionEnabled = true;
+    const sendTextMessage = vi.fn();
+    appContext.ofapi = { sendTextMessage } as unknown as AppContext["ofapi"];
+    const created = await createCommand(commandBody());
+    const commandId = (created.json() as { commandId: string }).commandId;
+    await testDb!.pool.query("update pages set ofapi_binding_generation=ofapi_binding_generation+1 where ofapi_account_id=$1", [ACCOUNT_ONE]);
+    await executeOfapiCommand(appContext, commandId);
+    await executeOfapiCommand(appContext, commandId);
+    expect(sendTextMessage).not.toHaveBeenCalled();
+    expect((await getCommand(commandId)).json()).toMatchObject({ state: "failed_terminal", attemptCount: 1 });
+  });
+
   it("executes one vendor attempt and confirms from the response id", async () => {
     appContext.config.ofapiDesktopCommandExecutionEnabled = true;
     const sendTextMessage = vi.fn().mockResolvedValue({ messageId: "987654321" });

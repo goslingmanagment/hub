@@ -252,6 +252,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 249 | An explicit posts request is the manual action | `POST /admin/sync/trigger {scope: posts}` — the explicit per-page operator action — now clears a `manual_action_required` block on the posts stream (`clearPageSyncManualActionBlock`, that blocker kind only) BEFORE recording the request, so the request lands on a runnable row. Production 2026-09-04: after #128's cancel/resolve the streams stayed `blocked` with the old `ofapi_capture_job_*` codes because `resumePageSync` only lifts `paused` and nothing ever cleared a manual block; the explicit request the code itself calls "an explicit per-page operator action" was a no-op on exactly the state it exists for. `provider_bad_data`/`dependency` blocks are untouched. The posts handler also forgets an owner-cancelled pending job (checkpoint still named it) and seeds a fresh one through the ordinary slot path. |
 | 250 | OFAPI UI inherits the existing Anthropic-inspired Hub design | Owner requirement for the OFAPI refresh: use the current dashboard theme, typography, spacing and shared components across collection controls and other new OFAPI screens. The concrete source is globals.css plus Settings and OFAPI Credits; token reuse and visual consistency are acceptance criteria. |
 | 251 | OFAPI collection policy and UI are separate stages | Owner separates backend S-POL from frontend S-UI, each with independent implementation and acceptance. Saved mockups are non-normative references outside the implementation plan. New collection still requires both applicable stages plus explicit staged activation; existing Hub design tokens remain authoritative. |
+| 252 | OFAPI binding custody, credential adoption and free balance | S0/S1/S4a and minimum S5 use verified creator identity, a preview bound to current generation, durable historical attribution and narrow recovery. Expected team comes from independent configuration; unknown access fails closed for writes. The optional balance probe uses free usage. Code acceptance and live acceptance stay separate. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -10719,3 +10720,45 @@ are ready and the owner explicitly activates one bounded lane through the
 existing staged rollout. Separating the UI does not relax server-side budget
 enforcement, capture-first retention or the activation gate. No application
 code, migration or production configuration is changed by this decision.
+
+
+## OFAPI first refresh release: identity and recovery boundaries (2026-09-05)
+
+**Decision #252:** Implement the S0/S1/S4a and minimum-S5 release from
+[PR #131](https://github.com/goslingmanagment/core/pull/131), merged as
+`f1834cd9`. This decision records implementation boundaries, not production
+acceptance. The [release runbook](runbooks/ofapi-refresh-release1.md) records
+configuration, migration, acceptance and recovery requirements.
+
+A provider account is a replaceable connection, not the creator identity.
+`onlyfans_id` is the primary creator evidence; nested fallback is explicit,
+and conflicting or unsafe numeric identities fail closed. Replacing a binding
+requires an owner-session preview with stable creator evidence, the exact
+current account/generation and versioned recovery candidates. Applying it
+atomically retains custody history and an operator observation. Usernames alone
+cannot seed an existing page. Imported historical references keep unknown time
+boundaries rather than inventing dates.
+
+Historical account lookup serves attribution and replay, including late
+redelivery. Auth, gateway and commands keep the current binding boundary.
+Replacement, lifecycle changes and command dispatch share a page lock. Outbox
+state commits remain independently visible so a webhook can win confirmation
+while a send is in flight. A queued command from a former generation cannot be
+sent; existing indeterminate rows never restart automatically. Recovery clears
+only the previewed auth blockers of the replaced generation and preserves
+checkpoints, user pauses, collection flags and budgets. Legacy blockers without
+a provable generation remain for explicit review.
+
+Credential adoption compares vendor `whoami.team.slug` with an independently
+configured expected team and caches the result for that credential/client.
+Unknown, mismatch and denied are distinct; none admits stateful vendor actions.
+A visible account roster never proves full scope. Webhook registration inspects
+remote state before a stable noop; a 404 only permits durable recreation after
+configured team-wide management visibility and successful inventory absence
+proof. Ambiguous creation remains in the existing reconciliation flow.
+
+The optional balance probe reads free `/usage/credits`, independent of account
+bindings and the paid-read credit floor. Zero is observed zero; unavailable
+metadata remains unknown. S4b spending reconciliation, additional collectors,
+S-POL/S-UI and broader commands/events remain separate. Posts capture remains
+an unresolved defect with its own live acceptance.

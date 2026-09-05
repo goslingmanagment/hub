@@ -294,7 +294,7 @@ describe("OFAPI audience sweep", () => {
         activeFanItem({ id: 101, price: 4.99, status: "Active" }),
         activeFanItem({ id: 102, price: 10, status: "Set to Expire" }),
       ], true)],
-      [2, fansPage([activeFanItem({ id: 103, price: 0 })], false)],
+      [20, fansPage([activeFanItem({ id: 103, price: 0 })], false)],
     ]));
     appContext = { ...appContext, ofapi: client };
 
@@ -435,7 +435,7 @@ describe("OFAPI audience sweep", () => {
     const page = await seedMappedPage();
     const { client, listActiveFans } = fakeAudienceClient(new Map([
       [0, fansPage([activeFanItem({ id: 101 }), activeFanItem({ id: 102 })], true)],
-      [2, fansPage([activeFanItem({ id: 103 })], false)],
+      [20, fansPage([activeFanItem({ id: 103 })], false)],
     ]));
     appContext = { ...appContext, ofapi: client };
 

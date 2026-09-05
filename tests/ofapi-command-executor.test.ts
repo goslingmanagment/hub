@@ -82,6 +82,7 @@ describe("OFAPI account client", () => {
       displayName: "LoraVie FREE",
       onlyfansName: "Lora Vie",
       onlyfansUserId: "123",
+      identityStatus: "nested_fallback",
       avatarUrl: "https://public.onlyfans.com/files/lora/avatar.jpg",
     }, {
       id: "acct_signed",
@@ -89,6 +90,7 @@ describe("OFAPI account client", () => {
       displayName: "Signed",
       onlyfansName: null,
       onlyfansUserId: null,
+      identityStatus: "missing",
       avatarUrl: null,
     }]);
   });

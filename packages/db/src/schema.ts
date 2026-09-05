@@ -304,6 +304,7 @@ export const pages = pgTable(
     // Latest accounts.* webhook state for the mapped OFAPI account (raw event
     // suffix, e.g. "connected" / "authentication_failed"); forward-only by
     // received_at. Null until the first accounts.* event is projected.
+    ofapiBindingGeneration: integer("ofapi_binding_generation").notNull().default(1),
     ofapiAuthStatus: text("ofapi_auth_status"),
     ofapiAuthChangedAt: timestamp("ofapi_auth_changed_at", { withTimezone: true }),
     username: text("username"),
@@ -1468,6 +1469,7 @@ export const ofapiCommands = pgTable(
     chatterUserId: bigint("chatter_user_id", { mode: "number" })
       .references(() => users.id, { onDelete: "restrict" })
       .notNull(),
+    bindingGeneration: integer("binding_generation").notNull().default(1),
     ofapiAccountId: text("ofapi_account_id").notNull(),
     conversationId: text("conversation_id").notNull(),
     kind: text("kind").$type<OfapiCommandKind>().notNull(),

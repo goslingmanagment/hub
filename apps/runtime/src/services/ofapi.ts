@@ -3,7 +3,7 @@
 // docs/ofapi-integration-plan.md). Not to be confused with packages/onlyfans,
 // which is the OnlyMonster adapter.
 
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 
 import {
@@ -47,6 +47,16 @@ export class OfapiApiError extends Error {
   }
 }
 
+/** A missing account is a typed provider diagnosis, never a generic 404. */
+export function ofapiAccountNotFound(status: number | null, body: string | null): boolean {
+  if (status !== 404 || !body) return false;
+  try {
+    const parsed = asRecord(JSON.parse(body));
+    const error = asRecord(parsed?.error);
+    return (error?.code ?? parsed?.code ?? parsed?.error) === "account_not_found";
+  } catch { return false; }
+}
+
 export interface OfapiWebhookRegistrationInput {
   endpointUrl: string;
   signingSecret: string;
@@ -64,6 +74,8 @@ export interface OfapiAccountRecord {
   displayName: string | null;
   onlyfansName: string | null;
   onlyfansUserId: string | null;
+  isAuthenticated?: boolean;
+  identityStatus?: "verified" | "nested_fallback" | "missing" | "conflict";
   avatarUrl: string | null;
 }
 
@@ -206,6 +218,10 @@ export interface OfapiClient {
   createWebhook(input: OfapiWebhookRegistrationInput): Promise<OfapiWebhookRecord>;
   updateWebhook(id: string, input: OfapiWebhookRegistrationInput): Promise<OfapiWebhookRecord>;
   listAccounts(): Promise<OfapiAccountRecord[]>;
+  getCredentialPreflight?(): Promise<OfapiCredentialPreflight>;
+  assertCredentialReady?(): Promise<void>;
+  getWebhook?(id: string): Promise<Record<string, unknown>>;
+  listWebhooks?(): Promise<Record<string, unknown>[]>;
   listChats(
     context: OfapiRequestContext,
     accountId: string,
@@ -305,10 +321,8 @@ export interface OfapiClient {
     accountId: string,
     params: { limit?: number; offset?: number },
   ): Promise<OfapiListPage>;
-  // One cheap (1-credit) account-scoped request purely to observe the credit
-  // balance: GET /accounts carries no _meta per the OFAPI OpenAPI spec, so the
-  // ping reads a minimal chats page instead (reconciliation anchor on quiet days).
-  pingBalance(context: OfapiRequestContext, accountId: string): Promise<OfapiListPage>;
+  // Free, account-independent usage balance probe; retained method name for callers.
+  pingBalance(context: OfapiRequestContext, accountId?: string): Promise<OfapiListPage>;
   // Read-only desktop gateway path. The caller supplies an already validated
   // pathname/query pair and a bounded operation name. Exactly one upstream
   // attempt is made: desktop remains the retry authority during migration.
@@ -439,10 +453,10 @@ function toWebhookRecord(value: unknown): OfapiWebhookRecord {
   };
 }
 
-function toAccountRecords(value: unknown): OfapiAccountRecord[] {
+export function toAccountRecords(value: unknown): OfapiAccountRecord[] {
   const data = unwrapData(value);
   if (!Array.isArray(data)) {
-    return [];
+    throw new OfapiApiError("OFAPI account roster shape unavailable", 200, null);
   }
 
   const accounts: OfapiAccountRecord[] = [];
@@ -455,8 +469,16 @@ function toAccountRecords(value: unknown): OfapiAccountRecord[] {
 
     const onlyfansUserData = asRecord(record?.onlyfans_user_data)
       ?? asRecord(record?.onlyfansUserData);
+    const top = asStringId(record?.onlyfans_id);
+    const nested = [onlyfansUserData?.id, record?.onlyfans_user_id, record?.onlyfansUserId]
+      .map(asStringId).filter((id): id is string => id !== null);
+    const ids = [...new Set([top, ...nested].filter((id): id is string => id !== null))];
+    const invalidNumericId = [record?.onlyfans_id, onlyfansUserData?.id, record?.onlyfans_user_id, record?.onlyfansUserId]
+      .some(value => typeof value === "number" && !Number.isSafeInteger(value));
+    const conflict = invalidNumericId || ids.length > 1 || ids.some(id => !/^[1-9]\d*$/.test(id));
     accounts.push({
       id,
+      ...(typeof record?.is_authenticated === "boolean" ? { isAuthenticated: record.is_authenticated } : {}),
       username: firstNonEmptyString(
         record?.onlyfans_username,
         record?.onlyfansUsername,
@@ -465,11 +487,8 @@ function toAccountRecords(value: unknown): OfapiAccountRecord[] {
       ),
       displayName: firstNonEmptyString(record?.display_name, record?.displayName),
       onlyfansName: firstNonEmptyString(onlyfansUserData?.name, record?.name),
-      onlyfansUserId: asStringId(
-        onlyfansUserData?.id
-          ?? record?.onlyfans_user_id
-          ?? record?.onlyfansUserId,
-      ),
+      onlyfansUserId: conflict ? null : ids[0] ?? null,
+      identityStatus: conflict ? "conflict" : top ? "verified" : ids.length ? "nested_fallback" : "missing",
       avatarUrl: normalizeOnlyFansAvatarUrl(firstNonEmptyString(
         record?.avatar,
         record?.avatar_url,
@@ -497,8 +516,9 @@ function asNumberOrNull(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
-function parseResponseMeta(body: unknown): OfapiResponseMeta | null {
-  const meta = asRecord(asRecord(body)?._meta);
+export function parseResponseMeta(body: unknown): OfapiResponseMeta | null {
+  const root = asRecord(body);
+  const meta = asRecord(root?._meta) ?? (asRecord(root?._credits) ? root : null);
   if (!meta) {
     return null;
   }
@@ -571,12 +591,19 @@ export function toFansListPage(body: unknown): OfapiListPage {
     : Array.isArray(data)
       ? data
       : [];
+  if (!Array.isArray(dataRecord?.list) && !Array.isArray(data)) {
+    throw new OfapiApiError("OFAPI fan page shape unavailable", 200, null);
+  }
   const pagination = asRecord(record?._pagination);
   const nextPage = pagination?.next_page;
+  if (typeof dataRecord?.hasMore !== "boolean" && nextPage !== null && typeof nextPage !== "string") {
+    throw new OfapiApiError("OFAPI fan page continuation unavailable", 200, null);
+  }
   return {
-    items: list.flatMap((item) => {
+    items: list.map(item => {
       const itemRecord = asRecord(item);
-      return itemRecord ? [itemRecord] : [];
+      if (!itemRecord) throw new OfapiApiError("OFAPI fan item shape unavailable", 200, null);
+      return itemRecord;
     }),
     hasNextPage: typeof dataRecord?.hasMore === "boolean"
       ? dataRecord.hasMore
@@ -600,7 +627,22 @@ function resolveRetryAfterMs(retryAfter: string | null, attemptNumber: number) {
   return fallbackMs;
 }
 
+export interface OfapiCredentialPreflight {
+  status: "verified" | "unknown" | "mismatch" | "denied";
+  expectedTeam: string | null;
+  observedTeam: string | null;
+  credentialFingerprint: string;
+  checkedAt: string;
+  reason: string | null;
+  rosterScope: "unknown";
+}
+
 export function createOfapiClient(input: {
+  credentialPolicy?: { expectedTeamSlug: string | null };
+  beforeAccountRequest?: (pageId: number | null | undefined, accountId: string, generation?: number) => Promise<number>;
+  onAccountResponse?: (accountId: string, generation: number, status: number, body: string) => Promise<void>;
+  onAdminResponse?: (response: { operation: string; status: number; body: string }) => Promise<void>;
+  onPreflight?: (result: OfapiCredentialPreflight) => Promise<void>;
   baseUrl?: string;
   apiKey: string;
   restDelayMs?: number;
@@ -618,6 +660,39 @@ export function createOfapiClient(input: {
   const baseUrl = (input.baseUrl ?? OFAPI_DEFAULT_BASE_URL).replace(/\/+$/, "");
   const restDelayMs = Math.max(0, input.restDelayMs ?? OFAPI_DEFAULT_REST_DELAY_MS);
   const onCreditSpend = input.onCreditSpend ?? null;
+
+  let preflight: Promise<OfapiCredentialPreflight> | null = null;
+  async function getCredentialPreflight(): Promise<OfapiCredentialPreflight> {
+    preflight ??= (async () => {
+      const result: OfapiCredentialPreflight = {
+        status: "unknown", expectedTeam: input.credentialPolicy?.expectedTeamSlug ?? null,
+        observedTeam: null, credentialFingerprint: createHash("sha256").update(input.apiKey).digest("hex"),
+        checkedAt: new Date().toISOString(), reason: "expected_team_unconfigured", rosterScope: "unknown",
+      };
+      if (result.expectedTeam) {
+        try {
+          const body = await request("ofapi_credential_preflight", "GET", "/whoami");
+          result.observedTeam = firstNonEmptyString(asRecord(asRecord(body)?.team)?.slug);
+          result.status = result.observedTeam === null ? "unknown" : result.observedTeam === result.expectedTeam ? "verified" : "mismatch";
+          result.reason = result.status === "verified" ? null : result.status === "mismatch" ? "team_mismatch" : "team_missing";
+        } catch (error) {
+          // HTML edge rejection is indeterminate access, not provider IAM.
+          const denied = error instanceof OfapiApiError && [401, 403].includes(error.status ?? 0) &&
+            error.body?.trimStart().startsWith("{");
+          result.status = denied ? "denied" : "unknown";
+          result.reason = denied ? "provider_access_denied" : "preflight_unavailable";
+        }
+      }
+      await input.onPreflight?.(result);
+      return result;
+    })();
+    return preflight;
+  }
+  async function assertCredentialReady() {
+    if (!input.credentialPolicy) return; // Injection-only clients have no adoption policy.
+    const checked = await getCredentialPreflight();
+    if (checked.status !== "verified") throw new OfapiApiError(`OFAPI credential preflight ${checked.status}`, 403, null);
+  }
 
   // Reports one physical response's spend before retry/return. A configured
   // sink can fail closed so a billed attempt is never followed by more egress
@@ -740,6 +815,8 @@ export function createOfapiClient(input: {
     }
     const url = `${baseUrl}${options.pathname}${query.size > 0 ? `?${query.toString()}` : ""}`;
     const requestId = `${options.operation}:${randomUUID()}`;
+    const accountId = options.pathname.split("/")[1]!;
+    const generation = await input.beforeAccountRequest?.(options.context.pageId, accountId);
 
     return executeObservedRequest<{ response: Response; text: string }, OfapiListPage>({
       observer: options.context.requestObserver,
@@ -755,6 +832,7 @@ export function createOfapiClient(input: {
       retries: options.retries ?? OFAPI_OBSERVED_RETRIES,
       waitForRateLimit: () => waitForRequestSlot("bulk"),
       execute: async () => {
+        await input.beforeAccountRequest?.(options.context.pageId, accountId, generation);
         const response = await fetch(url, {
           method: "GET",
           headers: {
@@ -763,7 +841,9 @@ export function createOfapiClient(input: {
           },
           signal: AbortSignal.timeout(options.timeoutMs ?? OFAPI_REQUEST_TIMEOUT_MS),
         });
-        return { response, text: await response.text() };
+        const text = await response.text();
+        if (generation !== undefined) await input.onAccountResponse?.(accountId, generation, response.status, text);
+        return { response, text };
       },
       onTransportError: (error, executionContext) => {
         const errorMessage = `OFAPI request failed: GET ${options.pathname}: ${
@@ -907,6 +987,8 @@ export function createOfapiClient(input: {
     const requestId = `${options.operation}:${randomUUID()}`;
     await waitForRequestSlot("interactive");
 
+    const accountId = options.pathname.split("/")[1]!;
+    const generation = await input.beforeAccountRequest?.(context.pageId, accountId);
     let response: Response;
     try {
       const init: RequestInit & { dispatcher?: Dispatcher } = {
@@ -943,6 +1025,7 @@ export function createOfapiClient(input: {
         null,
       );
     }
+    if (generation !== undefined) await input.onAccountResponse?.(accountId, generation, response.status, text);
     let body: unknown = null;
     if (text.length > 0) {
       try {
@@ -1073,6 +1156,12 @@ export function createOfapiClient(input: {
       headers["content-type"] = options.contentType;
     }
 
+    const accountId = options.pathname.split("/")[1]!;
+    let generation: number | undefined;
+    if (accountId.startsWith("acct_")) {
+      try { generation = await input.beforeAccountRequest?.(context.pageId, accountId); }
+      catch (error) { throw new OfapiGovernedRequestError("OFAPI binding unavailable", "pre_dispatch", "cancelled", { cause: error }); }
+    }
     let response: Response;
     try {
       const init: RequestInit & { dispatcher?: Dispatcher } = {
@@ -1101,6 +1190,7 @@ export function createOfapiClient(input: {
       response,
       Math.max(1, options.maxResponseBytes ?? 10 * 1024 * 1024),
     );
+    if (generation !== undefined) await input.onAccountResponse?.(accountId, generation, response.status, bodyBytes.toString("utf8"));
     const responseHeaders: Record<string, string> = {};
     for (const name of [
       "content-type",
@@ -1504,6 +1594,8 @@ export function createOfapiClient(input: {
     path: string,
     body?: unknown,
   ): Promise<unknown> {
+    if (method !== "GET") await assertCredentialReady();
+    await waitForRequestSlot("interactive");
     let response: Response;
     try {
       response = await fetch(`${baseUrl}${path}`, {
@@ -1525,6 +1617,7 @@ export function createOfapiClient(input: {
     }
 
     const text = await response.text();
+    await input.onAdminResponse?.({ operation, status: response.status, body: text });
     let responseBody: unknown = null;
     let bodyIsJson = text.length === 0;
     if (text.length > 0) {
@@ -1545,6 +1638,8 @@ export function createOfapiClient(input: {
       requestId: `${operation}:${randomUUID()}`,
       pageId: null,
       attemptNumber: 1,
+      ...(["ofapi_balance_ping", "ofapi_credential_preflight", "ofapi_webhook_inventory", "ofapi_admin_accounts"].includes(operation)
+        ? { fallbackCredits: 0, fallbackEstimated: false } : {}),
     });
 
     if (!response.ok) {
@@ -1567,6 +1662,19 @@ export function createOfapiClient(input: {
   }
 
   return {
+    getCredentialPreflight,
+    assertCredentialReady,
+    async getWebhook(id) {
+      const body = await request("ofapi_webhook_inventory", "GET", `/webhooks/${encodeURIComponent(id)}`);
+      const record = asRecord(unwrapData(body));
+      if (!record || record.id !== id) throw new OfapiApiError("OFAPI webhook identity unavailable", 200, null);
+      return record;
+    },
+    async listWebhooks() {
+      const body = unwrapData(await request("ofapi_webhook_inventory", "GET", "/webhooks"));
+      if (!Array.isArray(body)) throw new OfapiApiError("OFAPI webhook inventory unavailable", 200, null);
+      return body.flatMap(value => asRecord(value) ? [asRecord(value)!] : []);
+    },
     async createWebhook(registration) {
       return toWebhookRecord(await request(
         "ofapi_webhook_crud",
@@ -1801,37 +1909,39 @@ export function createOfapiClient(input: {
         requestMetadata: { limit, offset: params.offset ?? 0 },
       });
     },
-    async pingBalance(context, accountId) {
-      return observedListRequest({
-        context,
-        operation: "ofapi_balance_ping",
-        endpointTemplate: "/:accountId/chats",
-        pathname: `/${encodeURIComponent(accountId)}/chats`,
-        query: { limit: "1" },
-        pageIndex: 0,
-        cursorPresent: false,
-        requestMetadata: { purpose: "balance_ping" },
-      });
+    async pingBalance() {
+      const day = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
+      const body = await request("ofapi_balance_ping", "GET", `/usage/credits?from=${day}&to=${day}`);
+      return { items: [], hasNextPage: false, meta: parseResponseMeta(body), creditSpendAccounted: true };
     },
     async proxyRead(context, options) {
       return proxyReadRequest(context, options);
     },
     async dispatchGovernedRaw(context, options) {
+      if (options.method !== "GET") {
+        try { await assertCredentialReady(); }
+        catch (error) { throw new OfapiGovernedRequestError("OFAPI credential preflight unavailable", "pre_dispatch", "cancelled", { cause: error }); }
+      }
       return dispatchGovernedRawRequest(context, options);
     },
     async sendTextMessage(context, accountId, conversationId, command) {
+      await assertCredentialReady();
       return sendTextMessageRequest(context, accountId, conversationId, command);
     },
     async sendMediaMessage(context, accountId, conversationId, command) {
+      await assertCredentialReady();
       return sendMediaMessageRequest(context, accountId, conversationId, command);
     },
     async startTyping(context, accountId, conversationId) {
+      await assertCredentialReady();
       return startTypingRequest(context, accountId, conversationId);
     },
     async unsendMessage(context, accountId, conversationId, messageId) {
+      await assertCredentialReady();
       return unsendMessageRequest(context, accountId, conversationId, messageId);
     },
     async markChatRead(context, accountId, conversationId) {
+      await assertCredentialReady();
       return markChatReadRequest(context, accountId, conversationId);
     },
   };

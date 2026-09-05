@@ -197,6 +197,7 @@ export function resolveOfapiReadGatewayRequest(
     const query = parseQuery(rawQuery, {
       limit: LIMIT_100,
       order: enumRule(["asc", "desc"]),
+      filter: enumRule(["pinned"]),
       first_id: textRule(100),
       last_id: textRule(100),
       skip_users: enumRule(["all", "none"]),
@@ -216,11 +217,16 @@ export function resolveOfapiReadGatewayRequest(
     };
   }
 
+  if (segments.length === 5 && segments[1] === "chats" && segments[3] === "messages" && segments[4] === "search") {
+    return proxy(accountId, segments, parseQuery(rawQuery, { query: textRule(200) }), "ofapi_gateway_chat_search");
+  }
+
   if (
     segments.length === 5
     && segments[1] === "chats"
     && segments[3] === "messages"
   ) {
+    if (!/^\d+$/.test(segments[4]!)) invalid("message id must be numeric");
     return proxy(
       accountId,
       segments,
@@ -235,7 +241,10 @@ export function resolveOfapiReadGatewayRequest(
     && segments[3] === "media"
   ) {
     return proxy(accountId, segments, parseQuery(rawQuery, {
-      type: enumRule(["photo", "gif", "video", "audio"]),
+      type: { parse(value, name) {
+        const aliases: Record<string, string> = { photo: "photos", video: "videos", audio: "audios" };
+        return enumRule(["photos", "videos", "audios"]).parse(aliases[value] ?? value, name);
+      } },
       limit: LIMIT_100,
       offset: OFFSET,
       skip_users: enumRule(["all", "none"]),
@@ -249,6 +258,7 @@ export function resolveOfapiReadGatewayRequest(
   }
 
   if (segments.length === 3 && segments[1] === "users") {
+    if (["blocked", "restricted", "search", "me"].includes(segments[2]!)) invalid("reserved user path is not supported");
     return proxy(
       accountId,
       segments,
@@ -261,6 +271,7 @@ export function resolveOfapiReadGatewayRequest(
     return proxy(accountId, segments, parseQuery(rawQuery, {
       limit: LIMIT_100,
       type: enumRule(["subscribes", "tips", "post", "chat_messages", "stream"]),
+      tipsSource: enumRule(["profile", "post_all", "chat", "stream", "story"]),
       marker: integerRule(0, Number.MAX_SAFE_INTEGER),
       startDate: textRule(64, /^(?:-\d+days|\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2}:\d{2})?)$/),
     }), "ofapi_gateway_transactions");
@@ -281,11 +292,13 @@ export function resolveOfapiReadGatewayRequest(
       // re-serializes them verbatim (filter%5Bonline%5D=1) to OFAPI.
       "filter[online]": enumRule(["1"]),
       "filter[total_spent]": integerRule(0, 1_000_000),
+      "filter[max_total_spent]": integerRule(0, 1_000_000),
     }), `ofapi_gateway_fans_${segments[2]}`);
   }
 
   if (segments.length === 2 && segments[1] === "user-lists") {
     return proxy(accountId, segments, parseQuery(rawQuery, {
+      view: enumRule(["queue"]),
       limit: LIMIT_100,
       offset: OFFSET,
     }), "ofapi_gateway_user_lists");
@@ -324,6 +337,7 @@ export function resolveOfapiReadGatewayRequest(
       query: textRule(200),
       limit: LIMIT_100,
       offset: OFFSET,
+      lightweight: enumRule(["true", "false"]),
     }), "ofapi_gateway_vault_lists");
   }
 

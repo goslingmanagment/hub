@@ -19,7 +19,6 @@ import {
   reconcileOfapiWebhookRegistrationAdopt,
   reconcileOfapiWebhookRegistrationNotCreated,
   rejectOfapiWebhookRegistration,
-  setPageOfapiAccountId,
 } from "@agency_hub_core/db";
 import {
   decryptJsonWithKeyVersion,
@@ -34,6 +33,7 @@ import {
   ServiceUnavailableError,
   UnauthorizedError,
 } from "./errors.ts";
+import { ofapiCredentialPolicy } from "./ofapi-credential-policy.ts";
 import { createOfapiCreditSpendSink } from "./ofapi-credits.ts";
 import { sendOfapiEventProcessJob } from "./ofapi-events.ts";
 import { OfapiApiError, createOfapiClient, type OfapiClient } from "./ofapi.ts";
@@ -208,6 +208,7 @@ function resolveOfapiClient(app: AppContext): OfapiClient {
   return createOfapiClient({
     baseUrl: app.config.ofapiBaseUrl,
     apiKey,
+    ...ofapiCredentialPolicy(app.db, app.config, app.logger),
     onCreditSpend: createOfapiCreditSpendSink(app),
   });
 }
@@ -220,43 +221,15 @@ async function mapOfapiAccountsToPages(app: AppContext, client: OfapiClient) {
 
   const mapped: Array<{ pageId: number; label: string; ofapiAccountId: string }> = [];
   const unmatchedAccounts: Array<{ id: string; username: string | null }> = [];
-  const claimedAccountIds = new Set(
-    pages.map((page) => page.ofapiAccountId).filter((id): id is string => id !== null),
-  );
-  const pagesByUsername = new Map<string, typeof pages>();
-  for (const page of pages) {
-    if (!page.username) {
-      continue;
-    }
-    const key = page.username.toLowerCase();
-    pagesByUsername.set(key, [...(pagesByUsername.get(key) ?? []), page]);
-  }
-
+  // Registration inventories current associations; replacements require the
+  // explicit versioned binding preview/apply workflow, never a username guess.
   for (const account of accounts) {
-    const candidates = account.username
-      ? pagesByUsername.get(account.username.toLowerCase()) ?? []
-      : [];
-    const existing = pages.find((page) => page.ofapiAccountId === account.id);
-    if (existing) {
-      // Already mapped (idempotent re-registration).
+    const existing = pages.find(page => page.ofapiAccountId === account.id);
+    const stable = existing?.creatorId ?? existing?.metadata.onlyfansUserId;
+    if (existing && account.identityStatus !== "conflict" &&
+        (!stable || stable === account.onlyfansUserId)) {
       mapped.push({ pageId: existing.id, label: existing.label, ofapiAccountId: account.id });
-      continue;
-    }
-
-    // Map only on an unambiguous username match to a page that has no mapping yet;
-    // anything else is reported back for manual resolution instead of guessed.
-    const target = candidates.length === 1 && candidates[0] && !candidates[0].ofapiAccountId
-      ? candidates[0]
-      : null;
-    if (!target || claimedAccountIds.has(account.id)) {
-      unmatchedAccounts.push({ id: account.id, username: account.username });
-      continue;
-    }
-
-    await setPageOfapiAccountId(app.db, { pageId: target.id, ofapiAccountId: account.id });
-    target.ofapiAccountId = account.id;
-    claimedAccountIds.add(account.id);
-    mapped.push({ pageId: target.id, label: target.label, ofapiAccountId: account.id });
+    } else unmatchedAccounts.push({ id: account.id, username: account.username });
   }
 
   const unmappedPages = pages
@@ -271,6 +244,40 @@ export async function registerOfapiWebhook(
   input: { endpointUrl: string },
 ): Promise<OfapiWebhookRegisterResponse> {
   const client = resolveOfapiClient(app);
+  const credential = await client.getCredentialPreflight?.();
+  if (credential?.status !== "verified") throw new ServiceUnavailableError(`OFAPI credential preflight ${credential?.status ?? "unknown"}`);
+  const existing = await getOfapiWebhookConfig(app.db);
+  let remoteProof: Parameters<typeof prepareOfapiWebhookRegistration>[1]["remoteProof"];
+  if (existing?.registrationState === "stable" && existing.externalWebhookId) {
+    if (!client.getWebhook) throw new ServiceUnavailableError("OFAPI remote webhook inspection unavailable");
+    let remote: Record<string, unknown> | null;
+    try {
+      remote = await client.getWebhook(existing.externalWebhookId);
+    } catch (error) {
+      // A 404 alone may hide a scope-restricted resource. Require configured
+      // full visibility plus a successful inventory, and refuse endpoint overlaps.
+      if (!(error instanceof OfapiApiError) || error.status !== 404 ||
+          app.config.ofapiWebhookManagementScope !== "team" || !client.listWebhooks) throw new ServiceUnavailableError("OFAPI webhook access unavailable; absence is unproven");
+      const inventory = await client.listWebhooks();
+      if (inventory.some(row => row.id === existing.externalWebhookId || row.url === input.endpointUrl || row.endpoint_url === input.endpointUrl)) {
+        throw new ServiceUnavailableError("OFAPI remote webhook requires reconciliation");
+      }
+      remote = null;
+    }
+    if (remote && (remote.account_scope ?? remote.accountScope) !== "global") {
+      throw new ServiceUnavailableError("OFAPI remote webhook scope is unknown or differs; reconcile before updating");
+    }
+    const matches = remote && (remote.url ?? remote.endpoint_url) === input.endpointUrl &&
+      remote.enabled === true && Array.isArray(remote.events) &&
+      JSON.stringify([...remote.events].sort()) === JSON.stringify([...OFAPI_WEBHOOK_EVENTS].sort());
+    remoteProof = { id: existing.externalWebhookId, updatedAt: existing.updatedAt.toISOString(),
+      credentialFingerprint: credential.credentialFingerprint, state: !remote ? "missing" : matches ? "match" : "drift" };
+  } else if (!existing || (existing.registrationState === "stable" && !existing.externalWebhookId)) {
+    if (app.config.ofapiWebhookManagementScope !== "team" || !client.listWebhooks) throw new ServiceUnavailableError("OFAPI webhook visibility must be confirmed before creation");
+    const inventory = await client.listWebhooks();
+    if (inventory.some(row => row.url === input.endpointUrl || row.endpoint_url === input.endpointUrl)) throw new ServiceUnavailableError("An existing OFAPI webhook for this endpoint requires reconciliation");
+  }
+
   const candidateSecret = randomToken(32);
   const candidateEncryptedSecret = JSON.stringify(encryptJson(
     candidateSecret,
@@ -282,6 +289,7 @@ export async function registerOfapiWebhook(
     endpointUrl: input.endpointUrl,
     events: [...OFAPI_WEBHOOK_EVENTS],
     candidateEncryptedSigningSecret: candidateEncryptedSecret,
+    ...(remoteProof ? { remoteProof } : {}),
   });
   if (prepared.kind === "blocked") {
     const message = prepared.reason === "create_indeterminate"
@@ -437,6 +445,7 @@ export async function getOfapiWebhookStatus(
       const lastEventAt = lastEventTimes.get(page.id) ?? null;
       return {
         pageId: page.id,
+        bindingGeneration: page.bindingGeneration,
         label: page.label,
         username: page.username,
         ofapiAccountId: page.ofapiAccountId,

@@ -2833,6 +2833,7 @@ export async function pausePageSync(
       await database.execute(sql`
         update ${pageSyncStates}
         set status = 'paused',
+            ofapi_user_paused = exists(select 1 from pages p where p.id = ${input.pageId} and p.platform = 'onlyfans'),
             blocker_kind = case
                              when blocker_kind = ${FANSLY_BULK_STREAM_FEATURE_GATE_BLOCKER_KIND}
                                then null
@@ -2937,7 +2938,8 @@ export async function resumePageSync(
     for (const stream of streams) {
       await database.execute(sql`
         update ${pageSyncStates}
-        set status = case
+        set ofapi_user_paused = false,
+            status = case
                        when blocker_kind is not null then 'blocked'::page_sync_status
                        when request_seq > applied_seq then 'pending'::page_sync_status
                        else 'idle'::page_sync_status

@@ -8,7 +8,7 @@
 // journal row, the minutely sweep retries failures.
 
 import {
-  findPageByOfapiAccountId,
+  findHistoricalPageByOfapiAccountId,
   findPlatformFan,
   listOfapiWebhookEventsForDmProjection,
   markOfapiWebhookEventProjection,
@@ -103,7 +103,7 @@ async function projectOfapiPresenceEvent(
   }
 
   const page = row.ofapiAccountId
-    ? await findPageByOfapiAccountId(app.db, row.ofapiAccountId)
+    ? await findHistoricalPageByOfapiAccountId(app.db, row.ofapiAccountId)
     : null;
   if (!page) {
     return {

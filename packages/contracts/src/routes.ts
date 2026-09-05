@@ -3616,6 +3616,7 @@ export const ofapiWebhookAckResponseSchema = z.object({
 });
 
 export const ofapiPageMappingSchema = z.object({
+  bindingGeneration: z.number().int().positive(),
   pageId: intId,
   label: z.string(),
   username: z.string().nullable(),
@@ -3668,6 +3669,32 @@ export const ofapiWebhookStatusResponseSchema = z.object({
     spentToday: z.number().int(),
   }),
 });
+
+const ofapiEvidenceRefSchema = z.object({ id: intId, receivedAt: isoTimestamp }).strict();
+export const ofapiBindingRefreshBodySchema = z.object({
+  pageId: intId,
+  expectedAccountId: z.string().regex(/^acct_[A-Za-z0-9]+$/).nullable(),
+  expectedGeneration: z.number().int().positive(),
+  accountId: z.string().regex(/^acct_[A-Za-z0-9]+$/),
+  identityEvidence: ofapiEvidenceRefSchema.nullable().default(null),
+  historicalEvidence: z.array(ofapiEvidenceRefSchema).max(20).default([]),
+  dryRun: z.boolean().default(true),
+  previewToken: z.string().regex(/^[0-9a-f]{64}$/).optional(),
+}).strict();
+export const ofapiBindingRefreshResponseSchema = z.object({
+  dryRun: z.boolean(), applied: z.boolean(), previewToken: z.string(),
+  pageId: intId, expectedAccountId: z.string().nullable(), expectedGeneration: z.number().int(),
+  accountId: z.string(), creatorId: z.string(), historicalAccountIds: z.array(z.string()),
+  recovery: z.array(z.object({ stream: z.string(), version: z.string(), code: z.string() })),
+  credentialFingerprint: z.string(), expectedTeam: z.string().nullable(),
+  identityEvidence: ofapiEvidenceRefSchema.nullable(), historicalEvidence: z.array(ofapiEvidenceRefSchema),
+});
+export const ofapiCredentialPreflightSchema = z.object({
+  status: z.enum(["verified", "unknown", "mismatch", "denied"]), expectedTeam: z.string().nullable(),
+  observedTeam: z.string().nullable(), credentialFingerprint: z.string(), checkedAt: isoTimestamp,
+  reason: z.string().nullable(), rosterScope: z.literal("unknown"),
+});
+export type OfapiBindingRefreshBody = z.infer<typeof ofapiBindingRefreshBodySchema>;
 
 export const ofapiWebhookRegisterBodySchema = z.object({
   // Public URL OFAPI should deliver to, e.g. https://hub.example.com/api/v1/ofapi/webhook
@@ -5674,13 +5701,24 @@ export const routeSchemas = {
       403: errorResponseSchema,
     },
   },
+  adminOfapiBindingRefresh: {
+    auth: { kind: "owner-session" }, tags: ["admin"],
+    summary: "Preview or apply a verified OFAPI binding replacement and narrow recovery",
+    body: ofapiBindingRefreshBodySchema,
+    response: { 200: ofapiBindingRefreshResponseSchema, 400: errorResponseSchema, 401: errorResponseSchema,
+      403: errorResponseSchema, 409: errorResponseSchema, 503: errorResponseSchema },
+  },
+  adminOfapiCredentialPreflight: {
+    auth: { kind: "owner-session" }, tags: ["admin"], summary: "Inspect server credential adoption proof",
+    response: { 200: ofapiCredentialPreflightSchema, 401: errorResponseSchema, 403: errorResponseSchema, 503: errorResponseSchema },
+  },
   adminOfapiWebhookRegister: {
     auth: { kind: "owner-session" },
     tags: ["admin"],
-    summary: "Register (or re-register) the OFAPI webhook and auto-map accounts to pages",
+    summary: "Register (or re-register) the OFAPI webhook and inventory current bindings",
     description: "Creates/updates the team webhook at onlyfansapi.com with "
       + "account_scope=global and a freshly generated signing secret, stores the "
-      + "registration, and maps OFAPI accounts to OnlyFans pages by username.",
+      + "registration, and inventories current page bindings. Replacement uses a verified preview.",
     body: ofapiWebhookRegisterBodySchema,
     response: {
       200: ofapiWebhookRegisterResponseSchema,

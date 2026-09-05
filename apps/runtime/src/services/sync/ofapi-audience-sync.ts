@@ -1,3 +1,4 @@
+import { OFAPI_DEFAULT_BASE_URL } from "../ofapi.ts";
 // OFAPI-backed OnlyFans audience sync (Phase 3 of docs/ofapi-parity-plan.md,
 // D6/D8): the subscribers executor stream for OnlyFans pages mapped to an OFAPI
 // account, behind OFAPI_AUDIENCE_SYNC_ENABLED. A budgeted fans/active offset
@@ -451,7 +452,7 @@ export async function executeOfapiAudienceChunk(
       syncRunId: input.syncRunId,
       endpoint: "fans_active",
       requestParams: { limit: OFAPI_FANS_PAGE_LIMIT, offset: state.offset },
-      responsePayload: { items: page.items },
+      responsePayload: { items: page.items, hasNextPage: page.hasNextPage, nextPageUrl: page.nextPageUrl ?? null },
       mapperVersion: OFAPI_AUDIENCE_MAPPER_VERSION,
       payloadKind: "mapping_critical",
       retainUntil: retentionDate(),
@@ -461,7 +462,7 @@ export async function executeOfapiAudienceChunk(
     });
     pagesFetched += 1;
 
-    if (state.offset === 0 && page.items.length === 0) {
+    if (state.offset === 0 && page.items.length === 0 && !page.hasNextPage && !page.nextPageUrl) {
       const currentSubscribers = await getCurrentSubscribers(app.db, input.pageContext.page.id);
       if (currentSubscribers.rows.length > 0) {
         // Mirrors the Fansly empty-first-page guard: never run the destructive
@@ -491,11 +492,21 @@ export async function executeOfapiAudienceChunk(
       }
     }
 
-    const sweepComplete = !page.hasNextPage || page.items.length === 0;
-    // An empty page that still claims hasNextPage is contradictory pagination —
-    // complete the sweep (offset += 0 would loop forever) but refuse the
-    // destructive generational expiry on a signal we cannot trust.
-    const contradictoryPagination = page.items.length === 0 && page.hasNextPage;
+    const nextOffset = resolveOfapiAudienceNextOffset(page, {
+      accountId: ofapiAccountId, offset: state.offset, limit: OFAPI_FANS_PAGE_LIMIT,
+      baseUrl: app.config.ofapiBaseUrl,
+    });
+    const sweepComplete = nextOffset === null;
+    // Dropping an unrecognized identity cannot establish complete membership.
+    const invalidIdentities = fans.length !== page.items.length;
+    if (invalidIdentities) {
+      await input.telemetry.addAnomaly({
+        code: "ofapi_fans_invalid_identities", severity: "warn",
+        message: "fans/active contained invalid identities; refusing destructive finalization",
+        details: { offset: state.offset, generation: state.generation },
+      });
+      throw new Error("OFAPI audience identities invalid; refusing sweep completion");
+    }
     const nextState = sweepComplete
       ? {
         ...state,
@@ -506,22 +517,13 @@ export async function executeOfapiAudienceChunk(
       }
       : {
         ...state,
-        offset: state.offset + page.items.length,
+        offset: nextOffset!,
         pageCount: state.pageCount + 1,
       };
 
-    if (contradictoryPagination) {
-      await input.telemetry.addAnomaly({
-        code: "ofapi_fans_contradictory_pagination",
-        severity: "warn",
-        message: "fans/active returned an empty page with hasMore=true; completing the sweep without the generational expiry",
-        details: { offset: state.offset, generation: state.generation },
-      });
-    }
-
     const written = await withOwnedPageSyncTransaction(app.db, async (dbTx) => {
       await applyActiveFans(dbTx, fans);
-      if (sweepComplete && !contradictoryPagination) {
+      if (sweepComplete) {
         // P-25: a multi-chunk sweep can take hours; a subscription the live
         // webhook projection created mid-sweep (lastSeenGeneration null) may
         // sit at an offset the walk already passed — retiring it here would
@@ -539,14 +541,6 @@ export async function executeOfapiAudienceChunk(
         await refreshFanPageSubscriberState(dbTx, input.pageContext.page.id);
         await rebuildSubscriberRollups(dbTx, input.pageContext.page.id);
         await refreshPageSubscriberCount(dbTx, input.pageContext.page.id);
-        return upsertCheckpoint(dbTx, {
-          platformAccountId: input.pageContext.page.id,
-          stream: "subscribers",
-          state: nextState,
-          lastSuccessfulRunId: input.syncRunId,
-        });
-      }
-      if (sweepComplete) {
         return upsertCheckpoint(dbTx, {
           platformAccountId: input.pageContext.page.id,
           stream: "subscribers",
@@ -599,4 +593,29 @@ export async function executeOfapiAudienceChunk(
   };
 
   return result;
+}
+
+/** Follow only a advancing cursor for this exact account/operation. Never fetch
+ * the supplied URL: it is evidence for an offset, not egress authority. */
+export function resolveOfapiAudienceNextOffset(
+  page: { hasNextPage: boolean; nextPageUrl?: string | null; items: unknown[] },
+  input: { accountId: string; offset: number; limit: number; baseUrl?: string | undefined },
+): number | null {
+  if (page.nextPageUrl) {
+    const base = new URL(`${input.baseUrl ?? OFAPI_DEFAULT_BASE_URL}/`);
+    const expected = `${base.pathname.replace(/\/$/, "")}/${encodeURIComponent(input.accountId)}/fans/active`;
+    const next = new URL(page.nextPageUrl, base);
+    const offset = next.searchParams.get("offset");
+    if (next.origin !== base.origin || next.pathname !== expected || next.username || next.password || next.hash ||
+        next.searchParams.getAll("offset").length !== 1 || !offset || !/^\d+$/.test(offset) ||
+        !Number.isSafeInteger(Number(offset)) || Number(offset) <= input.offset ||
+        [...next.searchParams.keys()].some(key => !["limit", "offset"].includes(key)) ||
+        (next.searchParams.has("limit") && next.searchParams.get("limit") !== String(input.limit))) {
+      throw new Error("OFAPI audience pagination invalid or not advancing");
+    }
+    return Number(offset);
+  }
+  if (!page.hasNextPage) return null;
+  // Documented fixed-size offset walk fallback; an empty page still advances.
+  return input.offset + input.limit;
 }

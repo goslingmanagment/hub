@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 // OFAPI account health + credit ops (Phase 3 of docs/ofapi-integration-plan.md,
 // D9): accounts.* webhook events project into pages.ofapi_auth_status
 // (post-settle, never blocking the settle/fanout path), and the minutely OFAPI
@@ -7,7 +8,8 @@
 
 import {
   advancePageOfapiAuthStatus,
-  clearPageSyncAuthBlock,
+  withOfapiBindingLock,
+  getOfapiBindingPage,
   findPageByOfapiAccountId,
   getLatestOfapiWebhookEventReceivedAt,
   getOfapiCreditState,
@@ -32,6 +34,8 @@ export const OFAPI_ACCOUNT_EVENT_PREFIX = "accounts.";
 // (still authenticated) — it alerts for visibility but is not an action state.
 export const OFAPI_AUTH_ACTION_REQUIRED_STATUSES = new Set([
   "authentication_failed",
+  "disconnected",
+  "account_not_found",
   "otp_code_required",
   "face_otp_required",
 ]);
@@ -65,6 +69,7 @@ interface OfapiAccountEventRow {
   eventType: string;
   ofapiAccountId: string | null;
   receivedAt: Date;
+  bindingGeneration?: number;
 }
 
 /**
@@ -72,7 +77,7 @@ interface OfapiAccountEventRow {
  * auth state (forward-only by receive time) and open/resolve the per-page
  * ofapi_auth incident. Best-effort — never throws into the event processor.
  */
-export async function applyOfapiAccountHealthEvent(
+async function applyCurrentOfapiAccountHealthEvent(
   app: AppContext,
   row: OfapiAccountEventRow,
 ) {
@@ -88,7 +93,11 @@ export async function applyOfapiAccountHealthEvent(
       return;
     }
 
+    const binding = await getOfapiBindingPage(app.db, page.id);
+    if (!binding || binding.account_id !== row.ofapiAccountId ||
+        (row.bindingGeneration !== undefined && row.bindingGeneration !== binding.generation)) return;
     const authStatus = row.eventType.slice(OFAPI_ACCOUNT_EVENT_PREFIX.length);
+    if (!OFAPI_AUTH_ALERT_STATUSES.has(authStatus) && !OFAPI_AUTH_RECOVERED_STATUSES.has(authStatus)) return;
     const advanced = await advancePageOfapiAuthStatus(app.db, {
       pageId: page.id,
       authStatus,
@@ -113,6 +122,10 @@ export async function applyOfapiAccountHealthEvent(
           now: row.receivedAt,
         });
       }
+      await app.db.execute(sql`
+        update page_sync_states set blocker_ofapi_generation=${binding.generation}
+        where page_id=${page.id} and blocker_kind='auth' and blocker_code=${`ofapi_${authStatus}`}
+      `);
       await notifyOfapiAuthIncident(app, {
         platformAccountId: page.id,
         pageLabel: page.label,
@@ -123,7 +136,13 @@ export async function applyOfapiAccountHealthEvent(
     } else if (OFAPI_AUTH_RECOVERED_STATUSES.has(authStatus)) {
       // Stage 26: vendor-signaled recovery is the OFAPI-side re-verify —
       // release the auth pause the same way credential re-verify does.
-      await clearPageSyncAuthBlock(app.db, page.id, { now: row.receivedAt });
+      // Only this generation owns these pauses. Older or operator blockers survive.
+      await app.db.execute(sql`
+        update page_sync_states set blocker_kind=null,blocker_code=null,blocker_message=null,blocked_at=null,
+          blocker_ofapi_generation=null,status=case when request_seq>applied_seq then 'pending'::page_sync_status else 'idle'::page_sync_status end,
+          retry_kind=null,retry_at=null,updated_at=${row.receivedAt}
+        where page_id=${page.id} and blocker_kind='auth' and blocker_ofapi_generation=${binding.generation} and not ofapi_user_paused
+      `);
       await resolveOfapiAuthIncident(app, {
         platformAccountId: page.id,
         pageLabel: page.label,
@@ -210,4 +229,13 @@ export async function runOfapiAccountHealthMonitor(app: AppContext, now = new Da
   } catch (error) {
     app.logger.warn({ err: error }, "OFAPI account health monitor failed; continuing");
   }
+}
+
+/** Serialize lifecycle effects with remap; resolving a page before a CAS alone
+ * would still allow a late event to pause the replacement between statements. */
+export async function applyOfapiAccountHealthEvent(app: AppContext, row: OfapiAccountEventRow) {
+  if (!isOfapiAccountHealthEnabled(app.config) || !row.ofapiAccountId) return;
+  const page = await findPageByOfapiAccountId(app.db, row.ofapiAccountId);
+  if (!page) return;
+  return withOfapiBindingLock(app.db, page.id, db => applyCurrentOfapiAccountHealthEvent({ ...app, db }, row));
 }

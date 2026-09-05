@@ -34,7 +34,7 @@ import {
   executeOfapiCaptureJobChunk,
   isOfapiBackgroundCaptureRunnable,
 } from "../ofapi-capture-jobs.ts";
-import { OfapiApiError } from "../ofapi.ts";
+import { OfapiApiError, ofapiAccountNotFound } from "../ofapi.ts";
 import {
   notifyAuthFailedIncident,
   notifyOfapiGlobalIncident,
@@ -231,6 +231,10 @@ function classifyOfapiApiError(
   failure: ReturnType<typeof buildNormalizedSyncError>,
 ): ReturnType<typeof classifyTaskFailure> {
   const status = error.status;
+  if (ofapiAccountNotFound(status, error.body)) return {
+    mode: "blocked", blockerType: "manual_action_required", blockerCode: "ofapi_account_not_found",
+    blockerReason: "OFAPI account binding is unavailable",
+  };
   if (status === null) {
     // A transport failure before any status: the one shape the old generic
     // fallback described correctly.

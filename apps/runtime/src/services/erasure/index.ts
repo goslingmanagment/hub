@@ -275,7 +275,12 @@ async function resolveScope(app: Db, input: ErasureScopeInput): Promise<Resolved
     fanId: null,
     fanRef: null,
     fanGroupIds: [],
-    nativeRefs: pageRows.flatMap((row) => [row.a, row.b]).filter((ref): ref is string => !!ref),
+    nativeRefs: [...new Set([
+      ...pageRows.flatMap((row) => [row.a, row.b]).filter((ref): ref is string => !!ref),
+      ...(await rows<{ account_id: string }>(app, sql`
+        select account_id from ofapi_account_bindings where page_id in ${pageRows.map(row => Number(row.id))}
+      `)).map(row => row.account_id),
+    ])],
   };
 }
 
@@ -1147,6 +1152,7 @@ export interface PageErasureTableExclusion {
  * This is deliberately tiny: everything not named here must appear as a hot
  * target, because the page catalog row survives and no FK action will run. */
 export const PAGE_ERASURE_TABLE_EXCLUSIONS: readonly PageErasureTableExclusion[] = [
+  { table: "ofapi_account_bindings", reason: "Provider-to-page custody evidence, retained with the pages catalog row and operator audit. It contains creator association, not fan facts; retaining old refs keeps late replay and future erasure scoped to the original page." },
   {
     table: "audit_events",
     reason: "Agency audit evidence is an append-only governance record, not captured platform data; retaining the page id preserves who authorized and executed the erasure itself.",

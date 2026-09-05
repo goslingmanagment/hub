@@ -1,3 +1,4 @@
+import { listHistoricalOfapiBindings } from "@agency_hub_core/db";
 // Canonicalization driver (Stage 8). The minutely sweep IS the replay
 // executor: it walks observations whose parse_version is below their
 // family's current version, runs the pure canonicalizer, appends events
@@ -654,6 +655,13 @@ export async function runCanonicalization(
     if (page.ofapiAccountId) {
       accountIdByNativeRef.set(`${page.platform}:${page.ofapiAccountId}`, page.id);
     }
+  }
+  for (const binding of await listHistoricalOfapiBindings(app.db)) {
+    const key = `onlyfans:${binding.account_id}`;
+    const current = accountIdByNativeRef.get(key);
+    if (current !== undefined && current !== binding.page_id) {
+      throw new Error("OFAPI historical binding ownership conflicts with the current mapping");
+    } else accountIdByNativeRef.set(key, binding.page_id);
   }
   const runContext = {
     nativeAccountRefByAccountId: new Map(

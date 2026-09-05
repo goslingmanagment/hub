@@ -1,6 +1,6 @@
 import {
   deleteExpiredDmMessageArchiveRows,
-  findPageByOfapiAccountId,
+  findHistoricalPageByOfapiAccountId,
   getDmMessageArchiveStatus,
   listOfapiWebhookEventsForDmColdArchive,
   markOfapiWebhookEventArchive,
@@ -197,7 +197,7 @@ export async function archiveOfapiDmEvent(
   }
 
   const page = row.ofapiAccountId
-    ? await findPageByOfapiAccountId(app.db, row.ofapiAccountId)
+    ? await findHistoricalPageByOfapiAccountId(app.db, row.ofapiAccountId)
     : null;
   if (!page || page.platform !== "onlyfans" || !row.ofapiAccountId) {
     return { status: "skipped" as const, reason: "unmapped_or_non_onlyfans_page" };
