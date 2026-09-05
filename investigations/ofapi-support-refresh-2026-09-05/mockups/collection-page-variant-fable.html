@@ -1,0 +1,904 @@
+<title>Сбор данных OFAPI</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;600;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root{
+  --doc-bg:#eeebe6; --doc-panel:#f7f5f1; --doc-ink:#26221f; --doc-ink-2:#58514a; --doc-muted:#8a827a;
+  --doc-line:#d9d3cb; --doc-accent:#c96442; --doc-mark:#26221f; --doc-mark-ink:#fff;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --doc-bg:#181614; --doc-panel:#201d1a; --doc-ink:#ece7e0; --doc-ink-2:#bdb5ac; --doc-muted:#8f877e;
+    --doc-line:#302b27; --doc-accent:#e07a5c; --doc-mark:#ece7e0; --doc-mark-ink:#181614;
+  }
+}
+:root[data-theme="dark"]{
+  --doc-bg:#181614; --doc-panel:#201d1a; --doc-ink:#ece7e0; --doc-ink-2:#bdb5ac; --doc-muted:#8f877e;
+  --doc-line:#302b27; --doc-accent:#e07a5c; --doc-mark:#ece7e0; --doc-mark-ink:#181614;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--doc-bg);color:var(--doc-ink);font-family:"IBM Plex Sans",-apple-system,"Segoe UI",sans-serif;font-size:15px;line-height:1.55}
+.doc{max-width:1500px;margin:0 auto;padding:44px 28px 96px}
+.eyebrow{font-family:"IBM Plex Mono",ui-monospace,Menlo,monospace;font-size:11.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--doc-muted)}
+h1{font-size:34px;font-weight:600;letter-spacing:-.02em;line-height:1.15;margin:10px 0 14px;text-wrap:balance}
+.lead{max-width:66ch;color:var(--doc-ink-2);margin:0}
+.decisions{margin-top:30px;display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px 28px}
+.dec{border-top:1px solid var(--doc-line);padding-top:12px}
+.dec b{display:block;font-weight:600;margin-bottom:3px}
+.dec p{margin:0;color:var(--doc-ink-2);font-size:14px}
+.frame{margin-top:64px}
+.frame-head{display:flex;align-items:baseline;justify-content:space-between;gap:16px;border-top:1px solid var(--doc-line);padding-top:14px;margin-bottom:14px;flex-wrap:wrap}
+.frame-head h2{margin:0;font-size:20px;font-weight:600;letter-spacing:-.01em;display:flex;align-items:baseline;gap:12px}
+.frame-head h2 .num{font-family:"IBM Plex Mono",monospace;font-size:13px;color:var(--doc-accent);font-weight:500}
+.frame-head .meta{font-family:"IBM Plex Mono",monospace;font-size:11.5px;color:var(--doc-muted)}
+.frame-grid{display:grid;gap:22px}
+@media (min-width:1480px){.frame-grid.side{grid-template-columns:1192px 1fr;align-items:start}}
+.frame-body{overflow-x:auto;border:1px solid var(--doc-line);border-radius:12px;background:#f9f8f6;box-shadow:0 1px 2px rgba(0,0,0,.05),0 14px 36px rgba(40,30,20,.10)}
+.notes{display:grid;gap:12px;margin-top:0}
+.notes.cols{grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px 26px;margin-top:20px}
+.note{display:grid;grid-template-columns:20px 1fr;gap:10px;font-size:13.5px;line-height:1.5;color:var(--doc-ink-2)}
+.note b{color:var(--doc-ink);font-weight:600}
+.n{width:18px;height:18px;border-radius:50%;background:var(--doc-mark);color:var(--doc-mark-ink);font:600 11px/18px "IBM Plex Mono",monospace;text-align:center;flex:none;margin-top:2px}
+.crop-label{font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--doc-muted);letter-spacing:.06em;text-transform:uppercase;margin:0 0 8px}
+.stack{display:grid;gap:18px}
+
+/* ===== product frame (Hub theme, deliberately light-only: it depicts the product) ===== */
+.screen{font-family:Inter,-apple-system,"Segoe UI",sans-serif;color:#1a1a1a;background:#f9f8f6;font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased;position:relative;overflow:hidden;border-radius:12px}
+.screen *{font-variant-numeric:tabular-nums}
+.shell{display:grid;grid-template-columns:248px 1fr;width:1440px}
+.crop{width:1190px}
+.sb{background:#fff;border-right:1px solid #e8e5e0;display:flex;flex-direction:column;min-height:100%}
+.sb-logo{padding:22px;font-size:17px;font-weight:700;letter-spacing:-.03em;border-bottom:1px solid #e8e5e0}
+.sb-logo b{color:#c96442;font-weight:700}
+.sb-nav{padding:12px;flex:1}
+.nav{display:flex;align-items:center;gap:10px;padding:10px 14px;border-radius:8px;font-size:14px;font-weight:500;color:#78716c}
+.nav svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:none}
+.nav.on{background:#f4f1ec;color:#1a1a1a;font-weight:600}
+.sb-eyebrow{margin-top:16px;padding:0 14px 8px;font-size:11px;font-weight:600;color:#a8a29e;text-transform:uppercase;letter-spacing:.1em}
+.model{padding:8px 14px;font-size:13px;font-weight:600;color:#78716c;display:flex;gap:8px;align-items:center;margin-top:4px}
+.model b{color:#c96442;font-weight:600}
+.model span{font-size:12px;color:#a8a29e;font-weight:400}
+.pg{padding:8px 14px 8px 36px;font-size:13px;color:#78716c;display:flex;gap:8px;align-items:center;border-radius:6px;font-weight:450}
+.pbadge{font-size:9px;font-weight:700;padding:1px 5px;border-radius:4px;text-transform:uppercase;letter-spacing:.02em}
+.pbadge.of{background:rgba(194,122,26,.15);color:#c27a1a}
+.pbadge.fs{background:rgba(59,111,196,.15);color:#3b6fc4}
+.main{min-width:0;display:flex;flex-direction:column}
+.topbar{height:56px;background:#fff;border-bottom:1px solid #e8e5e0;display:flex;align-items:center;justify-content:space-between;padding:0 28px}
+.crumbs{display:flex;align-items:center;gap:8px;font-size:14px;color:#a8a29e}
+.crumbs .cur{font-size:16px;font-weight:600;color:#1a1a1a;letter-spacing:-.02em}
+.user{display:flex;align-items:center;gap:8px;border:1px solid #e8e5e0;border-radius:999px;padding:4px 8px 4px 4px}
+.user i{width:32px;height:32px;border-radius:50%;background:#f4f1ec;display:inline-flex;align-items:center;justify-content:center;font-style:normal;font-size:13px;font-weight:600;color:#78716c}
+.user svg{width:14px;height:14px;stroke:#a8a29e;fill:none;stroke-width:2}
+.content{padding:28px;position:relative;min-height:400px}
+.h1{font-size:20px;font-weight:800;margin:0 0 20px}
+.tabs{display:flex;gap:4px;border-bottom:1px solid #e8e5e0;margin-bottom:20px}
+.tab{padding:8px 16px;font-size:14px;font-weight:500;color:#a8a29e;border-bottom:2px solid transparent;margin-bottom:-1px}
+.tab.on{color:#c96442;border-color:#c96442}
+
+/* page header */
+.phead{display:flex;justify-content:space-between;gap:24px;align-items:flex-start;position:relative;margin-bottom:18px}
+.phead h2{font-size:17px;font-weight:700;margin:0 0 4px;letter-spacing:-.01em}
+.phead p{margin:0;color:#78716c;font-size:13px;max-width:62ch}
+.phead .tools{display:flex;flex-direction:column;align-items:flex-end;gap:10px;flex:none}
+.row{display:flex;align-items:center;gap:10px}
+.seg{display:inline-flex;border:1px solid #e8e5e0;border-radius:8px;background:#fff;padding:2px}
+.seg span{padding:5px 10px;border-radius:6px;font-size:12.5px;font-weight:500;color:#78716c}
+.seg .on{background:#f4f1ec;color:#1a1a1a;font-weight:600}
+.pill{display:inline-flex;align-items:center;gap:7px;height:28px;padding:0 11px;border:1px solid #e8e5e0;border-radius:999px;background:#fff;font-size:12px;color:#78716c;white-space:nowrap}
+.pill b{color:#1a1a1a;font-weight:600}
+.dot{width:7px;height:7px;border-radius:50%;background:#a8a29e;flex:none;display:inline-block}
+.dot.ok{background:#4ead6b}.dot.warn{background:#f59e0b}.dot.bad{background:#d14343}.dot.acc{background:#c96442}
+.dot.off{background:transparent;border:1.5px solid #a8a29e;width:7px;height:7px}
+.btn{display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 12px;border-radius:8px;font-size:13px;font-weight:500;border:1px solid #e8e5e0;background:#fff;color:#78716c;white-space:nowrap}
+.btn.primary{background:#c96442;border-color:#c96442;color:#fff;font-weight:600}
+.btn.ghost{border-color:transparent;background:transparent}
+.btn.danger-o{border-color:rgba(209,67,67,.35);color:#b53838}
+.btn.danger{background:#d14343;border-color:#d14343;color:#fff;font-weight:600}
+.btn.sm{height:26px;padding:0 9px;font-size:12px}
+.btn.dis{opacity:.45}
+.link{color:#c96442;font-weight:500}
+
+/* cards */
+.card{background:#fff;border:1px solid #e8e5e0;border-radius:12px;position:relative}
+.card + .card{margin-top:18px}
+.card-h{display:flex;align-items:baseline;justify-content:space-between;gap:12px;padding:14px 18px 0}
+.card-h h3{margin:0;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:#78716c}
+.card-h .r{font-size:12px;color:#78716c}
+.mk{position:absolute;width:18px;height:18px;border-radius:50%;background:#26221f;color:#fff;font:600 11px/18px "IBM Plex Mono",monospace;text-align:center;box-shadow:0 0 0 2px #fff;z-index:6}
+
+/* credits card */
+.cred{display:grid;grid-template-columns:1fr 300px}
+.cred-l{padding:14px 18px 16px}
+.cred-r{border-left:1px solid #f4f1ec;padding:14px 18px 16px;display:grid;gap:14px;align-content:start}
+.total{display:flex;align-items:baseline;gap:8px;margin-bottom:10px}
+.total b{font-size:26px;font-weight:700;letter-spacing:-.02em}
+.total span{font-size:12.5px;color:#78716c}
+.stackbar{display:flex;height:10px;border-radius:5px;overflow:hidden;gap:2px;background:#f4f1ec}
+.stackbar i{display:block;height:100%}
+.legend{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-top:12px}
+.lg{border-top:2px solid transparent;padding-top:8px}
+.lg .k{font-size:12px;color:#78716c;display:flex;align-items:center;gap:6px}
+.lg .k i{width:8px;height:8px;border-radius:2px;display:inline-block}
+.lg .v{font-size:15px;font-weight:600;margin:2px 0 1px}
+.lg .s{font-size:11.5px;color:#a8a29e;line-height:1.4}
+.sw1{background:#c96442}.sw2{background:rgba(201,100,66,.55)}.sw3{background:rgba(201,100,66,.28)}
+.sw4{background:repeating-linear-gradient(135deg,#d6d1c9 0 3px,#f4f1ec 3px 6px)}
+.meter .k{display:flex;justify-content:space-between;font-size:12px;color:#78716c}
+.meter .k b{color:#1a1a1a;font-weight:600}
+.meter .bar{height:6px;border-radius:3px;background:#faf8f5;margin-top:6px;overflow:hidden}
+.meter .bar i{display:block;height:100%;background:#c96442}
+.meter .s{font-size:11.5px;color:#a8a29e;margin-top:5px;line-height:1.4}
+.bal{display:flex;align-items:baseline;gap:6px}
+.bal b{font-size:20px;font-weight:700;letter-spacing:-.02em}
+.bal span{font-size:12px;color:#78716c}
+.thr{display:flex;gap:0;height:6px;border-radius:3px;overflow:hidden;background:#faf8f5;margin-top:6px;position:relative}
+.thr i{display:block;height:100%}
+.thr .m{position:absolute;top:-2px;width:1.5px;height:10px;background:#78716c}
+.foot{border-top:1px solid #f4f1ec;padding:10px 18px;font-size:12px;color:#78716c;display:flex;gap:14px;flex-wrap:wrap}
+.foot b{color:#1a1a1a;font-weight:600}
+
+/* categories table */
+table.cat{width:100%;border-collapse:collapse;margin-top:12px;table-layout:fixed}
+.cat th{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:#78716c;text-align:left;padding:9px 12px;background:#faf8f5;border-top:1px solid #f4f1ec;border-bottom:1px solid #f4f1ec}
+.cat th:first-child,.cat td:first-child{padding-left:18px}
+.cat th:last-child,.cat td:last-child{padding-right:14px}
+.cat td{padding:12px 12px;border-top:1px solid #f4f1ec;vertical-align:top;font-size:12.5px;color:#78716c}
+.cat td.name{color:#1a1a1a}
+.cat td.num{text-align:right;white-space:nowrap}
+.cat th.num{text-align:right}
+.cat tr.grp td{padding:14px 12px 6px 18px;border-top:none;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.07em;color:#a8a29e}
+.cat tr.grp td span{font-weight:400;text-transform:none;letter-spacing:0;color:#a8a29e;margin-left:8px}
+.cat tr.grp + tr td{border-top:1px solid #e8e5e0}
+.nm{font-weight:600;font-size:13px}
+.why{font-size:12px;color:#78716c;margin-top:2px}
+.chips{display:flex;gap:4px;flex-wrap:wrap;margin-top:6px}
+.chip{font-size:10.5px;padding:1px 6px;border-radius:5px;background:#f4f1ec;color:#78716c;font-weight:500;white-space:nowrap}
+.mode{display:inline-flex;align-items:center;gap:6px;padding:2px 8px;border-radius:6px;font-size:12px;font-weight:600;white-space:nowrap}
+.mode.on{background:rgba(201,100,66,.10);color:#a54e30}
+.mode.off{background:#f4f1ec;color:#78716c}
+.mode.job{border:1px dashed #d6d1c9;color:#78716c;background:transparent;font-weight:500}
+.sub{font-size:11.5px;color:#a8a29e;margin-top:4px;line-height:1.4}
+.big{font-size:13.5px;font-weight:600;color:#1a1a1a}
+.bar64{height:3px;width:64px;background:#f4f1ec;border-radius:2px;margin:6px 0 0 auto;overflow:hidden}
+.bar64 i{display:block;height:100%;background:#c96442}
+.st{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:500;color:#1a1a1a}
+.st.ok{color:#2f8a4c}.st.warn{color:#b5711a}.st.bad{color:#b53838}.st.acc{color:#a54e30}.st.mut{color:#78716c}.st.off{color:#a8a29e}
+.caret{width:10px;height:10px;stroke:#a8a29e;fill:none;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+.src{display:inline-block;font-size:11px;line-height:1.35;color:#78716c;background:#faf8f5;border:1px solid #f4f1ec;border-radius:5px;padding:1px 6px}
+.src.none{border-style:dashed;color:#a8a29e}
+
+/* webhook card */
+.wh-note{padding:10px 18px 0;font-size:12.5px;color:#78716c;max-width:80ch}
+table.wh{width:100%;border-collapse:collapse;margin-top:12px;table-layout:fixed}
+.wh th{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:#78716c;text-align:left;padding:9px 12px;background:#faf8f5;border-top:1px solid #f4f1ec;border-bottom:1px solid #f4f1ec}
+.wh td{padding:11px 12px;border-top:1px solid #f4f1ec;font-size:12.5px;color:#78716c;vertical-align:middle}
+.wh th:first-child,.wh td:first-child{padding-left:18px}.wh th:last-child,.wh td:last-child{padding-right:18px;text-align:right}
+.wh .num{text-align:right;white-space:nowrap}
+.wh code,.mono{font-family:"IBM Plex Mono",ui-monospace,Menlo,monospace;font-size:11px;color:#78716c;background:transparent;overflow-wrap:anywhere}
+.tg{width:32px;height:18px;border-radius:9px;background:#e8e5e0;position:relative;display:inline-block;vertical-align:middle}
+.tg::after{content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.18)}
+.tg.on{background:#c96442}.tg.on::after{left:16px}
+.tg.lock{background:#c9c3bb}.tg.lock::after{left:16px}
+.tg.dis{opacity:.45}
+.lockrow{font-size:11px;color:#a8a29e;display:inline-flex;align-items:center;gap:4px}
+
+/* collapsible */
+.coll{display:flex;align-items:center;gap:10px;padding:12px 18px;font-size:12px;color:#78716c}
+.coll h3{margin:0;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:#78716c}
+.hint{padding:0 18px 14px;font-size:12px;color:#a8a29e}
+
+/* expanded editor */
+tr.exp td{background:rgba(250,248,245,.6);padding:16px 18px 14px 18px}
+.editor{display:grid;grid-template-columns:1.35fr 1fr;gap:28px}
+.ed-h{font-size:12px;font-weight:600;color:#1a1a1a;margin-bottom:10px}
+.radio{display:grid;grid-template-columns:16px 1fr;gap:10px;padding:8px 0;color:#1a1a1a}
+.radio i{width:16px;height:16px;border-radius:50%;border:1.5px solid #c9c3bb;background:#fff;margin-top:1px;position:relative}
+.radio.on i{border-color:#c96442}.radio.on i::after{content:"";position:absolute;inset:3px;border-radius:50%;background:#c96442}
+.radio .t{font-size:13px;font-weight:500}
+.radio .d{font-size:12px;color:#78716c;margin-top:1px}
+.fields{margin:6px 0 0 26px;display:grid;grid-template-columns:1fr 1fr;gap:12px 16px;padding:12px 14px;border:1px solid #f4f1ec;border-radius:10px;background:#fff}
+.fld label{display:block;font-size:12px;color:#78716c;margin-bottom:4px}
+.sel,.inp{height:32px;border:1px solid #e8e5e0;border-radius:8px;background:#fff;padding:0 10px;display:flex;align-items:center;justify-content:space-between;font-size:13px;color:#1a1a1a}
+.sel svg{width:12px;height:12px;stroke:#a8a29e;fill:none;stroke-width:2}
+.inp span{color:#a8a29e;font-size:12px}
+.fld .h{font-size:11px;color:#a8a29e;margin-top:4px;line-height:1.4}
+.cb{display:inline-flex;align-items:center;gap:7px;font-size:13px;color:#1a1a1a;margin-right:14px}
+.cb i{width:15px;height:15px;border-radius:4px;border:1.5px solid #c9c3bb;background:#fff;position:relative}
+.cb.on i{background:#c96442;border-color:#c96442}
+.cb.on i::after{content:"";position:absolute;left:4px;top:1px;width:4px;height:8px;border:solid #fff;border-width:0 2px 2px 0;transform:rotate(45deg)}
+.side{display:grid;gap:14px}
+.sbox{border:1px solid #f4f1ec;border-radius:10px;padding:12px 14px;background:#fff}
+.sbox .k{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:#a8a29e;margin-bottom:6px}
+.sbox .v{font-size:13px;color:#1a1a1a}
+.sbox .v b{font-weight:600}
+.sbox .s{font-size:12px;color:#78716c;margin-top:4px;line-height:1.45}
+.sbox ul{margin:0;padding-left:0;list-style:none;font-size:12.5px;color:#1a1a1a}
+.sbox li{padding:3px 0;display:flex;justify-content:space-between;gap:10px}
+.sbox li span{color:#a8a29e}
+.est{font-size:15px;font-weight:600;color:#1a1a1a}
+.draft{position:absolute;left:28px;right:28px;bottom:22px;background:#fff;border:1px solid #e8e5e0;border-radius:12px;padding:10px 14px;display:flex;align-items:center;justify-content:space-between;gap:16px;box-shadow:0 10px 30px rgba(40,30,20,.14),0 1px 2px rgba(0,0,0,.06);z-index:4}
+.draft .l{display:flex;align-items:center;gap:12px;font-size:13px;color:#1a1a1a;min-width:0}
+.draft .l b{font-weight:600;white-space:nowrap}
+.dchip{font-size:12px;color:#78716c;background:#faf8f5;border:1px solid #f4f1ec;border-radius:6px;padding:3px 8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dchip b{color:#1a1a1a;font-weight:600}
+
+/* modal */
+.overlay{position:absolute;inset:0;background:rgba(26,26,26,.22);display:flex;align-items:flex-start;justify-content:center;padding:40px 24px;z-index:8}
+.modal{width:100%;max-width:680px;background:#fff;border:1px solid #e8e5e0;border-radius:16px;padding:24px;box-shadow:0 24px 60px rgba(0,0,0,.22);position:relative}
+.modal-h{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}
+.modal-h h4{margin:0;font-size:18px;font-weight:700}
+.modal-h span{font-size:13px;color:#a8a29e}
+.sec{border-top:1px solid #f4f1ec;padding:12px 0}
+.sec .k{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:#a8a29e;margin-bottom:6px}
+.chg{display:grid;grid-template-columns:1fr auto 1fr;gap:8px 12px;align-items:center;font-size:13px;color:#1a1a1a}
+.chg .was{color:#78716c}
+.chg .arr{color:#a8a29e}
+.chg .meta{grid-column:1 / -1;font-size:12px;color:#78716c}
+.kv{display:grid;grid-template-columns:200px 1fr;gap:6px 16px;font-size:13px}
+.kv .kk{color:#78716c}.kv .vv{color:#1a1a1a}
+.kv .vv b{font-weight:600}
+.warnbox{border:1px solid rgba(245,158,11,.4);background:rgba(245,158,11,.08);color:#8a5a12;border-radius:8px;padding:8px 10px;font-size:12.5px;margin-top:8px}
+.okbox{border:1px solid rgba(78,173,107,.35);background:rgba(78,173,107,.08);color:#2f7a48;border-radius:8px;padding:8px 10px;font-size:12.5px}
+.modal-f{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-top:8px;padding-top:14px;border-top:1px solid #f4f1ec}
+.modal-f .ver{font-size:12px;color:#a8a29e}
+.opt{display:grid;grid-template-columns:16px 1fr;gap:10px;padding:8px 10px;border:1px solid #f4f1ec;border-radius:10px;margin-top:6px;align-items:start}
+.opt.on{border-color:rgba(201,100,66,.45);background:rgba(201,100,66,.04)}
+.opt i{width:16px;height:16px;border-radius:50%;border:1.5px solid #c9c3bb;background:#fff;position:relative;margin-top:1px}
+.opt.on i{border-color:#c96442}.opt.on i::after{content:"";position:absolute;inset:3px;border-radius:50%;background:#c96442}
+.opt .t{font-size:13px;font-weight:500;color:#1a1a1a}.opt .d{font-size:12px;color:#78716c}
+.reco{font-size:10.5px;font-weight:600;color:#a54e30;background:rgba(201,100,66,.10);border-radius:4px;padding:1px 6px;margin-left:6px;text-transform:uppercase;letter-spacing:.04em}
+
+/* banner */
+.banner{border:1px solid rgba(209,67,67,.3);background:rgba(209,67,67,.05);border-radius:12px;padding:12px 16px;display:flex;justify-content:space-between;gap:16px;align-items:flex-start;margin-bottom:18px;position:relative}
+.banner .t{font-size:13.5px;font-weight:600;color:#9b2f2f}
+.banner .d{font-size:12.5px;color:#78716c;margin-top:3px;line-height:1.5}
+.banner .d b{color:#1a1a1a;font-weight:600}
+
+/* steps in pill */
+.steps{display:inline-flex;gap:10px;font-size:11.5px;color:#78716c;margin-left:6px}
+.steps span{display:inline-flex;align-items:center;gap:4px}
+
+/* vocabulary */
+.vocab{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:18px;padding:18px}
+.vg{border:1px solid #f4f1ec;border-radius:10px;padding:14px}
+.vg h5{margin:0 0 10px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.07em;color:#a8a29e}
+.vrow{display:grid;grid-template-columns:minmax(150px,max-content) 1fr;gap:12px;align-items:center;padding:6px 0;border-top:1px solid #faf8f5;font-size:12px;color:#78716c}
+.vrow:first-of-type{border-top:none}
+.vrow b{color:#1a1a1a;font-weight:500}
+</style>
+
+<div class="doc">
+  <div class="eyebrow">Agency Hub · Settings › Collection · макет экрана · 05.09.2026</div>
+  <h1>Сбор данных OFAPI</h1>
+  <p class="lead">Экран в настройках Hub, который решает, что мы запрашиваем у OnlyFans API в фоне, как часто и за сколько кредитов. Владелец видит, куда уходят кредиты сегодня, включает новые категории по одной и с предварительной оценкой, а любое отключение прекращает новые запросы, не трогая уже собранное. Fansly сюда не входит. Цифры на макете условные.</p>
+
+  <div class="decisions">
+    <div class="dec"><b>Место: Settings › Collection, рядом с Sync</b><p>Сбор это соседний ритуал синхронизации, а не список env-ключей. С OFAPI Credits ведёт ссылка «Настройки сбора». Одна страница, детали категории раскрываются в строке, как операции в Credits.</p></div>
+    <div class="dec"><b>Черновик → проверка → применение</b><p>Ручки не действуют мгновенно. Правки собираются в черновик, «Проверить и применить» показывает расход, последствия и порядок включения, потом сервер меняет политику. «Сохранено», «применяется», «применено», «ошибка» показываются раздельно.</p></div>
+    <div class="dec"><b>Деньги без подмены</b><p>Расход дня разложен на четыре источника, экран управляет только первым. Один терракотовый цвет со ступенями прозрачности показывает степень контроля с этого экрана; штриховка это неатрибутированное.</p></div>
+    <div class="dec"><b>Baseline отделён от нового</b><p>Работающие категории показаны и не меняются автоматически. Новые выключены, включаются по одной, при неизмеренной цене первое включение идёт пилотом с потолком.</p></div>
+    <div class="dec"><b>Оценка всегда с источником</b><p>«Измерено», «по прайсу OFAPI» или «не измерена». Неизвестное не выглядит нулём, а ноль не выглядит бесплатным будущим.</p></div>
+    <div class="dec"><b>Язык и стиль как в Hub</b><p>Оболочка (навигация, вкладки) на английском, содержимое на русском, как в OFAPI Credits и Configuration. Токены темы, Inter, скругления 12/8, тумблер 32×18, состояния с подписью, а не только цветом.</p></div>
+  </div>
+
+  <!-- ================= FRAME 01 ================= -->
+  <section class="frame">
+    <div class="frame-head"><h2><span class="num">01</span>Экран в покое</h2><span class="meta">1440 × auto · Settings › Collection · охват «Все OF-страницы»</span></div>
+    <div class="frame-body">
+      <div class="screen shell">
+        <aside class="sb">
+          <div class="sb-logo"><b>Agency</b>Hub</div>
+          <nav class="sb-nav">
+            <div class="nav"><svg viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/></svg>Overview</div>
+            <div class="sb-eyebrow">Models</div>
+            <div class="model"><b>Lora</b><span>3 pages</span></div>
+            <div class="pg">lora-of <span class="pbadge of">OF</span></div>
+            <div class="pg">lora-vip-of <span class="pbadge of">OF</span></div>
+            <div class="pg">lora-fansly <span class="pbadge fs">Fansly</span></div>
+            <div class="sb-eyebrow">System</div>
+            <div class="nav"><svg viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>Usage</div>
+            <div class="nav"><svg viewBox="0 0 24 24"><circle cx="8" cy="8" r="6"/><path d="M18.09 10.37A6 6 0 1 1 10.34 18"/><path d="M7 6h1v4"/><path d="m16.71 13.88.7.71-2.82 2.82"/></svg>OFAPI Credits</div>
+            <div class="nav"><svg viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>Analytics</div>
+            <div class="nav"><svg viewBox="0 0 24 24"><path d="m12 3 1.9 5.8a2 2 0 0 0 1.3 1.3L21 12l-5.8 1.9a2 2 0 0 0-1.3 1.3L12 21l-1.9-5.8a2 2 0 0 0-1.3-1.3L3 12l5.8-1.9a2 2 0 0 0 1.3-1.3z"/></svg>AI Analytics</div>
+            <div class="nav"><svg viewBox="0 0 24 24"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>Notifications</div>
+            <div class="nav on"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>Settings</div>
+            <div class="nav"><svg viewBox="0 0 24 24"><path d="m18 16 4-4-4-4"/><path d="m6 8-4 4 4 4"/><path d="m14.5 4-5 16"/></svg>Dev <svg viewBox="0 0 24 24" style="margin-left:auto;width:14px;height:14px"><path d="m6 9 6 6 6-6"/></svg></div>
+          </nav>
+        </aside>
+        <div class="main">
+          <div class="topbar">
+            <div class="crumbs"><span class="cur">Settings</span></div>
+            <div class="user"><i>D</i><svg viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg></div>
+          </div>
+          <div class="content">
+            <div class="h1">Settings</div>
+            <div class="tabs" style="position:relative">
+              <span class="mk" style="left:118px;top:-8px">1</span>
+              <span class="tab">Credentials</span><span class="tab">Sync</span><span class="tab on">Collection</span><span class="tab">Models</span><span class="tab">AI Personas</span><span class="tab">Pages</span><span class="tab">Users</span><span class="tab">Agent Keys</span><span class="tab">Configuration</span>
+            </div>
+
+            <div class="phead">
+              <div>
+                <h2>Сбор данных OFAPI</h2>
+                <p>Фоновые запросы Hub к OnlyFans API: что собираем, как часто и сколько это стоит. Выключение останавливает новые запросы и не удаляет собранное. Fansly собирается расширением и кредитов не тратит.</p>
+              </div>
+              <div class="tools">
+                <div class="row">
+                  <span class="mk" style="left:-26px;top:6px">2</span>
+                  <div class="seg"><span class="on">Все OF-страницы</span><span>lora-of</span><span>lora-vip-of</span></div>
+                </div>
+                <div class="row">
+                  <span class="mk" style="left:-26px;top:6px">3</span>
+                  <span class="pill"><span class="dot ok"></span>Политика <b>v14</b> · применена 5 сент 14:10 UTC · owner</span>
+                  <span class="mk" style="right:-26px;top:6px">4</span>
+                  <span class="btn danger-o">Остановить фоновый сбор</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- credits today -->
+            <div class="card">
+              <div class="card-h"><h3>Кредиты сегодня · 5 сент, UTC</h3><span class="r">Подробно в <span class="link">OFAPI Credits</span></span></div>
+              <div class="cred">
+                <div class="cred-l">
+                  <span class="mk" style="left:-9px;top:44px">5</span>
+                  <div class="total"><b>290</b><span>кр списано за день · из них этим экраном управляются <b style="font-size:12.5px;color:#1a1a1a">118</b></span></div>
+                  <div class="stackbar"><i class="sw1" style="width:40.7%"></i><i class="sw2" style="width:29%"></i><i class="sw3" style="width:21%"></i><i class="sw4" style="width:9.3%"></i></div>
+                  <div class="legend">
+                    <div class="lg"><div class="k"><i class="sw1"></i>Фоновый сбор</div><div class="v">118 кр</div><div class="s">Категории ниже. Управляется этим экраном.</div></div>
+                    <div class="lg"><div class="k"><i class="sw2"></i>События вебхука</div><div class="v">84 кр</div><div class="s">≈ 8 400 событий · 1 кр за 100. Настройка групп ниже.</div></div>
+                    <div class="lg"><div class="k"><i class="sw3"></i>Действия чаттеров</div><div class="v">61 кр</div><div class="s">Отправки и ручные обновления. Свой бюджет, здесь не регулируется.</div></div>
+                    <div class="lg"><div class="k"><i class="sw4"></i>Прочее</div><div class="v">27 кр</div><div class="s">Другие клиенты того же ключа и не атрибутированные списания.</div></div>
+                  </div>
+                </div>
+                <div class="cred-r">
+                  <div class="meter">
+                    <span class="mk" style="left:-9px;top:-2px">6</span>
+                    <div class="k"><span>Предел управляемых запросов</span><b>118 из 400 кр</b></div>
+                    <div class="bar"><i style="width:29.5%"></i></div>
+                    <div class="s">Сервер не начнёт новые фоновые запросы выше предела. События, чаттеры и внешние списания сюда не входят.</div>
+                  </div>
+                  <div>
+                    <span class="mk" style="left:-9px;top:-2px">7</span>
+                    <div class="bal"><b>1 099</b><span>кр на балансе команды</span></div>
+                    <div class="thr"><i style="width:45.5%;background:#f4f1ec"></i><i style="width:45.5%;background:rgba(245,158,11,.35)"></i><i style="width:9%;background:#4ead6b"></i><span class="m" style="left:45.5%"></span><span class="m" style="left:91%"></span></div>
+                    <div class="meter"><div class="s">Автостоп при <b style="color:#1a1a1a">500</b> · тревога при <b style="color:#1a1a1a">1 000</b>. Хватит ≈ <b style="color:#b5711a">4 дня</b> при 290 кр/день: оценка по последним 7 дням. Баланс общий для ключа, это не бюджет одного коллектора.</div></div>
+                  </div>
+                </div>
+              </div>
+              <div class="foot"><span>За 30 дней:</span><span>фоновый сбор <b>3 480</b></span><span>события <b>2 610</b></span><span>чаттеры <b>1 720</b></span><span>прочее <b>640</b></span><span style="margin-left:auto">Балансы читаются бесплатным запросом каждые 15 мин</span></div>
+            </div>
+
+            <!-- categories -->
+            <div class="card">
+              <div class="card-h"><h3>Категории</h3><span class="r">Показаны все OF-страницы · 2 · сортировка по расходу</span></div>
+              <table class="cat">
+                <thead><tr>
+                  <th style="width:26%">Категория</th><th style="width:14%">Режим</th><th style="width:18%">Свежесть и охват</th><th class="num" style="width:10%">Кредиты · 7 дн</th><th style="width:14%">Оценка / день</th><th style="width:15%">Состояние</th><th style="width:3%"></th>
+                </tr></thead>
+                <tbody>
+                  <tr class="grp"><td colspan="7" style="position:relative"><span class="mk" style="left:-9px;top:12px">8</span>Работает сейчас<span>действующая конфигурация, не меняется автоматически</span></td></tr>
+                  <tr>
+                    <td class="name" style="position:relative"><span class="mk" style="left:-9px;top:14px">9</span><div class="nm">Сообщения</div><div class="why">Чат в десктопе, needs-reply, история переписки</div><div class="chips"><span class="chip">Десктоп</span><span class="chip">Needs-reply</span><span class="chip">Agent Read</span></div></td>
+                    <td><span class="mode on">События</span><div class="sub">+ сверка каждые 15 мин</div></td>
+                    <td><div class="big" style="font-weight:500">3 мин назад</div><div class="sub">2 страницы · 1 812 чатов</div></td>
+                    <td class="num" style="position:relative"><span class="mk" style="right:-9px;top:14px">10</span><div class="big">690</div><div class="sub">+ события 148</div><div class="bar64"><i style="width:100%"></i></div></td>
+                    <td><div class="big" style="font-weight:500">≈ 105</div><div class="sub"><span class="src">измерено · 7 дн</span></div></td>
+                    <td><span class="st ok"><span class="dot ok"></span>работает</span></td>
+                    <td><svg class="caret" viewBox="0 0 12 12"><path d="M4 2l4 4-4 4"/></svg></td>
+                  </tr>
+                  <tr>
+                    <td class="name"><div class="nm">Оплаты и подписки</div><div class="why">Леджер, статусы подписок, продления и истечения</div><div class="chips"><span class="chip">Леджер</span><span class="chip">Дашборд</span><span class="chip">Десктоп</span></div></td>
+                    <td><span class="mode on">События</span><div class="sub">+ сверка 1 раз в час</div></td>
+                    <td><div class="big" style="font-weight:500">41 мин назад</div><div class="sub">2 страницы · 96 транзакций сегодня</div></td>
+                    <td class="num"><div class="big">210</div><div class="sub">+ события 62</div><div class="bar64"><i style="width:30%"></i></div></td>
+                    <td><div class="big" style="font-weight:500">≈ 30</div><div class="sub"><span class="src">измерено · 7 дн</span></div></td>
+                    <td><span class="st ok"><span class="dot ok"></span>работает</span></td>
+                    <td><svg class="caret" viewBox="0 0 12 12"><path d="M4 2l4 4-4 4"/></svg></td>
+                  </tr>
+                  <tr>
+                    <td class="name"><div class="nm">Аудитория</div><div class="why">Карточки фанов, подписчики и истёкшие, топ-спендеры</div><div class="chips"><span class="chip">Дашборд</span><span class="chip">Десктоп</span><span class="chip">Agent Read</span></div></td>
+                    <td><span class="mode on">Расписание</span><div class="sub">1 раз в сутки · 03:00 UTC</div></td>
+                    <td><div class="big" style="font-weight:500">сегодня 03:12</div><div class="sub">4 618 фанов · 47 запросов за обход</div></td>
+                    <td class="num"><div class="big">168</div><div class="sub">запросы</div><div class="bar64"><i style="width:24%"></i></div></td>
+                    <td><div class="big" style="font-weight:500">≈ 24</div><div class="sub"><span class="src">измерено · 7 дн</span></div></td>
+                    <td style="position:relative"><span class="mk" style="right:-2px;top:14px">12</span><span class="st warn"><span class="dot warn"></span>пауза · бюджет</span><div class="sub">30 кр исчерпаны, продолжит 00:00 UTC</div></td>
+                    <td><svg class="caret" viewBox="0 0 12 12"><path d="M4 2l4 4-4 4"/></svg></td>
+                  </tr>
+                  <tr>
+                    <td class="name"><div class="nm">Online и «печатает»</div><div class="why">Индикаторы присутствия фанов в чате десктопа</div><div class="chips"><span class="chip">Десктоп</span></div></td>
+                    <td><span class="mode on">События</span><div class="sub">общая регистрация вебхука</div></td>
+                    <td><div class="big" style="font-weight:500">поток</div><div class="sub">2 страницы · ≈ 4 200 событий в сутки</div></td>
+                    <td class="num"><div class="big">294</div><div class="sub">только события</div><div class="bar64"><i style="width:43%"></i></div></td>
+                    <td><div class="big" style="font-weight:500">≈ 42</div><div class="sub"><span class="src">измерено · 7 дн</span></div></td>
+                    <td><span class="st ok"><span class="dot ok"></span>работает</span><div class="sub">самая объёмная группа событий</div></td>
+                    <td><svg class="caret" viewBox="0 0 12 12"><path d="M4 2l4 4-4 4"/></svg></td>
+                  </tr>
+
+                  <tr class="grp"><td colspan="7">Доступно к включению<span>по умолчанию выключено · включается по одной категории</span></td></tr>
+                  <tr>
+                    <td class="name"><div class="nm">Посты и комментарии</div><div class="why">История публикаций и обсуждений под ними</div><div class="chips"><span class="chip">Дашборд</span><span class="chip">Agent Read</span></div></td>
+                    <td><span class="mode off">Выключено</span></td>
+                    <td><div class="big" style="font-weight:500;color:#a8a29e">не собирается</div><div class="sub">разовых импортов не было</div></td>
+                    <td class="num"><div class="big" style="color:#a8a29e">0</div></td>
+                    <td style="position:relative"><span class="mk" style="left:-9px;top:14px">11</span><div class="big" style="font-weight:500">≈ 8 за обход</div><div class="sub"><span class="src none">по прайсу · не измерена</span></div></td>
+                    <td><span class="st off"><span class="dot off"></span>выключено</span></td>
+                    <td><svg class="caret" viewBox="0 0 12 12"><path d="M4 2l4 4-4 4"/></svg></td>
+                  </tr>
+                  <tr>
+                    <td class="name"><div class="nm">Посещаемость и динамика подписок</div><div class="why">Кто заходил на профиль, приток и отток подписчиков</div><div class="chips"><span class="chip">Дашборд</span></div></td>
+                    <td><span class="mode off">Выключено</span><div class="sub">доступно: по запросу</div></td>
+                    <td><div class="big" style="font-weight:500;color:#a8a29e">не собирается</div></td>
+                    <td class="num"><div class="big" style="color:#a8a29e">0</div></td>
+                    <td><div class="big" style="font-weight:500">1 за 20 строк</div><div class="sub"><span class="src none">по прайсу экспорта</span></div></td>
+                    <td><span class="st off"><span class="dot off"></span>выключено</span></td>
+                    <td><svg class="caret" viewBox="0 0 12 12"><path d="M4 2l4 4-4 4"/></svg></td>
+                  </tr>
+                  <tr>
+                    <td class="name"><div class="nm">Tracking и Smart Links</div><div class="why">Результат источников трафика: клики, подписки, доход</div><div class="chips"><span class="chip">Дашборд</span><span class="chip">Agent Read</span></div></td>
+                    <td><span class="mode off">Выключено</span><div class="sub">доступно: расписание, по запросу</div></td>
+                    <td><div class="big" style="font-weight:500;color:#a8a29e">не собирается</div><div class="sub">агрегаты по 12 ссылкам</div></td>
+                    <td class="num"><div class="big" style="color:#a8a29e">0</div></td>
+                    <td><div class="big" style="font-weight:500">≈ 1 за ссылку</div><div class="sub"><span class="src none">по прайсу · без обхода людей</span></div></td>
+                    <td><span class="st off"><span class="dot off"></span>выключено</span></td>
+                    <td><svg class="caret" viewBox="0 0 12 12"><path d="M4 2l4 4-4 4"/></svg></td>
+                  </tr>
+                  <tr>
+                    <td class="name"><div class="nm">Vault: каталог</div><div class="why">Поиск медиа и связи с постами, без скачивания файлов</div><div class="chips"><span class="chip">Десктоп · медиа</span></div></td>
+                    <td><span class="mode off">Выключено</span><div class="sub">доступно: расписание</div></td>
+                    <td><div class="big" style="font-weight:500;color:#a8a29e">не собирается</div></td>
+                    <td class="num"><div class="big" style="color:#a8a29e">0</div></td>
+                    <td><div class="big" style="font-weight:500">≈ 1 за 100 элементов</div><div class="sub"><span class="src none">по прайсу · не измерена</span></div></td>
+                    <td><span class="st off"><span class="dot off"></span>выключено</span></td>
+                    <td><svg class="caret" viewBox="0 0 12 12"><path d="M4 2l4 4-4 4"/></svg></td>
+                  </tr>
+                  <tr>
+                    <td class="name"><div class="nm">Балансы и выплаты</div><div class="why">Доступный и ожидаемый баланс модели, история выплат</div><div class="chips"><span class="chip">Дашборд</span></div></td>
+                    <td><span class="mode off">Выключено</span><div class="sub">доступно: по запросу, расписание</div></td>
+                    <td><div class="big" style="font-weight:500;color:#a8a29e">не собирается</div></td>
+                    <td class="num"><div class="big" style="color:#a8a29e">0</div></td>
+                    <td><div class="big" style="font-weight:500">1 за запрос</div><div class="sub"><span class="src none">по прайсу</span></div></td>
+                    <td><span class="st off"><span class="dot off"></span>выключено</span></td>
+                    <td><svg class="caret" viewBox="0 0 12 12"><path d="M4 2l4 4-4 4"/></svg></td>
+                  </tr>
+
+                  <tr class="grp"><td colspan="7" style="position:relative"><span class="mk" style="left:-9px;top:12px">13</span>Только разовые задачи<span>без тумблера: период, выбор и потолок задаются на каждую задачу</span></td></tr>
+                  <tr>
+                    <td class="name"><div class="nm">Файлы из vault</div><div class="why">Локальные копии медиа по выбранным файлам</div><div class="chips"><span class="chip">Десктоп · медиа</span></div></td>
+                    <td><span class="mode job">Разовая задача</span></td>
+                    <td><div class="big" style="font-weight:500;color:#a8a29e">задач не было</div></td>
+                    <td class="num"><div class="big" style="color:#a8a29e">0</div></td>
+                    <td><div class="big" style="font-weight:500">3 за МБ</div><div class="sub"><span class="src">прайс OFAPI</span></div></td>
+                    <td><span class="btn sm">Создать задачу…</span></td>
+                    <td></td>
+                  </tr>
+                  <tr>
+                    <td class="name"><div class="nm">История сообщений до подключения</div><div class="why">Догрузка переписки за выбранный период</div><div class="chips"><span class="chip">Десктоп</span><span class="chip">Agent Read</span></div></td>
+                    <td><span class="mode job">Разовая задача</span></td>
+                    <td><div class="big" style="font-weight:500">28 авг</div><div class="sub">2 страницы · до 1 июня · 1 240 кр</div></td>
+                    <td class="num"><div class="big" style="color:#a8a29e">0</div></td>
+                    <td><div class="big" style="font-weight:500">≈ 1 за 100 сообщений</div><div class="sub"><span class="src">измерено · 1 задача</span></div></td>
+                    <td><span class="btn sm">Создать задачу…</span></td>
+                    <td></td>
+                  </tr>
+                </tbody>
+              </table>
+              <div class="hint" style="padding-top:12px;border-top:1px solid #f4f1ec">Изменения на этом экране становятся черновиком и действуют после «Применить». Выключение категории останавливает новые запросы; уже собранные данные остаются и читаются с их реальной свежестью.</div>
+            </div>
+
+            <!-- webhook -->
+            <div class="card">
+              <span class="mk" style="left:-9px;top:14px">14</span>
+              <div class="card-h"><h3>События вебхука · одна регистрация на все OF-страницы</h3><span class="r"><span class="dot ok" style="margin-right:6px"></span>стабильна · <span class="mono">wh_43…24d</span> · цель gosling-agency.ru · проверена 14:10 UTC</span></div>
+              <div class="wh-note">Набор типов общий для всех страниц: отдельные наборы на страницу потребуют отдельных регистраций и здесь не обещаются. Изменение набора применяется перерегистрацией и считается применённым после проверки readback у провайдера.</div>
+              <table class="wh">
+                <thead><tr><th style="width:17%">Группа</th><th style="width:35%">Типы событий</th><th class="num" style="width:13%">Событий / сутки</th><th class="num" style="width:13%">Кредитов / сутки</th><th style="width:16%">Использует</th><th style="width:6%"></th></tr></thead>
+                <tbody>
+                  <tr><td style="color:#1a1a1a;font-weight:600">Сообщения</td><td><code>messages.received · messages.sent · messages.read</code></td><td class="num">2 100</td><td class="num" style="color:#1a1a1a;font-weight:600">21</td><td>Сообщения</td><td><span class="tg on"></span></td></tr>
+                  <tr><td style="color:#1a1a1a;font-weight:600">Оплаты и подписки</td><td><code>transactions.* · subscriptions.new / renewed / expired</code></td><td class="num">620</td><td class="num" style="color:#1a1a1a;font-weight:600">6</td><td>Оплаты и подписки</td><td><span class="tg on"></span></td></tr>
+                  <tr><td style="color:#1a1a1a;font-weight:600">Присутствие</td><td><code>users.online · users.offline · users.typing</code></td><td class="num">4 200</td><td class="num" style="color:#1a1a1a;font-weight:600">42</td><td>Online и «печатает»</td><td><span class="tg on"></span></td></tr>
+                  <tr><td style="color:#1a1a1a;font-weight:600">Посты и комментарии</td><td><code>posts.* · comments.*</code></td><td class="num" style="color:#a8a29e">≈ 400 по оценке</td><td class="num" style="color:#a8a29e">≈ 4</td><td>Посты и комментарии</td><td><span class="tg"></span></td></tr>
+                  <tr><td style="color:#1a1a1a;font-weight:600">Медиа-загрузки</td><td><code>media_uploads.completed · media_uploads.failed</code></td><td class="num">30</td><td class="num" style="color:#1a1a1a;font-weight:600">&lt; 1</td><td>Отправки чаттеров</td><td><span class="tg on"></span></td></tr>
+                  <tr><td style="color:#1a1a1a;font-weight:600">Аккаунт</td><td><code>accounts.disconnected</code></td><td class="num">0</td><td class="num" style="color:#1a1a1a;font-weight:600">0</td><td>Диагностика подключения</td><td><span class="lockrow"><span class="tg lock"></span></span></td></tr>
+                </tbody>
+              </table>
+              <div class="foot"><span>1 кредит за 100 событий любого типа.</span><span>Итого ≈ <b>70 кр / сутки</b>, за 7 дней <b>504</b>.</span><span style="margin-left:auto">Группа «Аккаунт» обязательна: без неё Hub не узнает об отключении аккаунта.</span></div>
+            </div>
+
+            <!-- log -->
+            <div class="card">
+              <span class="mk" style="left:-9px;top:12px">15</span>
+              <div class="coll"><svg class="caret" viewBox="0 0 12 12"><path d="M4 2l4 4-4 4"/></svg><h3>Журнал изменений</h3><span>14 записей · последняя: v14, 5 сент 14:10 UTC, owner: «Сообщения: сверка 30 → 15 мин»</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="notes cols">
+      <div class="note"><span class="n">1</span><div><b>Вкладка Collection между Sync и Models.</b> Сбор это соседний ритуал синхронизации, а не конфигурация. С OFAPI Credits сюда ведёт ссылка «Настройки сбора».</div></div>
+      <div class="note"><span class="n">2</span><div><b>Охват.</b> По умолчанию все OF-страницы. Выбор страницы фильтрует таблицу и цифры; общие вещи (вебхук, предел, баланс) остаются с пометкой «общее».</div></div>
+      <div class="note"><span class="n">3</span><div><b>Пилюля политики</b> единственный индикатор «что действует»: версия, время, автор. При расхождении с worker или вебхуком становится жёлтой «применяется» или красной «ошибка применения».</div></div>
+      <div class="note"><span class="n">4</span><div><b>Стоп красным контуром,</b> не заливкой: действие редкое и не должно читаться как основная кнопка экрана. Что именно остановится, показывает диалог (кадр 05).</div></div>
+      <div class="note"><span class="n">5</span><div><b>Стек расхода дня.</b> Четыре источника, у каждого подпись «кто управляет». Ступени одного цвета показывают степень контроля с этого экрана, штриховка это неатрибутированное.</div></div>
+      <div class="note"><span class="n">6</span><div><b>Предел назван точно:</b> предел новых управляемых запросов, а не бюджет всех списаний. Под ним написано, что в него не входит.</div></div>
+      <div class="note"><span class="n">7</span><div><b>Баланс общий для ключа,</b> с двумя порогами на шкале (автостоп, тревога). «Хватит на 4 дня» подписано как оценка по 7 дням и окрашено по шкале RemainingBar.</div></div>
+      <div class="note"><span class="n">8</span><div><b>Группы строк повторяют решение владельца:</b> работает сейчас, доступно к включению, только разовые задачи. Внутри группы порядок по расходу.</div></div>
+      <div class="note"><span class="n">9</span><div><b>Строка читается как предложение:</b> что собираем, зачем, кто использует, как, насколько свежо, сколько стоило, сколько будет стоить, в каком состоянии.</div></div>
+      <div class="note"><span class="n">10</span><div><b>Кредиты за 7 дней</b> разделены на запросы и события; полоска показывает долю от самой дорогой категории, а не от бюджета.</div></div>
+      <div class="note"><span class="n">11</span><div><b>Оценка всегда с источником:</b> «измерено · 7 дн», «по прайсу», «не измерена» (пунктирная рамка). Неизвестная цена никогда не показывается нулём.</div></div>
+      <div class="note"><span class="n">12</span><div><b>Пауза по бюджету это состояние строки,</b> а не спрятанная ошибка: видно, какой лимит исчерпан и когда продолжит.</div></div>
+      <div class="note"><span class="n">13</span><div><b>Разовые задачи без тумблера.</b> Только «Создать задачу…» с периодом, выбором и потолком. Соседний тумблер каталога файлы не скачивает.</div></div>
+      <div class="note"><span class="n">14</span><div><b>Вебхук отдельно от категорий,</b> потому что одна регистрация на все страницы. Типы выбираются группами; «Аккаунт» заблокирован как обязательный. Присутствие самая объёмная группа, но у неё есть потребитель.</div></div>
+      <div class="note"><span class="n">15</span><div><b>Журнал свёрнут:</b> кто, когда, что и версия политики. Раскрывается при необходимости, как разделы в OFAPI Credits.</div></div>
+    </div>
+  </section>
+
+  <!-- ================= FRAME 02 ================= -->
+  <section class="frame">
+    <div class="frame-head"><h2><span class="num">02</span>Настройка категории и черновик</h2><span class="meta">фрагмент: колонка контента 1192 · строка «Посты и комментарии» раскрыта</span></div>
+    <div class="frame-grid side">
+      <div class="frame-body">
+        <div class="screen crop">
+          <div class="content" style="padding-bottom:96px">
+            <div class="phead" style="margin-bottom:14px">
+              <div><h2>Сбор данных OFAPI</h2><p>Фоновые запросы Hub к OnlyFans API: что собираем, как часто и сколько это стоит.</p></div>
+              <div class="tools"><div class="row"><div class="seg"><span class="on">Все OF-страницы</span><span>lora-of</span><span>lora-vip-of</span></div></div><div class="row"><span class="pill"><span class="dot ok"></span>Политика <b>v14</b> · применена 5 сент 14:10 UTC</span><span class="btn danger-o">Остановить фоновый сбор</span></div></div>
+            </div>
+            <div class="card">
+              <div class="card-h"><h3>Категории</h3><span class="r">Показаны все OF-страницы · 2</span></div>
+              <table class="cat">
+                <thead><tr><th style="width:26%">Категория</th><th style="width:14%">Режим</th><th style="width:18%">Свежесть и охват</th><th class="num" style="width:10%">Кредиты · 7 дн</th><th style="width:14%">Оценка / день</th><th style="width:15%">Состояние</th><th style="width:3%"></th></tr></thead>
+                <tbody>
+                  <tr class="grp"><td colspan="7">Доступно к включению<span>по умолчанию выключено · включается по одной категории</span></td></tr>
+                  <tr style="background:rgba(250,248,245,.6)">
+                    <td class="name" style="position:relative"><span class="mk" style="left:-9px;top:14px">1</span><div class="nm">Посты и комментарии</div><div class="why">История публикаций и обсуждений под ними</div><div class="chips"><span class="chip">Дашборд</span><span class="chip">Agent Read</span></div></td>
+                    <td><span class="mode on">Расписание</span><div class="sub" style="color:#a54e30">черновик · было: Выключено</div></td>
+                    <td><div class="big" style="font-weight:500;color:#a8a29e">не собирается</div></td>
+                    <td class="num"><div class="big" style="color:#a8a29e">0</div></td>
+                    <td><div class="big" style="font-weight:500">≈ 32</div><div class="sub"><span class="src none">по прайсу · не измерена</span></div></td>
+                    <td><span class="st off"><span class="dot off"></span>выключено</span></td>
+                    <td><svg class="caret" viewBox="0 0 12 12" style="transform:rotate(90deg)"><path d="M4 2l4 4-4 4"/></svg></td>
+                  </tr>
+                  <tr class="exp"><td colspan="7" style="position:relative">
+                    <div class="editor">
+                      <div>
+                        <div class="ed-h" style="position:relative"><span class="mk" style="left:-27px;top:-2px">2</span>Режим · 2 страницы</div>
+                        <div class="radio"><i></i><div><div class="t">Выключено</div><div class="d">Новых запросов нет. Сохранённое читается с его реальной свежестью.</div></div></div>
+                        <div class="radio"><i></i><div><div class="t">По запросу</div><div class="d">Только после явного действия: кнопка на экране или разрешённый запрос агента. Открытие страницы не считается запросом.</div></div></div>
+                        <div class="radio on"><i></i><div><div class="t">По расписанию</div><div class="d">Фоновый обход с лимитом. Повторное включение продолжает с чекпоинта, пропущенное не догружается само.</div></div></div>
+                        <div class="fields" style="position:relative">
+                          <span class="mk" style="left:-27px;top:12px">3</span>
+                          <div class="fld"><label>Частота</label><div class="sel">4 раза в сутки<svg viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg></div></div>
+                          <div class="fld"><label>Глубина обхода</label><div class="sel">последние 100 постов<svg viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg></div><div class="h">Определяет цену одного обхода: ≈ 2 запроса на страницу</div></div>
+                          <div class="fld"><label>Комментарии</label><div class="sel">не собирать<svg viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg></div><div class="h">Отдельный запрос на каждый пост, ×5 к цене обхода</div></div>
+                          <div class="fld" style="position:relative"><span class="mk" style="left:-27px;top:22px">4</span><label>Дневной лимит категории</label><div class="inp">40<span>кр</span></div><div class="h">Сервер остановит новые запросы категории при достижении; ответы в полёте сохранятся</div></div>
+                          <div class="fld" style="grid-column:1 / -1"><label>Страницы</label><span class="cb on"><i></i>lora-of</span><span class="cb on"><i></i>lora-vip-of</span></div>
+                        </div>
+                      </div>
+                      <div class="side">
+                        <div class="sbox" style="position:relative"><span class="mk" style="left:-27px;top:12px">5</span><div class="k">Оценка</div><div class="est">≈ 8 кр за обход × 4 = ≈ 32 кр в сутки</div><div class="s"><span class="src none">по прайсу OFAPI · измерений нет</span></div><div class="s">Первое включение лучше пилотом: 3 обхода с потолком 30 кр, затем решение по факту. Предложим при проверке.</div></div>
+                        <div class="sbox" style="position:relative"><span class="mk" style="left:-27px;top:12px">6</span><div class="k">Кто использует</div><ul><li>Дашборд · История публикаций<span>новый экран</span></li><li>Agent Read · posts<span>сейчас отвечает «не собирается»</span></li></ul></div>
+                        <div class="sbox"><div class="k">Если выключить</div><div class="v" style="color:#78716c">Ничего не перестанет обновляться: категория сейчас не собирается.</div></div>
+                        <div class="sbox"><div class="k">Последние запуски</div><div class="v" style="color:#a8a29e">Запусков ещё не было</div></div>
+                      </div>
+                    </div>
+                  </td></tr>
+                  <tr>
+                    <td class="name"><div class="nm">Посещаемость и динамика подписок</div><div class="why">Кто заходил на профиль, приток и отток подписчиков</div><div class="chips"><span class="chip">Дашборд</span></div></td>
+                    <td><span class="mode off">Выключено</span><div class="sub">доступно: по запросу</div></td>
+                    <td><div class="big" style="font-weight:500;color:#a8a29e">не собирается</div></td>
+                    <td class="num"><div class="big" style="color:#a8a29e">0</div></td>
+                    <td><div class="big" style="font-weight:500">1 за 20 строк</div><div class="sub"><span class="src none">по прайсу экспорта</span></div></td>
+                    <td><span class="st off"><span class="dot off"></span>выключено</span></td>
+                    <td><svg class="caret" viewBox="0 0 12 12"><path d="M4 2l4 4-4 4"/></svg></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="draft">
+              <span class="mk" style="left:-9px;top:-9px">7</span>
+              <div class="l"><b>1 изменение в черновике</b><span class="dchip"><b>Посты и комментарии</b>: Выключено → По расписанию, 4 раза в сутки · lora-of, lora-vip-of · лимит 40 кр</span></div>
+              <div class="row"><span class="btn ghost">Сбросить</span><span class="btn primary">Проверить и применить</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="notes">
+        <div class="note"><span class="n">1</span><div><b>Раскрытие в строке, не боковая панель.</b> Соседние категории и их цифры остаются на месте; так уже устроена таблица операций в OFAPI Credits. Режим в строке сразу помечен «черновик · было».</div></div>
+        <div class="note"><span class="n">2</span><div><b>Только поддерживаемые режимы этой категории.</b> Недоступный режим не показывается вовсе, а не серым. У каждого режима одна строка честного описания.</div></div>
+        <div class="note"><span class="n">3</span><div><b>Частота, глубина и комментарии это разные ручки.</b> Глубина определяет цену одного обхода, частота его умножает; подсказки под полями говорят, что дорожает.</div></div>
+        <div class="note"><span class="n">4</span><div><b>Дневной лимит категории</b> с подсказкой о действии сервера. Это не форма-ограничение: сервер проверяет его до отправки запроса.</div></div>
+        <div class="note"><span class="n">5</span><div><b>Оценка пересчитывается по ручкам</b> и всегда с источником. При «не измерена» пилот предлагается здесь, заранее, а не сюрпризом в диалоге.</div></div>
+        <div class="note"><span class="n">6</span><div><b>Последствия рядом с ручками:</b> кто использует, что перестанет обновляться, последние запуски. Решение принимается с последствиями перед глазами.</div></div>
+        <div class="note"><span class="n">7</span><div><b>Плавающая полоса черновика:</b> сколько и каких изменений, «Сбросить» и одна основная кнопка. До «Применить» ничего не действует, закрытие вкладки спрашивает про черновик.</div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= FRAME 03 ================= -->
+  <section class="frame">
+    <div class="frame-head"><h2><span class="num">03</span>Проверка перед применением</h2><span class="meta">ModalShell · max-width 680 · над затемнённым экраном</span></div>
+    <div class="frame-grid side">
+      <div class="frame-body">
+        <div class="screen crop" style="min-height:760px">
+          <div class="content" style="filter:blur(1.5px);opacity:.9">
+            <div class="phead"><div><h2>Сбор данных OFAPI</h2><p>Фоновые запросы Hub к OnlyFans API: что собираем, как часто и сколько это стоит.</p></div><div class="tools"><div class="row"><span class="pill"><span class="dot ok"></span>Политика <b>v14</b></span><span class="btn danger-o">Остановить фоновый сбор</span></div></div></div>
+            <div class="card" style="height:520px"></div>
+          </div>
+          <div class="overlay">
+            <div class="modal">
+              <div class="modal-h" style="position:relative"><span class="mk" style="left:-33px;top:2px">1</span><h4>Проверить изменения</h4><span>Close</span></div>
+              <div class="sec" style="border-top:none;padding-top:0;position:relative"><span class="mk" style="left:-33px;top:2px">2</span>
+                <div class="k">Изменится · 1</div>
+                <div class="chg"><div><b style="font-weight:600">Посты и комментарии</b></div><div></div><div></div>
+                  <div class="was">Выключено</div><div class="arr">→</div><div>По расписанию · 4 раза в сутки · 100 постов · без комментариев</div>
+                  <div class="meta">lora-of, lora-vip-of · лимит 40 кр в сутки · вебхук не меняется</div></div>
+              </div>
+              <div class="sec" style="position:relative"><span class="mk" style="left:-33px;top:12px">3</span>
+                <div class="k">Перестанет обновляться</div>
+                <div style="font-size:13px;color:#78716c">Ничего: категория включается, а не выключается.</div>
+              </div>
+              <div class="sec" style="position:relative"><span class="mk" style="left:-33px;top:12px">4</span>
+                <div class="k">Расход</div>
+                <div class="kv">
+                  <div class="kk">Периодический</div><div class="vv"><b>+ ≈ 32 кр в сутки</b> · фоновый сбор станет ≈ 150 из 400</div>
+                  <div class="kk">Разовый импорт</div><div class="vv">нет</div>
+                  <div class="kk">Файлы</div><div class="vv">нет</div>
+                  <div class="kk">Источник оценки</div><div class="vv"><span class="src none">прайс OFAPI, 1 кр за запрос · измерений нет</span></div>
+                </div>
+              </div>
+              <div class="sec" style="position:relative"><span class="mk" style="left:-33px;top:12px">5</span>
+                <div class="k">Сейчас у провайдера</div>
+                <div style="font-size:13px;color:#1a1a1a">В полёте <b>2 запроса</b> (Сообщения). Принятых экспортов и загрузок нет. Они завершатся и могут списать кредиты независимо от этого изменения.</div>
+              </div>
+              <div class="sec" style="position:relative"><span class="mk" style="left:-33px;top:12px">6</span>
+                <div class="k">Порядок включения</div>
+                <div class="okbox">В наблюдении сейчас ничего. После применения откроется окно 24 ч; следующая категория включается после него.</div>
+              </div>
+              <div class="sec" style="position:relative"><span class="mk" style="left:-33px;top:12px">7</span>
+                <div class="k">Как применить</div>
+                <div class="opt on"><i></i><div><div class="t">Сначала пилот: 3 обхода, потолок 30 кр<span class="reco">рекомендуется</span></div><div class="d">Цена не измерена. После пилота строка покажет фактический расход и предложит включить расписание или оставить выключенным.</div></div></div>
+                <div class="opt"><i></i><div><div class="t">Сразу по расписанию</div><div class="d">4 раза в сутки с лимитом 40 кр, без пилота.</div></div></div>
+              </div>
+              <div class="modal-f"><span class="ver">Политика v14 → v15 · автор owner</span><div class="row"><span class="btn">Назад</span><span class="btn primary">Применить пилот</span></div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="notes">
+        <div class="note"><span class="n">1</span><div><b>«Проверить», не «Подтвердить».</b> Диалог сначала читается, потом принимается решение. Заголовок и порядок блоков одинаковы для любого изменения.</div></div>
+        <div class="note"><span class="n">2</span><div><b>Было → станет по страницам.</b> Общие настройки помечаются «общее для всех страниц»; здесь прямо сказано, что вебхук не меняется.</div></div>
+        <div class="note"><span class="n">3</span><div><b>«Перестанет обновляться» показывается всегда,</b> даже пустым: пустой ответ тоже информация, а при выключении здесь появятся экраны и данные Agent Read.</div></div>
+        <div class="note"><span class="n">4</span><div><b>Расход разложен:</b> периодический, разовый, файлы, источник оценки. Предел после изменения показан, чтобы был виден запас.</div></div>
+        <div class="note"><span class="n">5</span><div><b>«Сейчас у провайдера»</b> честно про остаточный риск: запросы в полёте и принятые задачи списывают кредиты независимо от применения.</div></div>
+        <div class="note"><span class="n">6</span><div><b>Порядок включения.</b> Если в наблюдении другая категория, блок становится жёлтым, а основная кнопка требует явной галочки «включаю вне очереди».</div></div>
+        <div class="note"><span class="n">7</span><div><b>Пилот выбран по умолчанию при неизмеренной цене.</b> Одна основная кнопка, подписанная тем, что произойдёт: «Применить пилот», не абстрактное «ОК».</div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= FRAME 04 ================= -->
+  <section class="frame">
+    <div class="frame-head"><h2><span class="num">04</span>Применение и наблюдение</h2><span class="meta">два фрагмента: строка в наблюдении после v15 · вебхук в перерегистрации</span></div>
+    <div class="frame-grid side">
+      <div class="stack">
+        <div>
+          <p class="crop-label">а · через 6 часов после применения пилота</p>
+          <div class="frame-body">
+            <div class="screen crop">
+              <div class="content" style="padding-bottom:20px">
+                <div class="phead" style="margin-bottom:14px">
+                  <div><h2>Сбор данных OFAPI</h2><p>Фоновые запросы Hub к OnlyFans API: что собираем, как часто и сколько это стоит.</p></div>
+                  <div class="tools"><div class="row" style="position:relative"><span class="mk" style="left:-26px;top:6px">1</span><span class="pill"><span class="dot ok"></span>Политика <b>v15</b> · применена 5 сент 15:02 UTC · owner<span class="steps"><span><span class="dot ok"></span>запись</span><span><span class="dot ok"></span>worker</span><span><span class="dot ok"></span>вебхук</span></span></span><span class="btn danger-o">Остановить фоновый сбор</span></div></div>
+                </div>
+                <div class="card">
+                  <div class="card-h"><h3>Категории</h3><span class="r">Показаны все OF-страницы · 2</span></div>
+                  <table class="cat">
+                    <thead><tr><th style="width:26%">Категория</th><th style="width:14%">Режим</th><th style="width:18%">Свежесть и охват</th><th class="num" style="width:10%">Кредиты · 7 дн</th><th style="width:14%">Оценка / день</th><th style="width:15%">Состояние</th><th style="width:3%"></th></tr></thead>
+                    <tbody>
+                      <tr class="grp"><td colspan="7">Доступно к включению<span>по умолчанию выключено · включается по одной категории</span></td></tr>
+                      <tr>
+                        <td class="name"><div class="nm">Посты и комментарии</div><div class="why">История публикаций и обсуждений под ними</div><div class="chips"><span class="chip">Дашборд</span><span class="chip">Agent Read</span></div></td>
+                        <td><span class="mode on">Пилот</span><div class="sub">затем расписание 4 раза в сутки</div></td>
+                        <td><div class="big" style="font-weight:500">2 ч назад</div><div class="sub">2 страницы · 196 постов</div></td>
+                        <td class="num" style="position:relative"><span class="mk" style="right:-9px;top:14px">2</span><div class="big">9</div><div class="sub">факт · 1 обход</div><div class="bar64"><i style="width:2%"></i></div></td>
+                        <td><div class="big" style="font-weight:500">≈ 36</div><div class="sub"><span class="src">измерено · 1 обход · 9 кр</span></div></td>
+                        <td><span class="st acc"><span class="dot acc"></span>наблюдение</span><div class="sub">обход 1 из 3 · 9 из 30 кр · окно до 6 сент 15:02 UTC</div></td>
+                        <td><svg class="caret" viewBox="0 0 12 12"><path d="M4 2l4 4-4 4"/></svg></td>
+                      </tr>
+                      <tr class="exp"><td colspan="7" style="position:relative;padding-top:12px;padding-bottom:12px">
+                        <span class="mk" style="left:-9px;top:14px">3</span>
+                        <div class="row" style="justify-content:space-between">
+                          <div style="font-size:12.5px;color:#78716c">Пилот завершится после 3 обходов или при потолке 30 кр. Когда закончится, здесь появится решение: включить расписание с фактической оценкой или оставить выключенным. Автоматически расписание не включится.</div>
+                          <div class="row"><span class="btn sm">Остановить пилот</span></div>
+                        </div>
+                      </td></tr>
+                      <tr>
+                        <td class="name"><div class="nm">Посещаемость и динамика подписок</div><div class="why">Кто заходил на профиль, приток и отток подписчиков</div><div class="chips"><span class="chip">Дашборд</span></div></td>
+                        <td><span class="mode off">Выключено</span><div class="sub">доступно: по запросу</div></td>
+                        <td><div class="big" style="font-weight:500;color:#a8a29e">не собирается</div></td>
+                        <td class="num"><div class="big" style="color:#a8a29e">0</div></td>
+                        <td><div class="big" style="font-weight:500">1 за 20 строк</div><div class="sub"><span class="src none">по прайсу экспорта</span></div></td>
+                        <td><span class="st mut"><span class="dot"></span>ждёт очереди</span><div class="sub">включение после окна наблюдения</div></td>
+                        <td><svg class="caret" viewBox="0 0 12 12"><path d="M4 2l4 4-4 4"/></svg></td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div>
+          <p class="crop-label">б · изменён набор событий: группа «Посты и комментарии» включена</p>
+          <div class="frame-body">
+            <div class="screen crop">
+              <div class="content" style="padding-top:20px;padding-bottom:20px">
+                <div class="card" style="border-color:rgba(245,158,11,.45)">
+                  <span class="mk" style="left:-9px;top:14px">4</span>
+                  <div class="card-h"><h3>События вебхука · одна регистрация на все OF-страницы</h3><span class="r" style="color:#b5711a;font-weight:500"><span class="dot warn" style="margin-right:6px"></span>перерегистрация · ждём readback · 0:48 из ≈ 2:00</span></div>
+                  <div class="warnbox" style="margin:10px 18px 0">Регистрация обновляется у провайдера. До подтверждения readback тумблеры групп заблокированы, чтобы изменения не наслаивались. Если readback не придёт за 5 минут, экран покажет «ошибка применения» с возможностью повторить или откатить к v15.</div>
+                  <table class="wh">
+                    <thead><tr><th style="width:17%">Группа</th><th style="width:35%">Типы событий</th><th class="num" style="width:13%">Событий / сутки</th><th class="num" style="width:13%">Кредитов / сутки</th><th style="width:16%">Использует</th><th style="width:6%"></th></tr></thead>
+                    <tbody>
+                      <tr><td style="color:#1a1a1a;font-weight:600">Присутствие</td><td><code>users.online · users.offline · users.typing</code></td><td class="num">4 200</td><td class="num" style="color:#1a1a1a;font-weight:600">42</td><td>Online и «печатает»</td><td><span class="tg on dis"></span></td></tr>
+                      <tr style="background:rgba(201,100,66,.04)"><td style="color:#1a1a1a;font-weight:600">Посты и комментарии</td><td><code>posts.* · comments.*</code></td><td class="num" style="color:#a8a29e">≈ 400 по оценке</td><td class="num" style="color:#a8a29e">≈ 4</td><td>Посты и комментарии <span class="sub" style="display:inline;color:#a54e30">· применяется</span></td><td><span class="tg on dis"></span></td></tr>
+                      <tr><td style="color:#1a1a1a;font-weight:600">Аккаунт</td><td><code>accounts.disconnected</code></td><td class="num">0</td><td class="num" style="color:#1a1a1a;font-weight:600">0</td><td>Диагностика подключения</td><td><span class="tg lock dis"></span></td></tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="notes">
+        <div class="note"><span class="n">1</span><div><b>Пилюля показывает три подтверждения раздельно:</b> запись в БД, worker, remote-вебхук. «Применено» только когда все три зелёные; иначе «применяется» с тем, чего ждём.</div></div>
+        <div class="note"><span class="n">2</span><div><b>Факт рядом с оценкой.</b> После первого обхода источник оценки меняется на «измерено · 1 обход», и прогноз пересчитывается по факту: так проверяется модель цены.</div></div>
+        <div class="note"><span class="n">3</span><div><b>Решение после пилота принимает владелец,</b> прямо в строке. Расписание не включается само; «Остановить пилот» доступна всё время наблюдения.</div></div>
+        <div class="note"><span class="n">4</span><div><b>Перерегистрация вебхука</b> жёлтое состояние с таймером ожидания readback. Тумблеры заблокированы до подтверждения; таймаут превращается в «ошибка применения» с повтором или откатом, а не в тихую неопределённость.</div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= FRAME 05 ================= -->
+  <section class="frame">
+    <div class="frame-head"><h2><span class="num">05</span>Аварийный стоп</h2><span class="meta">диалог подтверждения · затем баннер после остановки</span></div>
+    <div class="frame-grid side">
+      <div class="stack">
+        <div>
+          <p class="crop-label">а · диалог по кнопке «Остановить фоновый сбор»</p>
+          <div class="frame-body">
+            <div class="screen crop" style="min-height:560px">
+              <div class="content" style="filter:blur(1.5px);opacity:.9"><div class="phead"><div><h2>Сбор данных OFAPI</h2><p>Фоновые запросы Hub к OnlyFans API.</p></div></div><div class="card" style="height:400px"></div></div>
+              <div class="overlay">
+                <div class="modal">
+                  <div class="modal-h"><h4>Остановить фоновый сбор?</h4><span>Close</span></div>
+                  <div class="sec" style="border-top:none;padding-top:0;position:relative"><span class="mk" style="left:-33px;top:2px">1</span>
+                    <div class="k">Остановится</div>
+                    <div class="kv">
+                      <div class="kk">Категории по расписанию</div><div class="vv"><b>Аудитория</b>, <b>Посты и комментарии</b> (пилот) · 5 запусков до конца суток</div>
+                      <div class="kk">Сверки по событиям</div><div class="vv"><b>Сообщения</b> (каждые 15 мин), <b>Оплаты и подписки</b> (каждый час)</div>
+                      <div class="kk">Гидрация Agent Read</div><div class="vv">платные обновления по запросам агентов</div>
+                    </div>
+                  </div>
+                  <div class="sec">
+                    <div class="k">Продолжит работать и списывать</div>
+                    <div class="kv">
+                      <div class="kk">События вебхука</div><div class="vv">≈ 70 кр в сутки · сообщения и оплаты продолжат приходить в чат</div>
+                      <div class="kk">Действия чаттеров</div><div class="vv">отправки и ручные обновления · свой бюджет</div>
+                      <div class="kk">Уже в полёте</div><div class="vv"><b>2 запроса</b> и <b>0</b> принятых задач завершатся и могут списать кредиты</div>
+                    </div>
+                  </div>
+                  <div class="sec" style="position:relative"><span class="mk" style="left:-33px;top:12px">2</span>
+                    <span class="cb"><i></i>Также отписать необязательные события вебхука (Присутствие, Посты и комментарии). Это перерегистрация, ≈ 2 мин, сообщения и оплаты остаются.</span>
+                  </div>
+                  <div class="sec" style="padding-bottom:0"><div style="font-size:12.5px;color:#78716c">Собранные данные остаются. Возобновление продолжает с чекпоинтов и не догружает пропущенное автоматически. Пауза сохраняется при рестарте и переподключении аккаунтов.</div></div>
+                  <div class="modal-f"><span class="ver">Запись в журнал: owner · причина необязательна</span><div class="row"><span class="btn">Отмена</span><span class="btn danger">Остановить фоновый сбор</span></div></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div>
+          <p class="crop-label">б · экран после остановки</p>
+          <div class="frame-body">
+            <div class="screen crop">
+              <div class="content" style="padding-bottom:20px">
+                <div class="banner">
+                  <span class="mk" style="left:-9px;top:14px">3</span>
+                  <div><div class="t">Фоновый сбор остановлен · owner · 5 сент 16:40 UTC</div><div class="d">Новых фоновых запросов нет. Продолжают: события вебхука (≈ 70 кр в сутки), действия чаттеров, бесплатные чтения. <b>1 запрос</b> ещё в полёте. Категории ниже показаны с их последним состоянием.</div></div>
+                  <span class="btn primary">Возобновить сбор</span>
+                </div>
+                <div class="phead" style="margin-bottom:14px">
+                  <div><h2>Сбор данных OFAPI</h2><p>Фоновые запросы Hub к OnlyFans API: что собираем, как часто и сколько это стоит.</p></div>
+                  <div class="tools"><div class="row"><span class="pill"><span class="dot bad"></span>Политика <b>v16</b> · глобальная пауза · 16:40 UTC</span><span class="btn dis">Остановить фоновый сбор</span></div></div>
+                </div>
+                <div class="card">
+                  <div class="card-h"><h3>Категории</h3><span class="r">Показаны все OF-страницы · 2</span></div>
+                  <table class="cat">
+                    <thead><tr><th style="width:26%">Категория</th><th style="width:14%">Режим</th><th style="width:18%">Свежесть и охват</th><th class="num" style="width:10%">Кредиты · 7 дн</th><th style="width:14%">Оценка / день</th><th style="width:15%">Состояние</th><th style="width:3%"></th></tr></thead>
+                    <tbody>
+                      <tr class="grp"><td colspan="7">Работает сейчас<span>действующая конфигурация, остановлена глобальной паузой</span></td></tr>
+                      <tr>
+                        <td class="name"><div class="nm">Сообщения</div><div class="why">Чат в десктопе, needs-reply, история переписки</div><div class="chips"><span class="chip">Десктоп</span><span class="chip">Needs-reply</span><span class="chip">Agent Read</span></div></td>
+                        <td><span class="mode on">События</span><div class="sub">сверка остановлена</div></td>
+                        <td><div class="big" style="font-weight:500">1 мин назад</div><div class="sub">только по событиям · 2 страницы</div></td>
+                        <td class="num"><div class="big">690</div><div class="sub">+ события 148</div><div class="bar64"><i style="width:100%"></i></div></td>
+                        <td><div class="big" style="font-weight:500">≈ 21</div><div class="sub"><span class="src">только события</span></div></td>
+                        <td style="position:relative"><span class="mk" style="right:-2px;top:14px">4</span><span class="st bad"><span class="dot bad"></span>остановлено</span><div class="sub">глобальная пауза</div></td>
+                        <td><svg class="caret" viewBox="0 0 12 12"><path d="M4 2l4 4-4 4"/></svg></td>
+                      </tr>
+                      <tr>
+                        <td class="name"><div class="nm">Аудитория</div><div class="why">Карточки фанов, подписчики и истёкшие, топ-спендеры</div><div class="chips"><span class="chip">Дашборд</span><span class="chip">Десктоп</span><span class="chip">Agent Read</span></div></td>
+                        <td><span class="mode on">Расписание</span><div class="sub">1 раз в сутки · 03:00 UTC</div></td>
+                        <td><div class="big" style="font-weight:500">сегодня 03:12</div><div class="sub">следующий запуск пропущен</div></td>
+                        <td class="num"><div class="big">168</div><div class="sub">запросы</div><div class="bar64"><i style="width:24%"></i></div></td>
+                        <td><div class="big" style="font-weight:500;color:#a8a29e">0</div><div class="sub"><span class="src">пока пауза</span></div></td>
+                        <td><span class="st bad"><span class="dot bad"></span>остановлено</span><div class="sub">глобальная пауза</div></td>
+                        <td><svg class="caret" viewBox="0 0 12 12"><path d="M4 2l4 4-4 4"/></svg></td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="notes">
+        <div class="note"><span class="n">1</span><div><b>Точный перечень вместо слова «всё».</b> Что остановится (категории, запуски до конца суток, гидрация агентов) и что продолжит списывать (события, чаттеры, в полёте). Слово «все списания» не используется.</div></div>
+        <div class="note"><span class="n">2</span><div><b>Отписка от необязательных событий это отдельная галочка,</b> потому что это отдельное действие с перерегистрацией. Сообщения и оплаты из неё исключены явно.</div></div>
+        <div class="note"><span class="n">3</span><div><b>Баннер после стопа:</b> автор, время, что продолжает списывать, сколько в полёте, одна кнопка «Возобновить». Пилюля политики становится красной с версией паузы.</div></div>
+        <div class="note"><span class="n">4</span><div><b>Категории не исчезают и не «выключаются»:</b> их режим сохранён, состояние «остановлено · глобальная пауза». Возобновление вернёт прежние режимы без повторного применения.</div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= FRAME 06 ================= -->
+  <section class="frame">
+    <div class="frame-head"><h2><span class="num">06</span>Словарь состояний</h2><span class="meta">одно значение, одна форма, одна подпись</span></div>
+    <div class="frame-body">
+      <div class="screen" style="width:100%;min-width:900px">
+        <div class="vocab">
+          <div class="vg"><h5>Режим категории</h5>
+            <div class="vrow"><span class="mode on">События</span><span>Приходит вебхуком. Может сопровождаться сверкой: «+ сверка каждые N мин».</span></div>
+            <div class="vrow"><span class="mode on">Расписание</span><span>Фоновый обход с частотой и лимитом.</span></div>
+            <div class="vrow"><span class="mode on">По запросу</span><span>Только после явного действия. Без фонового расписания.</span></div>
+            <div class="vrow"><span class="mode on">Пилот</span><span>Ограниченное первое включение: N обходов, потолок кредитов.</span></div>
+            <div class="vrow"><span class="mode off">Выключено</span><span>Новых запросов нет. Данные читаются с реальной свежестью.</span></div>
+            <div class="vrow"><span class="mode job">Разовая задача</span><span>Без тумблера. Период, выбор и потолок на каждую задачу.</span></div>
+          </div>
+          <div class="vg"><h5>Состояние строки</h5>
+            <div class="vrow"><span class="st ok"><span class="dot ok"></span>работает</span><span>Последний запуск успешен, лимиты не достигнуты.</span></div>
+            <div class="vrow"><span class="st acc"><span class="dot acc"></span>наблюдение</span><span>Окно после включения: прогресс пилота, дедлайн, факт против оценки.</span></div>
+            <div class="vrow"><span class="st warn"><span class="dot warn"></span>пауза · бюджет</span><span>Лимит категории или предел исчерпан. Подпись говорит, когда продолжит.</span></div>
+            <div class="vrow"><span class="st bad"><span class="dot bad"></span>блок · нужна проверка</span><span>Провайдер вернул ошибку, требующую человека. Ссылка на диагноз, как в Sync.</span></div>
+            <div class="vrow"><span class="st bad"><span class="dot bad"></span>остановлено</span><span>Глобальная пауза. Режим сохранён.</span></div>
+            <div class="vrow"><span class="st mut"><span class="dot"></span>ждёт очереди</span><span>Черновик включения принят, ждёт конца окна наблюдения другой категории.</span></div>
+            <div class="vrow"><span class="st off"><span class="dot off"></span>выключено</span><span>Полая точка: ничего не происходит, это нормально.</span></div>
+            <div class="vrow"><span class="st off" style="text-decoration:underline dotted #a8a29e">ещё не реализовано</span><span>Категория из плана без работающего кода. Тумблера нет, только описание.</span></div>
+          </div>
+          <div class="vg"><h5>Источник оценки</h5>
+            <div class="vrow"><span class="src">измерено · 7 дн</span><span>Средний факт из леджера за период. Самый надёжный.</span></div>
+            <div class="vrow"><span class="src">измерено · 1 обход</span><span>Факт одного запуска, обычно после пилота.</span></div>
+            <div class="vrow"><span class="src none">по прайсу · не измерена</span><span>Расчёт по тарифу OFAPI и предполагаемому числу запросов. Пунктир: доверять с осторожностью.</span></div>
+            <div class="vrow"><span class="src none">неизвестна</span><span>Нет ни факта, ни тарифа. Включение возможно только пилотом с потолком.</span></div>
+          </div>
+          <div class="vg"><h5>Политика (пилюля в шапке)</h5>
+            <div class="vrow"><span class="pill" style="height:24px"><span class="dot ok"></span>Политика <b>v14</b> · применена</span><span>Запись, worker и remote-вебхук совпадают.</span></div>
+            <div class="vrow"><span class="pill" style="height:24px"><span class="dot warn"></span>Политика <b>v15</b> · применяется</span><span>Чего ждём, показано тремя точками: запись · worker · вебхук.</span></div>
+            <div class="vrow"><span class="pill" style="height:24px"><span class="dot bad"></span><b>v15</b> · ошибка применения</span><span>Тайм-аут или отказ. Кнопки «Повторить» и «Откатить к v14».</span></div>
+            <div class="vrow"><span class="pill" style="height:24px"><span class="dot bad"></span><b>v16</b> · глобальная пауза</span><span>Аварийный стоп активен. Баннер сверху.</span></div>
+            <div class="vrow"><span class="pill" style="height:24px;border-color:rgba(201,100,66,.45)"><span class="dot acc"></span>изменено в другом окне</span><span>Версия на сервере новее черновика. Черновик не перетирает: «Обновить и сравнить».</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="notes cols" style="margin-top:18px">
+      <div class="note"><span class="n">·</span><div><b>Цвет никогда не единственный носитель смысла.</b> У каждого состояния своя форма (заливка, контур, пунктир, полая точка) и подпись словами. Семантические цвета (зелёный, жёлтый, красный) не смешиваются с акцентом: акцент означает «включено или в работе владельца».</div></div>
+      <div class="note"><span class="n">·</span><div><b>Загрузка и пустота.</b> Таблица категорий загружается TableSkeleton с теми же колонками; при недоступном API верхняя карточка показывает StatusPanel «Расход недоступен, политика читается из последней записи v14», а ручки остаются доступны только на чтение.</div></div>
+      <div class="note"><span class="n">·</span><div><b>Клавиатура.</b> Строки раскрываются Enter, тумблеры и радио стандартные, диалог закрывается Esc и возвращает фокус на кнопку, как в ModalShell. Полоса черновика доступна из Tab-порядка последней.</div></div>
+    </div>
+  </section>
+</div>

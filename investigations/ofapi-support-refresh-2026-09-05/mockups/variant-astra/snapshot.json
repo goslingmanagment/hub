@@ -1,0 +1,19 @@
+{
+  "name": "Вариант-Астра",
+  "savedAt": "2026-09-05",
+  "status": "independent mockup; not approved for implementation",
+  "sourceApp": "ofapi-collection-page-20260905",
+  "reactSourceSha256": "8c56fd908aa34006dcdc7b832e223620c079824a32c2a1eede529c382d4730fa",
+  "files": {
+    "index.html": {
+      "bytes": 1488183,
+      "sha256": "dce9acf6537a14b861c1a094736ac52f1242a63ea69184c7b9a57c6f5951dd2b"
+    },
+    "source.zip": {
+      "bytes": 1632298,
+      "sha256": "7dd810218a2a77c15343eddf934e4ae4aad28bbbcd7038333518c9e2665a802f"
+    }
+  },
+  "embeddedFontAssets": 56,
+  "networkCalls": "none; local example state only"
+}

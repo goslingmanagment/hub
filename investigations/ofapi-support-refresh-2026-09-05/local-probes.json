@@ -1,0 +1,133 @@
+[
+  {
+    "name": "documented-gallery-photos",
+    "path": "acct_AUDIT/chats/123/media",
+    "query": {
+      "type": "photos"
+    },
+    "error": "Invalid OFAPI read gateway request: type has an unsupported value"
+  },
+  {
+    "name": "legacy-gallery-photo",
+    "path": "acct_AUDIT/chats/123/media",
+    "query": {
+      "type": "photo"
+    },
+    "result": {
+      "kind": "proxy",
+      "accountId": "acct_AUDIT",
+      "pathname": "/acct_AUDIT/chats/123/media",
+      "query": {
+        "type": "photo"
+      },
+      "operation": "ofapi_gateway_chat_media",
+      "fallbackCredits": 1,
+      "fallbackEstimated": true
+    }
+  },
+  {
+    "name": "banned-words",
+    "path": "banned-words",
+    "query": {},
+    "error": "Invalid OFAPI read gateway request: account id is not an OFAPI account id"
+  },
+  {
+    "name": "documented-message-filter-pinned",
+    "path": "acct_AUDIT/chats/123/messages",
+    "query": {
+      "filter": "pinned"
+    },
+    "error": "Invalid OFAPI read gateway request: query parameter filter is not allowed"
+  },
+  {
+    "name": "blocked-static-collision",
+    "path": "acct_AUDIT/users/blocked",
+    "query": {},
+    "result": {
+      "kind": "proxy",
+      "accountId": "acct_AUDIT",
+      "pathname": "/acct_AUDIT/users/blocked",
+      "query": {},
+      "operation": "ofapi_gateway_user",
+      "fallbackCredits": 1,
+      "fallbackEstimated": true
+    }
+  },
+  {
+    "name": "restricted-static-collision",
+    "path": "acct_AUDIT/users/restricted",
+    "query": {},
+    "result": {
+      "kind": "proxy",
+      "accountId": "acct_AUDIT",
+      "pathname": "/acct_AUDIT/users/restricted",
+      "query": {},
+      "operation": "ofapi_gateway_user",
+      "fallbackCredits": 1,
+      "fallbackEstimated": true
+    }
+  },
+  {
+    "name": "message-search-static-collision",
+    "path": "acct_AUDIT/chats/123/messages/search",
+    "query": {},
+    "result": {
+      "kind": "proxy",
+      "accountId": "acct_AUDIT",
+      "pathname": "/acct_AUDIT/chats/123/messages/search",
+      "query": {},
+      "operation": "ofapi_gateway_chat_message",
+      "fallbackCredits": 1,
+      "fallbackEstimated": true
+    }
+  },
+  {
+    "name": "documented-message-search",
+    "path": "acct_AUDIT/chats/123/messages/search",
+    "query": {
+      "query": "hello"
+    },
+    "error": "Invalid OFAPI read gateway request: query parameter query is not allowed"
+  },
+  {
+    "name": "fans-max-spend",
+    "path": "acct_AUDIT/fans/all",
+    "query": {
+      "filter[max_total_spent]": "0"
+    },
+    "error": "Invalid OFAPI read gateway request: query parameter filter[max_total_spent] is not allowed"
+  },
+  {
+    "name": "documented-vault-lightweight",
+    "path": "acct_AUDIT/media/vault/lists",
+    "query": {
+      "lightweight": "true"
+    },
+    "error": "Invalid OFAPI read gateway request: query parameter lightweight is not allowed"
+  },
+  {
+    "name": "documented-list-view-queue",
+    "path": "acct_AUDIT/user-lists",
+    "query": {
+      "view": "queue"
+    },
+    "error": "Invalid OFAPI read gateway request: query parameter view is not allowed"
+  },
+  {
+    "name": "documented-fractional-ppv-price",
+    "providerDocumentedPrice": 6.97,
+    "hubSchemaAccepted": false,
+    "issues": [
+      {
+        "expected": "int",
+        "format": "safeint",
+        "code": "invalid_type",
+        "path": [
+          "payload",
+          "price"
+        ],
+        "message": "Invalid input: expected int, received number"
+      }
+    ]
+  }
+]
