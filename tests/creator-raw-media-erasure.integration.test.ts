@@ -43,12 +43,16 @@ beforeEach(async () => {
     passwordHash: null,
   }))!.id;
 });
+const mediaFixtures = [
+  { platform: "fansly", sourceKind: "vault_media", createPage: createFanslyPage },
+  { platform: "onlyfans", sourceKind: "ofapi.collection_read_response.v1", createPage: createOnlyFansPage },
+] as const;
 function snapshot(
-  platform: "fansly" | "onlyfans" = "fansly",
+  fixture: Pick<UpsertCreatorRawMediaInput, "platform" | "sourceKind"> = mediaFixtures[0],
 ): UpsertCreatorRawMediaInput {
   return {
     pageId,
-    platform,
+    platform: fixture.platform,
     mediaRef: "321",
     ownerAccountRef: null,
     filename: "owned.png",
@@ -63,10 +67,7 @@ function snapshot(
     frameRateMilli: null,
     createdAtPlatform: null,
     updatedAtPlatform: null,
-    sourceKind:
-      platform === "fansly"
-        ? "vault_media"
-        : "ofapi.collection_read_response.v1",
+    sourceKind: fixture.sourceKind,
     firstOrigin: "vault",
     observedAt: new Date(Date.now() - 1000),
     contentHash: "a".repeat(64),
@@ -76,20 +77,19 @@ function snapshot(
   };
 }
 describe("raw media erasure writer fence", () => {
-  it.each(["fansly", "onlyfans"] as const)(
-    "prevents an already loaded %s event recreating erased media while admitting later observations",
-    async (platform) => {
-      if (platform === "onlyfans") {
-        const model = (await createModel(db.db, {
-          slug: "of-media-fence",
-          name: "OF media fence",
-        }))!;
-        pageId = (await createOnlyFansPage(db.db, {
-          modelId: model.id,
-          label: "of-media-fence",
-        }))!.id;
-      }
-      const loadedBeforeErasure = snapshot(platform);
+  it.each(mediaFixtures)(
+    "prevents an already loaded $platform event recreating erased media while admitting later observations",
+    async (fixture) => {
+      const pageLabel = `${fixture.platform}-media-fence`;
+      const model = (await createModel(db.db, {
+        slug: pageLabel,
+        name: pageLabel,
+      }))!;
+      pageId = (await fixture.createPage(db.db, {
+        modelId: model.id,
+        label: pageLabel,
+      }))!.id;
+      const loadedBeforeErasure = snapshot(fixture);
       expect(await upsertCreatorRawMedia(db.db, loadedBeforeErasure)).toEqual({
         applied: true,
       });
@@ -98,8 +98,7 @@ describe("raw media erasure writer fence", () => {
         app,
         {
           scopeType: "page",
-          pageLabel:
-            platform === "fansly" ? "raw-media-fence" : "of-media-fence",
+          pageLabel,
         },
         { initiatedBy: ownerId },
       );
