@@ -1,5 +1,6 @@
 import { buildSettingsRoute } from "../lib/navigation.js";
 import { OfapiVendorEvidence } from "./settings/OfapiVendorEvidence.js";
+import { OfapiWebhookRecovery } from "./settings/OfapiWebhookRecovery.js";
 import { Fragment, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router";
 import {
@@ -1137,6 +1138,8 @@ export function OfapiCreditsPage() {
           синк чатов, отправку сообщений, проверку фанатов. Всё время на странице — UTC.
         </p>
       </div>
+
+      <details className="mb-5"><summary className="cursor-pointer py-2 text-sm font-medium text-text-primary">События OFAPI и история доставок</summary><OfapiWebhookRecovery /></details>
 
       {!summary.enabled ? (
         <StatusPanel

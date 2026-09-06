@@ -265,6 +265,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 261 | OFAPI request audit correctness | Explicit list continuation owns completion; transient credential failure refreshes through one shared preflight; retained financial receipts repair accounting without resending confirmed commands; accepted media IDs never round and gateway required queries fail locally. |
 | 264 | OFAPI vendor usage and key scope | Preserve vendor aggregates independently of ledger; prefer fresh credit headers; CAS declarations bound to server credential fingerprint |
 | 262 | OFAPI lifecycle receipt and ordering | Signed no-key ephemeral receipts keep local identities; subscription/account material follows provider time; health retries independently of settlement; upload/export hooks remain durable progress evidence without paid follow-ups. |
+| 265 | OFAPI delivery recovery and event application | Numeric attempt facts survive provider retention; remote redelivery has durable one-attempt intent and separate outcomes; local replay targets retained evidence; optional groups use saved policy and verified remote readback. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -10925,7 +10926,6 @@ is floored at zero; ledger facts and the new net fields are not. Existing client
 continue to accept the response, while displaying negative windows requires
 adoption of the additive net fields.
 
-<<<<<<< HEAD
 ## OFAPI request audit correctness (2026-09-06)
 
 **Decision #261:** Generic successful list mapping must prove the declared list
@@ -10994,7 +10994,6 @@ charges, other clients, already accepted operations or variable vendor prices.
 New collector execution and the matching UI must ship and be reviewed before
 one-at-a-time owner activation. This change authorizes no production toggle,
 paid discovery or blanket collection.
-=======
 
 **Decision #262 (2026-09-06, OFAPI lifecycle receipt and ordering):**
 
@@ -11027,4 +11026,32 @@ credit obligation. Terminal conflicts remain visible. New subscriptions remain
 default off; only the owner-applied collection policy changes the remote set.
 
 [Implementation and rollout](runbooks/ofapi-webhook-lifecycle.md).
->>>>>>> impl/ofapi-webhook-lifecycle
+
+**Decision #265 (2026-09-06, OFAPI delivery recovery and event application):**
+
+Delivery history records each provider attempt, including successful retries,
+under its numeric attempt ID. Frozen windows, overlap and durable cursors capture
+raw responses before parsing. No success-only or failure-only filter can claim
+complete collection. Credential-visible history never claims whole-team scope.
+History's new automatic collector defaults off, uses bulk priority and one free
+100-row request every five minutes.
+
+Remote redelivery is a distinct owner action with durable intent before its
+single POST, a hard 20/day limit, and an accepted/rejected/indeterminate result.
+Neither an accepted response nor a retry UUID is proof of receipt/projection.
+Provider outcomes and local receipt/projection/canonical state remain separately
+queryable. Retained local evidence uses exact local replay, without a paid
+redelivery, new canonical business identity or new SSE sequence.
+
+Optional webhook groups have CAS-versioned desired state and separately applied
+state. Applying preserves baseline events and requires remote event/URL/scope
+readback before confirmation. Saving alone never claims a remote subscription
+change. Existing async callbacks continue to be accepted when a group is off.
+
+Governed page erasure deletes exclusive attempts/intents/receipt observations;
+shared exact bytes are reported under existing shared-observation semantics.
+Material-time fences prevent retained shared exports or recollected historical
+attempts from recreating erased facts. Summary routes expose machine metadata,
+not vendor bodies, URLs or secrets.
+
+[Implementation, spend and owner rollout](runbooks/ofapi-webhook-recovery.md).

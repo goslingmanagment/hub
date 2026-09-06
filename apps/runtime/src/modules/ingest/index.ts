@@ -1,3 +1,8 @@
+import {
+  applyOfapiWebhookCollectionPolicy, listOfapiWebhookDeliveryHistory, redeliverOfapiWebhook,
+  replayLocalOfapiWebhook, saveOfapiWebhookCollectionPolicy, syncOfapiWebhookDeliveries,
+  webhookCollectionPolicyStatus,
+} from "../../services/ofapi-webhook-recovery.ts";
 import { ServiceUnavailableError } from "../../services/errors.ts";
 import { refreshOfapiBinding } from "../../services/ofapi-binding-refresh.ts";
 import { routeSchemas } from "@agency_hub_core/contracts";
@@ -126,6 +131,35 @@ export async function registerIngestRoutes(server: ApiServer, ctx: ApiModuleCont
     requireOwner(principal);
 
     return getOfapiWebhookStatus(appContext);
+  });
+
+  server.get("/api/v1/admin/ofapi/webhook/deliveries", { schema: routeSchemas.adminOfapiWebhookDeliveries }, async request => {
+    const principal = await requirePrincipal(request); requireOwner(principal);
+    return listOfapiWebhookDeliveryHistory(appContext, { limit: request.query.limit, offset: request.query.offset, failedOnly: request.query.failedOnly === "true" });
+  });
+  server.post("/api/v1/admin/ofapi/webhook/deliveries/sync", { schema: routeSchemas.adminOfapiWebhookDeliverySync }, async request => {
+    const principal = await requirePrincipal(request); requireOwner(principal);
+    return syncOfapiWebhookDeliveries(appContext, { ...request.body, actorUserId: principal.user.id });
+  });
+  server.post("/api/v1/admin/ofapi/webhook/deliveries/redeliver", { schema: routeSchemas.adminOfapiWebhookRedeliver }, async request => {
+    const principal = await requirePrincipal(request); requireOwner(principal);
+    return redeliverOfapiWebhook(appContext, { ...request.body, actorUserId: principal.user.id });
+  });
+  server.post("/api/v1/admin/ofapi/webhook/replay", { schema: routeSchemas.adminOfapiWebhookReplay }, async request => {
+    const principal = await requirePrincipal(request); requireOwner(principal);
+    return replayLocalOfapiWebhook(appContext, { ...request.body, actorUserId: principal.user.id });
+  });
+  server.get("/api/v1/admin/ofapi/webhook/collection-policy", { schema: routeSchemas.adminOfapiWebhookCollectionPolicy }, async request => {
+    const principal = await requirePrincipal(request); requireOwner(principal);
+    return webhookCollectionPolicyStatus(appContext);
+  });
+  server.put("/api/v1/admin/ofapi/webhook/collection-policy", { schema: routeSchemas.adminOfapiWebhookCollectionPolicySave }, async request => {
+    const principal = await requirePrincipal(request); requireOwner(principal);
+    return saveOfapiWebhookCollectionPolicy(appContext, { ...request.body, actorUserId: principal.user.id });
+  });
+  server.post("/api/v1/admin/ofapi/webhook/collection-policy/apply", { schema: routeSchemas.adminOfapiWebhookCollectionPolicyApply }, async request => {
+    const principal = await requirePrincipal(request); requireOwner(principal);
+    return applyOfapiWebhookCollectionPolicy(appContext, { ...request.body, actorUserId: principal.user.id });
   });
 
   server.post("/api/v1/admin/ofapi/webhook/bindings", {

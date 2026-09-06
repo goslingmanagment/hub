@@ -215,6 +215,8 @@ export interface CanonicalizationRunResult {
 }
 
 export interface CanonicalizationRunOptions {
+  /** Exact retained fact for an owner-scoped local repair. */
+  observationId?: number;
   /** Narrow to specific kinds (CLI); default = every declared family kind. */
   kinds?: readonly string[];
   accountId?: number | null;
@@ -436,6 +438,7 @@ async function runFamily(
     }
     const rows: ReplayObservationRow[] = await listObservationsForReplay(app.db, {
       belowParseVersion,
+      ...(options.observationId !== undefined ? { observationId: options.observationId } : {}),
       ...(family.minimumParseVersion === undefined ? {} : { atLeastParseVersion: family.minimumParseVersion }),
       source: family.source,
       ...(kinds !== undefined ? { kinds } : {}),
@@ -568,6 +571,19 @@ async function runFamily(
           // key is what lets a version bump mint EXTRA events for an
           // already-checkpointed observation without colliding.
           for (const targetAccountId of new Set(accountIds)) {
+            if (exportLifecycle) {
+              // Team exports retain shared bytes after page erasure. Append
+              // each account under its material-time fence so replay cannot
+              // recreate that account's deleted canonical lifecycle facts.
+              const { isDmArchiveScopeFenced, tryAcquireDmArchiveWriterFenceLock } = await import("@agency_hub_core/db");
+              const result = await app.db.transaction(async tx => {
+                if (!await tryAcquireDmArchiveWriterFenceLock(tx, targetAccountId!)) throw new Error("Erasure is in progress");
+                if (await isDmArchiveScopeFenced(tx, { pageId: targetAccountId!, refs: [], materialAt: row.receivedAt })) return { appended: 0, deduped: 0 };
+                return appendDomainEvents(tx, targetAccountId!, inputs);
+              });
+              totals.appended += result.appended; totals.deduped += result.deduped;
+              continue;
+            }
             const result = family.projectionOnly === true
               ? await appendProjectionOnlyDomainEvents(app.db, targetAccountId!, inputs, checkpoint)
               : family.mixed === true

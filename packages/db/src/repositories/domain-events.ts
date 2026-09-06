@@ -976,6 +976,7 @@ export async function listObservationsForReplay(
   db: Database,
   input: {
     belowParseVersion: number;
+    observationId?: number;
     atLeastParseVersion?: number;
     source?: string;
     kinds?: readonly string[];
@@ -997,6 +998,7 @@ export async function listObservationsForReplay(
 ): Promise<ReplayObservationRow[]> {
   const limit = input.limit ?? 200;
   const conditions = [sql`o.parse_version < ${input.belowParseVersion}`];
+  if (input.observationId !== undefined) conditions.push(sql`o.id = ${input.observationId}`);
   if (input.atLeastParseVersion !== undefined) conditions.push(sql`o.parse_version >= ${input.atLeastParseVersion}`);
   if (input.source !== undefined) {
     conditions.push(sql`o.source = ${input.source}`);

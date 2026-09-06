@@ -147,3 +147,4 @@ export * from "./repositories/ofapi-bindings.ts";
 
 export * from "./repositories/ofapi-vendor-usage.ts";
 export * from "./repositories/ofapi-collection.ts";
+export * from "./repositories/ofapi-webhook-recovery.ts";
