@@ -20,6 +20,7 @@ import {
 } from "./ofapi-account-health.ts";
 import { runOfapiAsyncLifecycleForSettledRow, sweepOfapiAsyncLifecycles } from "./ofapi-async-lifecycle.ts";
 import { ofapiAccountLifecycleTime } from "./ofapi-lifecycle-contract.ts";
+import { sweepOfapiWebhookDeliveryHistory } from "./ofapi-webhook-recovery.ts";
 import { runOfapiCreditBurnMonitor } from "./ofapi-credits.ts";
 import {
   cleanupExpiredDmMessageArchive,
@@ -525,6 +526,7 @@ export async function startOfapiEventWorker(app: AppContext, boss: OfapiWorkerBo
       }
       await sweepOfapiAsyncLifecycles(app);
       await sweepOfapiAccountHealthProjections(app);
+      await sweepOfapiWebhookDeliveryHistory(app);
       await runOfapiAccountHealthMonitor(app);
       await runOfapiCreditBurnMonitor(app);
     });

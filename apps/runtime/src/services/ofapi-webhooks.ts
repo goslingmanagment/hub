@@ -219,7 +219,7 @@ export async function receiveOfapiWebhook(
   return { received: true, duplicate: captured.duplicate };
 }
 
-function resolveOfapiClient(app: AppContext): OfapiClient {
+export function resolveOfapiClient(app: AppContext): OfapiClient {
   if (app.ofapi) {
     return app.ofapi;
   }

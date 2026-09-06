@@ -96,6 +96,11 @@ export async function getOfapiAsyncLifecycle(app: AppContext, input: {
       and w.event_type in (${sql.join(types.map(type => sql`${type}`), sql`, `)})
       and w.payload->'payload'->>'id'=${input.resourceId}
       and (w.ofapi_account_id=${input.ofapiAccountId} or w.payload->'payload'->'account_ids' ? ${input.ofapiAccountId})
+      and not exists(select 1 from erasure_log e where e.dry_run=false and e.scope_type in ('page','model')
+        and e.started_at>=w.received_at and exists(select 1 from pages p
+          where (p.ofapi_account_id=${input.ofapiAccountId} or exists(select 1 from ofapi_account_bindings b
+            where b.page_id=p.id and b.account_id=${input.ofapiAccountId}))
+          and e.plan->'resolvedPageIds' @> jsonb_build_array(p.id)))
     order by case w.payload->'payload'->>'status'
       when 'completed' then 4 when 'failed' then 4 when 'cancelled' then 4
       when 'in_progress' then 3 when 'calculating_credits_completed' then 2

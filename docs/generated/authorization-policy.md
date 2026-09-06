@@ -22,7 +22,7 @@ body remain handler-checked and are noted per route in the service layer.
 | `agentKey` | Agent Read Plane key only; no human principal is admitted |
 | `any` | any authenticated principal except an agent key |
 
-## Routes (213)
+## Routes (220)
 
 | Method | Path | Route key | Kind | Roles | Page scope |
 | --- | --- | --- | --- | --- | --- |
@@ -78,8 +78,15 @@ body remain handler-checked and are noted per route in the service layer.
 | GET | `/api/v1/admin/ofapi/webhook` | `adminOfapiWebhookStatus` | `owner-session` | — | — |
 | POST | `/api/v1/admin/ofapi/webhook` | `adminOfapiWebhookRegister` | `owner-session` | — | — |
 | POST | `/api/v1/admin/ofapi/webhook/bindings` | `adminOfapiBindingRefresh` | `owner-session` | — | — |
+| GET | `/api/v1/admin/ofapi/webhook/collection-policy` | `adminOfapiWebhookCollectionPolicy` | `owner-session` | — | — |
+| PUT | `/api/v1/admin/ofapi/webhook/collection-policy` | `adminOfapiWebhookCollectionPolicySave` | `owner-session` | — | — |
+| POST | `/api/v1/admin/ofapi/webhook/collection-policy/apply` | `adminOfapiWebhookCollectionPolicyApply` | `owner-session` | — | — |
+| GET | `/api/v1/admin/ofapi/webhook/deliveries` | `adminOfapiWebhookDeliveries` | `owner-session` | — | — |
+| POST | `/api/v1/admin/ofapi/webhook/deliveries/redeliver` | `adminOfapiWebhookRedeliver` | `owner-session` | — | — |
+| POST | `/api/v1/admin/ofapi/webhook/deliveries/sync` | `adminOfapiWebhookDeliverySync` | `owner-session` | — | — |
 | GET | `/api/v1/admin/ofapi/webhook/preflight` | `adminOfapiCredentialPreflight` | `owner-session` | — | — |
 | POST | `/api/v1/admin/ofapi/webhook/reconcile` | `adminOfapiWebhookReconcile` | `owner-session` | — | — |
+| POST | `/api/v1/admin/ofapi/webhook/replay` | `adminOfapiWebhookReplay` | `owner-session` | — | — |
 | GET | `/api/v1/admin/pages` | `adminPages` | `owner-session` | — | — |
 | POST | `/api/v1/admin/pages` | `adminCreatePage` | `owner-session` | — | — |
 | DELETE | `/api/v1/admin/pages/:pageLabel` | `adminDeletePage` | `owner-session` | — | — |

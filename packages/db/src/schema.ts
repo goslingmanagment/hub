@@ -6241,3 +6241,49 @@ export const pagePayoutRequests = pgTable(
     ),
   }),
 );
+
+// OFAPI provider delivery metadata; nested business bodies remain observations.
+export const ofapiWebhookDeliveryAttempts = pgTable("ofapi_webhook_delivery_attempts", {
+  webhookId: text("webhook_id").notNull(), attemptId: bigint("attempt_id", { mode: "number" }).notNull(),
+  deliveryUuid: text("delivery_uuid").notNull(), eventType: text("event_type").notNull(),
+  attemptNumber: integer("attempt_number").notNull(), succeeded: boolean("succeeded").notNull(),
+  statusCode: integer("status_code"), errorType: text("error_type"), idempotencyKey: text("idempotency_key"),
+  ofapiAccountId: text("ofapi_account_id"), redeliveredFrom: text("redelivered_from"),
+  accountRefs: jsonbSafe("account_refs").$type<string[]>().default([]).notNull(),
+  sourceCreatedAt: timestamp("source_created_at", { withTimezone: true }).notNull(),
+  observationId: bigint("observation_id", { mode: "number" }).notNull(),
+  observationReceivedAt: timestamp("observation_received_at", { withTimezone: true }).notNull(),
+  recordedAt: timestamp("recorded_at", { withTimezone: true }).defaultNow().notNull(),
+}, table => ({
+  pk: primaryKey({ columns: [table.webhookId, table.attemptId] }),
+  groupIdx: index("ofapi_webhook_delivery_group_idx").on(table.webhookId, table.deliveryUuid),
+  timeIdx: index("ofapi_webhook_delivery_time_idx").on(table.webhookId, table.sourceCreatedAt.desc(), table.attemptId.desc()),
+}));
+
+export const ofapiWebhookDeliveryScans = pgTable("ofapi_webhook_delivery_scans", {
+  id: uuid("id").primaryKey(), webhookId: text("webhook_id").notNull(),
+  credentialFingerprint: text("credential_fingerprint").notNull(), observedTeam: text("observed_team").notNull(),
+  windowStart: timestamp("window_start", { withTimezone: true }).notNull(), windowEnd: timestamp("window_end", { withTimezone: true }).notNull(),
+  state: text("state").notNull(), nextOffset: integer("next_offset").default(0).notNull(), capturedAttempts: integer("captured_attempts").default(0).notNull(),
+  leaseToken: uuid("lease_token"), leaseUntil: timestamp("lease_until", { withTimezone: true }), errorCode: text("error_code"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(), updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  completedAt: timestamp("completed_at", { withTimezone: true }),
+}, table => ({ stateIdx: index("ofapi_webhook_delivery_scan_state_idx").on(table.webhookId, table.state, table.createdAt.desc()) }));
+
+export const ofapiWebhookRedeliveryIntents = pgTable("ofapi_webhook_redelivery_intents", {
+  id: uuid("id").primaryKey(), webhookId: text("webhook_id").notNull(), attemptId: bigint("attempt_id", { mode: "number" }).notNull(),
+  actorUserId: bigint("actor_user_id", { mode: "number" }).notNull().references(() => users.id, { onDelete: "restrict" }),
+  state: text("state").notNull(), redeliveryUuid: text("redelivery_uuid"), errorCode: text("error_code"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(), settledAt: timestamp("settled_at", { withTimezone: true }),
+}, table => ({
+  attemptFk: foreignKey({ columns: [table.webhookId, table.attemptId], foreignColumns: [ofapiWebhookDeliveryAttempts.webhookId, ofapiWebhookDeliveryAttempts.attemptId] }).onDelete("restrict"),
+  activeAttemptUniq: uniqueIndex("ofapi_webhook_redelivery_active_attempt_uniq").on(table.webhookId, table.attemptId).where(sql`${table.state} in ('dispatching','accepted','indeterminate')`),
+}));
+
+export const ofapiWebhookCollectionPolicy = pgTable("ofapi_webhook_collection_policy", {
+  id: boolean("id").primaryKey().default(true), version: bigint("version", { mode: "number" }).default(0).notNull(),
+  desiredGroups: jsonbSafe("desired_groups").$type<string[]>().default([]).notNull(), appliedGroups: jsonbSafe("applied_groups").$type<string[]>().default([]).notNull(),
+  historyEnabled: boolean("history_enabled").default(false).notNull(), applyState: text("apply_state").default("pending").notNull(),
+  applyToken: uuid("apply_token"), applyStartedAt: timestamp("apply_started_at", { withTimezone: true }),
+  appliedAt: timestamp("applied_at", { withTimezone: true }), errorCode: text("error_code"), updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
