@@ -30,7 +30,29 @@
       "requiredBodyFields": [
         "text"
       ],
-      "queryFields": []
+      "queryFields": [],
+      "responsesMatchPinned": true,
+      "responses": {
+        "200": {
+          "contentTypes": [
+            "application/json"
+          ],
+          "dataFields": [
+            "id",
+            "date",
+            "isReady",
+            "isDone",
+            "total",
+            "pending",
+            "canUnsend",
+            "unsendSeconds",
+            "hasError",
+            "isCanceled",
+            "isCouplePeopleMedia"
+          ],
+          "emptyTextExample": false
+        }
+      }
     },
     {
       "method": "PUT",
@@ -53,7 +75,29 @@
       "requiredBodyFields": [
         "text"
       ],
-      "queryFields": []
+      "queryFields": [],
+      "responsesMatchPinned": true,
+      "responses": {
+        "200": {
+          "contentTypes": [
+            "application/json"
+          ],
+          "dataFields": [
+            "id",
+            "date",
+            "isReady",
+            "isDone",
+            "total",
+            "pending",
+            "canUnsend",
+            "unsendSeconds",
+            "hasError",
+            "isCanceled",
+            "isCouplePeopleMedia"
+          ],
+          "emptyTextExample": false
+        }
+      }
     },
     {
       "method": "DELETE",
@@ -63,7 +107,20 @@
       "bodyMatchesPinned": true,
       "bodyFields": [],
       "requiredBodyFields": [],
-      "queryFields": []
+      "queryFields": [],
+      "responsesMatchPinned": true,
+      "responses": {
+        "200": {
+          "contentTypes": [
+            "application/json"
+          ],
+          "dataFields": [
+            "success",
+            "queue"
+          ],
+          "emptyTextExample": false
+        }
+      }
     },
     {
       "method": "POST",
@@ -77,7 +134,29 @@
         "text",
         "answerTo",
         "giphyId"
-      ]
+      ],
+      "responsesMatchPinned": true,
+      "responses": {
+        "201": {
+          "contentTypes": [
+            "application/json"
+          ],
+          "dataFields": [
+            "id",
+            "text",
+            "giphyId",
+            "author",
+            "canLike",
+            "likesCount",
+            "isLiked",
+            "isLikedByAuthor",
+            "postedAt",
+            "changedAt",
+            "isPinned"
+          ],
+          "emptyTextExample": false
+        }
+      }
     },
     {
       "method": "DELETE",
@@ -87,7 +166,19 @@
       "bodyMatchesPinned": true,
       "bodyFields": [],
       "requiredBodyFields": [],
-      "queryFields": []
+      "queryFields": [],
+      "responsesMatchPinned": true,
+      "responses": {
+        "200": {
+          "contentTypes": [
+            "application/json"
+          ],
+          "dataFields": [
+            "success"
+          ],
+          "emptyTextExample": false
+        }
+      }
     },
     {
       "method": "POST",
@@ -97,7 +188,19 @@
       "bodyMatchesPinned": true,
       "bodyFields": [],
       "requiredBodyFields": [],
-      "queryFields": []
+      "queryFields": [],
+      "responsesMatchPinned": true,
+      "responses": {
+        "200": {
+          "contentTypes": [
+            "application/json"
+          ],
+          "dataFields": [
+            "success"
+          ],
+          "emptyTextExample": false
+        }
+      }
     },
     {
       "method": "DELETE",
@@ -107,7 +210,19 @@
       "bodyMatchesPinned": true,
       "bodyFields": [],
       "requiredBodyFields": [],
-      "queryFields": []
+      "queryFields": [],
+      "responsesMatchPinned": true,
+      "responses": {
+        "200": {
+          "contentTypes": [
+            "application/json"
+          ],
+          "dataFields": [
+            "success"
+          ],
+          "emptyTextExample": false
+        }
+      }
     },
     {
       "method": "POST",
@@ -117,7 +232,21 @@
       "bodyMatchesPinned": true,
       "bodyFields": [],
       "requiredBodyFields": [],
-      "queryFields": []
+      "queryFields": [],
+      "responsesMatchPinned": true,
+      "responses": {
+        "200": {
+          "contentTypes": [
+            "application/json"
+          ],
+          "dataFields": [
+            "success",
+            "isLiked",
+            "likesCount"
+          ],
+          "emptyTextExample": false
+        }
+      }
     },
     {
       "method": "DELETE",
@@ -127,7 +256,21 @@
       "bodyMatchesPinned": true,
       "bodyFields": [],
       "requiredBodyFields": [],
-      "queryFields": []
+      "queryFields": [],
+      "responsesMatchPinned": true,
+      "responses": {
+        "200": {
+          "contentTypes": [
+            "application/json"
+          ],
+          "dataFields": [
+            "success",
+            "isLiked",
+            "likesCount"
+          ],
+          "emptyTextExample": false
+        }
+      }
     },
     {
       "method": "POST",
@@ -141,7 +284,24 @@
       "requiredBodyFields": [
         "name"
       ],
-      "queryFields": []
+      "queryFields": [],
+      "responsesMatchPinned": true,
+      "responses": {
+        "200": {
+          "contentTypes": [
+            "application/json"
+          ],
+          "dataFields": [
+            "id",
+            "name",
+            "type",
+            "isClearInProgress",
+            "postsCount",
+            "posts"
+          ],
+          "emptyTextExample": false
+        }
+      }
     },
     {
       "method": "POST",
@@ -169,7 +329,35 @@
       "requiredBodyFields": [
         "text"
       ],
-      "queryFields": []
+      "queryFields": [],
+      "responsesMatchPinned": true,
+      "responses": {
+        "200": {
+          "contentTypes": [
+            "application/json"
+          ],
+          "dataFields": [
+            "author",
+            "responseType",
+            "id",
+            "postedAt",
+            "postedAtPrecise",
+            "text",
+            "isMarkdownDisabled",
+            "canDelete",
+            "canComment",
+            "canEdit",
+            "mediaCount",
+            "isOpened",
+            "canToggleFavorite",
+            "tipsAmount",
+            "rawText",
+            "media",
+            "canViewMedia"
+          ],
+          "emptyTextExample": false
+        }
+      }
     },
     {
       "method": "PUT",
@@ -197,7 +385,17 @@
       "requiredBodyFields": [
         "text"
       ],
-      "queryFields": []
+      "queryFields": [],
+      "responsesMatchPinned": true,
+      "responses": {
+        "200": {
+          "contentTypes": [
+            "text/plain"
+          ],
+          "dataFields": [],
+          "emptyTextExample": true
+        }
+      }
     },
     {
       "method": "DELETE",
@@ -207,7 +405,20 @@
       "bodyMatchesPinned": true,
       "bodyFields": [],
       "requiredBodyFields": [],
-      "queryFields": []
+      "queryFields": [],
+      "responsesMatchPinned": true,
+      "responses": {
+        "200": {
+          "contentTypes": [
+            "application/json"
+          ],
+          "dataFields": [
+            "success",
+            "counters"
+          ],
+          "emptyTextExample": false
+        }
+      }
     },
     {
       "method": "POST",
@@ -219,7 +430,20 @@
       "requiredBodyFields": [],
       "queryFields": [
         "private_archive"
-      ]
+      ],
+      "responsesMatchPinned": true,
+      "responses": {
+        "200": {
+          "contentTypes": [
+            "application/json"
+          ],
+          "dataFields": [
+            "labelStates",
+            "counters"
+          ],
+          "emptyTextExample": false
+        }
+      }
     },
     {
       "method": "POST",
@@ -231,7 +455,20 @@
       "requiredBodyFields": [],
       "queryFields": [
         "private_archive"
-      ]
+      ],
+      "responsesMatchPinned": true,
+      "responses": {
+        "200": {
+          "contentTypes": [
+            "application/json"
+          ],
+          "dataFields": [
+            "labelStates",
+            "counters"
+          ],
+          "emptyTextExample": false
+        }
+      }
     },
     {
       "method": "POST",
@@ -241,7 +478,19 @@
       "bodyMatchesPinned": true,
       "bodyFields": [],
       "requiredBodyFields": [],
-      "queryFields": []
+      "queryFields": [],
+      "responsesMatchPinned": true,
+      "responses": {
+        "200": {
+          "contentTypes": [
+            "application/json"
+          ],
+          "dataFields": [
+            "success"
+          ],
+          "emptyTextExample": false
+        }
+      }
     },
     {
       "method": "GET",
@@ -257,7 +506,20 @@
         "timezone",
         "limit",
         "type"
-      ]
+      ],
+      "responsesMatchPinned": true,
+      "responses": {
+        "200": {
+          "contentTypes": [
+            "application/json"
+          ],
+          "dataFields": [
+            "list",
+            "syncInProcess"
+          ],
+          "emptyTextExample": false
+        }
+      }
     },
     {
       "method": "PUT",
@@ -267,7 +529,19 @@
       "bodyMatchesPinned": true,
       "bodyFields": [],
       "requiredBodyFields": [],
-      "queryFields": []
+      "queryFields": [],
+      "responsesMatchPinned": true,
+      "responses": {
+        "200": {
+          "contentTypes": [
+            "application/json"
+          ],
+          "dataFields": [
+            "success"
+          ],
+          "emptyTextExample": false
+        }
+      }
     },
     {
       "method": "GET",
@@ -281,7 +555,20 @@
         "publishDateStart",
         "publishDateEnd",
         "timezone"
-      ]
+      ],
+      "responsesMatchPinned": true,
+      "responses": {
+        "200": {
+          "contentTypes": [
+            "application/json"
+          ],
+          "dataFields": [
+            "list",
+            "syncInProcess"
+          ],
+          "emptyTextExample": false
+        }
+      }
     },
     {
       "method": "POST",
@@ -291,7 +578,19 @@
       "bodyMatchesPinned": true,
       "bodyFields": [],
       "requiredBodyFields": [],
-      "queryFields": []
+      "queryFields": [],
+      "responsesMatchPinned": true,
+      "responses": {
+        "200": {
+          "contentTypes": [
+            "application/json"
+          ],
+          "dataFields": [
+            "success"
+          ],
+          "emptyTextExample": false
+        }
+      }
     },
     {
       "method": "POST",
@@ -309,7 +608,40 @@
       "requiredBodyFields": [
         "mediaFiles"
       ],
-      "queryFields": []
+      "queryFields": [],
+      "responsesMatchPinned": true,
+      "responses": {
+        "200": {
+          "contentTypes": [
+            "application/json"
+          ],
+          "dataFields": [
+            "id",
+            "userId",
+            "isReady",
+            "hasPost",
+            "isWatched",
+            "media",
+            "createdAt",
+            "canvasWidth",
+            "canvasHeight",
+            "question",
+            "texts",
+            "viewersCount",
+            "viewers",
+            "commentsCount",
+            "canDelete",
+            "isHighlightCover",
+            "isLastInHighlight",
+            "tipsAmount",
+            "tipsAmountRaw",
+            "tipsCount",
+            "likesCount",
+            "releaseForms"
+          ],
+          "emptyTextExample": false
+        }
+      }
     },
     {
       "method": "DELETE",
@@ -319,7 +651,19 @@
       "bodyMatchesPinned": true,
       "bodyFields": [],
       "requiredBodyFields": [],
-      "queryFields": []
+      "queryFields": [],
+      "responsesMatchPinned": true,
+      "responses": {
+        "200": {
+          "contentTypes": [
+            "application/json"
+          ],
+          "dataFields": [
+            "success"
+          ],
+          "emptyTextExample": false
+        }
+      }
     },
     {
       "method": "POST",
@@ -337,7 +681,25 @@
         "coverStoryId",
         "storyIds"
       ],
-      "queryFields": []
+      "queryFields": [],
+      "responsesMatchPinned": true,
+      "responses": {
+        "200": {
+          "contentTypes": [
+            "application/json"
+          ],
+          "dataFields": [
+            "id",
+            "userId",
+            "title",
+            "coverStoryId",
+            "cover",
+            "storiesCount",
+            "createdAt"
+          ],
+          "emptyTextExample": false
+        }
+      }
     },
     {
       "method": "PUT",
@@ -355,7 +717,25 @@
         "coverStoryId",
         "storyIds"
       ],
-      "queryFields": []
+      "queryFields": [],
+      "responsesMatchPinned": true,
+      "responses": {
+        "200": {
+          "contentTypes": [
+            "application/json"
+          ],
+          "dataFields": [
+            "id",
+            "userId",
+            "title",
+            "coverStoryId",
+            "cover",
+            "storiesCount",
+            "createdAt"
+          ],
+          "emptyTextExample": false
+        }
+      }
     },
     {
       "method": "DELETE",
@@ -365,7 +745,19 @@
       "bodyMatchesPinned": true,
       "bodyFields": [],
       "requiredBodyFields": [],
-      "queryFields": []
+      "queryFields": [],
+      "responsesMatchPinned": true,
+      "responses": {
+        "200": {
+          "contentTypes": [
+            "application/json"
+          ],
+          "dataFields": [
+            "success"
+          ],
+          "emptyTextExample": false
+        }
+      }
     },
     {
       "method": "PATCH",
@@ -379,7 +771,19 @@
       "requiredBodyFields": [
         "story_id"
       ],
-      "queryFields": []
+      "queryFields": [],
+      "responsesMatchPinned": true,
+      "responses": {
+        "200": {
+          "contentTypes": [
+            "application/json"
+          ],
+          "dataFields": [
+            "success"
+          ],
+          "emptyTextExample": false
+        }
+      }
     },
     {
       "method": "DELETE",
@@ -389,7 +793,19 @@
       "bodyMatchesPinned": true,
       "bodyFields": [],
       "requiredBodyFields": [],
-      "queryFields": []
+      "queryFields": [],
+      "responsesMatchPinned": true,
+      "responses": {
+        "200": {
+          "contentTypes": [
+            "application/json"
+          ],
+          "dataFields": [
+            "success"
+          ],
+          "emptyTextExample": false
+        }
+      }
     }
   ]
 }

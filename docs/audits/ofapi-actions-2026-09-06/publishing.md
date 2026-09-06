@@ -25,6 +25,29 @@ creation also returns a queue receipt. A post-update success can have an empty
 body and is therefore an acknowledgement, not a fabricated resource. A story
 resource may report `isReady=false`; a returned ID does not prove ready media.
 
+`ofapiPublishingResultConfirmed(command, status, body)` checks each documented
+receipt before the engine reports a confirmed result. Unexpected 2xx shapes,
+unsafe IDs, explicit error flags and conflicting update targets remain
+indeterminate. Specific differences from a generic acknowledgement are:
+
+| Operation | Receipt evidence |
+|---|---|
+| Post update | HTTP 200 with exactly an empty string body; null or a missing capture is not an empty-body proof |
+| Comment create | HTTP 201, safe `data.id` and text; its query-only request still returns a resource |
+| Post create | HTTP 200, safe `data.id`, `responseType=post` |
+| Story create | Safe `data.id`, boolean `isReady` and media array; not a readiness assertion |
+| Highlight create/update | Safe ID, requested title, cover and story count; update ID must match the target |
+| Campaign create/update | Safe ID, boolean `isReady`/`isDone`, no error/cancellation; update ID must match the target |
+| Campaign cancel | `data.success=true` plus matching cancelled queue ID |
+| Archive/unarchive | Archived label state and nonnegative post/archive counters, without an invented success boolean |
+| Comment like/unlike | Success, matching like state and nonnegative like count |
+| Queue publish | `data.success=true`; the documented receipt contains no resource ID |
+| Queue list/counts | Documented list/dated counter shape plus boolean `syncInProcess`; that flag is not treated as a complete snapshot |
+
+Other simple acknowledgements require the documented HTTP 200 and
+`data.success=true`. Full captured bodies remain available to distinguish
+provider drift from a failed action; response evidence never authorizes retry.
+
 The submitted campaign intent freezes the exact selected user IDs, list names
 and exclusion/window selectors. OnlyFans resolves list membership at execution
 time, including future scheduled execution. It does **not** freeze a list's

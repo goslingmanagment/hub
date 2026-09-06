@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ofapiPublishingActionOptions, ofapiPublishingActionSchema, ofapiPublishingAdmissionIssue } from "../packages/contracts/src/ofapi-actions-publishing.ts";
-import { ofapiPublishingRequest } from "../apps/runtime/src/services/ofapi-actions-publishing.ts";
+import { ofapiPublishingRequest, ofapiPublishingResultConfirmed } from "../apps/runtime/src/services/ofapi-actions-publishing.ts";
 
 const parse = (value: Record<string, unknown>) => ofapiPublishingActionSchema.parse({ pageId: 3, ...value });
 const valid = (value: Record<string, unknown>) => ofapiPublishingActionSchema.safeParse({ pageId: 3, ...value }).success;
@@ -131,5 +131,56 @@ describe("governed OFAPI publishing definitions", () => {
     expect(ofapiPublishingAdmissionIssue(parse(queue), new Date("2026-09-06T23:00:00Z"))).toContain("today");
     expect(ofapiPublishingAdmissionIssue(parse({ ...queue, timezone: "America/Los_Angeles" }), new Date("2026-09-06T23:00:00Z"))).toBeNull();
     for (const extra of [{ publishDateEnd: "2026-09-05" }, { publishDateEnd: "2028-09-06" }, { timezone: "../invalid" }, { limit: 101 }, { types: ["story"] }]) expect(valid({ ...queue, ...extra })).toBe(false);
+  });
+
+  it("requires operation-specific result evidence instead of accepting arbitrary successful HTTP bodies", () => {
+    const confirmed = (command: Record<string, unknown>, status: number, body: unknown) => ofapiPublishingResultConfirmed(parse(command), status, body);
+    const ack = { action: "post_delete", postId: "7" };
+    expect(confirmed(ack, 200, { data: { success: true } })).toBe(true);
+    for (const body of [null, undefined, "", [], {}, { data: {} }, { data: { success: "true" } }, { data: { success: false } }, { data: { success: true }, error: "Rejected" }, { data: { success: true, hasError: true } }]) expect(confirmed(ack, 200, body)).toBe(false);
+    expect(confirmed(ack, 202, { data: { success: true } })).toBe(false);
+    expect(confirmed({ action: "post_update", postId: "7", ...content }, 200, "")).toBe(true);
+    for (const body of [null, undefined, {}, { data: { success: true } }, "unexpected"]) expect(confirmed({ action: "post_update", postId: "7", ...content }, 200, body)).toBe(false);
+    expect(confirmed({ action: "post_update", postId: "7", ...content }, 204, "")).toBe(false);
+    expect(confirmed({ action: "post_comment_create", postId: "7", text: "Reply" }, 201, { data: { id: 8, text: "Reply" } })).toBe(true);
+    expect(confirmed({ action: "post_comment_create", postId: "7", text: "Reply" }, 200, { data: { id: 8, text: "Reply" } })).toBe(false);
+    for (const id of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, "../8", null]) expect(confirmed({ action: "post_create", ...content }, 200, { data: { id, responseType: "post" } })).toBe(false);
+    expect(confirmed({ action: "post_create", ...content }, 200, { data: { id: "9007199254740993", responseType: "post" } })).toBe(true);
+    expect(confirmed({ action: "post_label_create", name: "Chosen" }, 200, { data: { id: 9, name: "Other" } })).toBe(false);
+  });
+
+  it("checks campaign and highlight target identity while preserving asynchronous receipt semantics", () => {
+    const update = parse({ action: "campaign_update", campaignId: "7", ...campaign });
+    const receipt = { id: 7, isDone: false, isReady: true, hasError: false, isCanceled: false };
+    expect(ofapiPublishingResultConfirmed(update, 200, { data: receipt })).toBe(true);
+    for (const extra of [{ id: 8 }, { hasError: true }, { isCanceled: true }, { isDone: "false" }, { isReady: undefined }]) expect(ofapiPublishingResultConfirmed(update, 200, { data: { ...receipt, ...extra } })).toBe(false);
+    const cancel = parse({ action: "campaign_cancel", campaignId: "7" });
+    expect(ofapiPublishingResultConfirmed(cancel, 200, { data: { success: true, queue: { id: 7, isCanceled: true, hasError: false } } })).toBe(true);
+    expect(ofapiPublishingResultConfirmed(cancel, 200, { data: { success: true, queue: { id: 8, isCanceled: true } } })).toBe(false);
+    expect(ofapiPublishingResultConfirmed(cancel, 200, { data: { success: true } })).toBe(false);
+    const publish = parse({ action: "queue_publish", queueId: "7" });
+    expect(ofapiPublishingResultConfirmed(publish, 200, { data: { success: true } })).toBe(true); // Its documented receipt contains no resource ID.
+    expect(ofapiPublishingResultConfirmed(publish, 200, { data: { id: 7 } })).toBe(false);
+    const highlight = parse({ action: "highlight_update", highlightId: "7", title: "Summer", coverStoryId: "8", storyIds: ["8", "9"] });
+    const resource = { id: 7, title: "Summer", coverStoryId: 8, storiesCount: 2 };
+    expect(ofapiPublishingResultConfirmed(highlight, 200, { data: resource })).toBe(true);
+    for (const extra of [{ id: 8 }, { title: "Old title" }, { coverStoryId: 9 }, { storiesCount: 1 }]) expect(ofapiPublishingResultConfirmed(highlight, 200, { data: { ...resource, ...extra } })).toBe(false);
+    expect(ofapiPublishingResultConfirmed(parse({ action: "story_create", mediaFiles: ["123"] }), 200, { data: { id: 7, isReady: false, media: [] } })).toBe(true);
+  });
+
+  it("recognizes archive counters, comment state and queue reads without inventing a universal ACK", () => {
+    const archive = parse({ action: "post_archive", postId: "7" });
+    expect(ofapiPublishingResultConfirmed(archive, 200, { data: { labelStates: [{ id: "archived" }], counters: { postsCount: 1, archivedPostsCount: 1 } } })).toBe(true);
+    expect(ofapiPublishingResultConfirmed(archive, 200, { data: { success: true } })).toBe(false);
+    const like = parse({ action: "post_comment_like", postId: "7", commentId: "8" });
+    expect(ofapiPublishingResultConfirmed(like, 200, { data: { success: true, isLiked: true, likesCount: 1 } })).toBe(true);
+    expect(ofapiPublishingResultConfirmed(like, 200, { data: { success: true, isLiked: false, likesCount: 1 } })).toBe(false);
+    const window = { publishDateStart: "2026-09-06", publishDateEnd: "2026-09-07", timezone: "UTC" };
+    const list = parse({ action: "queue_list", ...window });
+    expect(ofapiPublishingResultConfirmed(list, 200, { data: { syncInProcess: false, list: [] } })).toBe(true);
+    expect(ofapiPublishingResultConfirmed(list, 200, { data: { syncInProcess: false, list: [{ id: 7, type: "story" }] } })).toBe(false);
+    const counts = parse({ action: "queue_counts", ...window });
+    expect(ofapiPublishingResultConfirmed(counts, 200, { data: { syncInProcess: false, list: { "2026-09-06": { post: 2, chat: 0 } } } })).toBe(true);
+    expect(ofapiPublishingResultConfirmed(counts, 200, { data: { syncInProcess: false, list: { "2026-09-06": { post: -1 } } } })).toBe(false);
   });
 });
