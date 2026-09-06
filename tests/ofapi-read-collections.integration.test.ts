@@ -1,4 +1,5 @@
 import { ofapiCollectionHandlers } from "../apps/runtime/src/services/ofapi-collection-handlers.ts";
+import { executeErasure } from "../apps/runtime/src/services/erasure/index.ts";
 import { rebuildOfapiReadSnapshotProjection } from "../apps/runtime/src/services/projections/ofapi-read-snapshots.ts";
 import { randomUUID } from "node:crypto";
 import { sha256Hex } from "@agency_hub_core/shared";
@@ -28,6 +29,7 @@ import {
   claimOfapiCollectionJob,
   checkpointOfapiCollectionJob,
   reserveOfapiCollectionRequest,
+  saveOfapiReadSnapshot,
 } from "@agency_hub_core/db";
 import { createOfapiClient } from "../apps/runtime/src/services/ofapi.ts";
 import { ofapiCollectionPolicyHooks } from "../apps/runtime/src/services/ofapi-collection-policy.ts";
@@ -237,6 +239,21 @@ describe("resumable OFAPI collection reads", () => {
     await rebuildOfapiReadSnapshotProjection(app, { accountId: pageId });
     expect((await readOfapiStoredSnapshots(app.db, { pageId })).map(row => row.observationId)).toEqual(snapshots.map(row => row.observationId));
     expect(fetch).toHaveBeenCalledTimes(2);
+  });
+  it.each(["page", "fan"] as const)("does not recreate read snapshots loaded before a completed %s erasure", async (scopeType) => {
+    vi.stubGlobal("fetch", vi.fn(async () => response({ list: [{ id: "55", username: "fan" }], hasMore: false }, null)));
+    const approved = await job(["fans_expired"], 1);
+    expect(await runOfapiCollectionJob(app, approved.id)).toEqual({ state: "completed" });
+    const stored = (await db.pool.query("select * from ofapi_read_snapshots where page_id=$1", [pageId])).rows[0]!;
+    await executeErasure(app, scopeType === "page" ? { scopeType: "page", pageLabel: "read-page" } : { scopeType: "fan", platform: "onlyfans", fanRef: "55" }, { initiatedBy: actor });
+    // Simulate the projection having loaded this event before the erasure committed.
+    await saveOfapiReadSnapshot(app.db, {
+      pageId, category: stored.category, operation: stored.operation, pathname: stored.pathname,
+      query: stored.query, observedAt: stored.observed_at, observationId: Number(stored.observation_id),
+      observationReceivedAt: stored.observation_received_at, eventId: Number(stored.event_id),
+      granularity: stored.granularity, coverage: stored.coverage, items: stored.items,
+    });
+    expect(await readOfapiStoredSnapshots(app.db, { pageId })).toEqual([]);
   });
   it("admits only one lease and enforces physical scheduled job caps plus changed policy", async () => {
     const approved = await job(["me"]);
