@@ -1,3 +1,4 @@
+vi.mock("../apps/dashboard/src/pages/settings/OfapiBannedWords.tsx", () => ({ OfapiBannedWords: () => null }));
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "../apps/dashboard/node_modules/react-router/dist/development/index.js";
