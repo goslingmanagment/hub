@@ -26,6 +26,7 @@ type RawQuery = Record<string, unknown>;
 
 interface QueryRule {
   parse(value: string, name: string): string;
+  required?: boolean;
 }
 
 interface ProxyRequest {
@@ -137,6 +138,9 @@ function parseQuery(raw: RawQuery, rules: Record<string, QueryRule>) {
     }
     parsed[name] = rule.parse(value, name);
   }
+  for (const [name, rule] of Object.entries(rules)) {
+    if (rule.required && parsed[name] === undefined) invalid(`query parameter ${name} is required`);
+  }
   return parsed;
 }
 
@@ -218,7 +222,7 @@ export function resolveOfapiReadGatewayRequest(
   }
 
   if (segments.length === 5 && segments[1] === "chats" && segments[3] === "messages" && segments[4] === "search") {
-    return proxy(accountId, segments, parseQuery(rawQuery, { query: textRule(200) }), "ofapi_gateway_chat_search");
+    return proxy(accountId, segments, parseQuery(rawQuery, { query: { ...textRule(200), required: true } }), "ofapi_gateway_chat_search");
   }
 
   if (
@@ -253,7 +257,7 @@ export function resolveOfapiReadGatewayRequest(
 
   if (segments.length === 3 && segments[1] === "users" && segments[2] === "list") {
     return proxy(accountId, segments, parseQuery(rawQuery, {
-      ids: textRule(220, /^\d+(,\d+){0,9}$/),
+      ids: { ...textRule(220, /^\d+(,\d+){0,9}$/), required: true },
     }), "ofapi_gateway_users_list");
   }
 
@@ -299,7 +303,7 @@ export function resolveOfapiReadGatewayRequest(
   if (segments.length === 2 && segments[1] === "user-lists") {
     return proxy(accountId, segments, parseQuery(rawQuery, {
       view: enumRule(["queue"]),
-      limit: LIMIT_100,
+      limit: integerRule(10, 50),
       offset: OFFSET,
     }), "ofapi_gateway_user_lists");
   }

@@ -1167,6 +1167,18 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
   const pageIds = scope.pageIds;
   const targets: WorkTarget[] = [];
 
+  // Financial response receipts follow the ledger's explicit page erasure.
+  // Their attribution is nested metadata, not a page FK discovered below.
+  targets.push({
+    plane: "hot", target: "ofapi_credit_receipts", action: "delete",
+    rows: await countOf(app, sql`
+      select count(*)::text as n from ofapi_credit_receipts
+      where (observation ->> 'pageId')::bigint in ${pageIds}`),
+    run: tx => execCount(tx, sql`
+      delete from ofapi_credit_receipts
+      where (observation ->> 'pageId')::bigint in ${pageIds}`),
+  });
+
   // Fans linked ONLY to these pages become orphaned identity rows; collect
   // the candidates before page_fans is purged, guard against links elsewhere.
   const linkedFanRows = await rows<{ id: string }>(app, sql`

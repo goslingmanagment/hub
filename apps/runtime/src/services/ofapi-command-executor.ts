@@ -26,7 +26,7 @@ import {
   isOfapiDmColdArchiveEnabled,
   resolveOfapiDmColdArchiveRetentionDays,
 } from "./ofapi-dm-archive.ts";
-import { OfapiApiError, OfapiCredentialNotReadyError, ofapiAccountNotFound } from "./ofapi.ts";
+import { OfapiApiError, OfapiCreditAccountingUnavailableError, OfapiCredentialNotReadyError, ofapiAccountNotFound } from "./ofapi.ts";
 import {
   isOfapiAccountHealthEnabled,
   ofapiAuthStatusNeedsAction,
@@ -70,7 +70,7 @@ export type OfapiCommandFailure = {
 /** The command was claimed, but its local guard refused any vendor dispatch. */
 export class OfapiLocalDispatchRefusal extends Error {
   constructor(
-    readonly reason: "account_unavailable" | "binding_replaced" | "auth_action_required" | "credential_not_verified",
+    readonly reason: "account_unavailable" | "binding_replaced" | "auth_action_required" | "credential_not_verified" | "credit_accounting_unavailable",
     readonly detail: string | null = null,
   ) {
     super(`OFAPI command refused before dispatch: ${reason}`);
@@ -480,6 +480,7 @@ async function executeCurrentOfapiCommand(
         textPayload(command),
       );
       platformMessageId = result.messageId;
+      if (result.creditAccounting) verifierResult.creditAccounting = result.creditAccounting;
     } else if (command.kind === "send_media_message_v1") {
       const result = await app.ofapi!.sendMediaMessage!(
         { pageId: command.pageId },
@@ -488,27 +489,31 @@ async function executeCurrentOfapiCommand(
         mediaPayload(command),
       );
       platformMessageId = result.messageId;
+      if (result.creditAccounting) verifierResult.creditAccounting = result.creditAccounting;
     } else if (command.kind === "typing_active_v1") {
-      await app.ofapi!.startTyping!(
+      const result = await app.ofapi!.startTyping!(
         { pageId: command.pageId },
         command.ofapiAccountId,
         command.conversationId,
       );
+      if (result.creditAccounting) verifierResult.creditAccounting = result.creditAccounting;
     } else if (command.kind === "unsend_message_v1") {
       const { messageId } = unsendPayload(command);
-      await app.ofapi!.unsendMessage!(
+      const result = await app.ofapi!.unsendMessage!(
         { pageId: command.pageId },
         command.ofapiAccountId,
         command.conversationId,
         messageId,
       );
+      if (result.creditAccounting) verifierResult.creditAccounting = result.creditAccounting;
       platformMessageId = messageId;
     } else {
-      await app.ofapi!.markChatRead!(
+      const result = await app.ofapi!.markChatRead!(
         { pageId: command.pageId },
         command.ofapiAccountId,
         command.conversationId,
       );
+      if (result.creditAccounting) verifierResult.creditAccounting = result.creditAccounting;
     }
     const confirmedAt = new Date();
     verifierResult.confirmedAt = confirmedAt.toISOString();
@@ -549,7 +554,8 @@ async function executeCurrentOfapiCommand(
     const localRefusal = error instanceof OfapiLocalDispatchRefusal ? error
       : error instanceof OfapiCredentialNotReadyError
         ? new OfapiLocalDispatchRefusal("credential_not_verified", error.reason ?? error.preflightStatus)
-        : null;
+        : error instanceof OfapiCreditAccountingUnavailableError
+          ? new OfapiLocalDispatchRefusal("credit_accounting_unavailable") : null;
     if (error instanceof OfapiApiError && ofapiAccountNotFound(error.status, error.body)) {
       const marked = await markOfapiBindingUnavailable(bindingLockDb, command.ofapiAccountId, command.bindingGeneration);
       if (marked) await notifyOfapiAuthIncident({ ...app, db: bindingLockDb }, {

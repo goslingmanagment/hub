@@ -1203,6 +1203,14 @@ describe("erasure drill (Stage 28 Task 4)", () => {
     expect(await count(`page_link_stat_snapshots where platform_account_id = ${page.id}`)).toBe(1);
     expect(await count(`page_link_stat_runs where platform_account_id = ${page.id}`)).toBe(1);
 
+    // R4 financial receipts have JSON attribution, so FK inventory alone
+    // cannot find them. Erase this page and retain the global diagnostic.
+    await testDb.pool.query(`
+      insert into ofapi_credit_receipts (request_id, attempt_number, received_at, observation)
+      values ('erasure-page-receipt', 1, now(), $1::jsonb),
+             ('erasure-global-receipt', 1, now(), '{"pageId":null}'::jsonb)
+    `, [JSON.stringify({ pageId: page.id })]);
+
     const result = await executeErasure(
       appStub(),
       { scopeType: "page", pageLabel: "erasure-links-page" },
@@ -1218,6 +1226,9 @@ describe("erasure drill (Stage 28 Task 4)", () => {
     ).toBe(1);
     expect(await count(`page_link_stat_snapshots where platform_account_id = ${page.id}`)).toBe(0);
     expect(await count(`page_link_stat_runs where platform_account_id = ${page.id}`)).toBe(0);
+    expect(result.executedCounts["hot:ofapi_credit_receipts:delete"]).toBe(1);
+    expect(await count("ofapi_credit_receipts where request_id = 'erasure-page-receipt'")).toBe(0);
+    expect(await count("ofapi_credit_receipts where request_id = 'erasure-global-receipt'")).toBe(1);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("fan-scope erasure purges the fan's voice notes (audio + metadata); a co-resident different fan's note survives (0109)", async (context) => {

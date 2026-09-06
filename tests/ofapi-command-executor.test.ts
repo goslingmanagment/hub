@@ -23,6 +23,7 @@ describe("OFAPI command failure classification", () => {
     ["binding_replaced", "ofapi_binding_replaced"],
     ["auth_action_required", "ofapi_auth_action_required"],
     ["credential_not_verified", "ofapi_credential_not_verified"],
+    ["credit_accounting_unavailable", "ofapi_credit_accounting_unavailable"],
   ] as const)("classifies local %s without a vendor HTTP status", (reason, errorCode) => {
     expect(classifyOfapiCommandFailure(new OfapiLocalDispatchRefusal(reason))).toEqual({
       state: "failed_terminal", errorCode, errorClass: "terminal", httpStatus: null,

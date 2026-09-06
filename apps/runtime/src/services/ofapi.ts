@@ -68,6 +68,7 @@ export interface OfapiWebhookRegistrationInput {
 
 export interface OfapiWebhookRecord {
   id: string | null;
+  creditAccounting?: "pending";
 }
 
 export interface OfapiAccountRecord {
@@ -197,6 +198,7 @@ export class OfapiGovernedRequestError extends Error {
 
 export interface OfapiSentMessage {
   messageId: string;
+  creditAccounting?: "pending";
 }
 
 export interface OfapiMediaMessageInput {
@@ -208,14 +210,17 @@ export interface OfapiMediaMessageInput {
 
 export interface OfapiTypingResult {
   success: true;
+  creditAccounting?: "pending";
 }
 
 export interface OfapiUnsendResult {
   success: true;
+  creditAccounting?: "pending";
 }
 
 export interface OfapiMarkReadResult {
   success: true;
+  creditAccounting?: "pending";
 }
 
 // One credit-spend report per response that reached the server (retry attempts
@@ -233,11 +238,22 @@ export interface OfapiCreditSpendObservation {
   isCached: boolean | null;
   actorUserId: number | null;
   budgetScope?: "audience" | "backfill" | "link_stats" | null;
+  receivedAt?: string;
 }
 
-export type OfapiCreditSpendSink = (
+export type OfapiCreditSpendSink = ((
   observation: OfapiCreditSpendObservation,
-) => Promise<boolean | null | void> | boolean | null | void;
+) => Promise<boolean | null | void> | boolean | null | void) & {
+  recoverPending?: () => Promise<boolean>;
+};
+
+/** A new request was refused locally; an earlier response still needs accounting. */
+export class OfapiCreditAccountingUnavailableError extends OfapiApiError {
+  constructor() {
+    super("OFAPI credit accounting unavailable before dispatch", null, null);
+    this.name = "OfapiCreditAccountingUnavailableError";
+  }
+}
 
 /**
  * Maps one HTTP response to its ledger spend, or null for no row. Server-reported
@@ -609,25 +625,40 @@ function parseNextMarker(pagination: Record<string, unknown> | null) {
   }
 }
 
-function toListPage(body: unknown): OfapiListPage {
+function toListPage(body: unknown, arrayOnlyLimit?: number): OfapiListPage {
   const record = asRecord(body);
   const dataRecord = asRecord(record?.data);
   const data = Array.isArray(record?.data)
     ? record.data
     : Array.isArray(dataRecord?.list)
       ? dataRecord.list
-      : [];
+      : null;
+  if (data === null) throw new OfapiApiError("OFAPI list page shape unavailable", 200, null);
   const pagination = asRecord(record?._pagination);
   const nextPage = pagination?.next_page;
   const nextMarker = parseNextMarker(dataRecord) ?? parseNextMarker(pagination);
+  const hasMore = dataRecord?.hasMore;
+  if (hasMore !== undefined && typeof hasMore !== "boolean") {
+    throw new OfapiApiError("OFAPI list page continuation invalid", 200, null);
+  }
+  if (nextPage !== undefined && nextPage !== null && typeof nextPage !== "string") {
+    throw new OfapiApiError("OFAPI list page continuation invalid", 200, null);
+  }
+  // Spenders alone document an unpaginated array family. Every other list
+  // needs explicit continuation/termination evidence; missing is not empty.
+  if (typeof hasMore !== "boolean" && nextPage === undefined && nextMarker === null &&
+      !(arrayOnlyLimit !== undefined && Array.isArray(record?.data))) {
+    throw new OfapiApiError("OFAPI list page continuation unavailable", 200, null);
+  }
   return {
-    items: data.flatMap((item) => {
+    items: data.map((item) => {
       const itemRecord = asRecord(item);
-      return itemRecord ? [itemRecord] : [];
+      if (!itemRecord) throw new OfapiApiError("OFAPI list item shape unavailable", 200, null);
+      return itemRecord;
     }),
-    hasNextPage: typeof dataRecord?.hasMore === "boolean"
-      ? dataRecord.hasMore
-      : typeof nextPage === "string" && nextPage.length > 0,
+    hasNextPage: (typeof nextPage === "string" && nextPage.length > 0) ||
+      (typeof hasMore === "boolean" ? hasMore : nextMarker !== null ? true : nextPage === null ? false :
+        arrayOnlyLimit !== undefined && data.length >= arrayOnlyLimit),
     nextMarker,
     nextPageUrl: typeof nextPage === "string" && nextPage.length > 0 ? nextPage : null,
     meta: parseResponseMeta(body),
@@ -708,6 +739,7 @@ export class OfapiCredentialNotReadyError extends OfapiApiError {
 
 export function createOfapiClient(input: {
   credentialPolicy?: { expectedTeamSlug: string | null };
+  beforeOperationRequest?: (request: { operation: string; accountId: string | null; method: string }) => Promise<void>;
   beforeAccountRequest?: (pageId: number | null | undefined, accountId: string, generation?: number) => Promise<number>;
   onAccountResponse?: (accountId: string, generation: number, status: number, body: string) => Promise<void>;
   onAdminResponse?: (response: { operation: string; status: number; body: string; receivedAt: Date }) => Promise<void | OfapiAdminCapture>;
@@ -729,9 +761,41 @@ export function createOfapiClient(input: {
   const baseUrl = (input.baseUrl ?? OFAPI_DEFAULT_BASE_URL).replace(/\/+$/, "");
   const restDelayMs = Math.max(0, input.restDelayMs ?? OFAPI_DEFAULT_REST_DELAY_MS);
   const onCreditSpend = input.onCreditSpend ?? null;
+  async function authorizeOperation(operation: string, method: string, pathname: string) {
+    const segment = pathname.split("/")[1];
+    await input.beforeOperationRequest?.({ operation, method,
+      accountId: segment?.startsWith("acct_") ? decodeURIComponent(segment) : null });
+  }
+  let pendingCreditReceipts = new Map<string, OfapiCreditSpendObservation>();
+  function retirePendingReceipt(key: string) {
+    // Retire only process memory; the durable financial receipt stays retained.
+    pendingCreditReceipts = new Map([...pendingCreditReceipts].filter(([pendingKey]) => pendingKey !== key));
+  }
+  let accountingRecovery: Promise<void> | null = null;
+  async function assertCreditAccountingReady() {
+    accountingRecovery ??= (async () => {
+      if (!onCreditSpend) return;
+      for (const [key, receipt] of pendingCreditReceipts) {
+        let result: boolean | null | void;
+        try { result = await onCreditSpend(receipt); }
+        catch { throw new OfapiCreditAccountingUnavailableError(); }
+        if (result === false) throw new OfapiCreditAccountingUnavailableError();
+        retirePendingReceipt(key);
+      }
+      if (onCreditSpend.recoverPending && !await onCreditSpend.recoverPending()) {
+        throw new OfapiCreditAccountingUnavailableError();
+      }
+    })();
+    try { await accountingRecovery; }
+    finally { accountingRecovery = null; }
+  }
 
   let preflight: Promise<OfapiCredentialPreflight> | null = null;
+  let preflightRetryAt = 0;
   async function getCredentialPreflight(): Promise<OfapiCredentialPreflight> {
+    // A single shared in-flight promise owns refresh. Do not move the retry
+    // deadline at start: concurrent callers must await that same fresh result.
+    if (preflight && Date.now() >= preflightRetryAt) preflight = null;
     preflight ??= (async () => {
       const result: OfapiCredentialPreflight = {
         status: "unknown", expectedTeam: input.credentialPolicy?.expectedTeamSlug ?? null,
@@ -752,9 +816,18 @@ export function createOfapiClient(input: {
           result.reason = denied ? "provider_access_denied" : "preflight_unavailable";
         }
       }
-      await input.onPreflight?.(result);
+      try {
+        await input.onPreflight?.(result);
+      } catch {
+        result.status = "unknown";
+        result.reason = "preflight_persistence_unavailable";
+      }
+      preflightRetryAt = result.status === "verified" || result.status === "mismatch" ||
+        result.reason === "expected_team_unconfigured" ? Infinity : Date.now() + 30_000;
       return result;
     })();
+    // Infinity denotes in-flight, too; only settlement sets a retry deadline.
+    if (preflightRetryAt <= Date.now()) preflightRetryAt = Infinity;
     return preflight;
   }
   async function assertCredentialReady() {
@@ -804,8 +877,7 @@ export function createOfapiClient(input: {
       return null;
     }
 
-    try {
-      const outcome = await onCreditSpend({
+    const observation: OfapiCreditSpendObservation = {
         operation: report.operation,
         httpStatus: report.httpStatus,
         credits: spend.credits,
@@ -816,8 +888,14 @@ export function createOfapiClient(input: {
         attemptNumber: report.attemptNumber,
         isCached: meta?.isCached ?? null,
         actorUserId: report.actorUserId ?? null,
+        receivedAt: new Date().toISOString(),
         ...(report.budgetScope ? { budgetScope: report.budgetScope } : {}),
-      });
+    };
+    const key = `${observation.requestId}:${observation.attemptNumber}`;
+    pendingCreditReceipts.set(key, observation);
+    try {
+      const outcome = await onCreditSpend(observation);
+      if (outcome !== false) retirePendingReceipt(key);
       // Existing injected sinks are observational and return void. Treat that
       // as acknowledgement; the production sink returns explicit true/false.
       return outcome === undefined ? true : outcome;
@@ -834,7 +912,8 @@ export function createOfapiClient(input: {
   const pacer = input.pacer ?? null;
   let nextRequestSlotAt = 0;
 
-  async function waitForRequestSlot(priorityClass: EgressPriorityClass = "bulk") {
+  async function waitForRequestSlot(priorityClass: EgressPriorityClass = "bulk", checkAccounting = true) {
+    if (checkAccounting) await assertCreditAccountingReady();
     if (pacer && pacer.mode === "enforce") {
       return pacer.pace(priorityClass);
     }
@@ -899,7 +978,13 @@ export function createOfapiClient(input: {
       },
       requestMetadata: options.requestMetadata,
       retries: options.retries ?? OFAPI_OBSERVED_RETRIES,
-      waitForRateLimit: () => waitForRequestSlot("bulk"),
+      waitForRateLimit: async () => {
+        const waited = await waitForRequestSlot("bulk");
+        // Admission is outside the transport retry catch, but is evaluated
+        // before every physical attempt, including a permitted HTTP retry.
+        await authorizeOperation(options.operation, "GET", options.pathname);
+        return waited;
+      },
       execute: async () => {
         await input.beforeAccountRequest?.(options.context.pageId, accountId, generation);
         const response = await fetch(url, {
@@ -1058,6 +1143,7 @@ export function createOfapiClient(input: {
 
     const accountId = options.pathname.split("/")[1]!;
     const generation = await input.beforeAccountRequest?.(context.pageId, accountId);
+    await authorizeOperation(options.operation, "GET", options.pathname);
     let response: Response;
     try {
       const init: RequestInit & { dispatcher?: Dispatcher } = {
@@ -1104,7 +1190,7 @@ export function createOfapiClient(input: {
       }
     }
 
-    await reportCreditSpend({
+    const creditAccounted = await reportCreditSpend({
       operation: options.operation,
       httpStatus: response.status,
       body,
@@ -1115,6 +1201,8 @@ export function createOfapiClient(input: {
       fallbackEstimated: options.fallbackEstimated,
       actorUserId: context.actorUserId ?? null,
     });
+
+    if (creditAccounted === false) throw new OfapiApiError("OFAPI read credit accounting unavailable", null, null);
 
     const headers: Record<string, string> = {};
     for (const name of [
@@ -1204,7 +1292,13 @@ export function createOfapiClient(input: {
     context: OfapiRequestContext,
     options: Parameters<NonNullable<OfapiClient["dispatchGovernedRaw"]>>[1],
   ): Promise<OfapiGovernedRawResponse> {
-    await waitForRequestSlot(options.priorityClass);
+    try {
+      await waitForRequestSlot(options.priorityClass);
+      await authorizeOperation(options.operation, options.method, options.pathname);
+    }
+    catch (error) {
+      throw new OfapiGovernedRequestError("OFAPI dispatch admission unavailable", "pre_dispatch", "cancelled", { cause: error });
+    }
     if (Date.now() >= options.deadlineAt.getTime()) {
       throw new OfapiGovernedRequestError(
         `OFAPI governed attempt ${options.attemptId} missed its deadline`,
@@ -1306,7 +1400,8 @@ export function createOfapiClient(input: {
   };
 
   function toWireMediaId(id: string): string | number {
-    return /^[0-9]+$/.test(id) ? Number(id) : id;
+    const numeric = /^[0-9]+$/.test(id) ? Number(id) : NaN;
+    return Number.isSafeInteger(numeric) ? numeric : id;
   }
 
   async function sendMessageRequest(
@@ -1322,6 +1417,7 @@ export function createOfapiClient(input: {
     const requestId = `${operation}:${randomUUID()}`;
     await waitForRequestSlot("commands");
 
+    await authorizeOperation(operation, "POST", pathname);
     let response: Response;
     try {
       response = await fetch(`${baseUrl}${pathname}`, {
@@ -1354,7 +1450,7 @@ export function createOfapiClient(input: {
       }
     }
 
-    await reportCreditSpend({
+    const creditAccounted = await reportCreditSpend({
       operation,
       httpStatus: response.status,
       body: responseBody,
@@ -1394,7 +1490,7 @@ export function createOfapiClient(input: {
         null,
       );
     }
-    return { messageId };
+    return { messageId, ...(creditAccounted === false ? { creditAccounting: "pending" as const } : {}) };
   }
 
   async function sendTextMessageRequest(
@@ -1450,6 +1546,7 @@ export function createOfapiClient(input: {
     const requestId = `${operation}:${randomUUID()}`;
     await waitForRequestSlot("commands");
 
+    await authorizeOperation(operation, "POST", pathname);
     let response: Response;
     try {
       response = await fetch(`${baseUrl}${pathname}`, {
@@ -1480,7 +1577,7 @@ export function createOfapiClient(input: {
       }
     }
 
-    await reportCreditSpend({
+    const creditAccounted = await reportCreditSpend({
       operation,
       httpStatus: response.status,
       body: responseBody,
@@ -1507,7 +1604,7 @@ export function createOfapiClient(input: {
       );
     }
 
-    return { success: true };
+    return { success: true, ...(creditAccounted === false ? { creditAccounting: "pending" as const } : {}) };
   }
 
   async function unsendMessageRequest(
@@ -1523,6 +1620,7 @@ export function createOfapiClient(input: {
     const requestId = `${operation}:${randomUUID()}`;
     await waitForRequestSlot("commands");
 
+    await authorizeOperation(operation, "DELETE", pathname);
     let response: Response;
     try {
       response = await fetch(`${baseUrl}${pathname}`, {
@@ -1553,7 +1651,7 @@ export function createOfapiClient(input: {
       }
     }
 
-    await reportCreditSpend({
+    const creditAccounted = await reportCreditSpend({
       operation,
       httpStatus: response.status,
       body: responseBody,
@@ -1577,7 +1675,7 @@ export function createOfapiClient(input: {
       );
     }
     if (text.length === 0) {
-      return { success: true };
+      return { success: true, ...(creditAccounted === false ? { creditAccounting: "pending" as const } : {}) };
     }
 
     const record = asRecord(unwrapData(responseBody));
@@ -1588,7 +1686,7 @@ export function createOfapiClient(input: {
         null,
       );
     }
-    return { success: true };
+    return { success: true, ...(creditAccounted === false ? { creditAccounting: "pending" as const } : {}) };
   }
 
   async function markChatReadRequest(
@@ -1603,6 +1701,7 @@ export function createOfapiClient(input: {
     const requestId = `${operation}:${randomUUID()}`;
     await waitForRequestSlot("commands");
 
+    await authorizeOperation(operation, "POST", pathname);
     let response: Response;
     try {
       response = await fetch(`${baseUrl}${pathname}`, {
@@ -1633,7 +1732,7 @@ export function createOfapiClient(input: {
       }
     }
 
-    await reportCreditSpend({
+    const creditAccounted = await reportCreditSpend({
       operation,
       httpStatus: response.status,
       body: responseBody,
@@ -1657,7 +1756,7 @@ export function createOfapiClient(input: {
       );
     }
     if (text.length === 0) {
-      return { success: true };
+      return { success: true, ...(creditAccounted === false ? { creditAccounting: "pending" as const } : {}) };
     }
 
     const record = asRecord(unwrapData(responseBody));
@@ -1668,7 +1767,7 @@ export function createOfapiClient(input: {
         null,
       );
     }
-    return { success: true };
+    return { success: true, ...(creditAccounted === false ? { creditAccounting: "pending" as const } : {}) };
   }
 
   async function requestCaptured(
@@ -1676,9 +1775,11 @@ export function createOfapiClient(input: {
     method: string,
     path: string,
     body?: unknown,
-  ): Promise<{ body: unknown; capture: OfapiAdminCapture | null }> {
+  ): Promise<{ body: unknown; capture: OfapiAdminCapture | null; creditAccounting?: "pending" }> {
     if (method !== "GET") await assertCredentialReady();
-    await waitForRequestSlot("interactive");
+    const freeRead = method === "GET" && ["ofapi_balance_ping", "ofapi_credential_preflight", "ofapi_webhook_inventory", "ofapi_admin_accounts"].includes(operation);
+    await waitForRequestSlot("interactive", !freeRead);
+    await authorizeOperation(operation, method, path);
     let response: Response;
     try {
       response = await fetch(`${baseUrl}${path}`, {
@@ -1716,7 +1817,7 @@ export function createOfapiClient(input: {
 
     // The admin path spends credits too (D1) — report before any throw so
     // failed registrations and 4xx/5xx responses with _meta still land.
-    await reportCreditSpend({
+    const creditAccounted = await reportCreditSpend({
       operation,
       httpStatus: response.status,
       body: responseBody,
@@ -1726,6 +1827,10 @@ export function createOfapiClient(input: {
       ...(["ofapi_balance_ping", "ofapi_credential_preflight", "ofapi_webhook_inventory", "ofapi_admin_accounts"].includes(operation)
         ? { fallbackCredits: 0, fallbackEstimated: false } : {}),
     });
+
+    if (creditAccounted === false && method === "GET" && !freeRead) {
+      throw new OfapiApiError("OFAPI admin read credit accounting unavailable", null, null);
+    }
 
     if (!response.ok) {
       throw new OfapiApiError(
@@ -1743,7 +1848,7 @@ export function createOfapiClient(input: {
       );
     }
 
-    return { body: responseBody, capture };
+    return { body: responseBody, capture, ...(creditAccounted === false ? { creditAccounting: "pending" as const } : {}) };
   }
 
   async function request(operation: string, method: string, path: string, body?: unknown): Promise<unknown> {
@@ -1765,20 +1870,22 @@ export function createOfapiClient(input: {
       return body.flatMap(value => asRecord(value) ? [asRecord(value)!] : []);
     },
     async createWebhook(registration) {
-      return toWebhookRecord(await request(
+      const result = await requestCaptured(
         "ofapi_webhook_crud",
         "POST",
         "/webhooks",
         webhookRequestBody(registration),
-      ));
+      );
+      return { ...toWebhookRecord(result.body), ...(result.creditAccounting ? { creditAccounting: result.creditAccounting } : {}) };
     },
     async updateWebhook(id, registration) {
-      return toWebhookRecord(await request(
+      const result = await requestCaptured(
         "ofapi_webhook_crud",
         "PUT",
         `/webhooks/${encodeURIComponent(id)}`,
         webhookRequestBody(registration),
-      ));
+      );
+      return { ...toWebhookRecord(result.body), ...(result.creditAccounting ? { creditAccounting: result.creditAccounting } : {}) };
     },
     async listAccountsSnapshot() {
       const { body, capture } = await requestCaptured("ofapi_admin_accounts", "GET", "/accounts");
@@ -1934,6 +2041,7 @@ export function createOfapiClient(input: {
         pageIndex: params.offset != null ? Math.floor(params.offset / limit) : 0,
         cursorPresent: false,
         requestMetadata: { limit, offset: params.offset ?? 0, trackingLinkId, kind },
+        ...(kind === "spenders" ? { mapResponse: (body: unknown) => toListPage(body, limit) } : {}),
       });
     },
     async listTrialLinks(context, accountId, params) {

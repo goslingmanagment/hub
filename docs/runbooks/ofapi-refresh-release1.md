@@ -72,12 +72,15 @@ the account roster: rule `ofapi_admin_accounts_v2` retains an identity projectio
 without `onlyfans_email`, `_meta` or nested fields other than creator `id`.
 Non-200 roster bodies are withheld; status, body shape and machine code remain.
 
-Boot/adoption preflight is cached for the client lifetime, including failed or
-unknown results. Missing expected team produces `unknown` without guessing it.
+Boot/adoption preflight is cached for the client lifetime when verified or when
+the credential belongs to a different team. Missing expected team produces
+`unknown` without guessing it.
 JSON 401/403 produces `denied`; an edge HTML rejection is `unknown`; a different
 team is `mismatch`. All fail closed for stateful actions. DB-only service and
-permitted reads can continue. Fixing a transient/preflight configuration failure
-requires a reviewed restart/rollout; no new dynamic key-rotation feature exists.
+permitted reads can continue. Transient `unknown`/`denied` and persistence failures
+refresh after 30 seconds on the next request; concurrent callers share the same
+in-flight verification. No command is replayed by that refresh. Changing the
+configured expected team/key still requires a reviewed restart/rollout.
 
 ## Owner preview and apply
 
