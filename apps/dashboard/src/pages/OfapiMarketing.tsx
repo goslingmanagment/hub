@@ -9,7 +9,7 @@ import { actionLabels, buildMarketingCommand, conversionTypes, eventFields, even
 
 const field = "w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-text-primary";
 const button = "rounded-lg border border-border bg-card px-3 py-2 text-sm text-text-primary hover:bg-hover disabled:opacity-40";
-const primary = `${button} border-accent bg-accent text-white hover:bg-accent/90`;
+const primary = "rounded-lg border border-accent bg-accent px-3 py-2 text-sm text-white hover:bg-accent/90 disabled:opacity-40";
 const card = "rounded-xl border border-border bg-card p-5";
 const inventorySelections = new Set(["smart_links", "stored_tracking_links", "stored_trial_links", "stored_shared_tracking_links", "stored_shared_trial_links", "shared_tracking_links", "shared_trial_links"]);
 const readSelections: [string, string][] = [
