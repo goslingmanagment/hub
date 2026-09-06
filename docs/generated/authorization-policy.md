@@ -22,7 +22,7 @@ body remain handler-checked and are noted per route in the service layer.
 | `agentKey` | Agent Read Plane key only; no human principal is admitted |
 | `any` | any authenticated principal except an agent key |
 
-## Routes (239)
+## Routes (244)
 
 | Method | Path | Route key | Kind | Roles | Page scope |
 | --- | --- | --- | --- | --- | --- |
@@ -89,6 +89,11 @@ body remain handler-checked and are noted per route in the service layer.
 | GET | `/api/v1/admin/ofapi/exports/:jobId/rows` | `ofapiTypedExportRows` | `session` | — | — |
 | GET | `/api/v1/admin/ofapi/key-scope` | `ofapiKeyScopeGet` | `owner-session` | — | — |
 | POST | `/api/v1/admin/ofapi/key-scope` | `ofapiKeyScopeApply` | `owner-session` | — | — |
+| GET | `/api/v1/admin/ofapi/media` | `ofapiMediaGet` | `session` | — | — |
+| POST | `/api/v1/admin/ofapi/media/handoff` | `ofapiMediaHandoff` | `owner-session` | — | — |
+| POST | `/api/v1/admin/ofapi/media/sources` | `ofapiMediaSourceCreate` | `owner-session` | — | — |
+| POST | `/api/v1/admin/ofapi/media/uploads` | `ofapiMediaUploadCreate` | `owner-session` | — | — |
+| POST | `/api/v1/admin/ofapi/media/uploads/:jobId/resume` | `ofapiMediaUploadResume` | `owner-session` | — | — |
 | GET | `/api/v1/admin/ofapi/profile-visitors` | `ofapiProfileVisitorsGet` | `session` | — | — |
 | GET | `/api/v1/admin/ofapi/spend/comparison` | `adminOfapiSpendComparison` | `owner-session` | — | — |
 | POST | `/api/v1/admin/ofapi/vendor-usage` | `ofapiVendorUsageRefresh` | `owner-session` | — | — |

@@ -72,6 +72,7 @@ export const QUEUE_RETENTION_SETTINGS: readonly QueueRetentionSetting[] = [
   { queue: "ofapi.collection.run", retentionClass: "work", retentionSeconds: DEFAULT_RETENTION_SECONDS, deleteAfterSeconds: DEFAULT_DELETE_AFTER_SECONDS },
   { queue: "ofapi.collection.sweep", retentionClass: "heartbeat-cron", retentionSeconds: HEARTBEAT_RETENTION_SECONDS, deleteAfterSeconds: HEARTBEAT_RETENTION_SECONDS },
   // ---- Class A: pure cron heartbeats (24h / 24h) -------------------------
+  { queue: "ofapi.media.sweep", retentionClass: "heartbeat-cron", retentionSeconds: HEARTBEAT_RETENTION_SECONDS, deleteAfterSeconds: HEARTBEAT_RETENTION_SECONDS },
   { queue: "ofapi.typed-export.sweep", retentionClass: "heartbeat-cron", retentionSeconds: HEARTBEAT_RETENTION_SECONDS, deleteAfterSeconds: HEARTBEAT_RETENTION_SECONDS },
   { queue: "sync.planner", retentionClass: "heartbeat-cron", retentionSeconds: HEARTBEAT_RETENTION_SECONDS, deleteAfterSeconds: HEARTBEAT_RETENTION_SECONDS },
   { queue: "ops.metrics.sample", retentionClass: "heartbeat-cron", retentionSeconds: HEARTBEAT_RETENTION_SECONDS, deleteAfterSeconds: HEARTBEAT_RETENTION_SECONDS },

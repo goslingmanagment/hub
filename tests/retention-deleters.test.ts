@@ -66,6 +66,7 @@ const SANCTIONED_DELETER_FILES = [
   "apps/runtime/src/services/projections/ofapi-read-snapshots.ts",
   // S8: rebuilds derived rows from domain events; never deletes captured artifacts or jobs.
   "apps/runtime/src/services/projections/ofapi-typed-exports.ts",
+  "apps/runtime/src/services/projections/ofapi-media.ts", // Explicit derived metadata rebuild; source authority remains.
   "apps/runtime/src/cli.ts",
   "apps/runtime/src/services/erasure/index.ts",
   "apps/runtime/src/modules/events/index.ts",

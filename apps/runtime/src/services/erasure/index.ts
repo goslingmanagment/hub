@@ -1255,6 +1255,8 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
   });
 
   const deletions: Array<[string, string]> = [
+    ["ofapi_media_catalog", "page_id"],
+    ["ofapi_media_sources", "page_id"],
     ["ofapi_read_snapshots", "page_id"],
     ["ofapi_collection_schedules", "page_id"],
     // Rows that RESTRICT parents below go first.

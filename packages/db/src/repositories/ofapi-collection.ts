@@ -137,7 +137,7 @@ export async function reserveOfapiCollectionRequest(db: Database, input: OfapiCo
   if (!category) throw new OfapiCollectionPolicyError("unregistered_operation");
   const purpose = input.context?.purpose ?? input.purpose ?? "background";
   const now = input.now ?? new Date();
-  const freeExportOperation = ["ofapi_export_quote_create", "ofapi_export_quote_status"].includes(input.operation);
+  const freeExportOperation = ["ofapi_export_quote_create", "ofapi_export_quote_status", "ofapi_upload_status"].includes(input.operation);
   const estimate = Math.max(freeExportOperation ? 0 : 1, Math.trunc(input.reservedCredits ?? 1));
   return db.transaction(async tx => {
     const database = tx as unknown as Database;

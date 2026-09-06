@@ -32,3 +32,5 @@ export * from "./ofapi-extended-commands.ts";
 export * from "./routes-ofapi-banned-words.ts";
 export * from "./routes-ofapi-read-collections.ts";
 export * from "./routes-ofapi-exports.ts";
+
+export * from "./routes-ofapi-media.ts";

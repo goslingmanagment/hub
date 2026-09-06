@@ -199,6 +199,8 @@ export const WRITTEN_OBSERVATION_KINDS: readonly WrittenObservationKind[] = [
   },
   { kind: "ofapi.data_export_control.v1", source: "ofapi_capture", writer: "services/ofapi-export-quotes.ts" },
   { kind: "ofapi_export_inventory", source: "operator", writer: "services/ofapi-credential-policy.ts" },
+  { kind: "ofapi.media_source.v1", source: "operator", writer: "services/ofapi-media-sources.ts" },
+  { kind: "ofapi.media_upload_response.v1", source: "ofapi_capture", writer: "services/ofapi-media-uploads.ts" },
   { kind: "ofapi.typed_export_artifact.v1", source: "ofapi_capture", writer: "services/ofapi-typed-exports.ts" },
   { kind: "ofapi.posts_page.v1", source: "ofapi_capture", writer: "services/ofapi-capture-jobs.ts" },
   {
@@ -604,6 +606,11 @@ export const OFF_SWEEP_OBSERVATION_CLAIMANTS: readonly {
     justification:
       "Deliberately absent from CANONICALIZER_FAMILIES (canonicalize/fansly-replay.ts "
       + "says so in its header): it is flag-driven backfill, not steady-state sweep work.",
+  },
+  {
+    id: "OFAPI_MEDIA_UPLOAD_MATERIALIZATION",
+    kinds: ["ofapi.media_source.v1", "ofapi.media_upload_response.v1"],
+    justification: "Owned source bytes remain immutable upload authority. The exact governed upload parser and webhook reconciler append safe media metadata facts; one-use CDN tokens stay in captured authority and explicit owner handoff only.",
   },
   {
     id: "OFAPI_TYPED_EXPORT_MATERIALIZATION",

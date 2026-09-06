@@ -488,7 +488,7 @@ export async function listRunnableOfapiCapturePages(
            max(priority)::int as priority,
            min(case when state = 'awaiting_parse' then updated_at else next_attempt_at end) as requested_at
     from ofapi_capture_jobs
-    where kind <> 'collection_read' and ((state = 'awaiting_parse' and reason_code is null)
+    where kind not in ('collection_read','media_upload') and not (kind='account_export' and coalesce(target->>'profile' in ('profile_visitors','fans','tracking_links','trial_links','smart_links'),false)) and ((state = 'awaiting_parse' and reason_code is null)
        or (state in ('ready', 'retry_wait') and next_attempt_at <= ${now}))
     group by page_id
     order by max(priority) desc,
@@ -523,7 +523,7 @@ export async function leaseNextOfapiCaptureJob(
       select id
       from ofapi_capture_jobs
       where page_id = ${input.pageId}
-        and ${(input.jobId ?? input.exactJobId) ? sql`id=${input.jobId ?? input.exactJobId}::uuid` : sql`kind <> 'collection_read' and not (kind = 'account_export' and target->>'profile' is not null)`}
+        and ${(input.jobId ?? input.exactJobId) ? sql`id=${input.jobId ?? input.exactJobId}::uuid` : sql`kind not in ('collection_read','media_upload') and not (kind = 'account_export' and coalesce(target->>'profile' in ('profile_visitors','fans','tracking_links','trial_links','smart_links'),false))`}
         and (
           (state = 'awaiting_parse' and reason_code is null)
           or (state in ('ready', 'retry_wait') and next_attempt_at <= ${now})

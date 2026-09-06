@@ -1,3 +1,4 @@
+import { ofapiMediaRouteSchemas } from "./routes-ofapi-media.ts";
 import { ofapiBannedWordRouteSchemas } from "./routes-ofapi-banned-words.ts";
 import { OFAPI_EXTENDED_COMMAND_KINDS } from "@agency_hub_core/shared";
 import { ofapiExtendedCommandOptions } from "./ofapi-extended-commands.ts";
@@ -3986,6 +3987,7 @@ export const ofapiCaptureOperatorStatusResponseSchema = z.object({
       "export_import",
       "post_paginate",
       "collection_read",
+      "media_upload",
     ]),
     state: ofapiExportQuoteJobStateSchema,
     reasonCode: z.string().nullable(),
@@ -5529,6 +5531,7 @@ export const routeSchemas = {
   ...ofapiVendorRouteSchemas,
   ...ofapiReadCollectionsRouteSchemas,
   ...ofapiExportRouteSchemas,
+  ...ofapiMediaRouteSchemas,
   ...ofapiCollectionRouteSchemas,
   ...agentRouteSchemas,
   ...agentKeyAdminRouteSchemas,

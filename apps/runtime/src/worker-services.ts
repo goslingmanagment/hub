@@ -1,3 +1,4 @@
+import { ensureOfapiMediaQueue, OFAPI_MEDIA_SWEEP_QUEUE, runOfapiMediaUploadSweep } from "./services/ofapi-media-worker.ts";
 import { ensureOfapiCollectionQueues, startOfapiCollectionWorker } from "./services/ofapi-collection-runner.ts";
 import { ofapiCollectionHandlers } from "./services/ofapi-collection-handlers.ts";
 import { ensureOfapiTypedExportQueue, OFAPI_TYPED_EXPORT_SWEEP_QUEUE, runOfapiTypedExportSweep } from "./services/ofapi-typed-export-worker.ts";
@@ -222,6 +223,7 @@ export async function startWorkerServices(
   await ensureOfapiCommandQueues(boss, createdQueues);
   await ensureOfapiDmAnalyticsQueues(boss, createdQueues);
   await ensureOfapiTypedExportQueue(boss, createdQueues);
+  await ensureOfapiMediaQueue(boss, createdQueues);
   await ensureOfapiCollectionQueues(boss, createdQueues);
   await ensureDbDiskUsageQueue(boss, createdQueues);
   await ensureObservationsPartitionQueue(boss, createdQueues);
@@ -244,6 +246,7 @@ export async function startWorkerServices(
   // Stage 25: cron registration moved to the scheduler role (leader-elected;
   // services/schedules.ts) — workers only create queues and consume.
 
+  await boss.work(OFAPI_MEDIA_SWEEP_QUEUE, { batchSize: 1 }, async () => { await runOfapiMediaUploadSweep(app); });
   await boss.work(OFAPI_TYPED_EXPORT_SWEEP_QUEUE, { batchSize: 1 }, async () => { await runOfapiTypedExportSweep(app); });
 
   await boss.work(SYNC_PLANNER_QUEUE, {

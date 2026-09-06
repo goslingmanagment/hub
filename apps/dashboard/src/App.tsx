@@ -16,6 +16,7 @@ const FanProfilePage = lazy(() => import("./pages/FanProfilePage.js").then((m) =
 const TopSupportersPage = lazy(() => import("./pages/TopSupportersPage.js").then((m) => ({ default: m.TopSupportersPage })));
 const WorkboardV2Page = lazy(() => import("./pages/WorkboardV2Page.js").then((m) => ({ default: m.WorkboardV2Page })));
 const UsagePage = lazy(() => import("./pages/UsagePage.js").then((m) => ({ default: m.UsagePage })));
+const OfapiMediaPage = lazy(() => import("./pages/OfapiMediaPage.js").then((m) => ({ default: m.OfapiMediaPage })));
 const OfapiExportsPage = lazy(() => import("./pages/OfapiExportsPage.js").then((m) => ({ default: m.OfapiExportsPage })));
 const OfapiCreditsPage = lazy(() => import("./pages/OfapiCreditsPage.js").then((m) => ({ default: m.OfapiCreditsPage })));
 const AiAnalyticsPage = lazy(() => import("./pages/AiAnalyticsPage.js").then((m) => ({ default: m.AiAnalyticsPage })));
@@ -57,6 +58,7 @@ export function App() {
             <Route path="pages/:pageLabel/crm" element={<LegacyWorkboardRedirect />} />
             <Route path="pages/:pageLabel/fans/:platform/:platformUserId" element={<FanProfilePage />} />
             <Route path="usage" element={<OwnerRoute><UsagePage /></OwnerRoute>} />
+            <Route path="ofapi-media" element={<OfapiMediaPage />} />
             <Route path="ofapi-exports" element={<OfapiExportsPage />} />
             <Route path="ofapi-credits" element={<OwnerRoute><OfapiCreditsPage /></OwnerRoute>} />
             <Route path="ai-analytics" element={<OwnerRoute><AiAnalyticsPage /></OwnerRoute>} />

@@ -16,7 +16,7 @@ import {
 } from "../apps/runtime/src/services/ofapi-collection-runner.ts";
 const def = (id: string) => OFAPI_READ_CATALOG.find((row) => row.id === id)!;
 describe("closed OFAPI read coverage catalog", () => {
-  it("resolves every catalog operation through the existing gateway with explicit policy context", () => {
+  it("resolves new operations with policy context while preserving existing vault desktop reads", () => {
     for (const row of OFAPI_READ_CATALOG) {
       const query = Object.fromEntries(
         (row.required ?? []).map((key) => [
@@ -32,11 +32,30 @@ describe("closed OFAPI read coverage catalog", () => {
         `acct_test/${row.path.replace(":id", "9007199254740993")}`,
         query,
       );
-      expect(request).toMatchObject({
-        kind: "proxy",
-        operation: row.operation,
-        collectionContext: { category: row.category, purpose: "interactive" },
-      });
+      if (row.collectionOnly) {
+        const legacy = {
+          vault_inventory: "ofapi_gateway_vault_media",
+          vault_lists: "ofapi_gateway_vault_lists",
+          vault_item: "ofapi_gateway_vault_media_item",
+        };
+        expect(request).toMatchObject({
+          kind: "proxy",
+          operation: legacy[row.id as keyof typeof legacy],
+        });
+        expect(request).not.toHaveProperty("collectionContext");
+        expect(
+          resolveOfapiCatalogPath(
+            `acct_test/${row.path.replace(":id", "9007199254740993")}`,
+            query,
+          )?.definition.operation,
+        ).toBe(row.operation);
+      } else {
+        expect(request).toMatchObject({
+          kind: "proxy",
+          operation: row.operation,
+          collectionContext: { category: row.category, purpose: "interactive" },
+        });
+      }
       const data =
         row.shape === "object"
           ? {}

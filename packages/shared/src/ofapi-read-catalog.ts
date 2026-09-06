@@ -18,6 +18,7 @@ export interface OfapiReadDefinition {
   detail: boolean;
   defaultCollect: boolean;
   granularity: "entity" | "ranking" | "window" | "snapshot";
+  collectionOnly?: boolean;
 }
 const page = { limit: "int:1:50", offset: "int:0:1000000" };
 const dates = { start_date: "date", end_date: "date" };
@@ -376,6 +377,10 @@ read(
   { defaultCollect: true, granularity: "window" },
 );
 // S6/S7 reference reads are explicit, paid lookups; no background default.
+read("vault_inventory", "media/vault", "vault_catalog", "list", "offset", {...page,limit:"int:10:100",query:text,field:"enum:recent|most-liked|highest-tips",type:"enum:photo|gif|video|audio",list:text,sort:"enum:asc|desc"}, {defaultCollect:true,collectionOnly:true});
+read("vault_lists", "media/vault/lists", "vault_catalog", "list", "offset", {...page,query:text,lightweight:"enum:true|false"}, {defaultCollect:true,collectionOnly:true});
+read("vault_item", "media/vault/:id", "vault_catalog", "object", "none", {}, {collectionOnly:true});
+read("vault_list", "media/vault/lists/:id", "vault_catalog", "object", "none");
 const releaseFormQuery = { ...page, filter: "enum:all|pending", sort: "enum:date|name", sortDirection: "enum:desc|asc", name: text };
 read("release_forms", "release-forms", "vault_catalog", "items", "offset", releaseFormQuery);
 read("taggable_users", "release-forms/taggable-users", "vault_catalog", "items", "offset", releaseFormQuery);

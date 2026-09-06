@@ -116,6 +116,7 @@ for (const file of [
   "routes-ofapi-banned-words.ts",
   "routes-ofapi-read-collections.ts",
   "routes-ofapi-exports.ts",
+    "routes-ofapi-media.ts",
   "sdk-runtime.ts",
   "domain-event-cursor.ts",
   "authorization-policy.ts",
