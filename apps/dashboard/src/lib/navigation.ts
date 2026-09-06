@@ -8,6 +8,7 @@ export interface FanProfileNavigationState {
 export type SettingsTab =
   | "credentials"
   | "sync"
+  | "collection"
   | "models"
   | "personas"
   | "pages"
@@ -18,6 +19,7 @@ export type SettingsTab =
 const SETTINGS_TABS = new Set<SettingsTab>([
   "credentials",
   "sync",
+  "collection",
   "models",
   "personas",
   "pages",

@@ -891,6 +891,12 @@ function SystemHealthSection(props: {
           </dl>
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border-light px-4 py-3 text-[12px] text-text-secondary">
             <span className={eyebrowClass}>Настройки</span>
+            <Link
+              to="/settings?tab=collection"
+              className="font-medium text-accent underline-offset-2 hover:underline"
+            >
+              Настройки сбора
+            </Link>
             <ConfigLink configKey="ofapiDmDailyCreditBudget">Бюджет сообщений</ConfigLink>
             {props.hasAudienceBudget && (
               <ConfigLink configKey="ofapiAudienceDailyCreditBudget">Бюджет аудитории</ConfigLink>
