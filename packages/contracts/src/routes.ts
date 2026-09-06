@@ -5532,9 +5532,8 @@ export const moneyPayoutsResponseSchema = z.object({
   nextCursor: z.string().nullable(),
 });
 
-export const routeSchemas = {
+const baseRouteSchemas = {
   ...ofapiMarketingRouteSchemas,
-  ...ofapiActionRouteSchemas,
   ...ofapiBannedWordRouteSchemas,
   ...ofapiVendorRouteSchemas,
   ...ofapiReadCollectionsRouteSchemas,
@@ -8209,7 +8208,11 @@ export const routeSchemas = {
   },
 } as const;
 
-export type RouteSchemas = typeof routeSchemas;
+// Keep the owner action union behind a named group in declarations. Flattening
+// all 81 commands into the complete registry exceeds TypeScript's declaration
+// serialization limit (TS7056) when the SDK is compiled for external clients.
+export type RouteSchemas = typeof baseRouteSchemas & typeof ofapiActionRouteSchemas;
+export const routeSchemas: RouteSchemas = { ...baseRouteSchemas, ...ofapiActionRouteSchemas };
 export type AuthState = z.infer<typeof authStateSchema>;
 export type AuthUser = z.infer<typeof authUserSchema>;
 export type AdminUser = z.infer<typeof adminUserSchema>;
