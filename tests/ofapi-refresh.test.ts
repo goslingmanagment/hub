@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createOfapiClient, ofapiAccountNotFound, toFansListPage, toAccountRecords, type OfapiCreditSpendObservation } from "../apps/runtime/src/services/ofapi.ts";
+import { createOfapiClient, OfapiApiError, OfapiCredentialNotReadyError, ofapiAccountNotFound, toFansListPage, toAccountRecords, type OfapiCreditSpendObservation } from "../apps/runtime/src/services/ofapi.ts";
 import { onlyfansTopSpendersChunk, onlyfansTransactionsChunk } from "../apps/runtime/src/services/sync/executor-handlers.ts";
 import { resolveOfapiAudienceNextOffset } from "../apps/runtime/src/services/sync/ofapi-audience-sync.ts";
 import { resolveOfapiReadGatewayRequest } from "../apps/runtime/src/services/ofapi-read-gateway.ts";
@@ -96,7 +96,9 @@ describe("free balance and credential adoption", () => {
     const client = createOfapiClient({ apiKey: "synthetic-test-key", restDelayMs: 0, credentialPolicy: { expectedTeamSlug: "expected" } });
     expect(await client.getCredentialPreflight!()).toMatchObject({ status: expected, rosterScope: "unknown" });
     if (expected !== "verified") {
-      await expect(client.createWebhook({ endpointUrl: "https://hub.test", events: [], signingSecret: "synthetic", accountScope: "global" })).rejects.toThrow();
+      const refused = client.createWebhook({ endpointUrl: "https://hub.test", events: [], signingSecret: "synthetic", accountScope: "global" });
+      await expect(refused).rejects.toBeInstanceOf(OfapiCredentialNotReadyError);
+      await expect(refused).rejects.toBeInstanceOf(OfapiApiError);
       expect(fetch).toHaveBeenCalledTimes(1);
     }
   });

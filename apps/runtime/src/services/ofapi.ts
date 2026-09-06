@@ -694,6 +694,18 @@ export interface OfapiCredentialPreflight {
   rosterScope: "unknown";
 }
 
+/** A local adoption refusal, distinguishable from an HTTP response. The base
+ * class keeps existing non-command callers' error mapping compatible. */
+export class OfapiCredentialNotReadyError extends OfapiApiError {
+  constructor(
+    readonly preflightStatus: OfapiCredentialPreflight["status"],
+    readonly reason: string | null,
+  ) {
+    super(`OFAPI credential preflight ${preflightStatus}`, 403, null);
+    this.name = "OfapiCredentialNotReadyError";
+  }
+}
+
 export function createOfapiClient(input: {
   credentialPolicy?: { expectedTeamSlug: string | null };
   beforeAccountRequest?: (pageId: number | null | undefined, accountId: string, generation?: number) => Promise<number>;
@@ -748,7 +760,7 @@ export function createOfapiClient(input: {
   async function assertCredentialReady() {
     if (!input.credentialPolicy) return; // Injection-only clients have no adoption policy.
     const checked = await getCredentialPreflight();
-    if (checked.status !== "verified") throw new OfapiApiError(`OFAPI credential preflight ${checked.status}`, 403, null);
+    if (checked.status !== "verified") throw new OfapiCredentialNotReadyError(checked.status, checked.reason);
   }
 
   // Reports one physical response's spend before retry/return. A configured

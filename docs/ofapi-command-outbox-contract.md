@@ -31,6 +31,19 @@ so concurrent webhook confirmation can observe and settle the in-flight row.
 Replacing a binding never makes an older queued or indeterminate row sendable.
 This is an internal guard; existing client payloads and retry rules are unchanged.
 
+Guard refusals settle the claimed command as `failed_terminal` with
+`verifierResult.source = "local_precondition"`; they carry a `reason` and optional
+diagnostic `detail`, never a command-response `httpStatus`. The reasons are
+`credential_not_verified`, `binding_replaced`, `account_unavailable` and
+`auth_action_required`. Error codes are `ofapi_<reason>`, except that
+`account_unavailable` retains `ofapi_account_not_found`. A provider denial of
+the separate `whoami` request remains credential evidence, not a response to a
+command that was never sent. Actual command HTTP responses retain
+`source = "ofapi_response"` and their status; the existing account-health gate
+retains `source = "auth_gate"`. Command-result observations preserve the same
+local/remote distinction. Claiming still increments `attemptCount` once, and
+no local refusal schedules an automatic resend.
+
 ## Version 1 Commands
 
 Text send:

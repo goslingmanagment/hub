@@ -404,6 +404,13 @@ Restricted account lists are partial/unknown scope, never proof that hidden
 accounts were deleted. Preflight is bound to the key fingerprint and runs at
 boot/adoption; correcting its boot configuration requires an approved rollout.
 
+Commands refused before dispatch record `source=local_precondition` and a
+typed binding/auth/credential reason in both outbox evidence and the result
+observation, without a vendor `httpStatus`. A denied `whoami` is not a denied
+send. The claim still consumes the single attempt and settles terminally;
+neither a credential correction nor a key rotation automatically replays it.
+Actual command HTTP failures keep their provider status and classification.
+
 Owner binding recovery is a preview/apply operation with generation and
 blocker-version checks under the ordered page sync-row locks. Verified apply or
 same-generation connected/reconnected clears its auth marker even on owner-paused
