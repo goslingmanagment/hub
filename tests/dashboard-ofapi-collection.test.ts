@@ -113,7 +113,7 @@ const SERVER_LABELS: Record<OfapiCollectionCategory, string> = {
   tracking_links: "Tracking links",
   smart_links: "Smart links",
   vault_catalog: "Vault catalog",
-  vault_files: "Vault files",
+  vault_files: "Owned media uploads",
   balances: "Balances and payouts",
   profile_notifications: "Profile and notifications",
   content_history: "Stories, highlights and queue history",
@@ -126,9 +126,9 @@ function catalog(): OfapiCollectionCatalogEntry[] {
     modes: id === "vault_files" ? ["off"] : ["off", "on_demand", "scheduled"],
     baseline: ["core_messages", "core_payments", "core_audience"].includes(id),
     consumers: id === "core_messages" ? ["chatters", "Agent Read"] : ["dashboard", "Agent Read"],
-    supportsOneOff: true,
+    supportsOneOff: !["core_messages", "core_payments", "core_audience"].includes(id),
     priceUnit: id === "vault_files" ? "calls_and_bytes" : "physical_calls",
-    prerequisites: id === "vault_files" ? ["explicit bounded file selection"] : ["active OFAPI page binding"],
+    prerequisites: id === "vault_files" ? ["owned source and explicit upload approval"] : ["active OFAPI page binding"],
     scope: "page",
     legacyOperations: [],
   }));
@@ -281,9 +281,11 @@ describe("CollectionTab (static render)", () => {
     expect(markup).toContain("выключено по умолчанию");
     expect(markup).toContain("доступно: по запросу, расписание");
     // vault_files: registry offers only "off" → no radio, only the bounded job.
-    expect(markup).toContain("Файлы из vault");
+    expect(markup).toContain("Загрузка своих медиа");
+    expect(markup).toContain('href="/ofapi-media"');
+    expect(markup).not.toContain("Локальные копии медиа");
     expect(markup).toContain("Разовая задача");
-    expect(markup).toContain("Создать задачу…");
+    expect(markup).toContain("Загрузить свой файл…");
     expect(markup).not.toContain('type="radio"');
     // Budget-exhausted row is a state with its own wording, not a hidden error.
     expect(markup).toContain("лимит дня достигнут");
@@ -374,6 +376,7 @@ describe("CategoryEditor (static render)", () => {
     // A page override exists on lora-vip-of: the default-scope edit will not displace it.
     expect(markup).toContain("Своя настройка есть у: lora-vip-of");
     expect(markup).toContain("Сейчас по страницам");
+    expect(markup).not.toContain("Создать задачу…");
   });
 
   it("shows the limit fields and an unmeasured (never zero) estimate once a draft enables a category", () => {
@@ -403,8 +406,10 @@ describe("CategoryEditor (static render)", () => {
       snapshot, scope: { kind: "page", pageId: 7 }, view, draftEntry: null, jobs: [], onChange: vi.fn(), onCreateJob: vi.fn(),
     }));
     expect(markup).not.toContain('type="radio"');
-    expect(markup).toContain("Только разовые задачи");
-    expect(markup).toContain("явный ограниченный список файлов");
+    expect(markup).toContain("Загрузка своего файла");
+    expect(markup).toContain('href="/ofapi-media"');
+    expect(markup).not.toContain("Создать задачу…");
+    expect(markup).toContain("свой файл и отдельное подтверждение загрузки");
   });
 });
 

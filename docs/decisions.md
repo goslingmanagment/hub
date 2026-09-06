@@ -11174,3 +11174,14 @@ full, filtered and interrupted coverage; new catalog/file categories remain off.
 ### 262 implementation addendum — free available-event catalog
 
 2026-09-06: S3's explicit `/webhooks/events` read now has an owner-triggered free refresh and DB-only diagnostic consumer. The vendor response is retained before validation as a control-plane observation; malformed inventory stays visible as invalid. Exact returned events are compared against requested registration and known handlers without enabling new subscriptions. The live example's 13 events does not replace the separate 32-event vendor catalog. No production policy was changed.
+
+### Decision #269 follow-up: shared raw-media erasure serialization
+
+The shared native raw-media primitive now takes the governed page erasure
+writer lock before checking the material-time tombstone and writing its row.
+This closes the race where an event loaded before erasure was applied afterward.
+Contention throws a deferred projection error so the caller leaves its watermark
+unchanged. An executed tombstone rejects old material; newly observed material
+remains admissible. The behavior applies to both Fansly and OnlyFans media.
+
+Collection controls route owned-media actions to `/ofapi-media`; generic HTTP collection jobs reject `vault_files` before creating any durable job. The core messages/payments/audience categories retain their existing configurable collectors but advertise no generic one-off executor. Uploads still create their bounded task through the specialized owner approval flow.

@@ -1,3 +1,4 @@
+import { OFAPI_WEBHOOK_CANONICALIZER_VERSION } from "../apps/runtime/src/services/canonicalize/ofapi-webhook.ts";
 import { createHash, createHmac, randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -193,7 +194,7 @@ describe("OFAPI delivery recovery", () => {
     expect((await testDb.pool.query("select fanout_seq,projection_status,projection_attempts from ofapi_webhook_events where id=$1", [first])).rows[0]).toEqual({ fanout_seq: seq, projection_status: "projected", projection_attempts: 6 });
     expect((await testDb.pool.query("select status from ofapi_webhook_events where id=$1", [neighbor])).rows[0].status).toBe("pending");
     const parsed = (await testDb.pool.query("select k.idempotency_key,o.parse_version from observations o join observation_keys k on k.observation_id=o.id and k.received_at=o.received_at where o.source='webhook' order by o.id")).rows;
-    expect(parsed).toEqual([{ idempotency_key: "evt_delivery_original", parse_version: 5 }, { idempotency_key: "evt_neighbor", parse_version: 0 }]);
+    expect(parsed).toEqual([{ idempotency_key: "evt_delivery_original", parse_version: OFAPI_WEBHOOK_CANONICALIZER_VERSION }, { idempotency_key: "evt_neighbor", parse_version: 0 }]);
     await scan(); await expect(redeliverOfapiWebhook(app, { id: randomUUID(), attemptId: 1, actorUserId: ownerId, dryRun: false })).rejects.toThrow("retained locally");
     expect(send).not.toHaveBeenCalled();
   });
