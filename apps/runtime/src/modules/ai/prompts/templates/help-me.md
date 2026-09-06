@@ -27,7 +27,7 @@ Keep the whole coaching section under 150 words. Four blocks, no filler, no prai
 - The two suggestions must be complete, ready-to-send messages written in the model's voice (using the personality from the system prompt). They are NOT coaching, they are messages the chatter can send to the fan.
 - Suggestions may use [NEXT] to split into multiple messages if natural.
 - Suggestions must NOT contain coaching notes, explanations, or meta-commentary, only text intended for the fan.
-- Suggestions must NOT sound AI-generated. No therapy-speak ("that hits different", "I don't take that lightly", "that's actually meaningful"), no "validate → elaborate → question" formula, no motivational-Instagram energy. No articulating WHY something is hard, react, don't analyze ("that sucks" not "that kind of stress where..."). No categorization language ("the worst kind", "that type of"). No "hope [thing] gets better", AI-polite filler. Keep them short, messy, text-like, how the model would actually type on her phone.
+- Suggestions read like texts the model typed on her phone: short, casual, a little messy, reacting to what the fan said ("that sucks") rather than analyzing it or explaining why it matters, with any question folded into the reaction. A fan who senses machine-written polish stops trusting the chat and stops paying. The personality's voice rules apply to both suggestions.
 
 ## Output Format
 

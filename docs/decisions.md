@@ -252,7 +252,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 249 | An explicit posts request is the manual action | `POST /admin/sync/trigger {scope: posts}` — the explicit per-page operator action — now clears a `manual_action_required` block on the posts stream (`clearPageSyncManualActionBlock`, that blocker kind only) BEFORE recording the request, so the request lands on a runnable row. Production 2026-09-04: after #128's cancel/resolve the streams stayed `blocked` with the old `ofapi_capture_job_*` codes because `resumePageSync` only lifts `paused` and nothing ever cleared a manual block; the explicit request the code itself calls "an explicit per-page operator action" was a no-op on exactly the state it exists for. `provider_bad_data`/`dependency` blocks are untouched. The posts handler also forgets an owner-cancelled pending job (checkpoint still named it) and seeds a fresh one through the ordinary slot path. |
 | 250 | OFAPI UI inherits the existing Anthropic-inspired Hub design | Owner requirement for the OFAPI refresh: use the current dashboard theme, typography, spacing and shared components across collection controls and other new OFAPI screens. The concrete source is globals.css plus Settings and OFAPI Credits; token reuse and visual consistency are acceptance criteria. |
 | 251 | OFAPI collection policy and UI are separate stages | Owner separates backend S-POL from frontend S-UI, each with independent implementation and acceptance. Saved mockups are non-normative references outside the implementation plan. New collection still requires both applicable stages plus explicit staged activation; existing Hub design tokens remain authoritative. |
-| 252 | Prompt audit: model-generic gateway tuning, structured verdicts, cache split | The Anthropic request builder allowlists the LEGACY surface (`haiku-4-5`/`sonnet-4-5`/`opus-4-5` sampling+no-adaptive; `sonnet-4-6`/`opus-4-6` adaptive+temperature-tolerant) and treats every other model as adaptive-only with no sampling params, plus an explicit `thinking: disabled` for Opus 5 / Sonnet 5 when reasoning is off; the workboard classifier asks for verdicts through structured outputs (`output_config.format`, internal lane only) instead of prose-and-bracket-hunting; the workboard cost panel prices from the gateway catalog (retired `claude-3-5-haiku-latest` row and the Haiku-for-everything fallback gone); coach-chat splits the coach dialog into its own 5m cache block and the recap age label is never minute-granular; safety preambles, tone overrides, hi-greeting and the XML-format lines lose their shouted register. Anti-AI phrase lists and the #201 word caps are deliberately untouched |
+| 252 | Prompt audit: model-generic gateway tuning, structured verdicts, cache split | The Anthropic request builder allowlists the LEGACY surface (`haiku-4-5`/`sonnet-4-5`/`opus-4-5` sampling+no-adaptive; `sonnet-4-6`/`opus-4-6` adaptive+temperature-tolerant) and treats every other model as adaptive-only with no sampling params, plus an explicit `thinking: disabled` for Opus 5 / Sonnet 5 when reasoning is off; the workboard classifier asks for verdicts through structured outputs (`output_config.format`, internal lane only) instead of prose-and-bracket-hunting; the workboard cost panel prices from the gateway catalog (retired `claude-3-5-haiku-latest` row and the Haiku-for-everything fallback gone); coach-chat splits the coach dialog into its own 5m cache block and the recap age label is never minute-granular; safety preambles, tone overrides, hi-greeting and the XML-format lines lose their shouted register; the anti-AI banned-phrase lists become one positive paragraph per template plus varied examples (probed on Sonnet 4.6 / Opus 4.8: lists were inert on ordinary turns and produced synonyms on heavy ones). The #201 word caps are deliberately untouched |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -10776,9 +10776,40 @@ pass over everything that reaches a model. Applied, in one change:
   Manifest `coreSha256` values updated for `builder.ts`, `templates.ts`,
   `chat-review.md`, `help-me.md`, `hi-greeting.md`.
 
-**Deliberately not changed** (owner call, needs a before/after probe on real
-transcripts): the anti-AI phrase lists in `fast-reply` / `improve-draft` /
-`help-me` / `ping` / `hi-greeting`, and the #201 word caps (`under 150 words`,
-`under 400 words`, `under 350 words`). Both match the audit's dated-pattern
-rows (prohibition clusters without provenance; numeric output ceilings) but
-change fan-facing behaviour, and #201 is a month-old owner decision.
+**Anti-AI rework (second commit, owner request).** The banned-phrase lists in
+`fast-reply` / `improve-draft` / `help-me` / `ping` / `hi-greeting`
+(`NEVER use: "that hits different", "not gonna lie"…`, `No therapy-speak (…)`,
+`Do NOT sound AI-generated`) are replaced by one positive paragraph per
+template that states the wanted register and why it matters (a fan who senses
+machine polish stops trusting the chat and stops paying), plus examples where
+examples are what steers the model. Evidence, in order of weight:
+
+- The desktop's own changelog on Sonnet 4.6 (`of-desktop/docs/research/
+  legacy-chatgoose.md` §11.3, releases 1.2.5–1.2.14): "banned word lists don't
+  work — model finds synonyms. Structural rules + concrete examples work
+  better"; fast-reply was rewritten examples-first in 1.2.14 and the lists
+  survived as leftovers.
+- Anthropic's prompting guidance for 4.6+: tell the model what to do rather
+  than what not to do, give the reason, 3–5 varied examples in `<examples>`,
+  dial back aggressive guidance.
+- A synthetic-transcript probe (no fan data; ~230 samples, ~$4) on
+  `claude-sonnet-4-6` (prod default) and `claude-opus-4-8`: on 17 ordinary
+  scenarios the old and new templates are indistinguishable (short,
+  in-character, no machine tells either way); the lists were inert. In heavy
+  emotional scenarios Sonnet 4.6 drifts into interpreting the fan back to
+  himself under BOTH templates; the ban suppressed the literal "hits different"
+  but produced synonyms ("the quiet is the worst part", "that's such a
+  specific kind of pain"). The rework handles that case with a heavy-moment
+  BAD/GOOD pair and one reasoned line naming the three demonstrated
+  empathy-performance phrases (a scoped prohibition against a reproduced
+  failure, which the audit keeps); on fresh heavy scenarios the reworked
+  replies came out ~20% shorter and less interpretive.
+- The model copies example shape almost verbatim (a scenario matching an
+  example reproduced the example's wording), so the fast-reply examples were
+  diversified (buy signal, one-word reaction, flirt, grief) and labeled
+  illustrative.
+
+**Still deliberately untouched:** the #201 word caps (`under 150 words`,
+`under 400 words`, `under 350 words`). They match the audit's numeric-ceiling
+row but are a month-old owner decision on the analysis features, which the
+probe did not cover.
