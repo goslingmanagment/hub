@@ -18,10 +18,10 @@ export interface OfapiReadDefinition {
   detail: boolean;
   defaultCollect: boolean;
   granularity: "entity" | "ranking" | "window" | "snapshot";
-  collectionOnly?: boolean;
   scope?: "account" | "smart_link";
   idKind?: "numeric" | "ulid";
   reservedCredits?: number;
+  collectionOnly?: boolean;
 }
 const page = { limit: "int:1:50", offset: "int:0:1000000" };
 const dates = { start_date: "date", end_date: "date" };
@@ -50,6 +50,34 @@ function read(
     ...options,
   });
 }
+read("user_lists", "user-lists", "profile_notifications", "array", "offset", {
+  limit: "int:10:50",
+  offset: "int:0:1000000",
+  view: "enum:queue",
+});
+read(
+  "user_list",
+  "user-lists/:list",
+  "profile_notifications",
+  "object",
+  "none",
+);
+read(
+  "user_list_users",
+  "user-lists/:list/users",
+  "profile_notifications",
+  "list",
+  "offset",
+  { limit: "int:1:100", offset: "int:0:1000000" },
+);
+read(
+  "user_list_pinned_users",
+  "user-lists/:list/users/pinned",
+  "profile_notifications",
+  "list",
+  "offset",
+  { limit: "int:1:100", offset: "int:0:1000000" },
+);
 read(
   "profile_visitors",
   "statistics/reach/profile-visitors",
@@ -497,7 +525,7 @@ export function resolveOfapiCatalogPath(
     if (
       pieces.length !== segments.length ||
       !pieces.every((v, i) =>
-        v === ":id" ? (def.idKind === "ulid" ? /^[0-9A-HJKMNP-TV-Z]{26}$/ : /^\d+$/).test(segments[i]!) : v === segments[i],
+        v === ":id" ? (def.idKind === "ulid" ? /^[0-9A-HJKMNP-TV-Z]{26}$/ : /^\d+$/).test(segments[i]!) : v === ":list" ? isOfapiUserListRef(segments[i]!) : v === segments[i],
       )
     )
       continue;
@@ -511,4 +539,9 @@ export function resolveOfapiCatalogPath(
     };
   }
   return null;
+}
+
+/** List identifiers include vendor system names such as friends/tagged, never URL syntax. */
+export function isOfapiUserListRef(value: string): boolean {
+  return /^(?:[0-9]{1,30}|[A-Za-z][A-Za-z0-9_]{0,63})$/.test(value);
 }

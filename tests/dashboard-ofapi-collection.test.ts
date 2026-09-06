@@ -1,4 +1,5 @@
 vi.mock("../apps/dashboard/src/pages/settings/OfapiContentEvidence.tsx", () => ({ OfapiContentEvidence: () => null }));
+vi.mock("../apps/dashboard/src/pages/settings/OfapiStoredReads.tsx", () => ({ OfapiStoredReads: () => null }));
 // Adjacent settings panels have their own query/provider lifecycle and acceptance coverage.
 vi.mock("../apps/dashboard/src/pages/settings/OfapiWebhookRecovery.tsx", () => ({ OfapiWebhookRecovery: () => null }));
 vi.mock("../apps/dashboard/src/pages/settings/OfapiBannedWords.tsx", () => ({ OfapiBannedWords: () => null }));

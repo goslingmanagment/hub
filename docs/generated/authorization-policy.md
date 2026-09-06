@@ -22,7 +22,7 @@ body remain handler-checked and are noted per route in the service layer.
 | `agentKey` | Agent Read Plane key only; no human principal is admitted |
 | `any` | any authenticated principal except an agent key |
 
-## Routes (250)
+## Routes (252)
 
 | Method | Path | Route key | Kind | Roles | Page scope |
 | --- | --- | --- | --- | --- | --- |
@@ -112,6 +112,8 @@ body remain handler-checked and are noted per route in the service layer.
 | GET | `/api/v1/admin/ofapi/webhook/deliveries` | `adminOfapiWebhookDeliveries` | `owner-session` | — | — |
 | POST | `/api/v1/admin/ofapi/webhook/deliveries/redeliver` | `adminOfapiWebhookRedeliver` | `owner-session` | — | — |
 | POST | `/api/v1/admin/ofapi/webhook/deliveries/sync` | `adminOfapiWebhookDeliverySync` | `owner-session` | — | — |
+| GET | `/api/v1/admin/ofapi/webhook/event-catalog` | `adminOfapiWebhookEventCatalog` | `owner-session` | — | — |
+| POST | `/api/v1/admin/ofapi/webhook/event-catalog/refresh` | `adminOfapiWebhookEventCatalogRefresh` | `owner-session` | — | — |
 | GET | `/api/v1/admin/ofapi/webhook/preflight` | `adminOfapiCredentialPreflight` | `owner-session` | — | — |
 | POST | `/api/v1/admin/ofapi/webhook/reconcile` | `adminOfapiWebhookReconcile` | `owner-session` | — | — |
 | POST | `/api/v1/admin/ofapi/webhook/replay` | `adminOfapiWebhookReplay` | `owner-session` | — | — |

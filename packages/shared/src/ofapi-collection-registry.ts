@@ -55,7 +55,7 @@ export function classifyOfapiCollectionOperation(operation: string): OfapiCollec
   if (operation === "ofapi_export_inventory") return "diagnostic";
   if (["ofapi_upload_vault", "ofapi_upload_cdn", "ofapi_upload_status"].includes(operation)) return "vault_files";
   if (/^ofapi_command_/.test(operation)) return "command";
-  if (["ofapi_balance_ping", "ofapi_credential_preflight", "ofapi_admin_accounts", "ofapi_webhook_crud", "ofapi_webhook_inventory",
+  if (["ofapi_balance_ping", "ofapi_credential_preflight", "ofapi_admin_accounts", "ofapi_webhook_crud", "ofapi_webhook_inventory", "ofapi_webhook_event_catalog",
     "ofapi_stored_tracking_links", "ofapi_stored_trial_links"].includes(operation)) return "diagnostic";
   if (/chat|message/.test(operation) && !/export/.test(operation)) return "core_messages";
   if (/transaction|chargeback/.test(operation)) return "core_payments";

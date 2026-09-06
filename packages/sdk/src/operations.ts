@@ -61,6 +61,8 @@ export const kernelOperations = {
   adminOfapiWebhookCollectionPolicySave: { method: "PUT", path: "/api/v1/admin/ofapi/webhook/collection-policy" },
   adminOfapiWebhookDeliveries: { method: "GET", path: "/api/v1/admin/ofapi/webhook/deliveries" },
   adminOfapiWebhookDeliverySync: { method: "POST", path: "/api/v1/admin/ofapi/webhook/deliveries/sync" },
+  adminOfapiWebhookEventCatalog: { method: "GET", path: "/api/v1/admin/ofapi/webhook/event-catalog" },
+  adminOfapiWebhookEventCatalogRefresh: { method: "POST", path: "/api/v1/admin/ofapi/webhook/event-catalog/refresh" },
   adminOfapiWebhookReconcile: { method: "POST", path: "/api/v1/admin/ofapi/webhook/reconcile" },
   adminOfapiWebhookRedeliver: { method: "POST", path: "/api/v1/admin/ofapi/webhook/deliveries/redeliver" },
   adminOfapiWebhookRegister: { method: "POST", path: "/api/v1/admin/ofapi/webhook" },

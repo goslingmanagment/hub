@@ -11090,6 +11090,7 @@ Eleven closed owner commands cover Smart Link creation/deletion/tags and require
 
 Postback administration remains separate from business projections. Omitting a token/body/header on PATCH preserves provider state; rotation uses explicit new secret input. Page-owned control rows join governed erasure. Public V2 dashboard-only features and conditional legacy tracking/trial write workflows are not invented. [Implementation, discrepancies, spend and owner rollout](runbooks/ofapi-smart-links.md).
 Administrative marketing responses also register `OFAPI_MARKETING_ADMIN_PROJECTION`: encrypted exact response bytes, frozen command/target/binding and safe baseline produce resumable configuration receipts and exact deletion tombstones. Confirmed HTTP outcomes and validated remote IDs settle before accounting/projection, so local failures remain repairable without turning success into uncertainty or resending a write. Team-wide postbacks remain administrative state rather than fabricated page business events. Explicit EOF and matching credential scope are required before inventory absence removes a postback. Owner local rebuild and bounded dashboard repair issue no vendor calls; page-owned receipts participate in erasure and source-time fencing.
+S10 completion (2026-09-06): four explicit user-list selectors retain metadata previews, complete/partial member pages, and pinned-member pages in the same raw/canonical/projection path. Named system list IDs are validated separately from numeric fan IDs. These selectors are absent from the default schedule, keep existing desktop gateway admission, and never mutate lists or infer removal from absent partial rows. The collection screen now reads the local snapshot report with source/window/coverage and membership CRM context.
 
 ## 267. Typed OFAPI export profiles and daily visitors
 
@@ -11186,3 +11187,6 @@ shows source/freshness/observed-only coverage, and initiates no provider work.
 Optional engagement remains off until the owner applies that webhook group.
 
 [Shapes, discrepancies, validation and owner steps](runbooks/ofapi-content-events.md).
+### 262 implementation addendum — free available-event catalog
+
+2026-09-06: S3's explicit `/webhooks/events` read now has an owner-triggered free refresh and DB-only diagnostic consumer. The vendor response is retained before validation as a control-plane observation; malformed inventory stays visible as invalid. Exact returned events are compared against requested registration and known handlers without enabling new subscriptions. The live example's 13 events does not replace the separate 32-event vendor catalog. No production policy was changed.
