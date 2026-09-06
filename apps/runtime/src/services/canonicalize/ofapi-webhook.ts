@@ -328,7 +328,7 @@ export function canonicalizeOfapiWebhookObservation(
     case "accounts.otp_code_required":
     case "accounts.face_otp_required": {
       const status = observation.kind.slice("accounts.".length);
-      const occurredAt = ofapiAccountLifecycleTime(envelopePayload(observation) ?? {}, observation.receivedAt);
+      const occurredAt = ofapiAccountLifecycleTime(envelopePayload(observation) ?? {}, observation.observedAt ?? observation.receivedAt);
       return [{
         type: "account.auth_changed",
         occurredAt,
