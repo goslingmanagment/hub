@@ -24,15 +24,27 @@ type Row = { id: string; page_id: string; actor_user_id: string; action: string;
   accounting_state: string; created_at: Date };
 const fingerprint = (app: AppContext) => createHash("sha256").update(app.config.ofapiApiKey ?? "").digest("hex");
 const operation = (action: string) => `ofapi_command_action_${action}`;
+/** The TWO-KEY owner-action mutex `(9003011, 1)`: one per cluster, held through
+ * capture and subject indexing; erasure/index.ts takes the same two-key lock
+ * before planning. It is NOT the same lock as the ONE-KEY
+ * `pg_advisory_xact_lock(9003011)` the binding writers take (ofapi-bindings.ts,
+ * repositories/ofapi.ts) — Postgres keys (int, int) and (bigint) advisory locks
+ * in different spaces, so the two never contend. Numbers and arity are wire
+ * facts shared with those files and the integration tests; do not change. */
+const OFAPI_ACTION_LOCK_CLASS = 9003011;
+const OFAPI_ACTION_LOCK_OBJECT = 1;
+/** The per-page binding lock class `(9003010, pageId)`, shared with
+ * withOfapiBindingLock (binding replacement, account health, command dispatch). */
+const OFAPI_BINDING_LOCK_CLASS = 9003010;
 /** Owner actions are infrequent and serialize their physical dispatch. Try-locks
  * release pool slots immediately instead of accumulating blocked transactions. */
 async function withActionLock<T>(db: Database, run: (tx: Database) => Promise<T>, pageId?: number) {
   return db.transaction(async tx => {
     const database = tx as unknown as Database;
-    const global = (await database.execute<{ acquired: boolean }>(sql`select pg_try_advisory_xact_lock(9003011, 1) as acquired`)).rows[0];
+    const global = (await database.execute<{ acquired: boolean }>(sql`select pg_try_advisory_xact_lock(${OFAPI_ACTION_LOCK_CLASS}::integer, ${OFAPI_ACTION_LOCK_OBJECT}::integer) as acquired`)).rows[0];
     if (!global?.acquired) throw new ConflictError("Another owner action is being processed; refresh its status before continuing");
     if (pageId !== undefined) {
-      const binding = (await database.execute<{ acquired: boolean }>(sql`select pg_try_advisory_xact_lock(9003010, ${pageId}::integer) as acquired`)).rows[0];
+      const binding = (await database.execute<{ acquired: boolean }>(sql`select pg_try_advisory_xact_lock(${OFAPI_BINDING_LOCK_CLASS}::integer, ${pageId}::integer) as acquired`)).rows[0];
       if (!binding?.acquired) throw new ConflictError("This account is currently executing a command or changing its binding");
     }
     return run(database);
@@ -261,18 +273,38 @@ export async function repairOfapiAction(app: AppContext, id: string) {
   });
 }
 
+/** A dispatch that never reached capture or settlement is stranded after two minutes; the row becomes indeterminate. */
+async function sweepInterruptedDispatches(app: AppContext, scope: { id: string } | { pageId: number }) {
+  const where = "id" in scope ? sql`id=${scope.id}` : sql`page_id=${scope.pageId}`;
+  await app.db.execute(sql`update ofapi_action_intents set state='indeterminate',error_code='dispatch_interrupted' where ${where} and state='dispatching' and dispatched_at<now()-interval '2 minutes'`);
+}
+const unsettled = (row: Row) => row.state !== "prepared" && row.state !== "cancelled" && (row.state === "indeterminate" || row.accounting_state !== "complete");
+
 export async function getOfapiAction(app: AppContext, id: string) {
-  await app.db.execute(sql`update ofapi_action_intents set state='indeterminate',error_code='dispatch_interrupted' where id=${id} and state='dispatching' and dispatched_at<now()-interval '2 minutes'`);
+  await sweepInterruptedDispatches(app, { id });
   const row = await rowById(app, id);
-  if (row.state !== "prepared" && row.state !== "cancelled" && (row.state === "indeterminate" || row.accounting_state !== "complete")) {
+  if (unsettled(row)) {
     try { return await repairOfapiAction(app, id); } catch { /* Local evidence stays available while repair is pending. */ }
   }
   return dto(app, await rowById(app, id));
 }
 export async function listOfapiActions(app: AppContext, pageId: number) {
-  const rows = (await app.db.execute<{ id: string }>(sql`select id from ofapi_action_intents where page_id=${pageId} order by created_at desc limit 50`)).rows;
+  await sweepInterruptedDispatches(app, { pageId });
+  const rows = (await app.db.execute<Row>(sql`select * from ofapi_action_intents where page_id=${pageId} order by created_at desc limit 50`)).rows;
   const intents = [];
-  for (const row of rows) intents.push(await getOfapiAction(app, row.id));
+  for (const row of rows) {
+    // The list is a read: only a row holding a captured receipt that has not
+    // settled earns a repair (and the owner-action lock); an unsettled row
+    // with nothing retained would take the lock for nothing on every poll and
+    // 409 the owner's own execute. The single-row read keeps the observation_keys
+    // fallback for a receipt captured before its id was stamped on the row.
+    if (unsettled(row) && row.response_observation_id) {
+      try { intents.push(await repairOfapiAction(app, row.id)); continue; } catch { /* Local evidence stays available while repair is pending. */ }
+      intents.push(dto(app, await rowById(app, row.id)));
+      continue;
+    }
+    intents.push(dto(app, row));
+  }
   return { intents };
 }
 export async function cancelOfapiAction(app: AppContext, id: string, actorUserId: number) {
