@@ -200,6 +200,11 @@ export async function resetIntegrationDatabase(pool: ReturnType<typeof createPoo
   // fixtures get an explicit fresh healthy sample; tests for missing/stale/
   // breached storage delete or replace this singleton themselves.
   await seedHealthyStorageSample(pool);
+  // Explicit fixture reset of the migration-owned singleton. Runtime never
+  // reconstructs a missing policy state from env or enables a lost policy.
+  await pool.query(`do $$ begin if to_regclass('ofapi_collection_state') is not null then
+    insert into ofapi_collection_state(id) values(1) on conflict(id) do nothing;
+  end if; end $$`);
 }
 
 export async function seedFanslyPage(

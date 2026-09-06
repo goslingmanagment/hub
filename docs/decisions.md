@@ -251,6 +251,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 248 | Failed sync payloads journal the provider's response snippet | `PersistedSyncError` gains a nullable `responseSnippet` string, taken from `FanslyApiError.responseSnippet` (already redacted and bounded by the adapter) or from `OfapiApiError.body` (redacted with `redactSensitiveText`, then bounded), `null` for everything else, and unwrapped through `SyncPayloadPersistenceError.cause` like the message. It rides inside the existing `error` object into the raw failed payload, the `<endpoint>:failed` observation and run telemetry — no consumer changes and no new field on any wire. The bound is 400 characters; `summary` (and therefore `page_sync_states.last_error_summary`, telemetry and Telegram) is byte-identical to before. |
 | 249 | An explicit posts request is the manual action | `POST /admin/sync/trigger {scope: posts}` — the explicit per-page operator action — now clears a `manual_action_required` block on the posts stream (`clearPageSyncManualActionBlock`, that blocker kind only) BEFORE recording the request, so the request lands on a runnable row. Production 2026-09-04: after #128's cancel/resolve the streams stayed `blocked` with the old `ofapi_capture_job_*` codes because `resumePageSync` only lifts `paused` and nothing ever cleared a manual block; the explicit request the code itself calls "an explicit per-page operator action" was a no-op on exactly the state it exists for. `provider_bad_data`/`dependency` blocks are untouched. The posts handler also forgets an owner-cancelled pending job (checkpoint still named it) and seeds a fresh one through the ordinary slot path. |
 | 250 | OFAPI UI inherits the existing Anthropic-inspired Hub design | Owner requirement for the OFAPI refresh: use the current dashboard theme, typography, spacing and shared components across collection controls and other new OFAPI screens. The concrete source is globals.css plus Settings and OFAPI Credits; token reuse and visual consistency are acceptance criteria. |
+| 263 | OFAPI collection admission | New collectors default off; page/default CAS policies supersede the closed legacy baseline. Physical reservations separate background, interactive and bounded jobs; pauses retain checkpoints and paid responses. |
 | 251 | OFAPI collection policy and UI are separate stages | Owner separates backend S-POL from frontend S-UI, each with independent implementation and acceptance. Saved mockups are non-normative references outside the implementation plan. New collection still requires both applicable stages plus explicit staged activation; existing Hub design tokens remain authoritative. |
 | 252 | OFAPI binding custody, credential adoption and free balance | S0/S1/S4a and minimum S5 use verified creator identity, a preview bound to current generation, durable historical attribution and narrow recovery. Expected team comes from independent configuration; unknown access fails closed for writes. The optional balance probe uses free usage. Code acceptance and live acceptance stay separate. |
 | 253 | OFAPI roster capture | Account roster is restricted identity evidence; typed projection excludes session material before capture and preserves identity conflicts |
@@ -10963,3 +10964,31 @@ regression evidence, source discrepancies and rollout/recovery instructions.
 **Decision #264:** S4b stores bounded free vendor usage reads as independently captured and rebuildable accounting evidence. It does not add vendor aggregates to local ledger spend, infer actor/account attribution for null buckets, or claim historical credential-scope equivalence. Fresh credit headers override potentially cached body metadata; original header/body evidence and conflicts remain durable. A replay/cache marker alone does not prove a price or command success.
 
 S5 represents configured restrictions per exact server credential fingerprint with owner-session CAS and append-only audit. Provider permission CRUD/introspection is not invented: unknown, owner-declared and observed preflight states remain distinct. Operation/account restrictions are enforced before physical dispatch, independently of page/principal ACL and binding/team preflight. Free identity/credit diagnostics remain available. New collectors and production configuration are unchanged until explicitly enabled by the owner. See `docs/runbooks/ofapi-vendor-usage-scope.md`.
+
+## OFAPI collection policy is a dispatch authority (2026-09-06)
+
+**Decision #263:** S-POL adds a local, versioned collection policy, not another
+boot-only enable flag. Its registry names supported categories and the fixed
+legacy operation migration list. Existing callers retain their existing controls
+only while no explicit category policy exists. New callers declare category and
+purpose and default off. Explicit off and policy errors never fall back to env.
+
+Owner preview performs no provider calls. Apply uses one global revision/CAS and
+an append-only actor/change audit, supports one enabled category at a time, and
+immediately governs physical transport admission. Team leads read only their
+assigned pages. Event subscription/readback remains a distinct shared remote
+workflow; local applied status makes no claim about remote registrations.
+
+A database lock serializes category reservations across workers. Background,
+interactive and bounded one-off budgets remain separate beneath existing global
+credit and principal guards. Detail reads require explicit permission. One-off
+work carries call, credit and byte caps and a retained checkpoint. Disabling a
+category pauses its pending jobs; explicit resume cannot raise caps or erase the
+checkpoint. Existing facts and callbacks are retained; capture is not contingent
+on successful collection-usage settlement. Actual overages stop subsequent work.
+
+The control is a limit on new managed requests. It cannot cap incoming webhook
+charges, other clients, already accepted operations or variable vendor prices.
+New collector execution and the matching UI must ship and be reviewed before
+one-at-a-time owner activation. This change authorizes no production toggle,
+paid discovery or blanket collection.

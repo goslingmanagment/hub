@@ -24,3 +24,4 @@ export * from "./unicode.ts";
 export * from "./types.ts";
 
 export type * from "./ofapi-vendor-usage.ts";
+export * from "./ofapi-collection-registry.ts";

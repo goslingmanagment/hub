@@ -146,3 +146,4 @@ export * from "./repositories/workboard-v2.ts";
 export * from "./repositories/ofapi-bindings.ts";
 
 export * from "./repositories/ofapi-vendor-usage.ts";
+export * from "./repositories/ofapi-collection.ts";
