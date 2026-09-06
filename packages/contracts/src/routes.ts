@@ -4189,7 +4189,7 @@ export const ofapiCreditLedgerSourceEnum = z.enum([
   "adjustment",
 ]);
 
-// Positive spend per ledger source over a window. Refills are negative credit
+// Net spend per ledger source, including signed corrections. Refills are negative credit
 // movement and never count as spend, so they have no key here.
 const ofapiCreditsSpendBySourceSchema = z.object({
   rest: z.number().int(),
@@ -4223,6 +4223,16 @@ export const ofapiCreditsSummaryResponseSchema = z.object({
     blocked: z.boolean(),
   }),
   forecast: z.object({
+    // New forecasts use recorded REST activity plus signed corrections and
+    // webhook accrual estimates. Inferred balance residuals remain visible
+    // separately; they are not evidence of a repeatable spending rate.
+    basis: z.literal("recorded_activity").optional(),
+    unverifiedResidual: z.object({
+      credits: z.number().int(),
+      from: isoTimestamp,
+      to: isoTimestamp,
+    }).optional(),
+    monthUnverifiedResidualCredits: z.number().int().optional(),
     avgDailySpend7d: z.number(),
     daysLeft: z.number().int().nullable(),
     runOutDate: businessDate.nullable(),
@@ -4230,7 +4240,7 @@ export const ofapiCreditsSummaryResponseSchema = z.object({
     // avgDailySpend × remaining UTC days). Credits only; the dashboard formats USD
     // from `pricing`. Optional so a dashboard bundle can roll across an API version
     // that predates them.
-    monthToDateSpend: z.number().int().min(0).optional(),
+    monthToDateSpend: z.number().int().optional(),
     monthEndProjection: z.number().int().min(0).optional(),
     // Credits to refill now to keep the runway at `targetDays` above the floor:
     // max(0, floor + avgDailySpend × targetDays − balance). Null when the balance
@@ -4292,12 +4302,13 @@ export const ofapiCreditsSummaryResponseSchema = z.object({
 const ofapiCreditsChatterWindowSchema = z.object({
   from: isoTimestamp,
   to: isoTimestamp,
-  restCredits: z.number().int().min(0),
+  // A later correction can make a bounded window net-negative.
+  restCredits: z.number().int(),
   webhook: z.object({
     eventCount: z.number().int().min(0),
     estimatedCredits: z.number().int().min(0),
   }),
-  totalEstimatedCredits: z.number().int().min(0),
+  totalEstimatedCredits: z.number().int(),
 });
 
 export const ofapiCreditsChatterSummaryResponseSchema = z.object({

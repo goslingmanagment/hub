@@ -36,6 +36,8 @@ docs/runbooks/*
 !docs/runbooks/fansly-post-tips-acceptance.md
 # Operational acceptance for the OFAPI vendor transport and bounded recovery.
 !docs/runbooks/ofapi-posts-transport-recovery.md
+# Credit receipt, signed correction, and forecast evidence semantics.
+!docs/runbooks/ofapi-credit-reconciliation.md
 *.sql.gz
 
 # Local mockup/reference artifacts

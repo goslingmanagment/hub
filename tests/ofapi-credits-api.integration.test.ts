@@ -11,6 +11,8 @@ import {
   upsertTransaction,
 } from "@agency_hub_core/db";
 
+import { ofapiCreditsChatterSummaryResponseSchema } from "@agency_hub_core/contracts";
+import { getChatterOfapiCreditsSummary, getOfapiCreditsDaily, getOfapiCreditsSummary } from "../apps/runtime/src/services/ofapi-credit-report.ts";
 import { buildApiServer, normalizeOpenApiDocument } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import {
@@ -288,7 +290,7 @@ describe("ofapi credits admin api", () => {
     expect(body.last7d.restCredits).toBe(95);
     expect(body.last7d.webhook).toEqual({ eventCount: 109, estimatedCredits: 2 });
     expect(body.last7d.totalEstimatedCredits).toBe(97);
-    expect(body.limitations).toContain("owner-only balance, refills, external drift, and adjustments are omitted");
+    expect(body.limitations).toContain("owner-only balance, refills, external drift, and unattributed adjustments are omitted");
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("returns an unavailable chatter summary when the credit ledger is disabled", async (context) => {
@@ -381,8 +383,8 @@ describe("ofapi credits admin api", () => {
     // A2: all 137 net credits were recorded today (<1 day of history), so the
     // runway divides by the observed span floored at 1 day — not a full 7 — and
     // does not overstate days-left. (The old divide-by-7 reported 19.6/day.)
-    expect(body.forecast.avgDailySpend7d).toBe(137);
-    expect(body.forecast.daysLeft).toBe(Math.floor(23_950 / 137));
+    expect(body.forecast.avgDailySpend7d).toBe(132);
+    expect(body.forecast.daysLeft).toBe(Math.floor(23_950 / 132));
     expect(body.forecast.runOutDate).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     expect(body.reconciliation.lastRunAt).not.toBeNull();
     expect(body.reconciliation.lastDriftCredits).toBe(0);
@@ -392,8 +394,8 @@ describe("ofapi credits admin api", () => {
     expect(body.pricing).toEqual({ microUsdPerCredit: 0 });
     // D5: all 137 net credits were spent today (this month), and the 23,950
     // balance already covers 30 days above the 500 floor, so no refill is needed.
-    expect(body.forecast.monthToDateSpend).toBe(137);
-    expect(body.forecast.monthEndProjection).toBeGreaterThanOrEqual(137);
+    expect(body.forecast.monthToDateSpend).toBe(132);
+    expect(body.forecast.monthEndProjection).toBeGreaterThanOrEqual(132);
     expect(body.forecast.refillRecommendation).toEqual({ targetDays: 30, credits: 0 });
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
@@ -485,7 +487,7 @@ describe("ofapi credits admin api", () => {
     expect(response.json().pricing).toEqual({ microUsdPerCredit: 10_000 });
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("sizes the runway from an external residual's spread start, not its post time", async (context) => {
+  it("keeps an external residual visible without extrapolating it into the runway", async (context) => {
     if (!testDb || !server) {
       context.skip();
       return;
@@ -526,11 +528,59 @@ describe("ofapi credits admin api", () => {
     });
     expect(response.statusCode).toBe(200);
     const body = response.json();
-    // ~700 credits spread over ~7 days → ~100/day, not ~700/day (which anchoring
-    // on the post time would produce).
-    expect(body.forecast.avgDailySpend7d).toBe(100);
-    expect(body.forecast.daysLeft).toBe(Math.floor(7_000 / 100)); // 70
+    // The bridge remains visible for investigation, but cannot prove a
+    // recurring spending rate. A zero-cost probe supplies only the balance.
+    expect(body.forecast.avgDailySpend7d).toBe(0);
+    expect(body.forecast.daysLeft).toBeNull();
+    expect(body.forecast.basis).toBe("recorded_activity");
+    expect(body.forecast.unverifiedResidual.credits).toBe(700);
+    expect(body.forecast.unverifiedResidual.from).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(body.forecast.monthUnverifiedResidualCredits).toBeGreaterThan(0);
+    expect(body.today.bySource.external).toBe(700);
   }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("does not let a zero-credit balance anchor lengthen the observed spending window", async () => {
+    if (!testDb) return;
+    const now = new Date("2026-09-06T12:00:00.000Z");
+    await insertOfapiCreditLedgerEntry(appContext.db, {
+      source: "adjustment", operation: "ofapi_capture_posts", credits: 0, balanceAfter: 1_000,
+      occurredAt: new Date("2026-08-31T12:00:00.000Z"),
+    });
+    await recordOfapiCreditSpend(appContext.db, {
+      operation: "ofapi_chats", credits: 200, balanceAfter: 800,
+      occurredAt: new Date("2026-09-04T12:00:00.000Z"),
+    });
+    expect((await getOfapiCreditsSummary(appContext, now)).forecast).toMatchObject({
+      avgDailySpend7d: 100, daysLeft: 8,
+    });
+  });
+
+  it("retains a negative correction in a window whose original request is older", async () => {
+    if (!testDb) return;
+    const model = await createModel(appContext.db, { slug: "credit-correction", name: "Credit correction" });
+    if (!model) throw new Error("credit-correction model seed failed");
+    const page = await createOnlyFansPage(appContext.db, { modelId: model.id, label: "credit-correction-of" });
+    if (!page) throw new Error("credit-correction page seed failed");
+    const now = new Date("2026-09-06T12:00:00.000Z");
+    await recordOfapiCreditSpend(appContext.db, {
+      operation: "ofapi_chats", pageId: page.id, credits: 1,
+      occurredAt: new Date("2026-08-31T12:00:00.000Z"),
+    });
+    await insertOfapiCreditLedgerEntry(appContext.db, {
+      source: "adjustment", operation: "ofapi_chats", pageId: page.id, credits: -1,
+      occurredAt: new Date("2026-09-06T11:00:00.000Z"),
+    });
+    const summary = await getOfapiCreditsSummary(appContext, now);
+    expect(summary.today).toMatchObject({ total: -1, bySource: { rest: 0, adjustment: -1 } });
+    expect(summary.forecast.monthToDateSpend).toBe(-1);
+    const daily = await getOfapiCreditsDaily(appContext, { days: 1 }, now);
+    expect(daily.days[0]).toMatchObject({ total: -1, bySource: { adjustment: -1 } });
+    expect(daily.byOperation).toEqual([{ operation: "ofapi_chats", credits: -1, requests: 0 }]);
+    expect(daily.byPage[0]).toMatchObject({ pageId: page.id, credits: -1 });
+    const chatter = await getChatterOfapiCreditsSummary(appContext, { pageIds: [page.id] }, now);
+    expect(ofapiCreditsChatterSummaryResponseSchema.parse(chatter).today)
+      .toMatchObject({ restCredits: -1, totalEstimatedCredits: -1 });
+  });
 
   it("bounds summary forecast and burn windows at the current observation time", async (context) => {
     if (!testDb || !server) {

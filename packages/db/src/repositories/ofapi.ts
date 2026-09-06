@@ -1875,11 +1875,13 @@ export interface OfapiSpendWindowStats {
  * Net spend AND the earliest effective spend start over `[from, to)`, computed
  * in one query so the two can never drift. The `external`-drift proration
  * window used by both the sum and the effective-start is defined once
- * (`isProratedExternal`).
+ * (`isProratedExternal`). The optional scope reads recorded activity or actual
+ * external rows directly: subtracting two independently read totals could
+ * misclassify a concurrently committed REST entry as an unexplained residual.
  */
 export async function summarizeOfapiSpendWindowBetween(
   db: Database,
-  input: { from: Date; to: Date },
+  input: { from: Date; to: Date; scope?: "recorded_activity" | "external_residual" },
 ): Promise<OfapiSpendWindowStats> {
   const fromOccurredAt = sql`(${ofapiCreditLedger.details} ->> 'fromOccurredAt')::timestamptz`;
   const isProratedExternal = sql`${ofapiCreditLedger.source} = 'external'
@@ -1911,6 +1913,11 @@ export async function summarizeOfapiSpendWindowBetween(
       gte(ofapiCreditLedger.occurredAt, input.from),
       lt(ofapiCreditLedger.occurredAt, input.to),
       ne(ofapiCreditLedger.source, "refill"),
+      ...(input.scope === "recorded_activity"
+        ? [ne(ofapiCreditLedger.source, "external"), ne(ofapiCreditLedger.credits, 0)]
+        : input.scope === "external_residual"
+          ? [eq(ofapiCreditLedger.source, "external")]
+          : []),
     ));
 
   const rawEarliest = row?.earliestEffectiveAt ?? null;
@@ -2011,7 +2018,7 @@ export async function getLastOfapiWebhookAccrualDay(db: Database): Promise<strin
   return row?.day ?? null;
 }
 
-/** Positive (spend) credits by source over a time window — the "spent today" card. */
+/** Net spend by source, including signed corrections and excluding refills. */
 export async function sumOfapiSpendBySourceBetween(
   db: Database,
   input: { from: Date; to: Date },
@@ -2025,7 +2032,7 @@ export async function sumOfapiSpendBySourceBetween(
     .where(and(
       gte(ofapiCreditLedger.occurredAt, input.from),
       lt(ofapiCreditLedger.occurredAt, input.to),
-      gt(ofapiCreditLedger.credits, 0),
+      ne(ofapiCreditLedger.source, "refill"),
     ))
     .groupBy(ofapiCreditLedger.source);
 
@@ -2045,17 +2052,16 @@ export async function sumOfapiRestCreditsForOperationsBetween(
     .select({ total: sql<number>`coalesce(sum(${ofapiCreditLedger.credits}), 0)::int` })
     .from(ofapiCreditLedger)
     .where(and(
-      eq(ofapiCreditLedger.source, "rest"),
+      inArray(ofapiCreditLedger.source, ["rest", "adjustment"]),
       inArray(ofapiCreditLedger.operation, [...input.operations]),
       gte(ofapiCreditLedger.occurredAt, input.from),
       lt(ofapiCreditLedger.occurredAt, input.to),
-      gt(ofapiCreditLedger.credits, 0),
     ));
 
   return row?.total ?? 0;
 }
 
-/** Page-scoped positive REST spend for chatter-visible credit summaries. */
+/** Page-scoped REST spend net of attributed corrections for chatter summaries. */
 export async function sumOfapiRestCreditsForPagesBetween(
   db: Database,
   input: { pageIds: number[]; from: Date; to: Date },
@@ -2068,11 +2074,10 @@ export async function sumOfapiRestCreditsForPagesBetween(
     .select({ total: sql<number>`coalesce(sum(${ofapiCreditLedger.credits}), 0)::int` })
     .from(ofapiCreditLedger)
     .where(and(
-      eq(ofapiCreditLedger.source, "rest"),
+      inArray(ofapiCreditLedger.source, ["rest", "adjustment"]),
       inArray(ofapiCreditLedger.pageId, input.pageIds),
       gte(ofapiCreditLedger.occurredAt, input.from),
       lt(ofapiCreditLedger.occurredAt, input.to),
-      gt(ofapiCreditLedger.credits, 0),
     ));
 
   return row?.total ?? 0;
@@ -2084,7 +2089,7 @@ export interface OfapiDailySpendRow {
   credits: number;
 }
 
-/** Per-UTC-day positive spend by source (the stacked daily bars). */
+/** Per-UTC-day net spend by source, retaining signed corrections. */
 export async function listOfapiDailySpendBySource(
   db: Database,
   input: { from: Date; to: Date },
@@ -2097,7 +2102,7 @@ export async function listOfapiDailySpendBySource(
     from ofapi_credit_ledger
     where occurred_at >= ${input.from}::timestamptz
       and occurred_at < ${input.to}::timestamptz
-      and credits > 0
+      and source <> 'refill'
     group by 1, 2
     order by 1 asc
   `);
@@ -2174,7 +2179,7 @@ export interface OfapiOperationBreakdownRow {
   credits: number;
 }
 
-/** REST spend grouped by operation over a window (breakdown panel). */
+/** REST spend plus attributed corrections; only settlement rows count as requests. */
 export async function listOfapiOperationBreakdownBetween(
   db: Database,
   input: { from: Date; to: Date },
@@ -2182,12 +2187,12 @@ export async function listOfapiOperationBreakdownBetween(
   const rows = await db
     .select({
       operation: ofapiCreditLedger.operation,
-      requests: sql<number>`count(*)::int`,
+      requests: sql<number>`count(*) filter (where ${ofapiCreditLedger.source} = 'rest')::int`,
       credits: sql<number>`coalesce(sum(${ofapiCreditLedger.credits}), 0)::int`,
     })
     .from(ofapiCreditLedger)
     .where(and(
-      eq(ofapiCreditLedger.source, "rest"),
+      inArray(ofapiCreditLedger.source, ["rest", "adjustment"]),
       gte(ofapiCreditLedger.occurredAt, input.from),
       lt(ofapiCreditLedger.occurredAt, input.to),
     ))
@@ -2203,7 +2208,7 @@ export interface OfapiPageBreakdownRow {
   credits: number;
 }
 
-/** REST spend attributed to pages over a window, top spenders first. */
+/** Net REST spend and attributed corrections per page, top spenders first. */
 export async function listOfapiPageBreakdownBetween(
   db: Database,
   input: { from: Date; to: Date; limit?: number },
@@ -2217,10 +2222,9 @@ export async function listOfapiPageBreakdownBetween(
     .from(ofapiCreditLedger)
     .innerJoin(pages, eq(ofapiCreditLedger.pageId, pages.id))
     .where(and(
-      eq(ofapiCreditLedger.source, "rest"),
+      inArray(ofapiCreditLedger.source, ["rest", "adjustment"]),
       gte(ofapiCreditLedger.occurredAt, input.from),
       lt(ofapiCreditLedger.occurredAt, input.to),
-      gt(ofapiCreditLedger.credits, 0),
     ))
     .groupBy(ofapiCreditLedger.pageId, pages.label)
     .orderBy(sql`3 desc`)

@@ -22,6 +22,9 @@ import {
   insertObservation,
   leaseNextOfapiCaptureJob,
   listRunnableOfapiCapturePages,
+  listOfapiBalanceObservationsAfter,
+  listOfapiOperationBreakdownBetween,
+  sumOfapiRestCreditsForOperationsBetween,
   markOfapiAttemptDispatching,
   markOfapiAttemptIndeterminate,
   OfapiCaptureInvariantError,
@@ -43,6 +46,11 @@ import {
 } from "@agency_hub_core/db";
 
 import { executeOfapiCaptureJobChunk } from "../apps/runtime/src/services/ofapi-capture-jobs.ts";
+import {
+  getChatterOfapiCreditsSummary,
+  getOfapiCreditsDaily,
+  getOfapiCreditsSummary,
+} from "../apps/runtime/src/services/ofapi-credit-report.ts";
 import {
   OFAPI_CAPTURE_MATERIALIZER_VERSION,
   runOfapiCaptureMaterialization,
@@ -1196,6 +1204,80 @@ describe("OFAPI capture correctness repository", () => {
     ]);
   });
 
+  it.each([0, 1, 3])("nets provider receipt %s once across accounting views without increasing request counts", async (actualCredits) => {
+    if (!testDb) return;
+    const seeded = await createAndReserveInteractive({ reservedCredits: 1 });
+    expect(seeded.reservation.admitted).toBe(true);
+    if (!seeded.reservation.admitted) return;
+    const { attemptId, fenceToken } = seeded.reservation;
+    expect(await markOfapiAttemptDispatching(testDb.db, {
+      attemptId, fenceToken, now: new Date(NOW.getTime() + 1_000),
+    })).toBe(true);
+    const observedAt = new Date(NOW.getTime() + 2_000);
+    await captureOfapiAttemptResponse(testDb.db, {
+      attemptId, fenceToken,
+      responseObservedAt: observedAt,
+      httpStatus: 200, httpOutcome: "success",
+      responseHeaders: { "content-type": "application/json" },
+      bodyBytes: messagePage({ nextPage: null, creditsUsed: actualCredits }),
+      request: { method: "GET" }, producer: "test",
+      observationKind: "ofapi.chat_messages_page.v1",
+      now: new Date(NOW.getTime() + 3_000),
+    });
+    const receipt = { attemptId, actualCredits, balanceAfter: 1000 - actualCredits, now: new Date(NOW.getTime() + 4_000) };
+    expect(await reconcileOfapiCapturedAttemptCredit(testDb.db, receipt)).toBe(true);
+    expect(await reconcileOfapiCapturedAttemptCredit(testDb.db, receipt)).toBe(true);
+    const ledger = await testDb.pool.query(`
+      select source, credits, estimated, balance_after, attempt_entry_phase
+      from ofapi_credit_ledger where attempt_id = $1 order by id
+    `, [attemptId]);
+    expect(ledger.rows).toEqual([
+      { source: "rest", credits: 1, estimated: true, balance_after: null, attempt_entry_phase: "settlement" },
+      { source: "adjustment", credits: actualCredits - 1, estimated: false, balance_after: 1000 - actualCredits, attempt_entry_phase: "certainty_adjustment" },
+    ]);
+    // The reconciler's own read path must see the receipt even when the
+    // reported amount equals the reserve and has no monetary delta.
+    expect(await listOfapiBalanceObservationsAfter(testDb.db, { afterLedgerId: 0, limit: 10 }))
+      .toEqual([{ id: expect.any(Number), occurredAt: observedAt, balanceAfter: 1000 - actualCredits }]);
+    expect(await listOfapiOperationBreakdownBetween(testDb.db, {
+      from: NOW, to: new Date(NOW.getTime() + 60_000),
+    })).toEqual([{ operation: "list_messages", requests: 1, credits: actualCredits }]);
+    const credit = await testDb.pool.query(`
+      select spent_credits, interactive_spent_credits, governed_unsettled_credits,
+             last_balance from ofapi_credit_state where id = 1
+    `);
+    expect(credit.rows).toEqual([{
+      spent_credits: actualCredits, interactive_spent_credits: actualCredits,
+      governed_unsettled_credits: 0, last_balance: 1000 - actualCredits,
+    }]);
+    const principal = await testDb.pool.query(`
+      select used_calls, used_credits from ofapi_principal_budget_state
+      where principal_user_id = $1
+    `, [seeded.owner.id]);
+    expect(principal.rows).toEqual([{ used_calls: 1, used_credits: actualCredits }]);
+    const app = createTestAppContext(testDb, { ofapiCreditLedgerEnabled: true });
+    const reportAt = new Date(NOW.getTime() + 5_000);
+    const summary = await getOfapiCreditsSummary(app, reportAt);
+    expect(summary.today).toMatchObject({ total: actualCredits, bySource: {
+      rest: 1, webhookAccrual: 0, external: 0, adjustment: actualCredits - 1,
+    } });
+    expect(summary.forecast).toMatchObject({
+      basis: "recorded_activity", avgDailySpend7d: actualCredits,
+      monthToDateSpend: actualCredits, unverifiedResidual: { credits: 0 },
+    });
+    const daily = await getOfapiCreditsDaily(app, { days: 1 }, reportAt);
+    expect(daily.days).toEqual([{ ...summary.today }]);
+    expect(daily.byOperation).toEqual([{ operation: "list_messages", requests: 1, credits: actualCredits }]);
+    expect(daily.byPage).toEqual([{
+      pageId: seeded.page.id, pageLabel: seeded.page.label, credits: actualCredits, revenueMills: 0,
+    }]);
+    const chatter = await getChatterOfapiCreditsSummary(app, { pageIds: [seeded.page.id] }, reportAt);
+    expect(chatter.today).toMatchObject({ restCredits: actualCredits, totalEstimatedCredits: actualCredits });
+    expect(await sumOfapiRestCreditsForOperationsBetween(testDb.db, {
+      operations: ["list_messages"], from: NOW, to: reportAt,
+    })).toBe(actualCredits);
+  });
+
   it("counts one physical dispatch when an indeterminate job receives a late response", async () => {
     if (!testDb) return;
     const seeded = await seed();
@@ -2272,6 +2354,72 @@ describe("OFAPI capture correctness repository", () => {
     }));
   });
 
+  it.each([false, true])("counts a one-page posts completion exactly once, empty=%s", async (empty) => {
+    if (!testDb) return;
+    const fixture = await createPostCaptureExecutionFixture({
+      anchorPostId: empty ? null : "101",
+      maxCalls: 1,
+      maxPages: 1,
+      responses: [postsPage({
+        items: empty ? [] : [
+          { id: "103", postedAt: "2026-08-01T03:00:00.000Z" },
+          { id: "102", postedAt: "2026-08-01T02:00:00.000Z" },
+          { id: "101", postedAt: "2026-08-01T01:00:00.000Z" },
+        ],
+        hasMore: false,
+      })],
+    });
+    expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("success");
+    expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("success");
+    const completed = await getOfapiCaptureJob(testDb.db, fixture.job.id);
+    expect(completed).toMatchObject({
+      state: "complete",
+      acceptedPages: 1,
+      acceptedItems: empty ? 0 : 3,
+      result: { pages: 1, acceptedCount: empty ? 0 : 3 },
+    });
+    const attempt = await testDb.pool.query<{
+      id: string;
+      response_observation_id: string;
+      response_observation_received_at: Date;
+      lease_token: string;
+    }>(`
+      select attempt.id, attempt.response_observation_id,
+             attempt.response_observation_received_at,
+             attempt.job_lease_token as lease_token
+      from ofapi_request_attempts attempt where capture_job_id = $1
+    `, [fixture.job.id]);
+    const row = attempt.rows[0]!;
+    // Re-delivery of the same successful terminal parse must not append the
+    // terminal page to counters for a second time, even with the original lease.
+    expect(await settleOfapiCaptureParse(testDb.db, {
+      jobId: fixture.job.id,
+      attemptId: row.id,
+      leaseToken: row.lease_token,
+      observationId: Number(row.response_observation_id),
+      observationReceivedAt: row.response_observation_received_at,
+      parserOutcome: "accepted",
+      rawCount: empty ? 0 : 3,
+      acceptedCount: empty ? 0 : 3,
+      boundaryDuplicateCount: 0,
+      explicitlyIrrelevantCount: 0,
+      rejectedCount: 0,
+      disposition: {
+        kind: "complete",
+        terminal: {
+          producer: "test-redelivery",
+          kind: "ofapi.posts_capture_completed.v1",
+          payload: {},
+          payloadHash: Buffer.alloc(32),
+          idempotencyKey: `duplicate-completion:${fixture.job.id}`,
+        },
+      },
+    })).toBe(false);
+    expect(await getOfapiCaptureJob(testDb.db, fixture.job.id)).toEqual(completed);
+    expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("idle");
+    expect(fixture.dispatchGovernedRaw).toHaveBeenCalledTimes(1);
+  });
+
   it("materializes only accepted OFAPI posts and completes initial head verification at the exact cap", async () => {
     if (!testDb) return;
     const verbatim = "  <p>A &amp; B</p>\r\n ";
@@ -2316,6 +2464,8 @@ describe("OFAPI capture correctness repository", () => {
     expect(fixture.dispatchGovernedRaw).toHaveBeenCalledTimes(3);
     expect(await getOfapiCaptureJob(testDb.db, fixture.job.id)).toMatchObject({
       state: "complete",
+      acceptedPages: 3,
+      acceptedItems: 4,
       result: {
         headPostId: "104",
         oldestPostId: "101",
@@ -2523,8 +2673,8 @@ describe("OFAPI capture correctness repository", () => {
     expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("success");
     expect(await getOfapiCaptureJob(testDb.db, fixture.job.id)).toMatchObject({
       state: "complete",
-      acceptedItems: 2,
-      acceptedPages: 1,
+      acceptedItems: 3,
+      acceptedPages: 2,
     });
 
     const captured = await testDb.pool.query<{

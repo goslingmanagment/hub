@@ -8870,6 +8870,39 @@
                     "forecast": {
                       "type": "object",
                       "properties": {
+                        "basis": {
+                          "type": "string",
+                          "enum": [
+                            "recorded_activity"
+                          ]
+                        },
+                        "unverifiedResidual": {
+                          "type": "object",
+                          "properties": {
+                            "credits": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "from": {
+                              "type": "string"
+                            },
+                            "to": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "credits",
+                            "from",
+                            "to"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "monthUnverifiedResidualCredits": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
                         "avgDailySpend7d": {
                           "type": "number"
                         },
@@ -8898,7 +8931,7 @@
                         },
                         "monthToDateSpend": {
                           "type": "integer",
-                          "minimum": 0,
+                          "minimum": -9007199254740991,
                           "maximum": 9007199254740991
                         },
                         "monthEndProjection": {
@@ -62987,7 +63020,7 @@
                         },
                         "restCredits": {
                           "type": "integer",
-                          "minimum": 0,
+                          "minimum": -9007199254740991,
                           "maximum": 9007199254740991
                         },
                         "webhook": {
@@ -63012,7 +63045,7 @@
                         },
                         "totalEstimatedCredits": {
                           "type": "integer",
-                          "minimum": 0,
+                          "minimum": -9007199254740991,
                           "maximum": 9007199254740991
                         }
                       },
@@ -63037,7 +63070,7 @@
                         },
                         "restCredits": {
                           "type": "integer",
-                          "minimum": 0,
+                          "minimum": -9007199254740991,
                           "maximum": 9007199254740991
                         },
                         "webhook": {
@@ -63062,7 +63095,7 @@
                         },
                         "totalEstimatedCredits": {
                           "type": "integer",
-                          "minimum": 0,
+                          "minimum": -9007199254740991,
                           "maximum": 9007199254740991
                         }
                       },
