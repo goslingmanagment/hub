@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createModel, createOnlyFansPage, ensurePageSyncStates, pausePageSync, findHistoricalPageByOfapiAccountId,
@@ -5,6 +6,7 @@ import {
   upsertOfapiWebhookConfig, getOfapiWebhookConfig, listNotificationIncidents,
 } from "@agency_hub_core/db";
 import { encryptJson } from "@agency_hub_core/shared";
+import { agentObservationPayloadAllowed } from "../apps/runtime/src/modules/agent-read/index.ts";
 import { createOfapiClient } from "../apps/runtime/src/services/ofapi.ts";
 import { ofapiCredentialPolicy } from "../apps/runtime/src/services/ofapi-credential-policy.ts";
 import { applyOfapiAccountHealthEvent } from "../apps/runtime/src/services/ofapi-account-health.ts";
@@ -160,5 +162,29 @@ describe("remote webhook verification", () => {
     expect((await getOfapiWebhookConfig(app.db))!.externalWebhookId).toBe("wh_new");
     const history = await testDb!.pool.query("select external_webhook_id,reason from ofapi_webhook_registration_history");
     expect(history.rows).toEqual([{ external_webhook_id: "wh_old", reason: "confirmed_missing" }]);
+  });
+});
+
+
+describe("OFAPI restricted roster evidence", () => {
+  it("TRIAGE 7 excludes session material and preserves historical identity evidence", async () => {
+    roster = [{ id: "acct_old", onlyfans_id: 123, onlyfans_user_data: { id: 123, csrf: "synthetic-csrf", wsAuthToken: "synthetic-token" } }];
+    await app.ofapi!.listAccounts();
+    const row = (await testDb!.pool.query("select id,received_at,payload,encode(payload_hash,'hex') as hash from observations where kind='ofapi_admin_accounts'")).rows[0];
+    expect(row.payload.body).not.toContain("synthetic-token");
+    expect(row.payload.body).not.toContain("synthetic-csrf");
+    expect(agentObservationPayloadAllowed("ofapi_admin_accounts")).toBe(false);
+    expect(row.hash).toBe(createHash("sha256").update(row.payload.body).digest("hex"));
+    expect(row.payload.redaction.rule).toBe("ofapi_admin_accounts_v2");
+    roster = [{ id: "acct_new", onlyfans_id: 123, is_authenticated: true }];
+    const preview = await refreshOfapiBinding(app, { ...bindingInput(), identityEvidence: { id: Number(row.id), receivedAt: row.received_at.toISOString() } }, 1);
+    expect(preview.creatorId).toBe("123");
+  });
+  it("refuses withheld error bodies as historical identity evidence", async () => {
+    vi.mocked(fetch).mockImplementationOnce(async () => json({ error: { code: "unauthorized", message: "synthetic-session-secret" } }, 403));
+    await expect(app.ofapi!.listAccounts()).rejects.toThrow();
+    const row = (await testDb!.pool.query("select id,received_at,payload from observations where kind='ofapi_admin_accounts'")).rows[0];
+    expect(row.payload).toMatchObject({ status: 403, body: "", redaction: { withheld: "non_200_status" } });
+    await expect(refreshOfapiBinding(app, { ...bindingInput(), identityEvidence: { id: Number(row.id), receivedAt: row.received_at.toISOString() } }, 1)).rejects.toThrow("withheld");
   });
 });

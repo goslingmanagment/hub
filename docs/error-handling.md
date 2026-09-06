@@ -318,6 +318,11 @@ not detect them.
 
 ## 6. Boundary and redaction rules
 
+OFAPI roster capture uses `ofapi_admin_accounts_v2`: identity fields are allowlisted
+by key and type before journaling; session material is excluded, non-200 bodies
+are withheld, and identity conflicts survive the JSON projection. This control-plane
+evidence is restricted in tiering and refused by Agent Read.
+
 `sanitizeError` is the shared diagnostic sanitizer, not a license to expose
 diagnostic text:
 

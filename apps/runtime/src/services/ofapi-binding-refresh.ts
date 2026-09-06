@@ -41,8 +41,10 @@ export async function refreshOfapiBinding(app: AppContext, input: OfapiBindingRe
     const captured = await loadObservationPayload(app, input.identityEvidence.id);
     const payload = captured?.payload;
     const raw = payload as { status?: number; body?: string } | null;
-    const previous = raw?.status === 200 && typeof raw.body === "string"
-      ? toAccountRecords(JSON.parse(raw.body)).find(account => account.id === page.account_id) : null;
+    if (raw?.status !== 200 || typeof raw.body !== "string" || raw.body.length === 0) {
+      throw new ConflictError("Evidence is not a successful roster read or its body was withheld at capture");
+    }
+    const previous = toAccountRecords(JSON.parse(raw.body)).find(account => account.id === page.account_id);
     if (!previous?.onlyfansUserId) throw new ConflictError("Evidence does not establish the current binding identity");
     identities.push(previous.onlyfansUserId);
   }

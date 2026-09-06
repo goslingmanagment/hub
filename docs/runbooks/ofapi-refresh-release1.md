@@ -66,8 +66,11 @@ or collection flags.
 
 The API key remains server-side in the existing secret configuration. Never put
 keys, authorization headers or webhook signing requests in rollout notes.
-Preflight stores only the key fingerprint and expected/observed team result; raw
-admin response bytes are retained through the existing owner-controlled journal.
+Preflight stores only the key fingerprint and expected/observed team result.
+Admin response bytes are retained through the owner-controlled journal, except
+the account roster: rule `ofapi_admin_accounts_v2` retains an identity projection
+without `onlyfans_email`, `_meta` or nested fields other than creator `id`.
+Non-200 roster bodies are withheld; status, body shape and machine code remain.
 
 Boot/adoption preflight is cached for the client lifetime, including failed or
 unknown results. Missing expected team produces `unknown` without guessing it.
@@ -101,7 +104,7 @@ Current persisted stable identity or the current mapped account's verified
 roster identity must agree with the target creator. A replacement account or
 username alone is insufficient. If the previous account has disappeared from
 the visible roster and stable fields are empty, `identityEvidence` must reference
-a retained `ofapi_admin_accounts` observation using `{id, receivedAt}`; its raw
+a retained `ofapi_admin_accounts` observation using `{id, receivedAt}`; its projected
 successful response must establish that previous account's creator. Missing
 evidence blocks replacement rather than inventing a seed. Original captured
 observations already attributed to the page (including canonical event lineage)

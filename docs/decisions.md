@@ -253,6 +253,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 250 | OFAPI UI inherits the existing Anthropic-inspired Hub design | Owner requirement for the OFAPI refresh: use the current dashboard theme, typography, spacing and shared components across collection controls and other new OFAPI screens. The concrete source is globals.css plus Settings and OFAPI Credits; token reuse and visual consistency are acceptance criteria. |
 | 251 | OFAPI collection policy and UI are separate stages | Owner separates backend S-POL from frontend S-UI, each with independent implementation and acceptance. Saved mockups are non-normative references outside the implementation plan. New collection still requires both applicable stages plus explicit staged activation; existing Hub design tokens remain authoritative. |
 | 252 | OFAPI binding custody, credential adoption and free balance | S0/S1/S4a and minimum S5 use verified creator identity, a preview bound to current generation, durable historical attribution and narrow recovery. Expected team comes from independent configuration; unknown access fails closed for writes. The optional balance probe uses free usage. Code acceptance and live acceptance stay separate. |
+| 253 | OFAPI roster capture | Account roster is restricted identity evidence; typed projection excludes session material before capture and preserves identity conflicts |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -10762,3 +10763,16 @@ bindings and the paid-read credit floor. Zero is observed zero; unavailable
 metadata remains unknown. S4b spending reconciliation, additional collectors,
 S-POL/S-UI and broader commands/events remain separate. Posts capture remains
 an unresolved defect with its own live acceptance.
+
+
+## OFAPI roster capture excludes session material (2026-09-06)
+
+**Decision #253:** `ofapi_admin_accounts` is control-plane identity evidence, not a
+business fact. Capture uses a typed allowlist, excludes nested session material
+and `_meta`, and withholds non-200 bodies. The payload hash describes stored
+bytes; the source hash and UTF-8 byte count remain in redaction metadata.
+Historical binding evidence must preserve creator identity and conflict verdicts
+through projection, including alias precedence and unsafe/non-finite numeric IDs.
+Finite unsafe IDs remain numeric so the parser rejects them; non-finite values
+become invalid strings rather than JSON null. The kind is restricted for tiering
+and explicitly refused by Agent Read. Other captures retain their existing contract.
