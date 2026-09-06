@@ -61,7 +61,9 @@ describe("Smart Links end-to-end capture and owner controls",()=>{
  it("requires explicit shared-pixel acknowledgement and preserves one physical attempt with encrypted token custody",async()=>{
   await pixels(); const id=randomUUID();
   const prepared=await prepareOfapiMarketingCommand(app,{id,command:{action:"pixel_update",pageId,linkId:LINK,pixelId:9,pixel_access_token:"PRIVATE-AD-TOKEN"}},actor);
-  expect(prepared.preview).toMatchObject({affectedLinkIds:[LINK,OTHER],affectedLinksComplete:false});expect(JSON.stringify(prepared)).not.toContain("PRIVATE-AD-TOKEN");
+  expect(prepared.preview).toMatchObject({affectedLinkIds:[LINK,OTHER],affectedLinksComplete:false});
+  const disconnect=await prepareOfapiMarketingCommand(app,{id:randomUUID(),command:{action:"pixel_disconnect",pageId,linkId:LINK,pixelId:9}},actor);
+  expect(disconnect.preview.affectedLinkIds).toEqual([LINK]);expect(JSON.stringify(prepared)).not.toContain("PRIVATE-AD-TOKEN");
   await expect(apply(id,false)).rejects.toThrow("shared");
   fetchMock.mockResolvedValueOnce(response({id:9,pixel_access_token:"PRIVATE-AD-TOKEN"}));
   expect(await apply(id)).toMatchObject({state:"succeeded"});expect(await apply(id)).toMatchObject({state:"succeeded"});expect(fetchMock).toHaveBeenCalledTimes(4);
@@ -135,6 +137,24 @@ describe("Smart Links end-to-end capture and owner controls",()=>{
   const before=await getOfapiMarketingDashboard(app);await rebuildOfapiMarketingProjection(app);expect(await getOfapiMarketingDashboard(app)).toEqual(before);expect(JSON.stringify(before)).not.toContain("PRIVATE");
   fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({data:[],_pagination:{next_page:null}})));
   expect((await refreshOfapiMarketingPostbacks(app,actor)).resources).toEqual([]);await rebuildOfapiMarketingProjection(app);expect((await getOfapiMarketingDashboard(app)).resources).toEqual([]);expect(fetchMock).toHaveBeenCalledTimes(3);
+ });
+ it("retains the exact page/account and safe values when a prepared action is reviewed later",async()=>{
+  const id=randomUUID();const prepared=await prepareOfapiMarketingCommand(app,{id,command:{action:"smart_link_create",pageId,name:"Thirty day campaign",link_type:"free_trial",free_trial_days:30}},actor);
+  expect(prepared.preview).toMatchObject({pageId,pageLabel:"marketing",accountId:"acct_marketing",values:[{field:"name",value:"Thirty day campaign"},{field:"link_type",value:"free_trial"},{field:"free_trial_days",value:30}]});
+  await db.pool.query("update pages set label='renamed-after-preparation' where id=$1",[pageId]);
+  expect((await getOfapiMarketingDashboard(app)).intents[0]?.preview).toEqual(prepared.preview);expect(fetchMock).not.toHaveBeenCalled();
+ });
+ it("clears postback templates explicitly and rebuilds accurate remaining variable names",async()=>{
+  fetchMock.mockResolvedValueOnce(response([{id:8,url:"https://events.test/{fan_id}",body:"private {amount_net}",http_method:"POST",headers:[{name:"Authorization",value:"private {username}"}],smart_link_scope:"global",conversion_types:["new_transaction"]}]));
+  await refreshOfapiMarketingPostbacks(app,actor);
+  const id=randomUUID();const prepared=await prepareOfapiMarketingCommand(app,{id,command:{action:"postback_update",postbackId:8,url:"https://events.test/{fan_id}",http_method:"POST",body:"",smart_link_scope:"global",conversion_types:["new_transaction"]}},actor);
+  expect(prepared.preview.values).toContainEqual({field:"body_change",value:"clear"});expect(prepared.preview.values).toContainEqual({field:"headers_change",value:"preserve"});
+  fetchMock.mockResolvedValueOnce(response({id:8}));await apply(id);
+  expect((await getOfapiMarketingDashboard(app)).resources[0]).toMatchObject({hasBodyTemplate:false,headerNames:["Authorization"],templateVariables:["fan_id","username"]});
+  const clearHeaders=randomUUID();await prepareOfapiMarketingCommand(app,{id:clearHeaders,command:{action:"postback_update",postbackId:8,url:"https://events.test/{fan_id}",http_method:"GET",headers:[],smart_link_scope:"global",conversion_types:["new_transaction"]}},actor);
+  fetchMock.mockResolvedValueOnce(response({id:8}));await apply(clearHeaders);
+  const before=await getOfapiMarketingDashboard(app);expect(before.resources[0]).toMatchObject({hasBodyTemplate:false,headerNames:[],templateVariables:["fan_id"]});
+  await rebuildOfapiMarketingProjection(app);expect(await getOfapiMarketingDashboard(app)).toEqual(before);expect(fetchMock).toHaveBeenCalledTimes(3);
  });
  it("page erasure removes populated intents, captures and marketing projections before replay",async()=>{
   await inventory();const id=randomUUID();await prepareOfapiMarketingCommand(app,{id,command:{action:"smart_link_create",pageId,name:"new",link_type:"tracking_link"}},actor);

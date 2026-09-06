@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { sql } from "drizzle-orm";
 import { decryptJsonWithKeyVersion, encryptJson } from "@agency_hub_core/shared";
 import { getOfapiKeyDeclaration, checkOfapiCurrentBinding, findPageById, insertAuditEvent, insertObservation } from "@agency_hub_core/db";
-import { ofapiMarketingMetricSchema, ofapiMarketingActionSchema, ofapiMarketingDashboardSchema, ofapiMarketingIntentSchema, ofapiMarketingResourceSchema, type OfapiMarketingAction, type OfapiMarketingResource } from "@agency_hub_core/contracts";
+import { ofapiMarketingMetricSchema, ofapiMarketingActionSchema, ofapiMarketingDashboardSchema, ofapiMarketingIntentSchema, ofapiMarketingResourceSchema, type OfapiMarketingAction, type OfapiMarketingResource, type OfapiMarketingPreviewValue } from "@agency_hub_core/contracts";
 import type { AppContext } from "../bootstrap.ts";
 import { BadRequestError, ConflictError, NotFoundError, ServiceUnavailableError } from "./errors.ts";
 import { OfapiGovernedRequestError } from "./ofapi.ts";
@@ -116,6 +116,26 @@ async function validateTarget(app: AppContext, command: OfapiMarketingAction) {
   return { resources, accountId, request };
 }
 
+/** Explicit disclosure allowlist: adding a command field never makes its value
+ * public by default. Tokens, exact URL/body templates and header values stay in
+ * encrypted custody; only their intended replacement/clear action is shown. */
+export function ofapiMarketingSafePreviewValues(command: OfapiMarketingAction): OfapiMarketingPreviewValue[] {
+  const values: OfapiMarketingPreviewValue[]=[];
+  const plainFields=["name","link_type","free_trial_days","tags","label","platform","pixel_id","event_click","event_new_subscriber","event_first_transaction","event_new_transaction","event_message_received_from_fan","event_fan_sent_1_message","event_fan_sent_3_messages","event_type","http_method"] as const;
+  for(const field of plainFields) if(field in command) {
+    const value=(command as unknown as Record<string,unknown>)[field];
+    if(value===null || typeof value==="string" || typeof value==="number" || (Array.isArray(value) && value.every(v=>typeof v==="string"))) values.push({field,value:value as OfapiMarketingPreviewValue["value"]});
+  }
+  if("pixel_access_token" in command) values.push({field:"pixel_token_change",value:"replace"});
+  if("test_event_code" in command) values.push({field:"test_event_code_change",value:"replace"});
+  if("event_source_url" in command) values.push({field:"event_source_url_change",value:command.event_source_url===null ? "clear" : "replace"});
+  if(command.action==="postback_create" || command.action==="postback_update") {
+    values.push({field:"body_change",value:command.body===undefined ? command.action==="postback_create" ? "default" : "preserve" : command.body==="" ? "clear" : "replace"});
+    values.push({field:"headers_change",value:command.headers===undefined ? command.action==="postback_create" ? "default" : "preserve" : command.headers.length===0 ? "clear" : "replace"});
+  }
+  return values;
+}
+
 export async function prepareOfapiMarketingCommand(app: AppContext, input: { id: string; command: OfapiMarketingAction }, actorUserId: number) {
   const command = ofapiMarketingActionSchema.parse(input.command);
   const { resources, accountId } = await validateTarget(app, command);
@@ -127,10 +147,12 @@ export async function prepareOfapiMarketingCommand(app: AppContext, input: { id:
   const encoded = JSON.stringify(command); const hash = createHash("sha256").update(encoded).digest("hex");
   const previous = await intentById(app, input.id);
   if (previous) { if (previous.body_hash !== hash) throw new ConflictError("Command identity belongs to another payload"); return intentDto(previous); }
-  const affectedLinkIds = "pixelId" in command ? [...new Set(resources.filter(r => r.kind === "pixel" && r.id === String(command.pixelId)).flatMap(r => r.parentId ? [r.parentId] : []))]
+  const affectedLinkIds = command.action === "pixel_update" ? [...new Set(resources.filter(r => r.kind === "pixel" && r.id === String(command.pixelId)).flatMap(r => r.parentId ? [r.parentId] : []))]
     : "linkId" in command ? [command.linkId] : "smart_link_ids" in command ? command.smart_link_ids ?? [] : "postbackId" in command ? resources.find(r => r.kind === "postback" && r.id === String(command.postbackId))?.linkIds ?? [] : [];
   const headers = "headers" in command ? command.headers ?? [] : [];
-  const preview = { destination: "url" in command ? marketingDestination(command.url) : "event_source_url" in command ? marketingDestination(command.event_source_url) : null,
+  const scopePage="pageId" in command ? await findPageById(app.db,command.pageId) : null;
+  const preview = {pageId:"pageId" in command ? command.pageId : null,pageLabel:scopePage?.page.label ?? null,accountId,values:ofapiMarketingSafePreviewValues(command),
+    destination: "url" in command ? marketingDestination(command.url) : "event_source_url" in command ? marketingDestination(command.event_source_url) : null,
     templateVariables: "url" in command ? marketingTemplateVariables(command.url, command.body, ...headers.map(h => h.value)) : [],
     targetId: "pixelId" in command ? String(command.pixelId) : "postbackId" in command ? String(command.postbackId) : "linkId" in command ? command.linkId : null,
     changedFields:Object.keys(command).filter(k => !["action","pageId","linkId","pixelId","postbackId"].includes(k)),
@@ -142,7 +164,8 @@ export async function prepareOfapiMarketingCommand(app: AppContext, input: { id:
           : command.action.startsWith("postback_") ? "Changes external event forwarding; destination and variable names are shown, secret values are withheld" : command.action,
     externalTest: command.action === "pixel_test", estimatedCredits: 0 };
   const baselineResource=resources.find(r=>"pixelId" in command ? r.kind==="pixel" && r.pageId===command.pageId && r.parentId===command.linkId && r.id===String(command.pixelId) : "postbackId" in command ? r.kind==="postback" && r.id===String(command.postbackId) : "linkId" in command ? r.kind==="smart_link" && r.pageId===command.pageId && r.id===command.linkId : false) ?? null;
-  const frozen = { command, accountId, baselineResource, credentialFingerprint: fingerprint(app), bindingGeneration: accountId && "pageId" in command ? await checkOfapiCurrentBinding(app.db, command.pageId, accountId) : null };
+  const baselineTemplateVariables="postbackId" in command ? (await app.db.execute<{variables:unknown}>(sql`select data->'_templateVariablesByField' as variables from ofapi_marketing_resources where kind='postback' and page_id is null and upstream_id=${String(command.postbackId)}`)).rows[0]?.variables ?? null : null;
+  const frozen = { command, accountId, baselineResource, baselineTemplateVariables, credentialFingerprint: fingerprint(app), bindingGeneration: accountId && "pageId" in command ? await checkOfapiCurrentBinding(app.db, command.pageId, accountId) : null };
   await app.db.transaction(async tx => {
     await tx.execute(sql`insert into ofapi_marketing_intents(id,page_id,actor_user_id,action,body_encrypted,body_hash,preview,state)
       values(${input.id},${"pageId" in command ? command.pageId : null},${actorUserId},${command.action},${JSON.stringify(encryptJson(frozen, app.config.encryptionKey, app.config.encryptionKeyVersion))},${hash},${JSON.stringify(preview)}::jsonb,'prepared')`);
@@ -164,7 +187,7 @@ export async function dispatchOfapiMarketingCommand(app: AppContext, input: { id
   const preview = ofapiMarketingIntentSchema.parse(intentDto(intent)).preview;
   if (!preview.affectedLinksComplete && !input.acknowledgeSharedImpact) throw new BadRequestError("Acknowledge the shared configuration impact");
   if (preview.externalTest && !input.acknowledgeExternalTest) throw new BadRequestError("Acknowledge the external test event");
-  const frozen = decryptJsonWithKeyVersion<{command: unknown; accountId: string|null; bindingGeneration: number|null; credentialFingerprint: string; baselineResource?:unknown}>(JSON.parse(intent.body_encrypted), app.config.encryptionKeysByVersion);
+  const frozen = decryptJsonWithKeyVersion<{command: unknown; accountId: string|null; bindingGeneration: number|null; credentialFingerprint: string; baselineResource?:unknown;baselineTemplateVariables?:unknown}>(JSON.parse(intent.body_encrypted), app.config.encryptionKeysByVersion);
   const command = ofapiMarketingActionSchema.parse(frozen.command);
   if (frozen.credentialFingerprint !== fingerprint(app)) throw new ConflictError("Credential changed since command preparation");
   if ("pageId" in command && frozen.accountId) await checkOfapiCurrentBinding(app.db, command.pageId, frozen.accountId, frozen.bindingGeneration ?? undefined);
