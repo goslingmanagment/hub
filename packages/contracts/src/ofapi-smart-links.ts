@@ -53,11 +53,17 @@ export const ofapiMarketingResourceSchema = z.object({
   templateVariables: z.array(z.string()), headerNames: z.array(z.string()), hasBodyTemplate: z.boolean(),
 });
 export type OfapiMarketingResource = z.infer<typeof ofapiMarketingResourceSchema>;
+export const ofapiMarketingPreviewValueSchema = z.object({
+  field:z.enum(["name","link_type","free_trial_days","tags","label","platform","pixel_id","event_click","event_new_subscriber","event_first_transaction","event_new_transaction","event_message_received_from_fan","event_fan_sent_1_message","event_fan_sent_3_messages","event_type","http_method","body_change","headers_change","pixel_token_change","test_event_code_change","event_source_url_change"]),
+  value:z.union([z.string(),z.number(),z.array(z.string()),z.null()]),
+});
+export type OfapiMarketingPreviewValue = z.infer<typeof ofapiMarketingPreviewValueSchema>;
 export const ofapiMarketingIntentSchema = z.object({
   id: z.string().uuid(), action: z.string(), state: z.string(), errorCode: z.string().nullable(),
   remoteId:z.string().nullable(),accountingState:z.enum(["pending","complete"]),projectionState:z.enum(["pending","complete"]),
   createdAt: z.string().datetime(), responseObservationId: z.number().nullable(),
-  preview: z.object({ destination: z.string().nullable(), templateVariables: z.array(z.string()), headerNames: z.array(z.string()),
+  preview: z.object({ pageId:z.number().int().positive().nullable(),pageLabel:z.string().nullable(),accountId:z.string().nullable(),values:z.array(ofapiMarketingPreviewValueSchema),
+    destination: z.string().nullable(), templateVariables: z.array(z.string()), headerNames: z.array(z.string()),
     targetId: z.string().nullable(), changedFields: z.array(z.string()), conversionTypes: z.array(z.string()), scope: z.string().nullable(),
     affectedLinkIds: z.array(z.string()), affectedLinksComplete: z.boolean(), effect: z.string(), externalTest: z.boolean(), estimatedCredits: z.number() }),
 });
