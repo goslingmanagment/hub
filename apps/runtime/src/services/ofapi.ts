@@ -1,3 +1,5 @@
+import type { OfapiCollectionContext } from "@agency_hub_core/shared";
+import type { OfapiCollectionDispatch } from "./ofapi-collection-policy.ts";
 // Client for the onlyfansapi.com API: webhook CRUD + account list (admin flow)
 // plus credit-budgeted, observed chat/message reads for the DM sync (Phase 2 of
 // docs/ofapi-integration-plan.md). Not to be confused with packages/onlyfans,
@@ -82,6 +84,7 @@ export interface OfapiAccountRecord {
 }
 
 export interface OfapiRequestContext {
+  collectionContext?: OfapiCollectionContext;
   requestObserver?: HttpRequestObserver | null;
   // Governed/gateway callers resolve the vendor transport in ofapi-egress.
   // Production OFAPI is vendor-direct; a page proxy is not account identity.
@@ -707,6 +710,9 @@ export class OfapiCredentialNotReadyError extends OfapiApiError {
 }
 
 export function createOfapiClient(input: {
+  beforeCollectionRequest?: (input: OfapiCollectionDispatch) => Promise<void>;
+  onCollectionResponse?: (requestId: string, actualCredits: number | null) => Promise<void>;
+  onCollectionCancelled?: (requestId: string) => Promise<void>;
   credentialPolicy?: { expectedTeamSlug: string | null };
   beforeAccountRequest?: (pageId: number | null | undefined, accountId: string, generation?: number) => Promise<number>;
   onAccountResponse?: (accountId: string, generation: number, status: number, body: string) => Promise<void>;
@@ -782,11 +788,11 @@ export function createOfapiClient(input: {
     actorUserId?: number | null;
     budgetScope?: "audience" | "backfill" | "link_stats" | null;
   }) {
+    const meta = parseResponseMeta(report.body);
+    await input.onCollectionResponse?.(`${report.requestId}:${report.attemptNumber}`, meta?.creditsUsed ?? null);
     if (!onCreditSpend) {
       return null;
     }
-
-    const meta = parseResponseMeta(report.body);
     const spend = report.httpStatus >= 200
       && report.httpStatus < 300
       && meta?.creditsUsed == null
@@ -887,6 +893,7 @@ export function createOfapiClient(input: {
     const accountId = options.pathname.split("/")[1]!;
     const generation = await input.beforeAccountRequest?.(options.context.pageId, accountId);
 
+    let collectionAttempt = 0;
     return executeObservedRequest<{ response: Response; text: string }, OfapiListPage>({
       observer: options.context.requestObserver,
       requestId,
@@ -902,6 +909,8 @@ export function createOfapiClient(input: {
       waitForRateLimit: () => waitForRequestSlot("bulk"),
       execute: async () => {
         await input.beforeAccountRequest?.(options.context.pageId, accountId, generation);
+        collectionAttempt += 1;
+        await input.beforeCollectionRequest?.({ operation: options.operation, method: "GET", accountId, pageId: options.context.pageId, requestId: `${requestId}:${collectionAttempt}`, context: options.context.collectionContext });
         const response = await fetch(url, {
           method: "GET",
           headers: {
@@ -915,6 +924,7 @@ export function createOfapiClient(input: {
         return { response, text };
       },
       onTransportError: (error, executionContext) => {
+        if (error instanceof Error && error.name === "OfapiCollectionPolicyError") return { kind: "failed", failureKind: "transport", errorMessage: error.message, error };
         const errorMessage = `OFAPI request failed: GET ${options.pathname}: ${
           error instanceof Error ? error.message : String(error)
         }`;
@@ -1058,6 +1068,7 @@ export function createOfapiClient(input: {
 
     const accountId = options.pathname.split("/")[1]!;
     const generation = await input.beforeAccountRequest?.(context.pageId, accountId);
+    await input.beforeCollectionRequest?.({ operation: options.operation, method: "GET", accountId, pageId: context.pageId, requestId: `${requestId}:1`, context: context.collectionContext, interactive: true, reservedCredits: options.fallbackCredits });
     let response: Response;
     try {
       const init: RequestInit & { dispatcher?: Dispatcher } = {
@@ -1213,8 +1224,20 @@ export function createOfapiClient(input: {
       );
     }
 
+    const accountId = options.pathname.split("/")[1]!;
+    let generation: number | undefined;
+    if (accountId.startsWith("acct_")) {
+      try { generation = await input.beforeAccountRequest?.(context.pageId, accountId); }
+      catch (error) { throw new OfapiGovernedRequestError("OFAPI binding unavailable", "pre_dispatch", "cancelled", { cause: error }); }
+    }
+    try {
+      await input.beforeCollectionRequest?.({ operation: options.operation, method: options.method, accountId: options.pathname.split("/")[1]!, pageId: context.pageId, requestId: options.attemptId, context: context.collectionContext, interactive: options.priorityClass === "interactive" && context.actorUserId != null });
+    } catch (error) {
+      throw new OfapiGovernedRequestError("OFAPI collection policy refused dispatch", "pre_dispatch", "cancelled", { cause: error });
+    }
     const mayDispatch = await options.beforeDispatch();
     if (!mayDispatch) {
+      await input.onCollectionCancelled?.(options.attemptId);
       throw new OfapiGovernedRequestError(
         `OFAPI governed attempt ${options.attemptId} lost its dispatch fence`,
         "pre_dispatch",
@@ -1233,12 +1256,6 @@ export function createOfapiClient(input: {
       headers["content-type"] = options.contentType;
     }
 
-    const accountId = options.pathname.split("/")[1]!;
-    let generation: number | undefined;
-    if (accountId.startsWith("acct_")) {
-      try { generation = await input.beforeAccountRequest?.(context.pageId, accountId); }
-      catch (error) { throw new OfapiGovernedRequestError("OFAPI binding unavailable", "pre_dispatch", "cancelled", { cause: error }); }
-    }
     let response: Response;
     const startedAt = Date.now();
     const timeoutMs = options.timeoutMs ?? OFAPI_PROXY_READ_TIMEOUT_MS;

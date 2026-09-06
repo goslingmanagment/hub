@@ -1,3 +1,4 @@
+import { registerOfapiCollectionRoutes } from "./ofapi-collection.ts";
 import { randomUUID } from "node:crypto";
 
 import { routeSchemas } from "@agency_hub_core/contracts";
@@ -399,6 +400,7 @@ async function wakeGatedStreamsAfterConfigChange(
 }
 
 export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
+  registerOfapiCollectionRoutes(server, ctx);
   const { appContext, boss } = ctx;
   const { requirePrincipal, requireSyncHealthAccess } = ctx.auth;
 

@@ -143,3 +143,5 @@ export * from "./repositories/voice-profiles.ts";
 export * from "./repositories/workboard-v2.ts";
 
 export * from "./repositories/ofapi-bindings.ts";
+
+export * from "./repositories/ofapi-collection.ts";
