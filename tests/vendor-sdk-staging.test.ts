@@ -41,6 +41,25 @@ describe("vendored SDK surfaces the ai-stop-reason predicate", () => {
     ]));
   });
 
+  it("stages transitive contract imports reached through the public barrel", async () => {
+    const script = await readFile("scripts/vendor-sdk.mjs", "utf8");
+    const required = new Set<string>();
+    const pending = ["index.ts"];
+    while (pending.length > 0) {
+      const file = pending.pop()!;
+      if (required.has(file)) continue;
+      required.add(file);
+      const source = await readFile(`packages/contracts/src/${file}`, "utf8");
+      for (const match of source.matchAll(/from ["']\.\/([\w.-]+\.ts)["']/g)) {
+        pending.push(match[1]!);
+      }
+    }
+    // routes.ts reaches this schema without re-exporting it from index.ts.
+    expect(required.has("routes-ofapi-marketing.ts")).toBe(true);
+    const missing = [...required].filter(file => !script.includes(`"${file}"`));
+    expect(missing, "transitive contract imports missing from vendor staging").toEqual([]);
+  });
+
   it("re-exports isOutputExhausted through the contracts barrel", async () => {
     const contractsIndex = await readFile("packages/contracts/src/index.ts", "utf8");
     expect(contractsIndex).toContain(
