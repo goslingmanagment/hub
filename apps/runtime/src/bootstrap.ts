@@ -1,3 +1,4 @@
+import { ofapiCollectionPolicyHooks } from "./services/ofapi-collection-policy.ts";
 import { assertRuntimeSchemaReady, createDb, createPool, getConfigOverrides, type Database } from "@agency_hub_core/db";
 import { FanslyAdapter } from "@agency_hub_core/fansly";
 import type {
@@ -387,6 +388,7 @@ export async function createAppContext(): Promise<AppContext> {
         baseUrl: config.ofapiBaseUrl,
         apiKey: config.ofapiApiKey,
         ...ofapiCredentialPolicy(db, config, logger),
+        ...ofapiCollectionPolicyHooks(db, error => logger.warn({ error }, "Collection usage settlement pending")),
         restDelayMs: config.ofapiRestDelayMs,
         onCreditSpend: createOfapiCreditSpendSink({ db, logger, config }),
         // Stage 26: off = legacy slot only; shadow computes + logs the

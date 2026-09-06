@@ -1,3 +1,5 @@
+import { settleOfapiCollectionRequest } from "@agency_hub_core/db";
+import { assertOfapiCollectionAllowed, OfapiCollectionPolicyError } from "@agency_hub_core/db";
 import { createHash } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 
@@ -1322,6 +1324,14 @@ export async function executeOfapiCaptureJobChunk(
     return { kind: "blocked", pageId, jobId: job.id };
   }
 
+  try {
+    await assertOfapiCollectionAllowed(app.db, { pageId: job.pageId, operation: requestPlan.operation });
+  } catch (error) {
+    if (!(error instanceof OfapiCollectionPolicyError)) throw error;
+    await blockJob(app, job, error.reason, error.message);
+    return { kind: "blocked", pageId, jobId: job.id };
+  }
+
   let egress: Awaited<ReturnType<typeof resolveOfapiEgressContext>>;
   try {
     egress = await resolveOfapiEgressContext(app, {
@@ -1503,6 +1513,9 @@ export async function executeOfapiCaptureJobChunk(
     }
 
     const parsed = parseOfapiJsonBytes(raw.bodyBytes, raw.headers);
+  await settleOfapiCollectionRequest(app.db, reservation.attemptId, parsed.creditsUsed).catch(error => {
+    app.logger.warn({ error, attemptId: reservation.attemptId }, "Collection usage settlement pending; captured response retained");
+  });
     if (parsed.creditsUsed !== null && requestPlan.operation !== "ofapi_export_start") {
       await reconcileOfapiCapturedAttemptCredit(app.db, {
         attemptId: reservation.attemptId,

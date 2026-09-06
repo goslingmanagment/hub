@@ -1,3 +1,4 @@
+import { settleOfapiCollectionRequest } from "@agency_hub_core/db";
 import { setTimeout as delay } from "node:timers/promises";
 
 import {
@@ -262,6 +263,9 @@ export async function executeCaptureFirstInteractiveRead(
   }
 
   const parsed = parseOfapiJsonBytes(raw.bodyBytes, raw.headers);
+  await settleOfapiCollectionRequest(app.db, reservation.attemptId, parsed.creditsUsed).catch(error => {
+    app.logger.warn({ error, attemptId: reservation.attemptId }, "Collection usage settlement pending; captured response retained");
+  });
   if (parsed.creditsUsed !== null) {
     await reconcileOfapiCapturedAttemptCredit(app.db, {
       attemptId: reservation.attemptId,
