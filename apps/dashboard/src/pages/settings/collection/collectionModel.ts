@@ -335,12 +335,12 @@ export function rowState(view: CategoryView, backgroundPaused: boolean): RowStat
     };
   }
   if (view.mode === "mixed") {
-    return { tone: "ok", label: "работает", detail: "настройки различаются по страницам" };
+    return { tone: "ok", label: "сбор разрешён", detail: "настройки различаются по страницам" };
   }
   if (view.sources.includes("legacy_baseline")) {
-    return { tone: "ok", label: "работает", detail: "baseline · прежняя конфигурация, не менялась" };
+    return { tone: "muted", label: "прежняя конфигурация", detail: "Активность и лимиты задаёт прежний сборщик" };
   }
-  return { tone: "ok", label: "работает", detail: null };
+  return { tone: "ok", label: "сбор разрешён", detail: null };
 }
 
 // ---------------------------------------------------------------------------
