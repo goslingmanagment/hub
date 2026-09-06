@@ -112,6 +112,7 @@ for (const file of [
   "routes-ofapi-vendor.ts",
   "ofapi-vendor-usage.ts",
   "routes-ofapi-collection.ts",
+  "ofapi-smart-links.ts",
   "ofapi-extended-commands.ts",
   "routes-ofapi-banned-words.ts",
   "routes-ofapi-read-collections.ts",

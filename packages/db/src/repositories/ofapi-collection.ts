@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { sql } from "drizzle-orm";
-import { OFAPI_COLLECTION_REGISTRY, OFAPI_COLLECTION_LEGACY_OPERATIONS, classifyOfapiCollectionOperation, type OfapiCollectionCategory, type OfapiCollectionContext, type OfapiCollectionSettings } from "@agency_hub_core/shared";
+import { findOfapiReadDefinition, OFAPI_COLLECTION_REGISTRY, OFAPI_COLLECTION_LEGACY_OPERATIONS, classifyOfapiCollectionOperation, type OfapiCollectionCategory, type OfapiCollectionContext, type OfapiCollectionSettings } from "@agency_hub_core/shared";
 import type { Database } from "../client.ts";
 
 export class OfapiCollectionPolicyError extends Error {
@@ -137,7 +137,7 @@ export async function reserveOfapiCollectionRequest(db: Database, input: OfapiCo
   if (!category) throw new OfapiCollectionPolicyError("unregistered_operation");
   const purpose = input.context?.purpose ?? input.purpose ?? "background";
   const now = input.now ?? new Date();
-  const estimate = Math.max(1, Math.trunc(input.reservedCredits ?? 1));
+  const estimate = Math.max(findOfapiReadDefinition(input.operation)?.reservedCredits === 0 ? 0 : 1, Math.trunc(input.reservedCredits ?? 1));
   return db.transaction(async tx => {
     const database = tx as unknown as Database;
     const current = await state(database, true);

@@ -267,6 +267,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 264 | OFAPI vendor usage and key scope | Preserve vendor aggregates independently of ledger; prefer fresh credit headers; CAS declarations bound to server credential fingerprint |
 | 262 | OFAPI lifecycle receipt and ordering | Signed no-key ephemeral receipts keep local identities; subscription/account material follows provider time; health retries independently of settlement; upload/export hooks remain durable progress evidence without paid follow-ups. |
 | 265 | OFAPI delivery recovery and event application | Numeric attempt facts survive provider retention; remote redelivery has durable one-attempt intent and separate outcomes; local replay targets retained evidence; optional groups use saved policy and verified remote readback. |
+| 270 | OFAPI marketing custody | Closed scoped collectors feed canonical attribution snapshots; shared pixel and postback controls use encrypted one-attempt owner intents, safe impact previews and explicit external tests. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -11073,3 +11074,14 @@ Raw `ofapi.collection_read_response.v1` observations are canonicalized by a regi
 `GET /admin/ofapi/collection/results` is an owner-only, database-only SDK report. Expired fan rows combine captured contactability with locally stored prior spend and last fan reply, without sending anything or overwriting local notes. The separate OnlyFans `ofapi_financial_snapshots` Agent dataset requires `read:datasets` and `read:money`, retains the normal page-grant boundary and exposes source/metric/window/unit/coverage fields. Unknown numeric semantics remain `provider_number`; they are never converted into a money claim. Existing Fansly datasets remain platform-restricted as before.
 
 All new categories ship off. Scheduled jobs are created only from explicitly scheduled non-baseline policies. Owner rollout, exact supported paths, examples and vendor discrepancies are in `docs/runbooks/ofapi-read-collections.md`. No production enabling or paid probes are part of this change.
+
+
+## 270. OFAPI marketing reads and controls preserve attribution, scope and secrets
+
+Date: 2026-09-06. S9 ships default-off Smart Link and tracking/trial collection with a closed catalog of exact paths, query codecs and documented cost estimates. Global Smart Link captures freeze account scope; inventory verifies provider ownership, detail reads require retained evidence, and page rebinding cannot authorize a previous account's links. Documented free GETs bypass only balance freshness/floor admission; actual receipt credits and every other governor remain authoritative.
+
+Marketing business facts use the registered capture-to-canonical snapshot family and normal watermark projector, including synchronous collection and rebuild. Stored cost and tags, money units/basis, timestamps, windows, coverage and bot/duplicate flags survive normalization. Cohort numeric paths remain provider metrics where the public success schema is absent. Link attribution revenue never adds to Hub money, and provider campaign cost never becomes agency expense.
+
+Eleven closed owner commands cover Smart Link creation/deletion/tags and required Pixel/Postback controls. Prepared intent bodies and exact sensitive responses are encrypted with existing versioned keys; public/audit previews name fields and destinations without secret values. A credential/binding-bound intent is claimed once immediately before one physical dispatch. Uncertain or interrupted outcomes are never automatically retried. Shared pixel PATCH reports known affected links and incomplete team visibility; DELETE removes one relation. Explicit account restrictions fail closed for unknown team edits. External pixel tests require their own acknowledgement and provenance.
+
+Postback administration remains separate from business projections. Omitting a token/body/header on PATCH preserves provider state; rotation uses explicit new secret input. Page-owned control rows join governed erasure. Public V2 dashboard-only features and conditional legacy tracking/trial write workflows are not invented. [Implementation, discrepancies, spend and owner rollout](runbooks/ofapi-smart-links.md).

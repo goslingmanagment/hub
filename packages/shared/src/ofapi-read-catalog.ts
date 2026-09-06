@@ -18,6 +18,9 @@ export interface OfapiReadDefinition {
   detail: boolean;
   defaultCollect: boolean;
   granularity: "entity" | "ranking" | "window" | "snapshot";
+  scope?: "account" | "smart_link";
+  idKind?: "numeric" | "ulid";
+  reservedCredits?: number;
 }
 const page = { limit: "int:1:50", offset: "int:0:1000000" };
 const dates = { start_date: "date", end_date: "date" };
@@ -375,6 +378,33 @@ read(
   { ...dates, type: "enum:total|renew|new" },
   { defaultCollect: true, granularity: "window" },
 );
+const smartPage = { limit: "int:1:1000", offset: "int:0:1000000" };
+const smartDates = { date_start: "date", date_end: "date" };
+function smartRead(id: string, path: string, shape: OfapiReadShape, pagination: OfapiReadDefinition["pagination"], query: Record<string, string> = {}, options: Partial<OfapiReadDefinition> = {}) {
+  read(id, path, "smart_links", shape, pagination, query, { scope: "smart_link", idKind: "ulid", reservedCredits: 0, ...options });
+}
+smartRead("smart_links", "smart-links", "array", "offset", { ...smartPage, account_ids: "text", name: "text", pixel_ids: "text", "filter[tags][]": "text" }, { defaultCollect: true, required: ["account_ids"] });
+smartRead("smart_link", "smart-links/:id", "object", "none");
+smartRead("smart_link_pixels", "smart-links/:id/pixels", "array", "none");
+smartRead("smart_link_tags", "smart-links/:id/tags", "strings", "none");
+smartRead("smart_link_stats", "smart-links/:id/stats", "object", "none", smartDates, { granularity: "window" });
+smartRead("smart_link_cohort_arps", "smart-links/:id/cohort-arps", "object", "none", { acquisition_start: "date", acquisition_end: "date", revenue_basis: "enum:net|gross" }, { granularity: "window", reservedCredits: 1 });
+smartRead("smart_link_spenders", "smart-links/:id/spenders", "array", "offset", { ...smartPage, minSpend: "decimal" });
+smartRead("smart_link_fans", "smart-links/:id/fans", "object", "offset", { ...smartPage, sort: "enum:revenue_net|-revenue_net|tips_net|-tips_net|messages_sent_by_fan|-messages_sent_by_fan|converted_at|-converted_at", has_messages: "bool", min_messages_sent_by_fan: "int:0:1000000", min_revenue_net: "decimal", min_tips_net: "decimal", previously_subscribed: "bool", subscribed_using_promo: "bool" });
+for (const kind of ["clicks", "conversions"]) smartRead(`smart_link_${kind}`, `smart-links/:id/${kind}`, "object", "offset", { ...smartPage, ...smartDates, include_bots: "bool", include_duplicates: "bool", ...(kind === "conversions" ? { conversion_type: "enum:new_subscriber|new_transaction|message_received|fan_sent_1_message|fan_sent_3_messages", onlyfans_user_id: "id" } : {}) });
+for (const kind of ["tracking", "trial"]) read(`stored_${kind}_links`, `stored/${kind}-links`, "tracking_links", "list", "offset", { ...page, "filter[include_smart_links]": "bool", "filter[search]": "text", "filter[tags][]": "text" }, { defaultCollect: true, reservedCredits: 0 });
+
+for (const kind of ["tracking", "trial"]) {
+  read(`stored_shared_${kind}_links`, `stored/shared-${kind}-links`, "tracking_links", "list", "offset", {...smartPage, "filter[search]":"text", "filter[tags][]":"text"}, {reservedCredits:0});
+  read(`shared_${kind}_links`, `shared-${kind}-links`, "tracking_links", "list", "offset", page);
+  read(`${kind}_link`, `${kind}-links/:id`, "tracking_links", "object", "none");
+  read(`${kind}_link_tags`, `${kind}-links/:id/tags`, "tracking_links", "strings", "none", {}, {reservedCredits: 0});
+  read(`${kind}_link_subscribers`, `${kind}-links/:id/subscribers`, "tracking_links", "list", "offset", page);
+  read(`${kind}_link_spenders`, `${kind}-links/:id/spenders`, "tracking_links", "array", "offset", {...page, minSpend: "decimal"});
+  read(`${kind}_link_stats`, `${kind}-links/:id/stats`, "tracking_links", "object", "none", smartDates, {granularity: "window"});
+  read(`${kind}_link_cohort_arps`, `${kind}-links/:id/cohort-arps`, "tracking_links", "object", "none", {acquisition_start: "date", acquisition_end: "date", revenue_basis: "enum:net|gross"}, {granularity: "window"});
+}
+
 /** A closed GET catalog. No arbitrary vendor path or persistent following sort is accepted. */
 export const OFAPI_READ_CATALOG: readonly OfapiReadDefinition[] =
   definitions.map((row) => ({ ...row, operation: `ofapi_read_${row.id}` }));
@@ -417,6 +447,7 @@ export function validateOfapiReadQuery(
       throw new Error(`Invalid date ${name}`);
     if (rule === "id" && !/^\d+$/.test(v))
       throw new Error(`Invalid id ${name}`);
+    if (rule === "decimal" && (!/^\d+(\.\d+)?$/.test(v) || !Number.isFinite(Number(v)))) throw new Error(`Invalid decimal ${name}`);
     if (v.length < 1 || v.length > 500)
       throw new Error(`Invalid length ${name}`);
     result[name] = v;
@@ -426,6 +457,8 @@ export function validateOfapiReadQuery(
   for (const [start, end] of [
     ["start_date", "end_date"],
     ["startDate", "endDate"],
+    ["date_start", "date_end"],
+    ["acquisition_start", "acquisition_end"],
   ])
     if (
       Boolean(result[start!]) !== Boolean(result[end!]) ||
@@ -440,27 +473,32 @@ export function validateOfapiReadQuery(
 export function resolveOfapiCatalogPath(
   path: string,
   raw: Record<string, unknown>,
+  scopeAccountId?: string | null,
 ) {
   const segments = path.replace(/^\/+|\/+$/g, "").split("/");
-  const accountId = segments.shift();
+  const global = segments[0] === "smart-links";
+  const accountId = global ? scopeAccountId : segments.shift();
   if (!accountId || !/^acct_[A-Za-z0-9]+$/.test(accountId)) return null;
   // Literal paths win over ids (archive/highlights/overview/labels).
   for (const def of [...OFAPI_READ_CATALOG].sort(
     (a, b) => Number(a.detail) - Number(b.detail),
   )) {
+    if ((def.scope === "smart_link") !== global) continue;
     const pieces = def.path.split("/");
     if (
       pieces.length !== segments.length ||
       !pieces.every((v, i) =>
-        v === ":id" ? /^\d+$/.test(segments[i]!) : v === segments[i],
+        v === ":id" ? (def.idKind === "ulid" ? /^[0-9A-HJKMNP-TV-Z]{26}$/ : /^\d+$/).test(segments[i]!) : v === segments[i],
       )
     )
       continue;
+    const query = validateOfapiReadQuery(def, raw);
+    if (global && !def.detail && query.account_ids !== accountId) throw new Error("Smart Link inventory must match the frozen page account scope");
     return {
       definition: def,
       accountId,
-      pathname: `/${accountId}/${segments.join("/")}`,
-      query: validateOfapiReadQuery(def, raw),
+      pathname: global ? `/${segments.join("/")}` : `/${accountId}/${segments.join("/")}`,
+      query,
     };
   }
   return null;

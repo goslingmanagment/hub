@@ -1,3 +1,4 @@
+import { normalizeOfapiMarketingAnalytics, normalizeOfapiMarketingResource } from "./ofapi-marketing-normalization.ts";
 import { createHash } from "node:crypto";
 import {
   findOfapiReadDefinition,
@@ -65,6 +66,8 @@ export function ofapiReadItems(
   const root = ofapiReadRecord(body);
   if (!root) return null;
   const data = root.data;
+  if (def.id === "smart_link_tags") return Array.isArray(root.tags) ? root.tags : null;
+  if (/^(tracking|trial)_link_tags$/.test(def.id)) return Array.isArray(ofapiReadRecord(data)?.tags) ? ofapiReadRecord(data)!.tags as unknown[] : null;
   if (def.shape === "object") return ofapiReadRecord(data) ? [data] : null;
   if (def.shape === "array" || def.shape === "strings")
     return Array.isArray(data) ? data : null;
@@ -78,6 +81,9 @@ export function validateOfapiCatalogResponse(
   const def = findOfapiReadDefinition(operation);
   if (!def) return null;
   const items = ofapiReadItems(def, body);
+  if (def.category === "smart_links" || def.category === "tracking_links") {
+    try { normalizeOfapiMarketingRead(def, body); } catch { return false; }
+  }
   return (
     items !== null &&
     items.every((item) =>
@@ -219,6 +225,13 @@ export function ofapiReadCoverage(
     result.state = def.granularity === "ranking" ? "partial" : "complete";
     result.reason = def.granularity === "ranking" ? "bounded_ranking" : null;
   }
+  if (def.scope === "smart_link" && def.pagination === "offset") {
+    const count = Array.isArray(data?.rows) ? data.rows.length : items.length;
+    if (count >= Number(query.limit ?? 50)) {
+      result.state = "partial"; result.reason = "bounded_offset_scan";
+      result.nextQuery = { ...query, offset: String(Number(query.offset ?? 0) + count) };
+    }
+  }
   // Payout request examples carry a response marker but document only offset. Do not invent EOF.
   return partial();
 }
@@ -273,8 +286,26 @@ function scalarMetrics(
     );
   return [];
 }
+export function normalizeOfapiMarketingRead(def: OfapiReadDefinition, body: unknown) {
+  const items = ofapiReadItems(def, body);
+  if (!items) throw new Error("Marketing response contract rejected");
+  if (def.id.endsWith("_tags")) return items.map(raw => { if (typeof raw !== "string") throw new Error("Invalid marketing tag"); return { nativeId: raw, tag: raw }; });
+  const resourceKind = def.id === "smart_links" || def.id === "smart_link" ? "smart_link" : def.id === "smart_link_pixels" ? "pixel"
+    : /^(stored_)?(shared_)?tracking_links$|^tracking_link$/.test(def.id) ? "tracking" : /^(stored_)?(shared_)?trial_links$|^trial_link$/.test(def.id) ? "trial" : null;
+  if (resourceKind) return items.map(raw => {
+    const row = ofapiReadRecord(raw); if (!row) throw new Error("Invalid marketing resource");
+    const { pageId: _pageId, observedAt: _observedAt, ...resource } = normalizeOfapiMarketingResource({ kind: resourceKind, pageId: null, observedAt: new Date(0), row });
+    return { nativeId: resource.id, resource };
+  });
+  return normalizeOfapiMarketingAnalytics(def.operation, body).map((metric, i) => ({ nativeId: metric.nativeId ?? String(i), metric }));
+}
+export function validateOfapiMarketingAccount(def: OfapiReadDefinition, body: unknown, accountId: string) {
+  if (!["smart_links", "smart_link"].includes(def.id)) return true;
+  return (ofapiReadItems(def, body) ?? []).every(item => ofapiReadRecord(ofapiReadRecord(item)?.account)?.id === accountId);
+}
 /** Typed CRM/content fields are deliberately independent of the vendor's private profile fields. */
 export function normalizeOfapiRead(def: OfapiReadDefinition, body: unknown) {
+  if (def.category === "smart_links" || def.category === "tracking_links") return normalizeOfapiMarketingRead(def, body);
   const clean = safeOfapiReadBody(def.operation, body),
     items = ofapiReadItems(def, clean);
   if (!items || !validateOfapiCatalogResponse(def.operation, clean))

@@ -1,3 +1,4 @@
+import { findOfapiReadDefinition } from "@agency_hub_core/shared";
 import { createHash, randomUUID } from "node:crypto";
 
 import { sql } from "drizzle-orm";
@@ -1273,8 +1274,9 @@ export async function reserveOfapiRequestAttempt(
     const principalUsedCalls = principal ? asNumber(principal.used_calls, "used_calls") : 0;
     const principalUsedCredits = principal ? asNumber(principal.used_credits, "used_credits") : 0;
 
+    const registeredFree = estimate === 0 && input.method === "GET" && findOfapiReadDefinition(input.operation)?.reservedCredits === 0;
     const balanceUnavailable = !balanceFresh || lastBalance === null;
-    const floorProbeEligible = balanceUnavailable &&
+    const floorProbeEligible = !registeredFree && balanceUnavailable &&
       input.allowFloorProbe === true &&
       input.budgetScope === "live" &&
       activeFloorProbe.rows.length === 0 &&
@@ -1300,9 +1302,9 @@ export async function reserveOfapiRequestAttempt(
       denial = "job_cap";
     } else if (job?.maxCredits !== null && job && job.spentCredits + estimate > job.maxCredits) {
       denial = "job_cap";
-    } else if (balanceUnavailable && !floorProbeEligible) {
+    } else if (!registeredFree && balanceUnavailable && !floorProbeEligible) {
       denial = "balance_stale";
-    } else if (!balanceUnavailable && lastBalance - unsettled - estimate < creditFloor) {
+    } else if (!registeredFree && !balanceUnavailable && lastBalance - unsettled - estimate < creditFloor) {
       denial = "credit_floor";
     }
     const isFloorProbe = floorProbeEligible && denial === null;
