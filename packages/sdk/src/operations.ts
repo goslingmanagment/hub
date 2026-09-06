@@ -182,6 +182,7 @@ export const kernelOperations = {
   ofapiTypedExportControl: { method: "POST", path: "/api/v1/admin/ofapi/exports/:jobId/control" },
   ofapiTypedExportCreate: { method: "POST", path: "/api/v1/admin/ofapi/exports" },
   ofapiTypedExportList: { method: "GET", path: "/api/v1/admin/ofapi/exports" },
+  ofapiTypedExportResume: { method: "POST", path: "/api/v1/admin/ofapi/exports/:jobId/resume" },
   ofapiTypedExportRows: { method: "GET", path: "/api/v1/admin/ofapi/exports/:jobId/rows" },
   ofapiVendorUsageRefresh: { method: "POST", path: "/api/v1/admin/ofapi/vendor-usage" },
   ofapiWebhookReceive: { method: "POST", path: "/api/v1/ofapi/webhook" },

@@ -11130,3 +11130,15 @@ charges. The documented list status-filter enum omits the cancellation endpoint'
 ### 262 implementation addendum — free available-event catalog
 
 2026-09-06: S3's explicit `/webhooks/events` read now has an owner-triggered free refresh and DB-only diagnostic consumer. The vendor response is retained before validation as a control-plane observation; malformed inventory stays visible as invalid. Exact returned events are compared against requested registration and known handlers without enabling new subscriptions. The live example's 13 events does not replace the separate 32-event vendor catalog. No production policy was changed.
+
+
+### Decision #267 follow-up: resume retained export authority
+
+An owner resumes admission-paused typed exports through their own dashboard/SDK
+action. The policy and capture versions are checked together; both collection
+and capture rows resume under their original cursor, account and caps. The next
+planned request must fit the retained allowance. A documented free status read
+is admissible when the preceding paid start already reserved the entire credit
+cap. Unresolved reserved/dispatching/indeterminate requests and terminal export
+states cannot be revived by this action. Resuming a started export does not
+repeat its POST or create a new export; paid retry remains a separate approval.

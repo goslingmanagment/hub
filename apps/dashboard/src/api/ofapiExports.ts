@@ -4,6 +4,7 @@ export const ofapiExportActions = {
   control: (jobId: string, body: Parameters<typeof kernel.ofapiTypedExportControl>[0]["body"]) => kernel.ofapiTypedExportControl({ params: { jobId }, body }),
   refreshInventory: (body: Parameters<typeof kernel.ofapiExportInventoryRefresh>[0]["body"]) => kernel.ofapiExportInventoryRefresh({ body }),
   create: (body: Parameters<typeof kernel.ofapiTypedExportCreate>[0]["body"]) => kernel.ofapiTypedExportCreate({ body }),
+  resume: (jobId: string, body: Parameters<typeof kernel.ofapiTypedExportResume>[0]["body"]) => kernel.ofapiTypedExportResume({ params: { jobId }, body }),
   approve: (jobId: string, body: Parameters<typeof kernel.ofapiTypedExportApprove>[0]["body"]) => kernel.ofapiTypedExportApprove({ params: { jobId }, body }),
   artifact: (jobId: string, body: Parameters<typeof kernel.ofapiTypedExportArtifact>[0]["body"]) => kernel.ofapiTypedExportArtifact({ params: { jobId }, body }),
 };
