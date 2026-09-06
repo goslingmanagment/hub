@@ -487,8 +487,8 @@ export async function listRunnableOfapiCapturePages(
            max(priority)::int as priority,
            min(case when state = 'awaiting_parse' then updated_at else next_attempt_at end) as requested_at
     from ofapi_capture_jobs
-    where (state = 'awaiting_parse' and reason_code is null)
-       or (state in ('ready', 'retry_wait') and next_attempt_at <= ${now})
+    where kind <> 'collection_read' and ((state = 'awaiting_parse' and reason_code is null)
+       or (state in ('ready', 'retry_wait') and next_attempt_at <= ${now}))
     group by page_id
     order by max(priority) desc,
              min(case when state = 'awaiting_parse' then updated_at else next_attempt_at end),
@@ -506,6 +506,7 @@ export async function leaseNextOfapiCaptureJob(
   db: Database,
   input: {
     pageId: number;
+    jobId?: string;
     leaseOwner: string;
     leaseToken?: string;
     leaseTtlMs: number;
@@ -520,6 +521,7 @@ export async function leaseNextOfapiCaptureJob(
       select id
       from ofapi_capture_jobs
       where page_id = ${input.pageId}
+        and ${input.jobId ? sql`id=${input.jobId}::uuid` : sql`kind <> 'collection_read'`}
         and (
           (state = 'awaiting_parse' and reason_code is null)
           or (state in ('ready', 'retry_wait') and next_attempt_at <= ${now})

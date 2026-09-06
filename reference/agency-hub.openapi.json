@@ -7961,7 +7961,8 @@
                               "head_repair",
                               "account_export",
                               "export_import",
-                              "post_paginate"
+                              "post_paginate",
+                              "collection_read"
                             ]
                           },
                           "state": {
@@ -9913,6 +9914,374 @@
             }
           },
           "409": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/ofapi/collection/results": {
+      "get": {
+        "summary": "Read stored OFAPI CRM, content and monetary snapshots without vendor egress",
+        "tags": [
+          "ops"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "query",
+            "name": "pageId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            },
+            "in": "query",
+            "name": "operation",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            },
+            "in": "query",
+            "name": "limit",
+            "required": false
+          }
+        ],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "pageId": {
+                      "type": "number"
+                    },
+                    "catalog": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "operation": {
+                            "type": "string"
+                          },
+                          "path": {
+                            "type": "string"
+                          },
+                          "category": {
+                            "type": "string"
+                          },
+                          "detail": {
+                            "type": "boolean"
+                          },
+                          "defaultCollect": {
+                            "type": "boolean"
+                          },
+                          "granularity": {
+                            "type": "string"
+                          },
+                          "query": {
+                            "type": "object",
+                            "propertyNames": {
+                              "type": "string"
+                            },
+                            "additionalProperties": {
+                              "type": "string"
+                            }
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "operation",
+                          "path",
+                          "category",
+                          "detail",
+                          "defaultCollect",
+                          "granularity",
+                          "query"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "snapshots": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "source": {
+                            "type": "string",
+                            "enum": [
+                              "onlyfansapi"
+                            ]
+                          },
+                          "operation": {
+                            "type": "string"
+                          },
+                          "category": {
+                            "type": "string"
+                          },
+                          "pathname": {
+                            "type": "string"
+                          },
+                          "query": {
+                            "type": "object",
+                            "propertyNames": {
+                              "type": "string"
+                            },
+                            "additionalProperties": {
+                              "type": "string"
+                            }
+                          },
+                          "window": {
+                            "type": "object",
+                            "properties": {
+                              "from": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "to": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "from",
+                              "to"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "observedAt": {
+                            "type": "string"
+                          },
+                          "ageSeconds": {
+                            "type": "number"
+                          },
+                          "observationId": {
+                            "type": "string"
+                          },
+                          "granularity": {
+                            "type": "string"
+                          },
+                          "coverage": {
+                            "type": "object",
+                            "properties": {
+                              "state": {
+                                "type": "string",
+                                "enum": [
+                                  "complete",
+                                  "partial",
+                                  "unknown"
+                                ]
+                              },
+                              "reason": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "indexComplete": {
+                                "anyOf": [
+                                  {
+                                    "type": "boolean"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "omitted": {
+                                "anyOf": [
+                                  {
+                                    "type": "number"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "nextQuery": {
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "propertyNames": {
+                                      "type": "string"
+                                    },
+                                    "additionalProperties": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "state",
+                              "reason",
+                              "indexComplete",
+                              "omitted",
+                              "nextQuery"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "items": {
+                            "type": "array",
+                            "items": {}
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "source",
+                          "operation",
+                          "category",
+                          "pathname",
+                          "query",
+                          "window",
+                          "observedAt",
+                          "ageSeconds",
+                          "observationId",
+                          "granularity",
+                          "coverage",
+                          "items"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "pageId",
+                    "catalog",
+                    "snapshots"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
             "description": "Default Response",
             "content": {
               "application/json": {
@@ -27961,8 +28330,8 @@
                       }
                     },
                     "planes": {
-                      "minItems": 45,
-                      "maxItems": 45,
+                      "minItems": 46,
+                      "maxItems": 46,
                       "type": "array",
                       "items": {
                         "type": "object",
@@ -27982,6 +28351,7 @@
                               "fan_spend_lifetime",
                               "revenue_mix_daily",
                               "page_payout_requests",
+                              "ofapi_read_snapshots",
                               "page_payout_methods",
                               "fan_spend_daily",
                               "fans",
@@ -28042,6 +28412,7 @@
                               {
                                 "type": "string",
                                 "enum": [
+                                  "ofapi_financial_snapshots",
                                   "fan_memberships",
                                   "dm_threads",
                                   "subscriptions",
@@ -28266,6 +28637,7 @@
                           "lifetimeSpendMills",
                           "revenueMixDay",
                           "payoutRequest",
+                          "ofapiFinancialMetric",
                           "payoutMethod",
                           "platformUserId",
                           "username",
@@ -28416,8 +28788,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 45,
-                          "maxItems": 45,
+                          "minItems": 46,
+                          "maxItems": 46,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -28439,6 +28811,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -28534,6 +28907,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -28670,6 +29044,7 @@
                                   "fan_spend_lifetime",
                                   "revenue_mix_daily",
                                   "page_payout_requests",
+                                  "ofapi_read_snapshots",
                                   "page_payout_methods",
                                   "fan_spend_daily",
                                   "fans",
@@ -28915,6 +29290,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -29042,6 +29418,7 @@
                               "lifetimeSpendMills",
                               "revenueMixDay",
                               "payoutRequest",
+                              "ofapiFinancialMetric",
                               "payoutMethod",
                               "platformUserId",
                               "username",
@@ -29624,6 +30001,7 @@
                   "lifetimeSpendMills",
                   "revenueMixDay",
                   "payoutRequest",
+                  "ofapiFinancialMetric",
                   "payoutMethod",
                   "platformUserId",
                   "username",
@@ -29769,8 +30147,8 @@
                             ]
                           },
                           "planes": {
-                            "minItems": 45,
-                            "maxItems": 45,
+                            "minItems": 46,
+                            "maxItems": 46,
                             "type": "array",
                             "items": {
                               "anyOf": [
@@ -29792,6 +30170,7 @@
                                         "fan_spend_lifetime",
                                         "revenue_mix_daily",
                                         "page_payout_requests",
+                                        "ofapi_read_snapshots",
                                         "page_payout_methods",
                                         "fan_spend_daily",
                                         "fans",
@@ -29887,6 +30266,7 @@
                                         "fan_spend_lifetime",
                                         "revenue_mix_daily",
                                         "page_payout_requests",
+                                        "ofapi_read_snapshots",
                                         "page_payout_methods",
                                         "fan_spend_daily",
                                         "fans",
@@ -30023,6 +30403,7 @@
                                     "fan_spend_lifetime",
                                     "revenue_mix_daily",
                                     "page_payout_requests",
+                                    "ofapi_read_snapshots",
                                     "page_payout_methods",
                                     "fan_spend_daily",
                                     "fans",
@@ -30283,6 +30664,7 @@
                                 "lifetimeSpendMills",
                                 "revenueMixDay",
                                 "payoutRequest",
+                                "ofapiFinancialMetric",
                                 "payoutMethod",
                                 "platformUserId",
                                 "username",
@@ -30698,8 +31080,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 45,
-                          "maxItems": 45,
+                          "minItems": 46,
+                          "maxItems": 46,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -30721,6 +31103,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -30816,6 +31199,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -30952,6 +31336,7 @@
                                   "fan_spend_lifetime",
                                   "revenue_mix_daily",
                                   "page_payout_requests",
+                                  "ofapi_read_snapshots",
                                   "page_payout_methods",
                                   "fan_spend_daily",
                                   "fans",
@@ -31197,6 +31582,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -31324,6 +31710,7 @@
                               "lifetimeSpendMills",
                               "revenueMixDay",
                               "payoutRequest",
+                              "ofapiFinancialMetric",
                               "payoutMethod",
                               "platformUserId",
                               "username",
@@ -32328,8 +32715,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 45,
-                          "maxItems": 45,
+                          "minItems": 46,
+                          "maxItems": 46,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -32351,6 +32738,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -32446,6 +32834,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -32582,6 +32971,7 @@
                                   "fan_spend_lifetime",
                                   "revenue_mix_daily",
                                   "page_payout_requests",
+                                  "ofapi_read_snapshots",
                                   "page_payout_methods",
                                   "fan_spend_daily",
                                   "fans",
@@ -32827,6 +33217,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -32954,6 +33345,7 @@
                               "lifetimeSpendMills",
                               "revenueMixDay",
                               "payoutRequest",
+                              "ofapiFinancialMetric",
                               "payoutMethod",
                               "platformUserId",
                               "username",
@@ -33933,8 +34325,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 45,
-                          "maxItems": 45,
+                          "minItems": 46,
+                          "maxItems": 46,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -33956,6 +34348,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -34051,6 +34444,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -34187,6 +34581,7 @@
                                   "fan_spend_lifetime",
                                   "revenue_mix_daily",
                                   "page_payout_requests",
+                                  "ofapi_read_snapshots",
                                   "page_payout_methods",
                                   "fan_spend_daily",
                                   "fans",
@@ -34432,6 +34827,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -34559,6 +34955,7 @@
                               "lifetimeSpendMills",
                               "revenueMixDay",
                               "payoutRequest",
+                              "ofapiFinancialMetric",
                               "payoutMethod",
                               "platformUserId",
                               "username",
@@ -35649,8 +36046,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 45,
-                          "maxItems": 45,
+                          "minItems": 46,
+                          "maxItems": 46,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -35672,6 +36069,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -35767,6 +36165,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -35903,6 +36302,7 @@
                                   "fan_spend_lifetime",
                                   "revenue_mix_daily",
                                   "page_payout_requests",
+                                  "ofapi_read_snapshots",
                                   "page_payout_methods",
                                   "fan_spend_daily",
                                   "fans",
@@ -36148,6 +36548,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -36275,6 +36676,7 @@
                               "lifetimeSpendMills",
                               "revenueMixDay",
                               "payoutRequest",
+                              "ofapiFinancialMetric",
                               "payoutMethod",
                               "platformUserId",
                               "username",
@@ -37835,8 +38237,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 45,
-                          "maxItems": 45,
+                          "minItems": 46,
+                          "maxItems": 46,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -37858,6 +38260,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -37953,6 +38356,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -38089,6 +38493,7 @@
                                   "fan_spend_lifetime",
                                   "revenue_mix_daily",
                                   "page_payout_requests",
+                                  "ofapi_read_snapshots",
                                   "page_payout_methods",
                                   "fan_spend_daily",
                                   "fans",
@@ -38334,6 +38739,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -38461,6 +38867,7 @@
                               "lifetimeSpendMills",
                               "revenueMixDay",
                               "payoutRequest",
+                              "ofapiFinancialMetric",
                               "payoutMethod",
                               "platformUserId",
                               "username",
@@ -39153,8 +39560,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 45,
-                          "maxItems": 45,
+                          "minItems": 46,
+                          "maxItems": 46,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -39176,6 +39583,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -39271,6 +39679,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -39407,6 +39816,7 @@
                                   "fan_spend_lifetime",
                                   "revenue_mix_daily",
                                   "page_payout_requests",
+                                  "ofapi_read_snapshots",
                                   "page_payout_methods",
                                   "fan_spend_daily",
                                   "fans",
@@ -39652,6 +40062,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -39779,6 +40190,7 @@
                               "lifetimeSpendMills",
                               "revenueMixDay",
                               "payoutRequest",
+                              "ofapiFinancialMetric",
                               "payoutMethod",
                               "platformUserId",
                               "username",
@@ -40442,6 +40854,7 @@
                             "lifetimeSpendMills",
                             "revenueMixDay",
                             "payoutRequest",
+                            "ofapiFinancialMetric",
                             "payoutMethod",
                             "platformUserId",
                             "username",
@@ -40536,6 +40949,7 @@
             "schema": {
               "type": "string",
               "enum": [
+                "ofapi_financial_snapshots",
                 "fan_memberships",
                 "dm_threads",
                 "subscriptions",
@@ -40590,6 +41004,7 @@
                     "datasetRef": {
                       "type": "string",
                       "enum": [
+                        "ofapi_financial_snapshots",
                         "fan_memberships",
                         "dm_threads",
                         "subscriptions",
@@ -40660,6 +41075,7 @@
                           "datasetRef": {
                             "type": "string",
                             "enum": [
+                              "ofapi_financial_snapshots",
                               "fan_memberships",
                               "dm_threads",
                               "subscriptions",
@@ -40787,6 +41203,7 @@
                                 "lifetimeSpendMills",
                                 "revenueMixDay",
                                 "payoutRequest",
+                                "ofapiFinancialMetric",
                                 "payoutMethod",
                                 "platformUserId",
                                 "username",
@@ -41314,8 +41731,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 45,
-                          "maxItems": 45,
+                          "minItems": 46,
+                          "maxItems": 46,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -41337,6 +41754,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -41432,6 +41850,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -41568,6 +41987,7 @@
                                   "fan_spend_lifetime",
                                   "revenue_mix_daily",
                                   "page_payout_requests",
+                                  "ofapi_read_snapshots",
                                   "page_payout_methods",
                                   "fan_spend_daily",
                                   "fans",
@@ -41813,6 +42233,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -41940,6 +42361,7 @@
                               "lifetimeSpendMills",
                               "revenueMixDay",
                               "payoutRequest",
+                              "ofapiFinancialMetric",
                               "payoutMethod",
                               "platformUserId",
                               "username",
@@ -42530,6 +42952,7 @@
                             "lifetimeSpendMills",
                             "revenueMixDay",
                             "payoutRequest",
+                            "ofapiFinancialMetric",
                             "payoutMethod",
                             "platformUserId",
                             "username",
@@ -43142,8 +43565,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 45,
-                          "maxItems": 45,
+                          "minItems": 46,
+                          "maxItems": 46,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -43165,6 +43588,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -43260,6 +43684,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -43396,6 +43821,7 @@
                                   "fan_spend_lifetime",
                                   "revenue_mix_daily",
                                   "page_payout_requests",
+                                  "ofapi_read_snapshots",
                                   "page_payout_methods",
                                   "fan_spend_daily",
                                   "fans",
@@ -43641,6 +44067,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -43768,6 +44195,7 @@
                               "lifetimeSpendMills",
                               "revenueMixDay",
                               "payoutRequest",
+                              "ofapiFinancialMetric",
                               "payoutMethod",
                               "platformUserId",
                               "username",
@@ -44448,6 +44876,7 @@
                   "lifetimeSpendMills",
                   "revenueMixDay",
                   "payoutRequest",
+                  "ofapiFinancialMetric",
                   "payoutMethod",
                   "platformUserId",
                   "username",
@@ -45050,6 +45479,7 @@
                               "fan_spend_lifetime",
                               "revenue_mix_daily",
                               "page_payout_requests",
+                              "ofapi_read_snapshots",
                               "page_payout_methods",
                               "fan_spend_daily",
                               "fans",
@@ -45122,6 +45552,7 @@
                                 "lifetimeSpendMills",
                                 "revenueMixDay",
                                 "payoutRequest",
+                                "ofapiFinancialMetric",
                                 "payoutMethod",
                                 "platformUserId",
                                 "username",
@@ -45601,8 +46032,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 45,
-                          "maxItems": 45,
+                          "minItems": 46,
+                          "maxItems": 46,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -45624,6 +46055,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -45719,6 +46151,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -45855,6 +46288,7 @@
                                   "fan_spend_lifetime",
                                   "revenue_mix_daily",
                                   "page_payout_requests",
+                                  "ofapi_read_snapshots",
                                   "page_payout_methods",
                                   "fan_spend_daily",
                                   "fans",
@@ -46100,6 +46534,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -46227,6 +46662,7 @@
                               "lifetimeSpendMills",
                               "revenueMixDay",
                               "payoutRequest",
+                              "ofapiFinancialMetric",
                               "payoutMethod",
                               "platformUserId",
                               "username",
@@ -46768,6 +47204,7 @@
                   "lifetimeSpendMills",
                   "revenueMixDay",
                   "payoutRequest",
+                  "ofapiFinancialMetric",
                   "payoutMethod",
                   "platformUserId",
                   "username",
@@ -47619,6 +48056,7 @@
                                     "lifetimeSpendMills",
                                     "revenueMixDay",
                                     "payoutRequest",
+                                    "ofapiFinancialMetric",
                                     "payoutMethod",
                                     "platformUserId",
                                     "username",
@@ -48175,6 +48613,7 @@
                                         "lifetimeSpendMills",
                                         "revenueMixDay",
                                         "payoutRequest",
+                                        "ofapiFinancialMetric",
                                         "payoutMethod",
                                         "platformUserId",
                                         "username",
@@ -48734,6 +49173,7 @@
                           "lifetimeSpendMills",
                           "revenueMixDay",
                           "payoutRequest",
+                          "ofapiFinancialMetric",
                           "payoutMethod",
                           "platformUserId",
                           "username",
@@ -49135,8 +49575,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 45,
-                          "maxItems": 45,
+                          "minItems": 46,
+                          "maxItems": 46,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -49158,6 +49598,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -49253,6 +49694,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -49389,6 +49831,7 @@
                                   "fan_spend_lifetime",
                                   "revenue_mix_daily",
                                   "page_payout_requests",
+                                  "ofapi_read_snapshots",
                                   "page_payout_methods",
                                   "fan_spend_daily",
                                   "fans",
@@ -49634,6 +50077,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -49761,6 +50205,7 @@
                               "lifetimeSpendMills",
                               "revenueMixDay",
                               "payoutRequest",
+                              "ofapiFinancialMetric",
                               "payoutMethod",
                               "platformUserId",
                               "username",
@@ -50361,6 +50806,7 @@
                   "lifetimeSpendMills",
                   "revenueMixDay",
                   "payoutRequest",
+                  "ofapiFinancialMetric",
                   "payoutMethod",
                   "platformUserId",
                   "username",
@@ -50846,6 +51292,7 @@
                                 "lifetimeSpendMills",
                                 "revenueMixDay",
                                 "payoutRequest",
+                                "ofapiFinancialMetric",
                                 "payoutMethod",
                                 "platformUserId",
                                 "username",
@@ -51317,8 +51764,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 45,
-                          "maxItems": 45,
+                          "minItems": 46,
+                          "maxItems": 46,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -51340,6 +51787,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -51435,6 +51883,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -51571,6 +52020,7 @@
                                   "fan_spend_lifetime",
                                   "revenue_mix_daily",
                                   "page_payout_requests",
+                                  "ofapi_read_snapshots",
                                   "page_payout_methods",
                                   "fan_spend_daily",
                                   "fans",
@@ -51816,6 +52266,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -51943,6 +52394,7 @@
                               "lifetimeSpendMills",
                               "revenueMixDay",
                               "payoutRequest",
+                              "ofapiFinancialMetric",
                               "payoutMethod",
                               "platformUserId",
                               "username",
@@ -52510,6 +52962,7 @@
                             "lifetimeSpendMills",
                             "revenueMixDay",
                             "payoutRequest",
+                            "ofapiFinancialMetric",
                             "payoutMethod",
                             "platformUserId",
                             "username",
@@ -52819,6 +53272,7 @@
                                       "lifetimeSpendMills",
                                       "revenueMixDay",
                                       "payoutRequest",
+                                      "ofapiFinancialMetric",
                                       "payoutMethod",
                                       "platformUserId",
                                       "username",
@@ -53251,8 +53705,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 45,
-                          "maxItems": 45,
+                          "minItems": 46,
+                          "maxItems": 46,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -53274,6 +53728,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -53369,6 +53824,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -53505,6 +53961,7 @@
                                   "fan_spend_lifetime",
                                   "revenue_mix_daily",
                                   "page_payout_requests",
+                                  "ofapi_read_snapshots",
                                   "page_payout_methods",
                                   "fan_spend_daily",
                                   "fans",
@@ -53750,6 +54207,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -53877,6 +54335,7 @@
                               "lifetimeSpendMills",
                               "revenueMixDay",
                               "payoutRequest",
+                              "ofapiFinancialMetric",
                               "payoutMethod",
                               "platformUserId",
                               "username",
@@ -54482,6 +54941,7 @@
                             "lifetimeSpendMills",
                             "revenueMixDay",
                             "payoutRequest",
+                            "ofapiFinancialMetric",
                             "payoutMethod",
                             "platformUserId",
                             "username",
@@ -54714,6 +55174,7 @@
                                 "lifetimeSpendMills",
                                 "revenueMixDay",
                                 "payoutRequest",
+                                "ofapiFinancialMetric",
                                 "payoutMethod",
                                 "platformUserId",
                                 "username",
@@ -55170,8 +55631,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 45,
-                          "maxItems": 45,
+                          "minItems": 46,
+                          "maxItems": 46,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -55193,6 +55654,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -55288,6 +55750,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -55424,6 +55887,7 @@
                                   "fan_spend_lifetime",
                                   "revenue_mix_daily",
                                   "page_payout_requests",
+                                  "ofapi_read_snapshots",
                                   "page_payout_methods",
                                   "fan_spend_daily",
                                   "fans",
@@ -55669,6 +56133,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -55796,6 +56261,7 @@
                               "lifetimeSpendMills",
                               "revenueMixDay",
                               "payoutRequest",
+                              "ofapiFinancialMetric",
                               "payoutMethod",
                               "platformUserId",
                               "username",
@@ -56440,6 +56906,7 @@
                   "lifetimeSpendMills",
                   "revenueMixDay",
                   "payoutRequest",
+                  "ofapiFinancialMetric",
                   "payoutMethod",
                   "platformUserId",
                   "username",
@@ -56947,6 +57414,7 @@
                                 "lifetimeSpendMills",
                                 "revenueMixDay",
                                 "payoutRequest",
+                                "ofapiFinancialMetric",
                                 "payoutMethod",
                                 "platformUserId",
                                 "username",
@@ -57415,8 +57883,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 45,
-                          "maxItems": 45,
+                          "minItems": 46,
+                          "maxItems": 46,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -57438,6 +57906,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -57533,6 +58002,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -57669,6 +58139,7 @@
                                   "fan_spend_lifetime",
                                   "revenue_mix_daily",
                                   "page_payout_requests",
+                                  "ofapi_read_snapshots",
                                   "page_payout_methods",
                                   "fan_spend_daily",
                                   "fans",
@@ -57914,6 +58385,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -58041,6 +58513,7 @@
                               "lifetimeSpendMills",
                               "revenueMixDay",
                               "payoutRequest",
+                              "ofapiFinancialMetric",
                               "payoutMethod",
                               "platformUserId",
                               "username",

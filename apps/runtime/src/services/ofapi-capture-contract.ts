@@ -1,4 +1,5 @@
 import { ofapiResponseEvidence } from "./ofapi-response-evidence.ts";
+import { validateOfapiCatalogResponse } from "./ofapi-read-normalization.ts";
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -48,6 +49,8 @@ export function validateOfapiInteractiveResponseShape(
   operation: string,
   body: unknown,
 ): boolean {
+  const catalog = validateOfapiCatalogResponse(operation, body);
+  if (catalog !== null) return catalog;
   if (operation === "ofapi_gateway_chat_search") {
     const ids = asRecord(body)?.data;
     return Array.isArray(ids) && ids.every(id => itemId(id) !== null && /^\d+$/.test(itemId(id)!));

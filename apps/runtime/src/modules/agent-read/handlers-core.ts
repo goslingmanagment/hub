@@ -144,6 +144,7 @@ const AGENT_DATASET_CATALOG_OVERRIDES: Partial<Record<AgentDataset, {
   notifications: { platforms: ["fansly"], captureState: "unknown" },
   subscription_tiers: { platforms: ["fansly"], captureState: "unknown" },
   payouts: { platforms: ["fansly"], captureState: "unknown" },
+  ofapi_financial_snapshots: { platforms: ["onlyfans"], captureState: "unknown" },
   capture_coverage: { platforms: ["fansly"], captureState: "unknown" },
 };
 

@@ -170,6 +170,7 @@ export const kernelOperations = {
   ofapiCreditsChatterSummary: { method: "GET", path: "/api/v1/ofapi/credits/summary" },
   ofapiKeyScopeApply: { method: "POST", path: "/api/v1/admin/ofapi/key-scope" },
   ofapiKeyScopeGet: { method: "GET", path: "/api/v1/admin/ofapi/key-scope" },
+  ofapiReadCollectionsGet: { method: "GET", path: "/api/v1/admin/ofapi/collection/results" },
   ofapiReadGateway: { method: "GET", path: "/api/v1/ofapi/read/*" },
   ofapiVendorUsageRefresh: { method: "POST", path: "/api/v1/admin/ofapi/vendor-usage" },
   ofapiWebhookReceive: { method: "POST", path: "/api/v1/ofapi/webhook" },

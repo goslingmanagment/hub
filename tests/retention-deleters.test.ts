@@ -62,6 +62,8 @@ import { describe, expect, it } from "vitest";
 //     `capture_rewrite_runs` — the erasure's governance, for the same class of
 //     act.
 const SANCTIONED_DELETER_FILES = [
+  // Decision266: owner-invoked reset of replayable OFAPI snapshot projection only.
+  "apps/runtime/src/services/projections/ofapi-read-snapshots.ts",
   "apps/runtime/src/cli.ts",
   "apps/runtime/src/services/erasure/index.ts",
   "apps/runtime/src/modules/events/index.ts",

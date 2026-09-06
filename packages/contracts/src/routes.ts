@@ -2,6 +2,7 @@ import { ofapiBannedWordRouteSchemas } from "./routes-ofapi-banned-words.ts";
 import { OFAPI_EXTENDED_COMMAND_KINDS } from "@agency_hub_core/shared";
 import { ofapiExtendedCommandOptions } from "./ofapi-extended-commands.ts";
 import { ofapiVendorRouteSchemas } from "./routes-ofapi-vendor.ts";
+import { ofapiReadCollectionsRouteSchemas } from "./routes-ofapi-read-collections.ts";
 import { ofapiCollectionRouteSchemas } from "./routes-ofapi-collection.ts";
 import {
   PERIOD_OPTIONS,
@@ -3983,6 +3984,7 @@ export const ofapiCaptureOperatorStatusResponseSchema = z.object({
       "account_export",
       "export_import",
       "post_paginate",
+      "collection_read",
     ]),
     state: ofapiExportQuoteJobStateSchema,
     reasonCode: z.string().nullable(),
@@ -5524,6 +5526,7 @@ export const moneyPayoutsResponseSchema = z.object({
 export const routeSchemas = {
   ...ofapiBannedWordRouteSchemas,
   ...ofapiVendorRouteSchemas,
+  ...ofapiReadCollectionsRouteSchemas,
   ...ofapiCollectionRouteSchemas,
   ...agentRouteSchemas,
   ...agentKeyAdminRouteSchemas,

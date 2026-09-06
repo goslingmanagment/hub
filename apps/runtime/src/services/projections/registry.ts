@@ -1,3 +1,4 @@
+import { OFAPI_READ_SNAPSHOT_PROJECTION, runOfapiReadSnapshotProjection, rebuildOfapiReadSnapshotProjection } from "./ofapi-read-snapshots.ts";
 // The projection registry (WP-F1(0), the spine precursor).
 //
 // WHAT IT REPLACES, and why that was the expensive-forever shape: adding a
@@ -136,6 +137,7 @@ function count(result: Record<string, unknown>, key: string): number {
 }
 
 export const PROJECTION_REGISTRY: readonly ProjectionDefinition[] = [
+  { name:OFAPI_READ_SNAPSHOT_PROJECTION, eventTypes:["ofapi.read_snapshot_observed"], tables:["ofapi_read_snapshots"], stateClass:"fact_projection", rebuildKind:"truncate_replay", label:"OFAPI read snapshots projected", run:runOfapiReadSnapshotProjection, rebuild:rebuildOfapiReadSnapshotProjection, didWork:result=>count(result,"applied")>0 },
   {
     name: "message_archive",
     eventTypes: [...MESSAGE_EVENT_TYPES],

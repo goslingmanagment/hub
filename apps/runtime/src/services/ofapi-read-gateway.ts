@@ -1,3 +1,6 @@
+import { findOfapiReadDefinition, resolveOfapiCatalogPath, type OfapiCollectionContext } from "@agency_hub_core/shared";
+import { materializeOfapiReadSnapshot } from "./ofapi-collection-runner.ts";
+import { safeOfapiReadBody } from "./ofapi-read-normalization.ts";
 import { listOfapiMappedPages } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
@@ -30,6 +33,7 @@ interface QueryRule {
 }
 
 interface ProxyRequest {
+  collectionContext?: OfapiCollectionContext;
   kind: "proxy";
   accountId: string;
   pathname: string;
@@ -167,6 +171,9 @@ export function resolveOfapiReadGatewayRequest(
   rawPath: string,
   rawQuery: RawQuery,
 ): OfapiReadGatewayRequest {
+  let catalog;
+  try { catalog = resolveOfapiCatalogPath(rawPath, rawQuery); } catch (error) { invalid(error instanceof Error ? error.message : "Invalid collection query"); }
+  if (catalog) return { kind: "proxy", accountId: catalog.accountId, pathname: catalog.pathname, query: catalog.query, operation: catalog.definition.operation, fallbackCredits: 1, fallbackEstimated: true, collectionContext: { category: catalog.definition.category, purpose: "interactive", detail: catalog.definition.detail, reservedCredits: 1 } };
   const segments = decodeSegments(rawPath);
   if (segments.length === 1 && segments[0] === "accounts") {
     parseQuery(rawQuery, NO_QUERY);
@@ -401,7 +408,6 @@ export async function executeOfapiReadGatewayRequest(
   if (app.config.ofapiDesktopReadGatewayEnabled !== true) {
     throw new ServiceUnavailableError("OFAPI desktop read gateway is disabled");
   }
-  const captureFirst = app.config.ofapiMirrorInteractiveCaptureEnabled === true;
   const historyShadow = app.config.ofapiMessageHistoryShadowEnabled === true;
   const historyDbFallback = app.config.ofapiMessageHistoryDbFallbackEnabled === true;
   if (historyDbFallback && !historyShadow) {
@@ -416,6 +422,8 @@ export async function executeOfapiReadGatewayRequest(
   }
 
   const request = resolveOfapiReadGatewayRequest(input.rawPath, input.rawQuery);
+  const captureFirst = Boolean(request.kind === "proxy" && request.collectionContext) || app.config.ofapiMirrorInteractiveCaptureEnabled === true;
+
   if (request.kind === "whoami") {
     return {
       status: 200,
@@ -509,6 +517,9 @@ export async function executeOfapiReadGatewayRequest(
     throw new ServiceUnavailableError("OFAPI client is not configured");
   }
 
+  if (findOfapiReadDefinition(request.operation)?.category === "balances" && principal.user.role !== "owner") {
+    throw new BadRequestError("Financial collection reads require the owner report");
+  }
   const egress = await resolveOfapiEgressContext(app, {
     pageId: page.id,
     ofapiAccountId: request.accountId,
@@ -526,6 +537,7 @@ export async function executeOfapiReadGatewayRequest(
         pathname: request.pathname,
         query: request.query,
         fallbackCredits: request.fallbackCredits,
+        collectionContext: request.collectionContext,
         servingMode: historyMode === "vendor" ? "vendor_only" : historyMode,
         fallbackReason,
       })
@@ -542,6 +554,12 @@ export async function executeOfapiReadGatewayRequest(
         fallbackCredits: request.fallbackCredits,
         fallbackEstimated: request.fallbackEstimated,
       });
+    if (request.collectionContext && response.status >= 200 && response.status < 300) {
+      if (!("capture" in response)) throw new ServiceUnavailableError("Collection requires durable response capture");
+      const capture = response.capture as { observationId: number; receivedAt: Date };
+      await materializeOfapiReadSnapshot(app, { pageId: page.id, step: request, body: response.body, observationId: capture.observationId, observationReceivedAt: capture.receivedAt });
+      response.body = safeOfapiReadBody(request.operation, response.body);
+    }
     // Stage 9 producer 4: tee every successful proxied body into the journal
     // — O(1) enqueue off the latency path, fail-open with a visible counter.
     if (!captureFirst && response.status >= 200 && response.status < 300) {
