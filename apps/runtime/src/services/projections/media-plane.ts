@@ -212,7 +212,7 @@ export async function runMediaPlaneProjection(
           const firstOrigin = asText(data.firstOrigin);
           if (mediaRef === null || (firstOrigin !== "vault" && firstOrigin !== "post")
             || sourceKind === null || !["vault_albums", "uservault_albums", "vault_media",
-              "account_media_batch", "posts", "ofapi.posts_page.v1"].includes(sourceKind)) continue;
+              "account_media_batch", "posts", "ofapi.posts_page.v1", "ofapi.media_upload_response.v1", "ofapi.collection_read_response.v1", "media_uploads.completed"].includes(sourceKind)) continue;
           const result = await upsertCreatorRawMedia(app.db, {
             pageId: accountId, platform: mediaPlatform, mediaRef,
             ownerAccountRef: asText(data.ownerAccountRef),

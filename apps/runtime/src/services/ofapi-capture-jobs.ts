@@ -1,3 +1,4 @@
+import { buildOfapiMediaUploadRequest, parseCapturedOfapiMediaUpload, type OfapiMediaRequestPlan } from "./ofapi-media-uploads.ts";
 import { isOfapiTypedExportProfile, ofapiTypedExportCategory, type OfapiCollectionContext } from "@agency_hub_core/shared";
 import { settleOfapiCollectionRequest } from "@agency_hub_core/db";
 import { assertOfapiCollectionAllowed, OfapiCollectionPolicyError } from "@agency_hub_core/db";
@@ -852,8 +853,7 @@ async function parseCapturedJob(
   // parsing. The capture chunk also attempts this eagerly, but a process may
   // die after the response transaction commits and before that correction.
   const parsedJson = parseOfapiJsonBytes(captured.bodyBytes, captured.headers);
-  const holdsExportStartCeiling = job.kind === "account_export"
-    && job.cursor?.phase === "owner_approved";
+  const holdsExportStartCeiling = (job.kind === "account_export" && job.cursor?.phase === "owner_approved") || (job.kind === "media_upload" && job.cursor === null);
   if (parsedJson.creditsUsed !== null && !holdsExportStartCeiling) {
     await reconcileOfapiCapturedAttemptCredit(app.db, {
       attemptId: observation.attemptId,
@@ -862,6 +862,10 @@ async function parseCapturedJob(
     });
   }
 
+  if (job.kind === "media_upload") {
+    const result = await parseCapturedOfapiMediaUpload(app, { job, attemptId: observation.attemptId, observationId: observation.id, observationReceivedAt: observation.receivedAt, status: captured.status, headers: captured.headers, parsedJson });
+    return { kind: result, pageId: job.pageId, jobId: job.id };
+  }
   if (job.kind === "account_export") {
     const result = await parseCapturedOfapiExportQuote(app, {
       job,
@@ -1197,8 +1201,7 @@ export async function executeOfapiCaptureJobChunk(
   typedExportJobId?: string,
 ): Promise<OfapiCaptureChunkResult> {
   const selected = typedExportJobId ? await getOfapiCaptureJob(app.db, typedExportJobId) : null;
-  const explicitExport = selected?.pageId === pageId && selected.kind === "account_export"
-    && isOfapiTypedExportProfile(selected.target.profile) && typeof selected.target.collectionJobId === "string";
+  const explicitExport = selected?.pageId === pageId && typeof selected.target.collectionJobId === "string" && ((selected.kind === "account_export" && isOfapiTypedExportProfile(selected.target.profile)) || selected.kind === "media_upload");
   if ((typedExportJobId && !explicitExport) || (!explicitExport && !isOfapiBackgroundCaptureRunnable(app.config))) {
     return { kind: "idle", pageId, jobId: null };
   }
@@ -1222,7 +1225,7 @@ export async function executeOfapiCaptureJobChunk(
     return { kind: "blocked", pageId, jobId: job.id };
   }
   const leaseToken = job.leaseToken;
-  let requestPlan: OfapiExportQuoteRequestPlan | {
+  let requestPlan: OfapiExportQuoteRequestPlan | OfapiMediaRequestPlan | {
     operation: "ofapi_capture_chat_messages";
     endpointClass: "chat_messages";
     method: "GET";
@@ -1312,6 +1315,9 @@ export async function executeOfapiCaptureJobChunk(
         maxResponseBytes: 10 * 1024 * 1024,
       };
     }
+  } else if (job.kind === "media_upload") {
+    try { requestPlan = await buildOfapiMediaUploadRequest(app, job); }
+    catch { await blockJob(app, job, "media_source_unavailable", "Owned source bytes or account custody changed"); return { kind: "blocked", pageId, jobId: job.id }; }
   } else if (job.kind === "account_export") {
     requestPlan = buildOfapiExportQuoteRequest(job);
   }
@@ -1319,7 +1325,7 @@ export async function executeOfapiCaptureJobChunk(
     await blockJob(
       app,
       job,
-      job.kind === "chat_paginate" || job.kind === "post_paginate" || job.kind === "account_export"
+      job.kind === "chat_paginate" || job.kind === "post_paginate" || job.kind === "account_export" || job.kind === "media_upload"
         ? "target_invalid"
         : "unsupported_job_kind",
       `Capture request cannot be built for ${job.kind}`,
@@ -1331,7 +1337,9 @@ export async function executeOfapiCaptureJobChunk(
     return { kind: "blocked", pageId, jobId: job.id };
   }
 
-  const collectionContext: OfapiCollectionContext | undefined = isOfapiTypedExportProfile(job.target.profile) && typeof job.target.collectionJobId === "string"
+  const collectionContext: OfapiCollectionContext | undefined = job.kind === "media_upload" && typeof job.target.collectionJobId === "string"
+    ? { category: "vault_files", purpose: "one_off", jobId: job.target.collectionJobId, reservedCredits: requestPlan.reservedCredits }
+    : isOfapiTypedExportProfile(job.target.profile) && typeof job.target.collectionJobId === "string"
     ? { category: ofapiTypedExportCategory(job.target.profile), purpose: "one_off", jobId: job.target.collectionJobId, reservedCredits: requestPlan.reservedCredits }
     : undefined;
   try {
@@ -1527,7 +1535,7 @@ export async function executeOfapiCaptureJobChunk(
   await settleOfapiCollectionRequest(app.db, reservation.attemptId, parsed.creditsUsed).catch(error => {
     app.logger.warn({ error, attemptId: reservation.attemptId }, "Collection usage settlement pending; captured response retained");
   });
-    if (parsed.creditsUsed !== null && requestPlan.operation !== "ofapi_export_start" && requestPlan.operation !== "ofapi_export_retry") {
+    if (parsed.creditsUsed !== null && !["ofapi_export_start", "ofapi_export_retry", "ofapi_upload_vault", "ofapi_upload_cdn"].includes(requestPlan.operation)) {
       await reconcileOfapiCapturedAttemptCredit(app.db, {
         attemptId: reservation.attemptId,
         actualCredits: parsed.creditsUsed,

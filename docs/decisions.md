@@ -253,6 +253,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 250 | OFAPI UI inherits the existing Anthropic-inspired Hub design | Owner requirement for the OFAPI refresh: use the current dashboard theme, typography, spacing and shared components across collection controls and other new OFAPI screens. The concrete source is globals.css plus Settings and OFAPI Credits; token reuse and visual consistency are acceptance criteria. |
 | 263 | OFAPI collection admission | New collectors default off; page/default CAS policies supersede the closed legacy baseline. Physical reservations separate background, interactive and bounded jobs; pauses retain checkpoints and paid responses. |
 | 267 | Typed OFAPI exports | Owner bounded quote/start/download/import profiles preserve row identity, immutable checksums and source-specific daily visitors; no collector enabled on rollout. |
+| 269 | Owned OFAPI media | Captured source custody, bounded async upload and verified vault/CDN handoff keep readiness, one-use capability custody and rebuildable catalog metadata distinct. |
 | 251 | OFAPI collection policy and UI are separate stages | Owner separates backend S-POL from frontend S-UI, each with independent implementation and acceptance. Saved mockups are non-normative references outside the implementation plan. New collection still requires both applicable stages plus explicit staged activation; existing Hub design tokens remain authoritative. |
 | 252 | OFAPI binding custody, credential adoption and free balance | S0/S1/S4a and minimum S5 use verified creator identity, a preview bound to current generation, durable historical attribution and narrow recovery. Expected team comes from independent configuration; unknown access fails closed for writes. The optional balance probe uses free usage. Code acceptance and live acceptance stay separate. |
 | 253 | OFAPI roster capture | Account roster is restricted identity evidence; typed projection excludes session material before capture and preserves identity conflicts |
@@ -11154,3 +11155,35 @@ shows source/freshness/observed-only coverage, and initiates no provider work.
 Optional engagement remains off until the owner applies that webhook group.
 
 [Shapes, discrepancies, validation and owner steps](runbooks/ofapi-content-events.md).
+
+## 269. Owned OFAPI media upload, readiness and catalog provenance
+
+Date: 2026-09-06. Implements S7 of the September OFAPI coverage plan.
+
+An owner first captures exact file bytes with SHA-256, detected type, size and
+page/account custody, then approves a separate frozen upload. The durable worker
+sends one multipart file with async=true in the body. Known HTTP 202 work resumes
+through free bounded polling or captured signed callbacks. Documented HTTP 200
+inline vault/CDN responses also settle the original request without an invented
+polling identity. Unknown stateful outcomes never trigger automatic POST retry.
+A CAS resume restores only safe admission-paused capture/collection jobs under
+the original allowance; a full reserved upload credit ceiling does not prevent
+subsequent documented free status reads.
+
+Completion, readiness and send material are distinct. Vault handoff verifies a
+current native numeric ID with ready/no-error metadata. A completed CDN prefix
+with no error and no explicit false readiness is usable once; absent readiness
+remains unknown. Only an explicit owner handoff returns that capability. General
+catalogs, events and audit records contain its hash, while the existing S6 send
+custody prevents reuse and quarantines uncertain sends.
+
+The media canonical writer verifies the retained captured envelope before its
+atomic event/checkpoint/projection transaction. Source kinds and vault identity
+feed the existing media plane. Observation ordering prevents a stale replay from
+regressing newer metadata; missing release-form fields preserve observed refs.
+The registered projector rebuilds only the catalog. Shared erasure locks and
+material-time tombstones apply to both canonical and projection writes. All
+new tables participate in governed page erasure. Vault catalog traversal records
+full, filtered and interrupted coverage; new catalog/file categories remain off.
+
+[Owner steps, spend, validation and live contract discrepancies](runbooks/ofapi-media.md).

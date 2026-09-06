@@ -1,3 +1,5 @@
+import { ensureOfapiCollectionQueues } from "../apps/runtime/src/services/ofapi-collection-runner.ts";
+import { ensureOfapiMediaQueue } from "../apps/runtime/src/services/ofapi-media-worker.ts";
 import { ensureOfapiTypedExportQueue } from "../apps/runtime/src/services/ofapi-typed-export-worker.ts";
 import { beforeAll, afterAll, beforeEach, describe, expect, it } from "vitest";
 
@@ -58,6 +60,8 @@ async function createAllQueues(boss: PgBoss) {
   await ensureOfapiCommandQueues(boss);
   await ensureOfapiDmAnalyticsQueues(boss);
   await ensureOfapiTypedExportQueue(boss);
+  await ensureOfapiMediaQueue(boss);
+  await ensureOfapiCollectionQueues(boss);
   await ensureDbDiskUsageQueue(boss);
   await ensureObservationsPartitionQueue(boss);
   await ensureCapturePayloadParityQueue(boss);

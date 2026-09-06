@@ -2665,7 +2665,8 @@ export type OfapiCaptureJobKind =
   | "account_export"
   | "export_import"
   | "post_paginate"
-  | "collection_read";
+  | "collection_read"
+  | "media_upload";
 export type OfapiCaptureJobGoal =
   | "history_to_exhaustion"
   | "connect_to_anchor"

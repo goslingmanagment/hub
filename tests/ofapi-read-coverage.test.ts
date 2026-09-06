@@ -32,11 +32,30 @@ describe("closed OFAPI read coverage catalog", () => {
         `acct_test/${row.path.replace(":id", "9007199254740993")}`,
         query,
       );
-      expect(request).toMatchObject({
-        kind: "proxy",
-        operation: row.operation,
-        collectionContext: { category: row.category, purpose: "interactive" },
-      });
+      if (row.collectionOnly) {
+        const legacy = {
+          vault_inventory: "ofapi_gateway_vault_media",
+          vault_lists: "ofapi_gateway_vault_lists",
+          vault_item: "ofapi_gateway_vault_media_item",
+        };
+        expect(request).toMatchObject({
+          kind: "proxy",
+          operation: legacy[row.id as keyof typeof legacy],
+        });
+        expect(request).not.toHaveProperty("collectionContext");
+        expect(
+          resolveOfapiCatalogPath(
+            `acct_test/${row.path.replace(":id", "9007199254740993")}`,
+            query,
+          )?.definition.operation,
+        ).toBe(row.operation);
+      } else {
+        expect(request).toMatchObject({
+          kind: "proxy",
+          operation: row.operation,
+          collectionContext: { category: row.category, purpose: "interactive" },
+        });
+      }
       const data =
         row.shape === "object"
           ? row.id.endsWith("_stats") && row.category === "tracking_links" ? {summary:{}} : /^(tracking|trial)_link$/.test(row.id) ? {id:1} : {}

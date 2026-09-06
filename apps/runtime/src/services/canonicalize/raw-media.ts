@@ -103,14 +103,14 @@ export function fanslyRawMediaDrafts(
 /** OF media ids link posts directly to files. Technical values are copied only
  * from named scalar fields; delivery variants are never treated as originals. */
 export function onlyFansRawMediaDrafts(
-  observation: CanonicalizableObservation, media: readonly unknown[],
+  observation: CanonicalizableObservation, media: readonly unknown[], firstOrigin: "vault" | "post" = "post",
 ): CanonicalEventDraft[] {
   return media.flatMap(row => {
     if (!isRecord(row)) return [];
     const mediaRef = ref(row.id);
     if (mediaRef === null) return [];
     return [buildRawMediaDraft(observation, {
-      mediaRef, firstOrigin: "post", ownerAccountRef: null,
+      mediaRef, firstOrigin, ownerAccountRef: null,
       filename: typeof row.filename === "string" ? row.filename : null,
       // OF type names have no verified mapping to Fansly's numeric codes.
       mediaType: null, providerType: typeof row.type === "string" ? row.type : null,
