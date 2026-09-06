@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { PgDialect } from "drizzle-orm/pg-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   advancePageOfapiAuthStatus, createModel, createOnlyFansPage,
@@ -36,8 +37,10 @@ describe("PLAN REVISION 06 boundary", () => {
       get(target, property, receiver) {
         if (property === "execute") {
           return async (...args: Parameters<Database["execute"]>) => {
-            // Actual insertObservation's first statement is the nextval allocation.
-            if (firstExecute) {
+            // Scope admission can query before the response. Delay only the actual
+            // journal nextval, so this exercises the captured-body boundary.
+            const query = typeof args[0] === "string" ? args[0] : new PgDialect().sqlToQuery(args[0].getSQL()).sql;
+            if (firstExecute && query.includes("nextval(pg_get_serial_sequence('observations', 'id'))")) {
               firstExecute = false;
               atNextval.release();
               await releaseNextval.promise;
@@ -81,6 +84,7 @@ describe("PLAN REVISION 06 boundary", () => {
     expect(snapshot.accounts[0]?.isAuthenticated).toBe(true);
     const evidence = snapshot.evidence;
     expect(evidence).not.toBeNull();
+    expect(evidence!.receivedAt.getTime()).toBe(bodyTime);
     expect(evidence!.receivedAt.getTime()).toBeLessThanOrEqual(failureAt.getTime());
     // Apply the revised plan's proposed boundary value, then use the real forward-only projection.
     await testDb!.pool.query("update pages set ofapi_account_id='acct_new',ofapi_auth_status=null,ofapi_auth_changed_at=$2 where id=$1", [page!.id, evidence!.receivedAt]);
