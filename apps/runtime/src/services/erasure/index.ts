@@ -1240,6 +1240,9 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
   });
 
   const deletions: Array<[string, string]> = [
+    ["ofapi_collection_requests", "page_id"],
+    ["ofapi_collection_jobs", "page_id"],
+    ["ofapi_collection_policies", "page_id"],
     // Rows that RESTRICT parents below go first.
     ["creator_vault_album_members", "page_id"],
     ["creator_vault_album_scans", "page_id"],
