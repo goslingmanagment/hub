@@ -39,3 +39,5 @@ export * from "./ofapi-actions.ts";
 export * from "./ofapi-actions-collections.ts";
 
 export * from "./ofapi-actions-publishing.ts";
+
+export * from "./ofapi-actions-account.ts";

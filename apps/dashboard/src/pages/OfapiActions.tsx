@@ -2,12 +2,13 @@ import { useEffect, useRef, useState } from "react";
 import type { OfapiAction, OfapiActionIntent } from "@agency_hub_core/contracts";
 import { useAdminOfapiCollection } from "@/api/adminOfapiCollection";
 import { accountActions, useOfapiActions } from "@/api/ofapiActions";
+import { ofapiAccountForms } from "./ofapi-actions/account-forms.ts";
 import { ofapiPublishingForms } from "./ofapi-actions/publishing-forms.ts";
 import { ofapiCollectionForms } from "./ofapi-actions/collection-forms.ts";
 import type { OfapiActionField } from "./ofapi-actions/form-types.ts";
 import { actionDraftMatches, buildOfapiAction, createActionAdmissionRegistry, initialActionValues, isUncertainActionFailure, reviewActionFieldValue, type FormValues } from "./ofapi-actions/form-values.ts";
 
-const forms = [...ofapiCollectionForms, ...ofapiPublishingForms];
+const forms = [...ofapiCollectionForms, ...ofapiPublishingForms, ...ofapiAccountForms];
 const sections = [...new Set(forms.map(form => form.section))];
 const fieldClass = "w-full min-w-0 rounded-lg border border-border bg-card px-3 py-2 text-sm text-text-primary";
 const buttonClass = "rounded-lg border border-border px-3 py-2 text-sm hover:bg-hover disabled:opacity-40";
@@ -149,7 +150,7 @@ export function OfapiActions() {
           <OfapiActionCommandReview command={intent.command as unknown as FormValues} fields={reviewedForm?.fields ?? []} />
           {intent.state === "prepared" && !pending && <div className="flex flex-wrap gap-2"><button type="button" disabled={busy || !bindingMatches} className={`${buttonClass} bg-accent text-white`} onClick={() => mutateIntent("dispatch")}>Выполнить сохранённый запрос</button><button type="button" disabled={busy} className={buttonClass} onClick={() => mutateIntent("cancel")}>Отменить до отправки</button></div>}
           {intent.state === "indeterminate" && <p className="text-sm">Проверьте состояние в OnlyFans перед созданием нового действия. Этот запрос повторно не отправляется.</p>}
-          {intent.state === "confirmed" && (intent.action.startsWith("campaign_") || intent.action.startsWith("queue_") || intent.action.startsWith("bank_") || "scheduledDate" in intent.command) && <p className="text-xs text-text-muted">Провайдер подтвердил запрос. Доставка рассылки, публикация по расписанию и перевод выплаты могут завершиться позже.</p>}
+          {intent.state === "confirmed" && (intent.action.startsWith("campaign_") || intent.action.startsWith("queue_") || intent.action === "payout_withdrawal_request" || "scheduledDate" in intent.command) && <p className="text-xs text-text-muted">Провайдер подтвердил запрос. Доставка рассылки, публикация по расписанию и перевод выплаты могут завершиться позже.</p>}
           {intent.errorCode && <p className="text-sm">Причина: {intent.errorCode}</p>}
           <div className="flex flex-wrap gap-2"><button type="button" disabled={busy} className={buttonClass} onClick={() => void run(() => accountActions.get(intent.id))}>Обновить сохранённый результат</button>{intent.responseObservationId !== null && (intent.state === "indeterminate" || intent.accountingState === "pending") && <button type="button" disabled={busy || pending !== null} className={buttonClass} onClick={() => mutateIntent("repair")}>Обработать сохранённый ответ ещё раз</button>}</div>
           {intent.responseData !== null && <div className="max-h-96 overflow-auto text-sm"><Value value={intent.responseData} /></div>}

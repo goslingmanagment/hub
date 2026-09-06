@@ -122,6 +122,7 @@ for (const file of [
   "ofapi-actions.ts",
   "ofapi-actions-collections.ts",
   "ofapi-actions-publishing.ts",
+  "ofapi-actions-account.ts",
   "routes-ofapi-actions.ts",
   "sdk-runtime.ts",
   "domain-event-cursor.ts",
