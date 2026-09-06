@@ -595,7 +595,7 @@ async function executeCurrentOfapiCommand(
     const failure = classifyOfapiCommandFailure(localRefusal ?? error);
     const failureEvidence = localRefusal
       ? { source: "local_precondition", reason: localRefusal.reason, detail: localRefusal.detail }
-      : { source: "ofapi_response", httpStatus: failure.httpStatus, ...(error instanceof OfapiApiError && error.status === 422 && error.body ? { validationResponse: error.body.slice(0, 4000) } : {}) };
+      : { source: "ofapi_response", httpStatus: failure.httpStatus, ...(error instanceof OfapiApiError && error.status === 422 && error.validationResponse ? { validationResponse: error.validationResponse } : {}) };
     const finishedAt = new Date();
     const finalized = await finalizeOfapiCommand(app.db, {
       commandId: command.id,

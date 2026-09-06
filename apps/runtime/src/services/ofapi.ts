@@ -44,14 +44,18 @@ const OFAPI_FANS_PAGE_LIMIT = 20;
 export const OFAPI_DEFAULT_BASE_URL = "https://app.onlyfansapi.com/api";
 
 export class OfapiApiError extends Error {
+  declare readonly validationResponse?: string;
   constructor(
     message: string,
     readonly status: number | null,
     readonly body: string | null,
     readonly upstreamStatus: number | null = null,
+    validationResponse?: string,
   ) {
     super(message);
     this.name = "OfapiApiError";
+    // Explicit draft feedback is available to the outbox, never generic error serialization.
+    if (validationResponse !== undefined) Object.defineProperty(this, "validationResponse", { value: validationResponse, enumerable: false });
   }
 }
 
@@ -1499,8 +1503,9 @@ export function createOfapiClient(input: {
       throw new OfapiApiError(
         `OFAPI command rejected: POST ${pathname} returned ${response.status}`,
         response.status,
-        response.status === 422 ? text.slice(0, 4000) : null,
+        null,
         upstreamStatus,
+        operation === "ofapi_command_send_v2" && response.status === 422 ? text.slice(0, 4000) : undefined,
       );
     }
     if (!bodyIsJson) {
