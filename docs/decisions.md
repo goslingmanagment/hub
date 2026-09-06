@@ -11142,3 +11142,20 @@ is admissible when the preceding paid start already reserved the entire credit
 cap. Unresolved reserved/dispatching/indeterminate requests and terminal export
 states cannot be revived by this action. Resuming a started export does not
 repeat its POST or create a new export; paid retry remains a separate approval.
+
+### Decision #266 follow-up: bounded schedule exhaustion and final admission
+
+2026-09-06: A scheduled read refused by its job, daily or interval collection
+allowance terminates as `failed` with `scheduled_run_exhausted:<limit>`. Its
+checkpoint, captured responses, spend and partial coverage are retained; it is
+never marked complete merely because its budget ended. The next configured
+interval may create a new bounded window under the current policy. It does not
+silently resume the old cursor, reset that job's caps or catch up old windows.
+Owner and policy pauses remain paused, including bounded one-off jobs.
+
+The final governed dispatch callback may reject changing binding or permission
+authority by throwing. Both a thrown rejection and a false fence release unused
+collection admission and return `pre_dispatch`; neither sends HTTP nor creates
+a physical credit receipt. A cleanup failure retains pre-dispatch certainty so
+capture recovery can release its separate reservation without fabricating an
+indeterminate vendor request. No migration, collector enabling or vendor spend.
