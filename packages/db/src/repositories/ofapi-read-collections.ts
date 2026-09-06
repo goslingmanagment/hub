@@ -6,6 +6,7 @@ import {
 } from "@agency_hub_core/shared";
 import type { Database } from "../client.ts";
 import { getEffectiveOfapiCollectionPolicy } from "./ofapi-collection.ts";
+import { isDmArchiveScopeFenced, tryAcquireDmArchiveWriterFenceLock } from "./erasure-fence.ts";
 
 export async function claimOfapiCollectionJob(
   db: Database,
@@ -64,9 +65,27 @@ export async function saveOfapiReadSnapshot(
     items: unknown[];
   },
 ) {
-  await db.execute(sql`insert into ofapi_read_snapshots(page_id,category,operation,pathname,query,observed_at,observation_id,observation_received_at,event_id,granularity,coverage,items)
+  await db.transaction(async tx => {
+    const database = tx as unknown as Database;
+    if (!await tryAcquireDmArchiveWriterFenceLock(database, input.pageId)) {
+      throw new Error("OFAPI read projection deferred during page erasure");
+    }
+    const refs = new Set<string>();
+    const collectRefs = (value: unknown): void => {
+      if (Array.isArray(value)) { for (const item of value) collectRefs(item); return; }
+      if (!value || typeof value !== "object") return;
+      for (const [key, field] of Object.entries(value)) {
+        if (["fanId", "fan_id", "authorId", "userId", "user_id", "onlyfans_user_id", "onlyfansUserId"].includes(key) &&
+            (typeof field === "string" || typeof field === "number" && Number.isSafeInteger(field))) refs.add(String(field));
+        else if (field && typeof field === "object") collectRefs(field);
+      }
+    };
+    collectRefs(input.items);
+    if (await isDmArchiveScopeFenced(database, { pageId: input.pageId, refs: [...refs], materialAt: input.observationReceivedAt })) return;
+    await database.execute(sql`insert into ofapi_read_snapshots(page_id,category,operation,pathname,query,observed_at,observation_id,observation_received_at,event_id,granularity,coverage,items)
  values(${input.pageId},${input.category},${input.operation},${input.pathname},${JSON.stringify(input.query)}::jsonb,${input.observedAt},${input.observationId},${input.observationReceivedAt},${input.eventId},${input.granularity},${JSON.stringify(input.coverage)}::jsonb,${JSON.stringify(input.items)}::jsonb)
  on conflict(page_id,observation_id) do nothing`);
+  });
 }
 export async function readOfapiStoredSnapshots(
   db: Database,
