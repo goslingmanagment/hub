@@ -264,4 +264,44 @@ describe("database migration invariants", () => {
       "drop index concurrently if exists %I.%I",
     );
   });
+
+  it("builds the webhook lifecycle lookup index concurrently, outside 0157's transaction", async () => {
+    const lifecycle = await readFile(
+      "packages/db/migrations/0157_ofapi_webhook_lifecycle.sql",
+      "utf8",
+    );
+    const index = await readFile(
+      "packages/db/migrations/0169_ofapi_webhook_lifecycle_index.sql",
+      "utf8",
+    );
+
+    // 0157 runs inside the migration transaction: a plain CREATE INDEX there
+    // would hold ACCESS EXCLUSIVE on the 570k-row webhook journal for the whole
+    // build and stall inbound OFAPI deliveries past their 10 s timeout. The
+    // migration keeps its row update and nothing that takes that lock.
+    const lifecycleStatements = lifecycle
+      .split("\n")
+      .filter((line) => !line.trim().startsWith("--"))
+      .join("\n");
+    expect(lifecycleStatements).not.toMatch(/create index/i);
+    expect(lifecycleStatements).toMatch(/^UPDATE ofapi_webhook_events/m);
+
+    // The index itself follows the 0143 shape: non-transactional, an INVALID
+    // leftover from an interrupted attempt is dropped first, then CONCURRENTLY
+    // and idempotently, with the 0157 definition unchanged.
+    expect(index.startsWith("-- agency-hub:no-transaction")).toBe(true);
+    expect(index).toContain("drop index concurrently if exists %I.%I");
+    expect(index).toContain("where i.relname = 'ofapi_webhook_lifecycle_resource_idx'");
+    expect(index).toContain(
+      "create index concurrently if not exists ofapi_webhook_lifecycle_resource_idx",
+    );
+    expect(index).toContain(
+      "on ofapi_webhook_events ((payload->'payload'->>'id'), event_type, id desc)",
+    );
+    expect(index).toContain(
+      "where capture_state = 'accepted' and projection_status = 'projected'",
+    );
+    // Every executable query is delimited for the no-transaction runner.
+    expect(index.split("-- agency-hub:statement").length - 1).toBe(2);
+  });
 });

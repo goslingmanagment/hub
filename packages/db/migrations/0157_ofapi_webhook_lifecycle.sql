@@ -13,6 +13,8 @@ WHERE capture_state='accepted' AND projection_status='none'
 
 -- DB-only lifecycle summaries look up a known resource, never scan payloads
 -- across the whole journal. Exact signed bodies remain the immutable evidence.
-CREATE INDEX ofapi_webhook_lifecycle_resource_idx
-ON ofapi_webhook_events ((payload->'payload'->>'id'), event_type, id DESC)
-WHERE capture_state='accepted' AND projection_status='projected';
+-- The lookup index (ofapi_webhook_lifecycle_resource_idx) is built in
+-- 0169_ofapi_webhook_lifecycle_index.sql, CONCURRENTLY and outside a
+-- transaction: a plain CREATE INDEX here would hold ACCESS EXCLUSIVE on the
+-- 570k-row journal for the whole build and stall inbound OFAPI deliveries
+-- past their 10 s timeout (capture-first, DP 7). The 0143 shape is the precedent.
