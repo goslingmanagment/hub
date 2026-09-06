@@ -109,13 +109,13 @@ export function ofapiCredentialPolicy(db: Database, config: AppContext["config"]
     },
     credentialPolicy: { expectedTeamSlug: config.ofapiExpectedTeamSlug ?? null },
     onPreflight: (value: Parameters<typeof recordOfapiCredentialPreflight>[1]) => recordOfapiCredentialPreflight(db, value),
-    onAdminResponse: async (value: { operation: string; status: number; body: string; receivedAt: Date; headers?: Record<string, string> }) => {
+    onAdminResponse: async (value: { operation: string; status: number; body: string; receivedAt: Date; headers?: Record<string, string>; pageId?: number | null; accountId?: string }) => {
       // Control-plane roster evidence excludes session material before journaling (decision #253).
       const stored = value.operation === "ofapi_admin_accounts"
         ? projectOfapiAccountsRoster(value)
         : { body: value.body, redaction: null };
       const inserted = await insertObservation(db, {
-        receivedAt: value.receivedAt,
+        receivedAt: value.receivedAt, accountId: value.pageId ?? null, nativeAccountRef: value.accountId ?? null,
         source: "operator", producer: "ofapi:admin", platform: "onlyfans", kind: value.operation,
         payload: { status: value.status, body: stored.body, bodyEncoding: "utf8", headers: value.headers ?? {},
           ...(stored.redaction ? { redaction: stored.redaction } : {}),

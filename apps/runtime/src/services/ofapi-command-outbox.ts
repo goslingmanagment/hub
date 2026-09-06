@@ -1,3 +1,4 @@
+import type { OfapiExtendedCommandKind, OfapiExtendedCommandPayload, OfapiSendV2Payload } from "@agency_hub_core/shared";
 import { createHash, randomUUID } from "node:crypto";
 
 import {
@@ -16,7 +17,7 @@ import {
   ServiceUnavailableError,
 } from "./errors.ts";
 
-type OfapiCommandKind =
+type OfapiCommandKind = OfapiExtendedCommandKind
   | "send_text_message_v1"
   | "send_media_message_v1"
   | "typing_active_v1"
@@ -75,7 +76,9 @@ const RETRYABLE_SOURCE_STATES = new Set([
   "cancelled",
 ]);
 
-export type CreateOfapiCommandRequest =
+type ExtendedCommandRequest = { clientCommandId: string; accountId: string; conversationId: string; kind: OfapiExtendedCommandKind; payload: OfapiExtendedCommandPayload; retryOfCommandId?: string | null };
+
+export type CreateOfapiCommandRequest = ExtendedCommandRequest
   | TextCommandRequest
   | MediaCommandRequest
   | TypingCommandRequest
@@ -137,6 +140,7 @@ function canonicalHash(input: {
   accountId: string;
   conversationId: string;
   payload:
+    | OfapiExtendedCommandPayload
     | { text: string }
     | {
       text: string;
@@ -196,9 +200,11 @@ export async function createOfapiCommand(
   requireEnabled(app);
   const page = await resolveAssignedPage(app, principal, input.accountId);
   const retryOfCommandId = input.retryOfCommandId ?? null;
+  if (input.kind === "send_message_v2" && (input.payload as OfapiSendV2Payload).reuseProviderOperation && !retryOfCommandId) throw new ConflictError("Provider replay requires an explicit retry source");
 
   if (
-    input.kind !== "send_text_message_v1"
+    input.kind !== "send_message_v2"
+    && input.kind !== "send_text_message_v1"
     && input.kind !== "send_media_message_v1"
     && retryOfCommandId !== null
   ) {

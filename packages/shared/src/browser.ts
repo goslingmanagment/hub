@@ -7,3 +7,4 @@ export * from "./proxy-string.ts";
 export * from "./spender-retention.ts";
 export * from "./time.ts";
 export * from "./types.ts";
+export * from "./ofapi-extended-commands.ts";

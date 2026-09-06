@@ -1,3 +1,5 @@
+import type { OfapiExtendedCommandKind, OfapiExtendedCommandPayload } from "@agency_hub_core/shared";
+import { buildOfapiSendV2Body, ofapiExtendedAction } from "./ofapi-command-composer.ts";
 import { ofapiResponseEvidence } from "./ofapi-response-evidence.ts";
 import type { OfapiUsageWindow } from "@agency_hub_core/contracts";
 // Client for the onlyfansapi.com API: webhook CRUD + account list (admin flow)
@@ -290,6 +292,8 @@ export function resolveOfapiCreditSpend(input: {
 export interface OfapiAdminCapture { observationId: number; receivedAt: Date }
 
 export interface OfapiClient {
+  getBannedWordsPage?(page: number): Promise<{ body: unknown; evidence: OfapiAdminCapture | null }>;
+  executeExtendedCommand?(context: OfapiRequestContext, accountId: string, conversationId: string, kind: OfapiExtendedCommandKind, payload: OfapiExtendedCommandPayload, providerKey?: string): Promise<{ messageId?: string; creditAccounting?: "pending" }>;
   getCreditUsage?(window: OfapiUsageWindow): Promise<{ body: unknown; evidence: OfapiAdminCapture | null }>;
   createWebhook(input: OfapiWebhookRegistrationInput): Promise<OfapiWebhookRecord>;
   updateWebhook(id: string, input: OfapiWebhookRegistrationInput): Promise<OfapiWebhookRecord>;
@@ -729,7 +733,7 @@ export function createOfapiClient(input: {
   beforeOperationRequest?: (request: { operation: string; accountId: string | null; method: string }) => Promise<void>;
   beforeAccountRequest?: (pageId: number | null | undefined, accountId: string, generation?: number) => Promise<number>;
   onAccountResponse?: (accountId: string, generation: number, status: number, body: string) => Promise<void>;
-  onAdminResponse?: (response: { operation: string; status: number; body: string; receivedAt: Date; headers?: Record<string, string> }) => Promise<void | OfapiAdminCapture>;
+  onAdminResponse?: (response: { operation: string; status: number; body: string; receivedAt: Date; headers?: Record<string, string>; pageId?: number | null; accountId?: string }) => Promise<void | OfapiAdminCapture>;
   onPreflight?: (result: OfapiCredentialPreflight) => Promise<void>;
   baseUrl?: string;
   apiKey: string;
@@ -1391,7 +1395,13 @@ export function createOfapiClient(input: {
     price?: number;
     mediaFiles?: Array<string | number>;
     previews?: Array<string | number>;
-    lockedText?: true;
+    lockedText?: boolean;
+    replyToMessageId?: string | number;
+    giphyId?: string;
+    rfTag?: Array<string | number>;
+    rfPartner?: Array<string | number>;
+    rfGuest?: Array<string | number>;
+    blockBannedWords?: string;
   };
 
   function toWireMediaId(id: string): string | number {
@@ -1403,8 +1413,9 @@ export function createOfapiClient(input: {
     context: OfapiRequestContext,
     accountId: string,
     conversationId: string,
-    operation: "ofapi_command_send_text" | "ofapi_command_send_media",
+    operation: "ofapi_command_send_text" | "ofapi_command_send_media" | "ofapi_command_send_v2",
     body: OfapiCommandMessageBody,
+    providerKey?: string,
   ): Promise<OfapiSentMessage> {
     const pathname = `/${encodeURIComponent(accountId)}/chats/${
       encodeURIComponent(conversationId)
@@ -1421,6 +1432,7 @@ export function createOfapiClient(input: {
           authorization: `Bearer ${input.apiKey}`,
           accept: "application/json",
           "content-type": "application/json",
+          ...(providerKey ? { "Idempotency-Key": providerKey } : {}),
         },
         body: JSON.stringify(body),
         signal: AbortSignal.timeout(OFAPI_REQUEST_TIMEOUT_MS),
@@ -1434,6 +1446,12 @@ export function createOfapiClient(input: {
     }
 
     const text = await response.text();
+    let captureError: unknown;
+    if (operation === "ofapi_command_send_v2") {
+      try { await input.onAdminResponse?.({ operation, status: response.status, body: text, receivedAt: new Date(), pageId: context.pageId ?? null, accountId,
+        headers: Object.fromEntries(["x-ofapi-credits-used", "x-ofapi-credits-balance", "idempotent-replayed"].flatMap(name => { const value = response.headers.get(name); return value === null ? [] : [[name, value]]; })) }); }
+      catch (error) { captureError = error; }
+    }
     let responseBody: unknown = null;
     let bodyIsJson = text.length === 0;
     if (text.length > 0) {
@@ -1455,12 +1473,13 @@ export function createOfapiClient(input: {
       attemptNumber: 1,
     });
 
+    if (captureError) throw new OfapiApiError("OFAPI response capture unavailable after dispatch", null, null);
     if (!response.ok) {
       const upstreamStatus = wrappedOnlyFansStatus(responseBody);
       throw new OfapiApiError(
         `OFAPI command rejected: POST ${pathname} returned ${response.status}`,
         response.status,
-        null,
+        response.status === 422 ? text.slice(0, 4000) : null,
         upstreamStatus,
       );
     }
@@ -1476,7 +1495,7 @@ export function createOfapiClient(input: {
     const rawId = record?.id;
     const messageId = typeof rawId === "string" && rawId.length > 0
       ? rawId
-      : typeof rawId === "number" && Number.isFinite(rawId)
+      : typeof rawId === "number" && Number.isSafeInteger(rawId)
         ? String(rawId)
         : null;
     if (!messageId) {
@@ -1774,6 +1793,7 @@ export function createOfapiClient(input: {
     method: string,
     path: string,
     body?: unknown,
+    context?: OfapiRequestContext,
   ): Promise<{ body: unknown; capture: OfapiAdminCapture | null; creditAccounting?: "pending" }> {
     if (method !== "GET") await assertCredentialReady();
     const freeRead = method === "GET" && ["ofapi_balance_ping", "ofapi_credential_preflight", "ofapi_webhook_inventory", "ofapi_admin_accounts"].includes(operation);
@@ -1802,7 +1822,7 @@ export function createOfapiClient(input: {
     const text = await response.text();
     // Fix the transport boundary before capture can wait for a DB connection/nextval.
     const receivedAt = new Date();
-    const capture = (await input.onAdminResponse?.({ operation, status: response.status, body: text, receivedAt, headers: Object.fromEntries(["x-ofapi-credits-used", "x-ofapi-credits-balance", "x-ofapi-is-cached", "idempotent-replayed"].flatMap(name => { const value = response.headers.get(name); return value === null ? [] : [[name, value]]; })) })) ?? null;
+    const capture = (await input.onAdminResponse?.({ operation, status: response.status, body: text, receivedAt, pageId: context?.pageId ?? null, headers: Object.fromEntries(["x-ofapi-credits-used", "x-ofapi-credits-balance", "x-ofapi-is-cached", "idempotent-replayed"].flatMap(name => { const value = response.headers.get(name); return value === null ? [] : [[name, value]]; })) })) ?? null;
     let responseBody: unknown = null;
     let bodyIsJson = text.length === 0;
     if (text.length > 0) {
@@ -1822,7 +1842,7 @@ export function createOfapiClient(input: {
       headers: response.headers,
       body: responseBody,
       requestId: `${operation}:${randomUUID()}`,
-      pageId: null,
+      pageId: context?.pageId ?? null,
       attemptNumber: 1,
       ...(["ofapi_balance_ping", "ofapi_credential_preflight", "ofapi_webhook_inventory", "ofapi_admin_accounts", "ofapi_vendor_usage"].includes(operation)
         ? { fallbackCredits: 0, fallbackEstimated: false } : {}),
@@ -1856,6 +1876,21 @@ export function createOfapiClient(input: {
   }
 
   return {
+    async executeExtendedCommand(context, accountId, conversationId, kind, payload, providerKey) {
+      await assertCredentialReady();
+      if (kind === "send_message_v2") return sendMessageRequest(context, accountId, conversationId, "ofapi_command_send_v2", buildOfapiSendV2Body(payload), providerKey);
+      const action = ofapiExtendedAction(kind, accountId, conversationId, payload);
+      const result = await requestCaptured(`ofapi_command_${kind}`, action.method, action.path, action.body, context);
+      const record = asRecord(unwrapData(result.body));
+      const success = kind === "set_fan_custom_name_v1" ? String(record?.id ?? "") === conversationId && typeof record?.displayName === "string"
+        : result.body === null || record?.success === true;
+      if (!success) throw new OfapiApiError("OFAPI action response did not confirm the requested result", 200, null);
+      return { ...(result.creditAccounting ? { creditAccounting: result.creditAccounting } : {}) };
+    },
+    async getBannedWordsPage(page) {
+      const result = await requestCaptured("ofapi_banned_words", "GET", `/banned-words?per_page=100&page=${page}`);
+      return { body: result.body, evidence: result.capture };
+    },
     async getCreditUsage(window) {
       const query = new URLSearchParams({ from: window.from, to: window.to, group_by: window.groupBy, include_today: String(window.includeToday) });
       if (window.accountId) query.set("account_id", window.accountId);

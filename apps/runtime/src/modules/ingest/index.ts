@@ -1,3 +1,5 @@
+import { getOfapiBannedDictionary } from "@agency_hub_core/db";
+import { getOfapiBannedWordsPreview, refreshOfapiBannedWords } from "../../services/ofapi-banned-words.ts";
 import { ServiceUnavailableError } from "../../services/errors.ts";
 import { refreshOfapiBinding } from "../../services/ofapi-binding-refresh.ts";
 import { routeSchemas } from "@agency_hub_core/contracts";
@@ -185,6 +187,22 @@ export async function registerIngestRoutes(server: ApiServer, ctx: ApiModuleCont
       reply.header(name, value);
     }
     return reply.code(response.status as 200).send(response.body);
+  });
+
+  server.get("/api/v1/admin/ofapi/banned-words", { schema: routeSchemas.ofapiBannedWordsAdminGet }, async request => {
+    requireOwner(await requirePrincipal(request)); return getOfapiBannedDictionary(appContext.db);
+  });
+  server.get("/api/v1/ofapi/banned-words", { schema: routeSchemas.ofapiBannedWordsGet }, async request => {
+    requireApiKeyUser(await requirePrincipal(request));
+    return getOfapiBannedDictionary(appContext.db);
+  });
+  server.post("/api/v1/ofapi/banned-words/preview", { schema: routeSchemas.ofapiBannedWordsPreview }, async request => {
+    requireApiKeyUser(await requirePrincipal(request));
+    return getOfapiBannedWordsPreview(appContext, request.body.text);
+  });
+  server.post("/api/v1/admin/ofapi/banned-words/refresh", { schema: routeSchemas.ofapiBannedWordsRefresh }, async request => {
+    requireOwner(await requirePrincipal(request));
+    return refreshOfapiBannedWords(appContext, request.body.maxPages);
   });
 
   server.post("/api/v1/ofapi/commands", {
