@@ -168,10 +168,12 @@ describe("retention deleter enumeration (Stage 28)", () => {
     }
     // `server.delete(` is an HTTP verb registration (the Stage 31 persona
     // archive route), not a SQL delete — those lines don't make a deleter.
+    // Custody quarantine also removes an entry from an in-memory Map only.
     const found = [...new Set(
       output
         .split("\n")
-        .filter((line) => line.trim() !== "" && !/server\.delete\(/.test(line))
+        .filter((line) => line.trim() !== "" && !/server\.delete\(/.test(line)
+          && !/^apps\/runtime\/src\/services\/canonicalize-driver\.ts:\s*accountIdByNativeRef\.delete\(key\);$/.test(line))
         .map((line) => line.slice(0, line.indexOf(":"))),
     )].sort();
     expect(found).toEqual([...SANCTIONED_DELETER_FILES].sort());

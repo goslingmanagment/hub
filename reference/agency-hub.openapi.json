@@ -4132,7 +4132,8 @@
                 "ofapi_link_stats_reconcile_failed",
                 "ai_provider_billing",
                 "ai_provider_failed",
-                "capture_payload_parity"
+                "capture_payload_parity",
+                "ofapi_binding_conflict"
               ]
             },
             "in": "query",
@@ -4219,7 +4220,8 @@
                               "ofapi_link_stats_reconcile_failed",
                               "ai_provider_billing",
                               "ai_provider_failed",
-                              "capture_payload_parity"
+                              "capture_payload_parity",
+                              "ofapi_binding_conflict"
                             ]
                           },
                           "pageLabel": {

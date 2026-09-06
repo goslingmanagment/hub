@@ -1,3 +1,4 @@
+import { OfapiAccountCustodyConflictError } from "./ofapi-bindings.ts";
 import { and, asc, desc, eq, gt, gte, inArray, isNotNull, lt, lte, ne, sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
@@ -2793,28 +2794,64 @@ export async function listOnlyFansPagesForOfapiMapping(db: Database) {
     .orderBy(asc(pages.label));
 }
 
+/** INITIAL-MAPPING writer (and unmapping). Replacing one non-null account with another is the verified
+ * preview/apply's job (identity evidence, generation CAS, recovery); this function refuses it. Takes the
+ * same advisory locks as apply and command dispatch so an unmap cannot race a send. */
 export async function setPageOfapiAccountId(
   db: Database,
-  input: {
-    pageId: number;
-    ofapiAccountId: string | null;
-  },
+  input: { pageId: number; ofapiAccountId: string | null; creatorId?: string | null; evidence?: Record<string, unknown> },
 ) {
-  await db
-    .update(pages)
-    .set({
+  await db.transaction(async (raw) => {
+    const tx = raw as unknown as Database;
+    await tx.execute(sql`select pg_advisory_xact_lock(9003010, ${input.pageId}::integer)`);
+    await tx.execute(sql`select pg_advisory_xact_lock(9003011)`);
+    const current = await tx.execute<{ ofapi_account_id: string | null; generation: number }>(sql`
+      select p.ofapi_account_id, p.ofapi_binding_generation as generation from pages p where p.id = ${input.pageId} for update
+    `);
+    const page = current.rows[0];
+    if (!page) throw new Error(`Page ${input.pageId} was not found`);
+    const changed = input.ofapiAccountId !== page.ofapi_account_id;
+    if (changed && input.ofapiAccountId !== null && page.ofapi_account_id !== null) {
+      throw new Error(`setPageOfapiAccountId is an initial-mapping writer; page ${input.pageId} already maps "${page.ofapi_account_id}" — replace it through the verified binding preview/apply`);
+    }
+    if (changed && input.ofapiAccountId !== null) {
+      // Custody is permanent: an account retired from page A can never be claimed by page B.
+      const owner = await tx.execute<{ page_id: number }>(sql`
+        select b.page_id from ofapi_account_bindings b
+        where b.account_id = ${input.ofapiAccountId}
+          and (b.page_id <> ${input.pageId}
+            or (b.creator_id is not null and ${input.creatorId ?? null}::text is not null and b.creator_id <> ${input.creatorId ?? null}))
+        union all
+        select p.id from pages p where p.ofapi_account_id = ${input.ofapiAccountId} and p.id <> ${input.pageId}
+        limit 1
+      `);
+      if (owner.rows[0]) throw new OfapiAccountCustodyConflictError(input.ofapiAccountId, input.pageId, Number(owner.rows[0].page_id));
+    }
+    const generation = changed ? Number(page.generation) + 1 : Number(page.generation);
+    await tx.update(pages).set({
       ofapiAccountId: input.ofapiAccountId,
-      ofapiBindingGeneration: sql`case when ${pages.ofapiAccountId} is distinct from ${input.ofapiAccountId} then ${pages.ofapiBindingGeneration} + 1 else ${pages.ofapiBindingGeneration} end`,
-      // Stage 13: same invariant as the 0055 writer seed — mapping an OFAPI
-      // account makes OFAPI the page's transactions writer, but only when no
-      // writer was assigned yet (an explicit assignment is never overridden;
-      // unmapping keeps the writer, the ingest can't reach the page anyway).
-      ...(input.ofapiAccountId !== null
-        ? { transactionsWriter: sql`coalesce(${pages.transactionsWriter}, 'ofapi')` }
-        : {}),
+      ofapiBindingGeneration: generation,
+      // Stage 13 invariant unchanged: OFAPI becomes the transactions writer only when none was assigned.
+      ...(input.ofapiAccountId !== null ? { transactionsWriter: sql`coalesce(${pages.transactionsWriter}, 'ofapi')` } : {}),
       updatedAt: sql`now()`,
-    })
-    .where(eq(pages.id, input.pageId));
+    }).where(eq(pages.id, input.pageId));
+    if (!changed) return;
+    if (input.ofapiAccountId === null) {
+      await tx.execute(sql`
+        update ofapi_account_bindings set valid_to = coalesce(valid_to, now())
+        where account_id = ${page.ofapi_account_id} and page_id = ${input.pageId}
+      `);
+      return;
+    }
+    const evidence = JSON.stringify({ source: "set_page_ofapi_account_id", ...(input.evidence ?? {}) });
+    await tx.execute(sql`
+      insert into ofapi_account_bindings(account_id,page_id,creator_id,generation,valid_from,valid_to,evidence)
+      values (${input.ofapiAccountId},${input.pageId},${input.creatorId ?? null},${generation},now(),null,${evidence}::jsonb)
+      on conflict(account_id) do update set generation = excluded.generation, valid_to = null,
+        creator_id = coalesce(ofapi_account_bindings.creator_id, excluded.creator_id),
+        evidence = ofapi_account_bindings.evidence || excluded.evidence
+    `);
+  });
 }
 
 /**

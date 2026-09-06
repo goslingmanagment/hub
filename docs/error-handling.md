@@ -403,3 +403,11 @@ is refused and requires a new preview. It does not use Reset, delete checkpoints
 pauses, activate collectors or resend indeterminate commands. Unversioned
 legacy blockers are retained for explicit review. The free balance read has no
 paid fallback and never fabricates a zero result after access/transport failure.
+
+
+`ofapi_binding_conflict` is a global latch opened by a write-mode canonicalization
+sweep when custody and current mapping claim different owners. Only the conflicting
+ref is quarantined; a clean write-mode sweep resolves the latch. Dry-run computes
+conflicts without opening, delivering or resolving incidents. Initial mapping
+returns a conflict on another page’s historical account; lifecycle status cannot
+hide that owner.

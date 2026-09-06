@@ -1,5 +1,6 @@
 import {
   DuplicatePageLabelError,
+  OfapiAccountCustodyConflictError,
   PlatformAccountIdentityConflictError,
   PlatformAccountIdentityImmutableError,
   createFanslyPage,
@@ -52,7 +53,8 @@ function rethrowPageIdentityConflict(error: unknown): never {
   if (
     error instanceof DuplicatePageLabelError ||
     error instanceof PlatformAccountIdentityConflictError ||
-    error instanceof PlatformAccountIdentityImmutableError
+    error instanceof PlatformAccountIdentityImmutableError ||
+    error instanceof OfapiAccountCustodyConflictError
   ) {
     throw new ConflictError(error.message);
   }
@@ -191,7 +193,8 @@ export async function onboardOnlyFansPage(
         modelId: model.id,
         label: input.label,
       });
-      await setPageOfapiAccountId(dbTx, { pageId: created.id, ofapiAccountId: account.id });
+      await setPageOfapiAccountId(dbTx, { pageId: created.id, ofapiAccountId: account.id, creatorId: account.onlyfansUserId,
+        evidence: { source: "onboarding", username: account.username } });
       await updateOnlyFansPageIdentityFromOfapi(dbTx, created.id, {
         ofapiAccountId: account.id,
         username: account.username,

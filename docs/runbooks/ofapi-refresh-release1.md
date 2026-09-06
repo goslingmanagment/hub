@@ -225,3 +225,68 @@ releases the pause. Apply takes ordered sync-row locks before recovery reread:
 a preceding Resume changes the snapshot and requires re-preview; a concurrent
 Resume waits for commit and then sees the cleared marker. Legacy blockers whose
 generation cannot be proved remain unchanged; there is no blanket backfill.
+
+### Custody conflict and bounded live-event repair
+
+Migration `0151_ofapi_binding_conflict_incident.sql` adds the global incident kind.
+Initial onboarding refuses an account historically owned by another page. Custody
+is permanent: `historicalEvidence` imports former accounts of the same Hub page;
+it is not a transfer protocol. Historical ownership is resolved before lifecycle
+status; live consumers require the unique owner to be active.
+
+For `ofapi_binding_conflict`, identify the true owner from binding/audit evidence
+and confirm that it is active. Removing an illegal current claim requires its own
+owner approval. Use `setPageOfapiAccountId(..., ofapiAccountId:null)` under the
+existing writer contract, or this transaction with independently verified values:
+
+```sql
+-- Synthetic psql variables; replace with the approved page/account/generation.
+\set claimant_page 42
+\set expected_account 'acct_conflict'
+\set expected_generation 3
+select b.page_id,p.status,b.creator_id from ofapi_account_bindings b
+ join pages p on p.id=b.page_id where b.account_id=:'expected_account';
+-- Require the independently verified, active owner; it must not be the claimant.
+begin;
+select pg_advisory_xact_lock(9003010, :claimant_page);
+select pg_advisory_xact_lock(9003011);
+-- Require exactly one matching row before proceeding; otherwise ROLLBACK.
+select id from pages where id=:claimant_page
+  and ofapi_account_id=:'expected_account'
+  and ofapi_binding_generation=:expected_generation for update;
+update pages set ofapi_account_id=null,
+  ofapi_binding_generation=ofapi_binding_generation+1, updated_at=now()
+ where id=:claimant_page and ofapi_account_id=:'expected_account'
+   and ofapi_binding_generation=:expected_generation returning id;
+-- In a genuine illegal claim there is no custody row owned by the claimant.
+-- If one exists, stop and re-establish ownership rather than transferring it.
+commit;
+```
+
+Canonicalization retries the quarantined observations after a clean ownership
+map. Live webhook events already marked `skipped` do not automatically replay.
+Before approved replay, select the exact IDs for the account and conflict window
+with `status='skipped' AND error LIKE 'No page mapped%'`; retain that list for
+review and verification. Require an active, unambiguous historical owner. Never
+reset all skipped rows for that account: unrelated skips may be legitimate.
+
+```sql
+-- Synthetic, explicitly reviewed event IDs; keep this set for post-commit checks.
+\set repair_ids '{101,102}'
+select id,ofapi_account_id,event_type,status,projection_status,archive_status,error
+ from ofapi_webhook_events where id=any(:'repair_ids'::bigint[]) order by id;
+begin;
+update ofapi_webhook_events set status='pending',error=null,processed_at=null,
+  projection_status=case when projection_status='skipped' then 'pending' else projection_status end,
+  archive_status=case when archive_status='skipped' then 'pending' else archive_status end
+ where id=any(:'repair_ids'::bigint[]) and ofapi_account_id=:'expected_account'
+   and status='skipped' and error like 'No page mapped%' returning id;
+-- Require the returned IDs to match the approved set; otherwise ROLLBACK.
+commit;
+```
+
+The minutely pending-event sweep requeues these events. Verify the same ID set
+settles and the expected subscription/DM/presence projections reach the owner;
+inspect remaining failures individually. Fanout sequence follows settle order,
+so replayed rows receive a new sequence. No code rollback to the old runtime is
+safe merely because the incident resolved after a binding change.

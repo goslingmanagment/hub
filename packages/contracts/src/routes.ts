@@ -3029,6 +3029,7 @@ const notificationIncidentKindEnum = z.enum([
   "ai_provider_billing",
   "ai_provider_failed",
   "capture_payload_parity",
+  "ofapi_binding_conflict",
 ]);
 const notificationIncidentStatusEnum = z.enum(["open", "resolved"]);
 const notificationDeliveryOutboxStateEnum = z.enum([

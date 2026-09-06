@@ -2,7 +2,7 @@ import { syncEventSchema, type SyncEvent } from "@agency_hub_core/contracts";
 import { sanitizeLoneSurrogatesDeep } from "@agency_hub_core/shared";
 import {
   deleteExpiredOfapiWebhookEvents,
-  findHistoricalPageByOfapiAccountId,
+  findActiveOfapiPageForLiveConsumer,
   getOfapiWebhookEventById,
   listPendingOfapiWebhookEventIds,
   OFAPI_SYNC_EVENT_CHANNEL,
@@ -302,7 +302,7 @@ export async function processOfapiWebhookEvent(app: AppContext, eventId: number)
   }
 
   const page = row.ofapiAccountId
-    ? await findHistoricalPageByOfapiAccountId(app.db, row.ofapiAccountId)
+    ? await findActiveOfapiPageForLiveConsumer(app.db, row.ofapiAccountId)
     : null;
   if (!page) {
     await settleOfapiWebhookEvent(app.db, {

@@ -254,6 +254,7 @@ export const notificationIncidentKindEnum = pgEnum("notification_incident_kind",
   // G5 slice 1 (0124): the content-addressed capture copy disagrees with the
   // inline authority, or points at an object that is not there.
   "capture_payload_parity",
+  "ofapi_binding_conflict",
 ]);
 export const notificationIncidentStatusEnum = pgEnum("notification_incident_status", [
   "open",

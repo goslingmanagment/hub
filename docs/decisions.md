@@ -257,6 +257,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 254 | OFAPI missing binding | Park only unblocked work and current-generation auth; repeated 404 preserves state versions and retries notifications with the original marker time |
 | 255 | OFAPI recovery evidence | Authenticated target required; roster transport receipt is persisted as the binding recovery watermark and audit evidence |
 | 256 | OFAPI owner pause recovery | Auth marker and owner pause are separate; recovery locks sync rows before reread and clears only its marker, leaving Resume to the owner |
+| 257 | OFAPI permanent custody | Every initial binding checks historical ownership; ambiguous refs are quarantined, lifecycle is gated after ownership, and dry-run never mutates incidents |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -10814,3 +10815,15 @@ the recovery snapshot and retains those locks through cleanup. Resume either
 precedes that decision and causes a preview conflict, or waits until the marker
 is gone. Connected recovery uses one UPDATE with a per-row pause decision.
 Checkpoints and unknown-generation legacy blockers are unchanged.
+
+
+## OFAPI initial mapping obeys permanent custody (2026-09-06)
+
+**Decision #257:** Every binding writer checks and maintains `ofapi_account_bindings`.
+Initial mapping/unmapping uses the same page and custody locks as verified apply;
+non-null replacement requires preview/apply. Account custody cannot move between
+Hub pages. Historical lookup considers owners regardless of lifecycle status;
+only the separate active gate admits live projection writes. A conflicting ref
+is held unmapped and opens `ofapi_binding_conflict` while other refs continue.
+Dry-run reports conflicts but never opens/resolves incidents. Clearing a claim
+restores canonicalization; already-skipped live events need bounded owner repair.

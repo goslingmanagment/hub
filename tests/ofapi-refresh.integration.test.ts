@@ -4,6 +4,7 @@ import {
   createModel, createOnlyFansPage, ensurePageSyncStates, pausePageSync, resumePageSync, applyVerifiedOfapiBinding, findHistoricalPageByOfapiAccountId,
   findPageByOfapiAccountId, getOfapiBindingPage, setPageOfapiAccountId,
   upsertOfapiWebhookConfig, getOfapiWebhookConfig, listNotificationIncidents, markOfapiBindingUnavailable,
+  findActiveOfapiPageForLiveConsumer, OfapiAccountCustodyConflictError, insertObservation,
 } from "@agency_hub_core/db";
 import { encryptJson } from "@agency_hub_core/shared";
 import { agentObservationPayloadAllowed } from "../apps/runtime/src/modules/agent-read/index.ts";
@@ -11,6 +12,8 @@ import { createOfapiClient } from "../apps/runtime/src/services/ofapi.ts";
 import { ofapiCredentialPolicy } from "../apps/runtime/src/services/ofapi-credential-policy.ts";
 import { applyOfapiAccountHealthEvent } from "../apps/runtime/src/services/ofapi-account-health.ts";
 import { notifyOfapiAuthIncident } from "../apps/runtime/src/services/notification-incidents.ts";
+import { onboardOnlyFansPage } from "../apps/runtime/src/services/page-onboarding.ts";
+import { runCanonicalization } from "../apps/runtime/src/services/canonicalize-driver.ts";
 import { planErasure } from "../apps/runtime/src/services/erasure/index.ts";
 import { refreshOfapiBinding } from "../apps/runtime/src/services/ofapi-binding-refresh.ts";
 import { OFAPI_WEBHOOK_EVENTS, registerOfapiWebhook } from "../apps/runtime/src/services/ofapi-webhooks.ts";
@@ -356,5 +359,87 @@ describe("OFAPI owner pause and verified recovery", () => {
     expect(await subscriber()).toEqual({ status: "paused", blocker_kind: null, blocker_ofapi_generation: null, ofapi_user_paused: true });
     await resumePageSync(app.db, { pageId, streams: ["subscribers"] });
     expect(["pending", "idle"]).toContain((await subscriber()).status);
+  });
+});
+
+
+describe("OFAPI permanent custody", () => {
+  async function secondPage() {
+    const model = await createModel(app.db, { slug: "second", name: "Second" });
+    return (await createOnlyFansPage(app.db, { modelId: model!.id, label: "second-of" }))!;
+  }
+  it("REVIEW onboarding cannot reclaim another page's retired account", async () => {
+    roster = [{ id: "acct_old", onlyfans_id: 123, is_authenticated: true, onlyfans_username: "retired" }, { id: "acct_new", onlyfans_id: 123, is_authenticated: true }];
+    const preview = await refreshOfapiBinding(app, bindingInput(), 1);
+    await refreshOfapiBinding(app, { ...bindingInput(), dryRun: false, previewToken: preview.previewToken }, 1);
+    await expect(onboardOnlyFansPage(app, { modelSlug: "refresh", label: "second-of", username: "retired" })).rejects.toThrow("custody");
+    expect(await findHistoricalPageByOfapiAccountId(app.db, "acct_old")).toMatchObject({ id: pageId });
+    expect((await testDb!.pool.query("select id from pages where label='second-of'")).rows).toEqual([]);
+    await expect(runCanonicalization(app, { families: [] })).resolves.toMatchObject({ errored: 0, bindingConflicts: [] });
+  });
+
+  it("retains custody on unmap, permits the same owner to reconnect, and refuses unchecked replacement", async () => {
+    await expect(setPageOfapiAccountId(app.db, { pageId, ofapiAccountId: "acct_new" })).rejects.toThrow("preview/apply");
+    await setPageOfapiAccountId(app.db, { pageId, ofapiAccountId: null });
+    expect(await findHistoricalPageByOfapiAccountId(app.db, "acct_old")).toMatchObject({ id: pageId, status: "active" });
+    expect(await findActiveOfapiPageForLiveConsumer(app.db, "acct_old")).toMatchObject({ id: pageId });
+    const second = await secondPage();
+    await expect(setPageOfapiAccountId(app.db, { pageId: second.id, ofapiAccountId: "acct_old" })).rejects.toBeInstanceOf(OfapiAccountCustodyConflictError);
+    await setPageOfapiAccountId(app.db, { pageId, ofapiAccountId: "acct_old" });
+    expect((await getOfapiBindingPage(app.db, pageId))!.generation).toBe(generation + 2);
+  });
+
+  it.each([["active", "active"], ["deleted", "active"], ["active", "deleted"], ["deleted", "deleted"]])("refuses conflicting ownership before lifecycle gating: %s / %s", async (ownerStatus, claimantStatus) => {
+    await setPageOfapiAccountId(app.db, { pageId, ofapiAccountId: null });
+    const second = await secondPage();
+    // Corrupt legacy claim deliberately bypasses the now-guarded initial writer.
+    await testDb!.pool.query("update pages set ofapi_account_id='acct_old',status=$2 where id=$1", [second.id, claimantStatus]);
+    await testDb!.pool.query("update pages set status=$2 where id=$1", [pageId, ownerStatus]);
+    expect(await findHistoricalPageByOfapiAccountId(app.db, "acct_old")).toBeNull();
+    expect(await findActiveOfapiPageForLiveConsumer(app.db, "acct_old")).toBeNull();
+  });
+
+  it("retains historical ownership for tombstones but refuses live writes", async () => {
+    await testDb!.pool.query("update pages set status='deleted' where id=$1", [pageId]);
+    expect(await findHistoricalPageByOfapiAccountId(app.db, "acct_old")).toMatchObject({ id: pageId, status: "deleted" });
+    expect(await findActiveOfapiPageForLiveConsumer(app.db, "acct_old")).toBeNull();
+  });
+
+  it("serializes concurrent initial claims and leaves one custody owner", async () => {
+    const second = await secondPage();
+    await setPageOfapiAccountId(app.db, { pageId, ofapiAccountId: null });
+    const claims = await Promise.allSettled([pageId, second.id].map(id => setPageOfapiAccountId(app.db, { pageId: id, ofapiAccountId: "acct_contested" })));
+    expect(claims.filter(result => result.status === "fulfilled")).toHaveLength(1);
+    const failed = claims.find(result => result.status === "rejected");
+    expect(failed?.status === "rejected" && failed.reason).toBeInstanceOf(OfapiAccountCustodyConflictError);
+    expect(await findHistoricalPageByOfapiAccountId(app.db, "acct_contested")).not.toBeNull();
+  });
+
+  it("quarantines only the conflicting ref, dry-run never opens or resolves its incident, and repair self-heals", async () => {
+    await setPageOfapiAccountId(app.db, { pageId, ofapiAccountId: null });
+    const second = await secondPage();
+    await setPageOfapiAccountId(app.db, { pageId: second.id, ofapiAccountId: "acct_good" });
+    const thirdModel = await createModel(app.db, { slug: "third", name: "Third" });
+    const third = (await createOnlyFansPage(app.db, { modelId: thirdModel!.id, label: "third-of" }))!;
+    await testDb!.pool.query("update pages set ofapi_account_id='acct_old' where id=$1", [third.id]);
+    for (const [account, messageId] of [["acct_old", 8001], ["acct_good", 8002]] as const) {
+      const payload = { event: "messages.received", account_id: account, payload: { id: messageId, createdAt: "2026-09-01T10:00:00Z", fromUser: { id: 500 }, text: "synthetic", price: 0, isFree: true, mediaCount: 0 } };
+      await insertObservation(app.db, { source: "webhook", producer: "ofapi:webhook", platform: "onlyfans", nativeAccountRef: account,
+        kind: "messages.received", payload, payloadHash: createHash("sha256").update(JSON.stringify(payload)).digest(), idempotencyKey: account });
+    }
+    const open = () => listNotificationIncidents(app.db, { status: "open" }).then(rows => rows.filter(row => row.kind === "ofapi_binding_conflict"));
+    expect((await runCanonicalization(app, { dryRun: true })).bindingConflicts).toEqual(["acct_old"]);
+    expect(await open()).toHaveLength(0);
+    expect((await runCanonicalization(app)).bindingConflicts).toEqual(["acct_old"]);
+    expect(await open()).toHaveLength(1);
+    const facts = await testDb!.pool.query("select o.native_account_ref from domain_events d join observations o on o.id=d.observation_id");
+    expect(facts.rows.some(row => row.native_account_ref === "acct_good")).toBe(true);
+    expect(facts.rows.some(row => row.native_account_ref === "acct_old")).toBe(false);
+    await setPageOfapiAccountId(app.db, { pageId: third.id, ofapiAccountId: null });
+    expect((await runCanonicalization(app, { dryRun: true })).bindingConflicts).toEqual([]);
+    expect(await open()).toHaveLength(1);
+    expect((await runCanonicalization(app)).bindingConflicts).toEqual([]);
+    expect(await open()).toHaveLength(0);
+    expect((await testDb!.pool.query("select d.account_id from domain_events d join observations o on o.id=d.observation_id where o.native_account_ref='acct_old'")).rows).toEqual([{ account_id: BigInt(pageId) }]);
   });
 });

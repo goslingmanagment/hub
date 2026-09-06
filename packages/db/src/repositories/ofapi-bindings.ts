@@ -21,11 +21,20 @@ export async function getOfapiBindingPage(db: Database, pageId: number) {
   return row ? { ...row, id: Number(row.id) } : null;
 }
 
-/** An account remains resolvable after retirement, including a redelivery received
- * today. Current-only callers must keep using findPageByOfapiAccountId. */
+export class OfapiAccountCustodyConflictError extends Error {
+  constructor(readonly accountId: string, readonly pageId: number, readonly ownerPageId: number) {
+    super(`OFAPI account "${accountId}" is in the custody of page ${ownerPageId}; page ${pageId} cannot claim it`);
+    this.name = "OfapiAccountCustodyConflictError";
+  }
+}
+
+/** Who owns an account — current claim in pages OR custody in ofapi_account_bindings — REGARDLESS of page
+ * status. Two owners = an illegal second claim (custody is one page per account for good, PK on account_id):
+ * refuse rather than pick a side; a tombstone must never hide the conflict (PLAN AUDIT 04). Historical
+ * attribution and replay callers use this; live consumers go through findActiveOfapiPageForLiveConsumer. */
 export async function findHistoricalPageByOfapiAccountId(db: Database, accountId: string) {
-  const result = await db.execute<{ id: number; label: string; platform: "onlyfans" }>(sql`
-    select p.id, p.label, p.platform from pages p
+  const result = await db.execute<{ id: number; label: string; platform: "onlyfans"; status: string }>(sql`
+    select p.id, p.label, p.platform, p.status from pages p
     where p.platform = 'onlyfans' and (
       p.ofapi_account_id = ${accountId} or exists (
         select 1 from ofapi_account_bindings b where b.account_id = ${accountId} and b.page_id = p.id
@@ -33,6 +42,14 @@ export async function findHistoricalPageByOfapiAccountId(db: Database, accountId
     ) limit 2
   `);
   return result.rows.length === 1 ? { ...result.rows[0]!, id: Number(result.rows[0]!.id) } : null;
+}
+
+/** The live-consumer gate: an unambiguous owner that is still active. Webhook dispatch/fan-out and the
+ * DM, subscription, presence and cold-archive projections write only here (pre-#132 semantics for
+ * tombstones); canonicalization replay for a tombstoned page keeps using the page map. */
+export async function findActiveOfapiPageForLiveConsumer(db: Database, accountId: string) {
+  const page = await findHistoricalPageByOfapiAccountId(db, accountId);
+  return page && page.status === "active" ? page : null;
 }
 
 export async function withOfapiBindingLock<T>(db: Database, pageId: number, run: (tx: Database) => Promise<T>) {

@@ -6,6 +6,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 
 import {
   createModel,
+  deletePageByLabel,
   createOnlyFansPage,
   ensurePageSyncStates,
   findPageById,
@@ -513,6 +514,15 @@ describe("OFAPI audience sweep", () => {
 });
 
 describe("OFAPI live subscription projection", () => {
+  it("TRIAGE 10 refuses subscription projection after page tombstone", async () => {
+    const page = await seedMappedPage();
+    await seedWebhookConfigAndServer();
+    await deletePageByLabel(appContext.db, "lora-of");
+    const envelope = loadFixtureEnvelope("subscriptions_new.json");
+    envelope.account_id = OFAPI_ACCOUNT;
+    await deliverAndProcess(envelope);
+    expect(await findPageSubscription(appContext.db, { platformAccountId: page!.id, platformSubscriptionId: "1000032" })).toBeNull();
+  });
   it("projects subscriptions.new into page_subscriptions without a sweep", async (context) => {
     if (!testDb) {
       context.skip();
