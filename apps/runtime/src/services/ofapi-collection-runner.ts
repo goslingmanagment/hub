@@ -1,7 +1,9 @@
+import { runCanonicalization } from "./canonicalize-driver.ts";
+import { runOfapiReadSnapshotProjection } from "./projections/ofapi-read-snapshots.ts";
+import { sql } from "drizzle-orm";
 import { ensureQueueCreated, type QueueCreationClient } from "./sync-queue.ts";
 import { createHash } from "node:crypto";
 import {
-  appendProjectionOnlyDomainEvents,
   checkOfapiCollectionLease,
   checkpointOfapiCollectionJob,
   claimOfapiCollectionJob,
@@ -10,7 +12,6 @@ import {
   getEffectiveOfapiCollectionPolicy,
   getOfapiCollectionJob,
   listPendingOfapiCollectionJobs,
-  saveOfapiReadSnapshot,
 } from "@agency_hub_core/db";
 import {
   OFAPI_READ_CATALOG,
@@ -147,7 +148,7 @@ export function planOfapiProfileVisitorCollection(
   return steps;
 }
 export async function materializeOfapiReadSnapshot(
-  app: Pick<AppContext, "db">,
+  app: AppContext,
   input: {
     pageId: number;
     step: OfapiCollectionReadStep;
@@ -165,46 +166,11 @@ export async function materializeOfapiReadSnapshot(
       input.step.pathname,
       input.step.query,
     );
-  const data = {
-    pageId: input.pageId,
-    source: "onlyfansapi",
-    operation: def.operation,
-    category: def.category,
-    pathname: input.step.pathname,
-    query: input.step.query,
-    observedAt: input.observationReceivedAt.toISOString(),
-    granularity: def.granularity,
-    coverage,
-    items,
-  };
-  const dedupKey = `ofapi-read:${input.observationId}:v1`;
-  const appended = await appendProjectionOnlyDomainEvents(
-    app.db,
-    input.pageId,
-    [
-      {
-        type: "ofapi.read_snapshot_observed",
-        occurredAt: input.observationReceivedAt,
-        data,
-        schemaVersion: 1,
-        observationId: input.observationId,
-        dedupKey,
-      },
-    ],
-    {
-      occurredAt: input.observationReceivedAt,
-      observationId: input.observationId,
-      dedupKey: `${dedupKey}:checkpoint`,
-    },
-  );
-  const eventId = appended.events[0]!.eventId;
-  await saveOfapiReadSnapshot(app.db, {
-    ...data,
-    observedAt: input.observationReceivedAt,
-    observationId: input.observationId,
-    observationReceivedAt: input.observationReceivedAt,
-    eventId,
-  });
+  const canonical = await runCanonicalization(app, { observationId: input.observationId, kinds: ["ofapi.collection_read_response.v1"], pageSize:1, maxPagesPerFamily:1 });
+  if (canonical.skippedUnparseable || canonical.skippedUnmapped) throw new Error("OFAPI collection response contract rejected; raw response retained");
+  await runOfapiReadSnapshotProjection(app, {accountId:input.pageId});
+  const materialized = await app.db.execute(sql`select 1 from ofapi_read_snapshots where page_id=${input.pageId} and observation_id=${input.observationId}`);
+  if (!materialized.rows.length) throw new Error("OFAPI read canonical projection is unavailable");
   return { items, coverage };
 }
 /** Each invocation takes a lease and checkpoints every durable response before another request. */
