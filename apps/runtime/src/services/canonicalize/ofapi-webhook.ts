@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 // OFAPI webhook family canonicalizer (Stage 8). Reads the JOURNALED envelope
 // ({event, account_id, payload} — exactly what the receiver persisted), never
 // the live wire. Dedup keys follow the stage spec's binding table.
@@ -134,14 +135,15 @@ export function canonicalizeOfapiWebhookObservation(
   if ((OFAPI_ASYNC_LIFECYCLE_EVENT_TYPES as readonly string[]).includes(observation.kind)) {
     const lifecycle = isRecord(observation.payload) ? parseOfapiAsyncLifecycle(observation.kind, observation.payload) : null;
     if (!lifecycle) return [];
+    const resourceId = lifecycle.resourceKind === "media_upload" ? `sha256:${createHash("sha256").update(lifecycle.resourceId).digest("hex")}` : lifecycle.resourceId;
     return [{
       type: lifecycle.resourceKind === "data_export" ? "data_export.status_changed" : "media_upload.status_changed",
       occurredAt: lifecycle.sourceAt ?? observation.receivedAt,
-      data: { resourceId: lifecycle.resourceId, status: lifecycle.status, mediaId: lifecycle.mediaId,
+      data: { resourceId, status: lifecycle.status, mediaId: lifecycle.resourceKind === "media_upload" && !/^\d+$/.test(lifecycle.mediaId ?? "") ? null : lifecycle.mediaId,
         mediaReady: lifecycle.mediaReady, creditCost: lifecycle.creditCost,
         timeBasis: lifecycle.sourceAt ? "provider" : "receipt", artifactAccepted: false },
       schemaVersion: 1,
-      dedupKey: `ofapi:${lifecycle.resourceKind}:${lifecycle.resourceId}:${lifecycle.status}`,
+      dedupKey: `ofapi:${lifecycle.resourceKind}:${resourceId}:${lifecycle.status}`,
     }];
   }
   switch (observation.kind) {
