@@ -1,3 +1,4 @@
+import { resumeOwnerOfapiTypedExport } from "../apps/runtime/src/services/ofapi-export-resume.ts";
 import { prepareOwnerOfapiExportControl, readOfapiExportInventory, refreshOfapiExportInventory } from "../apps/runtime/src/services/ofapi-export-controls.ts";
 import { ofapiCredentialPolicy } from "../apps/runtime/src/services/ofapi-credential-policy.ts";
 import { rebuildOfapiTypedExportsProjection } from "../apps/runtime/src/services/projections/ofapi-typed-exports.ts";
@@ -47,8 +48,8 @@ beforeEach(async () => {
   app.ofapi = createOfapiClient({ apiKey: "synthetic", restDelayMs: 0, ...ofapiCollectionPolicyHooks(app.db) });
 });
 function identity(extra: Record<string, unknown>) { return { data: { id: exportId, type: "profile_visitors", start_date: input.startDate, end_date: input.endDate, file_type: "csv", accounts: [{ id: accountId }], ...extra } }; }
-async function createQuoted() {
-  const created = await createOwnerOfapiTypedExport(app, { ...input, pageId }, actorId);
+async function createQuoted(maxCredits = input.maxCredits) {
+  const created = await createOwnerOfapiTypedExport(app, { ...input, pageId, maxCredits }, actorId);
   responses.push(identity({ status: "calculating_credits_completed", total_rows: 1, credit_cost: 1 }));
   expect((await runOfapiTypedExportSweep(app))[0]?.kind).toBe("success");
   expect((await runOfapiTypedExportSweep(app))[0]?.kind).toBe("blocked");
@@ -85,6 +86,58 @@ describe("bounded typed exports and visitor coverage", () => {
     expect((await getOfapiCaptureJob(app.db, job.id))?.state).toBe("complete");
     expect((await testDb.pool.query("select state,actual_credits::text from ofapi_collection_requests where operation='ofapi_export_start'")).rows).toEqual([{ state: "captured", actual_credits: "1" }]);
   });
+  it("resumes the exact funded export cursor after pause while free polls leave start authority unchanged", async () => {
+    const quoted = await createQuoted(2);
+    await approveOwnerOfapiTypedExport(app, { jobId: quoted.id, expectedRowVersion: quoted.rowVersion, approvedMaxCredits: 2, reason: "full task cap", dryRun: false }, actorId);
+    responses.push({ data: { id: exportId, status: "pending" } });
+    await runOfapiTypedExportSweep(app); await runOfapiTypedExportSweep(app);
+    const pending = (await getOfapiCaptureJob(app.db, quoted.id))!;
+    const collectionId = String(pending.target.collectionJobId);
+    expect(Number((await getOfapiCollectionJob(app.db, collectionId))?.used_credits)).toBe(2);
+    await applyOfapiCollectionPolicy(app.db, { expectedRevision: 0, changes: [], backgroundPaused: true }, actorId);
+    await testDb.pool.query("update ofapi_capture_jobs set next_attempt_at=now()-interval '1 second' where id=$1", [quoted.id]);
+    await runOfapiTypedExportSweep(app);
+    const paused = (await getOfapiCaptureJob(app.db, quoted.id))!;
+    expect(paused.reasonCode).toBe("background_paused");
+    const snapshot = { jobId: paused.id, expectedRowVersion: paused.rowVersion, expectedPolicyRevision: 1, reason: "resume existing authority" };
+    await expect(resumeOwnerOfapiTypedExport(app, snapshot, actorId)).rejects.toThrow("paused");
+    await applyOfapiCollectionPolicy(app.db, { expectedRevision: 1, changes: [], backgroundPaused: false }, actorId);
+    await expect(resumeOwnerOfapiTypedExport(app, snapshot, actorId)).rejects.toThrow("policy changed");
+    await expect(resumeOwnerOfapiTypedExport(app, { ...snapshot, expectedPolicyRevision: 2, expectedRowVersion: paused.rowVersion - 1 }, actorId)).rejects.toThrow("snapshot");
+    await testDb.pool.query("update pages set ofapi_account_id='acct_changed' where id=$1", [pageId]);
+    await expect(resumeOwnerOfapiTypedExport(app, { ...snapshot, expectedPolicyRevision: 2 }, actorId)).rejects.toThrow("binding changed");
+    await testDb.pool.query("update pages set ofapi_account_id=$2 where id=$1", [pageId, accountId]);
+    server = await buildApiServer(app);
+    const login = await server.inject({ method: "POST", url: "/api/v1/auth/login", payload: { username: "typed-owner", password: "synthetic-password" } });
+    const raw = login.headers["set-cookie"]; const cookie = (Array.isArray(raw) ? raw[0]! : String(raw)).split(";")[0]!;
+    const response = await server.inject({ method: "POST", url: `/api/v1/admin/ofapi/exports/${quoted.id}/resume`, headers: { cookie }, payload: { expectedRowVersion: paused.rowVersion, expectedPolicyRevision: 2, reason: "same allowance" } });
+    expect(response.statusCode, response.body).toBe(200);
+    expect(await getOfapiCaptureJob(app.db, quoted.id)).toMatchObject({ state: "ready", cursor: pending.cursor, maxCredits: pending.maxCredits, maxCalls: pending.maxCalls });
+    await testDb.pool.query("update ofapi_collection_jobs set state='paused',reason='owner_paused' where id=$1", [collectionId]);
+    await runOfapiTypedExportSweep(app);
+    const locallyPaused = (await getOfapiCaptureJob(app.db, quoted.id))!;
+    expect(locallyPaused.reasonCode).toBe("job_unavailable");
+    await resumeOwnerOfapiTypedExport(app, { jobId: quoted.id, expectedRowVersion: locallyPaused.rowVersion, expectedPolicyRevision: 2, reason: "resume owner-paused task" }, actorId);
+    responses.push(identity({ status: "completed", total_rows: 1, rows_processed: 1, credit_cost: 1, failed_downloads: 0, download_url: downloadUrl }));
+    await runOfapiTypedExportSweep(app); await runOfapiTypedExportSweep(app);
+    expect(await getOfapiCaptureJob(app.db, quoted.id)).toMatchObject({ reasonCode: "artifact_capture_required", spentCredits: 1 });
+    expect(vendorFetch.mock.calls.filter(call => String(call[0]).endsWith("/start"))).toHaveLength(1);
+    expect((await testDb.pool.query("select reserved_credits::text,actual_credits::text from ofapi_collection_requests where operation='ofapi_export_quote_status'")).rows).toEqual([{ reserved_credits: "0", actual_credits: "0" }]);
+  });
+  it("refuses to revive uncertain stateful export attempts through pause recovery", async () => {
+    const quoted = await createQuoted(2);
+    await approveOwnerOfapiTypedExport(app, { jobId: quoted.id, expectedRowVersion: quoted.rowVersion, approvedMaxCredits: 2, reason: "bounded", dryRun: false }, actorId);
+    vendorFetch.mockImplementationOnce(async () => { throw new Error("synthetic lost response"); });
+    await runOfapiTypedExportSweep(app);
+    const unknown = (await getOfapiCaptureJob(app.db, quoted.id))!;
+    expect(unknown.reasonCode).toBe("indeterminate");
+    await expect(resumeOwnerOfapiTypedExport(app, { jobId: unknown.id, expectedRowVersion: unknown.rowVersion, expectedPolicyRevision: 0, reason: "cannot repeat" }, actorId)).rejects.toThrow("safely resumable");
+    // Even a subsequently recorded policy stop cannot hide the retained uncertain intent.
+    await testDb.pool.query("update ofapi_capture_jobs set reason_code='background_paused' where id=$1", [unknown.id]);
+    await expect(resumeOwnerOfapiTypedExport(app, { jobId: unknown.id, expectedRowVersion: unknown.rowVersion, expectedPolicyRevision: 0, reason: "still cannot repeat" }, actorId)).rejects.toThrow("uncertain");
+    await runOfapiTypedExportSweep(app);
+    expect(vendorFetch.mock.calls.filter(call => String(call[0]).endsWith("/start"))).toHaveLength(1);
+  });
   it("keeps the chat pilot gate separate and never starts without reviewed approval", async () => {
     const quoted = await createQuoted();
     expect(await approveBlockedOfapiExportPilotJob(app.db, { jobId: quoted.id, expectedRowVersion: quoted.rowVersion, approvedMaxCredits: 2, reason: "wrong endpoint", actorUserId: actorId, execute: true })).toMatchObject({ outcome: "conflict" });
@@ -95,6 +148,8 @@ describe("bounded typed exports and visitor coverage", () => {
   });
   it("captures rejected account bytes before parsing and refuses to replace the frozen artifact", async () => {
     const job = await completed(); const wrong = csv("acct_other");
+    const oversized = Buffer.alloc(1_000_000, 97);
+    await expect(captureOwnerOfapiTypedArtifact(app, { jobId: job.id, expectedRowVersion: job.rowVersion, csvBase64: oversized.toString("base64"), expectedSha256: createHash("sha256").update(oversized).digest("hex"), reason: "bounded manual import" }, actorId)).rejects.toThrow("byte ceiling");
     await expect(captureOwnerOfapiTypedArtifact(app, { jobId: job.id, expectedRowVersion: job.rowVersion, csvBase64: wrong.toString("base64"), expectedSha256: createHash("sha256").update(wrong).digest("hex"), reason: "test wrong account" }, actorId)).rejects.toThrow("different account");
     expect((await testDb.pool.query("select state from ofapi_typed_export_artifacts")).rows).toEqual([{ state: "rejected" }]);
     expect((await testDb.pool.query("select count(*)::text from ofapi_profile_visitors_daily")).rows[0].count).toBe("0");
@@ -151,6 +206,7 @@ describe("bounded typed exports and visitor coverage", () => {
     expect((await server.inject({ method: "GET", url, headers: { cookie: owner } })).statusCode).toBe(200);
     expect((await server.inject({ method: "GET", url, headers: { cookie: lead } })).statusCode).toBe(403);
     expect((await server.inject({ method: "POST", url: "/api/v1/admin/ofapi/exports", headers: { cookie: lead }, payload: { ...input, pageId } })).statusCode).toBe(403);
+    expect((await server.inject({ method: "POST", url: "/api/v1/admin/ofapi/exports/00000000-0000-4000-8000-000000000000/resume", headers: { cookie: lead }, payload: { expectedRowVersion: 0, expectedPolicyRevision: 0, reason: "forbidden" } })).statusCode).toBe(403);
     expect((await server.inject({ method: "GET", url: "/api/v1/admin/ofapi/export-inventory", headers: { cookie: owner } })).statusCode).toBe(200);
     expect((await server.inject({ method: "GET", url: "/api/v1/admin/ofapi/export-inventory", headers: { cookie: lead } })).statusCode).toBe(403);
     expect((await server.inject({ method: "POST", url: "/api/v1/admin/ofapi/export-inventory/refresh", headers: { cookie: lead }, payload: { type: "profile_visitors" } })).statusCode).toBe(403);
