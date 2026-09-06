@@ -59,7 +59,7 @@ export function canonicalizeOfapiReadObservation(
   )
     return [];
   const { definition: def, pathname, query } = input.resolved;
-  const items = normalizeOfapiRead(def, input.parsed.body),
+  const items = normalizeOfapiRead(def, input.parsed.body, pathname),
     coverage = ofapiReadCoverage(def, input.parsed.body, pathname, query);
   return [
     {

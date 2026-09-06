@@ -35,6 +35,11 @@ export function OfapiWebhookRecovery() {
   return <section className="space-y-4 rounded-xl border border-border bg-card p-5">
     <div><h2 className="text-base font-semibold text-text-primary">События и восстановление</h2>
       <p className="mt-1 text-sm text-text-secondary">Базовый поток сохраняется. Дополнительные события включайте по одному: сохраните выбор и примените его у провайдера.</p></div>
+    <details className="rounded-lg border border-border p-3"><summary className="cursor-pointer text-sm text-text-primary">Каталог событий провайдера · {query.data.catalog?.events.length??0}</summary>
+      <p className="my-2 text-xs text-text-secondary">Сохранённый ответ: {query.data.catalog?.observedAt??"ещё не получен"}. Каталог может меняться; новые события не включаются автоматически. {query.data.catalog?.state==='invalid'?'Последний ответ не прошёл проверку; исходные байты сохранены.':''}</p>
+      <button type="button" className={button} disabled={busy} onClick={()=>void run(async()=>{const result=await ofapiWebhookRecoveryActions.refreshCatalog({body:{}});return result.state==='captured'?`Сохранено событий: ${result.events.length}. Подписки не изменены.`:'Ответ сохранён, но формат каталога не подтверждён.';})}>Обновить каталог · бесплатно</button>
+      <ul className="mt-2 max-h-64 overflow-auto text-xs text-text-secondary">{query.data.catalog?.events.map(event=><li key={event.value} className="py-1"><span className="font-mono text-text-primary">{event.value}</span> · {event.description} · {event.requested?'запрошено':'не запрошено'} · {event.supported?'обработчик готов':'обработчик не подключён'}</li>)}</ul>
+    </details>
     <div className="grid gap-2 sm:grid-cols-2">
       {saved.groups.map(group => <label key={group.id} className="flex items-center gap-2 text-sm text-text-primary">
         <input type="checkbox" checked={groups.includes(group.id)} disabled={busy} onChange={event => setGroups(current => event.target.checked ? [...current, group.id] : current.filter(id => id !== group.id))} />

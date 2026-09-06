@@ -29,12 +29,14 @@ describe("closed OFAPI read coverage catalog", () => {
         ]),
       );
       const request = resolveOfapiReadGatewayRequest(
-        `acct_test/${row.path.replace(":id", "9007199254740993")}`,
+        `acct_test/${row.path.replace(/:(?:id|list)/, "9007199254740993")}`,
         query,
       );
-      if (row.collectionOnly) {
+      if (row.collectionOnly || ["user_lists", "user_list_users"].includes(row.id)) {
         const legacy = {
           vault_inventory: "ofapi_gateway_vault_media",
+          user_lists: "ofapi_gateway_user_lists",
+          user_list_users: "ofapi_gateway_user_list_users",
           vault_lists: "ofapi_gateway_vault_lists",
           vault_item: "ofapi_gateway_vault_media_item",
         };
@@ -45,7 +47,7 @@ describe("closed OFAPI read coverage catalog", () => {
         expect(request).not.toHaveProperty("collectionContext");
         expect(
           resolveOfapiCatalogPath(
-            `acct_test/${row.path.replace(":id", "9007199254740993")}`,
+            `acct_test/${row.path.replace(/:(?:id|list)/, "9007199254740993")}`,
             query,
           )?.definition.operation,
         ).toBe(row.operation);
@@ -58,7 +60,9 @@ describe("closed OFAPI read coverage catalog", () => {
       }
       const data =
         row.shape === "object"
-          ? {}
+          ? row.id === "user_list"
+            ? { id: "friends" }
+            : {}
           : row.shape === "array"
             ? []
             : row.shape === "strings"

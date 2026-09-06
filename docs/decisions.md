@@ -11076,6 +11076,8 @@ Raw `ofapi.collection_read_response.v1` observations are canonicalized by a regi
 
 All new categories ship off. Scheduled jobs are created only from explicitly scheduled non-baseline policies. Owner rollout, exact supported paths, examples and vendor discrepancies are in `docs/runbooks/ofapi-read-collections.md`. No production enabling or paid probes are part of this change.
 
+S10 completion (2026-09-06): four explicit user-list selectors retain metadata previews, complete/partial member pages, and pinned-member pages in the same raw/canonical/projection path. Named system list IDs are validated separately from numeric fan IDs. These selectors are absent from the default schedule, keep existing desktop gateway admission, and never mutate lists or infer removal from absent partial rows. The collection screen now reads the local snapshot report with source/window/coverage and membership CRM context.
+
 ## 267. Typed OFAPI export profiles and daily visitors
 
 Date: 2026-09-06. Extends decision #263, implementing S8 core of
@@ -11156,3 +11158,7 @@ new tables participate in governed page erasure. Vault catalog traversal records
 full, filtered and interrupted coverage; new catalog/file categories remain off.
 
 [Owner steps, spend, validation and live contract discrepancies](runbooks/ofapi-media.md).
+
+### 262 implementation addendum — free available-event catalog
+
+2026-09-06: S3's explicit `/webhooks/events` read now has an owner-triggered free refresh and DB-only diagnostic consumer. The vendor response is retained before validation as a control-plane observation; malformed inventory stays visible as invalid. Exact returned events are compared against requested registration and known handlers without enabling new subscriptions. The live example's 13 events does not replace the separate 32-event vendor catalog. No production policy was changed.

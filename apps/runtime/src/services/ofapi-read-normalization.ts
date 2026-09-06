@@ -2,6 +2,7 @@ import { OFAPI_DEFAULT_BASE_URL } from "./ofapi.ts";
 import { createHash } from "node:crypto";
 import {
   findOfapiReadDefinition,
+  isOfapiUserListRef,
   validateOfapiReadQuery,
   type OfapiReadDefinition,
 } from "@agency_hub_core/shared";
@@ -81,13 +82,23 @@ export function validateOfapiCatalogResponse(
   const items = ofapiReadItems(def, body);
   return (
     items !== null &&
-    items.every((item) =>
-      def.shape === "strings"
+    items.every((item) => {
+      if (def.id.startsWith("user_list")) {
+        const row = ofapiReadRecord(item),
+          nativeId = id(row?.id);
+        return (
+          nativeId !== null &&
+          (["user_lists", "user_list"].includes(def.id)
+            ? isOfapiUserListRef(nativeId)
+            : /^[1-9][0-9]*$/.test(nativeId))
+        );
+      }
+      return def.shape === "strings"
         ? typeof item === "string"
         : ofapiReadRecord(item) !== null &&
-          (!Object.hasOwn(ofapiReadRecord(item)!, "id") ||
-            id(ofapiReadRecord(item)!.id) !== null),
-    )
+            (!Object.hasOwn(ofapiReadRecord(item)!, "id") ||
+              id(ofapiReadRecord(item)!.id) !== null);
+    })
   );
 }
 export interface OfapiReadCoverage {
@@ -275,7 +286,11 @@ function scalarMetrics(
   return [];
 }
 /** Typed CRM/content fields are deliberately independent of the vendor's private profile fields. */
-export function normalizeOfapiRead(def: OfapiReadDefinition, body: unknown) {
+export function normalizeOfapiRead(
+  def: OfapiReadDefinition,
+  body: unknown,
+  pathname?: string,
+) {
   const clean = safeOfapiReadBody(def.operation, body),
     items = ofapiReadItems(def, clean);
   if (!items || !validateOfapiCatalogResponse(def.operation, clean))
@@ -296,11 +311,57 @@ export function normalizeOfapiRead(def: OfapiReadDefinition, body: unknown) {
     const profile =
       def.category === "profile_notifications" &&
       !def.id.startsWith("notification") &&
-      !def.id.startsWith("giphy");
+      !def.id.startsWith("giphy") &&
+      !["user_lists", "user_list"].includes(def.id);
     return {
       nativeId,
       kind: def.id,
       position: index,
+      ...(["user_lists", "user_list"].includes(def.id)
+        ? {
+            listId: id(row.id),
+            listType: text(row.type),
+            listName: text(row.name),
+            usersCount:
+              typeof row.usersCount === "number" ? row.usersCount : null,
+            postsCount:
+              typeof row.postsCount === "number" ? row.postsCount : null,
+            isPinnedToChat: bool(row.isPinnedToChat),
+            isPinnedToFeed: bool(row.isPinnedToFeed),
+            canManageUsers: bool(row.canManageUsers),
+            previewUsers: Array.isArray(row.users)
+              ? row.users.map((value) => {
+                  const u = ofapiReadRecord(value);
+                  return {
+                    fanId: id(u?.id),
+                    name: text(u?.name),
+                    username: text(u?.username),
+                  };
+                })
+              : [],
+            membershipCoverage: "preview_only",
+          }
+        : {}),
+      ...(["user_list_users", "user_list_pinned_users"].includes(def.id)
+        ? {
+            listId: pathname?.split("/")[3] ?? null,
+            membershipScope:
+              def.id === "user_list_pinned_users" ? "pinned_only" : "members",
+            membershipObserved: true,
+            listStates: Array.isArray(row.listsStates)
+              ? row.listsStates.map((value) => {
+                  const list = ofapiReadRecord(value);
+                  return {
+                    listId: id(list?.id),
+                    name: text(list?.name),
+                    hasUser: bool(list?.hasUser),
+                    canAddUser: bool(list?.canAddUser),
+                    cannotAddUserReason: text(list?.cannotAddUserReason),
+                  };
+                })
+              : [],
+          }
+        : {}),
       fanId: profile
         ? id(user.id)
         : (id(ofapiReadRecord(row.author)?.id) ??
