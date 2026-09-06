@@ -25,9 +25,9 @@
 //
 // WHAT IT DELIBERATELY DOES NOT DO:
 //
-// - It writes NOTHING to `post_likes`. No Fansly like code is live-confirmed
+// - Fansly events write NOTHING to `post_likes`. No Fansly like code is live-confirmed
 //   ([E4]); the table ships schema-complete and EMPTY, and the OF `posts.liked`
-//   webhook is its only writer today. A test pins that a 2007 purchase leaves
+//   webhook is its only writer through ofapi.post_like_observed. A test pins that a 2007 purchase leaves
 //   it empty.
 // - It never truncates `subject_refresh_state`. That table is capture-plane
 //   OPERATIONAL STATE (§3.4): a rebuild that reset it would re-trigger
@@ -49,6 +49,7 @@ import {
   markSubjectRefreshDirty,
   setProjectionWatermark,
   upsertPlatformNotification,
+  upsertPostLike,
   type EngagementPlatform,
 } from "@agency_hub_core/db";
 import { sql } from "drizzle-orm";
@@ -60,6 +61,7 @@ export const FANSLY_ENGAGEMENT_PROJECTION = "fansly_engagement";
 const EVENT_PAGE_SIZE = 500;
 
 const FANSLY_ENGAGEMENT_EVENT_TYPES = new Set([
+  "ofapi.post_like_observed",
   "notification.observed",
   "media.purchase_notification_observed",
 ]);
@@ -173,6 +175,17 @@ export async function runFanslyEngagementProjection(
         }
 
         switch (event.type) {
+          case "ofapi.post_like_observed": {
+            const sourceAt=isoDate(data.sourceAt), observedAt=isoDate(data.observedAt);
+            const subjectRef=asText(data.postRef), fanRef=asText(data.likerRef);
+            if(platform!=="onlyfans" || !sourceAt || !observedAt || !subjectRef || !fanRef || event.fanIdentityRef!==fanRef || event.postRef!==subjectRef) continue;
+            const result=await upsertPostLike(app.db,{pageId:accountId,platform:"onlyfans",subjectKind:"post",subjectRef,
+              likerPlatformUserId:fanRef,state:"active",occurredAt:sourceAt,notificationRef,discoveredVia:"ofapi_webhook",
+              observedAt,contentHash,sourceEventId:event.id,sourceObservationId:event.observationId,sourceAccountSeq:event.accountSeq});
+            if(result.applied) totals.applied++;
+            continue;
+          }
+
           case "notification.observed": {
             const typeCode = asInt(data.rawTypeCode);
             // The provider's own instant. A row with no `createdAt` has no

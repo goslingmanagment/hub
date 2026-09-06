@@ -138,6 +138,7 @@ export const WRITTEN_OBSERVATION_KINDS: readonly WrittenObservationKind[] = [
   { kind: "link_stats_trial", source: "pull", writer: "services/ofapi-link-stats-sync.ts" },
 
   // ── the OFAPI webhook plane (vendor-named events) ────────────────────────
+  { kind: "posts.liked", source: "webhook", writer: "services/ofapi-webhook-capture.ts" },
   { kind: "messages.received", source: "webhook", writer: "services/ofapi-webhook-capture.ts" },
   { kind: "messages.sent", source: "webhook", writer: "services/ofapi-webhook-capture.ts" },
   { kind: "messages.deleted", source: "webhook", writer: "services/ofapi-webhook-capture.ts" },
@@ -483,21 +484,6 @@ export const RAW_ONLY_OBSERVATION_KINDS: readonly RawOnlyObservationKind[] = [
       + "OFAPI_WEBHOOK_CANONICALIZED_KINDS: a typing indicator is a transient UI signal "
       + "with a lifetime of seconds, not a durable platform fact — the presence projection "
       + "claims users.online/offline and deliberately stops there.",
-  },
-  {
-    kind: "chat_queue.updated",
-    justification:
-      "SUBSCRIBED and journaled but claimed by no family: vendor-side send-queue progress "
-      + "for OUR outbound work. The outbox is the kernel's own truth for a send (one "
-      + "attempt, fail closed), so projecting the vendor's queue view would mint a second, "
-      + "racing opinion about a fact we already own.",
-  },
-  {
-    kind: "chat_queue.finished",
-    justification:
-      "The terminal half of the same vendor send-queue lifecycle — see chat_queue.updated. "
-      + "Captured because DP 7 says a fact we received is kept; not projected because the "
-      + "outbox row, not the vendor queue, is what says whether a message was sent.",
   },
   {
     kind: "ofapi.webhook.invalid_identity",

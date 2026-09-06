@@ -1,4 +1,5 @@
 import { OFAPI_MEDIA_EVENT, OFAPI_MEDIA_PROJECTION, runOfapiMediaProjection, rebuildOfapiMediaProjection } from "./ofapi-media.ts";
+import { OFAPI_CONTENT_PROJECTION, runOfapiContentProjection, rebuildOfapiContentProjection } from "./ofapi-content-events.ts";
 import { OFAPI_READ_SNAPSHOT_PROJECTION, runOfapiReadSnapshotProjection, rebuildOfapiReadSnapshotProjection } from "./ofapi-read-snapshots.ts";
 import { OFAPI_TYPED_EXPORT_EVENT, OFAPI_TYPED_EXPORT_PROJECTION, runOfapiTypedExportsProjection, rebuildOfapiTypedExportsProjection } from "./ofapi-typed-exports.ts";
 // The projection registry (WP-F1(0), the spine precursor).
@@ -139,6 +140,7 @@ function count(result: Record<string, unknown>, key: string): number {
 }
 
 export const PROJECTION_REGISTRY: readonly ProjectionDefinition[] = [
+  { name:OFAPI_CONTENT_PROJECTION, eventTypes:["ofapi.chat_queue_observed"], tables:["ofapi_chat_queue_state"], stateClass:"fact_projection", rebuildKind:"truncate_replay", label:"OFAPI queue evidence projected", run:runOfapiContentProjection, rebuild:rebuildOfapiContentProjection, didWork:result=>count(result,"applied")>0 },
   { name:OFAPI_READ_SNAPSHOT_PROJECTION, eventTypes:["ofapi.read_snapshot_observed"], tables:["ofapi_read_snapshots"], stateClass:"fact_projection", rebuildKind:"truncate_replay", label:"OFAPI read snapshots projected", run:runOfapiReadSnapshotProjection, rebuild:rebuildOfapiReadSnapshotProjection, didWork:result=>count(result,"applied")>0 },
   { name: OFAPI_MEDIA_PROJECTION, eventTypes: [OFAPI_MEDIA_EVENT], tables: ["ofapi_media_catalog"], stateClass: "fact_projection", rebuildKind: "truncate_replay", label: "OFAPI media metadata projection complete", run: runOfapiMediaProjection, rebuild: rebuildOfapiMediaProjection, didWork: result => count(result, "applied") > 0 },
   { name: OFAPI_TYPED_EXPORT_PROJECTION, eventTypes: [OFAPI_TYPED_EXPORT_EVENT], tables: ["ofapi_typed_export_rows", "ofapi_profile_visitors_daily"], stateClass: "fact_projection", rebuildKind: "truncate_replay", label: "Typed OFAPI exports projection complete", run: runOfapiTypedExportsProjection, rebuild: rebuildOfapiTypedExportsProjection, didWork: result => count(result, "applied") > 0 },
@@ -271,6 +273,7 @@ export const PROJECTION_REGISTRY: readonly ProjectionDefinition[] = [
     // can store today, and declaring an event type this projector ignores
     // would make the registry's `eventTypes` a wish rather than a contract.
     eventTypes: [
+      "ofapi.post_like_observed",
       "notification.observed",
       "media.purchase_notification_observed",
     ],

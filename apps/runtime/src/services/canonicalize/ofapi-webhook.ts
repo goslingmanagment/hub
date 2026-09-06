@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { OFAPI_CONTENT_KINDS, canonicalizeOfapiContentObservation } from "./ofapi-content-events.ts";
 // OFAPI webhook family canonicalizer (Stage 8). Reads the JOURNALED envelope
 // ({event, account_id, payload} — exactly what the receiver persisted), never
 // the live wire. Dedup keys follow the stage spec's binding table.
@@ -29,9 +30,12 @@ import {
 // renewal observations backfill as subscription.renewed; everything already
 // canonicalized dedupes via domain_event_keys). W5.3's sweep cursor must be
 // live before this deploys (it is — #130) so the replay can't starve the head.
-export const OFAPI_WEBHOOK_CANONICALIZER_VERSION = 4;
+// v5 (S11a / #271): retained post-like and queue evidence joins the mixed
+// projection lane. Replay is local and bounded; existing event identities dedupe.
+export const OFAPI_WEBHOOK_CANONICALIZER_VERSION = 5;
 
 export const OFAPI_WEBHOOK_CANONICALIZED_KINDS: ReadonlySet<string> = new Set([
+  ...OFAPI_CONTENT_KINDS,
   "messages.received",
   "messages.sent",
   "messages.deleted",
@@ -132,6 +136,7 @@ function subscriptionEvent(
 export function canonicalizeOfapiWebhookObservation(
   observation: CanonicalizableObservation,
 ): CanonicalEventDraft[] {
+  if ((OFAPI_CONTENT_KINDS as readonly string[]).includes(observation.kind)) return canonicalizeOfapiContentObservation(observation);
   if ((OFAPI_ASYNC_LIFECYCLE_EVENT_TYPES as readonly string[]).includes(observation.kind)) {
     const lifecycle = isRecord(observation.payload) ? parseOfapiAsyncLifecycle(observation.kind, observation.payload) : null;
     if (!lifecycle) return [];

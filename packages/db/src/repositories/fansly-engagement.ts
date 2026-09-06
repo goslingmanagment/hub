@@ -195,7 +195,11 @@ export async function upsertPostLike(
   db: Database,
   input: UpsertPostLikeInput,
 ): Promise<{ applied: boolean }> {
-  const result = await db.execute(sql`
+  return db.transaction(async tx => {
+    const writer=tx as unknown as Database;
+    if(!await tryAcquireDmArchiveWriterFenceLock(writer,input.pageId)) throw new Error("Post-like projection deferred by erasure");
+    if(await isDmArchiveScopeFenced(writer,{pageId:input.pageId,platform:input.platform,refs:[input.likerPlatformUserId],materialAt:new Date(Math.min(input.occurredAt.getTime(),input.observedAt.getTime()))})) return {applied:false};
+  const result = await writer.execute(sql`
     insert into post_likes (
       page_id, platform, subject_kind, subject_ref, liker_platform_user_id,
       state, occurred_at, notification_ref, discovered_via,
@@ -223,6 +227,7 @@ export async function upsertPostLike(
     returning page_id
   `);
   return { applied: (result.rowCount ?? 0) > 0 };
+  });
 }
 
 // ── subject_refresh_state (capture-plane operational state, §3.4) ────────────

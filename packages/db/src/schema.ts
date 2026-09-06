@@ -6314,3 +6314,14 @@ export const ofapiMarketingProjectionReceipts = pgTable("ofapi_marketing_project
   accountingState:text("accounting_state").default("pending").notNull(),errorCode:text("error_code"),
   checkedAt:timestamp("checked_at",{withTimezone:true}).defaultNow().notNull(),
 });
+/** S11a vendor queue evidence; no fan, command, delivery or revenue inference. */
+export const ofapiChatQueueState = pgTable('ofapi_chat_queue_state', {
+  pageId: bigint('page_id',{mode:'number'}).references(()=>pages.id,{onDelete:'restrict'}).notNull(),
+  queueId: text('queue_id').notNull(),
+  phase: text('phase').notNull(),
+  queueDate: timestamp('queue_date',{withTimezone:true}),
+  state: jsonbSafe('state').$type<Record<string,unknown>>().notNull(),
+  observedAt: timestamp('observed_at',{withTimezone:true}).notNull(),
+  sourceEventId: bigint('source_event_id',{mode:'number'}).notNull(),
+  sourceObservationId: bigint('source_observation_id',{mode:'number'}).notNull(),
+},table=>({pk:primaryKey({columns:[table.pageId,table.queueId]}),pageObservedIdx:index('ofapi_chat_queue_state_page_observed_idx').on(table.pageId,table.observedAt)}));

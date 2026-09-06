@@ -167,6 +167,7 @@ export const kernelOperations = {
   ofapiCollectionJobCreate: { method: "POST", path: "/api/v1/admin/ofapi/collection/jobs" },
   ofapiCollectionJobResume: { method: "POST", path: "/api/v1/admin/ofapi/collection/jobs/:id/resume" },
   ofapiCollectionPreview: { method: "POST", path: "/api/v1/admin/ofapi/collection/preview" },
+  ofapiContentEventsGet: { method: "GET", path: "/api/v1/admin/ofapi/content/events" },
   ofapiCreditsChatterSummary: { method: "GET", path: "/api/v1/ofapi/credits/summary" },
   ofapiExportInventoryGet: { method: "GET", path: "/api/v1/admin/ofapi/export-inventory" },
   ofapiExportInventoryRefresh: { method: "POST", path: "/api/v1/admin/ofapi/export-inventory/refresh" },

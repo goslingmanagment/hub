@@ -213,12 +213,12 @@ describe("ofapi-webhook canonicalizer (Stage 8)", () => {
     });
   });
 
-  it("declares no canonicalizer for unmapped kinds", () => {
+  it("leaves typing transient and declares content queue events without accepting malformed bodies", () => {
     // users.typing: ephemeral, unmapped by design.
     expect(OFAPI_WEBHOOK_CANONICALIZED_KINDS.has("users.typing")).toBe(false);
     expect(canonicalizeOfapiWebhookObservation(observation("users_typing"))).toEqual([]);
     for (const kind of ["chat_queue.updated", "chat_queue.finished"]) {
-      expect(OFAPI_WEBHOOK_CANONICALIZED_KINDS.has(kind)).toBe(false);
+      expect(OFAPI_WEBHOOK_CANONICALIZED_KINDS.has(kind)).toBe(true);
       expect(canonicalizeOfapiWebhookObservation({
         ...observation("users_typing"),
         kind,

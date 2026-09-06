@@ -1260,6 +1260,7 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
     ["ofapi_marketing_projection_receipts", "page_id"],
     ["ofapi_marketing_intents", "page_id"],
     ["ofapi_marketing_resources", "page_id"],
+    ["ofapi_chat_queue_state", "page_id"],
     ["ofapi_read_snapshots", "page_id"],
     ["ofapi_collection_schedules", "page_id"],
     // Rows that RESTRICT parents below go first.
