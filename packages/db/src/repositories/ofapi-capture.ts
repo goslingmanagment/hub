@@ -1900,8 +1900,11 @@ export async function markOfapiAttemptIndeterminate(
           : "indeterminate";
       // The governed cause travels in the job's own message, where the
       // operator status can show it — the ledger details are not on the wire.
+      const transportClass = input.details?.transportClass;
+      const classification = transportClass === "connect" || transportClass === "timeout"
+        || transportClass === "transport" ? `, ${transportClass}` : "";
       const cause = typeof input.details?.reason === "string"
-        ? ` (${input.details.reason}${typeof input.details.phase === "string" ? `, ${input.details.phase}` : ""})`
+        ? ` (${input.details.reason}${classification}${typeof input.details.phase === "string" ? `, ${input.details.phase}` : ""})`
         : "";
       const reasonMessage = retryBase && exhausted
         ? `Dispatch certainty unresolved ${consecutive} times in a row: ${input.outcome}${cause}`

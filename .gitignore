@@ -34,6 +34,8 @@ docs/runbooks/*
 # Tracked because this undocumented provider endpoint needs a recorded live
 # acceptance and parse-debt/reconciliation ritual after deployment.
 !docs/runbooks/fansly-post-tips-acceptance.md
+# Operational acceptance for the OFAPI vendor transport and bounded recovery.
+!docs/runbooks/ofapi-posts-transport-recovery.md
 *.sql.gz
 
 # Local mockup/reference artifacts

@@ -1,16 +1,18 @@
 import { findPageById } from "@agency_hub_core/db";
-import { createProxyRequestDispatcher } from "@agency_hub_core/shared";
 import type { Dispatcher } from "undici";
 
 import type { AppContext } from "../bootstrap.ts";
 import { ServiceUnavailableError } from "./errors.ts";
-import {
-  resolveStoredProxyConfig,
-  resolveStoredProxyEgressKey,
-} from "./page-context.ts";
+import { resolveEgress } from "./egress/resolver.ts";
+
+export class OfapiBindingUnavailableError extends ServiceUnavailableError {
+  constructor() {
+    super("OFAPI account binding is unavailable");
+  }
+}
 
 export interface OfapiEgressContext {
-  dispatcher: Dispatcher;
+  dispatcher: Dispatcher | null;
   egressKey: string;
   close(): Promise<void>;
 }
@@ -28,22 +30,16 @@ export async function resolveOfapiEgressContext(
     || stored.page.platform !== "onlyfans"
     || stored.page.ofapiAccountId !== input.ofapiAccountId
   ) {
-    throw new ServiceUnavailableError("OFAPI account egress mapping is unavailable");
+    throw new OfapiBindingUnavailableError();
   }
 
-  const proxy = resolveStoredProxyConfig(app, stored.proxy);
-  if (!proxy) {
-    throw new ServiceUnavailableError(
-      `OFAPI account "${input.ofapiAccountId}" requires a configured page proxy`,
-    );
-  }
-
-  const dispatcher = createProxyRequestDispatcher(proxy);
+  // Binding authorizes this account; the vendor owns its OnlyFans-side
+  // identity. Hub -> OFAPI shares the vendor route with ordinary REST reads.
+  // Do not expose pace: the OFAPI client already claims its one pacing slot.
+  const egress = await resolveEgress(app, { kind: "vendor", vendor: "ofapi" });
   return {
-    dispatcher,
-    egressKey: resolveStoredProxyEgressKey(stored.proxy),
-    close: async () => {
-      await dispatcher.close();
-    },
+    dispatcher: egress.dispatcher,
+    egressKey: egress.egressKey,
+    close: egress.close,
   };
 }

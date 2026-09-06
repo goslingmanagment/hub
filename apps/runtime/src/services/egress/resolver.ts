@@ -25,8 +25,9 @@ import {
 //
 // RECORDED ADDRESS POLICY (owner-visible, per vendor):
 // - page scope       — the page's assigned proxy is the address identity
-//   (Fansly direct-to-platform MUST ride it; OFAPI account-scoped reads ride
-//   it so large bodies don't traverse the hub VPS direct route). A FANSLY
+//   (Fansly direct-to-platform MUST ride it). The legacy OnlyFans page-scope
+//   branch below has no runtime callers: OFAPI callers must use vendor scope,
+//   including capture and desktop reads. A FANSLY
 //   page without a proxy is REFUSED (W3.1, decision #124 — this reverses the
 //   Stage-26 recorded direct fallback): a direct request would ride the
 //   shared VPS IP. OnlyFans pages without a proxy still egress direct under

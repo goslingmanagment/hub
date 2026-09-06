@@ -34,7 +34,7 @@ import {
   parseStrictOfapiMessagePage,
   parseStrictOfapiPostPage,
 } from "./ofapi-capture-contract.ts";
-import { resolveOfapiEgressContext } from "./ofapi-egress.ts";
+import { OfapiBindingUnavailableError, resolveOfapiEgressContext } from "./ofapi-egress.ts";
 import { OFAPI_CAPTURE_MATERIALIZER_VERSION } from "./ofapi-capture-materialization.ts";
 import {
   buildOfapiExportQuoteRequest,
@@ -1332,7 +1332,7 @@ export async function executeOfapiCaptureJobChunk(
     await blockJob(
       app,
       job,
-      "egress_unavailable",
+      error instanceof OfapiBindingUnavailableError ? "binding_unavailable" : "egress_unavailable",
       error instanceof Error ? error.message : String(error),
     );
     return { kind: "blocked", pageId, jobId: job.id };
@@ -1430,19 +1430,18 @@ export async function executeOfapiCaptureJobChunk(
           retryAt: new Date(Date.now() + 60_000),
         });
       } else {
+        const details = error instanceof OfapiGovernedRequestError
+          ? { reason: error.reason, phase: error.phase, ...error.diagnostics }
+          : { reason: "transport", phase: "post_dispatch" };
+        app.logger.warn({
+          jobId: job.id, pageId: job.pageId, attemptId: reservation.attemptId,
+          ...details,
+        }, "OFAPI capture transport failed");
         await markOfapiAttemptIndeterminate(app.db, {
           attemptId: reservation.attemptId,
           fenceToken: reservation.fenceToken,
           outcome: "transport",
-          details: {
-            error: error instanceof Error ? error.message : String(error),
-            // The governed reason is what an operator needs when the bound
-            // parks the job: `body_too_large` is a plan to change,
-            // `transport` is a network to look at.
-            ...(error instanceof OfapiGovernedRequestError
-              ? { reason: error.reason, phase: error.phase }
-              : {}),
-          },
+          details,
           retrySafeReadAt: indeterminateRetryAt,
         });
       }

@@ -419,7 +419,7 @@ describe("OFAPI read gateway integration", () => {
       url: `/${ACCOUNT_ONE}/chats?limit=50&order=recent&skip_users=none`,
       authorization: "Bearer core-vendor-key",
     }]);
-    expect(proxyRequests).toHaveLength(1);
+    expect(proxyRequests).toHaveLength(0);
 
     const { rows } = await testDb!.pool.query<{
       operation: string;
@@ -449,7 +449,7 @@ describe("OFAPI read gateway integration", () => {
     expect(response.statusCode, response.body).toBe(503);
     expect(response.headers["retry-after"]).toBe("7");
     expect(upstreamRequests).toHaveLength(1);
-    expect(proxyRequests).toHaveLength(1);
+    expect(proxyRequests).toHaveLength(0);
     expect(scriptedResponses).toHaveLength(1);
   });
 
@@ -470,10 +470,10 @@ describe("OFAPI read gateway integration", () => {
       statusCode: 503,
     });
     expect(upstreamRequests).toHaveLength(1);
-    expect(proxyRequests).toHaveLength(1);
+    expect(proxyRequests).toHaveLength(0);
   });
 
-  it("fails loudly before upstream when an assigned OFAPI account has no page proxy", async () => {
+  it("reads an assigned OFAPI account without a page proxy", async () => {
     await deleteProxyConfig(appContext.db, assignedPageId);
     scriptedResponses.push({
       status: 200,
@@ -482,14 +482,11 @@ describe("OFAPI read gateway integration", () => {
 
     const response = await inject(`${ACCOUNT_ONE}/chats?limit=10`);
 
-    expect(response.statusCode, response.body).toBe(503);
-    expect(response.json()).toMatchObject({
-      error: "service_unavailable",
-      statusCode: 503,
-    });
-    expect(upstreamRequests).toHaveLength(0);
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.json()).toMatchObject({ data: [{ id: 1 }] });
+    expect(upstreamRequests).toHaveLength(1);
     expect(proxyRequests).toHaveLength(0);
-    expect(scriptedResponses).toHaveLength(1);
+    expect(scriptedResponses).toHaveLength(0);
   });
 
   it("fails closed before upstream for unknown queries, paths, and unassigned accounts", async () => {
@@ -907,18 +904,21 @@ describe("OFAPI read gateway integration", () => {
     expect(response.statusCode, response.body).toBe(200);
     expect(response.json().data).toEqual([{ id: 77 }]);
     expect(upstreamRequests).toHaveLength(1);
+    expect(proxyRequests).toHaveLength(0);
     const state = await testDb!.pool.query<{
       request_state: string;
       attempt_state: string;
       parser_outcome: string;
       settled_credits: number;
       credit_estimated: boolean;
+      egress_key: string;
     }>(
       `select request.state as request_state,
               attempt.state as attempt_state,
               attempt.parser_outcome,
               attempt.settled_credits,
-              attempt.credit_estimated
+              attempt.credit_estimated,
+              attempt.egress_key
        from ofapi_interactive_requests request
        join ofapi_request_attempts attempt
          on attempt.interactive_request_id = request.id`,
@@ -929,6 +929,7 @@ describe("OFAPI read gateway integration", () => {
       parser_outcome: "accepted",
       settled_credits: 2,
       credit_estimated: false,
+      egress_key: "vendor:ofapi",
     }]);
     const observations = await testDb!.pool.query<{
       source: string;

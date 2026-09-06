@@ -259,6 +259,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 256 | OFAPI owner pause recovery | Auth marker and owner pause are separate; recovery locks sync rows before reread and clears only its marker, leaving Resume to the owner |
 | 257 | OFAPI permanent custody | Every initial binding checks historical ownership; ambiguous refs are quarantined, lifecycle is gated after ownership, and dry-run never mutates incidents |
 | 258 | OFAPI audience quality | Unverified empty sweeps preserve membership and freshness; checkpoint hold drives both status readers until certification |
+| 259 | OFAPI capture uses vendor transport | Binding authorizes the account; Hub-to-OFAPI capture and gateway reads use the canonical vendor-direct route with one client pacing claim. Page-proxy availability cannot gate OFAPI capture; bounded diagnostics preserve dispatch certainty and omit arbitrary causes. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -10844,3 +10845,37 @@ of unrelated run completions. They report Unverified without requiring a
 credential action. Ordinary partial chunks retain their existing retry/progress
 and incident recovery semantics; a hold is a completed uncertified attempt.
 Legacy checkpoints default the count to zero and the hold to null.
+
+## OFAPI capture and gateway use the vendor transport (2026-09-06)
+
+**Decision #259:** Account binding and transport identity are separate. The
+OFAPI egress helper checks the current page/platform/account before admission,
+then obtains `vendor:ofapi` from the canonical resolver, just as the recorded
+vendor policy specifies. Capture and desktop reads no longer require or decrypt
+the page proxy. The helper exposes only dispatcher/key/close; the existing OFAPI
+client owns the one pacing claim, and a null dispatcher leaves the shared native
+pool open. A binding mismatch is `binding_unavailable`, not a network diagnosis.
+Chargebacks and transaction backfill also stop constructing page-proxy agents
+that their list transport never consumed. Fansly and AI service routes keep
+their own existing policies. The unused legacy page-scope resolver branch is
+not a supported OFAPI route.
+
+This reverses the June 23 page-proxy workaround for large responses. Production
+controls on September 6 found the two affected pages' common proxy unreachable
+over TCP from API (10 seconds) and worker (65 seconds). Exact posts `limit=100`
+direct controls returned HTTP 200 with complete bodies of 357,906 and 381,786
+bytes in 5.57 and 7.41 seconds. Historical attempts prove only transport failure
+before headers: their nested cause was not retained. The earlier 10 MiB theory
+is not the diagnosis of this incident; neither cap nor request timeout changes.
+
+Governed failures expose only allowlisted machine class/name/code, header/body
+stage, elapsed time, timeout, status and byte counts. These reach structured
+logs and existing ledger details; the job reason includes the bounded transport
+class. No raw cause message, URL or credentials cross this boundary. A connect
+classification does not change dispatch certainty, assumed billing, safe-read
+retry bounds or the prohibition on automatically repeating stateful requests.
+
+Recovery uses the existing #246/#249 owner cancel and per-page posts request,
+one job at a time, retaining attempts and anchors. Balance above the effective
+floor plus unsettled reservations is an independent prerequisite. See
+`docs/runbooks/ofapi-posts-transport-recovery.md` for checks and proof of success.

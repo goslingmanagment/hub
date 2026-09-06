@@ -7,7 +7,9 @@ import { createHash, randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 
 import {
+  classifyTransportFailure,
   executeObservedRequest,
+  iterateErrorChain,
   type HttpRequestObserver,
 } from "@agency_hub_core/shared";
 import type { Dispatcher } from "undici";
@@ -81,8 +83,8 @@ export interface OfapiAccountRecord {
 
 export interface OfapiRequestContext {
   requestObserver?: HttpRequestObserver | null;
-  // Account-scoped OFAPI reads must use the page egress dispatcher so large
-  // response bodies do not go through the hub VPS direct route.
+  // Governed/gateway callers resolve the vendor transport in ofapi-egress.
+  // Production OFAPI is vendor-direct; a page proxy is not account identity.
   dispatcher?: Dispatcher | null;
   egressKey?: string | null;
   // Attributes the request's credit spend to a page in the ledger (D2);
@@ -129,15 +131,67 @@ export interface OfapiGovernedRawResponse {
   receivedAt: Date;
 }
 
+export interface OfapiTransportDiagnostics {
+  stage: "response_headers" | "response_body";
+  transportClass: "connect" | "timeout" | "transport" | null;
+  causeName: string | null;
+  causeCode: string | null;
+  elapsedMs: number;
+  timeoutMs: number;
+  status: number | null;
+  declaredLength: number | null;
+  bytesRead: number;
+  maxResponseBytes: number;
+}
+
+// Names/codes are untrusted strings too. Only known machine values may cross
+// into durable/operator diagnostics; no message, URL, socket or proxy fields.
+const DIAGNOSTIC_ERROR_NAMES = new Set([
+  "Error", "TypeError", "AbortError", "TimeoutError", "ConnectTimeoutError",
+  "HeadersTimeoutError", "BodyTimeoutError", "SocketError", "SocksClientError",
+]);
+const DIAGNOSTIC_ERROR_CODES = new Set([
+  "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_HEADERS_TIMEOUT", "UND_ERR_BODY_TIMEOUT",
+  "UND_ERR_SOCKET", "ECONNREFUSED", "ECONNRESET", "ETIMEDOUT", "EHOSTUNREACH",
+  "ENETUNREACH", "ENOTFOUND", "EAI_AGAIN", "EHOSTDOWN", "ENETDOWN", "EPIPE",
+  "CERT_HAS_EXPIRED", "DEPTH_ZERO_SELF_SIGNED_CERT", "ERR_TLS_CERT_ALTNAME_INVALID",
+]);
+
+function transportDiagnostics(
+  error: unknown,
+  input: Omit<OfapiTransportDiagnostics, "transportClass" | "causeName" | "causeCode" | "elapsedMs"> & {
+    startedAt: number;
+  },
+): OfapiTransportDiagnostics {
+  let causeName: string | null = null;
+  let causeCode: string | null = null;
+  for (const cause of iterateErrorChain(error)) {
+    if (!(cause instanceof Error)) continue;
+    if (DIAGNOSTIC_ERROR_NAMES.has(cause.name)) causeName = cause.name;
+    const code = (cause as Error & { code?: unknown }).code;
+    if (typeof code === "string" && DIAGNOSTIC_ERROR_CODES.has(code)) causeCode = code;
+  }
+  const { startedAt, ...fields } = input;
+  return {
+    ...fields,
+    transportClass: error === null ? null : classifyTransportFailure(error),
+    causeName,
+    causeCode,
+    elapsedMs: Math.max(0, Date.now() - startedAt),
+  };
+}
+
 export class OfapiGovernedRequestError extends Error {
+  readonly diagnostics: OfapiTransportDiagnostics | undefined;
   constructor(
     message: string,
     readonly phase: "pre_dispatch" | "post_dispatch",
     readonly reason: "cancelled" | "deadline" | "transport" | "body_read" | "body_too_large",
-    options?: { cause?: unknown },
+    options?: { cause?: unknown; diagnostics?: OfapiTransportDiagnostics },
   ) {
     super(message, options);
     this.name = "OfapiGovernedRequestError";
+    this.diagnostics = options?.diagnostics;
   }
 }
 
@@ -1072,17 +1126,24 @@ export function createOfapiClient(input: {
     };
   }
 
-  async function readGovernedResponseBytes(response: Response, maxBytes: number) {
+  async function readGovernedResponseBytes(
+    response: Response, maxBytes: number, startedAt: number, timeoutMs: number,
+  ) {
     const contentLength = response.headers.get("content-length");
-    if (contentLength !== null) {
-      const declaredLength = Number(contentLength);
-      if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
-        throw new OfapiGovernedRequestError(
-          `OFAPI response exceeds ${maxBytes} byte capture limit`,
-          "post_dispatch",
-          "body_too_large",
-        );
-      }
+    const length = contentLength === null ? NaN : Number(contentLength);
+    const declaredLength = Number.isFinite(length) && length >= 0 ? length : null;
+    const details = (error: unknown, bytesRead: number) => transportDiagnostics(error, {
+      startedAt, timeoutMs, stage: "response_body", status: response.status,
+      declaredLength, bytesRead, maxResponseBytes: maxBytes,
+    });
+    if (declaredLength !== null && declaredLength > maxBytes) {
+      await response.body?.cancel().catch(() => undefined);
+      throw new OfapiGovernedRequestError(
+        `OFAPI response exceeds ${maxBytes} byte capture limit`,
+        "post_dispatch",
+        "body_too_large",
+        { diagnostics: details(null, 0) },
+      );
     }
 
     if (!response.body) {
@@ -1101,11 +1162,12 @@ export function createOfapiClient(input: {
         const chunk = Buffer.from(result.value);
         totalBytes += chunk.byteLength;
         if (totalBytes > maxBytes) {
-          await reader.cancel();
+          await reader.cancel().catch(() => undefined);
           throw new OfapiGovernedRequestError(
             `OFAPI response exceeds ${maxBytes} byte capture limit`,
             "post_dispatch",
             "body_too_large",
+            { diagnostics: details(null, totalBytes) },
           );
         }
         chunks.push(chunk);
@@ -1118,7 +1180,7 @@ export function createOfapiClient(input: {
         "OFAPI governed response body read failed",
         "post_dispatch",
         "body_read",
-        { cause: error },
+        { cause: error, diagnostics: details(error, totalBytes) },
       );
     } finally {
       reader.releaseLock();
@@ -1166,11 +1228,14 @@ export function createOfapiClient(input: {
       catch (error) { throw new OfapiGovernedRequestError("OFAPI binding unavailable", "pre_dispatch", "cancelled", { cause: error }); }
     }
     let response: Response;
+    const startedAt = Date.now();
+    const timeoutMs = options.timeoutMs ?? OFAPI_PROXY_READ_TIMEOUT_MS;
+    const maxResponseBytes = Math.max(1, options.maxResponseBytes ?? 10 * 1024 * 1024);
     try {
       const init: RequestInit & { dispatcher?: Dispatcher } = {
         method: options.method,
         headers,
-        signal: AbortSignal.timeout(options.timeoutMs ?? OFAPI_PROXY_READ_TIMEOUT_MS),
+        signal: AbortSignal.timeout(timeoutMs),
       };
       if (options.bodyBytes) {
         init.body = Uint8Array.from(options.bodyBytes);
@@ -1181,17 +1246,20 @@ export function createOfapiClient(input: {
       response = await fetch(url, init);
     } catch (error) {
       throw new OfapiGovernedRequestError(
-        `OFAPI governed request failed: ${options.method} ${options.pathname}`,
+        "OFAPI governed request failed before response headers",
         "post_dispatch",
         "transport",
-        { cause: error },
+        { cause: error, diagnostics: transportDiagnostics(error, {
+          startedAt, timeoutMs, stage: "response_headers", status: null,
+          declaredLength: null, bytesRead: 0, maxResponseBytes,
+        }) },
       );
     }
 
     const receivedAt = new Date();
     const bodyBytes = await readGovernedResponseBytes(
       response,
-      Math.max(1, options.maxResponseBytes ?? 10 * 1024 * 1024),
+      maxResponseBytes, startedAt, timeoutMs,
     );
     if (generation !== undefined) await input.onAccountResponse?.(accountId, generation, response.status, bodyBytes.toString("utf8"));
     const responseHeaders: Record<string, string> = {};

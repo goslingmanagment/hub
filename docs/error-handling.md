@@ -323,6 +323,15 @@ by key and type before journaling; session material is excluded, non-200 bodies
 are withheld, and identity conflicts survive the JSON projection. This control-plane
 evidence is restricted in tiering and refused by Agent Read.
 
+OFAPI governed transport diagnostics (#259) expose only known machine
+class/name/code values, header/body stage, elapsed/timeout values, status and
+byte counts. They reach structured logs and existing credit-ledger details;
+the bounded transport class also reaches the capture job reason. Arbitrary
+cause names/codes are untrusted too and are omitted unless allowlisted. Raw
+cause messages, proxy/URL fields and provider bodies are never copied. A
+`connect` class does not reclassify `post_dispatch` as undispatched, refund an
+uncertain attempt or grant retry authority to a stateful command.
+
 `sanitizeError` is the shared diagnostic sanitizer, not a license to expose
 diagnostic text:
 

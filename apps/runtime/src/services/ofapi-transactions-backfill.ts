@@ -14,7 +14,6 @@ import {
   type Database,
 } from "@agency_hub_core/db";
 import {
-  createProxyRequestDispatcher,
   dollarsToMills,
 } from "@agency_hub_core/shared";
 
@@ -34,10 +33,7 @@ import {
   mapOfapiSpendStatusToTransactionState,
   normalizeOfapiSpendAmountMills,
 } from "./ofapi-spend-transaction-mapping.ts";
-import {
-  resolveStoredProxyConfig,
-  resolveStoredProxyEgressKey,
-} from "./page-context.ts";
+import { resolveEgress } from "./egress/resolver.ts";
 
 const OFAPI_TRANSACTION_BACKFILL_LIMIT = 100;
 const OVERLAP_CHUNK_SIZE = 500;
@@ -884,8 +880,7 @@ export async function runOfapiTransactionsBackfill(
       continue;
     }
 
-    const proxy = resolveStoredProxyConfig(app, stored.proxy);
-    const dispatcher = proxy ? createProxyRequestDispatcher(proxy) : null;
+    const egress = await resolveEgress(app, { kind: "vendor", vendor: "ofapi" });
     let fetched: Awaited<ReturnType<typeof fetchBackfillRows>>;
     try {
       fetched = await fetchBackfillRows(app, {
@@ -893,8 +888,8 @@ export async function runOfapiTransactionsBackfill(
         ofapiAccountId: eligibility.ofapiAccountId,
         requestContext: {
           pageId: stored.page.id,
-          dispatcher,
-          egressKey: resolveStoredProxyEgressKey(stored.proxy),
+          dispatcher: egress.dispatcher,
+          egressKey: egress.egressKey,
           creditBudgetScope: "backfill",
         },
         from: input.from,
@@ -904,11 +899,7 @@ export async function runOfapiTransactionsBackfill(
         guard,
       });
     } finally {
-      if (dispatcher) {
-        await dispatcher.close().catch((error: unknown) => {
-          app.logger.warn({ error, pageId: stored.page.id }, "Failed to close OFAPI backfill dispatcher");
-        });
-      }
+      await egress.close();
     }
     const range = occurredRange(fetched.normalizedRows);
     const overlap = await calculateProjectionOverlap(app.db, {

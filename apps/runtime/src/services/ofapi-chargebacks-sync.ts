@@ -20,7 +20,6 @@ import {
   type Database,
 } from "@agency_hub_core/db";
 import {
-  createProxyRequestDispatcher,
   dollarsToMills,
 } from "@agency_hub_core/shared";
 
@@ -28,10 +27,7 @@ import type { AppContext } from "../bootstrap.ts";
 import { asRecord, idToString } from "./ofapi-payloads.ts";
 import { upsertTransactionWithNegationGuards } from "./money-negation-guards.ts";
 import type { OfapiRequestContext } from "./ofapi.ts";
-import {
-  resolveStoredProxyConfig,
-  resolveStoredProxyEgressKey,
-} from "./page-context.ts";
+import { resolveEgress } from "./egress/resolver.ts";
 import {
   notifyOfapiGlobalIncident,
   resolveOfapiGlobalIncident,
@@ -267,12 +263,11 @@ async function reconcilePage(
   // the pair from one captured clock instant.
   const endDate = startDate === undefined ? undefined : formatOfapiDate(now);
 
-  const proxy = resolveStoredProxyConfig(app, stored.proxy);
-  const dispatcher = proxy ? createProxyRequestDispatcher(proxy) : null;
+  const egress = await resolveEgress(app, { kind: "vendor", vendor: "ofapi" });
   const requestContext: OfapiRequestContext = {
     pageId: input.pageId,
-    dispatcher,
-    egressKey: resolveStoredProxyEgressKey(stored.proxy),
+    dispatcher: egress.dispatcher,
+    egressKey: egress.egressKey,
     creditBudgetScope: "backfill",
   };
 
@@ -318,14 +313,7 @@ async function reconcilePage(
       offset += page.items.length;
     }
   } finally {
-    if (dispatcher) {
-      await dispatcher.close().catch((error: unknown) => {
-        app.logger.warn(
-          { error, pageId: input.pageId },
-          "Failed to close OFAPI chargebacks dispatcher",
-        );
-      });
-    }
+    await egress.close();
   }
 
   // A page's FIRST walk (no rows yet ⇒ no startDate) must cover the whole

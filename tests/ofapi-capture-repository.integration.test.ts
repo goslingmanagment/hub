@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { createServer } from "node:http";
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -38,6 +39,7 @@ import {
   setPageOfapiAccountId,
   setOfapiCaptureControl,
   settleOfapiCaptureParse,
+  storeProxyConfig,
 } from "@agency_hub_core/db";
 
 import { executeOfapiCaptureJobChunk } from "../apps/runtime/src/services/ofapi-capture-jobs.ts";
@@ -48,8 +50,9 @@ import {
 import {
   recoverExpiredOfapiInteractiveResponses,
 } from "../apps/runtime/src/services/ofapi-capture-transport.ts";
-import { OfapiGovernedRequestError } from "../apps/runtime/src/services/ofapi.ts";
-import { saveProxy } from "../apps/runtime/src/services/page-context.ts";
+import { createOfapiClient, OfapiGovernedRequestError } from "../apps/runtime/src/services/ofapi.ts";
+import { createEgressPacer } from "../apps/runtime/src/services/egress/pacer.ts";
+import { listenOnLoopback } from "./helpers/network.ts";
 import { runMessageArchiveProjection } from "../apps/runtime/src/services/projections/message-archive.ts";
 import {
   runOfapiMessageCoverageProjection,
@@ -317,9 +320,6 @@ async function createCaptureExecutionFixture(input: {
     ofapiBackfillDailyCreditBudget: 100,
     ofapiCreditFloor: 10,
   });
-  // The production route is intentionally proxy-bound. The test dispatcher
-  // never opens this socket; it only exercises the same durable egress lookup.
-  await saveProxy(app, seeded.page.id, { url: "http://127.0.0.1:65535" });
   const created = await createOrGetOfapiCaptureJob(testDb!.db, {
     pageId: seeded.page.id,
     ofapiAccountId: seeded.accountId,
@@ -400,7 +400,6 @@ async function createPostCaptureExecutionFixture(input: {
     ofapiBackfillDailyCreditBudget: 100,
     ofapiCreditFloor: 10,
   });
-  await saveProxy(app, seeded.page.id, { url: "http://127.0.0.1:65535" });
   const created = await createOrGetOfapiCaptureJob(testDb!.db, {
     pageId: seeded.page.id,
     ofapiAccountId: seeded.accountId,
@@ -444,7 +443,6 @@ async function createExportQuoteExecutionFixture(
     ofapiBackfillDailyCreditBudget: 100,
     ofapiCreditFloor: 10,
   });
-  await saveProxy(app, seeded.page.id, { url: "http://127.0.0.1:65535" });
   const created = await createOrGetOfapiCaptureJob(testDb!.db, {
     pageId: seeded.page.id,
     ofapiAccountId: seeded.accountId,
@@ -473,6 +471,91 @@ async function createExportQuoteExecutionFixture(
 }
 
 describe("OFAPI capture correctness repository", () => {
+  it.each([false, true])("captures posts on the vendor route with page proxy configured=%s", async (configured) => {
+    if (!testDb) throw new Error("test database required");
+    const fixture = await createPostCaptureExecutionFixture({
+      responses: [], anchorPostId: "1", maxCalls: 1, maxPages: 1,
+    });
+    const body = postsPage({
+      items: [
+        { id: "2", postedAt: "2026-08-01T02:00:00.000Z", rawText: "new" },
+        { id: "1", postedAt: "2026-08-01T01:00:00.000Z", rawText: "anchor" },
+      ],
+      hasMore: false,
+    });
+    const requests: string[] = [];
+    const upstream = createServer((req, res) => {
+      requests.push(req.url ?? "");
+      res.writeHead(200, { "content-type": "application/json" }).end(body);
+    });
+    let proxyConnections = 0;
+    const proxy = createServer((_req, res) => res.writeHead(502).end());
+    proxy.on("connection", () => { proxyConnections += 1; });
+    try {
+      const address = await listenOnLoopback(upstream, "OFAPI vendor capture");
+      const proxyAddress = await listenOnLoopback(proxy, "unused OFAPI page proxy");
+      if (!address || !proxyAddress) throw new Error("loopback required");
+      if (configured) await storeProxyConfig(testDb.db, fixture.page.id, {
+        url: `http://${proxyAddress.host}:${proxyAddress.port}`,
+        encryptedAuth: null, keyVersion: null,
+      });
+      fixture.app.config.egressPacerMode = "enforce";
+      fixture.app.config.ofapiRestDelayMs = 50;
+      const pacer = createEgressPacer(fixture.app, { vendor: "ofapi" });
+      await testDb.pool.query(`
+        create table test_ofapi_pace_claims (claimed_at timestamptz);
+        create function test_record_ofapi_pace() returns trigger language plpgsql as $$
+        begin
+          if new.egress_key = 'vendor:ofapi' and new.scope = 'vendor_global'
+             and new.next_available_at is distinct from old.next_available_at then
+            insert into test_ofapi_pace_claims values (new.next_available_at);
+          end if;
+          return new;
+        end $$;
+        create trigger test_record_ofapi_pace after update on sync_rate_limits
+        for each row execute function test_record_ofapi_pace();
+      `);
+      fixture.app.ofapi = createOfapiClient({
+        baseUrl: `http://${address.host}:${address.port}`,
+        apiKey: "test-key", restDelayMs: 0, pacer,
+      });
+      expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("success");
+      expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("success");
+      expect(requests).toEqual([`/${fixture.accountId}/posts?limit=100&offset=0&order=publish_date&sort=desc`]);
+      expect(proxyConnections).toBe(0);
+      expect(await getOfapiCaptureJob(testDb.db, fixture.job.id)).toMatchObject({
+        state: "complete", attemptCount: 1,
+        result: { pages: 1, acceptedCount: 2, headPostId: "2", anchorPostId: "1" },
+      });
+      const attempts = await testDb.pool.query(
+        "select egress_key, state, accepted_count::int from ofapi_request_attempts where capture_job_id = $1", [fixture.job.id],
+      );
+      expect(attempts.rows).toEqual([{ egress_key: "vendor:ofapi", state: "response_captured", accepted_count: 2 }]);
+      const claims = await testDb.pool.query("select count(*)::int as count from test_ofapi_pace_claims");
+      expect(claims.rows).toEqual([{ count: 1 }]);
+    } finally {
+      upstream.closeAllConnections(); upstream.close();
+      proxy.closeAllConnections(); proxy.close();
+      await testDb.pool.query(`
+        drop trigger if exists test_record_ofapi_pace on sync_rate_limits;
+        drop function if exists test_record_ofapi_pace();
+        drop table if exists test_ofapi_pace_claims;
+      `);
+    }
+  });
+
+  it("refuses a changed binding before reserving or dispatching a capture read", async () => {
+    if (!testDb) throw new Error("test database required");
+    const fixture = await createPostCaptureExecutionFixture({ responses: [], maxCalls: 1, maxPages: 1 });
+    await testDb.pool.query("update pages set ofapi_account_id = null where id = $1", [fixture.page.id]);
+    expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("blocked");
+    expect(await getOfapiCaptureJob(testDb.db, fixture.job.id)).toMatchObject({
+      state: "blocked", reasonCode: "binding_unavailable", attemptCount: 0,
+    });
+    expect(fixture.dispatchGovernedRaw).not.toHaveBeenCalled();
+    const attempts = await testDb.pool.query("select id from ofapi_request_attempts where capture_job_id = $1", [fixture.job.id]);
+    expect(attempts.rows).toEqual([]);
+  });
   beforeAll(async () => {
     testDb = await startIntegrationTestDatabase();
   }, INTEGRATION_TEST_TIMEOUT_MS);
