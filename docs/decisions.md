@@ -261,6 +261,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 258 | OFAPI audience quality | Unverified empty sweeps preserve membership and freshness; checkpoint hold drives both status readers until certification |
 | 259 | OFAPI capture uses vendor transport | Binding authorizes the account; Hub-to-OFAPI capture and gateway reads use the canonical vendor-direct route with one client pacing claim. Page-proxy availability cannot gate OFAPI capture; bounded diagnostics preserve dispatch certainty and omit arbitrary causes. |
 | 260 | OFAPI accounting evidence | Complete pages count once; exact zero-delta receipts remain append-only evidence; signed corrections reach attributed read models. Activity forecasts exclude visibly reported unverified balance drift. Local command refusals are not provider HTTP responses. |
+| 264 | OFAPI vendor usage and key scope | Preserve vendor aggregates independently of ledger; prefer fresh credit headers; CAS declarations bound to server credential fingerprint |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -10920,3 +10921,10 @@ amounts, including negative correction windows. Only the legacy representation
 is floored at zero; ledger facts and the new net fields are not. Existing clients
 continue to accept the response, while displaying negative windows requires
 adoption of the additive net fields.
+
+
+## OFAPI vendor usage and declared key restrictions (2026-09-06)
+
+**Decision #264:** S4b stores bounded free vendor usage reads as independently captured and rebuildable accounting evidence. It does not add vendor aggregates to local ledger spend, infer actor/account attribution for null buckets, or claim historical credential-scope equivalence. Fresh credit headers override potentially cached body metadata; original header/body evidence and conflicts remain durable. A replay/cache marker alone does not prove a price or command success.
+
+S5 represents configured restrictions per exact server credential fingerprint with owner-session CAS and append-only audit. Provider permission CRUD/introspection is not invented: unknown, owner-declared and observed preflight states remain distinct. Operation/account restrictions are enforced before physical dispatch, independently of page/principal ACL and binding/team preflight. Free identity/credit diagnostics remain available. New collectors and production configuration are unchanged until explicitly enabled by the owner. See `docs/runbooks/ofapi-vendor-usage-scope.md`.

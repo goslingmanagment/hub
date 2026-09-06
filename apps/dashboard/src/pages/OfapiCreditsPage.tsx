@@ -1,3 +1,4 @@
+import { OfapiVendorEvidence } from "./settings/OfapiVendorEvidence.js";
 import { Fragment, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router";
 import {
@@ -1749,6 +1750,8 @@ export function OfapiCreditsPage() {
               </>
             )}
           </section>
+
+          <OfapiVendorEvidence />
 
           <SystemHealthSection
             summary={summary}

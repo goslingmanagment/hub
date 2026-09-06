@@ -1,12 +1,7 @@
+import { ofapiResponseEvidence } from "./ofapi-response-evidence.ts";
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
-    : null;
-}
-
-function nonNegativeInteger(value: unknown) {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
-    ? value
     : null;
 }
 
@@ -96,28 +91,15 @@ export interface ParsedOfapiJsonBody {
   balanceAfter: number | null;
 }
 
-export function parseOfapiJsonBytes(bytes: Buffer): ParsedOfapiJsonBody {
-  if (bytes.length === 0) {
-    return { validJson: false, body: "", creditsUsed: null, balanceAfter: null };
-  }
+export function parseOfapiJsonBytes(bytes: Buffer, headers?: Record<string, string>): ParsedOfapiJsonBody {
   const text = bytes.toString("utf8");
-  if (!Buffer.from(text, "utf8").equals(bytes)) {
-    return { validJson: false, body: text, creditsUsed: null, balanceAfter: null };
+  let body: unknown = text;
+  let validJson = false;
+  if (bytes.length > 0 && Buffer.from(text, "utf8").equals(bytes)) {
+    try { body = JSON.parse(text) as unknown; validJson = true; } catch { /* Bytes remain captured. */ }
   }
-  try {
-    const body = JSON.parse(text) as unknown;
-    const root = asRecord(body);
-    const meta = asRecord(root?._meta);
-    const credits = asRecord(meta?._credits);
-    return {
-      validJson: true,
-      body,
-      creditsUsed: nonNegativeInteger(credits?.used),
-      balanceAfter: nonNegativeInteger(credits?.balance),
-    };
-  } catch {
-    return { validJson: false, body: text, creditsUsed: null, balanceAfter: null };
-  }
+  const evidence = ofapiResponseEvidence(validJson ? body : null, headers);
+  return { validJson, body, creditsUsed: evidence.meta.creditsUsed, balanceAfter: evidence.meta.creditBalance };
 }
 
 export function capturePayloadResponse(payload: unknown): {

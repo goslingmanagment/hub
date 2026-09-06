@@ -261,7 +261,7 @@ export async function executeCaptureFirstInteractiveRead(
     throw new ServiceUnavailableError("OFAPI response could not be durably captured");
   }
 
-  const parsed = parseOfapiJsonBytes(raw.bodyBytes);
+  const parsed = parseOfapiJsonBytes(raw.bodyBytes, raw.headers);
   if (parsed.creditsUsed !== null) {
     await reconcileOfapiCapturedAttemptCredit(app.db, {
       attemptId: reservation.attemptId,
@@ -355,7 +355,7 @@ export async function recoverExpiredOfapiInteractiveResponses(
     const captured = capturePayloadResponse(resolved.payload);
     const parsed = captured === null
       ? { validJson: false, body: null, creditsUsed: null, balanceAfter: null }
-      : parseOfapiJsonBytes(captured.bodyBytes);
+      : parseOfapiJsonBytes(captured.bodyBytes, captured.headers);
     try {
       if (parsed.creditsUsed !== null) {
         await reconcileOfapiCapturedAttemptCredit(app.db, {

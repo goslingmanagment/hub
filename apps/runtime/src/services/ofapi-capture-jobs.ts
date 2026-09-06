@@ -847,7 +847,7 @@ async function parseCapturedJob(
   // Credit metadata is replayed from the durable bytes as part of local
   // parsing. The capture chunk also attempts this eagerly, but a process may
   // die after the response transaction commits and before that correction.
-  const parsedJson = parseOfapiJsonBytes(captured.bodyBytes);
+  const parsedJson = parseOfapiJsonBytes(captured.bodyBytes, captured.headers);
   const holdsExportStartCeiling = job.kind === "account_export"
     && job.cursor?.phase === "owner_approved";
   if (parsedJson.creditsUsed !== null && !holdsExportStartCeiling) {
@@ -1502,7 +1502,7 @@ export async function executeOfapiCaptureJobChunk(
       return { kind: "failed", pageId, jobId: job.id };
     }
 
-    const parsed = parseOfapiJsonBytes(raw.bodyBytes);
+    const parsed = parseOfapiJsonBytes(raw.bodyBytes, raw.headers);
     if (parsed.creditsUsed !== null && requestPlan.operation !== "ofapi_export_start") {
       await reconcileOfapiCapturedAttemptCredit(app.db, {
         attemptId: reservation.attemptId,

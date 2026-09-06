@@ -22,7 +22,7 @@ body remain handler-checked and are noted per route in the service layer.
 | `agentKey` | Agent Read Plane key only; no human principal is admitted |
 | `any` | any authenticated principal except an agent key |
 
-## Routes (210)
+## Routes (213)
 
 | Method | Path | Route key | Kind | Roles | Page scope |
 | --- | --- | --- | --- | --- | --- |
@@ -71,7 +71,10 @@ body remain handler-checked and are noted per route in the service layer.
 | POST | `/api/v1/admin/ofapi/export-quotes/:jobId/cancel` | `adminOfapiExportQuoteCancel` | `owner-session` | — | — |
 | POST | `/api/v1/admin/ofapi/export-quotes/:jobId/capture-artifact` | `adminOfapiExportArtifactCapture` | `owner-session` | — | — |
 | POST | `/api/v1/admin/ofapi/export-quotes/:jobId/reconcile-create` | `adminOfapiExportCreateReconcile` | `owner-session` | — | — |
+| GET | `/api/v1/admin/ofapi/key-scope` | `ofapiKeyScopeGet` | `owner-session` | — | — |
+| POST | `/api/v1/admin/ofapi/key-scope` | `ofapiKeyScopeApply` | `owner-session` | — | — |
 | GET | `/api/v1/admin/ofapi/spend/comparison` | `adminOfapiSpendComparison` | `owner-session` | — | — |
+| POST | `/api/v1/admin/ofapi/vendor-usage` | `ofapiVendorUsageRefresh` | `owner-session` | — | — |
 | GET | `/api/v1/admin/ofapi/webhook` | `adminOfapiWebhookStatus` | `owner-session` | — | — |
 | POST | `/api/v1/admin/ofapi/webhook` | `adminOfapiWebhookRegister` | `owner-session` | — | — |
 | POST | `/api/v1/admin/ofapi/webhook/bindings` | `adminOfapiBindingRefresh` | `owner-session` | — | — |

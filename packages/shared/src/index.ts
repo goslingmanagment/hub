@@ -22,3 +22,5 @@ export * from "./spender-retention.ts";
 export * from "./time.ts";
 export * from "./unicode.ts";
 export * from "./types.ts";
+
+export type * from "./ofapi-vendor-usage.ts";

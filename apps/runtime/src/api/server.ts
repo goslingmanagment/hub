@@ -1,3 +1,4 @@
+import { registerOfapiVendorRoutes } from "../modules/ofapi-vendor/index.ts";
 import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -555,6 +556,7 @@ export async function buildApiServer(appContext: AppContext) {
 
   // --- Events (stream + snapshot) --- (module: apps/runtime/src/modules/events)
   registerEventsRoutes(server, moduleContext);
+  registerOfapiVendorRoutes(server, moduleContext);
 
   // OpenAPI JSON
   server.get("/api/v1/openapi.json", {

@@ -5,6 +5,7 @@ import { notifyOfapiAuthIncident } from "./notification-incidents.ts";
 import { OfapiApiError, ofapiAccountNotFound } from "./ofapi.ts";
 
 import { asRecord } from "./ofapi-payloads.ts";
+import { assertOfapiConfiguredAccess } from "./ofapi-vendor-usage.ts";
 
 export const OFAPI_ADMIN_ACCOUNTS_REDACTION_RULE = "ofapi_admin_accounts_v2";
 // Exactly the keys toAccountRecords (ofapi.ts:456-500) reads, with the scalar type each may carry.
@@ -86,6 +87,8 @@ export function projectOfapiAccountsRoster(input: { status: number; body: string
 /** Shared by boot and registration; excludes session material from roster evidence. */
 export function ofapiCredentialPolicy(db: Database, config: AppContext["config"], logger: AppContext["logger"]) {
   return {
+    beforeOperationRequest: (request: { operation: string; accountId?: string | null; method: string }) =>
+      assertOfapiConfiguredAccess(db, createHash("sha256").update(config.ofapiApiKey ?? "").digest("hex"), request),
     beforeAccountRequest: async (pageId: number | null | undefined, accountId: string, generation?: number) => {
       try { return await checkOfapiCurrentBinding(db, pageId, accountId, generation); }
       catch { throw new OfapiApiError("OFAPI current account binding unavailable", 409, null); }
@@ -106,7 +109,7 @@ export function ofapiCredentialPolicy(db: Database, config: AppContext["config"]
     },
     credentialPolicy: { expectedTeamSlug: config.ofapiExpectedTeamSlug ?? null },
     onPreflight: (value: Parameters<typeof recordOfapiCredentialPreflight>[1]) => recordOfapiCredentialPreflight(db, value),
-    onAdminResponse: async (value: { operation: string; status: number; body: string; receivedAt: Date }) => {
+    onAdminResponse: async (value: { operation: string; status: number; body: string; receivedAt: Date; headers?: Record<string, string> }) => {
       // Control-plane roster evidence excludes session material before journaling (decision #253).
       const stored = value.operation === "ofapi_admin_accounts"
         ? projectOfapiAccountsRoster(value)
@@ -114,7 +117,7 @@ export function ofapiCredentialPolicy(db: Database, config: AppContext["config"]
       const inserted = await insertObservation(db, {
         receivedAt: value.receivedAt,
         source: "operator", producer: "ofapi:admin", platform: "onlyfans", kind: value.operation,
-        payload: { status: value.status, body: stored.body, bodyEncoding: "utf8",
+        payload: { status: value.status, body: stored.body, bodyEncoding: "utf8", headers: value.headers ?? {},
           ...(stored.redaction ? { redaction: stored.redaction } : {}),
         },
         payloadHash: createHash("sha256").update(stored.body).digest(), idempotencyKey: randomUUID(),

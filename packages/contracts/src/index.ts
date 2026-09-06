@@ -23,3 +23,6 @@ export * from "./agent-read-datasets.ts";
 // out-of-workspace consumers (the extension) can import it from @kernel/sdk and
 // apply it to a terminal stop reason before committing/attaching a generation.
 export { isOutputExhausted } from "@agency_hub_core/shared";
+
+export * from "./ofapi-vendor-usage.ts";
+export * from "./routes-ofapi-vendor.ts";

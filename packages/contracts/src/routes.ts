@@ -1,3 +1,4 @@
+import { ofapiVendorRouteSchemas } from "./routes-ofapi-vendor.ts";
 import {
   PERIOD_OPTIONS,
   SPENDER_PERIOD_OPTIONS,
@@ -5484,6 +5485,7 @@ export const moneyPayoutsResponseSchema = z.object({
 });
 
 export const routeSchemas = {
+  ...ofapiVendorRouteSchemas,
   ...agentRouteSchemas,
   ...agentKeyAdminRouteSchemas,
   health: {

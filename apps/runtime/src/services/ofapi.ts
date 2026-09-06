@@ -1,3 +1,5 @@
+import { ofapiResponseEvidence } from "./ofapi-response-evidence.ts";
+import type { OfapiUsageWindow } from "@agency_hub_core/contracts";
 // Client for the onlyfansapi.com API: webhook CRUD + account list (admin flow)
 // plus credit-budgeted, observed chat/message reads for the DM sync (Phase 2 of
 // docs/ofapi-integration-plan.md). Not to be confused with packages/onlyfans,
@@ -222,6 +224,7 @@ export interface OfapiMarkReadResult {
 // included — OFAPI charged each). Emitted by the client itself on BOTH request
 // paths, so callers cannot forget to account spend (D1).
 export interface OfapiCreditSpendObservation {
+  responseEvidence?: ReturnType<typeof ofapiResponseEvidence>["evidence"];
   operation: string;
   httpStatus: number;
   credits: number;
@@ -271,6 +274,7 @@ export function resolveOfapiCreditSpend(input: {
 export interface OfapiAdminCapture { observationId: number; receivedAt: Date }
 
 export interface OfapiClient {
+  getCreditUsage?(window: OfapiUsageWindow): Promise<{ body: unknown; evidence: OfapiAdminCapture | null }>;
   createWebhook(input: OfapiWebhookRegistrationInput): Promise<OfapiWebhookRecord>;
   updateWebhook(id: string, input: OfapiWebhookRegistrationInput): Promise<OfapiWebhookRecord>;
   listAccounts(): Promise<OfapiAccountRecord[]>;
@@ -569,26 +573,9 @@ function webhookRequestBody(input: OfapiWebhookRegistrationInput) {
   };
 }
 
-function asNumberOrNull(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
-export function parseResponseMeta(body: unknown): OfapiResponseMeta | null {
-  const root = asRecord(body);
-  const meta = asRecord(root?._meta) ?? (asRecord(root?._credits) ? root : null);
-  if (!meta) {
-    return null;
-  }
-
-  const credits = asRecord(meta._credits);
-  const cache = asRecord(meta._cache);
-  const rateLimits = asRecord(meta._rate_limits);
-  return {
-    creditsUsed: asNumberOrNull(credits?.used),
-    creditBalance: asNumberOrNull(credits?.balance),
-    isCached: typeof cache?.is_cached === "boolean" ? cache.is_cached : null,
-    rateRemainingMinute: asNumberOrNull(rateLimits?.remaining_minute),
-  };
+export function parseResponseMeta(body: unknown, headers?: Headers | Record<string, string>): OfapiResponseMeta | null {
+  const parsed = ofapiResponseEvidence(body, headers);
+  return parsed.present ? parsed.meta : null;
 }
 
 function parseNextMarker(pagination: Record<string, unknown> | null) {
@@ -710,7 +697,7 @@ export function createOfapiClient(input: {
   credentialPolicy?: { expectedTeamSlug: string | null };
   beforeAccountRequest?: (pageId: number | null | undefined, accountId: string, generation?: number) => Promise<number>;
   onAccountResponse?: (accountId: string, generation: number, status: number, body: string) => Promise<void>;
-  onAdminResponse?: (response: { operation: string; status: number; body: string; receivedAt: Date }) => Promise<void | OfapiAdminCapture>;
+  onAdminResponse?: (response: { operation: string; status: number; body: string; receivedAt: Date; headers?: Record<string, string> }) => Promise<void | OfapiAdminCapture>;
   onPreflight?: (result: OfapiCredentialPreflight) => Promise<void>;
   baseUrl?: string;
   apiKey: string;
@@ -769,6 +756,7 @@ export function createOfapiClient(input: {
   async function reportCreditSpend(report: {
     operation: string;
     httpStatus: number;
+    headers?: Headers;
     body: unknown;
     requestId: string;
     pageId: number | null;
@@ -786,7 +774,7 @@ export function createOfapiClient(input: {
       return null;
     }
 
-    const meta = parseResponseMeta(report.body);
+    const meta = parseResponseMeta(report.body, report.headers);
     const spend = report.httpStatus >= 200
       && report.httpStatus < 300
       && meta?.creditsUsed == null
@@ -806,6 +794,7 @@ export function createOfapiClient(input: {
 
     try {
       const outcome = await onCreditSpend({
+        responseEvidence: ofapiResponseEvidence(report.body, report.headers).evidence,
         operation: report.operation,
         httpStatus: report.httpStatus,
         credits: spend.credits,
@@ -953,6 +942,7 @@ export function createOfapiClient(input: {
         const creditSpendRecorded = await reportCreditSpend({
           operation: options.operation,
           httpStatus: response.status,
+          headers: response.headers,
           body,
           requestId,
           pageId: options.context.pageId ?? null,
@@ -1107,6 +1097,7 @@ export function createOfapiClient(input: {
     await reportCreditSpend({
       operation: options.operation,
       httpStatus: response.status,
+      headers: response.headers,
       body,
       requestId,
       pageId: context.pageId ?? null,
@@ -1122,6 +1113,8 @@ export function createOfapiClient(input: {
       "retry-after",
       "x-ofapi-credits-used",
       "x-ofapi-credits-balance",
+      "x-ofapi-is-cached",
+      "idempotent-replayed",
       "x-rate-limit-remaining-minute",
       "x-rate-limit-limit-minute",
     ]) {
@@ -1280,6 +1273,8 @@ export function createOfapiClient(input: {
       "retry-after",
       "x-ofapi-credits-used",
       "x-ofapi-credits-balance",
+      "x-ofapi-is-cached",
+      "idempotent-replayed",
       "x-rate-limit-remaining-minute",
       "x-rate-limit-limit-minute",
     ]) {
@@ -1357,6 +1352,7 @@ export function createOfapiClient(input: {
     await reportCreditSpend({
       operation,
       httpStatus: response.status,
+      headers: response.headers,
       body: responseBody,
       requestId,
       pageId: context.pageId ?? null,
@@ -1483,6 +1479,7 @@ export function createOfapiClient(input: {
     await reportCreditSpend({
       operation,
       httpStatus: response.status,
+      headers: response.headers,
       body: responseBody,
       requestId,
       pageId: context.pageId ?? null,
@@ -1556,6 +1553,7 @@ export function createOfapiClient(input: {
     await reportCreditSpend({
       operation,
       httpStatus: response.status,
+      headers: response.headers,
       body: responseBody,
       requestId,
       pageId: context.pageId ?? null,
@@ -1636,6 +1634,7 @@ export function createOfapiClient(input: {
     await reportCreditSpend({
       operation,
       httpStatus: response.status,
+      headers: response.headers,
       body: responseBody,
       requestId,
       pageId: context.pageId ?? null,
@@ -1702,7 +1701,7 @@ export function createOfapiClient(input: {
     const text = await response.text();
     // Fix the transport boundary before capture can wait for a DB connection/nextval.
     const receivedAt = new Date();
-    const capture = (await input.onAdminResponse?.({ operation, status: response.status, body: text, receivedAt })) ?? null;
+    const capture = (await input.onAdminResponse?.({ operation, status: response.status, body: text, receivedAt, headers: Object.fromEntries(["x-ofapi-credits-used", "x-ofapi-credits-balance", "x-ofapi-is-cached", "idempotent-replayed"].flatMap(name => { const value = response.headers.get(name); return value === null ? [] : [[name, value]]; })) })) ?? null;
     let responseBody: unknown = null;
     let bodyIsJson = text.length === 0;
     if (text.length > 0) {
@@ -1719,11 +1718,12 @@ export function createOfapiClient(input: {
     await reportCreditSpend({
       operation,
       httpStatus: response.status,
+      headers: response.headers,
       body: responseBody,
       requestId: `${operation}:${randomUUID()}`,
       pageId: null,
       attemptNumber: 1,
-      ...(["ofapi_balance_ping", "ofapi_credential_preflight", "ofapi_webhook_inventory", "ofapi_admin_accounts"].includes(operation)
+      ...(["ofapi_balance_ping", "ofapi_credential_preflight", "ofapi_webhook_inventory", "ofapi_admin_accounts", "ofapi_vendor_usage"].includes(operation)
         ? { fallbackCredits: 0, fallbackEstimated: false } : {}),
     });
 
@@ -1751,6 +1751,12 @@ export function createOfapiClient(input: {
   }
 
   return {
+    async getCreditUsage(window) {
+      const query = new URLSearchParams({ from: window.from, to: window.to, group_by: window.groupBy, include_today: String(window.includeToday) });
+      if (window.accountId) query.set("account_id", window.accountId);
+      const result = await requestCaptured("ofapi_vendor_usage", "GET", `/usage/credits?${query}`);
+      return { body: result.body, evidence: result.capture };
+    },
     getCredentialPreflight,
     assertCredentialReady,
     async getWebhook(id) {
