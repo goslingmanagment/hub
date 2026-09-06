@@ -22,7 +22,7 @@ body remain handler-checked and are noted per route in the service layer.
 | `agentKey` | Agent Read Plane key only; no human principal is admitted |
 | `any` | any authenticated principal except an agent key |
 
-## Routes (253)
+## Routes (259)
 
 | Method | Path | Route key | Kind | Roles | Page scope |
 | --- | --- | --- | --- | --- | --- |
@@ -53,6 +53,12 @@ body remain handler-checked and are noted per route in the service layer.
 | GET | `/api/v1/admin/notifications/settings` | `notificationsSettings` | `owner-session` | — | — |
 | PATCH | `/api/v1/admin/notifications/settings` | `notificationsSettingsUpdate` | `owner-session` | — | — |
 | POST | `/api/v1/admin/notifications/test` | `notificationsTestMessage` | `owner-session` | — | — |
+| GET | `/api/v1/admin/ofapi/actions` | `ofapiActionList` | `owner-session` | — | — |
+| POST | `/api/v1/admin/ofapi/actions` | `ofapiActionPrepare` | `owner-session` | — | — |
+| GET | `/api/v1/admin/ofapi/actions/:id` | `ofapiActionGet` | `owner-session` | — | — |
+| POST | `/api/v1/admin/ofapi/actions/:id/cancel` | `ofapiActionCancel` | `owner-session` | — | — |
+| POST | `/api/v1/admin/ofapi/actions/:id/dispatch` | `ofapiActionDispatch` | `owner-session` | — | — |
+| POST | `/api/v1/admin/ofapi/actions/:id/repair` | `ofapiActionRepair` | `owner-session` | — | — |
 | GET | `/api/v1/admin/ofapi/banned-words` | `ofapiBannedWordsAdminGet` | `owner-session` | — | — |
 | POST | `/api/v1/admin/ofapi/banned-words/refresh` | `ofapiBannedWordsRefresh` | `owner-session` | — | — |
 | POST | `/api/v1/admin/ofapi/capture-jobs/seed` | `adminOfapiCaptureJobsSeed` | `owner-session` | — | — |

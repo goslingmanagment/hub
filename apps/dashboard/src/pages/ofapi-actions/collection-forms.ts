@@ -1,4 +1,4 @@
-import type { OfapiActionField, OfapiActionFormDefinition } from "./form-types";
+import type { OfapiActionField, OfapiActionFormDefinition } from "./form-types.ts";
 
 const listId: OfapiActionField = { name: "listId", label: "ID списка", type: "text", required: true, help: "ID из списка OnlyFans. Для пользовательских списков допустимы также friends и tagged." };
 const vaultListId: OfapiActionField = { name: "listId", label: "ID папки vault", type: "text", required: true };

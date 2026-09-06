@@ -440,3 +440,14 @@ gate. A durable checkpoint marker keeps both status readers Unverified until a
 certified sweep clears it, even after a lost-lease completion without hold stats.
 The single empty first-page guard and malformed-identity failures retain their
 existing failure classification.
+
+
+### Typed OFAPI owner actions (Decision #272)
+
+Owner action intents preserve prepared, dispatching, confirmed, partial, rejected,
+indeterminate and cancelled states. A busy nonblocking dispatch lock returns 409
+without HTTP and keeps the prepared intent. Definitive local admission refusal
+returns 503 without HTTP; timeout, 5xx or an unproven successful response retain an
+indeterminate outcome. Confirmed HTTP acceptance never asserts campaign delivery
+or money transfer. Retained response repair cannot redispatch the request.
+Encrypted commands/responses never enter audit metadata or error messages.

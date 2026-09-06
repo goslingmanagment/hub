@@ -438,7 +438,7 @@ export interface OfapiClient {
     input: {
       attemptId: string;
       operation: string;
-      method: "GET" | "POST" | "DELETE" | "PATCH";
+      method: "GET" | "POST" | "PUT" | "DELETE" | "PATCH";
       pathname: string;
       query?: Record<string, string>;
       bodyBytes?: Buffer | null;
@@ -447,9 +447,11 @@ export interface OfapiClient {
       deadlineAt: Date;
       timeoutMs?: number;
       maxResponseBytes?: number;
+      deferAccountResponse?: boolean;
       beforeDispatch: () => Promise<boolean>;
     },
   ): Promise<OfapiGovernedRawResponse>;
+  recordGovernedAccountResponse?(accountId: string, generation: number, status: number, body: string): Promise<void>;
   // Decision #56: exactly one text-send attempt. Optional for legacy test
   // doubles; production createOfapiClient always implements it.
   sendTextMessage?(
@@ -1404,7 +1406,7 @@ export function createOfapiClient(input: {
       response,
       maxResponseBytes, startedAt, timeoutMs,
     );
-    if (generation !== undefined) await input.onAccountResponse?.(accountId, generation, response.status, bodyBytes.toString("utf8"));
+    if (generation !== undefined && !options.deferAccountResponse) await input.onAccountResponse?.(accountId, generation, response.status, bodyBytes.toString("utf8"));
     const responseHeaders: Record<string, string> = {};
     for (const name of [
       "content-type",
@@ -2222,6 +2224,9 @@ export function createOfapiClient(input: {
         catch (error) { throw new OfapiGovernedRequestError("OFAPI credential preflight unavailable", "pre_dispatch", "cancelled", { cause: error }); }
       }
       return dispatchGovernedRawRequest(context, options);
+    },
+    async recordGovernedAccountResponse(accountId, generation, status, body) {
+      await input.onAccountResponse?.(accountId, generation, status, body);
     },
     async sendTextMessage(context, accountId, conversationId, command) {
       await assertCredentialReady();

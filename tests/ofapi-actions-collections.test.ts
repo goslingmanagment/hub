@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { ofapiCollectionActionSchema } from "../packages/contracts/src/ofapi-actions-collections.ts";
-import { ofapiCollectionRequest } from "../apps/runtime/src/services/ofapi-actions-collections.ts";
+import { ofapiCollectionRequest, ofapiCollectionResultConfirmed } from "../apps/runtime/src/services/ofapi-actions-collections.ts";
 
 const build = (value: unknown) => ofapiCollectionRequest(ofapiCollectionActionSchema.parse(value), "acct_bound");
+const confirmed = (command: unknown, data: unknown) => ofapiCollectionResultConfirmed(ofapiCollectionActionSchema.parse(command), data);
 
 describe("OFAPI collection actions", () => {
   it("rejects subscription purchases, arbitrary endpoints and caller-supplied account bindings", () => {
@@ -85,5 +86,66 @@ describe("OFAPI collection actions", () => {
     expect(build({ action: "fan_notes_clear", ...value })).toMatchObject({ method: "DELETE", path: "/acct_bound/fans/9007199254740993/notes" });
     expect(build({ action: "fan_notes_update", ...value, notes: "" }).body).toEqual({ notes: "" });
     expect(ofapiCollectionActionSchema.safeParse({ action: "fan_notes_update", ...value, notes: "x".repeat(16001) }).success).toBe(false);
+  });
+});
+
+describe("OFAPI collection receipt evidence", () => {
+  it("does not turn HTTP success with missing or false acknowledgement into a confirmed deletion", () => {
+    const command = { action: "vault_media_delete", pageId: 7, mediaIds: ["123"] };
+    for (const data of [null, false, true, [], {}, { success: false }, { success: "true" }, { arbitrary: "ok" }]) {
+      expect(confirmed(command, data)).toBe(false);
+    }
+    expect(confirmed(command, { success: true })).toBe(true);
+  });
+
+  it("requires exact IDs in ordinary list additions, without losing precision", () => {
+    const command = { action: "user_list_add_users", pageId: 7, listId: "tagged", ids: ["123", "9007199254740993"] };
+    expect(confirmed(command, { tagged: ["9007199254740993", 123] })).toBe(true);
+    for (const data of [{}, { other: command.ids }, { tagged: [123] }, { tagged: [123, 123] }, { tagged: [123, "456"] }, { tagged: [123, 9007199254740992] }]) {
+      expect(confirmed(command, data)).toBe(false);
+    }
+    // JSON.parse rounds 9007199254740993 to 9007199254740992. Never let the
+    // rounded value prove membership for the wrong requested ID.
+    expect(confirmed({ ...command, ids: ["9007199254740992"] }, JSON.parse('{"tagged":[9007199254740993]}'))).toBe(false);
+  });
+
+  it("requires every partial added/failed ID exactly once and retains string failure reasons", () => {
+    const command = { action: "user_list_add_users", pageId: 7, listId: "123", ids: ["456", "789"], skip_invalid: true };
+    expect(confirmed(command, { added: [456], failed: { "789": "Cannot add user" } })).toBe(true);
+    expect(confirmed(command, { added: [456, 789], failed: {} })).toBe(true);
+    for (const data of [
+      { added: [456], failed: {} },
+      { added: [456], failed: { "456": "Duplicate result" } },
+      { added: [456], failed: { "999": "Unrequested user" } },
+      { added: [456], failed: { "789": null } },
+      { added: [456], failed: ["Cannot add user"] },
+    ]) expect(confirmed(command, data)).toBe(false);
+  });
+
+  it("accepts named-list receipts and checks the removed user's membership state", () => {
+    const remove = { action: "user_list_remove_user", pageId: 7, listId: "friends", userId: "456" };
+    const data = { list: { id: "friends" }, userState: { id: "friends", hasUser: false } };
+    expect(confirmed(remove, data)).toBe(true);
+    expect(confirmed(remove, { ...data, userState: { id: "friends", hasUser: true } })).toBe(false);
+    expect(confirmed(remove, { ...data, userState: { id: "456", hasUser: false } })).toBe(false);
+    expect(confirmed(remove, { ...data, list: { id: "tagged" } })).toBe(false);
+    expect(confirmed(remove, { ...data, userState: {} })).toBe(false);
+    expect(confirmed({ action: "user_list_update", pageId: 7, listId: "tagged", name: "Name" }, { id: "tagged" })).toBe(true);
+    expect(confirmed({ action: "user_list_clear", pageId: 7, listId: "friends" }, { id: "friends" })).toBe(true);
+  });
+
+  it("requires the requested resource identity and does not mistake arbitrary IDs for valid ones", () => {
+    const command = { action: "user_block", pageId: 7, userId: "123" };
+    expect(confirmed(command, { id: 123 })).toBe(true);
+    for (const id of [124, 0, -1, 1.5, "other-user", "", 9007199254740992]) expect(confirmed(command, { id })).toBe(false);
+    expect(confirmed({ action: "user_list_create", pageId: 7, name: "New list" }, { id: "9007199254740993" })).toBe(true);
+    expect(confirmed({ action: "vault_list_update", pageId: 7, listId: "123", name: "New name" }, { id: "124" })).toBe(false);
+  });
+
+  it("confirms an empty native note while rejecting a missing note field or mismatched write target", () => {
+    expect(confirmed({ action: "fan_notes_get", pageId: 7, fanId: "123" }, { notes: "" })).toBe(true);
+    expect(confirmed({ action: "fan_notes_get", pageId: 7, fanId: "123" }, {})).toBe(false);
+    expect(confirmed({ action: "fan_notes_clear", pageId: 7, fanId: "123" }, { id: 124 })).toBe(false);
+    expect(confirmed({ action: "fan_notes_update", pageId: 7, fanId: "123", notes: "A note" }, { id: 123 })).toBe(true);
   });
 });

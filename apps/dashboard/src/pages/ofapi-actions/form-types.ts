@@ -1,7 +1,7 @@
 export interface OfapiActionField {
   name: string;
   label: string;
-  type: "text" | "textarea" | "number" | "money" | "boolean" | "select" | "datetime" | "strings" | "numbers" | "rows";
+  type: "text" | "textarea" | "number" | "money" | "money-list" | "boolean" | "select" | "datetime" | "strings" | "numbers" | "rows";
   required?: boolean;
   help?: string;
   defaultValue?: string | number | boolean;

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useLocation, Link } from "react-router";
-import { LogOut, ChevronDown } from "lucide-react";
+import { LogOut, ChevronDown, Menu } from "lucide-react";
 import { useLogout } from "@/api/queries";
 import { PeriodSelector } from "@/components/shared/PeriodSelector";
 import { clearDashboardSession } from "@/lib/queryClient";
@@ -8,10 +8,11 @@ import { buildPageRoute, decodeRouteSegment, resolveFanLabelFromState } from "@/
 import { useDashboardShell } from "./DashboardShellContext.js";
 
 interface TopbarProps {
+  onOpenNavigation?: () => void;
   user: { username: string; role: string };
 }
 
-export function Topbar({ user }: TopbarProps) {
+export function Topbar({ user, onOpenNavigation }: TopbarProps) {
   const location = useLocation();
   const logout = useLogout();
   const { pages } = useDashboardShell();
@@ -46,8 +47,9 @@ export function Topbar({ user }: TopbarProps) {
   }
 
   return (
-    <div className="h-[56px] bg-card border-b border-border flex items-center justify-between px-7 fixed top-0 left-[248px] right-0 z-10">
-      <div className="flex items-center gap-2">
+    <div className="h-[56px] bg-card border-b border-border flex items-center justify-between px-3 md:px-7 fixed top-0 left-0 md:left-[248px] right-0 z-10">
+      <div className="flex min-w-0 items-center gap-2">
+        <button type="button" className="shrink-0 rounded p-1 md:hidden" aria-label="Открыть навигацию" onClick={onOpenNavigation}><Menu size={20} /></button>
         {breadcrumbs.map((crumb, i) => (
           <span key={i} className="flex items-center gap-2">
             {i > 0 && <span className="text-text-muted/60 text-sm">›</span>}
@@ -123,6 +125,8 @@ function buildBreadcrumbs(
   const parts = pathname.split("/").filter(Boolean);
 
   if (parts.length === 0) return [{ label: "Overview" }];
+
+  if (parts[0] === "ofapi-actions") return [{ label: "Управление OnlyFans" }];
 
   if (parts[0] === "settings") return [{ label: "Overview", href: "/" }, { label: "Settings" }];
 

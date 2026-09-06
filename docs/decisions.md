@@ -272,6 +272,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 270 | OFAPI marketing custody | Closed scoped collectors feed canonical attribution snapshots; shared pixel and postback controls use encrypted one-attempt owner intents, safe impact previews and explicit external tests. |
 
 | 271 | OFAPI content webhook evidence | Queue progress and post likes canonicalize from raw captures into rebuildable, source-fenced projections; local owner report never claims delivery or complete liker coverage. |
+| 272 | Typed OFAPI owner actions | Closed action schemas share encrypted durable intents, frozen binding and accounting mode, nonblocking dispatch locks, exact response capture, local replay and owner controls. No subscribe-to-user or automatic enabling. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -11229,3 +11230,32 @@ collection admission and return `pre_dispatch`; neither sends HTTP nor creates
 a physical credit receipt. A cleanup failure retains pre-dispatch certainty so
 capture recovery can release its separate reservation without fabricating an
 indeterminate vendor request. No migration, collector enabling or vendor spend.
+
+
+## Decision 272: Typed OFAPI owner actions (2026-09-06)
+
+The owner expanded scope to publishing/campaigns, list writes/moderation, bank
+reads and payout commands, account settings, and provider-native Saved-for-later
+controls. Subscribing to users remains explicitly excluded. Existing chat and
+marketing flows remain stable while new non-chat actions share one closed
+request adapter and durable owner execution boundary. This is an explicit
+action API, never a caller-selected HTTP proxy.
+
+Prepare freezes the typed command, principal, account binding generation and
+credential fingerprint. Execute takes nonblocking owner/binding locks, reserves
+its maximum documented credit estimate, and performs one physical request. Raw
+response bytes are encrypted before parsing. Indeterminate actions cannot be
+redispatched; administrative result and accounting repair consumes the receipt.
+HTTP acceptance is not campaign delivery, a completed withdrawal or a complete
+read inventory. Accounting mode and reservation settlement are durable to avoid
+double debit after flag changes. Native notes remain separate from local notes,
+and subject indexes plus erasure fences retain the existing erasure semantics.
+
+The owner console renders typed fields and frozen review values. Owner-session
+routes enforce access on every read and mutation. Deploying these controls does
+not enable a collector, publish content or enable native automation.
+
+Owner action erasure removes payloads and associations while retaining only an
+anonymous admitted UUID in `ofapi_action_identities`. Reusing an erased ID is
+refused before a new intent can be dispatched. This extends Decision 272’s
+one-attempt law across erasure without retaining fan or account material.

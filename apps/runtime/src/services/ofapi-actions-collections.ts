@@ -64,3 +64,69 @@ export function ofapiCollectionRequest(command: OfapiCollectionAction, accountId
       return request("DELETE", `${account}/fans/${fan}/notes`, "resource");
   }
 }
+
+function record(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function returnedId(value: unknown): string | null {
+  if (typeof value === "number") return Number.isSafeInteger(value) && value > 0 ? String(value) : null;
+  return typeof value === "string" && /^[1-9][0-9]*$/.test(value) ? value : null;
+}
+
+function returnedListId(value: unknown): string | null {
+  if (typeof value === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(value)) return value;
+  return returnedId(value);
+}
+
+function exactIds(actual: unknown, expected: readonly string[]): boolean {
+  if (!Array.isArray(actual)) return false;
+  const ids = actual.map(returnedId);
+  return ids.length === expected.length && new Set(ids).size === ids.length
+    && ids.every(id => id !== null && expected.includes(id));
+}
+
+/** Positive receipt evidence only. The shared engine owns HTTP and final state. */
+export function ofapiCollectionResultConfirmed(command: OfapiCollectionAction, responseData: unknown): boolean {
+  const data = record(responseData);
+  if (!data || data.error || data.success === false) return false;
+  switch (command.action) {
+    case "user_list_create":
+    case "vault_list_create":
+      return returnedId(data.id) !== null;
+    case "user_list_update":
+    case "user_list_clear":
+    case "vault_list_update":
+    case "vault_list_add_media":
+    case "vault_list_remove_media":
+      return returnedListId(data.id) === command.listId;
+    case "user_list_delete":
+    case "user_list_pin_toggle":
+    case "vault_list_delete":
+    case "vault_media_delete":
+      return data.success === true;
+    case "user_list_add_users": {
+      if (command.skip_invalid !== true) return exactIds(data[command.listId], command.ids);
+      const failed = record(data.failed);
+      if (!failed || !Array.isArray(data.added) || !Object.values(failed).every(reason => typeof reason === "string")) return false;
+      return exactIds([...data.added, ...Object.keys(failed)], command.ids);
+    }
+    case "user_list_remove_user": {
+      const list = record(data.list);
+      const membership = record(data.userState);
+      // userState.id is the list ID, not the removed user's ID.
+      return returnedListId(list?.id) === command.listId
+        && returnedListId(membership?.id) === command.listId && membership?.hasUser === false;
+    }
+    case "user_block":
+    case "user_unblock":
+    case "user_restrict":
+    case "user_unrestrict":
+      return returnedId(data.id) === command.userId;
+    case "fan_notes_get":
+      return typeof data.notes === "string";
+    case "fan_notes_update":
+    case "fan_notes_clear":
+      return returnedId(data.id) === command.fanId;
+  }
+}

@@ -6306,6 +6306,20 @@ export const ofapiMarketingIntents = pgTable("ofapi_marketing_intents", {
   remoteId:text("remote_id"),accountingState:text("accounting_state").default("pending").notNull(),projectionState:text("projection_state").default("pending").notNull(),
   createdAt:timestamp("created_at",{withTimezone:true}).defaultNow().notNull(),dispatchedAt:timestamp("dispatched_at",{withTimezone:true}),settledAt:timestamp("settled_at",{withTimezone:true}),
 });
+export const ofapiActionIdentities = pgTable("ofapi_action_identities", { id: uuid("id").primaryKey() });
+
+export const ofapiActionIntents = pgTable("ofapi_action_intents", {
+  id: uuid("id").primaryKey(),
+  pageId: bigint("page_id", { mode: "number" }).notNull().references(() => pages.id, { onDelete: "restrict" }),
+  actorUserId: bigint("actor_user_id", { mode: "number" }).notNull().references(() => users.id, { onDelete: "restrict" }),
+  action: text("action").notNull(), bodyHash: text("body_hash").notNull(), bodyEncrypted: text("body_encrypted").notNull(),
+  subjectRefs: text("subject_refs").array().notNull().default(sql`'{}'::text[]`), state: text("state").notNull(),
+  estimatedCredits: integer("estimated_credits").notNull(), actualCredits: integer("actual_credits"), reservedDay: date("reserved_day"),
+  reservationSettled: boolean("reservation_settled").notNull().default(false), ledgerEnabled: boolean("ledger_enabled").notNull().default(false),
+  responseObservationId: bigint("response_observation_id", { mode: "number" }), resultEncrypted: text("result_encrypted"), remoteId: text("remote_id"), errorCode: text("error_code"),
+  accountingState: text("accounting_state").notNull().default("pending"), createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  dispatchedAt: timestamp("dispatched_at", { withTimezone: true }), settledAt: timestamp("settled_at", { withTimezone: true }),
+}, table => ({ pageCreated: index("ofapi_action_page_created_idx").on(table.pageId, table.createdAt.desc()) }));
 
 export const ofapiMarketingProjectionReceipts = pgTable("ofapi_marketing_projection_receipts", {
   observationId:bigint("observation_id",{mode:"number"}).primaryKey(),

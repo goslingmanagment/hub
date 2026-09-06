@@ -1,4 +1,5 @@
 import {rebuildOfapiMarketingState, getOfapiMarketingDashboard, prepareOfapiMarketingCommand, dispatchOfapiMarketingCommand, refreshOfapiMarketingPostbacks} from "../../services/ofapi-smart-links.ts";
+import { cancelOfapiAction, dispatchOfapiAction, getOfapiAction, listOfapiActions, prepareOfapiAction, repairOfapiAction } from "../../services/ofapi-actions.ts";
 import { readOfapiWebhookEventCatalog, refreshOfapiWebhookEventCatalog } from "../../services/ofapi-webhook-event-catalog.ts";
 import {
   applyOfapiWebhookCollectionPolicy, listOfapiWebhookDeliveryHistory, redeliverOfapiWebhook,
@@ -237,6 +238,27 @@ export async function registerIngestRoutes(server: ApiServer, ctx: ApiModuleCont
   server.post("/api/v1/admin/ofapi/marketing/rebuild", {schema:routeSchemas.ofapiMarketingRebuild}, async request => {
     const principal=await requirePrincipal(request); requireOwner(principal);
     return rebuildOfapiMarketingState(appContext,principal.user.id);
+  });
+  server.post("/api/v1/admin/ofapi/actions", { schema: routeSchemas.ofapiActionPrepare }, async request => {
+    const principal = await requirePrincipal(request); requireOwner(principal);
+    return prepareOfapiAction(appContext, request.body, principal.user.id);
+  });
+  server.get("/api/v1/admin/ofapi/actions", { schema: routeSchemas.ofapiActionList }, async request => {
+    requireOwner(await requirePrincipal(request)); return listOfapiActions(appContext, request.query.pageId);
+  });
+  server.get("/api/v1/admin/ofapi/actions/:id", { schema: routeSchemas.ofapiActionGet }, async request => {
+    requireOwner(await requirePrincipal(request)); return getOfapiAction(appContext, request.params.id);
+  });
+  server.post("/api/v1/admin/ofapi/actions/:id/dispatch", { schema: routeSchemas.ofapiActionDispatch }, async request => {
+    const principal = await requirePrincipal(request); requireOwner(principal);
+    return dispatchOfapiAction(appContext, request.params.id, principal.user.id);
+  });
+  server.post("/api/v1/admin/ofapi/actions/:id/cancel", { schema: routeSchemas.ofapiActionCancel }, async request => {
+    const principal = await requirePrincipal(request); requireOwner(principal);
+    return cancelOfapiAction(appContext, request.params.id, principal.user.id);
+  });
+  server.post("/api/v1/admin/ofapi/actions/:id/repair", { schema: routeSchemas.ofapiActionRepair }, async request => {
+    requireOwner(await requirePrincipal(request)); return repairOfapiAction(appContext, request.params.id);
   });
   server.get("/api/v1/admin/ofapi/marketing", {schema:routeSchemas.ofapiMarketingGet}, async request => {
     requireOwner(await requirePrincipal(request)); return getOfapiMarketingDashboard(appContext);

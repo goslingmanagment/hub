@@ -1,10 +1,14 @@
-import { Navigate, Outlet } from "react-router";
+import { useEffect, useState } from "react";
+import { Navigate, Outlet, useLocation } from "react-router";
 import { useAuthMe, useOverview } from "@/api/queries";
 import { DashboardShellProvider } from "./DashboardShellContext.js";
 import { Sidebar } from "./Sidebar.js";
 import { Topbar } from "./Topbar.js";
 
 export function ProtectedLayout() {
+  const location = useLocation();
+  const [navigationOpen, setNavigationOpen] = useState(false);
+  useEffect(() => setNavigationOpen(false), [location.pathname]);
   const { data, isLoading, isError } = useAuthMe();
   const {
     data: overview,
@@ -38,10 +42,11 @@ export function ProtectedLayout() {
   return (
     <DashboardShellProvider value={shellValue}>
       <div className="flex min-h-screen bg-bg">
-        <Sidebar user={data.user} />
-        <div className="ml-[248px] flex-1">
-          <Topbar user={data.user} />
-          <main className="mt-[56px] p-8 max-w-[1200px]">
+        {navigationOpen && <button type="button" aria-label="Закрыть навигацию" className="fixed inset-0 z-20 bg-black/30 md:hidden" onClick={() => setNavigationOpen(false)} />}
+        <div className={navigationOpen ? "relative z-20 md:z-auto" : "hidden md:block"}><Sidebar user={data.user} /></div>
+        <div className="min-w-0 flex-1 md:ml-[248px]">
+          <Topbar user={data.user} onOpenNavigation={() => setNavigationOpen(true)} />
+          <main className="mt-[56px] min-w-0 p-0 md:p-8 max-w-[1200px]">
             <Outlet />
           </main>
         </div>

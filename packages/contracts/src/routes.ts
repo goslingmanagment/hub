@@ -1,5 +1,6 @@
 import { ofapiMediaRouteSchemas } from "./routes-ofapi-media.ts";
 import { ofapiMarketingRouteSchemas } from "./routes-ofapi-marketing.ts";
+import { ofapiActionRouteSchemas } from "./routes-ofapi-actions.ts";
 import { ofapiBannedWordRouteSchemas } from "./routes-ofapi-banned-words.ts";
 import { OFAPI_EXTENDED_COMMAND_KINDS } from "@agency_hub_core/shared";
 import { ofapiExtendedCommandOptions } from "./ofapi-extended-commands.ts";
@@ -5533,6 +5534,7 @@ export const moneyPayoutsResponseSchema = z.object({
 
 export const routeSchemas = {
   ...ofapiMarketingRouteSchemas,
+  ...ofapiActionRouteSchemas,
   ...ofapiBannedWordRouteSchemas,
   ...ofapiVendorRouteSchemas,
   ...ofapiReadCollectionsRouteSchemas,
