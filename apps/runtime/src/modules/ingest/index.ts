@@ -1,3 +1,4 @@
+import {rebuildOfapiMarketingState, getOfapiMarketingDashboard, prepareOfapiMarketingCommand, dispatchOfapiMarketingCommand, refreshOfapiMarketingPostbacks} from "../../services/ofapi-smart-links.ts";
 import {
   applyOfapiWebhookCollectionPolicy, listOfapiWebhookDeliveryHistory, redeliverOfapiWebhook,
   replayLocalOfapiWebhook, saveOfapiWebhookCollectionPolicy, syncOfapiWebhookDeliveries,
@@ -222,6 +223,26 @@ export async function registerIngestRoutes(server: ApiServer, ctx: ApiModuleCont
       reply.header(name, value);
     }
     return reply.code(response.status as 200).send(response.body);
+  });
+
+  server.post("/api/v1/admin/ofapi/marketing/rebuild", {schema:routeSchemas.ofapiMarketingRebuild}, async request => {
+    const principal=await requirePrincipal(request); requireOwner(principal);
+    return rebuildOfapiMarketingState(appContext,principal.user.id);
+  });
+  server.get("/api/v1/admin/ofapi/marketing", {schema:routeSchemas.ofapiMarketingGet}, async request => {
+    requireOwner(await requirePrincipal(request)); return getOfapiMarketingDashboard(appContext);
+  });
+  server.post("/api/v1/admin/ofapi/marketing/intents", {schema:routeSchemas.ofapiMarketingPrepare}, async request => {
+    const principal = await requirePrincipal(request); requireOwner(principal);
+    return prepareOfapiMarketingCommand(appContext, request.body, principal.user.id);
+  });
+  server.post("/api/v1/admin/ofapi/marketing/intents/:id/dispatch", {schema:routeSchemas.ofapiMarketingDispatch}, async request => {
+    const principal = await requirePrincipal(request); requireOwner(principal);
+    return dispatchOfapiMarketingCommand(appContext, {...request.body,id:request.params.id}, principal.user.id);
+  });
+  server.post("/api/v1/admin/ofapi/marketing/postbacks/refresh", {schema:routeSchemas.ofapiMarketingPostbacksRefresh}, async request => {
+    const principal = await requirePrincipal(request); requireOwner(principal);
+    return refreshOfapiMarketingPostbacks(appContext, principal.user.id, request.body.postbackId);
   });
 
   server.get("/api/v1/admin/ofapi/banned-words", { schema: routeSchemas.ofapiBannedWordsAdminGet }, async request => {

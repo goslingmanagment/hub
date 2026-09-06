@@ -1,3 +1,6 @@
+import { sql } from "drizzle-orm";
+import { assertOfapiConfiguredAccess } from "./ofapi-vendor-usage.ts";
+import { checkOfapiCurrentBinding } from "@agency_hub_core/db";
 import { createHash } from "node:crypto";
 import {
   captureOfapiAttemptResponse,
@@ -35,6 +38,7 @@ export interface OfapiCollectionReadStep {
   pathname: string;
   query: Record<string, string>;
   detail?: boolean;
+  scopeAccountId?: string;
 }
 export interface OfapiCapturedCollectionRead {
   body: unknown;
@@ -104,6 +108,7 @@ export async function captureOfapiCollectionRead(
   const resolved = resolveOfapiCatalogPath(
     input.step.pathname,
     input.step.query,
+    input.accountId,
   );
   if (
     !resolved ||
@@ -112,6 +117,18 @@ export async function captureOfapiCollectionRead(
     resolved.definition.category !== input.context.category
   )
     throw new Error("Unregistered collection read");
+  const reservedCredits = resolved.definition.reservedCredits ?? 1;
+  if ((input.context.reservedCredits ?? reservedCredits) !== reservedCredits) throw new Error("Collection estimate differs from registered cost");
+  if (resolved.definition.scope === "smart_link") {
+    if (input.step.scopeAccountId !== input.accountId) throw new Error("Global collection scope proof is absent");
+    if (resolved.definition.id !== "smart_links" && resolved.definition.id !== "smart_link") {
+      const linkId = input.step.pathname.split("/")[2];
+      const proof = await app.db.execute(sql`select 1 from ofapi_read_snapshots s, jsonb_array_elements(s.items) item
+        where s.page_id=${input.pageId} and s.operation in ('ofapi_read_smart_links','ofapi_read_smart_link')
+        and item->'resource'->>'id'=${linkId} and item->'resource'->>'nativeAccountRef'=${input.accountId} limit 1`);
+      if (!proof.rows.length) throw new Error("Read this page's Smart Link inventory before collecting detail");
+    }
+  }
   const target = { ...input.step, collectionJobId: input.context.jobId };
   const completed = await findCompletedOfapiCaptureJobByTarget(app.db, {
     activeSlotKey: `page:${input.pageId}:collection:${input.stepKey}`,
@@ -129,7 +146,7 @@ export async function captureOfapiCollectionRead(
     budgetScope: "bulk",
     createdBy: "owner",
     maxCalls: 1,
-    maxCredits: Math.max(1, input.context.reservedCredits ?? 1),
+    maxCredits: Math.max(1, reservedCredits),
   });
   if (created.job.state === "complete") return loadCaptured(app, created.job);
   const job = await leaseNextOfapiCaptureJob(app.db, {
@@ -166,7 +183,7 @@ export async function captureOfapiCollectionRead(
       requestSemantics: "safe_read",
       requestShape: { ...input.step },
       requireFreshStorageHealth: true,
-      reservedCredits: input.context.reservedCredits ?? 1,
+      reservedCredits,
       globalDailyCap,
       scopeDailyCap: Math.min(
         globalDailyCap,
@@ -198,13 +215,15 @@ export async function captureOfapiCollectionRead(
           priorityClass: "bulk",
           deadlineAt,
           maxResponseBytes: Math.min(input.maxBytes, 10 * 1024 * 1024),
-          beforeDispatch: async () =>
-            (await input.beforeDispatch()) &&
-            (await markOfapiAttemptDispatching(app.db, {
+          beforeDispatch: async () => {
+            await checkOfapiCurrentBinding(app.db, input.pageId, input.accountId);
+            await assertOfapiConfiguredAccess(app.db, createHash("sha256").update(app.config.ofapiApiKey ?? "").digest("hex"), { operation: input.step.operation, method: "GET", accountId: input.accountId });
+            return (await input.beforeDispatch()) && (await markOfapiAttemptDispatching(app.db, {
               attemptId: reservation.attemptId,
               fenceToken: reservation.fenceToken,
               jobLeaseToken: job.leaseToken!,
-            })),
+            }));
+          },
         },
       );
     } catch (error) {

@@ -16,8 +16,8 @@ import {
 } from "../apps/runtime/src/services/ofapi-collection-runner.ts";
 const def = (id: string) => OFAPI_READ_CATALOG.find((row) => row.id === id)!;
 describe("closed OFAPI read coverage catalog", () => {
-  it("resolves every catalog operation through the existing gateway with explicit policy context", () => {
-    for (const row of OFAPI_READ_CATALOG) {
+  it("resolves account catalog operations through the existing gateway with explicit policy context", () => {
+    for (const row of OFAPI_READ_CATALOG.filter(row => row.scope !== "smart_link")) {
       const query = Object.fromEntries(
         (row.required ?? []).map((key) => [
           key,
@@ -39,14 +39,14 @@ describe("closed OFAPI read coverage catalog", () => {
       });
       const data =
         row.shape === "object"
-          ? {}
+          ? row.id.endsWith("_stats") && row.category === "tracking_links" ? {summary:{}} : /^(tracking|trial)_link$/.test(row.id) ? {id:1} : {}
           : row.shape === "array"
             ? []
             : row.shape === "strings"
               ? []
               : { [row.shape]: [] };
       expect(
-        validateOfapiInteractiveResponseShape(row.operation, { data }),
+        validateOfapiInteractiveResponseShape(row.operation, { data: /^(tracking|trial)_link_tags$/.test(row.id) ? {tags:[]} : data }),
       ).toBe(true);
       expect(
         validateOfapiInteractiveResponseShape(row.operation, {

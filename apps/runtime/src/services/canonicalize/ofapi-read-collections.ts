@@ -5,6 +5,7 @@ import {
 } from "../ofapi-capture-contract.ts";
 import {
   normalizeOfapiRead,
+  validateOfapiMarketingAccount,
   ofapiReadCoverage,
   ofapiReadRecord,
   validateOfapiCatalogResponse,
@@ -25,6 +26,7 @@ function captured(observation: CanonicalizableObservation) {
     resolved = resolveOfapiCatalogPath(
       request.pathname,
       ofapiReadRecord(request.query) ?? {},
+      typeof request.scopeAccountId === "string" ? request.scopeAccountId : null,
     );
   } catch {
     return null;
@@ -41,10 +43,10 @@ export function canParseOfapiReadObservation(
     input &&
       (input.response.status < 200 ||
         input.response.status >= 300 ||
-        validateOfapiCatalogResponse(
+        (validateOfapiMarketingAccount(input.resolved.definition, input.parsed.body, input.resolved.accountId) && validateOfapiCatalogResponse(
           input.resolved.definition.operation,
           input.parsed.body,
-        )),
+        ))),
   );
 }
 export function canonicalizeOfapiReadObservation(
@@ -59,7 +61,11 @@ export function canonicalizeOfapiReadObservation(
   )
     return [];
   const { definition: def, pathname, query } = input.resolved;
-  const items = normalizeOfapiRead(def, input.parsed.body),
+  if (!validateOfapiMarketingAccount(def, input.parsed.body, input.resolved.accountId)) throw new Error("Marketing response account does not match captured scope");
+  const items = normalizeOfapiRead(def, input.parsed.body).map(item => {
+    const resource = ofapiReadRecord(ofapiReadRecord(item)?.resource);
+    return resource ? {...item, resource: {...resource, nativeAccountRef: input.resolved.accountId}} : item;
+  }),
     coverage = ofapiReadCoverage(def, input.parsed.body, pathname, query);
   return [
     {

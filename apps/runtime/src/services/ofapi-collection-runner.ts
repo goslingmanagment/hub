@@ -56,6 +56,7 @@ const READ_CATEGORIES: OfapiCollectionCategory[] = [
   "posts_comments",
   "content_history",
   "balances",
+  "smart_links", "tracking_links",
 ];
 export function planOfapiReadCollection(
   job: OfapiCollectionJob,
@@ -78,12 +79,13 @@ export function planOfapiReadCollection(
       extra.length ||
       queryExtra.length ||
       Boolean(def.detail) !== Boolean(nativeId) ||
-      (nativeId && !/^\d+$/.test(nativeId))
+      (nativeId && !(def.idKind === "ulid" ? /^[0-9A-HJKMNP-TV-Z]{26}$/ : /^\d+$/).test(nativeId))
     )
       throw new Error(`Unsupported collection selection ${entry}`);
     const query: Record<string, string> = {};
     if (def.query.limit) query.limit = def.id === "fans_expired" ? "20" : "50";
     if (def.query.offset) query.offset = "0";
+    if (def.scope === "smart_link" && !def.detail) query.account_ids = accountId;
     if (job.target.from && job.target.to) {
       if (def.query.start_date) {
         query.start_date = job.target.from;
@@ -93,6 +95,8 @@ export function planOfapiReadCollection(
         query.startDate = job.target.from;
         query.endDate = job.target.to;
       }
+      if (def.query.date_start) { query.date_start = job.target.from; query.date_end = job.target.to; }
+      if (def.query.acquisition_start) { query.acquisition_start = job.target.from; query.acquisition_end = job.target.to; }
     }
     const explicitQuery = new URLSearchParams(rawQuery ?? "");
     if (new Set(explicitQuery.keys()).size !== [...explicitQuery.keys()].length)
@@ -100,7 +104,8 @@ export function planOfapiReadCollection(
     for (const [key, value] of explicitQuery) query[key] = value;
     return {
       operation: def.operation,
-      pathname: `/${accountId}/${def.path.replace(":id", nativeId ?? "")}`,
+      pathname: `${def.scope === "smart_link" ? "" : `/${accountId}`}/${def.path.replace(":id", nativeId ?? "")}`,
+      ...(def.scope === "smart_link" ? { scopeAccountId: accountId } : {}),
       query: validateOfapiReadQuery(def, query),
       detail: def.detail,
     };
@@ -245,7 +250,7 @@ export async function runOfapiCollectionJob(
           purpose: job.purpose,
           jobId,
           detail: step.detail ?? false,
-          reservedCredits: 1,
+          reservedCredits: findOfapiReadDefinition(step.operation)?.reservedCredits ?? 1,
         },
         beforeDispatch: () => checkOfapiCollectionLease(app.db, jobId, token),
       });
