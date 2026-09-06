@@ -42,13 +42,20 @@ export async function getEffectiveOfapiCollectionPolicy(db: Database, category: 
 }
 export async function assertOfapiCollectionAllowed(db: Database, input: Omit<OfapiCollectionAdmissionInput, "requestId">) {
   const classification = classifyOfapiCollectionOperation(input.operation);
-  if (classification === "diagnostic" || classification === "command") return;
-  const category = input.context?.category ?? classification;
+  if (classification === "command" || (classification === "diagnostic" && input.context?.purpose !== "one_off")) return;
+  const category = input.context?.category ?? (classification === "diagnostic" ? null : classification);
   if (!category) throw new OfapiCollectionPolicyError("unregistered_operation");
   const policy = await getEffectiveOfapiCollectionPolicy(db, category, input.pageId);
   const purpose = input.context?.purpose ?? input.purpose ?? "background";
   if (purpose !== "interactive" && policy.backgroundPaused) throw new OfapiCollectionPolicyError("background_paused");
-  if (purpose === "one_off") return; // The physical reservation atomically validates the bounded approval.
+  if (purpose === "one_off") {
+    const jobId = input.context?.jobId;
+    const job = jobId ? await getOfapiCollectionJob(db, jobId) : null;
+    if (!job || Number(job.page_id) !== input.pageId || job.category !== category || !["queued", "running"].includes(job.state)) {
+      throw new OfapiCollectionPolicyError("job_unavailable");
+    }
+    return; // Physical reservation repeats this check and atomically enforces the allowance.
+  }
   const legacy = !input.context && ["legacy_baseline", "default_off"].includes(policy.source) && OFAPI_COLLECTION_LEGACY_OPERATIONS.some(operation => operation === input.operation);
   if (policy.mode === "off" && !legacy) throw new OfapiCollectionPolicyError("collection_off");
   if (purpose === "background" && policy.mode !== "scheduled" && !legacy) throw new OfapiCollectionPolicyError("on_demand_only");

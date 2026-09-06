@@ -22,7 +22,7 @@ body remain handler-checked and are noted per route in the service layer.
 | `agentKey` | Agent Read Plane key only; no human principal is admitted |
 | `any` | any authenticated principal except an agent key |
 
-## Routes (246)
+## Routes (247)
 
 | Method | Path | Route key | Kind | Roles | Page scope |
 | --- | --- | --- | --- | --- | --- |
@@ -86,6 +86,7 @@ body remain handler-checked and are noted per route in the service layer.
 | POST | `/api/v1/admin/ofapi/exports/:jobId/approve` | `ofapiTypedExportApprove` | `owner-session` | — | — |
 | POST | `/api/v1/admin/ofapi/exports/:jobId/artifact` | `ofapiTypedExportArtifact` | `owner-session` | — | — |
 | POST | `/api/v1/admin/ofapi/exports/:jobId/control` | `ofapiTypedExportControl` | `owner-session` | — | — |
+| POST | `/api/v1/admin/ofapi/exports/:jobId/resume` | `ofapiTypedExportResume` | `owner-session` | — | — |
 | GET | `/api/v1/admin/ofapi/exports/:jobId/rows` | `ofapiTypedExportRows` | `session` | — | — |
 | GET | `/api/v1/admin/ofapi/key-scope` | `ofapiKeyScopeGet` | `owner-session` | — | — |
 | POST | `/api/v1/admin/ofapi/key-scope` | `ofapiKeyScopeApply` | `owner-session` | — | — |

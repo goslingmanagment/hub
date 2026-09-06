@@ -103,8 +103,9 @@ export async function captureOwnerOfapiTypedArtifact(app: AppContext, input: z.i
   if (!target || !cursor || job.rowVersion !== input.expectedRowVersion || job.state !== "blocked" || cursor.phase !== "artifact_pending" || cursor.vendorStatus !== "completed" || cursor.totalRows !== cursor.rowsProcessed || cursor.failedDownloads !== 0) throw new ConflictError("Export has no verified completed artifact or its version changed");
   let bytes: Buffer;
   if (input.csvBase64 !== undefined) {
-    if (!input.expectedSha256 || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(input.csvBase64)) throw new BadRequestError("Manual CSV requires canonical base64 and its expected SHA256");
+    if (!input.expectedSha256) throw new BadRequestError("Manual CSV requires canonical base64 and its expected SHA256");
     bytes = Buffer.from(input.csvBase64, "base64");
+    if (bytes.toString("base64") !== input.csvBase64) throw new BadRequestError("Manual CSV requires canonical base64 and its expected SHA256");
   } else {
     if (!cursor.downloadUrl || !app.config.ofapiExpectedTeamSlug) throw new ConflictError("A verified team and completed download URL are required");
     bytes = (await downloadOfapiExportArtifact({ url: cursor.downloadUrl, exportId: cursor.vendorExportId, teamSlug: app.config.ofapiExpectedTeamSlug, maxBytes: target.maxArtifactBytes ?? 4 * 1024 * 1024 })).bytes;

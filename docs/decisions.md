@@ -11173,3 +11173,14 @@ unchanged. An executed tombstone rejects old material; newly observed material
 remains admissible. The behavior applies to both Fansly and OnlyFans media.
 
 Collection controls route owned-media actions to `/ofapi-media`; generic HTTP collection jobs reject `vault_files` before creating any durable job. The core messages/payments/audience categories retain their existing configurable collectors but advertise no generic one-off executor. Uploads still create their bounded task through the specialized owner approval flow.
+
+### Decision #267 follow-up: resume retained export authority
+
+An owner resumes admission-paused typed exports through their own dashboard/SDK
+action. The policy and capture versions are checked together; both collection
+and capture rows resume under their original cursor, account and caps. The next
+planned request must fit the retained allowance. A documented free status read
+is admissible when the preceding paid start already reserved the entire credit
+cap. Unresolved reserved/dispatching/indeterminate requests and terminal export
+states cannot be revived by this action. Resuming a started export does not
+repeat its POST or create a new export; paid retry remains a separate approval.
