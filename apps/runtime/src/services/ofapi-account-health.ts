@@ -9,6 +9,7 @@ import { sql } from "drizzle-orm";
 import {
   advancePageOfapiAuthStatus,
   withOfapiBindingLock,
+  lockPageSyncStatesForPage,
   getOfapiBindingPage,
   findPageByOfapiAccountId,
   getLatestOfapiWebhookEventReceivedAt,
@@ -134,14 +135,14 @@ async function applyCurrentOfapiAccountHealthEvent(
         occurredAt: row.receivedAt,
       });
     } else if (OFAPI_AUTH_RECOVERED_STATUSES.has(authStatus)) {
-      // Stage 26: vendor-signaled recovery is the OFAPI-side re-verify —
-      // release the auth pause the same way credential re-verify does.
-      // Only this generation owns these pauses. Older or operator blockers survive.
+      // Clear this generation’s auth marker atomically without releasing the owner pause.
+      await lockPageSyncStatesForPage(app.db, page.id);
       await app.db.execute(sql`
         update page_sync_states set blocker_kind=null,blocker_code=null,blocker_message=null,blocked_at=null,
-          blocker_ofapi_generation=null,status=case when request_seq>applied_seq then 'pending'::page_sync_status else 'idle'::page_sync_status end,
+          blocker_ofapi_generation=null,status=case when ofapi_user_paused then 'paused'::page_sync_status
+            when request_seq>applied_seq then 'pending'::page_sync_status else 'idle'::page_sync_status end,
           retry_kind=null,retry_at=null,updated_at=${row.receivedAt}
-        where page_id=${page.id} and blocker_kind='auth' and blocker_ofapi_generation=${binding.generation} and not ofapi_user_paused
+        where page_id=${page.id} and blocker_kind='auth' and blocker_ofapi_generation=${binding.generation}
       `);
       await resolveOfapiAuthIncident(app, {
         platformAccountId: page.id,

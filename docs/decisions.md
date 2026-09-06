@@ -256,6 +256,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 253 | OFAPI roster capture | Account roster is restricted identity evidence; typed projection excludes session material before capture and preserves identity conflicts |
 | 254 | OFAPI missing binding | Park only unblocked work and current-generation auth; repeated 404 preserves state versions and retries notifications with the original marker time |
 | 255 | OFAPI recovery evidence | Authenticated target required; roster transport receipt is persisted as the binding recovery watermark and audit evidence |
+| 256 | OFAPI owner pause recovery | Auth marker and owner pause are separate; recovery locks sync rows before reread and clears only its marker, leaving Resume to the owner |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -10802,3 +10803,14 @@ received before it are stale; events at or after it still advance. The timestamp
 is excluded from the preview token so the fresh apply-time fetch remains usable.
 This receipt is not vendor event time and does not replay events already skipped
 before the new binding existed.
+
+
+## Auth recovery preserves owner pause without stranding its blocker (2026-09-06)
+
+**Decision #256:** Verified apply and same-generation connected/reconnected clear
+a confirmed auth blocker from an owner-paused row while preserving its pause.
+Apply locks all page sync rows in the same order as Pause/Resume before rereading
+the recovery snapshot and retains those locks through cleanup. Resume either
+precedes that decision and causes a preview conflict, or waits until the marker
+is gone. Connected recovery uses one UPDATE with a per-row pause decision.
+Checkpoints and unknown-generation legacy blockers are unchanged.

@@ -215,3 +215,13 @@ uses the database clock on the same host; revisit clock assumptions if split.
 A new-account event already processed before binding commit may find no page
 and remain skipped. This window includes capture, credit, identity and lock waits;
 the boundary does not replay such events.
+
+
+### Owner pause during auth recovery
+
+Apply and same-generation connected/reconnected clear the confirmed auth marker
+on owner-paused rows while retaining their pause and checkpoints. Only Resume
+releases the pause. Apply takes ordered sync-row locks before recovery reread:
+a preceding Resume changes the snapshot and requires re-preview; a concurrent
+Resume waits for commit and then sees the cleared marker. Legacy blockers whose
+generation cannot be proved remain unchanged; there is no blanket backfill.

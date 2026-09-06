@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  createModel, createOnlyFansPage, ensurePageSyncStates, pausePageSync, findHistoricalPageByOfapiAccountId,
+  createModel, createOnlyFansPage, ensurePageSyncStates, pausePageSync, resumePageSync, applyVerifiedOfapiBinding, findHistoricalPageByOfapiAccountId,
   findPageByOfapiAccountId, getOfapiBindingPage, setPageOfapiAccountId,
   upsertOfapiWebhookConfig, getOfapiWebhookConfig, listNotificationIncidents, markOfapiBindingUnavailable,
 } from "@agency_hub_core/db";
@@ -304,5 +304,57 @@ describe("OFAPI authenticated recovery boundary", () => {
     await lifecycle("acct_new", "authentication_failed", new Date(rosterRow.received_at.getTime() + delta));
     expect((await testDb!.pool.query("select ofapi_auth_status from pages where id=$1", [pageId])).rows[0].ofapi_auth_status).toBe("authentication_failed");
     expect((await testDb!.pool.query("select blocker_ofapi_generation from page_sync_states where page_id=$1 and stream='subscribers'", [pageId])).rows[0].blocker_ofapi_generation).toBe(generation + 1);
+  });
+});
+
+
+describe("OFAPI owner pause and verified recovery", () => {
+  const subscriber = async () => (await testDb!.pool.query("select status,blocker_kind,blocker_ofapi_generation,ofapi_user_paused from page_sync_states where page_id=$1 and stream='subscribers'", [pageId])).rows[0];
+  async function pausedPreview() {
+    await ensurePageSyncStates(app.db, { pageId });
+    await lifecycle("acct_old", "authentication_failed");
+    await pausePageSync(app.db, { pageId, streams: ["subscribers"] });
+    return refreshOfapiBinding(app, bindingInput(), 1);
+  }
+  it("REVIEW owner can resume a stream paused during old-binding auth after replacement", async () => {
+    const preview = await pausedPreview();
+    await refreshOfapiBinding(app, { ...bindingInput(), dryRun: false, previewToken: preview.previewToken }, 1);
+    expect(await subscriber()).toEqual({ status: "paused", blocker_kind: null, blocker_ofapi_generation: null, ofapi_user_paused: true });
+    await resumePageSync(app.db, { pageId, streams: ["subscribers"] });
+    const row = await subscriber();
+    expect(row).toMatchObject({ blocker_kind: null, ofapi_user_paused: false });
+    expect(["pending", "idle"]).toContain(row.status);
+  });
+  it("Resume during apply waits for the lock held inside apply", async () => {
+    const preview = await pausedPreview();
+    let resume: Promise<void> | undefined;
+    try {
+      expect(await applyVerifiedOfapiBinding(app.db, {
+        ...preview, authVerifiedAt: new Date(), evidence: { source: "concurrency_test" },
+      }, { afterLock: async () => {
+        resume = resumePageSync(app.db, { pageId, streams: ["subscribers"] });
+        const outcome = await Promise.race([resume.then(() => "resumed"), new Promise(resolve => setTimeout(() => resolve("waiting"), 300))]);
+        expect(outcome).toBe("waiting");
+      } })).toBe(true);
+    } finally { await resume; }
+    expect(await subscriber()).toMatchObject({ blocker_kind: null, blocker_ofapi_generation: null, ofapi_user_paused: false });
+    expect(["pending", "idle"]).toContain((await subscriber()).status);
+  });
+  it("Resume before apply invalidates preview and the new preview recovers the row", async () => {
+    const preview = await pausedPreview();
+    expect(preview.recovery.some(row => row.stream === "subscribers")).toBe(false);
+    await resumePageSync(app.db, { pageId, streams: ["subscribers"] });
+    await expect(refreshOfapiBinding(app, { ...bindingInput(), dryRun: false, previewToken: preview.previewToken }, 1)).rejects.toThrow("preview changed");
+    const next = await refreshOfapiBinding(app, bindingInput(), 1);
+    expect(next.recovery.some(row => row.stream === "subscribers")).toBe(true);
+    await refreshOfapiBinding(app, { ...bindingInput(), dryRun: false, previewToken: next.previewToken }, 1);
+    expect(await subscriber()).toMatchObject({ blocker_kind: null, ofapi_user_paused: false });
+  });
+  it.each(["connected", "reconnected"])("%s clears the same-generation marker while preserving the owner pause", async event => {
+    await pausedPreview();
+    await lifecycle("acct_old", event, new Date(Date.now() + 1000));
+    expect(await subscriber()).toEqual({ status: "paused", blocker_kind: null, blocker_ofapi_generation: null, ofapi_user_paused: true });
+    await resumePageSync(app.db, { pageId, streams: ["subscribers"] });
+    expect(["pending", "idle"]).toContain((await subscriber()).status);
   });
 });

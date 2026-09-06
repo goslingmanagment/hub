@@ -44,14 +44,19 @@ export async function withOfapiBindingLock<T>(db: Database, pageId: number, run:
   });
 }
 
+export const OFAPI_RECOVERABLE_AUTH_BLOCKER_CODES = [
+  "ofapi_authentication_failed", "ofapi_otp_code_required", "ofapi_face_otp_required",
+  "ofapi_disconnected", "ofapi_account_not_found",
+] as const;
+const recoverableCodes = () => sql.join(OFAPI_RECOVERABLE_AUTH_BLOCKER_CODES.map(code => sql`${code}`), sql`, `);
+
 export async function listOfapiBindingRecoveryCandidates(db: Database, pageId: number, generation: number) {
   const result = await db.execute<{ stream: string; version: string; code: string }>(sql`
     select s.stream, s.updated_at::text as version, s.blocker_code as code
     from page_sync_states s where s.page_id = ${pageId}
       and s.blocker_ofapi_generation = ${generation}
       and s.blocker_kind = 'auth' and not s.ofapi_user_paused
-      and s.blocker_code in ('ofapi_authentication_failed','ofapi_otp_code_required','ofapi_face_otp_required',
-        'ofapi_disconnected','ofapi_account_not_found')
+      and s.blocker_code in (${recoverableCodes()})
     order by s.stream
   `);
   return result.rows;
@@ -64,7 +69,7 @@ export async function applyVerifiedOfapiBinding(db: Database, input: {
   recovery: Array<{ stream: string; version: string; code: string }>;
   /** Receipt of the authenticated roster; null only for callers supplying no auth proof. */
   authVerifiedAt: Date | null;
-}) {
+}, hooks?: { afterLock?: () => Promise<void> }) {
   return withOfapiBindingLock(db, input.pageId, async tx => {
     // Serialize cross-page claims before testing historical ownership.
     await tx.execute(sql`select pg_advisory_xact_lock(9003011)`);
@@ -79,6 +84,10 @@ export async function applyVerifiedOfapiBinding(db: Database, input: {
       union all select 1 from pages p where p.id <> ${input.pageId} and p.ofapi_account_id = any(array[${sql.join(ids.map(id => sql`${id}`), sql`, `)}]::text[])
     `);
     if (conflicts.rows.length) return false;
+    // Pause/Resume use these row locks, not the binding advisory lock. Hold them
+    // from the recovery reread through marker cleanup and commit.
+    await lockPageSyncStatesForPage(tx, input.pageId);
+    await hooks?.afterLock?.();
     // Do not clear a newer blocker that appeared after preview.
     const recovery = await listOfapiBindingRecoveryCandidates(tx, input.pageId, page.generation);
     if (JSON.stringify(recovery) !== JSON.stringify(input.recovery)) return false;
@@ -112,6 +121,14 @@ export async function applyVerifiedOfapiBinding(db: Database, input: {
           and blocker_ofapi_generation=${page.generation} and blocker_kind='auth' and not ofapi_user_paused
       `);
     }
+    // Verified recovery clears the retired auth marker, while the owner keeps the pause.
+    await tx.execute(sql`
+      update page_sync_states set blocker_kind=null,blocker_code=null,blocker_message=null,blocked_at=null,
+        blocker_ofapi_generation=null,retry_kind=null,retry_at=null,updated_at=now()
+      where page_id=${input.pageId} and blocker_ofapi_generation=${page.generation}
+        and blocker_kind='auth' and ofapi_user_paused and status='paused'
+        and blocker_code in (${recoverableCodes()})
+    `);
     return true;
   });
 }

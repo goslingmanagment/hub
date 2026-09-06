@@ -396,7 +396,10 @@ accounts were deleted. Preflight is bound to the key fingerprint and runs at
 boot/adoption; correcting its boot configuration requires an approved rollout.
 
 Owner binding recovery is a preview/apply operation with generation and
-blocker-version checks. It does not use Reset, delete checkpoints, clear user
+blocker-version checks under the ordered page sync-row locks. Verified apply or
+same-generation connected/reconnected clears its auth marker even on owner-paused
+rows; the pause itself is released only by Resume. A changed recovery snapshot
+is refused and requires a new preview. It does not use Reset, delete checkpoints, clear user
 pauses, activate collectors or resend indeterminate commands. Unversioned
 legacy blockers are retained for explicit review. The free balance read has no
 paid fallback and never fabricates a zero result after access/transport failure.
