@@ -1776,7 +1776,7 @@ export function createOfapiClient(input: {
     body?: unknown,
   ): Promise<{ body: unknown; capture: OfapiAdminCapture | null; creditAccounting?: "pending" }> {
     if (method !== "GET") await assertCredentialReady();
-    const freeRead = method === "GET" && ["ofapi_balance_ping", "ofapi_credential_preflight", "ofapi_webhook_inventory", "ofapi_admin_accounts"].includes(operation);
+    const freeRead = method === "GET" && ["ofapi_balance_ping", "ofapi_credential_preflight", "ofapi_webhook_inventory", "ofapi_admin_accounts", "ofapi_vendor_usage"].includes(operation);
     await waitForRequestSlot("interactive", !freeRead);
     await authorizeOperation(operation, method, path);
     let response: Response;
