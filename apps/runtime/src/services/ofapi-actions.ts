@@ -12,7 +12,7 @@ import { ofapiActionRequest, ofapiActionAdmissionIssue, ofapiActionResultConfirm
 import { validateOfapiActionMedia, reserveOfapiActionMedia } from "./ofapi-action-media.ts";
 import type { OfapiActionRequest } from "./ofapi-actions-types.ts";
 import { loadObservationPayload } from "./payload-reader.ts";
-import { asRecord } from "./ofapi-payloads.ts";
+import { asRecord, negativeReceipt } from "./ofapi-payloads.ts";
 import { ofapiActionResponseSubjectRefs } from "./ofapi-action-subjects.ts";
 
 export const OFAPI_ACTION_RESPONSE_KIND = "ofapi.action_response.v1";
@@ -121,7 +121,10 @@ export function classifyOfapiActionResult(command: OfapiAction, request: OfapiAc
   const root = asRecord(body);
   const data = asRecord(root?.data);
   const confirmed = ofapiActionResultConfirmed(command, status, body);
-  if (!confirmed && (root?.error || data?.error || data?.success === false)) return result("rejected", null, "vendor_action_rejected");
+  // The module's verdict comes first: it alone knows the one read whose ordinary
+  // answer is `success:false`. Anything it did not confirm is then read for a
+  // vendor "no" by the shared rule at both levels.
+  if (!confirmed && (negativeReceipt(root) || negativeReceipt(data))) return result("rejected", null, "vendor_action_rejected");
   if (!confirmed) return result("indeterminate", null, request.resultKind === "partial" ? "vendor_partial_result_unconfirmed" : "vendor_result_unconfirmed");
   if (request.resultKind === "partial") return result(Object.keys(asRecord(data?.failed) ?? {}).length ? "partial" : "confirmed");
   const remoteId = safeId(data?.id) ?? (typeof data?.id === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(data.id) ? data.id : null);

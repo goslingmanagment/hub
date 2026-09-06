@@ -1,4 +1,5 @@
 import type { OfapiCollectionAction } from "../../../../packages/contracts/src/ofapi-actions-collections.ts";
+import { negativeReceipt } from "./ofapi-payloads.ts";
 import type { OfapiActionRequest } from "./ofapi-actions-types.ts";
 
 /** Build a closed provider request only after account binding and principal checks. */
@@ -86,10 +87,10 @@ function exactIds(actual: unknown, expected: readonly string[]): boolean {
     && ids.every(id => id !== null && expected.includes(id));
 }
 
-/** Positive receipt evidence only. The shared engine owns HTTP and final state. */
+/** Positive receipt evidence only. The shared engine owns HTTP, the envelope and final state. */
 export function ofapiCollectionResultConfirmed(command: OfapiCollectionAction, responseData: unknown): boolean {
   const data = record(responseData);
-  if (!data || data.error || data.success === false) return false;
+  if (!data || negativeReceipt(data)) return false;
   switch (command.action) {
     case "user_list_create":
     case "vault_list_create":

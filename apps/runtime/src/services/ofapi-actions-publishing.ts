@@ -1,6 +1,7 @@
 import { ofapiPublishingActionSchema, type OfapiPublishingAction } from "../../../../packages/contracts/src/ofapi-actions-publishing.ts";
 import { millsFromCents, millsToDollarsNumber } from "@agency_hub_core/shared";
 import { ofapiWireId } from "./ofapi-command-composer.ts";
+import { negativeReceipt } from "./ofapi-payloads.ts";
 import type { OfapiActionRequest } from "./ofapi-actions-types.ts";
 
 const usd = (cents: number) => millsToDollarsNumber(millsFromCents(cents));
@@ -76,7 +77,6 @@ const responseId = (value: unknown): string | null => {
   return typeof value === "string" && /^[1-9]\d{0,19}$/.test(value) ? value : null;
 };
 const count = (value: unknown): boolean => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
-const errorEvidence = (value: Record<string, unknown> | null) => !value || value.success === false || value.hasError === true || (value.error !== undefined && value.error !== null && value.error !== false) || (value.errors !== undefined && value.errors !== null && (!Array.isArray(value.errors) || value.errors.length > 0));
 
 /**
  * Confirms the documented receipt shape, not asynchronous delivery/readiness.
@@ -86,8 +86,8 @@ export function ofapiPublishingResultConfirmed(command: OfapiPublishingAction, s
   if (command.action === "post_update") return status === 200 && body === "";
   if (status !== (command.action === "post_comment_create" ? 201 : 200)) return false;
   const envelope = object(body), data = object(envelope?.data);
-  if (errorEvidence(envelope) || errorEvidence(data)) return false;
-  const result = data!;
+  if (!envelope || !data || negativeReceipt(envelope) || negativeReceipt(data)) return false;
+  const result = data;
   const id = responseId(result.id);
   switch (command.action) {
     case "post_create": return id !== null && result.responseType === "post";
@@ -100,7 +100,7 @@ export function ofapiPublishingResultConfirmed(command: OfapiPublishingAction, s
     case "campaign_update": return id !== null && (command.action !== "campaign_update" || id === command.campaignId) && typeof result.isDone === "boolean" && typeof result.isReady === "boolean" && result.hasError === false && result.isCanceled === false;
     case "campaign_cancel": {
       const queue = object(result.queue);
-      return result.success === true && !errorEvidence(queue) && responseId(queue?.id) === command.campaignId && queue?.isCanceled === true;
+      return result.success === true && queue !== null && !negativeReceipt(queue) && responseId(queue.id) === command.campaignId && queue.isCanceled === true;
     }
     case "post_archive":
     case "post_unarchive": {
