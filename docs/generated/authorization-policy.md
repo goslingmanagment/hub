@@ -22,7 +22,7 @@ body remain handler-checked and are noted per route in the service layer.
 | `agentKey` | Agent Read Plane key only; no human principal is admitted |
 | `any` | any authenticated principal except an agent key |
 
-## Routes (244)
+## Routes (249)
 
 | Method | Path | Route key | Kind | Roles | Page scope |
 | --- | --- | --- | --- | --- | --- |
@@ -89,6 +89,11 @@ body remain handler-checked and are noted per route in the service layer.
 | GET | `/api/v1/admin/ofapi/exports/:jobId/rows` | `ofapiTypedExportRows` | `session` | — | — |
 | GET | `/api/v1/admin/ofapi/key-scope` | `ofapiKeyScopeGet` | `owner-session` | — | — |
 | POST | `/api/v1/admin/ofapi/key-scope` | `ofapiKeyScopeApply` | `owner-session` | — | — |
+| GET | `/api/v1/admin/ofapi/marketing` | `ofapiMarketingGet` | `owner-session` | — | — |
+| POST | `/api/v1/admin/ofapi/marketing/intents` | `ofapiMarketingPrepare` | `owner-session` | — | — |
+| POST | `/api/v1/admin/ofapi/marketing/intents/:id/dispatch` | `ofapiMarketingDispatch` | `owner-session` | — | — |
+| POST | `/api/v1/admin/ofapi/marketing/postbacks/refresh` | `ofapiMarketingPostbacksRefresh` | `owner-session` | — | — |
+| POST | `/api/v1/admin/ofapi/marketing/rebuild` | `ofapiMarketingRebuild` | `owner-session` | — | — |
 | GET | `/api/v1/admin/ofapi/media` | `ofapiMediaGet` | `session` | — | — |
 | POST | `/api/v1/admin/ofapi/media/handoff` | `ofapiMediaHandoff` | `owner-session` | — | — |
 | POST | `/api/v1/admin/ofapi/media/sources` | `ofapiMediaSourceCreate` | `owner-session` | — | — |

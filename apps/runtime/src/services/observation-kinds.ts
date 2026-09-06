@@ -43,6 +43,7 @@ export const WRITTEN_OBSERVATION_KINDS: readonly WrittenObservationKind[] = [
   { kind: "ofapi.collection_read_response.v1", source: "ofapi_capture", writer: "services/ofapi-collection-read-transport.ts" },
   { kind: "ofapi_gateway_chat_search", source: "readthrough", writer: "services/ofapi-read-gateway.ts" },
   // Release 1 control-plane witnesses; these do not start business collectors.
+  { kind: "ofapi.marketing_response.v1", source: "operator", writer: "services/ofapi-smart-links.ts" },
   { kind: "ofapi.binding.replaced", source: "operator", writer: "services/ofapi-binding-refresh.ts" },
   { kind: "ofapi.account.response", source: "pull", writer: "services/ofapi-credential-policy.ts" },
   { kind: "ofapi_admin_accounts", source: "operator", writer: "services/ofapi-credential-policy.ts" },
@@ -600,6 +601,11 @@ export const OFF_SWEEP_OBSERVATION_CLAIMANTS: readonly {
   kinds: readonly string[];
   justification: string;
 }[] = [
+  {
+    id: "OFAPI_MARKETING_ADMIN_PROJECTION",
+    kinds: ["ofapi.marketing_response.v1"],
+    justification: "services/projections/ofapi-marketing.ts registers and runs this encrypted operator-response consumer with resumable receipts and an owner rebuild. Frozen command identity and target reconstruct administrative configuration without manufacturing page business events; collection analytics still use the canonical read family.",
+  },
   {
     id: "FANSLY_REPLAY_FAMILY",
     kinds: FANSLY_REPLAY_FAMILY.kinds ?? [],
