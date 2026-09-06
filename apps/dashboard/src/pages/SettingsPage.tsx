@@ -2,6 +2,7 @@ import { useSearchParams } from "react-router";
 import { resolveSettingsTab, type SettingsTab } from "@/lib/navigation";
 import { CredentialsTab } from "./settings/CredentialsTab.js";
 import { SyncTab } from "./settings/SyncTab.js";
+import { CollectionTab } from "./settings/CollectionTab.js";
 import { ModelsTab } from "./settings/ModelsTab.js";
 import { PagesTab } from "./settings/PagesTab.js";
 import { UsersTab } from "./settings/UsersTab.js";
@@ -12,6 +13,7 @@ import { AgentKeysTab } from "./settings/AgentKeysTab.js";
 const tabs: { key: SettingsTab; label: string }[] = [
   { key: "credentials", label: "Credentials" },
   { key: "sync", label: "Sync" },
+  { key: "collection", label: "Collection" },
   { key: "models", label: "Models" },
   { key: "personas", label: "AI Personas" },
   { key: "pages", label: "Pages" },
@@ -53,6 +55,7 @@ export function SettingsPage() {
 
       {activeTab === "credentials" && <CredentialsTab />}
       {activeTab === "sync" && <SyncTab />}
+      {activeTab === "collection" && <CollectionTab />}
       {activeTab === "models" && <ModelsTab />}
       {activeTab === "personas" && <AiPersonasTab />}
       {activeTab === "pages" && <PagesTab />}

@@ -2,6 +2,7 @@ export * from "./agentHydration.js";
 export * from "./adminNotifications.js";
 export * from "./adminAiPersonas.js";
 export * from "./agentKeys.js";
+export * from "./adminOfapiCollection.js";
 export * from "./adminOfapiCredits.js";
 export * from "./adminPages.js";
 export * from "./adminSync.js";
