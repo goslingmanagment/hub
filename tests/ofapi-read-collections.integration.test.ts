@@ -210,6 +210,34 @@ describe("resumable OFAPI collection reads", () => {
     });
     expect(await readOfapiStoredSnapshots(app.db, { pageId })).toHaveLength(1);
   });
+  it("replays older captured responses while preserving ordered snapshot history without refetching", async () => {
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(response({ list: [{ id: 7, totalSpent: 2 }], hasMore: false }, null))
+      .mockResolvedValueOnce(response({ list: [{ id: 7, totalSpent: 9 }], hasMore: false }, null));
+    vi.stubGlobal("fetch", fetch);
+    const step = { operation: "ofapi_read_fans_expired", pathname: "/acct_test/fans/expired", query: { limit: "20", offset: "0" } };
+    const captured = [];
+    for (let index = 0; index < 2; index++) {
+      const approved = await job(["fans_expired"], 1);
+      captured.push(await captureOfapiCollectionRead(app, {
+        pageId, accountId: "acct_test", step, stepKey: `ordered-recovery:${approved.id}`,
+        context: { category: "profile_notifications", purpose: "one_off", jobId: approved.id },
+        maxBytes: 100000, beforeDispatch: async () => true,
+      }));
+    }
+    for (const capture of [...captured].reverse()) {
+      const result = await materializeOfapiReadSnapshot(app, { pageId, step, body: capture.body,
+        observationId: capture.observationId, observationReceivedAt: capture.observationReceivedAt });
+      await completeOfapiCollectionRead(app, capture, result.items.length);
+    }
+    const snapshots = await readOfapiStoredSnapshots(app.db, { pageId });
+    expect(snapshots).toHaveLength(2);
+    expect(snapshots[0]!.observationId).toBe(String(captured[1]!.observationId));
+    expect((await db.pool.query("select count(*)::int count from domain_events where type='ofapi.read_snapshot_observed'")).rows[0].count).toBe(2);
+    await rebuildOfapiReadSnapshotProjection(app, { accountId: pageId });
+    expect((await readOfapiStoredSnapshots(app.db, { pageId })).map(row => row.observationId)).toEqual(snapshots.map(row => row.observationId));
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
   it("admits only one lease and enforces physical scheduled job caps plus changed policy", async () => {
     const approved = await job(["me"]);
     const leases = await Promise.all([
