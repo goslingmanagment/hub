@@ -48,8 +48,8 @@ beforeEach(async (context) => {
   });
 });
 
-function listPage(items: Record<string, unknown>[]): OfapiListPage {
-  return { items, hasNextPage: false, nextMarker: null, nextPageUrl: null, meta: null };
+function listPage(items: Record<string, unknown>[], hasNextPage = items.length === 100): OfapiListPage {
+  return { items, hasNextPage, nextMarker: null, nextPageUrl: null, meta: null };
 }
 
 function linkUser(id: number, username: string, name: string) {
@@ -140,6 +140,50 @@ async function buildInput(page: { id: number }) {
 }
 
 describe("OFAPI fan identities (tracking/trial links)", () => {
+  it("R1 persists a short subscriber continuation and resumes without completing or rebuying its prefix", async () => {
+    appContext = createTestAppContext(testDb!, {
+      ofapiFanIdentitiesSyncEnabled: true, ofapiCreditLedgerEnabled: true,
+      ofapiAudienceMaxRequestsPerRun: 4,
+    });
+    const page = await seedMappedPage("short-continuation");
+    const calls: string[] = [];
+    appContext = { ...appContext, ofapi: {
+      listTrackingLinks: async (_context: unknown, _account: string, params: { offset: number }) => {
+        calls.push(`links:${params.offset}`);
+        return params.offset === 0 ? { ...listPage([{ id: 42 }], true),
+          nextPageUrl: `/api/${OFAPI_ACCOUNT}/tracking-links?offset=10&limit=100` } : listPage([]);
+      },
+      listTrialLinks: async () => { calls.push("trial"); return listPage([]); },
+      listTrackingLinkUsers: async (_context: unknown, _account: string, _id: string,
+        kind: string, params: { offset: number }) => {
+        calls.push(`${kind}:${params.offset}`);
+        if (kind === "spenders") return listPage([]);
+        return { ...listPage([linkUser(700000 + params.offset, "user", "User")], params.offset === 0),
+          nextPageUrl: params.offset === 0 ? `/api/${OFAPI_ACCOUNT}/tracking-links/42/subscribers?offset=10&limit=100` : null };
+      },
+      listTrialLinkSubscribers: async () => listPage([]),
+    } as unknown as OfapiClient };
+    const result = await syncOfapiFanIdentities(appContext, await buildInput(page));
+    expect(result.satisfied).toBe(false);
+    const checkpoint = await getCheckpoint(appContext.db, page.id, "fan_identities");
+    expect(checkpoint?.state).toMatchObject({ activeTargetKey: "tracking:42:subscribers", activeOffset: 10, completedTargetKeys: [] });
+    const resumed = await syncOfapiFanIdentities(appContext, await buildInput(page));
+    expect(resumed.satisfied).toBe(true);
+    expect(calls).toEqual(["links:0", "links:10", "trial", "subscribers:0", "subscribers:10", "spenders:0"]);
+    const fans = await testDb!.pool.query("select platform_user_id from fans order by platform_user_id");
+    expect(fans.rows).toEqual([{ platform_user_id: "700000" }, { platform_user_id: "700010" }]);
+  });
+
+  it("R1 stops at a full terminal link page without buying an extra page", async () => {
+    const page = await seedMappedPage("full-terminal");
+    const { client } = fakeLinksClient({ trackingLinks: [], trialLinks: [], trackingUsers: new Map(), trialSubscribers: new Map() });
+    const tracking = vi.fn(async () => listPage(Array.from({ length: 100 }, () => ({ id: 42 })), false));
+    client.listTrackingLinks = tracking;
+    appContext = { ...appContext, ofapi: client };
+    expect((await syncOfapiFanIdentities(appContext, await buildInput(page))).satisfied).toBe(true);
+    expect(tracking).toHaveBeenCalledTimes(1);
+  });
+
   it("feeds link users into fans and page_fans", async (context) => {
     if (!testDb) {
       context.skip();

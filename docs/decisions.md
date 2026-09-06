@@ -261,6 +261,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 258 | OFAPI audience quality | Unverified empty sweeps preserve membership and freshness; checkpoint hold drives both status readers until certification |
 | 259 | OFAPI capture uses vendor transport | Binding authorizes the account; Hub-to-OFAPI capture and gateway reads use the canonical vendor-direct route with one client pacing claim. Page-proxy availability cannot gate OFAPI capture; bounded diagnostics preserve dispatch certainty and omit arbitrary causes. |
 | 260 | OFAPI accounting evidence | Complete pages count once; exact zero-delta receipts remain append-only evidence; signed corrections reach attributed read models. Activity forecasts exclude visibly reported unverified balance drift. Local command refusals are not provider HTTP responses. |
+| 261 | OFAPI request audit correctness | Explicit list continuation owns completion; transient credential failure refreshes through one shared preflight; retained financial receipts repair accounting without resending confirmed commands; accepted media IDs never round and gateway required queries fail locally. |
 | 264 | OFAPI vendor usage and key scope | Preserve vendor aggregates independently of ledger; prefer fresh credit headers; CAS declarations bound to server credential fingerprint |
 
 ## Consensus Decisions
@@ -10922,6 +10923,40 @@ is floored at zero; ledger facts and the new net fields are not. Existing client
 continue to accept the response, while displaying negative windows requires
 adoption of the additive net fields.
 
+## OFAPI request audit correctness (2026-09-06)
+
+**Decision #261:** Generic successful list mapping must prove the declared list
+shape and continuation/termination evidence. Invalid items fail the page rather
+than disappearing. Link discovery and subscriber walks use verified continuation
+offsets across durable budget yields; the array-only tracking-spender family has
+its own length fallback. A full page with explicit termination does not buy an
+extra request. Unsafe numeric media identifiers remain exact strings on the wire,
+and gateway validation enforces vendor-required fields and user-list limit 10–50.
+
+Credential adoption retries transient unknown/denied and persistence failures
+after 30 seconds on the next access, with exactly one shared in-flight refresh.
+Verified/mismatched team identity and unconfigured expected team remain pinned to
+the client. This refresh is a read-only verification, never command retry authority.
+
+Migration 0154 adds immutable financial response receipts keyed by physical
+request/attempt identity before legacy ledger/counter settlement. Settlement and
+its accounted marker commit together under the receipt row lock. A confirmed
+mutation stays confirmed even if both accounting projections fail; its result
+retains a pending-accounting disposition. Subsequent paid dispatch drains pending
+receipts using database work only, including after process restart. Free account,
+credential, webhook-inventory and credit-balance diagnostics stay available.
+The raw receipt contains safe financial metadata and no fan/body/secret data;
+page-data erasure includes its nested page attribution alongside the credit ledger.
+A database-wide outage can still defeat all durable capture: the process retains
+an in-memory receipt and closes paid dispatch, but crash recovery in that interval
+requires reconciliation rather than a claim of nonexistent durable evidence.
+
+Optional operation admission runs before each physical HTTP dispatch, outside
+transport retry classification and before governed dispatch fencing. Root policy
+wiring supplies credential permissions and collector policy; this seam does not
+invent a new generic write API. Existing one-attempt commands, flags and spend
+ceilings are unchanged. See `docs/runbooks/ofapi-request-audit-fixes.md` for
+regression evidence, source discrepancies and rollout/recovery instructions.
 
 ## OFAPI vendor usage and declared key restrictions (2026-09-06)
 

@@ -3023,6 +3023,21 @@ export const OFAPI_CREDIT_LEDGER_SOURCES = [
   "adjustment",
 ] as const;
 
+// Retained financial receipts for legacy HTTP responses. Only the accounting
+// disposition changes; no response text, credentials or fan identities live here.
+export const ofapiCreditReceipts = pgTable("ofapi_credit_receipts", {
+  requestId: text("request_id").notNull(),
+  attemptNumber: integer("attempt_number").notNull(),
+  receivedAt: timestamp("received_at", { withTimezone: true }).notNull(),
+  observation: jsonbSafe("observation").$type<Record<string, unknown>>().notNull(),
+  accountedAt: timestamp("accounted_at", { withTimezone: true }),
+  accountingPath: text("accounting_path").$type<"ledger" | "physical">(),
+}, table => ({
+  pk: primaryKey({ columns: [table.requestId, table.attemptNumber] }),
+  pendingIdx: index("ofapi_credit_receipts_pending_idx")
+    .on(table.receivedAt, table.requestId, table.attemptNumber).where(sql`${table.accountedAt} is null`),
+}));
+
 // Append-only OFAPI credit movement (docs/ofapi-parity-plan.md D2-D5): the
 // checkbook the bank-statement reconciliation balances against. 'rest' rows
 // are written by the client's onCreditSpend sink (one per response that

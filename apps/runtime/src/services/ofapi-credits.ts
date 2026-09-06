@@ -10,11 +10,11 @@
 import {
   countOfapiWebhookEventsReceivedBetween,
   getOfapiCreditReconcileState,
-  hasOfapiCreditSpendRequestAttempt,
+  captureOfapiCreditReceipt,
+  settleOfapiCreditReceipt,
+  recoverOfapiCreditReceipts,
   insertOfapiCreditLedgerEntry,
   listOfapiBalanceObservationsAfter,
-  recordOfapiPhysicalCreditUsage,
-  recordOfapiCreditSpend,
   setOfapiCreditReconcileCursor,
   sumOfapiCreditsSpentBetween,
   sumOfapiKnownCreditsBetween,
@@ -63,53 +63,30 @@ export function isOfapiCreditLedgerEnabled(
 export function createOfapiCreditSpendSink(
   app: Pick<AppContext, "db" | "logger" | "config">,
 ): OfapiCreditSpendSink {
-  return async (observation) => {
+  const sink: OfapiCreditSpendSink = async (observation) => {
     if (!isOfapiCreditLedgerEnabled(app.config)) {
       return null;
     }
 
     try {
-      await recordOfapiCreditSpend(app.db, {
-        operation: observation.operation,
-        pageId: observation.pageId,
-        httpStatus: observation.httpStatus,
-        credits: observation.credits,
-        estimated: observation.estimated,
-        balanceAfter: observation.balanceAfter,
-        requestId: observation.requestId,
-        actorUserId: observation.actorUserId,
-        budgetScope: observation.budgetScope ?? null,
-        details: {
-          attemptNumber: observation.attemptNumber,
-          ...(observation.isCached === null ? {} : { isCached: observation.isCached }),
-        },
-      });
-      return true;
-    } catch (error) {
-      // A connection failure can make COMMIT acknowledgement ambiguous. Check
-      // the physical request-attempt identity before telling the caller to
-      // repair the fast counter, otherwise a committed ledger write could be
-      // counted twice. requestId alone is logical and is reused by retries.
-      let recorded = await hasOfapiCreditSpendRequestAttempt(app.db, {
-        requestId: observation.requestId,
-        attemptNumber: observation.attemptNumber,
-      }).catch(() => false);
-      if (!recorded) {
-        recorded = await recordOfapiPhysicalCreditUsage(app.db, {
-          creditsUsed: observation.credits,
-          balance: observation.balanceAfter,
-          budgetScope: observation.budgetScope ?? null,
-        }).then(() => true, () => false);
-      }
-      app.logger.warn(
-        { err: error, operation: observation.operation, recorded },
-        recorded
-          ? "OFAPI credit ledger write failed; physical counter preserved"
-          : "OFAPI credit accounting failed; request path will stop",
-      );
+      await captureOfapiCreditReceipt(app.db, observation);
+      const recorded = await settleOfapiCreditReceipt(app.db, observation);
+      if (!recorded) app.logger.warn({ operation: observation.operation, requestId: observation.requestId },
+        "OFAPI financial receipt pending; paid dispatch waits for accounting recovery");
       return recorded;
+    } catch (error) {
+      app.logger.warn(
+        { err: error, operation: observation.operation, requestId: observation.requestId },
+        "OFAPI credit receipt persistence unavailable; request path will stop",
+      );
+      return false;
     }
   };
+  sink.recoverPending = async () => {
+    if (!isOfapiCreditLedgerEnabled(app.config)) return true;
+    return recoverOfapiCreditReceipts(app.db).catch(() => false);
+  };
+  return sink;
 }
 
 /** 1 credit per 100 webhook events, charged per started batch of 100. */

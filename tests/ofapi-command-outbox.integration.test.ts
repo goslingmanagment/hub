@@ -21,7 +21,7 @@ import {
   sweepOfapiCommands,
   verifyOfapiCommandFromSentWebhook,
 } from "../apps/runtime/src/services/ofapi-command-executor.ts";
-import { createOfapiClient, OfapiApiError } from "../apps/runtime/src/services/ofapi.ts";
+import { createOfapiClient, OfapiApiError, OfapiCreditAccountingUnavailableError } from "../apps/runtime/src/services/ofapi.ts";
 import { ofapiCredentialPolicy } from "../apps/runtime/src/services/ofapi-credential-policy.ts";
 import {
   resetIntegrationDatabase,
@@ -755,6 +755,30 @@ describe("OFAPI command outbox intake", () => {
       state: "failed_terminal", attemptCount: 1, lastErrorCode: "ofapi_http_403",
       verifierResult: { source: "ofapi_response", httpStatus: 403 },
     });
+  });
+
+  it("R4 confirms a sent command with pending credit evidence and never reexecutes it", async () => {
+    appContext.config.ofapiDesktopCommandExecutionEnabled = true;
+    const sendTextMessage = vi.fn().mockResolvedValue({ messageId: "987654321", creditAccounting: "pending" });
+    appContext.ofapi = { sendTextMessage } as unknown as AppContext["ofapi"];
+    const created = await createCommand(commandBody());
+    const { commandId } = created.json() as { commandId: string };
+    await expect(executeOfapiCommand(appContext, commandId)).resolves.toMatchObject({ status: "confirmed" });
+    await executeOfapiCommand(appContext, commandId);
+    expect(sendTextMessage).toHaveBeenCalledTimes(1);
+    expect((await getCommand(commandId)).json()).toMatchObject({ state: "confirmed", platformMessageId: "987654321",
+      verifierResult: { source: "ofapi_response", creditAccounting: "pending" } });
+  });
+
+  it("R4 classifies an accounting admission refusal as local without a false provider response", async () => {
+    appContext.config.ofapiDesktopCommandExecutionEnabled = true;
+    appContext.ofapi = { sendTextMessage: vi.fn().mockRejectedValue(new OfapiCreditAccountingUnavailableError()) } as unknown as AppContext["ofapi"];
+    const created = await createCommand(commandBody());
+    const { commandId } = created.json() as { commandId: string };
+    await expect(executeOfapiCommand(appContext, commandId)).resolves.toMatchObject({ status: "failed_terminal" });
+    expect((await getCommand(commandId)).json()).toMatchObject({ state: "failed_terminal",
+      lastErrorCode: "ofapi_credit_accounting_unavailable",
+      verifierResult: { source: "local_precondition", reason: "credit_accounting_unavailable" } });
   });
 
   it("executes one vendor attempt and confirms from the response id", async () => {
