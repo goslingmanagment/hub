@@ -2882,7 +2882,8 @@ export async function advancePageOfapiAuthStatus(
       eq(pages.id, input.pageId),
       sql`(${pages.ofapiAuthChangedAt} is null or ${pages.ofapiAuthChangedAt} < ${input.changedAt}
         or (${pages.ofapiAuthChangedAt} = ${input.changedAt} and (
-          ${pages.ofapiAuthStatus} = ${input.authStatus}
+          ${pages.ofapiAuthStatus} is null
+          or ${pages.ofapiAuthStatus} = ${input.authStatus}
           or (${input.authStatus} in ('connected', 'reconnected', 'session_expired')
             and ${pages.ofapiAuthStatus} not in ('connected', 'reconnected', 'session_expired'))
         )))`,
