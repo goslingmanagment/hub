@@ -31,3 +31,24 @@ export function ofapiExtendedAction(kind: Exclude<OfapiExtendedCommandKind, "sen
   const [method, action] = chats[kind as keyof typeof chats];
   return { method, path: `${chat}/${action}`, body: undefined };
 }
+
+/** Webhooks can confirm v2 only when they actually carry the requested composer evidence. */
+export function ofapiSentWebhookMatchesV2(payload: unknown, observed: Record<string, unknown>): boolean {
+  const parsed = ofapiSendV2PayloadSchema.safeParse(payload);
+  if (!parsed.success) return false;
+  const p = parsed.data;
+  const body = buildOfapiSendV2Body(p);
+  if (observed.text !== p.text || observed.price !== body.price || observed.lockedText !== p.lockedText) return false;
+  const object = (value: unknown) => value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+  const reply = observed.replyToMessageId ?? object(observed.replyToMessage)?.id ?? null;
+  if ((reply === null ? null : String(reply)) !== p.replyToMessageId || (observed.giphyId ?? null) !== p.giphyId) return false;
+  if (!Array.isArray(observed.media)) return false;
+  const ids = observed.media.map(item => object(item)?.id).map(id => typeof id === "string" || (typeof id === "number" && Number.isSafeInteger(id)) ? String(id) : null);
+  if (p.mediaFiles.some(id => id.startsWith("ofapi_media_")) || ids.length !== p.mediaFiles.length || ids.some((id,index) => id !== p.mediaFiles[index])) return false;
+  for (const field of ["rfTag", "rfPartner", "rfGuest"] as const) {
+    const observedTags = observed[field];
+    if (observedTags === undefined && p[field].length === 0) continue;
+    if (!Array.isArray(observedTags) || JSON.stringify(observedTags.map(String)) !== JSON.stringify(p[field])) return false;
+  }
+  return true;
+}

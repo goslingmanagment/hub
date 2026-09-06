@@ -1,6 +1,6 @@
 import { OFAPI_EXTENDED_COMMAND_KINDS, millsFromCents, type OfapiExtendedCommandKind, type OfapiExtendedCommandPayload, type OfapiSendV2Payload } from "@agency_hub_core/shared";
 import { reserveOfapiProviderOperation, OfapiProviderOperationRefused } from "@agency_hub_core/db";
-import { buildOfapiSendV2Body } from "./ofapi-command-composer.ts";
+import { buildOfapiSendV2Body, ofapiSentWebhookMatchesV2 } from "./ofapi-command-composer.ts";
 import { createHash } from "node:crypto";
 import { OfapiKeyPermissionDeniedError } from "./ofapi-vendor-usage.ts";
 
@@ -773,6 +773,7 @@ export async function verifyOfapiCommandFromSentWebhook(
     attemptStartedTo: new Date(row.receivedAt.getTime() + WEBHOOK_CLOCK_SKEW_MS),
   });
   const matches = candidates.filter((candidate) => {
+    if (candidate.kind === "send_message_v2") return ofapiSentWebhookMatchesV2(candidate.payload, payload ?? {});
     if (candidate.kind === "send_text_message_v1") {
       const candidatePayload = candidate.payload as { text?: unknown };
       return normalizeDmMessageText(
