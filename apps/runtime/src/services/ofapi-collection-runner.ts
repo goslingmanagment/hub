@@ -15,6 +15,7 @@ import {
 } from "@agency_hub_core/db";
 import {
   OFAPI_READ_CATALOG,
+  isOfapiUserListRef,
   findOfapiReadDefinition,
   validateOfapiReadQuery,
   type OfapiCollectionCategory,
@@ -79,7 +80,7 @@ export function planOfapiReadCollection(
       extra.length ||
       queryExtra.length ||
       Boolean(def.detail) !== Boolean(nativeId) ||
-      (nativeId && !(def.idKind === "ulid" ? /^[0-9A-HJKMNP-TV-Z]{26}$/ : /^\d+$/).test(nativeId))
+      (nativeId && !(def.path.includes(":list") ? isOfapiUserListRef(nativeId) : (def.idKind === "ulid" ? /^[0-9A-HJKMNP-TV-Z]{26}$/ : /^\d+$/).test(nativeId)))
     )
       throw new Error(`Unsupported collection selection ${entry}`);
     const query: Record<string, string> = {};
@@ -104,7 +105,7 @@ export function planOfapiReadCollection(
     for (const [key, value] of explicitQuery) query[key] = value;
     return {
       operation: def.operation,
-      pathname: `${def.scope === "smart_link" ? "" : `/${accountId}`}/${def.path.replace(":id", nativeId ?? "")}`,
+      pathname: `${def.scope === "smart_link" ? "" : `/${accountId}`}/${def.path.replace(/:(?:id|list)/, nativeId ?? "")}`,
       ...(def.scope === "smart_link" ? { scopeAccountId: accountId } : {}),
       query: validateOfapiReadQuery(def, query),
       detail: def.detail,
@@ -164,7 +165,7 @@ export async function materializeOfapiReadSnapshot(
 ) {
   const def = findOfapiReadDefinition(input.step.operation);
   if (!def) throw new Error("Unknown collection operation");
-  const items = normalizeOfapiRead(def, input.body),
+  const items = normalizeOfapiRead(def, input.body, input.step.pathname),
     coverage = ofapiReadCoverage(
       def,
       input.body,

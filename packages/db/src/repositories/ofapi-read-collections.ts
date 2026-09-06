@@ -148,7 +148,7 @@ export async function readOfapiStoredSnapshots(
     coverage: row.coverage,
     items: row.items.map((item) => {
       if (
-        row.operation !== "ofapi_read_fans_expired" ||
+        !["ofapi_read_fans_expired","ofapi_read_user_list_users","ofapi_read_user_list_pinned_users"].includes(row.operation) ||
         !item ||
         typeof item !== "object"
       )

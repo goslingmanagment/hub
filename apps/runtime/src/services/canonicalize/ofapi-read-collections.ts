@@ -62,7 +62,7 @@ export function canonicalizeOfapiReadObservation(
     return [];
   const { definition: def, pathname, query } = input.resolved;
   if (!validateOfapiMarketingAccount(def, input.parsed.body, input.resolved.accountId)) throw new Error("Marketing response account does not match captured scope");
-  const items = normalizeOfapiRead(def, input.parsed.body).map(item => {
+  const items = normalizeOfapiRead(def, input.parsed.body, pathname).map(item => {
     const resource = ofapiReadRecord(ofapiReadRecord(item)?.resource);
     return resource ? {...item, resource: {...resource, nativeAccountRef: input.resolved.accountId}} : item;
   }),

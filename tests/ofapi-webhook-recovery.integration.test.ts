@@ -1,5 +1,5 @@
 import { createHash, createHmac, randomUUID } from "node:crypto";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createModel, createOnlyFansPage, insertObservation, setPageOfapiAccountId, upsertOfapiWebhookConfig,
 } from "@agency_hub_core/db";
@@ -7,7 +7,8 @@ import { encryptJson } from "@agency_hub_core/shared";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import { createUserAccount } from "../apps/runtime/src/services/auth.ts";
-import { OfapiApiError, type OfapiClient, type OfapiWebhookRegistrationInput } from "../apps/runtime/src/services/ofapi.ts";
+import { createOfapiClient, OfapiApiError, type OfapiClient, type OfapiWebhookRegistrationInput } from "../apps/runtime/src/services/ofapi.ts";
+import { ofapiCredentialPolicy } from "../apps/runtime/src/services/ofapi-credential-policy.ts";
 import { OFAPI_WEBHOOK_EVENTS } from "../apps/runtime/src/services/ofapi-webhooks.ts";
 import { processOfapiWebhookEvent } from "../apps/runtime/src/services/ofapi-events.ts";
 import { executeErasure, planErasure } from "../apps/runtime/src/services/erasure/index.ts";
@@ -53,6 +54,7 @@ beforeAll(async () => {
   const started = await startIntegrationTestDatabase(); if (!started) throw new Error("Recovery tests require PostgreSQL"); testDb = started;
 }, 120_000);
 afterAll(async () => { await server?.close(); await testDb?.stop(); });
+afterEach(()=>vi.unstubAllGlobals());
 beforeEach(async () => {
   await server?.close(); await resetIntegrationDatabase(testDb.pool);
   app = createTestAppContext(testDb, { ofapiAccountHealthEnabled: true });
@@ -81,6 +83,25 @@ beforeEach(async () => {
 });
 
 describe("OFAPI delivery recovery", () => {
+  it("captures the vendor event catalog before local diagnostics and never enables an unknown event", async () => {
+    const fetch=vi.fn(async()=>new Response(JSON.stringify({data:[{value:"messages.received",description:"Message received"},{value:"subscriptions.expired",description:"Subscription expired"},{value:"new_family.future_event",description:"Unrecognized future event"}]})));
+    vi.stubGlobal("fetch",fetch);
+    app.ofapi=createOfapiClient({apiKey:"synthetic",restDelayMs:0,...ofapiCredentialPolicy(app.db,app.config,app.logger)});
+    const url="/api/v1/admin/ofapi/webhook/event-catalog";
+    expect((await server.inject({method:"POST",url:`${url}/refresh`,payload:{}})).statusCode).toBe(401);
+    expect((await server.inject({method:"GET",url,headers:{cookie}})).json()).toMatchObject({state:"never",events:[]});
+    expect(fetch).not.toHaveBeenCalled();
+    const result=await server.inject({method:"POST",url:`${url}/refresh`,headers:{cookie},payload:{}});
+    expect(result.statusCode,result.body).toBe(200);
+    expect(result.json()).toMatchObject({state:"captured",events:[{value:"messages.received",requested:true,supported:true},{value:"subscriptions.expired",requested:false,supported:true,optionalGroup:"subscription_expiry"},{value:"new_family.future_event",requested:false,supported:false}]});
+    expect((await testDb.pool.query("select payload->>'body' body from observations where kind='ofapi_webhook_event_catalog'")).rows[0].body).toContain("new_family.future_event");
+    expect((await server.inject({method:"GET",url,headers:{cookie}})).json()).toEqual(result.json());
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect((await testDb.pool.query("select events from ofapi_webhook_config")).rows[0].events).toEqual(remoteEvents);
+    fetch.mockImplementation(async()=>new Response(JSON.stringify({data:[{value:"malformed"}]})));
+    expect((await server.inject({method:"POST",url:`${url}/refresh`,headers:{cookie},payload:{}})).json()).toMatchObject({state:"invalid",events:[]});
+    expect((await testDb.pool.query("select count(*)::int n from observations where kind='ofapi_webhook_event_catalog'")).rows[0].n).toBe(2);
+  });
   it("retains every attempt and presents a recovered delivery without leaking vendor payloads", async () => {
     const result = await scan(); expect(result).toMatchObject({ state: "complete", capturedAttempts: 3 });
     await scan();
@@ -172,7 +193,7 @@ describe("OFAPI delivery recovery", () => {
     expect((await testDb.pool.query("select fanout_seq,projection_status,projection_attempts from ofapi_webhook_events where id=$1", [first])).rows[0]).toEqual({ fanout_seq: seq, projection_status: "projected", projection_attempts: 6 });
     expect((await testDb.pool.query("select status from ofapi_webhook_events where id=$1", [neighbor])).rows[0].status).toBe("pending");
     const parsed = (await testDb.pool.query("select k.idempotency_key,o.parse_version from observations o join observation_keys k on k.observation_id=o.id and k.received_at=o.received_at where o.source='webhook' order by o.id")).rows;
-    expect(parsed).toEqual([{ idempotency_key: "evt_delivery_original", parse_version: 4 }, { idempotency_key: "evt_neighbor", parse_version: 0 }]);
+    expect(parsed).toEqual([{ idempotency_key: "evt_delivery_original", parse_version: 5 }, { idempotency_key: "evt_neighbor", parse_version: 0 }]);
     await scan(); await expect(redeliverOfapiWebhook(app, { id: randomUUID(), attemptId: 1, actorUserId: ownerId, dryRun: false })).rejects.toThrow("retained locally");
     expect(send).not.toHaveBeenCalled();
   });

@@ -1,3 +1,4 @@
+import { OfapiStoredReads } from "../OfapiStoredReads.js";
 import { OfapiContentEvidence } from "../OfapiContentEvidence.js";
 import { OfapiWebhookRecovery } from "../OfapiWebhookRecovery.js";
 import { Fragment, useCallback, useEffect, useId, useMemo, useState, type ReactNode } from "react";
@@ -540,6 +541,7 @@ export function CollectionTab() {
       <WebhookCard />
       <OfapiWebhookRecovery />
       <OfapiContentEvidence pages={snapshot.pages} />
+      <OfapiStoredReads pages={snapshot.pages} />
       <AuditCard snapshot={snapshot} actorName={actorName} />
 
       {size > 0 && draft && (
