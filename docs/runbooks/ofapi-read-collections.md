@@ -90,3 +90,9 @@ Query names, limits, response families and category/detail flags live in `packag
 | payout_earnings | GET /api/{account}/payouts/earning-statistics | balances |
 | statistics_overview | GET /api/{account}/statistics/overview | balances |
 | subscriber_statistics | GET /api/{account}/subscribers/statistics | balances |
+
+## Composer reference lookup and runtime composition
+
+The collection worker and scheduler register the read runner and the typed Visitors handler. Job windows stay half-open UTC ranges; each daily upstream request ends at 23:59:59.999 of that day so the materializer records one daily bucket. Exact typed-export jobs and collection reads are excluded from the legacy mirror lease sweep.
+
+Four additional default-off, explicit lookup paths support the desktop composer: `giphy/trending`, `giphy/search` (required `q`), `release-forms`, `release-forms/taggable-users`. Giphy returns `data[]` with opaque string IDs and has no documented terminal pagination evidence. Both release-form lists return `data.items` and follow `_pagination.next_page`, even when OnlyFans lacks a reliable hasMore flag. `rfTag`, `rfPartner` and `rfGuest` are distinct references; a release-form document ID must not be relabelled as a partner/guest ID. No public separate partners/guests GET was found in the 294-operation inventory. Sources verified 2026-09-06: https://docs.onlyfansapi.com/api-reference/giphy/list-trending-gi-fs, https://docs.onlyfansapi.com/api-reference/giphy/search-gi-fs, https://docs.onlyfansapi.com/api-reference/release-forms/list-release-forms, https://docs.onlyfansapi.com/api-reference/release-forms/list-taggable-users.

@@ -1,3 +1,4 @@
+import { OfapiWebhookRecovery } from "../OfapiWebhookRecovery.js";
 import { Fragment, useCallback, useEffect, useId, useMemo, useState, type ReactNode } from "react";
 import { Link } from "react-router";
 import { toast } from "sonner";
@@ -536,6 +537,7 @@ export function CollectionTab() {
 
       <JobsCard snapshot={snapshot} scope={scope} />
       <WebhookCard />
+      <OfapiWebhookRecovery />
       <AuditCard snapshot={snapshot} actorName={actorName} />
 
       {size > 0 && draft && (
@@ -1267,9 +1269,8 @@ function WebhookCard() {
         )}
       </div>
       <p className="max-w-[80ch] px-4 pt-2 text-[12.5px] text-text-secondary">
-        Набор типов общий для всех страниц{status?.accountScope ? ` (scope: ${status.accountScope})` : ""}: отдельные
-        наборы на страницу потребуют отдельных регистраций и здесь не обещаются. Выбор групп событий с этого экрана
-        появится вместе с отдельным API перерегистрации и readback; пока список только для чтения.
+        Набор типов общий для всех страниц{status?.accountScope ? ` (область: ${status.accountScope})` : ""}.
+        Здесь показана текущая регистрация. Управление дополнительными событиями и восстановление доставок — ниже.
       </p>
       {query.isLoading && <p className="px-4 py-3 text-[12px] text-text-muted">Читаем регистрацию…</p>}
       {query.isError && (
@@ -1302,7 +1303,7 @@ function WebhookCard() {
                   <td className={`${tdClass} text-right`}>
                     <span className="inline-flex items-center gap-1.5 text-[12px] text-text-secondary">
                       <Dot tone="ok" />
-                      подписана · только чтение
+                      в текущем наборе
                     </span>
                   </td>
                 </tr>

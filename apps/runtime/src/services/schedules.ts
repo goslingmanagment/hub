@@ -1,3 +1,4 @@
+import { ensureOfapiCollectionQueues, ensureOfapiCollectionSchedules } from "./ofapi-collection-runner.ts";
 import { ensureOfapiTypedExportQueue, ensureOfapiTypedExportSchedule } from "./ofapi-typed-export-worker.ts";
 import type { PgBoss } from "pg-boss";
 
@@ -53,6 +54,7 @@ export async function registerAllSchedules(
   await ensureOfapiCommandQueues(boss, createdQueues);
   await ensureOfapiDmAnalyticsQueues(boss, createdQueues);
   await ensureOfapiTypedExportQueue(boss, createdQueues);
+  await ensureOfapiCollectionQueues(boss, createdQueues);
   await ensureDbDiskUsageQueue(boss, createdQueues);
   await ensureObservationsPartitionQueue(boss, createdQueues);
   await ensureCapturePayloadParityQueue(boss, createdQueues);
@@ -80,6 +82,7 @@ export async function registerAllSchedules(
     ensureOfapiCommandSchedules(boss),
     ensureOfapiDmAnalyticsSchedules(boss),
     ensureOfapiTypedExportSchedule(boss),
+    ensureOfapiCollectionSchedules(boss),
     ensureDbDiskUsageSchedule(boss),
     ensureObservationsPartitionSchedule(boss),
     ensureCapturePayloadParitySchedule(boss),

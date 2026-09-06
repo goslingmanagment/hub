@@ -1,3 +1,4 @@
+import { ensureQueueCreated, type QueueCreationClient } from "./sync-queue.ts";
 import { createHash } from "node:crypto";
 import {
   appendProjectionOnlyDomainEvents,
@@ -137,7 +138,7 @@ export function planOfapiProfileVisitorCollection(
         query: {
           start_date: new Date(from.getTime() + day * 86400000).toISOString(),
           end_date: new Date(
-            from.getTime() + (day + 1) * 86400000,
+            from.getTime() + (day + 1) * 86400000 - 1,
           ).toISOString(),
           type,
           filter: "chart",
@@ -383,10 +384,12 @@ export async function runOfapiCollectionJob(
     return { state: recoveryState ?? "paused", reason };
   }
 }
-export async function ensureOfapiCollectionSchedules(boss: PgBoss) {
-  await boss.createQueue(OFAPI_COLLECTION_RUN_QUEUE, { retryLimit: 0 });
-  await boss.createQueue(OFAPI_COLLECTION_SWEEP_QUEUE, { retryLimit: 0 });
-  await boss.schedule(OFAPI_COLLECTION_SWEEP_QUEUE, "* * * * *", null, {
+export async function ensureOfapiCollectionQueues(boss: QueueCreationClient, createdQueues?: Set<string>) {
+  await ensureQueueCreated(boss, OFAPI_COLLECTION_RUN_QUEUE, { retryLimit: 0 }, createdQueues);
+  await ensureQueueCreated(boss, OFAPI_COLLECTION_SWEEP_QUEUE, { retryLimit: 0 }, createdQueues);
+}
+export async function ensureOfapiCollectionSchedules(boss: QueueCreationClient) {
+  await boss.schedule?.(OFAPI_COLLECTION_SWEEP_QUEUE, "* * * * *", null, {
     tz: "UTC",
   });
 }
@@ -410,7 +413,7 @@ export async function sweepOfapiCollections(
 }
 export async function startOfapiCollectionWorker(
   app: AppContext,
-  boss: PgBoss,
+  boss: Pick<PgBoss, "work" | "send">,
   handlers: OfapiCollectionHandlers = {},
 ) {
   await boss.work<{ jobId: string }>(

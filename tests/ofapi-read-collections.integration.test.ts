@@ -1,3 +1,4 @@
+import { ofapiCollectionHandlers } from "../apps/runtime/src/services/ofapi-collection-handlers.ts";
 import { rebuildOfapiReadSnapshotProjection } from "../apps/runtime/src/services/projections/ofapi-read-snapshots.ts";
 import { randomUUID } from "node:crypto";
 import { sha256Hex } from "@agency_hub_core/shared";
@@ -388,4 +389,21 @@ describe("resumable OFAPI collection reads", () => {
       await server.close();
     }
   });
+});
+
+it("uses the runtime visitor handler to preserve exactly one UTC day without a second paid read", async () => {
+  const fetch = vi.fn().mockResolvedValue(response({ isAvailable: true, hasStats: true, chart: { visitors: [{ date: "2026-09-01", count: 17 }], duration: [{ date: "2026-09-01", count: 9 }] } }));
+  vi.stubGlobal("fetch", fetch);
+  const approved = await createOfapiCollectionJob(app.db, {
+    pageId, category: "visitors", expectedRevision: 0, maxCalls: 1, maxCredits: 5, maxBytes: 1000000,
+    from: "2026-09-01T00:00:00.000Z", to: "2026-09-02T00:00:00.000Z", selection: ["total"],
+  }, actor);
+  expect(await runOfapiCollectionJob(app, approved.id, ofapiCollectionHandlers)).toEqual({ state: "completed" });
+  const url = new URL(String(fetch.mock.calls[0]![0]));
+  expect(url.searchParams.get("start_date")).toBe("2026-09-01T00:00:00.000Z");
+  expect(url.searchParams.get("end_date")).toBe("2026-09-01T23:59:59.999Z");
+  const daily = (await db.pool.query("select day::text as date,total_visitors::text,source from ofapi_profile_visitors_daily where page_id=$1", [pageId])).rows;
+  expect(daily).toEqual([{ date: "2026-09-01", total_visitors: "17", source: "rest_total" }]);
+  await runOfapiCollectionJob(app, approved.id, ofapiCollectionHandlers);
+  expect(fetch).toHaveBeenCalledTimes(1);
 });

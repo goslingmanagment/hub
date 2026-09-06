@@ -55,7 +55,8 @@ describe("OFAPI release compatibility boundaries", () => {
     expect(validateOfapiInteractiveResponseShape("ofapi_gateway_chat_search", { data: [123, 456] })).toBe(true);
     expect(validateOfapiInteractiveResponseShape("ofapi_gateway_chat_message", { data: [123, 456] })).toBe(false);
     expect(resolveOfapiReadGatewayRequest(`${ACCOUNT}/chats/123/messages`, { filter: "pinned" })).toMatchObject({ query: { filter: "pinned" } });
-    for (const name of ["blocked", "restricted", "search"]) expect(() => resolveOfapiReadGatewayRequest(`${ACCOUNT}/users/${name}`, {})).toThrow();
+    for (const name of ["blocked", "restricted"]) expect(resolveOfapiReadGatewayRequest(`${ACCOUNT}/users/${name}`, {})).toMatchObject({ operation: `ofapi_read_users_${name}`, collectionContext: { category: "profile_notifications" } });
+    for (const name of ["search"]) expect(() => resolveOfapiReadGatewayRequest(`${ACCOUNT}/users/${name}`, {})).toThrow();
     expect(resolveOfapiReadGatewayRequest(`${ACCOUNT}/chats/123/media`, { type: "photo" })).toMatchObject({ query: { type: "photos" } });
     expect(resolveOfapiReadGatewayRequest(`${ACCOUNT}/media/vault/lists`, { lightweight: "true" })).toMatchObject({ query: { lightweight: "true" } });
   });

@@ -1,3 +1,6 @@
+// Adjacent settings panels have their own query/provider lifecycle and acceptance coverage.
+vi.mock("../apps/dashboard/src/pages/settings/OfapiWebhookRecovery.tsx", () => ({ OfapiWebhookRecovery: () => null }));
+vi.mock("../apps/dashboard/src/pages/settings/OfapiBannedWords.tsx", () => ({ OfapiBannedWords: () => null }));
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "../apps/dashboard/node_modules/react-router/dist/development/index.js";
@@ -303,7 +306,7 @@ describe("CollectionTab (static render)", () => {
     // Webhook card is read-only: no switches at all.
     expect(markup).toContain("одна регистрация на все OF-страницы");
     expect(markup).toContain("wh_43…24d");
-    expect(markup).toContain("только чтение");
+    expect(markup).toContain("в текущем наборе");
     expect(markup).not.toContain('role="switch"');
     // Journal summary line.
     expect(markup).toContain("Журнал изменений");
