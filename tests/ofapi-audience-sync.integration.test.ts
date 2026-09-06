@@ -12,6 +12,9 @@ import {
   findPageById,
   findPageSubscription,
   getCheckpoint,
+  getPageSyncState,
+  finishSyncRun,
+  openNotificationIncidentWithRecoveryGuard,
   getOfapiCreditState,
   listPageSyncStates,
   recordOfapiCreditUsage,
@@ -37,6 +40,10 @@ import {
   pauseDisabledOnlyFansAudienceForPage,
 } from "../apps/runtime/src/services/sync/ofapi-audience-sync.ts";
 import { resolveExecutorPageContext } from "../apps/runtime/src/services/sync/executor-handlers.ts";
+import { executeNextSyncPageChunk } from "../apps/runtime/src/services/sync/executor.ts";
+import { getSyncMonitorSnapshot } from "../apps/runtime/src/services/sync-monitor.ts";
+import { getSyncStatusSummarySnapshot } from "../apps/runtime/src/services/sync-summary.ts";
+import { incidentKey } from "../apps/runtime/src/services/notification-incidents.ts";
 import { triggerSyncBlock } from "../apps/runtime/src/services/sync-blocks.ts";
 import { getSyncStatusSnapshot } from "../apps/runtime/src/services/sync-status.ts";
 import {
@@ -260,6 +267,125 @@ afterEach(async () => {
 });
 
 describe("OFAPI audience sweep", () => {
+  async function seedExistingSubscriber(pageId: number, id = "555") {
+    const [fan] = await upsertFans(appContext.db, [{ platform: "onlyfans", platformUserId: id }]);
+    await upsertPageSubscription(appContext.db, {
+      platformSubscriptionId: id, platformAccountId: pageId, fanId: fan!.id,
+      rawStatus: 0, canonicalStatus: "active", priceMills: 0n, renewPriceMills: 0n, lastSeenGeneration: 0,
+    });
+    await testDb!.pool.query("update page_subscriptions set last_seen_at=now()-interval '1 day' where platform_account_id=$1", [pageId]);
+  }
+
+  it("TRIAGE 15 preserves existing audience after an all-empty paginated sweep", async () => {
+    const page = (await seedMappedPage())!;
+    await seedExistingSubscriber(page.id);
+    const { client } = fakeAudienceClient(new Map([[0, fansPage([], true)], [20, fansPage([], false)]]));
+    appContext = { ...appContext, ofapi: client };
+    const input = await buildChunkInput(page);
+    const result = await executeOfapiAudienceChunk(appContext, input);
+    expect(result).toMatchObject({ satisfied: true, qualityHold: "subscribers_empty_sweep_guard",
+      stats: { fullSweepCompleted: true, destructiveFinalizationSkipped: true, observedFans: 0 } });
+    expect(result).not.toHaveProperty("gatedSkip");
+    expect((await listSubscriptions(page.id))[0]).toMatchObject({ is_current: true });
+    const checkpoint = await getCheckpoint(appContext.db, page.id, "subscribers");
+    expect(checkpoint?.cursorLastSucceededRunId).toBeNull();
+    expect(checkpoint?.state).toMatchObject({ observedFans: 0, sweepStartedAt: null,
+      lastSweepCompletedAt: expect.any(String), lastSweepUnverifiedAt: expect.any(String) });
+    expect((input.telemetry as { addAnomaly: ReturnType<typeof vi.fn> }).addAnomaly)
+      .toHaveBeenCalledWith(expect.objectContaining({ code: "subscribers_empty_sweep_guard", severity: "warn" }));
+  });
+
+  it("certifies an empty final chunk when earlier chunks saw fans", async () => {
+    const page = (await seedMappedPage())!;
+    await seedExistingSubscriber(page.id);
+    const { client } = fakeAudienceClient(new Map([
+      [0, fansPage([activeFanItem({ id: 101 }), activeFanItem({ id: 102 })], true)],
+      [20, fansPage([], false)],
+    ]));
+    appContext = { ...appContext, ofapi: client, config: { ...appContext.config, ofapiAudienceMaxRequestsPerRun: 1 } };
+    const first = await executeOfapiAudienceChunk(appContext, await buildChunkInput(page));
+    expect(first.satisfied).toBe(false);
+    expect((await getCheckpoint(appContext.db, page.id, "subscribers"))?.state).toMatchObject({ observedFans: 2, offset: 20 });
+    const input = await buildChunkInput(page);
+    const second = await executeOfapiAudienceChunk(appContext, input);
+    expect(second).toMatchObject({ satisfied: true, qualityHold: null, stats: { observedFans: 2 } });
+    expect((await listSubscriptions(page.id)).find((row) => row.platform_subscription_id === "555")?.is_current).toBe(false);
+    expect(await getCheckpoint(appContext.db, page.id, "subscribers")).toMatchObject({
+      cursorLastSucceededRunId: input.syncRunId, state: { observedFans: 2, lastSweepUnverifiedAt: null },
+    });
+  });
+
+  it("keeps freshness, failures, incidents and both read paths unverified until certification", async () => {
+    const page = (await seedMappedPage())!;
+    await seedExistingSubscriber(page.id);
+    const { client, listActiveFans } = fakeAudienceClient(new Map([[0, fansPage([], true)], [20, fansPage([], false)]]));
+    appContext = { ...appContext, ofapi: client, config: { ...appContext.config, ofapiAccountHealthEnabled: true } };
+    await testDb!.pool.query("update page_sync_states set applied_seq=request_seq, status='idle', succeeded_at='2026-07-17T14:25:00Z' where page_id=$1", [page.id]);
+    await requestPageSyncRows(appContext.db, { pageId: page.id, streams: ["subscribers"], source: "scheduled" });
+    await testDb!.pool.query(`update page_sync_states set progressed_at='2026-07-17T14:25:00Z',
+      consecutive_failures=2, last_error_code='http_500', last_error_summary='upstream blew up'
+      where page_id=$1 and stream='subscribers'`, [page.id]);
+    const key = incidentKey({ kind: "stream_failed_threshold", platformAccountId: page.id, stream: "subscribers" });
+    await openNotificationIncidentWithRecoveryGuard(appContext.db, {
+      incidentKey: key, kind: "stream_failed_threshold", platformAccountId: page.id, stream: "subscribers",
+      occurredAt: new Date("2026-07-17T14:26:00Z"),
+    });
+    async function assertHold() {
+      const state = await getPageSyncState(appContext.db, page.id, "subscribers");
+      expect(state).toMatchObject({ status: "idle", leasedSeq: null, leaseToken: null,
+        consecutiveFailures: 2, lastErrorCode: "http_500", lastErrorSummary: "upstream blew up" });
+      expect(state?.appliedSeq).toBe(state?.requestSeq);
+      expect(state?.succeededAt?.toISOString()).toBe("2026-07-17T14:25:00.000Z");
+      expect(state?.progressedAt?.toISOString()).toBe("2026-07-17T14:25:00.000Z");
+      expect((await testDb!.pool.query("select status from notification_incidents where incident_key=$1", [key])).rows[0]?.status).toBe("open");
+      const monitor = await getSyncMonitorSnapshot(appContext, { pageLabel: page.label });
+      expect(monitor.pages[0]?.streams.find((row) => row.stream === "subscribers")?.syncUx)
+        .toMatchObject({ state: "attention", label: "Unverified", requiresAction: false });
+      const summary = await getSyncStatusSummarySnapshot(appContext, { pageIds: [page.id] });
+      expect(summary.pages[0]?.syncUx).toMatchObject({ state: "attention", label: "Unverified", requiresAction: false });
+      expect((await listSubscriptions(page.id))[0]?.is_current).toBe(true);
+      expect((await getCheckpoint(appContext.db, page.id, "subscribers"))?.cursorLastSucceededRunId).toBeNull();
+    }
+    const held = await executeNextSyncPageChunk(appContext, page.id);
+    expect(held).toMatchObject({ kind: "skipped", stream: "subscribers" });
+    const heldRun = (await testDb!.pool.query("select outcome, stats from sync_runs where id=$1", [held.runId])).rows[0];
+    expect(heldRun).toMatchObject({ outcome: "skipped", stats: { qualityHold: "subscribers_empty_sweep_guard" } });
+    expect(heldRun.stats).not.toHaveProperty("gatedSkip");
+    await assertHold();
+
+    await requestPageSyncRows(appContext.db, { pageId: page.id, streams: ["subscribers"], source: "scheduled" });
+    const notDue = await executeNextSyncPageChunk(appContext, page.id);
+    expect(notDue.kind).toBe("skipped");
+    expect((await testDb!.pool.query("select stats from sync_runs where id=$1", [notDue.runId])).rows[0]?.stats)
+      .toMatchObject({ skipped: "sweep_not_due", qualityHold: "subscribers_empty_sweep_guard" });
+    expect(listActiveFans).toHaveBeenCalledTimes(2);
+    await assertHold();
+
+    // A stale worker may finish after the hold without its structured stats.
+    const foreignRun = await startSyncRun(appContext.db, { platformAccountId: page.id, stream: "subscribers", trigger: "scheduled" });
+    await finishSyncRun(appContext.db, foreignRun!.id, { status: "skipped", stats: {}, errorSummary: "Page sync lease lost" });
+    await assertHold();
+
+    // Next daily sweep supplies real membership; it alone clears the hold.
+    await testDb!.pool.query(`update page_sync_cursors set state=jsonb_set(state, '{lastSweepCompletedAt}', to_jsonb('2026-07-17T14:25:00Z'::text))
+      where page_id=$1 and stream='subscribers'`, [page.id]);
+    appContext = { ...appContext, ofapi: fakeAudienceClient(new Map([[0, fansPage([activeFanItem({ id: 555 })], false)]])).client };
+    await requestPageSyncRows(appContext.db, { pageId: page.id, streams: ["subscribers"], source: "scheduled" });
+    const certified = await executeNextSyncPageChunk(appContext, page.id);
+    expect(certified).toMatchObject({ kind: "success", stream: "subscribers" });
+    const after = await getPageSyncState(appContext.db, page.id, "subscribers");
+    expect(after).toMatchObject({ consecutiveFailures: 0, lastErrorCode: null });
+    expect(after?.succeededAt?.toISOString()).not.toBe("2026-07-17T14:25:00.000Z");
+    expect(await getCheckpoint(appContext.db, page.id, "subscribers")).toMatchObject({
+      cursorLastSucceededRunId: certified.runId, state: { observedFans: 1, lastSweepUnverifiedAt: null },
+    });
+    expect((await testDb!.pool.query("select status from notification_incidents where incident_key=$1", [key])).rows[0]?.status).toBe("resolved");
+    const monitor = await getSyncMonitorSnapshot(appContext, { pageLabel: page.label });
+    expect(monitor.pages[0]?.streams.find((row) => row.stream === "subscribers")?.syncUx.state).toBe("healthy");
+    const summary = await getSyncStatusSummarySnapshot(appContext, { pageIds: [page.id] });
+    expect(summary.pages[0]?.syncUx.state).toBe("healthy");
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
   it("sweeps fans/active into page_subscriptions with the Fansly generational expiry", async (context) => {
     if (!testDb) {
       context.skip();

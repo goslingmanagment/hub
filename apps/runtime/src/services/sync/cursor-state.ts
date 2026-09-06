@@ -91,8 +91,10 @@ type OfapiAudienceCursorState = {
   generation: number;
   offset: number;
   pageCount: number;
+  observedFans: number;
   sweepStartedAt: string | null;
   lastSweepCompletedAt: string | null;
+  lastSweepUnverifiedAt: string | null;
 };
 
 type TopSpendersCursorWindow = {
@@ -479,8 +481,10 @@ export function parseOfapiAudienceCursorState(value: unknown): OfapiAudienceCurs
     generation,
     offset,
     pageCount,
+    observedFans: asNumber(state.observedFans) ?? 0,
     sweepStartedAt,
     lastSweepCompletedAt,
+    lastSweepUnverifiedAt: asNullableString(state.lastSweepUnverifiedAt) ?? null,
   };
 }
 
@@ -491,9 +495,20 @@ export function emptyOfapiAudienceCursorState(): OfapiAudienceCursorState {
     generation: 0,
     offset: 0,
     pageCount: 0,
+    observedFans: 0,
     sweepStartedAt: null,
     lastSweepCompletedAt: null,
+    lastSweepUnverifiedAt: null,
   };
+}
+
+export const OFAPI_AUDIENCE_EMPTY_SWEEP_HOLD = "subscribers_empty_sweep_guard";
+
+/** The checkpoint survives unrelated completions and lost-lease run records. */
+export function ofapiAudienceQualityHoldFor(value: unknown): string | null {
+  return parseOfapiAudienceCursorState(value)?.lastSweepUnverifiedAt
+    ? OFAPI_AUDIENCE_EMPTY_SWEEP_HOLD
+    : null;
 }
 
 export function parseDmMessagesCursorState(value: unknown): DmMessagesCursorState | null {

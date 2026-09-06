@@ -618,7 +618,8 @@ export async function executeNextSyncPageChunk(
 
     if (result.satisfied) {
       const skipped = Boolean(result.gatedSkip);
-      const applied = skipped
+      const held = !skipped && Boolean(result.qualityHold);
+      const applied = skipped || held
         ? await skipPageSync(app.db, {
           pageId: platformAccountId,
           stream: taskLease.stream,
@@ -663,6 +664,15 @@ export async function executeNextSyncPageChunk(
           // stream since long before ramp gates existed.
           gatedSkip: result.gatedSkip,
         });
+      } else if (held) {
+        await telemetry.finish("skipped", result.qualityHold, {
+          chunkBudget: {
+            requestCount: budget.totalRequests,
+            elapsedMs: budget.elapsedMs,
+          },
+          ...result.stats,
+          qualityHold: result.qualityHold,
+        });
       } else {
         const recoveredAt = new Date();
         await telemetry.finish("success", null, {
@@ -690,7 +700,7 @@ export async function executeNextSyncPageChunk(
         platformAccountId,
         taskLease.stream,
         run.id,
-        skipped ? "skipped" : "success",
+        skipped || held ? "skipped" : "success",
         continuationPriority,
       );
     }

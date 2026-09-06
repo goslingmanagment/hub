@@ -1,6 +1,7 @@
 import type { SyncUxSummary } from "@agency_hub_core/contracts";
 import {
   getSyncStreamsForPlatform,
+  listCheckpointStates,
   listPageSyncStates,
   listVisiblePages,
   SYNC_STREAM_POLICY,
@@ -14,6 +15,7 @@ import {
   ofapiAuthStatusNeedsAction,
 } from "./ofapi-account-health.ts";
 import { filterOnlyFansAudienceStreams } from "./sync/ofapi-audience-sync.ts";
+import { ofapiAudienceQualityHoldFor } from "./sync/cursor-state.ts";
 import { isOfapiFanIdentitiesEligiblePage } from "./sync/ofapi-fan-identities.ts";
 import { filterOnlyFansDmPollingStreams } from "./sync/onlyfans-dm-polling.ts";
 import { filterOnlyFansTopSpendersStreams } from "./sync/onlyfans-top-spenders.ts";
@@ -85,7 +87,7 @@ function isStalled(task: PageSyncState, now: Date) {
     (now.getTime() - lastActiveAt.getTime()) > policy.progressStallThresholdMs;
 }
 
-function toStreamSyncUx(task: PageSyncState, now: Date): SyncUxSummary {
+function toStreamSyncUx(task: PageSyncState, now: Date, qualityHold: string | null): SyncUxSummary {
   const activeRun = task.status === "running" && task.startedAt
     ? {
       startedAt: task.startedAt.toISOString(),
@@ -119,6 +121,7 @@ function toStreamSyncUx(task: PageSyncState, now: Date): SyncUxSummary {
       }
       : null,
     succeededAt: iso(task.succeededAt),
+    lastCompletionQualityHold: qualityHold,
     failedAt: iso(task.failedAt),
     lastErrorCode: task.lastErrorCode,
     blockerKind: task.blockerKind,
@@ -175,6 +178,7 @@ function buildPageSummarySyncUx(
   page: VisiblePage,
   taskRows: PageSyncState[],
   now: Date,
+  audienceQualityHold: string | null,
 ) {
   const actionRequired = buildOfapiAuthSyncUx(app, page) ?? buildCredentialSyncUx(app, page);
   if (actionRequired) {
@@ -221,7 +225,7 @@ function buildPageSummarySyncUx(
   const supportedStreams = new Set(applicableStreams);
   const streamSummaries = taskRows
     .filter((task) => supportedStreams.has(task.stream))
-    .map((task) => toStreamSyncUx(task, now));
+    .map((task) => toStreamSyncUx(task, now, task.stream === "subscribers" ? audienceQualityHold : null));
 
   return buildPageSyncUx(streamSummaries);
 }
@@ -263,7 +267,11 @@ export async function getSyncStatusSummarySnapshot(
   // sync planner tick, the executor, and the explicit admin paths
   // (sync-control.ts, sync-blocks.ts). A page with no state rows is reported as
   // such — buildPageSummarySyncUx already handles an empty row list.
-  const taskRows = await listPageSyncStates(app.db);
+  const [taskRows, checkpoints] = await Promise.all([
+    listPageSyncStates(app.db),
+    listCheckpointStates(app.db, scopedPageIds, "subscribers"),
+  ]);
+  const audienceHolds = new Map(checkpoints.map((row) => [row.pageId, ofapiAudienceQualityHoldFor(row.state)]));
   const taskRowsByPageId = new Map<number, PageSyncState[]>();
   for (const task of taskRows) {
     if (!scopedPageIds.includes(task.pageId)) {
@@ -284,7 +292,7 @@ export async function getSyncStatusSummarySnapshot(
       modelName: page.modelName,
       username: page.username,
       displayName: page.displayName,
-      syncUx: buildPageSummarySyncUx(app, page, taskRowsByPageId.get(page.id) ?? [], now),
+      syncUx: buildPageSummarySyncUx(app, page, taskRowsByPageId.get(page.id) ?? [], now, audienceHolds.get(page.id) ?? null),
     })),
   };
 }

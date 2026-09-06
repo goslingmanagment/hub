@@ -47,6 +47,8 @@ import type { ResolvedPageContext } from "../page-context.ts";
 import { composeRequestObservers, type SyncChunkBudget } from "./chunk-budget.ts";
 import {
   emptyOfapiAudienceCursorState,
+  OFAPI_AUDIENCE_EMPTY_SWEEP_HOLD,
+  ofapiAudienceQualityHoldFor,
   parseOfapiAudienceCursorState,
 } from "./cursor-state.ts";
 import {
@@ -324,7 +326,9 @@ export async function executeOfapiAudienceChunk(
         stats: {
           skipped: "sweep_not_due",
           lastSweepCompletedAt: state.lastSweepCompletedAt,
+          lastSweepUnverifiedAt: state.lastSweepUnverifiedAt,
         },
+        qualityHold: ofapiAudienceQualityHoldFor(state),
       };
     }
 
@@ -337,6 +341,7 @@ export async function executeOfapiAudienceChunk(
       generation: Math.max(state.generation, storedGeneration) + 1,
       offset: 0,
       pageCount: 0,
+      observedFans: 0,
       sweepStartedAt: new Date().toISOString(),
     };
     await upsertCheckpointProgress(app.db, {
@@ -507,23 +512,40 @@ export async function executeOfapiAudienceChunk(
       });
       throw new Error("OFAPI audience identities invalid; refusing sweep completion");
     }
+    const observedFans = state.observedFans + fans.length;
+    let qualityHold: string | null = null;
+    if (sweepComplete && observedFans === 0) {
+      const current = await getCurrentSubscribers(app.db, input.pageContext.page.id);
+      if (current.rows.length > 0) {
+        qualityHold = OFAPI_AUDIENCE_EMPTY_SWEEP_HOLD;
+        await input.telemetry.addAnomaly({
+          code: qualityHold,
+          severity: "warn",
+          message: "Empty audience sweep contradicts current subscriptions; preserving membership",
+          details: { generation: state.generation, currentSubscribers: current.rows.length },
+        });
+      }
+    }
     const nextState = sweepComplete
       ? {
         ...state,
         offset: 0,
         pageCount: state.pageCount + 1,
+        observedFans,
         sweepStartedAt: null,
         lastSweepCompletedAt: new Date().toISOString(),
+        lastSweepUnverifiedAt: qualityHold ? new Date().toISOString() : null,
       }
       : {
         ...state,
         offset: nextOffset!,
         pageCount: state.pageCount + 1,
+        observedFans,
       };
 
     const written = await withOwnedPageSyncTransaction(app.db, async (dbTx) => {
       await applyActiveFans(dbTx, fans);
-      if (sweepComplete) {
+      if (sweepComplete && qualityHold === null) {
         // P-25: a multi-chunk sweep can take hours; a subscription the live
         // webhook projection created mid-sweep (lastSeenGeneration null) may
         // sit at an offset the walk already passed — retiring it here would
@@ -560,6 +582,7 @@ export async function executeOfapiAudienceChunk(
     if (sweepComplete) {
       result = {
         satisfied: true,
+        qualityHold,
         yieldReason: null,
         stats: {
           mode: "audience_sweep",
@@ -568,6 +591,8 @@ export async function executeOfapiAudienceChunk(
           processedFans,
           pagesFetched,
           fullSweepCompleted: true,
+          observedFans: state.observedFans,
+          destructiveFinalizationSkipped: qualityHold !== null,
         },
       };
       break;
@@ -589,6 +614,7 @@ export async function executeOfapiAudienceChunk(
       processedFans,
       pagesFetched,
       fullSweepCompleted: false,
+      observedFans: state.observedFans,
     },
   };
 

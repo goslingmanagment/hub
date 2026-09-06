@@ -258,6 +258,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 255 | OFAPI recovery evidence | Authenticated target required; roster transport receipt is persisted as the binding recovery watermark and audit evidence |
 | 256 | OFAPI owner pause recovery | Auth marker and owner pause are separate; recovery locks sync rows before reread and clears only its marker, leaving Resume to the owner |
 | 257 | OFAPI permanent custody | Every initial binding checks historical ownership; ambiguous refs are quarantined, lifecycle is gated after ownership, and dry-run never mutates incidents |
+| 258 | OFAPI audience quality | Unverified empty sweeps preserve membership and freshness; checkpoint hold drives both status readers until certification |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -10827,3 +10828,19 @@ only the separate active gate admits live projection writes. A conflicting ref
 is held unmapped and opens `ofapi_binding_conflict` while other refs continue.
 Dry-run reports conflicts but never opens/resolves incidents. Clearing a claim
 restores canonicalization; already-skipped live events need bounded owner repair.
+
+
+## Empty OFAPI audience sweeps require certification (2026-09-06)
+
+**Decision #258:** An audience generation counts parsed fans across chunks. A
+completed all-empty sweep with existing current subscriptions cannot expire that
+membership or advance the successful checkpoint. It records an anomaly and a
+persistent `lastSweepUnverifiedAt`, and settles as `qualityHold`: the executor
+releases the lease with `skipPageSync`, records a skipped run and preserves
+success/progress timestamps, failures and open incidents. A subsequent
+`sweep_not_due` retains the hold. A certified sweep clears it. Detailed monitor
+and lightweight connections/overview summaries read the checkpoint, independent
+of unrelated run completions. They report Unverified without requiring a
+credential action. Ordinary partial chunks retain their existing retry/progress
+and incident recovery semantics; a hold is a completed uncertified attempt.
+Legacy checkpoints default the count to zero and the hold to null.

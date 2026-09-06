@@ -411,3 +411,16 @@ ref is quarantined; a clean write-mode sweep resolves the latch. Dry-run compute
 conflicts without opening, delivering or resolving incidents. Initial mapping
 returns a conflict on another page’s historical account; lifecycle status cannot
 hide that owner.
+
+
+### OFAPI audience quality hold
+
+A completed paginated audience sweep that saw zero fans while current subscriptions
+exist returns `qualityHold=subscribers_empty_sweep_guard` (decision #258). Existing
+membership and the successful checkpoint are preserved. The executor records a
+skipped run without changing freshness/failure evidence or resolving incidents;
+`sweep_not_due` carries the hold forward. This is distinct from a pre-egress ramp
+gate. A durable checkpoint marker keeps both status readers Unverified until a
+certified sweep clears it, even after a lost-lease completion without hold stats.
+The single empty first-page guard and malformed-identity failures retain their
+existing failure classification.

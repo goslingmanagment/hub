@@ -177,16 +177,16 @@ silence or production recovery are verified.
 
 ## Local validation record
 
-On the implementation branch: `pnpm check` passed (247 unit files, 2,700 passed,
+After the six review fixes on 2026-09-06: `pnpm check` passed (248 unit files, 2,715 passed,
 9 existing skips; lint, repository strictness ratchet and dashboard build).
 Strictness debt fell from 1,913 to 1,909 and its snapshot was tightened; the
 repository still has that pre-existing type debt. Vite reports its existing
-large-chunk warning. `pnpm contracts:generate` and `git diff --check` completed.
+large-chunk warning. `pnpm contracts:generate`, `pnpm build:production` and `git diff --check` completed.
 The dated full-repository code maps retain their earlier generation commit;
 current release behavior is described here and in the generated API/auth artifacts.
 
-The following single, serial integration invocation passed all 289 tests across
-19 files with Docker/Testcontainers and no skips:
+The following single, serial integration invocation passed all 357 tests across
+24 files with Docker/Testcontainers and no skips:
 
 ```sh
 pnpm exec vitest run --no-file-parallelism \
@@ -199,7 +199,9 @@ pnpm exec vitest run --no-file-parallelism \
   tests/ofapi-capture-repository.integration.test.ts tests/ofapi-flag-flip-hardening.integration.test.ts \
   tests/ofapi-sync-snapshot.integration.test.ts tests/canonicalize-sweep.integration.test.ts \
   tests/db-write.integration.test.ts tests/erasure-page-owned-tables.integration.test.ts \
-  tests/erasure.integration.test.ts
+  tests/erasure.integration.test.ts tests/ofapi-roster-boundary.integration.test.ts \
+  tests/tiering.integration.test.ts tests/ofapi-spend-transaction-ingest.integration.test.ts \
+  tests/page-sync-gated-skip.integration.test.ts tests/overview-read-paths.integration.test.ts
 ```
 
 
@@ -290,3 +292,18 @@ settles and the expected subscription/DM/presence projections reach the owner;
 inspect remaining failures individually. Fanout sequence follows settle order,
 so replayed rows receive a new sequence. No code rollback to the old runtime is
 safe merely because the incident resolved after a binding change.
+
+
+### Unverified audience sweep
+
+`subscribers_empty_sweep_guard` means an entire paginated generation returned no
+fans despite current subscriptions. Membership is retained, the successful cursor
+and freshness are unchanged, and the completed run is skipped. Inspect the
+`subscribers` checkpoint's `observedFans`, `lastSweepCompletedAt` (attempt cadence)
+and `lastSweepUnverifiedAt` (uncertified result). Both the detailed monitor and
+connections/overview show Unverified; a later lost-lease run cannot hide it.
+The next normal paid sweep is still scheduled by the existing interval. A
+certified membership sweep clears the marker and restores success. No reset of
+the cursor, user pause or subscription rows is required. Normal partial-run
+progress and recovery behavior remains unchanged; this guard covers completed
+uncertified attempts and the following not-due ticks.

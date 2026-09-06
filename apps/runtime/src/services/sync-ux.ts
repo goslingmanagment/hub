@@ -76,6 +76,8 @@ export interface SyncUxStreamLike {
    *  succeeded, so keying the state on the outcome alone would report a working
    *  stream as gated off until its next run lands — hours, on a daily cadence. */
   lastCompletionGatedSkipReason?: string | null;
+  /** Durable checkpoint hold, independent of the latest run's outcome. */
+  lastCompletionQualityHold?: string | null;
   succeededAt: string | null;
   failedAt: string | null;
   lastErrorCode?: string | null;
@@ -263,6 +265,16 @@ export function buildStreamSyncUx(stream: SyncUxStreamLike): SyncUxSummary {
     });
   }
 
+  if (stream.lastCompletionQualityHold) {
+    return buildSummary("attention", {
+      label: "Unverified",
+      headline: "Audience data could not be verified",
+      detail: "The latest sweep returned no subscribers. Existing data is preserved until the next verified sweep.",
+      progressLabel,
+      updatedAt,
+    });
+  }
+
   if (!hasSuccessfulSync && !hasCompletedRun) {
     return buildSummary("setup", {
       label: "Setting up",
@@ -342,6 +354,13 @@ export function buildPageSyncUx(items: SyncUxSummary[]): SyncUxSummary {
 
   const attention = items.filter((item) => item.state === "attention");
   if (attention.length > 0) {
+    if (attention.every((item) => item.label === "Unverified")) {
+      return chooseSummary("attention", attention, {
+        label: "Unverified",
+        headline: "Audience data could not be verified",
+        detail: "Existing subscriber data is preserved until the next verified sweep.",
+      });
+    }
     const requiresAction = attention.some((item) => item.requiresAction);
     return chooseSummary("attention", attention, requiresAction
       ? {

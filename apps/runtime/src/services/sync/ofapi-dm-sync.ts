@@ -92,6 +92,7 @@ type ExecutorRequestContext = {
 // fine, but redeclaring avoids any executor-handlers <-> ofapi-dm-sync cycle).
 export type OfapiStreamChunkResult = {
   satisfied: boolean;
+  qualityHold?: string | null;
   yieldReason: "request_budget" | "wall_clock" | null;
   continuationRetryAt?: Date | null;
   continuationRequestSource?: "scheduled" | null;

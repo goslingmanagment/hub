@@ -399,6 +399,9 @@ export type StreamChunkResult = {
    *  in BLOCK_TASKS / SYNC_DOMAIN_POLICY, where withholding succeeded_at WOULD
    *  degrade chatter-visible block health. That is a separate decision. */
   gatedSkip?: string | null;
+  /** A completed attempt whose data failed certification. Settle the request
+   *  without success, freshness, failure reset, or incident recovery. */
+  qualityHold?: string | null;
 };
 
 function asRecord(value: unknown) {
