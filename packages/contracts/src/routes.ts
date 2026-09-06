@@ -1,3 +1,6 @@
+import { ofapiBannedWordRouteSchemas } from "./routes-ofapi-banned-words.ts";
+import { OFAPI_EXTENDED_COMMAND_KINDS } from "@agency_hub_core/shared";
+import { ofapiExtendedCommandOptions } from "./ofapi-extended-commands.ts";
 import { ofapiVendorRouteSchemas } from "./routes-ofapi-vendor.ts";
 import { ofapiCollectionRouteSchemas } from "./routes-ofapi-collection.ts";
 import {
@@ -4377,6 +4380,7 @@ export const ofapiCommandStateSchema = z.enum([
 ]);
 
 export const ofapiCommandKindSchema = z.enum([
+  ...OFAPI_EXTENDED_COMMAND_KINDS,
   "send_text_message_v1",
   "send_media_message_v1",
   "typing_active_v1",
@@ -4441,6 +4445,7 @@ const sendMediaMessagePayloadSchema = z.strictObject({
 });
 
 export const createOfapiCommandBodySchema = z.discriminatedUnion("kind", [
+  ...ofapiExtendedCommandOptions,
   z.strictObject({
     ...ofapiCommandBaseFields,
     kind: z.literal("send_text_message_v1"),
@@ -5517,6 +5522,7 @@ export const moneyPayoutsResponseSchema = z.object({
 });
 
 export const routeSchemas = {
+  ...ofapiBannedWordRouteSchemas,
   ...ofapiVendorRouteSchemas,
   ...ofapiCollectionRouteSchemas,
   ...agentRouteSchemas,

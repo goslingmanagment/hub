@@ -1,3 +1,4 @@
+import type { OfapiExtendedCommandKind, OfapiExtendedCommandPayload } from "@agency_hub_core/shared";
 import {
   bigserial,
   bigint,
@@ -86,13 +87,13 @@ const jsonbSafe = customType<{ data: unknown; driverData: unknown }>({
   },
 });
 
-export type OfapiCommandKind =
+export type OfapiCommandKind = OfapiExtendedCommandKind
   | "send_text_message_v1"
   | "send_media_message_v1"
   | "typing_active_v1"
   | "unsend_message_v1"
   | "mark_chat_read_v1";
-export type OfapiCommandPayload =
+export type OfapiCommandPayload = OfapiExtendedCommandPayload
   | { text: string }
   | {
     text: string;

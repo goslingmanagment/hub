@@ -1,3 +1,6 @@
+import { OFAPI_EXTENDED_COMMAND_KINDS, millsFromCents, type OfapiExtendedCommandKind, type OfapiExtendedCommandPayload, type OfapiSendV2Payload } from "@agency_hub_core/shared";
+import { reserveOfapiProviderOperation, OfapiProviderOperationRefused } from "@agency_hub_core/db";
+import { buildOfapiSendV2Body } from "./ofapi-command-composer.ts";
 import { createHash } from "node:crypto";
 import { OfapiKeyPermissionDeniedError } from "./ofapi-vendor-usage.ts";
 
@@ -71,7 +74,7 @@ export type OfapiCommandFailure = {
 /** The command was claimed, but its local guard refused any vendor dispatch. */
 export class OfapiLocalDispatchRefusal extends Error {
   constructor(
-    readonly reason: "account_unavailable" | "binding_replaced" | "auth_action_required" | "credential_not_verified" | "credit_accounting_unavailable" | "key_scope_denied",
+    readonly reason: "account_unavailable" | "binding_replaced" | "auth_action_required" | "credential_not_verified" | "credit_accounting_unavailable" | "key_scope_denied" | "provider_replay_unavailable" | "media_token_already_used",
     readonly detail: string | null = null,
   ) {
     super(`OFAPI command refused before dispatch: ${reason}`);
@@ -244,13 +247,13 @@ async function recordConfirmedSendFact(
   if (!isOfapiDmColdArchiveEnabled(app.config)) {
     return;
   }
-  if (command.kind !== "send_text_message_v1" && command.kind !== "send_media_message_v1") {
+  if (command.kind !== "send_text_message_v1" && command.kind !== "send_media_message_v1" && command.kind !== "send_message_v2") {
     return;
   }
   try {
-    const payload = command.payload as { text?: unknown; price?: unknown };
+    const payload = command.payload as { text?: unknown; price?: unknown; priceCents?: number };
     const text = typeof payload.text === "string" ? normalizeDmMessageText(payload.text) : "";
-    const priceMills = command.kind === "send_media_message_v1"
+    const priceMills = command.kind === "send_message_v2" && payload.priceCents ? millsFromCents(payload.priceCents) : command.kind === "send_media_message_v1"
       && typeof payload.price === "number" && payload.price > 0
       ? millsFromDollars(payload.price)
       : null;
@@ -297,6 +300,7 @@ function canExecuteCommandKind(
   app: AppContext,
   command: Pick<OfapiCommandRow, "kind">,
 ): boolean {
+  if ((OFAPI_EXTENDED_COMMAND_KINDS as readonly string[]).includes(command.kind)) return typeof app.ofapi?.executeExtendedCommand === "function";
   switch (command.kind) {
     case "send_text_message_v1":
       return typeof app.ofapi?.sendTextMessage === "function";
@@ -308,6 +312,7 @@ function canExecuteCommandKind(
       return typeof app.ofapi?.unsendMessage === "function";
     case "mark_chat_read_v1":
       return typeof app.ofapi?.markChatRead === "function";
+    default: return false;
   }
 }
 
@@ -473,7 +478,29 @@ async function executeCurrentOfapiCommand(
       source: "ofapi_response",
       commandKind: command.kind,
     };
-    if (command.kind === "send_text_message_v1") {
+    if ((OFAPI_EXTENDED_COMMAND_KINDS as readonly string[]).includes(command.kind)) {
+      let providerKey: string | undefined;
+      if (command.kind === "send_message_v2") {
+        const preflight = await app.ofapi?.getCredentialPreflight?.();
+        if (preflight?.status !== "verified" || !preflight.observedTeam) throw new OfapiLocalDispatchRefusal("credential_not_verified");
+        const payload = command.payload as OfapiSendV2Payload;
+        const body = buildOfapiSendV2Body(payload);
+        const operation = await reserveOfapiProviderOperation(app.db, {
+          commandId: command.id, parentCommandId: command.retryOfCommandId, reuse: payload.reuseProviderOperation,
+          teamSlug: preflight.observedTeam, accountId: command.ofapiAccountId,
+          endpoint: `/${command.ofapiAccountId}/chats/${command.conversationId}/messages`,
+          bodyHash: createHash("sha256").update(JSON.stringify(body)).digest("hex"),
+          tokens: payload.mediaFiles.filter(id => id.startsWith("ofapi_media_")), now,
+        });
+        providerKey = operation.providerKey;
+        verifierResult.providerOperationId = operation.operationId;
+        verifierResult.firstAttemptAt = operation.firstAttemptAt;
+      }
+      const result = await app.ofapi!.executeExtendedCommand!({ pageId: command.pageId }, command.ofapiAccountId, command.conversationId,
+        command.kind as OfapiExtendedCommandKind, command.payload as OfapiExtendedCommandPayload, providerKey);
+      platformMessageId = result.messageId ?? null;
+      if (result.creditAccounting) verifierResult.creditAccounting = result.creditAccounting;
+    } else if (command.kind === "send_text_message_v1") {
       const result = await app.ofapi!.sendTextMessage!(
         { pageId: command.pageId },
         command.ofapiAccountId,
@@ -552,7 +579,7 @@ async function executeCurrentOfapiCommand(
     );
     return { status: "confirmed" as const, commandId: command.id };
   } catch (error) {
-    const localRefusal = error instanceof OfapiLocalDispatchRefusal ? error
+    const localRefusal = error instanceof OfapiProviderOperationRefused ? new OfapiLocalDispatchRefusal(error.reason === "replay_unavailable" ? "provider_replay_unavailable" : error.reason) : error instanceof OfapiLocalDispatchRefusal ? error
       : error instanceof OfapiCredentialNotReadyError
         ? new OfapiLocalDispatchRefusal("credential_not_verified", error.reason ?? error.preflightStatus)
         : error instanceof OfapiCreditAccountingUnavailableError
@@ -568,7 +595,7 @@ async function executeCurrentOfapiCommand(
     const failure = classifyOfapiCommandFailure(localRefusal ?? error);
     const failureEvidence = localRefusal
       ? { source: "local_precondition", reason: localRefusal.reason, detail: localRefusal.detail }
-      : { source: "ofapi_response", httpStatus: failure.httpStatus };
+      : { source: "ofapi_response", httpStatus: failure.httpStatus, ...(error instanceof OfapiApiError && error.status === 422 && error.body ? { validationResponse: error.body.slice(0, 4000) } : {}) };
     const finishedAt = new Date();
     const finalized = await finalizeOfapiCommand(app.db, {
       commandId: command.id,

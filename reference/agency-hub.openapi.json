@@ -5458,6 +5458,446 @@
         }
       }
     },
+    "/api/v1/admin/ofapi/banned-words": {
+      "get": {
+        "summary": "Read retained dictionary evidence without a vendor call",
+        "tags": [
+          "admin"
+        ],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "version": {
+                          "type": "string"
+                        },
+                        "observedAt": {
+                          "type": "string"
+                        },
+                        "complete": {
+                          "type": "boolean"
+                        },
+                        "pages": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "entries": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "word": {
+                                "type": "string"
+                              },
+                              "riskLevel": {
+                                "type": "string"
+                              },
+                              "category": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "alternatives": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "word",
+                              "riskLevel",
+                              "category",
+                              "alternatives"
+                            ],
+                            "additionalProperties": false
+                          }
+                        }
+                      },
+                      "required": [
+                        "version",
+                        "observedAt",
+                        "complete",
+                        "pages",
+                        "entries"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/ofapi/banned-words/refresh": {
+      "post": {
+        "summary": "Explicit bounded dictionary refresh; no background collection",
+        "tags": [
+          "admin"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "maxPages": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 30
+                  }
+                },
+                "required": [
+                  "maxPages"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "version": {
+                      "type": "string"
+                    },
+                    "observedAt": {
+                      "type": "string"
+                    },
+                    "complete": {
+                      "type": "boolean"
+                    },
+                    "pages": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "entries": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "word": {
+                            "type": "string"
+                          },
+                          "riskLevel": {
+                            "type": "string"
+                          },
+                          "category": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "alternatives": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "word",
+                          "riskLevel",
+                          "category",
+                          "alternatives"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "version",
+                    "observedAt",
+                    "complete",
+                    "pages",
+                    "entries"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/ofapi/capture-jobs/seed": {
       "post": {
         "summary": "Dry-run or seed a bounded explicit OFAPI chat cohort",
@@ -66066,6 +66506,472 @@
         }
       }
     },
+    "/api/v1/ofapi/banned-words": {
+      "get": {
+        "summary": "Read retained vendor banned-word dictionary with coverage",
+        "tags": [
+          "ingest"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "version": {
+                          "type": "string"
+                        },
+                        "observedAt": {
+                          "type": "string"
+                        },
+                        "complete": {
+                          "type": "boolean"
+                        },
+                        "pages": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "entries": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "word": {
+                                "type": "string"
+                              },
+                              "riskLevel": {
+                                "type": "string"
+                              },
+                              "category": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "alternatives": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "word",
+                              "riskLevel",
+                              "category",
+                              "alternatives"
+                            ],
+                            "additionalProperties": false
+                          }
+                        }
+                      },
+                      "required": [
+                        "version",
+                        "observedAt",
+                        "complete",
+                        "pages",
+                        "entries"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ofapi/banned-words/preview": {
+      "post": {
+        "summary": "Preview literal banned words locally without altering text",
+        "tags": [
+          "ingest"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "text": {
+                    "type": "string",
+                    "maxLength": 10000
+                  }
+                },
+                "required": [
+                  "text"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "version": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "observedAt": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "complete": {
+                      "type": "boolean"
+                    },
+                    "matching": {
+                      "type": "string",
+                      "enum": [
+                        "literal_case_insensitive"
+                      ]
+                    },
+                    "matches": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "word": {
+                            "type": "string"
+                          },
+                          "riskLevel": {
+                            "type": "string"
+                          },
+                          "category": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "alternatives": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "start": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "end": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          }
+                        },
+                        "required": [
+                          "word",
+                          "riskLevel",
+                          "category",
+                          "alternatives",
+                          "start",
+                          "end"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "version",
+                    "observedAt",
+                    "complete",
+                    "matching",
+                    "matches"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/ofapi/commands": {
       "post": {
         "summary": "Create or deduplicate a desktop OFAPI command",
@@ -66079,6 +66985,563 @@
             "application/json": {
               "schema": {
                 "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "clientCommandId": {
+                        "type": "string",
+                        "format": "uuid",
+                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                      },
+                      "accountId": {
+                        "type": "string",
+                        "pattern": "^acct_[A-Za-z0-9]+$"
+                      },
+                      "conversationId": {
+                        "type": "string",
+                        "pattern": "^[0-9]{1,30}$"
+                      },
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "send_message_v2"
+                        ]
+                      },
+                      "payload": {
+                        "type": "object",
+                        "properties": {
+                          "text": {
+                            "type": "string",
+                            "maxLength": 10000
+                          },
+                          "priceCents": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 20000
+                          },
+                          "mediaFiles": {
+                            "maxItems": 50,
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "pattern": "^(?:[0-9]{1,30}|ofapi_media_[A-Za-z0-9_-]{1,128})$"
+                            }
+                          },
+                          "previews": {
+                            "maxItems": 50,
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "pattern": "^(?:[0-9]{1,30}|ofapi_media_[A-Za-z0-9_-]{1,128})$"
+                            }
+                          },
+                          "lockedText": {
+                            "type": "boolean"
+                          },
+                          "replyToMessageId": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "pattern": "^[0-9]{1,30}$"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "giphyId": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 200
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "rfTag": {
+                            "maxItems": 50,
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "pattern": "^[0-9]{1,30}$"
+                            }
+                          },
+                          "rfPartner": {
+                            "maxItems": 50,
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "pattern": "^[0-9]{1,30}$"
+                            }
+                          },
+                          "rfGuest": {
+                            "maxItems": 50,
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "pattern": "^[0-9]{1,30}$"
+                            }
+                          },
+                          "blockBannedWords": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "enum": [
+                                  "strict_ban",
+                                  "risky",
+                                  "replace_soften"
+                                ]
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "reuseProviderOperation": {
+                            "default": false,
+                            "type": "boolean"
+                          }
+                        },
+                        "required": [
+                          "text",
+                          "priceCents",
+                          "mediaFiles",
+                          "previews",
+                          "lockedText",
+                          "replyToMessageId",
+                          "giphyId",
+                          "rfTag",
+                          "rfPartner",
+                          "rfGuest",
+                          "blockBannedWords"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "retryOfCommandId": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "format": "uuid",
+                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "clientCommandId",
+                      "accountId",
+                      "conversationId",
+                      "kind",
+                      "payload"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "clientCommandId": {
+                        "type": "string",
+                        "format": "uuid",
+                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                      },
+                      "accountId": {
+                        "type": "string",
+                        "pattern": "^acct_[A-Za-z0-9]+$"
+                      },
+                      "conversationId": {
+                        "type": "string",
+                        "pattern": "^[0-9]{1,30}$"
+                      },
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "set_fan_custom_name_v1"
+                        ]
+                      },
+                      "payload": {
+                        "type": "object",
+                        "properties": {
+                          "customName": {
+                            "type": "string",
+                            "maxLength": 100
+                          }
+                        },
+                        "required": [
+                          "customName"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "retryOfCommandId": {
+                        "type": "null"
+                      }
+                    },
+                    "required": [
+                      "clientCommandId",
+                      "accountId",
+                      "conversationId",
+                      "kind",
+                      "payload"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "clientCommandId": {
+                        "type": "string",
+                        "format": "uuid",
+                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                      },
+                      "accountId": {
+                        "type": "string",
+                        "pattern": "^acct_[A-Za-z0-9]+$"
+                      },
+                      "conversationId": {
+                        "type": "string",
+                        "pattern": "^[0-9]{1,30}$"
+                      },
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "like_message_v1"
+                        ]
+                      },
+                      "payload": {
+                        "type": "object",
+                        "properties": {
+                          "messageId": {
+                            "type": "string",
+                            "pattern": "^[0-9]{1,30}$"
+                          }
+                        },
+                        "required": [
+                          "messageId"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "retryOfCommandId": {
+                        "type": "null"
+                      }
+                    },
+                    "required": [
+                      "clientCommandId",
+                      "accountId",
+                      "conversationId",
+                      "kind",
+                      "payload"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "clientCommandId": {
+                        "type": "string",
+                        "format": "uuid",
+                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                      },
+                      "accountId": {
+                        "type": "string",
+                        "pattern": "^acct_[A-Za-z0-9]+$"
+                      },
+                      "conversationId": {
+                        "type": "string",
+                        "pattern": "^[0-9]{1,30}$"
+                      },
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "unlike_message_v1"
+                        ]
+                      },
+                      "payload": {
+                        "type": "object",
+                        "properties": {
+                          "messageId": {
+                            "type": "string",
+                            "pattern": "^[0-9]{1,30}$"
+                          }
+                        },
+                        "required": [
+                          "messageId"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "retryOfCommandId": {
+                        "type": "null"
+                      }
+                    },
+                    "required": [
+                      "clientCommandId",
+                      "accountId",
+                      "conversationId",
+                      "kind",
+                      "payload"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "clientCommandId": {
+                        "type": "string",
+                        "format": "uuid",
+                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                      },
+                      "accountId": {
+                        "type": "string",
+                        "pattern": "^acct_[A-Za-z0-9]+$"
+                      },
+                      "conversationId": {
+                        "type": "string",
+                        "pattern": "^[0-9]{1,30}$"
+                      },
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "pin_message_v1"
+                        ]
+                      },
+                      "payload": {
+                        "type": "object",
+                        "properties": {
+                          "messageId": {
+                            "type": "string",
+                            "pattern": "^[0-9]{1,30}$"
+                          }
+                        },
+                        "required": [
+                          "messageId"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "retryOfCommandId": {
+                        "type": "null"
+                      }
+                    },
+                    "required": [
+                      "clientCommandId",
+                      "accountId",
+                      "conversationId",
+                      "kind",
+                      "payload"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "clientCommandId": {
+                        "type": "string",
+                        "format": "uuid",
+                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                      },
+                      "accountId": {
+                        "type": "string",
+                        "pattern": "^acct_[A-Za-z0-9]+$"
+                      },
+                      "conversationId": {
+                        "type": "string",
+                        "pattern": "^[0-9]{1,30}$"
+                      },
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "unpin_message_v1"
+                        ]
+                      },
+                      "payload": {
+                        "type": "object",
+                        "properties": {
+                          "messageId": {
+                            "type": "string",
+                            "pattern": "^[0-9]{1,30}$"
+                          }
+                        },
+                        "required": [
+                          "messageId"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "retryOfCommandId": {
+                        "type": "null"
+                      }
+                    },
+                    "required": [
+                      "clientCommandId",
+                      "accountId",
+                      "conversationId",
+                      "kind",
+                      "payload"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "clientCommandId": {
+                        "type": "string",
+                        "format": "uuid",
+                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                      },
+                      "accountId": {
+                        "type": "string",
+                        "pattern": "^acct_[A-Za-z0-9]+$"
+                      },
+                      "conversationId": {
+                        "type": "string",
+                        "pattern": "^[0-9]{1,30}$"
+                      },
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "mark_chat_unread_v1"
+                        ]
+                      },
+                      "payload": {
+                        "type": "object",
+                        "properties": {},
+                        "additionalProperties": false
+                      },
+                      "retryOfCommandId": {
+                        "type": "null"
+                      }
+                    },
+                    "required": [
+                      "clientCommandId",
+                      "accountId",
+                      "conversationId",
+                      "kind",
+                      "payload"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "clientCommandId": {
+                        "type": "string",
+                        "format": "uuid",
+                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                      },
+                      "accountId": {
+                        "type": "string",
+                        "pattern": "^acct_[A-Za-z0-9]+$"
+                      },
+                      "conversationId": {
+                        "type": "string",
+                        "pattern": "^[0-9]{1,30}$"
+                      },
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "mute_chat_v1"
+                        ]
+                      },
+                      "payload": {
+                        "type": "object",
+                        "properties": {},
+                        "additionalProperties": false
+                      },
+                      "retryOfCommandId": {
+                        "type": "null"
+                      }
+                    },
+                    "required": [
+                      "clientCommandId",
+                      "accountId",
+                      "conversationId",
+                      "kind",
+                      "payload"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "clientCommandId": {
+                        "type": "string",
+                        "format": "uuid",
+                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                      },
+                      "accountId": {
+                        "type": "string",
+                        "pattern": "^acct_[A-Za-z0-9]+$"
+                      },
+                      "conversationId": {
+                        "type": "string",
+                        "pattern": "^[0-9]{1,30}$"
+                      },
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "unmute_chat_v1"
+                        ]
+                      },
+                      "payload": {
+                        "type": "object",
+                        "properties": {},
+                        "additionalProperties": false
+                      },
+                      "retryOfCommandId": {
+                        "type": "null"
+                      }
+                    },
+                    "required": [
+                      "clientCommandId",
+                      "accountId",
+                      "conversationId",
+                      "kind",
+                      "payload"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "clientCommandId": {
+                        "type": "string",
+                        "format": "uuid",
+                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                      },
+                      "accountId": {
+                        "type": "string",
+                        "pattern": "^acct_[A-Za-z0-9]+$"
+                      },
+                      "conversationId": {
+                        "type": "string",
+                        "pattern": "^[0-9]{1,30}$"
+                      },
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "hide_chat_v1"
+                        ]
+                      },
+                      "payload": {
+                        "type": "object",
+                        "properties": {},
+                        "additionalProperties": false
+                      },
+                      "retryOfCommandId": {
+                        "type": "null"
+                      }
+                    },
+                    "required": [
+                      "clientCommandId",
+                      "accountId",
+                      "conversationId",
+                      "kind",
+                      "payload"
+                    ],
+                    "additionalProperties": false
+                  },
                   {
                     "type": "object",
                     "properties": {
@@ -66378,6 +67841,16 @@
                     "kind": {
                       "type": "string",
                       "enum": [
+                        "send_message_v2",
+                        "set_fan_custom_name_v1",
+                        "like_message_v1",
+                        "unlike_message_v1",
+                        "pin_message_v1",
+                        "unpin_message_v1",
+                        "mark_chat_unread_v1",
+                        "mute_chat_v1",
+                        "unmute_chat_v1",
+                        "hide_chat_v1",
                         "send_text_message_v1",
                         "send_media_message_v1",
                         "typing_active_v1",
@@ -66543,6 +68016,16 @@
                     "kind": {
                       "type": "string",
                       "enum": [
+                        "send_message_v2",
+                        "set_fan_custom_name_v1",
+                        "like_message_v1",
+                        "unlike_message_v1",
+                        "pin_message_v1",
+                        "unpin_message_v1",
+                        "mark_chat_unread_v1",
+                        "mute_chat_v1",
+                        "unmute_chat_v1",
+                        "hide_chat_v1",
                         "send_text_message_v1",
                         "send_media_message_v1",
                         "typing_active_v1",
@@ -66910,6 +68393,16 @@
                     "kind": {
                       "type": "string",
                       "enum": [
+                        "send_message_v2",
+                        "set_fan_custom_name_v1",
+                        "like_message_v1",
+                        "unlike_message_v1",
+                        "pin_message_v1",
+                        "unpin_message_v1",
+                        "mark_chat_unread_v1",
+                        "mute_chat_v1",
+                        "unmute_chat_v1",
+                        "hide_chat_v1",
                         "send_text_message_v1",
                         "send_media_message_v1",
                         "typing_active_v1",
@@ -67219,6 +68712,16 @@
                     "kind": {
                       "type": "string",
                       "enum": [
+                        "send_message_v2",
+                        "set_fan_custom_name_v1",
+                        "like_message_v1",
+                        "unlike_message_v1",
+                        "pin_message_v1",
+                        "unpin_message_v1",
+                        "mark_chat_unread_v1",
+                        "mute_chat_v1",
+                        "unmute_chat_v1",
+                        "hide_chat_v1",
                         "send_text_message_v1",
                         "send_media_message_v1",
                         "typing_active_v1",

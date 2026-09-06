@@ -1,4 +1,5 @@
 import { buildSettingsRoute } from "../lib/navigation.js";
+import { OfapiBannedWords } from "./settings/OfapiBannedWords.js";
 import { OfapiVendorEvidence } from "./settings/OfapiVendorEvidence.js";
 import { OfapiWebhookRecovery } from "./settings/OfapiWebhookRecovery.js";
 import { Fragment, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
@@ -1762,6 +1763,7 @@ export function OfapiCreditsPage() {
           </section>
 
           <OfapiVendorEvidence />
+      <OfapiBannedWords />
 
           <SystemHealthSection
             summary={summary}
