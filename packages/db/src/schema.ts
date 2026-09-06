@@ -6307,9 +6307,13 @@ export const ofapiMarketingIntents = pgTable("ofapi_marketing_intents", {
   createdAt:timestamp("created_at",{withTimezone:true}).defaultNow().notNull(),dispatchedAt:timestamp("dispatched_at",{withTimezone:true}),settledAt:timestamp("settled_at",{withTimezone:true}),
 });
 export const ofapiActionIdentities = pgTable("ofapi_action_identities", { id: uuid("id").primaryKey() });
+export const ofapiMediaTokenFences = pgTable("ofapi_media_token_fences", {
+  tokenHash: text("token_hash").primaryKey(), operationId: uuid("operation_id").notNull(),
+});
 
 export const ofapiActionIntents = pgTable("ofapi_action_intents", {
   id: uuid("id").primaryKey(),
+  mediaOperationId: uuid("media_operation_id").defaultRandom().notNull(),
   pageId: bigint("page_id", { mode: "number" }).notNull().references(() => pages.id, { onDelete: "restrict" }),
   actorUserId: bigint("actor_user_id", { mode: "number" }).notNull().references(() => users.id, { onDelete: "restrict" }),
   action: text("action").notNull(), bodyHash: text("body_hash").notNull(), bodyEncrypted: text("body_encrypted").notNull(),

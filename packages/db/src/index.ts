@@ -150,6 +150,7 @@ export * from "./repositories/ofapi-collection.ts";
 export * from "./repositories/ofapi-webhook-recovery.ts";
 
 export * from "./repositories/ofapi-provider-operations.ts";
+export * from "./repositories/ofapi-media-token-fences.ts";
 export * from "./repositories/ofapi-banned-words.ts";
 
 export * from "./repositories/ofapi-read-collections.ts";

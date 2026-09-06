@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import type { Database } from "@agency_hub_core/db";
+import { claimOfapiMediaTokenFence, isOfapiMediaTokenReserved, type Database } from "@agency_hub_core/db";
 import type { AppContext } from "../bootstrap.ts";
 import { BadRequestError, ConflictError } from "./errors.ts";
 
@@ -41,6 +41,7 @@ export async function validateOfapiActionMedia(app: AppContext, command: MediaCo
       const cursor = object(upload.cursor);
       return cursor?.mediaRef === reference && cursor.status === "completed" && cursor.hasError !== true && cursor.isReady !== false;
     })) throw new ConflictError("Every one-use material needs a completed upload for this account before it can be used");
+    if (await isOfapiMediaTokenReserved(db, accountId, reference)) throw new ConflictError("This one-use material is already reserved by another action or chat send");
     tokens.push(reference);
   }
   return tokens;
@@ -52,14 +53,22 @@ export async function reserveOfapiActionMedia(db: Database, intentId: string, ac
   const unique = [...new Set(tokens)].sort();
   if (!unique.length) return;
   await db.transaction(async tx => {
+    const owner = (await tx.execute<{ media_operation_id: string }>(sql`
+      select media_operation_id from ofapi_action_intents where id=${intentId}::uuid for share
+    `)).rows[0];
+    if (!owner) throw new ConflictError("The prepared media action is no longer available");
+    const operationId = owner.media_operation_id;
     for (const token of unique) {
+      if (!await claimOfapiMediaTokenFence(tx as unknown as Database, { accountId, token, operationId })) {
+        throw new ConflictError("This one-use material is already reserved by another action or chat send");
+      }
       await tx.execute(sql`insert into ofapi_media_token_custody(account_id,token,operation_id,command_id,action_intent_id)
-        values(${accountId},${token},${intentId}::uuid,null,${intentId}::uuid) on conflict do nothing`);
+        values(${accountId},${token},${operationId}::uuid,null,${intentId}::uuid) on conflict do nothing`);
       const held = (await tx.execute<{ operation_id: string; command_id: string | null; action_intent_id: string | null }>(sql`
         select operation_id,command_id,action_intent_id from ofapi_media_token_custody
         where account_id=${accountId} and token=${token} for update
       `)).rows[0];
-      if (held?.operation_id !== intentId || held.action_intent_id !== intentId || held.command_id !== null) throw new ConflictError("This one-use material is already reserved by another action or chat send");
+      if (held?.operation_id !== operationId || held.action_intent_id !== intentId || held.command_id !== null) throw new ConflictError("This one-use material is already reserved by another action or chat send");
     }
   });
 }

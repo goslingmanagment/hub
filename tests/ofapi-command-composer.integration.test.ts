@@ -109,6 +109,39 @@ function installedClient(send: ReturnType<typeof vi.fn>) {
   appContext.ofapi = { executeExtendedCommand: send, getCredentialPreflight: async () => ({ status: "verified", expectedTeam: "team", observedTeam: "team", credentialFingerprint: "synthetic", checkedAt: new Date().toISOString(), reason: null, rosterScope: "unknown" }) } as unknown as AppContext["ofapi"];
 }
 describe("durable send-v2 provider operation custody", () => {
+  it("reserves a legacy CDN attachment at execution and rejects a second v1 or v2 send without replay", async () => {
+    const send = vi.fn().mockRejectedValue(new OfapiApiError("timeout", null, null));
+    installedClient(send);
+    appContext.ofapi!.sendMediaMessage = send;
+    const payload = { text: "Legacy media", price: 0, mediaFiles: ["ofapi_media_token"], previews: [] };
+    const first = (await createCommand({ kind: "send_media_message_v1", payload })).json().commandId;
+    expect((await testDb!.pool.query("select * from ofapi_media_token_fences")).rows).toEqual([]);
+    expect((await executeOfapiCommand(appContext, first)).status).toBe("indeterminate");
+    expect((await executeOfapiCommand(appContext, first)).status).toBe("not_claimed");
+    const second = (await createCommand({ kind: "send_media_message_v1", payload })).json().commandId;
+    expect((await executeOfapiCommand(appContext, second)).status).toBe("failed_terminal");
+    const v2 = (await createCommand()).json().commandId;
+    expect((await executeOfapiCommand(appContext, v2)).status).toBe("failed_terminal");
+    expect(send).toHaveBeenCalledTimes(1);
+    expect((await testDb!.pool.query("select operation_id from ofapi_media_token_fences")).rows).toEqual([{ operation_id: first }]);
+    expect((await testDb!.pool.query("select * from ofapi_command_provider_operations")).rows).toEqual([]);
+  });
+
+  it("does not burn a legacy token when retained payload validation fails before dispatch", async () => {
+    const send = vi.fn().mockResolvedValue({ messageId: "999" });
+    installedClient(send);
+    appContext.ofapi!.sendMediaMessage = send;
+    const payload = { text: "Legacy media", price: 0, mediaFiles: ["ofapi_media_token"], previews: [] };
+    const invalid = (await createCommand({ kind: "send_media_message_v1", payload })).json().commandId;
+    await testDb!.pool.query("update ofapi_commands set payload=$2::jsonb where id=$1", [invalid, JSON.stringify({ ...payload, price: 2 })]);
+    expect((await executeOfapiCommand(appContext, invalid)).status).toBe("failed_terminal");
+    expect((await testDb!.pool.query("select * from ofapi_media_token_fences")).rows).toEqual([]);
+    expect(send).not.toHaveBeenCalled();
+    const valid = (await createCommand({ kind: "send_media_message_v1", payload })).json().commandId;
+    expect((await executeOfapiCommand(appContext, valid)).status).toBe("confirmed");
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps a failed send one-attempt and only explicit unchanged recovery reuses its provider key", async () => {
     const send = vi.fn().mockRejectedValueOnce(new OfapiApiError("timeout", null, null)).mockResolvedValue({ messageId: "999" }); installedClient(send);
     const created = await createCommand(); expect(created.statusCode).toBe(202); const id = created.json().commandId;

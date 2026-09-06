@@ -1,14 +1,20 @@
 import { createHash, randomUUID } from "node:crypto";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createModel, createOnlyFansPage, createOrGetOfapiCaptureJob, createOrGetOfapiCommand,
-  createUser, insertObservation, OfapiProviderOperationRefused, reserveOfapiProviderOperation,
+  createUser, getOfapiCaptureJob, insertObservation, ofapiMediaTokenHash,
+  OfapiProviderOperationRefused, reserveOfapiLegacyMediaTokens, reserveOfapiProviderOperation,
   setPageOfapiAccountId, type Database,
 } from "@agency_hub_core/db";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { BadRequestError, ConflictError } from "../apps/runtime/src/services/errors.ts";
 import { reserveOfapiActionMedia, validateOfapiActionMedia } from "../apps/runtime/src/services/ofapi-action-media.ts";
 import { prepareOfapiAction } from "../apps/runtime/src/services/ofapi-actions.ts";
+import { executeErasure } from "../apps/runtime/src/services/erasure/index.ts";
+import { handoffOfapiMedia } from "../apps/runtime/src/services/ofapi-media-catalog.ts";
 import { buildOfapiMediaFact, recordOfapiMediaFacts } from "../apps/runtime/src/services/projections/ofapi-media.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
@@ -88,9 +94,10 @@ async function upload(token = TOKEN, options: {
   }
   return id;
 }
-async function intent() {
-  const id = randomUUID();
-  await prepareOfapiAction(app, { id, command: { action: "user_list_create", pageId, name: "Media reservation" } }, actor);
+async function intent(fanRef?: string, id: string = randomUUID()) {
+  await prepareOfapiAction(app, { id, command: fanRef
+    ? { action: "fan_notes_update", pageId, fanId: fanRef, notes: "Fan-scoped action" }
+    : { action: "user_list_create", pageId, name: "Media reservation" } }, actor);
   return id;
 }
 async function chat(token = TOKEN) {
@@ -107,6 +114,8 @@ const reserveChat = (commandId: string, token = TOKEN) => reserveOfapiProviderOp
   endpoint: `/${ACCOUNT}/chats/101/messages`, bodyHash: hash(token).toString("hex"), tokens: [token],
 });
 const custody = async () => (await database.pool.query("select account_id,token,operation_id,command_id,action_intent_id from ofapi_media_token_custody order by token")).rows;
+const fences = async () => (await database.pool.query("select * from ofapi_media_token_fences order by token_hash")).rows;
+const actionOperation = async (id: string): Promise<string> => (await database.pool.query("select media_operation_id from ofapi_action_intents where id=$1", [id])).rows[0].media_operation_id;
 const validate = (fields: Record<string, unknown>) => validateOfapiActionMedia(app, { pageId, ...fields }, ACCOUNT);
 
 describe("shared owner-action media custody", () => {
@@ -116,6 +125,7 @@ describe("shared owner-action media custody", () => {
     expect(await validate({})).toEqual([]);
     for (let count = 0; count < 2; count++) expect(await validate({ mediaFiles: [largeId], previews: [largeId], avatar: largeId, header: largeId })).toEqual([]);
     expect(await custody()).toEqual([]);
+    expect(await fences()).toEqual([]);
   });
 
   it("refuses missing vault metadata and evidence belonging to another page or account", async () => {
@@ -189,7 +199,8 @@ describe("shared owner-action media custody", () => {
     expect(rows).toHaveLength(1);
     const winner = rows[0].action_intent_id;
     expect([first, second]).toContain(winner);
-    expect(rows[0]).toMatchObject({ command_id: null, operation_id: winner });
+    expect(rows[0]).toMatchObject({ command_id: null, operation_id: await actionOperation(winner) });
+    expect(rows[0].operation_id).not.toBe(winner);
     await reserveOfapiActionMedia(app.db, winner, ACCOUNT, [TOKEN]);
     expect(await custody()).toEqual(rows);
   });
@@ -222,7 +233,7 @@ describe("shared owner-action media custody", () => {
     expect(rows).toHaveLength(1);
     const operationCount = Number((await database.pool.query("select count(*)::int n from ofapi_command_provider_operations")).rows[0].n);
     if (rows[0].action_intent_id === actionId) {
-      expect(rows[0]).toMatchObject({ command_id: null, operation_id: actionId });
+      expect(rows[0]).toMatchObject({ command_id: null, operation_id: await actionOperation(actionId) });
       expect(operationCount).toBe(0);
     } else {
       expect(rows[0]).toMatchObject({ command_id: chatId, action_intent_id: null });
@@ -237,6 +248,7 @@ describe("shared owner-action media custody", () => {
       throw new Error("Synthetic claim failure before HTTP");
     })).rejects.toThrow("Synthetic claim failure");
     expect(await custody()).toEqual([]);
+    expect(await fences()).toEqual([]);
     const replacement = await intent();
     await reserveOfapiActionMedia(app.db, replacement, ACCOUNT, [TOKEN]);
     expect((await custody())[0]).toMatchObject({ action_intent_id: replacement });
@@ -249,7 +261,86 @@ describe("shared owner-action media custody", () => {
     const owner = await intent();
     await expect(reserveOfapiActionMedia(app.db, owner, ACCOUNT, [fresh, taken])).rejects.toBeInstanceOf(ConflictError);
     expect((await custody()).map(row => row.token)).toEqual([taken]);
+    expect((await fences()).map(row => row.token_hash)).toEqual([ofapiMediaTokenHash(ACCOUNT, taken)]);
     await reserveOfapiActionMedia(app.db, owner, ACCOUNT, [fresh]);
     expect((await custody()).map(row => row.token)).toEqual([fresh, taken]);
+  });
+
+  it.each(["action", "chat", "legacy"] as const)("keeps a %s token consumed after real fan erasure removes its custody link", async source => {
+    const lakeDir = await mkdtemp(join(tmpdir(), "ofapi-media-fence-erasure-"));
+    app.config.lakeDir = lakeDir;
+    try {
+      const uploadId = await upload();
+      const completed = (await getOfapiCaptureJob(app.db, uploadId))!;
+      const handoff = { pageId, jobId: uploadId, expectedRowVersion: completed.rowVersion, reason: "Explicit material handoff" };
+      expect(await handoffOfapiMedia(app, handoff, actor)).toMatchObject({ materialId: TOKEN });
+      expect(await validate({ mediaFiles: [TOKEN] })).toEqual([TOKEN]);
+
+      const ownerId = source === "action" ? await intent("101") : await chat();
+      let operationId: string = source === "action" ? await actionOperation(ownerId) : ownerId;
+      if (source === "action") await reserveOfapiActionMedia(app.db, ownerId, ACCOUNT, [TOKEN]);
+      else if (source === "legacy") await reserveOfapiLegacyMediaTokens(app.db, { commandId: ownerId, accountId: ACCOUNT, tokens: [TOKEN] });
+      else operationId = (await reserveChat(ownerId)).operationId;
+
+      await executeErasure(app, { scopeType: "fan", platform: "onlyfans", fanRef: "101" }, { initiatedBy: actor });
+      expect(await custody()).toEqual([]);
+      expect((await database.pool.query("select id from ofapi_commands where id=$1", [ownerId])).rows).toEqual([]);
+      expect((await database.pool.query("select id from ofapi_action_intents where id=$1", [ownerId])).rows).toEqual([]);
+      expect(await fences()).toEqual([{ token_hash: ofapiMediaTokenHash(ACCOUNT, TOKEN), operation_id: operationId }]);
+      expect(await getOfapiCaptureJob(app.db, uploadId)).toMatchObject({ state: "complete", cursor: { mediaRef: TOKEN } });
+
+      await expect(handoffOfapiMedia(app, handoff, actor)).rejects.toThrow("already reserved");
+      await expect(validate({ mediaFiles: [TOKEN] })).rejects.toBeInstanceOf(ConflictError);
+      await expect(reserveOfapiActionMedia(app.db, await intent(), ACCOUNT, [TOKEN])).rejects.toBeInstanceOf(ConflictError);
+      // A caller may know the old operation UUID. Using it as a new action ID
+      // cannot inherit the erased operation's authority through the hash fence.
+      const impersonator = await intent(undefined, operationId);
+      expect(await actionOperation(impersonator)).not.toBe(operationId);
+      await expect(reserveOfapiActionMedia(app.db, impersonator, ACCOUNT, [TOKEN])).rejects.toBeInstanceOf(ConflictError);
+      const nextChat = await chat();
+      await expect(reserveChat(nextChat)).rejects.toMatchObject({ reason: "media_token_already_used" });
+      await expect(reserveOfapiLegacyMediaTokens(app.db, { commandId: nextChat, accountId: ACCOUNT, tokens: [TOKEN] })).rejects.toMatchObject({ reason: "media_token_already_used" });
+      // An older runtime that only writes raw custody is fenced by the migration trigger too.
+      await expect(database.pool.query(
+        "insert into ofapi_media_token_custody(account_id,token,operation_id,command_id) values($1,$2,$3,$4)",
+        [ACCOUNT, TOKEN, randomUUID(), nextChat],
+      )).rejects.toMatchObject({ code: "23505" });
+      expect(await custody()).toEqual([]);
+
+      const freshToken = `${TOKEN}_fresh`;
+      await upload(freshToken);
+      expect(await validate({ mediaFiles: [freshToken] })).toEqual([freshToken]);
+      await reserveOfapiActionMedia(app.db, await intent(), ACCOUNT, [freshToken]);
+      expect((await custody()).map(row => row.token)).toEqual([freshToken]);
+    } finally {
+      await rm(lakeDir, { recursive: true, force: true });
+    }
+  });
+
+  it("backfills existing custody with the exact shared digest and protects legacy writes", async () => {
+    const first = await chat();
+    const original = await reserveChat(first);
+    const later = await chat(`${TOKEN}_later`);
+    const laterOperation = randomUUID();
+    const client = await database.pool.connect();
+    try {
+      await client.query("begin");
+      await client.query("drop trigger preserve_ofapi_media_token_fence on ofapi_media_token_custody");
+      await client.query("drop function preserve_ofapi_media_token_fence()");
+      await client.query("drop table ofapi_media_token_fences");
+      await client.query("alter table ofapi_action_intents drop column media_operation_id");
+      await client.query(await readFile(new URL("../packages/db/migrations/0168_ofapi_media_token_fences.sql", import.meta.url), "utf8"));
+      expect((await client.query("select * from ofapi_media_token_fences")).rows).toEqual([
+        { token_hash: ofapiMediaTokenHash(ACCOUNT, TOKEN), operation_id: original.operationId },
+      ]);
+      await client.query(
+        "insert into ofapi_media_token_custody(account_id,token,operation_id,command_id) values($1,$2,$3,$4)",
+        [ACCOUNT, `${TOKEN}_later`, laterOperation, later],
+      );
+      expect((await client.query("select operation_id from ofapi_media_token_fences where token_hash=$1", [ofapiMediaTokenHash(ACCOUNT, `${TOKEN}_later`)])).rows).toEqual([{ operation_id: laterOperation }]);
+    } finally {
+      await client.query("rollback");
+      client.release();
+    }
   });
 });

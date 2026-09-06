@@ -3,6 +3,7 @@ import {
   findPageById,
   getOfapiCaptureJob,
   insertAuditEvent,
+  isOfapiMediaTokenReserved,
 } from "@agency_hub_core/db";
 import type { AppContext } from "../bootstrap.ts";
 import type { OfapiCollectionHandler } from "./ofapi-collection-runner.ts";
@@ -269,10 +270,7 @@ export async function handoffOfapiMedia(
     isReady = saved.is_ready;
   }
   if (kind === "cdn") {
-    const custody = await app.db.execute(
-      sql`select 1 from ofapi_media_token_custody where account_id=${account} and token=${materialId}`,
-    );
-    if (custody.rows.length)
+    if (await isOfapiMediaTokenReserved(app.db, account, materialId))
       throw new ConflictError(
         "This one-use material is already reserved or consumed; an unknown send remains quarantined",
       );

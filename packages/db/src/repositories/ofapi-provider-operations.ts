@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { sql } from "drizzle-orm";
 import type { Database } from "../client.ts";
+import { claimOfapiMediaTokenFence } from "./ofapi-media-token-fences.ts";
 
 export class OfapiProviderOperationRefused extends Error {
   constructor(readonly reason: "replay_unavailable" | "media_token_already_used") { super(reason); }
@@ -27,6 +28,9 @@ export async function reserveOfapiProviderOperation(db: Database, input: {
       operationId = parent.operation_id; providerKey = parent.provider_key; firstAttemptAt = new Date(parent.first_attempt_at);
     }
     for (const token of [...new Set(input.tokens)].sort()) {
+      if (!await claimOfapiMediaTokenFence(tx as unknown as Database, { accountId: input.accountId, token, operationId })) {
+        throw new OfapiProviderOperationRefused("media_token_already_used");
+      }
       await tx.execute(sql`insert into ofapi_media_token_custody(account_id,token,operation_id,command_id)
         values (${input.accountId},${token},${operationId},${input.commandId}) on conflict do nothing`);
       const held = await tx.execute<{ operation_id: string }>(sql`select operation_id from ofapi_media_token_custody where account_id=${input.accountId} and token=${token} for update`);
@@ -36,5 +40,29 @@ export async function reserveOfapiProviderOperation(db: Database, input: {
       (command_id,operation_id,provider_key,team_slug,account_id,endpoint,body_hash,first_attempt_at)
       values (${input.commandId},${operationId},${providerKey},${input.teamSlug},${input.accountId},${input.endpoint},${input.bodyHash},${firstAttemptAt})`);
     return { operationId, providerKey, firstAttemptAt: firstAttemptAt.toISOString() };
+  });
+}
+
+/** Legacy media sends have no provider replay identity. Reserve only after the
+ * command is claimed and its payload validated, before its sole physical send. */
+export async function reserveOfapiLegacyMediaTokens(db: Database, input: {
+  commandId: string; accountId: string; tokens: string[];
+}): Promise<void> {
+  if (!input.tokens.length) return;
+  await db.transaction(async tx => {
+    for (const token of [...new Set(input.tokens)].sort()) {
+      if (!await claimOfapiMediaTokenFence(tx as unknown as Database, {
+        accountId: input.accountId, token, operationId: input.commandId,
+      })) throw new OfapiProviderOperationRefused("media_token_already_used");
+      await tx.execute(sql`insert into ofapi_media_token_custody(account_id,token,operation_id,command_id)
+        values(${input.accountId},${token},${input.commandId}::uuid,${input.commandId}::uuid) on conflict do nothing`);
+      const held = (await tx.execute<{ operation_id: string; command_id: string | null }>(sql`
+        select operation_id,command_id from ofapi_media_token_custody
+        where account_id=${input.accountId} and token=${token} for update
+      `)).rows[0];
+      if (held?.operation_id !== input.commandId || held.command_id !== input.commandId) {
+        throw new OfapiProviderOperationRefused("media_token_already_used");
+      }
+    }
   });
 }

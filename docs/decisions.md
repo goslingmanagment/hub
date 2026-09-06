@@ -11259,3 +11259,11 @@ Owner action erasure removes payloads and associations while retaining only an
 anonymous admitted UUID in `ofapi_action_identities`. Reusing an erased ID is
 refused before a new intent can be dispatched. This extends Decision 272’s
 one-attempt law across erasure without retaining fan or account material.
+
+CDN media consumption follows the same erasure rule. Migration 0168 retains
+only a SHA-256 digest of account plus token and the original opaque operation
+UUID after personal custody links are erased. Chat v1/v2 and owner actions
+claim this shared fence transactionally; handoff checks it without consuming
+the token. A new operation cannot reuse erased or indeterminate CDN material.
+Existing v2 provider recovery keeps its exact-identity and 24-hour restrictions;
+legacy media sends gain no replay permission. Vault IDs remain reusable.

@@ -1,5 +1,5 @@
 import { OFAPI_EXTENDED_COMMAND_KINDS, millsFromCents, type OfapiExtendedCommandKind, type OfapiExtendedCommandPayload, type OfapiSendV2Payload } from "@agency_hub_core/shared";
-import { reserveOfapiProviderOperation, OfapiProviderOperationRefused } from "@agency_hub_core/db";
+import { reserveOfapiProviderOperation, reserveOfapiLegacyMediaTokens, OfapiProviderOperationRefused } from "@agency_hub_core/db";
 import { buildOfapiSendV2Body, ofapiSentWebhookMatchesV2 } from "./ofapi-command-composer.ts";
 import { createHash } from "node:crypto";
 import { OfapiKeyPermissionDeniedError } from "./ofapi-vendor-usage.ts";
@@ -510,11 +510,16 @@ async function executeCurrentOfapiCommand(
       platformMessageId = result.messageId;
       if (result.creditAccounting) verifierResult.creditAccounting = result.creditAccounting;
     } else if (command.kind === "send_media_message_v1") {
+      const payload = mediaPayload(command);
+      await reserveOfapiLegacyMediaTokens(app.db, {
+        commandId: command.id, accountId: command.ofapiAccountId,
+        tokens: payload.mediaFiles.filter(id => id.startsWith("ofapi_media_")),
+      });
       const result = await app.ofapi!.sendMediaMessage!(
         { pageId: command.pageId },
         command.ofapiAccountId,
         command.conversationId,
-        mediaPayload(command),
+        payload,
       );
       platformMessageId = result.messageId;
       if (result.creditAccounting) verifierResult.creditAccounting = result.creditAccounting;
