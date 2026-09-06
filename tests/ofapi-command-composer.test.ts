@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ofapiSendV2PayloadSchema } from "@agency_hub_core/contracts";
-import { buildOfapiSendV2Body, ofapiExtendedAction } from "../apps/runtime/src/services/ofapi-command-composer.ts";
+import { buildOfapiSendV2Body, ofapiExtendedAction, ofapiSentWebhookMatchesV2 } from "../apps/runtime/src/services/ofapi-command-composer.ts";
 import { previewOfapiBannedWords } from "../apps/runtime/src/services/ofapi-banned-words.ts";
 import { createOfapiClient } from "../apps/runtime/src/services/ofapi.ts";
 const payload = { text: "hello", priceCents: 697, mediaFiles: ["9007199254740993"], previews: [], lockedText: false, replyToMessageId: "9007199254740995", giphyId: null, rfTag: ["123"], rfPartner: [], rfGuest: [], blockBannedWords: "risky" as const, reuseProviderOperation: false };
@@ -39,4 +39,11 @@ describe("send v2 and closed chat actions", () => {
     expect(result.complete).toBe(false);
     expect(previewOfapiBannedWords("text", null)).toMatchObject({ version: null, complete: false, matches: [] });
   });
+});
+
+it("requires exact visible v2 evidence for webhook verification", () => {
+  const actual = { text: "hello", price: 6.97, lockedText: false, replyToMessageId: "9007199254740995", media: [{id:"9007199254740993"}], rfTag: [123] };
+  expect(ofapiSentWebhookMatchesV2(payload, actual)).toBe(true);
+  expect(ofapiSentWebhookMatchesV2(payload, { ...actual, lockedText: undefined })).toBe(false);
+  expect(ofapiSentWebhookMatchesV2({ ...payload, mediaFiles: ["ofapi_media_token"] }, actual)).toBe(false);
 });
