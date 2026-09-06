@@ -6,13 +6,13 @@ The machine-readable [operation matrix](endpoint-matrix.csv) retains every origi
 
 The 140 selected operations comprise 107 GET routes and 33 explicit command/administrative routes. The baseline audit identified 39 explicitly implemented operations in production revision `7fac98f3`. Counts here deduplicate method/path pairs across legacy gateway, typed transport, catalog and closed command maps. They do not add overlapping Giphy, vault, tracking or fan operations twice. The input operation matrix SHA-256 is recorded in the generated summary. The extractor imports only the pure shared registry and evaluates isolated pure allowlists/maps; it performs no network or database work. Runtime source must be committed before freezing the report. The frozen baseline inputs are retained under `source/` for reproduction; their old status/evidence fields describe `7fac98f3`, not this release.
 
-Reproduce from a clean checkout of the `summary.json` source revision (pass its absolute checkout path as the first argument):
+Run the extractor from the final PR #142 checkout, which contains the script and frozen inputs, and pass a separate clean checkout of the `summary.json` source revision (`41679950c9926bf4137d9002b54a52015fa42740`) as the first argument. The script was added after that frozen code revision:
 
 ```sh
 node --import tsx/esm scripts/audit-ofapi-coverage.mjs /absolute/path/to/source-checkout docs/audits/ofapi-completion-2026-09-06/source/inventory/endpoint-matrix.json /tmp/ofapi-audit-check
 ```
 
-The script is read-only to that source checkout. It writes only the chosen output directory and checks exact evidence anchors, referenced files, unique catalog declarations and unresolved operations. Inspect `summary.json`: pending UI evidence or an uncommitted runtime source prevents `endToEndEvidenceComplete`.
+The script is read-only to that source checkout. It writes only the chosen output directory and checks exact evidence anchors, referenced files, unique catalog declarations and unresolved operations. A later clean checkout containing only documentation changes reproduces the same coverage counts but records its later HEAD. Inspect `summary.json`: pending UI evidence or an uncommitted runtime source prevents `endToEndEvidenceComplete`.
 
 ## Scope and evidence
 
