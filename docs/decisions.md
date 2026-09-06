@@ -11055,3 +11055,6 @@ attempts from recreating erased facts. Summary routes expose machine metadata,
 not vendor bodies, URLs or secrets.
 
 [Implementation, spend and owner rollout](runbooks/ofapi-webhook-recovery.md).
+### 268. Send v2 provider identity and bounded dictionary preview (2026-09-06)
+
+Keep one outbox attempt per command. Fix provider Idempotency-Key custody before dispatch; only explicit unchanged manual recovery can share a parent's logical operation within its original 24h window. Team/account/endpoint/body and single-use media-token ownership are durable, and a restarted executor cannot redispatch a reserved row. Integer cents use the mills codec; no large media ID passes through unsafe Number conversion. New chat actions use closed versioned kinds and the same page/principal fence. Banned-word dictionary refresh is explicit and bounded; local preview executes only escaped literals, retains partial coverage and never modifies a draft or treats an unknown price as free. Live release-form field descriptions require arrays despite their scalar schema labels. See `docs/runbooks/ofapi-command-composer.md`.
