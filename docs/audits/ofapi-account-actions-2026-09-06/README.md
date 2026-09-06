@@ -91,3 +91,11 @@ Banking support remains read-only because the published family has seven read
 operations. This batch does not invent writes for bank accounts, identity, DAC7 or
 tax forms. User subscriptions and paid subscribe-to-user calls remain excluded at
 the owner's request.
+
+Final acceptance: `pnpm check` passed with 2,911 unit tests (9 existing skips)
+and 96 selected integration/schema regressions passed on the integrated stack.
+The complete vendored SDK builds, loads all 81 actions and preserves external
+consumer request types. Local owner browser checks confirmed exact price review,
+provider-native scheduler controls and the mobile console using synthetic responses. The 294-operation/32-event
+coverage and every owner activation step are in
+[the final runbook](../ofapi-actions-2026-09-06/final-coverage.md).

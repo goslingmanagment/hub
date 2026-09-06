@@ -1,29 +1,30 @@
-# OFAPI expansion: target coverage after all three batches
+# OFAPI owner-action coverage and rollout
 
-**Target review stack: 221 of 294 operations (75.17%), up from 140.** The three
+**Implemented review stack: 221 of 294 operations (75.17%), up from 140.** The three
 new domains contribute **81 unique operations**; **73 remain excluded**. Events
 are unchanged: **30 of 32 have canonical handling and consumers**, typing is
 intentionally ephemeral, and `fan_summary.completed` remains deferred.
 
-This report describes the target after the common owner-action engine and all
-three domain batches have been integrated and passed the integrator's checks.
-It is not a claim that these source commits are already merged, deployed, or
-activated in production. Operation coverage means an explicit method/path and
+The shared owner-action engine and all three domain batches are integrated in
+reviewable branches. `pnpm check` passed with 2,911 unit tests and 9 existing
+skips; all 96 selected integration/schema regressions passed. PRs #143, #144 and
+#145 extend the preceding #134–#142 coverage stack. They are not a claim of
+production deployment or owner activation. Operation coverage means an explicit method/path and
 selected useful workflow, not complete optional-parameter parity or a live
 provider acceptance test. The [294-row CSV](final-coverage.csv) preserves every
 original operation ID, method/path, status, source revision, evidence and reason.
 
 ## Count and source boundary
 
-| Source | Operations | New versus baseline | Target cumulative |
+| Source | Operations | New versus baseline | Cumulative |
 |---|---:|---:|---:|
 | [Frozen completion baseline](../ofapi-completion-2026-09-06/REPORT.md), `41679950c9926bf4137d9002b54a52015fa42740` | 140 | — | 140 |
-| [Collections/moderation/native notes](collections.md), `907c723d81e44c973dee0e5ce4043f015f2ad26f` | 20 | 20 | 160 |
-| [Publishing/campaigns/queue](publishing.md), `c877a65622308f559245a954f02f0e2d11f84598` | 27 | 27 | 187 |
-| [Account/banking/native automation](../ofapi-account-actions-2026-09-06/README.md), `62835233cce00ed9a3f16534c7a22695066ab79d` | 34 | 34 | 221 |
+| [Collections/moderation/native notes](collections.md), `073ade3909ad7bbffeca76cf3604560b3135230f` | 20 | 20 | 160 |
+| [Publishing/campaigns/queue](publishing.md), `564af639af796deb033a578c36784eb12421d673` | 27 | 27 | 187 |
+| [Account/banking/native automation](../ofapi-account-actions-2026-09-06/README.md), `8b6b04c35c3c6e148283a518328fd82185b428d3` | 34 | 34 | 221 |
 
 No new domain operation overlaps another domain or the baseline. All 81 request
-signatures match one original inventory row. The target contains **127 GET,
+signatures match one original inventory row. The implemented stack contains **127 GET,
 45 POST, 11 PUT, 11 PATCH and 27 DELETE** operations. Non-GET is not synonymous
 with mutation: username availability, for example, is a POST read.
 
@@ -277,10 +278,35 @@ of publishing, list changes, banking and account settings.
 
 ## Validation boundary
 
-This documentation-only audit checked 294 unique input/output rows, 81 exact
+The inventory audit checked 294 unique input/output rows, 81 exact
 adapter-to-manifest matches, zero unresolved signatures, zero overlap, 221
-covered target signatures and 73 excluded signatures. No tests were rerun for
-the report. Domain test evidence belongs to the three source commits; the
-integrator must attach `pnpm check`, common engine integration, erasure and
-owner UI evidence to the actual assembled PR heads before marking them ready.
-The source commits and this report alone do not certify an integrated release.
+covered signatures and 73 excluded signatures. Integration, erasure, UI and
+packaged SDK evidence below was then checked on the assembled branches.
+These checks use synthetic provider responses; production activation and
+provider acceptance remain separate owner steps.
+
+## Acceptance evidence for this expansion
+
+- First action batch: `pnpm check` with 2,880 passing unit tests; 110 selected
+  integration/schema cases; owner browser checks at desktop and 390px.
+- Publishing batch: `pnpm check` with 2,897 passing unit tests; 84 selected
+  integration/schema cases, including media admission and erasure.
+- Final account stack: `pnpm check` with 2,911 passing unit tests and the unchanged
+  9 skipped tests; 96 selected integration/schema cases, including all new
+  account API scenarios. The typecheck ratchet remains at its pre-existing
+  1,909 errors across 121 debt files; no new type errors were accepted.
+- Isolated vendored SDK compilation passes at 20, 47 and 81 actions. The final
+  regression loads the compiled package, checks six client methods and all 81
+  actions, and compiles an external consumer with positive and negative type
+  assertions. The declaration fix preserves contract hash
+  `59deb1b5c836b6cc4f7a6b269684aac660bd239a1d3bfcfdeda43984b620bb6f`.
+- Local Playwright used a disposable PostgreSQL database and synthetic provider
+  responses: account selection, prepare/execute, partial membership changes,
+  a post, exact 4.99 USD review, and native scheduler enable/disable. Final mobile
+  console review at 390px confirmed all 15 sections and no horizontal overflow.
+- Media custody survives erasure through anonymous token digests and original
+  server-assigned operation identities. Raw personal links are erased; prior
+  erased reservations cannot be reconstructed retroactively.
+
+The complete exact remaining-exclusion inventory above is intentional; no paid
+subscribe-to-user operation or following-list mutation is exposed.
