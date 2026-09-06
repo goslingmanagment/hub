@@ -1,0 +1,97 @@
+- navigation:
+  - link "AgencyHub":
+    - /url: /
+  - link "Overview":
+    - /url: /
+    - text: Overview
+  - link "Smart Links":
+    - /url: /ofapi-marketing
+    - text: Smart Links
+  - link "OFAPI exports":
+    - /url: /ofapi-exports
+    - text: OFAPI exports
+  - link "OnlyFans media":
+    - /url: /ofapi-media
+    - text: OnlyFans media
+  - generic: Models
+  - generic: QA Model
+  - generic: 2 pages
+  - link "qa-main-of OF":
+    - /url: /pages/qa-main-of
+    - text: qa-main-of
+    - generic: OF
+  - link "qa-second-of OF":
+    - /url: /pages/qa-second-of
+    - text: qa-second-of
+    - generic: OF
+  - button "Dev":
+    - text: Dev
+  - link "Usage":
+    - /url: /usage
+    - text: Usage
+  - link "OFAPI Credits":
+    - /url: /ofapi-credits
+    - text: OFAPI Credits
+  - link "Analytics":
+    - /url: /analytics
+    - text: Analytics
+  - link "ИИ-аналитика":
+    - /url: /ai-analytics
+    - text: ИИ-аналитика
+  - link "Notifications":
+    - /url: /notifications
+    - text: Notifications
+  - link "Settings":
+    - /url: /settings
+    - text: Settings
+- generic: Overview
+- button "O":
+  - generic: O
+- main:
+  - heading "OnlyFans media" [level=1]
+  - paragraph: Owned sources, asynchronous uploads and saved vault metadata.
+  - link "Collection controls":
+    - /url: /settings?tab=collection
+  - text: Page
+  - combobox "Page":
+    - option "qa-main-of" [selected]
+    - option "qa-second-of"
+  - button "Reload saved data"
+  - status: Upload queued. Its progress appears below.
+  - heading "Upload owned media" [level=2]
+  - paragraph: Files up to 100 MB. Save a source once; reuse it for an explicitly approved upload. The server checks its type, size and checksum. Uploads cost 3 credits per decimal MB, minimum 1.
+  - text: Owned image, video or audio
+  - button "Owned image, video or audio"
+  - button "Save source" [disabled]
+  - text: Saved source
+  - combobox "Saved source":
+    - option "Choose a source"
+    - option "synthetic-qa.png · 0.00 MB" [selected]
+  - text: Destination
+  - combobox "Destination":
+    - option "Reusable vault media" [selected]
+    - option "One-use message attachment"
+  - text: Maximum credits
+  - spinbutton "Maximum credits": "1"
+  - button "Preview upload"
+  - paragraph: Verified image/png · SHA256 6b1048f8a6d40bac0b2954c18fefa40c4ea7a96120fc2e54b7317c0e43c2bbec
+  - heading "Uploads" [level=2]
+  - strong: Vault · ready
+  - generic: 9/6/2026, 8:42:31 PM
+  - paragraph: "Transcoding: Unknown · Vendor charge: not established · Recorded allowance/spend: 0"
+  - heading "Saved vault catalog · never" [level=2]
+  - button "Preview bounded catalog refresh"
+  - paragraph: Completeness describes one captured vault traversal at its observation time. Filtered or interrupted traversals stay partial; absent rendition URLs never prove missing media.
+  - table:
+    - rowgroup:
+      - row "Media Readiness Metadata Release forms Action":
+        - columnheader "Media"
+        - columnheader "Readiness"
+        - columnheader "Metadata"
+        - columnheader "Release forms"
+        - columnheader "Action"
+    - rowgroup
+  - button "Previous" [disabled]
+  - generic: 1–0 of 0
+  - button "Next" [disabled]
+- region "Notifications alt+T"
