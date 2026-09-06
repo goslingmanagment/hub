@@ -34,6 +34,7 @@ import {
 export const OFAPI_SUBSCRIPTION_PROJECTION_EVENT_TYPES = [
   "subscriptions.new",
   "subscriptions.renewed",
+  "subscriptions.expired",
 ] as const;
 
 export const OFAPI_SUBSCRIPTION_PROJECTION_MAX_ATTEMPTS = 5;
@@ -75,6 +76,7 @@ export interface OfapiSubscriptionEventData {
   occurredAt: Date | null;
   priceDollars: number | null;
   lastSeenAt: Date | null;
+  expiredAt: Date | null;
 }
 
 /**
@@ -100,6 +102,7 @@ export function parseOfapiSubscriptionPayload(
     username: nonEmpty(user.username),
     displayName: nonEmpty(user.name) ?? nonEmpty(user.displayName),
     occurredAt: parseTimestamp(payload.createdAt),
+    expiredAt: parseTimestamp(payload.expiredAt),
     priceDollars: parseDollarString(replacePairs?.["{PRICE}"]) ??
       (typeof subscribePrice === "number" && Number.isFinite(subscribePrice) && subscribePrice > 0
         ? subscribePrice
@@ -155,7 +158,11 @@ async function projectOfapiSubscriptionEvent(
     return { status: "skipped", reason: "Subscription payload is missing the subscriber identity" };
   }
 
-  const occurredAt = parsed.occurredAt ?? row.receivedAt;
+  const expired = row.eventType === "subscriptions.expired";
+  if (expired && !parsed.expiredAt) {
+    return { status: "skipped", reason: "Expiry requires the provider expiredAt period boundary" };
+  }
+  const occurredAt = (expired ? parsed.expiredAt : parsed.occurredAt) ?? row.receivedAt;
 
   await app.db.transaction(async (tx) => {
     const [fan] = await upsertFans(tx, [{
@@ -180,7 +187,13 @@ async function projectOfapiSubscriptionEvent(
       forUpdate: true,
     });
 
-    const priceMills = parsed.priceDollars !== null
+    // Guard ALL material, not just its timestamp. A completed audience sweep
+    // can also retire a subscription newer than the arriving notification.
+    if (existing && ((existing.sourceUpdatedAt && existing.sourceUpdatedAt > occurredAt) ||
+        (!existing.isCurrent && existing.lastSeenAt > occurredAt && existing.canonicalStatus !== "expired") ||
+        (expired && existing.sourceUpdatedAt?.getTime() === occurredAt.getTime() && existing.isCurrent))) return;
+
+    const priceMills = !expired && parsed.priceDollars !== null
       ? dollarsToMills(parsed.priceDollars)
       : existing?.priceMills ?? 0n;
     const sourceCreatedAt = existing?.sourceCreatedAt ?? occurredAt;
@@ -189,12 +202,14 @@ async function projectOfapiSubscriptionEvent(
       ? existing.sourceUpdatedAt
       : occurredAt;
 
-    await upsertPageSubscription(tx, {
+    const subscription = await upsertPageSubscription(tx, {
       platformSubscriptionId: parsed.fanId,
       platformAccountId: page.id,
       fanId: fan.id,
       rawStatus: existing?.rawStatus ?? 0,
-      canonicalStatus: "active",
+      canonicalStatus: expired ? "expired" : "active",
+      isCurrent: !expired,
+      lifecycleEvidenceAt: occurredAt,
       priceMills,
       renewPriceMills: existing?.renewPriceMills ?? priceMills,
       autoRenew: existing?.autoRenew ?? null,
@@ -204,16 +219,17 @@ async function projectOfapiSubscriptionEvent(
       renewDate: existing?.renewDate ?? null,
       sourceCreatedAt,
       sourceUpdatedAt,
-      endsAt: existing?.endsAt ?? null,
+      endsAt: expired ? occurredAt : existing?.endsAt ?? null,
       lastSeenGeneration: existing?.lastSeenGeneration ?? null,
     });
 
+    if (!subscription) return;
     await upsertFanPages(tx, [{
       fanId: fan.id,
       platformAccountId: page.id,
-      isSubscriber: true,
+      isSubscriber: !expired,
       subscriberSince: sourceCreatedAt,
-      subscriptionExpiresAt: existing?.endsAt ?? null,
+      subscriptionExpiresAt: expired ? occurredAt : existing?.endsAt ?? null,
       autoRenew: existing?.autoRenew ?? null,
     }]);
     await refreshPageSubscriberCount(tx, page.id);

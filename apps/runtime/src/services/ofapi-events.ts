@@ -3,6 +3,7 @@ import { sanitizeLoneSurrogatesDeep } from "@agency_hub_core/shared";
 import {
   deleteExpiredOfapiWebhookEvents,
   findActiveOfapiPageForLiveConsumer,
+  findPageById,
   getOfapiWebhookEventById,
   listPendingOfapiWebhookEventIds,
   OFAPI_SYNC_EVENT_CHANNEL,
@@ -13,9 +14,12 @@ import type { PgBoss } from "pg-boss";
 
 import type { AppContext } from "../bootstrap.ts";
 import {
-  applyOfapiAccountHealthEvent,
+  runOfapiAccountHealthProjectionForSettledRow,
+  sweepOfapiAccountHealthProjections,
   runOfapiAccountHealthMonitor,
 } from "./ofapi-account-health.ts";
+import { runOfapiAsyncLifecycleForSettledRow, sweepOfapiAsyncLifecycles } from "./ofapi-async-lifecycle.ts";
+import { ofapiAccountLifecycleTime } from "./ofapi-lifecycle-contract.ts";
 import { runOfapiCreditBurnMonitor } from "./ofapi-credits.ts";
 import {
   cleanupExpiredDmMessageArchive,
@@ -50,7 +54,7 @@ import {
   type OfapiWebhookEnvelope,
 } from "./ofapi-payloads.ts";
 import { ensureQueueCreated, type QueueCreationClient } from "./sync-queue.ts";
-import { finalizeOfapiWebhookRaw } from "./ofapi-webhook-capture.ts";
+import { OFAPI_EPHEMERAL_EVENT_TYPES, finalizeOfapiWebhookRaw } from "./ofapi-webhook-capture.ts";
 
 export { ofapiWebhookEnvelopeSchema, type OfapiWebhookEnvelope } from "./ofapi-payloads.ts";
 
@@ -92,7 +96,7 @@ type SettledOfapiEventRow = Parameters<typeof runOfapiDmColdArchiveForSettledRow
   Parameters<typeof runOfapiDmProjectionForSettledRow>[1] &
   Parameters<typeof runOfapiSubscriptionProjectionForSettledRow>[1] &
   Parameters<typeof runOfapiPresenceProjectionForSettledRow>[1] &
-  Parameters<typeof applyOfapiAccountHealthEvent>[1];
+  Parameters<typeof runOfapiAccountHealthProjectionForSettledRow>[1];
 
 // Best-effort post-settle steps (DM/subscription/presence projections, account
 // health) — all internally flag-gated and never throw into the settle path.
@@ -110,7 +114,8 @@ async function runPostSettleOfapiProjections(app: AppContext, row: SettledOfapiE
   await runOfapiSubscriptionProjectionForSettledRow(app, projectionRow);
   await runOfapiPresenceProjectionForSettledRow(app, projectionRow);
   await runOfapiSpendProjectionForSettledRow(app, projectionRow);
-  await applyOfapiAccountHealthEvent(app, projectionRow);
+  await runOfapiAccountHealthProjectionForSettledRow(app, projectionRow);
+  await runOfapiAsyncLifecycleForSettledRow(app, projectionRow);
 }
 
 /**
@@ -190,6 +195,7 @@ export function mapOfapiEventToSyncEvent(envelope: OfapiWebhookEnvelope): SyncEv
     }
     case "subscriptions.new":
     case "subscriptions.renewed":
+    case "subscriptions.expired":
       return { type: "chatListUpdated", accountId };
     case "users.online":
     case "users.offline": {
@@ -215,6 +221,7 @@ export function mapOfapiEventToSyncEvent(envelope: OfapiWebhookEnvelope): SyncEv
     case "accounts.reconnected":
     case "accounts.session_expired":
       return { type: "accountAuthChanged", accountId, authenticated: true };
+    case "accounts.disconnected":
     case "accounts.authentication_failed":
     case "accounts.otp_code_required":
     case "accounts.face_otp_required":
@@ -284,7 +291,9 @@ export async function processOfapiWebhookEvent(app: AppContext, eventId: number)
     await finalizeOfapiWebhookRaw(app, eventId);
     row = await getOfapiWebhookEventById(app.db, eventId);
   }
-  if (!row || row.status !== "pending") {
+  if (!row) return;
+  if (row.status !== "pending") {
+    if (row.captureState === "accepted") await runPostSettleOfapiProjections(app, row);
     return;
   }
 
@@ -317,7 +326,21 @@ export async function processOfapiWebhookEvent(app: AppContext, eventId: number)
     return;
   }
 
-  const mapped = mapOfapiEventToSyncEvent(envelope.data);
+  // A local replay repairs durable facts, never today's typing/presence.
+  const staleEphemeral = OFAPI_EPHEMERAL_EVENT_TYPES.has(row.eventType) &&
+    processedAt.getTime() - row.receivedAt.getTime() > 5 * 60_000;
+  let staleAccount = false;
+  if (row.eventType.startsWith("accounts.")) {
+    const current = await findPageById(app.db, page.id);
+    const occurredAt = ofapiAccountLifecycleTime(asRecord(envelope.data.payload) ?? {}, row.receivedAt);
+    const recovery = ["accounts.connected", "accounts.reconnected", "accounts.session_expired"].includes(row.eventType);
+    staleAccount = current?.page.ofapiAccountId !== row.ofapiAccountId ||
+      (current.page.ofapiAuthChangedAt !== null && (
+        current.page.ofapiAuthChangedAt > occurredAt ||
+        (current.page.ofapiAuthChangedAt.getTime() === occurredAt.getTime() && !recovery &&
+          ["connected", "reconnected", "session_expired"].includes(current.page.ofapiAuthStatus ?? ""))));
+  }
+  const mapped = staleEphemeral || staleAccount ? null : mapOfapiEventToSyncEvent(envelope.data);
   const frame = mapped ? syncEventSchema.safeParse(mapped) : null;
   if (!frame?.success) {
     await settleOfapiWebhookEvent(app.db, {
@@ -500,6 +523,8 @@ export async function startOfapiEventWorker(app: AppContext, boss: OfapiWorkerBo
           "OFAPI spend shadow projection sweep processed journal rows",
         );
       }
+      await sweepOfapiAsyncLifecycles(app);
+      await sweepOfapiAccountHealthProjections(app);
       await runOfapiAccountHealthMonitor(app);
       await runOfapiCreditBurnMonitor(app);
     });

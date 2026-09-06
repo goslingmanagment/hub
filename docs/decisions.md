@@ -261,6 +261,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 258 | OFAPI audience quality | Unverified empty sweeps preserve membership and freshness; checkpoint hold drives both status readers until certification |
 | 259 | OFAPI capture uses vendor transport | Binding authorizes the account; Hub-to-OFAPI capture and gateway reads use the canonical vendor-direct route with one client pacing claim. Page-proxy availability cannot gate OFAPI capture; bounded diagnostics preserve dispatch certainty and omit arbitrary causes. |
 | 260 | OFAPI accounting evidence | Complete pages count once; exact zero-delta receipts remain append-only evidence; signed corrections reach attributed read models. Activity forecasts exclude visibly reported unverified balance drift. Local command refusals are not provider HTTP responses. |
+| 262 | OFAPI lifecycle receipt and ordering | Signed no-key ephemeral receipts keep local identities; subscription/account material follows provider time; health retries independently of settlement; upload/export hooks remain durable progress evidence without paid follow-ups. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -10920,3 +10921,36 @@ amounts, including negative correction windows. Only the legacy representation
 is floored at zero; ledger facts and the new net fields are not. Existing clients
 continue to accept the response, while displaying negative windows requires
 adoption of the additive net fields.
+
+
+**Decision #262 (2026-09-06, OFAPI lifecycle receipt and ordering):**
+
+Valid no-key users.typing/online/offline deliveries are locally identified
+receipts. HMAC verification and exact-byte commit precede the event allowlist;
+non-ephemeral missing identities remain quarantined. A repeated typing body is
+another pulse, not a perpetual body-hash duplicate. Replaying a receipt older
+than five minutes cannot broadcast present typing/presence.
+
+The subscription material writer fences its entire update and page-fan state
+against newer evidence. `subscriptions.expired` uses the provider period end
+and the existing `subscription.ended` vocabulary; a newer renewal owns current
+state while both facts remain in history. Account transitions use
+`disconnected_at` or `latestAuthAttempt` time, with receipt fallback where old
+payloads lack the source. Auth recovery wins an equal-time failure, and current
+binding custody continues to isolate replacements from historical events.
+
+Account health joins the existing independent journal projection bookkeeping.
+State, stream blockers and incident effects share the binding transaction;
+errors escape that transaction and become retryable after journal settlement.
+A minutely bounded sweep or explicit local processing repairs the projection
+without redelivering a paid webhook.
+
+The source journal is also the durable upload/export lifecycle history. All
+nine async lifecycle kinds validate explicit resource identity and account
+scope. Team export hooks attribute to their explicit account_ids and remain
+replayable if a binding is unknown. New canonical events and DB-only export
+status hints expose progress, never artifact import, media readiness or a new
+credit obligation. Terminal conflicts remain visible. New subscriptions remain
+default off; only the owner-applied collection policy changes the remote set.
+
+[Implementation and rollout](runbooks/ofapi-webhook-lifecycle.md).

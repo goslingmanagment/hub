@@ -861,7 +861,7 @@ export async function upsertPageSubscription(
     sourceCreatedAt: input.sourceCreatedAt ?? null,
     sourceUpdatedAt: input.sourceUpdatedAt ?? null,
     endsAt: input.endsAt ?? null,
-    isCurrent: true,
+    isCurrent: input.isCurrent ?? true,
     lastSeenGeneration: input.lastSeenGeneration ?? null,
     lastSeenAt,
   };
@@ -874,6 +874,8 @@ export async function upsertPageSubscription(
     })
     .onConflictDoUpdate({
       target: [pageSubscriptions.platformAccountId, pageSubscriptions.platformSubscriptionId],
+      ...(input.lifecycleEvidenceAt ? { setWhere: sql`(${pageSubscriptions.sourceUpdatedAt} is null
+        or ${pageSubscriptions.sourceUpdatedAt} <= ${input.lifecycleEvidenceAt})` } : {}),
       set: {
         ...patch,
         autoRenewOffDetectedAt: sql`
@@ -915,6 +917,9 @@ export interface UpsertPageSubscriptionInput {
   sourceUpdatedAt?: Date | null;
   endsAt?: Date | null;
   lastSeenGeneration?: number | null;
+  isCurrent?: boolean;
+  /** Webhook-only monotonic guard; callers must update page_fans only when this write wins. */
+  lifecycleEvidenceAt?: Date;
 }
 
 export async function maxPageSubscriptionGeneration(db: Database, platformAccountId: number) {
