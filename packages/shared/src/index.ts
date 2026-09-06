@@ -27,3 +27,5 @@ export type * from "./ofapi-vendor-usage.ts";
 export * from "./ofapi-collection-registry.ts";
 
 export * from "./ofapi-extended-commands.ts";
+export * from "./ofapi-read-catalog.ts";
+export * from "./ofapi-export-profiles.ts";

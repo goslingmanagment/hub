@@ -11,7 +11,7 @@ export function ofapiCollectionPolicyHooks(db: Database, onSettlementError?: (er
   return {
     beforeCollectionRequest: async (input: OfapiCollectionDispatch) => {
       const classification = classifyOfapiCollectionOperation(input.operation);
-      if (classification === "diagnostic" || classification === "command") return;
+      if (classification === "command" || (classification === "diagnostic" && input.context?.purpose !== "one_off")) return;
       if (!input.pageId) throw new OfapiCollectionPolicyError("page_required");
       const context = input.context;
       await reserveOfapiCollectionRequest(db, { operation: input.operation, pageId: input.pageId, requestId: input.requestId,

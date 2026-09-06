@@ -132,12 +132,13 @@ export interface OfapiCollectionAdmissionInput {
 /** Atomic at physical dispatch: separate background budget cannot consume interactive allowance. */
 export async function reserveOfapiCollectionRequest(db: Database, input: OfapiCollectionAdmissionInput) {
   const classification = classifyOfapiCollectionOperation(input.operation);
-  if (classification === "diagnostic" || classification === "command") return;
-  const category = input.context?.category ?? classification;
+  if (classification === "command" || (classification === "diagnostic" && input.context?.purpose !== "one_off")) return;
+  const category = input.context?.category ?? (classification === "diagnostic" ? null : classification);
   if (!category) throw new OfapiCollectionPolicyError("unregistered_operation");
   const purpose = input.context?.purpose ?? input.purpose ?? "background";
   const now = input.now ?? new Date();
-  const estimate = Math.max(1, Math.trunc(input.reservedCredits ?? 1));
+  const freeExportOperation = ["ofapi_export_quote_create", "ofapi_export_quote_status"].includes(input.operation);
+  const estimate = Math.max(freeExportOperation ? 0 : 1, Math.trunc(input.reservedCredits ?? 1));
   return db.transaction(async tx => {
     const database = tx as unknown as Database;
     const current = await state(database, true);
@@ -147,14 +148,15 @@ export async function reserveOfapiCollectionRequest(db: Database, input: OfapiCo
     if (purpose !== "interactive" && current.background_paused) throw new OfapiCollectionPolicyError("background_paused");
     const legacy = !input.context && (policy.source === "legacy_baseline" || policy.source === "default_off") && OFAPI_COLLECTION_LEGACY_OPERATIONS.some(operation => operation === input.operation);
     if (input.context?.detail && !policy.includeDetails && purpose !== "one_off") throw new OfapiCollectionPolicyError("detail_disabled");
-    if (purpose === "one_off") {
+    if (purpose === "one_off" || input.context?.jobId) {
       if (!input.context?.jobId) throw new OfapiCollectionPolicyError("bounded_job_required");
       const job = await database.execute<{ page_id: number | string; category: string; state: string; max_credits: string; used_credits: string; max_calls: number; used_calls: number; max_bytes: string; used_bytes: string }>(sql`select * from ofapi_collection_jobs where id=${input.context.jobId}::uuid for update`);
       const row = job.rows[0];
       if (!row || Number(row.page_id) !== input.pageId || row.category !== category || !["queued", "running"].includes(row.state)) throw new OfapiCollectionPolicyError("job_unavailable");
       if (Number(row.used_credits) + estimate > Number(row.max_credits) || row.used_calls + 1 > row.max_calls || Number(row.used_bytes) >= Number(row.max_bytes)) throw new OfapiCollectionPolicyError("job_limit");
       await database.execute(sql`update ofapi_collection_jobs set state='running',used_credits=used_credits+${estimate},used_calls=used_calls+1,updated_at=${now} where id=${input.context.jobId}::uuid`);
-    } else {
+    }
+    if (purpose !== "one_off") {
       if (policy.mode === "off" && !legacy) throw new OfapiCollectionPolicyError("collection_off");
       if (purpose === "background" && policy.mode !== "scheduled" && !legacy) throw new OfapiCollectionPolicyError("on_demand_only");
     }
@@ -174,14 +176,18 @@ export async function reserveOfapiCollectionRequest(db: Database, input: OfapiCo
   });
 }
 export async function settleOfapiCollectionRequest(db: Database, requestId: string, actualCredits: number | null) {
+  if (actualCredits !== null && (!Number.isSafeInteger(actualCredits) || actualCredits < 0)) throw new OfapiCollectionPolicyError("invalid_credits");
   await db.transaction(async tx => {
     const database = tx as unknown as Database;
-    const result = await database.execute<{ job_id: string | null; reserved_credits: string }>(sql`update ofapi_collection_requests set actual_credits=${actualCredits},state='captured',captured_at=now()
-      where request_id=${requestId} and state='reserved' returning job_id,reserved_credits`);
-    const row = result.rows[0];
-    if (row?.job_id && actualCredits !== null && actualCredits > Number(row.reserved_credits)) {
-      await database.execute(sql`update ofapi_collection_jobs set used_credits=used_credits+${actualCredits - Number(row.reserved_credits)},updated_at=now() where id=${row.job_id}::uuid`);
-    }
+    // Async exports replace start estimates with terminal vendor billing. Replays
+    // must not double charge, and an unknown response cannot erase actual evidence.
+    const result = await database.execute<{ job_id: string | null; reserved_credits: string; actual_credits: string | null }>(sql`select job_id,reserved_credits,actual_credits from ofapi_collection_requests
+      where request_id=${requestId} and state<>'released' for update`);
+    const row = result.rows[0]; if (!row) return;
+    const actual = actualCredits ?? (row.actual_credits === null ? null : Number(row.actual_credits));
+    await database.execute(sql`update ofapi_collection_requests set actual_credits=${actual},state='captured',captured_at=coalesce(captured_at,now()) where request_id=${requestId}`);
+    const delta = Math.max(Number(row.reserved_credits), actual ?? 0) - Math.max(Number(row.reserved_credits), Number(row.actual_credits ?? 0));
+    if (row.job_id && delta !== 0) await database.execute(sql`update ofapi_collection_jobs set used_credits=used_credits+${delta},updated_at=now() where id=${row.job_id}::uuid`);
   });
 }
 export async function releaseOfapiCollectionRequest(db: Database, requestId: string) {
@@ -200,11 +206,11 @@ export async function updateOfapiCollectionJob(db: Database, id: string, input: 
   await db.execute(sql`update ofapi_collection_jobs set state=${input.state},checkpoint=coalesce(${input.checkpoint ? JSON.stringify(input.checkpoint) : null}::jsonb,checkpoint),used_bytes=used_bytes+${bytes},reason=${input.reason ?? null},updated_at=now() where id=${id}::uuid`);
 }
 export async function getOfapiCollectionJob(db: Database, id: string) {
-  const row = await db.execute<{ id: string; page_id: string; category: OfapiCollectionCategory; state: string; actor_user_id: string; max_credits: string; max_calls: number; max_bytes: string; used_credits: string; used_calls: number; used_bytes: string; target: { from: string | null; to: string | null; selection: string[] }; checkpoint: Record<string, unknown> }>(sql`select * from ofapi_collection_jobs where id=${id}::uuid`);
+  const row = await db.execute<{ id: string; page_id: string; category: OfapiCollectionCategory; state: string; purpose: "one_off" | "background"; actor_user_id: string; max_credits: string; max_calls: number; max_bytes: string; used_credits: string; used_calls: number; used_bytes: string; target: { from: string | null; to: string | null; selection: string[] }; checkpoint: Record<string, unknown> }>(sql`select * from ofapi_collection_jobs where id=${id}::uuid`);
   return row.rows[0] ?? null;
 }
 export async function listPendingOfapiCollectionJobs(db: Database) {
-  const rows = await db.execute<{ id: string }>(sql`select id from ofapi_collection_jobs where state in ('queued','running') order by created_at limit 20`);
+  const rows = await db.execute<{ id: string }>(sql`select id from ofapi_collection_jobs where state in ('queued','running') and coalesce(target->>'executor','read')='read' order by created_at limit 20`);
   return rows.rows;
 }
 

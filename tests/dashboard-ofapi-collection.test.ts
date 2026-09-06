@@ -1,3 +1,5 @@
+// Adjacent settings panels have their own query/provider lifecycle and acceptance coverage.
+vi.mock("../apps/dashboard/src/pages/settings/OfapiWebhookRecovery.tsx", () => ({ OfapiWebhookRecovery: () => null }));
 vi.mock("../apps/dashboard/src/pages/settings/OfapiBannedWords.tsx", () => ({ OfapiBannedWords: () => null }));
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -32,7 +34,6 @@ const creditsQueryMocks = vi.hoisted(() => ({
 vi.mock("../apps/dashboard/src/api/adminOfapiCollection.ts", () => collectionMocks);
 vi.mock("../apps/dashboard/src/api/adminUsers.ts", () => usersMocks);
 vi.mock("../apps/dashboard/src/api/queries.ts", () => creditsQueryMocks);
-vi.mock("../apps/dashboard/src/pages/settings/OfapiWebhookRecovery.js", () => ({ OfapiWebhookRecovery: () => null }));
 
 // sdk.ts drags in @/lib/queryClient (→ @tanstack/react-query); the tab only
 // needs KernelApiError for the 409 instanceof check.

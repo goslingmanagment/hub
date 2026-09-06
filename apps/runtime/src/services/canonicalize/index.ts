@@ -1,3 +1,4 @@
+import { canonicalizeOfapiReadObservation, canParseOfapiReadObservation } from "./ofapi-read-collections.ts";
 // Canonicalizer registry (Stage 8). The driver job and the parse_version
 // sweep dispatch on observation.source through this table; a family's
 // `kinds` (null = every kind of that source, filtered inside the function)
@@ -118,6 +119,7 @@ export interface CanonicalizerFamily {
 }
 
 export const CANONICALIZER_FAMILIES: readonly CanonicalizerFamily[] = [
+  { source:"ofapi_capture", lane:"read_collections", kinds:["ofapi.collection_read_response.v1"], version:1, canonicalize:canonicalizeOfapiReadObservation, canParse:canParseOfapiReadObservation, projectionOnly:true },
   {
     source: "ofapi_capture", lane: "ofapi-posts", kinds: ["ofapi.posts_page.v1"],
     version: POSTS_CANONICALIZER_VERSION, minimumParseVersion: 7,

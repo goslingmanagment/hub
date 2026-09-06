@@ -1,3 +1,4 @@
+import type { OfapiCollectionContext } from "@agency_hub_core/shared";
 import { settleOfapiCollectionRequest } from "@agency_hub_core/db";
 import { setTimeout as delay } from "node:timers/promises";
 
@@ -86,6 +87,7 @@ export async function executeCaptureFirstInteractiveRead(
   app: AppContext,
   input: {
     principalUserId: number;
+    collectionContext?: OfapiCollectionContext | undefined;
     pageId: number;
     ofapiAccountId: string;
     dispatcher: Dispatcher | null;
@@ -105,7 +107,7 @@ export async function executeCaptureFirstInteractiveRead(
       | "shadow_probe"
       | null;
   },
-): Promise<OfapiRawResponse> {
+): Promise<OfapiRawResponse & { capture: { observationId: number; receivedAt: Date } }> {
   if (!app.ofapi?.dispatchGovernedRaw) {
     throw new ServiceUnavailableError("OFAPI capture-first transport is unavailable");
   }
@@ -176,6 +178,7 @@ export async function executeCaptureFirstInteractiveRead(
     raw = await app.ofapi.dispatchGovernedRaw({
       pageId: input.pageId,
       actorUserId: input.principalUserId,
+      ...(input.collectionContext ? { collectionContext: input.collectionContext } : {}),
       dispatcher: input.dispatcher,
       egressKey: input.egressKey,
     }, {
@@ -219,9 +222,10 @@ export async function executeCaptureFirstInteractiveRead(
 
   let captureError: unknown = null;
   let captured = false;
+  let captureEvidence: { observationId: number; receivedAt: Date } | null = null;
   for (let attempt = 1; attempt <= CAPTURE_COMMIT_ATTEMPTS; attempt += 1) {
     try {
-      await captureOfapiAttemptResponse(app.db, {
+      captureEvidence = await captureOfapiAttemptResponse(app.db, {
         attemptId: reservation.attemptId,
         fenceToken: reservation.fenceToken,
         responseObservedAt: raw.receivedAt,
@@ -235,7 +239,7 @@ export async function executeCaptureFirstInteractiveRead(
           query: input.query,
         },
         producer: "ofapi-mirror-interactive",
-        observationKind: "ofapi.interactive_response.v1",
+        observationKind: input.collectionContext ? "ofapi.collection_read_response.v1" : "ofapi.interactive_response.v1",
       });
       captured = true;
       break;
@@ -290,6 +294,7 @@ export async function executeCaptureFirstInteractiveRead(
     status: raw.status,
     body: parsed.body,
     headers: raw.headers,
+    capture: captureEvidence!,
   };
 }
 

@@ -1,4 +1,6 @@
 import { getOfapiAsyncLifecycle } from "./ofapi-async-lifecycle.ts";
+import { settleCapturedOfapiExportCancellation } from "./ofapi-export-controls.ts";
+import { isOfapiTypedExportProfile, OFAPI_TYPED_EXPORT_COLUMNS, type OfapiTypedExportProfile } from "@agency_hub_core/shared";
 import type {
   OfapiExportPilotApprovalBody,
   OfapiExportPilotApprovalResponse,
@@ -15,6 +17,8 @@ import {
   getOfapiCaptureJob,
   hashOfapiCaptureValue,
   reconcileOfapiCapturedAttemptCredit,
+  settleOfapiCollectionRequest,
+  updateOfapiCollectionJob,
   settleOfapiCaptureParse,
   type OfapiCaptureJobRecord,
 } from "@agency_hub_core/db";
@@ -32,11 +36,17 @@ const QUOTE_POLL_INTERVAL_MS = 15 * 60_000;
 const EXPORT_POLL_INTERVAL_MS = 5 * 60_000;
 const EXPORT_EARLIEST_START_MS = Date.parse("2016-11-01T00:00:00.000Z");
 
-type ExportQuoteProfile = "pilot_chats" | "fleet_tail";
+type ExportQuoteProfile = "pilot_chats" | "fleet_tail" | OfapiTypedExportProfile;
 
 export interface ExportQuoteTarget extends Record<string, unknown> {
   profile: ExportQuoteProfile;
-  type: "chat_messages";
+  type: "chat_messages" | OfapiTypedExportProfile;
+  collectionJobId?: string;
+  controlAction?: "cancel" | "retry";
+  controlVendorExportId?: string;
+  sourceJobId?: string;
+  maxArtifactBytes?: number;
+  fanType?: "all" | "active" | "expired" | "latest";
   accountIds: [string];
   startDate: string;
   endDate: string;
@@ -84,9 +94,11 @@ export interface OfapiExportQuoteRequestPlan {
   operation:
     | "ofapi_export_quote_create"
     | "ofapi_export_quote_status"
-    | "ofapi_export_start";
+    | "ofapi_export_start"
+    | "ofapi_export_cancel"
+    | "ofapi_export_retry";
   endpointClass: "data_exports";
-  method: "GET" | "POST";
+  method: "GET" | "POST" | "DELETE";
   requestSemantics: "safe_read" | "stateful";
   pathname: string;
   query: Record<string, string>;
@@ -96,7 +108,8 @@ export interface OfapiExportQuoteRequestPlan {
   observationKind:
     | "ofapi.data_export_create.v1"
     | "ofapi.data_export_status.v1"
-    | "ofapi.data_export_start.v1";
+    | "ofapi.data_export_start.v1"
+    | "ofapi.data_export_control.v1";
   reservedCredits: number;
   timeoutMs: number;
   maxResponseBytes: number;
@@ -166,6 +179,7 @@ function sameInstantOrEffectiveUtcDayEnd(value: unknown, expected: string) {
 
 function effectiveOptionsMatch(target: ExportQuoteTarget, data: Record<string, unknown>) {
   const options = asRecord(data.effective_options);
+  if (target.type !== "chat_messages") return target.type !== "fans" || !options || options.type === target.fanType;
   if (!options) return true;
   if (
     nonnegativeInteger(options.maxMessages) !== target.maxMessages
@@ -185,7 +199,7 @@ function effectiveOptionsMatch(target: ExportQuoteTarget, data: Record<string, u
 
 export function parseOfapiExportTarget(job: OfapiCaptureJobRecord): ExportQuoteTarget | null {
   const target = job.target;
-  const profile = target.profile === "pilot_chats" || target.profile === "fleet_tail"
+  const profile = target.profile === "pilot_chats" || target.profile === "fleet_tail" || isOfapiTypedExportProfile(target.profile)
     ? target.profile
     : null;
   const accountIds = Array.isArray(target.accountIds) && target.accountIds.length === 1
@@ -198,7 +212,7 @@ export function parseOfapiExportTarget(job: OfapiCaptureJobRecord): ExportQuoteT
     : null;
   if (
     profile === null
-    || target.type !== "chat_messages"
+    || (isOfapiTypedExportProfile(profile) ? target.type !== profile : target.type !== "chat_messages")
     || accountIds === null
     || accountIds[0] !== job.ofapiAccountId
     || typeof target.startDate !== "string"
@@ -213,13 +227,19 @@ export function parseOfapiExportTarget(job: OfapiCaptureJobRecord): ExportQuoteT
     || chatIds === null
     || (profile === "pilot_chats" && (chatIds.length < 1 || chatIds.length > 3))
     || (profile === "fleet_tail" && chatIds.length !== 0)
+    || (isOfapiTypedExportProfile(profile) && (typeof target.collectionJobId !== "string" || !/^[0-9a-f-]{36}$/i.test(target.collectionJobId) || !Number.isSafeInteger(target.maxArtifactBytes) || Number(target.maxArtifactBytes) < 1024 || Number(target.maxArtifactBytes) > 16 * 1024 * 1024))
+    || (target.controlAction !== undefined && (!(target.controlAction === "cancel" || target.controlAction === "retry") || !isOfapiTypedExportProfile(profile) || typeof target.sourceJobId !== "string" || !/^[0-9a-f-]{36}$/i.test(target.sourceJobId) || typeof target.controlVendorExportId !== "string" || !/^data_export_[A-Za-z0-9_-]+$/.test(target.controlVendorExportId)))
     || target.autoStart !== false
   ) {
     return null;
   }
   return {
     profile,
-    type: "chat_messages",
+    ...(target.controlAction === "cancel" || target.controlAction === "retry" ? { controlAction: target.controlAction, controlVendorExportId: String(target.controlVendorExportId), sourceJobId: String(target.sourceJobId) } : {}),
+    type: isOfapiTypedExportProfile(profile) ? profile : "chat_messages",
+    ...(typeof target.collectionJobId === "string" ? { collectionJobId: target.collectionJobId } : {}),
+    ...(typeof target.maxArtifactBytes === "number" ? { maxArtifactBytes: target.maxArtifactBytes } : {}),
+    ...(target.fanType === "all" || target.fanType === "active" || target.fanType === "expired" || target.fanType === "latest" ? { fanType: target.fanType } : {}),
     accountIds,
     startDate: target.startDate,
     endDate: target.endDate,
@@ -535,6 +555,12 @@ export function buildOfapiExportQuoteRequest(
   if (!target) return null;
   const cursor = parseOfapiExportCursor(job);
   if (cursor === null && job.cursor !== null) return null;
+  if (cursor === null && target.controlAction) return null;
+  if (cursor?.phase === "owner_approved" && target.controlAction === "cancel") return {
+    operation: "ofapi_export_cancel", endpointClass: "data_exports", method: "DELETE", requestSemantics: "stateful",
+    pathname: `/data-exports/${encodeURIComponent(target.controlVendorExportId!)}`, query: {}, bodyBytes: null, contentType: null,
+    request: { sourceJobId: target.sourceJobId, vendorExportId: target.controlVendorExportId }, observationKind: "ofapi.data_export_control.v1", reservedCredits: 0, timeoutMs: 30000, maxResponseBytes: 1024 * 1024,
+  };
   if (cursor === null) {
     const body = {
       type: target.type,
@@ -542,7 +568,8 @@ export function buildOfapiExportQuoteRequest(
       start_date: target.startDate,
       end_date: target.endDate,
       file_type: target.fileType,
-      options: {
+      ...(isOfapiTypedExportProfile(target.profile) ? { export_columns: [...OFAPI_TYPED_EXPORT_COLUMNS[target.profile]] } : {}),
+      options: isOfapiTypedExportProfile(target.profile) ? (target.type === "fans" ? { type: target.fanType ?? "all" } : {}) : {
         maxMessages: target.maxMessages,
         skipMassMessages: false,
         ...(target.chatIds.length > 0
@@ -562,7 +589,7 @@ export function buildOfapiExportQuoteRequest(
       contentType: "application/json",
       request: { body },
       observationKind: "ofapi.data_export_create.v1",
-      reservedCredits: 1,
+      reservedCredits: isOfapiTypedExportProfile(target.profile) ? 0 : 1,
       timeoutMs: 65_000,
       maxResponseBytes: 1024 * 1024,
     };
@@ -577,11 +604,11 @@ export function buildOfapiExportQuoteRequest(
       return null;
     }
     return {
-      operation: "ofapi_export_start",
+      operation: target.controlAction === "retry" ? "ofapi_export_retry" : "ofapi_export_start",
       endpointClass: "data_exports",
       method: "POST",
       requestSemantics: "stateful",
-      pathname: `/data-exports/${encodeURIComponent(cursor.vendorExportId)}/start`,
+      pathname: `/data-exports/${encodeURIComponent(cursor.vendorExportId)}/${target.controlAction === "retry" ? "retry" : "start"}`,
       query: {},
       bodyBytes: null,
       contentType: null,
@@ -610,7 +637,7 @@ export function buildOfapiExportQuoteRequest(
     contentType: null,
     request: { vendorExportId: cursor.vendorExportId },
     observationKind: "ofapi.data_export_status.v1",
-    reservedCredits: 1,
+    reservedCredits: isOfapiTypedExportProfile(target.profile) ? 0 : 1,
     timeoutMs: 30_000,
     maxResponseBytes: 1024 * 1024,
   };
@@ -709,7 +736,9 @@ export async function parseCapturedOfapiExportQuote(
           kind: "blocked",
           reasonCode: createValidationRejected
             ? "export_quote_failed"
-            : isStart
+            : target?.controlAction && isStart
+              ? `export_${target.controlAction}_http_${input.status}`
+              : isStart
               ? `export_start_http_${input.status}`
               : isStatusPoll
               ? `export_status_http_${input.status}`
@@ -723,6 +752,9 @@ export async function parseCapturedOfapiExportQuote(
     return retryable ? "failed" : "blocked";
   }
 
+  if (target?.controlAction === "cancel") {
+    return settleCapturedOfapiExportCancellation(app, input, target);
+  }
   if (isStart) {
     const root = input.parsedJson.validJson ? asRecord(input.parsedJson.body) : null;
     const data = asRecord(root?.data);
@@ -730,7 +762,9 @@ export async function parseCapturedOfapiExportQuote(
     const status = typeof data?.status === "string" ? data.status : null;
     if (
       !priorCursor
-      || id !== priorCursor.vendorExportId
+      || (target?.controlAction === "retry"
+        ? (typeof id !== "string" || !/^data_export_[A-Za-z0-9_-]+$/.test(id) || id === priorCursor.vendorExportId || data?.original_id !== target.controlVendorExportId || data?.type !== target.type)
+        : id !== priorCursor.vendorExportId)
       || !status
       || !["pending", "in_progress", "completed"].includes(status)
       || priorCursor.approvedMaxCredits === null
@@ -756,6 +790,7 @@ export async function parseCapturedOfapiExportQuote(
     }
     const cursor: ExportQuoteCursor = {
       ...priorCursor,
+      vendorExportId: id!,
       phase: "in_progress",
       vendorStatus: status,
       lastStatusAt: now.toISOString(),
@@ -830,6 +865,9 @@ export async function parseCapturedOfapiExportQuote(
     failedDownloads: priorCursor?.failedDownloads ?? null,
     downloadUrl: priorCursor?.downloadUrl ?? null,
   };
+  if (isExportStatusPoll && identity.status === "cancelled") {
+    return settleCapturedOfapiExportCancellation(app, input, { ...target, controlVendorExportId: identity.id, sourceJobId: job.id });
+  }
   if (isExportStatusPoll) {
     const totalRows = nonnegativeInteger(identity.data.total_rows);
     const rowsProcessed = nonnegativeInteger(identity.data.rows_processed);
@@ -837,6 +875,13 @@ export async function parseCapturedOfapiExportQuote(
     const failedDownloads = nonnegativeInteger(identity.data.failed_downloads);
     const approvedMaxCredits = priorCursor?.approvedMaxCredits ?? null;
     const startAttemptId = priorCursor?.startAttemptId ?? null;
+    if (isOfapiTypedExportProfile(target.profile) && startAttemptId !== null
+      && /^[0-9a-f-]{36}$/i.test(startAttemptId) && creditCost !== null
+      && (identity.status === "completed" || identity.status === "failed")) {
+      // Billing is evidence even when the vendor exceeded the approved cap.
+      await reconcileOfapiCapturedAttemptCredit(app.db, { attemptId: startAttemptId, actualCredits: creditCost, balanceAfter: input.parsedJson.balanceAfter });
+      await settleOfapiCollectionRequest(app.db, startAttemptId, creditCost);
+    }
     if (
       approvedMaxCredits === null
       || approvedMaxCredits < 1
@@ -864,6 +909,7 @@ export async function parseCapturedOfapiExportQuote(
           reasonCode: creditCost !== null && creditCost > (approvedMaxCredits ?? 0)
             ? "export_budget_exceeded"
             : "export_progress_contract_rejected",
+          ...(isOfapiTypedExportProfile(target.profile) ? { cursor: { ...baseCursor, phase: "in_progress", totalRows, rowsProcessed, creditCost, failedDownloads, downloadUrl: null } } : {}),
         },
         now,
       });
@@ -902,6 +948,7 @@ export async function parseCapturedOfapiExportQuote(
       return "success";
     }
     if (identity.status === "failed") {
+      if (isOfapiTypedExportProfile(target.profile) && target.collectionJobId) await updateOfapiCollectionJob(app.db, target.collectionJobId, { state: "failed", reason: "export_failed" });
       if (creditCost !== null) {
         await reconcileOfapiCapturedAttemptCredit(app.db, {
           attemptId: startAttemptId,
@@ -1088,7 +1135,7 @@ export async function parseCapturedOfapiExportQuote(
           reasonCode: "export_quote_requires_start",
           reasonMessage: typeof identity.data.credit_calculation_note === "string"
             ? identity.data.credit_calculation_note.slice(0, 500)
-            : "Vendor cannot calculate this chat export before scraping starts",
+            : "Vendor cannot calculate this export before scraping starts",
           cursor,
         },
         now,
@@ -1137,7 +1184,7 @@ export async function parseCapturedOfapiExportQuote(
       disposition: {
         kind: "blocked",
         reasonCode: "owner_approval_required",
-        reasonMessage: "Quote captured; this implementation cannot start an export",
+        reasonMessage: "Quote captured; explicit bounded owner approval is required",
         cursor,
       },
       now,

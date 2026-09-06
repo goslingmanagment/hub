@@ -302,6 +302,7 @@ function eventPredSql(scope: ResolvedScope, alias = ""): SQL {
         ${a}fan_identity_ref = ${scope.fanRef}
         or ${conversationPred}
         or ${a}data ->> 'authorRef' = ${scope.fanRef}
+        or (${a}type = 'ofapi.read_snapshot_observed' and ${payloadMatchPredSql(scope.fanRef!,sql`${a}data`)})
         or ${a}data ->> 'correlationGroupRef' = ${scope.fanRef}
         or (${a}type = 'notification.observed'
           and ${a}data ->> 'rawTypeCode' = '3002'
@@ -816,6 +817,11 @@ async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLine
       : execCount(tx, sql`delete from sync_raw_payloads where id in ${_lineage.rawPayloadIds}`),
   });
 
+  targets.push({
+    plane: "hot", target: "ofapi_read_snapshots", action: "delete",
+    rows: await countOf(app, sql`select count(*)::text as n from ofapi_read_snapshots where page_id in ${scope.pageIds} and ${payloadMatchPredSql(ref,sql.raw("items"))}`),
+    run: tx => execCount(tx, sql`delete from ofapi_read_snapshots where page_id in ${scope.pageIds} and ${payloadMatchPredSql(ref,sql.raw("items"))}`),
+  });
   const fanFks = await rows<{ child: string; del_type: string }>(app, sql`
     select con.conrelid::regclass::text as child, con.confdeltype::text as del_type
     from pg_constraint con
@@ -1239,8 +1245,24 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
         select generation_ref from ai_generation_content where page_id in ${pageIds})`),
   });
 
+  // Artifact rows have no direct page FK; resolve custody before deleting jobs.
+  targets.push({
+    plane: "hot", target: "ofapi_typed_export_artifacts", action: "delete",
+    rows: await countOf(app, sql`select count(*)::text as n from ofapi_typed_export_artifacts
+      where export_job_id in (select id from ofapi_capture_jobs where page_id in ${pageIds})`),
+    run: tx => execCount(tx, sql`delete from ofapi_typed_export_artifacts
+      where export_job_id in (select id from ofapi_capture_jobs where page_id in ${pageIds})`),
+  });
+
   const deletions: Array<[string, string]> = [
+    ["ofapi_read_snapshots", "page_id"],
+    ["ofapi_collection_schedules", "page_id"],
     // Rows that RESTRICT parents below go first.
+    ["ofapi_typed_export_rows", "page_id"],
+    ["ofapi_profile_visitors_daily", "page_id"],
+    ["ofapi_collection_requests", "page_id"],
+    ["ofapi_collection_jobs", "page_id"],
+    ["ofapi_collection_policies", "page_id"],
     ["creator_vault_album_members", "page_id"],
     ["creator_vault_album_scans", "page_id"],
     ["page_subscription_tier_plans", "page_id"],

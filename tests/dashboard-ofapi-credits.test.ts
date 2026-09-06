@@ -1,3 +1,5 @@
+// Adjacent settings panels have their own query/provider lifecycle and acceptance coverage.
+vi.mock("../apps/dashboard/src/pages/settings/OfapiWebhookRecovery.tsx", () => ({ OfapiWebhookRecovery: () => null }));
 vi.mock("../apps/dashboard/src/pages/settings/OfapiBannedWords.tsx", () => ({ OfapiBannedWords: () => null }));
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -12,7 +14,6 @@ const queryMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../apps/dashboard/src/api/queries.ts", () => queryMocks);
-vi.mock("../apps/dashboard/src/pages/settings/OfapiWebhookRecovery.js", () => ({ OfapiWebhookRecovery: () => null }));
 
 import { OfapiCreditsPage } from "../apps/dashboard/src/pages/OfapiCreditsPage.tsx";
 

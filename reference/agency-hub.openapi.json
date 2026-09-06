@@ -7961,7 +7961,8 @@
                               "head_repair",
                               "account_export",
                               "export_import",
-                              "post_paginate"
+                              "post_paginate",
+                              "collection_read"
                             ]
                           },
                           "state": {
@@ -9944,6 +9945,374 @@
         }
       }
     },
+    "/api/v1/admin/ofapi/collection/results": {
+      "get": {
+        "summary": "Read stored OFAPI CRM, content and monetary snapshots without vendor egress",
+        "tags": [
+          "ops"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "query",
+            "name": "pageId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            },
+            "in": "query",
+            "name": "operation",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            },
+            "in": "query",
+            "name": "limit",
+            "required": false
+          }
+        ],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "pageId": {
+                      "type": "number"
+                    },
+                    "catalog": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "operation": {
+                            "type": "string"
+                          },
+                          "path": {
+                            "type": "string"
+                          },
+                          "category": {
+                            "type": "string"
+                          },
+                          "detail": {
+                            "type": "boolean"
+                          },
+                          "defaultCollect": {
+                            "type": "boolean"
+                          },
+                          "granularity": {
+                            "type": "string"
+                          },
+                          "query": {
+                            "type": "object",
+                            "propertyNames": {
+                              "type": "string"
+                            },
+                            "additionalProperties": {
+                              "type": "string"
+                            }
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "operation",
+                          "path",
+                          "category",
+                          "detail",
+                          "defaultCollect",
+                          "granularity",
+                          "query"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "snapshots": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "source": {
+                            "type": "string",
+                            "enum": [
+                              "onlyfansapi"
+                            ]
+                          },
+                          "operation": {
+                            "type": "string"
+                          },
+                          "category": {
+                            "type": "string"
+                          },
+                          "pathname": {
+                            "type": "string"
+                          },
+                          "query": {
+                            "type": "object",
+                            "propertyNames": {
+                              "type": "string"
+                            },
+                            "additionalProperties": {
+                              "type": "string"
+                            }
+                          },
+                          "window": {
+                            "type": "object",
+                            "properties": {
+                              "from": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "to": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "from",
+                              "to"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "observedAt": {
+                            "type": "string"
+                          },
+                          "ageSeconds": {
+                            "type": "number"
+                          },
+                          "observationId": {
+                            "type": "string"
+                          },
+                          "granularity": {
+                            "type": "string"
+                          },
+                          "coverage": {
+                            "type": "object",
+                            "properties": {
+                              "state": {
+                                "type": "string",
+                                "enum": [
+                                  "complete",
+                                  "partial",
+                                  "unknown"
+                                ]
+                              },
+                              "reason": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "indexComplete": {
+                                "anyOf": [
+                                  {
+                                    "type": "boolean"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "omitted": {
+                                "anyOf": [
+                                  {
+                                    "type": "number"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "nextQuery": {
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "propertyNames": {
+                                      "type": "string"
+                                    },
+                                    "additionalProperties": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "state",
+                              "reason",
+                              "indexComplete",
+                              "omitted",
+                              "nextQuery"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "items": {
+                            "type": "array",
+                            "items": {}
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "source",
+                          "operation",
+                          "category",
+                          "pathname",
+                          "query",
+                          "window",
+                          "observedAt",
+                          "ageSeconds",
+                          "observationId",
+                          "granularity",
+                          "coverage",
+                          "items"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "pageId",
+                    "catalog",
+                    "snapshots"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/ofapi/credits/daily": {
       "get": {
         "summary": "Get per-day OFAPI credit spend by source plus balance/refill series",
@@ -11523,6 +11892,640 @@
         }
       }
     },
+    "/api/v1/admin/ofapi/export-inventory": {
+      "get": {
+        "summary": "Read the last captured provider export inventory without vendor access",
+        "tags": [
+          "ops"
+        ],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "rows": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "type": {
+                            "type": "string"
+                          },
+                          "status": {
+                            "type": "string"
+                          },
+                          "totalRows": {
+                            "anyOf": [
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "deliveredRows": {
+                            "anyOf": [
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "creditCost": {
+                            "anyOf": [
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "accounts": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "type",
+                          "status",
+                          "totalRows",
+                          "deliveredRows",
+                          "creditCost",
+                          "accounts"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "currentPage": {
+                      "type": "number"
+                    },
+                    "lastPage": {
+                      "type": "number"
+                    },
+                    "observedAt": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "observationId": {
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "rows",
+                    "currentPage",
+                    "lastPage",
+                    "observedAt",
+                    "observationId"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/ofapi/export-inventory/refresh": {
+      "post": {
+        "summary": "Explicitly capture one bounded free provider export inventory page",
+        "tags": [
+          "ops"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "page": {
+                    "default": 1,
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 1000
+                  },
+                  "perPage": {
+                    "default": 25,
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 100
+                  },
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "profile_visitors",
+                      "fans",
+                      "tracking_links",
+                      "trial_links",
+                      "smart_links"
+                    ]
+                  }
+                },
+                "required": [
+                  "type"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "rows": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "type": {
+                            "type": "string"
+                          },
+                          "status": {
+                            "type": "string"
+                          },
+                          "totalRows": {
+                            "anyOf": [
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "deliveredRows": {
+                            "anyOf": [
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "creditCost": {
+                            "anyOf": [
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "accounts": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "type",
+                          "status",
+                          "totalRows",
+                          "deliveredRows",
+                          "creditCost",
+                          "accounts"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "currentPage": {
+                      "type": "number"
+                    },
+                    "lastPage": {
+                      "type": "number"
+                    },
+                    "observedAt": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "observationId": {
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "rows",
+                    "currentPage",
+                    "lastPage",
+                    "observedAt",
+                    "observationId"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/ofapi/export-quotes": {
       "post": {
         "summary": "Dry-run or create a bounded OFAPI chat-export quote",
@@ -11688,7 +12691,12 @@
                       "type": "string",
                       "enum": [
                         "pilot_chats",
-                        "fleet_tail"
+                        "fleet_tail",
+                        "profile_visitors",
+                        "fans",
+                        "tracking_links",
+                        "trial_links",
+                        "smart_links"
                       ]
                     },
                     "targetHash": {
@@ -11933,7 +12941,12 @@
                       "type": "string",
                       "enum": [
                         "pilot_chats",
-                        "fleet_tail"
+                        "fleet_tail",
+                        "profile_visitors",
+                        "fans",
+                        "tracking_links",
+                        "trial_links",
+                        "smart_links"
                       ]
                     },
                     "targetHash": {
@@ -12632,7 +13645,12 @@
                       "type": "string",
                       "enum": [
                         "pilot_chats",
-                        "fleet_tail"
+                        "fleet_tail",
+                        "profile_visitors",
+                        "fans",
+                        "tracking_links",
+                        "trial_links",
+                        "smart_links"
                       ]
                     },
                     "targetHash": {
@@ -13888,6 +14906,1883 @@
         }
       }
     },
+    "/api/v1/admin/ofapi/exports": {
+      "post": {
+        "summary": "Preview or create a bounded typed export quote with auto_start=false",
+        "tags": [
+          "ops"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "pageId": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "profile": {
+                    "type": "string",
+                    "enum": [
+                      "profile_visitors",
+                      "fans",
+                      "tracking_links",
+                      "trial_links",
+                      "smart_links"
+                    ]
+                  },
+                  "startDate": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                  },
+                  "endDate": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                  },
+                  "maxRows": {
+                    "default": 1000,
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 1000
+                  },
+                  "maxCredits": {
+                    "default": 10,
+                    "type": "integer",
+                    "minimum": 2,
+                    "maximum": 50
+                  },
+                  "maxBytes": {
+                    "default": 4194304,
+                    "type": "integer",
+                    "minimum": 1024,
+                    "maximum": 16777216
+                  },
+                  "expectedPolicyRevision": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "fanType": {
+                    "default": "all",
+                    "type": "string",
+                    "enum": [
+                      "all",
+                      "active",
+                      "expired",
+                      "latest"
+                    ]
+                  },
+                  "dryRun": {
+                    "default": true,
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "pageId",
+                  "profile",
+                  "startDate",
+                  "endDate",
+                  "expectedPolicyRevision"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "dryRun": {
+                      "type": "boolean"
+                    },
+                    "jobId": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "profile": {
+                      "type": "string",
+                      "enum": [
+                        "profile_visitors",
+                        "fans",
+                        "tracking_links",
+                        "trial_links",
+                        "smart_links"
+                      ]
+                    },
+                    "category": {
+                      "type": "string"
+                    },
+                    "maxRows": {
+                      "type": "number"
+                    },
+                    "maximumCredits": {
+                      "type": "number"
+                    },
+                    "estimatedCredits": {
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "estimateSource": {
+                      "type": "string",
+                      "enum": [
+                        "documented_row_tariff",
+                        "unknown"
+                      ]
+                    },
+                    "state": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "dryRun",
+                    "jobId",
+                    "profile",
+                    "category",
+                    "maxRows",
+                    "maximumCredits",
+                    "estimatedCredits",
+                    "estimateSource",
+                    "state"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "Read local typed export jobs, import outcomes and credit evidence",
+        "tags": [
+          "ops"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "query",
+            "name": "pageId",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "jobs": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "jobId": {
+                            "type": "string"
+                          },
+                          "pageId": {
+                            "type": "number"
+                          },
+                          "profile": {
+                            "type": "string",
+                            "enum": [
+                              "profile_visitors",
+                              "fans",
+                              "tracking_links",
+                              "trial_links",
+                              "smart_links"
+                            ]
+                          },
+                          "state": {
+                            "type": "string"
+                          },
+                          "rowVersion": {
+                            "type": "number"
+                          },
+                          "reason": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "createdAt": {
+                            "type": "string"
+                          },
+                          "vendorExportId": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "vendorStatus": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "totalRows": {
+                            "anyOf": [
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "deliveredRows": {
+                            "anyOf": [
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "creditCost": {
+                            "anyOf": [
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "spentCredits": {
+                            "type": "number"
+                          },
+                          "imported": {
+                            "type": "boolean"
+                          },
+                          "sha256": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "artifactBytes": {
+                            "anyOf": [
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "collectionJobId": {
+                            "type": "string"
+                          },
+                          "controlAction": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "enum": [
+                                  "cancel",
+                                  "retry"
+                                ]
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "sourceJobId": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "jobId",
+                          "pageId",
+                          "profile",
+                          "state",
+                          "rowVersion",
+                          "reason",
+                          "createdAt",
+                          "vendorExportId",
+                          "vendorStatus",
+                          "totalRows",
+                          "deliveredRows",
+                          "creditCost",
+                          "spentCredits",
+                          "imported",
+                          "sha256",
+                          "artifactBytes",
+                          "collectionJobId",
+                          "controlAction",
+                          "sourceJobId"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "jobs"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/ofapi/exports/{jobId}/approve": {
+      "post": {
+        "summary": "Approve one typed export start without changing chat pilot policy",
+        "tags": [
+          "ops"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "expectedRowVersion": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "approvedMaxCredits": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 50
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 500
+                  },
+                  "dryRun": {
+                    "default": true,
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "expectedRowVersion",
+                  "approvedMaxCredits",
+                  "reason"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "in": "path",
+            "name": "jobId",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "dryRun": {
+                      "type": "boolean"
+                    },
+                    "jobId": {
+                      "type": "string"
+                    },
+                    "state": {
+                      "type": "string",
+                      "enum": [
+                        "ready"
+                      ]
+                    },
+                    "rowVersion": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "dryRun",
+                    "jobId",
+                    "state",
+                    "rowVersion"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/ofapi/exports/{jobId}/artifact": {
+      "post": {
+        "summary": "Capture and verify a bounded completed export artifact before projection",
+        "tags": [
+          "ops"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "expectedRowVersion": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "expectedSha256": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  },
+                  "csvBase64": {
+                    "type": "string",
+                    "maxLength": 23000000
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 500
+                  }
+                },
+                "required": [
+                  "expectedRowVersion",
+                  "reason"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "in": "path",
+            "name": "jobId",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "jobId": {
+                      "type": "string"
+                    },
+                    "sha256": {
+                      "type": "string"
+                    },
+                    "byteSize": {
+                      "type": "number"
+                    },
+                    "rowCount": {
+                      "type": "number"
+                    },
+                    "state": {
+                      "type": "string",
+                      "enum": [
+                        "imported"
+                      ]
+                    },
+                    "duplicate": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "jobId",
+                    "sha256",
+                    "byteSize",
+                    "rowCount",
+                    "state",
+                    "duplicate"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/ofapi/exports/{jobId}/control": {
+      "post": {
+        "summary": "Preview or issue one bounded provider cancel or paid auto-start retry",
+        "tags": [
+          "ops"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "cancel",
+                      "retry"
+                    ]
+                  },
+                  "expectedRowVersion": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "expectedPolicyRevision": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "approvedMaxCredits": {
+                    "default": 1,
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 50
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 500
+                  },
+                  "dryRun": {
+                    "default": true,
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "action",
+                  "expectedRowVersion",
+                  "expectedPolicyRevision",
+                  "reason"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "in": "path",
+            "name": "jobId",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "dryRun": {
+                      "type": "boolean"
+                    },
+                    "action": {
+                      "type": "string",
+                      "enum": [
+                        "cancel",
+                        "retry"
+                      ]
+                    },
+                    "sourceJobId": {
+                      "type": "string"
+                    },
+                    "vendorExportId": {
+                      "type": "string"
+                    },
+                    "profile": {
+                      "type": "string",
+                      "enum": [
+                        "profile_visitors",
+                        "fans",
+                        "tracking_links",
+                        "trial_links",
+                        "smart_links"
+                      ]
+                    },
+                    "maximumCredits": {
+                      "type": "number"
+                    },
+                    "jobId": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "rowVersion": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "dryRun",
+                    "action",
+                    "sourceJobId",
+                    "vendorExportId",
+                    "profile",
+                    "maximumCredits",
+                    "jobId",
+                    "rowVersion"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/ofapi/exports/{jobId}/rows": {
+      "get": {
+        "summary": "Read source-attributed typed export rows without starting hydration",
+        "tags": [
+          "ops"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "default": 0,
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1000
+            },
+            "in": "query",
+            "name": "offset",
+            "required": false
+          },
+          {
+            "schema": {
+              "default": 100,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            },
+            "in": "query",
+            "name": "limit",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "in": "path",
+            "name": "jobId",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "pageId": {
+                      "type": "number"
+                    },
+                    "profile": {
+                      "type": "string",
+                      "enum": [
+                        "profile_visitors",
+                        "fans",
+                        "tracking_links",
+                        "trial_links",
+                        "smart_links"
+                      ]
+                    },
+                    "coverage": {
+                      "type": "string",
+                      "enum": [
+                        "item_presence"
+                      ]
+                    },
+                    "rows": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "propertyNames": {
+                          "type": "string"
+                        },
+                        "additionalProperties": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "pageId",
+                    "profile",
+                    "coverage",
+                    "rows"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/ofapi/key-scope": {
       "get": {
         "summary": "Read declared and observed server key readiness",
@@ -14413,6 +17308,408 @@
             }
           },
           "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/ofapi/profile-visitors": {
+      "get": {
+        "summary": "Read daily profile visitors with missing days and explicit source",
+        "tags": [
+          "ops"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "query",
+            "name": "pageId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "date",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+            },
+            "in": "query",
+            "name": "from",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "date",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+            },
+            "in": "query",
+            "name": "to",
+            "required": true
+          },
+          {
+            "schema": {
+              "default": "export",
+              "type": "string",
+              "enum": [
+                "export",
+                "rest"
+              ]
+            },
+            "in": "query",
+            "name": "source",
+            "required": false
+          },
+          {
+            "schema": {
+              "default": "total",
+              "type": "string",
+              "enum": [
+                "total",
+                "users",
+                "guests"
+              ]
+            },
+            "in": "query",
+            "name": "visitorType",
+            "required": false
+          }
+        ],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "pageId": {
+                      "type": "number"
+                    },
+                    "days": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "date": {
+                            "type": "string"
+                          },
+                          "source": {
+                            "type": "string",
+                            "enum": [
+                              "export",
+                              "rest",
+                              "missing"
+                            ]
+                          },
+                          "totalVisitors": {
+                            "anyOf": [
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "guestVisitors": {
+                            "anyOf": [
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "userVisitors": {
+                            "anyOf": [
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "subscriberVisitors": {
+                            "anyOf": [
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "avgViewDuration": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "chartDuration": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "durationUnit": {
+                            "type": "string",
+                            "enum": [
+                              "vendor_unspecified"
+                            ]
+                          },
+                          "availability": {
+                            "type": "string",
+                            "enum": [
+                              "complete",
+                              "partial",
+                              "missing",
+                              "unavailable",
+                              "ineligible"
+                            ]
+                          },
+                          "observedAt": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "observationId": {
+                            "anyOf": [
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "date",
+                          "source",
+                          "totalVisitors",
+                          "guestVisitors",
+                          "userVisitors",
+                          "subscriberVisitors",
+                          "avgViewDuration",
+                          "chartDuration",
+                          "durationUnit",
+                          "availability",
+                          "observedAt",
+                          "observationId"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "note": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "pageId",
+                    "days",
+                    "note"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
             "description": "Default Response",
             "content": {
               "application/json": {
@@ -27961,8 +31258,8 @@
                       }
                     },
                     "planes": {
-                      "minItems": 45,
-                      "maxItems": 45,
+                      "minItems": 46,
+                      "maxItems": 46,
                       "type": "array",
                       "items": {
                         "type": "object",
@@ -27982,6 +31279,7 @@
                               "fan_spend_lifetime",
                               "revenue_mix_daily",
                               "page_payout_requests",
+                              "ofapi_read_snapshots",
                               "page_payout_methods",
                               "fan_spend_daily",
                               "fans",
@@ -28042,6 +31340,7 @@
                               {
                                 "type": "string",
                                 "enum": [
+                                  "ofapi_financial_snapshots",
                                   "fan_memberships",
                                   "dm_threads",
                                   "subscriptions",
@@ -28266,6 +31565,7 @@
                           "lifetimeSpendMills",
                           "revenueMixDay",
                           "payoutRequest",
+                          "ofapiFinancialMetric",
                           "payoutMethod",
                           "platformUserId",
                           "username",
@@ -28416,8 +31716,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 45,
-                          "maxItems": 45,
+                          "minItems": 46,
+                          "maxItems": 46,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -28439,6 +31739,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -28534,6 +31835,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -28670,6 +31972,7 @@
                                   "fan_spend_lifetime",
                                   "revenue_mix_daily",
                                   "page_payout_requests",
+                                  "ofapi_read_snapshots",
                                   "page_payout_methods",
                                   "fan_spend_daily",
                                   "fans",
@@ -28915,6 +32218,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -29042,6 +32346,7 @@
                               "lifetimeSpendMills",
                               "revenueMixDay",
                               "payoutRequest",
+                              "ofapiFinancialMetric",
                               "payoutMethod",
                               "platformUserId",
                               "username",
@@ -29624,6 +32929,7 @@
                   "lifetimeSpendMills",
                   "revenueMixDay",
                   "payoutRequest",
+                  "ofapiFinancialMetric",
                   "payoutMethod",
                   "platformUserId",
                   "username",
@@ -29769,8 +33075,8 @@
                             ]
                           },
                           "planes": {
-                            "minItems": 45,
-                            "maxItems": 45,
+                            "minItems": 46,
+                            "maxItems": 46,
                             "type": "array",
                             "items": {
                               "anyOf": [
@@ -29792,6 +33098,7 @@
                                         "fan_spend_lifetime",
                                         "revenue_mix_daily",
                                         "page_payout_requests",
+                                        "ofapi_read_snapshots",
                                         "page_payout_methods",
                                         "fan_spend_daily",
                                         "fans",
@@ -29887,6 +33194,7 @@
                                         "fan_spend_lifetime",
                                         "revenue_mix_daily",
                                         "page_payout_requests",
+                                        "ofapi_read_snapshots",
                                         "page_payout_methods",
                                         "fan_spend_daily",
                                         "fans",
@@ -30023,6 +33331,7 @@
                                     "fan_spend_lifetime",
                                     "revenue_mix_daily",
                                     "page_payout_requests",
+                                    "ofapi_read_snapshots",
                                     "page_payout_methods",
                                     "fan_spend_daily",
                                     "fans",
@@ -30283,6 +33592,7 @@
                                 "lifetimeSpendMills",
                                 "revenueMixDay",
                                 "payoutRequest",
+                                "ofapiFinancialMetric",
                                 "payoutMethod",
                                 "platformUserId",
                                 "username",
@@ -30698,8 +34008,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 45,
-                          "maxItems": 45,
+                          "minItems": 46,
+                          "maxItems": 46,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -30721,6 +34031,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -30816,6 +34127,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -30952,6 +34264,7 @@
                                   "fan_spend_lifetime",
                                   "revenue_mix_daily",
                                   "page_payout_requests",
+                                  "ofapi_read_snapshots",
                                   "page_payout_methods",
                                   "fan_spend_daily",
                                   "fans",
@@ -31197,6 +34510,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -31324,6 +34638,7 @@
                               "lifetimeSpendMills",
                               "revenueMixDay",
                               "payoutRequest",
+                              "ofapiFinancialMetric",
                               "payoutMethod",
                               "platformUserId",
                               "username",
@@ -32328,8 +35643,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 45,
-                          "maxItems": 45,
+                          "minItems": 46,
+                          "maxItems": 46,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -32351,6 +35666,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -32446,6 +35762,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -32582,6 +35899,7 @@
                                   "fan_spend_lifetime",
                                   "revenue_mix_daily",
                                   "page_payout_requests",
+                                  "ofapi_read_snapshots",
                                   "page_payout_methods",
                                   "fan_spend_daily",
                                   "fans",
@@ -32827,6 +36145,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -32954,6 +36273,7 @@
                               "lifetimeSpendMills",
                               "revenueMixDay",
                               "payoutRequest",
+                              "ofapiFinancialMetric",
                               "payoutMethod",
                               "platformUserId",
                               "username",
@@ -33933,8 +37253,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 45,
-                          "maxItems": 45,
+                          "minItems": 46,
+                          "maxItems": 46,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -33956,6 +37276,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -34051,6 +37372,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -34187,6 +37509,7 @@
                                   "fan_spend_lifetime",
                                   "revenue_mix_daily",
                                   "page_payout_requests",
+                                  "ofapi_read_snapshots",
                                   "page_payout_methods",
                                   "fan_spend_daily",
                                   "fans",
@@ -34432,6 +37755,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -34559,6 +37883,7 @@
                               "lifetimeSpendMills",
                               "revenueMixDay",
                               "payoutRequest",
+                              "ofapiFinancialMetric",
                               "payoutMethod",
                               "platformUserId",
                               "username",
@@ -35649,8 +38974,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 45,
-                          "maxItems": 45,
+                          "minItems": 46,
+                          "maxItems": 46,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -35672,6 +38997,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -35767,6 +39093,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -35903,6 +39230,7 @@
                                   "fan_spend_lifetime",
                                   "revenue_mix_daily",
                                   "page_payout_requests",
+                                  "ofapi_read_snapshots",
                                   "page_payout_methods",
                                   "fan_spend_daily",
                                   "fans",
@@ -36148,6 +39476,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -36275,6 +39604,7 @@
                               "lifetimeSpendMills",
                               "revenueMixDay",
                               "payoutRequest",
+                              "ofapiFinancialMetric",
                               "payoutMethod",
                               "platformUserId",
                               "username",
@@ -37835,8 +41165,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 45,
-                          "maxItems": 45,
+                          "minItems": 46,
+                          "maxItems": 46,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -37858,6 +41188,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -37953,6 +41284,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -38089,6 +41421,7 @@
                                   "fan_spend_lifetime",
                                   "revenue_mix_daily",
                                   "page_payout_requests",
+                                  "ofapi_read_snapshots",
                                   "page_payout_methods",
                                   "fan_spend_daily",
                                   "fans",
@@ -38334,6 +41667,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -38461,6 +41795,7 @@
                               "lifetimeSpendMills",
                               "revenueMixDay",
                               "payoutRequest",
+                              "ofapiFinancialMetric",
                               "payoutMethod",
                               "platformUserId",
                               "username",
@@ -39153,8 +42488,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 45,
-                          "maxItems": 45,
+                          "minItems": 46,
+                          "maxItems": 46,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -39176,6 +42511,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -39271,6 +42607,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -39407,6 +42744,7 @@
                                   "fan_spend_lifetime",
                                   "revenue_mix_daily",
                                   "page_payout_requests",
+                                  "ofapi_read_snapshots",
                                   "page_payout_methods",
                                   "fan_spend_daily",
                                   "fans",
@@ -39652,6 +42990,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -39779,6 +43118,7 @@
                               "lifetimeSpendMills",
                               "revenueMixDay",
                               "payoutRequest",
+                              "ofapiFinancialMetric",
                               "payoutMethod",
                               "platformUserId",
                               "username",
@@ -40442,6 +43782,7 @@
                             "lifetimeSpendMills",
                             "revenueMixDay",
                             "payoutRequest",
+                            "ofapiFinancialMetric",
                             "payoutMethod",
                             "platformUserId",
                             "username",
@@ -40536,6 +43877,7 @@
             "schema": {
               "type": "string",
               "enum": [
+                "ofapi_financial_snapshots",
                 "fan_memberships",
                 "dm_threads",
                 "subscriptions",
@@ -40590,6 +43932,7 @@
                     "datasetRef": {
                       "type": "string",
                       "enum": [
+                        "ofapi_financial_snapshots",
                         "fan_memberships",
                         "dm_threads",
                         "subscriptions",
@@ -40660,6 +44003,7 @@
                           "datasetRef": {
                             "type": "string",
                             "enum": [
+                              "ofapi_financial_snapshots",
                               "fan_memberships",
                               "dm_threads",
                               "subscriptions",
@@ -40787,6 +44131,7 @@
                                 "lifetimeSpendMills",
                                 "revenueMixDay",
                                 "payoutRequest",
+                                "ofapiFinancialMetric",
                                 "payoutMethod",
                                 "platformUserId",
                                 "username",
@@ -41314,8 +44659,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 45,
-                          "maxItems": 45,
+                          "minItems": 46,
+                          "maxItems": 46,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -41337,6 +44682,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -41432,6 +44778,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -41568,6 +44915,7 @@
                                   "fan_spend_lifetime",
                                   "revenue_mix_daily",
                                   "page_payout_requests",
+                                  "ofapi_read_snapshots",
                                   "page_payout_methods",
                                   "fan_spend_daily",
                                   "fans",
@@ -41813,6 +45161,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -41940,6 +45289,7 @@
                               "lifetimeSpendMills",
                               "revenueMixDay",
                               "payoutRequest",
+                              "ofapiFinancialMetric",
                               "payoutMethod",
                               "platformUserId",
                               "username",
@@ -42530,6 +45880,7 @@
                             "lifetimeSpendMills",
                             "revenueMixDay",
                             "payoutRequest",
+                            "ofapiFinancialMetric",
                             "payoutMethod",
                             "platformUserId",
                             "username",
@@ -43142,8 +46493,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 45,
-                          "maxItems": 45,
+                          "minItems": 46,
+                          "maxItems": 46,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -43165,6 +46516,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -43260,6 +46612,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -43396,6 +46749,7 @@
                                   "fan_spend_lifetime",
                                   "revenue_mix_daily",
                                   "page_payout_requests",
+                                  "ofapi_read_snapshots",
                                   "page_payout_methods",
                                   "fan_spend_daily",
                                   "fans",
@@ -43641,6 +46995,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -43768,6 +47123,7 @@
                               "lifetimeSpendMills",
                               "revenueMixDay",
                               "payoutRequest",
+                              "ofapiFinancialMetric",
                               "payoutMethod",
                               "platformUserId",
                               "username",
@@ -44448,6 +47804,7 @@
                   "lifetimeSpendMills",
                   "revenueMixDay",
                   "payoutRequest",
+                  "ofapiFinancialMetric",
                   "payoutMethod",
                   "platformUserId",
                   "username",
@@ -45050,6 +48407,7 @@
                               "fan_spend_lifetime",
                               "revenue_mix_daily",
                               "page_payout_requests",
+                              "ofapi_read_snapshots",
                               "page_payout_methods",
                               "fan_spend_daily",
                               "fans",
@@ -45122,6 +48480,7 @@
                                 "lifetimeSpendMills",
                                 "revenueMixDay",
                                 "payoutRequest",
+                                "ofapiFinancialMetric",
                                 "payoutMethod",
                                 "platformUserId",
                                 "username",
@@ -45601,8 +48960,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 45,
-                          "maxItems": 45,
+                          "minItems": 46,
+                          "maxItems": 46,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -45624,6 +48983,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -45719,6 +49079,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -45855,6 +49216,7 @@
                                   "fan_spend_lifetime",
                                   "revenue_mix_daily",
                                   "page_payout_requests",
+                                  "ofapi_read_snapshots",
                                   "page_payout_methods",
                                   "fan_spend_daily",
                                   "fans",
@@ -46100,6 +49462,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -46227,6 +49590,7 @@
                               "lifetimeSpendMills",
                               "revenueMixDay",
                               "payoutRequest",
+                              "ofapiFinancialMetric",
                               "payoutMethod",
                               "platformUserId",
                               "username",
@@ -46768,6 +50132,7 @@
                   "lifetimeSpendMills",
                   "revenueMixDay",
                   "payoutRequest",
+                  "ofapiFinancialMetric",
                   "payoutMethod",
                   "platformUserId",
                   "username",
@@ -47619,6 +50984,7 @@
                                     "lifetimeSpendMills",
                                     "revenueMixDay",
                                     "payoutRequest",
+                                    "ofapiFinancialMetric",
                                     "payoutMethod",
                                     "platformUserId",
                                     "username",
@@ -48175,6 +51541,7 @@
                                         "lifetimeSpendMills",
                                         "revenueMixDay",
                                         "payoutRequest",
+                                        "ofapiFinancialMetric",
                                         "payoutMethod",
                                         "platformUserId",
                                         "username",
@@ -48734,6 +52101,7 @@
                           "lifetimeSpendMills",
                           "revenueMixDay",
                           "payoutRequest",
+                          "ofapiFinancialMetric",
                           "payoutMethod",
                           "platformUserId",
                           "username",
@@ -49135,8 +52503,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 45,
-                          "maxItems": 45,
+                          "minItems": 46,
+                          "maxItems": 46,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -49158,6 +52526,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -49253,6 +52622,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -49389,6 +52759,7 @@
                                   "fan_spend_lifetime",
                                   "revenue_mix_daily",
                                   "page_payout_requests",
+                                  "ofapi_read_snapshots",
                                   "page_payout_methods",
                                   "fan_spend_daily",
                                   "fans",
@@ -49634,6 +53005,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -49761,6 +53133,7 @@
                               "lifetimeSpendMills",
                               "revenueMixDay",
                               "payoutRequest",
+                              "ofapiFinancialMetric",
                               "payoutMethod",
                               "platformUserId",
                               "username",
@@ -50361,6 +53734,7 @@
                   "lifetimeSpendMills",
                   "revenueMixDay",
                   "payoutRequest",
+                  "ofapiFinancialMetric",
                   "payoutMethod",
                   "platformUserId",
                   "username",
@@ -50846,6 +54220,7 @@
                                 "lifetimeSpendMills",
                                 "revenueMixDay",
                                 "payoutRequest",
+                                "ofapiFinancialMetric",
                                 "payoutMethod",
                                 "platformUserId",
                                 "username",
@@ -51317,8 +54692,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 45,
-                          "maxItems": 45,
+                          "minItems": 46,
+                          "maxItems": 46,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -51340,6 +54715,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -51435,6 +54811,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -51571,6 +54948,7 @@
                                   "fan_spend_lifetime",
                                   "revenue_mix_daily",
                                   "page_payout_requests",
+                                  "ofapi_read_snapshots",
                                   "page_payout_methods",
                                   "fan_spend_daily",
                                   "fans",
@@ -51816,6 +55194,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -51943,6 +55322,7 @@
                               "lifetimeSpendMills",
                               "revenueMixDay",
                               "payoutRequest",
+                              "ofapiFinancialMetric",
                               "payoutMethod",
                               "platformUserId",
                               "username",
@@ -52510,6 +55890,7 @@
                             "lifetimeSpendMills",
                             "revenueMixDay",
                             "payoutRequest",
+                            "ofapiFinancialMetric",
                             "payoutMethod",
                             "platformUserId",
                             "username",
@@ -52819,6 +56200,7 @@
                                       "lifetimeSpendMills",
                                       "revenueMixDay",
                                       "payoutRequest",
+                                      "ofapiFinancialMetric",
                                       "payoutMethod",
                                       "platformUserId",
                                       "username",
@@ -53251,8 +56633,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 45,
-                          "maxItems": 45,
+                          "minItems": 46,
+                          "maxItems": 46,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -53274,6 +56656,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -53369,6 +56752,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -53505,6 +56889,7 @@
                                   "fan_spend_lifetime",
                                   "revenue_mix_daily",
                                   "page_payout_requests",
+                                  "ofapi_read_snapshots",
                                   "page_payout_methods",
                                   "fan_spend_daily",
                                   "fans",
@@ -53750,6 +57135,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -53877,6 +57263,7 @@
                               "lifetimeSpendMills",
                               "revenueMixDay",
                               "payoutRequest",
+                              "ofapiFinancialMetric",
                               "payoutMethod",
                               "platformUserId",
                               "username",
@@ -54482,6 +57869,7 @@
                             "lifetimeSpendMills",
                             "revenueMixDay",
                             "payoutRequest",
+                            "ofapiFinancialMetric",
                             "payoutMethod",
                             "platformUserId",
                             "username",
@@ -54714,6 +58102,7 @@
                                 "lifetimeSpendMills",
                                 "revenueMixDay",
                                 "payoutRequest",
+                                "ofapiFinancialMetric",
                                 "payoutMethod",
                                 "platformUserId",
                                 "username",
@@ -55170,8 +58559,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 45,
-                          "maxItems": 45,
+                          "minItems": 46,
+                          "maxItems": 46,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -55193,6 +58582,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -55288,6 +58678,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -55424,6 +58815,7 @@
                                   "fan_spend_lifetime",
                                   "revenue_mix_daily",
                                   "page_payout_requests",
+                                  "ofapi_read_snapshots",
                                   "page_payout_methods",
                                   "fan_spend_daily",
                                   "fans",
@@ -55669,6 +59061,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -55796,6 +59189,7 @@
                               "lifetimeSpendMills",
                               "revenueMixDay",
                               "payoutRequest",
+                              "ofapiFinancialMetric",
                               "payoutMethod",
                               "platformUserId",
                               "username",
@@ -56440,6 +59834,7 @@
                   "lifetimeSpendMills",
                   "revenueMixDay",
                   "payoutRequest",
+                  "ofapiFinancialMetric",
                   "payoutMethod",
                   "platformUserId",
                   "username",
@@ -56947,6 +60342,7 @@
                                 "lifetimeSpendMills",
                                 "revenueMixDay",
                                 "payoutRequest",
+                                "ofapiFinancialMetric",
                                 "payoutMethod",
                                 "platformUserId",
                                 "username",
@@ -57415,8 +60811,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 45,
-                          "maxItems": 45,
+                          "minItems": 46,
+                          "maxItems": 46,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -57438,6 +60834,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -57533,6 +60930,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -57669,6 +61067,7 @@
                                   "fan_spend_lifetime",
                                   "revenue_mix_daily",
                                   "page_payout_requests",
+                                  "ofapi_read_snapshots",
                                   "page_payout_methods",
                                   "fan_spend_daily",
                                   "fans",
@@ -57914,6 +61313,7 @@
                                       "fan_spend_lifetime",
                                       "revenue_mix_daily",
                                       "page_payout_requests",
+                                      "ofapi_read_snapshots",
                                       "page_payout_methods",
                                       "fan_spend_daily",
                                       "fans",
@@ -58041,6 +61441,7 @@
                               "lifetimeSpendMills",
                               "revenueMixDay",
                               "payoutRequest",
+                              "ofapiFinancialMetric",
                               "payoutMethod",
                               "platformUserId",
                               "username",

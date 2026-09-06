@@ -313,6 +313,7 @@ export interface OfapiClient {
   listWebhookDeliveries?(id: string, params: { from: string; to: string; limit: number; offset: number }): Promise<{ body: unknown; capture: OfapiAdminCapture | null }>;
   redeliverWebhookDelivery?(id: string, attemptId: number): Promise<{ body: unknown; capture: OfapiAdminCapture | null }>;
 
+  listDataExports?(input: { page: number; perPage: number; type: string }): Promise<{ body: unknown; capture: OfapiAdminCapture | null }>;
   listChats(
     context: OfapiRequestContext,
     accountId: string,
@@ -1822,7 +1823,7 @@ export function createOfapiClient(input: {
     context?: OfapiRequestContext,
   ): Promise<{ body: unknown; capture: OfapiAdminCapture | null; creditAccounting?: "pending" }> {
     if (method !== "GET") await assertCredentialReady();
-    const freeRead = method === "GET" && ["ofapi_balance_ping", "ofapi_credential_preflight", "ofapi_webhook_inventory", "ofapi_admin_accounts", "ofapi_vendor_usage", "ofapi_webhook_deliveries"].includes(operation);
+    const freeRead = method === "GET" && ["ofapi_balance_ping", "ofapi_credential_preflight", "ofapi_webhook_inventory", "ofapi_admin_accounts", "ofapi_vendor_usage", "ofapi_webhook_deliveries", "ofapi_export_inventory"].includes(operation);
     await waitForRequestSlot(priorityClass, !freeRead);
     await authorizeOperation(operation, method, path);
     let response: Response;
@@ -1870,7 +1871,7 @@ export function createOfapiClient(input: {
       requestId: `${operation}:${randomUUID()}`,
       pageId: context?.pageId ?? null,
       attemptNumber: 1,
-      ...(["ofapi_balance_ping", "ofapi_credential_preflight", "ofapi_webhook_inventory", "ofapi_admin_accounts", "ofapi_vendor_usage", "ofapi_webhook_deliveries", "ofapi_webhook_redelivery"].includes(operation)
+      ...(["ofapi_balance_ping", "ofapi_credential_preflight", "ofapi_webhook_inventory", "ofapi_admin_accounts", "ofapi_vendor_usage", "ofapi_webhook_deliveries", "ofapi_webhook_redelivery", "ofapi_export_inventory"].includes(operation)
         ? { fallbackCredits: 0, fallbackEstimated: false } : {}),
     });
 
@@ -1930,6 +1931,10 @@ export function createOfapiClient(input: {
       const record = asRecord(unwrapData(body));
       if (!record || record.id !== id) throw new OfapiApiError("OFAPI webhook identity unavailable", 200, null);
       return record;
+    },
+    async listDataExports(options) {
+      const query = new URLSearchParams({ page: String(options.page), per_page: String(options.perPage), type: options.type, download_url_expires_in: "1" });
+      return requestCaptured("ofapi_export_inventory", "GET", `/data-exports?${query}`);
     },
     async listWebhooks() {
       const body = unwrapData(await request("ofapi_webhook_inventory", "GET", "/webhooks"));

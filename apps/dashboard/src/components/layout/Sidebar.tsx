@@ -86,6 +86,8 @@ export function Sidebar({ user }: SidebarProps) {
           Overview
         </NavLink>
 
+        {(user.role === "owner" || user.role === "team_lead") && <NavLink to="/ofapi-exports" className="flex items-center gap-2.5 px-3.5 py-2.5 rounded-lg text-sm text-text-secondary hover:bg-hover"><Database size={16} /> OFAPI exports</NavLink>}
+
         {modelPages.size > 0 && (
           <div className="mt-4 px-3.5 pb-2 text-[11px] font-semibold text-text-muted uppercase tracking-[0.1em]">
             Models

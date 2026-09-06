@@ -2664,7 +2664,8 @@ export type OfapiCaptureJobKind =
   | "head_repair"
   | "account_export"
   | "export_import"
-  | "post_paginate";
+  | "post_paginate"
+  | "collection_read";
 export type OfapiCaptureJobGoal =
   | "history_to_exhaustion"
   | "connect_to_anchor"
