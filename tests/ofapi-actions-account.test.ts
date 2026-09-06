@@ -106,6 +106,39 @@ describe("account settings, banking reads and provider automation actions", () =
     expect(request("account_drm_update", { enabled: false }).body).toEqual({ enabled: false });
   });
 
+  it("rejects explicit provider errors before accepting read, automation or withdrawal evidence", () => {
+    const cases = [
+      { command: parse("bank_payout_details_read"), data: { accountNumber: "masked" } },
+      { command: parse("saved_message_autosend_update", { period: 12 }), data: { period: 12 } },
+      { command: parse("payout_withdrawal_request", { amountCents: 5000 }), data: { list: [{ state: "new", rejectReason: null }] } },
+      { command: parse("account_drm_update", { enabled: false }), data: { success: true } },
+    ];
+    for (const { command, data } of cases) {
+      expect(ofapiAccountResultConfirmed(command, 200, { data })).toBe(true);
+      for (const marker of [{ error: "denied" }, { errors: ["denied"] }, { errors: { reason: "denied" } }, { hasError: true }, { success: false }]) {
+        expect(ofapiAccountResultConfirmed(command, 200, { data, ...marker })).toBe(false);
+        expect(ofapiAccountResultConfirmed(command, 200, { data: { ...data, ...marker } })).toBe(false);
+      }
+    }
+    const disable = parse("saved_message_autosend_disable");
+    expect(ofapiAccountResultConfirmed(disable, 200, { data: [], errors: ["denied"] })).toBe(false);
+  });
+
+  it("allows absent error values while limiting the false-success exception to username data", () => {
+    const username = parse("username_availability_read", { username: "already_used" });
+    for (const empty of [undefined, null, false, [], "", 0]) {
+      expect(ofapiAccountResultConfirmed(username, 200, { error: empty, errors: empty, data: { success: false, error: empty, errors: empty, hasError: false } })).toBe(true);
+      expect(ofapiAccountResultConfirmed(parse("account_settings_read"), 200, { error: empty, errors: empty, data: { errors: empty, error: empty } })).toBe(true);
+    }
+    for (const marker of [{ error: "denied" }, { errors: ["denied"] }, { hasError: true }]) {
+      expect(ofapiAccountResultConfirmed(username, 200, { data: { success: false, ...marker } })).toBe(false);
+      expect(ofapiAccountResultConfirmed(username, 200, { data: { success: false }, ...marker })).toBe(false);
+    }
+    expect(ofapiAccountResultConfirmed(username, 200, { success: false, data: { success: false } })).toBe(false);
+    expect(ofapiAccountResultConfirmed(username, 200, { success: false, data: { success: true } })).toBe(false);
+    expect(ofapiAccountResultConfirmed(parse("account_settings_read"), 200, { data: { success: false } })).toBe(false);
+  });
+
   it("validates social button arrays against the affected button and submitted order", () => {
     expect(() => parse("social_button_create", { label: "IG", type: "Instagram", value: "alice" })).toThrow();
     expect(() => parse("social_button_update", { buttonId: "123", label: "IG", value: "different" })).toThrow();

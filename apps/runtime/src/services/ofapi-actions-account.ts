@@ -55,14 +55,21 @@ export function ofapiAccountRequest(input: OfapiAccountAction, accountId: string
 
 function object(value: unknown): Record<string, unknown> | null { return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null; }
 function resourceId(value: unknown): string | null { const id = object(value)?.id; return typeof id === "string" && /^\d+$/.test(id) ? id : typeof id === "number" && Number.isSafeInteger(id) && id >= 0 ? String(id) : null; }
+function errorValue(value: unknown): boolean { return Array.isArray(value) ? value.length > 0 : Boolean(value); }
+function negativeResult(row: Record<string, unknown> | null, allowFalseSuccess = false): boolean {
+  return row !== null && (row.hasError === true || errorValue(row.error) || errorValue(row.errors) || (!allowFalseSuccess && row.success === false));
+}
 
 /** A confirmed withdrawal means an accepted request; it never means money reached the bank. */
 export function ofapiAccountResultConfirmed(command: OfapiAccountAction, status: number, body: unknown): boolean {
   if (status < 200 || status >= 300) return false;
   const envelope = object(body);
-  if (!envelope || !("data" in envelope) || envelope.error) return false;
+  if (!envelope || !("data" in envelope) || negativeResult(envelope)) return false;
   const data = envelope.data;
   const row = object(data);
+  // Only this read uses a false success field as its ordinary domain answer.
+  // Provider errors still override that answer and every mutation receipt.
+  if (negativeResult(row, command.action === "username_availability_read")) return false;
   if (command.action === "username_availability_read") return typeof row?.success === "boolean";
   if (command.action in readPaths || command.action === "saved_messages_read" || command.action === "saved_posts_read") return Array.isArray(data) || row !== null;
   switch (command.action) {
