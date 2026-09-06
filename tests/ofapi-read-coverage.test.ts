@@ -29,17 +29,30 @@ describe("closed OFAPI read coverage catalog", () => {
         ]),
       );
       const request = resolveOfapiReadGatewayRequest(
-        `acct_test/${row.path.replace(":id", "9007199254740993")}`,
+        `acct_test/${row.path.replace(/:(?:id|list)/, "9007199254740993")}`,
         query,
       );
-      expect(request).toMatchObject({
-        kind: "proxy",
-        operation: row.operation,
-        collectionContext: { category: row.category, purpose: "interactive" },
-      });
+      const legacyOperation = {
+        user_lists: "ofapi_gateway_user_lists",
+        user_list_users: "ofapi_gateway_user_list_users",
+      }[row.id];
+      if (legacyOperation) {
+        expect(request).toMatchObject({
+          kind: "proxy",
+          operation: legacyOperation,
+        });
+        expect(request).not.toHaveProperty("collectionContext");
+      } else
+        expect(request).toMatchObject({
+          kind: "proxy",
+          operation: row.operation,
+          collectionContext: { category: row.category, purpose: "interactive" },
+        });
       const data =
         row.shape === "object"
-          ? {}
+          ? row.id === "user_list"
+            ? { id: "friends" }
+            : {}
           : row.shape === "array"
             ? []
             : row.shape === "strings"

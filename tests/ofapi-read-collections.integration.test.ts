@@ -5,7 +5,10 @@ import { randomUUID } from "node:crypto";
 import { sha256Hex } from "@agency_hub_core/shared";
 import { insertAgentKey, setConfigOverride } from "@agency_hub_core/db";
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
-import { AGENT_KEY_TOKEN_PREFIX } from "../apps/runtime/src/services/auth.ts";
+import {
+  AGENT_KEY_TOKEN_PREFIX,
+  createUserAccount,
+} from "../apps/runtime/src/services/auth.ts";
 import {
   afterAll,
   afterEach,
@@ -30,6 +33,7 @@ import {
   checkpointOfapiCollectionJob,
   reserveOfapiCollectionRequest,
   saveOfapiReadSnapshot,
+  upsertFans,
 } from "@agency_hub_core/db";
 import { createOfapiClient } from "../apps/runtime/src/services/ofapi.ts";
 import { ofapiCollectionPolicyHooks } from "../apps/runtime/src/services/ofapi-collection-policy.ts";
@@ -112,6 +116,145 @@ const response = (data: unknown, next?: string | null) =>
     }),
   );
 describe("resumable OFAPI collection reads", () => {
+  it("captures list preview and explicit member pages, rebuilds their identity, and serves owner CRM context locally", async () => {
+    const [fan] = await upsertFans(app.db, [
+      { platform: "onlyfans", platformUserId: "9007199254740993" },
+    ]);
+    await db.pool.query(
+      "insert into page_dm_threads(platform_account_id,fan_id,platform_conversation_id,partner_platform_user_id,last_fan_message_at) values($1,$2,'9007199254740993','9007199254740993','2026-09-05T10:00:00Z')",
+      [pageId, fan!.id],
+    );
+    await db.pool.query(
+      "insert into fan_spend_lifetime(platform_account_id,fan_id,gross_amount_mills) values($1,$2,12345)",
+      [pageId, fan!.id],
+    );
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(
+        response({
+          id: "friends",
+          name: "Friends",
+          usersCount: 10,
+          users: [{ id: "9007199254740993", username: "fan" }],
+        }),
+      )
+      .mockResolvedValueOnce(
+        response({ list: [], hasMore: true, nextOffset: 50 }),
+      )
+      .mockResolvedValueOnce(
+        response({
+          list: [
+            {
+              id: "9007199254740993",
+              username: "fan",
+              totalSpent: 1,
+              canReceiveChatMessage: false,
+            },
+          ],
+          hasMore: false,
+        }),
+      );
+    vi.stubGlobal("fetch", fetch);
+    const approved = await job(
+      ["user_list:friends", "user_list_users:friends"],
+      3,
+    );
+    expect(await runOfapiCollectionJob(app, approved.id)).toEqual({
+      state: "completed",
+    });
+    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(
+      new URL(String(fetch.mock.calls[2]![0])).searchParams.get("offset"),
+    ).toBe("50");
+    const snapshots = await readOfapiStoredSnapshots(app.db, { pageId });
+    expect(snapshots).toHaveLength(3);
+    expect(snapshots[0]).toMatchObject({
+      coverage: { state: "complete" },
+      items: [
+        {
+          nativeId: "9007199254740993",
+          fanId: "9007199254740993",
+          listId: "friends",
+          membershipScope: "members",
+          contactability: "unavailable",
+          priorSpendMills: "12345",
+          lastReplyAt: "2026-09-05T10:00:00.000Z",
+          crmSource: "local_archive_and_spend_projection",
+        },
+      ],
+    });
+    expect(snapshots[1]).toMatchObject({
+      coverage: { state: "partial", nextQuery: { offset: "50" } },
+      items: [],
+    });
+    expect(snapshots[2]).toMatchObject({
+      items: [
+        {
+          listId: "friends",
+          usersCount: 10,
+          membershipCoverage: "preview_only",
+          previewUsers: [{ fanId: "9007199254740993" }],
+        },
+      ],
+    });
+    await rebuildOfapiReadSnapshotProjection(app, { accountId: pageId });
+    expect(
+      (await readOfapiStoredSnapshots(app.db, { pageId })).map((row) => ({
+        items: row.items,
+        observationId: row.observationId,
+      })),
+    ).toEqual(
+      snapshots.map((row) => ({
+        items: row.items,
+        observationId: row.observationId,
+      })),
+    );
+    expect(
+      (
+        await db.pool.query(
+          "select count(*)::int n from observations where kind='ofapi.collection_read_response.v1'",
+        )
+      ).rows[0].n,
+    ).toBe(3);
+    await createUserAccount(
+      app,
+      {
+        username: "list-owner",
+        role: "owner",
+        password: "test-owner-password",
+      },
+      { source: "cli" },
+    );
+    const server = await buildApiServer(app);
+    try {
+      expect(
+        (
+          await server.inject({
+            method: "GET",
+            url: `/api/v1/admin/ofapi/collection/results?pageId=${pageId}`,
+          })
+        ).statusCode,
+      ).toBe(401);
+      const login = await server.inject({
+        method: "POST",
+        url: "/api/v1/auth/login",
+        payload: { username: "list-owner", password: "test-owner-password" },
+      });
+      const cookie = String(login.headers["set-cookie"]).split(";")[0]!;
+      const served = await server.inject({
+        method: "GET",
+        url: `/api/v1/admin/ofapi/collection/results?pageId=${pageId}&operation=ofapi_read_user_list_users`,
+        headers: { cookie },
+      });
+      expect(served.statusCode, served.body).toBe(200);
+      expect(served.json().snapshots).toHaveLength(2);
+      expect(served.body).toContain("9007199254740993");
+      expect(served.body).toContain("12345");
+      expect(fetch).toHaveBeenCalledTimes(3);
+    } finally {
+      await server.close();
+    }
+  });
   it("collects through an empty following page; captures, canonicalizes and serves local coverage", async () => {
     const fetch = vi
       .fn()
@@ -437,18 +580,49 @@ describe("resumable OFAPI collection reads", () => {
 });
 
 it("uses the runtime visitor handler to preserve exactly one UTC day without a second paid read", async () => {
-  const fetch = vi.fn().mockResolvedValue(response({ isAvailable: true, hasStats: true, chart: { visitors: [{ date: "2026-09-01", count: 17 }], duration: [{ date: "2026-09-01", count: 9 }] } }));
+  const fetch = vi
+    .fn()
+    .mockResolvedValue(
+      response({
+        isAvailable: true,
+        hasStats: true,
+        chart: {
+          visitors: [{ date: "2026-09-01", count: 17 }],
+          duration: [{ date: "2026-09-01", count: 9 }],
+        },
+      }),
+    );
   vi.stubGlobal("fetch", fetch);
-  const approved = await createOfapiCollectionJob(app.db, {
-    pageId, category: "visitors", expectedRevision: 0, maxCalls: 1, maxCredits: 5, maxBytes: 1000000,
-    from: "2026-09-01T00:00:00.000Z", to: "2026-09-02T00:00:00.000Z", selection: ["total"],
-  }, actor);
-  expect(await runOfapiCollectionJob(app, approved.id, ofapiCollectionHandlers)).toEqual({ state: "completed" });
+  const approved = await createOfapiCollectionJob(
+    app.db,
+    {
+      pageId,
+      category: "visitors",
+      expectedRevision: 0,
+      maxCalls: 1,
+      maxCredits: 5,
+      maxBytes: 1000000,
+      from: "2026-09-01T00:00:00.000Z",
+      to: "2026-09-02T00:00:00.000Z",
+      selection: ["total"],
+    },
+    actor,
+  );
+  expect(
+    await runOfapiCollectionJob(app, approved.id, ofapiCollectionHandlers),
+  ).toEqual({ state: "completed" });
   const url = new URL(String(fetch.mock.calls[0]![0]));
   expect(url.searchParams.get("start_date")).toBe("2026-09-01T00:00:00.000Z");
   expect(url.searchParams.get("end_date")).toBe("2026-09-01T23:59:59.999Z");
-  const daily = (await db.pool.query("select day::text as date,total_visitors::text,source from ofapi_profile_visitors_daily where page_id=$1", [pageId])).rows;
-  expect(daily).toEqual([{ date: "2026-09-01", total_visitors: "17", source: "rest_total" }]);
+  const daily = (
+    await db.pool.query(
+      "select day::text as date,total_visitors::text,source from ofapi_profile_visitors_daily where page_id=$1",
+      [pageId],
+    )
+  ).rows;
+  expect(daily).toEqual([
+    { date: "2026-09-01", total_visitors: "17", source: "rest_total" },
+  ]);
   await runOfapiCollectionJob(app, approved.id, ofapiCollectionHandlers);
   expect(fetch).toHaveBeenCalledTimes(1);
 });

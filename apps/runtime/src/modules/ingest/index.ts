@@ -1,3 +1,4 @@
+import { readOfapiWebhookEventCatalog, refreshOfapiWebhookEventCatalog } from "../../services/ofapi-webhook-event-catalog.ts";
 import {
   applyOfapiWebhookCollectionPolicy, listOfapiWebhookDeliveryHistory, redeliverOfapiWebhook,
   replayLocalOfapiWebhook, saveOfapiWebhookCollectionPolicy, syncOfapiWebhookDeliveries,
@@ -135,6 +136,14 @@ export async function registerIngestRoutes(server: ApiServer, ctx: ApiModuleCont
     return getOfapiWebhookStatus(appContext);
   });
 
+  server.get("/api/v1/admin/ofapi/webhook/event-catalog", {schema:routeSchemas.adminOfapiWebhookEventCatalog}, async request=>{
+    const principal=await requirePrincipal(request);requireOwner(principal);
+    return readOfapiWebhookEventCatalog(appContext);
+  });
+  server.post("/api/v1/admin/ofapi/webhook/event-catalog/refresh", {schema:routeSchemas.adminOfapiWebhookEventCatalogRefresh}, async request=>{
+    const principal=await requirePrincipal(request);requireOwner(principal);
+    return refreshOfapiWebhookEventCatalog(appContext,principal.user.id);
+  });
   server.get("/api/v1/admin/ofapi/webhook/deliveries", { schema: routeSchemas.adminOfapiWebhookDeliveries }, async request => {
     const principal = await requirePrincipal(request); requireOwner(principal);
     return listOfapiWebhookDeliveryHistory(appContext, { limit: request.query.limit, offset: request.query.offset, failedOnly: request.query.failedOnly === "true" });

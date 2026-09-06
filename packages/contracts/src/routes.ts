@@ -3705,6 +3705,10 @@ export const ofapiCredentialPreflightSchema = z.object({
 export type OfapiBindingRefreshBody = z.infer<typeof ofapiBindingRefreshBodySchema>;
 
 const ofapiWebhookGroupSchema = z.enum(["subscription_expiry", "account_lifecycle", "media_uploads", "data_exports", "engagement"]);
+export const ofapiWebhookEventCatalogSchema = z.object({
+  source:z.literal("onlyfansapi"),state:z.enum(["never","captured","invalid"]),observedAt:isoTimestamp.nullable(),observationId:z.string().nullable(),
+  events:z.array(z.object({value:z.string(),description:z.string(),requested:z.boolean(),supported:z.boolean(),optionalGroup:z.string().nullable()})),
+});
 export const ofapiWebhookCollectionPolicySchema = z.object({
   version: z.number().int().nonnegative(), desiredGroups: z.array(z.string()), appliedGroups: z.array(z.string()),
   historyEnabled: z.boolean(), applyState: z.string(), errorCode: z.string().nullable(), appliedAt: isoTimestamp.nullable(),
@@ -5774,6 +5778,14 @@ export const routeSchemas = {
   adminOfapiCredentialPreflight: {
     auth: { kind: "owner-session" }, tags: ["admin"], summary: "Inspect server credential adoption proof",
     response: { 200: ofapiCredentialPreflightSchema, 401: errorResponseSchema, 403: errorResponseSchema, 503: errorResponseSchema },
+  },
+  adminOfapiWebhookEventCatalog: {
+    auth:{kind:"owner-session"},tags:["admin"],summary:"Read the captured vendor webhook event catalog without egress",
+    response:{200:ofapiWebhookEventCatalogSchema,401:errorResponseSchema,403:errorResponseSchema},
+  },
+  adminOfapiWebhookEventCatalogRefresh: {
+    auth:{kind:"owner-session"},tags:["admin"],summary:"Explicitly capture the free vendor webhook event catalog",
+    body:z.object({}),response:{200:ofapiWebhookEventCatalogSchema,401:errorResponseSchema,403:errorResponseSchema,503:errorResponseSchema},
   },
   adminOfapiWebhookDeliveries: {
     auth: { kind: "owner-session" }, tags: ["admin"], summary: "Read retained webhook attempts and local ingestion stages",

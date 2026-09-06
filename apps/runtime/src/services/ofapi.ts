@@ -309,6 +309,7 @@ export interface OfapiClient {
   getCredentialPreflight?(): Promise<OfapiCredentialPreflight>;
   assertCredentialReady?(): Promise<void>;
   getWebhook?(id: string): Promise<Record<string, unknown>>;
+  listWebhookEvents?(): Promise<{ body: unknown; capture: OfapiAdminCapture | null }>;
   listWebhooks?(): Promise<Record<string, unknown>[]>;
   listWebhookDeliveries?(id: string, params: { from: string; to: string; limit: number; offset: number }): Promise<{ body: unknown; capture: OfapiAdminCapture | null }>;
   redeliverWebhookDelivery?(id: string, attemptId: number): Promise<{ body: unknown; capture: OfapiAdminCapture | null }>;
@@ -1823,7 +1824,7 @@ export function createOfapiClient(input: {
     context?: OfapiRequestContext,
   ): Promise<{ body: unknown; capture: OfapiAdminCapture | null; creditAccounting?: "pending" }> {
     if (method !== "GET") await assertCredentialReady();
-    const freeRead = method === "GET" && ["ofapi_balance_ping", "ofapi_credential_preflight", "ofapi_webhook_inventory", "ofapi_admin_accounts", "ofapi_vendor_usage", "ofapi_webhook_deliveries", "ofapi_export_inventory"].includes(operation);
+    const freeRead = method === "GET" && ["ofapi_balance_ping", "ofapi_credential_preflight", "ofapi_webhook_inventory", "ofapi_webhook_event_catalog", "ofapi_admin_accounts", "ofapi_vendor_usage", "ofapi_webhook_deliveries", "ofapi_export_inventory"].includes(operation);
     await waitForRequestSlot(priorityClass, !freeRead);
     await authorizeOperation(operation, method, path);
     let response: Response;
@@ -1871,7 +1872,7 @@ export function createOfapiClient(input: {
       requestId: `${operation}:${randomUUID()}`,
       pageId: context?.pageId ?? null,
       attemptNumber: 1,
-      ...(["ofapi_balance_ping", "ofapi_credential_preflight", "ofapi_webhook_inventory", "ofapi_admin_accounts", "ofapi_vendor_usage", "ofapi_webhook_deliveries", "ofapi_webhook_redelivery", "ofapi_export_inventory"].includes(operation)
+      ...(["ofapi_balance_ping", "ofapi_credential_preflight", "ofapi_webhook_inventory", "ofapi_webhook_event_catalog", "ofapi_admin_accounts", "ofapi_vendor_usage", "ofapi_webhook_deliveries", "ofapi_webhook_redelivery", "ofapi_export_inventory"].includes(operation)
         ? { fallbackCredits: 0, fallbackEstimated: false } : {}),
     });
 
@@ -1935,6 +1936,9 @@ export function createOfapiClient(input: {
     async listDataExports(options) {
       const query = new URLSearchParams({ page: String(options.page), per_page: String(options.perPage), type: options.type, download_url_expires_in: "1" });
       return requestCaptured("ofapi_export_inventory", "GET", `/data-exports?${query}`);
+    },
+    async listWebhookEvents() {
+      return requestCaptured("ofapi_webhook_event_catalog", "GET", "/webhooks/events");
     },
     async listWebhooks() {
       const body = unwrapData(await request("ofapi_webhook_inventory", "GET", "/webhooks"));

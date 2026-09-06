@@ -46,6 +46,34 @@ function read(
     ...options,
   });
 }
+read("user_lists", "user-lists", "profile_notifications", "array", "offset", {
+  limit: "int:10:50",
+  offset: "int:0:1000000",
+  view: "enum:queue",
+});
+read(
+  "user_list",
+  "user-lists/:list",
+  "profile_notifications",
+  "object",
+  "none",
+);
+read(
+  "user_list_users",
+  "user-lists/:list/users",
+  "profile_notifications",
+  "list",
+  "offset",
+  { limit: "int:1:100", offset: "int:0:1000000" },
+);
+read(
+  "user_list_pinned_users",
+  "user-lists/:list/users/pinned",
+  "profile_notifications",
+  "list",
+  "offset",
+  { limit: "int:1:100", offset: "int:0:1000000" },
+);
 read(
   "profile_visitors",
   "statistics/reach/profile-visitors",
@@ -376,9 +404,29 @@ read(
   { defaultCollect: true, granularity: "window" },
 );
 // S6/S7 reference reads are explicit, paid lookups; no background default.
-const releaseFormQuery = { ...page, filter: "enum:all|pending", sort: "enum:date|name", sortDirection: "enum:desc|asc", name: text };
-read("release_forms", "release-forms", "vault_catalog", "items", "offset", releaseFormQuery);
-read("taggable_users", "release-forms/taggable-users", "vault_catalog", "items", "offset", releaseFormQuery);
+const releaseFormQuery = {
+  ...page,
+  filter: "enum:all|pending",
+  sort: "enum:date|name",
+  sortDirection: "enum:desc|asc",
+  name: text,
+};
+read(
+  "release_forms",
+  "release-forms",
+  "vault_catalog",
+  "items",
+  "offset",
+  releaseFormQuery,
+);
+read(
+  "taggable_users",
+  "release-forms/taggable-users",
+  "vault_catalog",
+  "items",
+  "offset",
+  releaseFormQuery,
+);
 /** A closed GET catalog. No arbitrary vendor path or persistent following sort is accepted. */
 export const OFAPI_READ_CATALOG: readonly OfapiReadDefinition[] =
   definitions.map((row) => ({ ...row, operation: `ofapi_read_${row.id}` }));
@@ -456,7 +504,11 @@ export function resolveOfapiCatalogPath(
     if (
       pieces.length !== segments.length ||
       !pieces.every((v, i) =>
-        v === ":id" ? /^\d+$/.test(segments[i]!) : v === segments[i],
+        v === ":id"
+          ? /^\d+$/.test(segments[i]!)
+          : v === ":list"
+            ? isOfapiUserListRef(segments[i]!)
+            : v === segments[i],
       )
     )
       continue;
@@ -468,4 +520,9 @@ export function resolveOfapiCatalogPath(
     };
   }
   return null;
+}
+
+/** List identifiers include vendor system names such as friends/tagged, never URL syntax. */
+export function isOfapiUserListRef(value: string): boolean {
+  return /^(?:[0-9]{1,30}|[A-Za-z][A-Za-z0-9_]{0,63})$/.test(value);
 }
