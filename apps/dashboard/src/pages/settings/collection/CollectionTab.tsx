@@ -1770,7 +1770,7 @@ export function JobModal(props: {
         <label className="block">
           <span className="mb-1 block text-[12px] text-text-secondary">Потолок объёма, МБ</span>
           <input type="number" min={1} max={10240} value={maxMegabytes} onChange={(event) => setMaxMegabytes(clampInt(event.target.value, 1, 10240))} className={inputClass} />
-          <span className={fieldHintClass}>= {formatBytes(Math.round(maxMegabytes * 1024 * 1024))}; считается только для файлов.</span>
+          <span className={fieldHintClass}>= {formatBytes(Math.round(maxMegabytes * 1024 * 1024))}; учитывает сохранённые ответы и файлы.</span>
         </label>
         <div className="grid gap-3 sm:grid-cols-2 sm:col-span-2">
           <label className="block">
