@@ -1335,13 +1335,27 @@ export function createOfapiClient(input: {
     } catch (error) {
       throw new OfapiGovernedRequestError("OFAPI collection policy refused dispatch", "pre_dispatch", "cancelled", { cause: error });
     }
-    const mayDispatch = await options.beforeDispatch();
+    let mayDispatch = false;
+    let dispatchError: unknown;
+    try {
+      mayDispatch = await options.beforeDispatch();
+    } catch (error) {
+      dispatchError = error;
+    }
     if (!mayDispatch) {
-      await input.onCollectionCancelled?.(options.attemptId);
+      // The callback checks changing authority as well as the durable fence.
+      // A thrown check still precedes HTTP and must release unused admission.
+      try {
+        await input.onCollectionCancelled?.(options.attemptId);
+      } catch (error) {
+        dispatchError = dispatchError === undefined ? error
+          : new AggregateError([dispatchError, error], "OFAPI pre-dispatch cleanup failed");
+      }
       throw new OfapiGovernedRequestError(
         `OFAPI governed attempt ${options.attemptId} lost its dispatch fence`,
         "pre_dispatch",
         "cancelled",
+        { cause: dispatchError },
       );
     }
 
