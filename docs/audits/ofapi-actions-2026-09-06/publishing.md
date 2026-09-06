@@ -140,3 +140,17 @@ unchanged by these definitions. After deployment the owner uses the common
 action preview to review the precise page, targets, media, price and schedule,
 then explicitly submits that operation. No user-subscription purchase endpoint
 is added.
+
+Final integration evidence: `pnpm check` passed with 2,897 unit tests and 9 existing
+skips; 84 selected integration/schema cases passed across publishing, shared
+actions, erasure, media custody, composer, uploads and schema guard (the two
+updated suites were rerun after correcting fixture decoding/provenance and the
+more specific pre-dispatch error expectation). Owner browser checks exercised
+text post preparation and execution against synthetic responses. Required edit
+captions have no default clear; clearing is explicit, and poll choices retain
+commas. Advanced options are expandable in the owner form.
+
+Apply migration 0168 before starting this batch's runtime. The shared anonymous
+CDN-token fence and legacy-send compatibility are documented in
+[media-token-erasure.md](media-token-erasure.md). No production call, collector
+activation or provider-native schedule activation was performed.

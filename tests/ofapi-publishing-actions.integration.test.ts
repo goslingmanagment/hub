@@ -1,6 +1,6 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createModel, createOnlyFansPage, createOrGetOfapiCaptureJob, setPageOfapiAccountId } from "@agency_hub_core/db";
+import { createModel, createOnlyFansPage, createOrGetOfapiCaptureJob, insertObservation, setPageOfapiAccountId } from "@agency_hub_core/db";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import { createUserAccount } from "../apps/runtime/src/services/auth.ts";
@@ -181,7 +181,7 @@ describe("publishing media admission through the owner API", () => {
     expect((await dispatch(id)).statusCode).toBe(409);
     expect(fetchMock).not.toHaveBeenCalled();
     await database.pool.query("update ofapi_media_catalog set is_ready=true where page_id=$1", [pageId]);
-    fetchMock.mockResolvedValue(response({ id: 801, responseType: "post" }));
+    fetchMock.mockImplementation(async () => response({ id: 801, responseType: "post" }));
     await expectConfirmed(id);
     expect(sent().body).toMatchObject({mediaFiles:[101]});
     const next = randomUUID();
@@ -195,8 +195,11 @@ describe("publishing media admission through the owner API", () => {
     const token = "ofapi_media_publish_once";
     const jobId = randomUUID();
     const actor = Number((await database.pool.query("select id from users where username='expanded-owner'")).rows[0].id);
-    await createOrGetOfapiCaptureJob(app.db, {id:jobId,pageId,ofapiAccountId:ACCOUNT,kind:"media_upload",activeSlotKey:`test:${jobId}`,target:{requestId:randomUUID(),sourceId:randomUUID(),destination:"cdn",maxCredits:3},budgetScope:"interactive",originPrincipalId:actor,createdBy:"owner",maxCalls:3,maxCredits:3});
-    await database.pool.query("update ofapi_capture_jobs set state='complete',cursor=$2::jsonb,completed_at=now() where id=$1", [jobId,JSON.stringify({mediaRef:token,status:"completed",isReady:true,hasError:false})]);
+    await createOrGetOfapiCaptureJob(app.db, {id:jobId,pageId,ofapiAccountId:ACCOUNT,kind:"media_upload",activeSlotKey:`page:${pageId}:test:${jobId}`,target:{requestId:randomUUID(),sourceId:randomUUID(),destination:"cdn",maxCredits:3},budgetScope:"interactive",originPrincipalId:actor,createdBy:"owner",maxCalls:3,maxCredits:3});
+    const receivedAt = new Date();
+    const cursor = {mediaRef:token,status:"completed",isReady:true,hasError:false};
+    const evidence = await insertObservation(app.db,{source:"ofapi_capture",producer:"ofapi:media-test",platform:"onlyfans",kind:"ofapi.media_upload_response.v1",accountId:pageId,nativeAccountRef:ACCOUNT,idempotencyKey:randomUUID(),payload:cursor,payloadHash:createHash("sha256").update(JSON.stringify(cursor)).digest(),receivedAt});
+    await database.pool.query("update ofapi_capture_jobs set state='complete',cursor=$2::jsonb,terminal_observation_id=$3,terminal_observation_received_at=$4,completed_at=now() where id=$1", [jobId,JSON.stringify(cursor),evidence.observationId,receivedAt]);
     const command = { action: "post_create", pageId, text: "Owned upload", mediaFiles: [token] };
     const first = randomUUID(), second = randomUUID();
     await expectPrepared(first,command);

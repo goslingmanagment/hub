@@ -375,7 +375,7 @@ describe("governed OFAPI owner action custody", () => {
   it("refuses a batch whose five-credit reservation exceeds the cap before any provider call", async () => {
     app.config.ofapiMirrorGlobalDailyCreditBudget = 4;
     const id = await prepare(batch());
-    await expect(apply(id)).rejects.toThrow("not dispatched");
+    await expect(apply(id)).rejects.toThrow("daily credit budget exhausted");
     expect(await getOfapiAction(app, id)).toMatchObject({ state: "prepared", estimatedCredits: 5 });
     expect(await spent()).toBe(0);
     expect(await captures(id)).toHaveLength(0);
