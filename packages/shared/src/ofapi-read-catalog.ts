@@ -379,8 +379,6 @@ read(
 const releaseFormQuery = { ...page, filter: "enum:all|pending", sort: "enum:date|name", sortDirection: "enum:desc|asc", name: text };
 read("release_forms", "release-forms", "vault_catalog", "items", "offset", releaseFormQuery);
 read("taggable_users", "release-forms/taggable-users", "vault_catalog", "items", "offset", releaseFormQuery);
-read("giphy_trending", "giphy/trending", "profile_notifications", "array", "offset", page);
-read("giphy_search", "giphy/search", "profile_notifications", "array", "offset", { ...page, q: text }, { required: ["q"] });
 /** A closed GET catalog. No arbitrary vendor path or persistent following sort is accepted. */
 export const OFAPI_READ_CATALOG: readonly OfapiReadDefinition[] =
   definitions.map((row) => ({ ...row, operation: `ofapi_read_${row.id}` }));
