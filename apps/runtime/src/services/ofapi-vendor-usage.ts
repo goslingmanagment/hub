@@ -8,6 +8,10 @@ import type { AppContext } from "../bootstrap.ts";
 import { ConflictError, ForbiddenError, ServiceUnavailableError } from "./errors.ts";
 import { asRecord } from "./ofapi-payloads.ts";
 
+export class OfapiKeyPermissionDeniedError extends ForbiddenError {
+  constructor(message: string) { super(message); this.name = "OfapiKeyPermissionDeniedError"; }
+}
+
 export function parseOfapiVendorUsage(body: unknown, window: OfapiUsageWindow) {
   const data = asRecord(asRecord(body)?.data);
   if (!data || !Array.isArray(data.results)) throw new ServiceUnavailableError("OFAPI usage response shape unavailable");
@@ -65,9 +69,9 @@ export async function assertOfapiConfiguredAccess(db: Database, fingerprint: str
       : /upload/.test(input.operation) ? "uploads"
         : /smart_link|pixel|postback/.test(input.operation) ? "links"
           : input.method === "GET" ? "reads" : "commands";
-  if (policy.capabilities && !policy.capabilities.includes(capability)) throw new ForbiddenError(`OFAPI key declaration does not allow ${capability}`);
+  if (policy.capabilities && !policy.capabilities.includes(capability)) throw new OfapiKeyPermissionDeniedError(`OFAPI key declaration does not allow ${capability}`);
   if (input.accountId && policy.account_ids && !policy.account_ids.includes(input.accountId)) {
-    throw new ForbiddenError("OFAPI key declaration does not allow this account");
+    throw new OfapiKeyPermissionDeniedError("OFAPI key declaration does not allow this account");
   }
 }
 

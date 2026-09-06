@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { OfapiKeyPermissionDeniedError } from "./ofapi-vendor-usage.ts";
 
 import {
   claimQueuedOfapiCommand,
@@ -70,7 +71,7 @@ export type OfapiCommandFailure = {
 /** The command was claimed, but its local guard refused any vendor dispatch. */
 export class OfapiLocalDispatchRefusal extends Error {
   constructor(
-    readonly reason: "account_unavailable" | "binding_replaced" | "auth_action_required" | "credential_not_verified" | "credit_accounting_unavailable",
+    readonly reason: "account_unavailable" | "binding_replaced" | "auth_action_required" | "credential_not_verified" | "credit_accounting_unavailable" | "key_scope_denied",
     readonly detail: string | null = null,
   ) {
     super(`OFAPI command refused before dispatch: ${reason}`);
@@ -555,7 +556,8 @@ async function executeCurrentOfapiCommand(
       : error instanceof OfapiCredentialNotReadyError
         ? new OfapiLocalDispatchRefusal("credential_not_verified", error.reason ?? error.preflightStatus)
         : error instanceof OfapiCreditAccountingUnavailableError
-          ? new OfapiLocalDispatchRefusal("credit_accounting_unavailable") : null;
+          ? new OfapiLocalDispatchRefusal("credit_accounting_unavailable")
+          : error instanceof OfapiKeyPermissionDeniedError ? new OfapiLocalDispatchRefusal("key_scope_denied") : null;
     if (error instanceof OfapiApiError && ofapiAccountNotFound(error.status, error.body)) {
       const marked = await markOfapiBindingUnavailable(bindingLockDb, command.ofapiAccountId, command.bindingGeneration);
       if (marked) await notifyOfapiAuthIncident({ ...app, db: bindingLockDb }, {
