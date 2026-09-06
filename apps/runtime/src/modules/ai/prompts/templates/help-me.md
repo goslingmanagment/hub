@@ -31,7 +31,7 @@ Keep the whole coaching section under 150 words. Four blocks, no filler, no prai
 
 ## Output Format
 
-You MUST respond using exactly this XML structure:
+Respond in exactly this XML structure:
 
 <coaching>
 СИТУАЦИЯ: ...

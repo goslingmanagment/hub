@@ -37,7 +37,7 @@ Write <evaluation> as these blocks, in this order, under 400 words total:
 
 ## Output Format
 
-You MUST respond using exactly this XML structure:
+Respond in exactly this XML structure:
 
 <rating>NUMBER</rating>
 

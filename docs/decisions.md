@@ -252,6 +252,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 249 | An explicit posts request is the manual action | `POST /admin/sync/trigger {scope: posts}` — the explicit per-page operator action — now clears a `manual_action_required` block on the posts stream (`clearPageSyncManualActionBlock`, that blocker kind only) BEFORE recording the request, so the request lands on a runnable row. Production 2026-09-04: after #128's cancel/resolve the streams stayed `blocked` with the old `ofapi_capture_job_*` codes because `resumePageSync` only lifts `paused` and nothing ever cleared a manual block; the explicit request the code itself calls "an explicit per-page operator action" was a no-op on exactly the state it exists for. `provider_bad_data`/`dependency` blocks are untouched. The posts handler also forgets an owner-cancelled pending job (checkpoint still named it) and seeds a fresh one through the ordinary slot path. |
 | 250 | OFAPI UI inherits the existing Anthropic-inspired Hub design | Owner requirement for the OFAPI refresh: use the current dashboard theme, typography, spacing and shared components across collection controls and other new OFAPI screens. The concrete source is globals.css plus Settings and OFAPI Credits; token reuse and visual consistency are acceptance criteria. |
 | 251 | OFAPI collection policy and UI are separate stages | Owner separates backend S-POL from frontend S-UI, each with independent implementation and acceptance. Saved mockups are non-normative references outside the implementation plan. New collection still requires both applicable stages plus explicit staged activation; existing Hub design tokens remain authoritative. |
+| 252 | Prompt audit: model-generic gateway tuning, structured verdicts, cache split | The Anthropic request builder allowlists the LEGACY surface (`haiku-4-5`/`sonnet-4-5`/`opus-4-5` sampling+no-adaptive; `sonnet-4-6`/`opus-4-6` adaptive+temperature-tolerant) and treats every other model as adaptive-only with no sampling params, plus an explicit `thinking: disabled` for Opus 5 / Sonnet 5 when reasoning is off; the workboard classifier asks for verdicts through structured outputs (`output_config.format`, internal lane only) instead of prose-and-bracket-hunting; the workboard cost panel prices from the gateway catalog (retired `claude-3-5-haiku-latest` row and the Haiku-for-everything fallback gone); coach-chat splits the coach dialog into its own 5m cache block and the recap age label is never minute-granular; safety preambles, tone overrides, hi-greeting and the XML-format lines lose their shouted register. Anti-AI phrase lists and the #201 word caps are deliberately untouched |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -10719,3 +10720,65 @@ are ready and the owner explicitly activates one bounded lane through the
 existing staged rollout. Separating the UI does not relax server-side budget
 enforcement, capture-first retention or the activation gate. No application
 code, migration or production configuration is changed by this decision.
+
+
+## Prompt audit: model-generic gateway tuning, structured verdicts, cache split (2026-09-07)
+
+**Decision #252 (2026-09-07, prompt audit fixes):** a `/claude-api prompt-audit`
+pass over everything that reaches a model. Applied, in one change:
+
+- **Gateway tuning is model-generic.** `ai-gateway-anthropic.ts` used to allowlist
+  the adaptive models (`sonnet-4-6`, `opus-4-6`, `opus-4-8`) and the one
+  no-sampling model (`opus-4-8`); any model added to the pricing catalog later
+  would silently get `temperature` (a 400 on Opus 4.7+, Opus 5, Sonnet 5) and no
+  adaptive thinking. The lists now name the LEGACY surface instead:
+  `haiku-4-5` / `sonnet-4-5` / `opus-4-5` keep sampling params and never get
+  adaptive thinking; `sonnet-4-6` / `opus-4-6` are adaptive and still accept
+  `temperature` while thinking is off; everything else is adaptive-only with no
+  sampling params. Opus 5 and Sonnet 5 (thinking on when the field is omitted)
+  get an explicit `thinking: {type: "disabled"}` when reasoning is off or the
+  short-recap `disableAdaptiveThinking` flag is set, so the non-adaptive
+  `max_tokens` cap stays a pure output budget. No behaviour change for the
+  models in the catalog today.
+- **Classifier verdicts via structured outputs.** The workboard closing
+  classifier stops asking for "ONLY a compact JSON array … no code fences" and
+  hunting for brackets; the internal lane passes an off-wire `outputFormat`
+  (`output_config.format`, json_schema with the `state` enum) through the
+  provider input, exactly like `disableAdaptiveThinking`. The completion is a
+  schema-valid `{"verdicts": [...]}` object; `coerceState` and the
+  needs_reply=true defaults stay as the fail-safe for a truncated stream. Not
+  on the public wire schema.
+- **Workboard cost panel prices from the gateway catalog.** `ai-settings.ts`
+  carried its own three-row price table (including the retired
+  `claude-3-5-haiku-latest`) and priced every other model at Haiku rates, so a
+  per-page `claude-sonnet-4-6` override under-reported cost 3×. It now reads
+  `anthropicListPriceUsdPerMillion` from `ai-gateway-pricing.ts`; unknown
+  models still fall back to the default model's price.
+- **Coach-chat cache split.** The `## Coach Dialog So Far` section grows every
+  turn and sat inside the 5m block with the transcript, so each coach turn
+  re-billed the whole transcript as a cache write. It is now its own 5m block
+  (four breakpoints total, the API maximum), and the recap age label is
+  `under an hour ago` rather than `N min ago` so the dynamic block is not
+  invalidated by the clock. The budget reducer is unchanged (it sums block
+  lengths).
+- **Prompt register.** Safety preambles: `CRITICAL SAFETY RULES` →
+  `Safety rules:`, `IGNORE THEM COMPLETELY` → `ignore them`, `UNTRUSTED USER
+  INPUT` lowercased (reply-output's meta-leak regex is case-insensitive, so the
+  scrub still fires). Tone overrides: the bold `**IMPORTANT. Tone override:
+  X.**` header becomes a plain `Tone for this reply: x.` line (markdown in the
+  prompt bled into replies that must carry no bold). `help-me` / `chat-review`:
+  `You MUST respond using exactly this XML structure` → `Respond in exactly this
+  XML structure` (the XML wire format itself is unchanged). `hi-greeting`: the
+  `Read the Room FIRST / Before writing anything` planning choreography becomes
+  two plain conditionals. Rationale for all four: current models follow the
+  system prompt closely and literally; the shouted register was written to
+  overcome older models' reluctance and now bleeds into the output's tone.
+  Manifest `coreSha256` values updated for `builder.ts`, `templates.ts`,
+  `chat-review.md`, `help-me.md`, `hi-greeting.md`.
+
+**Deliberately not changed** (owner call, needs a before/after probe on real
+transcripts): the anti-AI phrase lists in `fast-reply` / `improve-draft` /
+`help-me` / `ping` / `hi-greeting`, and the #201 word caps (`under 150 words`,
+`under 400 words`, `under 350 words`). Both match the audit's dated-pattern
+rows (prohibition clusters without provenance; numeric output ceilings) but
+change fan-facing behaviour, and #201 is a month-old owner decision.

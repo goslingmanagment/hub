@@ -315,9 +315,11 @@ describe("restricted capture class (Stage 29)", () => {
       return;
     }
     appContext.config.anthropicApiKey = "test-key";
-    const verdictJson = JSON.stringify([
-      { id: "m1", state: "buy_signal", needs_reply: true, reason: "accepted PPV offer" },
-    ]);
+    const verdictJson = JSON.stringify({
+      verdicts: [
+        { id: "m1", state: "buy_signal", needs_reply: true, reason: "accepted PPV offer" },
+      ],
+    });
     const classifier = createGatewayClosingClassifier(appContext, {
       model: "claude-haiku-4-5",
       providerOverride: fakeProvider([verdictJson]),

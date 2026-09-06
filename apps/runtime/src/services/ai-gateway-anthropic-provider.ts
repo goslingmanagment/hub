@@ -247,6 +247,7 @@ export function createAnthropicAiGatewayProvider(
     async *stream(input) {
       const request = buildAnthropicGatewayStreamRequest(input.body, {
         disableAdaptiveThinking: input.disableAdaptiveThinking,
+        outputFormat: input.outputFormat,
       });
       const clientResolution = await resolveClient(input);
       let providerResponseId: string | null = null;

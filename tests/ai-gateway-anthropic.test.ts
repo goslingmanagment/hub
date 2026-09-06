@@ -154,6 +154,74 @@ describe("Anthropic AI gateway request builder", () => {
     expect(tuning).toEqual({ maxTokens: 8000 });
   });
 
+  // The model lists are allowlists of the LEGACY surface, not of the current
+  // one: a model the catalog gains later must default to adaptive-only and
+  // no sampling params (400 on Opus 4.7+, Opus 5, Sonnet 5), and the two
+  // thinking-on-by-default models must get an explicit disable when reasoning
+  // is off (otherwise thinking eats the non-adaptive cap and truncates).
+  it("treats an unlisted newer model as adaptive-only with no sampling params", () => {
+    expect(resolveAnthropicGatewayRequestTuning({
+      providerModelId: "claude-opus-4-7",
+      feature: "fast-reply",
+      temperature: 0.65,
+      reasoningEffort: "off",
+    })).toEqual({ maxTokens: 8000 });
+    expect(resolveAnthropicGatewayRequestTuning({
+      providerModelId: "claude-opus-4-7",
+      feature: "fast-reply",
+      temperature: 0.65,
+      reasoningEffort: "medium",
+    })).toEqual({
+      maxTokens: 8000,
+      thinking: { type: "adaptive", display: "summarized" },
+      outputConfig: { effort: "medium" },
+    });
+  });
+
+  it.each(["claude-opus-5", "claude-sonnet-5"])(
+    "sends an explicit thinking disable for %s when reasoning is off",
+    (providerModelId) => {
+      expect(resolveAnthropicGatewayRequestTuning({
+        providerModelId,
+        feature: "fan-summary",
+        temperature: 0.4,
+        reasoningEffort: "off",
+      })).toEqual({ maxTokens: 24000, thinking: { type: "disabled" } });
+      expect(resolveAnthropicGatewayRequestTuning({
+        providerModelId,
+        feature: "fan-summary",
+        temperature: 0.4,
+        reasoningEffort: "medium",
+        disableAdaptiveThinking: true,
+      })).toEqual({ maxTokens: 8192, thinking: { type: "disabled" } });
+    },
+  );
+
+  it("keeps temperature on the 4.6 family when reasoning is off", () => {
+    expect(resolveAnthropicGatewayRequestTuning({
+      providerModelId: "claude-opus-4-6",
+      feature: "fast-reply",
+      temperature: 0.65,
+      reasoningEffort: "off",
+    })).toEqual({ maxTokens: 8000, temperature: 0.65 });
+  });
+
+  it("nests a structured-output format under output_config next to the effort", () => {
+    const format = { type: "json_schema" as const, schema: { type: "object" } };
+    const adaptive = buildAnthropicGatewayStreamRequest(
+      body({ reasoningEffort: "medium" }),
+      { outputFormat: format },
+    );
+    expect(adaptive.output_config).toEqual({ effort: "medium", format });
+
+    const off = buildAnthropicGatewayStreamRequest(
+      body({ reasoningEffort: "off" }),
+      { outputFormat: format },
+    );
+    expect(off.output_config).toEqual({ format });
+    expect(off.temperature).toBe(0.65);
+  });
+
   it("maps scan to the same deep-analysis cap and temperature as fan-summary", () => {
     const request = buildAnthropicGatewayStreamRequest(body({
       feature: "scan",

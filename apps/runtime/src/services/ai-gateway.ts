@@ -31,7 +31,10 @@ import {
 import type { AppContext } from "../bootstrap.ts";
 import { canAccessPage, type HumanAuthPrincipal } from "./auth.ts";
 import { BadRequestError, ConflictError, NotFoundError, QuotaDeniedError, ServiceUnavailableError } from "./errors.ts";
-import { estimateAnthropicGatewayRequestCost } from "./ai-gateway-anthropic.ts";
+import {
+  estimateAnthropicGatewayRequestCost,
+  type AnthropicGatewayOutputFormat,
+} from "./ai-gateway-anthropic.ts";
 import { estimateOpenrouterGatewayRequestCost } from "./ai-gateway-openrouter-provider.ts";
 import { reconcileAiProviderTerminalIncident } from "./ai-gateway-incidents.ts";
 import { aiGatewayProviderForModel } from "./ai-gateway-pricing.ts";
@@ -65,6 +68,10 @@ export interface AiGatewayProviderInput {
    * tight maxTokens stays a pure output budget (fan-summary short recap). The
    * Anthropic provider honors it; OpenRouter has no thinking block to disable. */
   disableAdaptiveThinking?: boolean;
+  /** Server-derived, off the wire: structured-outputs schema for a request
+   * whose consumer parses JSON (the workboard classifier on the internal
+   * lane). The Anthropic provider honors it; OpenRouter ignores it. */
+  outputFormat?: AnthropicGatewayOutputFormat;
 }
 
 export interface AiGatewayProvider {

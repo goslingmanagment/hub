@@ -87,8 +87,8 @@ describe("coach-chat prompt", () => {
       coachHistory: [{ question: "PRIORQ", answer: "PRIORA" }],
       recapAttach: { full: { body: "FULLBODY", ageMs: 60_000 }, short: null },
     });
-    expect(built.userBlocks).toHaveLength(3);
-    const [staticBlock, dynamicBlock, taskBlock] = built.userBlocks;
+    expect(built.userBlocks).toHaveLength(4);
+    const [staticBlock, dynamicBlock, historyBlock, taskBlock] = built.userBlocks;
     // The 1h prefix must be fan-agnostic (builder invariant) — none of the
     // per-fan / per-turn data may ride here or the breakpoint never re-hits.
     expect(staticBlock?.cache).toBe("1h");
@@ -97,11 +97,19 @@ describe("coach-chat prompt", () => {
     expect(staticBlock?.text).not.toContain("PRIORQ");
     expect(staticBlock?.text).not.toContain("TRANSCRIPTBODY");
     expect(staticBlock?.text).not.toContain("## Fan Recaps");
-    // Recaps + dossier + coach history ride the ephemeral dynamic block.
+    // Recaps + dossier ride the ephemeral dynamic block with the transcript.
     expect(dynamicBlock?.cache).toBe("5m");
     expect(dynamicBlock?.text).toContain("TRANSCRIPTBODY");
     expect(dynamicBlock?.text).toContain("FULLBODY");
-    expect(dynamicBlock?.text).toContain("PRIORQ");
+    expect(dynamicBlock?.text).not.toContain("PRIORQ");
+    // The per-turn coach dialog rides its OWN 5m block after the transcript,
+    // so a growing dialog never invalidates the cached transcript bytes.
+    expect(historyBlock?.cache).toBe("5m");
+    expect(historyBlock?.text).toContain("## Coach Dialog So Far");
+    expect(historyBlock?.text).toContain("PRIORQ");
+    expect(historyBlock?.text).not.toContain("TRANSCRIPTBODY");
+    // The recap age label is never minute-granular (it sits in a cached block).
+    expect(dynamicBlock?.text).toContain("Full recap, generated under an hour ago:");
     // The question stays in the uncached task block.
     expect(taskBlock?.cache).toBe("none");
     expect(taskBlock?.text).toContain("как продать ppv?");
@@ -109,7 +117,7 @@ describe("coach-chat prompt", () => {
 
   it("keeps the normal uncached task block byte-identical with an empty preset slot", () => {
     const built = buildPrompt({ ...baseInput });
-    const taskBlock = built.userBlocks[2];
+    const taskBlock = built.userBlocks[3];
     expect(taskBlock?.text).toBe(`## Your Task
 
 The chatter asks:
@@ -131,7 +139,7 @@ Answer the chatter now. Use a draft fence for any proposed fan message.
     });
     expect(
       createHash("sha256").update(JSON.stringify(withDraft.userBlocks)).digest("hex"),
-    ).toBe("1ae9af5f607c96f1b1fbdd9d922a57e9647ccca958f50e267df57f9d8c30b814");
+    ).toBe("c0475c06636a8f04c2a4c763758901cb9c661c17eb8cfde2b7365af1c3361487");
   });
 
   it("renders the situation preset only in the uncached task block", () => {
@@ -140,12 +148,14 @@ Answer the chatter now. Use a draft fence for any proposed fan message.
       preset: "situation",
       draftText: "warm start",
     });
-    expect(built.userBlocks).toHaveLength(3);
-    const [staticBlock, dynamicBlock, taskBlock] = built.userBlocks;
+    expect(built.userBlocks).toHaveLength(4);
+    const [staticBlock, dynamicBlock, historyBlock, taskBlock] = built.userBlocks;
     expect(staticBlock?.cache).toBe("1h");
     expect(staticBlock?.text).not.toContain("## Preset Turn");
     expect(dynamicBlock?.cache).toBe("5m");
     expect(dynamicBlock?.text).not.toContain("## Preset Turn");
+    expect(historyBlock?.cache).toBe("5m");
+    expect(historyBlock?.text).not.toContain("## Preset Turn");
     expect(taskBlock?.cache).toBe("none");
     expect(taskBlock?.text).toContain("## Preset Turn");
     expect(taskBlock?.text).toContain("СИТУАЦИЯ:");
@@ -311,7 +321,7 @@ describe("coach-chat optional draft", () => {
       ...baseInput,
       draftText: "  hey <babe> & wanna see more? 😘  ",
     });
-    const [staticBlock, dynamicBlock, taskBlock] = built.userBlocks;
+    const [staticBlock, dynamicBlock, historyBlock, taskBlock] = built.userBlocks;
     // The section is present and framed as the chatter's OWN unsent reply.
     expect(built.user).toContain("## Chatter's Working Draft");
     expect(built.user).toContain("This is their OWN unsent draft");
@@ -329,6 +339,8 @@ describe("coach-chat optional draft", () => {
     expect(staticBlock?.text).not.toContain("## Chatter's Working Draft");
     expect(dynamicBlock?.cache).toBe("5m");
     expect(dynamicBlock?.text).not.toContain("## Chatter's Working Draft");
+    expect(historyBlock?.cache).toBe("5m");
+    expect(historyBlock?.text).not.toContain("## Chatter's Working Draft");
     expect(taskBlock?.cache).toBe("none");
     expect(taskBlock?.text).toContain("## Chatter's Working Draft");
     expect(taskBlock?.text).toContain("<chatter_draft>");

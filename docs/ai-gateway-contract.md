@@ -129,7 +129,9 @@ R4f adds the first Anthropic provider adapter groundwork without wiring the rout
 network. Core now builds the Anthropic Messages streaming request from the gateway body, preserving
 desktop-compatible prompt-cache markers (`5m` as provider-default ephemeral, `1h` explicit),
 feature temperatures, adaptive thinking caps, the no-temperature-with-thinking invariant, and the
-`claude-opus-4-8` no-sampling-params rule. `scan` is treated as the deep analysis/fan-summary
+no-sampling-params rule for every model after the 4.6 family (Opus 4.7+, Opus 5, Sonnet 5; only
+`claude-haiku-4-5` / `claude-sonnet-4-5` / `claude-opus-4-5` are non-adaptive, and Opus 5 / Sonnet 5
+get an explicit `thinking: disabled` when reasoning is off). `scan` is treated as the deep analysis/fan-summary
 tuning profile until desktop exposes a separate gateway operation contract. The same slice
 normalizes Anthropic usage into the terminal ledger cost shape, including 5m/1h cache-write
 breakdown when the provider supplies it.
