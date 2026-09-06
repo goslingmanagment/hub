@@ -1,3 +1,4 @@
+import { parseOfapiAsyncLifecycle } from "./ofapi-async-lifecycle.ts";
 import { notifyOfapiGlobalIncident, resolveOfapiGlobalIncident } from "./notification-incidents.ts";
 import { listHistoricalOfapiBindings } from "@agency_hub_core/db";
 // Canonicalization driver (Stage 8). The minutely sweep IS the replay
@@ -516,12 +517,22 @@ async function runFamily(
             ? runContext.accountIdByNativeRef.get(`${row.platform}:${row.nativeAccountRef}`) ?? null
             : null);
 
+        // Export webhooks are team-level, with an explicit account_ids list.
+        // Attribute the same source fact only to those named accounts; an
+        // unknown member keeps the observation replayable until binding repair.
+        const exportLifecycle = row.source === "webhook" && row.kind.startsWith("data_exports.") &&
+          typeof observation.payload === "object" && observation.payload !== null
+          ? parseOfapiAsyncLifecycle(row.kind, observation.payload as Record<string, unknown>) : null;
+        const exportAccounts = exportLifecycle?.accountIds.map(ref =>
+          runContext.accountIdByNativeRef.get(`onlyfans:${ref}`) ?? null);
+        const accountIds = exportAccounts ?? [accountId];
+
         if (options.dryRun) {
-          totals.appended += drafts.length;
+          totals.appended += drafts.length * Math.max(1, accountIds.length);
           continue;
         }
 
-        if (drafts.length > 0 && accountId == null) {
+        if (drafts.length > 0 && (accountIds.length === 0 || accountIds.some(id => id === null))) {
           // Events require an account; an unmapped observation stays below the
           // version floor and self-heals once the account mapping lands.
           totals.skippedUnmapped += 1;
@@ -556,13 +567,15 @@ async function runFamily(
           // key the projection-only branch builds — the family version in the
           // key is what lets a version bump mint EXTRA events for an
           // already-checkpointed observation without colliding.
-          const result = family.projectionOnly === true
-            ? await appendProjectionOnlyDomainEvents(app.db, accountId!, inputs, checkpoint)
-            : family.mixed === true
-            ? await appendMixedDomainEvents(app.db, accountId!, inputs, checkpoint)
-            : await appendDomainEvents(app.db, accountId!, inputs);
-          totals.appended += result.appended;
-          totals.deduped += result.deduped;
+          for (const targetAccountId of new Set(accountIds)) {
+            const result = family.projectionOnly === true
+              ? await appendProjectionOnlyDomainEvents(app.db, targetAccountId!, inputs, checkpoint)
+              : family.mixed === true
+              ? await appendMixedDomainEvents(app.db, targetAccountId!, inputs, checkpoint)
+              : await appendDomainEvents(app.db, targetAccountId!, inputs);
+            totals.appended += result.appended;
+            totals.deduped += result.deduped;
+          }
         }
         await markObservationParsed(app.db, {
           observationId: row.id,

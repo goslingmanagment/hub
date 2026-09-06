@@ -11666,6 +11666,50 @@
                             },
                             "artifactPending": {
                               "type": "boolean"
+                            },
+                            "lifecycle": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "status": {
+                                      "type": "string"
+                                    },
+                                    "receivedAt": {
+                                      "type": "string"
+                                    },
+                                    "sourceAt": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "eventId": {
+                                      "type": "integer",
+                                      "exclusiveMinimum": 0,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "conflictingTerminal": {
+                                      "type": "boolean"
+                                    }
+                                  },
+                                  "required": [
+                                    "status",
+                                    "receivedAt",
+                                    "sourceAt",
+                                    "eventId",
+                                    "conflictingTerminal"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             }
                           },
                           "required": [
@@ -12321,6 +12365,50 @@
                             },
                             "artifactPending": {
                               "type": "boolean"
+                            },
+                            "lifecycle": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "status": {
+                                      "type": "string"
+                                    },
+                                    "receivedAt": {
+                                      "type": "string"
+                                    },
+                                    "sourceAt": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "eventId": {
+                                      "type": "integer",
+                                      "exclusiveMinimum": 0,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "conflictingTerminal": {
+                                      "type": "boolean"
+                                    }
+                                  },
+                                  "required": [
+                                    "status",
+                                    "receivedAt",
+                                    "sourceAt",
+                                    "eventId",
+                                    "conflictingTerminal"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             }
                           },
                           "required": [

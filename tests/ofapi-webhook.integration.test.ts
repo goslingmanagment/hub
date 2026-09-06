@@ -275,10 +275,10 @@ describe("OFAPI webhook receiver", () => {
     }
 
     await seedWebhookConfig();
-    const body = await fixtureBody("users_typing.json");
+    const body = await fixtureBody("messages_received.json");
 
     const tampered = await postWebhook({
-      body: body.replace("users.typing", "users.typing "),
+      body: body.replace("messages.received", "messages.received "),
       signature: sign(body),
     });
     expect(tampered.statusCode).toBe(401);
@@ -295,10 +295,8 @@ describe("OFAPI webhook receiver", () => {
     const missingKey = await postWebhook({ body, idempotencyKey: null });
     expect(missingKey.statusCode).toBe(200);
     expect(missingKey.json()).toEqual({ received: true, duplicate: false });
-    const repeatedMissingKey = await postWebhook({ body, idempotencyKey: null });
-    expect(repeatedMissingKey.json()).toEqual({ received: true, duplicate: true });
 
-    const oversizedBody = body.replace("users.typing", "users.online");
+    const oversizedBody = body.replace("messages.received", "users.online");
     const oversizedKey = await postWebhook({
       body: oversizedBody,
       signature: sign(oversizedBody),

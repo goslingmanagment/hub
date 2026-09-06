@@ -15,10 +15,17 @@ import { ofapiWebhookEnvelopeSchema } from "./ofapi-payloads.ts";
 import { isOfapiPresenceProjectionEventType } from "./ofapi-presence-projection.ts";
 import { isOfapiSubscriptionProjectionEventType } from "./ofapi-subscription-projection.ts";
 
+export const OFAPI_EPHEMERAL_EVENT_TYPES: ReadonlySet<string> = new Set([
+  "users.typing", "users.online", "users.offline",
+]);
+
 function projectionStatus(eventType: string): "pending" | "none" {
   return isOfapiDmProjectionEventType(eventType) ||
       isOfapiSubscriptionProjectionEventType(eventType) ||
-      isOfapiPresenceProjectionEventType(eventType)
+      isOfapiPresenceProjectionEventType(eventType) ||
+      eventType.startsWith("accounts.") ||
+      eventType.startsWith("media_uploads.") ||
+      eventType.startsWith("data_exports.")
     ? "pending"
     : "none";
 }
@@ -65,7 +72,25 @@ export async function finalizeOfapiWebhookRaw(
   const rawBody = initial.rawBody;
   const payloadHash = initial.payloadHash;
 
-  if (initial.captureHeaders["identityStatus"] === "invalid") {
+  let parsedBody: unknown;
+  let malformedReason: string | null = null;
+  try {
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(rawBody);
+    parsedBody = JSON.parse(text) as unknown;
+  } catch {
+    parsedBody = null;
+    malformedReason = "signed_webhook_invalid_json";
+  }
+  const envelope = malformedReason === null
+    ? ofapiWebhookEnvelopeSchema.safeParse(parsedBody)
+    : null;
+  if (envelope !== null && !envelope.success) {
+    malformedReason = "signed_webhook_invalid_envelope";
+  }
+
+  if (initial.captureHeaders["identityStatus"] === "invalid" ||
+      (initial.captureHeaders["identityStatus"] === "local_receipt" && envelope?.success &&
+        !OFAPI_EPHEMERAL_EVENT_TYPES.has(envelope.data.event))) {
     await app.db.transaction(async (tx) => {
       const db = tx as AppContext["db"];
       const won = await quarantineMalformedOfapiWebhookRaw(db, {
@@ -96,22 +121,6 @@ export async function finalizeOfapiWebhookRaw(
       await assertObservationHash(db, observation, payloadHash);
     });
     return { eventId, state: "quarantined_malformed" };
-  }
-
-  let parsedBody: unknown;
-  let malformedReason: string | null = null;
-  try {
-    const text = new TextDecoder("utf-8", { fatal: true }).decode(rawBody);
-    parsedBody = JSON.parse(text) as unknown;
-  } catch {
-    parsedBody = null;
-    malformedReason = "signed_webhook_invalid_json";
-  }
-  const envelope = malformedReason === null
-    ? ofapiWebhookEnvelopeSchema.safeParse(parsedBody)
-    : null;
-  if (envelope !== null && !envelope.success) {
-    malformedReason = "signed_webhook_invalid_envelope";
   }
 
   if (malformedReason !== null) {

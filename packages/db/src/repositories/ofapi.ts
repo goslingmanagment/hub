@@ -2860,7 +2860,7 @@ export async function setPageOfapiAccountId(
 
 /**
  * Advances a page's OFAPI auth state from an accounts.* webhook event.
- * Forward-only by event receive time: an out-of-order older event never
+ * Forward-only by provider occurrence (receipt fallback for old envelopes): an out-of-order older event never
  * overwrites a newer state. Returns false when skipped for that reason.
  */
 export async function advancePageOfapiAuthStatus(
@@ -2880,7 +2880,12 @@ export async function advancePageOfapiAuthStatus(
     })
     .where(and(
       eq(pages.id, input.pageId),
-      sql`(${pages.ofapiAuthChangedAt} is null or ${pages.ofapiAuthChangedAt} <= ${input.changedAt})`,
+      sql`(${pages.ofapiAuthChangedAt} is null or ${pages.ofapiAuthChangedAt} < ${input.changedAt}
+        or (${pages.ofapiAuthChangedAt} = ${input.changedAt} and (
+          ${pages.ofapiAuthStatus} = ${input.authStatus}
+          or (${input.authStatus} in ('connected', 'reconnected', 'session_expired')
+            and ${pages.ofapiAuthStatus} not in ('connected', 'reconnected', 'session_expired'))
+        )))`,
     ))
     .returning({ id: pages.id });
 
