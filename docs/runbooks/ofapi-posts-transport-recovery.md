@@ -35,9 +35,9 @@ rollout; do not lower the floor to make the canary run.
 
 1. Submit the owner-session `POST /api/v1/admin/ofapi/capture/jobs/:jobId/cancel`
    with `expectedState`, `expectedReasonCode`, `expectedJobRowVersion`, a reason,
-   and `execute: false`. This records an audited dry run but dispatches no OFAPI
+   and `dryRun: true`. This records an audited dry run but dispatches no OFAPI
    request. Verify it says `would_cancel` for the frozen job.
-2. Repeat with `execute: true` and the same CAS. A conflict means re-read; do not
+2. Repeat with `dryRun: false` and the same CAS. A conflict means re-read; do not
    substitute a different job or force a reset. The cancelled row and its
    attempts remain and its slot becomes available.
 3. Explicitly request only that page's `posts` scope using the existing owner
@@ -75,3 +75,17 @@ Stop repeated recovery if the route still fails. Keep the five-attempt bound;
 use the new evidence to repair the cause. A body cap or timeout change needs its
 own evidence and must respect request deadlines, job lease TTL and the remaining
 page/call allowance. Never silently fall back to another route or replay sends.
+
+A slow request can outlast the safe-read retry delay. Retry deadlines must be
+derived when the transport or capture-commit failure is recorded, using the same
+clock sample as that transition. A deadline captured before HTTP can already be
+in the past when a 65-second body timeout occurs, causing the repository to
+reject the transition and leave recovery to lease expiry. Preserve the strict
+future-deadline check and fix the caller's clock; do not relax the invariant or
+extend request timeouts to hide it.
+
+If persisting the indeterminate transition itself fails, the worker logs
+`OFAPI capture settlement failed; awaiting lease recovery` with job/attempt IDs
+and the error class only. It does not repeat settlement or dispatch in that
+chunk. The existing planner recovers the expired lease after the database is
+available; verify the job reaches bounded retry or its existing terminal bound.

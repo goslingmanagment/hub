@@ -1986,6 +1986,154 @@ describe("OFAPI capture correctness repository", () => {
     expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("idle");
   });
 
+  it.each(["transport", "capture_uncommitted"] as const)(
+    "schedules %s retry after a posts request lasting longer than the retry delay",
+    async (failure) => {
+      if (!testDb) throw new Error("test database required");
+      const fixture = await createPostCaptureExecutionFixture({
+        responses: [], maxCalls: 2, maxPages: 2,
+      });
+      if (failure === "capture_uncommitted") {
+        await testDb.pool.query(`
+          create function test_reject_slow_posts_capture() returns trigger
+          language plpgsql as $$ begin
+            if new.kind = 'ofapi.posts_page.v1' then
+              raise exception 'scripted capture commit failure';
+            end if;
+            return new;
+          end $$;
+          create trigger test_reject_slow_posts_capture before insert on observations
+            for each row execute function test_reject_slow_posts_capture();
+        `);
+      }
+      const failedAt = new Date(Date.now() + 65_001);
+      fixture.dispatchGovernedRaw.mockImplementationOnce(async (_context, request) => {
+        if (!await request.beforeDispatch()) throw new Error("dispatch fence missing");
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(failedAt);
+        if (failure === "transport") {
+          throw new OfapiGovernedRequestError("slow body timeout", "post_dispatch", "body_read");
+        }
+        return {
+          status: 200,
+          bodyBytes: postsPage({
+            items: [{ id: "101", postedAt: "2026-08-01T01:00:00.000Z", rawText: "post" }],
+            hasMore: false,
+          }),
+          headers: { "content-type": "application/json" },
+          receivedAt: failedAt,
+        };
+      });
+      try {
+        await expect(executeOfapiCaptureJobChunk(fixture.app, fixture.page.id))
+          .resolves.toMatchObject({ kind: "failed", jobId: fixture.job.id });
+        const job = await getOfapiCaptureJob(testDb.db, fixture.job.id);
+        expect(job).toMatchObject({
+          state: "retry_wait", reasonCode: "indeterminate_safe_read_retry",
+          attemptCount: 1, dispatchCount: 1, spentCredits: 1,
+          consecutiveUncaptured: 1, leaseToken: null,
+        });
+        expect(job!.nextAttemptAt.getTime()).toBe(failedAt.getTime() + 60_000);
+        const attempts = await testDb.pool.query(`
+          select state, credit_state, settled_credits, certainty_resolution,
+                 dispatch_outcome, response_observed_at
+          from ofapi_request_attempts where capture_job_id = $1
+        `, [fixture.job.id]);
+        expect(attempts.rows).toEqual([{
+          state: "indeterminate", credit_state: "settled", settled_credits: 1,
+          certainty_resolution: "safe_read_retry_assumed_billed",
+          dispatch_outcome: failure,
+          response_observed_at: failure === "capture_uncommitted" ? failedAt : null,
+        }]);
+        const ledger = await testDb.pool.query(`
+          select entry.credits, entry.attempt_entry_phase
+          from ofapi_credit_ledger entry
+          join ofapi_request_attempts attempt on attempt.id = entry.attempt_id
+          where attempt.capture_job_id = $1
+        `, [fixture.job.id]);
+        expect(ledger.rows).toEqual([{ credits: 1, attempt_entry_phase: "settlement" }]);
+      } finally {
+        vi.useRealTimers();
+        if (failure === "capture_uncommitted") await testDb.pool.query(`
+          drop trigger if exists test_reject_slow_posts_capture on observations;
+          drop function if exists test_reject_slow_posts_capture();
+        `);
+      }
+    },
+  );
+
+  it.each(["transport", "capture_uncommitted"] as const)(
+    "logs failed %s settlement and recovers it once through lease expiry",
+    async (failure) => {
+      if (!testDb) throw new Error("test database required");
+      const fixture = await createPostCaptureExecutionFixture({
+        responses: [failure === "transport"
+          ? new OfapiGovernedRequestError("scripted timeout", "post_dispatch", "body_read")
+          : postsPage({ items: [], hasMore: false })],
+        maxCalls: 2, maxPages: 2,
+      });
+      const logError = vi.spyOn(fixture.app.logger, "error");
+      await testDb.pool.query(`
+        create function test_reject_posts_settlement() returns trigger
+        language plpgsql as $$ begin
+          raise exception 'scripted settlement failure with private details';
+        end $$;
+        create trigger test_reject_posts_settlement before insert on ofapi_credit_ledger
+          for each row execute function test_reject_posts_settlement();
+        ${failure === "capture_uncommitted" ? `
+          create trigger test_reject_posts_capture before insert on observations
+            for each row execute function test_reject_posts_settlement();
+        ` : ""}
+      `);
+      try {
+        await expect(executeOfapiCaptureJobChunk(fixture.app, fixture.page.id))
+          .resolves.toMatchObject({ kind: "failed", jobId: fixture.job.id });
+        const leased = await getOfapiCaptureJob(testDb.db, fixture.job.id);
+        expect(leased).toMatchObject({ state: "leased", dispatchCount: 0, spentCredits: 0 });
+        const attempts = await testDb.pool.query(`
+          select id, state, credit_state from ofapi_request_attempts where capture_job_id = $1
+        `, [fixture.job.id]);
+        expect(attempts.rows).toEqual([{
+          id: expect.any(String), state: "dispatching", credit_state: "reserved",
+        }]);
+        expect(logError.mock.calls).toEqual([[
+          {
+            jobId: fixture.job.id, attemptId: attempts.rows[0].id,
+            errorName: expect.any(String), recovery: "expired_job_lease",
+          },
+          "OFAPI capture settlement failed; awaiting lease recovery",
+        ]]);
+        expect(JSON.stringify(logError.mock.calls)).not.toContain("private details");
+
+        await testDb.pool.query(`
+          drop trigger test_reject_posts_settlement on ofapi_credit_ledger;
+          drop trigger if exists test_reject_posts_capture on observations;
+        `);
+        const recoveryAt = new Date(leased!.leaseUntil!.getTime() + 1);
+        expect(await recoverStaleOfapiCaptureWork(testDb.db, { now: recoveryAt }))
+          .toEqual({ released: 0, indeterminate: 1, requeued: 0 });
+        expect(await recoverStaleOfapiCaptureWork(testDb.db, { now: recoveryAt }))
+          .toEqual({ released: 0, indeterminate: 0, requeued: 0 });
+        expect(await getOfapiCaptureJob(testDb.db, fixture.job.id)).toMatchObject({
+          state: "retry_wait", reasonCode: "indeterminate_safe_read_retry",
+          dispatchCount: 1, spentCredits: 1, leaseToken: null,
+        });
+        const ledger = await testDb.pool.query(`
+          select credits from ofapi_credit_ledger where attempt_id = $1
+        `, [attempts.rows[0].id]);
+        expect(ledger.rows).toEqual([{ credits: 1 }]);
+        expect(fixture.dispatchGovernedRaw).toHaveBeenCalledTimes(1);
+      } finally {
+        logError.mockRestore();
+        await testDb.pool.query(`
+          drop trigger if exists test_reject_posts_settlement on ofapi_credit_ledger;
+          drop trigger if exists test_reject_posts_capture on observations;
+          drop function if exists test_reject_posts_settlement();
+        `);
+      }
+    },
+  );
+
   it("retries an indeterminate OFAPI posts GET as a billed safe read", async () => {
     if (!testDb) return;
     const fixture = await createPostCaptureExecutionFixture({
