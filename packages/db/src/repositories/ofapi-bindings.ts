@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import type { Database } from "../client.ts";
+import { lockPageSyncStatesForPage } from "./page-sync.ts";
 
 export interface OfapiBindingPage extends Record<string, unknown> {
   id: number;
@@ -146,23 +147,56 @@ export async function checkOfapiCurrentBinding(db: Database, pageId: number | nu
   return row.generation;
 }
 
-export async function markOfapiBindingUnavailable(db: Database, accountId: string, generation: number) {
-  const selected = await db.execute<{ id: number; label: string }>(sql`select p.id,p.label from pages p where p.ofapi_account_id=${accountId}`);
-  const page = selected.rows[0];
-  if (!page) return null;
-  return withOfapiBindingLock(db, page.id, async tx => {
-    const changed = await tx.execute(sql`
-      update pages set ofapi_auth_status='account_not_found',ofapi_auth_changed_at=now(),updated_at=now()
-      where id=${page.id} and ofapi_account_id=${accountId} and ofapi_binding_generation=${generation}
-      returning id
+export type OfapiBindingUnavailableResult = {
+  page: { id: number; label: string };
+  /** true = this call stamped the page and parked its rows; false = the CURRENT binding was already marked
+   * (state and sync-row versions untouched). Either way the caller must run the idempotent incident notify
+   * with `markedAt`: a failed first open/delivery gets its bounded retry, a recovery newer than `markedAt`
+   * suppresses a late notification. null = the response belongs to a stale binding: nothing to do. */
+  changed: boolean;
+  markedAt: Date;
+};
+
+export async function markOfapiBindingUnavailable(
+  db: Database, accountId: string, generation: number,
+): Promise<OfapiBindingUnavailableResult | null> {
+  const selected = await db.execute<{ id: number }>(sql`
+    select p.id from pages p where p.ofapi_account_id=${accountId} and p.platform='onlyfans'`);
+  const pageId = selected.rows[0] ? Number(selected.rows[0].id) : null;
+  if (pageId === null) return null;
+  return withOfapiBindingLock(db, pageId, async tx => {
+    const current = await tx.execute<{ id: number; label: string; auth_status: string | null; changed_at: Date | string | null }>(sql`
+      select p.id, p.label, p.ofapi_auth_status as auth_status, p.ofapi_auth_changed_at as changed_at from pages p
+      where p.id=${pageId} and p.ofapi_account_id=${accountId} and p.ofapi_binding_generation=${generation}
+      for update
     `);
-    if (!changed.rows.length) return null;
+    const page = current.rows[0];
+    if (!page) return null; // stale: replaced or unmapped since the request was issued
+    if (page.auth_status === "account_not_found") {
+      // Already marked for THIS binding: no state, no sync-row versions, no lease churn. The caller still
+      // notifies idempotently with the ORIGINAL marker time.
+      return { page: { id: Number(page.id), label: page.label }, changed: false, markedAt: page.changed_at ? new Date(page.changed_at) : new Date() };
+    }
+    const now = new Date();
+    await tx.execute(sql`
+      update pages set ofapi_auth_status='account_not_found',ofapi_auth_changed_at=${now},updated_at=${now}
+      where id=${pageId} and ofapi_account_id=${accountId} and ofapi_binding_generation=${generation}
+    `);
+    // Same lock order as Pause/Resume before touching the rows (plan 01 relies on it too).
+    await lockPageSyncStatesForPage(tx, pageId);
+    // Park only what auth may own: runnable/running rows without a blocker (lease revoked — that is
+    // how a running job is stopped) and this generation's own auth rows. Foreign blockers
+    // (provider_bad_data, manual_action_required, dependency, …), gate pauses, owner pauses and auth
+    // rows of another or unknown generation keep their owner's marker.
     await tx.execute(sql`
       update page_sync_states set status='paused',blocker_kind='auth',blocker_code='ofapi_account_not_found',
-        blocker_message='OFAPI account binding is unavailable',blocker_ofapi_generation=${generation},blocked_at=now(),
-        leased_seq=null,lease_owner=null,lease_token=null,lease_heartbeat_at=null,lease_expires_at=null,updated_at=now()
-      where page_id=${page.id} and not ofapi_user_paused and (status<>'paused' or blocker_kind='auth')
+        blocker_message='OFAPI account binding is unavailable',blocker_ofapi_generation=${generation},blocked_at=${now},
+        leased_seq=null,lease_owner=null,lease_token=null,lease_heartbeat_at=null,lease_expires_at=null,updated_at=${now}
+      where page_id=${pageId} and not ofapi_user_paused and (
+        (status <> 'paused' and blocker_kind is null)
+        or (blocker_kind = 'auth' and blocker_ofapi_generation = ${generation})
+      )
     `);
-    return { ...page, id: Number(page.id) };
+    return { page: { id: Number(page.id), label: page.label }, changed: true, markedAt: now };
   });
 }

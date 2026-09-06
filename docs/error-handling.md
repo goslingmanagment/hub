@@ -376,8 +376,11 @@ call sites therefore own the same no-secret/no-provider-diagnostic rule.
 
 An HTTP 404 with the vendor machine code `account_not_found` is a missing
 provider binding; a message/resource 404 is not. Capture the response first,
-mark only the matching current generation unavailable, park its eligible
-streams and open the existing OFAPI auth incident. Later reads and commands
+mark only the matching current generation unavailable, park runnable streams
+with lease revocation and re-stamp only auth blockers of that generation. Foreign
+blockers, legacy auth and owner/gate pauses remain untouched. Repeated missing
+responses rewrite no state; they retry only the idempotent incident notification
+using the original marker time. Responses for replaced bindings do nothing. Later reads and commands
 fail locally until verified recovery. DB-only queries and computations remain
 available. A late response or lifecycle event from a retired binding cannot
 change the replacement's auth state.

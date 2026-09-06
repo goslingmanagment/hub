@@ -98,9 +98,10 @@ export function ofapiCredentialPolicy(db: Database, config: AppContext["config"]
         payloadHash: createHash("sha256").update(body).digest(), idempotencyKey: randomUUID(),
       });
       if (!ofapiAccountNotFound(status, body)) return;
-      const page = await markOfapiBindingUnavailable(db, accountId, generation);
-      if (page) await notifyOfapiAuthIncident({ db, config, logger }, {
-        platformAccountId: page.id, pageLabel: page.label, platform: "onlyfans", authStatus: "account_not_found",
+      const marked = await markOfapiBindingUnavailable(db, accountId, generation);
+      if (marked) await notifyOfapiAuthIncident({ db, config, logger }, {
+        platformAccountId: marked.page.id, pageLabel: marked.page.label, platform: "onlyfans",
+        authStatus: "account_not_found", occurredAt: marked.markedAt,
       });
     },
     credentialPolicy: { expectedTeamSlug: config.ofapiExpectedTeamSlug ?? null },

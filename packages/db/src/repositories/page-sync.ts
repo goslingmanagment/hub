@@ -1200,6 +1200,14 @@ async function listPageSyncStatesInternal(
   return result.rows.map((row) => normalizePageSyncState(row));
 }
 
+/** Locks every page_sync_states row of one page in the ORDER pausePageSync / pausePageSyncForAuth /
+ * resumePageSync / resetPageSync take them (listPageSyncStatesInternal with lock:true). Any writer that
+ * reads blocker state and then rewrites it must hold these locks for the whole read-decide-write, or a
+ * concurrent Resume can move a row between the read and the write (#132/4, PLAN AUDIT 01). */
+export async function lockPageSyncStatesForPage(db: Database, pageId: number) {
+  return listPageSyncStatesInternal(db, { pageId }, { lock: true });
+}
+
 export async function listPageSyncStates(
   db: Database,
   input?: {

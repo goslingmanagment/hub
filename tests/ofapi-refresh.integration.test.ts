@@ -3,13 +3,14 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import {
   createModel, createOnlyFansPage, ensurePageSyncStates, pausePageSync, findHistoricalPageByOfapiAccountId,
   findPageByOfapiAccountId, getOfapiBindingPage, setPageOfapiAccountId,
-  upsertOfapiWebhookConfig, getOfapiWebhookConfig, listNotificationIncidents,
+  upsertOfapiWebhookConfig, getOfapiWebhookConfig, listNotificationIncidents, markOfapiBindingUnavailable,
 } from "@agency_hub_core/db";
 import { encryptJson } from "@agency_hub_core/shared";
 import { agentObservationPayloadAllowed } from "../apps/runtime/src/modules/agent-read/index.ts";
 import { createOfapiClient } from "../apps/runtime/src/services/ofapi.ts";
 import { ofapiCredentialPolicy } from "../apps/runtime/src/services/ofapi-credential-policy.ts";
 import { applyOfapiAccountHealthEvent } from "../apps/runtime/src/services/ofapi-account-health.ts";
+import { notifyOfapiAuthIncident } from "../apps/runtime/src/services/notification-incidents.ts";
 import { planErasure } from "../apps/runtime/src/services/erasure/index.ts";
 import { refreshOfapiBinding } from "../apps/runtime/src/services/ofapi-binding-refresh.ts";
 import { OFAPI_WEBHOOK_EVENTS, registerOfapiWebhook } from "../apps/runtime/src/services/ofapi-webhooks.ts";
@@ -186,5 +187,68 @@ describe("OFAPI restricted roster evidence", () => {
     const row = (await testDb!.pool.query("select id,received_at,payload from observations where kind='ofapi_admin_accounts'")).rows[0];
     expect(row.payload).toMatchObject({ status: 403, body: "", redaction: { withheld: "non_200_status" } });
     await expect(refreshOfapiBinding(app, { ...bindingInput(), identityEvidence: { id: Number(row.id), receivedAt: row.received_at.toISOString() } }, 1)).rejects.toThrow("withheld");
+  });
+});
+
+
+describe("OFAPI missing-binding blocker ownership", () => {
+  it("TRIAGE 8 preserves an unrelated blocker through missing-account recovery", async () => {
+    await ensurePageSyncStates(app.db, { pageId });
+    await testDb!.pool.query("update page_sync_states set status='blocked',blocker_kind='manual_action_required',blocker_code='unrelated_manual_block' where page_id=$1 and stream='posts'", [pageId]);
+    expect(await markOfapiBindingUnavailable(app.db, "acct_old", generation)).toMatchObject({ changed: true });
+    const before = (await testDb!.pool.query("select status,blocker_code from page_sync_states where page_id=$1 and stream='posts'", [pageId])).rows[0];
+    expect(before).toEqual({ status: "blocked", blocker_code: "unrelated_manual_block" });
+    const preview = await refreshOfapiBinding(app, bindingInput(), 1);
+    await refreshOfapiBinding(app, { ...bindingInput(), dryRun: false, previewToken: preview.previewToken }, 1);
+    expect((await testDb!.pool.query("select status,blocker_code from page_sync_states where page_id=$1 and stream='posts'", [pageId])).rows[0]).toEqual(before);
+    expect(await markOfapiBindingUnavailable(app.db, "acct_old", generation)).toBeNull();
+  });
+
+  it.each([
+    ["blocked", "provider_bad_data", generation => generation, false],
+    ["blocked", "dependency", generation => generation, false],
+    ["paused", "retired", generation => generation, false],
+    ["paused", "auth", () => null, false],
+    ["paused", "auth", generation => generation - 1, false],
+    ["paused", "auth", generation => generation, true],
+    ["paused", null, () => null, false],
+  ] as Array<[string, string | null, (generation: number) => number | null, boolean]>)("preserves %s/%s rows outside its ownership", async (status, kind, bindingGeneration, userPaused) => {
+    await ensurePageSyncStates(app.db, { pageId });
+    await testDb!.pool.query("update page_sync_states set status=$2,blocker_kind=$3,blocker_code='original',blocker_ofapi_generation=$4,ofapi_user_paused=$5 where page_id=$1 and stream='posts'", [pageId, status, kind, bindingGeneration(generation), userPaused]);
+    const query = "select status,blocker_kind,blocker_code,blocker_ofapi_generation,updated_at::text from page_sync_states where page_id=$1 and stream='posts'";
+    const before = (await testDb!.pool.query(query, [pageId])).rows;
+    await markOfapiBindingUnavailable(app.db, "acct_old", generation);
+    expect((await testDb!.pool.query(query, [pageId])).rows).toEqual(before);
+  });
+
+  it("revokes runnable leases once and keeps preview versions stable on repeated 404", async () => {
+    await ensurePageSyncStates(app.db, { pageId });
+    await testDb!.pool.query("update page_sync_states set status='running',blocker_kind=null,lease_token='token',lease_owner='worker',leased_seq=1,lease_expires_at=now()+interval '5 minutes' where page_id=$1 and stream='subscribers'", [pageId]);
+    const first = await markOfapiBindingUnavailable(app.db, "acct_old", generation);
+    expect(first).toMatchObject({ changed: true });
+    expect((await testDb!.pool.query("select status,lease_token,blocker_code from page_sync_states where page_id=$1 and stream='subscribers'", [pageId])).rows[0])
+      .toEqual({ status: "paused", lease_token: null, blocker_code: "ofapi_account_not_found" });
+    const query = "select stream,updated_at::text from page_sync_states where page_id=$1 order by stream";
+    const before = (await testDb!.pool.query(query, [pageId])).rows;
+    const preview = await refreshOfapiBinding(app, bindingInput(), 1);
+    expect(await markOfapiBindingUnavailable(app.db, "acct_old", generation)).toEqual({ ...first, changed: false });
+    expect((await testDb!.pool.query(query, [pageId])).rows).toEqual(before);
+    await refreshOfapiBinding(app, { ...bindingInput(), dryRun: false, previewToken: preview.previewToken }, 1);
+  });
+
+  it("retries incident opening for repeated responses and suppresses a late notify after recovery", async () => {
+    const first = await markOfapiBindingUnavailable(app.db, "acct_old", generation);
+    expect(first).not.toBeNull();
+    const policy = ofapiCredentialPolicy(app.db, app.config, app.logger);
+    await policy.onAccountResponse("acct_old", generation, 404, '{"code":"account_not_found"}');
+    const open = () => listNotificationIncidents(app.db, { status: "open" }).then(rows => rows.filter(row => row.kind === "ofapi_auth"));
+    expect(await open()).toHaveLength(1);
+    const recoveredAt = new Date(first!.markedAt.getTime() + 1000);
+    await lifecycle("acct_old", "reconnected", recoveredAt);
+    const notify = (occurredAt: Date) => notifyOfapiAuthIncident(app, { platformAccountId: pageId, pageLabel: "refresh-of", platform: "onlyfans", authStatus: "account_not_found", occurredAt });
+    await notify(first!.markedAt);
+    expect(await open()).toHaveLength(0);
+    await notify(new Date(recoveredAt.getTime() + 1000));
+    expect(await open()).toHaveLength(1);
   });
 });

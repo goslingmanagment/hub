@@ -531,9 +531,10 @@ async function executeCurrentOfapiCommand(
     return { status: "confirmed" as const, commandId: command.id };
   } catch (error) {
     if (error instanceof OfapiApiError && ofapiAccountNotFound(error.status, error.body)) {
-      const page = await markOfapiBindingUnavailable(bindingLockDb, command.ofapiAccountId, command.bindingGeneration);
-      if (page) await notifyOfapiAuthIncident({ ...app, db: bindingLockDb }, {
-        platformAccountId: page.id, pageLabel: page.label, platform: "onlyfans", authStatus: "account_not_found",
+      const marked = await markOfapiBindingUnavailable(bindingLockDb, command.ofapiAccountId, command.bindingGeneration);
+      if (marked) await notifyOfapiAuthIncident({ ...app, db: bindingLockDb }, {
+        platformAccountId: marked.page.id, pageLabel: marked.page.label, platform: "onlyfans",
+        authStatus: "account_not_found", occurredAt: marked.markedAt,
       });
     }
     const failure = classifyOfapiCommandFailure(error);

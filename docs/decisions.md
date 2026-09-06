@@ -254,6 +254,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 251 | OFAPI collection policy and UI are separate stages | Owner separates backend S-POL from frontend S-UI, each with independent implementation and acceptance. Saved mockups are non-normative references outside the implementation plan. New collection still requires both applicable stages plus explicit staged activation; existing Hub design tokens remain authoritative. |
 | 252 | OFAPI binding custody, credential adoption and free balance | S0/S1/S4a and minimum S5 use verified creator identity, a preview bound to current generation, durable historical attribution and narrow recovery. Expected team comes from independent configuration; unknown access fails closed for writes. The optional balance probe uses free usage. Code acceptance and live acceptance stay separate. |
 | 253 | OFAPI roster capture | Account roster is restricted identity evidence; typed projection excludes session material before capture and preserves identity conflicts |
+| 254 | OFAPI missing binding | Park only unblocked work and current-generation auth; repeated 404 preserves state versions and retries notifications with the original marker time |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -10776,3 +10777,14 @@ through projection, including alias precedence and unsafe/non-finite numeric IDs
 Finite unsafe IDs remain numeric so the parser rejects them; non-finite values
 become invalid strings rather than JSON null. The kind is restricted for tiering
 and explicitly refused by Agent Read. Other captures retain their existing contract.
+
+
+## Missing OFAPI bindings preserve blocker ownership (2026-09-06)
+
+**Decision #254:** Missing-account handling may park runnable work without a
+blocker and auth rows of the same binding generation, revoking their leases.
+It preserves unrelated blockers, legacy generations and owner/gate pauses.
+State changes use the page binding lock and ordered sync-row locks. A repeated
+404 returns the original marker timestamp without rewriting versions; callers
+still use existing bounded incident delivery retries. Recovery tombstones can
+suppress a late notification by that original occurrence time.
