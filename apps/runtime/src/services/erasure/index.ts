@@ -1255,6 +1255,7 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
   });
 
   const deletions: Array<[string, string]> = [
+    ["ofapi_chat_queue_state", "page_id"],
     ["ofapi_read_snapshots", "page_id"],
     ["ofapi_collection_schedules", "page_id"],
     // Rows that RESTRICT parents below go first.

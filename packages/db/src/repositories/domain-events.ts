@@ -54,6 +54,8 @@ export interface ProjectionCheckpointInput {
 }
 
 const PROJECTION_ONLY_DOMAIN_EVENT_TYPES = new Set([
+  "ofapi.post_like_observed",
+  "ofapi.chat_queue_observed",
   "ofapi.read_snapshot_observed",
   "ofapi.typed_snapshot_observed",
   "message.material_observed",

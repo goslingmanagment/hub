@@ -64,6 +64,8 @@ import { describe, expect, it } from "vitest";
 const SANCTIONED_DELETER_FILES = [
   // Decision266: owner-invoked reset of replayable OFAPI snapshot projection only.
   "apps/runtime/src/services/projections/ofapi-read-snapshots.ts",
+  // S11a owner rebuild deletes only reconstructible vendor queue heads.
+  "apps/runtime/src/services/projections/ofapi-content-events.ts",
   // S8: rebuilds derived rows from domain events; never deletes captured artifacts or jobs.
   "apps/runtime/src/services/projections/ofapi-typed-exports.ts",
   "apps/runtime/src/cli.ts",

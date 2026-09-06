@@ -155,3 +155,4 @@ export * from "./repositories/ofapi-banned-words.ts";
 export * from "./repositories/ofapi-read-collections.ts";
 
 export * from "./repositories/ofapi-typed-exports.ts";
+export { saveOfapiChatQueueState, readOfapiContentEvents } from './repositories/ofapi-content-events.ts';

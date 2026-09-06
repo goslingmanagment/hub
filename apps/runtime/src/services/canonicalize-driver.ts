@@ -584,6 +584,17 @@ async function runFamily(
               totals.appended += result.appended; totals.deduped += result.deduped;
               continue;
             }
+            if (inputs.some(event => event.type === "ofapi.post_like_observed" || event.type === "ofapi.chat_queue_observed")) {
+              const { isDmArchiveScopeFenced, tryAcquireDmArchiveWriterFenceLock } = await import("@agency_hub_core/db");
+              const materialAt = new Date(Math.min(row.receivedAt.getTime(), ...inputs.flatMap(event => [event.data.sourceAt,event.data.queueDate].filter((value):value is string=>typeof value === "string").map(value=>Date.parse(value)).filter(Number.isFinite))));
+              const result = await app.db.transaction(async tx => {
+                if (!await tryAcquireDmArchiveWriterFenceLock(tx,targetAccountId!)) throw new Error("Erasure is in progress");
+                if (await isDmArchiveScopeFenced(tx,{pageId:targetAccountId!,refs:inputs.map(event=>event.fanIdentityRef),materialAt})) return {appended:0,deduped:0};
+                return appendMixedDomainEvents(tx,targetAccountId!,inputs,checkpoint);
+              });
+              totals.appended += result.appended; totals.deduped += result.deduped;
+              continue;
+            }
             const result = family.projectionOnly === true
               ? await appendProjectionOnlyDomainEvents(app.db, targetAccountId!, inputs, checkpoint)
               : family.mixed === true

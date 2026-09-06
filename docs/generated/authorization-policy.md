@@ -22,7 +22,7 @@ body remain handler-checked and are noted per route in the service layer.
 | `agentKey` | Agent Read Plane key only; no human principal is admitted |
 | `any` | any authenticated principal except an agent key |
 
-## Routes (239)
+## Routes (240)
 
 | Method | Path | Route key | Kind | Roles | Page scope |
 | --- | --- | --- | --- | --- | --- |
@@ -68,6 +68,7 @@ body remain handler-checked and are noted per route in the service layer.
 | POST | `/api/v1/admin/ofapi/collection/jobs/:id/resume` | `ofapiCollectionJobResume` | `owner-session` | — | — |
 | POST | `/api/v1/admin/ofapi/collection/preview` | `ofapiCollectionPreview` | `owner-session` | — | — |
 | GET | `/api/v1/admin/ofapi/collection/results` | `ofapiReadCollectionsGet` | `owner-session` | — | — |
+| GET | `/api/v1/admin/ofapi/content/events` | `ofapiContentEventsGet` | `owner-session` | — | — |
 | GET | `/api/v1/admin/ofapi/credits/daily` | `adminOfapiCreditsDaily` | `owner-session` | — | — |
 | GET | `/api/v1/admin/ofapi/credits/ledger` | `adminOfapiCreditsLedger` | `owner-session` | — | — |
 | GET | `/api/v1/admin/ofapi/credits/ledger.csv` | `adminOfapiCreditsLedgerCsv` | `owner-session` | — | — |

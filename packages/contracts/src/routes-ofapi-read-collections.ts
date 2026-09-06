@@ -1,6 +1,14 @@
 import { z } from "zod";
 import { errorResponseSchema } from "./primitives.ts";
 export const ofapiReadCollectionsRouteSchemas = {
+  ofapiContentEventsGet: {
+    auth: { kind: "owner-session" }, tags:["ops"], summary:"Read retained queue progress and post-like evidence without vendor egress",
+    querystring:z.object({pageId:z.coerce.number().int().positive(),limit:z.coerce.number().int().min(1).max(100).optional()}),
+    response:{200:z.object({pageId:z.number(),source:z.literal("onlyfansapi"),coverage:z.literal("observed_events_only"),
+      queues:z.array(z.object({queueId:z.string(),phase:z.enum(["updated","finished"]),queueDate:z.string().nullable(),state:z.record(z.string(),z.unknown()),observedAt:z.string(),sourceEventId:z.string(),sourceObservationId:z.string(),timeBasis:z.literal("receipt")})),
+      likes:z.array(z.object({postRef:z.string(),fanRef:z.string(),state:z.enum(["active","undone"]),sourceAt:z.string(),observedAt:z.string(),sourceEventId:z.string(),sourceObservationId:z.string(),timeBasis:z.literal("provider")})),
+      unattributedLikes:z.number(),queuesHasMore:z.boolean(),likesHasMore:z.boolean()}),400:errorResponseSchema,401:errorResponseSchema,403:errorResponseSchema},
+  },
   ofapiReadCollectionsGet: {
     auth: { kind: "owner-session" },
     tags: ["ops"],

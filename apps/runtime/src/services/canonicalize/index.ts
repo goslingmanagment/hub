@@ -1,3 +1,4 @@
+import { OFAPI_CONTENT_KINDS, canonicalizeOfapiContentObservation } from "./ofapi-content-events.ts";
 import { canonicalizeOfapiReadObservation, canParseOfapiReadObservation } from "./ofapi-read-collections.ts";
 // Canonicalizer registry (Stage 8). The driver job and the parse_version
 // sweep dispatch on observation.source through this table; a family's
@@ -132,6 +133,8 @@ export const CANONICALIZER_FAMILIES: readonly CanonicalizerFamily[] = [
     kinds: [...OFAPI_WEBHOOK_CANONICALIZED_KINDS],
     version: OFAPI_WEBHOOK_CANONICALIZER_VERSION,
     canonicalize: canonicalizeOfapiWebhookObservation,
+    canParse: observation => !(OFAPI_CONTENT_KINDS as readonly string[]).includes(observation.kind) || canonicalizeOfapiContentObservation(observation).length > 0,
+    mixed: true,
   },
   {
     // Creator posts are projection material, not client-deliverable news.

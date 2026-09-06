@@ -269,6 +269,8 @@ appends a row here in the same change (family law: updated-in-change).
 | 262 | OFAPI lifecycle receipt and ordering | Signed no-key ephemeral receipts keep local identities; subscription/account material follows provider time; health retries independently of settlement; upload/export hooks remain durable progress evidence without paid follow-ups. |
 | 265 | OFAPI delivery recovery and event application | Numeric attempt facts survive provider retention; remote redelivery has durable one-attempt intent and separate outcomes; local replay targets retained evidence; optional groups use saved policy and verified remote readback. |
 
+| 271 | OFAPI content webhook evidence | Queue progress and post likes canonicalize from raw captures into rebuildable, source-fenced projections; local owner report never claims delivery or complete liker coverage. |
+
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
 - **Frontend app shell (12/12):** React SPA with Vite and TanStack Query fits a desktop-only internal dashboard without SSR overhead.
@@ -11123,3 +11125,19 @@ row/byte/credit caps, source and policy CAS, and verified old/new export identit
 An uncertain retry stays fenced. Neither cancellation nor retry rewrites prior
 charges. The documented list status-filter enum omits the cancellation endpoint's
 `cancelled` result; captured vendor state is retained. No new migration or flag.
+
+
+## 271. OFAPI queue progress and post-like evidence are local projection material
+
+`posts.liked` keeps notification/post/actor namespaces separate: nested actor only,
+explicit trusted post-link attribution, no fabricated link or unlike semantics.
+`chat_queue.updated/finished` retain vendor flags under their own queue ID. A
+finished queue can also be cancelled; no queue event confirms a recipient send.
+Raw captures canonicalize into projection-only events and atomic checkpoints.
+The engagement projector owns post_likes; ofapi_content_events owns queue heads.
+Both have registered rebuilds and material-time erasure fences, including old
+facts recollected after erasure. The owner Collection report reads retained rows,
+shows source/freshness/observed-only coverage, and initiates no provider work.
+Optional engagement remains off until the owner applies that webhook group.
+
+[Shapes, discrepancies, validation and owner steps](runbooks/ofapi-content-events.md).
