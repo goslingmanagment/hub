@@ -34,6 +34,8 @@ export function actionFieldValues(fields: OfapiActionField[], values: FormValues
   const body: FormValues = {};
   for (const field of fields) {
     const value = values[field.name];
+    if (field.allowEmptyText && value === null) { body[field.name] = ""; continue; }
+    if (field.allowEmptyText && typeof value === "string" && !value.trim()) throw new Error(`Заполните поле «${field.label}» или явно выберите очистку текста`);
     if (value === undefined || (typeof value === "string" && !value.trim() && !field.required && field.defaultValue !== "")) continue;
     switch (field.type) {
       case "money": body[field.name] = cents(value); break;
@@ -47,7 +49,7 @@ export function actionFieldValues(fields: OfapiActionField[], values: FormValues
       case "strings": case "numbers": case "money-list": {
         // Newlines/semicolons or comma+space separate monetary values; a decimal
         // comma within one amount remains a decimal comma, never two amounts.
-        const separator = field.type === "money-list" ? /[\n;]+|,\s+/ : /[\n,]+/;
+        const separator = field.listSeparator === "newline" ? /\r?\n/ : field.type === "money-list" ? /[\n;]+|,\s+/ : /[\n,]+/;
         const items = Array.isArray(value) ? value : String(value).split(separator).map(item => item.trim()).filter(Boolean);
         body[field.name] = field.type === "money-list" ? items.map(cents) : field.type === "numbers" ? items.map(item => numeric(item, field.label)) : items;
         break;
@@ -69,6 +71,7 @@ export function buildOfapiAction(form: OfapiActionFormDefinition, pageId: number
 
 /** Amounts in frozen intents are cents; the owner review always renders USD. */
 export function reviewActionFieldValue(field: OfapiActionField, value: unknown): unknown {
+  if (field.allowEmptyText && value === "") return "Текст будет очищен";
   const usd = (amount: unknown) => {
     if (typeof amount !== "number" || !Number.isSafeInteger(amount)) return "Некорректная сумма";
     const cents = BigInt(amount);

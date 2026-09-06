@@ -17,6 +17,7 @@ export function OfapiActionFields({ fields, values, update, disabled }: { fields
   return <>{fields.map(field => {
     const value = values[field.name];
     const explicitEmpty = Array.isArray(value) && value.length === 0;
+    const explicitEmptyText = field.allowEmptyText === true && value === null;
     const label = <span className="text-sm font-medium">{field.label}{field.required ? " *" : ""}</span>;
     let input;
     if (field.type === "boolean") {
@@ -32,12 +33,12 @@ export function OfapiActionFields({ fields, values, update, disabled }: { fields
       const rows = Array.isArray(value) ? value as FormValues[] : [];
       input = <div className="min-w-0 space-y-3">{rows.map((row, index) => <div key={index} className="min-w-0 space-y-2 rounded-lg border border-border p-3"><OfapiActionFields fields={field.fields ?? []} values={row} disabled={disabled} update={next => put(field.name, rows.map((existing, i) => i === index ? next : existing))} /><button type="button" className={buttonClass} disabled={disabled} onClick={() => put(field.name, rows.filter((_, i) => i !== index))}>Убрать строку {index + 1}</button></div>)}<button type="button" className={buttonClass} disabled={disabled} onClick={() => put(field.name, [...rows, initialActionValues(field.fields ?? [])])}>Добавить строку</button></div>;
     } else if (["textarea", "strings", "numbers", "money-list"].includes(field.type)) {
-      input = <textarea className={fieldClass} rows={field.type === "textarea" ? 4 : 3} value={Array.isArray(value) ? value.join("\n") : String(value ?? "")} disabled={disabled} required={field.required && !explicitEmpty} onChange={event => put(field.name, event.target.value)} aria-label={field.label} />;
+      input = <textarea className={fieldClass} rows={field.type === "textarea" ? 4 : 3} value={Array.isArray(value) ? value.join("\n") : String(value ?? "")} disabled={disabled || explicitEmptyText} required={field.required && !explicitEmpty && !explicitEmptyText} onChange={event => put(field.name, event.target.value)} aria-label={field.label} />;
     } else {
       const type = field.type === "datetime" ? "datetime-local" : field.type === "number" || field.type === "money" ? "number" : "text";
       input = <input className={fieldClass} type={type} step={field.type === "money" ? "0.01" : field.type === "datetime" ? "1" : "any"} value={String(value ?? "")} disabled={disabled} required={field.required} onChange={event => put(field.name, event.target.value)} aria-label={field.label} />;
     }
-    return <div key={field.name} className="min-w-0 space-y-1.5">{label}{input}{field.help && <p className="break-words text-xs text-text-muted">{field.help}</p>}{field.type === "datetime" && <p className="text-xs text-text-muted">Часовой пояс: {Intl.DateTimeFormat().resolvedOptions().timeZone}. В OnlyFans передаётся время UTC.</p>}{field.type === "money-list" && <p className="text-xs text-text-muted">Например: 5.00 и 10.00 с новой строки. Между суммами можно поставить запятую с пробелом.</p>}{["strings", "numbers", "money-list", "rows"].includes(field.type) && <label className="flex items-start gap-2 text-xs text-text-secondary"><input type="checkbox" checked={explicitEmpty} disabled={disabled} onChange={event => put(field.name, event.target.checked ? [] : undefined)} />Передать пустой список</label>}</div>;
+    return <div key={field.name} className="min-w-0 space-y-1.5">{label}{input}{field.help && <p className="break-words text-xs text-text-muted">{field.help}</p>}{field.allowEmptyText && <label className="flex items-start gap-2 text-xs text-text-secondary"><input type="checkbox" checked={explicitEmptyText} disabled={disabled} onChange={event => put(field.name, event.target.checked ? null : undefined)} />Очистить текст</label>}{field.type === "datetime" && <p className="text-xs text-text-muted">Часовой пояс: {Intl.DateTimeFormat().resolvedOptions().timeZone}. В OnlyFans передаётся время UTC.</p>}{field.type === "money-list" && <p className="text-xs text-text-muted">Например: 5.00 и 10.00 с новой строки. Между суммами можно поставить запятую с пробелом.</p>}{["strings", "numbers", "money-list", "rows"].includes(field.type) && <label className="flex items-start gap-2 text-xs text-text-secondary"><input type="checkbox" checked={explicitEmpty} disabled={disabled} onChange={event => put(field.name, event.target.checked ? [] : undefined)} />Передать пустой список</label>}</div>;
   })}</>;
 }
 function Value({ value, depth = 0 }: { value: unknown; depth?: number }) {

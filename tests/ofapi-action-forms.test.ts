@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { actionDraftMatches, actionFieldValues, buildOfapiAction, createActionAdmissionRegistry, initialActionValues, isUncertainActionFailure, localActionDateTimeToIso, reviewActionFieldValue } from "../apps/dashboard/src/pages/ofapi-actions/form-values.ts";
 import { KernelApiError } from "@kernel/sdk";
 import { ofapiCollectionForms } from "../apps/dashboard/src/pages/ofapi-actions/collection-forms.ts";
+import { ofapiPublishingForms } from "../apps/dashboard/src/pages/ofapi-actions/publishing-forms.ts";
 import type { OfapiActionField } from "../apps/dashboard/src/pages/ofapi-actions/form-types.ts";
 
 vi.mock("../apps/dashboard/src/api/ofapiActions.ts", () => ({ accountActions: {}, useOfapiActions: vi.fn() }));
@@ -106,6 +107,44 @@ describe("owner action form values and review", () => {
     expect(actionDraftMatches(form, 3, { ...values, name: "Edited list" }, command)).toBe(false);
     expect(actionDraftMatches(form, 3, { ...values, listId: "../escape" }, command)).toBe(false);
     expect(command).toMatchObject({ pageId: 3, name: "Chosen list" });
+  });
+
+  it.each([
+    { action: "post_update", targets: { postId: "123" } },
+    { action: "campaign_update", targets: { campaignId: "123", userIds: "789" } },
+  ])("requires an explicit replacement or clear choice for $action text", ({ action, targets }) => {
+    const form = ofapiPublishingForms.find(form => form.action === action)!;
+    const values = { ...initialActionValues(form.fields), ...targets, mediaFiles: "456" };
+    expect(values).not.toHaveProperty("text");
+    expect(() => buildOfapiAction(form, 3, values)).toThrow();
+    for (const text of ["", " \n "]) expect(() => buildOfapiAction(form, 3, { ...values, text })).toThrow("явно выберите очистку");
+    expect(buildOfapiAction(form, 3, { ...values, text: "Keep this caption" })).toMatchObject({ action, text: "Keep this caption", mediaFiles: ["456"] });
+    const cleared = buildOfapiAction(form, 3, { ...values, text: null });
+    expect(cleared).toMatchObject({ action, text: "", mediaFiles: ["456"] });
+    expect(() => buildOfapiAction(form, 3, { ...values, text: null, mediaFiles: undefined })).toThrow();
+    const review = renderToStaticMarkup(createElement(OfapiActionCommandReview, { fields: form.fields, command: cleared }));
+    expect(review).toContain("Текст будет очищен");
+  });
+
+  it("preserves commas within poll choices and the selected quiz answer", () => {
+    const form = ofapiPublishingForms.find(form => form.action === "post_create")!;
+    const command = buildOfapiAction(form, 3, { ...initialActionValues(form.fields), text: "Choose an answer", votingType: "quiz", votingOptions: "Yes, please\r\nNo, thanks", votingCorrectIndex: "1" });
+    expect(command).toMatchObject({ votingOptions: ["Yes, please", "No, thanks"], votingCorrectIndex: 1 });
+    expect(actionFieldValues([field("ids", "strings")], { ids: "123,456\n789" })).toEqual({ ids: ["123", "456", "789"] });
+  });
+
+  it("renders explicit text clearing without accepting an untouched update textarea", () => {
+    const form = ofapiPublishingForms.find(form => form.action === "post_update")!;
+    const text = form.fields.find(field => field.name === "text")!;
+    const untouched = renderFields([text], {});
+    expect(untouched).toContain("Очистить текст");
+    expect(untouched).toMatch(/<textarea[^>]*required=""/);
+    expect(untouched).not.toMatch(/<input[^>]*checked=""/);
+    const cleared = renderFields([text], { text: null });
+    expect(cleared).toMatch(/<textarea[^>]*disabled=""/);
+    expect(cleared).not.toMatch(/<textarea[^>]*required/);
+    expect(cleared).toMatch(/<input[^>]*checked=""/);
+    expect(renderFields([text], { text: "Keep this caption" })).not.toMatch(/<input[^>]*checked=""/);
   });
 
   it("renders frozen money as USD, nested labels as labels and escaped text as text", () => {

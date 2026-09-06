@@ -8,6 +8,7 @@ const screen = field("blockBannedWords", "Проверка запрещённы�
   { value: "strict_ban", label: "Все категории" }, { value: "risky", label: "Рискованные и требующие замены" }, { value: "replace_soften", label: "Требующие замены" },
 ] });
 const text = field("text", "Текст", "textarea", { defaultValue: "", help: "Можно оставить пустым, если выбран материал." });
+const updateText = field("text", "Текст", "textarea", { required: true, allowEmptyText: true, help: "Введите новый текст или скопируйте текущий, чтобы сохранить его. Для удаления текста отдельно выберите «Очистить текст» и укажите материал." });
 const schedule = field("scheduledDate", "Дата и время публикации", "datetime", { help: "Ваше местное время; на сервер отправляется точное время UTC." });
 const saved = field("saveForLater", "Сохранить на потом", "boolean", { help: "Не совмещается с датой публикации." });
 const postFields: OfapiActionField[] = [
@@ -20,7 +21,7 @@ const postFields: OfapiActionField[] = [
   field("fundRaisingTipsPresetCents", "Кнопки чаевых, USD", "money-list", { help: "Суммы через запятую или с новой строки. Не больше цели сбора; целые доллары." }),
   field("votingType", "Опрос или викторина", "select", { options: [{ value: "poll", label: "Опрос" }, { value: "quiz", label: "Викторина" }] }),
   field("votingDue", "Срок голосования, дней", "select", { options: [1, 3, 7, 30].map(value => ({ value, label: String(value) })) }),
-  field("votingOptions", "Варианты ответа", "strings", { help: "От 2 до 10 вариантов, по одному на строку." }),
+  field("votingOptions", "Варианты ответа", "strings", { listSeparator: "newline", help: "От 2 до 10 вариантов, по одному на строку. Запятые внутри ответа сохраняются." }),
   field("votingCorrectIndex", "Номер правильного ответа", "number", { help: "Только для викторины. Первый вариант имеет номер 0." }),
 ];
 const listHelp = "ID пользовательских списков или системные имена fans, recent, following, rebill_off, tagged. Участников списка определяет OnlyFans при выполнении.";
@@ -60,7 +61,7 @@ const campaignTarget = [id("campaignId", "ID массовой рассылки")
 
 export const ofapiPublishingForms: OfapiActionFormDefinition[] = [
   form("post_create", "Создать пост", "Посты", "Публикация сейчас, по расписанию или в «Сохранить на потом». Документация провайдера не определяет цену при создании поста; платная публикация этим действием не заявлена.", [...postFields, preview]),
-  form("post_update", "Изменить пост", "Посты", "Изменение опубликованного или запланированного поста. Заполненные списки материалов и меток заменяют текущие; незаполненные поля не отправляются.", [...postTarget, ...postFields, field("priceCents", "Цена поста, USD", "money", { help: "0 или от 3 до 100 целых USD; при ненулевой цене нужен материал." })]),
+  form("post_update", "Изменить пост", "Посты", "Изменение опубликованного или запланированного поста. Текст нужно передать заново или явно очистить. Заполненные списки материалов и меток заменяют текущие; остальные незаполненные поля не отправляются.", [...postTarget, ...postFields.map(item => item.name === "text" ? updateText : item), field("priceCents", "Цена поста, USD", "money", { help: "0 или от 3 до 100 целых USD; при ненулевой цене нужен материал." })]),
   form("post_delete", "Удалить пост", "Посты", "Удаляет выбранный пост в OnlyFans.", postTarget),
   form("post_archive", "Архивировать пост", "Посты", "Переносит выбранный пост в архив OnlyFans.", postTarget),
   form("post_unarchive", "Вернуть пост из архива", "Посты", "Возвращает выбранный пост из архива.", postTarget),
@@ -91,7 +92,7 @@ export const ofapiPublishingForms: OfapiActionFormDefinition[] = [
     field("subscribedWithinLastDays", "Подписались за последние N дней", "number", { help: "От 1 до 30, включая сегодня. Этот фильтр несовместим с расписанием и «Сохранить на потом»." }),
     field("rfTag", "ID авторов контента", "strings"), field("rfPartner", "ID партнёров в release forms", "strings"), field("rfGuest", "ID гостей в release forms", "strings"), saved,
   ]),
-  form("campaign_update", "Изменить массовую рассылку", "Рассылки", "Меняет текст, получателей, материалы, цену или дату существующей рассылки. Получателей нужно выбрать явно. Исключения и фильтр недавней подписки для изменения не документированы.", [...campaignTarget, ...campaignFields]),
+  form("campaign_update", "Изменить массовую рассылку", "Рассылки", "Меняет текст, получателей, материалы, цену или дату существующей рассылки. Текст нужно передать заново или явно очистить; получателей выбрать явно. Исключения и фильтр недавней подписки для изменения не документированы.", [...campaignTarget, ...campaignFields.map(item => item.name === "text" ? updateText : item)]),
   form("campaign_cancel", "Отменить или отозвать рассылку", "Рассылки", "Удаляет запланированную рассылку либо отзывает недавно отправленную, если OnlyFans ещё разрешает это. Купленный контент остаётся доступен покупателям.", campaignTarget),
   form("queue_list", "Посмотреть очередь публикаций", "Очередь", "Посты и массовые сообщения за выбранный период. Один запрос возвращает до 100 элементов; полный список не гарантируется.", [...windowFields, field("limit", "Количество элементов", "number", { defaultValue: 20 }), field("types", "Типы публикаций", "strings", { options: [{ value: "post", label: "Посты" }, { value: "chat", label: "Рассылки" }] })]),
   form("queue_counts", "Посчитать публикации в очереди", "Очередь", "Количество постов и сообщений по датам в выбранном часовом поясе.", windowFields),
