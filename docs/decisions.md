@@ -260,6 +260,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 257 | OFAPI permanent custody | Every initial binding checks historical ownership; ambiguous refs are quarantined, lifecycle is gated after ownership, and dry-run never mutates incidents |
 | 258 | OFAPI audience quality | Unverified empty sweeps preserve membership and freshness; checkpoint hold drives both status readers until certification |
 | 259 | OFAPI capture uses vendor transport | Binding authorizes the account; Hub-to-OFAPI capture and gateway reads use the canonical vendor-direct route with one client pacing claim. Page-proxy availability cannot gate OFAPI capture; bounded diagnostics preserve dispatch certainty and omit arbitrary causes. |
+| 260 | OFAPI accounting evidence | Complete pages count once; exact zero-delta receipts remain append-only evidence; signed corrections reach attributed read models. Activity forecasts exclude visibly reported unverified balance drift. Local command refusals are not provider HTTP responses. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -10879,3 +10880,36 @@ Recovery uses the existing #246/#249 owner cancel and per-page posts request,
 one job at a time, retaining attempts and anchors. Balance above the effective
 floor plus unsettled reservations is an independent prerequisite. See
 `docs/runbooks/ofapi-posts-transport-recovery.md` for checks and proof of success.
+
+## OFAPI accounting separates activity from balance inference (2026-09-06)
+
+**Decision #260:** A balance discontinuity is evidence of a changed balance,
+not proof of an external payment or charge. Historical credit observations do
+not establish credential/team continuity. Their inferred `external` and `refill`
+rows remain in the append-only audit history; changing a key does not authorize
+deleting those rows or inventing a historical provider receipt. Runway and refill
+recommendations use net recorded activity and expose the excluded unverified
+residual and its window. The UI distinguishes reconciliation from an actual
+payment, qualifies estimates by their source, and does not turn a residual-only
+window into assurance that further funding is unnecessary. Live balance,
+admission, reservation and conservative burn-monitor policy remain independent
+of this forecast basis.
+
+Provider certainty is evidence even when actual credits equal the reservation.
+The capture ledger records that zero-delta confirmation and any reported balance
+once under the existing attempt/phase identity. It does not become another
+request or expense, and zero-credit observations do not extend the observed
+spending window. Signed provider corrections participate in period totals and
+page, operation and chatter attribution; a cached zero-cost response cannot
+retain its original estimated charge in one view while being free in another.
+
+Capture completion counts the final accepted page/items in the same fenced
+transaction as terminal settlement. Retry, blocked-parser recovery and replay
+retain their existing cursor ownership. Historical terminal facts/results stay
+authoritative for old completed jobs whose raw progress counters omitted their
+last page; this change does not claim a historical counter backfill.
+
+Command credential/binding/auth preconditions use typed local evidence and no
+fabricated vendor HTTP status in the outbox result. A real provider rejection
+keeps its HTTP evidence. One claimed attempt remains terminal on local refusal;
+neither a key change nor this classification authorizes automatic send replay.
