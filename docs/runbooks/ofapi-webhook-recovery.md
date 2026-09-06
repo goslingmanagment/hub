@@ -7,7 +7,7 @@ the owner saves/applies them.
 
 ## Behavior and evidence
 
-Migration 0157 stores each numeric provider attempt ID separately; delivery UUID
+Migration 0158 stores each numeric provider attempt ID separately; delivery UUID
 groups ordinary retries and never deduplicates attempt facts. Both failures and
 successes are collected. Original attempt, manual-redelivery UUID, provider
 outcome, retained receipt, projection status and canonical parser version remain
@@ -45,7 +45,7 @@ New provider events after the erasure keep the existing material-time semantics.
 
 ## Owner rollout
 
-1. Deploy migration 0157 and the API/worker/dashboard together after checks.
+1. Deploy migration 0158 and the API/worker/dashboard together after checks.
    Deploying does not enable collection or change remote subscriptions.
 2. Open OFAPI credits → “События и восстановление”. Read the last day manually
    to verify history permissions and inspect provider → receipt → parser →

@@ -11,6 +11,7 @@ const queryMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../apps/dashboard/src/api/queries.ts", () => queryMocks);
+vi.mock("../apps/dashboard/src/pages/settings/OfapiWebhookRecovery.js", () => ({ OfapiWebhookRecovery: () => null }));
 
 import { OfapiCreditsPage } from "../apps/dashboard/src/pages/OfapiCreditsPage.tsx";
 

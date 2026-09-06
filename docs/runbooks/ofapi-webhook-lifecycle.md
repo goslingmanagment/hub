@@ -51,7 +51,7 @@ repair or production registration was run in this batch.
 
 ## Rollout and local recovery
 
-1. Apply forward-only migration 0155, then deploy the code. It marks existing
+1. Apply forward-only migration 0157, then deploy the code. It marks existing
    accepted account/async lifecycle rows with no projection bookkeeping as
    pending; canonicalizer v4 reuses existing message/money/auth dedup keys.
 2. Keep optional groups off. Verify no new projection failures and that no-key
@@ -95,6 +95,6 @@ SQL state, canonical replay and transaction rollback after journal settlement.
 The integrator records final `pnpm check` and suite results in the PR.
 
 No new business-fact table is introduced. The source journal and domain event
-retention/erasure inventory remain authoritative; 0155 adds only a resource
+retention/erasure inventory remain authoritative; 0157 adds only a resource
 lookup index and projection-retry bookkeeping backfill. The lifecycle summary
 omits raw bodies, download URLs and reusable upload material.
