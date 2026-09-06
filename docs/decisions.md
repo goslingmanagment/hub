@@ -10913,3 +10913,10 @@ Command credential/binding/auth preconditions use typed local evidence and no
 fabricated vendor HTTP status in the outbox result. A real provider rejection
 keeps its HTTP evidence. One claimed attempt remains terminal on local refusal;
 neither a key change nor this classification authorizes automatic send replay.
+
+The chatter response retains the nonnegative legacy estimate fields accepted by
+already-installed SDK validators. Additive net fields carry the exact signed
+amounts, including negative correction windows. Only the legacy representation
+is floored at zero; ledger facts and the new net fields are not. Existing clients
+continue to accept the response, while displaying negative windows requires
+adoption of the additive net fields.
