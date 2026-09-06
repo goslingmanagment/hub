@@ -1,3 +1,4 @@
+import { isOfapiTypedExportProfile, ofapiTypedExportCategory, type OfapiCollectionContext } from "@agency_hub_core/shared";
 import { settleOfapiCollectionRequest } from "@agency_hub_core/db";
 import { assertOfapiCollectionAllowed, OfapiCollectionPolicyError } from "@agency_hub_core/db";
 import { createHash } from "node:crypto";
@@ -8,6 +9,7 @@ import {
   blockOfapiCaptureJobLease,
   captureOfapiAttemptResponse,
   getComposableOfapiMessageCoverageProof,
+  getOfapiCaptureJob,
   leaseNextOfapiCaptureJob,
   loadOfapiCaptureObservation,
   markObservationParsed,
@@ -1192,13 +1194,18 @@ async function parseCapturedJob(
 export async function executeOfapiCaptureJobChunk(
   app: AppContext,
   pageId: number,
+  typedExportJobId?: string,
 ): Promise<OfapiCaptureChunkResult> {
-  if (!isOfapiBackgroundCaptureRunnable(app.config)) {
+  const selected = typedExportJobId ? await getOfapiCaptureJob(app.db, typedExportJobId) : null;
+  const explicitExport = selected?.pageId === pageId && selected.kind === "account_export"
+    && isOfapiTypedExportProfile(selected.target.profile) && typeof selected.target.collectionJobId === "string";
+  if ((typedExportJobId && !explicitExport) || (!explicitExport && !isOfapiBackgroundCaptureRunnable(app.config))) {
     return { kind: "idle", pageId, jobId: null };
   }
   const job = await leaseNextOfapiCaptureJob(app.db, {
     pageId,
     leaseOwner: `sync-page-executor:${process.pid}`,
+    ...(explicitExport ? { exactJobId: typedExportJobId! } : {}),
     leaseTtlMs: JOB_LEASE_TTL_MS,
   });
   if (!job) {
@@ -1324,8 +1331,11 @@ export async function executeOfapiCaptureJobChunk(
     return { kind: "blocked", pageId, jobId: job.id };
   }
 
+  const collectionContext: OfapiCollectionContext | undefined = isOfapiTypedExportProfile(job.target.profile) && typeof job.target.collectionJobId === "string"
+    ? { category: ofapiTypedExportCategory(job.target.profile), purpose: "one_off", jobId: job.target.collectionJobId, reservedCredits: requestPlan.reservedCredits }
+    : undefined;
   try {
-    await assertOfapiCollectionAllowed(app.db, { pageId: job.pageId, operation: requestPlan.operation });
+    await assertOfapiCollectionAllowed(app.db, { pageId: job.pageId, operation: requestPlan.operation, ...(collectionContext ? { context: collectionContext } : {}) });
   } catch (error) {
     if (!(error instanceof OfapiCollectionPolicyError)) throw error;
     await blockJob(app, job, error.reason, error.message);
@@ -1426,6 +1436,7 @@ export async function executeOfapiCaptureJobChunk(
     try {
       raw = await app.ofapi.dispatchGovernedRaw({
         pageId: job.pageId,
+        ...(collectionContext ? { collectionContext } : {}),
         dispatcher: egress.dispatcher,
         egressKey: egress.egressKey,
       }, {
@@ -1441,7 +1452,7 @@ export async function executeOfapiCaptureJobChunk(
         timeoutMs: requestPlan.timeoutMs,
         maxResponseBytes: requestPlan.maxResponseBytes,
         beforeDispatch: async () =>
-          isOfapiBackgroundCaptureRunnable(app.config) &&
+          (explicitExport || isOfapiBackgroundCaptureRunnable(app.config)) &&
           await markOfapiAttemptDispatching(app.db, {
             attemptId: reservation.attemptId,
             fenceToken: reservation.fenceToken,

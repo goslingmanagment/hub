@@ -197,6 +197,7 @@ export const WRITTEN_OBSERVATION_KINDS: readonly WrittenObservationKind[] = [
     source: "ofapi_capture",
     writer: "services/ofapi-capture-jobs.ts",
   },
+  { kind: "ofapi.typed_export_artifact.v1", source: "ofapi_capture", writer: "services/ofapi-typed-exports.ts" },
   { kind: "ofapi.posts_page.v1", source: "ofapi_capture", writer: "services/ofapi-capture-jobs.ts" },
   {
     kind: "ofapi.capture_completed.v1",
@@ -595,6 +596,11 @@ export const OFF_SWEEP_OBSERVATION_CLAIMANTS: readonly {
     justification:
       "Deliberately absent from CANONICALIZER_FAMILIES (canonicalize/fansly-replay.ts "
       + "says so in its header): it is flag-driven backfill, not steady-state sweep work.",
+  },
+  {
+    id: "OFAPI_TYPED_EXPORT_MATERIALIZATION",
+    kinds: ["ofapi.typed_export_artifact.v1"],
+    justification: "The owner import transaction verifies frozen account, row, window and checksum contracts and materializes typed export rows and visitor days directly. Invalid bytes remain immutable parse evidence.",
   },
   {
     id: "OFAPI_CAPTURE_MATERIALIZATION",

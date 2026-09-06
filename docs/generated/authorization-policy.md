@@ -22,7 +22,7 @@ body remain handler-checked and are noted per route in the service layer.
 | `agentKey` | Agent Read Plane key only; no human principal is admitted |
 | `any` | any authenticated principal except an agent key |
 
-## Routes (230)
+## Routes (236)
 
 | Method | Path | Route key | Kind | Roles | Page scope |
 | --- | --- | --- | --- | --- | --- |
@@ -79,8 +79,14 @@ body remain handler-checked and are noted per route in the service layer.
 | POST | `/api/v1/admin/ofapi/export-quotes/:jobId/cancel` | `adminOfapiExportQuoteCancel` | `owner-session` | — | — |
 | POST | `/api/v1/admin/ofapi/export-quotes/:jobId/capture-artifact` | `adminOfapiExportArtifactCapture` | `owner-session` | — | — |
 | POST | `/api/v1/admin/ofapi/export-quotes/:jobId/reconcile-create` | `adminOfapiExportCreateReconcile` | `owner-session` | — | — |
+| GET | `/api/v1/admin/ofapi/exports` | `ofapiTypedExportList` | `session` | — | — |
+| POST | `/api/v1/admin/ofapi/exports` | `ofapiTypedExportCreate` | `owner-session` | — | — |
+| POST | `/api/v1/admin/ofapi/exports/:jobId/approve` | `ofapiTypedExportApprove` | `owner-session` | — | — |
+| POST | `/api/v1/admin/ofapi/exports/:jobId/artifact` | `ofapiTypedExportArtifact` | `owner-session` | — | — |
+| GET | `/api/v1/admin/ofapi/exports/:jobId/rows` | `ofapiTypedExportRows` | `session` | — | — |
 | GET | `/api/v1/admin/ofapi/key-scope` | `ofapiKeyScopeGet` | `owner-session` | — | — |
 | POST | `/api/v1/admin/ofapi/key-scope` | `ofapiKeyScopeApply` | `owner-session` | — | — |
+| GET | `/api/v1/admin/ofapi/profile-visitors` | `ofapiProfileVisitorsGet` | `session` | — | — |
 | GET | `/api/v1/admin/ofapi/spend/comparison` | `adminOfapiSpendComparison` | `owner-session` | — | — |
 | POST | `/api/v1/admin/ofapi/vendor-usage` | `ofapiVendorUsageRefresh` | `owner-session` | — | — |
 | GET | `/api/v1/admin/ofapi/webhook` | `adminOfapiWebhookStatus` | `owner-session` | — | — |

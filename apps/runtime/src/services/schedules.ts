@@ -1,3 +1,4 @@
+import { ensureOfapiTypedExportQueue, ensureOfapiTypedExportSchedule } from "./ofapi-typed-export-worker.ts";
 import type { PgBoss } from "pg-boss";
 
 import { ensureAgentHydrationQueue, ensureAgentHydrationSchedule } from "./agent-hydration.ts";
@@ -51,6 +52,7 @@ export async function registerAllSchedules(
   await ensureOfapiPendingReconcileQueue(boss, createdQueues);
   await ensureOfapiCommandQueues(boss, createdQueues);
   await ensureOfapiDmAnalyticsQueues(boss, createdQueues);
+  await ensureOfapiTypedExportQueue(boss, createdQueues);
   await ensureDbDiskUsageQueue(boss, createdQueues);
   await ensureObservationsPartitionQueue(boss, createdQueues);
   await ensureCapturePayloadParityQueue(boss, createdQueues);
@@ -77,6 +79,7 @@ export async function registerAllSchedules(
     ensureOfapiPendingReconcileSchedule(boss),
     ensureOfapiCommandSchedules(boss),
     ensureOfapiDmAnalyticsSchedules(boss),
+    ensureOfapiTypedExportSchedule(boss),
     ensureDbDiskUsageSchedule(boss),
     ensureObservationsPartitionSchedule(boss),
     ensureCapturePayloadParitySchedule(boss),

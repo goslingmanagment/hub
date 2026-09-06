@@ -3,6 +3,7 @@ import { OFAPI_EXTENDED_COMMAND_KINDS } from "@agency_hub_core/shared";
 import { ofapiExtendedCommandOptions } from "./ofapi-extended-commands.ts";
 import { ofapiVendorRouteSchemas } from "./routes-ofapi-vendor.ts";
 import { ofapiReadCollectionsRouteSchemas } from "./routes-ofapi-read-collections.ts";
+import { ofapiExportRouteSchemas } from "./routes-ofapi-exports.ts";
 import { ofapiCollectionRouteSchemas } from "./routes-ofapi-collection.ts";
 import {
   PERIOD_OPTIONS,
@@ -3837,7 +3838,7 @@ export const ofapiExportQuoteCreateResponseSchema = z.object({
   status: z.enum(["would_create", "would_coalesce", "created", "coalesced"]),
   jobId: z.string().uuid().nullable(),
   pageId: intId,
-  profile: z.enum(["pilot_chats", "fleet_tail"]),
+  profile: z.enum(["pilot_chats", "fleet_tail", "profile_visitors", "fans", "tracking_links", "trial_links", "smart_links"]),
   targetHash: z.string().regex(/^[0-9a-f]{64}$/),
   state: ofapiExportQuoteJobStateSchema.nullable(),
   reasonCode: z.string().nullable(),
@@ -3901,7 +3902,7 @@ export const ofapiExportArtifactCaptureResponseSchema = z.object({
 export const ofapiExportQuoteStatusResponseSchema = z.object({
   jobId: z.string().uuid(),
   pageId: intId,
-  profile: z.enum(["pilot_chats", "fleet_tail"]),
+  profile: z.enum(["pilot_chats", "fleet_tail", "profile_visitors", "fans", "tracking_links", "trial_links", "smart_links"]),
   targetHash: z.string().regex(/^[0-9a-f]{64}$/),
   state: ofapiExportQuoteJobStateSchema,
   reasonCode: z.string().nullable(),
@@ -5527,6 +5528,7 @@ export const routeSchemas = {
   ...ofapiBannedWordRouteSchemas,
   ...ofapiVendorRouteSchemas,
   ...ofapiReadCollectionsRouteSchemas,
+  ...ofapiExportRouteSchemas,
   ...ofapiCollectionRouteSchemas,
   ...agentRouteSchemas,
   ...agentKeyAdminRouteSchemas,

@@ -252,6 +252,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 249 | An explicit posts request is the manual action | `POST /admin/sync/trigger {scope: posts}` — the explicit per-page operator action — now clears a `manual_action_required` block on the posts stream (`clearPageSyncManualActionBlock`, that blocker kind only) BEFORE recording the request, so the request lands on a runnable row. Production 2026-09-04: after #128's cancel/resolve the streams stayed `blocked` with the old `ofapi_capture_job_*` codes because `resumePageSync` only lifts `paused` and nothing ever cleared a manual block; the explicit request the code itself calls "an explicit per-page operator action" was a no-op on exactly the state it exists for. `provider_bad_data`/`dependency` blocks are untouched. The posts handler also forgets an owner-cancelled pending job (checkpoint still named it) and seeds a fresh one through the ordinary slot path. |
 | 250 | OFAPI UI inherits the existing Anthropic-inspired Hub design | Owner requirement for the OFAPI refresh: use the current dashboard theme, typography, spacing and shared components across collection controls and other new OFAPI screens. The concrete source is globals.css plus Settings and OFAPI Credits; token reuse and visual consistency are acceptance criteria. |
 | 263 | OFAPI collection admission | New collectors default off; page/default CAS policies supersede the closed legacy baseline. Physical reservations separate background, interactive and bounded jobs; pauses retain checkpoints and paid responses. |
+| 267 | Typed OFAPI exports | Owner bounded quote/start/download/import profiles preserve row identity, immutable checksums and source-specific daily visitors; no collector enabled on rollout. |
 | 251 | OFAPI collection policy and UI are separate stages | Owner separates backend S-POL from frontend S-UI, each with independent implementation and acceptance. Saved mockups are non-normative references outside the implementation plan. New collection still requires both applicable stages plus explicit staged activation; existing Hub design tokens remain authoritative. |
 | 252 | OFAPI binding custody, credential adoption and free balance | S0/S1/S4a and minimum S5 use verified creator identity, a preview bound to current generation, durable historical attribution and narrow recovery. Expected team comes from independent configuration; unknown access fails closed for writes. The optional balance probe uses free usage. Code acceptance and live acceptance stay separate. |
 | 253 | OFAPI roster capture | Account roster is restricted identity evidence; typed projection excludes session material before capture and preserves identity conflicts |
@@ -11073,3 +11074,42 @@ Raw `ofapi.collection_read_response.v1` observations are canonicalized by a regi
 `GET /admin/ofapi/collection/results` is an owner-only, database-only SDK report. Expired fan rows combine captured contactability with locally stored prior spend and last fan reply, without sending anything or overwriting local notes. The separate OnlyFans `ofapi_financial_snapshots` Agent dataset requires `read:datasets` and `read:money`, retains the normal page-grant boundary and exposes source/metric/window/unit/coverage fields. Unknown numeric semantics remain `provider_number`; they are never converted into a money claim. Existing Fansly datasets remain platform-restricted as before.
 
 All new categories ship off. Scheduled jobs are created only from explicitly scheduled non-baseline policies. Owner rollout, exact supported paths, examples and vendor discrepancies are in `docs/runbooks/ofapi-read-collections.md`. No production enabling or paid probes are part of this change.
+
+## 267. Typed OFAPI export profiles and daily visitors
+
+Date: 2026-09-06. Extends decision #263, implementing S8 core of
+`docs/plans/2026-09-05-ofapi-coverage-refresh.md`.
+
+Owner-created single-page exports use explicit columns for profile visitors,
+fans, tracking links, trial links and smart links. Creating a vendor quote always
+sets `auto_start=false`. A separate CAS approval authorizes a single start under
+the frozen task call, credit, byte and row ceilings. Unknown pricing is accepted
+only for visitors, whose closed UTC day range bounds account-day rows; the other
+profiles require a captured quote. The existing chat pilot approval remains
+unchanged. The dedicated minute sweep leases exact typed job IDs and does not
+need or enable the legacy background capture flag. Free quote/status reads count
+against the task request cap; pauses prevent new physical requests while retained
+responses remain parseable. Terminal billing replaces estimated start billing
+idempotently, including an actual vendor overrun.
+
+Vendor artifact downloads permit only HTTPS documented S3 endpoints and the
+frozen team/export CSV path, pin public DNS answers, refuse redirects and bound
+streamed bytes while hashing. Reviewed owner CSV upload remains a fallback.
+Immutable bytes precede parsing. Account, columns, row identity, delivered count,
+window and checksum contracts must pass before projections or successful import.
+Rejected artifacts remain available as evidence. Accepted rows append projection-only
+domain events and populate the serving tables atomically; the registered
+`ofapi_typed_exports` projection rebuilds them without resetting job authority. Page erasure explicitly covers
+all new projections/artifacts and policy jobs/requests/settings.
+
+Visitors are daily account aggregates. CSV averages and REST chart duration
+remain distinct vendor fields with unspecified units. Null measurements and
+missing dates never become zeros; subscriber/user/guest categories are not
+assumed disjoint. REST materialization certifies only one-day requests and keeps
+total/users/guests sources separately. Other exports certify item presence, not
+continuous fan history or Hub financial totals. API GETs read saved state only;
+owner mutation and assigned-page team-lead reads are enforced server-side.
+
+The vendor list/cancel/retry action extension is the follow-up S8b commit: retry
+creates another auto-started export and requires fresh bounded owner authority.
+No production configuration or vendor spending is authorized by this decision.
