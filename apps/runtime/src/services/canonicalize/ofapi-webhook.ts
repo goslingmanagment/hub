@@ -6,6 +6,9 @@
 // decision #80) — the waiting parse_version-0 observations are exactly the
 // replay customers the capture-now-parse-later design promised.
 
+import { ofapiAccountLifecycleTime, OFAPI_ASYNC_LIFECYCLE_EVENT_TYPES, lifecycleTimestamp } from "../ofapi-lifecycle-contract.ts";
+import { parseOfapiAsyncLifecycle } from "../ofapi-async-lifecycle.ts";
+
 import {
   asDate,
   asNumber,
@@ -25,7 +28,7 @@ import {
 // renewal observations backfill as subscription.renewed; everything already
 // canonicalized dedupes via domain_event_keys). W5.3's sweep cursor must be
 // live before this deploys (it is — #130) so the replay can't starve the head.
-export const OFAPI_WEBHOOK_CANONICALIZER_VERSION = 3;
+export const OFAPI_WEBHOOK_CANONICALIZER_VERSION = 4;
 
 export const OFAPI_WEBHOOK_CANONICALIZED_KINDS: ReadonlySet<string> = new Set([
   "messages.received",
@@ -36,6 +39,9 @@ export const OFAPI_WEBHOOK_CANONICALIZED_KINDS: ReadonlySet<string> = new Set([
   "transactions.new",
   "subscriptions.new",
   "subscriptions.renewed",
+  "subscriptions.expired",
+  "accounts.disconnected",
+  ...OFAPI_ASYNC_LIFECYCLE_EVENT_TYPES,
   "users.online",
   "users.offline",
   "accounts.connected",
@@ -90,7 +96,7 @@ function messageEvent(
  *  the event type and dedup-key family carry the phase. */
 function subscriptionEvent(
   observation: CanonicalizableObservation,
-  phase: "started" | "renewed",
+  phase: "started" | "renewed" | "ended",
 ): CanonicalEventDraft[] {
   const payload = envelopePayload(observation);
   if (!payload) {
@@ -106,7 +112,8 @@ function subscriptionEvent(
   if (!fanId) {
     return [];
   }
-  const occurredAt = asDate(payload.createdAt, observation.receivedAt);
+  if (phase === "ended" && !lifecycleTimestamp(payload.expiredAt)) return [];
+  const occurredAt = asDate(phase === "ended" ? payload.expiredAt : payload.createdAt, observation.receivedAt);
   return [{
     type: `subscription.${phase}`,
     occurredAt,
@@ -114,6 +121,7 @@ function subscriptionEvent(
     data: {
       subType: asString(payload.subType),
       notificationId: asString(payload.id),
+      ...(phase === "ended" ? { expiredAt: occurredAt.toISOString(), periodIdentity: asString(payload.id) } : {}),
     },
     schemaVersion: 1,
     dedupKey: `sub:${phase}:${fanId}:${occurredAt.toISOString()}`,
@@ -123,6 +131,19 @@ function subscriptionEvent(
 export function canonicalizeOfapiWebhookObservation(
   observation: CanonicalizableObservation,
 ): CanonicalEventDraft[] {
+  if ((OFAPI_ASYNC_LIFECYCLE_EVENT_TYPES as readonly string[]).includes(observation.kind)) {
+    const lifecycle = isRecord(observation.payload) ? parseOfapiAsyncLifecycle(observation.kind, observation.payload) : null;
+    if (!lifecycle) return [];
+    return [{
+      type: lifecycle.resourceKind === "data_export" ? "data_export.status_changed" : "media_upload.status_changed",
+      occurredAt: lifecycle.sourceAt ?? observation.receivedAt,
+      data: { resourceId: lifecycle.resourceId, status: lifecycle.status, mediaId: lifecycle.mediaId,
+        mediaReady: lifecycle.mediaReady, creditCost: lifecycle.creditCost,
+        timeBasis: lifecycle.sourceAt ? "provider" : "receipt", artifactAccepted: false },
+      schemaVersion: 1,
+      dedupKey: `ofapi:${lifecycle.resourceKind}:${lifecycle.resourceId}:${lifecycle.status}`,
+    }];
+  }
   switch (observation.kind) {
     case "messages.received":
       return messageEvent(observation, "received");
@@ -256,6 +277,9 @@ export function canonicalizeOfapiWebhookObservation(
       }];
     }
 
+    case "subscriptions.expired":
+      return subscriptionEvent(observation, "ended");
+
     case "subscriptions.new":
       return subscriptionEvent(observation, "started");
 
@@ -296,6 +320,7 @@ export function canonicalizeOfapiWebhookObservation(
       }];
     }
 
+    case "accounts.disconnected":
     case "accounts.connected":
     case "accounts.reconnected":
     case "accounts.session_expired":
@@ -303,13 +328,13 @@ export function canonicalizeOfapiWebhookObservation(
     case "accounts.otp_code_required":
     case "accounts.face_otp_required": {
       const status = observation.kind.slice("accounts.".length);
-      const occurredAt = observation.observedAt ?? observation.receivedAt;
+      const occurredAt = ofapiAccountLifecycleTime(envelopePayload(observation) ?? {}, observation.receivedAt);
       return [{
         type: "account.auth_changed",
         occurredAt,
         data: { event: observation.kind, status },
         schemaVersion: 1,
-        dedupKey: `auth:${status}:${occurredAt.toISOString()}`,
+        dedupKey: `auth:${status}:${(observation.observedAt ?? observation.receivedAt).toISOString()}`,
       }];
     }
 

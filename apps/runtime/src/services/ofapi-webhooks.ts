@@ -33,6 +33,7 @@ import {
   ServiceUnavailableError,
   UnauthorizedError,
 } from "./errors.ts";
+import { OFAPI_OPTIONAL_WEBHOOK_GROUPS } from "./ofapi-lifecycle-contract.ts";
 import { ofapiCredentialPolicy } from "./ofapi-credential-policy.ts";
 import { createOfapiCreditSpendSink } from "./ofapi-credits.ts";
 import { sendOfapiEventProcessJob } from "./ofapi-events.ts";
@@ -65,6 +66,23 @@ export const OFAPI_WEBHOOK_EVENTS = [
   "chat_queue.updated",
   "chat_queue.finished",
 ] as const;
+
+/** Optional billed subscriptions are requested only by an explicit collection-policy apply. */
+export function buildOfapiWebhookEventSet(groups: readonly (keyof typeof OFAPI_OPTIONAL_WEBHOOK_GROUPS)[] = []) {
+  return [...new Set<string>([...OFAPI_WEBHOOK_EVENTS, ...groups.flatMap(group => [...OFAPI_OPTIONAL_WEBHOOK_GROUPS[group]])])];
+}
+
+export async function getOfapiWebhookCollectionState(db: AppContext["db"]) {
+  const config = await getOfapiWebhookConfig(db);
+  const events = config?.events ?? [];
+  return {
+    registrationState: config?.registrationState ?? "unregistered",
+    externalWebhookId: config?.externalWebhookId ?? null,
+    groups: Object.entries(OFAPI_OPTIONAL_WEBHOOK_GROUPS).map(([id, members]) => ({
+      id, events: [...members], enabled: members.every(event => events.includes(event)),
+    })),
+  };
+}
 
 const SIGNATURE_HEX_PATTERN = /^[0-9a-f]{64}$/i;
 const MAX_IDEMPOTENCY_KEY_LENGTH = 255;
@@ -107,7 +125,7 @@ function maskSecret(secret: string) {
 
 /**
  * Receiver path: verify HMAC, dedupe on the idempotency key, journal, enqueue
- * async processing, ack. Stays well under OFAPI's 15s delivery timeout — two
+ * async processing, ack. Stays well under OFAPI's 10s delivery timeout — two
  * indexed statements plus one pg-boss send.
  */
 export async function receiveOfapiWebhook(
@@ -117,6 +135,7 @@ export async function receiveOfapiWebhook(
     rawBody: Buffer;
     signatureHeader: unknown;
     idempotencyKeyHeader: unknown;
+    redeliveryOfHeader?: unknown;
   },
 ): Promise<OfapiWebhookAckResponse> {
   const config = await getOfapiWebhookConfig(app.db);
@@ -141,8 +160,8 @@ export async function receiveOfapiWebhook(
   );
   if (!signatureValid) {
     // A sustained run of these means the registered secret and the stored one have
-    // diverged (e.g. a half-completed rotation) — OFAPI drops deliveries after 5
-    // retries, so this must be loud.
+    // diverged (e.g. a half-completed rotation) — OFAPI drops deliveries after 3
+    // attempts, so this must be loud.
     app.logger.warn({
       idempotencyKey: headerString(input.idempotencyKeyHeader),
       hasSignature: signature !== null,
@@ -150,16 +169,19 @@ export async function receiveOfapiWebhook(
     throw new UnauthorizedError("Invalid webhook signature");
   }
 
-  const idempotencyKey = headerString(input.idempotencyKeyHeader);
-  if (!idempotencyKey || idempotencyKey.length > MAX_IDEMPOTENCY_KEY_LENGTH) {
+  const vendorIdempotencyKey = headerString(input.idempotencyKeyHeader);
+  if (vendorIdempotencyKey && vendorIdempotencyKey.length > MAX_IDEMPOTENCY_KEY_LENGTH) {
     const quarantined = await captureInvalidIdentityOfapiWebhookRaw(app, {
       rawBody: input.rawBody,
       signature: signature!,
-      providedIdempotencyKey: idempotencyKey,
+      providedIdempotencyKey: vendorIdempotencyKey,
     });
     return { received: true, duplicate: quarantined.duplicate };
   }
 
+  // A missing key is classified only AFTER the exact signed bytes commit.
+  // Each allowed ephemeral receipt is distinct, including identical typing pulses.
+  const idempotencyKey = vendorIdempotencyKey ?? `local-receipt:${randomUUID()}`;
   // Capture-before-parse: once the signature is trusted, exact bytes commit
   // before JSON or envelope interpretation. Signed malformed
   // deliveries are quarantined locally and acknowledged, never discarded.
@@ -168,7 +190,9 @@ export async function receiveOfapiWebhook(
     idempotencyKey,
     captureHeaders: {
       signature,
-      idempotencyKey,
+      idempotencyKey: vendorIdempotencyKey ?? "<missing>",
+      identityStatus: vendorIdempotencyKey ? "vendor" : "local_receipt",
+      ...(headerString(input.redeliveryOfHeader) ? { redeliveryOf: headerString(input.redeliveryOfHeader)!.slice(0, 255) } : {}),
     },
   });
   if (!captured.accepted) {
@@ -241,12 +265,15 @@ async function mapOfapiAccountsToPages(app: AppContext, client: OfapiClient) {
 
 export async function registerOfapiWebhook(
   app: AppContext,
-  input: { endpointUrl: string },
+  input: { endpointUrl: string; optionalWebhookGroups?: readonly (keyof typeof OFAPI_OPTIONAL_WEBHOOK_GROUPS)[] },
 ): Promise<OfapiWebhookRegisterResponse> {
   const client = resolveOfapiClient(app);
   const credential = await client.getCredentialPreflight?.();
   if (credential?.status !== "verified") throw new ServiceUnavailableError(`OFAPI credential preflight ${credential?.status ?? "unknown"}`);
   const existing = await getOfapiWebhookConfig(app.db);
+  const desiredEvents = input.optionalWebhookGroups
+    ? buildOfapiWebhookEventSet(input.optionalWebhookGroups)
+    : [...new Set([...OFAPI_WEBHOOK_EVENTS, ...(existing?.events ?? [])])];
   let remoteProof: Parameters<typeof prepareOfapiWebhookRegistration>[1]["remoteProof"];
   if (existing?.registrationState === "stable" && existing.externalWebhookId) {
     if (!client.getWebhook) throw new ServiceUnavailableError("OFAPI remote webhook inspection unavailable");
@@ -269,7 +296,7 @@ export async function registerOfapiWebhook(
     }
     const matches = remote && (remote.url ?? remote.endpoint_url) === input.endpointUrl &&
       remote.enabled === true && Array.isArray(remote.events) &&
-      JSON.stringify([...remote.events].sort()) === JSON.stringify([...OFAPI_WEBHOOK_EVENTS].sort());
+      JSON.stringify([...remote.events].sort()) === JSON.stringify([...desiredEvents].sort());
     remoteProof = { id: existing.externalWebhookId, updatedAt: existing.updatedAt.toISOString(),
       credentialFingerprint: credential.credentialFingerprint, state: !remote ? "missing" : matches ? "match" : "drift" };
   } else if (!existing || (existing.registrationState === "stable" && !existing.externalWebhookId)) {
@@ -287,7 +314,7 @@ export async function registerOfapiWebhook(
   const prepared = await prepareOfapiWebhookRegistration(app.db, {
     operationId: randomUUID(),
     endpointUrl: input.endpointUrl,
-    events: [...OFAPI_WEBHOOK_EVENTS],
+    events: desiredEvents,
     candidateEncryptedSigningSecret: candidateEncryptedSecret,
     ...(remoteProof ? { remoteProof } : {}),
   });
@@ -301,7 +328,7 @@ export async function registerOfapiWebhook(
   const registration = {
     endpointUrl: prepared.kind === "ready" ? prepared.endpointUrl : input.endpointUrl,
     signingSecret,
-    events: prepared.kind === "ready" ? prepared.events : [...OFAPI_WEBHOOK_EVENTS],
+    events: prepared.kind === "ready" ? prepared.events : desiredEvents,
     accountScope: "global" as const,
   };
 

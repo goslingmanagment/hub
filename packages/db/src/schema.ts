@@ -3224,6 +3224,9 @@ export const ofapiWebhookEvents = pgTable(
     rawCaptureIdx: index("ofapi_webhook_events_raw_capture_idx")
       .on(table.id)
       .where(sql`${table.captureState} = 'raw_captured'`),
+    lifecycleResourceIdx: index("ofapi_webhook_lifecycle_resource_idx")
+      .on(sql`(${table.payload}->'payload'->>'id')`, table.eventType, table.id.desc())
+      .where(sql`${table.captureState} = 'accepted' and ${table.projectionStatus} = 'projected'`),
     captureStateCheck: check("ofapi_webhook_events_capture_state_check", sql`
       ${table.captureState} in ('raw_captured', 'accepted', 'quarantined_malformed')
     `),

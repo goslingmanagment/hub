@@ -263,6 +263,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 260 | OFAPI accounting evidence | Complete pages count once; exact zero-delta receipts remain append-only evidence; signed corrections reach attributed read models. Activity forecasts exclude visibly reported unverified balance drift. Local command refusals are not provider HTTP responses. |
 | 261 | OFAPI request audit correctness | Explicit list continuation owns completion; transient credential failure refreshes through one shared preflight; retained financial receipts repair accounting without resending confirmed commands; accepted media IDs never round and gateway required queries fail locally. |
 | 264 | OFAPI vendor usage and key scope | Preserve vendor aggregates independently of ledger; prefer fresh credit headers; CAS declarations bound to server credential fingerprint |
+| 262 | OFAPI lifecycle receipt and ordering | Signed no-key ephemeral receipts keep local identities; subscription/account material follows provider time; health retries independently of settlement; upload/export hooks remain durable progress evidence without paid follow-ups. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -10963,3 +10964,35 @@ regression evidence, source discrepancies and rollout/recovery instructions.
 **Decision #264:** S4b stores bounded free vendor usage reads as independently captured and rebuildable accounting evidence. It does not add vendor aggregates to local ledger spend, infer actor/account attribution for null buckets, or claim historical credential-scope equivalence. Fresh credit headers override potentially cached body metadata; original header/body evidence and conflicts remain durable. A replay/cache marker alone does not prove a price or command success.
 
 S5 represents configured restrictions per exact server credential fingerprint with owner-session CAS and append-only audit. Provider permission CRUD/introspection is not invented: unknown, owner-declared and observed preflight states remain distinct. Operation/account restrictions are enforced before physical dispatch, independently of page/principal ACL and binding/team preflight. Free identity/credit diagnostics remain available. New collectors and production configuration are unchanged until explicitly enabled by the owner. See `docs/runbooks/ofapi-vendor-usage-scope.md`.
+
+**Decision #262 (2026-09-06, OFAPI lifecycle receipt and ordering):**
+
+Valid no-key users.typing/online/offline deliveries are locally identified
+receipts. HMAC verification and exact-byte commit precede the event allowlist;
+non-ephemeral missing identities remain quarantined. A repeated typing body is
+another pulse, not a perpetual body-hash duplicate. Replaying a receipt older
+than five minutes cannot broadcast present typing/presence.
+
+The subscription material writer fences its entire update and page-fan state
+against newer evidence. `subscriptions.expired` uses the provider period end
+and the existing `subscription.ended` vocabulary; a newer renewal owns current
+state while both facts remain in history. Account transitions use
+`disconnected_at` or `latestAuthAttempt` time, with receipt fallback where old
+payloads lack the source. Auth recovery wins an equal-time failure, and current
+binding custody continues to isolate replacements from historical events.
+
+Account health joins the existing independent journal projection bookkeeping.
+State, stream blockers and incident effects share the binding transaction;
+errors escape that transaction and become retryable after journal settlement.
+A minutely bounded sweep or explicit local processing repairs the projection
+without redelivering a paid webhook.
+
+The source journal is also the durable upload/export lifecycle history. All
+nine async lifecycle kinds validate explicit resource identity and account
+scope. Team export hooks attribute to their explicit account_ids and remain
+replayable if a binding is unknown. New canonical events and DB-only export
+status hints expose progress, never artifact import, media readiness or a new
+credit obligation. Terminal conflicts remain visible. New subscriptions remain
+default off; only the owner-applied collection policy changes the remote set.
+
+[Implementation and rollout](runbooks/ofapi-webhook-lifecycle.md).

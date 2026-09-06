@@ -103,7 +103,7 @@ export async function registerIngestRoutes(server: ApiServer, ctx: ApiModuleCont
 
     // No route-level rate limit ON PURPOSE (fast-reply freshness PR1): a 429
     // here drops signed deliveries BEFORE the journal — OFAPI stops retrying
-    // after 5 attempts and the fact is lost. receiveOfapiWebhook already
+    // after 3 attempts and the fact is lost. receiveOfapiWebhook already
     // implements the full target order (HMAC → validate → journal+observation
     // in one tx → 200 incl. duplicates → best-effort boss.send with sweep
     // recovery; journal-tx failure → 5xx retried by OFAPI).
@@ -114,6 +114,7 @@ export async function registerIngestRoutes(server: ApiServer, ctx: ApiModuleCont
         rawBody: Buffer.isBuffer(request.body) ? request.body : Buffer.alloc(0),
         signatureHeader: request.headers.signature,
         idempotencyKeyHeader: request.headers["x-ofapi-idempotency-key"],
+        redeliveryOfHeader: request.headers["x-ofapi-redelivery-of"],
       });
     });
   });

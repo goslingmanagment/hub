@@ -3893,6 +3893,10 @@ export const ofapiExportQuoteStatusResponseSchema = z.object({
     rowsProcessed: z.number().int().nonnegative().nullable(),
     failedDownloads: z.number().int().nonnegative().nullable(),
     artifactPending: z.boolean(),
+    lifecycle: z.object({
+      status: z.string(), receivedAt: isoTimestamp, sourceAt: isoTimestamp.nullable(),
+      eventId: z.number().int().positive(), conflictingTerminal: z.boolean(),
+    }).nullable().optional(),
   }).nullable(),
 });
 

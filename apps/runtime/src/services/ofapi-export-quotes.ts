@@ -1,3 +1,4 @@
+import { getOfapiAsyncLifecycle } from "./ofapi-async-lifecycle.ts";
 import type {
   OfapiExportPilotApprovalBody,
   OfapiExportPilotApprovalResponse,
@@ -422,6 +423,9 @@ export async function getOwnerOfapiExportQuoteStatus(
   const target = parseOfapiExportTarget(job);
   if (!target) throw new ConflictError(`OFAPI export quote job ${jobId} has an invalid target`);
   const cursor = parseOfapiExportCursor(job);
+  const lifecycle = cursor ? await getOfapiAsyncLifecycle(app, {
+    resourceKind: "data_export", resourceId: cursor.vendorExportId, ofapiAccountId: job.ofapiAccountId,
+  }) : null;
   return {
     jobId: job.id,
     pageId: job.pageId,
@@ -451,6 +455,11 @@ export async function getOwnerOfapiExportQuoteStatus(
         rowsProcessed: cursor.rowsProcessed,
         failedDownloads: cursor.failedDownloads,
         artifactPending: cursor.phase === "artifact_pending",
+        lifecycle: lifecycle ? {
+          status: lifecycle.status, receivedAt: lifecycle.receivedAt.toISOString(),
+          sourceAt: lifecycle.sourceAt?.toISOString() ?? null, eventId: lifecycle.eventId,
+          conflictingTerminal: lifecycle.conflictingTerminal,
+        } : null,
       },
   };
 }
