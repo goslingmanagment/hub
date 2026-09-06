@@ -1,7 +1,7 @@
 # OFAPI collection policy and bounded work
 
 S-POL separates a supported API from permission to start collecting. Deploying
-migration 0152 creates revision 0 with no overrides and no new collectors enabled.
+migration 0159 creates revision 0 with no overrides and no new collectors enabled.
 The closed `OFAPI_COLLECTION_LEGACY_OPERATIONS` list keeps pre-existing callers
 under their existing controls until the owner applies a category policy. The
 catalog exposes that list; a new collector being off does not claim to stop those

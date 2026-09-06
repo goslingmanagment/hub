@@ -31,6 +31,7 @@ const creditsQueryMocks = vi.hoisted(() => ({
 vi.mock("../apps/dashboard/src/api/adminOfapiCollection.ts", () => collectionMocks);
 vi.mock("../apps/dashboard/src/api/adminUsers.ts", () => usersMocks);
 vi.mock("../apps/dashboard/src/api/queries.ts", () => creditsQueryMocks);
+vi.mock("../apps/dashboard/src/pages/settings/OfapiWebhookRecovery.js", () => ({ OfapiWebhookRecovery: () => null }));
 
 // sdk.ts drags in @/lib/queryClient (→ @tanstack/react-query); the tab only
 // needs KernelApiError for the 409 instanceof check.
@@ -303,7 +304,7 @@ describe("CollectionTab (static render)", () => {
     // Webhook card is read-only: no switches at all.
     expect(markup).toContain("одна регистрация на все OF-страницы");
     expect(markup).toContain("wh_43…24d");
-    expect(markup).toContain("только чтение");
+    expect(markup).toContain("в текущем наборе");
     expect(markup).not.toContain('role="switch"');
     // Journal summary line.
     expect(markup).toContain("Журнал изменений");
