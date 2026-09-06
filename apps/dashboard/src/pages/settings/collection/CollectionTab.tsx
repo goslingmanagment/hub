@@ -7,6 +7,7 @@ import {
   useAdminOfapiWebhookStatus,
   useOfapiCollectionApply,
   useOfapiCollectionJobCreate,
+  useOfapiCollectionJobResume,
   useOfapiCollectionPreview,
   type OfapiCollectionCategory,
   type OfapiCollectionChangeBody,
@@ -762,7 +763,7 @@ function UsageCard(props: {
           <p className="mt-1 text-[11.5px] leading-snug text-text-muted">
             Сумма дневных лимитов включённых категорий в этом охвате.
             {legacyCategories > 0
-              ? ` Ещё ${legacyCategories} ${ruPlural(legacyCategories, "категория работает", "категории работают", "категорий работают")} по прежним бюджетам (baseline) до первого применения.`
+              ? ` Ещё ${legacyCategories} ${ruPlural(legacyCategories, "категория", "категории", "категорий")} зависят от прежних настроек и бюджетов до первого применения.`
               : ""}
           </p>
           <p className="mt-2 text-[11px] leading-snug text-text-muted" lang="en">
@@ -776,7 +777,7 @@ function UsageCard(props: {
 
 const GROUP_COPY: Record<CategoryGroup, { title: string; hint: string; pausedHint?: string }> = {
   running: {
-    title: "Работает сейчас",
+    title: "Действующая конфигурация",
     hint: "действующая конфигурация, не меняется автоматически",
     pausedHint: "действующая конфигурация, остановлена глобальной паузой",
   },
@@ -826,6 +827,8 @@ function CategoryRow(props: {
   const modeForChip: OfapiCollectionMode | "mixed" = draftEntry ? draftEntry.settings.mode : view.mode;
   const subline = draftEntry
     ? `черновик · было: ${draftEntry.base ? modeLabel(draftEntry.base.mode) : "различалось"}`
+    : !draftEntry && view.sources.includes("legacy_baseline")
+      ? "Режим и лимиты задаёт прежний сборщик"
     : shownSettings && shownSettings.mode !== "off"
       ? describeSettings(shownSettings).split(" · ").slice(1).join(" · ")
       : view.group === "available" && view.supportsToggle
@@ -878,7 +881,7 @@ function CategoryRow(props: {
             ? <ModeChip mode="off" job />
             : view.group === "unavailable"
               ? <span className="text-[12px] text-text-muted">ещё не реализовано</span>
-              : <ModeChip mode={modeForChip} draft={draftEntry !== null} />}
+              : !draftEntry && view.sources.includes("legacy_baseline") ? <span className="text-[12px] text-text-secondary">Прежние настройки</span> : <ModeChip mode={modeForChip} draft={draftEntry !== null} />}
           {subline && <div className="mt-1 text-[11.5px] leading-snug text-text-muted">{subline}</div>}
           {view.group !== "one_off" && view.group !== "unavailable" && (
             <div className="mt-0.5 text-[11px] text-text-muted">{sourceLine}</div>
@@ -1192,12 +1195,14 @@ function SideBox(props: { title: string; children: ReactNode }) {
 }
 
 function JobsCard(props: { snapshot: OfapiCollectionSnapshot; scope: CollectionScope }) {
+  const resume = useOfapiCollectionJobResume();
   const jobs = jobsFor(props.snapshot, props.scope);
   if (jobs.length === 0) return null;
   return (
     <section className={cardClass} aria-labelledby="collection-jobs-heading">
       <div className="flex items-baseline justify-between gap-3 px-4 pt-3.5">
         <h3 id="collection-jobs-heading" className={eyebrowClass}>Разовые задачи</h3>
+        {resume.isError && <p role="alert" className="text-[12px] text-red-700">{errorMessage(resume.error, "Не удалось продолжить задачу")}</p>}
         <span className="text-[12px] text-text-secondary">{jobs.length} {ruPlural(jobs.length, "задача", "задачи", "задач")} · потолки на каждую</span>
       </div>
       <div className="mt-3 overflow-x-auto">
@@ -1219,6 +1224,7 @@ function JobsCard(props: { snapshot: OfapiCollectionSnapshot; scope: CollectionS
                 <td className={tdClass}>
                   <span className="font-medium text-text-primary">{jobStateLabel(job.state)}</span>
                   {job.reason && <div className="mt-0.5 text-[11px] text-text-muted">{job.reason}</div>}
+                  {["paused", "blocked", "budget_exhausted"].includes(job.state) && <button type="button" className={smallButtonClass} disabled={resume.isPending || props.snapshot.backgroundPaused} onClick={() => resume.mutate({ id: job.id, expectedRevision: props.snapshot.revision })}>Продолжить с чекпоинта</button>}
                 </td>
                 <td className={`${tdClass} tabular-nums`}>{jobProgress(job)}</td>
                 <td className={`${tdClass} tabular-nums`}>{utcDateTime(job.createdAt)}</td>

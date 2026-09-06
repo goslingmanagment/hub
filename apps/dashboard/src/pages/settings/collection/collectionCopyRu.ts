@@ -29,7 +29,7 @@ export const CATEGORY_COPY_RU: Record<string, CategoryCopy> = {
   },
   visitors: {
     label: "Посещаемость профиля",
-    why: "Кто заходил на профиль, приток и отток подписчиков",
+    why: "Количество посещений профиля по дням; без списка посетителей",
   },
   tracking_links: {
     label: "Tracking links",

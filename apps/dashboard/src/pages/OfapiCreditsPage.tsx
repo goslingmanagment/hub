@@ -1,3 +1,4 @@
+import { buildSettingsRoute } from "../lib/navigation.js";
 import { OfapiVendorEvidence } from "./settings/OfapiVendorEvidence.js";
 import { Fragment, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router";
@@ -1130,7 +1131,7 @@ export function OfapiCreditsPage() {
   return (
     <div className="mx-auto max-w-6xl px-4 py-6">
       <div className="mb-5">
-        <h1 className="text-xl font-extrabold text-text-primary">Кредиты OFAPI</h1>
+        <div className="flex items-center justify-between gap-4"><h1 className="text-xl font-extrabold text-text-primary">Кредиты OFAPI</h1><Link className="text-sm text-accent" to={buildSettingsRoute("collection")}>Настройки сбора</Link></div>
         <p className="mt-1 text-sm text-text-secondary">
           Предоплаченные кредиты списываются за каждый запрос этого приложения к API OnlyFans —
           синк чатов, отправку сообщений, проверку фанатов. Всё время на странице — UTC.

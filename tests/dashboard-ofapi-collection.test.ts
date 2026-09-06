@@ -12,6 +12,7 @@ const collectionMocks = vi.hoisted(() => ({
   useOfapiCollectionPreview: vi.fn(),
   useOfapiCollectionApply: vi.fn(),
   useOfapiCollectionJobCreate: vi.fn(),
+  useOfapiCollectionJobResume: vi.fn(() => ({ isPending: false, isError: false, mutate: vi.fn() })),
   OFAPI_COLLECTION_QUERY_KEY: ["admin", "ofapi-collection"],
 }));
 
@@ -125,6 +126,7 @@ function catalog(): OfapiCollectionCatalogEntry[] {
     priceUnit: id === "vault_files" ? "calls_and_bytes" : "physical_calls",
     prerequisites: id === "vault_files" ? ["explicit bounded file selection"] : ["active OFAPI page binding"],
     scope: "page",
+    legacyOperations: [],
   }));
 }
 
@@ -266,7 +268,7 @@ describe("CollectionTab (static render)", () => {
 
     expect(markup).toContain("Сбор данных OFAPI");
     // Owner-facing groups in the decided order.
-    expect(markup.indexOf("Работает сейчас")).toBeLessThan(markup.indexOf("Доступно к включению"));
+    expect(markup.indexOf("Действующая конфигурация")).toBeLessThan(markup.indexOf("Доступно к включению"));
     expect(markup.indexOf("Доступно к включению")).toBeLessThan(markup.indexOf("Только разовые задачи"));
     // Baseline categories run under the legacy configuration; new ones are off.
     expect(markup).toContain("Сообщения");
@@ -326,7 +328,7 @@ describe("CollectionTab (static render)", () => {
     expect(markup).toContain("глобальная пауза · режим сохранён");
     expect(markup).toContain("остановлена глобальной паузой");
     // Modes are preserved, not flipped to off.
-    expect(markup).toContain("Расписание");
+    expect(markup).toContain("Прежние настройки");
     expect(markup).toMatch(/<button[^>]*disabled=""[^>]*>Остановить фоновый сбор<\/button>/);
   });
 
@@ -602,13 +604,13 @@ describe("collection model helpers", () => {
       buildCategoryView(snapshot, scope, snapshot.catalog.find((row) => row.id === id)!);
     expect(rowState(view("posts_comments"), false)).toMatchObject({ tone: "off", label: "выключено" });
     expect(rowState(view("core_messages"), true)).toMatchObject({ tone: "danger", label: "остановлено" });
-    expect(rowState(view("core_messages"), false)).toMatchObject({ tone: "ok", label: "работает", detail: "baseline · прежняя конфигурация, не менялась" });
+    expect(rowState(view("core_messages"), false)).toMatchObject({ tone: "muted", label: "прежняя конфигурация", detail: "Активность и лимиты задаёт прежний сборщик" });
     expect(rowState(view("core_audience", { kind: "page", pageId: 9 }), false)).toMatchObject({ tone: "warning", label: "лимит дня достигнут" });
     // Legacy-baseline rows never claim a budget pause: their old budgets still govern.
     const legacyHot = snapshotFixture();
     const row = legacyHot.policies.find((candidate) => candidate.pageId === 7 && candidate.category === "core_payments")!;
     row.usage.reservedCreditsToday = 999;
-    expect(rowState(buildCategoryView(legacyHot, { kind: "page", pageId: 7 }, legacyHot.catalog[1]!), false).label).toBe("работает");
+    expect(rowState(buildCategoryView(legacyHot, { kind: "page", pageId: 7 }, legacyHot.catalog[1]!), false).label).toBe("прежняя конфигурация");
     row.inFlight = 3;
     expect(rowState(buildCategoryView(legacyHot, { kind: "page", pageId: 7 }, legacyHot.catalog[1]!), false)).toMatchObject({ tone: "accent", label: "в работе", detail: "3 запроса в полёте" });
   });
