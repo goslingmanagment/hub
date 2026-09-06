@@ -2,11 +2,12 @@ import { useEffect, useRef, useState } from "react";
 import type { OfapiAction, OfapiActionIntent } from "@agency_hub_core/contracts";
 import { useAdminOfapiCollection } from "@/api/adminOfapiCollection";
 import { accountActions, useOfapiActions } from "@/api/ofapiActions";
+import { ofapiPublishingForms } from "./ofapi-actions/publishing-forms.ts";
 import { ofapiCollectionForms } from "./ofapi-actions/collection-forms.ts";
 import type { OfapiActionField } from "./ofapi-actions/form-types.ts";
 import { actionDraftMatches, buildOfapiAction, createActionAdmissionRegistry, initialActionValues, isUncertainActionFailure, reviewActionFieldValue, type FormValues } from "./ofapi-actions/form-values.ts";
 
-const forms = [...ofapiCollectionForms];
+const forms = [...ofapiCollectionForms, ...ofapiPublishingForms];
 const sections = [...new Set(forms.map(form => form.section))];
 const fieldClass = "w-full min-w-0 rounded-lg border border-border bg-card px-3 py-2 text-sm text-text-primary";
 const buttonClass = "rounded-lg border border-border px-3 py-2 text-sm hover:bg-hover disabled:opacity-40";
@@ -112,6 +113,9 @@ export function OfapiActions() {
     const target = intent;
     void run(() => accountActions[operation](target.id), { id: target.id, pageId: target.pageId, label: forms.find(item => item.action === target.action)?.label ?? target.action, command: target.command, operation });
   }
+  const primaryNames = new Set(["text", "mediaFiles", "previews", "priceCents", "scheduledDate", "saveForLater", "userIds", "userLists"]);
+  const advancedFields = form.fields.length > 8 ? form.fields.filter(field => !field.required && !primaryNames.has(field.name)) : [];
+  const mainFields = form.fields.filter(field => !advancedFields.includes(field));
   const reviewedForm = forms.find(item => item.action === intent?.action);
   const matches = intent !== null && actionDraftMatches(form, pageId, values, intent.command);
   const bindingMatches = intent !== null && pages.some(page => page.id === intent.pageId && page.accountId === intent.accountId);
@@ -127,7 +131,8 @@ export function OfapiActions() {
       <form className="min-w-0 space-y-4 rounded-xl border border-border bg-card p-5" onSubmit={event => { event.preventDefault(); void prepare(); }}>
         <label className="grid gap-2"><span className="text-sm">Действие</span><select className={fieldClass} value={action} disabled={busy} onChange={event => reset(event.target.value)}>{forms.filter(item => item.section === section).map(item => <option key={item.action} value={item.action}>{item.label}</option>)}</select></label>
         <p className="text-sm text-text-secondary">{form.description}</p>
-        <OfapiActionFields fields={form.fields} values={values} disabled={busy} update={next => { setValues(next); setAllowNewAfterUnknown(false); }} />
+        <OfapiActionFields fields={mainFields} values={values} disabled={busy} update={next => { setValues(next); setAllowNewAfterUnknown(false); }} />
+        {advancedFields.length > 0 && <details key={action} className="rounded-lg border border-border p-3"><summary className="cursor-pointer text-sm">Дополнительные параметры ({advancedFields.length})</summary><div className="mt-4 space-y-4"><OfapiActionFields fields={advancedFields} values={values} disabled={busy} update={next => { setValues(next); setAllowNewAfterUnknown(false); }} /></div></details>}
         <button type="submit" disabled={busy || !pageId || pending !== null} className={`${buttonClass} bg-accent text-white`}>{busy ? "Обрабатываем…" : "Проверить действие"}</button>
       </form>
       <section className="min-w-0 space-y-4 rounded-xl border border-border bg-card p-5" aria-label="Результат действия">

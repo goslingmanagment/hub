@@ -4,12 +4,12 @@ import { decryptJsonWithKeyVersion, encryptJson, OFAPI_MIRROR_BUDGET_DEFAULTS } 
 import { checkOfapiCurrentBinding, findPageById, insertAuditEvent, insertObservation, reserveOfapiDayCredits, settleOfapiDayCreditReservation, isDmArchiveScopeFenced, tryAcquireDmArchiveWriterFenceLock, type Database } from "@agency_hub_core/db";
 import { ofapiActionSchema, ofapiActionIntentSchema, type OfapiAction } from "@agency_hub_core/contracts";
 import type { AppContext } from "../bootstrap.ts";
-import { ConflictError, NotFoundError, ServiceUnavailableError } from "./errors.ts";
+import { AppError, BadRequestError, ConflictError, NotFoundError, ServiceUnavailableError } from "./errors.ts";
 import { assertOfapiConfiguredAccess } from "./ofapi-vendor-usage.ts";
 import { createOfapiCreditSpendSink, isOfapiCreditLedgerEnabled } from "./ofapi-credits.ts";
 import { parseResponseMeta, OfapiGovernedRequestError } from "./ofapi.ts";
-import { ofapiActionRequest } from "./ofapi-actions-registry.ts";
-import { ofapiCollectionResultConfirmed } from "./ofapi-actions-collections.ts";
+import { ofapiActionRequest, ofapiActionAdmissionIssue, ofapiActionResultConfirmed } from "./ofapi-actions-registry.ts";
+import { validateOfapiActionMedia, reserveOfapiActionMedia } from "./ofapi-action-media.ts";
 import type { OfapiActionRequest } from "./ofapi-actions-types.ts";
 import { loadObservationPayload } from "./payload-reader.ts";
 import { asRecord } from "./ofapi-payloads.ts";
@@ -90,7 +90,10 @@ export async function prepareOfapiAction(app: AppContext, input: { id: string; c
     if (previous.body_hash !== hash || Number(previous.actor_user_id) !== actorUserId) throw new ConflictError("Action ID already belongs to another request");
     return dto(app, previous);
   }
+  const issue = ofapiActionAdmissionIssue(command, new Date());
+  if (issue) throw new BadRequestError(issue);
   const { page, accountId, generation, request } = await authority(app, command);
+  await validateOfapiActionMedia(app, command, accountId);
   const frozen: Frozen = { command, accountId, generation, credential: fingerprint(app), pageLabel: page.page.label };
   await app.db.transaction(async tx => {
     await erasureGuard(tx as unknown as Database, command, new Date());
@@ -116,10 +119,10 @@ export function classifyOfapiActionResult(command: OfapiAction, request: OfapiAc
   if (status >= 500) return result("indeterminate", null, `vendor_http_${status}`);
   if (status < 200 || status >= 300) return result("rejected", null, `vendor_http_${status}`);
   const root = asRecord(body);
-  if (!root || !("data" in root)) return result("indeterminate", null, "vendor_result_unconfirmed");
-  const data = asRecord(root.data);
-  if (root.error || data?.error || data?.success === false) return result("rejected", null, "vendor_action_rejected");
-  if (!ofapiCollectionResultConfirmed(command, root.data)) return result("indeterminate", null, request.resultKind === "partial" ? "vendor_partial_result_unconfirmed" : "vendor_result_unconfirmed");
+  const data = asRecord(root?.data);
+  const confirmed = ofapiActionResultConfirmed(command, status, body);
+  if (!confirmed && (root?.error || data?.error || data?.success === false)) return result("rejected", null, "vendor_action_rejected");
+  if (!confirmed) return result("indeterminate", null, request.resultKind === "partial" ? "vendor_partial_result_unconfirmed" : "vendor_result_unconfirmed");
   if (request.resultKind === "partial") return result(Object.keys(asRecord(data?.failed) ?? {}).length ? "partial" : "confirmed");
   const remoteId = safeId(data?.id) ?? (typeof data?.id === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(data.id) ? data.id : null);
   return result("confirmed", remoteId);
@@ -179,7 +182,10 @@ async function dispatchCurrentAction(app: AppContext, id: string, actorUserId: n
   const frozen = decrypt<Frozen>(app, intent.body_encrypted);
   const command = ofapiActionSchema.parse(frozen.command);
   await erasureGuard(bindingDb, command, new Date(intent.created_at));
+  const issue = ofapiActionAdmissionIssue(command, new Date());
+  if (issue) throw new ConflictError(issue);
   const { request, accountId } = await authority(app, command, frozen, bindingDb);
+  await validateOfapiActionMedia(app, command, accountId, bindingDb);
   const client = app.ofapi;
   if (!client?.dispatchGovernedRaw || (await client.getCredentialPreflight?.())?.status !== "verified") throw new ServiceUnavailableError("Verified OFAPI transport is unavailable");
   let claimed = false;
@@ -192,12 +198,16 @@ async function dispatchCurrentAction(app: AppContext, id: string, actorUserId: n
       priorityClass: "interactive", deadlineAt: new Date(Date.now() + 65000), maxResponseBytes: 2 * 1024 * 1024,
       beforeDispatch: async () => {
         await authority(app, command, frozen, bindingDb);
+        const issue = ofapiActionAdmissionIssue(command, new Date());
+        if (issue) throw new ConflictError(issue);
+        const tokens = await validateOfapiActionMedia(app, command, accountId, bindingDb);
         return app.db.transaction(async tx => {
           const locked = (await tx.execute<Row>(sql`select * from ofapi_action_intents where id=${id} for update`)).rows[0];
           if (!locked || locked.state !== "prepared") return false;
           const budget = await reserveOfapiDayCredits(tx as unknown as Database, { scope: "global", estimate: request.estimatedCredits,
             budget: app.config.ofapiMirrorGlobalDailyCreditBudget ?? OFAPI_MIRROR_BUDGET_DEFAULTS.globalDailyCreditBudget });
           if (!budget) throw new ServiceUnavailableError("OFAPI daily credit budget exhausted");
+          await reserveOfapiActionMedia(tx as unknown as Database, id, accountId, tokens);
           await tx.execute(sql`update ofapi_action_intents set state='dispatching',dispatched_at=now(),reserved_day=${budget.reservationDay}::date,ledger_enabled=${isOfapiCreditLedgerEnabled(app.config)} where id=${id}`);
           return true;
         }).then(value => { claimed = value; return value; });
@@ -213,7 +223,10 @@ async function dispatchCurrentAction(app: AppContext, id: string, actorUserId: n
   } catch (error) {
     if (claimed) await app.db.execute(sql`update ofapi_action_intents set state='indeterminate',error_code=${error instanceof OfapiGovernedRequestError ? `${error.phase}_${error.reason}` : "local_capture_or_settlement_pending"}
       where id=${id} and state='dispatching'`);
-    if ((await rowById(app, id)).state === "prepared") throw new ServiceUnavailableError("The request was not dispatched; the prepared action is retained");
+    if ((await rowById(app, id)).state === "prepared") {
+      if (error instanceof OfapiGovernedRequestError && error.phase === "pre_dispatch" && error.cause instanceof AppError) throw error.cause;
+      throw new ServiceUnavailableError("The request was not dispatched; the prepared action is retained");
+    }
   }
   return dto(app, await rowById(app, id));
 }

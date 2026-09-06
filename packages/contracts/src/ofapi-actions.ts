@@ -1,8 +1,9 @@
 import { z } from "zod";
+import { ofapiPublishingActionOptions } from "./ofapi-actions-publishing.ts";
 import { ofapiCollectionActionOptions } from "./ofapi-actions-collections.ts";
 
 /** Each batch contributes an explicit schema; clients never submit HTTP paths. */
-export const ofapiActionSchema = z.union(ofapiCollectionActionOptions);
+export const ofapiActionSchema = z.union([...ofapiCollectionActionOptions, ...ofapiPublishingActionOptions]);
 export type OfapiAction = z.infer<typeof ofapiActionSchema>;
 export const ofapiActionIntentSchema = z.object({
   id: z.string().uuid(), pageId: z.number().int().positive(), pageLabel: z.string(), accountId: z.string(),

@@ -1,4 +1,4 @@
-import type { OfapiActionField, OfapiActionFormDefinition } from "./form-types";
+import type { OfapiActionField, OfapiActionFormDefinition } from "./form-types.ts";
 
 const field = (name: string, label: string, type: OfapiActionField["type"] = "text", extra: Partial<OfapiActionField> = {}): OfapiActionField => ({ name, label, type, ...extra });
 const id = (name: string, label: string) => field(name, label, "text", { required: true });

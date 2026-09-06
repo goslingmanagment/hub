@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 const id = z.string().regex(/^[1-9]\d{0,19}$/, "Use a positive provider ID");
-const mediaId = z.string().regex(/^(?:[1-9]\d{0,19}|ofapi_media_[A-Za-z0-9_-]{1,180})$/);
+const mediaId = z.string().regex(/^(?:[1-9]\d{0,19}|ofapi_media_[A-Za-z0-9_-]{1,128})$/);
 const listId = z.union([id, z.enum(["fans", "recent", "following", "rebill_off", "tagged"])]);
 const unique = <T extends z.ZodType>(item: T, max: number) => z.array(item).max(max).refine(
   values => new Set(values).size === values.length, "Remove duplicate values",
