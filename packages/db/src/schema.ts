@@ -306,6 +306,7 @@ export const pages = pgTable(
     // received_at. Null until the first accounts.* event is projected.
     ofapiBindingGeneration: integer("ofapi_binding_generation").notNull().default(1),
     ofapiAuthStatus: text("ofapi_auth_status"),
+    // Verified apply stores null status with the authenticated roster receipt as the forward-only boundary.
     ofapiAuthChangedAt: timestamp("ofapi_auth_changed_at", { withTimezone: true }),
     username: text("username"),
     displayName: text("display_name"),

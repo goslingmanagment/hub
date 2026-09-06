@@ -255,6 +255,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 252 | OFAPI binding custody, credential adoption and free balance | S0/S1/S4a and minimum S5 use verified creator identity, a preview bound to current generation, durable historical attribution and narrow recovery. Expected team comes from independent configuration; unknown access fails closed for writes. The optional balance probe uses free usage. Code acceptance and live acceptance stay separate. |
 | 253 | OFAPI roster capture | Account roster is restricted identity evidence; typed projection excludes session material before capture and preserves identity conflicts |
 | 254 | OFAPI missing binding | Park only unblocked work and current-generation auth; repeated 404 preserves state versions and retries notifications with the original marker time |
+| 255 | OFAPI recovery evidence | Authenticated target required; roster transport receipt is persisted as the binding recovery watermark and audit evidence |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -10788,3 +10789,16 @@ State changes use the page binding lock and ordered sync-row locks. A repeated
 404 returns the original marker timestamp without rewriting versions; callers
 still use existing bounded incident delivery retries. Recovery tombstones can
 suppress a late notification by that original occurrence time.
+
+
+## Verified binding recovery records its evidence boundary (2026-09-06)
+
+**Decision #255:** Preview and apply require `is_authenticated=true`. The client
+records JS time immediately after the full roster body is read, before DB or
+credit-ledger waits, and propagates it into `insertObservation.receivedAt`.
+The apply-time roster observation ID and receipt remain in custody and audit;
+the receipt becomes `ofapi_auth_changed_at` with null status. New-account events
+received before it are stale; events at or after it still advance. The timestamp
+is excluded from the preview token so the fresh apply-time fetch remains usable.
+This receipt is not vendor event time and does not replay events already skipped
+before the new binding existed.

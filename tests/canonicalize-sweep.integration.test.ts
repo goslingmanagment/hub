@@ -255,6 +255,7 @@ describe("canonicalization sweep (Stage 8)", () => {
     // Retire it BEFORE parsing: arrival today still attributes the old fact.
     const binding = await getOfapiBindingPage(testDb.db, page.id);
     expect(await applyVerifiedOfapiBinding(testDb.db, {
+      authVerifiedAt: null,
       pageId: page.id, expectedAccountId: binding!.account_id, expectedGeneration: binding!.generation,
       accountId: "acct_replacement", creatorId: "123", historicalAccountIds: [], recovery: [],
       evidence: { source: "synthetic_test" },

@@ -214,10 +214,13 @@ export function resolveOfapiCreditSpend(input: {
   return null;
 }
 
+export interface OfapiAdminCapture { observationId: number; receivedAt: Date }
+
 export interface OfapiClient {
   createWebhook(input: OfapiWebhookRegistrationInput): Promise<OfapiWebhookRecord>;
   updateWebhook(id: string, input: OfapiWebhookRegistrationInput): Promise<OfapiWebhookRecord>;
   listAccounts(): Promise<OfapiAccountRecord[]>;
+  listAccountsSnapshot?(): Promise<{ accounts: OfapiAccountRecord[]; evidence: OfapiAdminCapture | null }>;
   getCredentialPreflight?(): Promise<OfapiCredentialPreflight>;
   assertCredentialReady?(): Promise<void>;
   getWebhook?(id: string): Promise<Record<string, unknown>>;
@@ -641,7 +644,7 @@ export function createOfapiClient(input: {
   credentialPolicy?: { expectedTeamSlug: string | null };
   beforeAccountRequest?: (pageId: number | null | undefined, accountId: string, generation?: number) => Promise<number>;
   onAccountResponse?: (accountId: string, generation: number, status: number, body: string) => Promise<void>;
-  onAdminResponse?: (response: { operation: string; status: number; body: string }) => Promise<void>;
+  onAdminResponse?: (response: { operation: string; status: number; body: string; receivedAt: Date }) => Promise<void | OfapiAdminCapture>;
   onPreflight?: (result: OfapiCredentialPreflight) => Promise<void>;
   baseUrl?: string;
   apiKey: string;
@@ -1588,12 +1591,12 @@ export function createOfapiClient(input: {
     return { success: true };
   }
 
-  async function request(
+  async function requestCaptured(
     operation: string,
     method: string,
     path: string,
     body?: unknown,
-  ): Promise<unknown> {
+  ): Promise<{ body: unknown; capture: OfapiAdminCapture | null }> {
     if (method !== "GET") await assertCredentialReady();
     await waitForRequestSlot("interactive");
     let response: Response;
@@ -1617,7 +1620,9 @@ export function createOfapiClient(input: {
     }
 
     const text = await response.text();
-    await input.onAdminResponse?.({ operation, status: response.status, body: text });
+    // Fix the transport boundary before capture can wait for a DB connection/nextval.
+    const receivedAt = new Date();
+    const capture = (await input.onAdminResponse?.({ operation, status: response.status, body: text, receivedAt })) ?? null;
     let responseBody: unknown = null;
     let bodyIsJson = text.length === 0;
     if (text.length > 0) {
@@ -1658,7 +1663,11 @@ export function createOfapiClient(input: {
       );
     }
 
-    return responseBody;
+    return { body: responseBody, capture };
+  }
+
+  async function request(operation: string, method: string, path: string, body?: unknown): Promise<unknown> {
+    return (await requestCaptured(operation, method, path, body)).body;
   }
 
   return {
@@ -1690,6 +1699,10 @@ export function createOfapiClient(input: {
         `/webhooks/${encodeURIComponent(id)}`,
         webhookRequestBody(registration),
       ));
+    },
+    async listAccountsSnapshot() {
+      const { body, capture } = await requestCaptured("ofapi_admin_accounts", "GET", "/accounts");
+      return { accounts: toAccountRecords(body), evidence: capture };
     },
     async listAccounts() {
       return toAccountRecords(await request("ofapi_admin_accounts", "GET", "/accounts"));

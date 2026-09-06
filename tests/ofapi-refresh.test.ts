@@ -130,3 +130,20 @@ describe("free balance and credential adoption", () => {
     await expect(client.pingBalance({})).rejects.toThrow();
   });
 });
+
+
+describe("OFAPI roster receipt", () => {
+  it("returns the transport capture receipt and keeps ordinary roster reads compatible", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response('[{"id":"acct_x","onlyfans_id":123}]', { status: 200 })));
+    const captures: Date[] = [];
+    const client = createOfapiClient({ apiKey: "synthetic", restDelayMs: 0, onAdminResponse: async value => {
+      captures.push(value.receivedAt);
+      return { observationId: 7, receivedAt: value.receivedAt };
+    } });
+    const snapshot = await client.listAccountsSnapshot!();
+    expect(snapshot.evidence).toEqual({ observationId: 7, receivedAt: captures[0] });
+    expect(await client.listAccounts()).toEqual(snapshot.accounts);
+    const uncaptured = createOfapiClient({ apiKey: "synthetic", restDelayMs: 0 });
+    expect((await uncaptured.listAccountsSnapshot!()).evidence).toBeNull();
+  });
+});

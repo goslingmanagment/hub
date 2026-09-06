@@ -383,7 +383,9 @@ responses rewrite no state; they retry only the idempotent incident notification
 using the original marker time. Responses for replaced bindings do nothing. Later reads and commands
 fail locally until verified recovery. DB-only queries and computations remain
 available. A late response or lifecycle event from a retired binding cannot
-change the replacement's auth state.
+change the replacement's auth state. Verified preview/apply always requires an
+authenticated target. The receipt of that apply-time roster is retained as the
+forward-only boundary: earlier lifecycle events of the new account are stale.
 
 `whoami` denial is credential access failure, not a model-session failure.
 JSON 401/403 is `denied`; missing evidence, transport/edge failures and an

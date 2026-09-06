@@ -14,16 +14,21 @@ export async function refreshOfapiBinding(app: AppContext, input: OfapiBindingRe
   const client = app.ofapi;
   const credential = await client?.getCredentialPreflight?.();
   if (credential?.status !== "verified") throw new ServiceUnavailableError(`OFAPI credential preflight ${credential?.status ?? "unknown"}`);
+  if (!client?.listAccountsSnapshot) throw new ServiceUnavailableError("OFAPI roster capture is unavailable");
   const page = await getOfapiBindingPage(app.db, input.pageId);
   if (!page) throw new BadRequestError("Active OnlyFans page is required");
   if (page.account_id !== input.expectedAccountId || page.generation !== input.expectedGeneration) {
     throw new ConflictError("OFAPI binding changed; refresh preview");
   }
-  const accounts = await client!.listAccounts();
+  const snapshot = await client.listAccountsSnapshot();
+  const accounts = snapshot.accounts;
   const target = accounts.find(account => account.id === input.accountId);
   if (!target?.onlyfansUserId || target.identityStatus === "conflict") {
     throw new ConflictError("Target account identity is unavailable or conflicting; the visible roster may be restricted");
   }
+  if (target.isAuthenticated !== true) throw new ConflictError("Verified binding requires the target account to be authenticated in the roster");
+  if (!snapshot.evidence) throw new ServiceUnavailableError("Roster capture evidence is unavailable; the recovery boundary cannot be proven");
+  const authVerifiedAt = snapshot.evidence.receivedAt;
   const identities = [page.creator_id, page.metadata_creator_id].filter((id): id is string => Boolean(id));
   // A current mapping plus the provider's numeric creator ID is seed evidence.
   // A replacement account alone is never evidence for which Hub page owns it.
@@ -68,7 +73,6 @@ export async function refreshOfapiBinding(app: AppContext, input: OfapiBindingRe
     historicalAccountIds.push(ref);
   }
   const recovery = await listOfapiBindingRecoveryCandidates(app.db, page.id, page.generation);
-  if (recovery.length && target.isAuthenticated !== true) throw new ConflictError("Recovery requires a verified authenticated target account");
   const preview = {
     pageId: page.id, expectedAccountId: page.account_id, expectedGeneration: page.generation,
     accountId: target.id, creatorId: target.onlyfansUserId,
@@ -79,20 +83,22 @@ export async function refreshOfapiBinding(app: AppContext, input: OfapiBindingRe
   const previewToken = createHmac("sha256", app.config.encryptionKey).update(JSON.stringify(preview)).digest("hex");
   if (input.dryRun) return { dryRun: true, applied: false, previewToken, ...preview };
   if (input.previewToken !== previewToken) throw new ConflictError("OFAPI preview changed; preview again before applying");
+  const rosterEvidence = { observationId: snapshot.evidence.observationId, receivedAt: authVerifiedAt.toISOString() };
   const applied = await app.db.transaction(async tx => {
     const db = tx as AppContext["db"];
     const changed = await applyVerifiedOfapiBinding(db, {
-      ...preview, evidence: { actorId, previewToken, credentialFingerprint: credential.credentialFingerprint,
-        identityEvidence: input.identityEvidence, historicalEvidence: input.historicalEvidence },
+      ...preview, authVerifiedAt, evidence: { actorId, previewToken, credentialFingerprint: credential.credentialFingerprint,
+        identityEvidence: input.identityEvidence, historicalEvidence: input.historicalEvidence, rosterEvidence },
     });
     if (!changed) return false;
+    const audit = { ...preview, rosterEvidence };
     await insertObservation(db, {
       source: "operator", producer: "ofapi:binding", platform: "onlyfans", accountId: page.id,
       nativeAccountRef: target.id, kind: "ofapi.binding.replaced", actorPrincipalId: actorId,
-      payload: preview, payloadHash: createHash("sha256").update(JSON.stringify(preview)).digest(), idempotencyKey: randomUUID(),
+      payload: audit, payloadHash: createHash("sha256").update(JSON.stringify(audit)).digest(), idempotencyKey: randomUUID(),
     });
-    if (target.isAuthenticated === true) await resolveOfapiAuthIncident({ ...app, db }, {
-      platformAccountId: page.id, pageLabel: page.label, platform: "onlyfans", recoveredAt: new Date(),
+    await resolveOfapiAuthIncident({ ...app, db }, {
+      platformAccountId: page.id, pageLabel: page.label, platform: "onlyfans", recoveredAt: authVerifiedAt,
     });
     return true;
   });

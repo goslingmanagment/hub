@@ -62,6 +62,8 @@ export async function applyVerifiedOfapiBinding(db: Database, input: {
   accountId: string; creatorId: string; evidence: Record<string, unknown>;
   historicalAccountIds: string[];
   recovery: Array<{ stream: string; version: string; code: string }>;
+  /** Receipt of the authenticated roster; null only for callers supplying no auth proof. */
+  authVerifiedAt: Date | null;
 }) {
   return withOfapiBindingLock(db, input.pageId, async tx => {
     // Serialize cross-page claims before testing historical ownership.
@@ -97,7 +99,7 @@ export async function applyVerifiedOfapiBinding(db: Database, input: {
     await tx.execute(sql`
       update pages set ofapi_account_id=${input.accountId}, ofapi_binding_generation=${generation},
         external_page_id=${input.creatorId}, metadata=coalesce(metadata,'{}'::jsonb) || jsonb_build_object('onlyfansUserId',${input.creatorId}::text),
-        ofapi_auth_status=null, ofapi_auth_changed_at=null,
+        ofapi_auth_status=null, ofapi_auth_changed_at=${input.authVerifiedAt},
         transactions_writer=coalesce(transactions_writer,'ofapi'),updated_at=now()
       where id=${input.pageId}
     `);

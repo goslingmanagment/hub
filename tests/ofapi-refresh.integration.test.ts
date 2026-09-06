@@ -252,3 +252,57 @@ describe("OFAPI missing-binding blocker ownership", () => {
     expect(await open()).toHaveLength(1);
   });
 });
+
+
+describe("OFAPI authenticated recovery boundary", () => {
+  it("REVIEW authenticated replacement rejects an older queued lifecycle failure", async () => {
+    await ensurePageSyncStates(app.db, { pageId });
+    const failureReceivedAt = new Date(Date.now() - 60_000);
+    const preview = await refreshOfapiBinding(app, bindingInput(), 1);
+    await refreshOfapiBinding(app, { ...bindingInput(), dryRun: false, previewToken: preview.previewToken }, 1);
+    await lifecycle("acct_new", "authentication_failed", failureReceivedAt);
+    expect((await testDb!.pool.query("select ofapi_auth_status from pages where id=$1", [pageId])).rows[0].ofapi_auth_status).toBeNull();
+    expect((await testDb!.pool.query("select stream from page_sync_states where page_id=$1 and blocker_kind='auth'", [pageId])).rows).toEqual([]);
+  });
+
+  it.each([false, undefined])("refuses unauthenticated/unknown targets (%s) without changing the binding", async isAuthenticated => {
+    roster = [{ id: "acct_old", onlyfans_id: 123 }, { id: "acct_new", onlyfans_id: 123, is_authenticated: isAuthenticated }];
+    await expect(refreshOfapiBinding(app, bindingInput(), 1)).rejects.toThrow("authenticated");
+    expect(await getOfapiBindingPage(app.db, pageId)).toMatchObject({ account_id: "acct_old", generation });
+    expect((await testDb!.pool.query("select id from observations where kind='ofapi.binding.replaced'")).rows).toEqual([]);
+  });
+
+  it.each(["method", "receipt"])("refuses a missing roster capture %s", async missing => {
+    if (missing === "method") delete app.ofapi!.listAccountsSnapshot;
+    else {
+      const capture = app.ofapi!.listAccountsSnapshot!;
+      app.ofapi!.listAccountsSnapshot = async () => ({ ...await capture(), evidence: null });
+    }
+    await expect(refreshOfapiBinding(app, bindingInput(), 1)).rejects.toThrow("capture");
+    expect(await getOfapiBindingPage(app.db, pageId)).toMatchObject({ account_id: "acct_old", generation });
+  });
+
+  it("rechecks target authentication on apply even with an unchanged preview", async () => {
+    const preview = await refreshOfapiBinding(app, bindingInput(), 1);
+    roster = [{ id: "acct_old", onlyfans_id: 123 }, { id: "acct_new", onlyfans_id: 123, is_authenticated: false }];
+    await expect(refreshOfapiBinding(app, { ...bindingInput(), dryRun: false, previewToken: preview.previewToken }, 1)).rejects.toThrow("authenticated");
+  });
+
+  it.each([0, 1])("uses the persisted roster receipt and accepts failures at boundary + %i ms", async delta => {
+    await ensurePageSyncStates(app.db, { pageId });
+    const preview = await refreshOfapiBinding(app, bindingInput(), 1);
+    await refreshOfapiBinding(app, { ...bindingInput(), dryRun: false, previewToken: preview.previewToken }, 1);
+    const rosterRow = (await testDb!.pool.query("select id,received_at from observations where kind='ofapi_admin_accounts' order by id desc limit 1")).rows[0];
+    const page = (await testDb!.pool.query("select ofapi_auth_status,ofapi_auth_changed_at from pages where id=$1", [pageId])).rows[0];
+    expect(page.ofapi_auth_changed_at).toEqual(rosterRow.received_at);
+    const evidence = { observationId: Number(rosterRow.id), receivedAt: rosterRow.received_at.toISOString() };
+    expect((await testDb!.pool.query("select evidence from ofapi_account_bindings where account_id='acct_new'")).rows[0].evidence.rosterEvidence).toEqual(evidence);
+    expect((await testDb!.pool.query("select payload from observations where kind='ofapi.binding.replaced'")).rows[0].payload.rosterEvidence).toEqual(evidence);
+    await lifecycle("acct_new", "reconnected", new Date(rosterRow.received_at.getTime() - 1));
+    await lifecycle("acct_new", "authentication_failed", new Date(rosterRow.received_at.getTime() - 1));
+    expect((await testDb!.pool.query("select ofapi_auth_status from pages where id=$1", [pageId])).rows[0].ofapi_auth_status).toBeNull();
+    await lifecycle("acct_new", "authentication_failed", new Date(rosterRow.received_at.getTime() + delta));
+    expect((await testDb!.pool.query("select ofapi_auth_status from pages where id=$1", [pageId])).rows[0].ofapi_auth_status).toBe("authentication_failed");
+    expect((await testDb!.pool.query("select blocker_ofapi_generation from page_sync_states where page_id=$1 and stream='subscribers'", [pageId])).rows[0].blocker_ofapi_generation).toBe(generation + 1);
+  });
+});

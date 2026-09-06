@@ -111,8 +111,8 @@ observations already attributed to the page (including canonical event lineage)
 may be referenced in `historicalEvidence` to import former account associations.
 
 3. Review exact old/new account, creator, generation, historical references and
-   recovery stream versions. Recovery also requires `is_authenticated=true` on
-   the target roster record. Obtain the applicable owner approval for this
+   recovery stream versions. Preview and apply require `is_authenticated=true` on
+   the target roster record; the apply-time roster receipt is the recovery boundary. Obtain the applicable owner approval for this
    concrete production mutation.
 4. Repeat the same body with `dryRun:false` and the returned `previewToken`.
    Credential, identity, binding or recovery drift rejects the apply and requires
@@ -201,3 +201,17 @@ pnpm exec vitest run --no-file-parallelism \
   tests/db-write.integration.test.ts tests/erasure-page-owned-tables.integration.test.ts \
   tests/erasure.integration.test.ts
 ```
+
+
+### Auth recovery evidence boundary
+
+The client stamps JS `Date` immediately after reading the complete roster body,
+before capture or credit-ledger waits. That timestamp is persisted as the roster
+observation receipt and used by apply as `ofapi_auth_changed_at`; custody and
+binding audit retain its observation ID and receipt. Earlier lifecycle events of
+the replacement cannot undo that proof; events at or after it remain eligible.
+This is a transport receipt, not a vendor snapshot timestamp. Webhook receipt
+uses the database clock on the same host; revisit clock assumptions if split.
+A new-account event already processed before binding commit may find no page
+and remain skipped. This window includes capture, credit, identity and lock waits;
+the boundary does not replay such events.
