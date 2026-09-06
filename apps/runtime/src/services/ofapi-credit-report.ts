@@ -127,7 +127,7 @@ async function getChatterSpendWindow(
     enabled: boolean;
   },
 ): Promise<Omit<OfapiCreditsChatterSummaryResponse["today"], "day">> {
-  const [restCredits, webhookEventCount] = await Promise.all([
+  const [netRestCredits, webhookEventCount] = await Promise.all([
     input.enabled
       ? sumOfapiRestCreditsForPagesBetween(app.db, {
         pageIds: input.pageIds,
@@ -144,6 +144,9 @@ async function getChatterSpendWindow(
       : Promise.resolve(0),
   ]);
   const estimatedWebhookCredits = webhookAccrualCredits(webhookEventCount);
+  // Installed SDKs require nonnegative legacy fields and a component-sum total.
+  // Preserve exact signed corrections separately for clients that support them.
+  const restCredits = Math.max(0, netRestCredits);
 
   return {
     from: input.from.toISOString(),
@@ -154,6 +157,8 @@ async function getChatterSpendWindow(
       estimatedCredits: estimatedWebhookCredits,
     },
     totalEstimatedCredits: restCredits + estimatedWebhookCredits,
+    netRestCredits,
+    netTotalEstimatedCredits: netRestCredits + estimatedWebhookCredits,
   };
 }
 
@@ -197,6 +202,7 @@ export async function getChatterOfapiCreditsSummary(
       ? [
         "webhook credits are estimated from assigned-page journal events",
         "REST credits include only ledger rows attributed to assigned pages",
+        "legacy credit fields floor negative REST net at zero; signed net fields preserve corrections",
         "owner-only balance, refills, external drift, and unattributed adjustments are omitted",
       ]
       : ["ledger disabled; page-scoped credit summary unavailable"],

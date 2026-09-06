@@ -63020,7 +63020,7 @@
                         },
                         "restCredits": {
                           "type": "integer",
-                          "minimum": -9007199254740991,
+                          "minimum": 0,
                           "maximum": 9007199254740991
                         },
                         "webhook": {
@@ -63044,6 +63044,16 @@
                           "additionalProperties": false
                         },
                         "totalEstimatedCredits": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "netRestCredits": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "netTotalEstimatedCredits": {
                           "type": "integer",
                           "minimum": -9007199254740991,
                           "maximum": 9007199254740991
@@ -63070,7 +63080,7 @@
                         },
                         "restCredits": {
                           "type": "integer",
-                          "minimum": -9007199254740991,
+                          "minimum": 0,
                           "maximum": 9007199254740991
                         },
                         "webhook": {
@@ -63094,6 +63104,16 @@
                           "additionalProperties": false
                         },
                         "totalEstimatedCredits": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "netRestCredits": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "netTotalEstimatedCredits": {
                           "type": "integer",
                           "minimum": -9007199254740991,
                           "maximum": 9007199254740991

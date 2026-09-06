@@ -1272,7 +1272,10 @@ describe("OFAPI capture correctness repository", () => {
       pageId: seeded.page.id, pageLabel: seeded.page.label, credits: actualCredits, revenueMills: 0,
     }]);
     const chatter = await getChatterOfapiCreditsSummary(app, { pageIds: [seeded.page.id] }, reportAt);
-    expect(chatter.today).toMatchObject({ restCredits: actualCredits, totalEstimatedCredits: actualCredits });
+    expect(chatter.today).toMatchObject({
+      restCredits: actualCredits, totalEstimatedCredits: actualCredits,
+      netRestCredits: actualCredits, netTotalEstimatedCredits: actualCredits,
+    });
     expect(await sumOfapiRestCreditsForOperationsBetween(testDb.db, {
       operations: ["list_messages"], from: NOW, to: reportAt,
     })).toBe(actualCredits);

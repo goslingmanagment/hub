@@ -9,13 +9,25 @@ uniqueness prevent replay from adding a second receipt or physical request.
 Receipt time is the original `response_observed_at`; the existing monotone balance
 guard prevents delayed parsing from replacing a newer balance observation.
 
-All spend views use signed arithmetic: REST settlements plus their attributed
+Underlying spend reads use signed arithmetic: REST settlements plus their attributed
 corrections. A cached request estimated at one credit and confirmed at zero costs
 zero in the daily, operation, page, chatter and forecast views. Only REST rows
 count as physical requests; certainty corrections do not. A correction arriving
 in a window after its original request can make that window negative. Refills
 remain outside spend. Zero-credit receipts carry balance evidence but cannot
 extend the observed spending period used for the forecast denominator.
+
+The chatter response adds optional `netRestCredits` and
+`netTotalEstimatedCredits` for exact signed window facts. Installed desktop SDKs
+require nonnegative legacy fields: `restCredits = max(0, netRestCredits)` and
+`totalEstimatedCredits = restCredits + webhook.estimatedCredits` preserve that
+compatibility and the legacy component sum. The signed total is
+`netRestCredits + webhook.estimatedCredits`. For REST −10 and webhook estimate 5,
+legacy fields are 0/5 and signed fields are −10/−5. Cached 1→0 requests still
+show zero in both field pairs. These compatibility floors do not alter ledger,
+owner reports or forecasts. Existing desktop clients accept the response but show
+the floored estimate for negative periods until their SDK and renderer adopt the
+optional signed fields; that client upgrade is separate from this server patch.
 
 Reconciliation computes the residual between reported balances after known costs.
 `external` does not prove an external actor or a payment, and `refill` does not

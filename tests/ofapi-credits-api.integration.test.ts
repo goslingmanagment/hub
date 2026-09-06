@@ -27,6 +27,29 @@ import {
 import { createTestAppContext } from "./helpers/runtime.ts";
 import { INTEGRATION_TEST_TIMEOUT_MS } from "./helpers/timeouts.ts";
 
+// Pin the fields and nonnegative constraints shipped in the pre-signed SDK.
+// Reuse scalar primitives, but explicitly freeze the old field set and min(0)
+// checks so widening the current contract cannot hide old-client rejection.
+const currentChatterWindow = ofapiCreditsChatterSummaryResponseSchema.shape.last7d;
+const legacyChatterCreditWindow = currentChatterWindow.pick({
+  from: true,
+  to: true,
+  restCredits: true,
+  webhook: true,
+  totalEstimatedCredits: true,
+}).extend({
+  restCredits: currentChatterWindow.shape.restCredits.min(0),
+  totalEstimatedCredits: currentChatterWindow.shape.totalEstimatedCredits.min(0),
+});
+const legacyChatterCreditResponse = ofapiCreditsChatterSummaryResponseSchema.pick({
+  enabled: true,
+  scope: true,
+  limitations: true,
+}).extend({
+  today: ofapiCreditsChatterSummaryResponseSchema.shape.today.pick({ day: true }).merge(legacyChatterCreditWindow),
+  last7d: legacyChatterCreditWindow,
+});
+
 let testDb: StartedTestDatabase | null = null;
 let appContext: AppContext;
 let server: Awaited<ReturnType<typeof buildApiServer>> | null = null;
@@ -579,7 +602,47 @@ describe("ofapi credits admin api", () => {
     expect(daily.byPage[0]).toMatchObject({ pageId: page.id, credits: -1 });
     const chatter = await getChatterOfapiCreditsSummary(appContext, { pageIds: [page.id] }, now);
     expect(ofapiCreditsChatterSummaryResponseSchema.parse(chatter).today)
-      .toMatchObject({ restCredits: -1, totalEstimatedCredits: -1 });
+      .toMatchObject({ restCredits: 0, totalEstimatedCredits: 0, netRestCredits: -1, netTotalEstimatedCredits: -1 });
+  });
+
+  it.each([
+    { correction: -1, eventCount: 0, webhookCredits: 0 },
+    { correction: -10, eventCount: 401, webhookCredits: 5 },
+  ])("keeps legacy chatter SDK compatible with signed correction $correction and $webhookCredits webhook credits", async ({ correction, eventCount, webhookCredits }) => {
+    if (!testDb || !server) return;
+    const model = await createModel(appContext.db, { slug: "legacy-chatter-credits", name: "Legacy chatter credits" });
+    if (!model) throw new Error("legacy chatter model seed failed");
+    const page = await createOnlyFansPage(appContext.db, { modelId: model.id, label: "legacy-chatter-of" });
+    if (!page) throw new Error("legacy chatter page seed failed");
+    const now = new Date();
+    const currentDay = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+    await insertOfapiCreditLedgerEntry(appContext.db, {
+      source: "adjustment", operation: "ofapi_chats", pageId: page.id,
+      credits: correction, occurredAt: currentDay,
+    });
+    await seedWebhookEventsAt("legacy_chatter_credits", eventCount, currentDay, page.id);
+    const { key } = await issueChatterApiKey(appContext, {
+      username: "anton", pageLabel: page.label,
+    }, { source: "test" });
+    const response = await server.inject({
+      method: "GET", url: "/api/v1/ofapi/credits/summary",
+      headers: { authorization: `Bearer ${key}` },
+    });
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    const legacy = legacyChatterCreditResponse.parse(body);
+    for (const period of ["today", "last7d"] as const) {
+      expect(legacy[period]).toMatchObject({
+        restCredits: 0, totalEstimatedCredits: webhookCredits,
+        webhook: { estimatedCredits: webhookCredits },
+      });
+      expect(body[period]).toMatchObject({
+        netRestCredits: correction,
+        netTotalEstimatedCredits: correction + webhookCredits,
+      });
+      expect(body[period].totalEstimatedCredits).toBe(body[period].restCredits + body[period].webhook.estimatedCredits);
+    }
+    expect(body.limitations).toContain("legacy credit fields floor negative REST net at zero; signed net fields preserve corrections");
   });
 
   it("bounds summary forecast and burn windows at the current observation time", async (context) => {

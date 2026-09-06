@@ -4302,13 +4302,18 @@ export const ofapiCreditsSummaryResponseSchema = z.object({
 const ofapiCreditsChatterWindowSchema = z.object({
   from: isoTimestamp,
   to: isoTimestamp,
-  // A later correction can make a bounded window net-negative.
-  restCredits: z.number().int(),
+  // Compatibility estimates for installed SDKs: REST is floored at zero and
+  // the legacy total remains REST plus the estimated webhook component.
+  restCredits: z.number().int().min(0),
   webhook: z.object({
     eventCount: z.number().int().min(0),
     estimatedCredits: z.number().int().min(0),
   }),
-  totalEstimatedCredits: z.number().int(),
+  totalEstimatedCredits: z.number().int().min(0),
+  // Exact signed net for upgraded clients. Optional for compatibility with
+  // older Hub versions; a correction can make a bounded window net-negative.
+  netRestCredits: z.number().int().optional(),
+  netTotalEstimatedCredits: z.number().int().optional(),
 });
 
 export const ofapiCreditsChatterSummaryResponseSchema = z.object({
