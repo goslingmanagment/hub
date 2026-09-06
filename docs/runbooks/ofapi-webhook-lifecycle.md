@@ -98,3 +98,5 @@ No new business-fact table is introduced. The source journal and domain event
 retention/erasure inventory remain authoritative; 0155 adds only a resource
 lookup index and projection-retry bookkeeping backfill. The lifecycle summary
 omits raw bodies, download URLs and reusable upload material.
+
+A roster receipt may establish an auth time while the page auth status remains null. The first lifecycle event at that exact time is admissible; an already recorded recovery event still wins an equal-time failure. This boundary is pinned by the authenticated recovery integration test for 0 ms and 1 ms offsets.
