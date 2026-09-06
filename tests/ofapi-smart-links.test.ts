@@ -3,7 +3,7 @@ import { ofapiMarketingActionSchema, routeSchemas } from "@agency_hub_core/contr
 import { findOfapiReadDefinition, resolveOfapiCatalogPath, OFAPI_READ_CATALOG } from "@agency_hub_core/shared";
 import { normalizeOfapiRead, validateOfapiCatalogResponse, ofapiReadCoverage, validateOfapiMarketingAccount } from "../apps/runtime/src/services/ofapi-read-normalization.ts";
 import { normalizeOfapiMarketingResource, normalizeOfapiMarketingAnalytics } from "../apps/runtime/src/services/ofapi-marketing-normalization.ts";
-import { ofapiMarketingRequest } from "../apps/runtime/src/services/ofapi-smart-links.ts";
+import { ofapiMarketingRequest, ofapiMarketingSafePreviewValues } from "../apps/runtime/src/services/ofapi-smart-links.ts";
 const LINK = "01JQZ9MY9QZHBBEMYW0AN9N8EQ";
 const def = (id: string) => findOfapiReadDefinition(`ofapi_read_${id}`)!;
 describe("closed Smart Link reads and safe marketing contracts", () => {
@@ -53,4 +53,12 @@ describe("closed Smart Link reads and safe marketing contracts", () => {
     expect(ofapiMarketingActionSchema.safeParse({action:"postback_create",url:"https://example.test",smart_link_scope:"global",conversion_types:["arbitrary"]}).success).toBe(false);
     for(const name of ["ofapiMarketingGet","ofapiMarketingPrepare","ofapiMarketingDispatch","ofapiMarketingPostbacksRefresh","ofapiMarketingRebuild"] as const) expect(routeSchemas[name].auth).toEqual({kind:"owner-session"});
   });
+  it("freezes concrete safe values while disclosing secret changes only as actions",()=>{
+    expect(ofapiMarketingSafePreviewValues({action:"smart_link_create",pageId:4,name:"Launch",link_type:"free_trial",free_trial_days:30})).toEqual([{field:"name",value:"Launch"},{field:"link_type",value:"free_trial"},{field:"free_trial_days",value:30}]);
+    expect(ofapiMarketingSafePreviewValues({action:"tags_remove",pageId:4,linkId:LINK,tags:["Launch"]})).toEqual([{field:"tags",value:["Launch"]}]);
+    const preview=ofapiMarketingSafePreviewValues({action:"postback_update",postbackId:8,url:"https://example.test/PRIVATE?key=SECRET",http_method:"POST",body:"PRIVATE",headers:[{name:"Authorization",value:"SECRET"}],smart_link_scope:"global",conversion_types:["new_transaction"]});
+    expect(preview).toEqual([{field:"http_method",value:"POST"},{field:"body_change",value:"replace"},{field:"headers_change",value:"replace"}]);expect(JSON.stringify(preview)).not.toMatch(/PRIVATE|SECRET|example/);
+    expect(ofapiMarketingSafePreviewValues({action:"pixel_test",pageId:4,linkId:LINK,pixelId:9,event_type:"event_new_subscriber_paid",test_event_code:"PRIVATE"})).toEqual([{field:"event_type",value:"event_new_subscriber_paid"},{field:"test_event_code_change",value:"replace"}]);
+  });
+
 });

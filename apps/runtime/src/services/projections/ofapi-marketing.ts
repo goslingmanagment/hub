@@ -4,7 +4,7 @@ import { isDmArchiveScopeFenced, tryAcquireDmArchiveWriterFenceLock, type Databa
 import { ofapiMarketingActionSchema, ofapiMarketingResourceSchema, type OfapiMarketingAction, type OfapiMarketingResource } from "@agency_hub_core/contracts";
 import type { AppContext } from "../../bootstrap.ts";
 import { asRecord, idToString } from "../ofapi-payloads.ts";
-import { normalizeOfapiMarketingResource } from "../ofapi-marketing-normalization.ts";
+import { marketingTemplateVariables, normalizeOfapiMarketingResource } from "../ofapi-marketing-normalization.ts";
 import { loadObservationPayload } from "../payload-reader.ts";
 import { createOfapiCreditSpendSink } from "../ofapi-credits.ts";
 import { parseResponseMeta } from "../ofapi.ts";
@@ -16,7 +16,7 @@ export interface MarketingResponseSource {
   requestId: string;
   actorUserId: number;
   credentialFingerprint: string;
-  frozen?: { command: unknown; accountId: string | null; bindingGeneration: number | null; credentialFingerprint: string; baselineResource?: unknown };
+  frozen?: { command: unknown; accountId: string | null; bindingGeneration: number | null; credentialFingerprint: string; baselineResource?: unknown; baselineTemplateVariables?: unknown };
   postbackId?: number;
 }
 const MUTEX = 815_420;
@@ -87,13 +87,22 @@ function patchResource(previous: OfapiMarketingResource | undefined, row: Record
   return ofapiMarketingResourceSchema.parse(next);
 }
 
-async function upsert(db: Database, resource: OfapiMarketingResource, observationId: number, credential: string, deleted = false) {
+type TemplateVariables = Record<"url"|"body"|"headers",string[]>;
+function templateVariables(row:Record<string,unknown>):TemplateVariables {
+  return {url:marketingTemplateVariables(row.url),body:marketingTemplateVariables(row.body),headers:marketingTemplateVariables(...(Array.isArray(row.headers) ? row.headers.map(value=>asRecord(value)?.value) : []))};
+}
+function savedTemplateVariables(value:unknown):TemplateVariables|null {
+  const row=asRecord(value);
+  if(!row || !["url","body","headers"].every(key=>Array.isArray(row[key]) && row[key].every(v=>typeof v==="string"))) return null;
+  return {url:[...row.url as string[]],body:[...row.body as string[]],headers:[...row.headers as string[]]};
+}
+async function upsert(db: Database, resource: OfapiMarketingResource, observationId: number, credential: string, deleted = false, variables?:TemplateVariables) {
   if (resource.pageId) {
     if (!await tryAcquireDmArchiveWriterFenceLock(db,resource.pageId)) throw new Error("marketing_erasure_busy");
     if (await isDmArchiveScopeFenced(db,{pageId:resource.pageId,refs:[],materialAt:new Date(resource.observedAt)})) return;
   }
   await db.execute(sql`insert into ofapi_marketing_resources(page_id,kind,upstream_id,parent_id,data,deleted,credential_fingerprint,observation_id,observed_at)
-    values(${resource.pageId},${resource.kind},${resource.id},${resource.parentId ?? ""},${JSON.stringify(resource)}::jsonb,${deleted},${credential},${observationId},${new Date(resource.observedAt)})
+    values(${resource.pageId},${resource.kind},${resource.id},${resource.parentId ?? ""},${JSON.stringify({...resource,...(variables ? {_templateVariablesByField:variables} : {})})}::jsonb,${deleted},${credential},${observationId},${new Date(resource.observedAt)})
     on conflict ((coalesce(page_id,0)),kind,parent_id,upstream_id) do update set data=excluded.data,deleted=excluded.deleted,
     credential_fingerprint=excluded.credential_fingerprint,observation_id=excluded.observation_id,observed_at=excluded.observed_at
     where ofapi_marketing_resources.observed_at<=excluded.observed_at`);
@@ -106,12 +115,14 @@ async function projectMaterial(db: Database, input: { source: MarketingResponseS
   if (!command) {
     const rows = source.postbackId ? [root?.data] : root?.data;
     if (!Array.isArray(rows)) throw new Error("postback_inventory_shape_unavailable");
+    const variableSets=new Map<string,TemplateVariables>();
     const resources = rows.map(value => {
       const row = asRecord(value); if (!row || !/^[1-9]\d*$/.test(idToString(row.id) ?? "")) throw new Error("postback_identity_unavailable");
       if (source.postbackId && String(row.id) !== String(source.postbackId)) throw new Error("postback_identity_mismatch");
-      return normalizeOfapiMarketingResource({ kind: "postback", pageId: null, row, observedAt: at });
+      const resource=normalizeOfapiMarketingResource({ kind: "postback", pageId: null, row, observedAt: at });
+      variableSets.set(resource.id,templateVariables(row));return resource;
     });
-    for (const resource of resources) await upsert(db, resource, observationId, source.credentialFingerprint);
+    for (const resource of resources) await upsert(db, resource, observationId, source.credentialFingerprint,false,variableSets.get(resource.id));
     const pagination = asRecord(root?._pagination);
     // A plain array does not establish inventory completeness. Only explicit
     // EOF authorizes absence tombstones, scoped to this credential's inventory.
@@ -144,8 +155,17 @@ async function projectMaterial(db: Database, input: { source: MarketingResponseS
     row.tags = Array.isArray(tags) ? tags : command.action === "tags_add" ? [...new Set([...(previous?.tags ?? []), ...command.tags])] : (previous?.tags ?? []).filter(t => !command.tags.includes(t));
   }
   const resource = patchResource(previous, row, kind, pageId, parentId, at);
+  let variables:TemplateVariables|undefined;
+  if(kind==="postback") {
+    const stored=(await db.execute<{variables:unknown}>(sql`select data->'_templateVariablesByField' as variables from ofapi_marketing_resources
+      where kind='postback' and page_id is null and upstream_id=${resource.id} and observed_at<=${at}`)).rows[0]?.variables;
+    variables=savedTemplateVariables(source.frozen?.baselineTemplateVariables) ?? savedTemplateVariables(stored) ?? templateVariables({});
+    const incoming=templateVariables(row);
+    for(const field of ["url","body","headers"] as const) if(field in row) variables[field]=incoming[field];
+    resource.templateVariables=[...new Set(Object.values(variables).flat())].sort();
+  }
   const deleted = command.action.endsWith("_delete") || command.action === "pixel_disconnect";
-  await upsert(db, resource, observationId, source.credentialFingerprint, deleted);
+  await upsert(db, resource, observationId, source.credentialFingerprint, deleted,variables);
   if (command.action === "pixel_update") for (const other of available.filter(r => r.kind === "pixel" && r.id === resource.id && key(r) !== key(resource))) {
     // The team-wide pixel update also changes every known connection, while its
     // acknowledgement explicitly says the known relation inventory is incomplete.

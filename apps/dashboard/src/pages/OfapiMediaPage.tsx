@@ -26,11 +26,15 @@ export function OfapiMediaPage() {
     [notice, setNotice] = useState("");
   const [preview, setPreview] = useState<{
     body: Parameters<typeof ofapiMediaActions.upload>[0];
+    pageLabel: string;
+    sourceFilename: string;
     receipt: Awaited<ReturnType<typeof ofapiMediaActions.upload>>;
   } | null>(null);
   const [collectionPreview, setCollectionPreview] = useState<{
     selection: string[];
     revision: number;
+    pageId: number;
+    pageLabel: string;
   } | null>(null);
   const [handoff, setHandoff] = useState<Awaited<
     ReturnType<typeof ofapiMediaActions.handoff>
@@ -95,7 +99,18 @@ export function OfapiMediaPage() {
         expectedPolicyRevision: pages.data!.revision,
         dryRun: true,
       };
-      setPreview({ body, receipt: await ofapiMediaActions.upload(body) });
+      const pageLabel =
+        pages.data!.pages.find((page) => page.id === body.pageId)?.label ??
+        `Page ${body.pageId}`;
+      const sourceFilename =
+        saved.data?.sources.find((source) => source.id === body.sourceId)
+          ?.filename ?? body.sourceId;
+      setPreview({
+        body,
+        pageLabel,
+        sourceFilename,
+        receipt: await ofapiMediaActions.upload(body),
+      });
     });
   }
   async function copyMaterial(
@@ -132,6 +147,7 @@ export function OfapiMediaPage() {
         <label className="grid gap-1 text-sm text-text-muted">
           Page
           <select
+            disabled={busy}
             className={field}
             value={pageId}
             onChange={(event) => {
@@ -196,6 +212,7 @@ export function OfapiMediaPage() {
             <label className="grid gap-1 text-sm text-text-muted">
               Owned image, video or audio
               <input
+                disabled={busy}
                 className={field}
                 type="file"
                 accept="image/jpeg,image/png,image/gif,image/webp,video/mp4,video/webm,audio/mpeg,audio/wav,audio/mp4"
@@ -222,6 +239,7 @@ export function OfapiMediaPage() {
             <label className="grid gap-1 text-sm text-text-muted">
               Saved source
               <select
+                disabled={busy}
                 className={field}
                 value={sourceId}
                 onChange={(event) => {
@@ -247,6 +265,7 @@ export function OfapiMediaPage() {
             <label className="grid gap-1 text-sm text-text-muted">
               Destination
               <select
+                disabled={busy}
                 className={field}
                 value={destination}
                 onChange={(event) => {
@@ -261,6 +280,7 @@ export function OfapiMediaPage() {
             <label className="grid gap-1 text-sm text-text-muted">
               Maximum credits
               <input
+                disabled={busy}
                 className={field}
                 type="number"
                 min={1}
@@ -287,6 +307,13 @@ export function OfapiMediaPage() {
           )}
           {preview && (
             <div className="rounded border border-border p-3 text-sm text-text-secondary">
+              <p className="font-medium">
+                {preview.pageLabel} (page {preview.body.pageId}) ·{" "}
+                {preview.sourceFilename}
+              </p>
+              <p className="break-all text-xs text-text-muted">
+                Source {preview.body.sourceId} · SHA256 {preview.receipt.sha256}
+              </p>
               <p>
                 {preview.receipt.destination === "vault"
                   ? "Reusable vault"
@@ -403,6 +430,10 @@ export function OfapiMediaPage() {
                       setCollectionPreview({
                         selection: [`vault_item:${job.mediaRef}`],
                         revision: pages.data!.revision,
+                        pageId,
+                        pageLabel:
+                          pages.data!.pages.find((page) => page.id === pageId)
+                            ?.label ?? `Page ${pageId}`,
                       })
                     }
                   >
@@ -418,6 +449,7 @@ export function OfapiMediaPage() {
         <section className="rounded border border-border p-4 space-y-2">
           <p className="text-sm text-text-secondary">{handoff.note}</p>
           <input
+            disabled={busy}
             aria-label="Verified media ID"
             className={`${field} w-full font-mono`}
             readOnly
@@ -447,6 +479,10 @@ export function OfapiMediaPage() {
                     "taggable_users",
                   ],
                   revision: pages.data!.revision,
+                  pageId,
+                  pageLabel:
+                    pages.data!.pages.find((page) => page.id === pageId)
+                      ?.label ?? `Page ${pageId}`,
                 })
               }
             >
@@ -458,6 +494,7 @@ export function OfapiMediaPage() {
         {collectionPreview && (
           <div className="rounded border border-border p-3 text-sm text-text-secondary">
             <p>
+              {collectionPreview.pageLabel} (page {collectionPreview.pageId}) ·
               Read{" "}
               {collectionPreview.selection.length === 1
                 ? "one selected item"
@@ -471,7 +508,7 @@ export function OfapiMediaPage() {
               onClick={() =>
                 void run(async () => {
                   await ofapiMediaActions.collect({
-                    pageId,
+                    pageId: collectionPreview.pageId,
                     category: "vault_catalog",
                     expectedRevision: collectionPreview.revision,
                     maxCredits: 10,
@@ -570,7 +607,7 @@ export function OfapiMediaPage() {
         <div className="flex gap-3 text-sm text-text-muted">
           <button
             className={button}
-            disabled={offset === 0}
+            disabled={busy || offset === 0}
             onClick={() => setOffset(Math.max(0, offset - 50))}
           >
             Previous
@@ -581,7 +618,7 @@ export function OfapiMediaPage() {
           </span>
           <button
             className={button}
-            disabled={offset + 50 >= (saved.data?.totalMedia ?? 0)}
+            disabled={busy || offset + 50 >= (saved.data?.totalMedia ?? 0)}
             onClick={() => setOffset(offset + 50)}
           >
             Next

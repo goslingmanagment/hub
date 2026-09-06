@@ -44,8 +44,8 @@ export const CATEGORY_COPY_RU: Record<string, CategoryCopy> = {
     why: "Поиск медиа и связи с постами, без скачивания файлов",
   },
   vault_files: {
-    label: "Файлы из vault",
-    why: "Локальные копии медиа по выбранным файлам",
+    label: "Загрузка своих медиа",
+    why: "Загрузка своего файла в vault или CDN с отдельным подтверждением",
   },
   balances: {
     label: "Балансы и выплаты",
@@ -96,6 +96,7 @@ export const JOB_STATE_LABELS_RU: Record<string, string> = {
 
 export const PREREQUISITE_LABELS_RU: Record<string, string> = {
   "active OFAPI page binding": "активная привязка страницы к OFAPI",
+  "owned source and explicit upload approval": "свой файл и отдельное подтверждение загрузки",
   "explicit bounded file selection": "явный ограниченный список файлов",
 };
 

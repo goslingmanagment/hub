@@ -86,6 +86,7 @@ export function Sidebar({ user }: SidebarProps) {
           Overview
         </NavLink>
 
+        {user.role === "owner" && <NavLink to="/ofapi-marketing" className="flex items-center gap-2.5 px-3.5 py-2.5 rounded-lg text-sm text-text-secondary hover:bg-hover"><Database size={16} /> Smart Links</NavLink>}
         {(user.role === "owner" || user.role === "team_lead") && <NavLink to="/ofapi-exports" className="flex items-center gap-2.5 px-3.5 py-2.5 rounded-lg text-sm text-text-secondary hover:bg-hover"><Database size={16} /> OFAPI exports</NavLink>}
         {(user.role === "owner" || user.role === "team_lead") && <NavLink to="/ofapi-media" className="flex items-center gap-2.5 px-3.5 py-2.5 rounded-lg text-sm text-text-secondary hover:bg-hover"><Database size={16} /> OnlyFans media</NavLink>}
 

@@ -18480,6 +18480,96 @@
                           "preview": {
                             "type": "object",
                             "properties": {
+                              "pageId": {
+                                "anyOf": [
+                                  {
+                                    "type": "integer",
+                                    "exclusiveMinimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "pageLabel": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "accountId": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "values": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "field": {
+                                      "type": "string",
+                                      "enum": [
+                                        "name",
+                                        "link_type",
+                                        "free_trial_days",
+                                        "tags",
+                                        "label",
+                                        "platform",
+                                        "pixel_id",
+                                        "event_click",
+                                        "event_new_subscriber",
+                                        "event_first_transaction",
+                                        "event_new_transaction",
+                                        "event_message_received_from_fan",
+                                        "event_fan_sent_1_message",
+                                        "event_fan_sent_3_messages",
+                                        "event_type",
+                                        "http_method",
+                                        "body_change",
+                                        "headers_change",
+                                        "pixel_token_change",
+                                        "test_event_code_change",
+                                        "event_source_url_change"
+                                      ]
+                                    },
+                                    "value": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "number"
+                                        },
+                                        {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string"
+                                          }
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "field",
+                                    "value"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
                               "destination": {
                                 "anyOf": [
                                   {
@@ -18554,6 +18644,10 @@
                               }
                             },
                             "required": [
+                              "pageId",
+                              "pageLabel",
+                              "accountId",
+                              "values",
                               "destination",
                               "templateVariables",
                               "headerNames",
@@ -19604,6 +19698,96 @@
                     "preview": {
                       "type": "object",
                       "properties": {
+                        "pageId": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "pageLabel": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "accountId": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "values": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "field": {
+                                "type": "string",
+                                "enum": [
+                                  "name",
+                                  "link_type",
+                                  "free_trial_days",
+                                  "tags",
+                                  "label",
+                                  "platform",
+                                  "pixel_id",
+                                  "event_click",
+                                  "event_new_subscriber",
+                                  "event_first_transaction",
+                                  "event_new_transaction",
+                                  "event_message_received_from_fan",
+                                  "event_fan_sent_1_message",
+                                  "event_fan_sent_3_messages",
+                                  "event_type",
+                                  "http_method",
+                                  "body_change",
+                                  "headers_change",
+                                  "pixel_token_change",
+                                  "test_event_code_change",
+                                  "event_source_url_change"
+                                ]
+                              },
+                              "value": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "number"
+                                  },
+                                  {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "field",
+                              "value"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
                         "destination": {
                           "anyOf": [
                             {
@@ -19678,6 +19862,10 @@
                         }
                       },
                       "required": [
+                        "pageId",
+                        "pageLabel",
+                        "accountId",
+                        "values",
                         "destination",
                         "templateVariables",
                         "headerNames",
@@ -20005,6 +20193,96 @@
                     "preview": {
                       "type": "object",
                       "properties": {
+                        "pageId": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "pageLabel": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "accountId": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "values": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "field": {
+                                "type": "string",
+                                "enum": [
+                                  "name",
+                                  "link_type",
+                                  "free_trial_days",
+                                  "tags",
+                                  "label",
+                                  "platform",
+                                  "pixel_id",
+                                  "event_click",
+                                  "event_new_subscriber",
+                                  "event_first_transaction",
+                                  "event_new_transaction",
+                                  "event_message_received_from_fan",
+                                  "event_fan_sent_1_message",
+                                  "event_fan_sent_3_messages",
+                                  "event_type",
+                                  "http_method",
+                                  "body_change",
+                                  "headers_change",
+                                  "pixel_token_change",
+                                  "test_event_code_change",
+                                  "event_source_url_change"
+                                ]
+                              },
+                              "value": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "number"
+                                  },
+                                  {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "field",
+                              "value"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
                         "destination": {
                           "anyOf": [
                             {
@@ -20079,6 +20357,10 @@
                         }
                       },
                       "required": [
+                        "pageId",
+                        "pageLabel",
+                        "accountId",
+                        "values",
                         "destination",
                         "templateVariables",
                         "headerNames",
@@ -21107,6 +21389,96 @@
                           "preview": {
                             "type": "object",
                             "properties": {
+                              "pageId": {
+                                "anyOf": [
+                                  {
+                                    "type": "integer",
+                                    "exclusiveMinimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "pageLabel": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "accountId": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "values": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "field": {
+                                      "type": "string",
+                                      "enum": [
+                                        "name",
+                                        "link_type",
+                                        "free_trial_days",
+                                        "tags",
+                                        "label",
+                                        "platform",
+                                        "pixel_id",
+                                        "event_click",
+                                        "event_new_subscriber",
+                                        "event_first_transaction",
+                                        "event_new_transaction",
+                                        "event_message_received_from_fan",
+                                        "event_fan_sent_1_message",
+                                        "event_fan_sent_3_messages",
+                                        "event_type",
+                                        "http_method",
+                                        "body_change",
+                                        "headers_change",
+                                        "pixel_token_change",
+                                        "test_event_code_change",
+                                        "event_source_url_change"
+                                      ]
+                                    },
+                                    "value": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "number"
+                                        },
+                                        {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string"
+                                          }
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "field",
+                                    "value"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
                               "destination": {
                                 "anyOf": [
                                   {
@@ -21181,6 +21553,10 @@
                               }
                             },
                             "required": [
+                              "pageId",
+                              "pageLabel",
+                              "accountId",
+                              "values",
                               "destination",
                               "templateVariables",
                               "headerNames",
@@ -22226,6 +22602,96 @@
                           "preview": {
                             "type": "object",
                             "properties": {
+                              "pageId": {
+                                "anyOf": [
+                                  {
+                                    "type": "integer",
+                                    "exclusiveMinimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "pageLabel": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "accountId": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "values": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "field": {
+                                      "type": "string",
+                                      "enum": [
+                                        "name",
+                                        "link_type",
+                                        "free_trial_days",
+                                        "tags",
+                                        "label",
+                                        "platform",
+                                        "pixel_id",
+                                        "event_click",
+                                        "event_new_subscriber",
+                                        "event_first_transaction",
+                                        "event_new_transaction",
+                                        "event_message_received_from_fan",
+                                        "event_fan_sent_1_message",
+                                        "event_fan_sent_3_messages",
+                                        "event_type",
+                                        "http_method",
+                                        "body_change",
+                                        "headers_change",
+                                        "pixel_token_change",
+                                        "test_event_code_change",
+                                        "event_source_url_change"
+                                      ]
+                                    },
+                                    "value": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "number"
+                                        },
+                                        {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string"
+                                          }
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "field",
+                                    "value"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
                               "destination": {
                                 "anyOf": [
                                   {
@@ -22300,6 +22766,10 @@
                               }
                             },
                             "required": [
+                              "pageId",
+                              "pageLabel",
+                              "accountId",
+                              "values",
                               "destination",
                               "templateVariables",
                               "headerNames",
