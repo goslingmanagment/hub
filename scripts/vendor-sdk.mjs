@@ -89,12 +89,12 @@ mkdirSync(join(staging, "src/shared"), { recursive: true });
 // is dependency-free (or types-only on each other). ai-stop-reason carries the
 // coach-chat isOutputExhausted predicate (spec §8) the contracts barrel
 // re-exports so out-of-workspace consumers (the extension) can apply it.
-for (const file of ["types.ts", "time.ts", "spender-retention.ts", "ai-stop-reason.ts"]) {
+for (const file of ["types.ts", "time.ts", "spender-retention.ts", "ai-stop-reason.ts", "ofapi-vendor-usage.ts"]) {
   stageFile(`packages/shared/src/${file}`, join(staging, `src/shared/${file}`), []);
 }
 writeFileSync(
   join(staging, "src/shared/index.ts"),
-  'export * from "./types";\nexport * from "./time";\nexport * from "./spender-retention";\nexport * from "./ai-stop-reason";\n',
+  'export * from "./types";\nexport * from "./time";\nexport * from "./spender-retention";\nexport * from "./ai-stop-reason";\nexport * from "./ofapi-vendor-usage";\n',
 );
 
 const toShared = [["@agency_hub_core/shared", "../shared/index"]];
@@ -109,6 +109,8 @@ for (const file of [
   // Owner administration of the plane's keys (slice B). routes.ts spreads these
   // into routeSchemas too, so the same rule applies: no file, no compile.
   "routes-agent-keys.ts",
+  "routes-ofapi-vendor.ts",
+  "ofapi-vendor-usage.ts",
   "sdk-runtime.ts",
   "domain-event-cursor.ts",
   "authorization-policy.ts",
