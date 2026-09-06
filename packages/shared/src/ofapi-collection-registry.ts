@@ -51,6 +51,8 @@ export const OFAPI_COLLECTION_REGISTRY = OFAPI_COLLECTION_CATEGORIES.map(id => (
 
 /** Fixed migration baseline. Unknown operations fail closed at the collection boundary. */
 export function classifyOfapiCollectionOperation(operation: string): OfapiCollectionCategory | "diagnostic" | "command" | null {
+  if (operation === "ofapi_export_cancel") return "command";
+  if (operation === "ofapi_export_inventory") return "diagnostic";
   if (/^ofapi_command_/.test(operation)) return "command";
   if (["ofapi_balance_ping", "ofapi_credential_preflight", "ofapi_admin_accounts", "ofapi_webhook_crud", "ofapi_webhook_inventory",
     "ofapi_stored_tracking_links", "ofapi_stored_trial_links"].includes(operation)) return "diagnostic";

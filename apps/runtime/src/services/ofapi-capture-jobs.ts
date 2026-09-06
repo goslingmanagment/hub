@@ -1527,7 +1527,7 @@ export async function executeOfapiCaptureJobChunk(
   await settleOfapiCollectionRequest(app.db, reservation.attemptId, parsed.creditsUsed).catch(error => {
     app.logger.warn({ error, attemptId: reservation.attemptId }, "Collection usage settlement pending; captured response retained");
   });
-    if (parsed.creditsUsed !== null && requestPlan.operation !== "ofapi_export_start") {
+    if (parsed.creditsUsed !== null && requestPlan.operation !== "ofapi_export_start" && requestPlan.operation !== "ofapi_export_retry") {
       await reconcileOfapiCapturedAttemptCredit(app.db, {
         attemptId: reservation.attemptId,
         actualCredits: parsed.creditsUsed,

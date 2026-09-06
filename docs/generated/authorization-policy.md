@@ -22,7 +22,7 @@ body remain handler-checked and are noted per route in the service layer.
 | `agentKey` | Agent Read Plane key only; no human principal is admitted |
 | `any` | any authenticated principal except an agent key |
 
-## Routes (236)
+## Routes (239)
 
 | Method | Path | Route key | Kind | Roles | Page scope |
 | --- | --- | --- | --- | --- | --- |
@@ -73,6 +73,8 @@ body remain handler-checked and are noted per route in the service layer.
 | GET | `/api/v1/admin/ofapi/credits/ledger.csv` | `adminOfapiCreditsLedgerCsv` | `owner-session` | — | — |
 | GET | `/api/v1/admin/ofapi/credits/summary` | `adminOfapiCreditsSummary` | `owner-session` | — | — |
 | GET | `/api/v1/admin/ofapi/dm-archive/status` | `adminOfapiDmColdArchiveStatus` | `owner-session` | — | — |
+| GET | `/api/v1/admin/ofapi/export-inventory` | `ofapiExportInventoryGet` | `owner-session` | — | — |
+| POST | `/api/v1/admin/ofapi/export-inventory/refresh` | `ofapiExportInventoryRefresh` | `owner-session` | — | — |
 | POST | `/api/v1/admin/ofapi/export-quotes` | `adminOfapiExportQuotesCreate` | `owner-session` | — | — |
 | GET | `/api/v1/admin/ofapi/export-quotes/:jobId` | `adminOfapiExportQuoteStatus` | `owner-session` | — | — |
 | POST | `/api/v1/admin/ofapi/export-quotes/:jobId/approve-pilot` | `adminOfapiExportPilotApprove` | `owner-session` | — | — |
@@ -83,6 +85,7 @@ body remain handler-checked and are noted per route in the service layer.
 | POST | `/api/v1/admin/ofapi/exports` | `ofapiTypedExportCreate` | `owner-session` | — | — |
 | POST | `/api/v1/admin/ofapi/exports/:jobId/approve` | `ofapiTypedExportApprove` | `owner-session` | — | — |
 | POST | `/api/v1/admin/ofapi/exports/:jobId/artifact` | `ofapiTypedExportArtifact` | `owner-session` | — | — |
+| POST | `/api/v1/admin/ofapi/exports/:jobId/control` | `ofapiTypedExportControl` | `owner-session` | — | — |
 | GET | `/api/v1/admin/ofapi/exports/:jobId/rows` | `ofapiTypedExportRows` | `session` | — | — |
 | GET | `/api/v1/admin/ofapi/key-scope` | `ofapiKeyScopeGet` | `owner-session` | — | — |
 | POST | `/api/v1/admin/ofapi/key-scope` | `ofapiKeyScopeApply` | `owner-session` | — | — |

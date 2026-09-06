@@ -11113,3 +11113,13 @@ owner mutation and assigned-page team-lead reads are enforced server-side.
 The vendor list/cancel/retry action extension is the follow-up S8b commit: retry
 creates another auto-started export and requires fresh bounded owner authority.
 No production configuration or vendor spending is authorized by this decision.
+
+**S8b control amendment (2026-09-06):** Provider inventory is an explicit, bounded
+owner-only free refresh over captured shared-credential metadata. Provider
+cancellation uses a separate durable one-attempt DELETE; rejected or uncertain
+acknowledgments reconcile the original export with bounded GET, never a repeated
+DELETE. Provider retry is an explicit newly approved paid auto-start, with frozen
+row/byte/credit caps, source and policy CAS, and verified old/new export identity.
+An uncertain retry stays fenced. Neither cancellation nor retry rewrites prior
+charges. The documented list status-filter enum omits the cancellation endpoint's
+`cancelled` result; captured vendor state is retained. No new migration or flag.

@@ -1,3 +1,4 @@
+import { resumeOfapiExportCancellationStatus } from "./ofapi-export-controls.ts";
 import { sql } from "drizzle-orm";
 import { OFAPI_TYPED_EXPORT_PROFILES } from "@agency_hub_core/shared";
 import type { AppContext } from "../bootstrap.ts";
@@ -6,6 +7,7 @@ import { ensureQueueCreated, type QueueCreationClient } from "./sync-queue.ts";
 export const OFAPI_TYPED_EXPORT_SWEEP_QUEUE = "ofapi.typed-export.sweep";
 /** Only explicitly created export jobs; this never enables baseline/background capture. */
 export async function runOfapiTypedExportSweep(app: AppContext) {
+  await resumeOfapiExportCancellationStatus(app);
   const jobs = await app.db.execute<{ id: string; page_id: string }>(sql`select id,page_id from ofapi_capture_jobs
     where kind='account_export' and target->>'profile' in (${sql.join(OFAPI_TYPED_EXPORT_PROFILES.map(value => sql`${value}`), sql`,`)})
       and ((state='awaiting_parse' and reason_code is null) or (state in ('ready','retry_wait') and next_attempt_at<=now()))

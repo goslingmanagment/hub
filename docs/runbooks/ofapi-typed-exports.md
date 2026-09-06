@@ -71,9 +71,43 @@ Verified 2026-09-06, read-only documentation requests only:
   insufficient to define the parser. Explicit columns come from the live guide;
   responses with different/missing columns stay captured but unimported.
 
-Provider list/cancel/retry action handling is delivered by the separate S8b
-commit. Local cancellation never implies a successful vendor cancellation;
-provider retry is a fresh paid auto-start and needs a new bounded approval.
+## Provider inventory, cancellation and retry
+
+The owner-only provider inventory initially reads the last captured local page.
+Press **Refresh selected profile** to capture one free vendor inventory page
+(maximum 100 records; the screen requests 25). Further pages require another
+explicit press. Its summary omits signed download URLs. This is shared credential
+inventory, so assigned team leads do not receive access to other pages' exports.
+
+For a running local export, **Preview vendor cancellation** saves the source
+version and current collection-policy revision. Confirming creates a separate
+one-attempt durable DELETE intent. The original job pauses until the captured
+acknowledgment identifies that exact vendor export as cancelled. If the response
+is rejected or lost, the worker resumes bounded GET status reconciliation of the
+original ID; it never repeats DELETE automatically. Background pause may defer
+that reconciliation. Earlier export charges remain recorded.
+
+For a captured failed export, **Preview paid retry** explains that the vendor
+creates a new export and starts it immediately. Confirming uses the saved source
+version, policy revision and credit ceiling, creates a fresh bounded job, and
+requires the response's new ID and original ID to match. The new export follows
+normal status capture and artifact verification. A lost retry response remains
+blocked with outcome unknown; there is no automatic retry or second spend.
+Original and retry charges remain separate. Changed snapshots require review
+again.
+
+Live control documentation verified 2026-09-06:
+
+- [List exports](https://docs.onlyfansapi.com/api-reference/data-exports/list-data-exports)
+  returns a nested `data.data` list and `data.meta` pagination. The route is free.
+- [Cancel export](https://docs.onlyfansapi.com/api-reference/data-exports/cancel-data-export)
+  accepts pending/in-progress exports and returns `cancelled`. The list route's
+  documented status filter omits `cancelled`; Hub retains this returned status
+  and does not depend on that inconsistent filter enum.
+- [Retry failed export](https://docs.onlyfansapi.com/api-reference/data-exports/retry-failed-data-export)
+  creates a new export with the original parameters and auto-starts it. Its
+  initial response reports zero credits, which is not proof that the asynchronous
+  export is free. The full approved reservation remains until terminal billing.
 
 ## Validation / spend
 
@@ -81,5 +115,8 @@ Synthetic captured vendor fixtures cover quote → approval → start → pollin
 bounded S3 download → immutable import → daily report, actual credit overrun,
 replay, wrong-account artifact retention, missing dates, REST source separation,
 old pilot refusal, page ACL, free polling caps and populated page erasure.
+Provider controls cover cancellation under pause, rejected/unknown cancellation
+GET reconciliation, exact new retry identity, separate retained charges, lost
+retry fencing, stale approvals and captured owner-only inventory.
 Downloader fixtures cover untrusted host/path, private/mixed DNS, redirects and
 both declared/streamed byte limits. No paid probes or production mutations.
