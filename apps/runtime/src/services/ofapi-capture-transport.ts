@@ -1,3 +1,4 @@
+import { findOfapiReadDefinition } from "@agency_hub_core/shared";
 import type { OfapiCollectionContext } from "@agency_hub_core/shared";
 import { settleOfapiCollectionRequest } from "@agency_hub_core/db";
 import { setTimeout as delay } from "node:timers/promises";
@@ -150,7 +151,7 @@ export async function executeCaptureFirstInteractiveRead(
     surface: input.surface,
     servingMode: input.servingMode ?? "vendor_only",
     fallbackReason: input.fallbackReason ?? null,
-    reservedCredits: Math.max(1, Math.trunc(input.fallbackCredits)),
+    reservedCredits: Math.max(findOfapiReadDefinition(input.operation)?.reservedCredits === 0 ? 0 : 1, Math.trunc(input.fallbackCredits)),
     globalDailyCap,
     scopeDailyCap: globalDailyCap,
     creditFloor: Math.max(0, app.config.ofapiCreditFloor ?? 500),

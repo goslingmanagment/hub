@@ -55,6 +55,7 @@ export const ofapiMarketingResourceSchema = z.object({
 export type OfapiMarketingResource = z.infer<typeof ofapiMarketingResourceSchema>;
 export const ofapiMarketingIntentSchema = z.object({
   id: z.string().uuid(), action: z.string(), state: z.string(), errorCode: z.string().nullable(),
+  remoteId:z.string().nullable(),accountingState:z.enum(["pending","complete"]),projectionState:z.enum(["pending","complete"]),
   createdAt: z.string().datetime(), responseObservationId: z.number().nullable(),
   preview: z.object({ destination: z.string().nullable(), templateVariables: z.array(z.string()), headerNames: z.array(z.string()),
     targetId: z.string().nullable(), changedFields: z.array(z.string()), conversionTypes: z.array(z.string()), scope: z.string().nullable(),

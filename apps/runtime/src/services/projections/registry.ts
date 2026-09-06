@@ -1,4 +1,5 @@
 import { OFAPI_READ_SNAPSHOT_PROJECTION, runOfapiReadSnapshotProjection, rebuildOfapiReadSnapshotProjection } from "./ofapi-read-snapshots.ts";
+import { OFAPI_TYPED_EXPORT_EVENT, OFAPI_TYPED_EXPORT_PROJECTION, runOfapiTypedExportsProjection, rebuildOfapiTypedExportsProjection } from "./ofapi-typed-exports.ts";
 // The projection registry (WP-F1(0), the spine precursor).
 //
 // WHAT IT REPLACES, and why that was the expensive-forever shape: adding a
@@ -138,6 +139,7 @@ function count(result: Record<string, unknown>, key: string): number {
 
 export const PROJECTION_REGISTRY: readonly ProjectionDefinition[] = [
   { name:OFAPI_READ_SNAPSHOT_PROJECTION, eventTypes:["ofapi.read_snapshot_observed"], tables:["ofapi_read_snapshots"], stateClass:"fact_projection", rebuildKind:"truncate_replay", label:"OFAPI read snapshots projected", run:runOfapiReadSnapshotProjection, rebuild:rebuildOfapiReadSnapshotProjection, didWork:result=>count(result,"applied")>0 },
+  { name: OFAPI_TYPED_EXPORT_PROJECTION, eventTypes: [OFAPI_TYPED_EXPORT_EVENT], tables: ["ofapi_typed_export_rows", "ofapi_profile_visitors_daily"], stateClass: "fact_projection", rebuildKind: "truncate_replay", label: "Typed OFAPI exports projection complete", run: runOfapiTypedExportsProjection, rebuild: rebuildOfapiTypedExportsProjection, didWork: result => count(result, "applied") > 0 },
   {
     name: "message_archive",
     eventTypes: [...MESSAGE_EVENT_TYPES],

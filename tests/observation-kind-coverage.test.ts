@@ -104,6 +104,7 @@ const DIRECT_WRITERS = [
   "apps/runtime/src/services/ofapi-binding-refresh.ts",
   "apps/runtime/src/services/ofapi-credential-policy.ts",
   "apps/runtime/src/services/ofapi-export-artifact.ts",
+  "apps/runtime/src/services/ofapi-typed-exports.ts",
   "apps/runtime/src/services/ofapi-read-gateway-capture.ts",
   "apps/runtime/src/services/ofapi-webhook-capture.ts",
   "apps/runtime/src/services/sync/shared.ts",

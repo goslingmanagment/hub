@@ -1,4 +1,4 @@
-import {getOfapiMarketingDashboard, prepareOfapiMarketingCommand, dispatchOfapiMarketingCommand, refreshOfapiMarketingPostbacks} from "../../services/ofapi-smart-links.ts";
+import {rebuildOfapiMarketingState, getOfapiMarketingDashboard, prepareOfapiMarketingCommand, dispatchOfapiMarketingCommand, refreshOfapiMarketingPostbacks} from "../../services/ofapi-smart-links.ts";
 import {
   applyOfapiWebhookCollectionPolicy, listOfapiWebhookDeliveryHistory, redeliverOfapiWebhook,
   replayLocalOfapiWebhook, saveOfapiWebhookCollectionPolicy, syncOfapiWebhookDeliveries,
@@ -225,6 +225,10 @@ export async function registerIngestRoutes(server: ApiServer, ctx: ApiModuleCont
     return reply.code(response.status as 200).send(response.body);
   });
 
+  server.post("/api/v1/admin/ofapi/marketing/rebuild", {schema:routeSchemas.ofapiMarketingRebuild}, async request => {
+    const principal=await requirePrincipal(request); requireOwner(principal);
+    return rebuildOfapiMarketingState(appContext,principal.user.id);
+  });
   server.get("/api/v1/admin/ofapi/marketing", {schema:routeSchemas.ofapiMarketingGet}, async request => {
     requireOwner(await requirePrincipal(request)); return getOfapiMarketingDashboard(appContext);
   });

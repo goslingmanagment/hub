@@ -8,6 +8,8 @@ import { ofapiCollectionPolicyHooks } from "../apps/runtime/src/services/ofapi-c
 import { runOfapiCollectionJob } from "../apps/runtime/src/services/ofapi-collection-runner.ts";
 import { rebuildOfapiReadSnapshotProjection } from "../apps/runtime/src/services/projections/ofapi-read-snapshots.ts";
 import { getOfapiMarketingDashboard, prepareOfapiMarketingCommand, dispatchOfapiMarketingCommand, refreshOfapiMarketingPostbacks } from "../apps/runtime/src/services/ofapi-smart-links.ts";
+import { rebuildOfapiMarketingProjection, runOfapiMarketingProjection } from "../apps/runtime/src/services/projections/ofapi-marketing.ts";
+import * as creditService from "../apps/runtime/src/services/ofapi-credits.ts";
 import { executeErasure, planErasure } from "../apps/runtime/src/services/erasure/index.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
@@ -16,7 +18,7 @@ let db:StartedTestDatabase,app:AppContext,actor:number,pageId:number;
 let fetchMock:ReturnType<typeof vi.fn>;
 const response=(data:unknown, credits=0)=>new Response(JSON.stringify({data,_meta:{_credits:{used:credits,balance:0}}}));
 beforeAll(async()=>{const value=await startIntegrationTestDatabase();if(!value)throw new Error("Marketing tests require PostgreSQL");db=value;},120000);
-afterAll(async()=>{await db?.stop();});afterEach(()=>vi.unstubAllGlobals());
+afterAll(async()=>{await db?.stop();});afterEach(()=>{vi.unstubAllGlobals();vi.restoreAllMocks();});
 beforeEach(async()=>{
  await resetIntegrationDatabase(db.pool);app=createTestAppContext(db);app.config.ofapiApiKey="synthetic-marketing";
  actor=(await createUser(app.db,{username:"marketing-owner",passwordHash:"synthetic",role:"owner"}))!.id;
@@ -97,13 +99,50 @@ describe("Smart Links end-to-end capture and owner controls",()=>{
   expect(await collect(["stored_shared_tracking_links"],"tracking_links")).toEqual({state:"completed"});
   expect((await db.pool.query("select reserved_credits,settled_credits from ofapi_request_attempts")).rows).toMatchObject([{reserved_credits:0,settled_credits:1}]);
  });
+ it("projects confirmed create IDs and exact DELETE 204 tombstones; local rebuild reproduces state",async()=>{
+  const id=randomUUID();await prepareOfapiMarketingCommand(app,{id,command:{action:"smart_link_create",pageId,name:"Launch",link_type:"tracking_link"}},actor);
+  fetchMock.mockResolvedValueOnce(response({id:LINK,name:"Launch",traffic_redirect_url:"https://ofapi.link/launch",account:{id:"acct_marketing"}}));
+  expect(await apply(id)).toMatchObject({state:"succeeded",remoteId:LINK,projectionState:"complete",accountingState:"complete"});
+  expect((await getOfapiMarketingDashboard(app)).resources).toMatchObject([{id:LINK,name:"Launch",publicUrl:"https://ofapi.link/launch",nativeAccountRef:"acct_marketing"}]);
+  const remove=randomUUID();await prepareOfapiMarketingCommand(app,{id:remove,command:{action:"smart_link_delete",pageId,linkId:LINK}},actor);
+  fetchMock.mockResolvedValueOnce(new Response(null,{status:204}));expect(await apply(remove)).toMatchObject({state:"succeeded",remoteId:LINK});
+  const before=await getOfapiMarketingDashboard(app);expect(before.resources).toEqual([]);
+  expect((await db.pool.query("select deleted from ofapi_marketing_resources")).rows).toEqual([{deleted:true}]);
+  await rebuildOfapiMarketingProjection(app);expect(await getOfapiMarketingDashboard(app)).toEqual(before);expect(fetchMock).toHaveBeenCalledTimes(2);
+ });
+ it("does not call a malformed 2xx creation confirmed or resend its retained intent",async()=>{
+  const id=randomUUID();await prepareOfapiMarketingCommand(app,{id,command:{action:"smart_link_create",pageId,name:"Unknown",link_type:"tracking_link"}},actor);
+  fetchMock.mockResolvedValueOnce(response({name:"missing remote identity"}));
+  expect(await apply(id)).toMatchObject({state:"indeterminate",remoteId:null,errorCode:"vendor_resource_identity_unconfirmed"});
+  expect((await getOfapiMarketingDashboard(app)).resources).toEqual([]);await apply(id);await rebuildOfapiMarketingProjection(app);expect(fetchMock).toHaveBeenCalledTimes(1);
+ });
+ it("keeps confirmed writes succeeded through projection and credit failures; repairs locally",async()=>{
+  const id=randomUUID();await prepareOfapiMarketingCommand(app,{id,command:{action:"smart_link_create",pageId,name:"Recoverable",link_type:"tracking_link"}},actor);
+  await db.pool.query("create function marketing_projection_fault() returns trigger language plpgsql as $$ begin raise exception 'synthetic projection outage'; end $$");
+  await db.pool.query("create trigger marketing_projection_fault before insert on ofapi_marketing_resources for each row execute function marketing_projection_fault()");
+  fetchMock.mockResolvedValueOnce(response({id:LINK}));
+  expect(await apply(id)).toMatchObject({state:"succeeded",remoteId:LINK,projectionState:"pending"});
+  await db.pool.query("drop trigger marketing_projection_fault on ofapi_marketing_resources");await db.pool.query("drop function marketing_projection_fault()");
+  vi.spyOn(creditService,"createOfapiCreditSpendSink").mockReturnValueOnce(async()=>false);
+  await runOfapiMarketingProjection(app);
+  expect((await db.pool.query("select state,projection_state,accounting_state from ofapi_marketing_intents where id=$1",[id])).rows[0]).toEqual({state:"succeeded",projection_state:"complete",accounting_state:"pending"});
+  expect((await getOfapiMarketingDashboard(app)).intents[0]).toMatchObject({state:"succeeded",projectionState:"complete",accountingState:"complete"});expect(fetchMock).toHaveBeenCalledTimes(1);
+ });
+ it("rebuilds secret-safe postbacks and only infers absence from explicit complete inventory",async()=>{
+  fetchMock.mockResolvedValueOnce(response([{id:8,url:"https://events.test/PRIVATE?fan={fan_id}",body:"PRIVATE {amount_net}",http_method:"POST",headers:[{name:"Authorization",value:"PRIVATE"}],smart_link_scope:"global",conversion_types:["new_transaction"]}]));
+  await refreshOfapiMarketingPostbacks(app,actor);
+  fetchMock.mockResolvedValueOnce(response([]));expect((await refreshOfapiMarketingPostbacks(app,actor)).resources).toHaveLength(1);
+  const before=await getOfapiMarketingDashboard(app);await rebuildOfapiMarketingProjection(app);expect(await getOfapiMarketingDashboard(app)).toEqual(before);expect(JSON.stringify(before)).not.toContain("PRIVATE");
+  fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({data:[],_pagination:{next_page:null}})));
+  expect((await refreshOfapiMarketingPostbacks(app,actor)).resources).toEqual([]);await rebuildOfapiMarketingProjection(app);expect((await getOfapiMarketingDashboard(app)).resources).toEqual([]);expect(fetchMock).toHaveBeenCalledTimes(3);
+ });
  it("page erasure removes populated intents, captures and marketing projections before replay",async()=>{
   await inventory();const id=randomUUID();await prepareOfapiMarketingCommand(app,{id,command:{action:"smart_link_create",pageId,name:"new",link_type:"tracking_link"}},actor);
   fetchMock.mockResolvedValueOnce(response({id:OTHER}));await apply(id);
   await db.pool.query("insert into ofapi_marketing_resources(page_id,kind,upstream_id,data,observation_id,observed_at) values($1,'pixel','999','{}',1,now())",[pageId]);
   const scope={scopeType:"page" as const,pageLabel:"marketing"};const plan=await planErasure(app,scope);
-  expect(plan.targets.find(t=>t.target==="ofapi_marketing_intents")?.rows).toBe(1);expect(plan.targets.find(t=>t.target==="ofapi_marketing_resources")?.rows).toBe(1);
-  await executeErasure(app,scope,{initiatedBy:actor});await rebuildOfapiReadSnapshotProjection(app,{accountId:pageId});
+  expect(plan.targets.find(t=>t.target==="ofapi_marketing_intents")?.rows).toBe(1);expect(plan.targets.find(t=>t.target==="ofapi_marketing_resources")?.rows).toBe(2);expect(plan.targets.find(t=>t.target==="ofapi_marketing_projection_receipts")?.rows).toBe(1);
+  await executeErasure(app,scope,{initiatedBy:actor});await rebuildOfapiReadSnapshotProjection(app,{accountId:pageId});await rebuildOfapiMarketingProjection(app);
   expect((await getOfapiMarketingDashboard(app))).toMatchObject({resources:[],analytics:[],intents:[]});
   expect((await db.pool.query("select count(*)::int n from observations where account_id=$1",[pageId])).rows[0].n).toBe(0);
  });

@@ -252,6 +252,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 249 | An explicit posts request is the manual action | `POST /admin/sync/trigger {scope: posts}` — the explicit per-page operator action — now clears a `manual_action_required` block on the posts stream (`clearPageSyncManualActionBlock`, that blocker kind only) BEFORE recording the request, so the request lands on a runnable row. Production 2026-09-04: after #128's cancel/resolve the streams stayed `blocked` with the old `ofapi_capture_job_*` codes because `resumePageSync` only lifts `paused` and nothing ever cleared a manual block; the explicit request the code itself calls "an explicit per-page operator action" was a no-op on exactly the state it exists for. `provider_bad_data`/`dependency` blocks are untouched. The posts handler also forgets an owner-cancelled pending job (checkpoint still named it) and seeds a fresh one through the ordinary slot path. |
 | 250 | OFAPI UI inherits the existing Anthropic-inspired Hub design | Owner requirement for the OFAPI refresh: use the current dashboard theme, typography, spacing and shared components across collection controls and other new OFAPI screens. The concrete source is globals.css plus Settings and OFAPI Credits; token reuse and visual consistency are acceptance criteria. |
 | 263 | OFAPI collection admission | New collectors default off; page/default CAS policies supersede the closed legacy baseline. Physical reservations separate background, interactive and bounded jobs; pauses retain checkpoints and paid responses. |
+| 267 | Typed OFAPI exports | Owner bounded quote/start/download/import profiles preserve row identity, immutable checksums and source-specific daily visitors; no collector enabled on rollout. |
 | 251 | OFAPI collection policy and UI are separate stages | Owner separates backend S-POL from frontend S-UI, each with independent implementation and acceptance. Saved mockups are non-normative references outside the implementation plan. New collection still requires both applicable stages plus explicit staged activation; existing Hub design tokens remain authoritative. |
 | 252 | OFAPI binding custody, credential adoption and free balance | S0/S1/S4a and minimum S5 use verified creator identity, a preview bound to current generation, durable historical attribution and narrow recovery. Expected team comes from independent configuration; unknown access fails closed for writes. The optional balance probe uses free usage. Code acceptance and live acceptance stay separate. |
 | 253 | OFAPI roster capture | Account roster is restricted identity evidence; typed projection excludes session material before capture and preserves identity conflicts |
@@ -11085,3 +11086,53 @@ Marketing business facts use the registered capture-to-canonical snapshot family
 Eleven closed owner commands cover Smart Link creation/deletion/tags and required Pixel/Postback controls. Prepared intent bodies and exact sensitive responses are encrypted with existing versioned keys; public/audit previews name fields and destinations without secret values. A credential/binding-bound intent is claimed once immediately before one physical dispatch. Uncertain or interrupted outcomes are never automatically retried. Shared pixel PATCH reports known affected links and incomplete team visibility; DELETE removes one relation. Explicit account restrictions fail closed for unknown team edits. External pixel tests require their own acknowledgement and provenance.
 
 Postback administration remains separate from business projections. Omitting a token/body/header on PATCH preserves provider state; rotation uses explicit new secret input. Page-owned control rows join governed erasure. Public V2 dashboard-only features and conditional legacy tracking/trial write workflows are not invented. [Implementation, discrepancies, spend and owner rollout](runbooks/ofapi-smart-links.md).
+Administrative marketing responses also register `OFAPI_MARKETING_ADMIN_PROJECTION`: encrypted exact response bytes, frozen command/target/binding and safe baseline produce resumable configuration receipts and exact deletion tombstones. Confirmed HTTP outcomes and validated remote IDs settle before accounting/projection, so local failures remain repairable without turning success into uncertainty or resending a write. Team-wide postbacks remain administrative state rather than fabricated page business events. Explicit EOF and matching credential scope are required before inventory absence removes a postback. Owner local rebuild and bounded dashboard repair issue no vendor calls; page-owned receipts participate in erasure and source-time fencing.
+
+## 267. Typed OFAPI export profiles and daily visitors
+
+Date: 2026-09-06. Extends decision #263, implementing S8 core of
+`docs/plans/2026-09-05-ofapi-coverage-refresh.md`.
+
+Owner-created single-page exports use explicit columns for profile visitors,
+fans, tracking links, trial links and smart links. Creating a vendor quote always
+sets `auto_start=false`. A separate CAS approval authorizes a single start under
+the frozen task call, credit, byte and row ceilings. Unknown pricing is accepted
+only for visitors, whose closed UTC day range bounds account-day rows; the other
+profiles require a captured quote. The existing chat pilot approval remains
+unchanged. The dedicated minute sweep leases exact typed job IDs and does not
+need or enable the legacy background capture flag. Free quote/status reads count
+against the task request cap; pauses prevent new physical requests while retained
+responses remain parseable. Terminal billing replaces estimated start billing
+idempotently, including an actual vendor overrun.
+
+Vendor artifact downloads permit only HTTPS documented S3 endpoints and the
+frozen team/export CSV path, pin public DNS answers, refuse redirects and bound
+streamed bytes while hashing. Reviewed owner CSV upload remains a fallback.
+Immutable bytes precede parsing. Account, columns, row identity, delivered count,
+window and checksum contracts must pass before projections or successful import.
+Rejected artifacts remain available as evidence. Accepted rows append projection-only
+domain events and populate the serving tables atomically; the registered
+`ofapi_typed_exports` projection rebuilds them without resetting job authority. Page erasure explicitly covers
+all new projections/artifacts and policy jobs/requests/settings.
+
+Visitors are daily account aggregates. CSV averages and REST chart duration
+remain distinct vendor fields with unspecified units. Null measurements and
+missing dates never become zeros; subscriber/user/guest categories are not
+assumed disjoint. REST materialization certifies only one-day requests and keeps
+total/users/guests sources separately. Other exports certify item presence, not
+continuous fan history or Hub financial totals. API GETs read saved state only;
+owner mutation and assigned-page team-lead reads are enforced server-side.
+
+The vendor list/cancel/retry action extension is the follow-up S8b commit: retry
+creates another auto-started export and requires fresh bounded owner authority.
+No production configuration or vendor spending is authorized by this decision.
+
+**S8b control amendment (2026-09-06):** Provider inventory is an explicit, bounded
+owner-only free refresh over captured shared-credential metadata. Provider
+cancellation uses a separate durable one-attempt DELETE; rejected or uncertain
+acknowledgments reconcile the original export with bounded GET, never a repeated
+DELETE. Provider retry is an explicit newly approved paid auto-start, with frozen
+row/byte/credit caps, source and policy CAS, and verified old/new export identity.
+An uncertain retry stays fenced. Neither cancellation nor retry rewrites prior
+charges. The documented list status-filter enum omits the cancellation endpoint's
+`cancelled` result; captured vendor state is retained. No new migration or flag.

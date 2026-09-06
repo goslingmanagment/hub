@@ -62,8 +62,12 @@ import { describe, expect, it } from "vitest";
 //     `capture_rewrite_runs` — the erasure's governance, for the same class of
 //     act.
 const SANCTIONED_DELETER_FILES = [
+  // Decision270: owner reset of encrypted-response-derived configuration, no source deletion.
+  "apps/runtime/src/services/projections/ofapi-marketing.ts",
   // Decision266: owner-invoked reset of replayable OFAPI snapshot projection only.
   "apps/runtime/src/services/projections/ofapi-read-snapshots.ts",
+  // S8: rebuilds derived rows from domain events; never deletes captured artifacts or jobs.
+  "apps/runtime/src/services/projections/ofapi-typed-exports.ts",
   "apps/runtime/src/cli.ts",
   "apps/runtime/src/services/erasure/index.ts",
   "apps/runtime/src/modules/events/index.ts",

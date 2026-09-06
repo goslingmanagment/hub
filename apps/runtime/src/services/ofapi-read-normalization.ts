@@ -1,4 +1,5 @@
 import { normalizeOfapiMarketingAnalytics, normalizeOfapiMarketingResource } from "./ofapi-marketing-normalization.ts";
+import { OFAPI_DEFAULT_BASE_URL } from "./ofapi.ts";
 import { createHash } from "node:crypto";
 import {
   findOfapiReadDefinition,
@@ -143,9 +144,9 @@ export function ofapiReadCoverage(
   };
   if (hasNext && typeof next === "string" && next.length > 0) {
     try {
-      const url = new URL(next, "https://app.onlyfansapi.com/api/");
+      const url = new URL(next, `${OFAPI_DEFAULT_BASE_URL}/`);
       if (
-        url.origin !== "https://app.onlyfansapi.com" ||
+        url.origin !== new URL(OFAPI_DEFAULT_BASE_URL).origin ||
         url.pathname !== `/api${pathname}` ||
         url.username ||
         url.password ||

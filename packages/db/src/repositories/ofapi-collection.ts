@@ -132,12 +132,14 @@ export interface OfapiCollectionAdmissionInput {
 /** Atomic at physical dispatch: separate background budget cannot consume interactive allowance. */
 export async function reserveOfapiCollectionRequest(db: Database, input: OfapiCollectionAdmissionInput) {
   const classification = classifyOfapiCollectionOperation(input.operation);
-  if (classification === "diagnostic" || classification === "command") return;
-  const category = input.context?.category ?? classification;
+  if (classification === "command" || (classification === "diagnostic" && input.context?.purpose !== "one_off")) return;
+  const category = input.context?.category ?? (classification === "diagnostic" ? null : classification);
   if (!category) throw new OfapiCollectionPolicyError("unregistered_operation");
   const purpose = input.context?.purpose ?? input.purpose ?? "background";
   const now = input.now ?? new Date();
-  const estimate = Math.max(findOfapiReadDefinition(input.operation)?.reservedCredits === 0 ? 0 : 1, Math.trunc(input.reservedCredits ?? 1));
+  const freeExportOperation = ["ofapi_export_quote_create", "ofapi_export_quote_status"].includes(input.operation);
+  const registeredFreeRead = findOfapiReadDefinition(input.operation)?.reservedCredits === 0;
+  const estimate = Math.max(freeExportOperation || registeredFreeRead ? 0 : 1, Math.trunc(input.reservedCredits ?? 1));
   return db.transaction(async tx => {
     const database = tx as unknown as Database;
     const current = await state(database, true);
@@ -175,14 +177,18 @@ export async function reserveOfapiCollectionRequest(db: Database, input: OfapiCo
   });
 }
 export async function settleOfapiCollectionRequest(db: Database, requestId: string, actualCredits: number | null) {
+  if (actualCredits !== null && (!Number.isSafeInteger(actualCredits) || actualCredits < 0)) throw new OfapiCollectionPolicyError("invalid_credits");
   await db.transaction(async tx => {
     const database = tx as unknown as Database;
-    const result = await database.execute<{ job_id: string | null; reserved_credits: string }>(sql`update ofapi_collection_requests set actual_credits=${actualCredits},state='captured',captured_at=now()
-      where request_id=${requestId} and state='reserved' returning job_id,reserved_credits`);
-    const row = result.rows[0];
-    if (row?.job_id && actualCredits !== null && actualCredits > Number(row.reserved_credits)) {
-      await database.execute(sql`update ofapi_collection_jobs set used_credits=used_credits+${actualCredits - Number(row.reserved_credits)},updated_at=now() where id=${row.job_id}::uuid`);
-    }
+    // Async exports replace start estimates with terminal vendor billing. Replays
+    // must not double charge, and an unknown response cannot erase actual evidence.
+    const result = await database.execute<{ job_id: string | null; reserved_credits: string; actual_credits: string | null }>(sql`select job_id,reserved_credits,actual_credits from ofapi_collection_requests
+      where request_id=${requestId} and state<>'released' for update`);
+    const row = result.rows[0]; if (!row) return;
+    const actual = actualCredits ?? (row.actual_credits === null ? null : Number(row.actual_credits));
+    await database.execute(sql`update ofapi_collection_requests set actual_credits=${actual},state='captured',captured_at=coalesce(captured_at,now()) where request_id=${requestId}`);
+    const delta = Math.max(Number(row.reserved_credits), actual ?? 0) - Math.max(Number(row.reserved_credits), Number(row.actual_credits ?? 0));
+    if (row.job_id && delta !== 0) await database.execute(sql`update ofapi_collection_jobs set used_credits=used_credits+${delta},updated_at=now() where id=${row.job_id}::uuid`);
   });
 }
 export async function releaseOfapiCollectionRequest(db: Database, requestId: string) {

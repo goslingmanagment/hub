@@ -405,6 +405,10 @@ for (const kind of ["tracking", "trial"]) {
   read(`${kind}_link_cohort_arps`, `${kind}-links/:id/cohort-arps`, "tracking_links", "object", "none", {acquisition_start: "date", acquisition_end: "date", revenue_basis: "enum:net|gross"}, {granularity: "window"});
 }
 
+// S6/S7 reference reads are explicit, paid lookups; no background default.
+const releaseFormQuery = { ...page, filter: "enum:all|pending", sort: "enum:date|name", sortDirection: "enum:desc|asc", name: text };
+read("release_forms", "release-forms", "vault_catalog", "items", "offset", releaseFormQuery);
+read("taggable_users", "release-forms/taggable-users", "vault_catalog", "items", "offset", releaseFormQuery);
 /** A closed GET catalog. No arbitrary vendor path or persistent following sort is accepted. */
 export const OFAPI_READ_CATALOG: readonly OfapiReadDefinition[] =
   definitions.map((row) => ({ ...row, operation: `ofapi_read_${row.id}` }));

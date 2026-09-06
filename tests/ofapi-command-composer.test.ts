@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ofapiSendV2PayloadSchema } from "@agency_hub_core/contracts";
 import { buildOfapiSendV2Body, ofapiExtendedAction, ofapiSentWebhookMatchesV2 } from "../apps/runtime/src/services/ofapi-command-composer.ts";
 import { previewOfapiBannedWords } from "../apps/runtime/src/services/ofapi-banned-words.ts";
-import { createOfapiClient } from "../apps/runtime/src/services/ofapi.ts";
+import { createOfapiClient, OfapiApiError } from "../apps/runtime/src/services/ofapi.ts";
 const payload = { text: "hello", priceCents: 697, mediaFiles: ["9007199254740993"], previews: [], lockedText: false, replyToMessageId: "9007199254740995", giphyId: null, rfTag: ["123"], rfPartner: [], rfGuest: [], blockBannedWords: "risky" as const, reuseProviderOperation: false };
 afterEach(() => vi.unstubAllGlobals());
 describe("send v2 and closed chat actions", () => {
@@ -46,4 +46,17 @@ it("requires exact visible v2 evidence for webhook verification", () => {
   expect(ofapiSentWebhookMatchesV2(payload, actual)).toBe(true);
   expect(ofapiSentWebhookMatchesV2(payload, { ...actual, lockedText: undefined })).toBe(false);
   expect(ofapiSentWebhookMatchesV2({ ...payload, mediaFiles: ["ofapi_media_token"] }, actual)).toBe(false);
+});
+
+it("keeps v2 validation feedback available to the owning draft but out of serialized errors", async () => {
+  const feedback = JSON.stringify({ errors: { text: ["private draft was blocked"] } });
+  const fetcher = vi.fn().mockResolvedValue(new Response(feedback, { status: 422 }));
+  vi.stubGlobal("fetch", fetcher);
+  const client = createOfapiClient({ apiKey: "synthetic", restDelayMs: 0 });
+  const error = await client.executeExtendedCommand!({}, "acct_a", "123", "send_message_v2", payload, "stable-key").catch(value => value);
+  expect(error).toBeInstanceOf(OfapiApiError);
+  expect(error.body).toBeNull();
+  expect(error.validationResponse).toBe(feedback);
+  expect(JSON.stringify(error)).not.toContain("private draft");
+  expect(fetcher).toHaveBeenCalledTimes(1);
 });

@@ -1,3 +1,4 @@
+import { ensureOfapiTypedExportQueue } from "../apps/runtime/src/services/ofapi-typed-export-worker.ts";
 import { beforeAll, afterAll, beforeEach, describe, expect, it } from "vitest";
 
 import { PgBoss } from "pg-boss";
@@ -56,6 +57,7 @@ async function createAllQueues(boss: PgBoss) {
   await ensureOfapiPendingReconcileQueue(boss);
   await ensureOfapiCommandQueues(boss);
   await ensureOfapiDmAnalyticsQueues(boss);
+  await ensureOfapiTypedExportQueue(boss);
   await ensureDbDiskUsageQueue(boss);
   await ensureObservationsPartitionQueue(boss);
   await ensureCapturePayloadParityQueue(boss);

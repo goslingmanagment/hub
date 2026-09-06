@@ -43,6 +43,7 @@ export const WRITTEN_OBSERVATION_KINDS: readonly WrittenObservationKind[] = [
   { kind: "ofapi.collection_read_response.v1", source: "ofapi_capture", writer: "services/ofapi-collection-read-transport.ts" },
   { kind: "ofapi_gateway_chat_search", source: "readthrough", writer: "services/ofapi-read-gateway.ts" },
   // Release 1 control-plane witnesses; these do not start business collectors.
+  { kind: "ofapi.marketing_response.v1", source: "operator", writer: "services/ofapi-smart-links.ts" },
   { kind: "ofapi.binding.replaced", source: "operator", writer: "services/ofapi-binding-refresh.ts" },
   { kind: "ofapi.account.response", source: "pull", writer: "services/ofapi-credential-policy.ts" },
   { kind: "ofapi_admin_accounts", source: "operator", writer: "services/ofapi-credential-policy.ts" },
@@ -197,6 +198,9 @@ export const WRITTEN_OBSERVATION_KINDS: readonly WrittenObservationKind[] = [
     source: "ofapi_capture",
     writer: "services/ofapi-capture-jobs.ts",
   },
+  { kind: "ofapi.data_export_control.v1", source: "ofapi_capture", writer: "services/ofapi-export-quotes.ts" },
+  { kind: "ofapi_export_inventory", source: "operator", writer: "services/ofapi-credential-policy.ts" },
+  { kind: "ofapi.typed_export_artifact.v1", source: "ofapi_capture", writer: "services/ofapi-typed-exports.ts" },
   { kind: "ofapi.posts_page.v1", source: "ofapi_capture", writer: "services/ofapi-capture-jobs.ts" },
   {
     kind: "ofapi.capture_completed.v1",
@@ -528,6 +532,12 @@ export const RAW_ONLY_OBSERVATION_KINDS: readonly RawOnlyObservationKind[] = [
     justification: "The second step of the same export lifecycle — see data_export_create.",
   },
   {
+    kind: "ofapi.data_export_control.v1", justification: "Durable provider cancel/retry acknowledgement; captured lifecycle evidence is read by the export control and status state machine.",
+  },
+  {
+    kind: "ofapi_export_inventory", justification: "Credential-visible owner control inventory, captured before parsing and read locally; it does not authorize export work or certify imported facts.",
+  },
+  {
     kind: "ofapi.data_export_status.v1",
     justification: "The poll step of the same export lifecycle — see data_export_create.",
   },
@@ -590,11 +600,21 @@ export const OFF_SWEEP_OBSERVATION_CLAIMANTS: readonly {
   justification: string;
 }[] = [
   {
+    id: "OFAPI_MARKETING_ADMIN_PROJECTION",
+    kinds: ["ofapi.marketing_response.v1"],
+    justification: "services/projections/ofapi-marketing.ts registers and runs this encrypted operator-response consumer with resumable receipts and an owner rebuild. Frozen command identity and target reconstruct administrative configuration without manufacturing page business events; collection analytics still use the canonical read family.",
+  },
+  {
     id: "FANSLY_REPLAY_FAMILY",
     kinds: FANSLY_REPLAY_FAMILY.kinds ?? [],
     justification:
       "Deliberately absent from CANONICALIZER_FAMILIES (canonicalize/fansly-replay.ts "
       + "says so in its header): it is flag-driven backfill, not steady-state sweep work.",
+  },
+  {
+    id: "OFAPI_TYPED_EXPORT_MATERIALIZATION",
+    kinds: ["ofapi.typed_export_artifact.v1"],
+    justification: "The owner import transaction verifies frozen account, row, window and checksum contracts and materializes typed export rows and visitor days directly. Invalid bytes remain immutable parse evidence.",
   },
   {
     id: "OFAPI_CAPTURE_MATERIALIZATION",

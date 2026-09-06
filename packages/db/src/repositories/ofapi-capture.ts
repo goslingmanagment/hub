@@ -1,4 +1,5 @@
 import { findOfapiReadDefinition } from "@agency_hub_core/shared";
+import { isOfapiTypedExportProfile, type OfapiTypedExportProfile } from "@agency_hub_core/shared";
 import { createHash, randomUUID } from "node:crypto";
 
 import { sql } from "drizzle-orm";
@@ -508,6 +509,7 @@ export async function leaseNextOfapiCaptureJob(
   input: {
     pageId: number;
     jobId?: string;
+    exactJobId?: string;
     leaseOwner: string;
     leaseToken?: string;
     leaseTtlMs: number;
@@ -522,7 +524,7 @@ export async function leaseNextOfapiCaptureJob(
       select id
       from ofapi_capture_jobs
       where page_id = ${input.pageId}
-        and ${input.jobId ? sql`id=${input.jobId}::uuid` : sql`kind <> 'collection_read'`}
+        and ${(input.jobId ?? input.exactJobId) ? sql`id=${input.jobId ?? input.exactJobId}::uuid` : sql`kind <> 'collection_read' and not (kind = 'account_export' and target->>'profile' is not null)`}
         and (
           (state = 'awaiting_parse' and reason_code is null)
           or (state in ('ready', 'retry_wait') and next_attempt_at <= ${now})
@@ -3538,6 +3540,7 @@ export async function approveBlockedOfapiExportPilotJob(
     actorUserId: number;
     reason: string;
     execute?: boolean;
+    typedProfile?: OfapiTypedExportProfile;
     now?: Date;
   },
 ) {
@@ -3564,9 +3567,11 @@ export async function approveBlockedOfapiExportPilotJob(
     const quoteExpiresAt = typeof cursor?.expiresAt === "string"
       ? new Date(cursor.expiresAt)
       : null;
-    const requiredMaxCredits = Number.isSafeInteger(targetMaxMessages)
+    const requiredMaxCredits = input.typedProfile && quotedCredits !== null ? Math.max(1, quotedCredits) : Number.isSafeInteger(targetMaxMessages)
       ? Math.ceil(targetMaxMessages / 20)
       : Number.NaN;
+    const typed = input.typedProfile !== undefined && isOfapiTypedExportProfile(input.typedProfile) && job.target.profile === input.typedProfile;
+    const typedRowsValid = typed && Number.isSafeInteger(targetMaxMessages) && targetMaxMessages > 0 && targetMaxMessages <= 1000;
     if (
       job.kind !== "account_export"
       || job.state !== "blocked"
@@ -3574,10 +3579,11 @@ export async function approveBlockedOfapiExportPilotJob(
       || !["export_quote_requires_start", "owner_approval_required"].includes(
         job.reasonCode ?? "",
       )
-      || job.target.profile !== "pilot_chats"
+      || (input.typedProfile !== undefined ? !typedRowsValid : job.target.profile !== "pilot_chats")
       || !Array.isArray(targetChatIds)
-      || targetChatIds.length < 1
-      || targetChatIds.length > 3
+      || (typed ? targetChatIds.length !== 0 : targetChatIds.length < 1 || targetChatIds.length > 3)
+      || (typed && input.typedProfile !== "profile_visitors" && cursorPhase !== "quoted")
+      || (typed && cursor?.totalRows !== null && cursor?.totalRows !== undefined && Number(cursor.totalRows) > targetMaxMessages)
       || !Number.isSafeInteger(targetMaxMessages)
       || targetMaxMessages < 1
       || targetMaxMessages > 1_000
@@ -3662,7 +3668,7 @@ export async function approveBlockedOfapiExportPilotJob(
         action, target_type, target_ref, expected_state,
         previous_state, resulting_state, dry_run, actor_user_id, reason, occurred_at
       ) values (
-        'approve_export_pilot',
+        ${typed ? "approve_typed_export" : "approve_export_pilot"},
         'job',
         ${input.jobId},
         ${`blocked@${input.expectedRowVersion}`},

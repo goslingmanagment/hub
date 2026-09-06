@@ -173,7 +173,7 @@ export function resolveOfapiReadGatewayRequest(
 ): OfapiReadGatewayRequest {
   let catalog;
   try { catalog = resolveOfapiCatalogPath(rawPath, rawQuery); } catch (error) { invalid(error instanceof Error ? error.message : "Invalid collection query"); }
-  if (catalog) return { kind: "proxy", accountId: catalog.accountId, pathname: catalog.pathname, query: catalog.query, operation: catalog.definition.operation, fallbackCredits: 1, fallbackEstimated: true, collectionContext: { category: catalog.definition.category, purpose: "interactive", detail: catalog.definition.detail, reservedCredits: 1 } };
+  if (catalog) return { kind: "proxy", accountId: catalog.accountId, pathname: catalog.pathname, query: catalog.query, operation: catalog.definition.operation, fallbackCredits: catalog.definition.reservedCredits ?? 1, fallbackEstimated: true, collectionContext: { category: catalog.definition.category, purpose: "interactive", detail: catalog.definition.detail, reservedCredits: catalog.definition.reservedCredits ?? 1 } };
   const segments = decodeSegments(rawPath);
   if (segments.length === 1 && segments[0] === "accounts") {
     parseQuery(rawQuery, NO_QUERY);

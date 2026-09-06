@@ -51,6 +51,6 @@ describe("closed Smart Link reads and safe marketing contracts", () => {
     expect(ofapiMarketingActionSchema.safeParse({action:"pixel_create",pageId:1,linkId:LINK,platform:"meta",pixel_id:"",pixel_access_token:"token"}).success).toBe(false);
     expect(ofapiMarketingActionSchema.safeParse({action:"pixel_create",pageId:1,linkId:LINK,platform:"creatortraffic",pixel_id:"",pixel_access_token:"token"}).success).toBe(true);
     expect(ofapiMarketingActionSchema.safeParse({action:"postback_create",url:"https://example.test",smart_link_scope:"global",conversion_types:["arbitrary"]}).success).toBe(false);
-    for(const name of ["ofapiMarketingGet","ofapiMarketingPrepare","ofapiMarketingDispatch","ofapiMarketingPostbacksRefresh"] as const) expect(routeSchemas[name].auth).toEqual({kind:"owner-session"});
+    for(const name of ["ofapiMarketingGet","ofapiMarketingPrepare","ofapiMarketingDispatch","ofapiMarketingPostbacksRefresh","ofapiMarketingRebuild"] as const) expect(routeSchemas[name].auth).toEqual({kind:"owner-session"});
   });
 });

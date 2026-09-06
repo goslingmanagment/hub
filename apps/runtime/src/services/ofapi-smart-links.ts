@@ -5,11 +5,12 @@ import { getOfapiKeyDeclaration, checkOfapiCurrentBinding, findPageById, insertA
 import { ofapiMarketingMetricSchema, ofapiMarketingActionSchema, ofapiMarketingDashboardSchema, ofapiMarketingIntentSchema, ofapiMarketingResourceSchema, type OfapiMarketingAction, type OfapiMarketingResource } from "@agency_hub_core/contracts";
 import type { AppContext } from "../bootstrap.ts";
 import { BadRequestError, ConflictError, NotFoundError, ServiceUnavailableError } from "./errors.ts";
-import { createOfapiCreditSpendSink } from "./ofapi-credits.ts";
-import { OfapiGovernedRequestError, parseResponseMeta } from "./ofapi.ts";
+import { OfapiGovernedRequestError } from "./ofapi.ts";
 import { assertOfapiConfiguredAccess } from "./ofapi-vendor-usage.ts";
 import { asRecord } from "./ofapi-payloads.ts";
-import { marketingDestination, marketingTemplateVariables, normalizeOfapiMarketingResource } from "./ofapi-marketing-normalization.ts";
+import { marketingDestination, marketingTemplateVariables } from "./ofapi-marketing-normalization.ts";
+
+import { OFAPI_MARKETING_RESPONSE_KIND, runOfapiMarketingProjection, rebuildOfapiMarketingProjection, settleOfapiMarketingOutcome, type MarketingResponseSource } from "./projections/ofapi-marketing.ts";
 
 function operation(action: string) { return `ofapi_command_marketing_${action}`; }
 function fingerprint(app: AppContext) { return createHash("sha256").update(app.config.ofapiApiKey ?? "").digest("hex"); }
@@ -36,11 +37,11 @@ export function ofapiMarketingRequest(command: OfapiMarketingAction, accountId?:
 
 async function intentById(app: AppContext, id: string) {
   return (await app.db.execute<{ id: string; action: string; state: string; body_encrypted: string; body_hash: string;
-    error_code: string | null; created_at: Date; response_observation_id: string | null; preview: unknown }>(sql`select * from ofapi_marketing_intents where id=${id}`)).rows[0] ?? null;
+    remote_id: string | null; accounting_state: string; projection_state: string; error_code: string | null; created_at: Date; response_observation_id: string | null; preview: unknown }>(sql`select * from ofapi_marketing_intents where id=${id}`)).rows[0] ?? null;
 }
 function intentDto(row: NonNullable<Awaited<ReturnType<typeof intentById>>>) {
   return ofapiMarketingIntentSchema.parse({ id: row.id, action: row.action, state: row.state, errorCode: row.error_code,
-    createdAt: new Date(row.created_at).toISOString(), responseObservationId: row.response_observation_id ? Number(row.response_observation_id) : null, preview: row.preview });
+    remoteId:row.remote_id,accountingState:row.accounting_state,projectionState:row.projection_state,createdAt: new Date(row.created_at).toISOString(), responseObservationId: row.response_observation_id ? Number(row.response_observation_id) : null, preview: row.preview });
 }
 
 /** Read consumers use the rebuildable snapshot projection. Configuration-only
@@ -63,16 +64,18 @@ async function readMarketingResources(app: AppContext): Promise<OfapiMarketingRe
     const snapshot = tagSnapshots.find(s => Number(s.page_id) === resource.pageId && s.pathname.endsWith(`/${resource.id}/tags`));
     if (snapshot && new Date(snapshot.observed_at).toISOString() >= resource.observedAt) resource.tags = snapshot.items.flatMap(i => typeof asRecord(i)?.tag === "string" ? [String(asRecord(i)!.tag)] : []);
   }
-  const configs = (await app.db.execute<{ data: unknown }>(sql`select data from ofapi_marketing_resources order by observed_at desc`)).rows;
+  const tombstones=new Set<string>();
+  const configs = (await app.db.execute<{ data: unknown; deleted: boolean }>(sql`select data,deleted from ofapi_marketing_resources order by observed_at desc`)).rows;
   for (const config of configs) {
     const parsed = ofapiMarketingResourceSchema.safeParse(config.data); if (!parsed.success) continue;
     const r = parsed.data; const key = `${r.pageId}:${r.kind}:${r.shared}:${r.parentId}:${r.id}`;
-    const existing = found.get(key); if (!existing || existing.observedAt < r.observedAt) found.set(key, r);
+    const existing = found.get(key); if (!existing || existing.observedAt <= r.observedAt) { if (config.deleted) tombstones.add(key); else found.set(key, r); }
   }
-  return [...found.values()];
+  return [...found.entries()].filter(([key])=>!tombstones.has(key)).map(([,resource])=>resource);
 }
 
 export async function getOfapiMarketingDashboard(app: AppContext) {
+  await runOfapiMarketingProjection(app);
   await app.db.execute(sql`update ofapi_marketing_intents set state='indeterminate',error_code='dispatch_interrupted'
     where state='dispatching' and dispatched_at<now()-interval '2 minutes'`);
   const rows = (await app.db.execute<NonNullable<Awaited<ReturnType<typeof intentById>>>>(sql`select * from ofapi_marketing_intents order by created_at desc limit 50`)).rows;
@@ -138,7 +141,8 @@ export async function prepareOfapiMarketingCommand(app: AppContext, input: { id:
         : command.action === "pixel_test" ? "Sends one labeled test event to the external ad platform"
           : command.action.startsWith("postback_") ? "Changes external event forwarding; destination and variable names are shown, secret values are withheld" : command.action,
     externalTest: command.action === "pixel_test", estimatedCredits: 0 };
-  const frozen = { command, accountId, credentialFingerprint: fingerprint(app), bindingGeneration: accountId && "pageId" in command ? await checkOfapiCurrentBinding(app.db, command.pageId, accountId) : null };
+  const baselineResource=resources.find(r=>"pixelId" in command ? r.kind==="pixel" && r.pageId===command.pageId && r.parentId===command.linkId && r.id===String(command.pixelId) : "postbackId" in command ? r.kind==="postback" && r.id===String(command.postbackId) : "linkId" in command ? r.kind==="smart_link" && r.pageId===command.pageId && r.id===command.linkId : false) ?? null;
+  const frozen = { command, accountId, baselineResource, credentialFingerprint: fingerprint(app), bindingGeneration: accountId && "pageId" in command ? await checkOfapiCurrentBinding(app.db, command.pageId, accountId) : null };
   await app.db.transaction(async tx => {
     await tx.execute(sql`insert into ofapi_marketing_intents(id,page_id,actor_user_id,action,body_encrypted,body_hash,preview,state)
       values(${input.id},${"pageId" in command ? command.pageId : null},${actorUserId},${command.action},${JSON.stringify(encryptJson(frozen, app.config.encryptionKey, app.config.encryptionKeyVersion))},${hash},${JSON.stringify(preview)}::jsonb,'prepared')`);
@@ -147,10 +151,11 @@ export async function prepareOfapiMarketingCommand(app: AppContext, input: { id:
   return intentDto((await intentById(app, input.id))!);
 }
 
-async function captureSensitiveResponse(app: AppContext, input: { operation: string; bodyBytes: Buffer; status: number; receivedAt: Date; pageId?: number | null; accountId?: string | null }) {
-  return insertObservation(app.db, { source: "operator", producer: "ofapi:marketing", platform: "onlyfans", kind: input.operation,
+async function captureSensitiveResponse(app: AppContext, input: { operation: string; bodyBytes: Buffer; headers: Record<string,string>; status: number; receivedAt: Date; pageId?: number | null; accountId?: string | null; intentId?: string; source: Omit<MarketingResponseSource,"bodyBase64"|"headers"> }) {
+  return insertObservation(app.db, { source: "operator", producer: "ofapi:marketing", platform: "onlyfans", kind: OFAPI_MARKETING_RESPONSE_KIND,
     accountId: input.pageId ?? null, nativeAccountRef: input.accountId ?? null, receivedAt: input.receivedAt,
-    payload: { status: input.status, encryptedBody: encryptJson({ bodyBase64: input.bodyBytes.toString("base64") }, app.config.encryptionKey, app.config.encryptionKeyVersion), bodyEncoding: "encrypted_base64" },
+    payload: { status: input.status, operation:input.operation, intentId:input.intentId ?? null,
+      encryptedBody: encryptJson({ ...input.source, headers:input.headers, bodyBase64: input.bodyBytes.toString("base64") }, app.config.encryptionKey, app.config.encryptionKeyVersion), bodyEncoding: "encrypted_base64" },
     payloadHash: createHash("sha256").update(input.bodyBytes).digest(), idempotencyKey: randomUUID() });
 }
 export async function dispatchOfapiMarketingCommand(app: AppContext, input: { id: string; acknowledgeSharedImpact: boolean; acknowledgeExternalTest: boolean }, actorUserId: number) {
@@ -159,7 +164,7 @@ export async function dispatchOfapiMarketingCommand(app: AppContext, input: { id
   const preview = ofapiMarketingIntentSchema.parse(intentDto(intent)).preview;
   if (!preview.affectedLinksComplete && !input.acknowledgeSharedImpact) throw new BadRequestError("Acknowledge the shared configuration impact");
   if (preview.externalTest && !input.acknowledgeExternalTest) throw new BadRequestError("Acknowledge the external test event");
-  const frozen = decryptJsonWithKeyVersion<{command: unknown; accountId: string|null; bindingGeneration: number|null; credentialFingerprint: string}>(JSON.parse(intent.body_encrypted), app.config.encryptionKeysByVersion);
+  const frozen = decryptJsonWithKeyVersion<{command: unknown; accountId: string|null; bindingGeneration: number|null; credentialFingerprint: string; baselineResource?:unknown}>(JSON.parse(intent.body_encrypted), app.config.encryptionKeysByVersion);
   const command = ofapiMarketingActionSchema.parse(frozen.command);
   if (frozen.credentialFingerprint !== fingerprint(app)) throw new ConflictError("Credential changed since command preparation");
   if ("pageId" in command && frozen.accountId) await checkOfapiCurrentBinding(app.db, command.pageId, frozen.accountId, frozen.bindingGeneration ?? undefined);
@@ -179,15 +184,14 @@ export async function dispatchOfapiMarketingCommand(app: AppContext, input: { id
         return claimedByThisCall;
       },
     });
-    const observation = await captureSensitiveResponse(app, { ...result, operation: operation(command.action), pageId: "pageId" in command ? command.pageId : null, accountId });
+    const observation = await captureSensitiveResponse(app, { ...result, operation: operation(command.action), pageId: "pageId" in command ? command.pageId : null, accountId,
+      intentId:input.id,source:{requestId:input.id,actorUserId,credentialFingerprint:fingerprint(app),frozen} });
     await app.db.execute(sql`update ofapi_marketing_intents set response_observation_id=${observation.observationId} where id=${input.id} and state='dispatching'`);
-    const body = result.bodyBytes.length ? JSON.parse(result.bodyBytes.toString("utf8")) : null;
-    const meta = parseResponseMeta(body, result.headers);
-    await createOfapiCreditSpendSink(app)({ operation:operation(command.action), httpStatus:result.status, credits:meta?.creditsUsed ?? 0, estimated:meta?.creditsUsed == null, balanceAfter:meta?.creditBalance ?? null, requestId:input.id, pageId:"pageId" in command ? command.pageId : null, attemptNumber:1, isCached:meta?.isCached ?? null, actorUserId, receivedAt:result.receivedAt.toISOString() });
-    const data = asRecord(asRecord(body)?.data);
-    const success = result.status >= 200 && result.status < 300 && (command.action !== "pixel_test" || data?.accepted === true);
-    await app.db.execute(sql`update ofapi_marketing_intents set state=${success ? "succeeded" : "rejected"},response_observation_id=${observation.observationId},error_code=${success ? null : (result.status >= 200 && result.status < 300 ? "vendor_result_not_accepted" : `vendor_http_${result.status}`)},settled_at=now() where id=${input.id} and state='dispatching'`);
-    await insertAuditEvent(app.db, { actorUserId, source: "api", eventType: "admin.ofapi_marketing_dispatched", metadata: { id: input.id, action: command.action, success, externalTest: preview.externalTest, observationId: observation.observationId } });
+    let body:unknown=null;
+    try { body=result.bodyBytes.length ? JSON.parse(result.bodyBytes.toString("utf8")) : null; } catch { /* Exact malformed bytes are already captured. */ }
+    const outcome=await settleOfapiMarketingOutcome(app,input.id,observation.observationId,command,result.status,body,frozen.accountId);
+    await runOfapiMarketingProjection(app,{observationId:observation.observationId});
+    await insertAuditEvent(app.db, { actorUserId, source: "api", eventType: "admin.ofapi_marketing_dispatched", metadata: { id: input.id, action: command.action, state:outcome.state, remoteId:outcome.remoteId, externalTest: preview.externalTest, observationId: observation.observationId } });
   } catch (error) {
     if (claimedByThisCall) await app.db.execute(sql`update ofapi_marketing_intents set state='indeterminate',error_code=${errorCode(error)},settled_at=now() where id=${input.id} and state='dispatching'`);
     // A definite refusal before dispatch leaves the prepared command reusable.
@@ -205,19 +209,15 @@ export async function refreshOfapiMarketingPostbacks(app: AppContext, actorUserI
   const result = await app.ofapi.dispatchGovernedRaw({ actorUserId }, { attemptId: requestId, operation: operation("postbacks_read"), method: "GET",
     pathname: `/smart-link-postbacks${postbackId ? `/${postbackId}` : ""}`, priorityClass: "interactive", deadlineAt: new Date(Date.now() + 65_000),
     maxResponseBytes: 2 * 1024 * 1024, beforeDispatch: async () => true });
-  const observation = await captureSensitiveResponse(app, { ...result, operation: operation("postbacks_read") });
+  const observation = await captureSensitiveResponse(app, { ...result, operation: operation("postbacks_read"),source:{requestId,actorUserId,credentialFingerprint:fingerprint(app),...(postbackId ? {postbackId} : {})} });
   if (result.status < 200 || result.status >= 300) throw new ServiceUnavailableError(`Provider configuration read failed (${result.status}); encrypted evidence retained`);
-  const body = asRecord(JSON.parse(result.bodyBytes.toString("utf8"))); const data = postbackId ? [body?.data] : body?.data;
-  const meta = parseResponseMeta(body, result.headers);
-  await createOfapiCreditSpendSink(app)({operation:operation("postbacks_read"),httpStatus:result.status,credits:meta?.creditsUsed ?? 0,estimated:meta?.creditsUsed == null,balanceAfter:meta?.creditBalance ?? null,requestId,pageId:null,attemptNumber:1,isCached:meta?.isCached ?? null,actorUserId,receivedAt:result.receivedAt.toISOString()});
-  if (!Array.isArray(data)) throw new ServiceUnavailableError("Postback inventory shape is unavailable; encrypted evidence retained");
-  for (const item of data) {
-    const row = asRecord(item); if (!row) throw new ServiceUnavailableError("Invalid postback configuration");
-    const resource = normalizeOfapiMarketingResource({ kind: "postback", pageId: null, row, observedAt: observation.receivedAt });
-    await app.db.execute(sql`insert into ofapi_marketing_resources(page_id,kind,upstream_id,parent_id,data,observation_id,observed_at)
-      values(null,'postback',${resource.id},'',${JSON.stringify(resource)}::jsonb,${observation.observationId},${observation.receivedAt})
-      on conflict ((coalesce(page_id,0)),kind,parent_id,upstream_id) do update set data=excluded.data,observation_id=excluded.observation_id,observed_at=excluded.observed_at`);
-  }
-  await insertAuditEvent(app.db, { actorUserId, source: "api", eventType: "admin.ofapi_marketing_postbacks_read", metadata: { postbackId: postbackId ?? null, observationId: observation.observationId, count: data.length } });
+  await runOfapiMarketingProjection(app,{observationId:observation.observationId});
+  await insertAuditEvent(app.db, { actorUserId, source: "api", eventType: "admin.ofapi_marketing_postbacks_read", metadata: { postbackId: postbackId ?? null, observationId: observation.observationId } });
+  return getOfapiMarketingDashboard(app);
+}
+
+export async function rebuildOfapiMarketingState(app:AppContext,actorUserId:number) {
+  const result=await rebuildOfapiMarketingProjection(app);
+  await insertAuditEvent(app.db,{actorUserId,source:"api",eventType:"admin.ofapi_marketing_rebuilt",metadata:result});
   return getOfapiMarketingDashboard(app);
 }

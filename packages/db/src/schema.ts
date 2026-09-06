@@ -6295,12 +6295,21 @@ export const ofapiMarketingResources = pgTable("ofapi_marketing_resources", {
   id: bigserial("id", {mode:"number"}).primaryKey(),
   pageId: bigint("page_id", {mode:"number"}).references(()=>pages.id,{onDelete:"restrict"}),
   kind:text("kind").notNull(),upstreamId:text("upstream_id").notNull(),parentId:text("parent_id").default("").notNull(),
-  data:jsonbSafe("data").notNull(),observationId:bigint("observation_id",{mode:"number"}).notNull(),observedAt:timestamp("observed_at",{withTimezone:true}).notNull(),
+  data:jsonbSafe("data").notNull(),deleted:boolean("deleted").default(false).notNull(),credentialFingerprint:text("credential_fingerprint"),observationId:bigint("observation_id",{mode:"number"}).notNull(),observedAt:timestamp("observed_at",{withTimezone:true}).notNull(),
 }, table=>({identity:uniqueIndex("ofapi_marketing_resource_identity_idx").on(sql`coalesce(${table.pageId},0)`,table.kind,table.parentId,table.upstreamId)}));
 export const ofapiMarketingIntents = pgTable("ofapi_marketing_intents", {
   id:uuid("id").primaryKey(),pageId:bigint("page_id",{mode:"number"}).references(()=>pages.id,{onDelete:"restrict"}),
   actorUserId:bigint("actor_user_id",{mode:"number"}).notNull().references(()=>users.id,{onDelete:"restrict"}),
   action:text("action").notNull(),bodyEncrypted:text("body_encrypted").notNull(),bodyHash:text("body_hash").notNull(),preview:jsonbSafe("preview").notNull(),
   state:text("state").notNull(),responseObservationId:bigint("response_observation_id",{mode:"number"}),errorCode:text("error_code"),
+  remoteId:text("remote_id"),accountingState:text("accounting_state").default("pending").notNull(),projectionState:text("projection_state").default("pending").notNull(),
   createdAt:timestamp("created_at",{withTimezone:true}).defaultNow().notNull(),dispatchedAt:timestamp("dispatched_at",{withTimezone:true}),settledAt:timestamp("settled_at",{withTimezone:true}),
+});
+
+export const ofapiMarketingProjectionReceipts = pgTable("ofapi_marketing_projection_receipts", {
+  observationId:bigint("observation_id",{mode:"number"}).primaryKey(),
+  pageId:bigint("page_id",{mode:"number"}).references(()=>pages.id,{onDelete:"restrict"}),
+  version:integer("version").default(1).notNull(),projectionState:text("projection_state").default("pending").notNull(),
+  accountingState:text("accounting_state").default("pending").notNull(),errorCode:text("error_code"),
+  checkedAt:timestamp("checked_at",{withTimezone:true}).defaultNow().notNull(),
 });
