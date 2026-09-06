@@ -8,3 +8,4 @@ export * from "./spender-retention.ts";
 export * from "./time.ts";
 export * from "./types.ts";
 export * from "./ofapi-vendor-usage.ts";
+export * from "./ofapi-collection-registry.ts";
