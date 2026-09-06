@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { PgDialect } from "drizzle-orm/pg-core";
+import { PgDialect } from "../packages/db/node_modules/drizzle-orm/pg-core/index.js";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   advancePageOfapiAuthStatus, createModel, createOnlyFansPage,
