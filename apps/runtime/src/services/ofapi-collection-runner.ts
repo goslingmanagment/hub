@@ -12,6 +12,7 @@ import {
   getEffectiveOfapiCollectionPolicy,
   getOfapiCollectionJob,
   listPendingOfapiCollectionJobs,
+  OfapiCollectionPolicyError,
 } from "@agency_hub_core/db";
 import {
   OFAPI_READ_CATALOG,
@@ -31,6 +32,7 @@ import {
   normalizeOfapiRead,
   ofapiReadCoverage,
 } from "./ofapi-read-normalization.ts";
+import { OfapiGovernedRequestError } from "./ofapi.ts";
 export type OfapiCollectionJob = NonNullable<
   Awaited<ReturnType<typeof getOfapiCollectionJob>>
 >;
@@ -319,7 +321,15 @@ export async function runOfapiCollectionJob(
     });
     return { state: "completed" };
   } catch (error) {
-    const reason =
+    const admissionError = error instanceof OfapiGovernedRequestError && error.phase === "pre_dispatch"
+      ? error.cause : error;
+    const scheduledLimit = job.purpose === "background" && admissionError instanceof OfapiCollectionPolicyError
+      && ["job_limit", "daily_limit", "interval_limit"].includes(admissionError.reason)
+      ? admissionError.reason : null;
+    // A bounded scheduled run may end with a partial cursor. Retain that
+    // evidence as failed, not completed or operator-paused, so the next
+    // configured interval can start a new bounded window without backlog.
+    const reason = scheduledLimit ? `scheduled_run_exhausted:${scheduledLimit}` :
       error instanceof Error
         ? error.message.startsWith("Failed query")
           ? "Local collection persistence failed"
@@ -336,7 +346,7 @@ export async function runOfapiCollectionJob(
       id: jobId,
       token,
       checkpoint,
-      state: localRecovery ? "queued" : "paused",
+      state: scheduledLimit ? "failed" : localRecovery ? "queued" : "paused",
       reason,
     }).catch((err) =>
       app.logger.error(

@@ -491,6 +491,73 @@ describe("resumable OFAPI collection reads", () => {
     });
     expect(fetch).not.toHaveBeenCalled();
   });
+  it("retains an exhausted scheduled cursor as incomplete and admits the next bounded interval", async () => {
+    const settings = { pageId, category: "profile_notifications" as const, mode: "scheduled" as const,
+      intervalMinutes: 15, dailyCreditLimit: 10, maxCallsPerRun: 1, includeDetails: false };
+    await applyOfapiCollectionPolicy(app.db, { expectedRevision: 0, changes: [settings] }, actor);
+    const fetch = vi.fn<typeof globalThis.fetch>()
+      .mockResolvedValueOnce(response({ list: [{ id: "55" }], hasMore: true, nextOffset: 20 }))
+      .mockResolvedValueOnce(response({ list: [{ id: "56" }], hasMore: false }));
+    vi.stubGlobal("fetch", fetch);
+    const handlers = { profile_notifications: { plan: () => [{ operation: "ofapi_read_fans_expired",
+      pathname: "/acct_test/fans/expired", query: { limit: "20", offset: "0" } }] } };
+    const [firstId] = await enqueueDueOfapiCollectionSchedules(app.db, ["profile_notifications"]);
+    expect(await runOfapiCollectionJob(app, firstId!, handlers)).toEqual({
+      state: "failed", reason: "scheduled_run_exhausted:job_limit",
+    });
+    const first = await getOfapiCollectionJob(app.db, firstId!);
+    expect(first).toMatchObject({ state: "failed", used_calls: 1, checkpoint: { index: 0, nextQuery: { offset: "20" } } });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(await enqueueDueOfapiCollectionSchedules(app.db, ["profile_notifications"])).toEqual([]);
+    const snapshots = await readOfapiStoredSnapshots(app.db, { pageId });
+    expect(snapshots).toHaveLength(1);
+    expect(snapshots[0]!.coverage).toMatchObject({ state: "partial", nextQuery: { offset: "20" } });
+    // Advance the schedule/usage windows without resetting task spend or its cursor.
+    await db.pool.query("update ofapi_collection_schedules set last_scheduled_at=now()-interval '16 minutes'");
+    await db.pool.query("update ofapi_collection_requests set created_at=now()-interval '16 minutes'");
+    const [nextId] = await enqueueDueOfapiCollectionSchedules(app.db, ["profile_notifications"]);
+    expect(nextId).toBeDefined(); expect(nextId).not.toBe(firstId);
+    expect(await runOfapiCollectionJob(app, nextId!, handlers)).toEqual({ state: "completed" });
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(new URL(String(fetch.mock.calls[1]![0])).searchParams.get("offset")).toBe("0");
+    expect((await getOfapiCollectionJob(app.db, firstId!))!.checkpoint).toEqual(first!.checkpoint);
+    expect(await readOfapiStoredSnapshots(app.db, { pageId })).toHaveLength(2);
+  });
+  it("releases both bounded allowances when the final authority check throws before HTTP", async () => {
+    const fetch = vi.fn(); vi.stubGlobal("fetch", fetch);
+    const approved = await job(["me"], 1);
+    await expect(captureOfapiCollectionRead(app, {
+      pageId, accountId: "acct_test", step: { operation: "ofapi_read_me", pathname: "/acct_test/me", query: {} },
+      stepKey: `authority-refused:${approved.id}`, maxBytes: 100000,
+      context: { category: "profile_notifications", purpose: "one_off", jobId: approved.id },
+      beforeDispatch: async () => { throw new Error("Binding changed at final admission"); },
+    })).rejects.toMatchObject({ phase: "pre_dispatch", reason: "cancelled" });
+    expect(fetch).not.toHaveBeenCalled();
+    const retained = await getOfapiCollectionJob(app.db, approved.id);
+    expect(retained?.used_calls).toBe(0); expect(Number(retained?.used_credits)).toBe(0);
+    expect((await db.pool.query("select state,credit_state from ofapi_request_attempts")).rows)
+      .toEqual([{ state: "released_pre_dispatch", credit_state: "released" }]);
+    expect((await db.pool.query("select state from ofapi_collection_requests")).rows).toEqual([{ state: "released" }]);
+    expect((await db.pool.query("select count(*)::int count from ofapi_credit_receipts")).rows[0].count).toBe(0);
+    expect((await db.pool.query("select count(*)::int count from observations where kind='ofapi.collection_read_response.v1'")).rows[0].count).toBe(0);
+    // A fresh reviewed attempt can still use the unchanged one-call ceiling.
+    await reserveOfapiCollectionRequest(app.db, { pageId, operation: "ofapi_read_me", requestId: randomUUID(),
+      context: { category: "profile_notifications", purpose: "one_off", jobId: approved.id } });
+  });
+  it.each(["daily_limit", "interval_limit"])("terminates a scheduled %s refusal without bypassing a later owner pause", async (limit) => {
+    await applyOfapiCollectionPolicy(app.db, { expectedRevision: 0, changes: [{ pageId,
+      category: "profile_notifications", mode: "scheduled", intervalMinutes: 15, includeDetails: false,
+      dailyCreditLimit: limit === "daily_limit" ? 1 : 10, maxCallsPerRun: limit === "interval_limit" ? 1 : 10 }] }, actor);
+    await reserveOfapiCollectionRequest(app.db, { pageId, operation: "ofapi_read_me", requestId: "previous-run",
+      context: { category: "profile_notifications", purpose: "background" } });
+    const fetch = vi.fn(); vi.stubGlobal("fetch", fetch);
+    const [id] = await enqueueDueOfapiCollectionSchedules(app.db, ["profile_notifications"]);
+    expect(await runOfapiCollectionJob(app, id!)).toEqual({ state: "failed", reason: `scheduled_run_exhausted:${limit}` });
+    expect((await getOfapiCollectionJob(app.db, id!))?.used_calls).toBe(0);
+    expect(fetch).not.toHaveBeenCalled();
+    await applyOfapiCollectionPolicy(app.db, { expectedRevision: 1, changes: [], backgroundPaused: true }, actor);
+    expect(await enqueueDueOfapiCollectionSchedules(app.db, ["profile_notifications"], new Date(Date.now() + 86400000))).toEqual([]);
+  });
   it("serves source-labelled financial metrics only to page-granted Agent keys with read:money", async () => {
     const approved = await createOfapiCollectionJob(
       app.db,
