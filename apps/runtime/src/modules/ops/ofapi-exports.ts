@@ -1,3 +1,4 @@
+import { resumeOwnerOfapiTypedExport } from "../../services/ofapi-export-resume.ts";
 import { prepareOwnerOfapiExportControl, readOfapiExportInventory, refreshOfapiExportInventory } from "../../services/ofapi-export-controls.ts";
 import { ofapiExportRouteSchemas } from "@agency_hub_core/contracts";
 import { getOfapiCaptureJob, listOfapiProfileVisitorsDaily, listOfapiTypedExportRows } from "@agency_hub_core/db";
@@ -22,6 +23,10 @@ export function registerOfapiExportRoutes(server: ApiServer, ctx: ApiModuleConte
   server.post("/api/v1/admin/ofapi/exports", { schema: ofapiExportRouteSchemas.ofapiTypedExportCreate }, async request => {
     const principal = await requirePrincipal(request); requireOwner(principal);
     return createOwnerOfapiTypedExport(app, request.body, principal.user.id);
+  });
+  server.post("/api/v1/admin/ofapi/exports/:jobId/resume", { schema: ofapiExportRouteSchemas.ofapiTypedExportResume }, async request => {
+    const principal = await requirePrincipal(request); requireOwner(principal);
+    return resumeOwnerOfapiTypedExport(app, { ...request.body, jobId: request.params.jobId }, principal.user.id);
   });
   server.post("/api/v1/admin/ofapi/exports/:jobId/approve", { schema: ofapiExportRouteSchemas.ofapiTypedExportApprove }, async request => {
     const principal = await requirePrincipal(request); requireOwner(principal);

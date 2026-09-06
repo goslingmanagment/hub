@@ -34,9 +34,18 @@ seeded and no legacy background flag needs to change.
    money strings are vendor values, not normalized Hub accounting totals.
 
 Collection controls at `/settings?tab=collection` can pause managed requests.
-Already captured observations and imported rows remain readable. Explicit resume
-retains the task's allowance/checkpoint. A budget overrun is recorded and stops
-new work; it does not disappear because the vendor exceeded an approval.
+Already captured observations and imported rows remain readable. After unpausing,
+open `/ofapi-exports` and choose **Resume approved export** on the paused job.
+The owner-only SDK operation `ofapiTypedExportResume` checks the displayed job
+version and current collection policy revision, then resumes both the capture
+and collection records together. It preserves the exact vendor ID, cursor,
+source account, original request/credit/byte caps and already authorized start.
+A status poll remains free when the original start has reserved the entire
+credit ceiling; calls and bytes still have to fit. Resume refuses a changed
+account, stale snapshot, unresolved request or indeterminate POST. A completed
+or failed export cannot be restarted through this action. A budget overrun is
+recorded and stops new work; it does not disappear because the vendor exceeded
+an approval.
 
 The `visitors` REST collector uses one-day steps through the shared collection
 runner. Before scheduling it, preview one bounded run, compare the same dates
@@ -117,6 +126,11 @@ replay, wrong-account artifact retention, missing dates, REST source separation,
 old pilot refusal, page ACL, free polling caps and populated page erasure.
 Provider controls cover cancellation under pause, rejected/unknown cancellation
 GET reconciliation, exact new retry identity, separate retained charges, lost
-retry fencing, stale approvals and captured owner-only inventory.
+retry fencing, stale approvals and captured owner-only inventory. Resume fixtures
+fund a start to the full task ceiling, pause it, resume through the owner HTTP
+route, and finish with one free poll and exactly one start. Separate regressions
+reject policy/job version drift, account rebinding and uncertain POST recovery.
 Downloader fixtures cover untrusted host/path, private/mixed DNS, redirects and
 both declared/streamed byte limits. No paid probes or production mutations.
+
+The export screen freezes page, profile, date range and task ceiling in the quote preview, and displays the page/profile/job identity in start and provider-action receipts. Target controls are disabled while requests are pending; quote creation submits the reviewed snapshot.
