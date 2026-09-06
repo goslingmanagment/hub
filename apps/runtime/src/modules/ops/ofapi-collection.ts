@@ -1,3 +1,4 @@
+import { OFAPI_COLLECTION_REGISTRY } from "@agency_hub_core/shared";
 import { ofapiCollectionRouteSchemas } from "@agency_hub_core/contracts";
 import { applyOfapiCollectionPolicy, createOfapiCollectionJob, getOfapiCollectionSnapshot, OfapiCollectionPolicyError, previewOfapiCollectionPolicy, resumeOfapiCollectionJob } from "@agency_hub_core/db";
 import { canAccessPage, requireDashboardUser, requireOwner } from "../../services/auth.ts";
@@ -28,6 +29,8 @@ export function registerOfapiCollectionRoutes(server: ApiServer, ctx: ApiModuleC
   });
   server.post("/api/v1/admin/ofapi/collection/jobs", { schema: ofapiCollectionRouteSchemas.ofapiCollectionJobCreate }, async request => {
     const principal = await requirePrincipal(request); requireOwner(principal);
+    if (request.body.category === "vault_files") throw new BadRequestError("Use /ofapi-media to upload an owned source with a frozen preview and explicit approval.");
+    if (!OFAPI_COLLECTION_REGISTRY.find(entry => entry.id === request.body.category)?.supportsOneOff) throw new BadRequestError("This baseline category uses its existing collector. Configure its collection policy; generic one-off jobs are unavailable.");
     const job = await policyResult(() => createOfapiCollectionJob(app.db, request.body, principal.user.id));
     // Durable queued rows are also swept; a lost pg-boss wakeup never loses approval.
     await boss?.send("ofapi.collection.run", { jobId: job.id }, { singletonKey: job.id, retryLimit: 0 });

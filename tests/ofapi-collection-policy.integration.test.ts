@@ -33,6 +33,17 @@ async function cookie(username: string, role: "owner" | "team_lead") {
   return (Array.isArray(header) ? header[0]! : String(header)).split(";")[0]!;
 }
 describe("OFAPI effective collection control", () => {
+  it("rejects generic jobs with no executor and directs owned uploads to their specialized approval flow", async () => {
+    const owner = await cookie("owner", "owner");
+    const snapshot = await getOfapiCollectionSnapshot(app.db, null);
+    for (const category of ["vault_files", "core_messages", "core_payments", "core_audience"] as const) {
+      const response = await server!.inject({ method: "POST", url: "/api/v1/admin/ofapi/collection/jobs", headers: { cookie: owner }, payload: { expectedRevision: 0, pageId, category, maxCalls: 2, maxCredits: 2, maxBytes: 100, from: null, to: null, selection: ["owned-source"] } });
+      expect(response.statusCode).toBe(400);
+      expect(response.body).toContain(category === "vault_files" ? "/ofapi-media" : "existing collector");
+      expect(snapshot.catalog.find(entry => entry.id === category)?.supportsOneOff).toBe(category === "vault_files");
+    }
+    expect((await testDb.pool.query("select count(*)::int as n from ofapi_collection_jobs")).rows[0].n).toBe(0);
+  });
   it("keeps new collection off, preserves only enumerated legacy baseline, and never falls back after explicit off", async () => {
     expect(await getEffectiveOfapiCollectionPolicy(app.db, "posts_comments", pageId)).toMatchObject({ mode: "off", source: "default_off" });
     await expect(admission()).rejects.toThrow("collection_off");

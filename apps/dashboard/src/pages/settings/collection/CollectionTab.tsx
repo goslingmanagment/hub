@@ -915,7 +915,7 @@ function CategoryRow(props: {
           {view.group === "one_off"
             ? (
               <div>
-                <button
+                {view.entry.id === "vault_files" ? <Link className={smallButtonClass} to="/ofapi-media" onClick={event => event.stopPropagation()}>Загрузить свой файл…</Link> : <button
                   type="button"
                   className={smallButtonClass}
                   disabled={snapshot.backgroundPaused}
@@ -925,7 +925,7 @@ function CategoryRow(props: {
                   }}
                 >
                   Создать задачу…
-                </button>
+                </button>}
                 <div className="mt-1 text-[11px] text-text-muted">
                   {latestJob
                     ? `последняя: ${jobStateLabel(latestJob.state)} · ${utcDateTime(latestJob.createdAt)}`
@@ -1066,7 +1066,13 @@ export function CategoryEditor(props: {
               )}
             </fieldset>
           )
-          : (
+          : view.entry.id === "vault_files" ? (
+            <div>
+              <div className="mb-2 text-[12px] font-semibold text-text-primary">Загрузка своего файла</div>
+              <p className="text-[12.5px] text-text-secondary">Выберите свой файл, страницу и назначение в отдельном экране. Перед отправкой проверьте источник и потолок кредитов; готовый результат можно передать в чат.</p>
+              <Link className={`${buttonClass} mt-3 inline-block`} to="/ofapi-media">Загрузить свой файл…</Link>
+            </div>
+          ) : (
             <div>
               <div className="mb-2 text-[12px] font-semibold text-text-primary">Только разовые задачи</div>
               <p className="text-[12.5px] text-text-secondary">
@@ -1230,7 +1236,7 @@ function JobsCard(props: { snapshot: OfapiCollectionSnapshot; scope: CollectionS
                 <td className={tdClass}>
                   <span className="font-medium text-text-primary">{jobStateLabel(job.state)}</span>
                   {job.reason && <div className="mt-0.5 text-[11px] text-text-muted">{job.reason}</div>}
-                  {["paused", "blocked", "budget_exhausted"].includes(job.state) && <button type="button" className={smallButtonClass} disabled={resume.isPending || props.snapshot.backgroundPaused} onClick={() => resume.mutate({ id: job.id, expectedRevision: props.snapshot.revision })}>Продолжить с чекпоинта</button>}
+                  {job.category === "vault_files" ? <Link className={smallButtonClass} to="/ofapi-media">Открыть загрузку</Link> : ["paused", "blocked", "budget_exhausted"].includes(job.state) && <button type="button" className={smallButtonClass} disabled={resume.isPending || props.snapshot.backgroundPaused} onClick={() => resume.mutate({ id: job.id, expectedRevision: props.snapshot.revision })}>Продолжить с чекпоинта</button>}
                 </td>
                 <td className={`${tdClass} tabular-nums`}>{jobProgress(job)}</td>
                 <td className={`${tdClass} tabular-nums`}>{utcDateTime(job.createdAt)}</td>
@@ -1708,11 +1714,10 @@ export function JobModal(props: {
   const [to, setTo] = useState("");
   const [selectionRaw, setSelectionRaw] = useState("");
   const selection = parseSelection(selectionRaw);
-  const needsSelection = props.category === "vault_files";
   const fromIso = localDateTimeToIso(from);
   const toIso = localDateTimeToIso(to);
   const windowInvalid = fromIso !== null && toIso !== null && fromIso >= toIso;
-  const canSubmit = pageId !== null && !windowInvalid && (!needsSelection || selection.length > 0) && !props.pending;
+  const canSubmit = pageId !== null && !windowInvalid && !props.pending;
 
   function submit() {
     if (pageId === null) return;
@@ -1728,6 +1733,13 @@ export function JobModal(props: {
     props.onSubmit(body);
   }
 
+  if (props.category === "vault_files" || !entry?.supportsOneOff) return (
+    <ModalShell title={categoryLabel(props.category, entry?.label)} onClose={props.onClose}>
+      {props.category === "vault_files"
+        ? <Link className={buttonClass} to="/ofapi-media">Загрузить свой файл…</Link>
+        : <p className="text-sm text-text-secondary">Для этой категории настройте действующий сбор. Разовые задачи недоступны.</p>}
+    </ModalShell>
+  );
   return (
     <ModalShell title={`Разовая задача · ${categoryLabel(props.category, entry?.label)}`} onClose={props.onClose}>
       <p className="text-[13px] text-text-secondary">
@@ -1773,7 +1785,7 @@ export function JobModal(props: {
         </div>
         <label className="block sm:col-span-2">
           <span className="mb-1 block text-[12px] text-text-secondary">
-            Выбор {needsSelection ? "(обязателен: идентификаторы файлов, по одному в строке)" : "(необязательно: идентификаторы, по одному в строке)"}
+            Выбор (необязательно: идентификаторы, по одному в строке)
           </span>
           <textarea
             value={selectionRaw}

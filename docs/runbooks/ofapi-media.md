@@ -16,8 +16,11 @@ responses only; no upload or paid download is performed during development.
    bytes. No arbitrary remote URL is accepted.
 3. Select **Vault** for a reusable numeric media ID or **CDN** for material usable
    in one send. Enter a credit ceiling and **Preview upload**. Review the source,
-   destination, bytes and estimate, then approve the frozen preview. A new owner
-   action creates one upload; reopening the page does not upload again.
+   destination, bytes and estimate, then approve the frozen preview. It displays
+   the frozen page ID/label and source filename/UUID/hash. Page and form controls
+   remain disabled during async actions, and metadata approvals also carry their
+   frozen page. A new owner action creates one upload; reopening the page does
+   not upload again.
 4. The minute sweep sends multipart `file` plus body field `async=true`, at most
    once. Progress distinguishes provider upload completion from `isReady`.
    Signed completion can settle the upload before the first status poll, including
@@ -80,7 +83,11 @@ The canonical writer verifies the observation envelope, then appends deduplicate
 atomic projection checkpoint and applies the serving row in the same transaction.
 The registered `ofapi_media` projection rebuilds only derived catalog rows and its
 watermark. Replays cannot regress a newer observation, duplicate ledger material,
-or bypass the page/model erasure lock and material-time fence. Upload authority,
+or bypass the page/model erasure lock and material-time fence. The shared native
+raw-media writer applies the same fence for both platforms. An event already
+loaded when erasure begins cannot recreate an erased row; lock contention defers
+the projector without advancing its watermark, while later observations remain
+admissible. Upload authority,
 source bytes, policy and spend records survive ordinary projection rebuilds.
 Governed erasure explicitly removes the owned sources and catalog with the page's
 other captured data.
@@ -113,3 +120,5 @@ Verified 2026-09-06 without authenticated vendor requests:
   prices uploads by bytes. Example response credits in the pinned schema are not
   a fixed per-upload price. The live direct-vault endpoint supersedes older
   descriptions that discuss only temporary CDN uploads.
+
+Collection controls route owned-media actions to `/ofapi-media`; generic HTTP collection jobs reject `vault_files` before creating any durable job. The core messages/payments/audience categories retain their existing configurable collectors but advertise no generic one-off executor. Uploads still create their bounded task through the specialized owner approval flow.
