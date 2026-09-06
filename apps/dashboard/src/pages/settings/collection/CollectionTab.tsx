@@ -1,3 +1,4 @@
+import { OfapiStoredReads } from "../OfapiStoredReads.js";
 import { OfapiWebhookRecovery } from "../OfapiWebhookRecovery.js";
 import { Fragment, useCallback, useEffect, useId, useMemo, useState, type ReactNode } from "react";
 import { Link } from "react-router";
@@ -538,6 +539,7 @@ export function CollectionTab() {
       <JobsCard snapshot={snapshot} scope={scope} />
       <WebhookCard />
       <OfapiWebhookRecovery />
+      <OfapiStoredReads pages={snapshot.pages} />
       <AuditCard snapshot={snapshot} actorName={actorName} />
 
       {size > 0 && draft && (
