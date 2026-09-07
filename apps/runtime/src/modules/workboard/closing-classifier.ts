@@ -75,8 +75,7 @@ const SYSTEM_PROMPT = [
   '  fan: "Someone down for a share4share? https://fansly.com/post/123 xoxo" => cold (self-promo solicitation — no reply)',
   '  fan: "ok thanks babe" => closing',
   "",
-  'Input is a JSON array of {"id":string,"messages":[{"role":"fan"|"creator","text":string}, ...]}.',
-  'Respond with ONLY a compact JSON array of {"id":string,"state":string,"needs_reply":boolean,"reason":string} — one object per input thread, no prose, no code fences.',
+  'Input is a JSON array of {"id":string,"messages":[{"role":"fan"|"creator","text":string}, ...]}. Return one verdict per input id.',
 ].join("\n");
 
 const MAX_CONTENT_CHARS = 500;
@@ -95,6 +94,35 @@ function coerceState(raw: unknown): ConversationState {
   return typeof raw === "string" && STATES.has(raw) ? (raw as ConversationState) : "smalltalk";
 }
 
+// Structured outputs: the provider guarantees a schema-valid JSON object, so
+// the prompt no longer begs for "ONLY a compact JSON array" and the parser no
+// longer hunts for brackets. `coerceState` / the needs_reply defaults below
+// stay as the fail-safe for a truncated stream.
+const VERDICT_OUTPUT_FORMAT = {
+  type: "json_schema" as const,
+  schema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["verdicts"],
+    properties: {
+      verdicts: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["id", "state", "needs_reply", "reason"],
+          properties: {
+            id: { type: "string" },
+            state: { type: "string", enum: [...STATES] },
+            needs_reply: { type: "boolean" },
+            reason: { type: "string" },
+          },
+        },
+      },
+    },
+  },
+};
+
 function buildUserContent(messages: ClosingClassifierInput[]): string {
   return JSON.stringify(
     messages.map((m) => ({
@@ -106,28 +134,21 @@ function buildUserContent(messages: ClosingClassifierInput[]): string {
 
 function parseVerdicts(text: string, messages: ClosingClassifierInput[]): ClosingVerdict[] {
   const byId = new Map<string, { needsReply: boolean; state: ConversationState; reason: string }>();
-  const start = text.indexOf("[");
-  const end = text.lastIndexOf("]");
-  if (start !== -1 && end > start) {
-    try {
-      const parsed = JSON.parse(text.slice(start, end + 1)) as Array<{
-        id?: unknown;
-        state?: unknown;
-        needs_reply?: unknown;
-        reason?: unknown;
-      }>;
-      for (const row of parsed) {
-        if (typeof row?.id === "string") {
-          const state = coerceState(row.state);
-          // Trust an explicit boolean; otherwise derive from the state (closing = no reply).
-          const needsReply = typeof row.needs_reply === "boolean" ? row.needs_reply : state !== "closing";
-          const reason = typeof row.reason === "string" ? row.reason.slice(0, MAX_REASON_CHARS) : "";
-          byId.set(row.id, { needsReply, state, reason });
-        }
+  try {
+    const parsed = JSON.parse(text) as {
+      verdicts?: Array<{ id?: unknown; state?: unknown; needs_reply?: unknown; reason?: unknown }>;
+    };
+    for (const row of parsed?.verdicts ?? []) {
+      if (typeof row?.id === "string") {
+        const state = coerceState(row.state);
+        // Trust an explicit boolean; otherwise derive from the state (closing = no reply).
+        const needsReply = typeof row.needs_reply === "boolean" ? row.needs_reply : state !== "closing";
+        const reason = typeof row.reason === "string" ? row.reason.slice(0, MAX_REASON_CHARS) : "";
+        byId.set(row.id, { needsReply, state, reason });
       }
-    } catch {
-      // fall through — default everything to a safe needs_reply=true below
     }
+  } catch {
+    // fall through — default everything to a safe needs_reply=true below
   }
   // Default any missing/unparseable id to needs_reply=true with a neutral state (no urgency boost).
   return messages.map((m) => {
@@ -161,6 +182,7 @@ export function createGatewayClosingClassifier(
         // flapping) and the permanent per-message cache stays meaningful.
         maxTokens: 1536,
         temperature: 0,
+        outputFormat: VERDICT_OUTPUT_FORMAT,
         systemBlocks: [{ text: SYSTEM_PROMPT, cache: "none" }],
         userBlocks: [{ text: buildUserContent(messages), cache: "none" }],
         ...(opts.providerOverride ? { providerOverride: opts.providerOverride } : {}),

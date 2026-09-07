@@ -90,7 +90,7 @@ quick-ref table up top), Git tags, and production itself.**
 ## Conventions
 
 - pnpm workspace: `apps/runtime` (Fastify API + worker + CLI), `apps/dashboard`
-  (React SPA, served same-origin; being rebuilt), `packages/{contracts,db,sdk,
+  (React SPA, served same-origin), `packages/{contracts,db,sdk,
   shared,fansly}`. ESM everywhere, TS strict.
 - `pnpm check` = typecheck + lint + unit tests + build. Integration tests
   (`tests/*.integration.test.ts`) need **Docker Desktop** (Testcontainers) and

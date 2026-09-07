@@ -432,7 +432,9 @@ describe("AI feature service pilot (Stage 30)", () => {
     // the user blocks.
     const body = capture.input!.body;
     expect(body.feature).toBe("fast-reply");
-    expect(body.model).toBe("anthropic:claude-sonnet-4-6");
+    // Decision #273: reply features default to Sonnet 5 at low effort.
+    expect(body.model).toBe("anthropic:claude-sonnet-5");
+    expect(body.reasoningEffort).toBe("low");
     const lora = createBundledPersonalities()[0]!;
     expect(body.prompt.systemBlocks[1]).toMatchObject({ text: lora.content, cache: "1h" });
     const userText = body.prompt.userBlocks.map((block) => block.text).join("\n");
@@ -1165,6 +1167,11 @@ describe("AI feature registry gates (Stage 30 Task 4)", () => {
     // help-me (analysis preamble) streams.
     const helpMe = await call("help-me");
     expect(helpMe.statusCode, helpMe.body).toBe(200);
+    expect(capture.input!.body).toMatchObject({
+      feature: "help-me",
+      model: "anthropic:claude-sonnet-5",
+      reasoningEffort: "low",
+    });
 
     // hi-greeting: allowed on a short conversation, WITHOUT earnings blocks.
     const hi = await call("hi-greeting");
@@ -1257,8 +1264,8 @@ describe("voice-script feature (voice notes lane)", () => {
     expect(scripted.statusCode, scripted.body).toBe(200);
     expect(scripted.body).toContain("sure thing");
     expect(capture.input!.body.feature).toBe("voice-script");
-    // Delegates model + reasoning selection to fast-reply.
-    expect(capture.input!.body.model).toBe("anthropic:claude-sonnet-4-6");
+    // Delegates model + reasoning selection to fast-reply (Sonnet 5, low).
+    expect(capture.input!.body.model).toBe("anthropic:claude-sonnet-5");
     const userText = capture.input!.body.prompt.userBlocks.map((block) => block.text).join("\n");
     expect(userText).toContain("## Current Draft");
     expect(userText).toContain("omg u looked so good today");
@@ -1709,6 +1716,11 @@ describe("coach-chat gates", () => {
     const meta = frames.find((frame) => frame.type === "meta");
     expect(meta?.feature).toBe("coach-chat");
     expect(meta).not.toHaveProperty("presetQuestion");
+    expect(capture.input!.body).toMatchObject({
+      feature: "coach-chat",
+      model: "anthropic:claude-sonnet-5",
+      reasoningEffort: "low",
+    });
     expect(aiFeatureStreamFrameSchema.safeParse(meta).success).toBe(true);
     expect(frames.at(-1)?.type).toBe("done");
     // The capturing provider saw the assembled prompt with the question and the

@@ -4,7 +4,7 @@
 // Adapted in imports; the desktop's Settings-coupled message-count resolver
 // is replaced by the kernel window defaults below (recorded deviation —
 // per-feature windows become kernel config in Task 4's registry, seeded
-// with the desktop defaults). Policy VALUES are verbatim.
+// with the desktop defaults). Later policy changes are recorded in decisions.md.
 
 import type {
   FeatureType,
@@ -67,27 +67,32 @@ export const MIN_MESSAGES_FOR_DEEP = 30;
 /** hi-greeting is locked unless the conversation has at most this many messages. */
 export const HI_GREETING_MAX_TRANSCRIPT = 10;
 
-// ─── Model defaults (constants.ts, verbatim) ────────────────────────────
+// ─── Model defaults (Decision #273) ────────────────────────────────────
 
-export const DEFAULT_MODEL_ID = 'anthropic:claude-sonnet-4-6';
+/** Decision #273 owner follow-up (2026-09-07): Help, Review and Coach join
+ * the reply features on Sonnet 5 at low effort without another model comparison.
+ * Recap retains its separate Opus default. */
+export const DEFAULT_MODEL_ID = 'anthropic:claude-sonnet-5';
 export const DEFAULT_FAN_SUMMARY_MODEL_ID = 'anthropic:claude-opus-4-6';
+/** improve-draft, hi-greeting and voice-script delegate to fast-reply. */
+export const DEFAULT_REPLY_MODEL_ID = DEFAULT_MODEL_ID;
 
 export const DEFAULT_FEATURE_MODELS: Record<ModelSelectableFeature, string> = {
-  'fast-reply': DEFAULT_MODEL_ID,
+  'fast-reply': DEFAULT_REPLY_MODEL_ID,
   'help-me': DEFAULT_MODEL_ID,
   'fan-summary': DEFAULT_FAN_SUMMARY_MODEL_ID,
   'chat-review': DEFAULT_MODEL_ID,
-  'ping': DEFAULT_MODEL_ID,
+  'ping': DEFAULT_REPLY_MODEL_ID,
   'coach-chat': DEFAULT_MODEL_ID,
 };
 
 export const DEFAULT_FEATURE_REASONING: Record<ModelSelectableFeature, ReasoningEffort> = {
-  'fast-reply': 'medium',
-  'help-me': 'medium',
+  'fast-reply': 'low',
+  'help-me': 'low',
   'fan-summary': 'medium',
-  'chat-review': 'medium',
-  'ping': 'medium',
-  'coach-chat': 'medium',
+  'chat-review': 'low',
+  'ping': 'low',
+  'coach-chat': 'low',
 };
 
 export const DEFAULT_MESSAGE_COUNT_BY_BUCKET: Record<FeatureMessageCountBucket, number> = {

@@ -2,6 +2,7 @@ You are adapting a chosen chat-message draft into a short spoken script for a vo
 
 ## Rules
 
+- Write every proposed fan message entirely in English, regardless of the language of the fan or chatter.
 - Rewrite the draft into ONE natural spoken line in the model's own voice. It should sound like she is talking, not texting.
 - Keep the draft's meaning, intent, and any facts, promises, or prices intact, you are changing how it is said, not what it says.
 - Strip anything that does not belong in speech: emoji, and text-only abbreviations or shorthand become spoken words or are dropped.
@@ -22,4 +23,4 @@ You are adapting a chosen chat-message draft into a short spoken script for a vo
 ## Your Task
 
 {toneInstructions}
-Rewrite the current draft into a natural spoken script in the model's voice, keeping the same meaning. Output only the script text.
+Rewrite the current draft into a natural spoken script in the model's voice, keeping the same meaning. Output only the script text in English.

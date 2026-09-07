@@ -26,8 +26,18 @@ export interface AnthropicGatewayStreamRequest {
     content: AnthropicGatewayTextBlock[];
   }];
   temperature?: number;
-  thinking?: { type: "adaptive"; display: "summarized" };
-  output_config?: { effort: Exclude<AiGatewayReasoningEffort, "off"> };
+  thinking?: { type: "adaptive"; display: "summarized" } | { type: "disabled" };
+  output_config?: {
+    effort?: Exclude<AiGatewayReasoningEffort, "off">;
+    format?: AnthropicGatewayOutputFormat;
+  };
+}
+
+/** Structured-outputs schema (`output_config.format`) for a request whose
+ * consumer parses JSON. Off the wire: only the internal lane sets it. */
+export interface AnthropicGatewayOutputFormat {
+  type: "json_schema";
+  schema: Record<string, unknown>;
 }
 
 export interface AnthropicGatewayRequestTuning {
@@ -84,13 +94,24 @@ const FEATURE_TEMPERATURES: Record<GatewayOperationFeature, number> = {
   "voice-script": 0.4,
 };
 
-const ANTHROPIC_ADAPTIVE_THINKING_MODELS = new Set([
-  "claude-sonnet-4-6",
-  "claude-opus-4-6",
-  "claude-opus-4-8",
+// Pre-4.6 request surface: no adaptive thinking, sampling params accepted.
+// Every model NOT listed here is treated as adaptive-only, so adding a model
+// to the pricing catalog needs no edit here unless it is a legacy one.
+const ANTHROPIC_LEGACY_SAMPLING_MODELS = new Set([
+  "claude-haiku-4-5",
+  "claude-sonnet-4-5",
+  "claude-opus-4-5",
 ]);
 
-const ANTHROPIC_SAMPLING_PARAMS_REMOVED_MODELS = new Set(["claude-opus-4-8"]);
+// 4.6 family: adaptive thinking available, `temperature` still accepted while
+// thinking is off. Opus 4.7+, Opus 5 and Sonnet 5 return 400 on any sampling
+// parameter, so the default for an unlisted adaptive model is "omit".
+const ANTHROPIC_SAMPLING_TOLERANT_MODELS = new Set(["claude-sonnet-4-6", "claude-opus-4-6"]);
+
+// Omitting `thinking` means thinking ON here, so "off" needs an explicit
+// disable; otherwise thinking spends the non-adaptive max_tokens cap and the
+// answer truncates (stopReason 'max_tokens').
+const ANTHROPIC_THINKING_ON_BY_DEFAULT_MODELS = new Set(["claude-opus-5", "claude-sonnet-5"]);
 
 const ANTHROPIC_ADAPTIVE_MAX_TOKENS: Record<GatewayOperationFeature, number> = {
   "fast-reply": 8000,
@@ -114,11 +135,18 @@ const ANTHROPIC_ADAPTIVE_MAX_TOKENS: Record<GatewayOperationFeature, number> = {
 const APPROX_CHARS_PER_TOKEN = 4;
 
 function isAdaptiveAnthropicModel(providerModelId: string) {
-  return ANTHROPIC_ADAPTIVE_THINKING_MODELS.has(providerModelId);
+  return !ANTHROPIC_LEGACY_SAMPLING_MODELS.has(providerModelId);
 }
 
 function hasRemovedSamplingParams(providerModelId: string) {
-  return ANTHROPIC_SAMPLING_PARAMS_REMOVED_MODELS.has(providerModelId);
+  return isAdaptiveAnthropicModel(providerModelId)
+    && !ANTHROPIC_SAMPLING_TOLERANT_MODELS.has(providerModelId);
+}
+
+function thinkingOffSwitch(providerModelId: string) {
+  return ANTHROPIC_THINKING_ON_BY_DEFAULT_MODELS.has(providerModelId)
+    ? { thinking: { type: "disabled" as const } }
+    : {};
 }
 
 function nonnegativeInt(value: number | null | undefined) {
@@ -193,10 +221,11 @@ export function resolveAnthropicGatewayRequestTuning(input: {
     ? ANTHROPIC_ADAPTIVE_MAX_TOKENS[input.feature]
     : FEATURE_MAX_TOKENS[input.feature];
   if (!adaptive || input.reasoningEffort === "off") {
+    const thinkingOff = thinkingOffSwitch(input.providerModelId);
     if (hasRemovedSamplingParams(input.providerModelId)) {
-      return { maxTokens };
+      return { maxTokens, ...thinkingOff };
     }
-    return { maxTokens, temperature: input.temperature };
+    return { maxTokens, temperature: input.temperature, ...thinkingOff };
   }
 
   return {
@@ -208,7 +237,10 @@ export function resolveAnthropicGatewayRequestTuning(input: {
 
 export function buildAnthropicGatewayStreamRequest(
   input: AiGatewayStreamBody,
-  options?: { disableAdaptiveThinking?: boolean | undefined },
+  options?: {
+    disableAdaptiveThinking?: boolean | undefined;
+    outputFormat?: AnthropicGatewayOutputFormat | undefined;
+  },
 ): AnthropicGatewayStreamRequest {
   const model = resolveAnthropicGatewayModel(input.model);
   const temperature = input.temperature ?? getAnthropicGatewayFeatureTemperature(input.feature);
@@ -230,7 +262,14 @@ export function buildAnthropicGatewayStreamRequest(
       content: toAnthropicGatewayTextBlocks(input.prompt.userBlocks),
     }],
     ...(tuning.thinking ? { thinking: tuning.thinking } : {}),
-    ...(tuning.outputConfig ? { output_config: tuning.outputConfig } : {}),
+    ...(tuning.outputConfig || options?.outputFormat
+      ? {
+          output_config: {
+            ...(tuning.outputConfig ?? {}),
+            ...(options?.outputFormat ? { format: options.outputFormat } : {}),
+          },
+        }
+      : {}),
     ...(tuning.temperature !== undefined ? { temperature: tuning.temperature } : {}),
   };
 }

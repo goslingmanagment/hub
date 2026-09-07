@@ -17,6 +17,7 @@ import {
 
 import type { AppContext } from "../bootstrap.ts";
 import type { AiGatewayProvider } from "./ai-gateway.ts";
+import type { AnthropicGatewayOutputFormat } from "./ai-gateway-anthropic.ts";
 import {
   createAnthropicAiGatewayProvider,
   createDirectAnthropicClientResolver,
@@ -58,6 +59,8 @@ export interface GatewayCompletionInput {
   userBlocks: AiGatewayPromptBlock[];
   maxTokens?: number;
   temperature?: number;
+  /** Structured-outputs schema; the completion text is then schema-valid JSON. */
+  outputFormat?: AnthropicGatewayOutputFormat;
   pageId?: number | null;
   conversationRef?: string | null;
   /** Test seam: replaces the direct-egress Anthropic provider. */
@@ -157,6 +160,7 @@ export async function runGatewayCompletion(
       body,
       quota: { accepted: true, remainingRequestsToday: null, remainingMicroUsdToday: null },
       signal: abort.signal,
+      ...(input.outputFormat ? { outputFormat: input.outputFormat } : {}),
     })) {
       // No SSE on this lane, so the frames the consumer wants emitted are
       // dropped; only the folded terminal state matters here.

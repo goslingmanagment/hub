@@ -1,6 +1,8 @@
 // Effective L2-classifier settings = per-page override (DB) over env defaults,
-// plus a tiny model→price table for cost estimates. Pure + framework-free so the
+// plus a model→price lookup for cost estimates. Pure + framework-free so the
 // worker, the API handlers, and tests all resolve settings the same way.
+
+import { anthropicListPriceUsdPerMillion } from "../../services/ai-gateway-pricing.ts";
 
 export interface ClosingConfigLike {
   anthropicApiKey?: string | null;
@@ -55,16 +57,11 @@ export function resolveClosingSettings(
   };
 }
 
-// USD per 1M tokens. Batch / prompt-caching discounts are not modelled (we use the
-// sync API), so this is a conservative upper bound. Falls back to Haiku 4.5 pricing.
-const MODEL_PRICING: Record<string, { input: number; output: number }> = {
-  "claude-haiku-4-5": { input: 1, output: 5 },
-  "claude-3-5-haiku-latest": { input: 1, output: 5 },
-  "claude-sonnet-4-5": { input: 3, output: 15 },
-};
-
+// USD per 1M tokens from the gateway catalog (the single price table). Prompt
+// caching discounts are not modelled here, so this is a conservative upper
+// bound. A model outside the catalog falls back to the default model's price.
 export function modelPricing(model: string): { input: number; output: number } {
-  return MODEL_PRICING[model] ?? MODEL_PRICING[DEFAULT_MODEL]!;
+  return anthropicListPriceUsdPerMillion(model) ?? anthropicListPriceUsdPerMillion(DEFAULT_MODEL)!;
 }
 
 /** Estimated USD cost for a token count under a model's list price. */

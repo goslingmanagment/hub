@@ -25,6 +25,16 @@ interface AnthropicGatewayPricing {
 }
 
 const ANTHROPIC_PRICING: Record<string, AnthropicGatewayPricing> = {
+  // Decision #273: the judged reply-feature default (adaptive-only surface,
+  // handled generically by ai-gateway-anthropic.ts). List price 2026-09.
+  "anthropic:claude-sonnet-5": {
+    providerModelId: "claude-sonnet-5",
+    inputUsdPerMillion: 2,
+    cacheWrite5mUsdPerMillion: 2.5,
+    cacheWrite1hUsdPerMillion: 4,
+    cacheReadUsdPerMillion: 0.2,
+    outputUsdPerMillion: 10,
+  },
   "anthropic:claude-sonnet-4-6": {
     providerModelId: "claude-sonnet-4-6",
     inputUsdPerMillion: 3,
@@ -131,6 +141,18 @@ export function resolveAnthropicGatewayModel(model: string): AnthropicGatewayPri
   }
 
   return pricing;
+}
+
+/** List price (USD per 1M tokens) by bare provider model id, for estimates
+ * that never touch the ledger (workboard cost panel); null outside the catalog
+ * so the caller decides its own fallback instead of silently underpricing. */
+export function anthropicListPriceUsdPerMillion(
+  providerModelId: string,
+): { input: number; output: number } | null {
+  const entry = Object.values(ANTHROPIC_PRICING).find(
+    (pricing) => pricing.providerModelId === providerModelId,
+  );
+  return entry ? { input: entry.inputUsdPerMillion, output: entry.outputUsdPerMillion } : null;
 }
 
 export function estimateAiGatewayUsageCost(

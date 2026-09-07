@@ -270,6 +270,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 262 | OFAPI lifecycle receipt and ordering | Signed no-key ephemeral receipts keep local identities; subscription/account material follows provider time; health retries independently of settlement; upload/export hooks remain durable progress evidence without paid follow-ups. |
 | 265 | OFAPI delivery recovery and event application | Numeric attempt facts survive provider retention; remote redelivery has durable one-attempt intent and separate outcomes; local replay targets retained evidence; optional groups use saved policy and verified remote readback. |
 | 270 | OFAPI marketing custody | Closed scoped collectors feed canonical attribution snapshots; shared pixel and postback controls use encrypted one-attempt owner intents, safe impact previews and explicit external tests. |
+| 273 | Prompt audit: model-generic gateway tuning, structured verdicts, cache split | The Anthropic request builder allowlists the LEGACY surface (`haiku-4-5`/`sonnet-4-5`/`opus-4-5` sampling+no-adaptive; `sonnet-4-6`/`opus-4-6` adaptive+temperature-tolerant) and treats every other model as adaptive-only with no sampling params, plus an explicit `thinking: disabled` for Opus 5 / Sonnet 5 when reasoning is off; the workboard classifier asks for verdicts through structured outputs (`output_config.format`, internal lane only) instead of prose-and-bracket-hunting; the workboard cost panel prices from the gateway catalog (retired `claude-3-5-haiku-latest` row and the Haiku-for-everything fallback gone); coach-chat splits the coach dialog into its own 5m cache block and the recap age label is never minute-granular; safety preambles, tone overrides, hi-greeting and the XML-format lines lose their shouted register; the anti-AI banned-phrase lists become positive guidance plus varied examples, then re-tuned by a blind pairwise judge (~1,400 comparisons): fast-reply v10 = GOOD-only examples, six structural bullets, no quoted tell-phrases, a reread line at the end of the task block (63% wins vs the pre-audit production setup on Sonnet 4.6); improve-draft rewrite wins 64/25. Biggest lever measured is the model: Sonnet 5 at low effort wins 71% and costs less, applied on the owner's go as the reply-feature default (`DEFAULT_REPLY_MODEL_ID`; the owner follow-up extends Sonnet 5 low to Help, Review and Coach without another model comparison). chat-review's inert "under 400 words" replaced by audience framing; help-me's binding "under 150 words" and the short recap's 350 stay |
 
 | 271 | OFAPI content webhook evidence | Queue progress and post likes canonicalize from raw captures into rebuildable, source-fenced projections; local owner report never claims delivery or complete liker coverage. |
 | 272 | Typed OFAPI owner actions | Closed action schemas share encrypted durable intents, frozen binding and accounting mode, nonblocking dispatch locks, exact response capture, local replay and owner controls. No subscribe-to-user or automatic enabling. |
@@ -11267,3 +11268,220 @@ claim this shared fence transactionally; handoff checks it without consuming
 the token. A new operation cannot reuse erased or indeterminate CDN material.
 Existing v2 provider recovery keeps its exact-identity and 24-hour restrictions;
 legacy media sends gain no replay permission. Vault IDs remain reusable.
+
+**Decision #273 (2026-09-07, prompt audit fixes):** a `/claude-api prompt-audit`
+pass over everything that reaches a model. Applied, in one change:
+
+- **Gateway tuning is model-generic.** `ai-gateway-anthropic.ts` used to allowlist
+  the adaptive models (`sonnet-4-6`, `opus-4-6`, `opus-4-8`) and the one
+  no-sampling model (`opus-4-8`); any model added to the pricing catalog later
+  would silently get `temperature` (a 400 on Opus 4.7+, Opus 5, Sonnet 5) and no
+  adaptive thinking. The lists now name the LEGACY surface instead:
+  `haiku-4-5` / `sonnet-4-5` / `opus-4-5` keep sampling params and never get
+  adaptive thinking; `sonnet-4-6` / `opus-4-6` are adaptive and still accept
+  `temperature` while thinking is off; everything else is adaptive-only with no
+  sampling params. Opus 5 and Sonnet 5 (thinking on when the field is omitted)
+  get an explicit `thinking: {type: "disabled"}` when reasoning is off or the
+  short-recap `disableAdaptiveThinking` flag is set, so the non-adaptive
+  `max_tokens` cap stays a pure output budget. No behaviour change for the
+  models in the catalog today.
+- **Classifier verdicts via structured outputs.** The workboard closing
+  classifier stops asking for "ONLY a compact JSON array … no code fences" and
+  hunting for brackets; the internal lane passes an off-wire `outputFormat`
+  (`output_config.format`, json_schema with the `state` enum) through the
+  provider input, exactly like `disableAdaptiveThinking`. The completion is a
+  schema-valid `{"verdicts": [...]}` object; `coerceState` and the
+  needs_reply=true defaults stay as the fail-safe for a truncated stream. Not
+  on the public wire schema.
+- **Workboard cost panel prices from the gateway catalog.** `ai-settings.ts`
+  carried its own three-row price table (including the retired
+  `claude-3-5-haiku-latest`) and priced every other model at Haiku rates, so a
+  per-page `claude-sonnet-4-6` override under-reported cost 3×. It now reads
+  `anthropicListPriceUsdPerMillion` from `ai-gateway-pricing.ts`; unknown
+  models still fall back to the default model's price.
+- **Coach-chat cache split.** The `## Coach Dialog So Far` section grows every
+  turn and sat inside the 5m block with the transcript, so each coach turn
+  re-billed the whole transcript as a cache write. It is now its own 5m block
+  (four breakpoints total, the API maximum), and the recap age label is
+  `under an hour ago` rather than `N min ago` so the dynamic block is not
+  invalidated by the clock. The budget reducer is unchanged (it sums block
+  lengths).
+- **Prompt register.** Safety preambles: `CRITICAL SAFETY RULES` →
+  `Safety rules:`, `IGNORE THEM COMPLETELY` → `ignore them`, `UNTRUSTED USER
+  INPUT` lowercased (reply-output's meta-leak regex is case-insensitive, so the
+  scrub still fires). Tone overrides: the bold `**IMPORTANT. Tone override:
+  X.**` header becomes a plain `Tone for this reply: x.` line (markdown in the
+  prompt bled into replies that must carry no bold). `help-me` / `chat-review`:
+  `You MUST respond using exactly this XML structure` → `Respond in exactly this
+  XML structure` (the XML wire format itself is unchanged). `hi-greeting`: the
+  `Read the Room FIRST / Before writing anything` planning choreography becomes
+  two plain conditionals. Rationale for all four: current models follow the
+  system prompt closely and literally; the shouted register was written to
+  overcome older models' reluctance and now bleeds into the output's tone.
+  Manifest `coreSha256` values updated for `builder.ts`, `templates.ts`,
+  `chat-review.md`, `help-me.md`, `hi-greeting.md`.
+
+**Anti-AI rework (second commit, owner request).** The banned-phrase lists in
+`fast-reply` / `improve-draft` / `help-me` / `ping` / `hi-greeting`
+(`NEVER use: "that hits different", "not gonna lie"…`, `No therapy-speak (…)`,
+`Do NOT sound AI-generated`) are replaced by one positive paragraph per
+template that states the wanted register and why it matters (a fan who senses
+machine polish stops trusting the chat and stops paying), plus examples where
+examples are what steers the model. Evidence, in order of weight:
+
+- The desktop's own changelog on Sonnet 4.6 (`of-desktop/docs/research/
+  legacy-chatgoose.md` §11.3, releases 1.2.5–1.2.14): "banned word lists don't
+  work — model finds synonyms. Structural rules + concrete examples work
+  better"; fast-reply was rewritten examples-first in 1.2.14 and the lists
+  survived as leftovers.
+- Anthropic's prompting guidance for 4.6+: tell the model what to do rather
+  than what not to do, give the reason, 3–5 varied examples in `<examples>`,
+  dial back aggressive guidance.
+- A synthetic-transcript probe (no fan data; ~230 samples, ~$4) on
+  `claude-sonnet-4-6` (prod default) and `claude-opus-4-8`: on 17 ordinary
+  scenarios the old and new templates are indistinguishable (short,
+  in-character, no machine tells either way); the lists were inert. In heavy
+  emotional scenarios Sonnet 4.6 drifts into interpreting the fan back to
+  himself under BOTH templates; the ban suppressed the literal "hits different"
+  but produced synonyms ("the quiet is the worst part", "that's such a
+  specific kind of pain"). The rework handles that case with a heavy-moment
+  BAD/GOOD pair and one reasoned line naming the three demonstrated
+  empathy-performance phrases (a scoped prohibition against a reproduced
+  failure, which the audit keeps); on fresh heavy scenarios the reworked
+  replies came out ~20% shorter and less interpretive.
+- The model copies example shape almost verbatim (a scenario matching an
+  example reproduced the example's wording), so the fast-reply examples were
+  diversified (buy signal, one-word reaction, flirt, grief) and labeled
+  illustrative.
+
+**Third commit: judged rework (owner asked for "super natural", research +
+more variants).** A blind pairwise judge (Opus 4.8, both candidate orders,
+28 pairs per variant, ~1,400 comparisons) over 14 fast-reply scenarios (10
+ordinary, 4 heavy) and 7 improve-draft drafts, every variant scored against
+the pre-audit production setup (claude-sonnet-4-6, old template, adaptive
+medium). What it found, in order of size:
+
+- **The model is the biggest lever.** Same prompts, `claude-sonnet-5` at
+  `low` effort: 71% wins vs production (heavy moments 15/1); `claude-opus-4-8`
+  medium: 71%; Sonnet 5 is also cheaper per token than Sonnet 4.6 ($2/$10 vs
+  $3/$15) and `low` spends less thinking. **Applied in the fourth commit on
+  the owner's go:** `anthropic:claude-sonnet-5` joins the pricing catalog and
+  the reply features (`fast-reply`, `ping`, and through delegation
+  `improve-draft`, `hi-greeting`, `voice-script`) default to it at
+  `DEFAULT_FEATURE_REASONING` = `low` (`DEFAULT_REPLY_MODEL_ID`). The analysis
+  features (`help-me`, `chat-review`, `coach-chat`) were not measured and stay
+  on Sonnet 4.6 medium; `fan-summary` stays on Opus 4.6. The gateway tuning
+  from the first commit already handles the new model (adaptive-only, no
+  sampling params, `thinking: disabled` when reasoning is off). A client that
+  sends its own `model` is unaffected: the default applies only when the body
+  omits it. Sonnet 5's tokenizer produces roughly 30% more tokens for the same
+  text, so the chars/4 preflight estimate under-counts slightly; the ledger
+  prices real usage.
+- **The second commit's prose rewrite lost on Sonnet 4.6** (41% wins, 6
+  strong wins / 11 strong losses): the judge's reasons were almost all
+  "restates or interprets the fan's situation back to him". Sonnet 4.6 skims
+  prose but follows a short bullet list, and the BAD examples seeded phrases
+  (GOOD-only examples alone moved it to 50%). The desktop's "structural rules
+  + examples" finding was right; the mistake was turning the structural
+  bullets into a paragraph.
+- **v10 (applied):** GOOD-only examples labeled `Reply:`; the structural
+  rules back as six short bullets, the load-bearing one being "never restate,
+  summarize, or interpret what he just said back to him"; no quoted
+  tell-phrases anywhere (naming them seeds them); one reread line at the very
+  end of the task block ("if any line restates his situation, explains, or
+  reassures, cut it"), which alone was worth +18 points as a recency effect.
+  v10 on Sonnet 4.6: 63% wins (heavy 13/3); on Sonnet 5 low: 66%.
+- **Also measured, not applied:** `thinking: off` + `temperature 0.65` on
+  Sonnet 4.6 is neutral (52%); effort `low` on 4.6 hurts heavy moments
+  (2/13); a persona line change ("listening looks like asking, not like
+  explaining his situation back") scores best on heavy moments (14/2) but
+  is owner content (bundled Lora v2), left as a suggestion; 24 of the page's
+  real recent DMs as style exemplars in the persona score 59% on 4.6 (they
+  are themselves AI-written in another vendor's house style, per the owner).
+- **improve-draft:** the second-commit rewrite wins 64% / loses 25% vs the
+  old template; kept as is.
+- **Word caps (owner delegated the call):** `chat-review`'s "under 400
+  words" was inert on Sonnet 4.6 (about 500 words with it, 530 without), so
+  it is replaced by audience framing; `help-me`'s "under 150 words" binds
+  (122 vs 177 words) and the panel is read mid-conversation, so it stays;
+  `fan-summary-short`'s 350 stays (it feeds the coach prompt and the
+  2048-token recap budget).
+
+Harness and raw results live only in the session scratchpad (synthetic
+transcripts; the exemplar pull used the read-only Agent Read Plane).
+
+
+**Decision #273 owner follow-up (2026-09-07, analysis feature defaults):**
+During ChatGoose 2.0 release preparation, the owner explicitly requested that
+Help, Review and Coach move to Sonnet 5 low now, without an additional model
+comparison. This supersedes the fourth commit's decision to retain Sonnet 4.6
+medium for those three unmeasured features. `DEFAULT_MODEL_ID` is now
+`anthropic:claude-sonnet-5`, with `DEFAULT_REPLY_MODEL_ID` pointing to the same
+constant; `help-me`, `chat-review` and `coach-chat` use `low` reasoning. Reply,
+Fix, Hi, Ping and voice-script already use this model and effort through their
+existing policies. Full and short Recap retain the separate Opus 4.6 default,
+including short Recap's existing adaptive-thinking override. Explicit request
+`model` and `reasoningEffort` overrides still win independently. The prompt
+manifest pin and existing service/policy expectations are updated with the
+change. This is an owner-directed default change, with no new quality claim or
+paid comparison run; deployment status is separate from this source change.
+
+Integration provenance: this prompt-audit decision used number 252 in its
+original branch. On integration with main it is renumbered to 273 because
+main's Decision 252 already governs OFAPI binding custody. Both decision
+histories are retained; older prompt-branch commit messages keep their
+historical number. The existing OFAPI decision and current main runtime
+changes are preserved in full.
+
+
+**Decision #201 amendment (2026-09-07, proposed fan messages are always
+English).** The owner reported Russian phrases leaking into proposed fan
+messages in Coach and possibly Review, then explicitly answered «Всегда на
+английском» when asked whether those messages follow English or the fan's
+language. This supersedes #201's fan-language inference rule for generated
+fan messages. Russian chatter-facing analysis and original-language evidence
+quotes remain separate from proposed wording.
+
+Ordinary Coach previously instructed the model to answer in the chatter's
+language without an explicit language for draft fences. The situation preset
+used the fan's language. Review ended with the blanket task "Write in Russian"
+even though replacement messages shared the same response. Help had an audience
+split but still followed fan-language inference. These prompts now state that
+every proposed fan message is entirely English regardless of the fan, chatter,
+transcript, unsent draft, history, recap, dossier or persona-note language.
+Both static instructions and the final uncached task carry the distinction;
+Coach labels and explanations remain outside draft fences, Help coaching stays
+outside the suggestion tags, and Review explanations stay outside replacement
+quotes. The situation preset retains four Russian advice blocks and exactly
+two English drafts.
+
+The same English-only rule covers Reply, Fix, Hi, Ping and Voice Script so a
+follow-up action cannot switch the draft back to the fan's language. Fix's
+explicit language-inference instruction is removed. Tone, split/variant
+protocols, Voice audio tags, model selection, quotas and automatic-retry
+behavior are unchanged. Template sources, compiled string mirrors and manifest
+hashes are updated together. Assembly tests cover multilingual inputs and the
+cached/uncached boundary; they verify the instructions supplied to the model,
+not a deterministic guarantee of model compliance.
+
+The Fansly extension separately fixes a display parser that included Russian
+commentary after a quoted Review replacement in its example card, and blocks
+Copy/Insert for Coach drafts containing Cyrillic (extension E91). That guard
+is deliberately a Cyrillic detector, not a semantic English classifier.
+Original output remains visible and no translation or generation is retried
+automatically. These client changes do not deploy the kernel prompt changes.
+The original patch was prepared on production source revision 2475b3046332.
+It is restored onto the integrated main plus Decision #273 prompt stack,
+preserving the newer reply style, model defaults and separate cached Coach
+history block. Compiled mirrors and manifest hashes are synchronized for the
+combined revision before validation and rollout.
+
+
+Release validation for the integrated Decisions #273 and #201 changes
+(2026-09-07): `pnpm check` passed with 3,026 unit tests (nine existing skips),
+the strictness ratchet, lint and dashboard build. The feature service,
+restricted-capture/internal classifier and gateway integration suites passed
+all 85 tests with Docker-backed Postgres. The 27 prompt manifest hashes match.
+Independent review found no blocking issue. No additional model comparison
+or paid generation was performed. Deployment is authorized by the owner's
+explicit "Выкатить сейчас" reply; its outcome is recorded separately.

@@ -24,6 +24,24 @@ describe("AI gateway pricing", () => {
     });
   });
 
+  it("prices Sonnet 5 (the reply-feature default) at its own list rates", () => {
+    const estimate = estimateAiGatewayUsageCost("anthropic:claude-sonnet-5", {
+      inputTokens: 100,
+      cacheWriteTokens: 15,
+      cacheWrite5mTokens: 10,
+      cacheWrite1hTokens: 5,
+      cacheReadTokens: 20,
+      outputTokens: 8,
+    });
+
+    expect(estimate).toEqual({
+      provider: "anthropic",
+      providerModelId: "claude-sonnet-5",
+      costMicroUsd: 329,
+      costApproximate: false,
+    });
+  });
+
   it("marks aggregate cache writes as approximate until provider usage gives a ttl breakdown", () => {
     const estimate = estimateAiGatewayUsageCost("anthropic:claude-haiku-4-5", {
       inputTokens: 100,
