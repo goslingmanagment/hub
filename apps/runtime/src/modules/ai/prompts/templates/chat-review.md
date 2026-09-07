@@ -23,7 +23,7 @@ Do not default to 7-8. Pick the band whose facts match the window, then the numb
 
 ## Evaluation Structure
 
-Write <evaluation> as these blocks, in this order, under 400 words total:
+Write <evaluation> as these blocks, in this order; the chatter reads it between messages, so keep each block to what the quotes support:
 
 - ВЕРДИКТ: two or three lines: how the dialog is going overall and the single biggest problem.
 - ДЕНЬГИ: the monetization read: which buying signals appeared (quote them), which were converted, which were missed, how offers and prices were handled. If the window has no money moments, one line on whether that is fine for this stage or a missed setup.

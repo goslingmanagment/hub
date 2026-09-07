@@ -252,7 +252,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 249 | An explicit posts request is the manual action | `POST /admin/sync/trigger {scope: posts}` — the explicit per-page operator action — now clears a `manual_action_required` block on the posts stream (`clearPageSyncManualActionBlock`, that blocker kind only) BEFORE recording the request, so the request lands on a runnable row. Production 2026-09-04: after #128's cancel/resolve the streams stayed `blocked` with the old `ofapi_capture_job_*` codes because `resumePageSync` only lifts `paused` and nothing ever cleared a manual block; the explicit request the code itself calls "an explicit per-page operator action" was a no-op on exactly the state it exists for. `provider_bad_data`/`dependency` blocks are untouched. The posts handler also forgets an owner-cancelled pending job (checkpoint still named it) and seeds a fresh one through the ordinary slot path. |
 | 250 | OFAPI UI inherits the existing Anthropic-inspired Hub design | Owner requirement for the OFAPI refresh: use the current dashboard theme, typography, spacing and shared components across collection controls and other new OFAPI screens. The concrete source is globals.css plus Settings and OFAPI Credits; token reuse and visual consistency are acceptance criteria. |
 | 251 | OFAPI collection policy and UI are separate stages | Owner separates backend S-POL from frontend S-UI, each with independent implementation and acceptance. Saved mockups are non-normative references outside the implementation plan. New collection still requires both applicable stages plus explicit staged activation; existing Hub design tokens remain authoritative. |
-| 252 | Prompt audit: model-generic gateway tuning, structured verdicts, cache split | The Anthropic request builder allowlists the LEGACY surface (`haiku-4-5`/`sonnet-4-5`/`opus-4-5` sampling+no-adaptive; `sonnet-4-6`/`opus-4-6` adaptive+temperature-tolerant) and treats every other model as adaptive-only with no sampling params, plus an explicit `thinking: disabled` for Opus 5 / Sonnet 5 when reasoning is off; the workboard classifier asks for verdicts through structured outputs (`output_config.format`, internal lane only) instead of prose-and-bracket-hunting; the workboard cost panel prices from the gateway catalog (retired `claude-3-5-haiku-latest` row and the Haiku-for-everything fallback gone); coach-chat splits the coach dialog into its own 5m cache block and the recap age label is never minute-granular; safety preambles, tone overrides, hi-greeting and the XML-format lines lose their shouted register; the anti-AI banned-phrase lists become one positive paragraph per template plus varied examples (probed on Sonnet 4.6 / Opus 4.8: lists were inert on ordinary turns and produced synonyms on heavy ones). The #201 word caps are deliberately untouched |
+| 252 | Prompt audit: model-generic gateway tuning, structured verdicts, cache split | The Anthropic request builder allowlists the LEGACY surface (`haiku-4-5`/`sonnet-4-5`/`opus-4-5` sampling+no-adaptive; `sonnet-4-6`/`opus-4-6` adaptive+temperature-tolerant) and treats every other model as adaptive-only with no sampling params, plus an explicit `thinking: disabled` for Opus 5 / Sonnet 5 when reasoning is off; the workboard classifier asks for verdicts through structured outputs (`output_config.format`, internal lane only) instead of prose-and-bracket-hunting; the workboard cost panel prices from the gateway catalog (retired `claude-3-5-haiku-latest` row and the Haiku-for-everything fallback gone); coach-chat splits the coach dialog into its own 5m cache block and the recap age label is never minute-granular; safety preambles, tone overrides, hi-greeting and the XML-format lines lose their shouted register; the anti-AI banned-phrase lists become positive guidance plus varied examples, then re-tuned by a blind pairwise judge (~1,400 comparisons): fast-reply v10 = GOOD-only examples, six structural bullets, no quoted tell-phrases, a reread line at the end of the task block (63% wins vs the pre-audit production setup on Sonnet 4.6); improve-draft rewrite wins 64/25. Biggest lever measured is the model: Sonnet 5 at low effort wins 71% and costs less, recommended to the owner, not applied. chat-review's inert "under 400 words" replaced by audience framing; help-me's binding "under 150 words" and the short recap's 350 stay |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -10809,7 +10809,51 @@ examples are what steers the model. Evidence, in order of weight:
   diversified (buy signal, one-word reaction, flirt, grief) and labeled
   illustrative.
 
-**Still deliberately untouched:** the #201 word caps (`under 150 words`,
-`under 400 words`, `under 350 words`). They match the audit's numeric-ceiling
-row but are a month-old owner decision on the analysis features, which the
-probe did not cover.
+**Third commit: judged rework (owner asked for "super natural", research +
+more variants).** A blind pairwise judge (Opus 4.8, both candidate orders,
+28 pairs per variant, ~1,400 comparisons) over 14 fast-reply scenarios (10
+ordinary, 4 heavy) and 7 improve-draft drafts, every variant scored against
+the pre-audit production setup (claude-sonnet-4-6, old template, adaptive
+medium). What it found, in order of size:
+
+- **The model is the biggest lever.** Same prompts, `claude-sonnet-5` at
+  `low` effort: 71% wins vs production (heavy moments 15/1); `claude-opus-4-8`
+  medium: 71%; Sonnet 5 is also cheaper per token than Sonnet 4.6 ($2/$10 vs
+  $3/$15) and `low` spends less thinking. Recommendation, not applied here
+  (a default-model change is the owner's call): add `anthropic:claude-sonnet-5`
+  to the pricing catalog and move `DEFAULT_MODEL_ID` for the reply features
+  to it with `DEFAULT_FEATURE_REASONING` = `low`; the gateway tuning from the
+  first commit already handles it (adaptive-only, `thinking: disabled` when
+  reasoning is off).
+- **The second commit's prose rewrite lost on Sonnet 4.6** (41% wins, 6
+  strong wins / 11 strong losses): the judge's reasons were almost all
+  "restates or interprets the fan's situation back to him". Sonnet 4.6 skims
+  prose but follows a short bullet list, and the BAD examples seeded phrases
+  (GOOD-only examples alone moved it to 50%). The desktop's "structural rules
+  + examples" finding was right; the mistake was turning the structural
+  bullets into a paragraph.
+- **v10 (applied):** GOOD-only examples labeled `Reply:`; the structural
+  rules back as six short bullets, the load-bearing one being "never restate,
+  summarize, or interpret what he just said back to him"; no quoted
+  tell-phrases anywhere (naming them seeds them); one reread line at the very
+  end of the task block ("if any line restates his situation, explains, or
+  reassures, cut it"), which alone was worth +18 points as a recency effect.
+  v10 on Sonnet 4.6: 63% wins (heavy 13/3); on Sonnet 5 low: 66%.
+- **Also measured, not applied:** `thinking: off` + `temperature 0.65` on
+  Sonnet 4.6 is neutral (52%); effort `low` on 4.6 hurts heavy moments
+  (2/13); a persona line change ("listening looks like asking, not like
+  explaining his situation back") scores best on heavy moments (14/2) but
+  is owner content (bundled Lora v2), left as a suggestion; 24 of the page's
+  real recent DMs as style exemplars in the persona score 59% on 4.6 (they
+  are themselves AI-written in another vendor's house style, per the owner).
+- **improve-draft:** the second-commit rewrite wins 64% / loses 25% vs the
+  old template; kept as is.
+- **Word caps (owner delegated the call):** `chat-review`'s "under 400
+  words" was inert on Sonnet 4.6 (about 500 words with it, 530 without), so
+  it is replaced by audience framing; `help-me`'s "under 150 words" binds
+  (122 vs 177 words) and the panel is read mid-conversation, so it stays;
+  `fan-summary-short`'s 350 stays (it feeds the coach prompt and the
+  2048-token recap budget).
+
+Harness and raw results live only in the session scratchpad (synthetic
+transcripts; the exemplar pull used the read-only Agent Read Plane).
