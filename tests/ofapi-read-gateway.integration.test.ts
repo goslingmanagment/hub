@@ -8,6 +8,7 @@ import { connect as connectTcp } from "node:net";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
+  applyOfapiCollectionPolicy,
   createModel,
   createOnlyFansPage,
   deleteProxyConfig,
@@ -23,6 +24,7 @@ import {
   createUserAccount,
   issueChatterApiKey,
 } from "../apps/runtime/src/services/auth.ts";
+import { ofapiCollectionPolicyHooks } from "../apps/runtime/src/services/ofapi-collection-policy.ts";
 import { createOfapiCreditSpendSink } from "../apps/runtime/src/services/ofapi-credits.ts";
 import {
   configureReadGatewayCaptureForTests,
@@ -880,6 +882,62 @@ describe("OFAPI read gateway integration", () => {
       "select 1 from observations where source = 'readthrough'",
     );
     expect(observations.rows).toHaveLength(0);
+  });
+
+  it("answers a collection-policy refusal as 409/429 with the reason, never 500/503 (review #136)", async () => {
+    appContext.ofapi = createOfapiClient({
+      baseUrl: upstreamBaseUrl!,
+      apiKey: "core-vendor-key",
+      restDelayMs: 0,
+      onCreditSpend: createOfapiCreditSpendSink(appContext),
+      ...ofapiCollectionPolicyHooks(appContext.db),
+    });
+    const policy = (overrides: Record<string, unknown>) => ({
+      pageId: assignedPageId, category: "core_messages" as const, mode: "scheduled" as const,
+      intervalMinutes: 15, dailyCreditLimit: 1, maxCallsPerRun: 2, includeDetails: false, ...overrides,
+    });
+
+    // Capture-first path: the refusal is the pre-dispatch cause of a governed
+    // attempt; the released attempt must not turn it into a 503.
+    appContext.config.ofapiMirrorInteractiveCaptureEnabled = true;
+    await testDb!.pool.query(
+      `insert into ofapi_credit_state (id, spend_day, last_balance, last_balance_at)
+       values (1, current_date, 9000, now())
+       on conflict (id) do update
+       set last_balance = excluded.last_balance,
+           last_balance_at = excluded.last_balance_at`,
+    );
+    await applyOfapiCollectionPolicy(appContext.db, { expectedRevision: 0, changes: [policy({ mode: "off" })] }, 1);
+    const off = await inject(`${ACCOUNT_ONE}/chats?limit=10`);
+    expect(off.statusCode, off.body).toBe(409);
+    expect(off.json()).toMatchObject({
+      error: "ofapi_collection_refused",
+      reason: "collection_off",
+      statusCode: 409,
+      retryAfterMs: null,
+    });
+    expect(upstreamRequests).toHaveLength(0);
+
+    // Proxy-read path: the second read of the day crosses the 1-credit cap.
+    appContext.config.ofapiMirrorInteractiveCaptureEnabled = false;
+    await applyOfapiCollectionPolicy(appContext.db, { expectedRevision: 1, changes: [policy({})] }, 1);
+    scriptedResponses.push({
+      status: 200,
+      body: { data: [{ id: 1 }], _meta: { _credits: { used: 1, balance: 8999 } }, _pagination: { next_page: null } },
+      headers: { "x-ofapi-credits-used": "1", "x-ofapi-credits-balance": "8999" },
+    });
+    const first = await inject(`${ACCOUNT_ONE}/chats?limit=10`);
+    expect(first.statusCode, first.body).toBe(200);
+    const capped = await inject(`${ACCOUNT_ONE}/chats?limit=10`);
+    expect(capped.statusCode, capped.body).toBe(429);
+    expect(capped.json()).toMatchObject({
+      error: "ofapi_collection_refused",
+      reason: "daily_limit",
+      statusCode: 429,
+    });
+    expect(capped.json().retryAfterMs).toBeGreaterThan(0);
+    expect(Number(capped.headers["retry-after"])).toBeGreaterThan(0);
+    expect(upstreamRequests).toHaveLength(1);
   });
 
   it("capture-first serves only after the raw response and attempt are durable", async () => {

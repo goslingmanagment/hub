@@ -3,8 +3,23 @@ import { sql } from "drizzle-orm";
 import { findOfapiReadDefinition, OFAPI_COLLECTION_REGISTRY, OFAPI_COLLECTION_LEGACY_OPERATIONS, classifyOfapiCollectionOperation, type OfapiCollectionCategory, type OfapiCollectionContext, type OfapiCollectionSettings } from "@agency_hub_core/shared";
 import type { Database } from "../client.ts";
 
+/**
+ * A local refusal at the collection boundary — never a vendor or transport
+ * failure. `reason` is the machine reason; `code` is the stable error code the
+ * sync journal keeps (`sanitizeError` reads `.code`); `retryAt` is set only for
+ * time-bound caps (the UTC day rollover, the interval window reopening) and is
+ * the earliest instant a retry can be admitted. The runtime maps this to HTTP
+ * and to sync scheduling; this package stays free of those concerns.
+ */
 export class OfapiCollectionPolicyError extends Error {
-  constructor(readonly reason: string) { super(`OFAPI collection policy: ${reason}`); this.name = "OfapiCollectionPolicyError"; }
+  readonly code: string;
+  readonly retryAt: Date | null;
+  constructor(readonly reason: string, options?: { retryAt?: Date | null }) {
+    super(`OFAPI collection policy: ${reason}`);
+    this.name = "OfapiCollectionPolicyError";
+    this.code = `ofapi_collection_${reason}`;
+    this.retryAt = options?.retryAt ?? null;
+  }
 }
 interface State extends Record<string, unknown> { revision: number; background_paused: boolean }
 interface PolicyRow extends Record<string, unknown> { page_id: string | number | null; category: OfapiCollectionCategory; settings: OfapiCollectionSettings; revision: number }
@@ -173,11 +188,19 @@ export async function reserveOfapiCollectionRequest(db: Database, input: OfapiCo
       from ofapi_collection_requests where state<>'released' and page_id=${input.pageId} and category=${category} and purpose=${purpose} and created_at>=${dayStart}`);
     const consumed = usage.rows[0]!;
     // The existing working baseline keeps its existing budget authority until explicitly migrated.
-    if (purpose !== "one_off" && policy.source !== "legacy_baseline" && !legacy && Number(consumed.credits) + estimate > policy.dailyCreditLimit) throw new OfapiCollectionPolicyError("daily_limit");
+    if (purpose !== "one_off" && policy.source !== "legacy_baseline" && !legacy && Number(consumed.credits) + estimate > policy.dailyCreditLimit) {
+      // The daily budget is counted per UTC day: it clears at the next rollover.
+      const nextDay = new Date(dayStart); nextDay.setUTCDate(nextDay.getUTCDate() + 1);
+      throw new OfapiCollectionPolicyError("daily_limit", { retryAt: nextDay });
+    }
     if (purpose === "background" && policy.source !== "legacy_baseline" && !legacy) {
       const windowStart = new Date(now.getTime() - policy.intervalMinutes * 60_000);
-      const recent = await database.execute<{ count: string }>(sql`select count(*)::text count from ofapi_collection_requests where state<>'released' and page_id=${input.pageId} and category=${category} and purpose='background' and created_at>${windowStart}`);
-      if (Number(recent.rows[0]?.count ?? 0) >= policy.maxCallsPerRun) throw new OfapiCollectionPolicyError("interval_limit");
+      const recent = await database.execute<{ count: string; oldest: Date | string | null }>(sql`select count(*)::text count,min(created_at) oldest from ofapi_collection_requests where state<>'released' and page_id=${input.pageId} and category=${category} and purpose='background' and created_at>${windowStart}`);
+      if (Number(recent.rows[0]?.count ?? 0) >= policy.maxCallsPerRun) {
+        // The sliding window reopens when its oldest counted request ages out.
+        const oldest = recent.rows[0]?.oldest ? new Date(recent.rows[0].oldest) : now;
+        throw new OfapiCollectionPolicyError("interval_limit", { retryAt: new Date(oldest.getTime() + policy.intervalMinutes * 60_000 + 1_000) });
+      }
     }
     await database.execute(sql`insert into ofapi_collection_requests(request_id,page_id,category,purpose,operation,policy_revision,job_id,reserved_credits,created_at)
       values(${input.requestId},${input.pageId},${category},${purpose},${input.operation},${current.revision},${input.context?.jobId ?? null}::uuid,${estimate},${now})`);

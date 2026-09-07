@@ -1005,7 +1005,7 @@ export async function finishSyncRequestAttempt(
   attemptId: number,
   input: {
     state: "success" | "retry" | "failed";
-    failureKind?: "timeout" | "transport" | "http" | "provider" | null;
+    failureKind?: "timeout" | "transport" | "http" | "provider" | "policy" | null;
     httpStatus?: number | null;
     retryDelayMs?: number | null;
     durationMs?: number | null;
@@ -1380,7 +1380,7 @@ type SyncRequestAttemptRow = {
   logicalRequestId: string;
   attemptNumber: number;
   state: "started" | "success" | "retry" | "failed";
-  failureKind: "timeout" | "transport" | "http" | "provider" | null;
+  failureKind: "timeout" | "transport" | "http" | "provider" | "policy" | null;
   httpStatus: number | null;
   retryDelayMs: number | null;
   durationMs: number | null;

@@ -196,6 +196,42 @@ describe("health and docs route auth", () => {
     }
   });
 
+  it("answers a collection-policy refusal with its typed status, reason and reset advice (review #136)", async () => {
+    const { OfapiCollectionRefusedError } = await import("../apps/runtime/src/services/errors.ts");
+    const now = new Date("2026-09-07T10:00:00.000Z");
+    routeMocks.getSystemHealth.mockRejectedValue(
+      new OfapiCollectionRefusedError("daily_limit", { retryAt: new Date("2026-09-08T00:00:00.000Z"), now }),
+    );
+    const server = await buildApiServer(createRouteTestContext());
+
+    try {
+      const capped = await server.inject({ method: "GET", url: "/api/v1/health" });
+      expect(capped.statusCode).toBe(429);
+      expect(capped.headers["retry-after"]).toBe(String(14 * 3600));
+      expect(capped.json()).toEqual({
+        error: "ofapi_collection_refused",
+        message: "OFAPI collection budget for this category is exhausted; retry after it resets",
+        statusCode: 429,
+        reason: "daily_limit",
+        retryAfterMs: 14 * 3600 * 1000,
+      });
+
+      routeMocks.getSystemHealth.mockRejectedValue(new OfapiCollectionRefusedError("collection_off"));
+      const off = await server.inject({ method: "GET", url: "/api/v1/health" });
+      expect(off.statusCode).toBe(409);
+      expect(off.headers["retry-after"]).toBeUndefined();
+      expect(off.json()).toEqual({
+        error: "ofapi_collection_refused",
+        message: "OFAPI collection policy refuses this read; change the collection policy to allow it",
+        statusCode: 409,
+        reason: "collection_off",
+        retryAfterMs: null,
+      });
+    } finally {
+      await server.close();
+    }
+  });
+
   it("keeps Zod errors useful and bounded without echoing request values", async () => {
     const requestSecret = `sk-ant-${"s".repeat(800)}`;
     const server = await buildApiServer(createRouteTestContext());

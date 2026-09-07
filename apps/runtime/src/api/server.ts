@@ -39,6 +39,7 @@ import {
   AppError,
   ForbiddenError,
   NotFoundError,
+  OfapiCollectionRefusedError,
   SnapshotRestartRequiredError,
   TooManyRequestsError,
   UnauthorizedError,
@@ -490,6 +491,22 @@ export async function buildApiServer(appContext: AppContext) {
         statusCode: error.statusCode,
         replayFloor: error.replayFloor,
         snapshotPath: error.snapshotPath,
+      });
+      return;
+    }
+
+    if (error instanceof OfapiCollectionRefusedError) {
+      // Documented structured extension (docs/error-handling.md §3): the
+      // machine reason and, for a time-bound cap, the reset advice.
+      if (error.retryAfterMs !== null) {
+        reply.header("retry-after", String(Math.ceil(error.retryAfterMs / 1000)));
+      }
+      reply.code(error.statusCode).send({
+        error: error.code,
+        message: error.message,
+        statusCode: error.statusCode,
+        reason: error.reason,
+        retryAfterMs: error.retryAfterMs,
       });
       return;
     }

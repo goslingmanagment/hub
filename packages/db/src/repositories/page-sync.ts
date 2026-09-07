@@ -2579,6 +2579,9 @@ export async function retryPageSync(
     requestSeq: number;
     leaseToken: string;
     retryKind: string;
+    /** Wake up at this instant instead of the consecutive-failure backoff
+     * (a collection-policy cap knows exactly when it resets, review #136). */
+    retryAt?: Date | null;
     errorCode: string | null;
     errorSummary: string;
     progressedAt?: Date | null;
@@ -2591,7 +2594,7 @@ export async function retryPageSync(
   const now = input.now ?? new Date();
   const row = await getPageSyncState(db, input.pageId, input.stream);
   const nextFailures = (row?.consecutiveFailures ?? 0) + 1;
-  const retryAt = new Date(now.getTime() + resolveRetryDelayMs(nextFailures));
+  const retryAt = input.retryAt ?? new Date(now.getTime() + resolveRetryDelayMs(nextFailures));
   const result = await db.execute(sql<{ status: PageSyncStatus; retryKind: string | null }>`
     update ${pageSyncStates}
     set status = case

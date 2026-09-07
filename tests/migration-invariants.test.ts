@@ -301,7 +301,10 @@ describe("database migration invariants", () => {
     expect(index).toContain(
       "where capture_state = 'accepted' and projection_status = 'projected'",
     );
+    // The review #136 rider: the attempt failure kind for a local
+    // collection-policy refusal, idempotent, outside any transaction.
+    expect(index).toContain("alter type sync_http_failure_kind add value if not exists 'policy';");
     // Every executable query is delimited for the no-transaction runner.
-    expect(index.split("-- agency-hub:statement").length - 1).toBe(2);
+    expect(index.split("-- agency-hub:statement").length - 1).toBe(3);
   });
 });

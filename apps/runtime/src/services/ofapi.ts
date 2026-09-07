@@ -1013,7 +1013,20 @@ export function createOfapiClient(input: {
         return { response, text };
       },
       onTransportError: (error, executionContext) => {
-        if (error instanceof Error && error.name === "OfapiCollectionPolicyError") return { kind: "failed", failureKind: "transport", errorMessage: error.message, error };
+        // A collection-policy refusal happens before any fetch: it is a local
+        // decision, not a vendor outage. It gets its own attempt failure kind
+        // and surfaces unchanged so the executor can read `reason`/`retryAt`
+        // (review #136). Never a transport retry.
+        if (error instanceof Error && error.name === "OfapiCollectionPolicyError") {
+          return {
+            kind: "failed",
+            failureKind: "policy",
+            errorMessage: `OFAPI collection policy refused ${options.operation}: ${
+              (error as { reason?: unknown }).reason ?? "unknown"
+            }`,
+            error,
+          };
+        }
         const errorMessage = `OFAPI request failed: GET ${options.pathname}: ${
           error instanceof Error ? error.message : String(error)
         }`;

@@ -4,7 +4,7 @@ import type * as DbModule from "@agency_hub_core/db";
 import type * as NotificationIncidentsModule from "../apps/runtime/src/services/notification-incidents.ts";
 import type * as SyncSharedModule from "../apps/runtime/src/services/sync/shared.ts";
 
-import { PageSyncLeaseLostError } from "@agency_hub_core/db";
+import { OfapiCollectionPolicyError, PageSyncLeaseLostError } from "@agency_hub_core/db";
 import { FanslyApiError } from "@agency_hub_core/fansly";
 
 import { ProxyMissingError } from "../apps/runtime/src/services/errors.ts";
@@ -1341,6 +1341,88 @@ describe("sync executor", () => {
       runId: 777,
       needsContinuation: false,
     });
+  });
+
+  it("sleeps until a collection cap resets under its own retry class, with no incident (review #136)", async () => {
+    const app = {
+      db: {},
+      logger: { warn: vi.fn(), error: vi.fn() },
+    } as never;
+    const resetAt = new Date("2026-09-08T00:00:00.000Z");
+
+    dbMocks.acquirePageSyncLease.mockResolvedValueOnce(taskLease);
+    handlerMocks.executeStreamChunk.mockRejectedValue(
+      new OfapiCollectionPolicyError("daily_limit", { retryAt: resetAt }),
+    );
+
+    const result = await executeNextSyncPageChunk(app, 55);
+
+    // The owner's own daily budget, refused locally before any fetch: not a
+    // vendor outage, so not the transient backoff ladder (which would poll
+    // every 30 min until midnight) and not a "stream failed 3x" page.
+    expect(dbMocks.retryPageSync).toHaveBeenCalledWith({}, expect.objectContaining({
+      pageId: 55,
+      stream: "followers",
+      retryKind: "ofapi_collection_policy",
+      retryAt: resetAt,
+      errorCode: "ofapi_collection_daily_limit",
+    }));
+    expect(dbMocks.blockPageSync).not.toHaveBeenCalled();
+    expect(notificationMocks.notifySyncChunkFailureIncident).not.toHaveBeenCalled();
+    expect(notificationMocks.notifyOfapiGlobalIncident).not.toHaveBeenCalled();
+    expect(sharedMocks.persistFailedSyncPayload).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ kind: "failed", runId: 777 });
+  });
+
+  it("re-checks a paused background collection on a short cadence instead of parking (review #136)", async () => {
+    const app = {
+      db: {},
+      logger: { warn: vi.fn(), error: vi.fn() },
+    } as never;
+
+    dbMocks.acquirePageSyncLease.mockResolvedValueOnce(taskLease);
+    handlerMocks.executeStreamChunk.mockRejectedValue(
+      new OfapiCollectionPolicyError("background_paused"),
+    );
+    const before = Date.now();
+
+    await executeNextSyncPageChunk(app, 55);
+
+    // Resume must heal the stream by itself: a parked stream would silently
+    // stop capture for every OFAPI page after the owner lifts the pause.
+    const call = dbMocks.retryPageSync.mock.calls[0]?.[1] as { retryKind: string; retryAt?: Date };
+    expect(call.retryKind).toBe("ofapi_collection_policy");
+    expect(call.retryAt).toBeInstanceOf(Date);
+    expect(call.retryAt!.getTime() - before).toBeGreaterThanOrEqual(14 * 60_000);
+    expect(call.retryAt!.getTime() - before).toBeLessThanOrEqual(16 * 60_000);
+    expect(dbMocks.blockPageSync).not.toHaveBeenCalled();
+    expect(notificationMocks.notifySyncChunkFailureIncident).not.toHaveBeenCalled();
+  });
+
+  it("parks a stream whose collection category is switched off, with no incident (review #136)", async () => {
+    const app = {
+      db: {},
+      logger: { warn: vi.fn(), error: vi.fn() },
+    } as never;
+
+    dbMocks.acquirePageSyncLease.mockResolvedValueOnce(taskLease);
+    handlerMocks.executeStreamChunk.mockRejectedValue(
+      new OfapiCollectionPolicyError("collection_off"),
+    );
+
+    await executeNextSyncPageChunk(app, 55);
+
+    // A durable owner decision that no clock clears: park it for the owner,
+    // who already sees the decision in the collection console.
+    expect(dbMocks.blockPageSync).toHaveBeenCalledWith({}, expect.objectContaining({
+      pageId: 55,
+      stream: "followers",
+      blockerKind: "manual_action_required",
+      blockerCode: "ofapi_collection_collection_off",
+      errorCode: "ofapi_collection_collection_off",
+    }));
+    expect(dbMocks.retryPageSync).not.toHaveBeenCalled();
+    expect(notificationMocks.notifySyncChunkFailureIncident).not.toHaveBeenCalled();
   });
 
   it("parks the stream with blocker proxy_missing when the context refuses proxyless Fansly egress (W3.1)", async () => {

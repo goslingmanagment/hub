@@ -15,6 +15,16 @@
 -- The expression and predicate use only columns that exist since 0157
 -- (capture_state, projection_status, payload, event_type, id), so this file
 -- has no dependency on anything that follows it.
+--
+-- Rider (own idempotent statement in the same non-transactional file): a
+-- collection-policy refusal that stops an observed sync request before any
+-- fetch is journaled under its own sync_http_attempts failure kind, 'policy',
+-- instead of masquerading as 'transport'. ALTER TYPE ... ADD VALUE cannot be
+-- used in the transaction that adds it, which is why it rides here rather
+-- than in an ordinary transactional migration.
+
+-- agency-hub:statement
+alter type sync_http_failure_kind add value if not exists 'policy';
 
 -- A backend/process failure during CREATE INDEX CONCURRENTLY leaves an INVALID
 -- index behind, and `if not exists` would then skip that unusable shell

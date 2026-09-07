@@ -23,6 +23,26 @@ export interface OfapiCollectionSettings {
   maxCallsPerRun: number;
   includeDetails: boolean;
 }
+/**
+ * How a collection-policy refusal clears, which decides both the HTTP answer
+ * and what a scheduler does with it:
+ * - `cap`: time clears it (the UTC day rolls over, the interval window
+ *   reopens) — HTTP 429 with the reset time; a sync stream sleeps until then.
+ * - `pause`: the owner's temporary background brake — HTTP 409; a sync stream
+ *   re-checks on a short cadence so Resume heals it without operator work.
+ * - `policy`: a durable owner decision or a misconfiguration that no clock
+ *   fixes — HTTP 409; a sync stream parks until the owner acts.
+ * Every reason is a local decision the console already shows; none is a vendor
+ * outage, so none opens a sync incident.
+ */
+export type OfapiCollectionRefusalDisposition = "cap" | "pause" | "policy";
+export const OFAPI_COLLECTION_CAP_REASONS = ["daily_limit", "interval_limit"] as const;
+export function ofapiCollectionRefusalDisposition(reason: string): OfapiCollectionRefusalDisposition {
+  if (OFAPI_COLLECTION_CAP_REASONS.some(cap => cap === reason)) return "cap";
+  if (reason === "background_paused") return "pause";
+  return "policy";
+}
+
 /** Existing callers may use their old config only until this category receives a policy. */
 export const OFAPI_COLLECTION_LEGACY_OPERATIONS = [
   "ofapi_chats", "ofapi_chat_messages", "ofapi_transactions", "ofapi_chargebacks", "ofapi_fans_active",

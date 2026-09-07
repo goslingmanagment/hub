@@ -193,6 +193,9 @@ export const syncHttpFailureKindEnum = pgEnum("sync_http_failure_kind", [
   "transport",
   "http",
   "provider",
+  // A local collection-policy refusal before any fetch (0169); never a
+  // vendor or transport failure.
+  "policy",
 ]);
 export const syncEventSeverityEnum = pgEnum("sync_event_severity", [
   "info",

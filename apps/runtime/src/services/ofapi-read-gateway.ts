@@ -1,7 +1,7 @@
 import { findOfapiReadDefinition, resolveOfapiCatalogPath, type OfapiCollectionContext } from "@agency_hub_core/shared";
 import { materializeOfapiReadSnapshot } from "./ofapi-collection-runner.ts";
 import { safeOfapiReadBody } from "./ofapi-read-normalization.ts";
-import { listOfapiMappedPages } from "@agency_hub_core/db";
+import { listOfapiMappedPages, OfapiCollectionPolicyError } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
 import type { HumanAuthPrincipal } from "./auth.ts";
@@ -18,10 +18,11 @@ import { executeCaptureFirstInteractiveRead } from "./ofapi-capture-transport.ts
 import { resolveOfapiEgressContext } from "./ofapi-egress.ts";
 import { isOfapiDmReadthroughReconcileEnabled } from "./ofapi-dm-readthrough.ts";
 import { enqueueReadGatewayCapture } from "./ofapi-read-gateway-capture.ts";
-import { OfapiApiError } from "./ofapi.ts";
+import { OfapiApiError, OfapiGovernedRequestError } from "./ofapi.ts";
 import {
   BadRequestError,
   NotFoundError,
+  OfapiCollectionRefusedError,
   ServiceUnavailableError,
 } from "./errors.ts";
 
@@ -59,6 +60,22 @@ export interface OfapiReadGatewayResponse {
 
 function invalid(message: string): never {
   throw new BadRequestError(`Invalid OFAPI read gateway request: ${message}`);
+}
+
+/**
+ * Review #136: a collection-policy refusal — raw from the repository on the
+ * proxy-read path, or the pre-dispatch cause of a governed attempt on the
+ * capture-first path — is a local decision, never an upstream failure. It
+ * becomes the one typed HTTP answer (429 for a time-bound cap with the reset
+ * advice, 409 for an owner policy state) instead of 500/503.
+ */
+export function ofapiCollectionRefusal(error: unknown): OfapiCollectionRefusedError | null {
+  const cause = error instanceof OfapiGovernedRequestError && error.phase === "pre_dispatch"
+    ? error.cause
+    : error;
+  return cause instanceof OfapiCollectionPolicyError
+    ? new OfapiCollectionRefusedError(cause.reason, { retryAt: cause.retryAt })
+    : null;
 }
 
 function decodeSegments(rawPath: string) {
@@ -611,6 +628,8 @@ export async function executeOfapiReadGatewayRequest(
     }
     return { ...response, headers };
   } catch (error) {
+    const refusal = ofapiCollectionRefusal(error);
+    if (refusal) throw refusal;
     if (error instanceof OfapiApiError && error.status === null) {
       throw new ServiceUnavailableError("OFAPI upstream is unavailable");
     }

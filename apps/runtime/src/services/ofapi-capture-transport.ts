@@ -1,6 +1,6 @@
 import { findOfapiReadDefinition } from "@agency_hub_core/shared";
 import type { OfapiCollectionContext } from "@agency_hub_core/shared";
-import { settleOfapiCollectionRequest } from "@agency_hub_core/db";
+import { OfapiCollectionPolicyError, settleOfapiCollectionRequest } from "@agency_hub_core/db";
 import { setTimeout as delay } from "node:timers/promises";
 
 import {
@@ -202,6 +202,10 @@ export async function executeCaptureFirstInteractiveRead(
         fenceToken: reservation.fenceToken,
         reasonCode: error.reason,
       });
+      // A collection-policy refusal is a typed local answer (429/409 at the
+      // read gateway), not an upstream outage: surface it once the unused
+      // attempt is released (review #136).
+      if (error.cause instanceof OfapiCollectionPolicyError) throw error.cause;
     } else {
       const details = error instanceof OfapiGovernedRequestError
         ? { reason: error.reason, phase: error.phase, ...error.diagnostics }
