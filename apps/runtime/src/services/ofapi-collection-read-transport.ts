@@ -237,12 +237,38 @@ export async function captureOfapiCollectionRead(
           fenceToken: reservation.fenceToken,
           reasonCode: error.reason,
         });
-      else
+      else {
+        // The transport already allowlists machine diagnostics. Copy only
+        // those fields; Error/cause, URLs, headers and body bytes stay out of
+        // both the durable receipt and operational logs.
+        const diagnostics = error instanceof OfapiGovernedRequestError && error.diagnostics
+          ? {
+            phase: error.phase,
+            reason: error.reason,
+            stage: error.diagnostics.stage,
+            status: error.diagnostics.status,
+            declaredLength: error.diagnostics.declaredLength,
+            bytesRead: error.diagnostics.bytesRead,
+            maxResponseBytes: error.diagnostics.maxResponseBytes,
+            timeoutMs: error.diagnostics.timeoutMs,
+            elapsedMs: error.diagnostics.elapsedMs,
+            transportClass: error.diagnostics.transportClass,
+            causeName: error.diagnostics.causeName,
+            causeCode: error.diagnostics.causeCode,
+          }
+          : undefined;
+        if (diagnostics) app.logger.warn({
+          operation: input.step.operation,
+          jobId: input.context.jobId,
+          ...diagnostics,
+        }, "OFAPI collection transport failed");
         await markOfapiAttemptIndeterminate(app.db, {
           attemptId: reservation.attemptId,
           fenceToken: reservation.fenceToken,
           outcome: "transport",
+          ...(diagnostics ? { details: diagnostics } : {}),
         });
+      }
       throw error;
     }
     // Capture and credit settlement precede JSON parsing, projection and checkpoint advancement.

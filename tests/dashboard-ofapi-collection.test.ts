@@ -18,6 +18,7 @@ const collectionMocks = vi.hoisted(() => ({
   useOfapiCollectionApply: vi.fn(),
   useOfapiCollectionJobCreate: vi.fn(),
   useOfapiCollectionJobResume: vi.fn(() => ({ isPending: false, isError: false, mutate: vi.fn() })),
+  useOfapiCollectionJobFinishIncomplete: vi.fn(),
   OFAPI_COLLECTION_QUERY_KEY: ["admin", "ofapi-collection"],
 }));
 
@@ -63,6 +64,8 @@ import {
   DraftBar,
   PauseModal,
   PreviewModal,
+  JobsCard,
+  FinishIncompleteRunModal,
 } from "../apps/dashboard/src/pages/settings/collection/CollectionTab.tsx";
 import {
   buildCategoryView,
@@ -229,7 +232,7 @@ function renderTab() {
   return withRouter(createElement(CollectionTab));
 }
 
-const idleMutation = () => ({ mutate: vi.fn(), isPending: false });
+const idleMutation = () => ({ mutate: vi.fn(), isPending: false, isError: false, error: null, reset: vi.fn() });
 
 // ru-RU number formatting uses U+00A0 as the thousands separator.
 const NBSP = " ";
@@ -243,6 +246,8 @@ beforeEach(() => {
   collectionMocks.useOfapiCollectionPreview.mockImplementation(idleMutation);
   collectionMocks.useOfapiCollectionApply.mockImplementation(idleMutation);
   collectionMocks.useOfapiCollectionJobCreate.mockImplementation(idleMutation);
+  collectionMocks.useOfapiCollectionJobResume.mockImplementation(idleMutation);
+  collectionMocks.useOfapiCollectionJobFinishIncomplete.mockImplementation(idleMutation);
   collectionMocks.useAdminOfapiWebhookStatus.mockReturnValue({
     data: {
       configured: true,
@@ -265,6 +270,35 @@ beforeEach(() => {
 });
 
 describe("CollectionTab (static render)", () => {
+  it("shows Finish only for a server-authorized paused scheduled read in the shared Collection screen", () => {
+    const fixture = snapshotFixture();
+    fixture.jobs = [{ id: "scheduled-read", pageId: 7, category: "posts_comments", state: "paused",
+      maxCredits: 10, maxCalls: 10, maxBytes: 1000, usedCredits: 2, usedCalls: 2, usedBytes: 200,
+      createdAt: "2026-09-07T05:00:00Z", reason: "Vendor HTTP 404; response captured", canFinishIncomplete: true }];
+    const markup = withRouter(createElement(JobsCard, { snapshot: fixture, scope: { kind: "all" } }));
+    expect(markup).toContain("Завершить неполный проход");
+    expect(markup).toContain("Vendor HTTP 404; response captured");
+    expect(markup).toContain("Проходы сбора и разовые задачи");
+    fixture.jobs[0]!.canFinishIncomplete = false;
+    expect(withRouter(createElement(JobsCard, { snapshot: fixture, scope: { kind: "all" } }))).not.toContain("Завершить неполный проход");
+  });
+  it("explains preserved uncertain charges and the next scheduled run before confirmation", () => {
+    const job = { id: "scheduled-read", pageId: 7, category: "posts_comments" as const, state: "paused",
+      maxCredits: 10, maxCalls: 10, maxBytes: 1000, usedCredits: 2, usedCalls: 2, usedBytes: 200,
+      createdAt: "2026-09-07T05:00:00Z", reason: "response body read failed", canFinishIncomplete: true };
+    const props = { job, pageLabel: "lora-of", pending: false, error: null, onClose: vi.fn(), onConfirm: vi.fn() };
+    const markup = renderToStaticMarkup(createElement(FinishIncompleteRunModal, props));
+    expect(markup).toContain('role="dialog"');
+    expect(markup).toContain("lora-of");
+    expect(markup).toContain("учёт неподтверждённых списаний останутся");
+    expect(markup).toContain("по штатному расписанию, если сбор включён");
+    expect(markup).toContain("Оставить на паузе");
+    expect(props.onConfirm).not.toHaveBeenCalled();
+    const pending = renderToStaticMarkup(createElement(FinishIncompleteRunModal, { ...props, pending: true }));
+    expect(pending).toContain("Завершаем…");
+    expect(pending.match(/disabled=""/g)).toHaveLength(2);
+    expect(renderToStaticMarkup(createElement(FinishIncompleteRunModal, { ...props, error: "Изменения в другом окне" }))).toContain('role="alert"');
+  });
   it("renders registry-driven groups, modes, spend and the policy pill without any fabricated telemetry", () => {
     collectionMocks.useAdminOfapiCollection.mockReturnValue({
       data: snapshotFixture(), isLoading: false, isFetching: false, error: null, refetch: vi.fn(),

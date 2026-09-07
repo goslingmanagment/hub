@@ -29,6 +29,18 @@ Agent consumers query `POST /api/v1/agent/pages/{pageLabel}/datasets/ofapi_finan
 
 One physical attempt settles into a raw observation before parsing. The worker recovers captured or completed steps without another request. Canonicalization repairs a missing event from retained raw data, and `projection:rebuild ofapi_read_snapshots` rebuilds the normalized view without vendor egress. Policy/storage/credit denial pauses the job. A scheduled run that reaches its job, daily or interval allowance instead ends as `failed` with `scheduled_run_exhausted:<limit>`; its saved cursor and partial coverage remain available. The next configured interval may create a fresh bounded window under current policy, without resuming the exhausted cursor or resetting its spend. Owner pauses still require explicit recovery. A lost network response is uncertain paid work; the existing capture operator tools can reconcile or cancel it. No write command is part of this runner. Local parse failures retain the raw payload and have a bounded local retry count.
 
+A scheduled GET with a captured `429` or `500`–`599` response also ends its current
+run as `failed`. These statuses follow the existing OFAPI rate-limit/server-error
+classification (Decision #245); they do not authorize an immediate retry. The
+next configured schedule may start a separate bounded run. The failed run keeps
+its raw response, cursor, caps, consumed calls/credits and response bytes. For an
+older run parked on a captured `503`, owner **Resume** reads that exact response
+locally and finishes the run as failed, even when its call allowance is spent.
+It makes no additional vendor request. One-off jobs remain paused on these
+statuses; a fresh probe requires a separate bounded job. Authentication errors,
+other HTTP statuses, uncertain transport outcomes and parse failures retain their
+existing recovery behavior and never gain a fresh scheduled request this way.
+
 Costs are based on reserved estimates until captured vendor metadata is available. All catalog requests start with a one-credit reservation; vendor prices can vary and the actual response may exceed a remaining cap. Such overage is retained and blocks the next call. These are managed-request ceilings, not a guarantee of the provider invoice: incoming vendor events, external tools and accepted asynchronous operations remain separate. No paid probe ran during development.
 
 ## Vendor discrepancies and limits, checked 2026-09-06
@@ -56,6 +68,36 @@ Resume preserves the original credit, call and byte ceilings and consumption.
 It does not grant another request; an exhausted job without that response stays
 non-resumable. Verify one original physical request, the completed local snapshot
 and unchanged spend after recovery. Do not raise the allowance to repair parsing.
+
+Collection transport failures retain bounded diagnostics in the indeterminate
+credit receipt and log `OFAPI collection transport failed` with operation and
+collection job ID. The fields distinguish response headers from body reading,
+reported HTTP status, bytes read versus the size ceiling, elapsed time versus
+timeout, and allowlisted transport cause names/codes. Logs and receipt details do
+not include URLs, account/fan IDs, headers, response bodies or raw errors. A
+`body_too_large` reason proves the explicit size guard; `body_read` needs its
+transport/cause fields to distinguish an abort from a socket failure. Missing
+diagnostics on older receipts remain unknown. These diagnostics do not change
+timeouts, limits, accounting certainty or retry authorization.
+
+## Finish an incomplete scheduled read
+
+When a paused periodic GET cannot usefully resume (for example, a retained `404`
+or an uncertain body-read failure), the owner can choose **Завершить неполный
+проход** in Collection. Confirm the page and category. The confirmation explains
+that data, the saved cursor and uncertain charges remain, and the next run follows
+the enabled schedule. The action marks only the outer run `failed`; it does not
+claim complete coverage, resolve an unknown charge, dispatch a request, reset a
+cap or move the schedule deadline. The original stop reason remains in the audit.
+
+The SDK operation is `ofapiCollectionJobFinishIncomplete`, or
+`POST /api/v1/admin/ofapi/collection/jobs/{id}/finish-incomplete`, with the current
+`expectedRevision`, `expectedState:"paused"`, matching `pageId` and an owner
+`reason`. A stale revision/state returns `409`; reload before another action.
+Only paused background runs in the eight closed GET categories are eligible,
+with no active worker lease or reserved/dispatching capture attempt. One-offs,
+baseline sync, exports and uploads retain their own recovery paths. Global pause
+and category-off settings continue to prevent the next scheduled dispatch.
 
 ## Exact GET catalog
 
