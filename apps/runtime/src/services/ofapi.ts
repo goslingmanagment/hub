@@ -27,6 +27,8 @@ import type { EgressPacer } from "./egress/pacer.ts";
 import { normalizeOnlyFansAvatarUrl } from "./onlyfans.ts";
 
 const OFAPI_REQUEST_TIMEOUT_MS = 15_000;
+// The free, bounded delivery-history GET can outlast the generic admin deadline.
+const OFAPI_HISTORY_READ_TIMEOUT_MS = 60_000;
 // Live-bug fix (2026-07-05): chat-message history reads scrape OnlyFans
 // server-side and scale with chat size — two prod conversations consistently
 // exceeded the 15 s abort (400 wasted attempts/24 h, zero successes ever on
@@ -167,14 +169,12 @@ const DIAGNOSTIC_ERROR_CODES = new Set([
   "UND_ERR_SOCKET", "ECONNREFUSED", "ECONNRESET", "ETIMEDOUT", "EHOSTUNREACH",
   "ENETUNREACH", "ENOTFOUND", "EAI_AGAIN", "EHOSTDOWN", "ENETDOWN", "EPIPE",
   "CERT_HAS_EXPIRED", "DEPTH_ZERO_SELF_SIGNED_CERT", "ERR_TLS_CERT_ALTNAME_INVALID",
+  // PostgreSQL machine codes can identify failed durable capture without SQL text.
+  "22003", "23502", "23503", "23505", "23514", "42501", "42P01", "42703", "40P01", "40001", "57014", "53300", "08006",
 ]);
 
-function transportDiagnostics(
-  error: unknown,
-  input: Omit<OfapiTransportDiagnostics, "transportClass" | "causeName" | "causeCode" | "elapsedMs"> & {
-    startedAt: number;
-  },
-): OfapiTransportDiagnostics {
+/** Fixed machine identifiers only; never include error messages, SQL or endpoint data. */
+export function ofapiSafeErrorDiagnostics(error: unknown) {
   let causeName: string | null = null;
   let causeCode: string | null = null;
   for (const cause of iterateErrorChain(error)) {
@@ -183,6 +183,34 @@ function transportDiagnostics(
     const code = (cause as Error & { code?: unknown }).code;
     if (typeof code === "string" && DIAGNOSTIC_ERROR_CODES.has(code)) causeCode = code;
   }
+  return { causeName, causeCode };
+}
+
+export type OfapiHistoryRequestStage = "admission" | "authorization" | "response_headers" | "response_body" | "response_capture" | "credit_receipt" | "response_contract";
+/** Restricted to the free delivery-history GET; other admin/mutation errors keep their existing behavior. */
+export class OfapiHistoryRequestError extends OfapiApiError {
+  readonly diagnostics: {
+    stage: OfapiHistoryRequestStage; status: number | null; elapsedMs: number;
+    timeoutMs: number; causeName: string | null; causeCode: string | null;
+    transportClass: "connect" | "timeout" | "transport" | null;
+  };
+  constructor(error: unknown, stage: OfapiHistoryRequestStage, status: number | null, startedAt: number, timeoutMs: number) {
+    super(`OFAPI delivery history ${stage} failed`, error instanceof OfapiApiError ? error.status : null, null,
+      error instanceof OfapiApiError ? error.upstreamStatus : null);
+    this.name = "OfapiHistoryRequestError";
+    this.diagnostics = { stage, status, elapsedMs: Math.max(0, Date.now() - startedAt),
+      timeoutMs, ...ofapiSafeErrorDiagnostics(error),
+      transportClass: stage === "response_headers" || stage === "response_body" ? classifyTransportFailure(error) : null };
+  }
+}
+
+function transportDiagnostics(
+  error: unknown,
+  input: Omit<OfapiTransportDiagnostics, "transportClass" | "causeName" | "causeCode" | "elapsedMs"> & {
+    startedAt: number;
+  },
+): OfapiTransportDiagnostics {
+  const { causeName, causeCode } = ofapiSafeErrorDiagnostics(error);
   const { startedAt, ...fields } = input;
   return {
     ...fields,
@@ -1854,80 +1882,98 @@ export function createOfapiClient(input: {
     priorityClass: EgressPriorityClass = "interactive",
     context?: OfapiRequestContext,
   ): Promise<{ body: unknown; capture: OfapiAdminCapture | null; creditAccounting?: "pending" }> {
-    if (method !== "GET") await assertCredentialReady();
-    const freeRead = method === "GET" && ["ofapi_balance_ping", "ofapi_credential_preflight", "ofapi_webhook_inventory", "ofapi_webhook_event_catalog", "ofapi_admin_accounts", "ofapi_vendor_usage", "ofapi_webhook_deliveries", "ofapi_export_inventory"].includes(operation);
-    await waitForRequestSlot(priorityClass, !freeRead);
-    await authorizeOperation(operation, method, path);
-    let response: Response;
+    const historyRead = operation === "ofapi_webhook_deliveries" && method === "GET";
+    const timeoutMs = historyRead ? OFAPI_HISTORY_READ_TIMEOUT_MS : OFAPI_REQUEST_TIMEOUT_MS;
+    const startedAt = Date.now();
+    let stage: OfapiHistoryRequestStage = "admission";
+    let status: number | null = null;
     try {
-      response = await fetch(`${baseUrl}${path}`, {
-        method,
-        headers: {
-          authorization: `Bearer ${input.apiKey}`,
-          accept: "application/json",
-          ...(body === undefined ? {} : { "content-type": "application/json" }),
-        },
-        body: body === undefined ? undefined : JSON.stringify(body),
-        signal: AbortSignal.timeout(OFAPI_REQUEST_TIMEOUT_MS),
-      });
-    } catch (error) {
-      throw new OfapiApiError(
-        `OFAPI request failed: ${method} ${path}: ${error instanceof Error ? error.message : String(error)}`,
-        null,
-        null,
-      );
-    }
-
-    const text = await response.text();
-    // Fix the transport boundary before capture can wait for a DB connection/nextval.
-    const receivedAt = new Date();
-    const capture = (await input.onAdminResponse?.({ operation, status: response.status, body: text, receivedAt, pageId: context?.pageId ?? null, headers: Object.fromEntries(["x-ofapi-credits-used", "x-ofapi-credits-balance", "x-ofapi-is-cached", "idempotent-replayed"].flatMap(name => { const value = response.headers.get(name); return value === null ? [] : [[name, value]]; })) })) ?? null;
-    let responseBody: unknown = null;
-    let bodyIsJson = text.length === 0;
-    if (text.length > 0) {
+      if (method !== "GET") await assertCredentialReady();
+      const freeRead = method === "GET" && ["ofapi_balance_ping", "ofapi_credential_preflight", "ofapi_webhook_inventory", "ofapi_webhook_event_catalog", "ofapi_admin_accounts", "ofapi_vendor_usage", "ofapi_webhook_deliveries", "ofapi_export_inventory"].includes(operation);
+      await waitForRequestSlot(priorityClass, !freeRead);
+      stage = "authorization";
+      await authorizeOperation(operation, method, path);
+      stage = "response_headers";
+      let response: Response;
       try {
-        responseBody = JSON.parse(text) as unknown;
-        bodyIsJson = true;
-      } catch {
-        bodyIsJson = false;
+        response = await fetch(`${baseUrl}${path}`, {
+          method,
+          headers: {
+            authorization: `Bearer ${input.apiKey}`,
+            accept: "application/json",
+            ...(body === undefined ? {} : { "content-type": "application/json" }),
+          },
+          body: body === undefined ? undefined : JSON.stringify(body),
+          signal: AbortSignal.timeout(timeoutMs),
+        });
+      } catch (error) {
+        if (historyRead) throw error;
+        throw new OfapiApiError(
+          `OFAPI request failed: ${method} ${path}: ${error instanceof Error ? error.message : String(error)}`,
+          null,
+          null,
+        );
       }
+
+      status = response.status;
+      stage = "response_body";
+      const text = await response.text();
+      stage = "response_capture";
+      // Fix the transport boundary before capture can wait for a DB connection/nextval.
+      const receivedAt = new Date();
+      const capture = (await input.onAdminResponse?.({ operation, status: response.status, body: text, receivedAt, pageId: context?.pageId ?? null, headers: Object.fromEntries(["x-ofapi-credits-used", "x-ofapi-credits-balance", "x-ofapi-is-cached", "idempotent-replayed"].flatMap(name => { const value = response.headers.get(name); return value === null ? [] : [[name, value]]; })) })) ?? null;
+      let responseBody: unknown = null;
+      let bodyIsJson = text.length === 0;
+      if (text.length > 0) {
+        try {
+          responseBody = JSON.parse(text) as unknown;
+          bodyIsJson = true;
+        } catch {
+          bodyIsJson = false;
+        }
+      }
+
+      // The admin path spends credits too (D1) — report before any throw so
+      // failed registrations and 4xx/5xx responses with _meta still land.
+      stage = "credit_receipt";
+      const creditAccounted = await reportCreditSpend({
+        operation,
+        httpStatus: response.status,
+        headers: response.headers,
+        body: responseBody,
+        requestId: `${operation}:${randomUUID()}`,
+        pageId: context?.pageId ?? null,
+        attemptNumber: 1,
+        ...(["ofapi_balance_ping", "ofapi_credential_preflight", "ofapi_webhook_inventory", "ofapi_webhook_event_catalog", "ofapi_admin_accounts", "ofapi_vendor_usage", "ofapi_webhook_deliveries", "ofapi_webhook_redelivery", "ofapi_export_inventory"].includes(operation)
+          ? { fallbackCredits: 0, fallbackEstimated: false } : {}),
+      });
+
+      if (creditAccounted === false && method === "GET" && !freeRead) {
+        throw new OfapiApiError("OFAPI admin read credit accounting unavailable", null, null);
+      }
+
+      stage = "response_contract";
+      if (!response.ok) {
+        throw new OfapiApiError(
+          `OFAPI request failed: ${method} ${path} returned ${response.status}`,
+          response.status,
+          text.slice(0, 2000),
+        );
+      }
+
+      if (!bodyIsJson) {
+        throw new OfapiApiError(
+          `OFAPI request failed: ${method} ${path} returned non-JSON body`,
+          response.status,
+          text.slice(0, 2000),
+        );
+      }
+
+      return { body: responseBody, capture, ...(creditAccounted === false ? { creditAccounting: "pending" as const } : {}) };
+    } catch (error) {
+      if (historyRead) throw new OfapiHistoryRequestError(error, stage, status, startedAt, timeoutMs);
+      throw error;
     }
-
-    // The admin path spends credits too (D1) — report before any throw so
-    // failed registrations and 4xx/5xx responses with _meta still land.
-    const creditAccounted = await reportCreditSpend({
-      operation,
-      httpStatus: response.status,
-      headers: response.headers,
-      body: responseBody,
-      requestId: `${operation}:${randomUUID()}`,
-      pageId: context?.pageId ?? null,
-      attemptNumber: 1,
-      ...(["ofapi_balance_ping", "ofapi_credential_preflight", "ofapi_webhook_inventory", "ofapi_webhook_event_catalog", "ofapi_admin_accounts", "ofapi_vendor_usage", "ofapi_webhook_deliveries", "ofapi_webhook_redelivery", "ofapi_export_inventory"].includes(operation)
-        ? { fallbackCredits: 0, fallbackEstimated: false } : {}),
-    });
-
-    if (creditAccounted === false && method === "GET" && !freeRead) {
-      throw new OfapiApiError("OFAPI admin read credit accounting unavailable", null, null);
-    }
-
-    if (!response.ok) {
-      throw new OfapiApiError(
-        `OFAPI request failed: ${method} ${path} returned ${response.status}`,
-        response.status,
-        text.slice(0, 2000),
-      );
-    }
-
-    if (!bodyIsJson) {
-      throw new OfapiApiError(
-        `OFAPI request failed: ${method} ${path} returned non-JSON body`,
-        response.status,
-        text.slice(0, 2000),
-      );
-    }
-
-    return { body: responseBody, capture, ...(creditAccounted === false ? { creditAccounting: "pending" as const } : {}) };
   }
 
   async function request(operation: string, method: string, path: string, body?: unknown): Promise<unknown> {

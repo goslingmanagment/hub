@@ -12,7 +12,7 @@ import type { AppContext } from "../bootstrap.ts";
 import { BadRequestError, ConflictError, NotFoundError, ServiceUnavailableError } from "./errors.ts";
 import { asRecord, idToString } from "./ofapi-payloads.ts";
 import { OFAPI_OPTIONAL_WEBHOOK_GROUPS, lifecycleTimestamp } from "./ofapi-lifecycle-contract.ts";
-import { OfapiApiError } from "./ofapi.ts";
+import { OfapiApiError, OfapiHistoryRequestError, ofapiSafeErrorDiagnostics } from "./ofapi.ts";
 import { buildOfapiWebhookEventSet, registerOfapiWebhook, resolveOfapiClient } from "./ofapi-webhooks.ts";
 import { runCanonicalization } from "./canonicalize-driver.ts";
 import { processOfapiWebhookEvent } from "./ofapi-events.ts";
@@ -95,23 +95,36 @@ export async function syncOfapiWebhookDeliveries(app: AppContext, input: {
   if (!scan) return scanResult(existing);
   if (input.actorUserId) await insertAuditEvent(app.db, { actorUserId: input.actorUserId, source: "api",
     eventType: "admin.ofapi_delivery_history_requested", metadata: { scanId: input.id, from: input.from, to: input.to } });
+  let stage: "request" | "capture_missing" | "parse" | "window" | "persistence" = "request";
   try {
     for (let page = 0; page < Math.min(20, Math.max(1, input.maxPages ?? 20)); page += 1) {
+      stage = "request";
       const response = await client.listWebhookDeliveries(scan.webhook_id, {
         from: input.from, to: input.to, limit: PAGE_SIZE, offset: scan.next_offset,
       });
+      stage = "capture_missing";
       if (!response.capture) throw new Error("Delivery history response has no durable observation");
+      stage = "parse";
       const parsed = parseWebhookDeliveryPage(response.body);
+      stage = "window";
       if (parsed.attempts.some(attempt => attempt.createdAt < from || attempt.createdAt > to)) throw new Error("Delivery response escaped the requested window");
+      stage = "persistence";
       await captureWebhookDeliveryPage(app.db, { scan, ...parsed,
         observationId: response.capture.observationId, observationReceivedAt: response.capture.receivedAt });
       scan = (await getWebhookDeliveryScan(app.db, input.id))!;
       if (scan.state === "complete") break;
     }
+    stage = "persistence";
     await finishWebhookDeliveryScanTick(app.db, scan);
   } catch (error) {
-    await finishWebhookDeliveryScanTick(app.db, scan, errorCode(error));
-    app.logger.warn({ scanId: input.id, code: errorCode(error) }, "OFAPI delivery history scan paused");
+    const diagnostics = error instanceof OfapiHistoryRequestError
+      ? error.diagnostics : { stage, ...ofapiSafeErrorDiagnostics(error) };
+    const code = error instanceof OfapiApiError && error.status !== null && error.status >= 300
+      ? errorCode(error) : `history_${diagnostics.stage}_failed`;
+    // Emit before a recovery UPDATE: its failure must not hide the original phase.
+    // No error object, vendor body, headers, endpoint or account IDs cross this boundary.
+    app.logger.warn({ scanId: input.id, operation: "ofapi_webhook_deliveries", code, ...diagnostics }, "OFAPI delivery history scan paused");
+    await finishWebhookDeliveryScanTick(app.db, scan, code);
   }
   return scanResult((await getWebhookDeliveryScan(app.db, input.id))!);
 }

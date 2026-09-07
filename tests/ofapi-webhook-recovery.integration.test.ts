@@ -55,7 +55,7 @@ beforeAll(async () => {
   const started = await startIntegrationTestDatabase(); if (!started) throw new Error("Recovery tests require PostgreSQL"); testDb = started;
 }, 120_000);
 afterAll(async () => { await server?.close(); await testDb?.stop(); });
-afterEach(()=>vi.unstubAllGlobals());
+afterEach(()=>{ vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 beforeEach(async () => {
   await server?.close(); await resetIntegrationDatabase(testDb.pool);
   app = createTestAppContext(testDb, { ofapiAccountHealthEnabled: true });
@@ -133,6 +133,49 @@ describe("OFAPI delivery recovery", () => {
     expect((await testDb.pool.query("select count(*)::int n from observations where kind='ofapi_webhook_deliveries'")).rows[0].n).toBe(1);
     expect((await scan(id)).state).toBe("complete");
     expect(read.mock.calls.map(call => call[1].offset)).toEqual([0, 0]);
+  });
+
+  it.each(["capture_missing", "parse", "window", "persistence"] as const)("names a %s failure without losing prior history or its frozen offset", async failure => {
+    rows = Array.from({ length: 101 }, (_, index) => attempt(index + 1));
+    const id = randomUUID();
+    expect(await scan(id, 1)).toMatchObject({ state: "pending", nextOffset: 100, capturedAttempts: 100 });
+    const before = (await testDb.pool.query("select * from ofapi_webhook_delivery_scans where id=$1", [id])).rows[0];
+    const retained = (await testDb.pool.query("select * from ofapi_webhook_delivery_attempts order by attempt_id")).rows;
+    const warning = vi.spyOn(app.logger, "warn");
+    const badRow = failure === "parse" ? { id: 101, privateBody: "secret-response-material" }
+      : { ...attempt(101), ...(failure === "window" ? { created_at: new Date(Date.parse(to) + 1000).toISOString() }
+        : failure === "persistence" ? { attempt: 2147483648 } : {}) };
+    read.mockImplementationOnce(async () => failure === "capture_missing" ? { body: { data: [badRow] }, capture: null }
+      : capture({ data: [badRow], _pagination: { next_page: null } }));
+    expect(await scan(id)).toMatchObject({ state: "failed", nextOffset: 100, capturedAttempts: 100, errorCode: `history_${failure}_failed` });
+    const after = (await testDb.pool.query("select * from ofapi_webhook_delivery_scans where id=$1", [id])).rows[0];
+    for (const key of ["window_start", "window_end", "next_offset", "captured_attempts", "credential_fingerprint"])
+      expect(after[key]).toEqual(before[key]);
+    expect((await testDb.pool.query("select * from ofapi_webhook_delivery_attempts order by attempt_id")).rows).toEqual(retained);
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(warning).toHaveBeenCalledWith(expect.objectContaining({ scanId: id, operation: "ofapi_webhook_deliveries", stage: failure,
+      code: `history_${failure}_failed`, ...(failure === "persistence" ? { causeCode: "22003" } : {}) }), "OFAPI delivery history scan paused");
+    const exposed = JSON.stringify({ warnings: warning.mock.calls, result: await listOfapiWebhookDeliveryHistory(app, { limit: 1, offset: 0 }) });
+    for (const secret of ["secret-response-material", "privateText", "never expose", "https://", "secret=private", "secret-token-from-url"])
+      expect(exposed).not.toContain(secret);
+  });
+
+  it("persists the real admin capture failure phase before another free history poll", async () => {
+    const warning = vi.spyOn(app.logger, "warn");
+    const preflight = app.ofapi!.getCredentialPreflight!;
+    const captureError = Object.assign(new Error("private SQL https://private.invalid/?key=private-token"), { code: "42501" });
+    const spend = vi.fn(); const fetch = vi.fn(async () => new Response(JSON.stringify({ data: [], _pagination: { next_page: null } })));
+    vi.stubGlobal("fetch", fetch);
+    app.ofapi = { ...createOfapiClient({ apiKey: "private-token", restDelayMs: 0, onCreditSpend: spend,
+      onAdminResponse: async () => { throw captureError; } }), getCredentialPreflight: preflight };
+    const id = randomUUID();
+    expect(await scan(id)).toMatchObject({ state: "failed", nextOffset: 0, capturedAttempts: 0,
+      errorCode: "history_response_capture_failed" });
+    expect(warning).toHaveBeenCalledWith(expect.objectContaining({ operation: "ofapi_webhook_deliveries", stage: "response_capture", status: 200,
+      code: "history_response_capture_failed", causeCode: "42501" }), "OFAPI delivery history scan paused");
+    expect(fetch).toHaveBeenCalledTimes(1); expect(spend).not.toHaveBeenCalled();
+    expect(JSON.stringify(warning.mock.calls)).not.toMatch(/private SQL|private-token|https:/);
+    expect((await testDb.pool.query("select count(*)::int n from ofapi_webhook_delivery_attempts")).rows[0].n).toBe(0);
   });
 
   it("keeps new automatic history collection off and reports desired versus applied event settings", async () => {
