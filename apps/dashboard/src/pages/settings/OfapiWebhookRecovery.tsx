@@ -5,6 +5,9 @@ const labels: Record<string, string> = {
   subscription_expiry: "Окончания подписок", account_lifecycle: "Отключения аккаунта",
   media_uploads: "Загрузки медиа", data_exports: "Экспорты", engagement: "Лайки постов",
 };
+const scanLabels: Record<string, string> = {
+  pending: "частично", running: "идёт сбор", failed: "остановлено", complete: "завершено",
+};
 const button = "rounded-lg border border-border px-3 py-2 text-xs font-medium text-text-primary hover:bg-hover disabled:opacity-50";
 
 /** Owner-only consumer mounted by the OFAPI collection/settings page. Reads are
@@ -75,6 +78,11 @@ export function OfapiWebhookRecovery() {
         })}>{history.latestScan && ["pending", "failed"].includes(history.latestScan.state) ? "Продолжить сбор истории" : "Прочитать последние сутки · бесплатно"}</button>
       </div>
       <p className="my-2 text-xs text-text-secondary">Провайдер хранит попытки 7 дней; Hub сохраняет прочитанные записи. Доступ ограничен областью текущего ключа. Во время паузы события могут отсутствовать у самого провайдера.</p>
+      {history.latestScan && <div role="status" aria-label="Состояние чтения истории" className="mb-3 space-y-1 text-xs text-text-secondary">
+        <p>Чтение истории: {scanLabels[history.latestScan.state] ?? history.latestScan.state} · просмотрено {history.latestScan.nextOffset} записей · сохранено {history.latestScan.capturedAttempts} новых попыток.</p>
+        <p>Период UTC: {history.latestScan.from.slice(0, 19).replace("T", " ")} — {history.latestScan.to.slice(0, 19).replace("T", " ")}.</p>
+        {history.latestScan.errorCode && <p>Причина остановки: {history.latestScan.errorCode}.</p>}
+      </div>}
       <div className="overflow-x-auto"><table className="w-full text-left text-xs">
         <thead className="text-text-secondary"><tr><th className="p-2">Событие / UTC</th><th className="p-2">Провайдер</th><th className="p-2">Hub</th><th className="p-2">Действие</th></tr></thead>
         <tbody>{history.attempts.map(attempt => <tr key={attempt.attemptId} className="border-t border-border-light">
