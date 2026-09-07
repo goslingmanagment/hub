@@ -41,6 +41,22 @@ Costs are based on reserved estimates until captured vendor metadata is availabl
 - The pinned message-buyers example includes a localhost next URL and literal account placeholder. Foreign or changed-account links are refused. Max-spend fan filtering can use a provider-maintained index; its completeness and omitted rows are displayed instead of claiming all matching fans were read.
 - Profile stats and subscriber values are retained as provider snapshots. They do not replace the active fan roster, transaction ledger or full payout reconciliation. Content publishing, comment writes/moderation, bank settings, and following sort writes are outside this batch.
 
+## Recovery after a captured response and local projection failure
+
+Collection step and cursor fingerprints use canonical JSON so a checkpoint's
+Postgres JSONB key ordering cannot create a second paid intent. Reads also adopt
+an older capture slot only when page, account, collection job and the complete
+canonical request target match. A retained unresolved attempt still blocks new
+egress; a different query, account or job cannot borrow its response.
+
+If a pre-fix job is paused after spending its full allowance, use the existing
+owner **Resume** action. It now permits local recovery when the current frozen
+checkpoint has an exact captured response under the page's current binding.
+Resume preserves the original credit, call and byte ceilings and consumption.
+It does not grant another request; an exhausted job without that response stays
+non-resumable. Verify one original physical request, the completed local snapshot
+and unchanged spend after recovery. Do not raise the allowance to repair parsing.
+
 ## Exact GET catalog
 
 Query names, limits, response families and category/detail flags live in `packages/shared/src/ofapi-read-catalog.ts` and are returned by the SDK catalog. Every request rejects unknown keys. IDs remain strings, including values above JavaScript's safe integer range.

@@ -2,7 +2,6 @@ import { runCanonicalization } from "./canonicalize-driver.ts";
 import { projectOfapiReadSnapshotObservation } from "./projections/ofapi-read-snapshots.ts";
 import { sql } from "drizzle-orm";
 import { ensureQueueCreated, type QueueCreationClient } from "./sync-queue.ts";
-import { createHash } from "node:crypto";
 import {
   checkOfapiCollectionLease,
   checkpointOfapiCollectionJob,
@@ -11,6 +10,7 @@ import {
   findPageById,
   getEffectiveOfapiCollectionPolicy,
   getOfapiCollectionJob,
+  hashOfapiCaptureValue,
   listPendingOfapiCollectionJobs,
   OfapiCollectionPolicyError,
 } from "@agency_hub_core/db";
@@ -241,7 +241,9 @@ export async function runOfapiCollectionJob(
         throw new Error("Scheduled policy changed");
       const remainingBytes =
         Number(current.max_bytes) - Number(current.used_bytes);
-      const stepKey = `${jobId}:${index}:${createHash("sha256").update(JSON.stringify(step)).digest("hex")}`;
+      // JSONB changes object key order. Identity must survive the checkpoint
+      // round trip, including a replay after a paid response was captured.
+      const stepKey = `${jobId}:${index}:${hashOfapiCaptureValue(step)}`;
       const read = await captureOfapiCollectionRead(app, {
         pageId: Number(job.page_id),
         accountId,
@@ -277,15 +279,13 @@ export async function runOfapiCollectionJob(
         observationReceivedAt: read.observationReceivedAt,
       });
       await completeOfapiCollectionRead(app, read, projected.items.length);
-      const fingerprint = createHash("sha256")
-        .update(JSON.stringify(step.query))
-        .digest("hex");
+      const fingerprint = hashOfapiCaptureValue(step.query);
       const visited = Array.isArray(checkpoint.visited)
         ? (checkpoint.visited as string[])
         : [];
       const next = projected.coverage.nextQuery;
       const nextHash = next
-        ? createHash("sha256").update(JSON.stringify(next)).digest("hex")
+        ? hashOfapiCaptureValue(next)
         : null;
       if (nextHash && (nextHash === fingerprint || visited.includes(nextHash)))
         throw new Error("Provider cursor cycle; response retained");

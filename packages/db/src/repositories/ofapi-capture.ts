@@ -432,6 +432,27 @@ export async function findCompletedOfapiCaptureJobByTarget(
   return result.rows[0] ? mapCaptureJob(result.rows[0]) : null;
 }
 
+/**
+ * Collection step slots originally hashed insertion-order JSON. Recover an
+ * existing exact intent across that historical slot spelling, without turning
+ * an unresolved attempt into permission for another provider request.
+ */
+export async function findOfapiCollectionCaptureJob(
+  db: Database,
+  input: { pageId: number; ofapiAccountId: string; collectionJobId: string; targetHash: string },
+) {
+  const result = await db.execute<Record<string, unknown>>(sql`
+    select * from ofapi_capture_jobs
+    where kind='collection_read' and page_id=${input.pageId}
+      and ofapi_account_id=${input.ofapiAccountId}
+      and target->>'collectionJobId'=${input.collectionJobId}
+      and target_hash=${input.targetHash}
+    order by (pending_observation_id is not null or state='complete') desc, created_at, id
+    limit 1
+  `);
+  return result.rows[0] ? mapCaptureJob(result.rows[0]) : null;
+}
+
 export interface CreateOfapiInteractiveRequestInput {
   id?: string;
   pageId: number;

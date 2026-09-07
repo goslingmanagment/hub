@@ -6,7 +6,7 @@ import {
   captureOfapiAttemptResponse,
   createOrGetOfapiCaptureJob,
   getOfapiCaptureJob,
-  findCompletedOfapiCaptureJobByTarget,
+  findOfapiCollectionCaptureJob,
   hashOfapiCaptureValue,
   leaseNextOfapiCaptureJob,
   loadOfapiCaptureObservation,
@@ -112,6 +112,7 @@ export async function captureOfapiCollectionRead(
   );
   if (
     !resolved ||
+    !input.context.jobId ||
     resolved.definition.operation !== input.step.operation ||
     resolved.accountId !== input.accountId ||
     resolved.definition.category !== input.context.category
@@ -130,14 +131,14 @@ export async function captureOfapiCollectionRead(
     }
   }
   const target = { ...input.step, collectionJobId: input.context.jobId };
-  const completed = await findCompletedOfapiCaptureJobByTarget(app.db, {
-    activeSlotKey: `page:${input.pageId}:collection:${input.stepKey}`,
+  const retained = await findOfapiCollectionCaptureJob(app.db, {
+    pageId: input.pageId,
+    ofapiAccountId: input.accountId,
+    collectionJobId: input.context.jobId!,
     targetHash: hashOfapiCaptureValue(target),
-    kind: "collection_read",
-    goal: null,
   });
-  if (completed) return loadCaptured(app, completed);
-  const created = await createOrGetOfapiCaptureJob(app.db, {
+  if (retained?.state === "complete") return loadCaptured(app, retained);
+  const created = retained ? { job: retained } : await createOrGetOfapiCaptureJob(app.db, {
     pageId: input.pageId,
     ofapiAccountId: input.accountId,
     kind: "collection_read",
