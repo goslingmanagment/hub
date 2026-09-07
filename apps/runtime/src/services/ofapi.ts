@@ -308,6 +308,8 @@ export interface OfapiClient {
   listAccountsSnapshot?(): Promise<{ accounts: OfapiAccountRecord[]; evidence: OfapiAdminCapture | null }>;
   getCredentialPreflight?(): Promise<OfapiCredentialPreflight>;
   assertCredentialReady?(): Promise<void>;
+  /** Drains pending credit receipts; rejects with OfapiCreditAccountingUnavailableError while accounting is unready. */
+  assertCreditAccountingReady?(): Promise<void>;
   getWebhook?(id: string): Promise<Record<string, unknown>>;
   listWebhookEvents?(): Promise<{ body: unknown; capture: OfapiAdminCapture | null }>;
   listWebhooks?(): Promise<Record<string, unknown>[]>;
@@ -1956,6 +1958,7 @@ export function createOfapiClient(input: {
     },
     getCredentialPreflight,
     assertCredentialReady,
+    assertCreditAccountingReady,
     async getWebhook(id) {
       const body = await request("ofapi_webhook_inventory", "GET", `/webhooks/${encodeURIComponent(id)}`);
       const record = asRecord(unwrapData(body));

@@ -44,6 +44,18 @@ retains `source = "auth_gate"`. Command-result observations preserve the same
 local/remote distinction. Claiming still increments `attemptCount` once, and
 no local refusal schedules an automatic resend.
 
+Credit-accounting readiness is proven BEFORE the claim (a pending
+credit-receipt backlog deeper than one bounded drain, or a receipt whose
+settlement keeps failing, is a process-wide condition, not a verdict on the
+command), so an unready ledger leaves the row `queued` for the next sweep
+instead of spending its single attempt.
+A key-scope declaration lookup that cannot complete after the claim (a
+database blip before any HTTP) is the one local refusal that
+settles `failed_retryable` rather than `failed_terminal`: reason
+`key_scope_unavailable`, code `ofapi_key_scope_unavailable`, still
+`source = "local_precondition"` and never `indeterminate` — nothing left the
+process, so a human retry (a new row with lineage) is safe.
+
 ## Version 1 Commands
 
 Text send:
@@ -137,6 +149,12 @@ later read workflow action is a fresh command.
 - New canonical request: `202`, `deduplicated=false`, state `queued`.
 - Exact duplicate: `200`, `deduplicated=true`, returns the existing command.
 - Reused client id with any canonical-field mismatch: `409`.
+- `send_message_v2` with `reuseProviderOperation` whose original provider operation can no
+  longer be replayed (missing; team, account, endpoint or body changed; outside its 24-hour
+  window; or the runtime credential cannot be verified right now): `409` with
+  `error = "provider_operation_reuse_unavailable"` and NO command row. The client keeps the
+  original in its unconfirmed recovery state rather than showing a failed retry. An exact replay
+  of an already-accepted recovery still dedupes to `200`. Dispatch re-checks the same rule.
 - Intake disabled: `503`.
 
 ### Read
@@ -365,6 +383,14 @@ page-attributed. Other commands use normal OFAPI response credit observation.
 
 The stored error surface is a bounded code/class/status only. Raw vendor bodies and payload text
 are not persisted in command outcome metadata.
+
+One-use `ofapi_media_*` custody (migration `0160`, fence `0168`) follows the same verdicts
+(migration `0170`): it is RELEASED — marked `released_at`/`released_reason`, never deleted —
+only when the material was definitely not spent: a local pre-dispatch refusal (no HTTP), a
+definite `4xx` rejection other than `408`/`429`, or a queued row cancelled/expired before
+dispatch. Indeterminate, `5xx`, `429` and confirmed outcomes keep the reservation, and a reuse
+child never releases the reservation it inherited from its parent. A released token is free for
+a new command, an owner action or a handoff; the next claim re-arms the same row and fence.
 
 ### Webhook Verification
 

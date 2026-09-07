@@ -3,19 +3,39 @@ import { createHash, randomUUID } from "node:crypto";
 
 import {
   cancelQueuedOfapiCommand,
+  checkOfapiProviderOperationReuse,
   createOrGetOfapiCommand,
   getOfapiCommandByIdForUser,
   listOfapiMappedPages,
+  releaseOfapiMediaTokenCustody,
+  type Database,
   type OfapiCommandRow,
+  type OfapiProviderOperationReuseIssue,
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
 import type { HumanAuthPrincipal } from "./auth.ts";
 import {
+  AppError,
   ConflictError,
   NotFoundError,
   ServiceUnavailableError,
 } from "./errors.ts";
+import { buildOfapiSendV2Body } from "./ofapi-command-composer.ts";
+
+/**
+ * The original provider operation can no longer be replayed honestly (missing,
+ * changed scope/body, outside its 24-hour window, or the credential cannot be
+ * verified right now). Answered at INTAKE with no command row, so the client
+ * keeps its original in the unconfirmed recovery state instead of receiving a
+ * retry child that fails terminally and invites a duplicate send.
+ */
+export class OfapiProviderOperationReuseUnavailableError extends AppError {
+  constructor(readonly issue: OfapiProviderOperationReuseIssue | "credential_not_verified") {
+    super(`Provider operation cannot be reused: ${issue}`, 409, "provider_operation_reuse_unavailable");
+    this.name = "OfapiProviderOperationReuseUnavailableError";
+  }
+}
 
 type OfapiCommandKind = OfapiExtendedCommandKind
   | "send_text_message_v1"
@@ -238,17 +258,37 @@ export async function createOfapiCommand(
     payload: input.payload,
     retryOfCommandId,
   });
-  const result = await createOrGetOfapiCommand(app.db, {
-    id: randomUUID(),
-    clientCommandId: input.clientCommandId,
-    pageId: page.id,
-    chatterUserId: principal.user.id,
-    ofapiAccountId: input.accountId,
-    conversationId: input.conversationId,
-    kind: input.kind,
-    payload: input.payload,
-    payloadHash,
-    retryOfCommandId,
+  // Provider replay eligibility is decided here, before any row exists, so an
+  // ineligible recovery never becomes a failed retry child. The vendor-facing
+  // preflight (free, cached) runs outside the transaction; the DB predicate runs
+  // inside it and rolls the insert back. Exact replays of an already-accepted
+  // command still dedupe to 200 — the check only guards a NEW row. Dispatch
+  // re-evaluates the same predicate as belt-and-braces.
+  const reuse = input.kind === "send_message_v2" && (input.payload as OfapiSendV2Payload).reuseProviderOperation
+    ? await resolveProviderOperationReuse(app, input as ExtendedCommandRequest & { payload: OfapiSendV2Payload })
+    : null;
+  const result = await app.db.transaction(async (tx) => {
+    const created = await createOrGetOfapiCommand(tx as unknown as Database, {
+      id: randomUUID(),
+      clientCommandId: input.clientCommandId,
+      pageId: page.id,
+      chatterUserId: principal.user.id,
+      ofapiAccountId: input.accountId,
+      conversationId: input.conversationId,
+      kind: input.kind,
+      payload: input.payload,
+      payloadHash,
+      retryOfCommandId,
+    });
+    if (created.inserted && reuse) {
+      if (reuse.issue) throw new OfapiProviderOperationReuseUnavailableError(reuse.issue);
+      const eligibility = await checkOfapiProviderOperationReuse(tx as unknown as Database, {
+        parentCommandId: retryOfCommandId!, teamSlug: reuse.teamSlug, accountId: input.accountId,
+        endpoint: reuse.endpoint, bodyHash: reuse.bodyHash,
+      });
+      if (!eligibility.eligible) throw new OfapiProviderOperationReuseUnavailableError(eligibility.issue);
+    }
+    return created;
   });
 
   if (
@@ -267,6 +307,21 @@ export async function createOfapiCommand(
   return {
     status: result.inserted ? 202 : 200,
     command: toView(result.row, !result.inserted),
+  };
+}
+
+/** Same identity inputs the executor fixes at dispatch (team, endpoint, body hash). */
+async function resolveProviderOperationReuse(
+  app: AppContext,
+  input: { accountId: string; conversationId: string; payload: OfapiSendV2Payload },
+): Promise<{ issue: "credential_not_verified" | null; teamSlug: string | null; endpoint: string; bodyHash: string }> {
+  const preflight = await app.ofapi?.getCredentialPreflight?.().catch(() => null) ?? null;
+  const teamSlug = preflight?.status === "verified" ? preflight.observedTeam : null;
+  return {
+    issue: teamSlug ? null : "credential_not_verified",
+    teamSlug,
+    endpoint: `/${input.accountId}/chats/${input.conversationId}/messages`,
+    bodyHash: createHash("sha256").update(JSON.stringify(buildOfapiSendV2Body(input.payload))).digest("hex"),
   };
 }
 
@@ -308,12 +363,20 @@ export async function cancelOfapiCommand(
     throw new ConflictError(`Command in state '${existing.state}' cannot be cancelled`);
   }
 
+  const now = new Date();
   const updated = await cancelQueuedOfapiCommand(app.db, {
     commandId,
     chatterUserId: principal.user.id,
-    now: new Date(),
+    now,
   });
   if (updated) {
+    // queued -> cancelled never dispatched: any one-use custody it holds
+    // (reserved only at dispatch today) is definitely unspent. Best-effort;
+    // a hiccup keeps the reservation (fail closed).
+    if (updated.kind === "send_message_v2" || updated.kind === "send_media_message_v1") {
+      await releaseOfapiMediaTokenCustody(app.db, { commandId, reason: "cancelled_before_dispatch", now })
+        .catch((error: unknown) => app.logger.error({ err: error, commandId }, "OFAPI media custody release after cancel failed — reservation stays held"));
+    }
     return toView(updated, false);
   }
 

@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { claimOfapiMediaTokenFence, isOfapiMediaTokenReserved, type Database } from "@agency_hub_core/db";
+import { claimOfapiActionMediaCustody, claimOfapiMediaTokenFence, isOfapiMediaTokenReserved, type Database } from "@agency_hub_core/db";
 import type { AppContext } from "../bootstrap.ts";
 import { BadRequestError, ConflictError } from "./errors.ts";
 
@@ -62,8 +62,8 @@ export async function reserveOfapiActionMedia(db: Database, intentId: string, ac
       if (!await claimOfapiMediaTokenFence(tx as unknown as Database, { accountId, token, operationId })) {
         throw new ConflictError("This one-use material is already reserved by another action or chat send");
       }
-      await tx.execute(sql`insert into ofapi_media_token_custody(account_id,token,operation_id,command_id,action_intent_id)
-        values(${accountId},${token},${operationId}::uuid,null,${intentId}::uuid) on conflict do nothing`);
+      // A custody row released by a definite chat-send rejection (0170) is re-armed here; a live row is refused below.
+      await claimOfapiActionMediaCustody(tx as unknown as Database, { accountId, token, operationId, actionIntentId: intentId });
       const held = (await tx.execute<{ operation_id: string; command_id: string | null; action_intent_id: string | null }>(sql`
         select operation_id,command_id,action_intent_id from ofapi_media_token_custody
         where account_id=${accountId} and token=${token} for update
