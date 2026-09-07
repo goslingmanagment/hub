@@ -7,8 +7,7 @@ import {
 
 import type { AppContext } from "../../bootstrap.ts";
 import { loadEffectiveConfig } from "../effective-config.ts";
-import { isPageAllowlisted } from "../voice-notes.ts";
-import { resolveFanslyNewStreamState } from "./fansly-stream-gate.ts";
+import { isPageAllowlisted, resolveFanslyNewStreamState } from "./fansly-stream-gate.ts";
 
 export type FanslyBulkStreamGateSummary = {
   paused: number;
