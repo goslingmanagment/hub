@@ -23,6 +23,7 @@ import {
 } from "../apps/runtime/src/services/ofapi-command-executor.ts";
 import { createOfapiClient, OfapiApiError, OfapiCreditAccountingUnavailableError } from "../apps/runtime/src/services/ofapi.ts";
 import { ofapiCredentialPolicy } from "../apps/runtime/src/services/ofapi-credential-policy.ts";
+import { assertOfapiConfiguredAccess } from "../apps/runtime/src/services/ofapi-vendor-usage.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
@@ -779,6 +780,39 @@ describe("OFAPI command outbox intake", () => {
     expect((await getCommand(commandId)).json()).toMatchObject({ state: "failed_terminal",
       lastErrorCode: "ofapi_credit_accounting_unavailable",
       verifierResult: { source: "local_precondition", reason: "credit_accounting_unavailable" } });
+  });
+
+  it("settles a failed key-scope lookup as a local retryable refusal with zero POSTs, never indeterminate (review #138 fix 3)", async () => {
+    appContext.config.ofapiDesktopCommandExecutionEnabled = true;
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ team: { slug: "expected" } }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const brokenDb = { execute: vi.fn().mockRejectedValue(new Error("connection terminated unexpectedly")) } as unknown as AppContext["db"];
+    appContext.ofapi = createOfapiClient({
+      apiKey: "synthetic-credential", restDelayMs: 0, credentialPolicy: { expectedTeamSlug: "expected" },
+      beforeOperationRequest: (request) => assertOfapiConfiguredAccess(brokenDb, "fp", request),
+    });
+    const created = await createCommand(commandBody());
+    const commandId = (created.json() as { commandId: string }).commandId;
+    await expect(executeOfapiCommand(appContext, commandId)).resolves.toMatchObject({ status: "failed_retryable" });
+    await executeOfapiCommand(appContext, commandId);
+    // Only the free whoami preflight reached the network; the command itself never did.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toMatch(/\/whoami$/);
+    const result = (await getCommand(commandId)).json();
+    expect(result).toMatchObject({
+      state: "failed_retryable", attemptCount: 1, lastErrorCode: "ofapi_key_scope_unavailable", lastErrorClass: "retryable",
+      verifierResult: { source: "local_precondition", reason: "key_scope_unavailable", detail: "key_declaration_lookup_failed" },
+    });
+    expect(result.verifierResult).not.toHaveProperty("httpStatus");
+    const observations = await testDb!.pool.query(
+      "select payload from observations where kind='command.failed_retryable' and payload->>'commandId'=$1",
+      [commandId],
+    );
+    expect(observations.rows).toHaveLength(1);
+    expect(observations.rows[0].payload).toMatchObject({ source: "local_precondition", reason: "key_scope_unavailable" });
+    // A human retry is a new row with lineage — accepted, because nothing was ever sent.
+    const retry = await createCommand(commandBody({ retryOfCommandId: commandId }));
+    expect(retry.statusCode, retry.body).toBe(202);
   });
 
   it("executes one vendor attempt and confirms from the response id", async () => {

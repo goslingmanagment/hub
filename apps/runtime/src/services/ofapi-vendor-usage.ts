@@ -12,6 +12,17 @@ export class OfapiKeyPermissionDeniedError extends ForbiddenError {
   constructor(message: string) { super(message); this.name = "OfapiKeyPermissionDeniedError"; }
 }
 
+/** The declaration lookup runs BEFORE any egress. When it cannot complete, nothing
+ * was dispatched: this is a local pre-dispatch refusal (retry is safe), never an
+ * indeterminate vendor outcome. The command executor maps it to a local verdict. */
+export class OfapiKeyScopeUnavailableError extends ServiceUnavailableError {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message);
+    this.name = "OfapiKeyScopeUnavailableError";
+    if (options?.cause !== undefined) this.cause = options.cause;
+  }
+}
+
 export function parseOfapiVendorUsage(body: unknown, window: OfapiUsageWindow) {
   const data = asRecord(asRecord(body)?.data);
   if (!data || !Array.isArray(data.results)) throw new ServiceUnavailableError("OFAPI usage response shape unavailable");
@@ -62,7 +73,9 @@ export async function assertOfapiConfiguredAccess(db: Database, fingerprint: str
 }) {
   // Free identity and credit diagnostics remain usable to repair a restricted credential.
   if (["ofapi_credential_preflight", "ofapi_balance_ping", "ofapi_vendor_usage"].includes(input.operation)) return;
-  const policy = await getOfapiKeyDeclaration(db, fingerprint);
+  let policy: Awaited<ReturnType<typeof getOfapiKeyDeclaration>>;
+  try { policy = await getOfapiKeyDeclaration(db, fingerprint); }
+  catch (error) { throw new OfapiKeyScopeUnavailableError("OFAPI key scope declaration unavailable before dispatch", { cause: error }); }
   if (!policy) return;
   const capability = /webhook/.test(input.operation) ? "webhooks"
     : /export/.test(input.operation) ? "exports"

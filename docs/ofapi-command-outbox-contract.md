@@ -44,6 +44,13 @@ retains `source = "auth_gate"`. Command-result observations preserve the same
 local/remote distinction. Claiming still increments `attemptCount` once, and
 no local refusal schedules an automatic resend.
 
+A key-scope declaration lookup that cannot complete after the claim (a
+database blip before any HTTP) is the one local refusal that
+settles `failed_retryable` rather than `failed_terminal`: reason
+`key_scope_unavailable`, code `ofapi_key_scope_unavailable`, still
+`source = "local_precondition"` and never `indeterminate` — nothing left the
+process, so a human retry (a new row with lineage) is safe.
+
 ## Version 1 Commands
 
 Text send:
