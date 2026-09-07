@@ -29,6 +29,18 @@ Agent consumers query `POST /api/v1/agent/pages/{pageLabel}/datasets/ofapi_finan
 
 One physical attempt settles into a raw observation before parsing. The worker recovers captured or completed steps without another request. Canonicalization repairs a missing event from retained raw data, and `projection:rebuild ofapi_read_snapshots` rebuilds the normalized view without vendor egress. Policy/storage/credit denial pauses the job. A scheduled run that reaches its job, daily or interval allowance instead ends as `failed` with `scheduled_run_exhausted:<limit>`; its saved cursor and partial coverage remain available. The next configured interval may create a fresh bounded window under current policy, without resuming the exhausted cursor or resetting its spend. Owner pauses still require explicit recovery. A lost network response is uncertain paid work; the existing capture operator tools can reconcile or cancel it. No write command is part of this runner. Local parse failures retain the raw payload and have a bounded local retry count.
 
+A scheduled GET with a captured `429` or `500`–`599` response also ends its current
+run as `failed`. These statuses follow the existing OFAPI rate-limit/server-error
+classification (Decision #245); they do not authorize an immediate retry. The
+next configured schedule may start a separate bounded run. The failed run keeps
+its raw response, cursor, caps, consumed calls/credits and response bytes. For an
+older run parked on a captured `503`, owner **Resume** reads that exact response
+locally and finishes the run as failed, even when its call allowance is spent.
+It makes no additional vendor request. One-off jobs remain paused on these
+statuses; a fresh probe requires a separate bounded job. Authentication errors,
+other HTTP statuses, uncertain transport outcomes and parse failures retain their
+existing recovery behavior and never gain a fresh scheduled request this way.
+
 Costs are based on reserved estimates until captured vendor metadata is available. All catalog requests start with a one-credit reservation; vendor prices can vary and the actual response may exceed a remaining cap. Such overage is retained and blocks the next call. These are managed-request ceilings, not a guarantee of the provider invoice: incoming vendor events, external tools and accepted asynchronous operations remain separate. No paid probe ran during development.
 
 ## Vendor discrepancies and limits, checked 2026-09-06

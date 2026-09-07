@@ -61,6 +61,11 @@ const READ_CATEGORIES: OfapiCollectionCategory[] = [
   "balances",
   "smart_links", "tracking_links",
 ];
+class OfapiCollectionCapturedHttpError extends Error {
+  constructor(readonly status: number) {
+    super(`Vendor HTTP ${status}; response captured`);
+  }
+}
 export function planOfapiReadCollection(
   job: OfapiCollectionJob,
   accountId: string,
@@ -193,6 +198,7 @@ export async function runOfapiCollectionJob(
   if (!job) throw new Error("Collection job disappeared");
   let checkpoint = { ...job.checkpoint };
   let localRecovery = false;
+  let capturedFailureBytes = 0;
   try {
     const stored = await findPageById(app.db, Number(job.page_id));
     const accountId = stored?.page.ofapiAccountId;
@@ -262,7 +268,13 @@ export async function runOfapiCollectionJob(
       localRecovery = true;
       if (read.status < 200 || read.status >= 300) {
         localRecovery = false;
-        throw new Error(`Vendor HTTP ${read.status}; response captured`);
+        // Owner Resume can consume this same response again. Account for its
+        // retained bytes once while preserving the failed step and cursor.
+        if (checkpoint.failedResponseObservationId !== read.observationId)
+          capturedFailureBytes = read.bytes;
+        checkpoint = { ...checkpoint, failedResponseObservationId: read.observationId,
+          failedResponseStatus: read.status };
+        throw new OfapiCollectionCapturedHttpError(read.status);
       }
       const projected = await materializeOfapiReadSnapshot(app, {
         pageId: Number(job.page_id),
@@ -331,6 +343,11 @@ export async function runOfapiCollectionJob(
     const scheduledLimit = job.purpose === "background" && admissionError instanceof OfapiCollectionPolicyError
       && ["job_limit", "daily_limit", "interval_limit"].includes(admissionError.reason)
       ? admissionError.reason : null;
+    // Only a captured safe-read response permits the next scheduled window.
+    // Auth, parse and uncertain transport failures still require recovery.
+    const scheduledHttpFailure = job.purpose === "background"
+      && error instanceof OfapiCollectionCapturedHttpError
+      && (error.status === 429 || (error.status >= 500 && error.status <= 599));
     // A bounded scheduled run may end with a partial cursor. Retain that
     // evidence as failed, not completed or operator-paused, so the next
     // configured interval can start a new bounded window without backlog.
@@ -351,7 +368,8 @@ export async function runOfapiCollectionJob(
       id: jobId,
       token,
       checkpoint,
-      state: scheduledLimit ? "failed" : localRecovery ? "queued" : "paused",
+      state: scheduledLimit || scheduledHttpFailure ? "failed" : localRecovery ? "queued" : "paused",
+      bytesAdded: capturedFailureBytes,
       reason,
     }).catch((err) =>
       app.logger.error(

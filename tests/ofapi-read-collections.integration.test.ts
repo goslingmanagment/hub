@@ -118,6 +118,112 @@ const response = (data: unknown, next?: string | null) =>
     }),
   );
 describe("resumable OFAPI collection reads", () => {
+  it("finishes a legacy paused scheduled 503 locally and waits for the existing next interval", async () => {
+    await applyOfapiCollectionPolicy(app.db, { expectedRevision: 0, changes: [{ pageId,
+      category: "profile_notifications", mode: "scheduled", intervalMinutes: 15,
+      dailyCreditLimit: 10, maxCallsPerRun: 1, includeDetails: false }] }, actor);
+    const scheduledAt = new Date();
+    const [id] = await enqueueDueOfapiCollectionSchedules(app.db, ["profile_notifications"], scheduledAt);
+    const base = { operation: "ofapi_read_fans_expired", pathname: "/acct_test/fans/expired", query: { limit: "20", offset: "0" }, detail: false };
+    const nextQuery = { limit: "20", offset: "40" };
+    const checkpoint = { plan: [base], index: 0, nextQuery, visited: ["earlier-window"] };
+    const token = (await claimOfapiCollectionJob(app.db, id!))!;
+    await checkpointOfapiCollectionJob(app.db, { id: id!, token, checkpoint, state: "running" });
+    const body = JSON.stringify({ error: "temporarily_unavailable", _meta: { _credits: { used: 1, balance: 9999 } } });
+    const fetch = vi.fn(async () => new Response(body, { status: 503 }));
+    vi.stubGlobal("fetch", fetch);
+    const captured = await captureOfapiCollectionRead(app, {
+      pageId, accountId: "acct_test", step: { ...base, query: nextQuery }, stepKey: `legacy503:${id}`,
+      context: { category: "profile_notifications", purpose: "background", jobId: id! },
+      maxBytes: 100000, beforeDispatch: async () => true,
+    });
+    // The deployed pre-fix runner parked a known transient response without
+    // advancing its cursor or including the failed response's bytes.
+    await checkpointOfapiCollectionJob(app.db, { id: id!, token, checkpoint, state: "paused", reason: "Vendor HTTP 503; response captured" });
+    const before = (await getOfapiCollectionJob(app.db, id!))!;
+    await resumeOfapiCollectionJob(app.db, id!, 1, actor);
+    expect(await runOfapiCollectionJob(app, id!)).toEqual({ state: "failed", reason: "Vendor HTTP 503; response captured" });
+    const failed = (await getOfapiCollectionJob(app.db, id!))!;
+    expect(failed.used_calls).toBe(1);
+    expect(Number(failed.used_credits)).toBe(1);
+    expect(failed.max_calls).toBe(before.max_calls);
+    expect(failed.max_credits).toBe(before.max_credits);
+    expect(failed.max_bytes).toBe(before.max_bytes);
+    expect(Number(failed.used_bytes)).toBe(Buffer.byteLength(body));
+    expect(failed.checkpoint).toMatchObject({ ...checkpoint, failedResponseObservationId: captured.observationId, failedResponseStatus: 503 });
+    expect(await runOfapiCollectionJob(app, id!)).toEqual({ state: "busy" });
+    expect(await enqueueDueOfapiCollectionSchedules(app.db, ["profile_notifications"], new Date(scheduledAt.getTime() + 14 * 60000))).toEqual([]);
+    const next = await enqueueDueOfapiCollectionSchedules(app.db, ["profile_notifications"], new Date(scheduledAt.getTime() + 16 * 60000));
+    expect(next).toHaveLength(1);
+    expect(next[0]).not.toBe(id);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(await readOfapiStoredSnapshots(app.db, { pageId })).toEqual([]);
+  });
+  it.each([
+    [429, "failed"], [500, "failed"], [503, "failed"], [599, "failed"],
+    [302, "paused"], [401, "paused"], [402, "paused"], [403, "paused"], [422, "paused"],
+  ] as const)("retains a captured scheduled HTTP %i as %s without immediate retry", async (status, state) => {
+    await applyOfapiCollectionPolicy(app.db, { expectedRevision: 0, changes: [{ pageId,
+      category: "profile_notifications", mode: "scheduled", intervalMinutes: 15,
+      dailyCreditLimit: 10, maxCallsPerRun: 1, includeDetails: false }] }, actor);
+    const scheduledAt = new Date();
+    const [id] = await enqueueDueOfapiCollectionSchedules(app.db, ["profile_notifications"], scheduledAt);
+    const body = JSON.stringify({ error: "synthetic", _meta: { _credits: { used: 1, balance: 9999 } } });
+    const fetch = vi.fn(async () => new Response(body, { status }));
+    vi.stubGlobal("fetch", fetch);
+    expect(await runOfapiCollectionJob(app, id!)).toEqual({ state, reason: `Vendor HTTP ${status}; response captured` });
+    const stopped = (await getOfapiCollectionJob(app.db, id!))!;
+    expect(stopped.used_calls).toBe(1);
+    expect(Number(stopped.used_credits)).toBe(1);
+    expect(Number(stopped.used_bytes)).toBe(Buffer.byteLength(body));
+    expect(stopped.checkpoint.failedResponseStatus).toBe(status);
+    expect((await db.pool.query("select count(*)::int count from observations where kind='ofapi.collection_read_response.v1'")).rows[0].count).toBe(1);
+    expect(await runOfapiCollectionJob(app, id!)).toEqual({ state: "busy" });
+    expect(await enqueueDueOfapiCollectionSchedules(app.db, ["profile_notifications"], new Date(scheduledAt.getTime() + 14 * 60000))).toEqual([]);
+    expect(await enqueueDueOfapiCollectionSchedules(app.db, ["profile_notifications"], new Date(scheduledAt.getTime() + 16 * 60000)))
+      .toHaveLength(state === "failed" ? 1 : 0);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(await readOfapiStoredSnapshots(app.db, { pageId })).toEqual([]);
+  });
+  it("keeps a one-off 503 paused and charges its retained bytes once across owner resumes", async () => {
+    const approved = await job(["me"], 1);
+    const body = JSON.stringify({ error: "unavailable", _meta: { _credits: { used: 1, balance: 9999 } } });
+    const fetch = vi.fn(async () => new Response(body, { status: 503 }));
+    vi.stubGlobal("fetch", fetch);
+    for (let revision = 0; revision < 3; revision++) {
+      if (revision) await resumeOfapiCollectionJob(app.db, approved.id, revision - 1, actor);
+      expect(await runOfapiCollectionJob(app, approved.id)).toEqual({ state: "paused", reason: "Vendor HTTP 503; response captured" });
+      const paused = (await getOfapiCollectionJob(app.db, approved.id))!;
+      expect(paused.used_calls).toBe(1);
+      expect(Number(paused.used_credits)).toBe(1);
+      expect(Number(paused.used_bytes)).toBe(Buffer.byteLength(body));
+    }
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(await readOfapiStoredSnapshots(app.db, { pageId })).toEqual([]);
+  });
+  it.each(["indeterminate", "invalid_json", "invalid_contract"] as const)("does not grant a fresh scheduled request after %s failure", async (failure) => {
+    await applyOfapiCollectionPolicy(app.db, { expectedRevision: 0, changes: [{ pageId,
+      category: "profile_notifications", mode: "scheduled", intervalMinutes: 15,
+      dailyCreditLimit: 10, maxCallsPerRun: 2, includeDetails: false }] }, actor);
+    const scheduledAt = new Date();
+    const [id] = await enqueueDueOfapiCollectionSchedules(app.db, ["profile_notifications"], scheduledAt);
+    const fetch = vi.fn(async () => {
+      if (failure === "indeterminate") throw new Error("connection reset after dispatch");
+      return failure === "invalid_json" ? new Response("<html>malformed response</html>") : response({ list: "invalid" });
+    });
+    vi.stubGlobal("fetch", fetch);
+    const handlers = { profile_notifications: { plan: () => [{ operation: "ofapi_read_fans_expired",
+      pathname: "/acct_test/fans/expired", query: { limit: "20", offset: "0" } }] } };
+    expect(await runOfapiCollectionJob(app, id!, handlers)).toMatchObject({ state: "paused" });
+    if (failure === "indeterminate")
+      expect((await db.pool.query("select state from ofapi_request_attempts")).rows).toEqual([{ state: "indeterminate" }]);
+    await resumeOfapiCollectionJob(app.db, id!, 1, actor);
+    expect(await runOfapiCollectionJob(app, id!, handlers)).toMatchObject({ state: "paused" });
+    expect(await enqueueDueOfapiCollectionSchedules(app.db, ["profile_notifications"], new Date(scheduledAt.getTime() + 16 * 60000))).toEqual([]);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect((await getOfapiCollectionJob(app.db, id!))!.used_calls).toBe(1);
+    expect(await readOfapiStoredSnapshots(app.db, { pageId })).toEqual([]);
+  });
   it("reuses the paid step after its plan round-trips through JSONB and local materialization fails", async () => {
     const fetch = vi.fn(async () => response({ id: "55", username: "creator" }));
     vi.stubGlobal("fetch", fetch);
