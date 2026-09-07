@@ -3,23 +3,17 @@ import {
   assertOwnedPageSyncLease,
   countRecentTerminalDmMessageConversationFailureStreak,
   countActivePageFollows,
-  countPageDmThreadsByGeneration,
   countPageFollowsByGeneration,
   deactivatePageFollowsByGeneration,
   deactivatePageSubscriptionsByGeneration,
   finalizePageDmConversationMessageSync,
-  findErasureLogTouchingPageSince,
   getEarliestSpenderTransactionAt,
   getPageDmConversationById,
   getCheckpoint,
   getCurrentSubscribers,
-  listPageDmConversationsByPlatformConversationIds,
-  listPageDmThreadIdsStampedWithGeneration,
   listFanslyPurchaseHistoryCaptures,
   listFanslyDmRawPayloadsAfterId,
   listFanslyMessagePurchaseTargetsAfterId,
-  markPageDmConversationsInvisibleByGeneration,
-  maxPageDmThreadGeneration,
   maxPageFollowGeneration,
   maxPageSubscriptionGeneration,
   PAGE_DM_LIVE_BACKFILL_CAP,
@@ -33,7 +27,6 @@ import {
   rebuildSubscriberRollups,
   selectNextPageDmMessageDeepBackfillCandidate,
   selectNextPageDmMessageSyncCandidate,
-  tryAcquireDmArchiveWriterFenceLock,
   updatePageSyncTimestampCache,
   upsertArchivedPageSubscriptions,
   upsertPageTopSpenders,
@@ -50,10 +43,7 @@ import {
   withOwnedPageSyncTransaction,
   refreshFanPageFollowerState,
   refreshFanPageSubscriberState,
-  type DmSenderRole,
-  type MessageCoverageStatus,
   type PageSyncLease,
-  type SyncRequestSource,
   type SyncStream,
   type UpsertFanPageInput,
   type UpsertPageFollowInput,
@@ -67,16 +57,11 @@ import {
   type FanslyFollower,
 } from "@agency_hub_core/fansly";
 import {
-  buildFanslyDmConversationMetadata,
   fanslyFollowIdToDate,
   FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY,
-  getFanslyDmMessageSyncExcludedReason,
   isFanslyDmMessageSyncExcluded,
-  normalizeDmMessageText,
   millsFromInteger,
-  FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_MISSING_FROM_AGGREGATION_ACCOUNTS,
   FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP,
-  type FanslyDmMessageSyncExcludedReason,
 } from "@agency_hub_core/shared";
 
 import type { CanonicalStream } from "@agency_hub_core/platform-core";
@@ -100,22 +85,16 @@ import {
   type DmMessagesChunkSummary,
   type SyncRunTelemetry,
 } from "./observability.ts";
-import { composeRequestObservers, type SyncChunkYieldReason, type SyncChunkBudget } from "./chunk-budget.ts";
+import { composeRequestObservers, type SyncChunkBudget } from "./chunk-budget.ts";
 import {
-  isDmSweepErasureShapedCountShortfall,
-  DM_SWEEP_DUAL_PROOF_ERASURE_NOTE_CODE,
-  DM_SWEEP_DUAL_PROOF_PAGE_NOTE_CODE,
-} from "./dm-sweep-dual-proof.ts";
-import {
+  asNumber,
+  asRecord,
   emptyDmMessagesCursorState,
-  isUnresumableLegacyDmConversationCursorState,
-  parseDmConversationCursorState,
   parseDmMessagesCursorState,
   parseFollowersCursorState,
   parseFollowersReconcileCursorState,
   parseSubscribersCursorState,
   parseTopSpendersCursorState,
-  type DmConversationCursorState,
   type DmMessagesCursorState,
   type FollowersCursorState,
   type FollowersReconcileCursorState,
@@ -124,7 +103,7 @@ import {
   type TopSpendersCursorWindow,
 } from "./cursor-state.ts";
 import { pageSyncDependencyInput } from "./dependencies.ts";
-import { createSyncRateLimitWaiter } from "./rate-limiter.ts";
+import { createPageRateLimitWaiter } from "./rate-limiter.ts";
 import {
   isOnlyFansDmPollingEnabled,
   isOnlyFansDmPollingStream,
@@ -165,25 +144,20 @@ import {
 } from "./fansly-purchase-history.ts";
 import { isOnlyFansTopSpendersEnabled } from "./onlyfans-top-spenders.ts";
 import {
-  dmRetentionDate,
   FANSLY_FOLLOWERS_CAPTURE_MAPPER_VERSION,
-  FANSLY_GROUPS_CAPTURE_MAPPER_VERSION,
   persistRawPayload,
   refreshPageMetadata,
   retentionDate,
   trimFanslyFollowerPayload,
-  trimFanslyMessagingGroupsPayload,
 } from "./shared.ts";
 import {
   assertDmSharedRateLimitEnabled,
   DmMessagesChunkRequestObserver,
   FANSLY_DM_MESSAGE_PAGE_LIMIT,
   fetchAndJournalFanslyDmMessagePage,
-  normalizeDmTimestampWithAnomaly,
   resolveDmConversationCoverageStatus,
-  resolveDmSenderRole,
 } from "./fansly-dm-messages.ts";
-import { materializeFanslyDmTipContextsBestEffort } from "./fansly-tip-contexts.ts";
+import { probeFanslyAccountResolution } from "./fansly-account-probe.ts";
 import { lookupHydratedFans, upsertHydratedFansForPage, type HydrationCaptureContext } from "./fan-hydration.ts";
 import { syncTransactions } from "./transactions.ts";
 import {
@@ -194,27 +168,13 @@ import {
   followersReconcileDeactivationLimit,
 } from "./followers-reconcile-safety.ts";
 
-export type ExecutorRequestContext = {
-  budget: SyncChunkBudget;
-  pageContext: ResolvedPageContext;
-  telemetry: SyncRunTelemetry;
-};
+// Kept exported from here for the modules and the platform registry that
+// already import them from this file; both now live in executor-types.ts so a
+// handler module can be a leaf.
+import type { ExecutorRequestContext, StreamChunkResult } from "./executor-types.ts";
+export type { ExecutorRequestContext, StreamChunkResult };
 
 const DM_MESSAGES_PARTNER_UNRESOLVABLE_FAILURE_STREAK_THRESHOLD = 3;
-/** G3: the Fansly dm_conversations sweep's own membership verdict — the row-
- *  side generation set did not reproduce the count the sweep observed, and no
- *  erasure explains the gap, so the destructive finalization was withheld. */
-const DM_SWEEP_GENERATION_MEMBERSHIP_ANOMALY_CODE = "dm_conversations_generation_membership_guard";
-const DM_CONVERSATIONS_ERASURE_FENCE_DEFERRED_NOTE_CODE = "dm_conversations_erasure_fence_deferred";
-/** An erasure's delete transaction is seconds-to-minutes work, not an hour's:
- *  park the stream long enough to let it finish, short enough that a page's
- *  DM freshness barely notices. */
-const DM_CONVERSATIONS_ERASURE_FENCE_RETRY_DELAY_MS = 60_000;
-/** A withheld finalization re-sweeps the whole page from offset 0, so the
- *  retry must not be immediate: an uncertified membership tends to repeat, and
- *  an unthrottled loop would spend the page's whole DM request budget proving
- *  the same thing against the provider over and over. */
-const DM_CONVERSATIONS_MEMBERSHIP_RETRY_DELAY_MS = 15 * 60_000;
 const FOLLOWERS_RECONCILE_PAGE_SIZE = 100;
 const FOLLOWERS_RECONCILE_MAX_SNAPSHOT_RESTARTS = 2;
 const FOLLOWERS_RECONCILE_RETRY_DELAY_MS = 15 * 60_000;
@@ -284,45 +244,6 @@ function shouldSkipOnlyFansDmPolling(
     !isOfapiDmSyncEligiblePage(app.config, input.pageContext.page);
 }
 
-function shouldRequestDmMessagesFollowup(conversation: {
-  fanId: number | null;
-  isVisible: boolean;
-  lastMessageId: string | null;
-  newestStoredMessageId: string | null;
-  lastMessageAt: Date | null;
-  lastMessageSyncAt: Date | null;
-  messageCoverageStatus: MessageCoverageStatus;
-  metadata: Record<string, unknown>;
-}) {
-  if (
-    !conversation.isVisible ||
-    conversation.fanId === null ||
-    getFanslyDmMessageSyncExcludedReason(conversation.metadata) !== null
-  ) {
-    return false;
-  }
-
-  if (conversation.messageCoverageStatus === "pending_backfill") {
-    return true;
-  }
-
-  if (conversation.lastMessageId === conversation.newestStoredMessageId) {
-    return false;
-  }
-
-  return conversation.lastMessageSyncAt === null ||
-    (conversation.lastMessageAt !== null && conversation.lastMessageSyncAt < conversation.lastMessageAt);
-}
-
-function createPageRateLimitWaiter(
-  app: AppContext,
-  pageContext: ResolvedPageContext,
-) {
-  return createSyncRateLimitWaiter(app, {
-    egressKey: pageContext.egressKey,
-  });
-}
-
 function resolveFanslyDmDeepBackfillContinuationDelayMs(
   config: Pick<
     AppContext["config"],
@@ -385,91 +306,11 @@ function incrementDmMessagesLiveRequestsSinceDeepBackfill(
   );
 }
 
-export type StreamChunkResult = {
-  satisfied: boolean;
-  yieldReason: SyncChunkYieldReason | null;
-  continuationRetryAt?: Date | null;
-  continuationRequestSource?: SyncRequestSource | null;
-  stats?: Record<string, unknown>;
-  /** Set when a ramp gate short-circuited the chunk before any egress. Such a
-   *  chunk terminates WITHOUT recording a successful sync anywhere. ONLY
-   *  fanslyNewStreamSkip sets this — do not extend it to the other
-   *  "satisfied but did nothing" skips (onlyfans_top_spenders_disabled,
-   *  legacy_ofapi_dm_messages_retired, sweep_not_due, ...): their streams sit
-   *  in BLOCK_TASKS / SYNC_DOMAIN_POLICY, where withholding succeeded_at WOULD
-   *  degrade chatter-visible block health. That is a separate decision. */
-  gatedSkip?: string | null;
-  /** A completed attempt whose data failed certification. Settle the request
-   *  without success, freshness, failure reset, or incident recovery. */
-  qualityHold?: string | null;
-};
-
-function asRecord(value: unknown) {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null;
-}
-
-function asNumber(value: unknown) {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
-function asNullableString(value: unknown) {
-  return value === null || typeof value === "string" ? value : null;
-}
-
-function hasUnresolvedIdentityMetadata(metadata: Record<string, unknown> | null | undefined) {
-  return metadata?.unresolvedIdentity === true;
-}
-
-type FanslyAccountResolution = "resolved" | "unresolved" | "unknown";
-
 function isTerminalFanslyServerError(error: unknown): error is FanslyApiError & { status: number } {
   return error instanceof FanslyApiError &&
     typeof error.status === "number" &&
     error.status >= 500 &&
     error.status < 600;
-}
-
-async function probeFanslyAccountResolution(
-  app: AppContext,
-  requestContext: Parameters<AppContext["adapter"]["getAccountsByIdsPage"]>[0],
-  partnerPlatformUserId: string,
-  capture: { platformAccountId: number; syncRunId: number },
-): Promise<FanslyAccountResolution> {
-  let response: Awaited<ReturnType<AppContext["adapter"]["getAccountsByIdsPage"]>>;
-  try {
-    response = await app.adapter.getAccountsByIdsPage(requestContext, [partnerPlatformUserId]);
-  } catch {
-    // Only the probe fetch itself is best-effort ("unknown" verdict); the
-    // journal write below stays outside this catch so a failed capture still
-    // fails the chunk (Stage 7: never a silent drop).
-    return "unknown";
-  }
-
-  await persistRawPayload(app.db, {
-    platformAccountId: capture.platformAccountId,
-    syncRunId: capture.syncRunId,
-    endpoint: "account_lookup",
-    requestParams: { ids: [partnerPlatformUserId], probe: true },
-    responsePayload: response.raw,
-    mapperVersion: FANSLY_MAPPER_VERSION,
-    payloadKind: "mapping_critical",
-    retainUntil: retentionDate(),
-  }, {
-    action: "inserting account_lookup probe raw payload",
-    platform: "fansly",
-  });
-
-  if (!Array.isArray(response?.parsed)) {
-    return "unknown";
-  }
-  if (response.parsed.length === 0) {
-    return "unresolved";
-  }
-  return response.parsed.some((account) => account.id === partnerPlatformUserId)
-    ? "resolved"
-    : "unknown";
 }
 
 async function triggerFollowersReconcileAnomaly(
@@ -587,17 +428,6 @@ async function recordFollowerMappingBlockedAnomaly(
       examples: input.unmappedFollowerIds.slice(0, 5),
     },
   });
-}
-
-function truncateDmPreview(content: string | null | undefined, maxLength = 280) {
-  const normalized = normalizeDmMessageText(content);
-  if (!normalized) {
-    return null;
-  }
-
-  return normalized.length <= maxLength
-    ? normalized
-    : `${normalized.slice(0, maxLength - 1).trimEnd()}…`;
 }
 
 function buildUtcMonthKey(date: Date) {
@@ -2777,940 +2607,6 @@ export async function onlyfansDmConversationsChunk(
     satisfied: true,
     yieldReason: null,
     stats: { skipped: "onlyfans_dm_requires_ofapi_mapping" },
-  } satisfies StreamChunkResult;
-}
-
-export async function fanslyDmConversationsChunk(
-  app: AppContext,
-  input: ExecutorRequestContext & {
-    streamState: PageSyncLease;
-    syncRunId: number;
-  },
-) {
-  if (input.pageContext.platform !== "fansly") {
-    throw new Error("DM conversation sync is only supported for Fansly pages");
-  }
-
-  assertDmSharedRateLimitEnabled(app);
-  await input.telemetry.recordPhaseStarted("dm_conversations");
-
-  const requestContext = {
-    session: input.pageContext.session,
-    proxy: input.pageContext.proxy,
-    egressKey: input.pageContext.egressKey,
-    requestObserver: composeRequestObservers(input.telemetry.getRequestObserver(), input.budget),
-    rateLimitWaiter: createPageRateLimitWaiter(app, input.pageContext),
-  };
-  const checkpoint = await getCheckpoint(app.db, input.pageContext.page.id, "dm_conversations");
-  await input.telemetry.recordCheckpointLoaded("dm_conversations", summarizeCheckpoint(checkpoint));
-
-  const pageAccountId = resolveFanslyPlatformAccountId(input.pageContext.page);
-  const checkpointStateRecord = asRecord(checkpoint?.state);
-  // G3: the parser migrates a stored v1 state (with its cumulative id array) to
-  // the v2 scalar shape on load — `observedCount` comes across as the array's
-  // length, and the array is never written again.
-  //
-  // ROLLBACK (verified against main @ 61f7c1dd, the binary production would
-  // roll back to): that parser rejects anything whose `version` is not exactly
-  // 1, so a v2 state parses as null there and the pre-G3 handler falls into
-  // this same fresh-sweep branch — it reads `generation` straight off the
-  // stored record, takes max(that, the row-side high-water) + 1, and re-walks
-  // from offset 0. A rolled-back sweep therefore loses its PROGRESS and never
-  // its correctness: the new generation is above every stamp on the page, so
-  // its finalization cannot hide a thread the interrupted sweep had seen.
-  // `lastFullSweepCompletedAt` is read off the raw record too, so the UX
-  // timestamp survives the round trip.
-  const existingState = parseDmConversationCursorState(checkpoint?.state);
-  // Only meaningful for a cursor that DID resume: a record the parser rejected
-  // outright already restarts as a fresh sweep below, and restarting it twice
-  // would burn a generation and re-fetch a page for nothing.
-  const legacyCountEvidenceMissing = existingState !== null &&
-    isUnresumableLegacyDmConversationCursorState(checkpoint?.state);
-  let state: DmConversationCursorState;
-  if (existingState) {
-    state = existingState;
-  } else {
-    const checkpointGeneration = asNumber(checkpointStateRecord?.generation) ?? 0;
-    const storedGeneration = await maxPageDmThreadGeneration(app.db, input.pageContext.page.id);
-    state = {
-      version: 2,
-      mode: "full_scan",
-      generation: Math.max(checkpointGeneration, storedGeneration) + 1,
-      offset: 0,
-      observedCount: 0,
-      pageCount: 0,
-      providerTotalMode: "unobserved",
-      providerReportedTotal: null,
-      unchangedPageStreak: 0,
-      fullSweepStartedAt: new Date().toISOString(),
-      lastFullSweepCompletedAt: asNullableString(checkpointStateRecord?.lastFullSweepCompletedAt),
-    };
-    const progressCheckpoint = await upsertCheckpointProgress(app.db, {
-      platformAccountId: input.pageContext.page.id,
-      stream: "dm_conversations",
-      state,
-    });
-    await input.telemetry.recordCheckpointAdvanced(
-      "dm_conversations",
-      summarizeCheckpoint(progressCheckpoint),
-    );
-  }
-
-  const restartSweepAfterCapturedContractDrift = async (guard: {
-    code: string;
-    message: string;
-    details: Record<string, unknown>;
-  }): Promise<never> => {
-    const storedGeneration = await maxPageDmThreadGeneration(app.db, input.pageContext.page.id);
-    const restartState: DmConversationCursorState = {
-      version: 2,
-      mode: "full_scan",
-      generation: Math.max(state.generation, storedGeneration) + 1,
-      offset: 0,
-      observedCount: 0,
-      pageCount: 0,
-      providerTotalMode: "unobserved",
-      providerReportedTotal: null,
-      unchangedPageStreak: 0,
-      fullSweepStartedAt: new Date().toISOString(),
-      lastFullSweepCompletedAt: state.lastFullSweepCompletedAt,
-    };
-    const progressCheckpoint = await upsertCheckpointProgress(app.db, {
-      platformAccountId: input.pageContext.page.id,
-      stream: "dm_conversations",
-      state: restartState,
-    });
-    await input.telemetry.recordCheckpointAdvanced(
-      "dm_conversations",
-      summarizeCheckpoint(progressCheckpoint),
-    );
-    await input.telemetry.addAnomaly({
-      code: guard.code,
-      severity: "error",
-      message: guard.message,
-      details: {
-        ...guard.details,
-        abandonedGeneration: state.generation,
-        restartGeneration: restartState.generation,
-      },
-    });
-    throw new Error(`${guard.message}; restarted the DM conversation sweep`);
-  };
-
-  let processedConversations = 0;
-  let repairedHeads = 0;
-  // The per-page count compare is cheap enough to run on every page, but its
-  // note is latched to ONE per run — a sweep that diverges on page 3 diverges
-  // on every page after it, and telemetry rows are the thing G1 just finished
-  // bounding. Since G3 this is an early warning for the completion check that
-  // now gates the destructive finalization, not a shadow reading.
-  let generationSetDivergenceNoted = false;
-
-  while (input.budget.hasRequestCapacity() && input.budget.hasWallClockCapacity()) {
-    await assertOwnedPageSyncLease(app.db);
-    const page = await app.adapter.getMessagingGroupsPage(requestContext, {
-      limit: 100,
-      offset: state.offset,
-      sortOrder: 1,
-      flags: 0,
-    });
-    const frozenProviderReportedTotal = state.providerReportedTotal;
-    const frozenProviderTotalMode = state.providerTotalMode;
-    const providerTotalField = page.total as unknown;
-    const currentProviderTotalMode = providerTotalField == null
-      ? "absent" as const
-      : "present" as const;
-    const currentProviderReportedTotal = currentProviderTotalMode === "present" &&
-        Number.isSafeInteger(providerTotalField) && (providerTotalField as number) >= 0
-      ? providerTotalField as number
-      : null;
-    const nextPageCount = state.pageCount + 1;
-
-    await persistRawPayload(app.db, {
-      platformAccountId: input.pageContext.page.id,
-      syncRunId: input.syncRunId,
-      endpoint: "dm_conversations",
-      requestParams: { offset: state.offset, limit: 100, sortOrder: 1, flags: 0 },
-      responsePayload: trimFanslyMessagingGroupsPayload(page.raw),
-      mapperVersion: FANSLY_GROUPS_CAPTURE_MAPPER_VERSION,
-      payloadKind: "dm_metadata",
-      retainUntil: dmRetentionDate(),
-    }, {
-      action: "inserting dm conversations raw payload",
-      platform: "fansly",
-    });
-
-    if (currentProviderTotalMode === "present" && currentProviderReportedTotal === null) {
-      await restartSweepAfterCapturedContractDrift({
-        code: "dm_conversations_provider_total_invalid",
-        message:
-          "DM conversation sync provider total was present but invalid; refusing to apply the page",
-        details: {
-          currentProviderReportedTotal: providerTotalField ?? null,
-          observedCount: state.observedCount,
-          pageCount: nextPageCount,
-          offset: state.offset,
-        },
-      });
-      continue;
-    }
-
-    if (legacyCountEvidenceMissing) {
-      await restartSweepAfterCapturedContractDrift({
-        code: "dm_conversations_legacy_snapshot_restart",
-        message:
-          "DM conversation sync resumed a legacy sweep without its unique-id snapshot; refusing to apply the page",
-        details: {
-          providerReportedTotal: currentProviderReportedTotal,
-          pageCount: nextPageCount,
-          offset: state.offset,
-        },
-      });
-    }
-
-    if (
-      (frozenProviderTotalMode !== "unobserved" &&
-        currentProviderTotalMode !== frozenProviderTotalMode) ||
-      (frozenProviderTotalMode === "present" &&
-        currentProviderReportedTotal !== frozenProviderReportedTotal)
-    ) {
-      await restartSweepAfterCapturedContractDrift({
-        code: "dm_conversations_provider_total_drift_guard",
-        message:
-          "DM conversation sync provider total presence or value changed during the sweep; refusing to apply the inconsistent page",
-        details: {
-          providerTotalMode: frozenProviderTotalMode,
-          currentProviderTotalMode,
-          providerReportedTotal: frozenProviderReportedTotal,
-          currentProviderReportedTotal,
-          observedCount: state.observedCount,
-          pageCount: nextPageCount,
-          offset: state.offset,
-        },
-      });
-    }
-
-    const currentConversationIds = page.items.map((conversation) => conversation.groupId);
-    const uniqueCurrentConversationIds = new Set(currentConversationIds);
-    // Within a single page the ids are compared in memory — no stored state can
-    // tell you a page repeated an id against itself. Only the CROSS-page
-    // overlap check needs the database, and it waits for the page transaction
-    // below; everything decidable without I/O stays HERE, before the hydration
-    // loop, so a malformed page cannot spend group-detail and head-repair
-    // requests against Fansly before being rejected.
-    const duplicateIdsWithinPage = currentConversationIds.length - uniqueCurrentConversationIds.size;
-    if (duplicateIdsWithinPage > 0) {
-      await restartSweepAfterCapturedContractDrift({
-        code: "dm_conversations_snapshot_overlap_guard",
-        message:
-          "DM conversation sync returned duplicate or overlapping group ids; refusing to apply the page",
-        details: {
-          providerReportedTotal: currentProviderReportedTotal,
-          overlappingConversationIds: [],
-          overlapCount: 0,
-          duplicateIdsWithinPage,
-          observedCount: state.observedCount,
-          pageCount: nextPageCount,
-          offset: state.offset,
-        },
-      });
-    }
-
-    // No overlap is tolerated, so a page that survives the guards here and in
-    // the transaction contributes exactly its unique ids — the same arithmetic
-    // the cumulative array performed by concatenating them and taking its
-    // length.
-    const finalObservedCount = state.observedCount + uniqueCurrentConversationIds.size;
-    if (currentProviderReportedTotal !== null && (
-      finalObservedCount > currentProviderReportedTotal ||
-      (page.done && finalObservedCount !== currentProviderReportedTotal)
-    )) {
-      await restartSweepAfterCapturedContractDrift({
-        code: "dm_conversations_partial_page_guard",
-        message:
-          "DM conversation sync returned a unique-id count that differs from the provider-reported total; refusing destructive finalization",
-        details: {
-          providerReportedTotal: currentProviderReportedTotal,
-          observedCount: finalObservedCount,
-          pageCount: nextPageCount,
-        },
-      });
-    }
-
-    state = {
-      ...state,
-      pageCount: nextPageCount,
-      providerTotalMode: frozenProviderTotalMode === "unobserved"
-        ? currentProviderTotalMode
-        : frozenProviderTotalMode,
-      providerReportedTotal: frozenProviderReportedTotal ?? currentProviderReportedTotal,
-    };
-
-    const accountsById = new Map(page.accounts.map((account) => [account.id, account]));
-    const groupsById = new Map(page.groups.map((group) => [group.id, group]));
-    const existingConversations = await listPageDmConversationsByPlatformConversationIds(app.db, {
-      platformAccountId: input.pageContext.page.id,
-      platformConversationIds: page.items.map((conversation) => conversation.groupId),
-    });
-    const existingByGroupId = new Map(
-      existingConversations.map((conversation) => [
-        conversation.platformConversationId,
-        conversation,
-      ]),
-    );
-    let unchangedPage = true;
-    const hydratedAccountsById = new Map<string, FanslyAccount>();
-    const fallbackPartnerIds = new Set<string>();
-    const conversationWrites: Array<{
-      existingFanId: number | null;
-      partnerPlatformUserId: string | null;
-      partnerUsername: string | null;
-      partnerDisplayName: string | null;
-      conversationFlags: number;
-      unreadCount: number;
-      subscriptionTierId: string | null;
-      lastMessageId: string | null;
-      lastUnreadMessageId: string | null;
-      lastMessageAt: Date | null;
-      lastMessageSenderId: string | null;
-      lastMessageSenderRole: DmSenderRole;
-      lastMessagePreview: string | null;
-      lastFanMessageAt: Date | null;
-      lastModelMessageAt: Date | null;
-      storedMessageCount: number;
-      newestStoredMessageId: string | null;
-      oldestStoredMessageId: string | null;
-      messageCoverageStatus: MessageCoverageStatus;
-      messageBackfillComplete: boolean;
-      lastMessageSyncAt: Date | null;
-      isVisible: boolean;
-      lastSeenGeneration: number;
-      metadata: Record<string, unknown>;
-      platformConversationId: string;
-    }> = [];
-
-    for (const conversation of page.items) {
-      const existing = existingByGroupId.get(conversation.groupId) ?? null;
-      const group = groupsById.get(conversation.groupId);
-      const aggregatedPartnerIds = Array.from(new Set(
-        (group?.users ?? [])
-          .map((user) => user.userId)
-          .filter((userId) => userId !== pageAccountId),
-      ));
-
-      let partnerPlatformUserId = conversation.partnerAccountId ?? null;
-      const contradictoryPartner =
-        (aggregatedPartnerIds.length === 1 &&
-          partnerPlatformUserId !== null &&
-          aggregatedPartnerIds[0] !== partnerPlatformUserId) ||
-        aggregatedPartnerIds.length > 1;
-
-      if (!partnerPlatformUserId && aggregatedPartnerIds.length === 1) {
-        partnerPlatformUserId = aggregatedPartnerIds[0]!;
-      }
-
-      const partnerMissingFromAggregationAccounts = Boolean(
-        partnerPlatformUserId &&
-        page.accounts.length > 0 &&
-        !accountsById.has(partnerPlatformUserId),
-      );
-
-      let detail: Awaited<ReturnType<AppContext["adapter"]["getGroupDetail"]>> | null = null;
-      if ((!partnerPlatformUserId || contradictoryPartner) &&
-        !partnerMissingFromAggregationAccounts &&
-        input.budget.hasRequestCapacity() &&
-        input.budget.hasWallClockCapacity()) {
-        detail = await app.adapter.getGroupDetail(requestContext, conversation.groupId);
-        await persistRawPayload(app.db, {
-          platformAccountId: input.pageContext.page.id,
-          syncRunId: input.syncRunId,
-          endpoint: "group_detail",
-          requestParams: { groupId: conversation.groupId },
-          responsePayload: detail.raw,
-          mapperVersion: FANSLY_MAPPER_VERSION,
-          payloadKind: "dm_metadata",
-          retainUntil: dmRetentionDate(),
-        }, {
-          action: "inserting group_detail raw payload",
-          platform: "fansly",
-        });
-        const detailPartnerIds = Array.from(new Set(
-          (detail.parsed.users ?? [])
-            .map((user) => user.userId)
-            .filter((userId) => userId !== pageAccountId),
-        ));
-        partnerPlatformUserId = detailPartnerIds.length === 1
-          ? detailPartnerIds[0]!
-          : null;
-      }
-
-      const partnerSnapshot = partnerPlatformUserId
-        ? accountsById.get(partnerPlatformUserId) ?? null
-        : null;
-      const partnerUsername = partnerSnapshot?.username ??
-        conversation.partnerUsername ??
-        existing?.partnerUsername ??
-        null;
-      const partnerDisplayName = partnerSnapshot?.displayName ??
-        existing?.partnerDisplayName ??
-        null;
-
-      if (partnerPlatformUserId && !partnerMissingFromAggregationAccounts) {
-        if (partnerSnapshot) {
-          hydratedAccountsById.set(partnerPlatformUserId, {
-            id: partnerPlatformUserId,
-            username: partnerUsername,
-            displayName: partnerDisplayName,
-            createdAt: partnerSnapshot.createdAt,
-            notes: partnerSnapshot.notes,
-          });
-        } else {
-          fallbackPartnerIds.add(partnerPlatformUserId);
-        }
-      }
-
-      const headMessage = group?.lastMessage ?? detail?.parsed.lastMessage ?? null;
-      let lastMessageAt = headMessage
-        ? await normalizeDmTimestampWithAnomaly(input.telemetry, {
-          context: "dm_conversations:lastMessage",
-          value: headMessage.createdAt,
-        })
-        : null;
-      let lastMessageSenderId = headMessage?.senderId ?? null;
-      let lastMessageSenderRole = resolveDmSenderRole(
-        lastMessageSenderId,
-        pageAccountId,
-        partnerPlatformUserId,
-      );
-      let lastMessagePreview = truncateDmPreview(headMessage?.content);
-
-      const needsHeadRepair = !partnerMissingFromAggregationAccounts &&
-        (!lastMessageAt || !lastMessageSenderId) &&
-        (!existing || existing.lastMessageId !== (conversation.lastMessageId ?? null)) &&
-        input.budget.hasRequestCapacity() &&
-        input.budget.hasWallClockCapacity();
-
-      if (needsHeadRepair) {
-        const headRepair = await app.adapter.getMessagesPage(requestContext, {
-          groupId: conversation.groupId,
-          limit: 1,
-        });
-        const headRepairRequestParams = {
-          groupId: conversation.groupId,
-          limit: 1,
-          headRepair: true,
-        };
-        const rawPayload = await persistRawPayload(app.db, {
-          platformAccountId: input.pageContext.page.id,
-          syncRunId: input.syncRunId,
-          endpoint: "dm_messages",
-          requestParams: headRepairRequestParams,
-          responsePayload: headRepair.raw,
-          mapperVersion: FANSLY_MAPPER_VERSION,
-          payloadKind: "dm_messages",
-          retainUntil: dmRetentionDate(),
-        }, {
-          action: "inserting dm_messages head-repair raw payload",
-          platform: "fansly",
-        });
-        await materializeFanslyDmTipContextsBestEffort(app, {
-          accountId: input.pageContext.page.id,
-          requestParams: headRepairRequestParams,
-          responsePayload: headRepair.raw,
-          sourceRawPayloadId: rawPayload.id,
-          capturedAt: rawPayload.capturedAt,
-        });
-        const repairedHead = headRepair.items[0] ?? null;
-        if (repairedHead) {
-          repairedHeads += 1;
-          lastMessageAt = await normalizeDmTimestampWithAnomaly(input.telemetry, {
-            context: "dm_conversations:headRepair",
-            value: repairedHead.createdAt,
-          });
-          lastMessageSenderId = repairedHead.senderId ?? null;
-          lastMessageSenderRole = resolveDmSenderRole(
-            lastMessageSenderId,
-            pageAccountId,
-            partnerPlatformUserId,
-          );
-          lastMessagePreview = truncateDmPreview(repairedHead.content);
-        }
-      }
-
-      const preservedLastFanMessageAt = lastMessageAt && lastMessageSenderRole === "fan"
-        ? lastMessageAt
-        : existing?.lastFanMessageAt ?? null;
-      const preservedLastModelMessageAt = lastMessageAt && lastMessageSenderRole === "model"
-        ? lastMessageAt
-        : existing?.lastModelMessageAt ?? null;
-      const existingExcludedReason = getFanslyDmMessageSyncExcludedReason(existing?.metadata);
-      let messageSyncExcludedReason: FanslyDmMessageSyncExcludedReason | null =
-        partnerMissingFromAggregationAccounts
-        ? FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_MISSING_FROM_AGGREGATION_ACCOUNTS
-        : null;
-
-      if (
-        existingExcludedReason ===
-          FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP
-      ) {
-        let shouldClearUnresolvableExclusion = false;
-
-        if (
-          partnerPlatformUserId &&
-          input.budget.hasRequestCapacity() &&
-          input.budget.hasWallClockCapacity()
-        ) {
-          const resolution = await probeFanslyAccountResolution(
-            app,
-            requestContext,
-            partnerPlatformUserId,
-            { platformAccountId: input.pageContext.page.id, syncRunId: input.syncRunId },
-          );
-          shouldClearUnresolvableExclusion = resolution === "resolved";
-        }
-
-        messageSyncExcludedReason = shouldClearUnresolvableExclusion
-          ? null
-          : FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP;
-      }
-
-      const metadata = buildFanslyDmConversationMetadata({
-        unresolvedIdentity: !partnerPlatformUserId,
-        messageSyncExcludedReason,
-      });
-      const incomingLastMessageId = conversation.lastMessageId ?? null;
-      const preserveHeadForRetry = incomingLastMessageId !== null &&
-        (!lastMessageAt || !lastMessageSenderId) &&
-        (!existing || existing.lastMessageId !== incomingLastMessageId);
-
-      if (
-        !existing ||
-        existing.lastMessageId !== incomingLastMessageId ||
-        existing.unreadCount !== conversation.unreadCount ||
-        !existing.isVisible ||
-        hasUnresolvedIdentityMetadata(existing?.metadata) !== hasUnresolvedIdentityMetadata(metadata) ||
-        getFanslyDmMessageSyncExcludedReason(existing?.metadata) !==
-          getFanslyDmMessageSyncExcludedReason(metadata)
-      ) {
-        unchangedPage = false;
-      }
-
-      conversationWrites.push({
-        existingFanId: partnerMissingFromAggregationAccounts
-          ? (existing?.fanId ?? null)
-          : null,
-        platformConversationId: conversation.groupId,
-        partnerPlatformUserId,
-        partnerUsername,
-        partnerDisplayName,
-        conversationFlags: conversation.flags,
-        unreadCount: conversation.unreadCount,
-        subscriptionTierId: conversation.subscriptionTierId ?? null,
-        lastMessageId: preserveHeadForRetry ? existing?.lastMessageId ?? null : incomingLastMessageId,
-        lastUnreadMessageId: conversation.lastUnreadMessageId ?? null,
-        lastMessageAt: lastMessageAt ?? existing?.lastMessageAt ?? null,
-        lastMessageSenderId: lastMessageSenderId ?? existing?.lastMessageSenderId ?? null,
-        lastMessageSenderRole: lastMessageAt && lastMessageSenderId
-          ? lastMessageSenderRole
-          : existing?.lastMessageSenderRole ?? "unknown",
-        lastMessagePreview: lastMessagePreview ?? existing?.lastMessagePreview ?? null,
-        lastFanMessageAt: preservedLastFanMessageAt,
-        lastModelMessageAt: preservedLastModelMessageAt,
-        storedMessageCount: existing?.storedMessageCount ?? 0,
-        newestStoredMessageId: existing?.newestStoredMessageId ?? null,
-        oldestStoredMessageId: existing?.oldestStoredMessageId ?? null,
-        messageCoverageStatus: existing?.messageCoverageStatus ?? "pending_backfill",
-        messageBackfillComplete: existing?.messageBackfillComplete ?? false,
-        lastMessageSyncAt: existing?.lastMessageSyncAt ?? null,
-        isVisible: true,
-        lastSeenGeneration: state.generation,
-        metadata,
-      });
-    }
-    processedConversations += conversationWrites.length;
-
-    const nextState: DmConversationCursorState = {
-      ...state,
-      observedCount: finalObservedCount,
-      unchangedPageStreak: unchangedPage ? state.unchangedPageStreak + 1 : 0,
-      offset: page.done ? state.offset : state.offset + 100,
-    };
-    const pageWrite = await withOwnedPageSyncTransaction(app.db, async (dbTx) => {
-      // G3 erasure fence (Stage 28 / PR4): with the cumulative array gone, the
-      // rows carrying this generation ARE the sweep's membership record, and a
-      // running erasure legitimately deletes some of them. Take the shared
-      // page fence so the check-stamp-count-finalize sequence below cannot
-      // interleave with an erasure's delete transaction; when the erasure
-      // holds the exclusive lock, DEFER the whole chunk — no writes, no
-      // checkpoint, nothing consumed. The page re-fetches from the same offset
-      // on the next dispatch (its response is already journaled, DP-7 intact).
-      if (!(await tryAcquireDmArchiveWriterFenceLock(dbTx, input.pageContext.page.id))) {
-        return { kind: "deferred" as const };
-      }
-
-      // The cross-page overlap check, row-side and pre-upsert: an id whose row
-      // already carries THIS generation was applied by an earlier offset page
-      // of this same sweep. Only this sweep ever writes this generation (the
-      // page/stream lease is exclusive, the generation starts above every
-      // stored stamp, and the monotonic conflict-update lets no other writer
-      // introduce it), so the stamp is as authoritative as the array was —
-      // and, unlike the array, it is read at the same isolation as the write
-      // that follows it. It has to be read BEFORE the upserts: afterwards
-      // every id on the page would carry the generation.
-      const overlappingConversationIds = await listPageDmThreadIdsStampedWithGeneration(dbTx, {
-        platformAccountId: input.pageContext.page.id,
-        generation: state.generation,
-        platformConversationIds: [...uniqueCurrentConversationIds],
-      });
-      if (overlappingConversationIds.length > 0) {
-        return { kind: "overlap" as const, overlappingConversationIds };
-      }
-
-      let dmMessagesFollowupNeeded = false;
-      const fanMap = await upsertHydratedFansForPage(dbTx, {
-        platformAccountId: input.pageContext.page.id,
-        accounts: [...hydratedAccountsById.values()],
-        fallbackIds: [...fallbackPartnerIds],
-      });
-
-      for (const conversationWrite of conversationWrites) {
-        const fanId = conversationWrite.partnerPlatformUserId && conversationWrite.existingFanId === null
-          ? (fanMap.get(conversationWrite.partnerPlatformUserId) ?? null)
-          : conversationWrite.existingFanId;
-        const upsertedConversation = await upsertPageDmConversation(dbTx, {
-          platformAccountId: input.pageContext.page.id,
-          fanId,
-          platformConversationId: conversationWrite.platformConversationId,
-          partnerPlatformUserId: conversationWrite.partnerPlatformUserId,
-          partnerUsername: conversationWrite.partnerUsername,
-          partnerDisplayName: conversationWrite.partnerDisplayName,
-          conversationFlags: conversationWrite.conversationFlags,
-          unreadCount: conversationWrite.unreadCount,
-          subscriptionTierId: conversationWrite.subscriptionTierId,
-          lastMessageId: conversationWrite.lastMessageId,
-          lastUnreadMessageId: conversationWrite.lastUnreadMessageId,
-          lastMessageAt: conversationWrite.lastMessageAt,
-          lastMessageSenderId: conversationWrite.lastMessageSenderId,
-          lastMessageSenderRole: conversationWrite.lastMessageSenderRole,
-          lastMessagePreview: conversationWrite.lastMessagePreview,
-          lastFanMessageAt: conversationWrite.lastFanMessageAt,
-          lastModelMessageAt: conversationWrite.lastModelMessageAt,
-          storedMessageCount: conversationWrite.storedMessageCount,
-          newestStoredMessageId: conversationWrite.newestStoredMessageId,
-          oldestStoredMessageId: conversationWrite.oldestStoredMessageId,
-          messageCoverageStatus: conversationWrite.messageCoverageStatus,
-          messageBackfillComplete: conversationWrite.messageBackfillComplete,
-          lastMessageSyncAt: conversationWrite.lastMessageSyncAt,
-          isVisible: conversationWrite.isVisible,
-          lastSeenGeneration: conversationWrite.lastSeenGeneration,
-          metadata: conversationWrite.metadata,
-        });
-        if (upsertedConversation && shouldRequestDmMessagesFollowup(upsertedConversation)) {
-          dmMessagesFollowupNeeded = true;
-        }
-      }
-
-      // One indexed count of the rows this sweep has stamped, read INSIDE the
-      // write transaction so it is exactly the membership the checkpoint about
-      // to be written describes. Since G3 this IS the sweep's second opinion on
-      // its own `observedCount` — and the last page's copy of it gates the
-      // destructive finalization below.
-      const generationSetCount = await countPageDmThreadsByGeneration(dbTx, {
-        platformAccountId: input.pageContext.page.id,
-        generation: state.generation,
-      });
-
-      if (page.done) {
-        // Erasure PLAUSIBILITY — not permission. The Stage-28 module deletes
-        // stamped rows, so a shortfall (and only a shortfall) can have a benign
-        // cause when an erasure touched this page inside the sweep window. But
-        // findErasureLogTouchingPageSince proves only that SOME erasure ran; it
-        // does not prove it deleted THESE missing rows. An abandoned erasure
-        // plus one genuinely lost stamp looks identical, and acting on that
-        // would hide a live thread — so this only chooses the calm note over
-        // the anomaly. It never certifies membership.
-        let erasureDelta: number | null = null;
-        if (
-          isDmSweepErasureShapedCountShortfall({
-            observedCount: finalObservedCount,
-            generationSetCount,
-          })
-        ) {
-          const sweepStartedAt = new Date(state.fullSweepStartedAt);
-          const erasure = Number.isNaN(sweepStartedAt.getTime())
-            ? null
-            : await findErasureLogTouchingPageSince(dbTx, {
-              pageId: input.pageContext.page.id,
-              since: sweepStartedAt,
-            });
-          if (erasure) {
-            erasureDelta = finalObservedCount - generationSetCount;
-          }
-        }
-
-        // The whole point of G3: invisibility only after the row-side set
-        // reproduces the count the sweep claims to have observed — EXACTLY,
-        // with no excuse accepted. Any gap, in either direction and however
-        // plausible, means the membership record cannot be trusted, and hiding
-        // threads on an untrustworthy record is the failure mode (a live thread
-        // disappearing from every chatter's list) this refuses to risk.
-        // Decision #208 prefers stale visibility to that, and the re-sweep
-        // under a fresh generation converges on its own.
-        const membershipCertified = generationSetCount === finalObservedCount;
-        const destructiveFinalization = state.providerTotalMode === "present" &&
-          membershipCertified;
-        // Independent of the total mode: a total-less sweep runs no destructive
-        // pass, but it must not stamp itself successful — or advance the
-        // coverage timestamp — on a membership it could not certify either.
-        const finalizationWithheld = !membershipCertified;
-        if (destructiveFinalization) {
-          await markPageDmConversationsInvisibleByGeneration(dbTx, {
-            platformAccountId: input.pageContext.page.id,
-            generation: state.generation,
-          });
-        }
-        const completedState = {
-          version: 2,
-          generation: state.generation,
-          observedCount: finalObservedCount,
-          generationSetCount,
-          providerTotalMode: state.providerTotalMode,
-          providerReportedTotal: state.providerReportedTotal,
-          destructiveFinalization,
-          membershipCertified,
-          // A withheld finalization did walk every page, but it is not a full
-          // sweep the coverage UX may advertise — the previous timestamp
-          // stands until a sweep certifies itself.
-          lastFullSweepCompletedAt: finalizationWithheld
-            ? state.lastFullSweepCompletedAt
-            : new Date().toISOString(),
-          ...(erasureDelta === null ? {} : { erasureDelta }),
-        };
-        // Note the completed state carries no `mode`, so the parser refuses it
-        // as a resumable cursor and the next chunk opens a fresh sweep under a
-        // higher generation. That is also what makes a withheld finalization
-        // self-healing rather than a wedge: the retry re-walks from offset 0.
-        return {
-          kind: "complete" as const,
-          destructiveFinalization,
-          finalizationWithheld,
-          membershipCertified,
-          dmMessagesFollowupNeeded,
-          generationSetCount,
-          erasureDelta,
-          checkpoint: finalizationWithheld
-            // Progress write: a run that refused to finalize must not stamp
-            // itself as the stream's last successful run.
-            ? await upsertCheckpointProgress(dbTx, {
-              platformAccountId: input.pageContext.page.id,
-              stream: "dm_conversations",
-              state: completedState,
-            })
-            : await upsertCheckpoint(dbTx, {
-              platformAccountId: input.pageContext.page.id,
-              stream: "dm_conversations",
-              state: completedState,
-              lastSuccessfulRunId: input.syncRunId,
-            }),
-        };
-      }
-
-      return {
-        kind: "progress" as const,
-        dmMessagesFollowupNeeded,
-        generationSetCount,
-        checkpoint: await upsertCheckpointProgress(dbTx, {
-          platformAccountId: input.pageContext.page.id,
-          stream: "dm_conversations",
-          // `generationSetCount` is telemetry, not cursor state: the parser
-          // drops it on resume and every page recomputes it. It rides the
-          // checkpoint purely so summarizeCheckpoint carries it into the
-          // bounded projection — the per-page membership signal that replaced
-          // the array's digest.
-          state: { ...nextState, generationSetCount },
-        }),
-      };
-    });
-
-    if (pageWrite.kind === "deferred") {
-      await input.telemetry.addNote(
-        "DM conversation sweep deferred a page while an erasure held the page fence",
-        {
-          code: DM_CONVERSATIONS_ERASURE_FENCE_DEFERRED_NOTE_CODE,
-          generation: state.generation,
-          pageCount: nextPageCount,
-          offset: state.offset,
-        },
-      );
-      return {
-        satisfied: false,
-        yieldReason: null,
-        continuationRetryAt: new Date(Date.now() + DM_CONVERSATIONS_ERASURE_FENCE_RETRY_DELAY_MS),
-        continuationRequestSource: "scheduled",
-        stats: {
-          generation: state.generation,
-          offset: state.offset,
-          pageCount: state.pageCount,
-          observedCount: state.observedCount,
-          processedConversations,
-          repairedHeads,
-          providerTotalMode: state.providerTotalMode,
-          providerReportedTotal: state.providerReportedTotal,
-          fullSweepCompleted: false,
-          erasureFenceDeferred: true,
-        },
-      } satisfies StreamChunkResult;
-    }
-
-    if (pageWrite.kind === "overlap") {
-      await restartSweepAfterCapturedContractDrift({
-        code: "dm_conversations_snapshot_overlap_guard",
-        message:
-          "DM conversation sync returned duplicate or overlapping group ids; refusing to apply the page",
-        details: {
-          providerReportedTotal: currentProviderReportedTotal,
-          overlappingConversationIds: pageWrite.overlappingConversationIds.slice(0, 10),
-          overlapCount: pageWrite.overlappingConversationIds.length,
-          duplicateIdsWithinPage,
-          observedCount: state.observedCount,
-          pageCount: nextPageCount,
-          offset: state.offset,
-        },
-      });
-      continue;
-    }
-
-    await input.telemetry.recordCheckpointAdvanced(
-      "dm_conversations",
-      summarizeCheckpoint(pageWrite.checkpoint),
-    );
-
-    if (pageWrite.dmMessagesFollowupNeeded) {
-      await requestPageSync(app.db, {
-        pageId: input.pageContext.page.id,
-        streams: ["dm_messages"],
-        source: "scheduled",
-        ...pageSyncDependencyInput(app),
-      });
-    }
-
-    // Early warning: a mid-sweep divergence is what the completion check will
-    // fail on, several pages before it does. It changes nothing on its own —
-    // the last page decides — but it dates the divergence to a page.
-    if (
-      pageWrite.kind === "progress" &&
-      !generationSetDivergenceNoted &&
-      pageWrite.generationSetCount !== finalObservedCount
-    ) {
-      generationSetDivergenceNoted = true;
-      await input.telemetry.addNote(
-        "DM conversation sweep generation set diverged from its observed count",
-        {
-          code: DM_SWEEP_DUAL_PROOF_PAGE_NOTE_CODE,
-          generation: state.generation,
-          pageCount: nextPageCount,
-          observedCount: finalObservedCount,
-          generationSetCount: pageWrite.generationSetCount,
-        },
-      );
-    }
-
-    if (pageWrite.kind === "complete") {
-      if (pageWrite.erasureDelta !== null) {
-        // Same withheld outcome as any other uncertified sweep — only the
-        // volume differs. A shortfall an erasure could plausibly have caused
-        // is not an incident, so it reports as a note; the sweep still refuses
-        // to finalize on it.
-        await input.telemetry.addNote(
-          "DM conversation sweep generation set trails its observed count by rows an erasure could have removed inside the sweep window; finalization withheld",
-          {
-            code: DM_SWEEP_DUAL_PROOF_ERASURE_NOTE_CODE,
-            generation: state.generation,
-            observedCount: finalObservedCount,
-            generationSetCount: pageWrite.generationSetCount,
-            erasureDelta: pageWrite.erasureDelta,
-            finalizationWithheld: pageWrite.finalizationWithheld,
-          },
-        );
-      } else if (!pageWrite.membershipCertified) {
-        await input.telemetry.addAnomaly({
-          code: DM_SWEEP_GENERATION_MEMBERSHIP_ANOMALY_CODE,
-          // error, not warn: unlike the G2 shadow this verdict WITHHELD the
-          // sweep's completion, and no deletion on this page can even explain
-          // the gap.
-          severity: "error",
-          message:
-            "DM conversation sweep generation set did not reproduce its observed count; refusing destructive finalization",
-          details: {
-            generation: state.generation,
-            pageCount: nextPageCount,
-            observedCount: finalObservedCount,
-            generationSetCount: pageWrite.generationSetCount,
-            providerTotalMode: state.providerTotalMode,
-            providerReportedTotal: state.providerReportedTotal,
-            finalizationWithheld: pageWrite.finalizationWithheld,
-          },
-        });
-      }
-
-      if (state.providerTotalMode !== "present" && !pageWrite.finalizationWithheld) {
-        await input.telemetry.addNote(
-          "DM conversation sweep completed without a provider total; unseen conversations remain visible",
-          {
-            code: "dm_conversations_provider_total_absent_nondestructive",
-            observedCount: finalObservedCount,
-            pageCount: state.pageCount,
-            providerTotalMode: state.providerTotalMode,
-          },
-        );
-      }
-      return {
-        // A withheld finalization is not a success: the walk finished, the
-        // certification did not. Yielding re-queues the stream, and the
-        // completed checkpoint it wrote makes the retry a fresh sweep.
-        satisfied: !pageWrite.finalizationWithheld,
-        yieldReason: null,
-        ...(pageWrite.finalizationWithheld
-          ? {
-            continuationRetryAt: new Date(Date.now() + DM_CONVERSATIONS_MEMBERSHIP_RETRY_DELAY_MS),
-            continuationRequestSource: "scheduled" as const,
-          }
-          : {}),
-        stats: {
-          generation: state.generation,
-          offset: state.offset,
-          pageCount: state.pageCount,
-          observedCount: finalObservedCount,
-          generationSetCount: pageWrite.generationSetCount,
-          processedConversations,
-          repairedHeads,
-          providerTotalMode: state.providerTotalMode,
-          providerReportedTotal: state.providerReportedTotal,
-          destructiveFinalization: pageWrite.destructiveFinalization,
-          membershipCertified: pageWrite.membershipCertified,
-          finalizationWithheld: pageWrite.finalizationWithheld,
-          fullSweepCompleted: !pageWrite.finalizationWithheld,
-        },
-      } satisfies StreamChunkResult;
-    }
-
-    state = nextState;
-  }
-
-  return {
-    satisfied: false,
-    yieldReason: input.budget.resolveYieldReason(),
-    stats: {
-      generation: state.generation,
-      offset: state.offset,
-      pageCount: state.pageCount,
-      observedCount: state.observedCount,
-      processedConversations,
-      repairedHeads,
-      providerTotalMode: state.providerTotalMode,
-      providerReportedTotal: state.providerReportedTotal,
-      fullSweepCompleted: false,
-    },
   } satisfies StreamChunkResult;
 }
 

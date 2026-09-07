@@ -124,7 +124,6 @@ import {
   executeFollowersChunk,
   executeFollowersReconcileChunk,
   executeStreamChunk,
-  fanslyDmConversationsChunk,
   fanslyDmMessagesChunk,
   fanslySubscribersChunk,
   fanslyTopSpendersChunk,
@@ -132,6 +131,9 @@ import {
   onlyfansDmMessagesChunk,
   onlyfansTransactionsChunk,
 } from "../apps/runtime/src/services/sync/executor-handlers.ts";
+import {
+  fanslyDmConversationsChunk,
+} from "../apps/runtime/src/services/sync/fansly-dm-conversations.ts";
 import { SyncChunkBudget } from "../apps/runtime/src/services/sync/chunk-budget.ts";
 
 function createTelemetry() {

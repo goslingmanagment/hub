@@ -7,6 +7,8 @@ import { describe, expect, it } from "vitest";
 import {
   isUnresumableLegacyDmConversationCursorState,
   parseDmConversationCursorState,
+  parseDmConversationSweepState,
+  serializeDmConversationSweepState,
 } from "../apps/runtime/src/services/sync/cursor-state.ts";
 
 const V2_STATE = {
@@ -116,6 +118,163 @@ describe("dm_conversations cursor state (G3)", () => {
 
   it("refuses a negative observed count", () => {
     expect(parseDmConversationCursorState({ ...V2_STATE, observedCount: -1 })).toBeNull();
+  });
+});
+
+/**
+ * The in-memory tagged union over the SAME two documents. The tag exists only
+ * in memory: every assertion below that touches JSON is a `toEqual` against the
+ * exact document the pre-union code wrote, because a rolled-back binary reads
+ * that document with the parser copied further down this file.
+ */
+const COMPLETED_STATE = {
+  version: 2,
+  generation: 7,
+  observedCount: 200,
+  generationSetCount: 200,
+  providerTotalMode: "present",
+  providerReportedTotal: 512,
+  destructiveFinalization: true,
+  membershipCertified: true,
+  lastFullSweepCompletedAt: "2026-03-10T02:00:00.000Z",
+} as const;
+
+describe("dm_conversations sweep state (tagged union)", () => {
+  it("parses the in-progress document into the in_progress arm", () => {
+    expect(parseDmConversationSweepState({ ...V2_STATE })).toEqual({
+      kind: "in_progress",
+      generation: 7,
+      offset: 200,
+      observedCount: 200,
+      pageCount: 2,
+      providerTotalMode: "present",
+      providerReportedTotal: 512,
+      unchangedPageStreak: 1,
+      fullSweepStartedAt: "2026-03-10T00:00:00.000Z",
+      lastFullSweepCompletedAt: "2026-03-09T00:00:00.000Z",
+    });
+  });
+
+  it("parses the completed document into the completed arm", () => {
+    expect(parseDmConversationSweepState({ ...COMPLETED_STATE })).toEqual({
+      kind: "completed",
+      generation: 7,
+      observedCount: 200,
+      generationSetCount: 200,
+      providerTotalMode: "present",
+      providerReportedTotal: 512,
+      destructiveFinalization: true,
+      membershipCertified: true,
+      erasureDelta: null,
+      lastFullSweepCompletedAt: "2026-03-10T02:00:00.000Z",
+    });
+  });
+
+  it("round-trips the in-progress document byte for byte", () => {
+    const parsed = parseDmConversationSweepState({ ...V2_STATE });
+
+    expect(parsed?.kind).toBe("in_progress");
+    expect(serializeDmConversationSweepState(parsed!)).toEqual({ ...V2_STATE });
+  });
+
+  it("round-trips the completed document byte for byte", () => {
+    const parsed = parseDmConversationSweepState({ ...COMPLETED_STATE });
+
+    expect(parsed?.kind).toBe("completed");
+    // No `erasureDelta` key: a null delta is ABSENT, not null, exactly as the
+    // conditional spread in the pre-union literal produced.
+    expect(serializeDmConversationSweepState(parsed!)).toEqual({ ...COMPLETED_STATE });
+    expect(serializeDmConversationSweepState(parsed!)).not.toHaveProperty("erasureDelta");
+  });
+
+  it("round-trips a completed document that carries an erasure delta", () => {
+    const withDelta = { ...COMPLETED_STATE, generationSetCount: 198, erasureDelta: 2 };
+    const parsed = parseDmConversationSweepState(withDelta);
+
+    expect(parsed).toMatchObject({ kind: "completed", erasureDelta: 2 });
+    expect(serializeDmConversationSweepState(parsed!)).toEqual(withDelta);
+  });
+
+  it("serializes the mid-sweep telemetry rider and drops it again on parse", () => {
+    const parsed = parseDmConversationSweepState({ ...V2_STATE });
+    const document = serializeDmConversationSweepState(parsed!, { generationSetCount: 200 });
+
+    expect(document).toEqual({ ...V2_STATE, generationSetCount: 200 });
+    // `generationSetCount` is telemetry, not cursor state: a resume recomputes
+    // it per page, so it must not survive the round trip.
+    expect(serializeDmConversationSweepState(parseDmConversationSweepState(document)!))
+      .toEqual({ ...V2_STATE });
+  });
+
+  it("never puts the in-memory tag in the persisted document", () => {
+    for (const source of [{ ...V2_STATE }, { ...COMPLETED_STATE }]) {
+      expect(serializeDmConversationSweepState(parseDmConversationSweepState(source)!))
+        .not.toHaveProperty("kind");
+    }
+  });
+
+  it("keeps the completed document free of the resumable cursor keys", () => {
+    const document = serializeDmConversationSweepState(
+      parseDmConversationSweepState({ ...COMPLETED_STATE })!,
+    );
+
+    // Their ABSENCE is the mechanism: the resumable parser refuses a document
+    // with no `mode`, so the next chunk opens a fresh sweep.
+    for (const key of ["mode", "offset", "pageCount", "fullSweepStartedAt", "unchangedPageStreak"]) {
+      expect(document, key).not.toHaveProperty(key);
+    }
+    expect(parseDmConversationCursorState(document)).toBeNull();
+  });
+
+  it("keeps unchangedPageStreak in the persisted in-progress document", () => {
+    // Nothing reads it back yet; it stays because dropping a key from a live
+    // checkpoint is not a refactor, it is a migration.
+    expect(serializeDmConversationSweepState(parseDmConversationSweepState({
+      ...V2_STATE,
+      unchangedPageStreak: 4,
+    })!)).toMatchObject({ unchangedPageStreak: 4 });
+  });
+
+  it("migrates a v1 in-progress document into the in_progress arm", () => {
+    const parsed = parseDmConversationSweepState(v1State({
+      snapshotConversationIds: Array.from({ length: 200 }, (_, index) => `group-${index}`),
+    }));
+
+    expect(parsed).toMatchObject({ kind: "in_progress", observedCount: 200 });
+    expect(serializeDmConversationSweepState(parsed!)).toEqual({ ...V2_STATE });
+  });
+
+  it.each([
+    { name: "an unknown mode", value: { ...V2_STATE, mode: "incremental" } },
+    { name: "an OFAPI cursor", value: { version: 1, mode: "ofapi", offset: 0, pageCount: 0 } },
+    { name: "a mode on an otherwise completed document", value: { ...COMPLETED_STATE, mode: "done" } },
+    { name: "an unknown version", value: { ...COMPLETED_STATE, version: 3 } },
+    { name: "a completed document with no membership count", value: {
+      version: 2,
+      generation: 7,
+      observedCount: 200,
+      providerTotalMode: "present",
+      providerReportedTotal: 512,
+      destructiveFinalization: true,
+      membershipCertified: true,
+      lastFullSweepCompletedAt: "2026-03-10T02:00:00.000Z",
+    } },
+    { name: "a completed document with a non-boolean verdict", value: {
+      ...COMPLETED_STATE,
+      membershipCertified: "yes",
+    } },
+    { name: "a completed document with a garbage erasure delta", value: {
+      ...COMPLETED_STATE,
+      erasureDelta: "two",
+    } },
+    { name: "a completed document with an unknown total mode", value: {
+      ...COMPLETED_STATE,
+      providerTotalMode: "guessed",
+    } },
+    { name: "not an object at all", value: "full_scan" },
+    { name: "null", value: null },
+  ])("refuses $name", ({ value }) => {
+    expect(parseDmConversationSweepState(value)).toBeNull();
   });
 });
 
@@ -250,6 +409,35 @@ describe("dm_conversations cursor state — rollback to the pre-G3 parser", () =
       observedCount: 200,
       lastFullSweepCompletedAt: "2026-03-10T02:00:00.000Z",
     })).toBeNull();
+  });
+
+  it("reads the union's OWN output exactly as it reads the pre-union documents", () => {
+    // The point of the union is that it changed nothing on disk. Both
+    // documents below came out of serializeDmConversationSweepState; the old
+    // parser must still refuse them (fresh sweep) and must still find the two
+    // fields the pre-G3 fresh-sweep path reads off the raw record.
+    const inProgress = serializeDmConversationSweepState(
+      parseDmConversationSweepState({ ...V2_STATE })!,
+    );
+    const completed = serializeDmConversationSweepState(
+      parseDmConversationSweepState({
+        version: 2,
+        generation: 7,
+        observedCount: 200,
+        generationSetCount: 200,
+        providerTotalMode: "present",
+        providerReportedTotal: 512,
+        destructiveFinalization: true,
+        membershipCertified: true,
+        lastFullSweepCompletedAt: "2026-03-10T02:00:00.000Z",
+      })!,
+    );
+
+    for (const document of [inProgress, completed]) {
+      expect(legacyParseDmConversationCursorState(document)).toBeNull();
+      expect(asNumber(document.generation)).toBe(7);
+      expect(typeof asNullableString(document.lastFullSweepCompletedAt)).toBe("string");
+    }
   });
 });
 

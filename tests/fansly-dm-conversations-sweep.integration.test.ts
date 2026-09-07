@@ -1,5 +1,5 @@
 // Characterization pins for the Fansly dm_conversations sweep
-// (`fanslyDmConversationsChunk`, apps/runtime/src/services/sync/executor-handlers.ts).
+// (`fanslyDmConversationsChunk`, apps/runtime/src/services/sync/fansly-dm-conversations.ts).
 // Written BEFORE a refactor of that handler: every expectation below records
 // what the code does TODAY, not what it ought to do. Where today's behavior is
 // arguably wrong the test says so in its name and in a comment — it still pins
@@ -27,7 +27,7 @@ import {
 
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { SyncChunkBudget } from "../apps/runtime/src/services/sync/chunk-budget.ts";
-import { fanslyDmConversationsChunk } from "../apps/runtime/src/services/sync/executor-handlers.ts";
+import { fanslyDmConversationsChunk } from "../apps/runtime/src/services/sync/fansly-dm-conversations.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,

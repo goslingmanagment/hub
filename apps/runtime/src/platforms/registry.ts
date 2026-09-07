@@ -15,7 +15,6 @@ import {
   executeFollowersChunk,
   executeFollowersReconcileChunk,
   executePurchaseHistoryChunk,
-  fanslyDmConversationsChunk,
   fanslyDmMessagesChunk,
   fanslyLightChunk,
   fanslySubscribersChunk,
@@ -29,6 +28,7 @@ import {
   type ExecutorRequestContext,
   type StreamChunkResult,
 } from "../services/sync/executor-handlers.ts";
+import { fanslyDmConversationsChunk } from "../services/sync/fansly-dm-conversations.ts";
 import {
   fanslyPostsChunk,
   onlyfansPostsChunk,
