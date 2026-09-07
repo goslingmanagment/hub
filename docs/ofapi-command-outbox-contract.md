@@ -44,6 +44,11 @@ retains `source = "auth_gate"`. Command-result observations preserve the same
 local/remote distinction. Claiming still increments `attemptCount` once, and
 no local refusal schedules an automatic resend.
 
+Credit-accounting readiness is proven BEFORE the claim (a pending
+credit-receipt backlog deeper than one bounded drain, or a receipt whose
+settlement keeps failing, is a process-wide condition, not a verdict on the
+command), so an unready ledger leaves the row `queued` for the next sweep
+instead of spending its single attempt.
 A key-scope declaration lookup that cannot complete after the claim (a
 database blip before any HTTP) is the one local refusal that
 settles `failed_retryable` rather than `failed_terminal`: reason

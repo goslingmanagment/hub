@@ -472,6 +472,19 @@ async function executeCurrentOfapiCommand(
     return { status: "client_unavailable" as const };
   }
 
+  // Credit accounting readiness is a process-wide precondition, not a property
+  // of this command: prove it BEFORE the claim (the way the auth gate is
+  // checked) so an unready ledger — a receipt backlog deeper than one bounded
+  // drain, or one receipt whose settle keeps failing — leaves the row `queued`
+  // for the next sweep instead of spending its single attempt on a terminal
+  // local failure. The client's own admission check remains the belt.
+  try {
+    await app.ofapi?.assertCreditAccountingReady?.();
+  } catch (error) {
+    app.logger.warn({ err: error, commandId }, "OFAPI credit accounting not ready; command remains queued");
+    return { status: "accounting_unavailable" as const };
+  }
+
   // W3.2 belt (decision #125): a row older than the queued TTL is
   // unclaimable — even if this execute job races the sweep's expiry, the
   // stale send cannot fire.

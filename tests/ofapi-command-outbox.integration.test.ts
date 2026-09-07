@@ -782,6 +782,29 @@ describe("OFAPI command outbox intake", () => {
       verifierResult: { source: "local_precondition", reason: "credit_accounting_unavailable" } });
   });
 
+  it("leaves a queued command unclaimed and unsent while credit accounting is not ready (pre-claim gate, review #138 fix 2)", async () => {
+    appContext.config.ofapiDesktopCommandExecutionEnabled = true;
+    const sendTextMessage = vi.fn().mockResolvedValue({ messageId: "987654321" });
+    const assertCreditAccountingReady = vi.fn()
+      .mockRejectedValueOnce(new OfapiCreditAccountingUnavailableError())
+      .mockResolvedValue(undefined);
+    appContext.ofapi = { sendTextMessage, assertCreditAccountingReady } as unknown as AppContext["ofapi"];
+    const created = await createCommand(commandBody());
+    const { commandId } = created.json() as { commandId: string };
+    await expect(executeOfapiCommand(appContext, commandId)).resolves.toEqual({ status: "accounting_unavailable" });
+    expect(sendTextMessage).not.toHaveBeenCalled();
+    expect((await getCommand(commandId)).json()).toMatchObject({
+      state: "queued", attemptCount: 0, attemptStartedAt: null, lastErrorCode: null, verifierResult: null,
+    });
+    const observations = await testDb!.pool.query("select 1 from observations where source='command_result' and payload->>'commandId'=$1", [commandId]);
+    expect(observations.rows).toHaveLength(0);
+    // The next sweep-driven attempt claims and sends once accounting has recovered.
+    await expect(executeOfapiCommand(appContext, commandId)).resolves.toMatchObject({ status: "confirmed" });
+    expect(assertCreditAccountingReady).toHaveBeenCalledTimes(2);
+    expect(sendTextMessage).toHaveBeenCalledTimes(1);
+    expect((await getCommand(commandId)).json()).toMatchObject({ state: "confirmed", attemptCount: 1 });
+  });
+
   it("settles a failed key-scope lookup as a local retryable refusal with zero POSTs, never indeterminate (review #138 fix 3)", async () => {
     appContext.config.ofapiDesktopCommandExecutionEnabled = true;
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ team: { slug: "expected" } }), { status: 200 }));
