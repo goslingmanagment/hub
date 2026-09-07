@@ -7,6 +7,35 @@ export class OfapiProviderOperationRefused extends Error {
   constructor(readonly reason: "replay_unavailable" | "media_token_already_used") { super(reason); }
 }
 type OperationRow = { operation_id: string; provider_key: string; team_slug: string; account_id: string; endpoint: string; body_hash: string; first_attempt_at: Date | string };
+
+/** A reused Idempotency-Key is only honest inside the vendor's cached-response window. */
+export const OFAPI_PROVIDER_OPERATION_REUSE_WINDOW_MS = 24 * 60 * 60 * 1000;
+export type OfapiProviderOperationReuseIssue =
+  "parent_operation_missing" | "team_changed" | "account_changed" | "endpoint_changed" | "body_changed" | "window_expired";
+
+/** One predicate for intake (refuse before any row exists) and dispatch (belt-and-braces). */
+export function ofapiProviderOperationReuseIssue(parent: OperationRow | undefined | null, input: {
+  teamSlug: string | null; accountId: string; endpoint: string; bodyHash: string; now: Date;
+}): OfapiProviderOperationReuseIssue | null {
+  if (!parent) return "parent_operation_missing";
+  if (input.teamSlug === null || parent.team_slug !== input.teamSlug) return "team_changed";
+  if (parent.account_id !== input.accountId) return "account_changed";
+  if (parent.endpoint !== input.endpoint) return "endpoint_changed";
+  if (parent.body_hash !== input.bodyHash) return "body_changed";
+  const firstAttemptAt = new Date(parent.first_attempt_at).getTime();
+  if (input.now.getTime() < firstAttemptAt || input.now.getTime() - firstAttemptAt >= OFAPI_PROVIDER_OPERATION_REUSE_WINDOW_MS) return "window_expired";
+  return null;
+}
+
+/** Read-only intake check. Dispatch re-evaluates the same predicate under its own locks. */
+export async function checkOfapiProviderOperationReuse(db: Database, input: {
+  parentCommandId: string; teamSlug: string | null; accountId: string; endpoint: string; bodyHash: string; now?: Date;
+}): Promise<{ eligible: true } | { eligible: false; issue: OfapiProviderOperationReuseIssue }> {
+  const parent = (await db.execute<OperationRow>(sql`select * from ofapi_command_provider_operations where command_id = ${input.parentCommandId}`)).rows[0];
+  const issue = ofapiProviderOperationReuseIssue(parent, { ...input, now: input.now ?? new Date() });
+  return issue ? { eligible: false, issue } : { eligible: true };
+}
+
 /** A released custody row (0170) is re-armed in place for the new holder; a live
  * row is left alone so the caller's row-lock check refuses it. */
 function custodyClaimSql(input: { accountId: string; token: string; operationId: string; commandId: string | null; actionIntentId: string | null }) {
@@ -33,9 +62,10 @@ export async function reserveOfapiProviderOperation(db: Database, input: {
     if (input.reuse) {
       const source = await tx.execute<OperationRow>(sql`select * from ofapi_command_provider_operations where command_id = ${input.parentCommandId} for share`);
       const parent = source.rows[0];
-      if (!parent || parent.team_slug !== input.teamSlug || parent.account_id !== input.accountId || parent.endpoint !== input.endpoint
-        || parent.body_hash !== input.bodyHash || now.getTime() < new Date(parent.first_attempt_at).getTime()
-        || now.getTime() - new Date(parent.first_attempt_at).getTime() >= 24 * 60 * 60 * 1000) throw new OfapiProviderOperationRefused("replay_unavailable");
+      if (ofapiProviderOperationReuseIssue(parent, { teamSlug: input.teamSlug, accountId: input.accountId, endpoint: input.endpoint, bodyHash: input.bodyHash, now })) {
+        throw new OfapiProviderOperationRefused("replay_unavailable");
+      }
+      if (!parent) throw new OfapiProviderOperationRefused("replay_unavailable");
       operationId = parent.operation_id; providerKey = parent.provider_key; firstAttemptAt = new Date(parent.first_attempt_at);
     }
     for (const token of [...new Set(input.tokens)].sort()) {

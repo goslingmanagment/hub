@@ -155,21 +155,27 @@ describe("durable send-v2 provider operation custody", () => {
     expect(send.mock.calls[0]?.[5]).toBe(send.mock.calls[1]?.[5]);
     const rows = await testDb!.pool.query("select distinct operation_id,first_attempt_at from ofapi_command_provider_operations"); expect(rows.rowCount).toBe(1);
   });
-  it("refuses edited replay and reusing a single-use CDN token for another logical send", async () => {
+  it("refuses edited replay at intake, at dispatch as the belt, and reusing a single-use CDN token for another logical send", async () => {
     const send = vi.fn().mockRejectedValue(new OfapiApiError("timeout", null, null)); installedClient(send);
     const first = (await createCommand()).json().commandId; await executeOfapiCommand(appContext, first);
-    const edited = (await createCommand({ retryOfCommandId: first, payload: { ...v2Payload, text: "edited", reuseProviderOperation: true } })).json().commandId;
-    expect((await executeOfapiCommand(appContext, edited)).status).toBe("failed_terminal");
+    const edited = await createCommand({ retryOfCommandId: first, payload: { ...v2Payload, text: "edited", reuseProviderOperation: true } });
+    expect(edited.statusCode).toBe(409); expect(edited.json()).toMatchObject({ error: "provider_operation_reuse_unavailable" });
+    // Belt: a child accepted while unchanged whose retained body later differs is still refused before dispatch.
+    const child = (await createCommand({ retryOfCommandId: first, payload: { ...v2Payload, reuseProviderOperation: true } })).json().commandId;
+    await testDb!.pool.query("update ofapi_commands set payload=$2::jsonb where id=$1", [child, JSON.stringify({ ...v2Payload, text: "edited", reuseProviderOperation: true })]);
+    expect((await executeOfapiCommand(appContext, child)).status).toBe("failed_terminal");
     const another = (await createCommand()).json().commandId;
     expect((await executeOfapiCommand(appContext, another)).status).toBe("failed_terminal");
     expect(send).toHaveBeenCalledTimes(1);
   });
-  it("cannot extend the original 24h recovery window", async () => {
+  it("cannot extend the original 24h recovery window: refused at intake, and at dispatch as the belt", async () => {
     const send = vi.fn().mockRejectedValue(new OfapiApiError("timeout", null, null)); installedClient(send);
     const first = (await createCommand()).json().commandId; await executeOfapiCommand(appContext, first);
+    const child = (await createCommand({ retryOfCommandId: first, payload: { ...v2Payload, reuseProviderOperation: true } })).json().commandId;
     await testDb!.pool.query("update ofapi_command_provider_operations set first_attempt_at=clock_timestamp()-interval '25 hours' where command_id=$1", [first]);
-    const retry = (await createCommand({ retryOfCommandId: first, payload: { ...v2Payload, reuseProviderOperation: true } })).json().commandId;
-    expect((await executeOfapiCommand(appContext, retry)).status).toBe("failed_terminal"); expect(send).toHaveBeenCalledTimes(1);
+    const late = await createCommand({ retryOfCommandId: first, payload: { ...v2Payload, reuseProviderOperation: true } });
+    expect(late.statusCode).toBe(409); expect(late.json()).toMatchObject({ error: "provider_operation_reuse_unavailable" });
+    expect((await executeOfapiCommand(appContext, child)).status).toBe("failed_terminal"); expect(send).toHaveBeenCalledTimes(1);
   });
   it("enforces page scope and original command owner on manual recoveries", async () => {
     const forbidden = await createCommand({ accountId: ACCOUNT_TWO }); expect(forbidden.statusCode).toBe(404);
@@ -313,3 +319,47 @@ describe("one-use media custody release after a definite non-delivery (review #1
   });
 });
 
+describe("provider replay eligibility is decided at intake (review #138 fix 4)", () => {
+  async function unconfirmedParent() {
+    const send = vi.fn().mockRejectedValue(new OfapiApiError("timeout", null, null)); installedClient(send);
+    const parent = (await createCommand()).json().commandId;
+    expect((await executeOfapiCommand(appContext, parent)).status).toBe("indeterminate");
+    return parent;
+  }
+  const rowCount = async () => (await testDb!.pool.query("select count(*)::int n from ofapi_commands")).rows[0].n;
+
+  it.each([
+    ["window_expired", async (parent: string) => { await testDb!.pool.query("update ofapi_command_provider_operations set first_attempt_at=clock_timestamp()-interval '25 hours' where command_id=$1", [parent]); return {}; }],
+    ["body_changed", async () => ({ payload: { ...v2Payload, text: "edited", reuseProviderOperation: true } })],
+    ["team_changed", async () => { await testDb!.pool.query("update ofapi_command_provider_operations set team_slug='previous-team'"); return {}; }],
+    ["parent_operation_missing", async () => { await testDb!.pool.query("delete from ofapi_command_provider_operations"); return {}; }],
+    ["credential_not_verified", async () => { appContext.ofapi = undefined; return {}; }],
+  ])("answers 409 provider_operation_reuse_unavailable (%s) without creating a command row", async (issue, arrange) => {
+    const parent = await unconfirmedParent();
+    const before = await rowCount();
+    const extra = await arrange(parent);
+    const response = await createCommand({ retryOfCommandId: parent, payload: { ...v2Payload, reuseProviderOperation: true }, ...extra });
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({ error: "provider_operation_reuse_unavailable", message: `Provider operation cannot be reused: ${issue}`, statusCode: 409 });
+    expect(await rowCount()).toBe(before);
+    expect((await testDb!.pool.query("select state from ofapi_commands where id=$1", [parent])).rows[0].state).toBe("indeterminate");
+  });
+
+  it("an exact replay of an already-accepted recovery still dedupes to 200 after the window closes", async () => {
+    const parent = await unconfirmedParent();
+    const clientCommandId = randomUUID();
+    const accepted = await createCommand({ clientCommandId, retryOfCommandId: parent, payload: { ...v2Payload, reuseProviderOperation: true } });
+    expect(accepted.statusCode).toBe(202);
+    await testDb!.pool.query("update ofapi_command_provider_operations set first_attempt_at=clock_timestamp()-interval '25 hours' where command_id=$1", [parent]);
+    const replay = await createCommand({ clientCommandId, retryOfCommandId: parent, payload: { ...v2Payload, reuseProviderOperation: true } });
+    expect(replay.statusCode).toBe(200);
+    expect(replay.json()).toMatchObject({ commandId: accepted.json().commandId, deduplicated: true });
+  });
+
+  it("does not consult replay eligibility for a retry that declines reuse", async () => {
+    const parent = await unconfirmedParent();
+    await testDb!.pool.query("delete from ofapi_command_provider_operations");
+    const fresh = await createCommand({ retryOfCommandId: parent, payload: { ...v2Payload, reuseProviderOperation: false } });
+    expect(fresh.statusCode).toBe(202);
+  });
+});

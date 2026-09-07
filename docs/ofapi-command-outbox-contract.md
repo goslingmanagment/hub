@@ -149,6 +149,12 @@ later read workflow action is a fresh command.
 - New canonical request: `202`, `deduplicated=false`, state `queued`.
 - Exact duplicate: `200`, `deduplicated=true`, returns the existing command.
 - Reused client id with any canonical-field mismatch: `409`.
+- `send_message_v2` with `reuseProviderOperation` whose original provider operation can no
+  longer be replayed (missing; team, account, endpoint or body changed; outside its 24-hour
+  window; or the runtime credential cannot be verified right now): `409` with
+  `error = "provider_operation_reuse_unavailable"` and NO command row. The client keeps the
+  original in its unconfirmed recovery state rather than showing a failed retry. An exact replay
+  of an already-accepted recovery still dedupes to `200`. Dispatch re-checks the same rule.
 - Intake disabled: `503`.
 
 ### Read
