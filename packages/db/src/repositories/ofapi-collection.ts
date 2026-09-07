@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { sql } from "drizzle-orm";
 import { findOfapiReadDefinition, OFAPI_COLLECTION_REGISTRY, OFAPI_COLLECTION_LEGACY_OPERATIONS, classifyOfapiCollectionOperation, type OfapiCollectionCategory, type OfapiCollectionContext, type OfapiCollectionSettings } from "@agency_hub_core/shared";
 import type { Database } from "../client.ts";
+import { insertAuditEvent } from "./auth.ts";
 
 /**
  * A local refusal at the collection boundary — never a vendor or transport
@@ -114,6 +115,19 @@ export async function applyOfapiCollectionPolicy(db: Database, input: OfapiColle
       on conflict(scope_key,category) do update set settings=excluded.settings,revision=excluded.revision,actor_user_id=excluded.actor_user_id,updated_at=now()`);
     await database.execute(sql`update ofapi_collection_state set revision=${revision},background_paused=${input.backgroundPaused ?? current.background_paused},updated_at=now() where id=1`);
     await database.execute(sql`insert into ofapi_collection_audit(revision,actor_user_id,changes) values(${revision},${actorUserId},${JSON.stringify(input)}::jsonb)`);
+    // Decision 43: every owner-console mutation also lands in the append-only
+    // audit_events trail, in the same transaction, as scalars only — the full
+    // change body stays in ofapi_collection_audit under the same revision.
+    for (const change of input.changes) {
+      await insertAuditEvent(database, { actorUserId, source: "api", eventType: "admin.ofapi_collection_policy_applied", platformAccountId: change.pageId,
+        metadata: { revision, pageId: change.pageId, category: change.category, mode: change.mode, action: "apply" } });
+    }
+    if (input.backgroundPaused !== undefined && input.backgroundPaused !== current.background_paused) {
+      await insertAuditEvent(database, { actorUserId, source: "api", eventType: input.backgroundPaused ? "admin.ofapi_collection_background_paused" : "admin.ofapi_collection_background_resumed",
+        metadata: { revision, action: input.backgroundPaused ? "background_pause" : "background_resume" } });
+    } else if (input.changes.length === 0) {
+      await insertAuditEvent(database, { actorUserId, source: "api", eventType: "admin.ofapi_collection_policy_applied", metadata: { revision, action: "apply" } });
+    }
     return { revision, state: "applied" as const };
   });
 }
@@ -138,11 +152,14 @@ export async function resumeOfapiCollectionJob(db: Database, id: string, expecte
     const current = await state(database, true);
     if (current.revision !== expectedRevision) throw new OfapiCollectionPolicyError("revision_conflict");
     if (current.background_paused) throw new OfapiCollectionPolicyError("background_paused");
-    const resumed = await database.execute(sql`update ofapi_collection_jobs set state='queued',reason=null,policy_revision=${current.revision + 1},updated_at=now()
-      where id=${id}::uuid and state='paused' and used_credits<max_credits and used_calls<max_calls and used_bytes<max_bytes returning id`);
-    if (!resumed.rows[0]) throw new OfapiCollectionPolicyError("job_not_resumable");
+    const resumed = await database.execute<{ id: string; page_id: string | number; category: OfapiCollectionCategory }>(sql`update ofapi_collection_jobs set state='queued',reason=null,policy_revision=${current.revision + 1},updated_at=now()
+      where id=${id}::uuid and state='paused' and used_credits<max_credits and used_calls<max_calls and used_bytes<max_bytes returning id,page_id,category`);
+    const job = resumed.rows[0];
+    if (!job) throw new OfapiCollectionPolicyError("job_not_resumable");
     await database.execute(sql`update ofapi_collection_state set revision=revision+1,updated_at=now() where id=1`);
     await database.execute(sql`insert into ofapi_collection_audit(revision,actor_user_id,changes) values(${current.revision + 1},${actorUserId},${JSON.stringify({ jobId: id, action: "resume_checkpoint" })}::jsonb)`);
+    await insertAuditEvent(database, { actorUserId, source: "api", eventType: "admin.ofapi_collection_job_resumed", platformAccountId: Number(job.page_id),
+      metadata: { revision: current.revision + 1, jobId: id, pageId: Number(job.page_id), category: job.category, action: "resume_checkpoint" } });
     return { id, state: "queued" as const, revision: current.revision + 1 };
   });
 }

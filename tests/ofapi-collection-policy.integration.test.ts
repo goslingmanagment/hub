@@ -21,6 +21,11 @@ beforeEach(async () => {
   app = createTestAppContext(testDb);
   const model = await createModel(app.db, { slug: "policy", name: "Policy" });
   pageId = (await createOnlyFansPage(app.db, { modelId: model!.id, label: "policy-of" }))!.id;
+  // Owner mutations now land in audit_events, whose actor_user_id is a users
+  // FK: the literal actor ids 1 and 2 used below must exist (identities
+  // restart on every reset, so these two accounts take exactly those ids).
+  await createUserAccount(app, { username: "actor-1", role: "team_lead", password: "synthetic-password" }, { source: "cli" });
+  await createUserAccount(app, { username: "actor-2", role: "team_lead", password: "synthetic-password" }, { source: "cli" });
 });
 const settings = (overrides: Partial<OfapiCollectionSettings> = {}): OfapiCollectionSettings => ({ pageId, category: "posts_comments", mode: "on_demand", intervalMinutes: 15, dailyCreditLimit: 2, maxCallsPerRun: 2, includeDetails: false, ...overrides });
 const admission = (overrides: Partial<Parameters<typeof reserveOfapiCollectionRequest>[1]> = {}) => reserveOfapiCollectionRequest(app.db, { pageId, operation: "ofapi_gateway_posts", requestId: randomUUID(), context: { category: "posts_comments", purpose: "interactive" }, ...overrides });
@@ -107,6 +112,10 @@ describe("OFAPI effective collection control", () => {
     await updateOfapiCollectionJob(app.db, job.id, { state: "running", bytesAdded: 10, checkpoint: { next: "kept" } });
     await applyOfapiCollectionPolicy(app.db, { expectedRevision: 1, changes: [], backgroundPaused: false }, 1);
     await expect(admission({ context })).rejects.toThrow("job_limit");
+    expect((await testDb.pool.query("select event_type, metadata from audit_events where event_type like 'admin.ofapi_collection_background_%' order by id")).rows).toEqual([
+      { event_type: "admin.ofapi_collection_background_paused", metadata: { revision: 1, action: "background_pause" } },
+      { event_type: "admin.ofapi_collection_background_resumed", metadata: { revision: 2, action: "background_resume" } },
+    ]);
     expect((await testDb.pool.query("select state from page_sync_cursors where page_id=$1 and stream='posts'", [pageId])).rows[0].state).toEqual({ cursor: "saved-123" });
     expect((await getOfapiCollectionSnapshot(app.db, null)).policies.find(row => row.category === "posts_comments")?.usage.actualCreditsToday).toBe(3);
   });
@@ -132,6 +141,15 @@ describe("OFAPI effective collection control", () => {
     expect(resumed?.checkpoint).toEqual({ offset: 100 });
     expect(Number(resumed?.max_bytes)).toBe(100); expect(Number(resumed?.used_bytes)).toBe(10);
     await admission({ context: { category: "posts_comments", purpose: "one_off", jobId: job.id } });
+    // Decision 43 (review #136): the policy flip and the resume are owner
+    // mutations, so each lands in append-only audit_events inside the same
+    // transaction — scalars only, no change bodies.
+    const audit = await testDb.pool.query<{ event_type: string; actor_user_id: string; platform_account_id: string; metadata: Record<string, unknown> }>(
+      "select event_type, actor_user_id, platform_account_id, metadata from audit_events where event_type like 'admin.ofapi_collection_%' order by id");
+    expect(audit.rows.map(row => ({ ...row, actor_user_id: Number(row.actor_user_id), platform_account_id: Number(row.platform_account_id) }))).toEqual([
+      { event_type: "admin.ofapi_collection_policy_applied", actor_user_id: 1, platform_account_id: pageId, metadata: { revision: 1, pageId, category: "posts_comments", mode: "off", action: "apply" } },
+      { event_type: "admin.ofapi_collection_job_resumed", actor_user_id: 1, platform_account_id: pageId, metadata: { revision: 2, jobId: job.id, pageId, category: "posts_comments", action: "resume_checkpoint" } },
+    ]);
   });
   it("a lost dispatch fence releases the unused category reservation", async () => {
     await applyOfapiCollectionPolicy(app.db, { expectedRevision: 0, changes: [settings()] }, 1);
