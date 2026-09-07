@@ -30,7 +30,7 @@ import {
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { createUserAccount } from "../apps/runtime/src/services/auth.ts";
 import { SyncChunkBudget } from "../apps/runtime/src/services/sync/chunk-budget.ts";
-import { fanslyDmConversationsChunk } from "../apps/runtime/src/services/sync/executor-handlers.ts";
+import { fanslyDmConversationsChunk } from "../apps/runtime/src/services/sync/fansly-dm-conversations.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,

@@ -6,6 +6,7 @@ import {
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../../bootstrap.ts";
+import type { ResolvedPageContext } from "../page-context.ts";
 
 export type SyncRateLimitScope = {
   provider: "fansly" | "onlyfans";
@@ -58,6 +59,18 @@ export function createSyncRateLimitWaiter(
 
     return waitMs;
   };
+}
+
+/** The waiter every executor chunk builds: the page's own egress key is the
+ *  rate-limit identity, so two pages sharing a proxy share a queue and two
+ *  pages that do not, do not. */
+export function createPageRateLimitWaiter(
+  app: AppContext,
+  pageContext: ResolvedPageContext,
+) {
+  return createSyncRateLimitWaiter(app, {
+    egressKey: pageContext.egressKey,
+  });
 }
 
 async function ensureProviderRateLimitProfile(

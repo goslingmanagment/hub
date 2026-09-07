@@ -46,7 +46,7 @@
   "apps/runtime/src/services/sync-control.ts": 1,
   "apps/runtime/src/services/sync-monitor.ts": 3,
   "apps/runtime/src/services/sync.ts": 5,
-  "apps/runtime/src/services/sync/executor-handlers.ts": 2,
+  "apps/runtime/src/services/sync/executor-handlers.ts": 1,
   "apps/runtime/src/services/sync/executor.ts": 23,
   "apps/runtime/src/services/sync/observability.ts": 1,
   "apps/runtime/src/services/sync/transactions.ts": 2,

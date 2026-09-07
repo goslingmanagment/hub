@@ -47,6 +47,8 @@ type FollowersReconcileProgressState = Omit<
  * G2 slice 2 proved equal to the array in production; `observedCount` is the
  * persisted count the sweep maintains against it.
  */
+type DmConversationProviderTotalMode = "unobserved" | "absent" | "present";
+
 type DmConversationCursorState = {
   version: 2;
   mode: "full_scan";
@@ -54,7 +56,7 @@ type DmConversationCursorState = {
   offset: number;
   observedCount: number;
   pageCount: number;
-  providerTotalMode: "unobserved" | "absent" | "present";
+  providerTotalMode: DmConversationProviderTotalMode;
   providerReportedTotal: number | null;
   unchangedPageStreak: number;
   fullSweepStartedAt: string;
@@ -115,13 +117,17 @@ type TopSpendersCursorState = {
   lastWindowEndedAt: string | null;
 };
 
-function asRecord(value: unknown) {
+// The raw checkpoint-record readers. Exported because a handler that opens a
+// FRESH sweep still has to read a couple of fields straight off the stored
+// record (the parser refused it, so there is no typed state to read them from)
+// — one definition, here, next to the shapes they read.
+export function asRecord(value: unknown) {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? value as Record<string, unknown>
     : null;
 }
 
-function asNumber(value: unknown) {
+export function asNumber(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
@@ -129,7 +135,7 @@ function asNullableNumber(value: unknown) {
   return value === null ? null : asNumber(value);
 }
 
-function asNullableString(value: unknown) {
+export function asNullableString(value: unknown) {
   return value === null || typeof value === "string" ? value : null;
 }
 
@@ -414,6 +420,164 @@ export function isUnresumableLegacyDmConversationCursorState(value: unknown) {
     asNumber(state.observedCount) === null;
 }
 
+/**
+ * The dm_conversations sweep as the HANDLER holds it: one tagged union over the
+ * two documents this stream persists. The tag lives in memory ONLY — the JSON
+ * in `page_sync_cursors.state` is unchanged to the byte, because a rolled-back
+ * binary parses that JSON with the pre-union reader and an added or renamed key
+ * would strand it (the `mode`-presence test below is exactly what the old
+ * reader keys off).
+ *
+ *   in_progress — `mode: "full_scan"`, a resumable cursor;
+ *   completed   — no `mode` at all, which is what makes the next chunk open a
+ *                 FRESH sweep under a higher generation instead of resuming a
+ *                 finished one.
+ *
+ * `unchangedPageStreak` stays in the persisted in-progress document as it
+ * always was, even though nothing reads it back yet.
+ */
+type DmConversationSweepInProgressState = {
+  kind: "in_progress";
+  generation: number;
+  offset: number;
+  observedCount: number;
+  pageCount: number;
+  providerTotalMode: DmConversationProviderTotalMode;
+  providerReportedTotal: number | null;
+  unchangedPageStreak: number;
+  fullSweepStartedAt: string;
+  lastFullSweepCompletedAt: string | null;
+};
+
+type DmConversationSweepCompletedState = {
+  kind: "completed";
+  generation: number;
+  observedCount: number;
+  generationSetCount: number;
+  providerTotalMode: DmConversationProviderTotalMode;
+  providerReportedTotal: number | null;
+  destructiveFinalization: boolean;
+  membershipCertified: boolean;
+  /** Serialized ONLY when non-null — the completed document omits the key
+   *  entirely otherwise, which is what it has always done. */
+  erasureDelta: number | null;
+  lastFullSweepCompletedAt: string | null;
+};
+
+type DmConversationSweepState =
+  | DmConversationSweepInProgressState
+  | DmConversationSweepCompletedState;
+
+function parseCompletedDmConversationSweepState(
+  value: unknown,
+): DmConversationSweepCompletedState | null {
+  const state = asRecord(value);
+  // No `mode` — not "some other mode": an unknown mode is a shape this codec
+  // does not know, and guessing at it is how a sweep resumes a cursor that
+  // means something else.
+  if (!state || asNumber(state.version) !== 2 || state.mode !== undefined) {
+    return null;
+  }
+
+  const generation = asNumber(state.generation);
+  const observedCount = asNumber(state.observedCount);
+  const generationSetCount = asNumber(state.generationSetCount);
+  const providerReportedTotal = asNullableNumber(state.providerReportedTotal);
+  const lastFullSweepCompletedAt = asNullableString(state.lastFullSweepCompletedAt);
+  const providerTotalMode = state.providerTotalMode === "unobserved" ||
+      state.providerTotalMode === "absent" || state.providerTotalMode === "present"
+    ? state.providerTotalMode
+    : null;
+  const erasureDelta = state.erasureDelta === undefined ? null : asNumber(state.erasureDelta);
+  if (
+    generation === null ||
+    observedCount === null ||
+    generationSetCount === null ||
+    providerTotalMode === null ||
+    (providerReportedTotal === null && state.providerReportedTotal !== null) ||
+    typeof state.destructiveFinalization !== "boolean" ||
+    typeof state.membershipCertified !== "boolean" ||
+    (state.erasureDelta !== undefined && erasureDelta === null)
+  ) {
+    return null;
+  }
+
+  return {
+    kind: "completed",
+    generation,
+    observedCount,
+    generationSetCount,
+    providerTotalMode,
+    providerReportedTotal,
+    destructiveFinalization: state.destructiveFinalization,
+    membershipCertified: state.membershipCertified,
+    erasureDelta,
+    lastFullSweepCompletedAt,
+  };
+}
+
+/**
+ * Parses BOTH persisted forms. The in-progress arm delegates to
+ * parseDmConversationCursorState, so the v1 → v2 migration and every refusal it
+ * encodes apply unchanged; only when that returns null is the completed shape
+ * tried. A record that is neither (an unknown `mode`, a version this codec does
+ * not know, a missing count) is null — the caller's fresh-sweep path.
+ */
+export function parseDmConversationSweepState(value: unknown): DmConversationSweepState | null {
+  const inProgress = parseDmConversationCursorState(value);
+  if (inProgress) {
+    const { version: _version, mode: _mode, ...rest } = inProgress;
+    return { kind: "in_progress", ...rest };
+  }
+
+  return parseCompletedDmConversationSweepState(value);
+}
+
+/**
+ * The inverse: the exact JSON document each form has always written.
+ *
+ * `generationSetCount` on an in-progress write is TELEMETRY, not cursor state —
+ * the mid-sweep progress write rides it along so summarizeCheckpoint can carry
+ * it into the bounded projection, and parseDmConversationCursorState drops it on
+ * resume. It is a parameter rather than a union field for that reason: the two
+ * checkpoint writes that open a sweep (fresh init, restart) do not carry one,
+ * and must keep not carrying one.
+ */
+export function serializeDmConversationSweepState(
+  state: DmConversationSweepState,
+  telemetry?: { generationSetCount: number },
+): Record<string, unknown> {
+  if (state.kind === "completed") {
+    return {
+      version: 2,
+      generation: state.generation,
+      observedCount: state.observedCount,
+      generationSetCount: state.generationSetCount,
+      providerTotalMode: state.providerTotalMode,
+      providerReportedTotal: state.providerReportedTotal,
+      destructiveFinalization: state.destructiveFinalization,
+      membershipCertified: state.membershipCertified,
+      lastFullSweepCompletedAt: state.lastFullSweepCompletedAt,
+      ...(state.erasureDelta === null ? {} : { erasureDelta: state.erasureDelta }),
+    };
+  }
+
+  return {
+    version: 2,
+    mode: "full_scan",
+    generation: state.generation,
+    offset: state.offset,
+    observedCount: state.observedCount,
+    pageCount: state.pageCount,
+    providerTotalMode: state.providerTotalMode,
+    providerReportedTotal: state.providerReportedTotal,
+    unchangedPageStreak: state.unchangedPageStreak,
+    fullSweepStartedAt: state.fullSweepStartedAt,
+    lastFullSweepCompletedAt: state.lastFullSweepCompletedAt,
+    ...(telemetry === undefined ? {} : { generationSetCount: telemetry.generationSetCount }),
+  };
+}
+
 export function parseOfapiDmConversationCursorState(value: unknown): OfapiDmConversationCursorState | null {
   const state = asRecord(value);
   if (!state || asNumber(state.version) !== 1 || state.mode !== "ofapi") {
@@ -632,6 +796,10 @@ export function parseTopSpendersCursorState(value: unknown): TopSpendersCursorSt
 
 export type {
   DmConversationCursorState,
+  DmConversationProviderTotalMode,
+  DmConversationSweepCompletedState,
+  DmConversationSweepInProgressState,
+  DmConversationSweepState,
   DmMessagesCursorState,
   FollowersCursorState,
   FollowersReconcileCursorState,

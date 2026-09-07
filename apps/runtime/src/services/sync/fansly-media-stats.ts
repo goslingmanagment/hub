@@ -141,7 +141,6 @@ import { CAPTURE_COVERAGE_PLANES } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
 import { loadEffectiveConfig } from "../effective-config.ts";
-import { isPageAllowlisted } from "../voice-notes.ts";
 import { composeRequestObservers } from "./chunk-budget.ts";
 import type { ExecutorRequestContext, StreamChunkResult } from "./executor-handlers.ts";
 import {
@@ -161,6 +160,7 @@ import {
   spreadFanslyContinuation,
   writeFanslyLaneCoverage,
 } from "./fansly-lane.ts";
+import { isPageAllowlisted } from "./fansly-stream-gate.ts";
 import { summarizeCheckpoint } from "./observability.ts";
 import { createSyncRateLimitWaiter } from "./rate-limiter.ts";
 import { retentionDate } from "./shared.ts";

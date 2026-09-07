@@ -1341,6 +1341,10 @@ export async function getPageDmSyncCoverage(
     `),
   ]);
 
+  // A raw read of the dm_conversations checkpoint document. Its shape is
+  // defined by apps/runtime/src/services/sync/cursor-state.ts (the completed
+  // form of DmConversationSweepState); `lastFullSweepCompletedAt` is the one
+  // field this coverage view takes from it, and only a certified sweep sets it.
   const checkpointState = conversationCheckpoint?.state as Record<string, unknown> | undefined;
   return {
     lastConversationChunkSucceededAt: conversationState?.succeededAt ?? null,

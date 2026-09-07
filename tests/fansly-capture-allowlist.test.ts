@@ -311,6 +311,13 @@ describe("the three journaling call sites", () => {
       path.resolve("apps/runtime/src/services/sync/executor-handlers.ts"),
       "utf8",
     );
+    // The dm_conversations sweep moved to its own module; the follower lanes
+    // stayed. Both call sites are still pinned, just in the files that hold
+    // them now.
+    const conversationSource = readFileSync(
+      path.resolve("apps/runtime/src/services/sync/fansly-dm-conversations.ts"),
+      "utf8",
+    );
     const follower = [...source.matchAll(
       /responsePayload: trimFanslyFollowerPayload\(page\.raw\),\s*\n\s*mapperVersion: (\w+),/g,
     )];
@@ -319,7 +326,7 @@ describe("the three journaling call sites", () => {
     for (const match of follower) {
       expect(match[1]).toBe("FANSLY_FOLLOWERS_CAPTURE_MAPPER_VERSION");
     }
-    const groups = [...source.matchAll(
+    const groups = [...conversationSource.matchAll(
       /responsePayload: trimFanslyMessagingGroupsPayload\(page\.raw\),\s*\n\s*mapperVersion: (\w+),/g,
     )];
     expect(groups).toHaveLength(1);
@@ -327,9 +334,11 @@ describe("the three journaling call sites", () => {
 
     // …and the shared constant is NOT bumped for these lanes: it is read by
     // every Fansly writer, so bumping it would re-label unrelated captures.
-    expect(source).not.toMatch(
-      /trimFansly(Follower|MessagingGroups)Payload\(page\.raw\),\s*\n\s*mapperVersion: FANSLY_MAPPER_VERSION,/,
-    );
+    for (const lane of [source, conversationSource]) {
+      expect(lane).not.toMatch(
+        /trimFansly(Follower|MessagingGroups)Payload\(page\.raw\),\s*\n\s*mapperVersion: FANSLY_MAPPER_VERSION,/,
+      );
+    }
   });
 });
 
@@ -352,6 +361,7 @@ describe("[A20] negative pins: no byte ceiling exists, anywhere", () => {
     const captureSources = [
       "apps/runtime/src/services/sync/shared.ts",
       "apps/runtime/src/services/sync/executor-handlers.ts",
+      "apps/runtime/src/services/sync/fansly-dm-conversations.ts",
       "packages/db/src/repositories/sync.ts",
     ];
     for (const relative of captureSources) {
