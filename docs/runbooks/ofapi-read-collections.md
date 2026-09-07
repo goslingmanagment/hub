@@ -172,3 +172,31 @@ Validation: targeted `ofapi-user-list-reads`, `ofapi-read-coverage`, `ofapi-read
 Settings → Collect → Events and recovery → Provider event catalog reads the last retained catalog response. “Обновить каталог · бесплатно” dispatches exactly one `GET /api/webhooks/events`, captures its response as `ofapi_webhook_event_catalog`, and exposes event name/description, current requested membership, Hub support and optional group. The GET diagnostics endpoint is DB-only. New provider events stay unrequested; neither refresh nor UI polling changes registration or policy. Invalid/duplicate identities retain their raw response and display `invalid`, instead of replacing uncertainty with a successful empty catalog.
 
 The [live endpoint](https://docs.onlyfansapi.com/api-reference/webhooks/list-available-events) documents no query parameters, a `data` array of `{value,description}`, and zero credits. Its illustrative response contains only 13 names despite the separate 32-event catalog; the code accepts the returned inventory rather than using that example as an authoritative fixed event set. Zero-cost fallback remains unestimated and diagnostics remain available with pending accounting receipts. Validation uses mocked provider responses, with exact transport, capture, owner authorization, local reread, malformed response, unknown-event and unchanged-registration regressions.
+
+## Delivery-history failure diagnostics
+
+A history scan's `errorCode` distinguishes `history_admission_failed`,
+`history_authorization_failed`, `history_response_headers_failed`,
+`history_response_body_failed`, `history_response_capture_failed`,
+`history_response_contract_failed`, `history_credit_receipt_failed` and local `history_capture_missing_failed`,
+`history_parse_failed`, `history_window_failed`, `history_persistence_failed`.
+Vendor HTTP failures keep their existing HTTP code. The structured
+`OFAPI delivery history scan paused` warning adds the stage, safe cause name/code
+and, for the admin GET, response status plus elapsed time and the configured HTTP
+timeout. Elapsed time starts before admission; it is not proof of HTTP duration.
+Partial body bytes are not counted because this admin read still uses `text()`.
+No URLs, SQL, raw errors, headers or payloads are copied into diagnostics.
+
+Only the free `ofapi_webhook_deliveries` GET uses a 60-second HTTP deadline;
+other admin reads and mutations retain 15 seconds. Page size stays at 100 and
+the scan lease at two minutes. The same scan window, offset, existing facts and
+five-minute polling rule remain unchanged. A successful HTTP ledger receipt is downstream of durable response
+capture; its presence helps distinguish a later local parse/window/persistence
+failure from a request that never reached durable capture. Do not infer failure
+cause from the timing of an unrelated canonicalization log.
+
+On 2026-09-07, the owner-triggered free history scan completed its local API
+request in 16,075 ms with a failed scan, and repeated automatic polls reported
+only `provider_outcome_unknown`. The previous HTTP deadline was 15 seconds.
+This supports a timeout hypothesis; the old logs do not prove it. Use the new
+stage/cause fields and subsequent capture progress to verify the next pass.

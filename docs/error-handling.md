@@ -455,3 +455,5 @@ returns 503 without HTTP; timeout, 5xx or an unproven successful response retain
 indeterminate outcome. Confirmed HTTP acceptance never asserts campaign delivery
 or money transfer. Retained response repair cannot redispatch the request.
 Encrypted commands/responses never enter audit metadata or error messages.
+
+Delivery-history GET diagnostics distinguish admission, authorization, response headers/body, durable capture and response contract failures. Local scan failures use `history_<stage>_failed` for missing capture, parsing, window validation or persistence; vendor HTTP refusals retain `vendor_http_<status>`. Only fixed machine fields cross into scan state/logs, with no raw error, SQL, URL, headers or payload. The free `ofapi_webhook_deliveries` GET uses a 60-second HTTP deadline; other admin requests keep 15 seconds. This does not change polling cadence or retry any write.
