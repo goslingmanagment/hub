@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { sql } from "drizzle-orm";
-import { findOfapiReadDefinition, OFAPI_COLLECTION_REGISTRY, OFAPI_COLLECTION_LEGACY_OPERATIONS, classifyOfapiCollectionOperation, type OfapiCollectionCategory, type OfapiCollectionContext, type OfapiCollectionSettings } from "@agency_hub_core/shared";
+import { findOfapiReadDefinition, OFAPI_COLLECTION_REGISTRY, OFAPI_COLLECTION_LEGACY_OPERATIONS, OFAPI_SCHEDULED_READ_COLLECTION_CATEGORIES, classifyOfapiCollectionOperation, type OfapiCollectionCategory, type OfapiCollectionContext, type OfapiCollectionSettings } from "@agency_hub_core/shared";
 import type { Database } from "../client.ts";
 import { insertAuditEvent } from "./auth.ts";
 import { findOfapiCollectionCaptureJob, hashOfapiCaptureValue } from "./ofapi-capture.ts";
@@ -182,6 +182,45 @@ export async function resumeOfapiCollectionJob(db: Database, id: string, expecte
   });
 }
 
+/** Uses the outer row alias `job`; a policy pause may still have an in-flight worker. */
+function finishableReadJob() {
+  return sql`job.state='paused' and job.purpose='background'
+    and job.category in (${sql.join(OFAPI_SCHEDULED_READ_COLLECTION_CATEGORIES.map(category => sql`${category}`), sql`,`)})
+    and coalesce(job.target->>'executor','read')='read'
+    and (job.lease_until is null or job.lease_until<=now())
+    and not exists(select 1 from ofapi_capture_jobs capture join ofapi_request_attempts attempt on attempt.capture_job_id=capture.id
+      where capture.kind='collection_read' and capture.page_id=job.page_id
+        and capture.target->>'collectionJobId'=job.id::text and attempt.state in ('reserved','dispatching'))`;
+}
+
+/** Owner closes incomplete periodic work locally; all captured facts and uncertain charges remain authoritative. */
+export async function finishIncompleteOfapiCollectionJob(db: Database, input: {
+  id: string; pageId: number; expectedRevision: number; expectedState: "paused"; reason: string;
+}, actorUserId: number) {
+  return db.transaction(async tx => {
+    const database = tx as unknown as Database;
+    const current = await state(database, true);
+    if (current.revision !== input.expectedRevision) throw new OfapiCollectionPolicyError("revision_conflict");
+    if (input.expectedState !== "paused" || !input.reason.trim() || input.reason.length > 500)
+      throw new OfapiCollectionPolicyError("invalid_finish_request");
+    await pageExists(database, input.pageId);
+    const candidate = await database.execute<{ id: string; category: OfapiCollectionCategory; reason: string | null }>(sql`
+      select job.id,job.category,job.reason from ofapi_collection_jobs job
+      where job.id=${input.id}::uuid and job.page_id=${input.pageId} and ${finishableReadJob()} for update of job`);
+    const job = candidate.rows[0];
+    if (!job) throw new OfapiCollectionPolicyError("job_not_finishable");
+    const revision = current.revision + 1;
+    await database.execute(sql`update ofapi_collection_jobs set state='failed',reason='owner_finished_incomplete',
+      lease_token=null,lease_until=null,updated_at=now() where id=${input.id}::uuid and state=${input.expectedState}`);
+    await database.execute(sql`update ofapi_collection_state set revision=${revision},updated_at=now() where id=1`);
+    await database.execute(sql`insert into ofapi_collection_audit(revision,actor_user_id,changes)
+      values(${revision},${actorUserId},${JSON.stringify({ jobId: input.id, pageId: input.pageId, action: "finish_incomplete", previousReason: job.reason, reason: input.reason.trim() })}::jsonb)`);
+    await insertAuditEvent(database, { actorUserId, source: "api", eventType: "admin.ofapi_collection_job_finished_incomplete", platformAccountId: input.pageId,
+      metadata: { revision, jobId: input.id, pageId: input.pageId, category: job.category, action: "finish_incomplete" } });
+    return { id: input.id, state: "failed" as const, revision };
+  });
+}
+
 /** Exhausted work can finish an already paid current step; this grants no new allowance. */
 async function hasCapturedCollectionCheckpoint(db: Database, job: NonNullable<Awaited<ReturnType<typeof getOfapiCollectionJob>>>) {
   const checkpoint = job.checkpoint;
@@ -320,12 +359,13 @@ export async function getOfapiCollectionSnapshot(db: Database, allowedPageIds: n
     policies.push({ ...policy, usage: { callsToday: Number(row.calls), reservedCreditsToday: Number(row.reserved), actualCreditsToday: row.actual === null ? null : Number(row.actual), credits30d: Number(row.month_credits) }, lastCapturedAt: row.captured ? new Date(row.captured).toISOString() : null, inFlight: Number(row.inflight) });
   }
   const ids = pages.map(page => page.id);
-  const jobs = await db.execute<{ id: string; page_id: string; category: OfapiCollectionCategory; state: string; max_credits: string; max_calls: number; max_bytes: string; used_credits: string; used_calls: number; used_bytes: string; created_at: Date; reason: string | null }>(sql`
-    select * from ofapi_collection_jobs where ${ids.length ? sql`page_id in (${sql.join(ids.map(id => sql`${id}`), sql`,`)})` : sql`false`} order by created_at desc limit 100`);
+  const jobs = await db.execute<{ id: string; page_id: string; category: OfapiCollectionCategory; state: string; max_credits: string; max_calls: number; max_bytes: string; used_credits: string; used_calls: number; used_bytes: string; created_at: Date; reason: string | null; can_finish_incomplete: boolean }>(sql`
+    select job.*,(${allowedPageIds === null} and ${finishableReadJob()}) as can_finish_incomplete from ofapi_collection_jobs job
+    where ${ids.length ? sql`job.page_id in (${sql.join(ids.map(id => sql`${id}`), sql`,`)})` : sql`false`} order by job.created_at desc limit 100`);
   // Global mutation history reveals page names/IDs; only the owner sees it.
   const audit = allowedPageIds === null ? await db.execute<{ revision: number; actor_user_id: string; changes: unknown; created_at: Date }>(sql`select * from ofapi_collection_audit order by revision desc limit 50`) : { rows: [] };
   return { revision: current.revision, backgroundPaused: current.background_paused, catalog: OFAPI_COLLECTION_REGISTRY.map(row => ({ ...row, modes: [...row.modes] })), pages, policies,
-    jobs: jobs.rows.map(row => ({ id: row.id, pageId: Number(row.page_id), category: row.category, state: row.state, maxCredits: Number(row.max_credits), maxCalls: row.max_calls, maxBytes: Number(row.max_bytes), usedCredits: Number(row.used_credits), usedCalls: row.used_calls, usedBytes: Number(row.used_bytes), createdAt: new Date(row.created_at).toISOString(), reason: row.reason })),
+    jobs: jobs.rows.map(row => ({ id: row.id, pageId: Number(row.page_id), category: row.category, state: row.state, maxCredits: Number(row.max_credits), maxCalls: row.max_calls, maxBytes: Number(row.max_bytes), usedCredits: Number(row.used_credits), usedCalls: row.used_calls, usedBytes: Number(row.used_bytes), createdAt: new Date(row.created_at).toISOString(), reason: row.reason, canFinishIncomplete: row.can_finish_incomplete })),
     audit: audit.rows.map(row => ({ revision: row.revision, actorUserId: Number(row.actor_user_id), createdAt: new Date(row.created_at).toISOString(), changes: row.changes })),
     limitDescription: "Limits apply to new managed physical requests. Vendor events, external clients, accepted operations and variable prices can charge separately. Legacy operations retain existing configuration until a category policy is applied." };
 }

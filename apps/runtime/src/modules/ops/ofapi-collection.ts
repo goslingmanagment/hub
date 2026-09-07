@@ -1,6 +1,6 @@
 import { OFAPI_COLLECTION_REGISTRY } from "@agency_hub_core/shared";
 import { ofapiCollectionRouteSchemas } from "@agency_hub_core/contracts";
-import { applyOfapiCollectionPolicy, createOfapiCollectionJob, getOfapiCollectionSnapshot, OfapiCollectionPolicyError, previewOfapiCollectionPolicy, resumeOfapiCollectionJob } from "@agency_hub_core/db";
+import { applyOfapiCollectionPolicy, createOfapiCollectionJob, finishIncompleteOfapiCollectionJob, getOfapiCollectionSnapshot, OfapiCollectionPolicyError, previewOfapiCollectionPolicy, resumeOfapiCollectionJob } from "@agency_hub_core/db";
 import { canAccessPage, requireDashboardUser, requireOwner } from "../../services/auth.ts";
 import { BadRequestError, ConflictError, ForbiddenError } from "../../services/errors.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
@@ -9,6 +9,7 @@ async function policyResult<T>(action: () => Promise<T>): Promise<T> {
   try { return await action(); } catch (error) {
     if (!(error instanceof OfapiCollectionPolicyError)) throw error;
     if (error.reason === "revision_conflict") throw new ConflictError("Collection policy changed in another session. Reload and preview again.");
+    if (error.reason === "job_not_finishable") throw new ConflictError("Only an idle paused scheduled read can be finished. Reload the collection status.");
     throw new BadRequestError(error.message);
   }
 }
@@ -41,5 +42,11 @@ export function registerOfapiCollectionRoutes(server: ApiServer, ctx: ApiModuleC
     const job = await policyResult(() => resumeOfapiCollectionJob(app.db, request.params.id, request.body.expectedRevision, principal.user.id));
     await boss?.send("ofapi.collection.run", { jobId: job.id }, { singletonKey: job.id, retryLimit: 0 });
     return job;
+  });
+  server.post("/api/v1/admin/ofapi/collection/jobs/:id/finish-incomplete", { schema: ofapiCollectionRouteSchemas.ofapiCollectionJobFinishIncomplete }, async request => {
+    const principal = await requirePrincipal(request); requireOwner(principal);
+    if (!canAccessPage(principal, request.body.pageId)) throw new ForbiddenError();
+    // Local lifecycle action only: do not enqueue work or reconcile an uncertain charge.
+    return policyResult(() => finishIncompleteOfapiCollectionJob(app.db, { id: request.params.id, ...request.body }, principal.user.id));
   });
 }

@@ -80,6 +80,25 @@ transport/cause fields to distinguish an abort from a socket failure. Missing
 diagnostics on older receipts remain unknown. These diagnostics do not change
 timeouts, limits, accounting certainty or retry authorization.
 
+## Finish an incomplete scheduled read
+
+When a paused periodic GET cannot usefully resume (for example, a retained `404`
+or an uncertain body-read failure), the owner can choose **Завершить неполный
+проход** in Collection. Confirm the page and category. The confirmation explains
+that data, the saved cursor and uncertain charges remain, and the next run follows
+the enabled schedule. The action marks only the outer run `failed`; it does not
+claim complete coverage, resolve an unknown charge, dispatch a request, reset a
+cap or move the schedule deadline. The original stop reason remains in the audit.
+
+The SDK operation is `ofapiCollectionJobFinishIncomplete`, or
+`POST /api/v1/admin/ofapi/collection/jobs/{id}/finish-incomplete`, with the current
+`expectedRevision`, `expectedState:"paused"`, matching `pageId` and an owner
+`reason`. A stale revision/state returns `409`; reload before another action.
+Only paused background runs in the eight closed GET categories are eligible,
+with no active worker lease or reserved/dispatching capture attempt. One-offs,
+baseline sync, exports and uploads retain their own recovery paths. Global pause
+and category-off settings continue to prevent the next scheduled dispatch.
+
 ## Exact GET catalog
 
 Query names, limits, response families and category/detail flags live in `packages/shared/src/ofapi-read-catalog.ts` and are returned by the SDK catalog. Every request rejects unknown keys. IDs remain strings, including values above JavaScript's safe integer range.

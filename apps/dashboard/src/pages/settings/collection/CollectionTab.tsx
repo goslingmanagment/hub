@@ -11,6 +11,7 @@ import {
   useOfapiCollectionApply,
   useOfapiCollectionJobCreate,
   useOfapiCollectionJobResume,
+  useOfapiCollectionJobFinishIncomplete,
   useOfapiCollectionPreview,
   type OfapiCollectionCategory,
   type OfapiCollectionChangeBody,
@@ -1206,14 +1207,16 @@ function SideBox(props: { title: string; children: ReactNode }) {
   );
 }
 
-function JobsCard(props: { snapshot: OfapiCollectionSnapshot; scope: CollectionScope }) {
+export function JobsCard(props: { snapshot: OfapiCollectionSnapshot; scope: CollectionScope }) {
   const resume = useOfapiCollectionJobResume();
+  const finish = useOfapiCollectionJobFinishIncomplete();
+  const [finishPreview, setFinishPreview] = useState<{ job: OfapiCollectionJob; revision: number } | null>(null);
   const jobs = jobsFor(props.snapshot, props.scope);
   if (jobs.length === 0) return null;
   return (
     <section className={cardClass} aria-labelledby="collection-jobs-heading">
       <div className="flex items-baseline justify-between gap-3 px-4 pt-3.5">
-        <h3 id="collection-jobs-heading" className={eyebrowClass}>Разовые задачи</h3>
+        <h3 id="collection-jobs-heading" className={eyebrowClass}>Проходы сбора и разовые задачи</h3>
         {resume.isError && <p role="alert" className="text-[12px] text-red-700">{errorMessage(resume.error, "Не удалось продолжить задачу")}</p>}
         <span className="text-[12px] text-text-secondary">{jobs.length} {ruPlural(jobs.length, "задача", "задачи", "задач")} · потолки на каждую</span>
       </div>
@@ -1237,6 +1240,10 @@ function JobsCard(props: { snapshot: OfapiCollectionSnapshot; scope: CollectionS
                   <span className="font-medium text-text-primary">{jobStateLabel(job.state)}</span>
                   {job.reason && <div className="mt-0.5 text-[11px] text-text-muted">{job.reason}</div>}
                   {job.category === "vault_files" ? <Link className={smallButtonClass} to="/ofapi-media">Открыть загрузку</Link> : ["paused", "blocked", "budget_exhausted"].includes(job.state) && <button type="button" className={smallButtonClass} disabled={resume.isPending || props.snapshot.backgroundPaused} onClick={() => resume.mutate({ id: job.id, expectedRevision: props.snapshot.revision })}>Продолжить с чекпоинта</button>}
+                  {job.canFinishIncomplete && <button type="button" className={smallButtonClass} disabled={resume.isPending || finish.isPending} onClick={() => {
+                    finish.reset();
+                    setFinishPreview({ job, revision: props.snapshot.revision });
+                  }}>Завершить неполный проход</button>}
                 </td>
                 <td className={`${tdClass} tabular-nums`}>{jobProgress(job)}</td>
                 <td className={`${tdClass} tabular-nums`}>{utcDateTime(job.createdAt)}</td>
@@ -1245,8 +1252,33 @@ function JobsCard(props: { snapshot: OfapiCollectionSnapshot; scope: CollectionS
           </tbody>
         </table>
       </div>
+      {finishPreview && <FinishIncompleteRunModal job={finishPreview.job} pageLabel={scopeLabel(finishPreview.job.pageId, props.snapshot.pages)}
+        pending={finish.isPending} error={finish.isError ? errorMessage(finish.error, "Не удалось завершить проход") : null}
+        onClose={() => { if (!finish.isPending) setFinishPreview(null); }}
+        onConfirm={() => finish.mutate({ params: { id: finishPreview.job.id }, body: {
+          pageId: finishPreview.job.pageId, expectedRevision: finishPreview.revision, expectedState: "paused",
+          reason: "Owner finished an incomplete scheduled read after reviewing its retained state",
+        } }, { onSuccess: () => {
+          setFinishPreview(null);
+          toast.success("Неполный проход завершён. Данные и учёт списаний сохранены.");
+        } })} />}
     </section>
   );
+}
+
+export function FinishIncompleteRunModal(props: {
+  job: OfapiCollectionJob; pageLabel: string; pending: boolean; error: string | null;
+  onClose: () => void; onConfirm: () => void;
+}) {
+  return <ModalShell title="Завершить неполный проход?" onClose={props.onClose}>
+    <p className="text-sm text-text-primary">{categoryLabel(props.job.category)} · {props.pageLabel}</p>
+    <p className="mt-3 text-sm text-text-secondary">Сохранённые данные, курсор и учёт неподтверждённых списаний останутся. Этот проход завершится как неполный. Новых запросов сейчас не будет; следующий проход начнётся по штатному расписанию, если сбор включён.</p>
+    {props.error && <p role="alert" className="mt-3 text-sm text-red-700">{props.error}</p>}
+    <div className="mt-5 flex justify-end gap-2">
+      <button type="button" className={buttonClass} disabled={props.pending} onClick={props.onClose}>Оставить на паузе</button>
+      <button type="button" className={primaryButtonClass} disabled={props.pending} onClick={props.onConfirm}>{props.pending ? "Завершаем…" : "Завершить неполный проход"}</button>
+    </div>
+  </ModalShell>;
 }
 
 function WebhookCard() {

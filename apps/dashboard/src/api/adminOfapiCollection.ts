@@ -87,3 +87,12 @@ export function useOfapiCollectionJobResume() {
     onSettled: () => qc.invalidateQueries({ queryKey: OFAPI_COLLECTION_QUERY_KEY }),
   });
 }
+
+export function useOfapiCollectionJobFinishIncomplete() {
+  const qc = useQueryClient();
+  return useMutation({
+    meta: { suppressGlobalError: true },
+    mutationFn: (input: Parameters<typeof kernel.ofapiCollectionJobFinishIncomplete>[0]) => kernel.ofapiCollectionJobFinishIncomplete(input),
+    onSettled: () => qc.invalidateQueries({ queryKey: OFAPI_COLLECTION_QUERY_KEY }),
+  });
+}

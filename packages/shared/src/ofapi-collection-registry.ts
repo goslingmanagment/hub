@@ -5,6 +5,11 @@ export const OFAPI_COLLECTION_CATEGORIES = [
   "profile_notifications", "content_history",
 ] as const;
 export type OfapiCollectionCategory = typeof OFAPI_COLLECTION_CATEGORIES[number];
+/** Closed periodic GET executors; uploads, exports and baseline sync use other lifecycles. */
+export const OFAPI_SCHEDULED_READ_COLLECTION_CATEGORIES: readonly OfapiCollectionCategory[] = [
+  "posts_comments", "visitors", "tracking_links", "smart_links", "vault_catalog",
+  "balances", "profile_notifications", "content_history",
+];
 export type OfapiCollectionMode = "off" | "on_demand" | "scheduled";
 export type OfapiCollectionPurpose = "background" | "interactive" | "one_off";
 export interface OfapiCollectionContext {
