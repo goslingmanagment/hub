@@ -366,6 +366,14 @@ page-attributed. Other commands use normal OFAPI response credit observation.
 The stored error surface is a bounded code/class/status only. Raw vendor bodies and payload text
 are not persisted in command outcome metadata.
 
+One-use `ofapi_media_*` custody (migration `0160`, fence `0168`) follows the same verdicts
+(migration `0170`): it is RELEASED — marked `released_at`/`released_reason`, never deleted —
+only when the material was definitely not spent: a local pre-dispatch refusal (no HTTP), a
+definite `4xx` rejection other than `408`/`429`, or a queued row cancelled/expired before
+dispatch. Indeterminate, `5xx`, `429` and confirmed outcomes keep the reservation, and a reuse
+child never releases the reservation it inherited from its parent. A released token is free for
+a new command, an owner action or a handoff; the next claim re-arms the same row and fence.
+
 ### Webhook Verification
 
 A settled `messages.sent` event may confirm `send_text_message_v1` or `send_media_message_v1`

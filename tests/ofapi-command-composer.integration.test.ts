@@ -5,6 +5,8 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import {
   createModel,
   createOnlyFansPage,
+  isOfapiMediaTokenReserved,
+  releaseOfapiMediaTokenCustody,
   setPageOfapiAccountId,
   reserveOfapiProviderOperation,
 } from "@agency_hub_core/db";
@@ -17,8 +19,9 @@ import {
 } from "../apps/runtime/src/services/auth.ts";
 import {
   executeOfapiCommand,
+  sweepOfapiCommands,
 } from "../apps/runtime/src/services/ofapi-command-executor.ts";
-import { OfapiApiError } from "../apps/runtime/src/services/ofapi.ts";
+import { OfapiApiError, OfapiCreditAccountingUnavailableError } from "../apps/runtime/src/services/ofapi.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
@@ -184,3 +187,129 @@ describe("durable send-v2 provider operation custody", () => {
     expect((await testDb!.pool.query("select count(*)::int n from ofapi_command_provider_operations")).rows[0].n).toBe(1);
   });
 });
+
+const custodyRows = async () => (await testDb!.pool.query("select command_id,operation_id,released_at,released_reason from ofapi_media_token_custody order by token")).rows;
+const fenceRows = async () => (await testDb!.pool.query("select operation_id,released_at,released_reason from ofapi_media_token_fences")).rows;
+const operationOf = async (commandId: string) => (await testDb!.pool.query("select operation_id from ofapi_command_provider_operations where command_id=$1", [commandId])).rows[0]?.operation_id;
+const resultObservation = async (commandId: string, state: string) => (await testDb!.pool.query("select payload from observations where kind=$2 and payload->>'commandId'=$1", [commandId, `command.${state}`])).rows[0]?.payload;
+
+describe("one-use media custody release after a definite non-delivery (review #138 fix 1)", () => {
+  it("releases custody and fence after a definite 422, journals it, and lets an edited command spend the same token", async () => {
+    const send = vi.fn().mockRejectedValueOnce(new OfapiApiError("banned word", 422, null)).mockResolvedValue({ messageId: "999" }); installedClient(send);
+    const first = (await createCommand()).json().commandId;
+    expect((await executeOfapiCommand(appContext, first)).status).toBe("failed_terminal");
+    expect(await custodyRows()).toEqual([{ command_id: first, operation_id: await operationOf(first), released_at: expect.any(Date), released_reason: "vendor_rejected_422" }]);
+    expect(await fenceRows()).toEqual([{ operation_id: await operationOf(first), released_at: expect.any(Date), released_reason: "vendor_rejected_422" }]);
+    expect(await resultObservation(first, "failed_terminal")).toMatchObject({ errorCode: "ofapi_http_422", mediaTokensReleased: 1 });
+    expect(await isOfapiMediaTokenReserved(appContext.db, ACCOUNT_ONE, "ofapi_media_token")).toBe(false);
+    const edited = (await createCommand({ payload: { ...v2Payload, text: "edited" } })).json().commandId;
+    expect((await executeOfapiCommand(appContext, edited)).status).toBe("confirmed");
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(await custodyRows()).toEqual([{ command_id: edited, operation_id: await operationOf(edited), released_at: null, released_reason: null }]);
+    expect(await fenceRows()).toEqual([{ operation_id: await operationOf(edited), released_at: null, released_reason: null }]);
+    expect(await isOfapiMediaTokenReserved(appContext.db, ACCOUNT_ONE, "ofapi_media_token")).toBe(true);
+  });
+
+  it.each([
+    ["transport timeout", new OfapiApiError("timeout", null, null), "indeterminate"],
+    ["HTTP 503", new OfapiApiError("unavailable", 503, null), "indeterminate"],
+    ["HTTP 408", new OfapiApiError("request timeout", 408, null), "indeterminate"],
+    ["HTTP 429", new OfapiApiError("throttled", 429, null), "failed_retryable"],
+  ])("keeps custody after %s (%s) so the token stays quarantined", async (_label, error, state) => {
+    const send = vi.fn().mockRejectedValue(error); installedClient(send);
+    const first = (await createCommand()).json().commandId;
+    expect((await executeOfapiCommand(appContext, first)).status).toBe(state);
+    expect(await custodyRows()).toEqual([{ command_id: first, operation_id: await operationOf(first), released_at: null, released_reason: null }]);
+    expect(await resultObservation(first, state)).not.toHaveProperty("mediaTokensReleased");
+    const next = (await createCommand({ payload: { ...v2Payload, text: "edited" } })).json().commandId;
+    expect(await executeOfapiCommand(appContext, next)).toMatchObject({ status: "failed_terminal" });
+    expect((await testDb!.pool.query("select last_error_code from ofapi_commands where id=$1", [next])).rows[0].last_error_code).toBe("ofapi_media_token_already_used");
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps custody after a confirmed send", async () => {
+    const send = vi.fn().mockResolvedValue({ messageId: "999" }); installedClient(send);
+    const first = (await createCommand()).json().commandId;
+    expect((await executeOfapiCommand(appContext, first)).status).toBe("confirmed");
+    expect(await custodyRows()).toMatchObject([{ command_id: first, released_at: null }]);
+    const next = (await createCommand({ payload: { ...v2Payload, text: "edited" } })).json().commandId;
+    expect((await executeOfapiCommand(appContext, next)).status).toBe("failed_terminal");
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it("a reuse child's definite rejection never releases the reservation it inherited from an unconfirmed parent", async () => {
+    const send = vi.fn().mockRejectedValueOnce(new OfapiApiError("timeout", null, null)).mockRejectedValueOnce(new OfapiApiError("rejected", 422, null)); installedClient(send);
+    const parent = (await createCommand()).json().commandId;
+    expect((await executeOfapiCommand(appContext, parent)).status).toBe("indeterminate");
+    const child = (await createCommand({ retryOfCommandId: parent, payload: { ...v2Payload, reuseProviderOperation: true } })).json().commandId;
+    expect((await executeOfapiCommand(appContext, child)).status).toBe("failed_terminal");
+    expect(await custodyRows()).toEqual([{ command_id: parent, operation_id: await operationOf(parent), released_at: null, released_reason: null }]);
+    expect(await resultObservation(child, "failed_terminal")).not.toHaveProperty("mediaTokensReleased");
+  });
+
+  it("releases after a local refusal that happened after reservation but before any HTTP", async () => {
+    const send = vi.fn().mockRejectedValueOnce(new OfapiCreditAccountingUnavailableError()).mockResolvedValue({ messageId: "999" }); installedClient(send);
+    const first = (await createCommand()).json().commandId;
+    expect((await executeOfapiCommand(appContext, first)).status).toBe("failed_terminal");
+    expect(await custodyRows()).toMatchObject([{ command_id: first, released_reason: "local_refusal_credit_accounting_unavailable" }]);
+    const next = (await createCommand({ payload: { ...v2Payload, text: "edited" } })).json().commandId;
+    expect((await executeOfapiCommand(appContext, next)).status).toBe("confirmed");
+  });
+
+  it("legacy media sends release on a definite 422 and re-arm on the next legacy send", async () => {
+    const send = vi.fn().mockRejectedValueOnce(new OfapiApiError("rejected", 422, null)).mockResolvedValue({ messageId: "999" }); installedClient(send);
+    appContext.ofapi!.sendMediaMessage = send;
+    const payload = { text: "Legacy media", price: 0, mediaFiles: ["ofapi_media_token"], previews: [] };
+    const first = (await createCommand({ kind: "send_media_message_v1", payload })).json().commandId;
+    expect((await executeOfapiCommand(appContext, first)).status).toBe("failed_terminal");
+    expect(await custodyRows()).toEqual([{ command_id: first, operation_id: first, released_at: expect.any(Date), released_reason: "vendor_rejected_422" }]);
+    const second = (await createCommand({ kind: "send_media_message_v1", payload })).json().commandId;
+    expect((await executeOfapiCommand(appContext, second)).status).toBe("confirmed");
+    expect(await custodyRows()).toEqual([{ command_id: second, operation_id: second, released_at: null, released_reason: null }]);
+    expect(await fenceRows()).toEqual([{ operation_id: second, released_at: null, released_reason: null }]);
+  });
+
+  it("a release racing a new reservation leaves exactly one holder and no deadlock", async () => {
+    const first = (await createCommand()).json().commandId;
+    const second = (await createCommand({ payload: { ...v2Payload, text: "edited" } })).json().commandId;
+    const common = { parentCommandId: null, reuse: false, teamSlug: "team", accountId: ACCOUNT_ONE, endpoint: "/messages", bodyHash: "h", tokens: ["ofapi_media_token"] };
+    await reserveOfapiProviderOperation(appContext.db, { ...common, commandId: first });
+    const [release, reserve] = await Promise.allSettled([
+      releaseOfapiMediaTokenCustody(appContext.db, { commandId: first, reason: "vendor_rejected_422" }),
+      reserveOfapiProviderOperation(appContext.db, { ...common, commandId: second, bodyHash: "h2" }),
+    ]);
+    expect(release.status).toBe("fulfilled");
+    if (reserve.status === "rejected") expect(reserve.reason).toMatchObject({ reason: "media_token_already_used" });
+    const live = (await custodyRows()).filter(row => row.released_at === null);
+    expect(live.length).toBeLessThanOrEqual(1);
+    if (reserve.status === "fulfilled") {
+      expect(live).toEqual([{ command_id: second, operation_id: reserve.value.operationId, released_at: null, released_reason: null }]);
+      expect(await fenceRows()).toEqual([{ operation_id: reserve.value.operationId, released_at: null, released_reason: null }]);
+    } else {
+      expect(live).toEqual([]);
+      expect(await fenceRows()).toMatchObject([{ released_reason: "vendor_rejected_422" }]);
+      const third = (await createCommand({ payload: { ...v2Payload, text: "third" } })).json().commandId;
+      const claimed = await reserveOfapiProviderOperation(appContext.db, { ...common, commandId: third, bodyHash: "h3" });
+      expect(await custodyRows()).toEqual([{ command_id: third, operation_id: claimed.operationId, released_at: null, released_reason: null }]);
+    }
+  });
+
+  it("a queued row expired by the TTL sweep or cancelled by the chatter releases any custody it holds", async () => {
+    const common = { parentCommandId: null, reuse: false, teamSlug: "team", accountId: ACCOUNT_ONE, endpoint: "/messages", bodyHash: "h", tokens: ["ofapi_media_token"] };
+    const aged = (await createCommand()).json().commandId;
+    await reserveOfapiProviderOperation(appContext.db, { ...common, commandId: aged });
+    await testDb!.pool.query("update ofapi_commands set created_at=now()-interval '11 minutes' where id=$1", [aged]);
+    await expect(sweepOfapiCommands(appContext, { send: vi.fn() } as never)).resolves.toMatchObject({ expired: 1 });
+    expect(await custodyRows()).toMatchObject([{ command_id: aged, released_reason: "expired_queued_ttl" }]);
+    expect(await resultObservation(aged, "cancelled")).toMatchObject({ errorCode: "expired_queued_ttl", mediaTokensReleased: 1 });
+
+    const cancelled = (await createCommand({ payload: { ...v2Payload, text: "edited" } })).json().commandId;
+    await reserveOfapiProviderOperation(appContext.db, { ...common, commandId: cancelled, bodyHash: "h2" });
+    expect(await custodyRows()).toMatchObject([{ command_id: cancelled, released_at: null }]);
+    const response = await apiServer!.inject({ method: "POST", url: `/api/v1/ofapi/commands/${cancelled}/cancel`, headers: { authorization: `Bearer ${chatterKey}` } });
+    expect(response.statusCode).toBe(200);
+    expect(await custodyRows()).toMatchObject([{ command_id: cancelled, released_reason: "cancelled_before_dispatch" }]);
+    expect(await fenceRows()).toMatchObject([{ released_reason: "cancelled_before_dispatch" }]);
+  });
+});
+

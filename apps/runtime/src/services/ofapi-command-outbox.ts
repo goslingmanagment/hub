@@ -6,6 +6,7 @@ import {
   createOrGetOfapiCommand,
   getOfapiCommandByIdForUser,
   listOfapiMappedPages,
+  releaseOfapiMediaTokenCustody,
   type OfapiCommandRow,
 } from "@agency_hub_core/db";
 
@@ -308,12 +309,20 @@ export async function cancelOfapiCommand(
     throw new ConflictError(`Command in state '${existing.state}' cannot be cancelled`);
   }
 
+  const now = new Date();
   const updated = await cancelQueuedOfapiCommand(app.db, {
     commandId,
     chatterUserId: principal.user.id,
-    now: new Date(),
+    now,
   });
   if (updated) {
+    // queued -> cancelled never dispatched: any one-use custody it holds
+    // (reserved only at dispatch today) is definitely unspent. Best-effort;
+    // a hiccup keeps the reservation (fail closed).
+    if (updated.kind === "send_message_v2" || updated.kind === "send_media_message_v1") {
+      await releaseOfapiMediaTokenCustody(app.db, { commandId, reason: "cancelled_before_dispatch", now })
+        .catch((error: unknown) => app.logger.error({ err: error, commandId }, "OFAPI media custody release after cancel failed — reservation stays held"));
+    }
     return toView(updated, false);
   }
 

@@ -1,5 +1,5 @@
 import { OFAPI_EXTENDED_COMMAND_KINDS, millsFromCents, type OfapiExtendedCommandKind, type OfapiExtendedCommandPayload, type OfapiSendV2Payload } from "@agency_hub_core/shared";
-import { reserveOfapiProviderOperation, reserveOfapiLegacyMediaTokens, OfapiProviderOperationRefused } from "@agency_hub_core/db";
+import { reserveOfapiProviderOperation, reserveOfapiLegacyMediaTokens, releaseOfapiMediaTokenCustody, OfapiProviderOperationRefused } from "@agency_hub_core/db";
 import { buildOfapiSendV2Body, ofapiSentWebhookMatchesV2 } from "./ofapi-command-composer.ts";
 import { createHash } from "node:crypto";
 import { OfapiKeyPermissionDeniedError } from "./ofapi-vendor-usage.ts";
@@ -131,6 +131,50 @@ export function classifyOfapiCommandFailure(error: unknown): OfapiCommandFailure
     errorClass: "indeterminate",
     httpStatus: null,
   };
+}
+
+/** Only these kinds reserve one-use `ofapi_media_*` custody at dispatch. */
+const MEDIA_CUSTODY_COMMAND_KINDS: ReadonlySet<string> = new Set(["send_message_v2", "send_media_message_v1"]);
+
+/**
+ * Migration 0170: one-use media custody is released ONLY when the vendor
+ * DEFINITELY did not consume the material — a local refusal (no HTTP happened)
+ * or a definite pre-delivery 4xx other than 408/429 as classified above.
+ * Indeterminate, 5xx, 429 and confirmed outcomes keep the reservation; a
+ * reservation refusal has nothing to release (its transaction rolled back).
+ * Returns the release reason, or null to keep custody.
+ */
+export function ofapiMediaCustodyReleaseReason(
+  localRefusal: OfapiLocalDispatchRefusal | null,
+  failure: OfapiCommandFailure,
+): string | null {
+  if (localRefusal) {
+    return localRefusal.reason === "provider_replay_unavailable" || localRefusal.reason === "media_token_already_used"
+      ? null
+      : `local_refusal_${localRefusal.reason}`;
+  }
+  if (failure.state !== "failed_terminal" || failure.httpStatus === null) return null;
+  if (failure.httpStatus < 400 || failure.httpStatus >= 500 || failure.httpStatus === 408 || failure.httpStatus === 429) return null;
+  return `vendor_rejected_${failure.httpStatus}`;
+}
+
+/** Best-effort after the terminal outcome is committed: a release hiccup keeps
+ * custody held (fail closed) and must never unsettle a settled command. */
+async function releaseCommandMediaCustody(
+  app: Pick<AppContext, "db" | "logger">,
+  command: Pick<OfapiCommandRow, "id" | "kind">,
+  reason: string,
+  now: Date,
+): Promise<number> {
+  if (!MEDIA_CUSTODY_COMMAND_KINDS.has(command.kind)) return 0;
+  try {
+    const released = await releaseOfapiMediaTokenCustody(app.db, { commandId: command.id, reason, now });
+    if (released > 0) app.logger.info({ commandId: command.id, reason, released }, "OFAPI one-use media custody released: material was definitely not spent");
+    return released;
+  } catch (error) {
+    app.logger.error({ err: error, commandId: command.id, reason }, "OFAPI media custody release failed — reservation stays held");
+    return 0;
+  }
 }
 
 export function isOfapiCommandExecutionEnabled(
@@ -630,6 +674,10 @@ async function executeCurrentOfapiCommand(
         raced: true,
       };
     }
+    // We own the terminal outcome (the webhook did not confirm a landed send):
+    // free one-use material the vendor definitely never spent.
+    const releaseReason = ofapiMediaCustodyReleaseReason(localRefusal, failure);
+    const mediaTokensReleased = releaseReason === null ? 0 : await releaseCommandMediaCustody(app, command, releaseReason, finishedAt);
     await recordCommandResultObservation(app, {
       command,
       state: failure.state,
@@ -637,6 +685,7 @@ async function executeCurrentOfapiCommand(
         errorCode: failure.errorCode,
         errorClass: failure.errorClass,
         ...failureEvidence,
+        ...(mediaTokensReleased > 0 ? { mediaTokensReleased } : {}),
       },
     });
     app.logger.warn(
@@ -675,10 +724,14 @@ export async function sweepOfapiCommands(
   });
   const expired = [...expiredTyping, ...expiredGeneral];
   for (const command of expired) {
+    // A queued row never dispatched: any one-use custody it holds (reserved
+    // only at dispatch today; this keeps the rule true if that ever moves
+    // earlier) is definitely unspent.
+    const mediaTokensReleased = await releaseCommandMediaCustody(app, command, "expired_queued_ttl", now);
     await recordCommandResultObservation(app, {
       command,
       state: "cancelled",
-      outcome: { errorCode: "expired_queued_ttl", queuedTtlMs: ttlMs },
+      outcome: { errorCode: "expired_queued_ttl", queuedTtlMs: ttlMs, ...(mediaTokensReleased > 0 ? { mediaTokensReleased } : {}) },
     });
   }
   if (expired.length > 0) {
