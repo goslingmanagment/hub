@@ -158,9 +158,11 @@ describe("OFAPI effective collection control", () => {
     // A park the policy did not cause is not the policy's to lift.
     await testDb.pool.query(`update page_sync_states set status='blocked',blocker_kind='manual_action_required',blocker_code='proxy_missing',blocker_message='proxy',blocked_at=now() where page_id=$1 and stream='transactions'`, [pageId]);
     await applyOfapiCollectionPolicy(app.db, { expectedRevision: 0, changes: [settings({ category: "core_messages" })] }, 1);
-    const rows = (await testDb.pool.query("select stream,status,blocker_code,retry_kind,retry_at<=now() as due from page_sync_states where page_id=$1 and stream in ('dm_conversations','subscribers','transactions') order by stream", [pageId])).rows;
+    const rows = (await testDb.pool.query("select stream,status,blocker_code,retry_kind,retry_at<=now() as due from page_sync_states where page_id=$1 and stream in ('dm_conversations','subscribers','transactions') order by stream::text", [pageId])).rows;
     expect(rows).toEqual([
-      { stream: "dm_conversations", status: "idle", blocker_code: null, retry_kind: null, due: null },
+      // ensurePageSyncStates seeds request_seq=1 > applied_seq=0, so the woken stream is
+      // pending (work outstanding), the same rule the operator unblock applies.
+      { stream: "dm_conversations", status: "pending", blocker_code: null, retry_kind: null, due: null },
       { stream: "subscribers", status: "retrying", blocker_code: null, retry_kind: "ofapi_collection_policy", due: true },
       { stream: "transactions", status: "blocked", blocker_code: "proxy_missing", retry_kind: null, due: null },
     ]);

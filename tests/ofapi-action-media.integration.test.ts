@@ -286,7 +286,8 @@ describe("shared owner-action media custody", () => {
       expect(await custody()).toEqual([]);
       expect((await database.pool.query("select id from ofapi_commands where id=$1", [ownerId])).rows).toEqual([]);
       expect((await database.pool.query("select id from ofapi_action_intents where id=$1", [ownerId])).rows).toEqual([]);
-      expect(await fences()).toEqual([{ token_hash: ofapiMediaTokenHash(ACCOUNT, TOKEN), operation_id: operationId }]);
+      // 0170: erasure removes custody, but the fence stays claimed and unreleased.
+      expect(await fences()).toEqual([{ token_hash: ofapiMediaTokenHash(ACCOUNT, TOKEN), operation_id: operationId, released_at: null, released_reason: null }]);
       expect(await getOfapiCaptureJob(app.db, uploadId)).toMatchObject({ state: "complete", cursor: { mediaRef: TOKEN } });
 
       await expect(handoffOfapiMedia(app, handoff, actor)).rejects.toThrow("already reserved");
