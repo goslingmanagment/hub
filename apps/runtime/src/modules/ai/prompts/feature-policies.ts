@@ -71,22 +71,30 @@ export const HI_GREETING_MAX_TRANSCRIPT = 10;
 
 export const DEFAULT_MODEL_ID = 'anthropic:claude-sonnet-4-6';
 export const DEFAULT_FAN_SUMMARY_MODEL_ID = 'anthropic:claude-opus-4-6';
+/** Decision #252 (2026-09-07): the fan-facing reply features moved to Sonnet 5
+ * at low effort. A blind pairwise judge over ~1,400 comparisons scored it at
+ * 71% wins against the Sonnet 4.6 + medium production setup (heavy emotional
+ * moments 15/1), at a lower per-token price. improve-draft, hi-greeting and
+ * voice-script delegate to fast-reply and move with it. The analysis features
+ * (help-me, chat-review, coach-chat) were not measured and stay on
+ * DEFAULT_MODEL_ID. */
+export const DEFAULT_REPLY_MODEL_ID = 'anthropic:claude-sonnet-5';
 
 export const DEFAULT_FEATURE_MODELS: Record<ModelSelectableFeature, string> = {
-  'fast-reply': DEFAULT_MODEL_ID,
+  'fast-reply': DEFAULT_REPLY_MODEL_ID,
   'help-me': DEFAULT_MODEL_ID,
   'fan-summary': DEFAULT_FAN_SUMMARY_MODEL_ID,
   'chat-review': DEFAULT_MODEL_ID,
-  'ping': DEFAULT_MODEL_ID,
+  'ping': DEFAULT_REPLY_MODEL_ID,
   'coach-chat': DEFAULT_MODEL_ID,
 };
 
 export const DEFAULT_FEATURE_REASONING: Record<ModelSelectableFeature, ReasoningEffort> = {
-  'fast-reply': 'medium',
+  'fast-reply': 'low',
   'help-me': 'medium',
   'fan-summary': 'medium',
   'chat-review': 'medium',
-  'ping': 'medium',
+  'ping': 'low',
   'coach-chat': 'medium',
 };
 

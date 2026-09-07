@@ -197,6 +197,20 @@ describe("Anthropic AI gateway request builder", () => {
     },
   );
 
+  it("builds the reply-feature default (Sonnet 5, low) as an adaptive request with no sampling params", () => {
+    const request = buildAnthropicGatewayStreamRequest(body({
+      model: "anthropic:claude-sonnet-5",
+      feature: "fast-reply",
+      reasoningEffort: "low",
+    }));
+
+    expect(request.model).toBe("claude-sonnet-5");
+    expect(request.max_tokens).toBe(8000);
+    expect(request).toHaveProperty("thinking", { type: "adaptive", display: "summarized" });
+    expect(request).toHaveProperty("output_config", { effort: "low" });
+    expect(request).not.toHaveProperty("temperature");
+  });
+
   it("keeps temperature on the 4.6 family when reasoning is off", () => {
     expect(resolveAnthropicGatewayRequestTuning({
       providerModelId: "claude-opus-4-6",

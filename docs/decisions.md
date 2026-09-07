@@ -252,7 +252,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 249 | An explicit posts request is the manual action | `POST /admin/sync/trigger {scope: posts}` — the explicit per-page operator action — now clears a `manual_action_required` block on the posts stream (`clearPageSyncManualActionBlock`, that blocker kind only) BEFORE recording the request, so the request lands on a runnable row. Production 2026-09-04: after #128's cancel/resolve the streams stayed `blocked` with the old `ofapi_capture_job_*` codes because `resumePageSync` only lifts `paused` and nothing ever cleared a manual block; the explicit request the code itself calls "an explicit per-page operator action" was a no-op on exactly the state it exists for. `provider_bad_data`/`dependency` blocks are untouched. The posts handler also forgets an owner-cancelled pending job (checkpoint still named it) and seeds a fresh one through the ordinary slot path. |
 | 250 | OFAPI UI inherits the existing Anthropic-inspired Hub design | Owner requirement for the OFAPI refresh: use the current dashboard theme, typography, spacing and shared components across collection controls and other new OFAPI screens. The concrete source is globals.css plus Settings and OFAPI Credits; token reuse and visual consistency are acceptance criteria. |
 | 251 | OFAPI collection policy and UI are separate stages | Owner separates backend S-POL from frontend S-UI, each with independent implementation and acceptance. Saved mockups are non-normative references outside the implementation plan. New collection still requires both applicable stages plus explicit staged activation; existing Hub design tokens remain authoritative. |
-| 252 | Prompt audit: model-generic gateway tuning, structured verdicts, cache split | The Anthropic request builder allowlists the LEGACY surface (`haiku-4-5`/`sonnet-4-5`/`opus-4-5` sampling+no-adaptive; `sonnet-4-6`/`opus-4-6` adaptive+temperature-tolerant) and treats every other model as adaptive-only with no sampling params, plus an explicit `thinking: disabled` for Opus 5 / Sonnet 5 when reasoning is off; the workboard classifier asks for verdicts through structured outputs (`output_config.format`, internal lane only) instead of prose-and-bracket-hunting; the workboard cost panel prices from the gateway catalog (retired `claude-3-5-haiku-latest` row and the Haiku-for-everything fallback gone); coach-chat splits the coach dialog into its own 5m cache block and the recap age label is never minute-granular; safety preambles, tone overrides, hi-greeting and the XML-format lines lose their shouted register; the anti-AI banned-phrase lists become positive guidance plus varied examples, then re-tuned by a blind pairwise judge (~1,400 comparisons): fast-reply v10 = GOOD-only examples, six structural bullets, no quoted tell-phrases, a reread line at the end of the task block (63% wins vs the pre-audit production setup on Sonnet 4.6); improve-draft rewrite wins 64/25. Biggest lever measured is the model: Sonnet 5 at low effort wins 71% and costs less, recommended to the owner, not applied. chat-review's inert "under 400 words" replaced by audience framing; help-me's binding "under 150 words" and the short recap's 350 stay |
+| 252 | Prompt audit: model-generic gateway tuning, structured verdicts, cache split | The Anthropic request builder allowlists the LEGACY surface (`haiku-4-5`/`sonnet-4-5`/`opus-4-5` sampling+no-adaptive; `sonnet-4-6`/`opus-4-6` adaptive+temperature-tolerant) and treats every other model as adaptive-only with no sampling params, plus an explicit `thinking: disabled` for Opus 5 / Sonnet 5 when reasoning is off; the workboard classifier asks for verdicts through structured outputs (`output_config.format`, internal lane only) instead of prose-and-bracket-hunting; the workboard cost panel prices from the gateway catalog (retired `claude-3-5-haiku-latest` row and the Haiku-for-everything fallback gone); coach-chat splits the coach dialog into its own 5m cache block and the recap age label is never minute-granular; safety preambles, tone overrides, hi-greeting and the XML-format lines lose their shouted register; the anti-AI banned-phrase lists become positive guidance plus varied examples, then re-tuned by a blind pairwise judge (~1,400 comparisons): fast-reply v10 = GOOD-only examples, six structural bullets, no quoted tell-phrases, a reread line at the end of the task block (63% wins vs the pre-audit production setup on Sonnet 4.6); improve-draft rewrite wins 64/25. Biggest lever measured is the model: Sonnet 5 at low effort wins 71% and costs less, applied on the owner's go as the reply-feature default (`DEFAULT_REPLY_MODEL_ID`; analysis features stay on Sonnet 4.6). chat-review's inert "under 400 words" replaced by audience framing; help-me's binding "under 150 words" and the short recap's 350 stay |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -10819,12 +10819,19 @@ medium). What it found, in order of size:
 - **The model is the biggest lever.** Same prompts, `claude-sonnet-5` at
   `low` effort: 71% wins vs production (heavy moments 15/1); `claude-opus-4-8`
   medium: 71%; Sonnet 5 is also cheaper per token than Sonnet 4.6 ($2/$10 vs
-  $3/$15) and `low` spends less thinking. Recommendation, not applied here
-  (a default-model change is the owner's call): add `anthropic:claude-sonnet-5`
-  to the pricing catalog and move `DEFAULT_MODEL_ID` for the reply features
-  to it with `DEFAULT_FEATURE_REASONING` = `low`; the gateway tuning from the
-  first commit already handles it (adaptive-only, `thinking: disabled` when
-  reasoning is off).
+  $3/$15) and `low` spends less thinking. **Applied in the fourth commit on
+  the owner's go:** `anthropic:claude-sonnet-5` joins the pricing catalog and
+  the reply features (`fast-reply`, `ping`, and through delegation
+  `improve-draft`, `hi-greeting`, `voice-script`) default to it at
+  `DEFAULT_FEATURE_REASONING` = `low` (`DEFAULT_REPLY_MODEL_ID`). The analysis
+  features (`help-me`, `chat-review`, `coach-chat`) were not measured and stay
+  on Sonnet 4.6 medium; `fan-summary` stays on Opus 4.6. The gateway tuning
+  from the first commit already handles the new model (adaptive-only, no
+  sampling params, `thinking: disabled` when reasoning is off). A client that
+  sends its own `model` is unaffected: the default applies only when the body
+  omits it. Sonnet 5's tokenizer produces roughly 30% more tokens for the same
+  text, so the chars/4 preflight estimate under-counts slightly; the ledger
+  prices real usage.
 - **The second commit's prose rewrite lost on Sonnet 4.6** (41% wins, 6
   strong wins / 11 strong losses): the judge's reasons were almost all
   "restates or interprets the fan's situation back to him". Sonnet 4.6 skims

@@ -119,7 +119,7 @@ around the actual provider attempt and final cost.
 
 R4e adds the first Anthropic pricing utility for terminal gateway usage rows. It supports the
 desktop Anthropic model ids currently accepted by ChatMuse (`anthropic:claude-sonnet-4-6`,
-`anthropic:claude-sonnet-4-5`, `anthropic:claude-opus-4-8`, `anthropic:claude-opus-4-6`,
+`anthropic:claude-sonnet-5` (the reply-feature default since Decision #252), `anthropic:claude-sonnet-4-5`, `anthropic:claude-opus-4-8`, `anthropic:claude-opus-4-6`,
 `anthropic:claude-opus-4-5`, and `anthropic:claude-haiku-4-5`) and computes integer micro-USD
 costs from input, output, cache-write, and cache-read tokens. Aggregate cache-write usage without
 5m/1h provider breakdown is recorded as approximate. Unsupported models fail closed instead of
