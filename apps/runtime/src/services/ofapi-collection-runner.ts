@@ -1,5 +1,5 @@
 import { runCanonicalization } from "./canonicalize-driver.ts";
-import { runOfapiReadSnapshotProjection } from "./projections/ofapi-read-snapshots.ts";
+import { projectOfapiReadSnapshotObservation } from "./projections/ofapi-read-snapshots.ts";
 import { sql } from "drizzle-orm";
 import { ensureQueueCreated, type QueueCreationClient } from "./sync-queue.ts";
 import { createHash } from "node:crypto";
@@ -176,7 +176,7 @@ export async function materializeOfapiReadSnapshot(
     );
   const canonical = await runCanonicalization(app, { observationId: input.observationId, kinds: ["ofapi.collection_read_response.v1"], pageSize:1, maxPagesPerFamily:1 });
   if (canonical.skippedUnparseable || canonical.skippedUnmapped) throw new Error("OFAPI collection response contract rejected; raw response retained");
-  await runOfapiReadSnapshotProjection(app, {accountId:input.pageId});
+  await projectOfapiReadSnapshotObservation(app, { accountId: input.pageId, observationId: input.observationId });
   const materialized = await app.db.execute(sql`select 1 from ofapi_read_snapshots where page_id=${input.pageId} and observation_id=${input.observationId}`);
   if (!materialized.rows.length) throw new Error("OFAPI read canonical projection is unavailable");
   return { items, coverage };

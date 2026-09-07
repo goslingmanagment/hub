@@ -917,6 +917,27 @@ function mapEventRow(row: Record<string, unknown>): DomainEventRow {
   };
 }
 
+/** Point read through the dedup companion and the partitioned event primary key. */
+export async function findDomainEventByDedupKey(
+  db: Database,
+  input: { accountId: number; dedupKey: string },
+): Promise<DomainEventRow | null> {
+  const keys = await db.execute<{ event_id: string; occurred_at: Date }>(sql`
+    select event_id::text, occurred_at from domain_event_keys
+    where account_id=${input.accountId} and dedup_key=${input.dedupKey}
+  `);
+  const key = keys.rows[0];
+  if (!key) return null;
+  const result = await db.execute<Record<string, unknown>>(sql`
+    select de.*, page.ofapi_account_id as current_account_ref
+    from domain_events de
+    left join pages page on page.id=de.account_id
+    where de.id=${key.event_id}::bigint and de.occurred_at=${key.occurred_at}
+      and de.account_id=${input.accountId} and de.dedup_key=${input.dedupKey}
+  `);
+  return result.rows[0] ? mapEventRow(result.rows[0]) : null;
+}
+
 /** Ordered per-account read: events with account_seq > afterSeq. */
 export async function listEventsSince(
   db: Database,
