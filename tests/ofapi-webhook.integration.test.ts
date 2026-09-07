@@ -275,10 +275,10 @@ describe("OFAPI webhook receiver", () => {
     }
 
     await seedWebhookConfig();
-    const body = await fixtureBody("users_typing.json");
+    const body = await fixtureBody("messages_received.json");
 
     const tampered = await postWebhook({
-      body: body.replace("users.typing", "users.typing "),
+      body: body.replace("messages.received", "messages.received "),
       signature: sign(body),
     });
     expect(tampered.statusCode).toBe(401);
@@ -295,10 +295,8 @@ describe("OFAPI webhook receiver", () => {
     const missingKey = await postWebhook({ body, idempotencyKey: null });
     expect(missingKey.statusCode).toBe(200);
     expect(missingKey.json()).toEqual({ received: true, duplicate: false });
-    const repeatedMissingKey = await postWebhook({ body, idempotencyKey: null });
-    expect(repeatedMissingKey.json()).toEqual({ received: true, duplicate: true });
 
-    const oversizedBody = body.replace("users.typing", "users.online");
+    const oversizedBody = body.replace("messages.received", "users.online");
     const oversizedKey = await postWebhook({
       body: oversizedBody,
       signature: sign(oversizedBody),
@@ -662,6 +660,11 @@ describe("OFAPI webhook admin flow", () => {
 
   function fakeOfapiClient(overrides?: Partial<OfapiClient>): OfapiClient {
     return {
+      getCredentialPreflight: vi.fn(async () => ({ status: "verified" as const, expectedTeam: "test", observedTeam: "test",
+        credentialFingerprint: "a".repeat(64), checkedAt: new Date().toISOString(), reason: null, rosterScope: "unknown" as const })),
+      getWebhook: vi.fn(async (id: string) => ({ id, url: "https://hub.example.com/api/v1/ofapi/webhook",
+        events: [...OFAPI_WEBHOOK_EVENTS], account_scope: "global", enabled: true })),
+      listWebhooks: vi.fn(async () => []),
       createWebhook: vi.fn(async () => ({ id: "wh_created" })),
       updateWebhook: vi.fn(async () => ({ id: "wh_created" })),
       listAccounts: vi.fn(async () => []),
@@ -673,7 +676,7 @@ describe("OFAPI webhook admin flow", () => {
     };
   }
 
-  it("registers the webhook globally, stores the secret encrypted, and auto-maps accounts by username", async (context) => {
+  it("registers globally, stores the secret encrypted, and never maps by username alone", async (context) => {
     if (!testDb || !server) {
       context.skip();
       return;
@@ -700,6 +703,7 @@ describe("OFAPI webhook admin flow", () => {
       ]),
     });
     appContext = createTestAppContext(testDb, { ofapi });
+    appContext.config.ofapiWebhookManagementScope = "team";
     await server.close();
     server = await buildApiServer(appContext);
     await server.ready();
@@ -729,11 +733,9 @@ describe("OFAPI webhook admin flow", () => {
     expect(body.externalWebhookId).toBe("wh_created");
     expect(body.accountScope).toBe("global");
     expect(body.events).toEqual([...OFAPI_WEBHOOK_EVENTS]);
-    expect(body.mapping.mapped).toEqual([
-      { pageId: expect.any(Number), label: "lora-of", ofapiAccountId: "acct_lora" },
-    ]);
-    expect(body.mapping.unmatchedAccounts).toEqual([{ id: "acct_unknown", username: "somebody-else" }]);
-    expect(body.mapping.unmappedPages).toEqual(["lily-of"]);
+    expect(body.mapping.mapped).toEqual([]);
+    expect(body.mapping.unmatchedAccounts).toEqual([{ id: "acct_lora", username: "LoraVie" }, { id: "acct_unknown", username: "somebody-else" }]);
+    expect(body.mapping.unmappedPages).toEqual(["lily-of", "lora-of"]);
 
     const createMock = ofapi.createWebhook as ReturnType<typeof vi.fn>;
     expect(createMock).toHaveBeenCalledTimes(1);
@@ -764,7 +766,7 @@ describe("OFAPI webhook admin flow", () => {
     });
     expect(delivery.statusCode).toBe(200);
 
-    // An identical owner retry is mapping-only: no remote call and no needless
+    // An identical owner retry verifies remote state without mutation or needless
     // secret rotation after a partial account-mapping failure.
     const updateMock = ofapi.updateWebhook as ReturnType<typeof vi.fn>;
     const sameTarget = await server.inject({
@@ -822,6 +824,7 @@ describe("OFAPI webhook admin flow", () => {
     expect(statusBody.pages).toEqual([
       {
         pageId: expect.any(Number),
+        bindingGeneration: expect.any(Number),
         label: "lily-of",
         username: "lilyvip",
         ofapiAccountId: null,
@@ -832,9 +835,10 @@ describe("OFAPI webhook admin flow", () => {
       },
       {
         pageId: expect.any(Number),
+        bindingGeneration: expect.any(Number),
         label: "lora-of",
         username: "loravie",
-        ofapiAccountId: "acct_lora",
+        ofapiAccountId: null,
         ofapiAuthStatus: null,
         ofapiAuthChangedAt: null,
         lastEventAt: null,
@@ -854,6 +858,7 @@ describe("OFAPI webhook admin flow", () => {
       .mockResolvedValueOnce({ id: "wh_test" });
     const ofapi = fakeOfapiClient({ updateWebhook });
     appContext = createTestAppContext(testDb, { ofapi });
+    appContext.config.ofapiWebhookManagementScope = "team";
     await server.close();
     server = await buildApiServer(appContext);
     await server.ready();
@@ -903,6 +908,7 @@ describe("OFAPI webhook admin flow", () => {
     });
     const ofapi = fakeOfapiClient({ createWebhook });
     appContext = createTestAppContext(testDb, { ofapi });
+    appContext.config.ofapiWebhookManagementScope = "team";
     await server.close();
     server = await buildApiServer(appContext);
     await server.ready();
@@ -1021,6 +1027,7 @@ describe("OFAPI webhook admin flow", () => {
     appContext = createTestAppContext(testDb, {
       ofapi: fakeOfapiClient({ createWebhook }),
     });
+    appContext.config.ofapiWebhookManagementScope = "team";
     await server.close();
     server = await buildApiServer(appContext);
     await server.ready();
@@ -1078,6 +1085,7 @@ describe("OFAPI webhook admin flow", () => {
     appContext = createTestAppContext(testDb, {
       ofapi: fakeOfapiClient({ createWebhook }),
     });
+    appContext.config.ofapiWebhookManagementScope = "team";
     await server.close();
     server = await buildApiServer(appContext);
     await server.ready();

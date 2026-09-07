@@ -11,6 +11,7 @@ import {
   insertOfapiWebhookEvent,
   listNotificationIncidents,
   recordOfapiCreditSpend,
+  recoverOfapiCreditReceipts,
   setConfigOverride,
   setPageOfapiAccountId,
 } from "@agency_hub_core/db";
@@ -162,7 +163,7 @@ describe("ofapi credit ledger integration", () => {
     await client.listChats({ pageId: page.id }, "acct_credits", { limit: 5 });
 
     // 2. A 2xx without _meta is the estimated 1-credit fallback.
-    scriptResponse({ status: 200, body: JSON.stringify({ data: [] }) });
+    scriptResponse({ status: 200, body: JSON.stringify({ data: [], _pagination: { next_page: null } }) });
     await client.listChats({ pageId: page.id }, "acct_credits", { limit: 5 });
 
     // 3. An error without _meta writes no row (reconciliation absorbs it).
@@ -274,6 +275,46 @@ describe("ofapi credit ledger integration", () => {
       spentToday: 4,
       audienceSpentToday: 4,
     });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("R4 retains confirmed send spend through both accounting failures and restart without resending", async () => {
+    const baseUrl = await startScriptedOfapiServer();
+    expect(baseUrl).not.toBeNull();
+    await testDb!.pool.query(`
+      create function reject_audit_credit_counter() returns trigger language plpgsql as $$
+      begin raise exception 'synthetic accounting outage'; end $$;
+      create trigger reject_audit_credit_counter before insert or update on ofapi_credit_state
+        for each row execute function reject_audit_credit_counter();
+    `);
+    try {
+      const firstClient = buildClient(baseUrl!, appContext);
+      scriptResponse({ status: 200, body: metaBody({ id: "9001" }, { used: 3, balance: 3997 }) });
+      await expect(firstClient.sendTextMessage!({}, "acct_credits", "1", { text: "one attempt" }))
+        .resolves.toEqual({ messageId: "9001", creditAccounting: "pending" });
+      expect(await listLedgerRows()).toHaveLength(0);
+      const receipts = await testDb!.pool.query("select observation, accounted_at from ofapi_credit_receipts");
+      expect(receipts.rows).toHaveLength(1);
+      expect(receipts.rows[0]).toMatchObject({ accounted_at: null, observation: {
+        credits: 3, estimated: false, balanceAfter: 3997, operation: "ofapi_command_send_text", attemptNumber: 1,
+      } });
+      // Fresh client has no process-local latch: the durable receipt alone
+      // prevents egress, and a queued provider response remains unconsumed.
+      const afterRestart = buildClient(baseUrl!, appContext);
+      scriptResponse({ status: 200, body: metaBody([], { used: 1, balance: 3996 }) });
+      await expect(afterRestart.listChats({}, "acct_credits", {})).rejects.toThrow("accounting unavailable");
+      expect(scriptedResponses).toHaveLength(1);
+      await testDb!.pool.query("drop trigger reject_audit_credit_counter on ofapi_credit_state");
+      await Promise.all([recoverOfapiCreditReceipts(appContext.db), recoverOfapiCreditReceipts(appContext.db)]);
+      expect(await listLedgerRows()).toHaveLength(1);
+      expect(await getOfapiCreditState(appContext.db)).toMatchObject({ spentToday: 3 });
+      await expect(afterRestart.listChats({}, "acct_credits", {})).resolves.toMatchObject({ hasNextPage: false });
+      expect(await getOfapiCreditState(appContext.db)).toMatchObject({ spentToday: 4 });
+      expect(scriptedResponses).toHaveLength(0);
+      expect(await listLedgerRows()).toHaveLength(2);
+    } finally {
+      await testDb!.pool.query("drop trigger if exists reject_audit_credit_counter on ofapi_credit_state");
+      await testDb!.pool.query("drop function reject_audit_credit_counter()");
+    }
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("falls back to the physical counter when the ledger row cannot be written", async (context) => {
@@ -522,7 +563,8 @@ describe("ofapi credit ledger integration", () => {
     expect(await listNotificationIncidents(appContext.db, { status: "resolved" })).toHaveLength(1);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("anchors reconciliation with the optional balance ping", async (context) => {
+  for (const balance of [0, 23_950]) {
+  it(`anchors free balance ${balance} without a mapped account`, async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -533,7 +575,6 @@ describe("ofapi credit ledger integration", () => {
       return;
     }
 
-    const page = await seedMappedPage("lora-of-ping", "acct_ping");
     const pingContext: AppContext = {
       ...createTestAppContext(testDb, {
         ofapiCreditLedgerEnabled: true,
@@ -542,7 +583,7 @@ describe("ofapi credit ledger integration", () => {
     };
     pingContext.ofapi = buildClient(baseUrl, pingContext);
 
-    scriptResponse({ status: 200, body: metaBody([], { used: 1, balance: 23_950 }) });
+    scriptResponse({ status: 200, body: metaBody([], { used: 0, balance }) });
     await runOfapiBalancePing(pingContext);
 
     const rows = await listLedgerRows();
@@ -550,9 +591,9 @@ describe("ofapi credit ledger integration", () => {
     expect(rows[0]).toMatchObject({
       source: "rest",
       operation: "ofapi_balance_ping",
-      credits: 1,
-      balance_after: 23_950,
-      page_id: page.id,
+      credits: 0,
+      balance_after: balance,
+      page_id: null,
     });
 
     // Ping without the ledger (or with the ping flag off) is inert.
@@ -563,4 +604,5 @@ describe("ofapi credit ledger integration", () => {
     await runOfapiBalancePing(disabledContext);
     expect(await listLedgerRows()).toHaveLength(1);
   }, INTEGRATION_TEST_TIMEOUT_MS);
+  }
 });

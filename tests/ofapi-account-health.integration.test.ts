@@ -286,8 +286,9 @@ describe("OFAPI account health monitor", () => {
 
     await seedMappedPage();
 
+    // Use the DB receipt clock; the Docker VM and host clock can differ.
     // No journaled events at all: stay quiet (no baseline to measure from).
-    await runOfapiAccountHealthMonitor(appContext);
+    await runOfapiAccountHealthMonitor(appContext, (await testDb.pool.query("select now() as now")).rows[0].now);
     expect((await listIncidents("open")).map((incident) => incident.kind))
       .not.toContain("ofapi_webhook_silence");
 
@@ -300,7 +301,7 @@ describe("OFAPI account health monitor", () => {
     await testDb.pool.query(
       "update ofapi_webhook_events set received_at = now() - interval '13 hours'",
     );
-    await runOfapiAccountHealthMonitor(appContext);
+    await runOfapiAccountHealthMonitor(appContext, (await testDb.pool.query("select now() as now")).rows[0].now);
     const open = await listIncidents("open");
     const silence = open.find((incident) => incident.kind === "ofapi_webhook_silence");
     expect(silence).toBeDefined();
@@ -312,7 +313,7 @@ describe("OFAPI account health monitor", () => {
       account_id: OFAPI_ACCOUNT,
       payload: { id: 1000005 },
     });
-    await runOfapiAccountHealthMonitor(appContext);
+    await runOfapiAccountHealthMonitor(appContext, (await testDb.pool.query("select now() as now")).rows[0].now);
     expect((await listIncidents("open")).map((incident) => incident.kind))
       .not.toContain("ofapi_webhook_silence");
   });

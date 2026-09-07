@@ -1,3 +1,4 @@
+import { registerOfapiVendorRoutes } from "../modules/ofapi-vendor/index.ts";
 import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -38,6 +39,7 @@ import {
   AppError,
   ForbiddenError,
   NotFoundError,
+  OfapiCollectionRefusedError,
   SnapshotRestartRequiredError,
   TooManyRequestsError,
   UnauthorizedError,
@@ -493,6 +495,22 @@ export async function buildApiServer(appContext: AppContext) {
       return;
     }
 
+    if (error instanceof OfapiCollectionRefusedError) {
+      // Documented structured extension (docs/error-handling.md §3): the
+      // machine reason and, for a time-bound cap, the reset advice.
+      if (error.retryAfterMs !== null) {
+        reply.header("retry-after", String(Math.ceil(error.retryAfterMs / 1000)));
+      }
+      reply.code(error.statusCode).send({
+        error: error.code,
+        message: error.message,
+        statusCode: error.statusCode,
+        reason: error.reason,
+        retryAfterMs: error.retryAfterMs,
+      });
+      return;
+    }
+
     if (error instanceof AppError) {
       reply.code(error.statusCode).send({
         error: error.code,
@@ -555,6 +573,7 @@ export async function buildApiServer(appContext: AppContext) {
 
   // --- Events (stream + snapshot) --- (module: apps/runtime/src/modules/events)
   registerEventsRoutes(server, moduleContext);
+  registerOfapiVendorRoutes(server, moduleContext);
 
   // OpenAPI JSON
   server.get("/api/v1/openapi.json", {

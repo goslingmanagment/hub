@@ -3,6 +3,7 @@ import { readFile, readdir, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { sql, type SQL } from "drizzle-orm";
+import { decryptJsonWithKeyVersion } from "@agency_hub_core/shared";
 
 import {
   type CapturePayloadErasureSubject,
@@ -111,6 +112,9 @@ interface ResolvedScope {
   fanGroupIds: string[];
   /** page/model scope: the pages' vendor-native account refs */
   nativeRefs: string[];
+  ofapiExclusiveObservationIds?: number[];
+  ofapiExclusiveReceiptIds?: number[];
+  ofapiSharedObservations?: number;
 }
 
 type Db = Pick<AppContext, "db" | "config" | "logger" | "pool">;
@@ -275,7 +279,12 @@ async function resolveScope(app: Db, input: ErasureScopeInput): Promise<Resolved
     fanId: null,
     fanRef: null,
     fanGroupIds: [],
-    nativeRefs: pageRows.flatMap((row) => [row.a, row.b]).filter((ref): ref is string => !!ref),
+    nativeRefs: [...new Set([
+      ...pageRows.flatMap((row) => [row.a, row.b]).filter((ref): ref is string => !!ref),
+      ...(await rows<{ account_id: string }>(app, sql`
+        select account_id from ofapi_account_bindings where page_id in ${pageRows.map(row => Number(row.id))}
+      `)).map(row => row.account_id),
+    ])],
   };
 }
 
@@ -294,6 +303,7 @@ function eventPredSql(scope: ResolvedScope, alias = ""): SQL {
         ${a}fan_identity_ref = ${scope.fanRef}
         or ${conversationPred}
         or ${a}data ->> 'authorRef' = ${scope.fanRef}
+        or (${a}type = 'ofapi.read_snapshot_observed' and ${payloadMatchPredSql(scope.fanRef!,sql`${a}data`)})
         or ${a}data ->> 'correlationGroupRef' = ${scope.fanRef}
         or (${a}type = 'notification.observed'
           and ${a}data ->> 'rawTypeCode' = '3002'
@@ -305,9 +315,11 @@ function eventPredSql(scope: ResolvedScope, alias = ""): SQL {
 }
 
 function observationPagePredSql(scope: ResolvedScope): SQL {
+  const extra = scope.ofapiExclusiveObservationIds?.length
+    ? sql`or id in ${scope.ofapiExclusiveObservationIds}` : sql``;
   if (scope.nativeRefs.length > 0) {
     return sql`(account_id in ${scope.pageIds}
-      or native_account_ref in ${scope.nativeRefs})`;
+      or native_account_ref in ${scope.nativeRefs} ${extra})`;
   }
   return sql`account_id in ${scope.pageIds}`;
 }
@@ -365,7 +377,7 @@ function duckdbObservationPred(scope: ResolvedScope, eraseObsIds: number[]): str
     const ids = scope.pageIds.join(", ") || "-1";
     const refs = scope.nativeRefs.map((ref) => `'${duckdbEscape(ref)}'`).join(", ");
     return refs.length > 0
-      ? `(account_id IN (${ids}) OR native_account_ref IN (${refs}))`
+      ? `(account_id IN (${ids}) OR native_account_ref IN (${refs})${scope.ofapiExclusiveObservationIds?.length ? ` OR id IN (${scope.ofapiExclusiveObservationIds.join(",")})` : ""})`
       : `account_id IN (${ids})`;
   }
   const ref = duckdbEscape(scope.fanRef!);
@@ -493,6 +505,24 @@ interface LedgerLineage {
   sharedObsIds: number[];
   /** Retained sync journal envelopes whose body contains the fan. */
   rawPayloadIds: number[];
+  /** Opaque receipts may name a fan absent from the original command/index. */
+  actionIntentIds: string[];
+}
+
+function opaqueActionReceiptMatch(app: Db, input: unknown, fanRef: string): string | null {
+  const payload = typeof input === "string" ? JSON.parse(input) as Record<string, unknown> : input as Record<string, unknown> | null;
+  if (!payload || typeof payload.intentId !== "string" || !payload.encryptedBody) throw new Error("OFAPI action receipt is unavailable for erasure");
+  const receipt = decryptJsonWithKeyVersion<{ bodyBase64: string; frozen: { command: unknown } }>(
+    payload.encryptedBody as Parameters<typeof decryptJsonWithKeyVersion>[0], app.config.encryptionKeysByVersion,
+  );
+  if (typeof receipt.bodyBase64 !== "string") throw new Error("OFAPI action receipt body is unavailable for erasure");
+  // Same whole-payload subject semantics as the existing plaintext matcher.
+  // Inspect original numeric bytes as well: JSON.parse could round a fan ID.
+  const raw = Buffer.from(receipt.bodyBase64, "base64").toString("utf8");
+  const text = `${JSON.stringify(receipt.frozen.command)}\n${raw}`;
+  const quoted = text.includes(JSON.stringify(fanRef));
+  const numeric = /^[0-9]+$/.test(fanRef) && new RegExp(`[:\\[,\\s]${fanRef}\\s*[,}\\]]`).test(text);
+  return quoted || numeric ? payload.intentId : null;
 }
 
 async function collectFanLineage(
@@ -506,6 +536,18 @@ async function collectFanLineage(
   const candidates = new Set<number>();
   const shared = new Set<number>();
   const rawPayloadIds = new Set<number>();
+  const actionIntentIds = new Set<string>();
+
+  // Resolve durable receipt links BEFORE hot action rows are removed. The
+  // source ID remains valid across hot, parked and lake observation planes.
+  const actionLinks = await rows<{ id: string; response_observation_id: string | null }>(app, sql`
+    select id::text,response_observation_id::text from ofapi_action_intents
+    where page_id in ${scope.pageIds} and subject_refs @> array[${scope.fanRef}]::text[]
+  `);
+  for (const row of actionLinks) {
+    actionIntentIds.add(row.id);
+    if (row.response_observation_id) candidates.add(Number(row.response_observation_id));
+  }
 
   const eventSources = ["domain_events", ...parked.domainEvents];
   for (const source of eventSources) {
@@ -529,6 +571,23 @@ async function collectFanLineage(
     `);
     for (const row of matched) {
       candidates.add(Number(row.id));
+    }
+    // Capture precedes response indexing. A crash between those writes must
+    // not hide returned fan data, and a retry after hot deletion must still
+    // find encrypted parked/lake copies. Scan receipts in bounded pages.
+    let cursor = 0;
+    for (;;) {
+      const receipts = await rows<{ id: string; payload: unknown }>(app, sql`
+        select o.id::text,o.payload from ${sql.raw(source)} o
+        where o.account_id in ${scope.pageIds} and o.kind='ofapi.action_response.v1' and o.id>${cursor}
+        order by o.id limit 50
+      `);
+      for (const receipt of receipts) {
+        const intentId = opaqueActionReceiptMatch(app, receipt.payload, scope.fanRef!);
+        if (intentId) { candidates.add(Number(receipt.id)); actionIntentIds.add(intentId); }
+      }
+      if (receipts.length < 50) break;
+      cursor = Number(receipts.at(-1)!.id);
     }
   }
 
@@ -632,6 +691,19 @@ async function collectFanLineage(
           for (const row of matched) {
             candidates.add(Number(row.id));
           }
+          let cursor = 0;
+          for (;;) {
+            const receipts = await run(
+              `SELECT id,payload FROM read_parquet('${duckdbEscape(parquet)}') `
+              + `WHERE account_id IN (${scope.pageIds.join(",")}) AND kind='ofapi.action_response.v1' AND id>${cursor} ORDER BY id LIMIT 50`,
+            );
+            for (const receipt of receipts) {
+              const intentId = opaqueActionReceiptMatch(app, receipt.payload, scope.fanRef!);
+              if (intentId) { candidates.add(Number(receipt.id)); actionIntentIds.add(intentId); }
+            }
+            if (receipts.length < 50) break;
+            cursor = Number(receipts.at(-1)!.id);
+          }
         }
       }
 
@@ -669,6 +741,7 @@ async function collectFanLineage(
     eraseObsIds: [...candidates].filter((id) => !shared.has(id)),
     sharedObsIds: [...shared],
     rawPayloadIds: [...rawPayloadIds],
+    actionIntentIds: [...actionIntentIds],
   };
 }
 
@@ -806,6 +879,23 @@ async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLine
       : execCount(tx, sql`delete from sync_raw_payloads where id in ${_lineage.rawPayloadIds}`),
   });
 
+  targets.push({
+    plane: "hot", target: "ofapi_read_snapshots", action: "delete",
+    rows: await countOf(app, sql`select count(*)::text as n from ofapi_read_snapshots where page_id in ${scope.pageIds} and ${payloadMatchPredSql(ref,sql.raw("items"))}`),
+    run: tx => execCount(tx, sql`delete from ofapi_read_snapshots where page_id in ${scope.pageIds} and ${payloadMatchPredSql(ref,sql.raw("items"))}`),
+  });
+  // Commands and results are encrypted. Use their explicit subject index
+  // plus identities recovered from immutable receipts during lineage scans.
+  // A mixed command is erased whole, just like an unprojected batch receipt;
+  // splitting and rewriting the encrypted source would invent a new fact.
+  const actionIntentPred = sql`page_id in ${scope.pageIds}
+    and (subject_refs @> array[${ref}]::text[]
+      ${_lineage.actionIntentIds.length ? sql`or id in ${_lineage.actionIntentIds}` : sql``})`;
+  targets.push({
+    plane: "hot", target: "ofapi_action_intents", action: "delete",
+    rows: await countOf(app, sql`select count(*)::text as n from ofapi_action_intents where ${actionIntentPred}`),
+    run: tx => execCount(tx, sql`delete from ofapi_action_intents where ${actionIntentPred}`),
+  });
   const fanFks = await rows<{ child: string; del_type: string }>(app, sql`
     select con.conrelid::regclass::text as child, con.confdeltype::text as del_type
     from pg_constraint con
@@ -1147,6 +1237,7 @@ export interface PageErasureTableExclusion {
  * This is deliberately tiny: everything not named here must appear as a hot
  * target, because the page catalog row survives and no FK action will run. */
 export const PAGE_ERASURE_TABLE_EXCLUSIONS: readonly PageErasureTableExclusion[] = [
+  { table: "ofapi_account_bindings", reason: "Provider-to-page custody evidence, retained with the pages catalog row and operator audit. It contains creator association, not fan facts; retaining old refs keeps late replay and future erasure scoped to the original page." },
   {
     table: "audit_events",
     reason: "Agency audit evidence is an append-only governance record, not captured platform data; retaining the page id preserves who authorized and executed the erasure itself.",
@@ -1160,6 +1251,33 @@ export const PAGE_ERASURE_TABLE_EXCLUSIONS: readonly PageErasureTableExclusion[]
 async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget[]> {
   const pageIds = scope.pageIds;
   const targets: WorkTarget[] = [];
+  if (scope.nativeRefs.length) {
+    // Shared response bytes remain evidence for other accounts. Per-attempt
+    // summaries and their dispatch intents are independently erasable.
+    const match = sql`account_refs ?| array[${sql.join(scope.nativeRefs.map(ref => sql`${ref}`), sql`, `)}]::text[]`;
+    const exclusive = sql`${match} and account_refs <@ ${JSON.stringify(scope.nativeRefs)}::jsonb`;
+    targets.push({ plane: "hot", target: "ofapi_webhook_redelivery_intents", action: "delete",
+      rows: await countOf(app, sql`select count(*)::text n from ofapi_webhook_redelivery_intents i where exists(select 1 from ofapi_webhook_delivery_attempts a where a.webhook_id=i.webhook_id and a.attempt_id=i.attempt_id and ${exclusive})`),
+      run: tx => execCount(tx, sql`delete from ofapi_webhook_redelivery_intents i where exists(select 1 from ofapi_webhook_delivery_attempts a where a.webhook_id=i.webhook_id and a.attempt_id=i.attempt_id and ${exclusive})`) });
+    targets.push({ plane: "hot", target: "ofapi_webhook_delivery_attempts", action: "delete",
+      rows: await countOf(app, sql`select count(*)::text n from ofapi_webhook_delivery_attempts where ${exclusive}`),
+      run: tx => execCount(tx, sql`delete from ofapi_webhook_delivery_attempts where ${exclusive}`) });
+  }
+  if (scope.ofapiExclusiveReceiptIds?.length) targets.push({ plane: "hot", target: "ofapi_webhook_events:team_scope", action: "delete",
+    rows: scope.ofapiExclusiveReceiptIds.length,
+    run: tx => execCount(tx, sql`delete from ofapi_webhook_events where id in ${scope.ofapiExclusiveReceiptIds!}`) });
+
+  // Financial response receipts follow the ledger's explicit page erasure.
+  // Their attribution is nested metadata, not a page FK discovered below.
+  targets.push({
+    plane: "hot", target: "ofapi_credit_receipts", action: "delete",
+    rows: await countOf(app, sql`
+      select count(*)::text as n from ofapi_credit_receipts
+      where (observation ->> 'pageId')::bigint in ${pageIds}`),
+    run: tx => execCount(tx, sql`
+      delete from ofapi_credit_receipts
+      where (observation ->> 'pageId')::bigint in ${pageIds}`),
+  });
 
   // Fans linked ONLY to these pages become orphaned identity rows; collect
   // the candidates before page_fans is purged, guard against links elsewhere.
@@ -1201,8 +1319,31 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
         select generation_ref from ai_generation_content where page_id in ${pageIds})`),
   });
 
+  // Artifact rows have no direct page FK; resolve custody before deleting jobs.
+  targets.push({
+    plane: "hot", target: "ofapi_typed_export_artifacts", action: "delete",
+    rows: await countOf(app, sql`select count(*)::text as n from ofapi_typed_export_artifacts
+      where export_job_id in (select id from ofapi_capture_jobs where page_id in ${pageIds})`),
+    run: tx => execCount(tx, sql`delete from ofapi_typed_export_artifacts
+      where export_job_id in (select id from ofapi_capture_jobs where page_id in ${pageIds})`),
+  });
+
   const deletions: Array<[string, string]> = [
+    ["ofapi_media_catalog", "page_id"],
+    ["ofapi_media_sources", "page_id"],
+    ["ofapi_marketing_projection_receipts", "page_id"],
+    ["ofapi_marketing_intents", "page_id"],
+    ["ofapi_action_intents", "page_id"],
+    ["ofapi_marketing_resources", "page_id"],
+    ["ofapi_chat_queue_state", "page_id"],
+    ["ofapi_read_snapshots", "page_id"],
+    ["ofapi_collection_schedules", "page_id"],
     // Rows that RESTRICT parents below go first.
+    ["ofapi_typed_export_rows", "page_id"],
+    ["ofapi_profile_visitors_daily", "page_id"],
+    ["ofapi_collection_requests", "page_id"],
+    ["ofapi_collection_jobs", "page_id"],
+    ["ofapi_collection_policies", "page_id"],
     ["creator_vault_album_members", "page_id"],
     ["creator_vault_album_scans", "page_id"],
     ["page_subscription_tier_plans", "page_id"],
@@ -1569,6 +1710,42 @@ interface ErasureWork {
 
 async function buildWork(app: Db, input: ErasureScopeInput): Promise<ErasureWork> {
   const scope = await resolveScope(app, input);
+  if (scope.input.scopeType !== "fan" && scope.nativeRefs.length) {
+    // Team-level receipts have no native_account_ref. Preserve their exact
+    // bytes when a bystander still owns part of the envelope, and report that
+    // residual under the same shared-observation rule used by fan erasure.
+    const receipts = await rows<{ id: string; observation_id: string | null; refs: string[] }>(app, sql`
+      select w.id::text,k.observation_id::text, w.payload->'payload'->'account_ids' as refs
+      from ofapi_webhook_events w left join observation_keys k on k.source='webhook' and k.idempotency_key=w.idempotency_key
+      where jsonb_typeof(w.payload->'payload'->'account_ids')='array'`);
+    const exclusive = new Set<number>(); const shared = new Set<number>(); const receiptIds: number[] = [];
+    for (const row of receipts) {
+      if (!row.refs.some(ref => scope.nativeRefs.includes(ref))) continue;
+      if (row.refs.every(ref => scope.nativeRefs.includes(ref))) {
+        receiptIds.push(Number(row.id)); if (row.observation_id) exclusive.add(Number(row.observation_id));
+      } else if (row.observation_id) shared.add(Number(row.observation_id));
+    }
+    // Every raw response, including overlapping scans, is considered. A
+    // failed parser leaves unknown scope visible as a retained residual.
+    const captures = await rows<{ id: string; payload: { body?: string } }>(app, sql`
+      select id::text,payload from observations where producer='ofapi:admin' and kind='ofapi_webhook_deliveries'`);
+    for (const capture of captures) {
+      try {
+        const body = JSON.parse(capture.payload.body ?? "null");
+        if (!Array.isArray(body?.data)) { shared.add(Number(capture.id)); continue; }
+        const refs = body.data.flatMap((attempt: { payload?: { account_id?: string; payload?: { account_ids?: string[] } } }) =>
+          attempt.payload?.account_id ? [attempt.payload.account_id] : attempt.payload?.payload?.account_ids ?? []);
+        const matched = refs.some((ref: string) => scope.nativeRefs.includes(ref));
+        if (!matched) continue;
+        const fullyScoped = body.data.every((attempt: { payload?: { account_id?: string; payload?: { account_ids?: string[] } } }) =>
+          attempt.payload?.account_id || attempt.payload?.payload?.account_ids?.length);
+        if (fullyScoped && refs.every((ref: string) => scope.nativeRefs.includes(ref))) exclusive.add(Number(capture.id));
+        else shared.add(Number(capture.id));
+      } catch { shared.add(Number(capture.id)); }
+    }
+    scope.ofapiExclusiveObservationIds = [...exclusive]; scope.ofapiExclusiveReceiptIds = receiptIds;
+    scope.ofapiSharedObservations = shared.size;
+  }
   // The catalog scan runs FIRST because the fan lineage consumes it: a body
   // that carries the subject names the envelopes that must go with it.
   const subject: CapturePayloadErasureSubject | null = scope.fanRef === null
@@ -1612,7 +1789,7 @@ function workToPlan(work: ErasureWork): ErasurePlan {
     scopeType: work.scope.input.scopeType,
     scopeRef: work.scope.scopeRef,
     targets,
-    sharedObservations: work.lineage?.sharedObsIds.length ?? 0,
+    sharedObservations: (work.lineage?.sharedObsIds.length ?? 0) + (work.scope.ofapiSharedObservations ?? 0),
     totalRows: targets.reduce((sum, target) => sum + target.rows, 0),
     resolvedPageIds: [...new Set(work.scope.pageIds)].sort((left, right) => left - right),
     resolvedFanGroupIds: [...new Set(work.scope.fanGroupIds)].sort(),
@@ -1642,7 +1819,14 @@ export async function executeErasure(
   input: ErasureScopeInput,
   options: { initiatedBy: number; auditSource?: string },
 ): Promise<ErasureExecutionResult> {
-  return withErasureExecutionLock(app, () => executeErasureLocked(app, input, options));
+  return withErasureExecutionLock(app, () => app.db.transaction(async tx => {
+    // Owner actions hold this mutex through capture and subject indexing.
+    // Acquire it BEFORE planning so a late receipt cannot arrive between
+    // lineage discovery and the exclusive page fence. This transaction owns
+    // only the lock; the existing erasure commits and recovery remain intact.
+    await tx.execute(sql`select pg_advisory_xact_lock(9003011, 1)`);
+    return executeErasureLocked(app, input, options);
+  }));
 }
 
 async function executeErasureLocked(

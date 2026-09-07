@@ -1374,7 +1374,7 @@ describe("db write safety", () => {
       username: "@lora_of",
       displayName: "Lora OF",
       onlyfansName: "lora_of",
-      onlyfansUserId: "of-uid-42",
+      onlyfansUserId: "4242",
       avatarUrl: "https://public.onlyfans.com/files/lora/avatar.jpg",
     };
 
@@ -1414,7 +1414,7 @@ describe("db write safety", () => {
     });
     expect(JSON.parse(pageRows.rows[0]?.metadata ?? "{}")).toMatchObject({
       avatarUrl: "https://public.onlyfans.com/files/lora/avatar.jpg",
-      onlyfansUserId: "of-uid-42",
+      onlyfansUserId: "4242",
     });
 
     // Stage 18: no pasted credentials — onboarding must leave the vault empty.
@@ -1605,7 +1605,7 @@ describe("db write safety", () => {
       username: "lora_of",
       displayName: "Lora OF",
       onlyfansName: "lora_of",
-      onlyfansUserId: null,
+      onlyfansUserId: "4242",
       avatarUrl: null,
     };
 

@@ -1,3 +1,5 @@
+import { findOfapiReadDefinition } from "@agency_hub_core/shared";
+import { isOfapiTypedExportProfile, type OfapiTypedExportProfile } from "@agency_hub_core/shared";
 import { createHash, randomUUID } from "node:crypto";
 
 import { sql } from "drizzle-orm";
@@ -430,6 +432,27 @@ export async function findCompletedOfapiCaptureJobByTarget(
   return result.rows[0] ? mapCaptureJob(result.rows[0]) : null;
 }
 
+/**
+ * Collection step slots originally hashed insertion-order JSON. Recover an
+ * existing exact intent across that historical slot spelling, without turning
+ * an unresolved attempt into permission for another provider request.
+ */
+export async function findOfapiCollectionCaptureJob(
+  db: Database,
+  input: { pageId: number; ofapiAccountId: string; collectionJobId: string; targetHash: string },
+) {
+  const result = await db.execute<Record<string, unknown>>(sql`
+    select * from ofapi_capture_jobs
+    where kind='collection_read' and page_id=${input.pageId}
+      and ofapi_account_id=${input.ofapiAccountId}
+      and target->>'collectionJobId'=${input.collectionJobId}
+      and target_hash=${input.targetHash}
+    order by (pending_observation_id is not null or state='complete') desc, created_at, id
+    limit 1
+  `);
+  return result.rows[0] ? mapCaptureJob(result.rows[0]) : null;
+}
+
 export interface CreateOfapiInteractiveRequestInput {
   id?: string;
   pageId: number;
@@ -487,8 +510,8 @@ export async function listRunnableOfapiCapturePages(
            max(priority)::int as priority,
            min(case when state = 'awaiting_parse' then updated_at else next_attempt_at end) as requested_at
     from ofapi_capture_jobs
-    where (state = 'awaiting_parse' and reason_code is null)
-       or (state in ('ready', 'retry_wait') and next_attempt_at <= ${now})
+    where kind not in ('collection_read','media_upload') and not (kind='account_export' and coalesce(target->>'profile' in ('profile_visitors','fans','tracking_links','trial_links','smart_links'),false)) and ((state = 'awaiting_parse' and reason_code is null)
+       or (state in ('ready', 'retry_wait') and next_attempt_at <= ${now}))
     group by page_id
     order by max(priority) desc,
              min(case when state = 'awaiting_parse' then updated_at else next_attempt_at end),
@@ -506,6 +529,8 @@ export async function leaseNextOfapiCaptureJob(
   db: Database,
   input: {
     pageId: number;
+    jobId?: string;
+    exactJobId?: string;
     leaseOwner: string;
     leaseToken?: string;
     leaseTtlMs: number;
@@ -520,6 +545,7 @@ export async function leaseNextOfapiCaptureJob(
       select id
       from ofapi_capture_jobs
       where page_id = ${input.pageId}
+        and ${(input.jobId ?? input.exactJobId) ? sql`id=${input.jobId ?? input.exactJobId}::uuid` : sql`kind not in ('collection_read','media_upload') and not (kind = 'account_export' and coalesce(target->>'profile' in ('profile_visitors','fans','tracking_links','trial_links','smart_links'),false))`}
         and (
           (state = 'awaiting_parse' and reason_code is null)
           or (state in ('ready', 'retry_wait') and next_attempt_at <= ${now})
@@ -1271,8 +1297,9 @@ export async function reserveOfapiRequestAttempt(
     const principalUsedCalls = principal ? asNumber(principal.used_calls, "used_calls") : 0;
     const principalUsedCredits = principal ? asNumber(principal.used_credits, "used_credits") : 0;
 
+    const registeredFree = estimate === 0 && input.method === "GET" && findOfapiReadDefinition(input.operation)?.reservedCredits === 0;
     const balanceUnavailable = !balanceFresh || lastBalance === null;
-    const floorProbeEligible = balanceUnavailable &&
+    const floorProbeEligible = !registeredFree && balanceUnavailable &&
       input.allowFloorProbe === true &&
       input.budgetScope === "live" &&
       activeFloorProbe.rows.length === 0 &&
@@ -1298,9 +1325,9 @@ export async function reserveOfapiRequestAttempt(
       denial = "job_cap";
     } else if (job?.maxCredits !== null && job && job.spentCredits + estimate > job.maxCredits) {
       denial = "job_cap";
-    } else if (balanceUnavailable && !floorProbeEligible) {
+    } else if (!registeredFree && balanceUnavailable && !floorProbeEligible) {
       denial = "balance_stale";
-    } else if (!balanceUnavailable && lastBalance - unsettled - estimate < creditFloor) {
+    } else if (!registeredFree && !balanceUnavailable && lastBalance - unsettled - estimate < creditFloor) {
       denial = "credit_floor";
     }
     const isFloorProbe = floorProbeEligible && denial === null;
@@ -1900,8 +1927,11 @@ export async function markOfapiAttemptIndeterminate(
           : "indeterminate";
       // The governed cause travels in the job's own message, where the
       // operator status can show it — the ledger details are not on the wire.
+      const transportClass = input.details?.transportClass;
+      const classification = transportClass === "connect" || transportClass === "timeout"
+        || transportClass === "transport" ? `, ${transportClass}` : "";
       const cause = typeof input.details?.reason === "string"
-        ? ` (${input.details.reason}${typeof input.details.phase === "string" ? `, ${input.details.phase}` : ""})`
+        ? ` (${input.details.reason}${classification}${typeof input.details.phase === "string" ? `, ${input.details.phase}` : ""})`
         : "";
       const reasonMessage = retryBase && exhausted
         ? `Dispatch certainty unresolved ${consecutive} times in a row: ${input.outcome}${cause}`
@@ -2399,29 +2429,30 @@ export async function reconcileOfapiCapturedAttemptCredit(
       "response_observed_at",
     ) ?? now;
     const delta = actualCredits - priorCredits;
-    if (delta !== 0) {
-      await database.execute(sql`
-        insert into ofapi_credit_ledger (
-          occurred_at, source, operation, page_id, http_status, credits,
-          estimated, balance_after, request_id, details, actor_user_id,
-          attempt_id, attempt_entry_phase
-        ) values (
-          ${responseObservedAt},
-          'adjustment',
-          ${attempt.operation},
-          ${asNumber(attempt.page_id, "page_id")},
-          null,
-          ${delta},
-          false,
-          ${input.balanceAfter ?? null},
-          ${input.attemptId},
-          ${JSON.stringify({ certainty: "captured_meta", priorCredits, actualCredits })}::jsonb,
-          ${principalId},
-          ${input.attemptId}::uuid,
-          'certainty_adjustment'
-        )
-      `);
-    }
+    // An equal-cost receipt still proves the amount and carries the provider
+    // balance used by reconciliation. Preserve that evidence append-only even
+    // when it changes no spend; the attempt lock makes replay exactly-once.
+    await database.execute(sql`
+      insert into ofapi_credit_ledger (
+        occurred_at, source, operation, page_id, http_status, credits,
+        estimated, balance_after, request_id, details, actor_user_id,
+        attempt_id, attempt_entry_phase
+      ) values (
+        ${responseObservedAt},
+        'adjustment',
+        ${attempt.operation},
+        ${asNumber(attempt.page_id, "page_id")},
+        null,
+        ${delta},
+        false,
+        ${input.balanceAfter ?? null},
+        ${input.attemptId},
+        ${JSON.stringify({ certainty: "captured_meta", priorCredits, actualCredits })}::jsonb,
+        ${principalId},
+        ${input.attemptId}::uuid,
+        'certainty_adjustment'
+      )
+    `);
 
     await adjustReservationCounters(database, {
       reservationDay: dateOnly(attempt.reservation_day)!,
@@ -2787,6 +2818,8 @@ export async function settleOfapiCaptureParse(
               terminal_observation_id = ${terminal.observationId},
               terminal_observation_received_at = ${terminal.receivedAt},
               result = ${JSON.stringify(input.disposition.result ?? {})}::jsonb,
+              accepted_items = accepted_items + ${counts.accepted},
+              accepted_pages = accepted_pages + 1,
               completed_at = ${now},
               reason_code = null,
               reason_message = null,
@@ -3528,6 +3561,7 @@ export async function approveBlockedOfapiExportPilotJob(
     actorUserId: number;
     reason: string;
     execute?: boolean;
+    typedProfile?: OfapiTypedExportProfile;
     now?: Date;
   },
 ) {
@@ -3554,9 +3588,11 @@ export async function approveBlockedOfapiExportPilotJob(
     const quoteExpiresAt = typeof cursor?.expiresAt === "string"
       ? new Date(cursor.expiresAt)
       : null;
-    const requiredMaxCredits = Number.isSafeInteger(targetMaxMessages)
+    const requiredMaxCredits = input.typedProfile && quotedCredits !== null ? Math.max(1, quotedCredits) : Number.isSafeInteger(targetMaxMessages)
       ? Math.ceil(targetMaxMessages / 20)
       : Number.NaN;
+    const typed = input.typedProfile !== undefined && isOfapiTypedExportProfile(input.typedProfile) && job.target.profile === input.typedProfile;
+    const typedRowsValid = typed && Number.isSafeInteger(targetMaxMessages) && targetMaxMessages > 0 && targetMaxMessages <= 1000;
     if (
       job.kind !== "account_export"
       || job.state !== "blocked"
@@ -3564,10 +3600,11 @@ export async function approveBlockedOfapiExportPilotJob(
       || !["export_quote_requires_start", "owner_approval_required"].includes(
         job.reasonCode ?? "",
       )
-      || job.target.profile !== "pilot_chats"
+      || (input.typedProfile !== undefined ? !typedRowsValid : job.target.profile !== "pilot_chats")
       || !Array.isArray(targetChatIds)
-      || targetChatIds.length < 1
-      || targetChatIds.length > 3
+      || (typed ? targetChatIds.length !== 0 : targetChatIds.length < 1 || targetChatIds.length > 3)
+      || (typed && input.typedProfile !== "profile_visitors" && cursorPhase !== "quoted")
+      || (typed && cursor?.totalRows !== null && cursor?.totalRows !== undefined && Number(cursor.totalRows) > targetMaxMessages)
       || !Number.isSafeInteger(targetMaxMessages)
       || targetMaxMessages < 1
       || targetMaxMessages > 1_000
@@ -3652,7 +3689,7 @@ export async function approveBlockedOfapiExportPilotJob(
         action, target_type, target_ref, expected_state,
         previous_state, resulting_state, dry_run, actor_user_id, reason, occurred_at
       ) values (
-        'approve_export_pilot',
+        ${typed ? "approve_typed_export" : "approve_export_pilot"},
         'job',
         ${input.jobId},
         ${`blocked@${input.expectedRowVersion}`},

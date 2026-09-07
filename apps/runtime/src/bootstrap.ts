@@ -1,3 +1,4 @@
+import { ofapiCollectionPolicyHooks } from "./services/ofapi-collection-policy.ts";
 import { assertRuntimeSchemaReady, createDb, createPool, getConfigOverrides, type Database } from "@agency_hub_core/db";
 import { FanslyAdapter } from "@agency_hub_core/fansly";
 import type {
@@ -28,6 +29,7 @@ import { createOfapiCreditSpendSink } from "./services/ofapi-credits.ts";
 import type { OfapiClient } from "./services/ofapi.ts";
 import { createEgressPacer } from "./services/egress/pacer.ts";
 import { hasServiceEgressProxy } from "./services/egress/service-proxy.ts";
+import { ofapiCredentialPolicy } from "./services/ofapi-credential-policy.ts";
 import { createOfapiClient } from "./services/ofapi.ts";
 import type { AiGatewayProvider } from "./services/ai-gateway.ts";
 import { createOpenrouterAiGatewayProvider } from "./services/ai-gateway-openrouter-provider.ts";
@@ -385,6 +387,8 @@ export async function createAppContext(): Promise<AppContext> {
       ? createOfapiClient({
         baseUrl: config.ofapiBaseUrl,
         apiKey: config.ofapiApiKey,
+        ...ofapiCredentialPolicy(db, config, logger),
+        ...ofapiCollectionPolicyHooks(db, error => logger.warn({ error }, "Collection usage settlement pending")),
         restDelayMs: config.ofapiRestDelayMs,
         onCreditSpend: createOfapiCreditSpendSink({ db, logger, config }),
         // Stage 26: off = legacy slot only; shadow computes + logs the
@@ -401,6 +405,8 @@ export async function createAppContext(): Promise<AppContext> {
         },
       })
       : undefined;
+    // Preflight failure leaves database-only work available; stateful dispatch stays closed.
+    await ofapi?.getCredentialPreflight?.();
     const aiGatewayProvider = config.chatMuseAiGatewayEnabled && config.anthropicApiKey
       ? createAnthropicAiGatewayProvider({
         resolveClient: createPageProxyAnthropicClientResolver(config.anthropicApiKey),

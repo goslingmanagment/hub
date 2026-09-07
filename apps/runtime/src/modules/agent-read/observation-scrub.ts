@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
  * to come out of them first.
  *
  * A DENYLIST CANNOT WORK HERE, and this was checked rather than assumed:
- * `RESTRICTED_OBSERVATION_KINDS` is exactly `["desktop.guard_audit"]` and is
+ * `RESTRICTED_OBSERVATION_KINDS` contains `desktop.guard_audit` and `ofapi_admin_accounts` and is
  * consulted only on the tiering/lake path, never on serving. It contains neither
  * `dm_messages` (signed CDN addresses) nor `account_me` (vendor auth material).
  * So the rule is an ALLOWLIST, fail-closed: a kind absent from the list below is
@@ -83,6 +83,7 @@ export const AGENT_OBSERVATION_PAYLOAD_ALLOWLIST: ReadonlySet<string> = new Set(
  * rather than inferring it from an omission. (The allowlist already refuses them;
  * this exists so a future widening has to delete a line that says why.)
  *
+ *   ofapi_admin_accounts         creator identities and auth state; session material is removed at capture
  *   account_me / account_lookup  vendor auth material and session state
  *   group_detail                 permission flags and user settings
  *   followers                    trimmed at capture; the journal row is not the fact
@@ -112,6 +113,7 @@ export const AGENT_OBSERVATION_PAYLOAD_ALLOWLIST: ReadonlySet<string> = new Set(
  *   <endpoint>:failed            error bodies are outside the sink allowlist
  */
 export const AGENT_OBSERVATION_PAYLOAD_DENYLIST: ReadonlySet<string> = new Set([
+  "ofapi_admin_accounts",
   "account_me",
   "account_lookup",
   "group_detail",

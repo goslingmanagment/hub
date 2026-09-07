@@ -1,3 +1,7 @@
+import { buildOfapiMediaUploadRequest, parseCapturedOfapiMediaUpload, type OfapiMediaRequestPlan } from "./ofapi-media-uploads.ts";
+import { isOfapiTypedExportProfile, ofapiTypedExportCategory, type OfapiCollectionContext } from "@agency_hub_core/shared";
+import { settleOfapiCollectionRequest } from "@agency_hub_core/db";
+import { assertOfapiCollectionAllowed, OfapiCollectionPolicyError } from "@agency_hub_core/db";
 import { createHash } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 
@@ -6,6 +10,7 @@ import {
   blockOfapiCaptureJobLease,
   captureOfapiAttemptResponse,
   getComposableOfapiMessageCoverageProof,
+  getOfapiCaptureJob,
   leaseNextOfapiCaptureJob,
   loadOfapiCaptureObservation,
   markObservationParsed,
@@ -34,7 +39,7 @@ import {
   parseStrictOfapiMessagePage,
   parseStrictOfapiPostPage,
 } from "./ofapi-capture-contract.ts";
-import { resolveOfapiEgressContext } from "./ofapi-egress.ts";
+import { OfapiBindingUnavailableError, resolveOfapiEgressContext } from "./ofapi-egress.ts";
 import { OFAPI_CAPTURE_MATERIALIZER_VERSION } from "./ofapi-capture-materialization.ts";
 import {
   buildOfapiExportQuoteRequest,
@@ -847,9 +852,8 @@ async function parseCapturedJob(
   // Credit metadata is replayed from the durable bytes as part of local
   // parsing. The capture chunk also attempts this eagerly, but a process may
   // die after the response transaction commits and before that correction.
-  const parsedJson = parseOfapiJsonBytes(captured.bodyBytes);
-  const holdsExportStartCeiling = job.kind === "account_export"
-    && job.cursor?.phase === "owner_approved";
+  const parsedJson = parseOfapiJsonBytes(captured.bodyBytes, captured.headers);
+  const holdsExportStartCeiling = (job.kind === "account_export" && job.cursor?.phase === "owner_approved") || (job.kind === "media_upload" && job.cursor === null);
   if (parsedJson.creditsUsed !== null && !holdsExportStartCeiling) {
     await reconcileOfapiCapturedAttemptCredit(app.db, {
       attemptId: observation.attemptId,
@@ -858,6 +862,10 @@ async function parseCapturedJob(
     });
   }
 
+  if (job.kind === "media_upload") {
+    const result = await parseCapturedOfapiMediaUpload(app, { job, attemptId: observation.attemptId, observationId: observation.id, observationReceivedAt: observation.receivedAt, status: captured.status, headers: captured.headers, parsedJson });
+    return { kind: result, pageId: job.pageId, jobId: job.id };
+  }
   if (job.kind === "account_export") {
     const result = await parseCapturedOfapiExportQuote(app, {
       job,
@@ -1190,13 +1198,17 @@ async function parseCapturedJob(
 export async function executeOfapiCaptureJobChunk(
   app: AppContext,
   pageId: number,
+  typedExportJobId?: string,
 ): Promise<OfapiCaptureChunkResult> {
-  if (!isOfapiBackgroundCaptureRunnable(app.config)) {
+  const selected = typedExportJobId ? await getOfapiCaptureJob(app.db, typedExportJobId) : null;
+  const explicitExport = selected?.pageId === pageId && typeof selected.target.collectionJobId === "string" && ((selected.kind === "account_export" && isOfapiTypedExportProfile(selected.target.profile)) || selected.kind === "media_upload");
+  if ((typedExportJobId && !explicitExport) || (!explicitExport && !isOfapiBackgroundCaptureRunnable(app.config))) {
     return { kind: "idle", pageId, jobId: null };
   }
   const job = await leaseNextOfapiCaptureJob(app.db, {
     pageId,
     leaseOwner: `sync-page-executor:${process.pid}`,
+    ...(explicitExport ? { exactJobId: typedExportJobId! } : {}),
     leaseTtlMs: JOB_LEASE_TTL_MS,
   });
   if (!job) {
@@ -1213,7 +1225,7 @@ export async function executeOfapiCaptureJobChunk(
     return { kind: "blocked", pageId, jobId: job.id };
   }
   const leaseToken = job.leaseToken;
-  let requestPlan: OfapiExportQuoteRequestPlan | {
+  let requestPlan: OfapiExportQuoteRequestPlan | OfapiMediaRequestPlan | {
     operation: "ofapi_capture_chat_messages";
     endpointClass: "chat_messages";
     method: "GET";
@@ -1303,6 +1315,9 @@ export async function executeOfapiCaptureJobChunk(
         maxResponseBytes: 10 * 1024 * 1024,
       };
     }
+  } else if (job.kind === "media_upload") {
+    try { requestPlan = await buildOfapiMediaUploadRequest(app, job); }
+    catch { await blockJob(app, job, "media_source_unavailable", "Owned source bytes or account custody changed"); return { kind: "blocked", pageId, jobId: job.id }; }
   } else if (job.kind === "account_export") {
     requestPlan = buildOfapiExportQuoteRequest(job);
   }
@@ -1310,7 +1325,7 @@ export async function executeOfapiCaptureJobChunk(
     await blockJob(
       app,
       job,
-      job.kind === "chat_paginate" || job.kind === "post_paginate" || job.kind === "account_export"
+      job.kind === "chat_paginate" || job.kind === "post_paginate" || job.kind === "account_export" || job.kind === "media_upload"
         ? "target_invalid"
         : "unsupported_job_kind",
       `Capture request cannot be built for ${job.kind}`,
@@ -1319,6 +1334,19 @@ export async function executeOfapiCaptureJobChunk(
   }
   if (!app.ofapi?.dispatchGovernedRaw) {
     await blockJob(app, job, "transport_unavailable", "OFAPI client is not configured");
+    return { kind: "blocked", pageId, jobId: job.id };
+  }
+
+  const collectionContext: OfapiCollectionContext | undefined = job.kind === "media_upload" && typeof job.target.collectionJobId === "string"
+    ? { category: "vault_files", purpose: "one_off", jobId: job.target.collectionJobId, reservedCredits: requestPlan.reservedCredits }
+    : isOfapiTypedExportProfile(job.target.profile) && typeof job.target.collectionJobId === "string"
+    ? { category: ofapiTypedExportCategory(job.target.profile), purpose: "one_off", jobId: job.target.collectionJobId, reservedCredits: requestPlan.reservedCredits }
+    : undefined;
+  try {
+    await assertOfapiCollectionAllowed(app.db, { pageId: job.pageId, operation: requestPlan.operation, ...(collectionContext ? { context: collectionContext } : {}) });
+  } catch (error) {
+    if (!(error instanceof OfapiCollectionPolicyError)) throw error;
+    await blockJob(app, job, error.reason, error.message);
     return { kind: "blocked", pageId, jobId: job.id };
   }
 
@@ -1332,7 +1360,7 @@ export async function executeOfapiCaptureJobChunk(
     await blockJob(
       app,
       job,
-      "egress_unavailable",
+      error instanceof OfapiBindingUnavailableError ? "binding_unavailable" : "egress_unavailable",
       error instanceof Error ? error.message : String(error),
     );
     return { kind: "blocked", pageId, jobId: job.id };
@@ -1393,12 +1421,30 @@ export async function executeOfapiCaptureJobChunk(
     // name allowlist. Every safe GET is repeatable after conservatively
     // settling the uncertain attempt as billed; stateful requests remain
     // parked for operator reconciliation.
-    const indeterminateRetryAt = requestPlan.requestSemantics === "safe_read"
-      ? new Date(Date.now() + 60_000)
-      : null;
+    // Anchor retry to the failure transition: a slow response or failed capture
+    // commit can outlast the entire retry delay. Use one clock sample for the
+    // repository invariant and retry so elapsed HTTP time cannot strand a lease.
+    const indeterminateTiming = () => {
+      const now = new Date();
+      return {
+        now,
+        retrySafeReadAt: requestPlan.requestSemantics === "safe_read"
+          ? new Date(now.getTime() + 60_000)
+          : null,
+      };
+    };
+    const logIndeterminateSettlementFailure = (error: unknown) => {
+      app.logger.error({
+        jobId: job.id,
+        attemptId: reservation.attemptId,
+        errorName: error instanceof Error ? error.name : "UnknownError",
+        recovery: "expired_job_lease",
+      }, "OFAPI capture settlement failed; awaiting lease recovery");
+    };
     try {
       raw = await app.ofapi.dispatchGovernedRaw({
         pageId: job.pageId,
+        ...(collectionContext ? { collectionContext } : {}),
         dispatcher: egress.dispatcher,
         egressKey: egress.egressKey,
       }, {
@@ -1414,7 +1460,7 @@ export async function executeOfapiCaptureJobChunk(
         timeoutMs: requestPlan.timeoutMs,
         maxResponseBytes: requestPlan.maxResponseBytes,
         beforeDispatch: async () =>
-          isOfapiBackgroundCaptureRunnable(app.config) &&
+          (explicitExport || isOfapiBackgroundCaptureRunnable(app.config)) &&
           await markOfapiAttemptDispatching(app.db, {
             attemptId: reservation.attemptId,
             fenceToken: reservation.fenceToken,
@@ -1430,21 +1476,20 @@ export async function executeOfapiCaptureJobChunk(
           retryAt: new Date(Date.now() + 60_000),
         });
       } else {
+        const details = error instanceof OfapiGovernedRequestError
+          ? { reason: error.reason, phase: error.phase, ...error.diagnostics }
+          : { reason: "transport", phase: "post_dispatch" };
+        app.logger.warn({
+          jobId: job.id, pageId: job.pageId, attemptId: reservation.attemptId,
+          ...details,
+        }, "OFAPI capture transport failed");
         await markOfapiAttemptIndeterminate(app.db, {
           attemptId: reservation.attemptId,
           fenceToken: reservation.fenceToken,
           outcome: "transport",
-          details: {
-            error: error instanceof Error ? error.message : String(error),
-            // The governed reason is what an operator needs when the bound
-            // parks the job: `body_too_large` is a plan to change,
-            // `transport` is a network to look at.
-            ...(error instanceof OfapiGovernedRequestError
-              ? { reason: error.reason, phase: error.phase }
-              : {}),
-          },
-          retrySafeReadAt: indeterminateRetryAt,
-        });
+          details,
+          ...indeterminateTiming(),
+        }).catch(logIndeterminateSettlementFailure);
       }
       return { kind: "failed", pageId, jobId: job.id };
     }
@@ -1481,13 +1526,16 @@ export async function executeOfapiCaptureJobChunk(
         details: {
           error: captureError instanceof Error ? captureError.message : String(captureError),
         },
-        retrySafeReadAt: indeterminateRetryAt,
-      }).catch(() => undefined);
+        ...indeterminateTiming(),
+      }).catch(logIndeterminateSettlementFailure);
       return { kind: "failed", pageId, jobId: job.id };
     }
 
-    const parsed = parseOfapiJsonBytes(raw.bodyBytes);
-    if (parsed.creditsUsed !== null && requestPlan.operation !== "ofapi_export_start") {
+    const parsed = parseOfapiJsonBytes(raw.bodyBytes, raw.headers);
+  await settleOfapiCollectionRequest(app.db, reservation.attemptId, parsed.creditsUsed).catch(error => {
+    app.logger.warn({ error, attemptId: reservation.attemptId }, "Collection usage settlement pending; captured response retained");
+  });
+    if (parsed.creditsUsed !== null && !["ofapi_export_start", "ofapi_export_retry", "ofapi_upload_vault", "ofapi_upload_cdn"].includes(requestPlan.operation)) {
       await reconcileOfapiCapturedAttemptCredit(app.db, {
         attemptId: reservation.attemptId,
         actualCredits: parsed.creditsUsed,

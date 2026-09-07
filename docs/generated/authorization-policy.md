@@ -22,7 +22,7 @@ body remain handler-checked and are noted per route in the service layer.
 | `agentKey` | Agent Read Plane key only; no human principal is admitted |
 | `any` | any authenticated principal except an agent key |
 
-## Routes (208)
+## Routes (260)
 
 | Method | Path | Route key | Kind | Roles | Page scope |
 | --- | --- | --- | --- | --- | --- |
@@ -53,6 +53,14 @@ body remain handler-checked and are noted per route in the service layer.
 | GET | `/api/v1/admin/notifications/settings` | `notificationsSettings` | `owner-session` | — | — |
 | PATCH | `/api/v1/admin/notifications/settings` | `notificationsSettingsUpdate` | `owner-session` | — | — |
 | POST | `/api/v1/admin/notifications/test` | `notificationsTestMessage` | `owner-session` | — | — |
+| GET | `/api/v1/admin/ofapi/actions` | `ofapiActionList` | `owner-session` | — | — |
+| POST | `/api/v1/admin/ofapi/actions` | `ofapiActionPrepare` | `owner-session` | — | — |
+| GET | `/api/v1/admin/ofapi/actions/:id` | `ofapiActionGet` | `owner-session` | — | — |
+| POST | `/api/v1/admin/ofapi/actions/:id/cancel` | `ofapiActionCancel` | `owner-session` | — | — |
+| POST | `/api/v1/admin/ofapi/actions/:id/dispatch` | `ofapiActionDispatch` | `owner-session` | — | — |
+| POST | `/api/v1/admin/ofapi/actions/:id/repair` | `ofapiActionRepair` | `owner-session` | — | — |
+| GET | `/api/v1/admin/ofapi/banned-words` | `ofapiBannedWordsAdminGet` | `owner-session` | — | — |
+| POST | `/api/v1/admin/ofapi/banned-words/refresh` | `ofapiBannedWordsRefresh` | `owner-session` | — | — |
 | POST | `/api/v1/admin/ofapi/capture-jobs/seed` | `adminOfapiCaptureJobsSeed` | `owner-session` | — | — |
 | POST | `/api/v1/admin/ofapi/capture/attempts/:attemptId/resolve` | `adminOfapiCaptureAttemptResolve` | `owner-session` | — | — |
 | POST | `/api/v1/admin/ofapi/capture/controls` | `adminOfapiCaptureControl` | `owner-session` | — | — |
@@ -60,21 +68,63 @@ body remain handler-checked and are noted per route in the service layer.
 | POST | `/api/v1/admin/ofapi/capture/jobs/:jobId/cancel` | `adminOfapiCaptureJobCancel` | `owner-session` | — | — |
 | POST | `/api/v1/admin/ofapi/capture/jobs/:jobId/replay` | `adminOfapiCaptureJobReplay` | `owner-session` | — | — |
 | GET | `/api/v1/admin/ofapi/capture/operator` | `adminOfapiCaptureOperatorStatus` | `owner-session` | — | — |
+| GET | `/api/v1/admin/ofapi/collection` | `ofapiCollectionGet` | `session` | — | — |
+| POST | `/api/v1/admin/ofapi/collection/apply` | `ofapiCollectionApply` | `owner-session` | — | — |
+| POST | `/api/v1/admin/ofapi/collection/jobs` | `ofapiCollectionJobCreate` | `owner-session` | — | — |
+| POST | `/api/v1/admin/ofapi/collection/jobs/:id/finish-incomplete` | `ofapiCollectionJobFinishIncomplete` | `owner-session` | — | — |
+| POST | `/api/v1/admin/ofapi/collection/jobs/:id/resume` | `ofapiCollectionJobResume` | `owner-session` | — | — |
+| POST | `/api/v1/admin/ofapi/collection/preview` | `ofapiCollectionPreview` | `owner-session` | — | — |
+| GET | `/api/v1/admin/ofapi/collection/results` | `ofapiReadCollectionsGet` | `owner-session` | — | — |
+| GET | `/api/v1/admin/ofapi/content/events` | `ofapiContentEventsGet` | `owner-session` | — | — |
 | GET | `/api/v1/admin/ofapi/credits/daily` | `adminOfapiCreditsDaily` | `owner-session` | — | — |
 | GET | `/api/v1/admin/ofapi/credits/ledger` | `adminOfapiCreditsLedger` | `owner-session` | — | — |
 | GET | `/api/v1/admin/ofapi/credits/ledger.csv` | `adminOfapiCreditsLedgerCsv` | `owner-session` | — | — |
 | GET | `/api/v1/admin/ofapi/credits/summary` | `adminOfapiCreditsSummary` | `owner-session` | — | — |
 | GET | `/api/v1/admin/ofapi/dm-archive/status` | `adminOfapiDmColdArchiveStatus` | `owner-session` | — | — |
+| GET | `/api/v1/admin/ofapi/export-inventory` | `ofapiExportInventoryGet` | `owner-session` | — | — |
+| POST | `/api/v1/admin/ofapi/export-inventory/refresh` | `ofapiExportInventoryRefresh` | `owner-session` | — | — |
 | POST | `/api/v1/admin/ofapi/export-quotes` | `adminOfapiExportQuotesCreate` | `owner-session` | — | — |
 | GET | `/api/v1/admin/ofapi/export-quotes/:jobId` | `adminOfapiExportQuoteStatus` | `owner-session` | — | — |
 | POST | `/api/v1/admin/ofapi/export-quotes/:jobId/approve-pilot` | `adminOfapiExportPilotApprove` | `owner-session` | — | — |
 | POST | `/api/v1/admin/ofapi/export-quotes/:jobId/cancel` | `adminOfapiExportQuoteCancel` | `owner-session` | — | — |
 | POST | `/api/v1/admin/ofapi/export-quotes/:jobId/capture-artifact` | `adminOfapiExportArtifactCapture` | `owner-session` | — | — |
 | POST | `/api/v1/admin/ofapi/export-quotes/:jobId/reconcile-create` | `adminOfapiExportCreateReconcile` | `owner-session` | — | — |
+| GET | `/api/v1/admin/ofapi/exports` | `ofapiTypedExportList` | `session` | — | — |
+| POST | `/api/v1/admin/ofapi/exports` | `ofapiTypedExportCreate` | `owner-session` | — | — |
+| POST | `/api/v1/admin/ofapi/exports/:jobId/approve` | `ofapiTypedExportApprove` | `owner-session` | — | — |
+| POST | `/api/v1/admin/ofapi/exports/:jobId/artifact` | `ofapiTypedExportArtifact` | `owner-session` | — | — |
+| POST | `/api/v1/admin/ofapi/exports/:jobId/control` | `ofapiTypedExportControl` | `owner-session` | — | — |
+| POST | `/api/v1/admin/ofapi/exports/:jobId/resume` | `ofapiTypedExportResume` | `owner-session` | — | — |
+| GET | `/api/v1/admin/ofapi/exports/:jobId/rows` | `ofapiTypedExportRows` | `session` | — | — |
+| GET | `/api/v1/admin/ofapi/key-scope` | `ofapiKeyScopeGet` | `owner-session` | — | — |
+| POST | `/api/v1/admin/ofapi/key-scope` | `ofapiKeyScopeApply` | `owner-session` | — | — |
+| GET | `/api/v1/admin/ofapi/marketing` | `ofapiMarketingGet` | `owner-session` | — | — |
+| POST | `/api/v1/admin/ofapi/marketing/intents` | `ofapiMarketingPrepare` | `owner-session` | — | — |
+| POST | `/api/v1/admin/ofapi/marketing/intents/:id/dispatch` | `ofapiMarketingDispatch` | `owner-session` | — | — |
+| POST | `/api/v1/admin/ofapi/marketing/postbacks/refresh` | `ofapiMarketingPostbacksRefresh` | `owner-session` | — | — |
+| POST | `/api/v1/admin/ofapi/marketing/rebuild` | `ofapiMarketingRebuild` | `owner-session` | — | — |
+| GET | `/api/v1/admin/ofapi/media` | `ofapiMediaGet` | `session` | — | — |
+| POST | `/api/v1/admin/ofapi/media/handoff` | `ofapiMediaHandoff` | `owner-session` | — | — |
+| POST | `/api/v1/admin/ofapi/media/sources` | `ofapiMediaSourceCreate` | `owner-session` | — | — |
+| POST | `/api/v1/admin/ofapi/media/uploads` | `ofapiMediaUploadCreate` | `owner-session` | — | — |
+| POST | `/api/v1/admin/ofapi/media/uploads/:jobId/resume` | `ofapiMediaUploadResume` | `owner-session` | — | — |
+| GET | `/api/v1/admin/ofapi/profile-visitors` | `ofapiProfileVisitorsGet` | `session` | — | — |
 | GET | `/api/v1/admin/ofapi/spend/comparison` | `adminOfapiSpendComparison` | `owner-session` | — | — |
+| POST | `/api/v1/admin/ofapi/vendor-usage` | `ofapiVendorUsageRefresh` | `owner-session` | — | — |
 | GET | `/api/v1/admin/ofapi/webhook` | `adminOfapiWebhookStatus` | `owner-session` | — | — |
 | POST | `/api/v1/admin/ofapi/webhook` | `adminOfapiWebhookRegister` | `owner-session` | — | — |
+| POST | `/api/v1/admin/ofapi/webhook/bindings` | `adminOfapiBindingRefresh` | `owner-session` | — | — |
+| GET | `/api/v1/admin/ofapi/webhook/collection-policy` | `adminOfapiWebhookCollectionPolicy` | `owner-session` | — | — |
+| PUT | `/api/v1/admin/ofapi/webhook/collection-policy` | `adminOfapiWebhookCollectionPolicySave` | `owner-session` | — | — |
+| POST | `/api/v1/admin/ofapi/webhook/collection-policy/apply` | `adminOfapiWebhookCollectionPolicyApply` | `owner-session` | — | — |
+| GET | `/api/v1/admin/ofapi/webhook/deliveries` | `adminOfapiWebhookDeliveries` | `owner-session` | — | — |
+| POST | `/api/v1/admin/ofapi/webhook/deliveries/redeliver` | `adminOfapiWebhookRedeliver` | `owner-session` | — | — |
+| POST | `/api/v1/admin/ofapi/webhook/deliveries/sync` | `adminOfapiWebhookDeliverySync` | `owner-session` | — | — |
+| GET | `/api/v1/admin/ofapi/webhook/event-catalog` | `adminOfapiWebhookEventCatalog` | `owner-session` | — | — |
+| POST | `/api/v1/admin/ofapi/webhook/event-catalog/refresh` | `adminOfapiWebhookEventCatalogRefresh` | `owner-session` | — | — |
+| GET | `/api/v1/admin/ofapi/webhook/preflight` | `adminOfapiCredentialPreflight` | `owner-session` | — | — |
 | POST | `/api/v1/admin/ofapi/webhook/reconcile` | `adminOfapiWebhookReconcile` | `owner-session` | — | — |
+| POST | `/api/v1/admin/ofapi/webhook/replay` | `adminOfapiWebhookReplay` | `owner-session` | — | — |
 | GET | `/api/v1/admin/pages` | `adminPages` | `owner-session` | — | — |
 | POST | `/api/v1/admin/pages` | `adminCreatePage` | `owner-session` | — | — |
 | DELETE | `/api/v1/admin/pages/:pageLabel` | `adminDeletePage` | `owner-session` | — | — |
@@ -163,6 +213,8 @@ body remain handler-checked and are noted per route in the service layer.
 | GET | `/api/v1/models` | `models` | `session` | — | — |
 | GET | `/api/v1/models/:modelSlug/revenue` | `modelRevenue` | `session` | — | — |
 | GET | `/api/v1/models/:modelSlug/revenue/daily` | `modelRevenueDaily` | `session` | — | — |
+| GET | `/api/v1/ofapi/banned-words` | `ofapiBannedWordsGet` | `apiKey` | — | — |
+| POST | `/api/v1/ofapi/banned-words/preview` | `ofapiBannedWordsPreview` | `apiKey` | — | — |
 | POST | `/api/v1/ofapi/commands` | `createOfapiCommand` | `apiKey` | — | — |
 | GET | `/api/v1/ofapi/commands/:commandId` | `getOfapiCommand` | `apiKey` | — | — |
 | POST | `/api/v1/ofapi/commands/:commandId/cancel` | `cancelOfapiCommand` | `apiKey` | — | — |

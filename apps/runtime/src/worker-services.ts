@@ -1,3 +1,7 @@
+import { ensureOfapiMediaQueue, OFAPI_MEDIA_SWEEP_QUEUE, runOfapiMediaUploadSweep } from "./services/ofapi-media-worker.ts";
+import { ensureOfapiCollectionQueues, startOfapiCollectionWorker } from "./services/ofapi-collection-runner.ts";
+import { ofapiCollectionHandlers } from "./services/ofapi-collection-handlers.ts";
+import { ensureOfapiTypedExportQueue, OFAPI_TYPED_EXPORT_SWEEP_QUEUE, runOfapiTypedExportSweep } from "./services/ofapi-typed-export-worker.ts";
 import {
   closeOrphanedSyncRuns,
   deleteExpiredPendingDeviceTokens,
@@ -218,6 +222,9 @@ export async function startWorkerServices(
   await ensureOfapiPendingReconcileQueue(boss, createdQueues);
   await ensureOfapiCommandQueues(boss, createdQueues);
   await ensureOfapiDmAnalyticsQueues(boss, createdQueues);
+  await ensureOfapiTypedExportQueue(boss, createdQueues);
+  await ensureOfapiMediaQueue(boss, createdQueues);
+  await ensureOfapiCollectionQueues(boss, createdQueues);
   await ensureDbDiskUsageQueue(boss, createdQueues);
   await ensureObservationsPartitionQueue(boss, createdQueues);
   await ensureCapturePayloadParityQueue(boss, createdQueues);
@@ -238,6 +245,9 @@ export async function startWorkerServices(
   await reconcileQueueRetention(boss);
   // Stage 25: cron registration moved to the scheduler role (leader-elected;
   // services/schedules.ts) — workers only create queues and consume.
+
+  await boss.work(OFAPI_MEDIA_SWEEP_QUEUE, { batchSize: 1 }, async () => { await runOfapiMediaUploadSweep(app); });
+  await boss.work(OFAPI_TYPED_EXPORT_SWEEP_QUEUE, { batchSize: 1 }, async () => { await runOfapiTypedExportSweep(app); });
 
   await boss.work(SYNC_PLANNER_QUEUE, {
     batchSize: 1,
@@ -559,6 +569,7 @@ export async function startWorkerServices(
   await startOfapiPendingReconcileWorker(app, boss);
   await startOfapiCommandWorker(app, boss);
   await startOfapiDmAnalyticsWorker(app, boss);
+  await startOfapiCollectionWorker(app, boss, ofapiCollectionHandlers);
 
   await boss.work(TELEGRAM_DAILY_REPORT_QUEUE, { batchSize: 1 }, async () => {
     const now = new Date();

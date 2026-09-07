@@ -16,6 +16,7 @@ import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 
 const dbMocks = vi.hoisted(() => ({
   listPageNativeAccountRefs: vi.fn(async () => [] as unknown[]),
+  listHistoricalOfapiBindings: vi.fn(async () => []),
   listObservationsForReplay: vi.fn(),
   markObservationParsed: vi.fn(),
   appendDomainEvents: vi.fn(),

@@ -1,3 +1,6 @@
+import { findOfapiReadDefinition } from "@agency_hub_core/shared";
+import type { OfapiCollectionContext } from "@agency_hub_core/shared";
+import { OfapiCollectionPolicyError, settleOfapiCollectionRequest } from "@agency_hub_core/db";
 import { setTimeout as delay } from "node:timers/promises";
 
 import {
@@ -85,9 +88,10 @@ export async function executeCaptureFirstInteractiveRead(
   app: AppContext,
   input: {
     principalUserId: number;
+    collectionContext?: OfapiCollectionContext | undefined;
     pageId: number;
     ofapiAccountId: string;
-    dispatcher: Dispatcher;
+    dispatcher: Dispatcher | null;
     egressKey: string;
     operation: string;
     surface: string;
@@ -104,7 +108,7 @@ export async function executeCaptureFirstInteractiveRead(
       | "shadow_probe"
       | null;
   },
-): Promise<OfapiRawResponse> {
+): Promise<OfapiRawResponse & { capture: { observationId: number; receivedAt: Date } }> {
   if (!app.ofapi?.dispatchGovernedRaw) {
     throw new ServiceUnavailableError("OFAPI capture-first transport is unavailable");
   }
@@ -147,7 +151,7 @@ export async function executeCaptureFirstInteractiveRead(
     surface: input.surface,
     servingMode: input.servingMode ?? "vendor_only",
     fallbackReason: input.fallbackReason ?? null,
-    reservedCredits: Math.max(1, Math.trunc(input.fallbackCredits)),
+    reservedCredits: Math.max(findOfapiReadDefinition(input.operation)?.reservedCredits === 0 ? 0 : 1, Math.trunc(input.fallbackCredits)),
     globalDailyCap,
     scopeDailyCap: globalDailyCap,
     creditFloor: Math.max(0, app.config.ofapiCreditFloor ?? 500),
@@ -175,6 +179,7 @@ export async function executeCaptureFirstInteractiveRead(
     raw = await app.ofapi.dispatchGovernedRaw({
       pageId: input.pageId,
       actorUserId: input.principalUserId,
+      ...(input.collectionContext ? { collectionContext: input.collectionContext } : {}),
       dispatcher: input.dispatcher,
       egressKey: input.egressKey,
     }, {
@@ -197,16 +202,24 @@ export async function executeCaptureFirstInteractiveRead(
         fenceToken: reservation.fenceToken,
         reasonCode: error.reason,
       });
+      // A collection-policy refusal is a typed local answer (429/409 at the
+      // read gateway), not an upstream outage: surface it once the unused
+      // attempt is released (review #136).
+      if (error.cause instanceof OfapiCollectionPolicyError) throw error.cause;
     } else {
+      const details = error instanceof OfapiGovernedRequestError
+        ? { reason: error.reason, phase: error.phase, ...error.diagnostics }
+        : { reason: "transport", phase: "post_dispatch" };
+      app.logger.warn({
+        pageId: input.pageId, attemptId: reservation.attemptId, ...details,
+      }, "OFAPI interactive capture transport failed");
       await markOfapiAttemptIndeterminate(app.db, {
         attemptId: reservation.attemptId,
         fenceToken: reservation.fenceToken,
         outcome: error instanceof OfapiGovernedRequestError && error.reason === "deadline"
           ? "vendor_slow"
           : "transport",
-        details: {
-          error: error instanceof Error ? error.message : String(error),
-        },
+        details,
       });
     }
     throw new ServiceUnavailableError("OFAPI upstream is unavailable");
@@ -214,9 +227,10 @@ export async function executeCaptureFirstInteractiveRead(
 
   let captureError: unknown = null;
   let captured = false;
+  let captureEvidence: { observationId: number; receivedAt: Date } | null = null;
   for (let attempt = 1; attempt <= CAPTURE_COMMIT_ATTEMPTS; attempt += 1) {
     try {
-      await captureOfapiAttemptResponse(app.db, {
+      captureEvidence = await captureOfapiAttemptResponse(app.db, {
         attemptId: reservation.attemptId,
         fenceToken: reservation.fenceToken,
         responseObservedAt: raw.receivedAt,
@@ -230,7 +244,7 @@ export async function executeCaptureFirstInteractiveRead(
           query: input.query,
         },
         producer: "ofapi-mirror-interactive",
-        observationKind: "ofapi.interactive_response.v1",
+        observationKind: input.collectionContext ? "ofapi.collection_read_response.v1" : "ofapi.interactive_response.v1",
       });
       captured = true;
       break;
@@ -257,7 +271,10 @@ export async function executeCaptureFirstInteractiveRead(
     throw new ServiceUnavailableError("OFAPI response could not be durably captured");
   }
 
-  const parsed = parseOfapiJsonBytes(raw.bodyBytes);
+  const parsed = parseOfapiJsonBytes(raw.bodyBytes, raw.headers);
+  await settleOfapiCollectionRequest(app.db, reservation.attemptId, parsed.creditsUsed).catch(error => {
+    app.logger.warn({ error, attemptId: reservation.attemptId }, "Collection usage settlement pending; captured response retained");
+  });
   if (parsed.creditsUsed !== null) {
     await reconcileOfapiCapturedAttemptCredit(app.db, {
       attemptId: reservation.attemptId,
@@ -282,6 +299,7 @@ export async function executeCaptureFirstInteractiveRead(
     status: raw.status,
     body: parsed.body,
     headers: raw.headers,
+    capture: captureEvidence!,
   };
 }
 
@@ -351,7 +369,7 @@ export async function recoverExpiredOfapiInteractiveResponses(
     const captured = capturePayloadResponse(resolved.payload);
     const parsed = captured === null
       ? { validJson: false, body: null, creditsUsed: null, balanceAfter: null }
-      : parseOfapiJsonBytes(captured.bodyBytes);
+      : parseOfapiJsonBytes(captured.bodyBytes, captured.headers);
     try {
       if (parsed.creditsUsed !== null) {
         await reconcileOfapiCapturedAttemptCredit(app.db, {

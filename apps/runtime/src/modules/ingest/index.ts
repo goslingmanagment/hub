@@ -1,3 +1,15 @@
+import {rebuildOfapiMarketingState, getOfapiMarketingDashboard, prepareOfapiMarketingCommand, dispatchOfapiMarketingCommand, refreshOfapiMarketingPostbacks} from "../../services/ofapi-smart-links.ts";
+import { cancelOfapiAction, dispatchOfapiAction, getOfapiAction, listOfapiActions, prepareOfapiAction, repairOfapiAction } from "../../services/ofapi-actions.ts";
+import { readOfapiWebhookEventCatalog, refreshOfapiWebhookEventCatalog } from "../../services/ofapi-webhook-event-catalog.ts";
+import {
+  applyOfapiWebhookCollectionPolicy, listOfapiWebhookDeliveryHistory, redeliverOfapiWebhook,
+  replayLocalOfapiWebhook, saveOfapiWebhookCollectionPolicy, syncOfapiWebhookDeliveries,
+  webhookCollectionPolicyStatus,
+} from "../../services/ofapi-webhook-recovery.ts";
+import { getOfapiBannedDictionary } from "@agency_hub_core/db";
+import { getOfapiBannedWordsPreview, refreshOfapiBannedWords } from "../../services/ofapi-banned-words.ts";
+import { ServiceUnavailableError } from "../../services/errors.ts";
+import { refreshOfapiBinding } from "../../services/ofapi-binding-refresh.ts";
 import { routeSchemas } from "@agency_hub_core/contracts";
 
 import {
@@ -101,7 +113,7 @@ export async function registerIngestRoutes(server: ApiServer, ctx: ApiModuleCont
 
     // No route-level rate limit ON PURPOSE (fast-reply freshness PR1): a 429
     // here drops signed deliveries BEFORE the journal — OFAPI stops retrying
-    // after 5 attempts and the fact is lost. receiveOfapiWebhook already
+    // after 3 attempts and the fact is lost. receiveOfapiWebhook already
     // implements the full target order (HMAC → validate → journal+observation
     // in one tx → 200 incl. duplicates → best-effort boss.send with sweep
     // recovery; journal-tx failure → 5xx retried by OFAPI).
@@ -112,6 +124,7 @@ export async function registerIngestRoutes(server: ApiServer, ctx: ApiModuleCont
         rawBody: Buffer.isBuffer(request.body) ? request.body : Buffer.alloc(0),
         signatureHeader: request.headers.signature,
         idempotencyKeyHeader: request.headers["x-ofapi-idempotency-key"],
+        redeliveryOfHeader: request.headers["x-ofapi-redelivery-of"],
       });
     });
   });
@@ -123,6 +136,60 @@ export async function registerIngestRoutes(server: ApiServer, ctx: ApiModuleCont
     requireOwner(principal);
 
     return getOfapiWebhookStatus(appContext);
+  });
+
+  server.get("/api/v1/admin/ofapi/webhook/event-catalog", {schema:routeSchemas.adminOfapiWebhookEventCatalog}, async request=>{
+    const principal=await requirePrincipal(request);requireOwner(principal);
+    return readOfapiWebhookEventCatalog(appContext);
+  });
+  server.post("/api/v1/admin/ofapi/webhook/event-catalog/refresh", {schema:routeSchemas.adminOfapiWebhookEventCatalogRefresh}, async request=>{
+    const principal=await requirePrincipal(request);requireOwner(principal);
+    return refreshOfapiWebhookEventCatalog(appContext,principal.user.id);
+  });
+  server.get("/api/v1/admin/ofapi/webhook/deliveries", { schema: routeSchemas.adminOfapiWebhookDeliveries }, async request => {
+    const principal = await requirePrincipal(request); requireOwner(principal);
+    return listOfapiWebhookDeliveryHistory(appContext, { limit: request.query.limit, offset: request.query.offset, failedOnly: request.query.failedOnly === "true" });
+  });
+  server.post("/api/v1/admin/ofapi/webhook/deliveries/sync", { schema: routeSchemas.adminOfapiWebhookDeliverySync }, async request => {
+    const principal = await requirePrincipal(request); requireOwner(principal);
+    return syncOfapiWebhookDeliveries(appContext, { ...request.body, actorUserId: principal.user.id });
+  });
+  server.post("/api/v1/admin/ofapi/webhook/deliveries/redeliver", { schema: routeSchemas.adminOfapiWebhookRedeliver }, async request => {
+    const principal = await requirePrincipal(request); requireOwner(principal);
+    return redeliverOfapiWebhook(appContext, { ...request.body, actorUserId: principal.user.id });
+  });
+  server.post("/api/v1/admin/ofapi/webhook/replay", { schema: routeSchemas.adminOfapiWebhookReplay }, async request => {
+    const principal = await requirePrincipal(request); requireOwner(principal);
+    return replayLocalOfapiWebhook(appContext, { ...request.body, actorUserId: principal.user.id });
+  });
+  server.get("/api/v1/admin/ofapi/webhook/collection-policy", { schema: routeSchemas.adminOfapiWebhookCollectionPolicy }, async request => {
+    const principal = await requirePrincipal(request); requireOwner(principal);
+    return webhookCollectionPolicyStatus(appContext);
+  });
+  server.put("/api/v1/admin/ofapi/webhook/collection-policy", { schema: routeSchemas.adminOfapiWebhookCollectionPolicySave }, async request => {
+    const principal = await requirePrincipal(request); requireOwner(principal);
+    return saveOfapiWebhookCollectionPolicy(appContext, { ...request.body, actorUserId: principal.user.id });
+  });
+  server.post("/api/v1/admin/ofapi/webhook/collection-policy/apply", { schema: routeSchemas.adminOfapiWebhookCollectionPolicyApply }, async request => {
+    const principal = await requirePrincipal(request); requireOwner(principal);
+    return applyOfapiWebhookCollectionPolicy(appContext, { ...request.body, actorUserId: principal.user.id });
+  });
+
+  server.post("/api/v1/admin/ofapi/webhook/bindings", {
+    schema: routeSchemas.adminOfapiBindingRefresh,
+  }, async request => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    return refreshOfapiBinding(appContext, request.body, principal.user.id);
+  });
+  server.get("/api/v1/admin/ofapi/webhook/preflight", {
+    schema: routeSchemas.adminOfapiCredentialPreflight,
+  }, async request => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    const proof = await appContext.ofapi?.getCredentialPreflight?.();
+    if (!proof) throw new ServiceUnavailableError("OFAPI preflight unavailable");
+    return proof;
   });
 
   server.post("/api/v1/admin/ofapi/webhook", {
@@ -166,6 +233,63 @@ export async function registerIngestRoutes(server: ApiServer, ctx: ApiModuleCont
       reply.header(name, value);
     }
     return reply.code(response.status as 200).send(response.body);
+  });
+
+  server.post("/api/v1/admin/ofapi/marketing/rebuild", {schema:routeSchemas.ofapiMarketingRebuild}, async request => {
+    const principal=await requirePrincipal(request); requireOwner(principal);
+    return rebuildOfapiMarketingState(appContext,principal.user.id);
+  });
+  server.post("/api/v1/admin/ofapi/actions", { schema: routeSchemas.ofapiActionPrepare }, async request => {
+    const principal = await requirePrincipal(request); requireOwner(principal);
+    return prepareOfapiAction(appContext, request.body, principal.user.id);
+  });
+  server.get("/api/v1/admin/ofapi/actions", { schema: routeSchemas.ofapiActionList }, async request => {
+    requireOwner(await requirePrincipal(request)); return listOfapiActions(appContext, request.query.pageId);
+  });
+  server.get("/api/v1/admin/ofapi/actions/:id", { schema: routeSchemas.ofapiActionGet }, async request => {
+    requireOwner(await requirePrincipal(request)); return getOfapiAction(appContext, request.params.id);
+  });
+  server.post("/api/v1/admin/ofapi/actions/:id/dispatch", { schema: routeSchemas.ofapiActionDispatch }, async request => {
+    const principal = await requirePrincipal(request); requireOwner(principal);
+    return dispatchOfapiAction(appContext, request.params.id, principal.user.id);
+  });
+  server.post("/api/v1/admin/ofapi/actions/:id/cancel", { schema: routeSchemas.ofapiActionCancel }, async request => {
+    const principal = await requirePrincipal(request); requireOwner(principal);
+    return cancelOfapiAction(appContext, request.params.id, principal.user.id);
+  });
+  server.post("/api/v1/admin/ofapi/actions/:id/repair", { schema: routeSchemas.ofapiActionRepair }, async request => {
+    requireOwner(await requirePrincipal(request)); return repairOfapiAction(appContext, request.params.id);
+  });
+  server.get("/api/v1/admin/ofapi/marketing", {schema:routeSchemas.ofapiMarketingGet}, async request => {
+    requireOwner(await requirePrincipal(request)); return getOfapiMarketingDashboard(appContext);
+  });
+  server.post("/api/v1/admin/ofapi/marketing/intents", {schema:routeSchemas.ofapiMarketingPrepare}, async request => {
+    const principal = await requirePrincipal(request); requireOwner(principal);
+    return prepareOfapiMarketingCommand(appContext, request.body, principal.user.id);
+  });
+  server.post("/api/v1/admin/ofapi/marketing/intents/:id/dispatch", {schema:routeSchemas.ofapiMarketingDispatch}, async request => {
+    const principal = await requirePrincipal(request); requireOwner(principal);
+    return dispatchOfapiMarketingCommand(appContext, {...request.body,id:request.params.id}, principal.user.id);
+  });
+  server.post("/api/v1/admin/ofapi/marketing/postbacks/refresh", {schema:routeSchemas.ofapiMarketingPostbacksRefresh}, async request => {
+    const principal = await requirePrincipal(request); requireOwner(principal);
+    return refreshOfapiMarketingPostbacks(appContext, principal.user.id, request.body.postbackId);
+  });
+
+  server.get("/api/v1/admin/ofapi/banned-words", { schema: routeSchemas.ofapiBannedWordsAdminGet }, async request => {
+    requireOwner(await requirePrincipal(request)); return getOfapiBannedDictionary(appContext.db);
+  });
+  server.get("/api/v1/ofapi/banned-words", { schema: routeSchemas.ofapiBannedWordsGet }, async request => {
+    requireApiKeyUser(await requirePrincipal(request));
+    return getOfapiBannedDictionary(appContext.db);
+  });
+  server.post("/api/v1/ofapi/banned-words/preview", { schema: routeSchemas.ofapiBannedWordsPreview }, async request => {
+    requireApiKeyUser(await requirePrincipal(request));
+    return getOfapiBannedWordsPreview(appContext, request.body.text);
+  });
+  server.post("/api/v1/admin/ofapi/banned-words/refresh", { schema: routeSchemas.ofapiBannedWordsRefresh }, async request => {
+    requireOwner(await requirePrincipal(request));
+    return refreshOfapiBannedWords(appContext, request.body.maxPages);
   });
 
   server.post("/api/v1/ofapi/commands", {

@@ -40,6 +40,10 @@ Options:
                         prune. OFF by default: Decision #176 keeps image/tag
                         deletion owner-gated, so GC runs only when asked.
   --no-image-gc          Explicitly disable image GC (the default).
+  --skip-hub-cli-rebuild
+                        Do not rebuild this machine's production-pinned `hub`
+                        CLI after the deploy is verified (it is rebuilt by
+                        default; see scripts/rebuild-hub-cli-prod.sh).
   -h, --help             Show this help text
 
 Environment variable equivalents:
@@ -59,6 +63,7 @@ Environment variable equivalents:
   DEPLOY_DESKTOP_DIAGNOSTICS_RECEIPT
   DEPLOY_IMAGE_GC
   DEPLOY_SKIP_IMAGE_GC
+  DEPLOY_SKIP_HUB_CLI_REBUILD
 EOF
 }
 
@@ -132,6 +137,20 @@ case "${DEPLOY_SKIP_IMAGE_GC:-0}" in
     fail "Invalid DEPLOY_SKIP_IMAGE_GC value: ${DEPLOY_SKIP_IMAGE_GC}"
     ;;
 esac
+# Default ON: the shared `hub` CLI on this machine is pinned to the deployed
+# revision and its contract validation is strict, so a deploy that leaves it
+# behind breaks every agent read at `capabilities` (2026-09-07).
+HUB_CLI_REBUILD_ENABLED=1
+case "${DEPLOY_SKIP_HUB_CLI_REBUILD:-0}" in
+  0|false|no|"")
+    ;;
+  1|true|yes)
+    HUB_CLI_REBUILD_ENABLED=0
+    ;;
+  *)
+    fail "Invalid DEPLOY_SKIP_HUB_CLI_REBUILD value: ${DEPLOY_SKIP_HUB_CLI_REBUILD}"
+    ;;
+esac
 HTTP_PORT="${DEPLOY_HTTP_PORT:-3000}"
 VERIFY_URL="${DEPLOY_VERIFY_URL:-}"
 IDENTITY_FILE="${DEPLOY_IDENTITY_FILE:-}"
@@ -178,6 +197,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --no-image-gc)
       IMAGE_GC_ENABLED=0
+      shift
+      ;;
+    --skip-hub-cli-rebuild)
+      HUB_CLI_REBUILD_ENABLED=0
       shift
       ;;
     --port)
@@ -1247,6 +1270,26 @@ publish_remote_clean_full_base_image() {
   run_remote "set -euo pipefail; docker tag $(printf '%q' "$IMAGE_CANDIDATE_TAG") $(printf '%q' "$CLEAN_FULL_BASE_TAG")"
 }
 
+# Local tooling, not production: rebuilds this machine's production-pinned
+# `hub` CLI from the revision that was just deployed and verified. It runs only
+# after every health gate has passed and must never fail a healthy deploy, so
+# the caller wraps it in `|| log`, never `fail` (which would roll production
+# back over a laptop-side problem).
+rebuild_local_hub_cli() {
+  if [[ "$HUB_CLI_REBUILD_ENABLED" != "1" ]]; then
+    log "Skipping the local hub CLI rebuild (disabled for this run)"
+    return 0
+  fi
+  case "$APP_SOURCE_REVISION" in
+    unknown|*-dirty)
+      log "Skipping the local hub CLI rebuild: source revision ${APP_SOURCE_REVISION} is not a clean commit"
+      return 0
+      ;;
+  esac
+  log "Rebuilding the production-pinned hub CLI from ${APP_SOURCE_REVISION}"
+  "${SCRIPT_DIR}/rebuild-hub-cli-prod.sh" "$APP_SOURCE_REVISION"
+}
+
 gc_remote_deploy_images() {
   if [[ "${IMAGE_GC_ENABLED:-1}" != "1" ]]; then
     log "Skipping remote image GC (default; enable per run with --image-gc / DEPLOY_IMAGE_GC=1)"
@@ -1601,6 +1644,8 @@ publish_remote_clean_full_base_image \
 # Disk hygiene only, and it runs after every health gate has passed. A healthy
 # deploy is never failed by cleanup.
 gc_remote_deploy_images || log "Image GC step failed; continuing"
+
+rebuild_local_hub_cli || log "WARNING: the local hub CLI rebuild failed; run scripts/rebuild-hub-cli-prod.sh ${APP_SOURCE_REVISION} by hand before any agent read"
 
 log "Deployment verified successfully"
 log "API health: ${VERIFY_URL%/}/api/v1/health"

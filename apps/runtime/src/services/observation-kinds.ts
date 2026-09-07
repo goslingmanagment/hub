@@ -39,6 +39,20 @@ export interface WrittenObservationKind {
 }
 
 export const WRITTEN_OBSERVATION_KINDS: readonly WrittenObservationKind[] = [
+  { kind: "ofapi.collection_read_materialized.v1", source: "ofapi_capture", writer: "services/ofapi-collection-read-transport.ts" },
+  { kind: "ofapi.collection_read_response.v1", source: "ofapi_capture", writer: "services/ofapi-collection-read-transport.ts" },
+  { kind: "ofapi_gateway_chat_search", source: "readthrough", writer: "services/ofapi-read-gateway.ts" },
+  // Release 1 control-plane witnesses; these do not start business collectors.
+  { kind: "ofapi.marketing_response.v1", source: "operator", writer: "services/ofapi-smart-links.ts" },
+  { kind: "ofapi.action_response.v1", source: "operator", writer: "services/ofapi-actions.ts" },
+  { kind: "ofapi.binding.replaced", source: "operator", writer: "services/ofapi-binding-refresh.ts" },
+  { kind: "ofapi.account.response", source: "pull", writer: "services/ofapi-credential-policy.ts" },
+  { kind: "ofapi_admin_accounts", source: "operator", writer: "services/ofapi-credential-policy.ts" },
+  { kind: "ofapi_credential_preflight", source: "operator", writer: "services/ofapi-credential-policy.ts" },
+  { kind: "ofapi_webhook_event_catalog", source: "operator", writer: "services/ofapi-credential-policy.ts" },
+  { kind: "ofapi_webhook_inventory", source: "operator", writer: "services/ofapi-credential-policy.ts" },
+  { kind: "ofapi_webhook_crud", source: "operator", writer: "services/ofapi-credential-policy.ts" },
+  { kind: "ofapi_balance_ping", source: "operator", writer: "services/ofapi-credential-policy.ts" },
   // ── the sync plane: `RawPayloadInsertRow.endpoint` → observations.kind ────
   // (services/sync/shared.ts persistRawPayload). This is the seam BL-C3 went
   // through, and the seam ~27–30 of this initiative's new Fansly kinds will
@@ -126,6 +140,7 @@ export const WRITTEN_OBSERVATION_KINDS: readonly WrittenObservationKind[] = [
   { kind: "link_stats_trial", source: "pull", writer: "services/ofapi-link-stats-sync.ts" },
 
   // ── the OFAPI webhook plane (vendor-named events) ────────────────────────
+  { kind: "posts.liked", source: "webhook", writer: "services/ofapi-webhook-capture.ts" },
   { kind: "messages.received", source: "webhook", writer: "services/ofapi-webhook-capture.ts" },
   { kind: "messages.sent", source: "webhook", writer: "services/ofapi-webhook-capture.ts" },
   { kind: "messages.deleted", source: "webhook", writer: "services/ofapi-webhook-capture.ts" },
@@ -186,6 +201,16 @@ export const WRITTEN_OBSERVATION_KINDS: readonly WrittenObservationKind[] = [
     source: "ofapi_capture",
     writer: "services/ofapi-capture-jobs.ts",
   },
+  { kind: "ofapi.data_export_control.v1", source: "ofapi_capture", writer: "services/ofapi-export-quotes.ts" },
+  { kind: "ofapi_export_inventory", source: "operator", writer: "services/ofapi-credential-policy.ts" },
+  // Written as `kind: value.operation` by onAdminResponse (ofapi-credential-policy.ts):
+  // the literal never appears at the writer, so the census cannot grep them.
+  { kind: "ofapi_command_send_v2", source: "operator", writer: "services/ofapi-credential-policy.ts" },
+  { kind: "ofapi_banned_words", source: "operator", writer: "services/ofapi-credential-policy.ts" },
+  { kind: "ofapi_vendor_usage", source: "operator", writer: "services/ofapi-credential-policy.ts" },
+  { kind: "ofapi.media_source.v1", source: "operator", writer: "services/ofapi-media-sources.ts" },
+  { kind: "ofapi.media_upload_response.v1", source: "ofapi_capture", writer: "services/ofapi-media-uploads.ts" },
+  { kind: "ofapi.typed_export_artifact.v1", source: "ofapi_capture", writer: "services/ofapi-typed-exports.ts" },
   { kind: "ofapi.posts_page.v1", source: "ofapi_capture", writer: "services/ofapi-capture-jobs.ts" },
   {
     kind: "ofapi.capture_completed.v1",
@@ -414,6 +439,16 @@ export interface RawOnlyObservationKind {
 }
 
 export const RAW_ONLY_OBSERVATION_KINDS: readonly RawOnlyObservationKind[] = [
+  { kind: "ofapi.collection_read_materialized.v1", justification:"Completion evidence for one bounded GET capture step. Its normalized facts are independently replayed from the retained response and projection-only snapshot event." },
+  { kind: "ofapi_gateway_chat_search", justification: "A query-scoped list of message IDs; retained as read evidence, never a message body or full-history coverage assertion." },
+  { kind: "ofapi.binding.replaced", justification: "Control-plane audit evidence. Binding, access and credit state use their existing control repositories; this response is not a business fact." },
+  { kind: "ofapi.account.response", justification: "Control-plane audit evidence. Binding, access and credit state use their existing control repositories; this response is not a business fact." },
+  { kind: "ofapi_admin_accounts", justification: "Journaled as an identity projection at every HTTP status; session material and _meta are removed before insert, non-200 bodies withheld. Control-plane audit evidence. Binding, access and credit state use their existing control repositories; this response is not a business fact." },
+  { kind: "ofapi_credential_preflight", justification: "Control-plane audit evidence. Binding, access and credit state use their existing control repositories; this response is not a business fact." },
+  { kind: "ofapi_webhook_event_catalog", justification: "Control-plane available-event catalog; owner diagnostics rebuild directly from the captured response without changing subscriptions." },
+  { kind: "ofapi_webhook_inventory", justification: "Control-plane audit evidence. Binding, access and credit state use their existing control repositories; this response is not a business fact." },
+  { kind: "ofapi_webhook_crud", justification: "Control-plane audit evidence. Binding, access and credit state use their existing control repositories; this response is not a business fact." },
+  { kind: "ofapi_balance_ping", justification: "Control-plane audit evidence. Binding, access and credit state use their existing control repositories; this response is not a business fact." },
   {
     kind: "account_lookup",
     justification:
@@ -459,21 +494,6 @@ export const RAW_ONLY_OBSERVATION_KINDS: readonly RawOnlyObservationKind[] = [
       + "claims users.online/offline and deliberately stops there.",
   },
   {
-    kind: "chat_queue.updated",
-    justification:
-      "SUBSCRIBED and journaled but claimed by no family: vendor-side send-queue progress "
-      + "for OUR outbound work. The outbox is the kernel's own truth for a send (one "
-      + "attempt, fail closed), so projecting the vendor's queue view would mint a second, "
-      + "racing opinion about a fact we already own.",
-  },
-  {
-    kind: "chat_queue.finished",
-    justification:
-      "The terminal half of the same vendor send-queue lifecycle — see chat_queue.updated. "
-      + "Captured because DP 7 says a fact we received is kept; not projected because the "
-      + "outbox row, not the vendor queue, is what says whether a message was sent.",
-  },
-  {
     kind: "ofapi.webhook.invalid_identity",
     justification:
       "A delivery whose account identity did not resolve. Journaled as evidence BEFORE "
@@ -506,6 +526,21 @@ export const RAW_ONLY_OBSERVATION_KINDS: readonly RawOnlyObservationKind[] = [
   {
     kind: "ofapi.data_export_start.v1",
     justification: "The second step of the same export lifecycle — see data_export_create.",
+  },
+  {
+    kind: "ofapi.data_export_control.v1", justification: "Durable provider cancel/retry acknowledgement; captured lifecycle evidence is read by the export control and status state machine.",
+  },
+  {
+    kind: "ofapi_export_inventory", justification: "Credential-visible owner control inventory, captured before parsing and read locally; it does not authorize export work or certify imported facts.",
+  },
+  {
+    kind: "ofapi_command_send_v2", justification: "Transport receipt of one v2 send attempt, journaled before the executor parses it; the command outbox settles from its own captured result, and the delivered message reaches the archive through the webhook lane, not this row.",
+  },
+  {
+    kind: "ofapi_banned_words", justification: "One page of the vendor's banned-word list, captured as the evidence behind the local policy check; a vocabulary snapshot, not a business fact about a fan or a page.",
+  },
+  {
+    kind: "ofapi_vendor_usage", justification: "Vendor-side credit usage report for the owner's cost view; the ledger and the reservation tables remain the accounting authority, this row is read-only corroboration.",
   },
   {
     kind: "ofapi.data_export_status.v1",
@@ -570,11 +605,31 @@ export const OFF_SWEEP_OBSERVATION_CLAIMANTS: readonly {
   justification: string;
 }[] = [
   {
+    id: "OFAPI_MARKETING_ADMIN_PROJECTION",
+    kinds: ["ofapi.marketing_response.v1"],
+    justification: "services/projections/ofapi-marketing.ts registers and runs this encrypted operator-response consumer with resumable receipts and an owner rebuild. Frozen command identity and target reconstruct administrative configuration without manufacturing page business events; collection analytics still use the canonical read family.",
+  },
+  {
+    id: "OFAPI_ACTION_RECEIPT_PROJECTION",
+    kinds: ["ofapi.action_response.v1"],
+    justification: "services/ofapi-actions.ts replays encrypted administrative action receipts into owner-scoped results and idempotent credit accounting. It does not manufacture page business events. Reads and explicit repair resume local settlement without repeating vendor actions.",
+  },
+  {
     id: "FANSLY_REPLAY_FAMILY",
     kinds: FANSLY_REPLAY_FAMILY.kinds ?? [],
     justification:
       "Deliberately absent from CANONICALIZER_FAMILIES (canonicalize/fansly-replay.ts "
       + "says so in its header): it is flag-driven backfill, not steady-state sweep work.",
+  },
+  {
+    id: "OFAPI_MEDIA_UPLOAD_MATERIALIZATION",
+    kinds: ["ofapi.media_source.v1", "ofapi.media_upload_response.v1"],
+    justification: "Owned source bytes remain immutable upload authority. The exact governed upload parser and webhook reconciler append safe media metadata facts; one-use CDN tokens stay in captured authority and explicit owner handoff only.",
+  },
+  {
+    id: "OFAPI_TYPED_EXPORT_MATERIALIZATION",
+    kinds: ["ofapi.typed_export_artifact.v1"],
+    justification: "The owner import transaction verifies frozen account, row, window and checksum contracts and materializes typed export rows and visitor days directly. Invalid bytes remain immutable parse evidence.",
   },
   {
     id: "OFAPI_CAPTURE_MATERIALIZATION",

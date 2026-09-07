@@ -13,6 +13,7 @@ import type { AppContext } from "../bootstrap.ts";
 import { BadRequestError } from "./errors.ts";
 import { parseTransactionBackfillState } from "./sync/transaction-backfill.ts";
 import {
+  ofapiAudienceQualityHoldFor,
   parseDmConversationCursorState,
   parseDmMessagesCursorState,
   parseFollowersCursorState,
@@ -795,6 +796,7 @@ function streamItemFor(
     lastErrorCode: row.lastErrorCode,
     blockerKind: row.blockerKind,
     lastCompletionGatedSkipReason: gatedSkipReasonFor(row),
+    lastCompletionQualityHold: row.stream === "subscribers" ? ofapiAudienceQualityHoldFor(row.checkpointState) : null,
   };
 
   return {

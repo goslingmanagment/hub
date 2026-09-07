@@ -52,8 +52,11 @@ change as any behavior recorded here; do not maintain client-side copies.
 | OpenRouter adapter | One local fetch; there is no adapter retry loop. | A later generation is a new explicit action. |
 | Voice synthesis | One paid provider dispatch. A timeout, transport failure, or ambiguous status remains dispatched and is swept to the existing indeterminate outcome; it is never redispatched automatically. Idempotent replay reads the same request result. A queued waiter heartbeats durable ownership until a process-local synthesis slot opens. | A deliberate new take is a new paid attempt. |
 | OFAPI state-changing commands | One execution attempt per command row; an indeterminate mutation is never automatically sent again. Typing, unsend, and mark-read reject retry lineage. | Only an explicitly requested, policy-permitted same-kind retry creates a new command row and lineage; it is never a second attempt on the old row. |
-| Sync/capture reads | Existing lane-specific pacing, durable retry state, and reconciliation remain authoritative; queue redelivery is not a substitute for that state machine. | The owning sync/capture lane, never an AI code or chatter card. |
+| Sync/capture reads | Existing lane-specific pacing, durable retry state, and reconciliation remain authoritative; queue redelivery is not a substitute for that state machine. Safe-read retry deadlines are anchored to the failure transition, after transport/capture has finished, using the same clock sample as persistence. | The owning sync/capture lane, never an AI code or chatter card. |
+| OFAPI sync reads — collection policy (review #136) | A collection-policy refusal before the fetch is journaled under attempt failure kind `policy` and classified under its own retry class `ofapi_collection_policy`: a time-bound cap sleeps until the repository's reset instant (next UTC day, interval window reopening), the background pause re-checks every 15 min so Resume heals the stream by itself, and a durable policy decision or misconfiguration parks the stream `manual_action_required` with code `ofapi_collection_<reason>`. No sync incident opens — the console already shows the owner's own decision. | The owner's collection policy; a parked stream is unblocked after the policy changes. |
 | OFAPI sync reads — status matrix (Decision #245) | `402` retries under `ofapi_insufficient_credits` (OFAPI does not charge the rejected request; ordinary ≤30 min per-stream backoff), opens the credit-ledger monitor's own global low-credit latch (no per-stream threshold alert on top), and that latch is resolved only by a later chunk that actually received an OFAPI response; `401`/`403` park the stream `manual_action_required` without pausing the page; other `4xx` park as `provider_bad_data`; `429` and `5xx` retry under `rate_limit` / `provider_5xx`; a status-less transport failure stays `transient_network`. | The owner tops up credits — the incident resolves itself on the first chunk that succeeds afterwards — or fixes the key/mapping and unblocks the parked stream. |
+| OFAPI bounded collection reads — captured transient HTTP | Only a durably captured GET response with `429` or `500`–`599` ends the current background run as `failed`, preserving its response, cursor, caps and consumption. There is no immediate retry or second dispatch on that run; a new bounded run is eligible only at the next configured schedule interval. One-offs remain paused. Auth, other HTTP statuses, indeterminate transport and parse failures keep their existing recovery behavior. | The owner's scheduled policy authorizes the next window. Resume on a legacy paused transient response only replays its captured response locally and ends that run as failed; a fresh one-off probe requires separate bounded approval. |
+| OFAPI bounded collection reads — owner finishes incomplete | An owner may close an idle paused background GET run as `failed` after reviewing its retained state, including an uncertain charge. The revision/state/page-fenced action preserves all response, attempt, ledger, cursor and allowance evidence; it performs no egress or charge reconciliation. One-offs, uploads, exports and active work are ineligible. | The explicit owner finish unblocks only the next configured periodic window under current policy. It neither resumes the old cursor nor overrides global/category pause. |
 | Fansly `dm_conversations` sweep — erasure fence (Decision #214) | A page whose write transaction cannot take the shared erasure fence writes nothing and yields the chunk with a **+60s** `continuationRetryAt`; the same offset is re-fetched on the next dispatch. Never an exception, never a partial apply. | The sweep's own cursor. The erasure releases the fence by committing; nothing operator-side is required. |
 | Fansly `dm_conversations` sweep — uncertified membership (Decision #214) | A completed walk whose row-side generation set does not reproduce its `observedCount` withholds the destructive visibility pass and the success stamp, and yields with a **+15min** `continuationRetryAt`. The retry is a FRESH sweep from offset 0 under a higher generation, never a resumption of the uncertified one. | The next sweep converges on its own; an operator only intervenes if `dm_conversations_generation_membership_guard` keeps firing. |
 | Critical-notification delivery | The durable outbox automatically retries delivery failures to a bounded attempt cap. This retries the notification only, never the failed business action. | Outbox lease/attempt policy; suppression and exhaustion are terminal. |
@@ -119,6 +122,7 @@ status, code, and intentional message.
 | General | `service_unavailable` | 503 | Intentional temporary service unavailability. Also the OFAPI coverage-revoke idempotency proof when the prior proof's captured body is unreadable (Decision #223) — never the 409 that means the action belongs to a different proof. |
 | Capture | `capture_payload_unavailable` | 503 | The agent plane's owner-only observation payload read (#9b): the envelope has no inline body and its content-addressed copy could not be read right now. Deliberately NOT one of the handler's withholding reasons — `restricted_class` is a decision the kernel made, this is a fetch that failed, and Decision #223 exists because the two were the same answer. Transient and retriable. |
 | Egress | `proxy_missing` | 409 | A Fansly page has no stored proxy, so fail-closed egress refuses the request. |
+| OFAPI | `ofapi_collection_refused` | 429 / 409 | A local collection-policy refusal before any vendor fetch (review #136); the body also carries the machine `reason` and `retryAfterMs`. 429 when only time clears it (`daily_limit`, `interval_limit` — `retryAfterMs` is the reset advice and `Retry-After` mirrors it); 409 when only an owner policy change clears it (`background_paused`, `collection_off`, `on_demand_only`, `detail_disabled`, job and configuration reasons). Never retried automatically; never 500/503. |
 | AI | `quota_denied` | 429 | Core AI daily budget/quota rejected the generation before provider dispatch. |
 | AI gate | `gate_draft_required` | 400 | Feature policy requires nonblank `draftText`. |
 | AI gate | `gate_voice_unsupported_platform` | 400 | `voice-script` was requested for a non-Fansly page. |
@@ -318,6 +322,20 @@ not detect them.
 
 ## 6. Boundary and redaction rules
 
+OFAPI roster capture uses `ofapi_admin_accounts_v2`: identity fields are allowlisted
+by key and type before journaling; session material is excluded, non-200 bodies
+are withheld, and identity conflicts survive the JSON projection. This control-plane
+evidence is restricted in tiering and refused by Agent Read.
+
+OFAPI governed transport diagnostics (#259) expose only known machine
+class/name/code values, header/body stage, elapsed/timeout values, status and
+byte counts. They reach structured logs and existing credit-ledger details;
+the bounded transport class also reaches the capture job reason. Arbitrary
+cause names/codes are untrusted too and are omitted unless allowlisted. Raw
+cause messages, proxy/URL fields and provider bodies are never copied. A
+`connect` class does not reclassify `post_dispatch` as undispatched, refund an
+uncertain attempt or grant retry authority to a stateful command.
+
 `sanitizeError` is the shared diagnostic sanitizer, not a license to expose
 diagnostic text:
 
@@ -365,3 +383,77 @@ free-form string on a broader wire.
 `AppError` messages are trusted application output and cross the boundary
 unchanged; the boundary does not sanitize or clamp them. Their constructors and
 call sites therefore own the same no-secret/no-provider-diagnostic rule.
+
+
+## OFAPI binding and credential failures (Decision #252)
+
+An HTTP 404 with the vendor machine code `account_not_found` is a missing
+provider binding; a message/resource 404 is not. Capture the response first,
+mark only the matching current generation unavailable, park runnable streams
+with lease revocation and re-stamp only auth blockers of that generation. Foreign
+blockers, legacy auth and owner/gate pauses remain untouched. Repeated missing
+responses rewrite no state; they retry only the idempotent incident notification
+using the original marker time. Responses for replaced bindings do nothing. Later reads and commands
+fail locally until verified recovery. DB-only queries and computations remain
+available. A late response or lifecycle event from a retired binding cannot
+change the replacement's auth state. Verified preview/apply always requires an
+authenticated target. The receipt of that apply-time roster is retained as the
+forward-only boundary: earlier lifecycle events of the new account are stale.
+
+`whoami` denial is credential access failure, not a model-session failure.
+JSON 401/403 is `denied`; missing evidence, transport/edge failures and an
+unconfigured expected team are `unknown`; a different observed team is
+`mismatch`. All three block stateful vendor actions and webhook management.
+Restricted account lists are partial/unknown scope, never proof that hidden
+accounts were deleted. Preflight is bound to the key fingerprint and runs at
+boot/adoption; correcting its boot configuration requires an approved rollout.
+
+Commands refused before dispatch record `source=local_precondition` and a
+typed binding/auth/credential reason in both outbox evidence and the result
+observation, without a vendor `httpStatus`. A denied `whoami` is not a denied
+send. The claim still consumes the single attempt and settles terminally;
+neither a credential correction nor a key rotation automatically replays it.
+Actual command HTTP failures keep their provider status and classification.
+
+Owner binding recovery is a preview/apply operation with generation and
+blocker-version checks under the ordered page sync-row locks. Verified apply or
+same-generation connected/reconnected clears its auth marker even on owner-paused
+rows; the pause itself is released only by Resume. A changed recovery snapshot
+is refused and requires a new preview. It does not use Reset, delete checkpoints, clear user
+pauses, activate collectors or resend indeterminate commands. Unversioned
+legacy blockers are retained for explicit review. The free balance read has no
+paid fallback and never fabricates a zero result after access/transport failure.
+
+
+`ofapi_binding_conflict` is a global latch opened by a write-mode canonicalization
+sweep when custody and current mapping claim different owners. Only the conflicting
+ref is quarantined; a clean write-mode sweep resolves the latch. Dry-run computes
+conflicts without opening, delivering or resolving incidents. Initial mapping
+returns a conflict on another page’s historical account; lifecycle status cannot
+hide that owner.
+
+
+### OFAPI audience quality hold
+
+A completed paginated audience sweep that saw zero fans while current subscriptions
+exist returns `qualityHold=subscribers_empty_sweep_guard` (decision #258). Existing
+membership and the successful checkpoint are preserved. The executor records a
+skipped run without changing freshness/failure evidence or resolving incidents;
+`sweep_not_due` carries the hold forward. This is distinct from a pre-egress ramp
+gate. A durable checkpoint marker keeps both status readers Unverified until a
+certified sweep clears it, even after a lost-lease completion without hold stats.
+The single empty first-page guard and malformed-identity failures retain their
+existing failure classification.
+
+
+### Typed OFAPI owner actions (Decision #272)
+
+Owner action intents preserve prepared, dispatching, confirmed, partial, rejected,
+indeterminate and cancelled states. A busy nonblocking dispatch lock returns 409
+without HTTP and keeps the prepared intent. Definitive local admission refusal
+returns 503 without HTTP; timeout, 5xx or an unproven successful response retain an
+indeterminate outcome. Confirmed HTTP acceptance never asserts campaign delivery
+or money transfer. Retained response repair cannot redispatch the request.
+Encrypted commands/responses never enter audit metadata or error messages.
+
+Delivery-history GET diagnostics distinguish admission, authorization, response headers/body, durable capture and response contract failures. Local scan failures use `history_<stage>_failed` for missing capture, parsing, window validation or persistence; vendor HTTP refusals retain `vendor_http_<status>`. Only fixed machine fields cross into scan state/logs, with no raw error, SQL, URL, headers or payload. The free `ofapi_webhook_deliveries` GET uses a 60-second HTTP deadline; other admin requests keep 15 seconds. This does not change polling cadence or retry any write.

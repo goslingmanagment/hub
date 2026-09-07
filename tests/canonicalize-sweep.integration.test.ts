@@ -3,6 +3,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
   appendDomainEvents,
+  applyVerifiedOfapiBinding,
+  getOfapiBindingPage,
   createModel,
   createOnlyFansPage,
   insertObservation,
@@ -227,7 +229,9 @@ describe("canonicalization sweep (Stage 8)", () => {
     // Prod truth: the webhook journal producer stores only the vendor ref —
     // the page id must resolve at canonicalize time through the page map.
     const model = await createModel(testDb.db, { slug: "reso", name: "Reso" });
+    if (!model) throw new Error("Expected synthetic model");
     const page = await createOnlyFansPage(testDb.db, { modelId: model.id, label: "reso-of" });
+    if (!page) throw new Error("Expected synthetic page");
     await setPageOfapiAccountId(testDb.db, {
       pageId: page.id,
       ofapiAccountId: "acct_reso11111111111111111111111111111",
@@ -248,6 +252,14 @@ describe("canonicalization sweep (Stage 8)", () => {
       payloadHash: sha256("wh-reso"),
       idempotencyKey: "evt-reso-1",
     });
+    // Retire it BEFORE parsing: arrival today still attributes the old fact.
+    const binding = await getOfapiBindingPage(testDb.db, page.id);
+    expect(await applyVerifiedOfapiBinding(testDb.db, {
+      authVerifiedAt: null,
+      pageId: page.id, expectedAccountId: binding!.account_id, expectedGeneration: binding!.generation,
+      accountId: "acct_replacement", creatorId: "123", historicalAccountIds: [], recovery: [],
+      evidence: { source: "synthetic_test" },
+    })).toBe(true);
     // A ref no page owns stays pending (self-heal contract unchanged).
     await insertObservation(testDb.db, {
       source: "webhook",

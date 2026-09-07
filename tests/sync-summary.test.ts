@@ -5,6 +5,7 @@ import type * as DbModule from "@agency_hub_core/db";
 const dbMocks = vi.hoisted(() => ({
   ensurePageSyncStates: vi.fn(),
   listPageSyncStates: vi.fn(),
+  listCheckpointStates: vi.fn(),
   listSyncMonitorStreamRows: vi.fn(),
   listVisiblePages: vi.fn(),
 }));
@@ -15,6 +16,7 @@ vi.mock("@agency_hub_core/db", async () => {
     ...actual,
     ensurePageSyncStates: dbMocks.ensurePageSyncStates,
     listPageSyncStates: dbMocks.listPageSyncStates,
+    listCheckpointStates: dbMocks.listCheckpointStates,
     listSyncMonitorStreamRows: dbMocks.listSyncMonitorStreamRows,
     listVisiblePages: dbMocks.listVisiblePages,
   };
@@ -92,6 +94,7 @@ function buildTaskRow(overrides: Record<string, unknown> = {}) {
 
 describe("sync summary service", () => {
   beforeEach(() => {
+    dbMocks.listCheckpointStates.mockResolvedValue([]);
     // Read paths never seed: this snapshot serves GET /overview and (through
     // listConnectionStatuses) the Sidebar's /admin/connections on every page.
     // Any call into the seeding/repair writer is a regression.

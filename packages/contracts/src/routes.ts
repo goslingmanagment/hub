@@ -1,3 +1,13 @@
+import { ofapiMediaRouteSchemas } from "./routes-ofapi-media.ts";
+import { ofapiMarketingRouteSchemas } from "./routes-ofapi-marketing.ts";
+import { ofapiActionRouteSchemas } from "./routes-ofapi-actions.ts";
+import { ofapiBannedWordRouteSchemas } from "./routes-ofapi-banned-words.ts";
+import { OFAPI_EXTENDED_COMMAND_KINDS } from "@agency_hub_core/shared";
+import { ofapiExtendedCommandOptions } from "./ofapi-extended-commands.ts";
+import { ofapiVendorRouteSchemas } from "./routes-ofapi-vendor.ts";
+import { ofapiReadCollectionsRouteSchemas } from "./routes-ofapi-read-collections.ts";
+import { ofapiExportRouteSchemas } from "./routes-ofapi-exports.ts";
+import { ofapiCollectionRouteSchemas } from "./routes-ofapi-collection.ts";
 import {
   PERIOD_OPTIONS,
   SPENDER_PERIOD_OPTIONS,
@@ -3029,6 +3039,7 @@ const notificationIncidentKindEnum = z.enum([
   "ai_provider_billing",
   "ai_provider_failed",
   "capture_payload_parity",
+  "ofapi_binding_conflict",
 ]);
 const notificationIncidentStatusEnum = z.enum(["open", "resolved"]);
 const notificationDeliveryOutboxStateEnum = z.enum([
@@ -3616,6 +3627,7 @@ export const ofapiWebhookAckResponseSchema = z.object({
 });
 
 export const ofapiPageMappingSchema = z.object({
+  bindingGeneration: z.number().int().positive(),
   pageId: intId,
   label: z.string(),
   username: z.string().nullable(),
@@ -3667,6 +3679,63 @@ export const ofapiWebhookStatusResponseSchema = z.object({
     lastBalanceAt: isoTimestamp.nullable(),
     spentToday: z.number().int(),
   }),
+});
+
+const ofapiEvidenceRefSchema = z.object({ id: intId, receivedAt: isoTimestamp }).strict();
+export const ofapiBindingRefreshBodySchema = z.object({
+  pageId: intId,
+  expectedAccountId: z.string().regex(/^acct_[A-Za-z0-9]+$/).nullable(),
+  expectedGeneration: z.number().int().positive(),
+  accountId: z.string().regex(/^acct_[A-Za-z0-9]+$/),
+  identityEvidence: ofapiEvidenceRefSchema.nullable().default(null),
+  historicalEvidence: z.array(ofapiEvidenceRefSchema).max(20).default([]),
+  dryRun: z.boolean().default(true),
+  previewToken: z.string().regex(/^[0-9a-f]{64}$/).optional(),
+}).strict();
+export const ofapiBindingRefreshResponseSchema = z.object({
+  dryRun: z.boolean(), applied: z.boolean(), previewToken: z.string(),
+  pageId: intId, expectedAccountId: z.string().nullable(), expectedGeneration: z.number().int(),
+  accountId: z.string(), creatorId: z.string(), historicalAccountIds: z.array(z.string()),
+  recovery: z.array(z.object({ stream: z.string(), version: z.string(), code: z.string() })),
+  credentialFingerprint: z.string(), expectedTeam: z.string().nullable(),
+  identityEvidence: ofapiEvidenceRefSchema.nullable(), historicalEvidence: z.array(ofapiEvidenceRefSchema),
+});
+export const ofapiCredentialPreflightSchema = z.object({
+  status: z.enum(["verified", "unknown", "mismatch", "denied"]), expectedTeam: z.string().nullable(),
+  observedTeam: z.string().nullable(), credentialFingerprint: z.string(), checkedAt: isoTimestamp,
+  reason: z.string().nullable(), rosterScope: z.literal("unknown"),
+});
+export type OfapiBindingRefreshBody = z.infer<typeof ofapiBindingRefreshBodySchema>;
+
+const ofapiWebhookGroupSchema = z.enum(["subscription_expiry", "account_lifecycle", "media_uploads", "data_exports", "engagement"]);
+export const ofapiWebhookEventCatalogSchema = z.object({
+  source:z.literal("onlyfansapi"),state:z.enum(["never","captured","invalid"]),observedAt:isoTimestamp.nullable(),observationId:z.string().nullable(),
+  events:z.array(z.object({value:z.string(),description:z.string(),requested:z.boolean(),supported:z.boolean(),optionalGroup:z.string().nullable()})),
+});
+export const ofapiWebhookCollectionPolicySchema = z.object({
+  version: z.number().int().nonnegative(), desiredGroups: z.array(z.string()), appliedGroups: z.array(z.string()),
+  historyEnabled: z.boolean(), applyState: z.string(), errorCode: z.string().nullable(), appliedAt: isoTimestamp.nullable(),
+  groups: z.array(z.object({ id: z.string(), events: z.array(z.string()) })),
+});
+export const ofapiWebhookDeliveryScanSchema = z.object({
+  id: z.string().uuid(), webhookId: z.string(), state: z.string(), from: isoTimestamp, to: isoTimestamp,
+  nextOffset: z.number().int().nonnegative(), capturedAttempts: z.number().int().nonnegative(),
+  errorCode: z.string().nullable(), coverageScope: z.literal("credential-visible"), completedAt: isoTimestamp.nullable(),
+});
+export const ofapiWebhookDeliveryHistorySchema = z.object({
+  webhookId: z.string().nullable(), latestScan: ofapiWebhookDeliveryScanSchema.nullable(),
+  attempts: z.array(z.object({
+    attemptId: z.number().int().positive(), deliveryUuid: z.string(), eventType: z.string(),
+    attemptNumber: z.number().int().positive(), succeeded: z.boolean(), statusCode: z.number().int().nullable(),
+    errorType: z.string().nullable(), redeliveredFrom: z.string().nullable(), createdAt: isoTimestamp,
+    deliveryRecovered: z.boolean(), localEventId: z.number().int().positive().nullable(),
+    captureState: z.string().nullable(), localStatus: z.string().nullable(), projectionStatus: z.string().nullable(),
+    canonicalVersion: z.number().int().nullable(),
+    redeliveryState: z.string().nullable(), redeliveryUuid: z.string().nullable(), redeliverySucceeded: z.boolean().nullable(),
+  })),
+});
+export const ofapiWebhookRedeliveryResultSchema = z.object({
+  id: z.string().uuid(), state: z.string(), redeliveryUuid: z.string().nullable(), errorCode: z.string().nullable(), projected: z.boolean(),
 });
 
 export const ofapiWebhookRegisterBodySchema = z.object({
@@ -3776,7 +3845,7 @@ export const ofapiExportQuoteCreateResponseSchema = z.object({
   status: z.enum(["would_create", "would_coalesce", "created", "coalesced"]),
   jobId: z.string().uuid().nullable(),
   pageId: intId,
-  profile: z.enum(["pilot_chats", "fleet_tail"]),
+  profile: z.enum(["pilot_chats", "fleet_tail", "profile_visitors", "fans", "tracking_links", "trial_links", "smart_links"]),
   targetHash: z.string().regex(/^[0-9a-f]{64}$/),
   state: ofapiExportQuoteJobStateSchema.nullable(),
   reasonCode: z.string().nullable(),
@@ -3840,7 +3909,7 @@ export const ofapiExportArtifactCaptureResponseSchema = z.object({
 export const ofapiExportQuoteStatusResponseSchema = z.object({
   jobId: z.string().uuid(),
   pageId: intId,
-  profile: z.enum(["pilot_chats", "fleet_tail"]),
+  profile: z.enum(["pilot_chats", "fleet_tail", "profile_visitors", "fans", "tracking_links", "trial_links", "smart_links"]),
   targetHash: z.string().regex(/^[0-9a-f]{64}$/),
   state: ofapiExportQuoteJobStateSchema,
   reasonCode: z.string().nullable(),
@@ -3864,6 +3933,10 @@ export const ofapiExportQuoteStatusResponseSchema = z.object({
     rowsProcessed: z.number().int().nonnegative().nullable(),
     failedDownloads: z.number().int().nonnegative().nullable(),
     artifactPending: z.boolean(),
+    lifecycle: z.object({
+      status: z.string(), receivedAt: isoTimestamp, sourceAt: isoTimestamp.nullable(),
+      eventId: z.number().int().positive(), conflictingTerminal: z.boolean(),
+    }).nullable().optional(),
   }).nullable(),
 });
 
@@ -3919,6 +3992,8 @@ export const ofapiCaptureOperatorStatusResponseSchema = z.object({
       "account_export",
       "export_import",
       "post_paginate",
+      "collection_read",
+      "media_upload",
     ]),
     state: ofapiExportQuoteJobStateSchema,
     reasonCode: z.string().nullable(),
@@ -4161,7 +4236,7 @@ export const ofapiCreditLedgerSourceEnum = z.enum([
   "adjustment",
 ]);
 
-// Positive spend per ledger source over a window. Refills are negative credit
+// Net spend per ledger source, including signed corrections. Refills are negative credit
 // movement and never count as spend, so they have no key here.
 const ofapiCreditsSpendBySourceSchema = z.object({
   rest: z.number().int(),
@@ -4195,6 +4270,16 @@ export const ofapiCreditsSummaryResponseSchema = z.object({
     blocked: z.boolean(),
   }),
   forecast: z.object({
+    // New forecasts use recorded REST activity plus signed corrections and
+    // webhook accrual estimates. Inferred balance residuals remain visible
+    // separately; they are not evidence of a repeatable spending rate.
+    basis: z.literal("recorded_activity").optional(),
+    unverifiedResidual: z.object({
+      credits: z.number().int(),
+      from: isoTimestamp,
+      to: isoTimestamp,
+    }).optional(),
+    monthUnverifiedResidualCredits: z.number().int().optional(),
     avgDailySpend7d: z.number(),
     daysLeft: z.number().int().nullable(),
     runOutDate: businessDate.nullable(),
@@ -4202,7 +4287,7 @@ export const ofapiCreditsSummaryResponseSchema = z.object({
     // avgDailySpend × remaining UTC days). Credits only; the dashboard formats USD
     // from `pricing`. Optional so a dashboard bundle can roll across an API version
     // that predates them.
-    monthToDateSpend: z.number().int().min(0).optional(),
+    monthToDateSpend: z.number().int().optional(),
     monthEndProjection: z.number().int().min(0).optional(),
     // Credits to refill now to keep the runway at `targetDays` above the floor:
     // max(0, floor + avgDailySpend × targetDays − balance). Null when the balance
@@ -4264,12 +4349,18 @@ export const ofapiCreditsSummaryResponseSchema = z.object({
 const ofapiCreditsChatterWindowSchema = z.object({
   from: isoTimestamp,
   to: isoTimestamp,
+  // Compatibility estimates for installed SDKs: REST is floored at zero and
+  // the legacy total remains REST plus the estimated webhook component.
   restCredits: z.number().int().min(0),
   webhook: z.object({
     eventCount: z.number().int().min(0),
     estimatedCredits: z.number().int().min(0),
   }),
   totalEstimatedCredits: z.number().int().min(0),
+  // Exact signed net for upgraded clients. Optional for compatibility with
+  // older Hub versions; a correction can make a bounded window net-negative.
+  netRestCredits: z.number().int().optional(),
+  netTotalEstimatedCredits: z.number().int().optional(),
 });
 
 export const ofapiCreditsChatterSummaryResponseSchema = z.object({
@@ -4300,6 +4391,7 @@ export const ofapiCommandStateSchema = z.enum([
 ]);
 
 export const ofapiCommandKindSchema = z.enum([
+  ...OFAPI_EXTENDED_COMMAND_KINDS,
   "send_text_message_v1",
   "send_media_message_v1",
   "typing_active_v1",
@@ -4364,6 +4456,7 @@ const sendMediaMessagePayloadSchema = z.strictObject({
 });
 
 export const createOfapiCommandBodySchema = z.discriminatedUnion("kind", [
+  ...ofapiExtendedCommandOptions,
   z.strictObject({
     ...ofapiCommandBaseFields,
     kind: z.literal("send_text_message_v1"),
@@ -5439,7 +5532,14 @@ export const moneyPayoutsResponseSchema = z.object({
   nextCursor: z.string().nullable(),
 });
 
-export const routeSchemas = {
+const baseRouteSchemas = {
+  ...ofapiMarketingRouteSchemas,
+  ...ofapiBannedWordRouteSchemas,
+  ...ofapiVendorRouteSchemas,
+  ...ofapiReadCollectionsRouteSchemas,
+  ...ofapiExportRouteSchemas,
+  ...ofapiMediaRouteSchemas,
+  ...ofapiCollectionRouteSchemas,
   ...agentRouteSchemas,
   ...agentKeyAdminRouteSchemas,
   health: {
@@ -5674,13 +5774,66 @@ export const routeSchemas = {
       403: errorResponseSchema,
     },
   },
+  adminOfapiBindingRefresh: {
+    auth: { kind: "owner-session" }, tags: ["admin"],
+    summary: "Preview or apply a verified OFAPI binding replacement and narrow recovery",
+    body: ofapiBindingRefreshBodySchema,
+    response: { 200: ofapiBindingRefreshResponseSchema, 400: errorResponseSchema, 401: errorResponseSchema,
+      403: errorResponseSchema, 409: errorResponseSchema, 503: errorResponseSchema },
+  },
+  adminOfapiCredentialPreflight: {
+    auth: { kind: "owner-session" }, tags: ["admin"], summary: "Inspect server credential adoption proof",
+    response: { 200: ofapiCredentialPreflightSchema, 401: errorResponseSchema, 403: errorResponseSchema, 503: errorResponseSchema },
+  },
+  adminOfapiWebhookEventCatalog: {
+    auth:{kind:"owner-session"},tags:["admin"],summary:"Read the captured vendor webhook event catalog without egress",
+    response:{200:ofapiWebhookEventCatalogSchema,401:errorResponseSchema,403:errorResponseSchema},
+  },
+  adminOfapiWebhookEventCatalogRefresh: {
+    auth:{kind:"owner-session"},tags:["admin"],summary:"Explicitly capture the free vendor webhook event catalog",
+    body:z.object({}),response:{200:ofapiWebhookEventCatalogSchema,401:errorResponseSchema,403:errorResponseSchema,503:errorResponseSchema},
+  },
+  adminOfapiWebhookDeliveries: {
+    auth: { kind: "owner-session" }, tags: ["admin"], summary: "Read retained webhook attempts and local ingestion stages",
+    querystring: z.object({ limit: z.coerce.number().int().min(1).max(100).default(25), offset: z.coerce.number().int().nonnegative().default(0), failedOnly: z.enum(["true", "false"]).optional() }),
+    response: { 200: ofapiWebhookDeliveryHistorySchema, 401: errorResponseSchema, 403: errorResponseSchema },
+  },
+  adminOfapiWebhookDeliverySync: {
+    auth: { kind: "owner-session" }, tags: ["admin"], summary: "Capture a bounded delivery-history window, including all outcomes",
+    body: z.object({ id: z.string().uuid(), from: isoTimestamp, to: isoTimestamp, maxPages: z.number().int().min(1).max(20).default(20) }),
+    response: { 200: ofapiWebhookDeliveryScanSchema, 400: errorResponseSchema, 401: errorResponseSchema, 403: errorResponseSchema, 409: errorResponseSchema, 503: errorResponseSchema },
+  },
+  adminOfapiWebhookRedeliver: {
+    auth: { kind: "owner-session" }, tags: ["admin"], summary: "Preview or explicitly queue one billed remote webhook redelivery",
+    body: z.object({ id: z.string().uuid(), attemptId: z.number().int().positive(), dryRun: z.boolean().default(true) }),
+    response: { 200: ofapiWebhookRedeliveryResultSchema, 400: errorResponseSchema, 401: errorResponseSchema, 403: errorResponseSchema, 404: errorResponseSchema, 409: errorResponseSchema, 503: errorResponseSchema },
+  },
+  adminOfapiWebhookReplay: {
+    auth: { kind: "owner-session" }, tags: ["admin"], summary: "Replay one accepted local receipt without vendor redelivery or new SSE identity",
+    body: z.object({ eventId: z.number().int().positive(), dryRun: z.boolean().default(true) }),
+    response: { 200: z.object({ eventId: z.number().int().positive(), state: z.string() }), 400: errorResponseSchema, 401: errorResponseSchema, 403: errorResponseSchema, 404: errorResponseSchema, 409: errorResponseSchema },
+  },
+  adminOfapiWebhookCollectionPolicy: {
+    auth: { kind: "owner-session" }, tags: ["admin"], summary: "Read optional webhook desired and applied settings",
+    response: { 200: ofapiWebhookCollectionPolicySchema, 401: errorResponseSchema, 403: errorResponseSchema },
+  },
+  adminOfapiWebhookCollectionPolicySave: {
+    auth: { kind: "owner-session" }, tags: ["admin"], summary: "Save versioned optional webhook categories and free history collector policy",
+    body: z.object({ expectedVersion: z.number().int().nonnegative(), groups: z.array(ofapiWebhookGroupSchema).max(5), historyEnabled: z.boolean() }),
+    response: { 200: ofapiWebhookCollectionPolicySchema, 400: errorResponseSchema, 401: errorResponseSchema, 403: errorResponseSchema, 409: errorResponseSchema },
+  },
+  adminOfapiWebhookCollectionPolicyApply: {
+    auth: { kind: "owner-session" }, tags: ["admin"], summary: "Apply optional webhook categories and verify the remote registration",
+    body: z.object({ expectedVersion: z.number().int().nonnegative() }),
+    response: { 200: ofapiWebhookCollectionPolicySchema, 400: errorResponseSchema, 401: errorResponseSchema, 403: errorResponseSchema, 409: errorResponseSchema, 503: errorResponseSchema },
+  },
   adminOfapiWebhookRegister: {
     auth: { kind: "owner-session" },
     tags: ["admin"],
-    summary: "Register (or re-register) the OFAPI webhook and auto-map accounts to pages",
+    summary: "Register (or re-register) the OFAPI webhook and inventory current bindings",
     description: "Creates/updates the team webhook at onlyfansapi.com with "
       + "account_scope=global and a freshly generated signing secret, stores the "
-      + "registration, and maps OFAPI accounts to OnlyFans pages by username.",
+      + "registration, and inventories current page bindings. Replacement uses a verified preview.",
     body: ofapiWebhookRegisterBodySchema,
     response: {
       200: ofapiWebhookRegisterResponseSchema,
@@ -8055,7 +8208,11 @@ export const routeSchemas = {
   },
 } as const;
 
-export type RouteSchemas = typeof routeSchemas;
+// Keep the owner action union behind a named group in declarations. Flattening
+// all 81 commands into the complete registry exceeds TypeScript's declaration
+// serialization limit (TS7056) when the SDK is compiled for external clients.
+export type RouteSchemas = typeof baseRouteSchemas & typeof ofapiActionRouteSchemas;
+export const routeSchemas: RouteSchemas = { ...baseRouteSchemas, ...ofapiActionRouteSchemas };
 export type AuthState = z.infer<typeof authStateSchema>;
 export type AuthUser = z.infer<typeof authUserSchema>;
 export type AdminUser = z.infer<typeof adminUserSchema>;
@@ -8326,3 +8483,5 @@ export type MoneyRevenueMixQuery = z.infer<typeof moneyRevenueMixQuerySchema>;
 export type MoneyRevenueMixResponse = z.infer<typeof moneyRevenueMixResponseSchema>;
 export type MoneyPayoutsQuery = z.infer<typeof moneyPayoutsQuerySchema>;
 export type MoneyPayoutsResponse = z.infer<typeof moneyPayoutsResponseSchema>;
+
+export type OfapiWebhookDeliveryHistoryResponse = z.infer<typeof ofapiWebhookDeliveryHistorySchema>;

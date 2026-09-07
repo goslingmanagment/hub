@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 // OFAPI account health + credit ops (Phase 3 of docs/ofapi-integration-plan.md,
 // D9): accounts.* webhook events project into pages.ofapi_auth_status
 // (post-settle, never blocking the settle/fanout path), and the minutely OFAPI
@@ -7,16 +8,22 @@
 
 import {
   advancePageOfapiAuthStatus,
-  clearPageSyncAuthBlock,
+  withOfapiBindingLock,
+  lockPageSyncStatesForPage,
+  getOfapiBindingPage,
   findPageByOfapiAccountId,
   getLatestOfapiWebhookEventReceivedAt,
   getOfapiCreditState,
   getSyncStreamsForPlatform,
   listOfapiMappedPages,
   pausePageSyncForAuth,
+  listOfapiWebhookEventsForDmProjection,
+  markOfapiWebhookEventProjection,
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
+import { asRecord } from "./ofapi-payloads.ts";
+import { OFAPI_ACCOUNT_HEALTH_EVENT_TYPES, ofapiAccountLifecycleTime } from "./ofapi-lifecycle-contract.ts";
 import { loadEffectiveConfig } from "./effective-config.ts";
 import {
   notifyOfapiAuthIncident,
@@ -32,6 +39,8 @@ export const OFAPI_ACCOUNT_EVENT_PREFIX = "accounts.";
 // (still authenticated) — it alerts for visibility but is not an action state.
 export const OFAPI_AUTH_ACTION_REQUIRED_STATUSES = new Set([
   "authentication_failed",
+  "disconnected",
+  "account_not_found",
   "otp_code_required",
   "face_otp_required",
 ]);
@@ -53,7 +62,7 @@ export function isOfapiAccountHealthEnabled(
 }
 
 export function isOfapiAccountEventType(eventType: string) {
-  return eventType.startsWith(OFAPI_ACCOUNT_EVENT_PREFIX);
+  return (OFAPI_ACCOUNT_HEALTH_EVENT_TYPES as readonly string[]).includes(eventType);
 }
 
 export function ofapiAuthStatusNeedsAction(status: string | null | undefined) {
@@ -65,14 +74,17 @@ interface OfapiAccountEventRow {
   eventType: string;
   ofapiAccountId: string | null;
   receivedAt: Date;
+  bindingGeneration?: number;
+  payload?: Record<string, unknown>;
+  projectionStatus?: string;
 }
 
 /**
  * Post-settle projection of one accounts.* journal row: advance the page's
- * auth state (forward-only by receive time) and open/resolve the per-page
- * ofapi_auth incident. Best-effort — never throws into the event processor.
+ * auth state (forward-only by provider occurrence) and open/resolve the per-page
+ * ofapi_auth incident. Errors escape the transaction so state and effects roll back.
  */
-export async function applyOfapiAccountHealthEvent(
+async function applyCurrentOfapiAccountHealthEvent(
   app: AppContext,
   row: OfapiAccountEventRow,
 ) {
@@ -80,62 +92,70 @@ export async function applyOfapiAccountHealthEvent(
     return;
   }
 
-  try {
-    const page = row.ofapiAccountId
-      ? await findPageByOfapiAccountId(app.db, row.ofapiAccountId)
-      : null;
-    if (!page) {
-      return;
-    }
+  const page = row.ofapiAccountId
+    ? await findPageByOfapiAccountId(app.db, row.ofapiAccountId)
+    : null;
+  if (!page) {
+    return;
+  }
 
-    const authStatus = row.eventType.slice(OFAPI_ACCOUNT_EVENT_PREFIX.length);
-    const advanced = await advancePageOfapiAuthStatus(app.db, {
-      pageId: page.id,
+  const binding = await getOfapiBindingPage(app.db, page.id);
+  if (!binding || binding.account_id !== row.ofapiAccountId ||
+      (row.bindingGeneration !== undefined && row.bindingGeneration !== binding.generation)) return;
+  const occurredAt = ofapiAccountLifecycleTime(asRecord(row.payload?.payload) ?? {}, row.receivedAt);
+  const authStatus = row.eventType.slice(OFAPI_ACCOUNT_EVENT_PREFIX.length);
+  if (!OFAPI_AUTH_ALERT_STATUSES.has(authStatus) && !OFAPI_AUTH_RECOVERED_STATUSES.has(authStatus)) return;
+  const advanced = await advancePageOfapiAuthStatus(app.db, {
+    pageId: page.id,
+    authStatus,
+    changedAt: occurredAt,
+  });
+  if (!advanced) {
+    // An out-of-order older event; the newer state already owns alerting.
+    return;
+  }
+
+  if (OFAPI_AUTH_ALERT_STATUSES.has(authStatus)) {
+    // Stage 26: action-required auth death parks the page's REST streams
+    // (paused + blocker_kind='auth') so sync stops burning credits on a
+    // dead vendor session. session_expired stays alert-only — OFAPI
+    // recovers it silently and the session still works.
+    if (OFAPI_AUTH_ACTION_REQUIRED_STATUSES.has(authStatus)) {
+      await pausePageSyncForAuth(app.db, {
+        pageId: page.id,
+        streams: getSyncStreamsForPlatform(page.platform),
+        blockerCode: `ofapi_${authStatus}`,
+        blockerMessage: `OFAPI reported ${authStatus} for account ${row.ofapiAccountId ?? "unknown"}`,
+        now: row.receivedAt,
+      });
+    }
+    await app.db.execute(sql`
+      update page_sync_states set blocker_ofapi_generation=${binding.generation}
+      where page_id=${page.id} and blocker_kind='auth' and blocker_code=${`ofapi_${authStatus}`}
+    `);
+    await notifyOfapiAuthIncident(app, {
+      platformAccountId: page.id,
+      pageLabel: page.label,
+      platform: page.platform,
       authStatus,
-      changedAt: row.receivedAt,
+      occurredAt,
     });
-    if (!advanced) {
-      // An out-of-order older event; the newer state already owns alerting.
-      return;
-    }
-
-    if (OFAPI_AUTH_ALERT_STATUSES.has(authStatus)) {
-      // Stage 26: action-required auth death parks the page's REST streams
-      // (paused + blocker_kind='auth') so sync stops burning credits on a
-      // dead vendor session. session_expired stays alert-only — OFAPI
-      // recovers it silently and the session still works.
-      if (OFAPI_AUTH_ACTION_REQUIRED_STATUSES.has(authStatus)) {
-        await pausePageSyncForAuth(app.db, {
-          pageId: page.id,
-          streams: getSyncStreamsForPlatform(page.platform),
-          blockerCode: `ofapi_${authStatus}`,
-          blockerMessage: `OFAPI reported ${authStatus} for account ${row.ofapiAccountId ?? "unknown"}`,
-          now: row.receivedAt,
-        });
-      }
-      await notifyOfapiAuthIncident(app, {
-        platformAccountId: page.id,
-        pageLabel: page.label,
-        platform: page.platform,
-        authStatus,
-        occurredAt: row.receivedAt,
-      });
-    } else if (OFAPI_AUTH_RECOVERED_STATUSES.has(authStatus)) {
-      // Stage 26: vendor-signaled recovery is the OFAPI-side re-verify —
-      // release the auth pause the same way credential re-verify does.
-      await clearPageSyncAuthBlock(app.db, page.id, { now: row.receivedAt });
-      await resolveOfapiAuthIncident(app, {
-        platformAccountId: page.id,
-        pageLabel: page.label,
-        platform: page.platform,
-        recoveredAt: row.receivedAt,
-      });
-    }
-  } catch (error) {
-    app.logger.warn(
-      { err: error, eventId: row.id, eventType: row.eventType },
-      "OFAPI account health projection failed; continuing",
-    );
+  } else if (OFAPI_AUTH_RECOVERED_STATUSES.has(authStatus)) {
+    // Clear this generation’s auth marker atomically without releasing the owner pause.
+    await lockPageSyncStatesForPage(app.db, page.id);
+    await app.db.execute(sql`
+      update page_sync_states set blocker_kind=null,blocker_code=null,blocker_message=null,blocked_at=null,
+        blocker_ofapi_generation=null,status=case when ofapi_user_paused then 'paused'::page_sync_status
+          when request_seq>applied_seq then 'pending'::page_sync_status else 'idle'::page_sync_status end,
+        retry_kind=null,retry_at=null,updated_at=${row.receivedAt}
+      where page_id=${page.id} and blocker_kind='auth' and blocker_ofapi_generation=${binding.generation}
+    `);
+    await resolveOfapiAuthIncident(app, {
+      platformAccountId: page.id,
+      pageLabel: page.label,
+      platform: page.platform,
+      recoveredAt: occurredAt,
+    });
   }
 }
 
@@ -210,4 +230,38 @@ export async function runOfapiAccountHealthMonitor(app: AppContext, now = new Da
   } catch (error) {
     app.logger.warn({ err: error }, "OFAPI account health monitor failed; continuing");
   }
+}
+
+/** Serialize lifecycle effects with remap; resolving a page before a CAS alone
+ * would still allow a late event to pause the replacement between statements. */
+export async function applyOfapiAccountHealthEvent(app: AppContext, row: OfapiAccountEventRow) {
+  if (!isOfapiAccountHealthEnabled(app.config) || !row.ofapiAccountId) return;
+  const page = await findPageByOfapiAccountId(app.db, row.ofapiAccountId);
+  if (!page) return;
+  return withOfapiBindingLock(app.db, page.id, db => applyCurrentOfapiAccountHealthEvent({ ...app, db }, row));
+}
+
+/** Retry state is independent of journal settlement. A failed effect rolls back
+ * the auth CAS too, so a retry can repair the complete transition. */
+export async function runOfapiAccountHealthProjectionForSettledRow(app: AppContext, row: OfapiAccountEventRow) {
+  if (!isOfapiAccountHealthEnabled(app.config) || !isOfapiAccountEventType(row.eventType) ||
+      !["pending", "failed"].includes(row.projectionStatus ?? "")) return;
+  try {
+    await applyOfapiAccountHealthEvent(app, row);
+    await markOfapiWebhookEventProjection(app.db, { id: row.id, status: "projected" });
+  } catch (error) {
+    app.logger.warn({ err: error, eventId: row.id }, "OFAPI account health projection failed; sweep will retry");
+    await markOfapiWebhookEventProjection(app.db, {
+      id: row.id, status: "failed", error: error instanceof Error ? error.message : String(error),
+    }).catch(() => undefined);
+  }
+}
+
+export async function sweepOfapiAccountHealthProjections(app: AppContext) {
+  if (!isOfapiAccountHealthEnabled(app.config)) return 0;
+  const rows = await listOfapiWebhookEventsForDmProjection(app.db, {
+    eventTypes: OFAPI_ACCOUNT_HEALTH_EVENT_TYPES, maxAttempts: 5, limit: 200,
+  });
+  for (const row of rows) await runOfapiAccountHealthProjectionForSettledRow(app, row);
+  return rows.length;
 }

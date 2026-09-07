@@ -40,9 +40,10 @@ describe("agent read plane: the 9b payload allowlist is fail-closed", () => {
 
   it("refuses the kinds named as forbidden, and everything unknown", () => {
     // A denylist could not work here: the repository's own restricted set is
-    // exactly ["desktop.guard_audit"], contains neither of these, and is
+    // for tiering only, differs from the disclosure allowlist, and is
     // consulted only on the tiering path rather than on serving.
     for (const kind of [
+      "ofapi_admin_accounts",
       "account_me",
       "account_lookup",
       "group_detail",

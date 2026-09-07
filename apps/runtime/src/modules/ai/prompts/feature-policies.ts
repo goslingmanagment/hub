@@ -67,9 +67,9 @@ export const MIN_MESSAGES_FOR_DEEP = 30;
 /** hi-greeting is locked unless the conversation has at most this many messages. */
 export const HI_GREETING_MAX_TRANSCRIPT = 10;
 
-// ─── Model defaults (Decision #252) ────────────────────────────────────
+// ─── Model defaults (Decision #273) ────────────────────────────────────
 
-/** Decision #252 owner follow-up (2026-09-07): Help, Review and Coach join
+/** Decision #273 owner follow-up (2026-09-07): Help, Review and Coach join
  * the reply features on Sonnet 5 at low effort without another model comparison.
  * Recap retains its separate Opus default. */
 export const DEFAULT_MODEL_ID = 'anthropic:claude-sonnet-5';

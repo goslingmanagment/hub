@@ -1,5 +1,10 @@
 # Итоговый план обновления OFAPI в Hub
 
+Implementation note, 2026-09-05: the first technical release has a separate
+[implementation and live-acceptance runbook](../runbooks/ofapi-refresh-release1.md).
+Its code covers S0/S1/S4a and the minimum S5 prerequisite. This does not mark
+production recovery, posts capture, S-POL or S-UI complete.
+
 Дата: 05.09.2026. Исходный Hub: `582ef1cf8a2de52eba6639ef775ddbe3e15ba74c`.
 Статус: **план PR #131 с отдельными этапами серверного контроля S-POL и интерфейса S-UI; поправки сведены непосредственно в этапы. Новые production-подключения и поступление данных подтверждены; кодовые изменения плана ещё не реализованы**. Fansly исключён.
 

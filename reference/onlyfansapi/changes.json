@@ -1,0 +1,620 @@
+{
+  "method": "Offline comparison by method/path; changed operation components include parameters (with enums), request bodies and response variants. Historical snapshot is evidence, not a second live baseline.",
+  "added": [
+    "GET /api/banned-words",
+    "GET /api/{account}/users/blocked",
+    "GET /api/{account}/users/restricted",
+    "POST /api/{account}/messages/{queue_id}/attach-tags",
+    "PUT /api/authenticate/{account_id}/credentials",
+    "POST /api/webhooks/vatstack",
+    "POST /api/webhooks/coingate",
+    "GET /api/fan-summary-categories",
+    "POST /api/fan-summary-categories",
+    "PUT /api/fan-summary-categories/{category_id}",
+    "DELETE /api/fan-summary-categories/{category_id}",
+    "GET /api/{account}/media/download/drm/{media_id}",
+    "GET /api/{account}/release-forms",
+    "GET /api/{account}/release-forms/mentions",
+    "PATCH /api/{account}/release-forms/toggle-show",
+    "PATCH /api/{account}/release-forms/rename",
+    "GET /api/{account}/settings/drm",
+    "PATCH /api/{account}/settings/drm",
+    "GET /api/smart-links/{smart_link_id}/pixels",
+    "POST /api/smart-links/{smart_link_id}/pixels",
+    "PATCH /api/smart-links/{smart_link_id}/pixels/{pixel_id}",
+    "DELETE /api/smart-links/{smart_link_id}/pixels/{pixel_id}",
+    "POST /api/smart-links/{smart_link_id}/pixels/{pixel_id}/test-event",
+    "GET /api/smart-links/{smart_link_id}/tags",
+    "POST /api/smart-links/{smart_link_id}/tags",
+    "DELETE /api/smart-links/{smart_link_id}/tags",
+    "GET /api/usage/credits",
+    "GET /api/webhooks/{webhook_id}/deliveries",
+    "POST /api/webhooks/{webhook_id}/deliveries/{delivery_id}/redeliver"
+  ],
+  "removed": [
+    "POST /api/{account}/messages/{message_id}/attach-tags"
+  ],
+  "changed": [
+    {
+      "operation": "DELETE /api/accounts/{id}",
+      "components": [
+        "parameters"
+      ]
+    },
+    {
+      "operation": "POST /api/analytics/financial/profitability",
+      "components": [
+        "responses"
+      ]
+    },
+    {
+      "operation": "GET /api/analytics/financial/profitability/{account}/history",
+      "components": [
+        "responses"
+      ]
+    },
+    {
+      "operation": "POST /api/analytics/summary/comparison",
+      "components": [
+        "requestBody"
+      ]
+    },
+    {
+      "operation": "GET /api/{account}/banking/available-payout-systems",
+      "components": [
+        "responses"
+      ]
+    },
+    {
+      "operation": "GET /api/{account}/chats/{chat_id}/messages",
+      "components": [
+        "parameters"
+      ]
+    },
+    {
+      "operation": "POST /api/{account}/chats/{chat_id}/messages",
+      "components": [
+        "parameters",
+        "requestBody",
+        "responses"
+      ]
+    },
+    {
+      "operation": "GET /api/{account}/chats",
+      "components": [
+        "parameters"
+      ]
+    },
+    {
+      "operation": "GET /api/{account}/chats/{chat_id}/media",
+      "components": [
+        "parameters"
+      ]
+    },
+    {
+      "operation": "POST /api/client-sessions",
+      "components": [
+        "requestBody"
+      ]
+    },
+    {
+      "operation": "POST /api/authenticate",
+      "components": [
+        "requestBody"
+      ]
+    },
+    {
+      "operation": "GET /api/data-exports",
+      "components": [
+        "parameters"
+      ]
+    },
+    {
+      "operation": "POST /api/data-exports",
+      "components": [
+        "requestBody"
+      ]
+    },
+    {
+      "operation": "GET /api/{account}/engagement/messages/mass-messages",
+      "components": [
+        "parameters"
+      ]
+    },
+    {
+      "operation": "GET /api/{account}/engagement/messages/direct-messages",
+      "components": [
+        "parameters"
+      ]
+    },
+    {
+      "operation": "GET /api/{account}/engagement/messages/mass-messages/chart",
+      "components": [
+        "parameters"
+      ]
+    },
+    {
+      "operation": "GET /api/{account}/engagement/messages/direct-messages/chart",
+      "components": [
+        "parameters"
+      ]
+    },
+    {
+      "operation": "GET /api/{account}/engagement/messages/top-message",
+      "components": [
+        "parameters"
+      ]
+    },
+    {
+      "operation": "GET /api/{account}/engagement/messages/{message_id}/buyers",
+      "components": [
+        "parameters"
+      ]
+    },
+    {
+      "operation": "GET /api/{account}/fans/all",
+      "components": [
+        "parameters"
+      ]
+    },
+    {
+      "operation": "GET /api/{account}/fans/active",
+      "components": [
+        "parameters"
+      ]
+    },
+    {
+      "operation": "GET /api/{account}/fans/expired",
+      "components": [
+        "parameters"
+      ]
+    },
+    {
+      "operation": "GET /api/{account}/fans/latest",
+      "components": [
+        "parameters"
+      ]
+    },
+    {
+      "operation": "GET /api/{account}/fans/top",
+      "components": [
+        "parameters"
+      ]
+    },
+    {
+      "operation": "GET /api/{account}/fans/{fan_id}/summary",
+      "components": [
+        "responses"
+      ]
+    },
+    {
+      "operation": "GET /api/{account}/following/all",
+      "components": [
+        "parameters"
+      ]
+    },
+    {
+      "operation": "GET /api/{account}/following/active",
+      "components": [
+        "parameters"
+      ]
+    },
+    {
+      "operation": "GET /api/{account}/following/expired",
+      "components": [
+        "parameters"
+      ]
+    },
+    {
+      "operation": "GET /api/{account}/trial-links",
+      "components": [
+        "parameters"
+      ]
+    },
+    {
+      "operation": "GET /api/{account}/trial-links/{trial_link_id}",
+      "components": [
+        "parameters"
+      ]
+    },
+    {
+      "operation": "DELETE /api/{account}/trial-links/{trial_link_id}",
+      "components": [
+        "parameters"
+      ]
+    },
+    {
+      "operation": "GET /api/{account}/trial-links/{trial_link_id}/subscribers",
+      "components": [
+        "parameters"
+      ]
+    },
+    {
+      "operation": "GET /api/{account}/trial-links/{trial_link_id}/stats",
+      "components": [
+        "parameters"
+      ]
+    },
+    {
+      "operation": "GET /api/{account}/trial-links/{trial_link_id}/cohort-arps",
+      "components": [
+        "parameters"
+      ]
+    },
+    {
+      "operation": "GET /api/link-tags",
+      "components": [
+        "parameters"
+      ]
+    },
+    {
+      "operation": "GET /api/{account}/mass-messaging/overview",
+      "components": [
+        "parameters"
+      ]
+    },
+    {
+      "operation": "POST /api/{account}/mass-messaging",
+      "components": [
+        "requestBody"
+      ]
+    },
+    {
+      "operation": "PUT /api/{account}/mass-messaging/{id}",
+      "components": [
+        "requestBody"
+      ]
+    },
+    {
+      "operation": "POST /api/{account}/media/upload",
+      "components": [
+        "requestBody"
+      ]
+    },
+    {
+      "operation": "GET /api/{account}/media/uploads/{upload}/status",
+      "components": [
+        "responses"
+      ]
+    },
+    {
+      "operation": "POST /api/{account}/media/vault",
+      "components": [
+        "requestBody"
+      ]
+    },
+    {
+      "operation": "GET /api/{account}/media/vault/lists",
+      "components": [
+        "parameters",
+        "responses"
+      ]
+    },
+    {
+      "operation": "POST /api/{account}/media/vault/lists/{list_id}/media",
+      "components": [
+        "parameters"
+      ]
+    },
+    {
+      "operation": "DELETE /api/{account}/media/vault/lists/{list_id}/media",
+      "components": [
+        "parameters"
+      ]
+    },
+    {
+      "operation": "GET /api/{account}/notifications",
+      "components": [
+        "parameters"
+      ]
+    },
+    {
+      "operation": "GET /api/{account}/payouts/earning-statistics",
+      "components": [
+        "parameters"
+      ]
+    },
+    {
+      "operation": "GET /api/{account}/posts/{post_id}/comments",
+      "components": [
+        "parameters"
+      ]
+    },
+    {
+      "operation": "POST /api/{account}/posts/{post_id}/comments",
+      "components": [
+        "parameters"
+      ]
+    },
+    {
+      "operation": "POST /api/{account}/posts",
+      "components": [
+        "requestBody"
+      ]
+    },
+    {
+      "operation": "PUT /api/{account}/posts/{post_id}",
+      "components": [
+        "requestBody"
+      ]
+    },
+    {
+      "operation": "GET /api/profiles/{username}",
+      "components": [
+        "parameters"
+      ]
+    },
+    {
+      "operation": "GET /api/search",
+      "components": [
+        "parameters"
+      ]
+    },
+    {
+      "operation": "GET /api/{account}/queue",
+      "components": [
+        "parameters"
+      ]
+    },
+    {
+      "operation": "POST /api/{account}/release-forms/create-invitation-link",
+      "components": [
+        "responses"
+      ]
+    },
+    {
+      "operation": "POST /api/{account}/release-forms/create-release-form",
+      "components": [
+        "responses"
+      ]
+    },
+    {
+      "operation": "GET /api/{account}/release-forms/taggable-users",
+      "components": [
+        "responses"
+      ]
+    },
+    {
+      "operation": "PATCH /api/{account}/saved-for-later/messages/settings/enable-or-update-automatic-messaging",
+      "components": [
+        "requestBody"
+      ]
+    },
+    {
+      "operation": "PATCH /api/{account}/saved-for-later/posts/settings/enable-or-update-automatic-posting",
+      "components": [
+        "requestBody"
+      ]
+    },
+    {
+      "operation": "GET /api/{account}/shared-trial-links",
+      "components": [
+        "parameters"
+      ]
+    },
+    {
+      "operation": "GET /api/{account}/shared-tracking-links",
+      "components": [
+        "parameters"
+      ]
+    },
+    {
+      "operation": "GET /api/smart-link-postbacks",
+      "components": [
+        "responses"
+      ]
+    },
+    {
+      "operation": "POST /api/smart-link-postbacks",
+      "components": [
+        "requestBody",
+        "responses"
+      ]
+    },
+    {
+      "operation": "GET /api/smart-link-postbacks/{postback_id}",
+      "components": [
+        "responses"
+      ]
+    },
+    {
+      "operation": "PATCH /api/smart-link-postbacks/{postback_id}",
+      "components": [
+        "requestBody",
+        "responses"
+      ]
+    },
+    {
+      "operation": "GET /api/smart-links",
+      "components": [
+        "parameters"
+      ]
+    },
+    {
+      "operation": "POST /api/smart-links",
+      "components": [
+        "responses"
+      ]
+    },
+    {
+      "operation": "GET /api/smart-links/{smart_link_id}/stats",
+      "components": [
+        "parameters"
+      ]
+    },
+    {
+      "operation": "GET /api/smart-links/{smart_link_id}/cohort-arps",
+      "components": [
+        "parameters"
+      ]
+    },
+    {
+      "operation": "GET /api/smart-links/{smart_link_id}/spenders",
+      "components": [
+        "parameters"
+      ]
+    },
+    {
+      "operation": "GET /api/smart-links/{smart_link_id}/fans",
+      "components": [
+        "parameters",
+        "responses"
+      ]
+    },
+    {
+      "operation": "GET /api/smart-links/{smart_link_id}/clicks",
+      "components": [
+        "parameters",
+        "responses"
+      ]
+    },
+    {
+      "operation": "GET /api/smart-links/{smart_link_id}/conversions",
+      "components": [
+        "parameters",
+        "responses"
+      ]
+    },
+    {
+      "operation": "GET /api/{account}/statistics/total-transactions",
+      "components": [
+        "parameters"
+      ]
+    },
+    {
+      "operation": "GET /api/{account}/statistics/subscriber-metrics",
+      "components": [
+        "parameters"
+      ]
+    },
+    {
+      "operation": "GET /api/{account}/statistics/statements/earnings",
+      "components": [
+        "parameters"
+      ]
+    },
+    {
+      "operation": "GET /api/{account}/statistics/reach/profile-visitors",
+      "components": [
+        "parameters"
+      ]
+    },
+    {
+      "operation": "GET /api/{account}/stored/trial-links",
+      "components": [
+        "parameters"
+      ]
+    },
+    {
+      "operation": "GET /api/{account}/stored/shared-trial-links",
+      "components": [
+        "parameters"
+      ]
+    },
+    {
+      "operation": "GET /api/{account}/stored/shared-tracking-links",
+      "components": [
+        "parameters"
+      ]
+    },
+    {
+      "operation": "GET /api/{account}/stored/tracking-links",
+      "components": [
+        "parameters"
+      ]
+    },
+    {
+      "operation": "POST /api/{account}/stories",
+      "components": [
+        "requestBody",
+        "responses"
+      ]
+    },
+    {
+      "operation": "PATCH /api/{account}/stories/highlights/{highlight_id}/{story_id}",
+      "components": [
+        "parameters"
+      ]
+    },
+    {
+      "operation": "DELETE /api/{account}/stories/highlights/{highlight_id}/{story_id}",
+      "components": [
+        "parameters"
+      ]
+    },
+    {
+      "operation": "GET /api/{account}/tracking-links/{tracking_link_id}/stats",
+      "components": [
+        "parameters"
+      ]
+    },
+    {
+      "operation": "GET /api/{account}/tracking-links/{tracking_link_id}/cohort-arps",
+      "components": [
+        "parameters"
+      ]
+    },
+    {
+      "operation": "GET /api/{account}/tracking-links",
+      "components": [
+        "parameters",
+        "responses"
+      ]
+    },
+    {
+      "operation": "GET /api/{account}/tracking-links/{tracking_link_id}",
+      "components": [
+        "parameters"
+      ]
+    },
+    {
+      "operation": "DELETE /api/{account}/tracking-links/{tracking_link_id}",
+      "components": [
+        "parameters"
+      ]
+    },
+    {
+      "operation": "GET /api/{account}/transactions",
+      "components": [
+        "parameters"
+      ]
+    },
+    {
+      "operation": "GET /api/{account}/user-lists",
+      "components": [
+        "parameters"
+      ]
+    },
+    {
+      "operation": "POST /api/{account}/user-lists",
+      "components": [
+        "requestBody"
+      ]
+    },
+    {
+      "operation": "POST /api/{account}/user-lists/{userListId}/users",
+      "components": [
+        "requestBody",
+        "responses"
+      ]
+    },
+    {
+      "operation": "GET /api/webhooks/events",
+      "components": [
+        "responses"
+      ]
+    },
+    {
+      "operation": "POST /api/webhooks",
+      "components": [
+        "requestBody"
+      ]
+    },
+    {
+      "operation": "PUT /api/webhooks/{webhook_id}",
+      "components": [
+        "requestBody"
+      ]
+    }
+  ]
+}

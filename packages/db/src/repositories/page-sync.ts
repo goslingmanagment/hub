@@ -1200,6 +1200,14 @@ async function listPageSyncStatesInternal(
   return result.rows.map((row) => normalizePageSyncState(row));
 }
 
+/** Locks every page_sync_states row of one page in the ORDER pausePageSync / pausePageSyncForAuth /
+ * resumePageSync / resetPageSync take them (listPageSyncStatesInternal with lock:true). Any writer that
+ * reads blocker state and then rewrites it must hold these locks for the whole read-decide-write, or a
+ * concurrent Resume can move a row between the read and the write (#132/4, PLAN AUDIT 01). */
+export async function lockPageSyncStatesForPage(db: Database, pageId: number) {
+  return listPageSyncStatesInternal(db, { pageId }, { lock: true });
+}
+
 export async function listPageSyncStates(
   db: Database,
   input?: {
@@ -2571,6 +2579,9 @@ export async function retryPageSync(
     requestSeq: number;
     leaseToken: string;
     retryKind: string;
+    /** Wake up at this instant instead of the consecutive-failure backoff
+     * (a collection-policy cap knows exactly when it resets, review #136). */
+    retryAt?: Date | null;
     errorCode: string | null;
     errorSummary: string;
     progressedAt?: Date | null;
@@ -2583,7 +2594,7 @@ export async function retryPageSync(
   const now = input.now ?? new Date();
   const row = await getPageSyncState(db, input.pageId, input.stream);
   const nextFailures = (row?.consecutiveFailures ?? 0) + 1;
-  const retryAt = new Date(now.getTime() + resolveRetryDelayMs(nextFailures));
+  const retryAt = input.retryAt ?? new Date(now.getTime() + resolveRetryDelayMs(nextFailures));
   const result = await db.execute(sql<{ status: PageSyncStatus; retryKind: string | null }>`
     update ${pageSyncStates}
     set status = case
@@ -2833,6 +2844,7 @@ export async function pausePageSync(
       await database.execute(sql`
         update ${pageSyncStates}
         set status = 'paused',
+            ofapi_user_paused = exists(select 1 from pages p where p.id = ${input.pageId} and p.platform = 'onlyfans'),
             blocker_kind = case
                              when blocker_kind = ${FANSLY_BULK_STREAM_FEATURE_GATE_BLOCKER_KIND}
                                then null
@@ -2937,7 +2949,8 @@ export async function resumePageSync(
     for (const stream of streams) {
       await database.execute(sql`
         update ${pageSyncStates}
-        set status = case
+        set ofapi_user_paused = false,
+            status = case
                        when blocker_kind is not null then 'blocked'::page_sync_status
                        when request_seq > applied_seq then 'pending'::page_sync_status
                        else 'idle'::page_sync_status

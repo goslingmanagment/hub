@@ -1,3 +1,4 @@
+import type { OfapiExtendedCommandKind, OfapiExtendedCommandPayload } from "@agency_hub_core/shared";
 import {
   bigserial,
   bigint,
@@ -86,13 +87,13 @@ const jsonbSafe = customType<{ data: unknown; driverData: unknown }>({
   },
 });
 
-export type OfapiCommandKind =
+export type OfapiCommandKind = OfapiExtendedCommandKind
   | "send_text_message_v1"
   | "send_media_message_v1"
   | "typing_active_v1"
   | "unsend_message_v1"
   | "mark_chat_read_v1";
-export type OfapiCommandPayload =
+export type OfapiCommandPayload = OfapiExtendedCommandPayload
   | { text: string }
   | {
     text: string;
@@ -192,6 +193,9 @@ export const syncHttpFailureKindEnum = pgEnum("sync_http_failure_kind", [
   "transport",
   "http",
   "provider",
+  // A local collection-policy refusal before any fetch (0169); never a
+  // vendor or transport failure.
+  "policy",
 ]);
 export const syncEventSeverityEnum = pgEnum("sync_event_severity", [
   "info",
@@ -254,6 +258,7 @@ export const notificationIncidentKindEnum = pgEnum("notification_incident_kind",
   // G5 slice 1 (0124): the content-addressed capture copy disagrees with the
   // inline authority, or points at an object that is not there.
   "capture_payload_parity",
+  "ofapi_binding_conflict",
 ]);
 export const notificationIncidentStatusEnum = pgEnum("notification_incident_status", [
   "open",
@@ -304,7 +309,9 @@ export const pages = pgTable(
     // Latest accounts.* webhook state for the mapped OFAPI account (raw event
     // suffix, e.g. "connected" / "authentication_failed"); forward-only by
     // received_at. Null until the first accounts.* event is projected.
+    ofapiBindingGeneration: integer("ofapi_binding_generation").notNull().default(1),
     ofapiAuthStatus: text("ofapi_auth_status"),
+    // Verified apply stores null status with the authenticated roster receipt as the forward-only boundary.
     ofapiAuthChangedAt: timestamp("ofapi_auth_changed_at", { withTimezone: true }),
     username: text("username"),
     displayName: text("display_name"),
@@ -1468,6 +1475,7 @@ export const ofapiCommands = pgTable(
     chatterUserId: bigint("chatter_user_id", { mode: "number" })
       .references(() => users.id, { onDelete: "restrict" })
       .notNull(),
+    bindingGeneration: integer("binding_generation").notNull().default(1),
     ofapiAccountId: text("ofapi_account_id").notNull(),
     conversationId: text("conversation_id").notNull(),
     kind: text("kind").$type<OfapiCommandKind>().notNull(),
@@ -2659,7 +2667,9 @@ export type OfapiCaptureJobKind =
   | "head_repair"
   | "account_export"
   | "export_import"
-  | "post_paginate";
+  | "post_paginate"
+  | "collection_read"
+  | "media_upload";
 export type OfapiCaptureJobGoal =
   | "history_to_exhaustion"
   | "connect_to_anchor"
@@ -3019,6 +3029,21 @@ export const OFAPI_CREDIT_LEDGER_SOURCES = [
   "adjustment",
 ] as const;
 
+// Retained financial receipts for legacy HTTP responses. Only the accounting
+// disposition changes; no response text, credentials or fan identities live here.
+export const ofapiCreditReceipts = pgTable("ofapi_credit_receipts", {
+  requestId: text("request_id").notNull(),
+  attemptNumber: integer("attempt_number").notNull(),
+  receivedAt: timestamp("received_at", { withTimezone: true }).notNull(),
+  observation: jsonbSafe("observation").$type<Record<string, unknown>>().notNull(),
+  accountedAt: timestamp("accounted_at", { withTimezone: true }),
+  accountingPath: text("accounting_path").$type<"ledger" | "physical">(),
+}, table => ({
+  pk: primaryKey({ columns: [table.requestId, table.attemptNumber] }),
+  pendingIdx: index("ofapi_credit_receipts_pending_idx")
+    .on(table.receivedAt, table.requestId, table.attemptNumber).where(sql`${table.accountedAt} is null`),
+}));
+
 // Append-only OFAPI credit movement (docs/ofapi-parity-plan.md D2-D5): the
 // checkbook the bank-statement reconciliation balances against. 'rest' rows
 // are written by the client's onCreditSpend sink (one per response that
@@ -3205,6 +3230,9 @@ export const ofapiWebhookEvents = pgTable(
     rawCaptureIdx: index("ofapi_webhook_events_raw_capture_idx")
       .on(table.id)
       .where(sql`${table.captureState} = 'raw_captured'`),
+    lifecycleResourceIdx: index("ofapi_webhook_lifecycle_resource_idx")
+      .on(sql`(${table.payload}->'payload'->>'id')`, table.eventType, table.id.desc())
+      .where(sql`${table.captureState} = 'accepted' and ${table.projectionStatus} = 'projected'`),
     captureStateCheck: check("ofapi_webhook_events_capture_state_check", sql`
       ${table.captureState} in ('raw_captured', 'accepted', 'quarantined_malformed')
     `),
@@ -6219,3 +6247,102 @@ export const pagePayoutRequests = pgTable(
     ),
   }),
 );
+
+// OFAPI provider delivery metadata; nested business bodies remain observations.
+export const ofapiWebhookDeliveryAttempts = pgTable("ofapi_webhook_delivery_attempts", {
+  webhookId: text("webhook_id").notNull(), attemptId: bigint("attempt_id", { mode: "number" }).notNull(),
+  deliveryUuid: text("delivery_uuid").notNull(), eventType: text("event_type").notNull(),
+  attemptNumber: integer("attempt_number").notNull(), succeeded: boolean("succeeded").notNull(),
+  statusCode: integer("status_code"), errorType: text("error_type"), idempotencyKey: text("idempotency_key"),
+  ofapiAccountId: text("ofapi_account_id"), redeliveredFrom: text("redelivered_from"),
+  accountRefs: jsonbSafe("account_refs").$type<string[]>().default([]).notNull(),
+  sourceCreatedAt: timestamp("source_created_at", { withTimezone: true }).notNull(),
+  observationId: bigint("observation_id", { mode: "number" }).notNull(),
+  observationReceivedAt: timestamp("observation_received_at", { withTimezone: true }).notNull(),
+  recordedAt: timestamp("recorded_at", { withTimezone: true }).defaultNow().notNull(),
+}, table => ({
+  pk: primaryKey({ columns: [table.webhookId, table.attemptId] }),
+  groupIdx: index("ofapi_webhook_delivery_group_idx").on(table.webhookId, table.deliveryUuid),
+  timeIdx: index("ofapi_webhook_delivery_time_idx").on(table.webhookId, table.sourceCreatedAt.desc(), table.attemptId.desc()),
+}));
+
+export const ofapiWebhookDeliveryScans = pgTable("ofapi_webhook_delivery_scans", {
+  id: uuid("id").primaryKey(), webhookId: text("webhook_id").notNull(),
+  credentialFingerprint: text("credential_fingerprint").notNull(), observedTeam: text("observed_team").notNull(),
+  windowStart: timestamp("window_start", { withTimezone: true }).notNull(), windowEnd: timestamp("window_end", { withTimezone: true }).notNull(),
+  state: text("state").notNull(), nextOffset: integer("next_offset").default(0).notNull(), capturedAttempts: integer("captured_attempts").default(0).notNull(),
+  leaseToken: uuid("lease_token"), leaseUntil: timestamp("lease_until", { withTimezone: true }), errorCode: text("error_code"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(), updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  completedAt: timestamp("completed_at", { withTimezone: true }),
+}, table => ({ stateIdx: index("ofapi_webhook_delivery_scan_state_idx").on(table.webhookId, table.state, table.createdAt.desc()) }));
+
+export const ofapiWebhookRedeliveryIntents = pgTable("ofapi_webhook_redelivery_intents", {
+  id: uuid("id").primaryKey(), webhookId: text("webhook_id").notNull(), attemptId: bigint("attempt_id", { mode: "number" }).notNull(),
+  actorUserId: bigint("actor_user_id", { mode: "number" }).notNull().references(() => users.id, { onDelete: "restrict" }),
+  state: text("state").notNull(), redeliveryUuid: text("redelivery_uuid"), errorCode: text("error_code"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(), settledAt: timestamp("settled_at", { withTimezone: true }),
+}, table => ({
+  attemptFk: foreignKey({ columns: [table.webhookId, table.attemptId], foreignColumns: [ofapiWebhookDeliveryAttempts.webhookId, ofapiWebhookDeliveryAttempts.attemptId] }).onDelete("restrict"),
+  activeAttemptUniq: uniqueIndex("ofapi_webhook_redelivery_active_attempt_uniq").on(table.webhookId, table.attemptId).where(sql`${table.state} in ('dispatching','accepted','indeterminate')`),
+}));
+
+export const ofapiWebhookCollectionPolicy = pgTable("ofapi_webhook_collection_policy", {
+  id: boolean("id").primaryKey().default(true), version: bigint("version", { mode: "number" }).default(0).notNull(),
+  desiredGroups: jsonbSafe("desired_groups").$type<string[]>().default([]).notNull(), appliedGroups: jsonbSafe("applied_groups").$type<string[]>().default([]).notNull(),
+  historyEnabled: boolean("history_enabled").default(false).notNull(), applyState: text("apply_state").default("pending").notNull(),
+  applyToken: uuid("apply_token"), applyStartedAt: timestamp("apply_started_at", { withTimezone: true }),
+  appliedAt: timestamp("applied_at", { withTimezone: true }), errorCode: text("error_code"), updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+// Owner marketing configuration; business analytics use canonical read snapshots.
+export const ofapiMarketingResources = pgTable("ofapi_marketing_resources", {
+  id: bigserial("id", {mode:"number"}).primaryKey(),
+  pageId: bigint("page_id", {mode:"number"}).references(()=>pages.id,{onDelete:"restrict"}),
+  kind:text("kind").notNull(),upstreamId:text("upstream_id").notNull(),parentId:text("parent_id").default("").notNull(),
+  data:jsonbSafe("data").notNull(),deleted:boolean("deleted").default(false).notNull(),credentialFingerprint:text("credential_fingerprint"),observationId:bigint("observation_id",{mode:"number"}).notNull(),observedAt:timestamp("observed_at",{withTimezone:true}).notNull(),
+}, table=>({identity:uniqueIndex("ofapi_marketing_resource_identity_idx").on(sql`coalesce(${table.pageId},0)`,table.kind,table.parentId,table.upstreamId)}));
+export const ofapiMarketingIntents = pgTable("ofapi_marketing_intents", {
+  id:uuid("id").primaryKey(),pageId:bigint("page_id",{mode:"number"}).references(()=>pages.id,{onDelete:"restrict"}),
+  actorUserId:bigint("actor_user_id",{mode:"number"}).notNull().references(()=>users.id,{onDelete:"restrict"}),
+  action:text("action").notNull(),bodyEncrypted:text("body_encrypted").notNull(),bodyHash:text("body_hash").notNull(),preview:jsonbSafe("preview").notNull(),
+  state:text("state").notNull(),responseObservationId:bigint("response_observation_id",{mode:"number"}),errorCode:text("error_code"),
+  remoteId:text("remote_id"),accountingState:text("accounting_state").default("pending").notNull(),projectionState:text("projection_state").default("pending").notNull(),
+  createdAt:timestamp("created_at",{withTimezone:true}).defaultNow().notNull(),dispatchedAt:timestamp("dispatched_at",{withTimezone:true}),settledAt:timestamp("settled_at",{withTimezone:true}),
+});
+export const ofapiActionIdentities = pgTable("ofapi_action_identities", { id: uuid("id").primaryKey() });
+export const ofapiMediaTokenFences = pgTable("ofapi_media_token_fences", {
+  tokenHash: text("token_hash").primaryKey(), operationId: uuid("operation_id").notNull(),
+});
+
+export const ofapiActionIntents = pgTable("ofapi_action_intents", {
+  id: uuid("id").primaryKey(),
+  mediaOperationId: uuid("media_operation_id").defaultRandom().notNull(),
+  pageId: bigint("page_id", { mode: "number" }).notNull().references(() => pages.id, { onDelete: "restrict" }),
+  actorUserId: bigint("actor_user_id", { mode: "number" }).notNull().references(() => users.id, { onDelete: "restrict" }),
+  action: text("action").notNull(), bodyHash: text("body_hash").notNull(), bodyEncrypted: text("body_encrypted").notNull(),
+  subjectRefs: text("subject_refs").array().notNull().default(sql`'{}'::text[]`), state: text("state").notNull(),
+  estimatedCredits: integer("estimated_credits").notNull(), actualCredits: integer("actual_credits"), reservedDay: date("reserved_day"),
+  reservationSettled: boolean("reservation_settled").notNull().default(false), ledgerEnabled: boolean("ledger_enabled").notNull().default(false),
+  responseObservationId: bigint("response_observation_id", { mode: "number" }), resultEncrypted: text("result_encrypted"), remoteId: text("remote_id"), errorCode: text("error_code"),
+  accountingState: text("accounting_state").notNull().default("pending"), createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  dispatchedAt: timestamp("dispatched_at", { withTimezone: true }), settledAt: timestamp("settled_at", { withTimezone: true }),
+}, table => ({ pageCreated: index("ofapi_action_page_created_idx").on(table.pageId, table.createdAt.desc()) }));
+
+export const ofapiMarketingProjectionReceipts = pgTable("ofapi_marketing_projection_receipts", {
+  observationId:bigint("observation_id",{mode:"number"}).primaryKey(),
+  pageId:bigint("page_id",{mode:"number"}).references(()=>pages.id,{onDelete:"restrict"}),
+  version:integer("version").default(1).notNull(),projectionState:text("projection_state").default("pending").notNull(),
+  accountingState:text("accounting_state").default("pending").notNull(),errorCode:text("error_code"),
+  checkedAt:timestamp("checked_at",{withTimezone:true}).defaultNow().notNull(),
+});
+/** S11a vendor queue evidence; no fan, command, delivery or revenue inference. */
+export const ofapiChatQueueState = pgTable('ofapi_chat_queue_state', {
+  pageId: bigint('page_id',{mode:'number'}).references(()=>pages.id,{onDelete:'restrict'}).notNull(),
+  queueId: text('queue_id').notNull(),
+  phase: text('phase').notNull(),
+  queueDate: timestamp('queue_date',{withTimezone:true}),
+  state: jsonbSafe('state').$type<Record<string,unknown>>().notNull(),
+  observedAt: timestamp('observed_at',{withTimezone:true}).notNull(),
+  sourceEventId: bigint('source_event_id',{mode:'number'}).notNull(),
+  sourceObservationId: bigint('source_observation_id',{mode:'number'}).notNull(),
+},table=>({pk:primaryKey({columns:[table.pageId,table.queueId]}),pageObservedIdx:index('ofapi_chat_queue_state_page_observed_idx').on(table.pageId,table.observedAt)}));

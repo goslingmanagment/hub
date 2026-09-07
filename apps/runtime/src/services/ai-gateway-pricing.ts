@@ -25,7 +25,7 @@ interface AnthropicGatewayPricing {
 }
 
 const ANTHROPIC_PRICING: Record<string, AnthropicGatewayPricing> = {
-  // Decision #252: the judged reply-feature default (adaptive-only surface,
+  // Decision #273: the judged reply-feature default (adaptive-only surface,
   // handled generically by ai-gateway-anthropic.ts). List price 2026-09.
   "anthropic:claude-sonnet-5": {
     providerModelId: "claude-sonnet-5",

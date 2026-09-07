@@ -27,7 +27,7 @@ import { ensureQueueCreated, type QueueCreationClient } from "../sync-queue.ts";
 //   analytics search path (stage-11 §2; Stage 29 wires access scoping).
 export const TIERING_HOT_WINDOW_MONTHS = 6;
 
-export const RESTRICTED_OBSERVATION_KINDS = new Set(["desktop.guard_audit"]);
+export const RESTRICTED_OBSERVATION_KINDS = new Set(["desktop.guard_audit", "ofapi_admin_accounts"]);
 
 // Stage 29: the restricted AI class NEVER exports to the lake — excluded by
 // construction (only TIERED_TABLES tier) and pinned by test so a future

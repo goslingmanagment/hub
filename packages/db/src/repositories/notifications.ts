@@ -15,6 +15,7 @@ import {
 } from "./notification-outbox.ts";
 
 export type NotificationIncidentKind =
+  | "ofapi_binding_conflict"
   | "auth_blocked"
   | "proxy_failed"
   | "proxy_missing"

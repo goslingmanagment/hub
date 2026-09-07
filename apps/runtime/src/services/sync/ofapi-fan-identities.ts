@@ -18,6 +18,7 @@ import {
 
 import type { AppContext } from "../../bootstrap.ts";
 import { idToString } from "../ofapi-payloads.ts";
+import { resolveOfapiListNextOffset } from "../ofapi-list-pagination.ts";
 import type { OfapiClient, OfapiListPage, OfapiRequestContext } from "../ofapi.ts";
 import type { ResolvedPageContext } from "../page-context.ts";
 import { composeRequestObservers, type SyncChunkBudget } from "./chunk-budget.ts";
@@ -74,9 +75,10 @@ async function upsertLinkUsers(
   app: AppContext,
   pageId: number,
   items: Record<string, unknown>[],
+  kind: "subscribers" | "spenders",
 ) {
   const fanInputs = items.flatMap((item) => {
-    const platformUserId = idToString(item.id);
+    const platformUserId = idToString(kind === "spenders" ? item.onlyfans_id : item.id);
     if (!platformUserId) {
       return [];
     }
@@ -323,12 +325,16 @@ export async function syncOfapiFanIdentities(
         }
       }
 
-      if (page.items.length < pageLimit) {
+      const nextOffset = resolveOfapiListNextOffset(page, {
+        pathname: `/${encodeURIComponent(ofapiAccountId)}/${linkType === "tracking" ? "tracking-links" : "trial-links"}`,
+        offset: cursor.linkOffset, limit: pageLimit, baseUrl: app.config?.ofapiBaseUrl,
+      });
+      if (nextOffset === null) {
         cursor = linkType === "tracking"
           ? { ...cursor, linkType: "trial", linkOffset: 0 }
           : { ...cursor, phase: "users", linkType: null, linkOffset: 0 };
       } else {
-        cursor = { ...cursor, linkOffset: cursor.linkOffset + pageLimit };
+        cursor = { ...cursor, linkOffset: nextOffset };
       }
       stats.trackingLinks = trackingLinkIds.size;
       stats.trialLinks = trialLinkIds.size;
@@ -350,16 +356,17 @@ export async function syncOfapiFanIdentities(
   }
 
   // Phase 2: each link's users -> fans/page_fans.
-  const consumeUsers = async (items: Record<string, unknown>[]) => {
+  const consumeUsers = async (items: Record<string, unknown>[], kind: "subscribers" | "spenders") => {
     stats.userPages += 1;
-    stats.upsertedFans += await upsertLinkUsers(app, input.pageContext.page.id, items);
+    stats.upsertedFans += await upsertLinkUsers(app, input.pageContext.page.id, items, kind);
   };
 
-  const targets: Array<{ key: string; fetchPage: GuardedFetch }> = [];
+  const targets: Array<{ key: string; pathname: string; fetchPage: GuardedFetch }> = [];
   for (const linkId of trackingLinkIds) {
     for (const kind of ["subscribers", "spenders"] as const) {
       targets.push({
         key: `tracking:${linkId}:${kind}`,
+        pathname: `/${encodeURIComponent(ofapiAccountId)}/tracking-links/${encodeURIComponent(linkId)}/${kind}`,
         fetchPage: (offset, limit) =>
           client.listTrackingLinkUsers!(requestContext, ofapiAccountId, linkId, kind, {
             limit,
@@ -371,6 +378,7 @@ export async function syncOfapiFanIdentities(
   for (const linkId of trialLinkIds) {
     targets.push({
       key: `trial:${linkId}:subscribers`,
+      pathname: `/${encodeURIComponent(ofapiAccountId)}/trial-links/${encodeURIComponent(linkId)}/subscribers`,
       fetchPage: (offset, limit) =>
         client.listTrialLinkSubscribers!(requestContext, ofapiAccountId, linkId, {
           limit,
@@ -415,14 +423,17 @@ export async function syncOfapiFanIdentities(
       const page = await target.fetchPage(offset, pageLimit);
       await guard.recordResponse(page);
       stats.requestsUsed += 1;
-      await consumeUsers(page.items);
-      if (page.items.length < pageLimit) {
+      await consumeUsers(page.items, target.key.endsWith(":spenders") ? "spenders" : "subscribers");
+      const nextOffset = resolveOfapiListNextOffset(page, {
+        pathname: target.pathname, offset, limit: pageLimit, baseUrl: app.config?.ofapiBaseUrl,
+      });
+      if (nextOffset === null) {
         completedTargetKeys.add(target.key);
         cursor = { ...cursor, activeTargetKey: null, activeOffset: 0 };
         await persistCursor();
         break;
       }
-      offset += pageLimit;
+      offset = nextOffset;
       cursor = { ...cursor, activeTargetKey: target.key, activeOffset: offset };
       await persistCursor();
     }

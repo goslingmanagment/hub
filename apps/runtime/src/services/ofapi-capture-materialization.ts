@@ -71,7 +71,7 @@ function capturedMessagePage(payload: unknown) {
   if (captured.status < 200 || captured.status >= 300) {
     return { kind: "noop" as const };
   }
-  const decoded = parseOfapiJsonBytes(captured.bodyBytes);
+  const decoded = parseOfapiJsonBytes(captured.bodyBytes, captured.headers);
   if (!decoded.validJson) {
     return { kind: "rejected" as const, reason: "invalid_json" };
   }

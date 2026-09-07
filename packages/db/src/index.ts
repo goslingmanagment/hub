@@ -3,6 +3,7 @@ export * from "./schema.ts";
 export * from "./repositories/creator-raw-media.ts";
 export * from "./repositories/vault-album-scans.ts";
 export * from "./repositories/ofapi-post-media-replay.ts";
+export * from "./repositories/ofapi-credit-receipts.ts";
 export * from "./schema-guard.ts";
 export * from "./capture-payload-codec.ts";
 // G5 slice 3a: pure derivations for the typed queryable columns. No database
@@ -141,3 +142,18 @@ export * from "./repositories/transaction-tip-contexts.ts";
 export * from "./repositories/voice-notes.ts";
 export * from "./repositories/voice-profiles.ts";
 export * from "./repositories/workboard-v2.ts";
+
+export * from "./repositories/ofapi-bindings.ts";
+
+export * from "./repositories/ofapi-vendor-usage.ts";
+export * from "./repositories/ofapi-collection.ts";
+export * from "./repositories/ofapi-webhook-recovery.ts";
+
+export * from "./repositories/ofapi-provider-operations.ts";
+export * from "./repositories/ofapi-media-token-fences.ts";
+export * from "./repositories/ofapi-banned-words.ts";
+
+export * from "./repositories/ofapi-read-collections.ts";
+
+export * from "./repositories/ofapi-typed-exports.ts";
+export { saveOfapiChatQueueState, readOfapiContentEvents } from './repositories/ofapi-content-events.ts';

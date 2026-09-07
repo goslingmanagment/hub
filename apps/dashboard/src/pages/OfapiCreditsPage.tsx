@@ -1,3 +1,7 @@
+import { buildSettingsRoute } from "../lib/navigation.js";
+import { OfapiBannedWords } from "./settings/OfapiBannedWords.js";
+import { OfapiVendorEvidence } from "./settings/OfapiVendorEvidence.js";
+import { OfapiWebhookRecovery } from "./settings/OfapiWebhookRecovery.js";
 import { Fragment, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router";
 import {
@@ -38,7 +42,7 @@ const RUNWAY_WARNING_DAYS = 7;
 const SOURCE_SERIES = [
   { key: "rest", label: "Приложение", color: "#4ead6b" },
   { key: "webhookAccrual", label: "Вебхуки", color: "#5b8def" },
-  { key: "external", label: "Вне приложения", color: "#e0a14f" },
+  { key: "external", label: "Сверка баланса", color: "#e0a14f" },
   { key: "adjustment", label: "Корректировки", color: "#9b7ede" },
 ] as const;
 
@@ -46,16 +50,16 @@ const SOURCE_FILTER_OPTIONS = [
   { value: "", label: "Все источники" },
   { value: "rest", label: "Приложение" },
   { value: "webhook_accrual", label: "Вебхуки" },
-  { value: "external", label: "Вне приложения" },
-  { value: "refill", label: "Пополнения" },
+  { value: "external", label: "Сверка баланса" },
+  { value: "refill", label: "Рост баланса" },
   { value: "adjustment", label: "Корректировки" },
 ] as const;
 
 const LEDGER_SOURCE_LABELS: Record<string, string> = {
   rest: "Приложение",
   webhook_accrual: "Вебхук",
-  external: "Вне приложения",
-  refill: "Пополнение",
+  external: "Сверка баланса",
+  refill: "Рост баланса",
   adjustment: "Корректировка",
 };
 
@@ -307,7 +311,7 @@ function BudgetMeter(props: {
   const unlimited = props.dailyCeiling <= 0;
   const pct = unlimited
     ? 0
-    : Math.min(100, Math.round((props.spentToday / props.dailyCeiling) * 100));
+    : Math.max(0, Math.min(100, Math.round((props.spentToday / props.dailyCeiling) * 100)));
   const barClass = paused
     ? "bg-red-500"
     : pct >= 80
@@ -466,7 +470,7 @@ function BalanceChart(props: {
           {refillCount > 0 && (
             <span className="inline-flex items-center gap-2">
               <span aria-hidden="true" className="inline-block w-4 border-t-2 border-dashed border-green" />
-              {refillCount} {ruPlural(refillCount, "пополнение", "пополнения", "пополнений")} за
+              {refillCount} {ruPlural(refillCount, "увеличение", "увеличения", "увеличений")} баланса по сверке за
               период · +{fmtCredits(refillTotal)} кр
             </span>
           )}
@@ -499,10 +503,19 @@ function ledgerAmount(row: { credits: number; estimated: boolean }) {
     : `${approx}-${fmtCredits(row.credits)}`;
 }
 
+const LEDGER_ESTIMATE_EXPLANATIONS: Record<OfapiCreditsLedgerResponse["rows"][number]["source"], string> = {
+  rest: "Оценка при учёте HTTP-запроса; подтверждения и уточнения отражаются отдельными корректировками",
+  webhook_accrual: "Оценка по числу полученных вебхуков, а не подтверждённое списание OFAPI",
+  external: "Необъяснённое уменьшение баланса после учтённых расходов; источник не подтверждён",
+  refill: "Увеличение баланса после учтённых расходов; платёж не подтверждён",
+  adjustment: "Оценочная корректировка учёта кредитов",
+};
+
 function LedgerRow(props: { row: OfapiCreditsLedgerResponse["rows"][number] }) {
   const [expanded, setExpanded] = useState(false);
   const detailId = useId();
   const { row } = props;
+  const estimateExplanation = row.estimated ? LEDGER_ESTIMATE_EXPLANATIONS[row.source] : null;
   const toggle = () => setExpanded((value) => !value);
   const failed = row.httpStatus !== null && row.httpStatus >= 400;
 
@@ -537,7 +550,7 @@ function LedgerRow(props: { row: OfapiCreditsLedgerResponse["rows"][number] }) {
         <td className={tdClass}>{row.pageLabel ?? "—"}</td>
         <td
           className={`${tdClass} text-right ${row.credits < 0 ? "font-medium text-green-700" : ""}`}
-          title={row.estimated ? "Оценка — точная сумма спишется с дневным начислением вебхуков" : undefined}
+          title={estimateExplanation ?? undefined}
         >
           {ledgerAmount(row)}
         </td>
@@ -553,7 +566,7 @@ function LedgerRow(props: { row: OfapiCreditsLedgerResponse["rows"][number] }) {
           <td colSpan={8} className="px-4 py-2 text-[12px] text-text-secondary">
             {row.operation ? `Операция ${row.operation} · ` : ""}
             {row.requestId ? `запрос ${row.requestId}` : "без id запроса"}
-            {row.estimated ? " · оценка — точная сумма спишется с дневным начислением вебхуков" : ""}
+            {estimateExplanation ? ` · ${estimateExplanation}` : ""}
             {row.accrualDay ? ` · день начисления ${row.accrualDay}` : ""}
             {` · запись #${row.id}`}
           </td>
@@ -736,6 +749,7 @@ function SystemHealthSection(props: {
   const needsAttention = summary.floor.blocked
     || summary.incidents.length > 0
     || (burn?.alerting ?? false)
+    || (summary.forecast.unverifiedResidual?.credits ?? 0) !== 0
     || parked.length > 0;
   const [open, setOpen] = useState(needsAttention);
   const bodyId = useId();
@@ -790,8 +804,8 @@ function SystemHealthSection(props: {
                     <>
                       Сверен с провайдером {utcDateTime(summary.reconciliation.lastRunAt)}
                       {drift === 0
-                        ? " — расхождений нет."
-                        : ` — расхождение ${fmtCredits(Math.abs(drift))} кр, учтено как траты вне приложения.`}
+                        ? " — последнее окно без расхождений."
+                        : ` — расхождение ${fmtCredits(drift)} кр; источник изменения не подтверждён.`}
                     </>
                   )
                   : "Ещё не выполнялась. Приложение периодически сверяет свой журнал с реальным балансом провайдера."}
@@ -879,6 +893,12 @@ function SystemHealthSection(props: {
           </dl>
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border-light px-4 py-3 text-[12px] text-text-secondary">
             <span className={eyebrowClass}>Настройки</span>
+            <Link
+              to="/settings?tab=collection"
+              className="font-medium text-accent underline-offset-2 hover:underline"
+            >
+              Настройки сбора
+            </Link>
             <ConfigLink configKey="ofapiDmDailyCreditBudget">Бюджет сообщений</ConfigLink>
             {props.hasAudienceBudget && (
               <ConfigLink configKey="ofapiAudienceDailyCreditBudget">Бюджет аудитории</ConfigLink>
@@ -945,8 +965,8 @@ export function OfapiCreditsPage() {
     return byDay;
   }, [charts]);
 
-  // Individual top-ups can be tiny and frequent (webhook accrual corrections), so
-  // the chart marks days, and the caption reports the aggregate.
+  // Balance residuals can be tiny and frequent; they are not payment receipts.
+  // The chart marks days, and the caption reports the inferred aggregate.
   const refillsByDay = useMemo(() => {
     const byDay = new Map<string, { day: string; credits: number; count: number }>();
     for (const refill of charts?.refills ?? []) {
@@ -983,12 +1003,16 @@ export function OfapiCreditsPage() {
 
   const operationTotal = (breakdown?.byOperation ?? [])
     .reduce((sum, row) => sum + row.credits, 0);
+  // A signed net total is not a meaningful share denominator: +10 and -9
+  // would otherwise produce 1000% and -900%. Keep the amounts, omit shares.
+  const operationSharesComparable = operationTotal > 0
+    && (breakdown?.byOperation ?? []).every((row) => row.credits >= 0);
 
   // Keep only sources that actually spent in this window, so the legend never
   // lists phantom series. Colors stay fixed per source either way.
   const activeSpendSeries = useMemo(() => {
     const active = SOURCE_SERIES.filter((series) =>
-      dailyBars.some((row) => row[series.key] > 0));
+      dailyBars.some((row) => row[series.key] !== 0));
     return active.length > 0 ? active : [...SOURCE_SERIES];
   }, [dailyBars]);
 
@@ -1096,9 +1120,11 @@ export function OfapiCreditsPage() {
 
   const todaySources = SOURCE_SERIES
     .map((series) => ({ ...series, value: summary.today.bySource[series.key] }))
-    .filter((series) => series.value > 0);
+    .filter((series) => series.value !== 0);
 
   const refillRecommendation = forecast.refillRecommendation ?? null;
+  const recordedActivityForecast = forecast.basis === "recorded_activity";
+  const unverifiedResidual = forecast.unverifiedResidual;
 
   const heroValueClass = "mt-1 text-[28px] font-semibold leading-tight";
   const heroUnitClass = "text-[15px] font-medium text-text-secondary";
@@ -1107,12 +1133,14 @@ export function OfapiCreditsPage() {
   return (
     <div className="mx-auto max-w-6xl px-4 py-6">
       <div className="mb-5">
-        <h1 className="text-xl font-extrabold text-text-primary">Кредиты OFAPI</h1>
+        <div className="flex items-center justify-between gap-4"><h1 className="text-xl font-extrabold text-text-primary">Кредиты OFAPI</h1><Link className="text-sm text-accent" to={buildSettingsRoute("collection")}>Настройки сбора</Link></div>
         <p className="mt-1 text-sm text-text-secondary">
           Предоплаченные кредиты списываются за каждый запрос этого приложения к API OnlyFans —
           синк чатов, отправку сообщений, проверку фанатов. Всё время на странице — UTC.
         </p>
       </div>
+
+      <details className="mb-5"><summary className="cursor-pointer py-2 text-sm font-medium text-text-primary">События OFAPI и история доставок</summary><OfapiWebhookRecovery /></details>
 
       {!summary.enabled ? (
         <StatusPanel
@@ -1142,7 +1170,7 @@ export function OfapiCreditsPage() {
               )}
               {burnAlerting && burn && (
                 <p>
-                  Кредиты сгорают быстро: {fmtCredits(burn.total)} кр за последние{" "}
+                  Журнал показывает расход или разницу баланса: {fmtCredits(burn.total)} кр за последние{" "}
                   {burn.windowMinutes} минут (порог тревоги {fmtCredits(burn.threshold)} кр/ч).
                   {burnDrivers.length > 0 ? ` Больше всего тратят: ${burnDrivers.join(", ")}.` : ""}
                 </p>
@@ -1178,7 +1206,7 @@ export function OfapiCreditsPage() {
                 </div>
               </div>
               <div className="sm:px-6">
-                <div className={eyebrowClass}>Хватит на</div>
+                <div className={eyebrowClass}>{recordedActivityForecast ? "Прогноз по операциям" : "Хватит на"}</div>
                 <div className={`${heroValueClass} ${runwayToneClass}`}>
                   {forecast.daysLeft !== null
                     ? (
@@ -1199,7 +1227,7 @@ export function OfapiCreditsPage() {
                       </>
                     )
                     : forecast.avgDailySpend7d <= 0
-                      ? "за последние 7 дней трат нет — баланс не движется"
+                      ? "за последние 7 дней нет учтённых трат для прогноза"
                       : "ждём показание баланса"}
                 </div>
               </div>
@@ -1221,9 +1249,11 @@ export function OfapiCreditsPage() {
                     )
                     : (
                       <>
-                        <div className={`${heroValueClass} text-green-700`}>Не нужно</div>
+                        <div className={`${heroValueClass} text-green-700`}>
+                          {unverifiedResidual && unverifiedResidual.credits > 0 ? "Уточнить расход" : "Не нужно"}
+                        </div>
                         <div className={heroSubClass}>
-                          баланса хватает больше чем на {refillRecommendation.targetDays}{" "}
+                          по учтённым операциям баланса хватит больше чем на {refillRecommendation.targetDays}{" "}
                           {daysWord(refillRecommendation.targetDays)}
                         </div>
                       </>
@@ -1236,13 +1266,29 @@ export function OfapiCreditsPage() {
                   )}
               </div>
             </div>
+            {recordedActivityForecast && (
+              <p className="mt-4 text-[12px] text-text-secondary">
+                Прогноз учитывает HTTP-запросы, их корректировки и оценку вебхуков.
+                Необъяснённая разница баланса в прогноз не включена.
+              </p>
+            )}
+            {unverifiedResidual && unverifiedResidual.credits > 0 && (
+              <p role="note" className="mt-3 rounded-lg bg-amber-50 p-3 text-[12px] text-amber-800">
+                По сверке за {utcDateTime(unverifiedResidual.from)} — {utcDateTime(unverifiedResidual.to)}:{" "}
+                ещё {fmtCredits(unverifiedResidual.credits)} кр уменьшения баланса без подтверждённого источника.
+                Фактический расход может быть выше прогноза; требуется проверка этой разницы.
+              </p>
+            )}
             {(forecast.monthToDateSpend !== undefined || forecast.monthEndProjection !== undefined) && (
               <div className="mt-4 border-t border-border-light pt-3 text-[12px] text-text-secondary">
                 {forecast.monthToDateSpend !== undefined && (
                   <>
-                    Потрачено за месяц: {fmtCredits(forecast.monthToDateSpend)} кр
+                    {recordedActivityForecast ? "По операциям за месяц: " : "Потрачено за месяц: "}{fmtCredits(forecast.monthToDateSpend)} кр
                     {priceKnown ? ` (≈ ${usd(forecast.monthToDateSpend)})` : ""}
                   </>
+                )}
+                {forecast.monthUnverifiedResidualCredits !== undefined && forecast.monthUnverifiedResidualCredits !== 0 && (
+                  <> · разница баланса за месяц: {fmtCredits(forecast.monthUnverifiedResidualCredits)} кр</>
                 )}
                 {forecast.monthEndProjection !== undefined && (
                   <>
@@ -1258,7 +1304,7 @@ export function OfapiCreditsPage() {
           <section className="mt-4 rounded-xl border border-border bg-card p-5">
             <div className="grid gap-5 lg:grid-cols-[1fr_1.3fr]">
               <div>
-                <div className={eyebrowClass}>Потрачено сегодня · {summary.today.day}</div>
+                <div className={eyebrowClass}>Учтено сегодня · {summary.today.day}</div>
                 <div className="mt-1 text-[22px] font-semibold leading-tight text-text-primary">
                   {fmtCredits(summary.today.total)} <span className={heroUnitClass}>кр</span>
                   {priceKnown && (
@@ -1288,7 +1334,7 @@ export function OfapiCreditsPage() {
                     + ~{fmtCredits(pendingWebhookEstimate.estimatedCredits)} кр за{" "}
                     {fmtCredits(pendingWebhookEstimate.eventCount)}{" "}
                     {ruPlural(pendingWebhookEstimate.eventCount, "событие", "события", "событий")} вебхуков
-                    ещё не проведены — спишутся в полночь UTC
+                    ещё не проведены — оценка добавится в журнал после завершения дня
                   </p>
                 )}
               </div>
@@ -1355,7 +1401,7 @@ export function OfapiCreditsPage() {
                 usd={priceKnown ? usd : undefined}
               />
               <StackedBarChart
-                title="Траты по дням"
+                title="Движение кредитов по дням"
                 data={dailyBars}
                 xKey="day"
                 series={[...activeSpendSeries]}
@@ -1425,7 +1471,7 @@ export function OfapiCreditsPage() {
                     </thead>
                     <tbody>
                       {(breakdown?.byOperation ?? []).map((row) => {
-                        const sharePct = operationTotal > 0
+                        const sharePct = operationSharesComparable
                           ? Math.round((row.credits / operationTotal) * 100)
                           : null;
                         return (
@@ -1715,6 +1761,9 @@ export function OfapiCreditsPage() {
               </>
             )}
           </section>
+
+          <OfapiVendorEvidence />
+      <OfapiBannedWords />
 
           <SystemHealthSection
             summary={summary}

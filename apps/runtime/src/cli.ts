@@ -1911,7 +1911,7 @@ export function buildProgram() {
           `${options.dryRun ? "[dry-run] would append" : "appended"} ${result.appended}, ` +
             `deduped ${result.deduped}, stamped ${result.stamped}, ` +
             `scanned ${result.scanned}, skipped-unmapped ${result.skippedUnmapped}, ` +
-            `errored ${result.errored}, partition-blocked ${result.partitionBlocked}`,
+            `errored ${result.errored}, partition-blocked ${result.partitionBlocked}, binding-conflicts ${result.bindingConflicts.length}`,
         );
         if (result.partitionBlocked > 0) {
           // A run reporting partitionBlocked > 0 is a SKIPPED step, not a

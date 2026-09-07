@@ -1,3 +1,4 @@
+import { OfapiAccountCustodyConflictError } from "./ofapi-bindings.ts";
 import { and, asc, desc, eq, gt, gte, inArray, isNotNull, lt, lte, ne, sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
@@ -1874,11 +1875,13 @@ export interface OfapiSpendWindowStats {
  * Net spend AND the earliest effective spend start over `[from, to)`, computed
  * in one query so the two can never drift. The `external`-drift proration
  * window used by both the sum and the effective-start is defined once
- * (`isProratedExternal`).
+ * (`isProratedExternal`). The optional scope reads recorded activity or actual
+ * external rows directly: subtracting two independently read totals could
+ * misclassify a concurrently committed REST entry as an unexplained residual.
  */
 export async function summarizeOfapiSpendWindowBetween(
   db: Database,
-  input: { from: Date; to: Date },
+  input: { from: Date; to: Date; scope?: "recorded_activity" | "external_residual" },
 ): Promise<OfapiSpendWindowStats> {
   const fromOccurredAt = sql`(${ofapiCreditLedger.details} ->> 'fromOccurredAt')::timestamptz`;
   const isProratedExternal = sql`${ofapiCreditLedger.source} = 'external'
@@ -1910,6 +1913,11 @@ export async function summarizeOfapiSpendWindowBetween(
       gte(ofapiCreditLedger.occurredAt, input.from),
       lt(ofapiCreditLedger.occurredAt, input.to),
       ne(ofapiCreditLedger.source, "refill"),
+      ...(input.scope === "recorded_activity"
+        ? [ne(ofapiCreditLedger.source, "external"), ne(ofapiCreditLedger.credits, 0)]
+        : input.scope === "external_residual"
+          ? [eq(ofapiCreditLedger.source, "external")]
+          : []),
     ));
 
   const rawEarliest = row?.earliestEffectiveAt ?? null;
@@ -2010,7 +2018,7 @@ export async function getLastOfapiWebhookAccrualDay(db: Database): Promise<strin
   return row?.day ?? null;
 }
 
-/** Positive (spend) credits by source over a time window — the "spent today" card. */
+/** Net spend by source, including signed corrections and excluding refills. */
 export async function sumOfapiSpendBySourceBetween(
   db: Database,
   input: { from: Date; to: Date },
@@ -2024,7 +2032,7 @@ export async function sumOfapiSpendBySourceBetween(
     .where(and(
       gte(ofapiCreditLedger.occurredAt, input.from),
       lt(ofapiCreditLedger.occurredAt, input.to),
-      gt(ofapiCreditLedger.credits, 0),
+      ne(ofapiCreditLedger.source, "refill"),
     ))
     .groupBy(ofapiCreditLedger.source);
 
@@ -2044,17 +2052,16 @@ export async function sumOfapiRestCreditsForOperationsBetween(
     .select({ total: sql<number>`coalesce(sum(${ofapiCreditLedger.credits}), 0)::int` })
     .from(ofapiCreditLedger)
     .where(and(
-      eq(ofapiCreditLedger.source, "rest"),
+      inArray(ofapiCreditLedger.source, ["rest", "adjustment"]),
       inArray(ofapiCreditLedger.operation, [...input.operations]),
       gte(ofapiCreditLedger.occurredAt, input.from),
       lt(ofapiCreditLedger.occurredAt, input.to),
-      gt(ofapiCreditLedger.credits, 0),
     ));
 
   return row?.total ?? 0;
 }
 
-/** Page-scoped positive REST spend for chatter-visible credit summaries. */
+/** Page-scoped REST spend net of attributed corrections for chatter summaries. */
 export async function sumOfapiRestCreditsForPagesBetween(
   db: Database,
   input: { pageIds: number[]; from: Date; to: Date },
@@ -2067,11 +2074,10 @@ export async function sumOfapiRestCreditsForPagesBetween(
     .select({ total: sql<number>`coalesce(sum(${ofapiCreditLedger.credits}), 0)::int` })
     .from(ofapiCreditLedger)
     .where(and(
-      eq(ofapiCreditLedger.source, "rest"),
+      inArray(ofapiCreditLedger.source, ["rest", "adjustment"]),
       inArray(ofapiCreditLedger.pageId, input.pageIds),
       gte(ofapiCreditLedger.occurredAt, input.from),
       lt(ofapiCreditLedger.occurredAt, input.to),
-      gt(ofapiCreditLedger.credits, 0),
     ));
 
   return row?.total ?? 0;
@@ -2083,7 +2089,7 @@ export interface OfapiDailySpendRow {
   credits: number;
 }
 
-/** Per-UTC-day positive spend by source (the stacked daily bars). */
+/** Per-UTC-day net spend by source, retaining signed corrections. */
 export async function listOfapiDailySpendBySource(
   db: Database,
   input: { from: Date; to: Date },
@@ -2096,7 +2102,7 @@ export async function listOfapiDailySpendBySource(
     from ofapi_credit_ledger
     where occurred_at >= ${input.from}::timestamptz
       and occurred_at < ${input.to}::timestamptz
-      and credits > 0
+      and source <> 'refill'
     group by 1, 2
     order by 1 asc
   `);
@@ -2173,7 +2179,7 @@ export interface OfapiOperationBreakdownRow {
   credits: number;
 }
 
-/** REST spend grouped by operation over a window (breakdown panel). */
+/** REST spend plus attributed corrections; only settlement rows count as requests. */
 export async function listOfapiOperationBreakdownBetween(
   db: Database,
   input: { from: Date; to: Date },
@@ -2181,12 +2187,12 @@ export async function listOfapiOperationBreakdownBetween(
   const rows = await db
     .select({
       operation: ofapiCreditLedger.operation,
-      requests: sql<number>`count(*)::int`,
+      requests: sql<number>`count(*) filter (where ${ofapiCreditLedger.source} = 'rest')::int`,
       credits: sql<number>`coalesce(sum(${ofapiCreditLedger.credits}), 0)::int`,
     })
     .from(ofapiCreditLedger)
     .where(and(
-      eq(ofapiCreditLedger.source, "rest"),
+      inArray(ofapiCreditLedger.source, ["rest", "adjustment"]),
       gte(ofapiCreditLedger.occurredAt, input.from),
       lt(ofapiCreditLedger.occurredAt, input.to),
     ))
@@ -2202,7 +2208,7 @@ export interface OfapiPageBreakdownRow {
   credits: number;
 }
 
-/** REST spend attributed to pages over a window, top spenders first. */
+/** Net REST spend and attributed corrections per page, top spenders first. */
 export async function listOfapiPageBreakdownBetween(
   db: Database,
   input: { from: Date; to: Date; limit?: number },
@@ -2216,10 +2222,9 @@ export async function listOfapiPageBreakdownBetween(
     .from(ofapiCreditLedger)
     .innerJoin(pages, eq(ofapiCreditLedger.pageId, pages.id))
     .where(and(
-      eq(ofapiCreditLedger.source, "rest"),
+      inArray(ofapiCreditLedger.source, ["rest", "adjustment"]),
       gte(ofapiCreditLedger.occurredAt, input.from),
       lt(ofapiCreditLedger.occurredAt, input.to),
-      gt(ofapiCreditLedger.credits, 0),
     ))
     .groupBy(ofapiCreditLedger.pageId, pages.label)
     .orderBy(sql`3 desc`)
@@ -2364,6 +2369,7 @@ export async function prepareOfapiWebhookRegistration(
     endpointUrl: string;
     events: string[];
     candidateEncryptedSigningSecret: string;
+    remoteProof?: { id: string; updatedAt: string; state: "match" | "drift" | "missing"; credentialFingerprint: string };
     now?: Date;
   },
 ): Promise<OfapiWebhookRegistrationPreparation> {
@@ -2410,7 +2416,21 @@ export async function prepareOfapiWebhookRegistration(
     }
 
     if (existing.registrationState === "stable") {
-      if (existing.externalWebhookId && sameWebhookRegistrationTarget(existing, desired)) {
+      if (input.remoteProof) {
+        if (existing.externalWebhookId !== input.remoteProof.id || existing.updatedAt.toISOString() !== input.remoteProof.updatedAt) {
+          return { kind: "blocked", reason: "target_conflict" };
+        }
+        if (input.remoteProof.state === "missing") {
+          await database.execute(sql`
+            insert into ofapi_webhook_registration_history(external_webhook_id,endpoint_url,credential_fingerprint,reason)
+            values (${existing.externalWebhookId},${existing.endpointUrl},${input.remoteProof.credentialFingerprint},'confirmed_missing')
+          `);
+          await database.update(ofapiWebhookConfig).set({ externalWebhookId: null }).where(eq(ofapiWebhookConfig.id, 1));
+          existing.externalWebhookId = null;
+        }
+      }
+
+      if (existing.externalWebhookId && input.remoteProof?.state !== "drift" && sameWebhookRegistrationTarget(existing, desired)) {
         return { kind: "noop", encryptedSigningSecret: existing.encryptedSigningSecret };
       }
       const operation: OfapiWebhookRegistrationOperation = existing.externalWebhookId
@@ -2769,38 +2789,78 @@ export async function listOnlyFansPagesForOfapiMapping(db: Database) {
       label: pages.label,
       username: pages.username,
       ofapiAccountId: pages.ofapiAccountId,
+      bindingGeneration: pages.ofapiBindingGeneration,
+      creatorId: pages.platformAccountId,
+      metadata: pages.metadata,
     })
     .from(pages)
     .where(and(eq(pages.platform, "onlyfans"), eq(pages.status, "active")))
     .orderBy(asc(pages.label));
 }
 
+/** INITIAL-MAPPING writer (and unmapping). Replacing one non-null account with another is the verified
+ * preview/apply's job (identity evidence, generation CAS, recovery); this function refuses it. Takes the
+ * same advisory locks as apply and command dispatch so an unmap cannot race a send. */
 export async function setPageOfapiAccountId(
   db: Database,
-  input: {
-    pageId: number;
-    ofapiAccountId: string | null;
-  },
+  input: { pageId: number; ofapiAccountId: string | null; creatorId?: string | null; evidence?: Record<string, unknown> },
 ) {
-  await db
-    .update(pages)
-    .set({
+  await db.transaction(async (raw) => {
+    const tx = raw as unknown as Database;
+    await tx.execute(sql`select pg_advisory_xact_lock(9003010, ${input.pageId}::integer)`);
+    await tx.execute(sql`select pg_advisory_xact_lock(9003011)`);
+    const current = await tx.execute<{ ofapi_account_id: string | null; generation: number }>(sql`
+      select p.ofapi_account_id, p.ofapi_binding_generation as generation from pages p where p.id = ${input.pageId} for update
+    `);
+    const page = current.rows[0];
+    if (!page) throw new Error(`Page ${input.pageId} was not found`);
+    const changed = input.ofapiAccountId !== page.ofapi_account_id;
+    if (changed && input.ofapiAccountId !== null && page.ofapi_account_id !== null) {
+      throw new Error(`setPageOfapiAccountId is an initial-mapping writer; page ${input.pageId} already maps "${page.ofapi_account_id}" — replace it through the verified binding preview/apply`);
+    }
+    if (changed && input.ofapiAccountId !== null) {
+      // Custody is permanent: an account retired from page A can never be claimed by page B.
+      const owner = await tx.execute<{ page_id: number }>(sql`
+        select b.page_id from ofapi_account_bindings b
+        where b.account_id = ${input.ofapiAccountId}
+          and (b.page_id <> ${input.pageId}
+            or (b.creator_id is not null and ${input.creatorId ?? null}::text is not null and b.creator_id <> ${input.creatorId ?? null}))
+        union all
+        select p.id from pages p where p.ofapi_account_id = ${input.ofapiAccountId} and p.id <> ${input.pageId}
+        limit 1
+      `);
+      if (owner.rows[0]) throw new OfapiAccountCustodyConflictError(input.ofapiAccountId, input.pageId, Number(owner.rows[0].page_id));
+    }
+    const generation = changed ? Number(page.generation) + 1 : Number(page.generation);
+    await tx.update(pages).set({
       ofapiAccountId: input.ofapiAccountId,
-      // Stage 13: same invariant as the 0055 writer seed — mapping an OFAPI
-      // account makes OFAPI the page's transactions writer, but only when no
-      // writer was assigned yet (an explicit assignment is never overridden;
-      // unmapping keeps the writer, the ingest can't reach the page anyway).
-      ...(input.ofapiAccountId !== null
-        ? { transactionsWriter: sql`coalesce(${pages.transactionsWriter}, 'ofapi')` }
-        : {}),
+      ofapiBindingGeneration: generation,
+      // Stage 13 invariant unchanged: OFAPI becomes the transactions writer only when none was assigned.
+      ...(input.ofapiAccountId !== null ? { transactionsWriter: sql`coalesce(${pages.transactionsWriter}, 'ofapi')` } : {}),
       updatedAt: sql`now()`,
-    })
-    .where(eq(pages.id, input.pageId));
+    }).where(eq(pages.id, input.pageId));
+    if (!changed) return;
+    if (input.ofapiAccountId === null) {
+      await tx.execute(sql`
+        update ofapi_account_bindings set valid_to = coalesce(valid_to, now())
+        where account_id = ${page.ofapi_account_id} and page_id = ${input.pageId}
+      `);
+      return;
+    }
+    const evidence = JSON.stringify({ source: "set_page_ofapi_account_id", ...(input.evidence ?? {}) });
+    await tx.execute(sql`
+      insert into ofapi_account_bindings(account_id,page_id,creator_id,generation,valid_from,valid_to,evidence)
+      values (${input.ofapiAccountId},${input.pageId},${input.creatorId ?? null},${generation},now(),null,${evidence}::jsonb)
+      on conflict(account_id) do update set generation = excluded.generation, valid_to = null,
+        creator_id = coalesce(ofapi_account_bindings.creator_id, excluded.creator_id),
+        evidence = ofapi_account_bindings.evidence || excluded.evidence
+    `);
+  });
 }
 
 /**
  * Advances a page's OFAPI auth state from an accounts.* webhook event.
- * Forward-only by event receive time: an out-of-order older event never
+ * Forward-only by provider occurrence (receipt fallback for old envelopes): an out-of-order older event never
  * overwrites a newer state. Returns false when skipped for that reason.
  */
 export async function advancePageOfapiAuthStatus(
@@ -2820,7 +2880,13 @@ export async function advancePageOfapiAuthStatus(
     })
     .where(and(
       eq(pages.id, input.pageId),
-      sql`(${pages.ofapiAuthChangedAt} is null or ${pages.ofapiAuthChangedAt} <= ${input.changedAt})`,
+      sql`(${pages.ofapiAuthChangedAt} is null or ${pages.ofapiAuthChangedAt} < ${input.changedAt}
+        or (${pages.ofapiAuthChangedAt} = ${input.changedAt} and (
+          ${pages.ofapiAuthStatus} is null
+          or ${pages.ofapiAuthStatus} = ${input.authStatus}
+          or (${input.authStatus} in ('connected', 'reconnected', 'session_expired')
+            and ${pages.ofapiAuthStatus} not in ('connected', 'reconnected', 'session_expired'))
+        )))`,
     ))
     .returning({ id: pages.id });
 

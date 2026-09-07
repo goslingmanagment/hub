@@ -1011,6 +1011,24 @@ const CAPTURE_COVERAGE = `
 `;
 
 export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>> = {
+  ofapi_financial_snapshots: {
+    source: `select s.page_id k_page_id,'onlyfans'::text k_platform,
+      concat(s.id,':',i.ordinality,':',m.ordinality) k_key,s.observed_at k_occurred_at,null::text k_fan,
+      'onlyfans'::text f_platform,'onlyfansapi'::text f_source,s.operation f_operation,
+      m.value->>'path' f_metric_path,m.value->>'unit' f_unit,m.value->>'value' f_raw_value,
+      (m.value->>'valueMills')::bigint f_value_mills,
+      coalesce(s.query->>'start_date',s.query->>'startDate')::timestamptz f_window_from,
+      coalesce(s.query->>'end_date',s.query->>'endDate')::timestamptz f_window_to,
+      s.granularity f_granularity,s.observed_at f_observed_at,
+      s.coverage->>'state' f_coverage_state,s.coverage->>'reason' f_coverage_reason,
+      s.observation_id::text f_observation_ref
+      from ofapi_read_snapshots s
+      cross join lateral jsonb_array_elements(s.items) with ordinality i(value,ordinality)
+      cross join lateral jsonb_array_elements(coalesce(i.value->'metrics','[]'::jsonb)) with ordinality m(value,ordinality)
+      where s.category='balances'`,
+    fields:{platform:"f_platform",source:"f_source",operation:"f_operation",metricPath:"f_metric_path",unit:"f_unit",rawValue:"f_raw_value",valueMills:"f_value_mills",windowFrom:"f_window_from",windowTo:"f_window_to",granularity:"f_granularity",observedAt:"f_observed_at",coverageState:"f_coverage_state",coverageReason:"f_coverage_reason",observationRef:"f_observation_ref"},
+    windowColumn:"k_occurred_at",stableKeyColumns:["k_key"],readPlanes:["ofapi_read_snapshots"],captureFloorPlane:"ofapi_read_snapshots",
+  },
   fan_memberships: {
     source: FAN_MEMBERSHIPS,
     fields: {

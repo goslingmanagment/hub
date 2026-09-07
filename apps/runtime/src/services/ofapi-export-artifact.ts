@@ -96,7 +96,7 @@ interface InspectedArtifact {
   groups: Array<{ chatId: string; items: Record<string, unknown>[] }>;
 }
 
-function parseCsv(textInput: string): string[][] {
+export function parseOfapiExportCsv(textInput: string): string[][] {
   const text = textInput.charCodeAt(0) === 0xfeff ? textInput.slice(1) : textInput;
   const rows: string[][] = [];
   let row: string[] = [];
@@ -237,7 +237,7 @@ async function inspectPilotArtifact(input: {
   if (input.expectedSha256 !== undefined && sha256 !== input.expectedSha256) {
     throw new Error("Pilot artifact checksum changed after registration");
   }
-  const records = parseCsv(bytes.toString("utf8"));
+  const records = parseOfapiExportCsv(bytes.toString("utf8"));
   const header = records.shift() ?? [];
   if (header.join("\u0000") !== OFAPI_CHAT_EXPORT_COLUMNS.join("\u0000")) {
     throw new Error("OFAPI chat-export CSV header drifted from the accepted contract");

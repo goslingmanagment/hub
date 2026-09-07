@@ -129,6 +129,8 @@ const envSchema = z.object({
   SERVICE_EGRESS_PROXY_PASSWORD: optionalTrimmedStringSchema,
   OFAPI_BASE_URL: z.string().url().default("https://app.onlyfansapi.com/api"),
   OFAPI_API_KEY: optionalTrimmedStringSchema,
+  OFAPI_EXPECTED_TEAM_SLUG: optionalTrimmedStringSchema,
+  OFAPI_WEBHOOK_MANAGEMENT_SCOPE: z.enum(["unknown", "team"]).default("unknown"),
   // Stage 1 retention stand-down: the webhook journal holds business facts; the
   // default matches the env so a missing env can never re-enable a short purge.
   OFAPI_EVENT_RETENTION_DAYS: z.coerce.number().int().positive().default(36500),
@@ -434,6 +436,8 @@ export interface AppConfig {
   serviceEgressProxyPassword: string | null;
   ofapiBaseUrl?: string;
   ofapiApiKey?: string | null;
+  ofapiExpectedTeamSlug?: string | null;
+  ofapiWebhookManagementScope?: "unknown" | "team";
   ofapiEventRetentionDays?: number;
   ofapiEventWorkerReplicas?: number;
   ofapiDmProjectionEnabled?: boolean;
@@ -754,6 +758,8 @@ export function loadConfig(
     serviceEgressProxyPassword: serviceEgressProxy.password,
     ofapiBaseUrl: parsed.OFAPI_BASE_URL,
     ofapiApiKey: parsed.OFAPI_API_KEY ?? null,
+    ofapiExpectedTeamSlug: parsed.OFAPI_EXPECTED_TEAM_SLUG ?? null,
+    ofapiWebhookManagementScope: parsed.OFAPI_WEBHOOK_MANAGEMENT_SCOPE,
     ofapiEventRetentionDays: parsed.OFAPI_EVENT_RETENTION_DAYS,
     ofapiEventWorkerReplicas: parsed.OFAPI_EVENT_WORKER_REPLICAS,
     ofapiDmProjectionEnabled: parsed.OFAPI_DM_PROJECTION_ENABLED,

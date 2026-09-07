@@ -3,11 +3,13 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   appendDomainEvents,
   appendProjectionOnlyDomainEvents,
+  applyVerifiedOfapiBinding,
   createModel,
   createOnlyFansPage,
   ensureDomainEventPartitions,
   getAccountHighWater,
   getDomainEventPartitionLeadMonths,
+  getOfapiBindingPage,
   listEventsSince,
   listDomainEventContiguousReplayEnds,
   listObservationsForReplay,
@@ -161,10 +163,18 @@ describe("domain events append protocol (Stage 8)", () => {
     });
     expect(beforeRemap[0]?.currentAccountRef).toBe("acct_domain_event_old");
 
-    await setPageOfapiAccountId(testDb.db, {
+    const binding = await getOfapiBindingPage(testDb.db, page.id);
+    expect(await applyVerifiedOfapiBinding(testDb.db, {
       pageId: page.id,
-      ofapiAccountId: "acct_domain_event_new",
-    });
+      expectedAccountId: binding!.account_id,
+      expectedGeneration: binding!.generation,
+      accountId: "acct_domain_event_new",
+      creatorId: "123",
+      historicalAccountIds: [],
+      recovery: [],
+      authVerifiedAt: null,
+      evidence: { source: "synthetic_test" },
+    })).toBe(true);
     const afterRemap = await listEventsSince(testDb.db, {
       accountId: page.id,
       afterSeq: 0,

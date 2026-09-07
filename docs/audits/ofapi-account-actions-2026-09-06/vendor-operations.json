@@ -1,0 +1,244 @@
+{
+  "checkedAt": "2026-09-06T18:59:47.589249+00:00",
+  "basis": "Public live documentation, no authenticated vendor API calls",
+  "operations": [
+    {
+      "action": "bank_payout_details_read",
+      "method": "GET",
+      "path": "/api/{account}/banking/details/bank",
+      "docsUrl": "https://docs.onlyfansapi.com/api-reference/banking/get-bank-payout-details",
+      "liveMarkdownSha256": "13698858a27db1f7a9ebdefaf52d12292fe9c9e2262211ec3f90c24d12d21a58"
+    },
+    {
+      "action": "bank_legal_form_read",
+      "method": "GET",
+      "path": "/api/{account}/banking/details/legal-form",
+      "docsUrl": "https://docs.onlyfansapi.com/api-reference/banking/get-legal-form-details",
+      "liveMarkdownSha256": "4b077ecd13d0f8e8054ab4b414f82674c1002cea4f39c129a208841d3b87df80"
+    },
+    {
+      "action": "bank_legal_tax_status_read",
+      "method": "GET",
+      "path": "/api/{account}/banking/details/legal-info",
+      "docsUrl": "https://docs.onlyfansapi.com/api-reference/banking/get-legal-and-tax-status",
+      "liveMarkdownSha256": "8583f62b8e765e4f364391e84ad192af468d78ff0aacf4afb58a6893d4329cd5"
+    },
+    {
+      "action": "bank_dac7_form_read",
+      "method": "GET",
+      "path": "/api/{account}/banking/details/dac7-form",
+      "docsUrl": "https://docs.onlyfansapi.com/api-reference/banking/get-dac7form-details",
+      "liveMarkdownSha256": "d79ea39c02783015862347d86d282ca35def8ad0ae7c93f18be1959ab7caf849"
+    },
+    {
+      "action": "bank_account_country_read",
+      "method": "GET",
+      "path": "/api/{account}/banking/details/account-country",
+      "docsUrl": "https://docs.onlyfansapi.com/api-reference/banking/get-account-country-details",
+      "liveMarkdownSha256": "25b3915542f6aaf7470174ba1fdc8e8bc82597106131d67096f28762ceeb9ec5"
+    },
+    {
+      "action": "bank_countries_read",
+      "method": "GET",
+      "path": "/api/{account}/banking/countries",
+      "docsUrl": "https://docs.onlyfansapi.com/api-reference/banking/list-countries",
+      "liveMarkdownSha256": "4c86ffb6a5ab1aebb8431044153d1fce00013ddf794a597d88b6c7b1766d49c5"
+    },
+    {
+      "action": "bank_payout_systems_read",
+      "method": "GET",
+      "path": "/api/{account}/banking/available-payout-systems",
+      "docsUrl": "https://docs.onlyfansapi.com/api-reference/banking/list-available-payout-systems",
+      "liveMarkdownSha256": "f286d4c28b27c12da10598f99202dc24fb501cbe71d9a2578070e2b28b13b169"
+    },
+    {
+      "action": "payout_eligibility_read",
+      "method": "GET",
+      "path": "/api/{account}/payouts/eligibility",
+      "docsUrl": "https://docs.onlyfansapi.com/api-reference/payouts/get-eligibility",
+      "liveMarkdownSha256": "a463e90a7a0237101ffd1f5be152bf1d4be67e95dd577b59ee46cd28bd2a4945"
+    },
+    {
+      "action": "payout_frequency_update",
+      "method": "PATCH",
+      "path": "/api/{account}/payouts/payout-frequency",
+      "docsUrl": "https://docs.onlyfansapi.com/api-reference/payouts/update-payout-frequency",
+      "liveMarkdownSha256": "027aa06791b5ce08fbffd5c7320984f6cb455899580d8b2f0d585136e4b9a926"
+    },
+    {
+      "action": "payout_withdrawal_request",
+      "method": "POST",
+      "path": "/api/{account}/payouts/request-manual-withdrawal",
+      "docsUrl": "https://docs.onlyfansapi.com/api-reference/payouts/request-manual-withdrawal",
+      "liveMarkdownSha256": "83c93e698c0f632f29dc43816864be02b84b5acef715fe056499bfded04e7bba"
+    },
+    {
+      "action": "saved_messages_read",
+      "method": "GET",
+      "path": "/api/{account}/saved-for-later/messages",
+      "docsUrl": "https://docs.onlyfansapi.com/api-reference/saved-for-later-messages/list-saved-for-later-messages",
+      "liveMarkdownSha256": "dcacd07057842586c0893e2339288593a75a820dcaf825c204e3be2da37affdd"
+    },
+    {
+      "action": "saved_message_settings_read",
+      "method": "GET",
+      "path": "/api/{account}/saved-for-later/messages/settings",
+      "docsUrl": "https://docs.onlyfansapi.com/api-reference/saved-for-later-messages/get-message-settings",
+      "liveMarkdownSha256": "370c9c27702082e8d6c0fadac9048f574778b6c7ecf69ef78a648c1deafc5204"
+    },
+    {
+      "action": "saved_message_autosend_update",
+      "method": "PATCH",
+      "path": "/api/{account}/saved-for-later/messages/settings/enable-or-update-automatic-messaging",
+      "docsUrl": "https://docs.onlyfansapi.com/api-reference/saved-for-later-messages/enable-update-automatic-messaging",
+      "liveMarkdownSha256": "135c4ff1d0b4828d7d1acca115e378d7218ae7a517953ba4f739710a3a90d0b7"
+    },
+    {
+      "action": "saved_message_autosend_disable",
+      "method": "PATCH",
+      "path": "/api/{account}/saved-for-later/messages/settings/disable-automatic-messaging",
+      "docsUrl": "https://docs.onlyfansapi.com/api-reference/saved-for-later-messages/disable-automatic-messaging",
+      "liveMarkdownSha256": "f53dce6d16908cfa5127d36fe447095a983bdb3ccbbc4c4ab5d4562f16494d2e"
+    },
+    {
+      "action": "saved_posts_read",
+      "method": "GET",
+      "path": "/api/{account}/saved-for-later/posts",
+      "docsUrl": "https://docs.onlyfansapi.com/api-reference/saved-for-later-posts/list-saved-for-later-posts",
+      "liveMarkdownSha256": "80ca6f91b06d64d99bfda76ba07a0fa9e4bdffac42135ff9957cb9014dfa291f"
+    },
+    {
+      "action": "saved_post_settings_read",
+      "method": "GET",
+      "path": "/api/{account}/saved-for-later/posts/settings",
+      "docsUrl": "https://docs.onlyfansapi.com/api-reference/saved-for-later-posts/get-post-settings",
+      "liveMarkdownSha256": "7a0c361ec35baed6d7b5c4bcd6166e855d6bfd13d16ba6394a51583c35c495c0"
+    },
+    {
+      "action": "saved_post_autopost_update",
+      "method": "PATCH",
+      "path": "/api/{account}/saved-for-later/posts/settings/enable-or-update-automatic-posting",
+      "docsUrl": "https://docs.onlyfansapi.com/api-reference/saved-for-later-posts/enable-update-automatic-posting",
+      "liveMarkdownSha256": "2628c0a3075a8cfb17229089412cd5d5140bba30258e51c48fa9cf6ebffd67b5"
+    },
+    {
+      "action": "saved_post_autopost_disable",
+      "method": "PATCH",
+      "path": "/api/{account}/saved-for-later/posts/settings/disable-automatic-posting",
+      "docsUrl": "https://docs.onlyfansapi.com/api-reference/saved-for-later-posts/disable-automatic-posting",
+      "liveMarkdownSha256": "d2678c5d3a86f195f10030c9047cae580276684f8f1fea8ef075a279ec8c9fc4"
+    },
+    {
+      "action": "account_settings_read",
+      "method": "GET",
+      "path": "/api/{account}/settings",
+      "docsUrl": "https://docs.onlyfansapi.com/api-reference/settings/get-settings",
+      "liveMarkdownSha256": "290a42fe2e01a05907a412e0b62d1258ec7557d49a617ecc9775641e4f3406bc"
+    },
+    {
+      "action": "account_profile_update",
+      "method": "POST",
+      "path": "/api/{account}/settings/profile",
+      "docsUrl": "https://docs.onlyfansapi.com/api-reference/settings/update-profile",
+      "liveMarkdownSha256": "85b89489f7347ba2f0413012e9c03292f653ef7252ef9dd4edc090b4ec83d328"
+    },
+    {
+      "action": "subscription_price_update",
+      "method": "PATCH",
+      "path": "/api/{account}/settings/subscription-price",
+      "docsUrl": "https://docs.onlyfansapi.com/api-reference/settings/update-subscription-price",
+      "liveMarkdownSha256": "5a363bdc1fc86e119d94a5950d5e234eff3b13a6b4aa70efbd6eb485d335030c"
+    },
+    {
+      "action": "blocked_countries_read",
+      "method": "GET",
+      "path": "/api/{account}/settings/blocked-countries",
+      "docsUrl": "https://docs.onlyfansapi.com/api-reference/settings/get-blocked-countries",
+      "liveMarkdownSha256": "ee4e7e1fd78b9ce7cbab4eb55d3328b31724d40204e1c6b5a7d9fbd6a336261c"
+    },
+    {
+      "action": "blocked_countries_update",
+      "method": "PUT",
+      "path": "/api/{account}/settings/blocked-countries",
+      "docsUrl": "https://docs.onlyfansapi.com/api-reference/settings/update-blocked-countries",
+      "liveMarkdownSha256": "8ea1d4803d8493350d42e397e86ac6f836070fbed3272ff6e92d395df63ab2eb"
+    },
+    {
+      "action": "welcome_message_read",
+      "method": "GET",
+      "path": "/api/{account}/settings/welcome-message",
+      "docsUrl": "https://docs.onlyfansapi.com/api-reference/settings/get-welcome-message",
+      "liveMarkdownSha256": "86a8ba8885cf9bec45e84b60127ade183969275da08fcff50fe6f96d2d0503c4"
+    },
+    {
+      "action": "welcome_message_enabled_update",
+      "method": "PATCH",
+      "path": "/api/{account}/settings/welcome-message",
+      "docsUrl": "https://docs.onlyfansapi.com/api-reference/settings/enable-disable-welcome-message",
+      "liveMarkdownSha256": "e045aaa3d1cfa18f13df9e7c61e6691538dd4c14c5377c45f7e93c078a2fdb98"
+    },
+    {
+      "action": "welcome_message_update",
+      "method": "POST",
+      "path": "/api/{account}/settings/welcome-message",
+      "docsUrl": "https://docs.onlyfansapi.com/api-reference/settings/update-welcome-message",
+      "liveMarkdownSha256": "8bd6c8e34f7de3e05d0f0b7f275d84b008dcac060efa7faf5b7f9e2b0562c6d1"
+    },
+    {
+      "action": "account_drm_read",
+      "method": "GET",
+      "path": "/api/{account}/settings/drm",
+      "docsUrl": "https://docs.onlyfansapi.com/api-reference/settings/get-drm-status",
+      "liveMarkdownSha256": "f498867fb1e064945bef454073f59787a76e7401db4ecbbd32b88b9629da0711"
+    },
+    {
+      "action": "account_drm_update",
+      "method": "PATCH",
+      "path": "/api/{account}/settings/drm",
+      "docsUrl": "https://docs.onlyfansapi.com/api-reference/settings/enable-disable-drm",
+      "liveMarkdownSha256": "bb423166ca3571473571a0e5f51af347997f4940db61eaebc4cc30feadcd5219"
+    },
+    {
+      "action": "username_availability_read",
+      "method": "POST",
+      "path": "/api/{account}/settings/username-exists",
+      "docsUrl": "https://docs.onlyfansapi.com/api-reference/settings/check-username-availability",
+      "liveMarkdownSha256": "41cc1d095e1808688cbd5cf9ebb9800e97c08394e3109d9a90eb2b87bdd16b67"
+    },
+    {
+      "action": "social_buttons_reorder",
+      "method": "POST",
+      "path": "/api/{account}/settings/social-media-buttons/reorder",
+      "docsUrl": "https://docs.onlyfansapi.com/api-reference/settings/reorder-social-media-buttons",
+      "liveMarkdownSha256": "ffc1f9f3dcf13cf5bb3683171b4d819d2aa19ffe1506d3cf269faf9a09bf1bb2"
+    },
+    {
+      "action": "social_buttons_read",
+      "method": "GET",
+      "path": "/api/{account}/settings/social-media-buttons",
+      "docsUrl": "https://docs.onlyfansapi.com/api-reference/settings/list-social-media-buttons",
+      "liveMarkdownSha256": "ad36acfdf1a0676b1c872301a64ed87b17a7a2dd96c39501b41e685e16f212ae"
+    },
+    {
+      "action": "social_button_create",
+      "method": "POST",
+      "path": "/api/{account}/settings/social-media-buttons",
+      "docsUrl": "https://docs.onlyfansapi.com/api-reference/settings/add-social-media-button",
+      "liveMarkdownSha256": "1808cc3be6a83c288ec0860ea1ae0c3b72051d0f7d334e19e6f3596406675f2c"
+    },
+    {
+      "action": "social_button_update",
+      "method": "PUT",
+      "path": "/api/{account}/settings/social-media-buttons/{button_id}",
+      "docsUrl": "https://docs.onlyfansapi.com/api-reference/settings/update-social-media-button",
+      "liveMarkdownSha256": "662e84c3a9e0934b5da19c20964ec57e424af389dbf53dbdacc66e8063b358ea"
+    },
+    {
+      "action": "social_button_delete",
+      "method": "DELETE",
+      "path": "/api/{account}/settings/social-media-buttons/{button_id}",
+      "docsUrl": "https://docs.onlyfansapi.com/api-reference/settings/delete-social-media-button",
+      "liveMarkdownSha256": "062bf51b4d8885013693c6e54030dd97f233b82f887c60cf2c88a949025cf994"
+    }
+  ]
+}

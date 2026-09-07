@@ -477,6 +477,14 @@ export async function getCheckpoint(
   })) ?? null;
 }
 
+/** A bounded read for lightweight status summaries; never seeds sync state. */
+export async function listCheckpointStates(db: Database, pageIds: number[], stream: SyncStream) {
+  if (pageIds.length === 0) return [];
+  return db.select({ pageId: pageSyncCursors.pageId, state: pageSyncCursors.state })
+    .from(pageSyncCursors)
+    .where(and(inArray(pageSyncCursors.pageId, pageIds), eq(pageSyncCursors.stream, stream)));
+}
+
 export interface FanslyDmRawPayloadCursorRow {
   id: number;
   responsePayload: unknown;
@@ -997,7 +1005,7 @@ export async function finishSyncRequestAttempt(
   attemptId: number,
   input: {
     state: "success" | "retry" | "failed";
-    failureKind?: "timeout" | "transport" | "http" | "provider" | null;
+    failureKind?: "timeout" | "transport" | "http" | "provider" | "policy" | null;
     httpStatus?: number | null;
     retryDelayMs?: number | null;
     durationMs?: number | null;
@@ -1372,7 +1380,7 @@ type SyncRequestAttemptRow = {
   logicalRequestId: string;
   attemptNumber: number;
   state: "started" | "success" | "retry" | "failed";
-  failureKind: "timeout" | "transport" | "http" | "provider" | null;
+  failureKind: "timeout" | "transport" | "http" | "provider" | "policy" | null;
   httpStatus: number | null;
   retryDelayMs: number | null;
   durationMs: number | null;

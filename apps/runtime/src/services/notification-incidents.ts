@@ -89,6 +89,8 @@ function openTitleForIncident(
       return "🚨 OFAPI account auth needs attention";
     case "ofapi_low_credit":
       return "🚨 OFAPI credit balance low";
+    case "ofapi_binding_conflict":
+      return "🚨 OFAPI account claimed by two pages";
     case "ofapi_webhook_silence":
       return "🚨 OFAPI webhooks silent";
     case "ofapi_burn_rate":
@@ -175,6 +177,8 @@ function resolveDetailForIncident(
       return "Server disk usage back under the threshold";
     case "observations_partitions":
       return "Observations partition lead restored";
+    case "ofapi_binding_conflict":
+      return "OFAPI binding custody conflict cleared";
     case "ofapi_webhook_silence":
       return "OFAPI webhooks delivering again";
     case "wrong_transactions_writer":
@@ -734,6 +738,7 @@ export async function resolveOfapiAuthIncident(
 }
 
 type GlobalIncidentKind =
+  | "ofapi_binding_conflict"
   | "ofapi_low_credit"
   | "ofapi_webhook_silence"
   | "ofapi_burn_rate"

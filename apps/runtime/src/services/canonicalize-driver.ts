@@ -1,3 +1,6 @@
+import { parseOfapiAsyncLifecycle } from "./ofapi-async-lifecycle.ts";
+import { notifyOfapiGlobalIncident, resolveOfapiGlobalIncident } from "./notification-incidents.ts";
+import { listHistoricalOfapiBindings } from "@agency_hub_core/db";
 // Canonicalization driver (Stage 8). The minutely sweep IS the replay
 // executor: it walks observations whose parse_version is below their
 // family's current version, runs the pure canonicalizer, appends events
@@ -13,6 +16,7 @@ import {
   assertDomainEventTargetMonthsAttached,
   type DomainEventPartitionCoverage,
   DomainEventTargetMonthsUnattachedError,
+  isDmArchiveScopeFenced,
   listObservationsForReplay,
   listDetachedPartitionsHoldingAccount,
   listObservedPostRefsForCapture,
@@ -20,6 +24,7 @@ import {
   loadDomainEventPartitionCoverage,
   markObservationParsed,
   type ReplayObservationRow,
+  tryAcquireDmArchiveWriterFenceLock,
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
@@ -128,6 +133,8 @@ export async function ensureCanonicalizeSchedule(boss: QueueCreationClient) {
 }
 
 export interface CanonicalizationRunResult {
+  /** Conflicting refs are held unmapped; dry-run reports without incident mutations. */
+  bindingConflicts: string[];
   scanned: number;
   appended: number;
   deduped: number;
@@ -210,6 +217,8 @@ export interface CanonicalizationRunResult {
 }
 
 export interface CanonicalizationRunOptions {
+  /** Exact retained fact for an owner-scoped local repair. */
+  observationId?: number;
   /** Narrow to specific kinds (CLI); default = every declared family kind. */
   kinds?: readonly string[];
   accountId?: number | null;
@@ -431,6 +440,7 @@ async function runFamily(
     }
     const rows: ReplayObservationRow[] = await listObservationsForReplay(app.db, {
       belowParseVersion,
+      ...(options.observationId !== undefined ? { observationId: options.observationId } : {}),
       ...(family.minimumParseVersion === undefined ? {} : { atLeastParseVersion: family.minimumParseVersion }),
       source: family.source,
       ...(kinds !== undefined ? { kinds } : {}),
@@ -512,12 +522,22 @@ async function runFamily(
             ? runContext.accountIdByNativeRef.get(`${row.platform}:${row.nativeAccountRef}`) ?? null
             : null);
 
+        // Export webhooks are team-level, with an explicit account_ids list.
+        // Attribute the same source fact only to those named accounts; an
+        // unknown member keeps the observation replayable until binding repair.
+        const exportLifecycle = row.source === "webhook" && row.kind.startsWith("data_exports.") &&
+          typeof observation.payload === "object" && observation.payload !== null
+          ? parseOfapiAsyncLifecycle(row.kind, observation.payload as Record<string, unknown>) : null;
+        const exportAccounts = exportLifecycle?.accountIds.map(ref =>
+          runContext.accountIdByNativeRef.get(`onlyfans:${ref}`) ?? null);
+        const accountIds = exportAccounts ?? [accountId];
+
         if (options.dryRun) {
-          totals.appended += drafts.length;
+          totals.appended += drafts.length * Math.max(1, accountIds.length);
           continue;
         }
 
-        if (drafts.length > 0 && accountId == null) {
+        if (drafts.length > 0 && (accountIds.length === 0 || accountIds.some(id => id === null))) {
           // Events require an account; an unmapped observation stays below the
           // version floor and self-heals once the account mapping lands.
           totals.skippedUnmapped += 1;
@@ -552,13 +572,37 @@ async function runFamily(
           // key the projection-only branch builds — the family version in the
           // key is what lets a version bump mint EXTRA events for an
           // already-checkpointed observation without colliding.
-          const result = family.projectionOnly === true
-            ? await appendProjectionOnlyDomainEvents(app.db, accountId!, inputs, checkpoint)
-            : family.mixed === true
-            ? await appendMixedDomainEvents(app.db, accountId!, inputs, checkpoint)
-            : await appendDomainEvents(app.db, accountId!, inputs);
-          totals.appended += result.appended;
-          totals.deduped += result.deduped;
+          for (const targetAccountId of new Set(accountIds)) {
+            if (exportLifecycle) {
+              // Team exports retain shared bytes after page erasure. Append
+              // each account under its material-time fence so replay cannot
+              // recreate that account's deleted canonical lifecycle facts.
+              const result = await app.db.transaction(async tx => {
+                if (!await tryAcquireDmArchiveWriterFenceLock(tx, targetAccountId!)) throw new Error("Erasure is in progress");
+                if (await isDmArchiveScopeFenced(tx, { pageId: targetAccountId!, refs: [], materialAt: row.receivedAt })) return { appended: 0, deduped: 0 };
+                return appendDomainEvents(tx, targetAccountId!, inputs);
+              });
+              totals.appended += result.appended; totals.deduped += result.deduped;
+              continue;
+            }
+            if (inputs.some(event => event.type === "ofapi.post_like_observed" || event.type === "ofapi.chat_queue_observed")) {
+              const materialAt = new Date(Math.min(row.receivedAt.getTime(), ...inputs.flatMap(event => [event.data.sourceAt,event.data.queueDate].filter((value):value is string=>typeof value === "string").map(value=>Date.parse(value)).filter(Number.isFinite))));
+              const result = await app.db.transaction(async tx => {
+                if (!await tryAcquireDmArchiveWriterFenceLock(tx,targetAccountId!)) throw new Error("Erasure is in progress");
+                if (await isDmArchiveScopeFenced(tx,{pageId:targetAccountId!,refs:inputs.map(event=>event.fanIdentityRef),materialAt})) return {appended:0,deduped:0};
+                return appendMixedDomainEvents(tx,targetAccountId!,inputs,checkpoint);
+              });
+              totals.appended += result.appended; totals.deduped += result.deduped;
+              continue;
+            }
+            const result = family.projectionOnly === true
+              ? await appendProjectionOnlyDomainEvents(app.db, targetAccountId!, inputs, checkpoint)
+              : family.mixed === true
+              ? await appendMixedDomainEvents(app.db, targetAccountId!, inputs, checkpoint)
+              : await appendDomainEvents(app.db, targetAccountId!, inputs);
+            totals.appended += result.appended;
+            totals.deduped += result.deduped;
+          }
         }
         await markObservationParsed(app.db, {
           observationId: row.id,
@@ -614,11 +658,29 @@ async function runFamily(
   return budgetExhausted;
 }
 
+/** One global latch; CLI/test stubs without config only log. Never called in dry-run. */
+async function reportOfapiBindingConflicts(
+  app: Pick<AppContext, "db" | "logger"> & Partial<Pick<AppContext, "config">>, refs: string[],
+) {
+  if (!app.config) return;
+  const incidentApp = { db: app.db, logger: app.logger, config: app.config };
+  if (refs.length > 0) {
+    await notifyOfapiGlobalIncident(incidentApp, {
+      kind: "ofapi_binding_conflict",
+      errorSummary: `OFAPI account(s) claimed by two pages: ${refs.join(", ")} — facts for these refs are held back until custody is settled`,
+      occurredAt: new Date(),
+    });
+  } else {
+    await resolveOfapiGlobalIncident(incidentApp, { kind: "ofapi_binding_conflict", recoveredAt: new Date() });
+  }
+}
+
 export async function runCanonicalization(
-  app: Pick<AppContext, "db" | "logger">,
+  app: Pick<AppContext, "db" | "logger"> & Partial<Pick<AppContext, "config">>,
   options: CanonicalizationRunOptions = {},
 ): Promise<CanonicalizationRunResult> {
   const totals: CanonicalizationRunResult = {
+    bindingConflicts: [],
     scanned: 0,
     appended: 0,
     deduped: 0,
@@ -655,6 +717,25 @@ export async function runCanonicalization(
       accountIdByNativeRef.set(`${page.platform}:${page.ofapiAccountId}`, page.id);
     }
   }
+  for (const binding of await listHistoricalOfapiBindings(app.db)) {
+    const key = `onlyfans:${binding.account_id}`;
+    const current = accountIdByNativeRef.get(key);
+    if (current !== undefined && current !== binding.page_id) {
+      // Two pages claim one provider account. Neither may receive its facts until an operator
+      // settles custody: the ref is quarantined (its rows stay skippedUnmapped and self-heal once
+      // the map is unambiguous), every other ref and family runs normally.
+      accountIdByNativeRef.delete(key);
+      totals.bindingConflicts.push(binding.account_id);
+      continue;
+    }
+    accountIdByNativeRef.set(key, binding.page_id);
+  }
+  if (totals.bindingConflicts.length > 0) {
+    app.logger.error({ bindingConflicts: totals.bindingConflicts, dryRun: options.dryRun === true },
+      "OFAPI binding custody conflict: refs quarantined from canonicalization");
+  }
+  // Stage 8 contract: a dry run writes NOTHING — no incident open, no incident resolve, no Telegram.
+  if (options.dryRun !== true) await reportOfapiBindingConflicts(app, totals.bindingConflicts);
   const runContext = {
     nativeAccountRefByAccountId: new Map(
       pages.map((page) => [page.id, page.nativeAccountRef] as const),

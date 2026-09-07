@@ -1,0 +1,811 @@
+{
+  "checkedAt": "2026-09-06",
+  "source": "Live documentation Markdown OpenAPI blocks; public documentation reads only. No authenticated or paid vendor requests.",
+  "pinnedSchemaSha256": "3adfee8d170567a8399d6716b9c99b6c979d734f1d149124f703e373fd846c34",
+  "operations": [
+    {
+      "method": "POST",
+      "path": "/api/{account}/mass-messaging",
+      "docsUrl": "https://docs.onlyfansapi.com/api-reference/mass-messaging/send-mass-message",
+      "liveVerified": true,
+      "bodyMatchesPinned": true,
+      "bodyFields": [
+        "userLists",
+        "excludedLists",
+        "userIds",
+        "subscribedWithinLastDays",
+        "text",
+        "lockedText",
+        "price",
+        "mediaFiles",
+        "previews",
+        "giphyId",
+        "rfTag",
+        "rfPartner",
+        "rfGuest",
+        "scheduledDate",
+        "saveForLater",
+        "blockBannedWords"
+      ],
+      "requiredBodyFields": [
+        "text"
+      ],
+      "queryFields": [],
+      "responsesMatchPinned": true,
+      "responses": {
+        "200": {
+          "contentTypes": [
+            "application/json"
+          ],
+          "dataFields": [
+            "id",
+            "date",
+            "isReady",
+            "isDone",
+            "total",
+            "pending",
+            "canUnsend",
+            "unsendSeconds",
+            "hasError",
+            "isCanceled",
+            "isCouplePeopleMedia"
+          ],
+          "emptyTextExample": false
+        }
+      }
+    },
+    {
+      "method": "PUT",
+      "path": "/api/{account}/mass-messaging/{id}",
+      "docsUrl": "https://docs.onlyfansapi.com/api-reference/mass-messaging/update-mass-message",
+      "liveVerified": true,
+      "bodyMatchesPinned": true,
+      "bodyFields": [
+        "userLists",
+        "userIds",
+        "text",
+        "lockedText",
+        "price",
+        "mediaFiles",
+        "previews",
+        "giphyId",
+        "scheduledDate",
+        "blockBannedWords"
+      ],
+      "requiredBodyFields": [
+        "text"
+      ],
+      "queryFields": [],
+      "responsesMatchPinned": true,
+      "responses": {
+        "200": {
+          "contentTypes": [
+            "application/json"
+          ],
+          "dataFields": [
+            "id",
+            "date",
+            "isReady",
+            "isDone",
+            "total",
+            "pending",
+            "canUnsend",
+            "unsendSeconds",
+            "hasError",
+            "isCanceled",
+            "isCouplePeopleMedia"
+          ],
+          "emptyTextExample": false
+        }
+      }
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/{account}/mass-messaging/{id}",
+      "docsUrl": "https://docs.onlyfansapi.com/api-reference/mass-messaging/unsend-delete-mass-message",
+      "liveVerified": true,
+      "bodyMatchesPinned": true,
+      "bodyFields": [],
+      "requiredBodyFields": [],
+      "queryFields": [],
+      "responsesMatchPinned": true,
+      "responses": {
+        "200": {
+          "contentTypes": [
+            "application/json"
+          ],
+          "dataFields": [
+            "success",
+            "queue"
+          ],
+          "emptyTextExample": false
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/{account}/posts/{post_id}/comments",
+      "docsUrl": "https://docs.onlyfansapi.com/api-reference/post-comments/create-post-comment",
+      "liveVerified": true,
+      "bodyMatchesPinned": true,
+      "bodyFields": [],
+      "requiredBodyFields": [],
+      "queryFields": [
+        "text",
+        "answerTo",
+        "giphyId"
+      ],
+      "responsesMatchPinned": true,
+      "responses": {
+        "201": {
+          "contentTypes": [
+            "application/json"
+          ],
+          "dataFields": [
+            "id",
+            "text",
+            "giphyId",
+            "author",
+            "canLike",
+            "likesCount",
+            "isLiked",
+            "isLikedByAuthor",
+            "postedAt",
+            "changedAt",
+            "isPinned"
+          ],
+          "emptyTextExample": false
+        }
+      }
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/{account}/posts/{post_id}/comments/{comment_id}",
+      "docsUrl": "https://docs.onlyfansapi.com/api-reference/post-comments/delete-post-comment",
+      "liveVerified": true,
+      "bodyMatchesPinned": true,
+      "bodyFields": [],
+      "requiredBodyFields": [],
+      "queryFields": [],
+      "responsesMatchPinned": true,
+      "responses": {
+        "200": {
+          "contentTypes": [
+            "application/json"
+          ],
+          "dataFields": [
+            "success"
+          ],
+          "emptyTextExample": false
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/{account}/posts/{post_id}/comments/{comment_id}/pin",
+      "docsUrl": "https://docs.onlyfansapi.com/api-reference/post-comments/pin-post-comment",
+      "liveVerified": true,
+      "bodyMatchesPinned": true,
+      "bodyFields": [],
+      "requiredBodyFields": [],
+      "queryFields": [],
+      "responsesMatchPinned": true,
+      "responses": {
+        "200": {
+          "contentTypes": [
+            "application/json"
+          ],
+          "dataFields": [
+            "success"
+          ],
+          "emptyTextExample": false
+        }
+      }
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/{account}/posts/{post_id}/comments/{comment_id}/pin",
+      "docsUrl": "https://docs.onlyfansapi.com/api-reference/post-comments/unpin-post-comment",
+      "liveVerified": true,
+      "bodyMatchesPinned": true,
+      "bodyFields": [],
+      "requiredBodyFields": [],
+      "queryFields": [],
+      "responsesMatchPinned": true,
+      "responses": {
+        "200": {
+          "contentTypes": [
+            "application/json"
+          ],
+          "dataFields": [
+            "success"
+          ],
+          "emptyTextExample": false
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/{account}/posts/{post_id}/comments/{comment_id}/like",
+      "docsUrl": "https://docs.onlyfansapi.com/api-reference/post-comments/like-post-comment",
+      "liveVerified": true,
+      "bodyMatchesPinned": true,
+      "bodyFields": [],
+      "requiredBodyFields": [],
+      "queryFields": [],
+      "responsesMatchPinned": true,
+      "responses": {
+        "200": {
+          "contentTypes": [
+            "application/json"
+          ],
+          "dataFields": [
+            "success",
+            "isLiked",
+            "likesCount"
+          ],
+          "emptyTextExample": false
+        }
+      }
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/{account}/posts/{post_id}/comments/{comment_id}/like",
+      "docsUrl": "https://docs.onlyfansapi.com/api-reference/post-comments/unlike-post-comment",
+      "liveVerified": true,
+      "bodyMatchesPinned": true,
+      "bodyFields": [],
+      "requiredBodyFields": [],
+      "queryFields": [],
+      "responsesMatchPinned": true,
+      "responses": {
+        "200": {
+          "contentTypes": [
+            "application/json"
+          ],
+          "dataFields": [
+            "success",
+            "isLiked",
+            "likesCount"
+          ],
+          "emptyTextExample": false
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/{account}/posts/labels",
+      "docsUrl": "https://docs.onlyfansapi.com/api-reference/post-labels/create-label",
+      "liveVerified": true,
+      "bodyMatchesPinned": true,
+      "bodyFields": [
+        "name"
+      ],
+      "requiredBodyFields": [
+        "name"
+      ],
+      "queryFields": [],
+      "responsesMatchPinned": true,
+      "responses": {
+        "200": {
+          "contentTypes": [
+            "application/json"
+          ],
+          "dataFields": [
+            "id",
+            "name",
+            "type",
+            "isClearInProgress",
+            "postsCount",
+            "posts"
+          ],
+          "emptyTextExample": false
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/{account}/posts",
+      "docsUrl": "https://docs.onlyfansapi.com/api-reference/posts/send-post",
+      "liveVerified": true,
+      "bodyMatchesPinned": true,
+      "bodyFields": [
+        "text",
+        "labelIds",
+        "mediaFiles",
+        "previews",
+        "rfTag",
+        "expireDays",
+        "scheduledDate",
+        "saveForLater",
+        "fundRaisingTargetAmount",
+        "fundRaisingTipsPresets",
+        "votingType",
+        "votingDue",
+        "votingOptions",
+        "votingCorrectIndex",
+        "blockBannedWords"
+      ],
+      "requiredBodyFields": [
+        "text"
+      ],
+      "queryFields": [],
+      "responsesMatchPinned": true,
+      "responses": {
+        "200": {
+          "contentTypes": [
+            "application/json"
+          ],
+          "dataFields": [
+            "author",
+            "responseType",
+            "id",
+            "postedAt",
+            "postedAtPrecise",
+            "text",
+            "isMarkdownDisabled",
+            "canDelete",
+            "canComment",
+            "canEdit",
+            "mediaCount",
+            "isOpened",
+            "canToggleFavorite",
+            "tipsAmount",
+            "rawText",
+            "media",
+            "canViewMedia"
+          ],
+          "emptyTextExample": false
+        }
+      }
+    },
+    {
+      "method": "PUT",
+      "path": "/api/{account}/posts/{post_id}",
+      "docsUrl": "https://docs.onlyfansapi.com/api-reference/posts/update-post",
+      "liveVerified": true,
+      "bodyMatchesPinned": true,
+      "bodyFields": [
+        "text",
+        "labelIds",
+        "price",
+        "mediaFiles",
+        "rfTag",
+        "expireDays",
+        "scheduledDate",
+        "saveForLater",
+        "fundRaisingTargetAmount",
+        "fundRaisingTipsPresets",
+        "votingType",
+        "votingDue",
+        "votingOptions",
+        "votingCorrectIndex",
+        "blockBannedWords"
+      ],
+      "requiredBodyFields": [
+        "text"
+      ],
+      "queryFields": [],
+      "responsesMatchPinned": true,
+      "responses": {
+        "200": {
+          "contentTypes": [
+            "text/plain"
+          ],
+          "dataFields": [],
+          "emptyTextExample": true
+        }
+      }
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/{account}/posts/{post_id}",
+      "docsUrl": "https://docs.onlyfansapi.com/api-reference/posts/delete-post",
+      "liveVerified": true,
+      "bodyMatchesPinned": true,
+      "bodyFields": [],
+      "requiredBodyFields": [],
+      "queryFields": [],
+      "responsesMatchPinned": true,
+      "responses": {
+        "200": {
+          "contentTypes": [
+            "application/json"
+          ],
+          "dataFields": [
+            "success",
+            "counters"
+          ],
+          "emptyTextExample": false
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/{account}/posts/{post_id}/archive",
+      "docsUrl": "https://docs.onlyfansapi.com/api-reference/posts/archive-post",
+      "liveVerified": true,
+      "bodyMatchesPinned": true,
+      "bodyFields": [],
+      "requiredBodyFields": [],
+      "queryFields": [
+        "private_archive"
+      ],
+      "responsesMatchPinned": true,
+      "responses": {
+        "200": {
+          "contentTypes": [
+            "application/json"
+          ],
+          "dataFields": [
+            "labelStates",
+            "counters"
+          ],
+          "emptyTextExample": false
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/{account}/posts/{post_id}/unarchive",
+      "docsUrl": "https://docs.onlyfansapi.com/api-reference/posts/unarchive-post",
+      "liveVerified": true,
+      "bodyMatchesPinned": true,
+      "bodyFields": [],
+      "requiredBodyFields": [],
+      "queryFields": [
+        "private_archive"
+      ],
+      "responsesMatchPinned": true,
+      "responses": {
+        "200": {
+          "contentTypes": [
+            "application/json"
+          ],
+          "dataFields": [
+            "labelStates",
+            "counters"
+          ],
+          "emptyTextExample": false
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/{account}/posts/{post_id}/pin",
+      "docsUrl": "https://docs.onlyfansapi.com/api-reference/posts/pin-unpin-post",
+      "liveVerified": true,
+      "bodyMatchesPinned": true,
+      "bodyFields": [],
+      "requiredBodyFields": [],
+      "queryFields": [],
+      "responsesMatchPinned": true,
+      "responses": {
+        "200": {
+          "contentTypes": [
+            "application/json"
+          ],
+          "dataFields": [
+            "success"
+          ],
+          "emptyTextExample": false
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/{account}/queue",
+      "docsUrl": "https://docs.onlyfansapi.com/api-reference/queue/list-queue-items",
+      "liveVerified": true,
+      "bodyMatchesPinned": true,
+      "bodyFields": [],
+      "requiredBodyFields": [],
+      "queryFields": [
+        "publishDateStart",
+        "publishDateEnd",
+        "timezone",
+        "limit",
+        "type"
+      ],
+      "responsesMatchPinned": true,
+      "responses": {
+        "200": {
+          "contentTypes": [
+            "application/json"
+          ],
+          "dataFields": [
+            "list",
+            "syncInProcess"
+          ],
+          "emptyTextExample": false
+        }
+      }
+    },
+    {
+      "method": "PUT",
+      "path": "/api/{account}/queue/{queue_id}/publish",
+      "docsUrl": "https://docs.onlyfansapi.com/api-reference/queue/publish-queue-item",
+      "liveVerified": true,
+      "bodyMatchesPinned": true,
+      "bodyFields": [],
+      "requiredBodyFields": [],
+      "queryFields": [],
+      "responsesMatchPinned": true,
+      "responses": {
+        "200": {
+          "contentTypes": [
+            "application/json"
+          ],
+          "dataFields": [
+            "success"
+          ],
+          "emptyTextExample": false
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/{account}/queue/counts",
+      "docsUrl": "https://docs.onlyfansapi.com/api-reference/queue/count-queue-items",
+      "liveVerified": true,
+      "bodyMatchesPinned": true,
+      "bodyFields": [],
+      "requiredBodyFields": [],
+      "queryFields": [
+        "publishDateStart",
+        "publishDateEnd",
+        "timezone"
+      ],
+      "responsesMatchPinned": true,
+      "responses": {
+        "200": {
+          "contentTypes": [
+            "application/json"
+          ],
+          "dataFields": [
+            "list",
+            "syncInProcess"
+          ],
+          "emptyTextExample": false
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/{account}/stories/{story_id}/mark-as-watched",
+      "docsUrl": "https://docs.onlyfansapi.com/api-reference/stories/mark-story-as-watched",
+      "liveVerified": true,
+      "bodyMatchesPinned": true,
+      "bodyFields": [],
+      "requiredBodyFields": [],
+      "queryFields": [],
+      "responsesMatchPinned": true,
+      "responses": {
+        "200": {
+          "contentTypes": [
+            "application/json"
+          ],
+          "dataFields": [
+            "success"
+          ],
+          "emptyTextExample": false
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/{account}/stories",
+      "docsUrl": "https://docs.onlyfansapi.com/api-reference/stories/add-to-story",
+      "liveVerified": true,
+      "bodyMatchesPinned": true,
+      "bodyFields": [
+        "mediaFiles",
+        "texts",
+        "question",
+        "canvasWidth",
+        "canvasHeight"
+      ],
+      "requiredBodyFields": [
+        "mediaFiles"
+      ],
+      "queryFields": [],
+      "responsesMatchPinned": true,
+      "responses": {
+        "200": {
+          "contentTypes": [
+            "application/json"
+          ],
+          "dataFields": [
+            "id",
+            "userId",
+            "isReady",
+            "hasPost",
+            "isWatched",
+            "media",
+            "createdAt",
+            "canvasWidth",
+            "canvasHeight",
+            "question",
+            "texts",
+            "viewersCount",
+            "viewers",
+            "commentsCount",
+            "canDelete",
+            "isHighlightCover",
+            "isLastInHighlight",
+            "tipsAmount",
+            "tipsAmountRaw",
+            "tipsCount",
+            "likesCount",
+            "releaseForms"
+          ],
+          "emptyTextExample": false
+        }
+      }
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/{account}/stories/{story_id}",
+      "docsUrl": "https://docs.onlyfansapi.com/api-reference/stories/delete-story",
+      "liveVerified": true,
+      "bodyMatchesPinned": true,
+      "bodyFields": [],
+      "requiredBodyFields": [],
+      "queryFields": [],
+      "responsesMatchPinned": true,
+      "responses": {
+        "200": {
+          "contentTypes": [
+            "application/json"
+          ],
+          "dataFields": [
+            "success"
+          ],
+          "emptyTextExample": false
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/{account}/stories/highlights",
+      "docsUrl": "https://docs.onlyfansapi.com/api-reference/story-highlights/create-story-highlight",
+      "liveVerified": true,
+      "bodyMatchesPinned": true,
+      "bodyFields": [
+        "title",
+        "coverStoryId",
+        "storyIds"
+      ],
+      "requiredBodyFields": [
+        "title",
+        "coverStoryId",
+        "storyIds"
+      ],
+      "queryFields": [],
+      "responsesMatchPinned": true,
+      "responses": {
+        "200": {
+          "contentTypes": [
+            "application/json"
+          ],
+          "dataFields": [
+            "id",
+            "userId",
+            "title",
+            "coverStoryId",
+            "cover",
+            "storiesCount",
+            "createdAt"
+          ],
+          "emptyTextExample": false
+        }
+      }
+    },
+    {
+      "method": "PUT",
+      "path": "/api/{account}/stories/highlights/{highlight_id}",
+      "docsUrl": "https://docs.onlyfansapi.com/api-reference/story-highlights/update-story-highlight",
+      "liveVerified": true,
+      "bodyMatchesPinned": true,
+      "bodyFields": [
+        "title",
+        "coverStoryId",
+        "storyIds"
+      ],
+      "requiredBodyFields": [
+        "title",
+        "coverStoryId",
+        "storyIds"
+      ],
+      "queryFields": [],
+      "responsesMatchPinned": true,
+      "responses": {
+        "200": {
+          "contentTypes": [
+            "application/json"
+          ],
+          "dataFields": [
+            "id",
+            "userId",
+            "title",
+            "coverStoryId",
+            "cover",
+            "storiesCount",
+            "createdAt"
+          ],
+          "emptyTextExample": false
+        }
+      }
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/{account}/stories/highlights/{highlight_id}",
+      "docsUrl": "https://docs.onlyfansapi.com/api-reference/story-highlights/delete-story-highlight",
+      "liveVerified": true,
+      "bodyMatchesPinned": true,
+      "bodyFields": [],
+      "requiredBodyFields": [],
+      "queryFields": [],
+      "responsesMatchPinned": true,
+      "responses": {
+        "200": {
+          "contentTypes": [
+            "application/json"
+          ],
+          "dataFields": [
+            "success"
+          ],
+          "emptyTextExample": false
+        }
+      }
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/{account}/stories/highlights/{highlight_id}/{story_id}",
+      "docsUrl": "https://docs.onlyfansapi.com/api-reference/story-highlights/add-story-to-highlight",
+      "liveVerified": true,
+      "bodyMatchesPinned": true,
+      "bodyFields": [
+        "story_id"
+      ],
+      "requiredBodyFields": [
+        "story_id"
+      ],
+      "queryFields": [],
+      "responsesMatchPinned": true,
+      "responses": {
+        "200": {
+          "contentTypes": [
+            "application/json"
+          ],
+          "dataFields": [
+            "success"
+          ],
+          "emptyTextExample": false
+        }
+      }
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/{account}/stories/highlights/{highlight_id}/{story_id}",
+      "docsUrl": "https://docs.onlyfansapi.com/api-reference/story-highlights/remove-story-from-highlight",
+      "liveVerified": true,
+      "bodyMatchesPinned": true,
+      "bodyFields": [],
+      "requiredBodyFields": [],
+      "queryFields": [],
+      "responsesMatchPinned": true,
+      "responses": {
+        "200": {
+          "contentTypes": [
+            "application/json"
+          ],
+          "dataFields": [
+            "success"
+          ],
+          "emptyTextExample": false
+        }
+      }
+    }
+  ]
+}

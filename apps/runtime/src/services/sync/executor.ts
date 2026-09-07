@@ -24,8 +24,10 @@ import {
   yieldPageSync,
   getSyncStreamsForPlatform,
   pausePageSyncForAuth,
+  OfapiCollectionPolicyError,
 } from "@agency_hub_core/db";
 import { FanslyApiError, FanslyProxyMissingError } from "@agency_hub_core/fansly";
+import { ofapiCollectionRefusalDisposition } from "@agency_hub_core/shared";
 import type { Db as PgBossDb, JobWithMetadata, PgBoss } from "pg-boss";
 
 import type { AppContext } from "../../bootstrap.ts";
@@ -34,7 +36,7 @@ import {
   executeOfapiCaptureJobChunk,
   isOfapiBackgroundCaptureRunnable,
 } from "../ofapi-capture-jobs.ts";
-import { OfapiApiError } from "../ofapi.ts";
+import { OfapiApiError, ofapiAccountNotFound } from "../ofapi.ts";
 import {
   notifyAuthFailedIncident,
   notifyOfapiGlobalIncident,
@@ -226,11 +228,27 @@ async function resolveSyncPageWakeupTarget(
 export const OFAPI_INSUFFICIENT_CREDITS_RETRY_CLASS = "ofapi_insufficient_credits";
 export const OFAPI_INSUFFICIENT_CREDITS_INCIDENT = { kind: "ofapi_low_credit" } as const;
 
+/**
+ * Review #136: a collection-policy refusal is the owner's own cap or switch,
+ * evaluated locally before any fetch — never a vendor outage, so never the
+ * transient backoff ladder and never a sync incident (the console already
+ * shows the decision). A time-bound cap sleeps until the repository's own
+ * reset instant; the background pause re-checks on a short cadence so Resume
+ * heals the stream by itself; a durable policy decision or misconfiguration
+ * parks the stream for the owner.
+ */
+export const OFAPI_COLLECTION_POLICY_RETRY_CLASS = "ofapi_collection_policy";
+export const OFAPI_COLLECTION_PAUSE_RECHECK_MS = 15 * 60_000;
+
 function classifyOfapiApiError(
   error: OfapiApiError,
   failure: ReturnType<typeof buildNormalizedSyncError>,
 ): ReturnType<typeof classifyTaskFailure> {
   const status = error.status;
+  if (ofapiAccountNotFound(status, error.body)) return {
+    mode: "blocked", blockerType: "manual_action_required", blockerCode: "ofapi_account_not_found",
+    blockerReason: "OFAPI account binding is unavailable",
+  };
   if (status === null) {
     // A transport failure before any status: the one shape the old generic
     // fallback described correctly.
@@ -294,10 +312,29 @@ function classifyTaskFailure(
 ): {
   mode: "retry" | "blocked";
   retryClass?: string;
+  /** An explicit wake-up instant instead of the consecutive-failure backoff. */
+  retryAt?: Date;
   blockerType?: string;
   blockerCode?: string;
   blockerReason?: string;
 } {
+  if (error instanceof OfapiCollectionPolicyError) {
+    const disposition = ofapiCollectionRefusalDisposition(error.reason);
+    if (disposition === "cap" || disposition === "pause") {
+      return {
+        mode: "retry",
+        retryClass: OFAPI_COLLECTION_POLICY_RETRY_CLASS,
+        retryAt: error.retryAt ?? new Date(Date.now() + OFAPI_COLLECTION_PAUSE_RECHECK_MS),
+      };
+    }
+    return {
+      mode: "blocked",
+      blockerType: "manual_action_required",
+      blockerCode: error.code,
+      blockerReason: failure.summary,
+    };
+  }
+
   if (error instanceof PostsCaptureJobBlockedError) {
     return {
       mode: "blocked",
@@ -614,7 +651,8 @@ export async function executeNextSyncPageChunk(
 
     if (result.satisfied) {
       const skipped = Boolean(result.gatedSkip);
-      const applied = skipped
+      const held = !skipped && Boolean(result.qualityHold);
+      const applied = skipped || held
         ? await skipPageSync(app.db, {
           pageId: platformAccountId,
           stream: taskLease.stream,
@@ -659,6 +697,15 @@ export async function executeNextSyncPageChunk(
           // stream since long before ramp gates existed.
           gatedSkip: result.gatedSkip,
         });
+      } else if (held) {
+        await telemetry.finish("skipped", result.qualityHold, {
+          chunkBudget: {
+            requestCount: budget.totalRequests,
+            elapsedMs: budget.elapsedMs,
+          },
+          ...result.stats,
+          qualityHold: result.qualityHold,
+        });
       } else {
         const recoveredAt = new Date();
         await telemetry.finish("success", null, {
@@ -686,7 +733,7 @@ export async function executeNextSyncPageChunk(
         platformAccountId,
         taskLease.stream,
         run.id,
-        skipped ? "skipped" : "success",
+        skipped || held ? "skipped" : "success",
         continuationPriority,
       );
     }
@@ -875,6 +922,7 @@ export async function executeNextSyncPageChunk(
         requestSeq: taskLease.leasedSeq ?? taskLease.requestSeq,
         leaseToken: taskLease.leaseToken ?? "",
         retryKind: classified.retryClass ?? "transient_network",
+        ...(classified.retryAt ? { retryAt: classified.retryAt } : {}),
         errorCode: failure.error.code,
         errorSummary: failure.summary,
         phase: taskLease.phase,
@@ -904,7 +952,10 @@ export async function executeNextSyncPageChunk(
     await telemetry.finish("failed", failure, {
       chunkStatus: "failed",
     });
-    if (classified.retryClass === OFAPI_INSUFFICIENT_CREDITS_RETRY_CLASS) {
+    if (error instanceof OfapiCollectionPolicyError) {
+      // The owner's own collection cap or switch, already visible in the
+      // console: not an outage, so no per-stream incident (review #136).
+    } else if (classified.retryClass === OFAPI_INSUFFICIENT_CREDITS_RETRY_CLASS) {
       // One pool, one alarm: the per-stream threshold alert is skipped so the
       // owner does not get "stream failed 3x" per OFAPI stream on top of it.
       await notifyOfapiGlobalIncident(app, {

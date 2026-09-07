@@ -1,8 +1,13 @@
 #!/usr/bin/env node
-// Kernel Stage 18 ratchet: counts strict `platform ===` branch sites outside
-// the adapter packages and fails when the count EXCEEDS the recorded budget.
+// Kernel Stage 18 ratchet: counts strict platform comparison sites — `platform`
+// followed by optional whitespace and `===` OR `!==` — outside the adapter
+// packages and fails when the count EXCEEDS the recorded budget. Until
+// 2026-09-07 only the literal `platform ===` was counted, so a branch written
+// as `platform!=="onlyfans"` slipped past unseen; the `!==` arm and the
+// optional whitespace close that door (budget re-based with a justification).
 // Decreases are recorded by updating scripts/platform-branch-budget.json.
-// Also runnable in CI; the test suite wraps the same logic.
+// Also runnable in CI; the test suite wraps the same logic and pins the
+// "platform === branch sites: N (budget M)" output line.
 
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -16,7 +21,7 @@ export function countPlatformBranches() {
   try {
     output = execFileSync(
       "grep",
-      ["-rn", "platform ===", "--include=*.ts", "apps", "packages", "tests"],
+      ["-rnE", "platform[[:space:]]*(===|!==)", "--include=*.ts", "apps", "packages", "tests"],
       { cwd: root, encoding: "utf8" },
     );
   } catch {

@@ -261,6 +261,19 @@ you:
 ln -s <checkout>/packages/hub-agent-cli/bin/hub.mjs ~/.local/bin/hub
 ```
 
+On the agency's operator machine the bare `hub` is deliberately NOT a link into
+a dev checkout. The CLI validates every response against the contract compiled
+into it, strictly, so it must match the DEPLOYED revision, and a checkout is
+routinely ahead of or behind production and fails at `capabilities`. The link
+points instead at a production-pinned copy, `~/.local/share/hub-agent-cli-prod`
+(a `git archive` of exactly the deployed commit, `.source-revision` inside; never
+a worktree, since worktree cleanup has deleted one mid-audit).
+`scripts/deploy-production.sh` rebuilds that copy at the end of every verified
+deploy; `scripts/rebuild-hub-cli-prod.sh <revision>` does the same by hand, and
+switches the link only after the new CLI answers `capabilities` with the contract
+hash that revision compiles to. The running revision is the
+`agency-hub.source-revision` label on the production image.
+
 ### Configuration
 
 Auth comes from `HUB_AGENT_KEY`, or from `HUB_AGENT_KEY=...` in

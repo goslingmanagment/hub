@@ -1,4 +1,7 @@
-import { listOfapiMappedPages } from "@agency_hub_core/db";
+import { findOfapiReadDefinition, resolveOfapiCatalogPath, type OfapiCollectionContext } from "@agency_hub_core/shared";
+import { materializeOfapiReadSnapshot } from "./ofapi-collection-runner.ts";
+import { safeOfapiReadBody } from "./ofapi-read-normalization.ts";
+import { listOfapiMappedPages, OfapiCollectionPolicyError } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
 import type { HumanAuthPrincipal } from "./auth.ts";
@@ -15,10 +18,11 @@ import { executeCaptureFirstInteractiveRead } from "./ofapi-capture-transport.ts
 import { resolveOfapiEgressContext } from "./ofapi-egress.ts";
 import { isOfapiDmReadthroughReconcileEnabled } from "./ofapi-dm-readthrough.ts";
 import { enqueueReadGatewayCapture } from "./ofapi-read-gateway-capture.ts";
-import { OfapiApiError } from "./ofapi.ts";
+import { OfapiApiError, OfapiGovernedRequestError } from "./ofapi.ts";
 import {
   BadRequestError,
   NotFoundError,
+  OfapiCollectionRefusedError,
   ServiceUnavailableError,
 } from "./errors.ts";
 
@@ -26,9 +30,11 @@ type RawQuery = Record<string, unknown>;
 
 interface QueryRule {
   parse(value: string, name: string): string;
+  required?: boolean;
 }
 
 interface ProxyRequest {
+  collectionContext?: OfapiCollectionContext;
   kind: "proxy";
   accountId: string;
   pathname: string;
@@ -54,6 +60,22 @@ export interface OfapiReadGatewayResponse {
 
 function invalid(message: string): never {
   throw new BadRequestError(`Invalid OFAPI read gateway request: ${message}`);
+}
+
+/**
+ * Review #136: a collection-policy refusal — raw from the repository on the
+ * proxy-read path, or the pre-dispatch cause of a governed attempt on the
+ * capture-first path — is a local decision, never an upstream failure. It
+ * becomes the one typed HTTP answer (429 for a time-bound cap with the reset
+ * advice, 409 for an owner policy state) instead of 500/503.
+ */
+export function ofapiCollectionRefusal(error: unknown): OfapiCollectionRefusedError | null {
+  const cause = error instanceof OfapiGovernedRequestError && error.phase === "pre_dispatch"
+    ? error.cause
+    : error;
+  return cause instanceof OfapiCollectionPolicyError
+    ? new OfapiCollectionRefusedError(cause.reason, { retryAt: cause.retryAt })
+    : null;
 }
 
 function decodeSegments(rawPath: string) {
@@ -137,14 +159,47 @@ function parseQuery(raw: RawQuery, rules: Record<string, QueryRule>) {
     }
     parsed[name] = rule.parse(value, name);
   }
+  for (const [name, rule] of Object.entries(rules)) {
+    if (rule.required && parsed[name] === undefined) invalid(`query parameter ${name} is required`);
+  }
   return parsed;
 }
+
+/**
+ * Every operation this resolver can emit for a hand-written (non-catalog)
+ * route. `proxy()` accepts only these, so the compiler refuses a route whose
+ * operation is not in the table, and tests/ofapi-collection-coverage derives
+ * the admission audit from the table instead of a hand-kept list: each entry
+ * is proven to be either an enumerated legacy operation or classified into a
+ * category that is on by default — nothing may fall silently into an
+ * off-by-default category the way `ofapi_gateway_fans_all` did (review #136).
+ * Catalog routes carry their category explicitly in `collectionContext`.
+ */
+export const OFAPI_READ_GATEWAY_OPERATIONS = [
+  "ofapi_gateway_chats",
+  "ofapi_gateway_chat_messages",
+  "ofapi_gateway_chat_search",
+  "ofapi_gateway_chat_message",
+  "ofapi_gateway_chat_media",
+  "ofapi_gateway_users_list",
+  "ofapi_gateway_user",
+  "ofapi_gateway_transactions",
+  "ofapi_gateway_fans_all",
+  "ofapi_gateway_fans_active",
+  "ofapi_gateway_user_lists",
+  "ofapi_gateway_user_list_users",
+  "ofapi_gateway_vault_media",
+  "ofapi_gateway_vault_lists",
+  "ofapi_gateway_vault_media_item",
+  "ofapi_gateway_upload_status",
+] as const;
+export type OfapiReadGatewayOperation = typeof OFAPI_READ_GATEWAY_OPERATIONS[number];
 
 function proxy(
   accountId: string,
   segments: string[],
   query: Record<string, string>,
-  operation: string,
+  operation: OfapiReadGatewayOperation,
   fallbackCredits = 1,
   fallbackEstimated = true,
 ): ProxyRequest {
@@ -164,6 +219,12 @@ export function resolveOfapiReadGatewayRequest(
   rawQuery: RawQuery,
 ): OfapiReadGatewayRequest {
   const segments = decodeSegments(rawPath);
+  // Existing desktop list reads retain their established validation and admission.
+  // New bounded collectors use the catalog and explicit collection context.
+  const legacyUserList = segments[1] === "user-lists" && (segments.length === 2 || (segments.length === 4 && segments[3] === "users"));
+  let catalog;
+  try { catalog = legacyUserList ? null : resolveOfapiCatalogPath(rawPath, rawQuery); } catch (error) { invalid(error instanceof Error ? error.message : "Invalid collection query"); }
+  if (catalog && !catalog.definition.collectionOnly) return { kind: "proxy", accountId: catalog.accountId, pathname: catalog.pathname, query: catalog.query, operation: catalog.definition.operation, fallbackCredits: catalog.definition.reservedCredits ?? 1, fallbackEstimated: true, collectionContext: { category: catalog.definition.category, purpose: "interactive", detail: catalog.definition.detail, reservedCredits: catalog.definition.reservedCredits ?? 1 } };
   if (segments.length === 1 && segments[0] === "accounts") {
     parseQuery(rawQuery, NO_QUERY);
     return { kind: "accounts" };
@@ -197,6 +258,7 @@ export function resolveOfapiReadGatewayRequest(
     const query = parseQuery(rawQuery, {
       limit: LIMIT_100,
       order: enumRule(["asc", "desc"]),
+      filter: enumRule(["pinned"]),
       first_id: textRule(100),
       last_id: textRule(100),
       skip_users: enumRule(["all", "none"]),
@@ -216,11 +278,16 @@ export function resolveOfapiReadGatewayRequest(
     };
   }
 
+  if (segments.length === 5 && segments[1] === "chats" && segments[3] === "messages" && segments[4] === "search") {
+    return proxy(accountId, segments, parseQuery(rawQuery, { query: { ...textRule(200), required: true } }), "ofapi_gateway_chat_search");
+  }
+
   if (
     segments.length === 5
     && segments[1] === "chats"
     && segments[3] === "messages"
   ) {
+    if (!/^\d+$/.test(segments[4]!)) invalid("message id must be numeric");
     return proxy(
       accountId,
       segments,
@@ -235,7 +302,10 @@ export function resolveOfapiReadGatewayRequest(
     && segments[3] === "media"
   ) {
     return proxy(accountId, segments, parseQuery(rawQuery, {
-      type: enumRule(["photo", "gif", "video", "audio"]),
+      type: { parse(value, name) {
+        const aliases: Record<string, string> = { photo: "photos", video: "videos", audio: "audios" };
+        return enumRule(["photos", "videos", "audios"]).parse(aliases[value] ?? value, name);
+      } },
       limit: LIMIT_100,
       offset: OFFSET,
       skip_users: enumRule(["all", "none"]),
@@ -244,11 +314,12 @@ export function resolveOfapiReadGatewayRequest(
 
   if (segments.length === 3 && segments[1] === "users" && segments[2] === "list") {
     return proxy(accountId, segments, parseQuery(rawQuery, {
-      ids: textRule(220, /^\d+(,\d+){0,9}$/),
+      ids: { ...textRule(220, /^\d+(,\d+){0,9}$/), required: true },
     }), "ofapi_gateway_users_list");
   }
 
   if (segments.length === 3 && segments[1] === "users") {
+    if (["blocked", "restricted", "search", "me"].includes(segments[2]!)) invalid("reserved user path is not supported");
     return proxy(
       accountId,
       segments,
@@ -261,6 +332,7 @@ export function resolveOfapiReadGatewayRequest(
     return proxy(accountId, segments, parseQuery(rawQuery, {
       limit: LIMIT_100,
       type: enumRule(["subscribes", "tips", "post", "chat_messages", "stream"]),
+      tipsSource: enumRule(["profile", "post_all", "chat", "stream", "story"]),
       marker: integerRule(0, Number.MAX_SAFE_INTEGER),
       startDate: textRule(64, /^(?:-\d+days|\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2}:\d{2})?)$/),
     }), "ofapi_gateway_transactions");
@@ -281,12 +353,14 @@ export function resolveOfapiReadGatewayRequest(
       // re-serializes them verbatim (filter%5Bonline%5D=1) to OFAPI.
       "filter[online]": enumRule(["1"]),
       "filter[total_spent]": integerRule(0, 1_000_000),
-    }), `ofapi_gateway_fans_${segments[2]}`);
+      "filter[max_total_spent]": integerRule(0, 1_000_000),
+    }), segments[2] === "all" ? "ofapi_gateway_fans_all" : "ofapi_gateway_fans_active");
   }
 
   if (segments.length === 2 && segments[1] === "user-lists") {
     return proxy(accountId, segments, parseQuery(rawQuery, {
-      limit: LIMIT_100,
+      view: enumRule(["queue"]),
+      limit: integerRule(10, 50),
       offset: OFFSET,
     }), "ofapi_gateway_user_lists");
   }
@@ -324,6 +398,7 @@ export function resolveOfapiReadGatewayRequest(
       query: textRule(200),
       limit: LIMIT_100,
       offset: OFFSET,
+      lightweight: enumRule(["true", "false"]),
     }), "ofapi_gateway_vault_lists");
   }
 
@@ -383,7 +458,6 @@ export async function executeOfapiReadGatewayRequest(
   if (app.config.ofapiDesktopReadGatewayEnabled !== true) {
     throw new ServiceUnavailableError("OFAPI desktop read gateway is disabled");
   }
-  const captureFirst = app.config.ofapiMirrorInteractiveCaptureEnabled === true;
   const historyShadow = app.config.ofapiMessageHistoryShadowEnabled === true;
   const historyDbFallback = app.config.ofapiMessageHistoryDbFallbackEnabled === true;
   if (historyDbFallback && !historyShadow) {
@@ -398,6 +472,8 @@ export async function executeOfapiReadGatewayRequest(
   }
 
   const request = resolveOfapiReadGatewayRequest(input.rawPath, input.rawQuery);
+  const captureFirst = Boolean(request.kind === "proxy" && request.collectionContext) || app.config.ofapiMirrorInteractiveCaptureEnabled === true;
+
   if (request.kind === "whoami") {
     return {
       status: 200,
@@ -491,6 +567,9 @@ export async function executeOfapiReadGatewayRequest(
     throw new ServiceUnavailableError("OFAPI client is not configured");
   }
 
+  if (findOfapiReadDefinition(request.operation)?.category === "balances" && principal.user.role !== "owner") {
+    throw new BadRequestError("Financial collection reads require the owner report");
+  }
   const egress = await resolveOfapiEgressContext(app, {
     pageId: page.id,
     ofapiAccountId: request.accountId,
@@ -508,6 +587,7 @@ export async function executeOfapiReadGatewayRequest(
         pathname: request.pathname,
         query: request.query,
         fallbackCredits: request.fallbackCredits,
+        collectionContext: request.collectionContext,
         servingMode: historyMode === "vendor" ? "vendor_only" : historyMode,
         fallbackReason,
       })
@@ -524,6 +604,12 @@ export async function executeOfapiReadGatewayRequest(
         fallbackCredits: request.fallbackCredits,
         fallbackEstimated: request.fallbackEstimated,
       });
+    if (request.collectionContext && response.status >= 200 && response.status < 300) {
+      if (!("capture" in response)) throw new ServiceUnavailableError("Collection requires durable response capture");
+      const capture = response.capture as { observationId: number; receivedAt: Date };
+      await materializeOfapiReadSnapshot(app, { pageId: page.id, step: request, body: response.body, observationId: capture.observationId, observationReceivedAt: capture.receivedAt });
+      response.body = safeOfapiReadBody(request.operation, response.body);
+    }
     // Stage 9 producer 4: tee every successful proxied body into the journal
     // — O(1) enqueue off the latency path, fail-open with a visible counter.
     if (!captureFirst && response.status >= 200 && response.status < 300) {
@@ -572,6 +658,8 @@ export async function executeOfapiReadGatewayRequest(
     }
     return { ...response, headers };
   } catch (error) {
+    const refusal = ofapiCollectionRefusal(error);
+    if (refusal) throw refusal;
     if (error instanceof OfapiApiError && error.status === null) {
       throw new ServiceUnavailableError("OFAPI upstream is unavailable");
     }

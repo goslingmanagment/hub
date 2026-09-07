@@ -199,7 +199,7 @@ export type SyncHealth = (typeof syncHealthStates)[number];
 export const httpRequestStates = ["started", "success", "retry", "failed"] as const;
 export type HttpRequestState = (typeof httpRequestStates)[number];
 
-export const httpRequestFailureKinds = ["timeout", "transport", "http", "provider"] as const;
+export const httpRequestFailureKinds = ["timeout", "transport", "http", "provider", "policy"] as const;
 export type HttpRequestFailureKind = (typeof httpRequestFailureKinds)[number];
 
 export const syncTelemetryEventSeverities = ["info", "warn", "error"] as const;

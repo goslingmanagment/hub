@@ -126,7 +126,7 @@ describe("OFAPI proxy read client", () => {
     server = createServer((request, response) => {
       upstreamRequests.push(request.url ?? "");
       response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify({ data: { list: [] } }));
+      response.end(JSON.stringify({ data: { list: [], hasMore: false } }));
     });
     const baseUrl = await listenOnLocalhost(server);
     const client = createOfapiClient({
@@ -271,6 +271,35 @@ describe("OFAPI proxy read client", () => {
 });
 
 describe("OFAPI governed raw transport", () => {
+  it.each([false, true])("keeps a thrown authority check pre-dispatch even when cleanup fails: %s", async (cleanupFails) => {
+    let upstreamRequests = 0;
+    server = createServer((_request, response) => {
+      upstreamRequests += 1;
+      response.writeHead(200).end("unexpected");
+    });
+    const baseUrl = await listenOnLocalhost(server);
+    const admitted: string[] = [], cancelled: string[] = [], spend: unknown[] = [];
+    const client = createOfapiClient({
+      baseUrl, apiKey: "test-key", restDelayMs: 0,
+      beforeCollectionRequest: async request => { admitted.push(request.requestId); },
+      onCollectionCancelled: async requestId => {
+        cancelled.push(requestId);
+        if (cleanupFails) throw new Error("Reservation cleanup unavailable");
+      },
+      onCreditSpend: receipt => { spend.push(receipt); },
+    });
+    await expect(client.dispatchGovernedRaw!({ pageId: 42 }, {
+      attemptId: "authority-changed", operation: "ofapi_capture_chat_messages", method: "GET",
+      pathname: `/${ACCOUNT}/chats/123/messages`, priorityClass: "bulk",
+      deadlineAt: new Date(Date.now() + 10000),
+      beforeDispatch: async () => { throw new Error("Account authority changed"); },
+    })).rejects.toMatchObject({ name: "OfapiGovernedRequestError", phase: "pre_dispatch", reason: "cancelled" });
+    expect(admitted).toEqual(["authority-changed"]);
+    expect(cancelled).toEqual(admitted);
+    expect(upstreamRequests).toBe(0);
+    expect(spend).toEqual([]);
+  });
+
   it("captures byte-exact response once without the legacy spend sink", async () => {
     const expectedBody = Buffer.from([0x7b, 0x22, 0x78, 0x22, 0x3a, 0xff, 0x7d]);
     const requests: Array<{ url: string; attemptId: string | undefined }> = [];

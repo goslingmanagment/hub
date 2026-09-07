@@ -251,8 +251,29 @@ appends a row here in the same change (family law: updated-in-change).
 | 248 | Failed sync payloads journal the provider's response snippet | `PersistedSyncError` gains a nullable `responseSnippet` string, taken from `FanslyApiError.responseSnippet` (already redacted and bounded by the adapter) or from `OfapiApiError.body` (redacted with `redactSensitiveText`, then bounded), `null` for everything else, and unwrapped through `SyncPayloadPersistenceError.cause` like the message. It rides inside the existing `error` object into the raw failed payload, the `<endpoint>:failed` observation and run telemetry — no consumer changes and no new field on any wire. The bound is 400 characters; `summary` (and therefore `page_sync_states.last_error_summary`, telemetry and Telegram) is byte-identical to before. |
 | 249 | An explicit posts request is the manual action | `POST /admin/sync/trigger {scope: posts}` — the explicit per-page operator action — now clears a `manual_action_required` block on the posts stream (`clearPageSyncManualActionBlock`, that blocker kind only) BEFORE recording the request, so the request lands on a runnable row. Production 2026-09-04: after #128's cancel/resolve the streams stayed `blocked` with the old `ofapi_capture_job_*` codes because `resumePageSync` only lifts `paused` and nothing ever cleared a manual block; the explicit request the code itself calls "an explicit per-page operator action" was a no-op on exactly the state it exists for. `provider_bad_data`/`dependency` blocks are untouched. The posts handler also forgets an owner-cancelled pending job (checkpoint still named it) and seeds a fresh one through the ordinary slot path. |
 | 250 | OFAPI UI inherits the existing Anthropic-inspired Hub design | Owner requirement for the OFAPI refresh: use the current dashboard theme, typography, spacing and shared components across collection controls and other new OFAPI screens. The concrete source is globals.css plus Settings and OFAPI Credits; token reuse and visual consistency are acceptance criteria. |
+| 263 | OFAPI collection admission | New collectors default off; page/default CAS policies supersede the closed legacy baseline. Physical reservations separate background, interactive and bounded jobs; pauses retain checkpoints and paid responses. |
+| 267 | Typed OFAPI exports | Owner bounded quote/start/download/import profiles preserve row identity, immutable checksums and source-specific daily visitors; no collector enabled on rollout. |
+| 269 | Owned OFAPI media | Captured source custody, bounded async upload and verified vault/CDN handoff keep readiness, one-use capability custody and rebuildable catalog metadata distinct. |
 | 251 | OFAPI collection policy and UI are separate stages | Owner separates backend S-POL from frontend S-UI, each with independent implementation and acceptance. Saved mockups are non-normative references outside the implementation plan. New collection still requires both applicable stages plus explicit staged activation; existing Hub design tokens remain authoritative. |
-| 252 | Prompt audit: model-generic gateway tuning, structured verdicts, cache split | The Anthropic request builder allowlists the LEGACY surface (`haiku-4-5`/`sonnet-4-5`/`opus-4-5` sampling+no-adaptive; `sonnet-4-6`/`opus-4-6` adaptive+temperature-tolerant) and treats every other model as adaptive-only with no sampling params, plus an explicit `thinking: disabled` for Opus 5 / Sonnet 5 when reasoning is off; the workboard classifier asks for verdicts through structured outputs (`output_config.format`, internal lane only) instead of prose-and-bracket-hunting; the workboard cost panel prices from the gateway catalog (retired `claude-3-5-haiku-latest` row and the Haiku-for-everything fallback gone); coach-chat splits the coach dialog into its own 5m cache block and the recap age label is never minute-granular; safety preambles, tone overrides, hi-greeting and the XML-format lines lose their shouted register; the anti-AI banned-phrase lists become positive guidance plus varied examples, then re-tuned by a blind pairwise judge (~1,400 comparisons): fast-reply v10 = GOOD-only examples, six structural bullets, no quoted tell-phrases, a reread line at the end of the task block (63% wins vs the pre-audit production setup on Sonnet 4.6); improve-draft rewrite wins 64/25. Biggest lever measured is the model: Sonnet 5 at low effort wins 71% and costs less, applied on the owner's go as the reply-feature default (`DEFAULT_REPLY_MODEL_ID`; the owner follow-up extends Sonnet 5 low to Help, Review and Coach without another model comparison). chat-review's inert "under 400 words" replaced by audience framing; help-me's binding "under 150 words" and the short recap's 350 stay |
+| 252 | OFAPI binding custody, credential adoption and free balance | S0/S1/S4a and minimum S5 use verified creator identity, a preview bound to current generation, durable historical attribution and narrow recovery. Expected team comes from independent configuration; unknown access fails closed for writes. The optional balance probe uses free usage. Code acceptance and live acceptance stay separate. |
+| 253 | OFAPI roster capture | Account roster is restricted identity evidence; typed projection excludes session material before capture and preserves identity conflicts |
+| 254 | OFAPI missing binding | Park only unblocked work and current-generation auth; repeated 404 preserves state versions and retries notifications with the original marker time |
+| 255 | OFAPI recovery evidence | Authenticated target required; roster transport receipt is persisted as the binding recovery watermark and audit evidence |
+| 256 | OFAPI owner pause recovery | Auth marker and owner pause are separate; recovery locks sync rows before reread and clears only its marker, leaving Resume to the owner |
+| 257 | OFAPI permanent custody | Every initial binding checks historical ownership; ambiguous refs are quarantined, lifecycle is gated after ownership, and dry-run never mutates incidents |
+| 258 | OFAPI audience quality | Unverified empty sweeps preserve membership and freshness; checkpoint hold drives both status readers until certification |
+| 259 | OFAPI capture uses vendor transport | Binding authorizes the account; Hub-to-OFAPI capture and gateway reads use the canonical vendor-direct route with one client pacing claim. Page-proxy availability cannot gate OFAPI capture; bounded diagnostics preserve dispatch certainty and omit arbitrary causes. |
+| 260 | OFAPI accounting evidence | Complete pages count once; exact zero-delta receipts remain append-only evidence; signed corrections reach attributed read models. Activity forecasts exclude visibly reported unverified balance drift. Local command refusals are not provider HTTP responses. |
+| 266 | OFAPI useful reads | Closed query catalog; explicit default-off policy context; leased bounded jobs use capture-before-parse bulk attempts, replayable snapshot events and owner/Agent Read consumers with monetary scopes. |
+| 261 | OFAPI request audit correctness | Explicit list continuation owns completion; transient credential failure refreshes through one shared preflight; retained financial receipts repair accounting without resending confirmed commands; accepted media IDs never round and gateway required queries fail locally. |
+| 264 | OFAPI vendor usage and key scope | Preserve vendor aggregates independently of ledger; prefer fresh credit headers; CAS declarations bound to server credential fingerprint |
+| 262 | OFAPI lifecycle receipt and ordering | Signed no-key ephemeral receipts keep local identities; subscription/account material follows provider time; health retries independently of settlement; upload/export hooks remain durable progress evidence without paid follow-ups. |
+| 265 | OFAPI delivery recovery and event application | Numeric attempt facts survive provider retention; remote redelivery has durable one-attempt intent and separate outcomes; local replay targets retained evidence; optional groups use saved policy and verified remote readback. |
+| 270 | OFAPI marketing custody | Closed scoped collectors feed canonical attribution snapshots; shared pixel and postback controls use encrypted one-attempt owner intents, safe impact previews and explicit external tests. |
+| 273 | Prompt audit: model-generic gateway tuning, structured verdicts, cache split | The Anthropic request builder allowlists the LEGACY surface (`haiku-4-5`/`sonnet-4-5`/`opus-4-5` sampling+no-adaptive; `sonnet-4-6`/`opus-4-6` adaptive+temperature-tolerant) and treats every other model as adaptive-only with no sampling params, plus an explicit `thinking: disabled` for Opus 5 / Sonnet 5 when reasoning is off; the workboard classifier asks for verdicts through structured outputs (`output_config.format`, internal lane only) instead of prose-and-bracket-hunting; the workboard cost panel prices from the gateway catalog (retired `claude-3-5-haiku-latest` row and the Haiku-for-everything fallback gone); coach-chat splits the coach dialog into its own 5m cache block and the recap age label is never minute-granular; safety preambles, tone overrides, hi-greeting and the XML-format lines lose their shouted register; the anti-AI banned-phrase lists become positive guidance plus varied examples, then re-tuned by a blind pairwise judge (~1,400 comparisons): fast-reply v10 = GOOD-only examples, six structural bullets, no quoted tell-phrases, a reread line at the end of the task block (63% wins vs the pre-audit production setup on Sonnet 4.6); improve-draft rewrite wins 64/25. Biggest lever measured is the model: Sonnet 5 at low effort wins 71% and costs less, applied on the owner's go as the reply-feature default (`DEFAULT_REPLY_MODEL_ID`; the owner follow-up extends Sonnet 5 low to Help, Review and Coach without another model comparison). chat-review's inert "under 400 words" replaced by audience framing; help-me's binding "under 150 words" and the short recap's 350 stay |
+
+| 271 | OFAPI content webhook evidence | Queue progress and post likes canonicalize from raw captures into rebuildable, source-fenced projections; local owner report never claims delivery or complete liker coverage. |
+| 272 | Typed OFAPI owner actions | Closed action schemas share encrypted durable intents, frozen binding and accounting mode, nonblocking dispatch locks, exact response capture, local replay and owner controls. No subscribe-to-user or automatic enabling. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -10722,9 +10743,533 @@ enforcement, capture-first retention or the activation gate. No application
 code, migration or production configuration is changed by this decision.
 
 
-## Prompt audit: model-generic gateway tuning, structured verdicts, cache split (2026-09-07)
+## OFAPI first refresh release: identity and recovery boundaries (2026-09-05)
 
-**Decision #252 (2026-09-07, prompt audit fixes):** a `/claude-api prompt-audit`
+**Decision #252:** Implement the S0/S1/S4a and minimum-S5 release from
+[PR #131](https://github.com/goslingmanagment/core/pull/131), merged as
+`f1834cd9`. This decision records implementation boundaries, not production
+acceptance. The [release runbook](runbooks/ofapi-refresh-release1.md) records
+configuration, migration, acceptance and recovery requirements.
+
+A provider account is a replaceable connection, not the creator identity.
+`onlyfans_id` is the primary creator evidence; nested fallback is explicit,
+and conflicting or unsafe numeric identities fail closed. Replacing a binding
+requires an owner-session preview with stable creator evidence, the exact
+current account/generation and versioned recovery candidates. Applying it
+atomically retains custody history and an operator observation. Usernames alone
+cannot seed an existing page. Imported historical references keep unknown time
+boundaries rather than inventing dates.
+
+Historical account lookup serves attribution and replay, including late
+redelivery. Auth, gateway and commands keep the current binding boundary.
+Replacement, lifecycle changes and command dispatch share a page lock. Outbox
+state commits remain independently visible so a webhook can win confirmation
+while a send is in flight. A queued command from a former generation cannot be
+sent; existing indeterminate rows never restart automatically. Recovery clears
+only the previewed auth blockers of the replaced generation and preserves
+checkpoints, user pauses, collection flags and budgets. Legacy blockers without
+a provable generation remain for explicit review.
+
+Credential adoption compares vendor `whoami.team.slug` with an independently
+configured expected team and caches the result for that credential/client.
+Unknown, mismatch and denied are distinct; none admits stateful vendor actions.
+A visible account roster never proves full scope. Webhook registration inspects
+remote state before a stable noop; a 404 only permits durable recreation after
+configured team-wide management visibility and successful inventory absence
+proof. Ambiguous creation remains in the existing reconciliation flow.
+
+The optional balance probe reads free `/usage/credits`, independent of account
+bindings and the paid-read credit floor. Zero is observed zero; unavailable
+metadata remains unknown. S4b spending reconciliation, additional collectors,
+S-POL/S-UI and broader commands/events remain separate. Posts capture remains
+an unresolved defect with its own live acceptance.
+
+
+## OFAPI roster capture excludes session material (2026-09-06)
+
+**Decision #253:** `ofapi_admin_accounts` is control-plane identity evidence, not a
+business fact. Capture uses a typed allowlist, excludes nested session material
+and `_meta`, and withholds non-200 bodies. The payload hash describes stored
+bytes; the source hash and UTF-8 byte count remain in redaction metadata.
+Historical binding evidence must preserve creator identity and conflict verdicts
+through projection, including alias precedence and unsafe/non-finite numeric IDs.
+Finite unsafe IDs remain numeric so the parser rejects them; non-finite values
+become invalid strings rather than JSON null. The kind is restricted for tiering
+and explicitly refused by Agent Read. Other captures retain their existing contract.
+
+
+## Missing OFAPI bindings preserve blocker ownership (2026-09-06)
+
+**Decision #254:** Missing-account handling may park runnable work without a
+blocker and auth rows of the same binding generation, revoking their leases.
+It preserves unrelated blockers, legacy generations and owner/gate pauses.
+State changes use the page binding lock and ordered sync-row locks. A repeated
+404 returns the original marker timestamp without rewriting versions; callers
+still use existing bounded incident delivery retries. Recovery tombstones can
+suppress a late notification by that original occurrence time.
+
+
+## Verified binding recovery records its evidence boundary (2026-09-06)
+
+**Decision #255:** Preview and apply require `is_authenticated=true`. The client
+records JS time immediately after the full roster body is read, before DB or
+credit-ledger waits, and propagates it into `insertObservation.receivedAt`.
+The apply-time roster observation ID and receipt remain in custody and audit;
+the receipt becomes `ofapi_auth_changed_at` with null status. New-account events
+received before it are stale; events at or after it still advance. The timestamp
+is excluded from the preview token so the fresh apply-time fetch remains usable.
+This receipt is not vendor event time and does not replay events already skipped
+before the new binding existed.
+
+
+## Auth recovery preserves owner pause without stranding its blocker (2026-09-06)
+
+**Decision #256:** Verified apply and same-generation connected/reconnected clear
+a confirmed auth blocker from an owner-paused row while preserving its pause.
+Apply locks all page sync rows in the same order as Pause/Resume before rereading
+the recovery snapshot and retains those locks through cleanup. Resume either
+precedes that decision and causes a preview conflict, or waits until the marker
+is gone. Connected recovery uses one UPDATE with a per-row pause decision.
+Checkpoints and unknown-generation legacy blockers are unchanged.
+
+
+## OFAPI initial mapping obeys permanent custody (2026-09-06)
+
+**Decision #257:** Every binding writer checks and maintains `ofapi_account_bindings`.
+Initial mapping/unmapping uses the same page and custody locks as verified apply;
+non-null replacement requires preview/apply. Account custody cannot move between
+Hub pages. Historical lookup considers owners regardless of lifecycle status;
+only the separate active gate admits live projection writes. A conflicting ref
+is held unmapped and opens `ofapi_binding_conflict` while other refs continue.
+Dry-run reports conflicts but never opens/resolves incidents. Clearing a claim
+restores canonicalization; already-skipped live events need bounded owner repair.
+
+
+## Empty OFAPI audience sweeps require certification (2026-09-06)
+
+**Decision #258:** An audience generation counts parsed fans across chunks. A
+completed all-empty sweep with existing current subscriptions cannot expire that
+membership or advance the successful checkpoint. It records an anomaly and a
+persistent `lastSweepUnverifiedAt`, and settles as `qualityHold`: the executor
+releases the lease with `skipPageSync`, records a skipped run and preserves
+success/progress timestamps, failures and open incidents. A subsequent
+`sweep_not_due` retains the hold. A certified sweep clears it. Detailed monitor
+and lightweight connections/overview summaries read the checkpoint, independent
+of unrelated run completions. They report Unverified without requiring a
+credential action. Ordinary partial chunks retain their existing retry/progress
+and incident recovery semantics; a hold is a completed uncertified attempt.
+Legacy checkpoints default the count to zero and the hold to null.
+
+## OFAPI capture and gateway use the vendor transport (2026-09-06)
+
+**Decision #259:** Account binding and transport identity are separate. The
+OFAPI egress helper checks the current page/platform/account before admission,
+then obtains `vendor:ofapi` from the canonical resolver, just as the recorded
+vendor policy specifies. Capture and desktop reads no longer require or decrypt
+the page proxy. The helper exposes only dispatcher/key/close; the existing OFAPI
+client owns the one pacing claim, and a null dispatcher leaves the shared native
+pool open. A binding mismatch is `binding_unavailable`, not a network diagnosis.
+Chargebacks and transaction backfill also stop constructing page-proxy agents
+that their list transport never consumed. Fansly and AI service routes keep
+their own existing policies. The unused legacy page-scope resolver branch is
+not a supported OFAPI route.
+
+This reverses the June 23 page-proxy workaround for large responses. Production
+controls on September 6 found the two affected pages' common proxy unreachable
+over TCP from API (10 seconds) and worker (65 seconds). Exact posts `limit=100`
+direct controls returned HTTP 200 with complete bodies of 357,906 and 381,786
+bytes in 5.57 and 7.41 seconds. Historical attempts prove only transport failure
+before headers: their nested cause was not retained. The earlier 10 MiB theory
+is not the diagnosis of this incident; neither cap nor request timeout changes.
+
+Governed failures expose only allowlisted machine class/name/code, header/body
+stage, elapsed time, timeout, status and byte counts. These reach structured
+logs and existing ledger details; the job reason includes the bounded transport
+class. No raw cause message, URL or credentials cross this boundary. A connect
+classification does not change dispatch certainty, assumed billing, safe-read
+retry bounds or the prohibition on automatically repeating stateful requests.
+
+Recovery uses the existing #246/#249 owner cancel and per-page posts request,
+one job at a time, retaining attempts and anchors. Balance above the effective
+floor plus unsettled reservations is an independent prerequisite. See
+`docs/runbooks/ofapi-posts-transport-recovery.md` for checks and proof of success.
+
+## OFAPI accounting separates activity from balance inference (2026-09-06)
+
+**Decision #260:** A balance discontinuity is evidence of a changed balance,
+not proof of an external payment or charge. Historical credit observations do
+not establish credential/team continuity. Their inferred `external` and `refill`
+rows remain in the append-only audit history; changing a key does not authorize
+deleting those rows or inventing a historical provider receipt. Runway and refill
+recommendations use net recorded activity and expose the excluded unverified
+residual and its window. The UI distinguishes reconciliation from an actual
+payment, qualifies estimates by their source, and does not turn a residual-only
+window into assurance that further funding is unnecessary. Live balance,
+admission, reservation and conservative burn-monitor policy remain independent
+of this forecast basis.
+
+Provider certainty is evidence even when actual credits equal the reservation.
+The capture ledger records that zero-delta confirmation and any reported balance
+once under the existing attempt/phase identity. It does not become another
+request or expense, and zero-credit observations do not extend the observed
+spending window. Signed provider corrections participate in period totals and
+page, operation and chatter attribution; a cached zero-cost response cannot
+retain its original estimated charge in one view while being free in another.
+
+Capture completion counts the final accepted page/items in the same fenced
+transaction as terminal settlement. Retry, blocked-parser recovery and replay
+retain their existing cursor ownership. Historical terminal facts/results stay
+authoritative for old completed jobs whose raw progress counters omitted their
+last page; this change does not claim a historical counter backfill.
+
+Command credential/binding/auth preconditions use typed local evidence and no
+fabricated vendor HTTP status in the outbox result. A real provider rejection
+keeps its HTTP evidence. One claimed attempt remains terminal on local refusal;
+neither a key change nor this classification authorizes automatic send replay.
+
+The chatter response retains the nonnegative legacy estimate fields accepted by
+already-installed SDK validators. Additive net fields carry the exact signed
+amounts, including negative correction windows. Only the legacy representation
+is floored at zero; ledger facts and the new net fields are not. Existing clients
+continue to accept the response, while displaying negative windows requires
+adoption of the additive net fields.
+
+## OFAPI request audit correctness (2026-09-06)
+
+**Decision #261:** Generic successful list mapping must prove the declared list
+shape and continuation/termination evidence. Invalid items fail the page rather
+than disappearing. Link discovery and subscriber walks use verified continuation
+offsets across durable budget yields; the array-only tracking-spender family has
+its own length fallback. A full page with explicit termination does not buy an
+extra request. Unsafe numeric media identifiers remain exact strings on the wire,
+and gateway validation enforces vendor-required fields and user-list limit 10–50.
+
+Credential adoption retries transient unknown/denied and persistence failures
+after 30 seconds on the next access, with exactly one shared in-flight refresh.
+Verified/mismatched team identity and unconfigured expected team remain pinned to
+the client. This refresh is a read-only verification, never command retry authority.
+
+Migration 0154 adds immutable financial response receipts keyed by physical
+request/attempt identity before legacy ledger/counter settlement. Settlement and
+its accounted marker commit together under the receipt row lock. A confirmed
+mutation stays confirmed even if both accounting projections fail; its result
+retains a pending-accounting disposition. Subsequent paid dispatch drains pending
+receipts using database work only, including after process restart. Free account,
+credential, webhook-inventory and credit-balance diagnostics stay available.
+The raw receipt contains safe financial metadata and no fan/body/secret data;
+page-data erasure includes its nested page attribution alongside the credit ledger.
+A database-wide outage can still defeat all durable capture: the process retains
+an in-memory receipt and closes paid dispatch, but crash recovery in that interval
+requires reconciliation rather than a claim of nonexistent durable evidence.
+
+Optional operation admission runs before each physical HTTP dispatch, outside
+transport retry classification and before governed dispatch fencing. Root policy
+wiring supplies credential permissions and collector policy; this seam does not
+invent a new generic write API. Existing one-attempt commands, flags and spend
+ceilings are unchanged. See `docs/runbooks/ofapi-request-audit-fixes.md` for
+regression evidence, source discrepancies and rollout/recovery instructions.
+
+## OFAPI vendor usage and declared key restrictions (2026-09-06)
+
+**Decision #264:** S4b stores bounded free vendor usage reads as independently captured and rebuildable accounting evidence. It does not add vendor aggregates to local ledger spend, infer actor/account attribution for null buckets, or claim historical credential-scope equivalence. Fresh credit headers override potentially cached body metadata; original header/body evidence and conflicts remain durable. A replay/cache marker alone does not prove a price or command success.
+
+S5 represents configured restrictions per exact server credential fingerprint with owner-session CAS and append-only audit. Provider permission CRUD/introspection is not invented: unknown, owner-declared and observed preflight states remain distinct. Operation/account restrictions are enforced before physical dispatch, independently of page/principal ACL and binding/team preflight. Free identity/credit diagnostics remain available. New collectors and production configuration are unchanged until explicitly enabled by the owner. See `docs/runbooks/ofapi-vendor-usage-scope.md`.
+
+## OFAPI collection policy is a dispatch authority (2026-09-06)
+
+**Decision #263:** S-POL adds a local, versioned collection policy, not another
+boot-only enable flag. Its registry names supported categories and the fixed
+legacy operation migration list. Existing callers retain their existing controls
+only while no explicit category policy exists. New callers declare category and
+purpose and default off. Explicit off and policy errors never fall back to env.
+
+Owner preview performs no provider calls. Apply uses one global revision/CAS and
+an append-only actor/change audit, supports one enabled category at a time, and
+immediately governs physical transport admission. Team leads read only their
+assigned pages. Event subscription/readback remains a distinct shared remote
+workflow; local applied status makes no claim about remote registrations.
+
+A database lock serializes category reservations across workers. Background,
+interactive and bounded one-off budgets remain separate beneath existing global
+credit and principal guards. Detail reads require explicit permission. One-off
+work carries call, credit and byte caps and a retained checkpoint. Disabling a
+category pauses its pending jobs; explicit resume cannot raise caps or erase the
+checkpoint. Existing facts and callbacks are retained; capture is not contingent
+on successful collection-usage settlement. Actual overages stop subsequent work.
+
+The control is a limit on new managed requests. It cannot cap incoming webhook
+charges, other clients, already accepted operations or variable vendor prices.
+New collector execution and the matching UI must ship and be reviewed before
+one-at-a-time owner activation. This change authorizes no production toggle,
+paid discovery or blanket collection.
+
+**Decision #262 (2026-09-06, OFAPI lifecycle receipt and ordering):**
+
+Valid no-key users.typing/online/offline deliveries are locally identified
+receipts. HMAC verification and exact-byte commit precede the event allowlist;
+non-ephemeral missing identities remain quarantined. A repeated typing body is
+another pulse, not a perpetual body-hash duplicate. Replaying a receipt older
+than five minutes cannot broadcast present typing/presence.
+
+The subscription material writer fences its entire update and page-fan state
+against newer evidence. `subscriptions.expired` uses the provider period end
+and the existing `subscription.ended` vocabulary; a newer renewal owns current
+state while both facts remain in history. Account transitions use
+`disconnected_at` or `latestAuthAttempt` time, with receipt fallback where old
+payloads lack the source. Auth recovery wins an equal-time failure, and current
+binding custody continues to isolate replacements from historical events.
+
+Account health joins the existing independent journal projection bookkeeping.
+State, stream blockers and incident effects share the binding transaction;
+errors escape that transaction and become retryable after journal settlement.
+A minutely bounded sweep or explicit local processing repairs the projection
+without redelivering a paid webhook.
+
+The source journal is also the durable upload/export lifecycle history. All
+nine async lifecycle kinds validate explicit resource identity and account
+scope. Team export hooks attribute to their explicit account_ids and remain
+replayable if a binding is unknown. New canonical events and DB-only export
+status hints expose progress, never artifact import, media readiness or a new
+credit obligation. Terminal conflicts remain visible. New subscriptions remain
+default off; only the owner-applied collection policy changes the remote set.
+
+[Implementation and rollout](runbooks/ofapi-webhook-lifecycle.md).
+
+**Decision #265 (2026-09-06, OFAPI delivery recovery and event application):**
+
+Delivery history records each provider attempt, including successful retries,
+under its numeric attempt ID. Frozen windows, overlap and durable cursors capture
+raw responses before parsing. No success-only or failure-only filter can claim
+complete collection. Credential-visible history never claims whole-team scope.
+History's new automatic collector defaults off, uses bulk priority and one free
+100-row request every five minutes.
+
+Remote redelivery is a distinct owner action with durable intent before its
+single POST, a hard 20/day limit, and an accepted/rejected/indeterminate result.
+Neither an accepted response nor a retry UUID is proof of receipt/projection.
+Provider outcomes and local receipt/projection/canonical state remain separately
+queryable. Retained local evidence uses exact local replay, without a paid
+redelivery, new canonical business identity or new SSE sequence.
+
+Optional webhook groups have CAS-versioned desired state and separately applied
+state. Applying preserves baseline events and requires remote event/URL/scope
+readback before confirmation. Saving alone never claims a remote subscription
+change. Existing async callbacks continue to be accepted when a group is off.
+
+Governed page erasure deletes exclusive attempts/intents/receipt observations;
+shared exact bytes are reported under existing shared-observation semantics.
+Material-time fences prevent retained shared exports or recollected historical
+attempts from recreating erased facts. Summary routes expose machine metadata,
+not vendor bodies, URLs or secrets.
+
+[Implementation, spend and owner rollout](runbooks/ofapi-webhook-recovery.md).
+### 268. Send v2 provider identity and bounded dictionary preview (2026-09-06)
+
+Keep one outbox attempt per command. Fix provider Idempotency-Key custody before dispatch; only explicit unchanged manual recovery can share a parent's logical operation within its original 24h window. Team/account/endpoint/body and single-use media-token ownership are durable, and a restarted executor cannot redispatch a reserved row. Integer cents use the mills codec; no large media ID passes through unsafe Number conversion. New chat actions use closed versioned kinds and the same page/principal fence. Banned-word dictionary refresh is explicit and bounded; local preview executes only escaped literals, retains partial coverage and never modifies a draft or treats an unknown price as free. Live release-form field descriptions require arrays despite their scalar schema labels. See `docs/runbooks/ofapi-command-composer.md`.
+
+## 266. OFAPI useful reads use explicit collection policy, durable steps and honest stored coverage
+
+Date: 2026-09-06. Implements S1b, the read parts of S10/S11a and explicit S12 snapshots from the September coverage plan.
+
+The shared `ofapi-read-catalog` is a closed list of GET paths, query types, response families, categories and detail flags. It is used by the gateway, collectors and SDK catalog. Following sort is intentionally absent: the vendor persists that GET query as an account-wide preference. An empty following page with a valid continuation remains work. Ranked, indexed, windowed and unknown-continuation results do not prove the full fan population. Provider `_source.is_complete` and omitted counts survive normalization. Bounded jobs never discover and fetch every item's details automatically.
+
+Each outer collection job has a conditional lease and retained per-step checkpoint. Each physical GET belongs to an inner `collection_read` capture job and the existing `bulk` credit/storage governor. The physical collection hook re-reads the effective policy and reserves both job and category allowances, including scheduled jobs. A lost wakeup is swept. Typed exports own a separate executor and cannot be claimed by the read runner. A captured or completed step is read locally before considering new egress; capture exceptions and HTTP failures park work instead of losing the cursor. Byte capacity bounds response reads; a body exceeding capacity is recorded as uncertain billed work and needs operator recovery. Captured bytes are never discarded to pretend a limit held.
+
+Raw `ofapi.collection_read_response.v1` observations are canonicalized by a registered projection-only family. `ofapi.read_snapshot_observed` records normalized fields, source, window, granularity, freshness and coverage. The registered `ofapi_read_snapshots` projector can rebuild from domain events; its owner-invoked reset deletes only its own reconstructible rows and watermark. It never clears policies, schedules, jobs or capture evidence. The synchronous materializer is idempotent with the same dedup key used by the replay sweep. `/me` raw bytes remain withheld by the Agent observation allowlist; only explicitly safe identity/counter fields enter serving data.
+
+`GET /admin/ofapi/collection/results` is an owner-only, database-only SDK report. Expired fan rows combine captured contactability with locally stored prior spend and last fan reply, without sending anything or overwriting local notes. The separate OnlyFans `ofapi_financial_snapshots` Agent dataset requires `read:datasets` and `read:money`, retains the normal page-grant boundary and exposes source/metric/window/unit/coverage fields. Unknown numeric semantics remain `provider_number`; they are never converted into a money claim. Existing Fansly datasets remain platform-restricted as before.
+
+All new categories ship off. Scheduled jobs are created only from explicitly scheduled non-baseline policies. Owner rollout, exact supported paths, examples and vendor discrepancies are in `docs/runbooks/ofapi-read-collections.md`. No production enabling or paid probes are part of this change.
+
+
+## 270. OFAPI marketing reads and controls preserve attribution, scope and secrets
+
+Date: 2026-09-06. S9 ships default-off Smart Link and tracking/trial collection with a closed catalog of exact paths, query codecs and documented cost estimates. Global Smart Link captures freeze account scope; inventory verifies provider ownership, detail reads require retained evidence, and page rebinding cannot authorize a previous account's links. Documented free GETs bypass only balance freshness/floor admission; actual receipt credits and every other governor remain authoritative.
+
+Marketing business facts use the registered capture-to-canonical snapshot family and normal watermark projector, including synchronous collection and rebuild. Stored cost and tags, money units/basis, timestamps, windows, coverage and bot/duplicate flags survive normalization. Cohort numeric paths remain provider metrics where the public success schema is absent. Link attribution revenue never adds to Hub money, and provider campaign cost never becomes agency expense.
+
+Eleven closed owner commands cover Smart Link creation/deletion/tags and required Pixel/Postback controls. Prepared intent bodies and exact sensitive responses are encrypted with existing versioned keys; public/audit previews name fields and destinations without secret values. A credential/binding-bound intent is claimed once immediately before one physical dispatch. Uncertain or interrupted outcomes are never automatically retried. Shared pixel PATCH reports known affected links and incomplete team visibility; DELETE removes one relation. Explicit account restrictions fail closed for unknown team edits. External pixel tests require their own acknowledgement and provenance.
+
+Postback administration remains separate from business projections. Omitting a token/body/header on PATCH preserves provider state; rotation uses explicit new secret input. Page-owned control rows join governed erasure. Public V2 dashboard-only features and conditional legacy tracking/trial write workflows are not invented. [Implementation, discrepancies, spend and owner rollout](runbooks/ofapi-smart-links.md).
+Administrative marketing responses also register `OFAPI_MARKETING_ADMIN_PROJECTION`: encrypted exact response bytes, frozen command/target/binding and safe baseline produce resumable configuration receipts and exact deletion tombstones. Confirmed HTTP outcomes and validated remote IDs settle before accounting/projection, so local failures remain repairable without turning success into uncertainty or resending a write. Team-wide postbacks remain administrative state rather than fabricated page business events. Explicit EOF and matching credential scope are required before inventory absence removes a postback. Owner local rebuild and bounded dashboard repair issue no vendor calls; page-owned receipts participate in erasure and source-time fencing.
+S10 completion (2026-09-06): four explicit user-list selectors retain metadata previews, complete/partial member pages, and pinned-member pages in the same raw/canonical/projection path. Named system list IDs are validated separately from numeric fan IDs. These selectors are absent from the default schedule, keep existing desktop gateway admission, and never mutate lists or infer removal from absent partial rows. The collection screen now reads the local snapshot report with source/window/coverage and membership CRM context.
+
+## 267. Typed OFAPI export profiles and daily visitors
+
+Date: 2026-09-06. Extends decision #263, implementing S8 core of
+`docs/plans/2026-09-05-ofapi-coverage-refresh.md`.
+
+Owner-created single-page exports use explicit columns for profile visitors,
+fans, tracking links, trial links and smart links. Creating a vendor quote always
+sets `auto_start=false`. A separate CAS approval authorizes a single start under
+the frozen task call, credit, byte and row ceilings. Unknown pricing is accepted
+only for visitors, whose closed UTC day range bounds account-day rows; the other
+profiles require a captured quote. The existing chat pilot approval remains
+unchanged. The dedicated minute sweep leases exact typed job IDs and does not
+need or enable the legacy background capture flag. Free quote/status reads count
+against the task request cap; pauses prevent new physical requests while retained
+responses remain parseable. Terminal billing replaces estimated start billing
+idempotently, including an actual vendor overrun.
+
+Vendor artifact downloads permit only HTTPS documented S3 endpoints and the
+frozen team/export CSV path, pin public DNS answers, refuse redirects and bound
+streamed bytes while hashing. Reviewed owner CSV upload remains a fallback.
+Immutable bytes precede parsing. Account, columns, row identity, delivered count,
+window and checksum contracts must pass before projections or successful import.
+Rejected artifacts remain available as evidence. Accepted rows append projection-only
+domain events and populate the serving tables atomically; the registered
+`ofapi_typed_exports` projection rebuilds them without resetting job authority. Page erasure explicitly covers
+all new projections/artifacts and policy jobs/requests/settings.
+
+Visitors are daily account aggregates. CSV averages and REST chart duration
+remain distinct vendor fields with unspecified units. Null measurements and
+missing dates never become zeros; subscriber/user/guest categories are not
+assumed disjoint. REST materialization certifies only one-day requests and keeps
+total/users/guests sources separately. Other exports certify item presence, not
+continuous fan history or Hub financial totals. API GETs read saved state only;
+owner mutation and assigned-page team-lead reads are enforced server-side.
+
+The vendor list/cancel/retry action extension is the follow-up S8b commit: retry
+creates another auto-started export and requires fresh bounded owner authority.
+No production configuration or vendor spending is authorized by this decision.
+
+**S8b control amendment (2026-09-06):** Provider inventory is an explicit, bounded
+owner-only free refresh over captured shared-credential metadata. Provider
+cancellation uses a separate durable one-attempt DELETE; rejected or uncertain
+acknowledgments reconcile the original export with bounded GET, never a repeated
+DELETE. Provider retry is an explicit newly approved paid auto-start, with frozen
+row/byte/credit caps, source and policy CAS, and verified old/new export identity.
+An uncertain retry stays fenced. Neither cancellation nor retry rewrites prior
+charges. The documented list status-filter enum omits the cancellation endpoint's
+`cancelled` result; captured vendor state is retained. No new migration or flag.
+
+## 269. Owned OFAPI media upload, readiness and catalog provenance
+
+Date: 2026-09-06. Implements S7 of the September OFAPI coverage plan.
+
+An owner first captures exact file bytes with SHA-256, detected type, size and
+page/account custody, then approves a separate frozen upload. The durable worker
+sends one multipart file with async=true in the body. Known HTTP 202 work resumes
+through free bounded polling or captured signed callbacks. Documented HTTP 200
+inline vault/CDN responses also settle the original request without an invented
+polling identity. Unknown stateful outcomes never trigger automatic POST retry.
+A CAS resume restores only safe admission-paused capture/collection jobs under
+the original allowance; a full reserved upload credit ceiling does not prevent
+subsequent documented free status reads.
+
+Completion, readiness and send material are distinct. Vault handoff verifies a
+current native numeric ID with ready/no-error metadata. A completed CDN prefix
+with no error and no explicit false readiness is usable once; absent readiness
+remains unknown. Only an explicit owner handoff returns that capability. General
+catalogs, events and audit records contain its hash, while the existing S6 send
+custody prevents reuse and quarantines uncertain sends.
+
+The media canonical writer verifies the retained captured envelope before its
+atomic event/checkpoint/projection transaction. Source kinds and vault identity
+feed the existing media plane. Observation ordering prevents a stale replay from
+regressing newer metadata; missing release-form fields preserve observed refs.
+The registered projector rebuilds only the catalog. Shared erasure locks and
+material-time tombstones apply to both canonical and projection writes. All
+new tables participate in governed page erasure. Vault catalog traversal records
+full, filtered and interrupted coverage; new catalog/file categories remain off.
+
+[Owner steps, spend, validation and live contract discrepancies](runbooks/ofapi-media.md).
+
+## 271. OFAPI queue progress and post-like evidence are local projection material
+
+`posts.liked` keeps notification/post/actor namespaces separate: nested actor only,
+explicit trusted post-link attribution, no fabricated link or unlike semantics.
+`chat_queue.updated/finished` retain vendor flags under their own queue ID. A
+finished queue can also be cancelled; no queue event confirms a recipient send.
+Raw captures canonicalize into projection-only events and atomic checkpoints.
+The engagement projector owns post_likes; ofapi_content_events owns queue heads.
+Both have registered rebuilds and material-time erasure fences, including old
+facts recollected after erasure. The owner Collection report reads retained rows,
+shows source/freshness/observed-only coverage, and initiates no provider work.
+Optional engagement remains off until the owner applies that webhook group.
+
+[Shapes, discrepancies, validation and owner steps](runbooks/ofapi-content-events.md).
+### 262 implementation addendum — free available-event catalog
+
+2026-09-06: S3's explicit `/webhooks/events` read now has an owner-triggered free refresh and DB-only diagnostic consumer. The vendor response is retained before validation as a control-plane observation; malformed inventory stays visible as invalid. Exact returned events are compared against requested registration and known handlers without enabling new subscriptions. The live example's 13 events does not replace the separate 32-event vendor catalog. No production policy was changed.
+
+### Decision #269 follow-up: shared raw-media erasure serialization
+
+The shared native raw-media primitive now takes the governed page erasure
+writer lock before checking the material-time tombstone and writing its row.
+This closes the race where an event loaded before erasure was applied afterward.
+Contention throws a deferred projection error so the caller leaves its watermark
+unchanged. An executed tombstone rejects old material; newly observed material
+remains admissible. The behavior applies to both Fansly and OnlyFans media.
+
+Collection controls route owned-media actions to `/ofapi-media`; generic HTTP collection jobs reject `vault_files` before creating any durable job. The core messages/payments/audience categories retain their existing configurable collectors but advertise no generic one-off executor. Uploads still create their bounded task through the specialized owner approval flow.
+
+### Decision #267 follow-up: resume retained export authority
+
+An owner resumes admission-paused typed exports through their own dashboard/SDK
+action. The policy and capture versions are checked together; both collection
+and capture rows resume under their original cursor, account and caps. The next
+planned request must fit the retained allowance. A documented free status read
+is admissible when the preceding paid start already reserved the entire credit
+cap. Unresolved reserved/dispatching/indeterminate requests and terminal export
+states cannot be revived by this action. Resuming a started export does not
+repeat its POST or create a new export; paid retry remains a separate approval.
+
+### Decision #266 follow-up: bounded schedule exhaustion and final admission
+
+2026-09-06: A scheduled read refused by its job, daily or interval collection
+allowance terminates as `failed` with `scheduled_run_exhausted:<limit>`. Its
+checkpoint, captured responses, spend and partial coverage are retained; it is
+never marked complete merely because its budget ended. The next configured
+interval may create a new bounded window under the current policy. It does not
+silently resume the old cursor, reset that job's caps or catch up old windows.
+Owner and policy pauses remain paused, including bounded one-off jobs.
+
+The final governed dispatch callback may reject changing binding or permission
+authority by throwing. Both a thrown rejection and a false fence release unused
+collection admission and return `pre_dispatch`; neither sends HTTP nor creates
+a physical credit receipt. A cleanup failure retains pre-dispatch certainty so
+capture recovery can release its separate reservation without fabricating an
+indeterminate vendor request. No migration, collector enabling or vendor spend.
+
+
+## Decision 272: Typed OFAPI owner actions (2026-09-06)
+
+The owner expanded scope to publishing/campaigns, list writes/moderation, bank
+reads and payout commands, account settings, and provider-native Saved-for-later
+controls. Subscribing to users remains explicitly excluded. Existing chat and
+marketing flows remain stable while new non-chat actions share one closed
+request adapter and durable owner execution boundary. This is an explicit
+action API, never a caller-selected HTTP proxy.
+
+Prepare freezes the typed command, principal, account binding generation and
+credential fingerprint. Execute takes nonblocking owner/binding locks, reserves
+its maximum documented credit estimate, and performs one physical request. Raw
+response bytes are encrypted before parsing. Indeterminate actions cannot be
+redispatched; administrative result and accounting repair consumes the receipt.
+HTTP acceptance is not campaign delivery, a completed withdrawal or a complete
+read inventory. Accounting mode and reservation settlement are durable to avoid
+double debit after flag changes. Native notes remain separate from local notes,
+and subject indexes plus erasure fences retain the existing erasure semantics.
+
+The owner console renders typed fields and frozen review values. Owner-session
+routes enforce access on every read and mutation. Deploying these controls does
+not enable a collector, publish content or enable native automation.
+
+Owner action erasure removes payloads and associations while retaining only an
+anonymous admitted UUID in `ofapi_action_identities`. Reusing an erased ID is
+refused before a new intent can be dispatched. This extends Decision 272’s
+one-attempt law across erasure without retaining fan or account material.
+
+CDN media consumption follows the same erasure rule. Migration 0168 retains
+only a SHA-256 digest of account plus token and the original opaque operation
+UUID after personal custody links are erased. Chat v1/v2 and owner actions
+claim this shared fence transactionally; handoff checks it without consuming
+the token. A new operation cannot reuse erased or indeterminate CDN material.
+Existing v2 provider recovery keeps its exact-identity and 24-hour restrictions;
+legacy media sends gain no replay permission. Vault IDs remain reusable.
+
+**Decision #273 (2026-09-07, prompt audit fixes):** a `/claude-api prompt-audit`
 pass over everything that reaches a model. Applied, in one change:
 
 - **Gateway tuning is model-generic.** `ai-gateway-anthropic.ts` used to allowlist
@@ -10866,7 +11411,7 @@ Harness and raw results live only in the session scratchpad (synthetic
 transcripts; the exemplar pull used the read-only Agent Read Plane).
 
 
-**Decision #252 owner follow-up (2026-09-07, analysis feature defaults):**
+**Decision #273 owner follow-up (2026-09-07, analysis feature defaults):**
 During ChatGoose 2.0 release preparation, the owner explicitly requested that
 Help, Review and Coach move to Sonnet 5 low now, without an additional model
 comparison. This supersedes the fourth commit's decision to retain Sonnet 4.6
@@ -10880,3 +11425,10 @@ including short Recap's existing adaptive-thinking override. Explicit request
 manifest pin and existing service/policy expectations are updated with the
 change. This is an owner-directed default change, with no new quality claim or
 paid comparison run; deployment status is separate from this source change.
+
+Integration provenance: this prompt-audit decision used number 252 in its
+original branch. On integration with main it is renumbered to 273 because
+main's Decision 252 already governs OFAPI binding custody. Both decision
+histories are retained; older prompt-branch commit messages keep their
+historical number. The existing OFAPI decision and current main runtime
+changes are preserved in full.

@@ -1,3 +1,5 @@
+import { ofapiCollectionRefusalDisposition } from "@agency_hub_core/shared";
+
 export class AppError extends Error {
   constructor(
     message: string,
@@ -109,5 +111,32 @@ export class QuotaDeniedError extends AppError {
 export class ProductGateError extends AppError {
   constructor(message: string, code: `gate_${string}`) {
     super(message, 400, code);
+  }
+}
+
+// Review #136: a collection-policy refusal (packages/db OfapiCollectionPolicyError)
+// is a local decision, never a vendor or transport failure, so it must reach a
+// client as a typed, non-retryable answer instead of 500 `internal_error`.
+// One code, the machine `reason` alongside it; the status says how it clears:
+// 429 when only time clears it (daily budget, interval window — the shape of
+// `quota_denied`/`rate_limit_exceeded` in the registry, with `retryAfterMs`
+// advice), 409 when only an owner's policy change clears it (paused, off,
+// on-demand only, details disabled — the shape of `proxy_missing`).
+export class OfapiCollectionRefusedError extends AppError {
+  readonly retryAfterMs: number | null;
+
+  constructor(readonly reason: string, options?: { retryAt?: Date | null; now?: Date }) {
+    const cap = ofapiCollectionRefusalDisposition(reason) === "cap";
+    super(
+      cap
+        ? "OFAPI collection budget for this category is exhausted; retry after it resets"
+        : "OFAPI collection policy refuses this read; change the collection policy to allow it",
+      cap ? 429 : 409,
+      "ofapi_collection_refused",
+    );
+    const retryAt = options?.retryAt ?? null;
+    this.retryAfterMs = retryAt === null
+      ? null
+      : Math.max(0, retryAt.getTime() - (options?.now ?? new Date()).getTime());
   }
 }

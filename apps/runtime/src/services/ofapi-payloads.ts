@@ -22,6 +22,44 @@ export function asRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
+/** A receipt field is PRESENT when it is truthy or a non-empty array. `null`,
+ *  `false`, `""`, `0` and `[]` are the spellings the vendor uses for "no error"
+ *  (e.g. `DAC7.error: null` inside the banking read) and never reject a receipt. */
+const receiptFieldPresent = (value: unknown): boolean => Array.isArray(value) ? value.length > 0 : Boolean(value);
+
+/**
+ * The ONE rule for "did the vendor answer no?" on an OFAPI action receipt. Every
+ * action module and the core classifier apply it to the response envelope and to
+ * its `data` object alike, so a `200 {data:{success:true,hasError:true}}` is
+ * rejected for a list deletion exactly as it is for a post deletion.
+ *
+ * A record is negative when ANY of these holds (shapes verified against the
+ * vendored snapshot, reference/onlyfansapi/openapi.yaml):
+ *   - `error` present — a string on the envelope of every documented 4xx/5xx
+ *     (`ONLYFANS_COM_ERROR`, `VALIDATION_ERROR`, `IDEMPOTENCY_CONFLICT`, the
+ *     unauthorized message), an object under `onlyfans_response.body.error`,
+ *     a string inside an upload status (`error: 'Failed to download file…'`);
+ *   - `errors` present — the 422 validation shape is a Laravel-style OBJECT keyed
+ *     by field (`errors: { text: ['The text field is required.'] }`), not an
+ *     array, so any non-empty value counts;
+ *   - `hasError === true` — the boolean the vendor puts on media, queue and
+ *     mass-messaging items;
+ *   - `success === false` — the documented "no" of every acknowledgement receipt.
+ *     Exactly one READ uses it as its ordinary domain answer (username
+ *     availability: `data.success === false` means "free"); that caller passes
+ *     `allowFalseSuccess` for the data record only — never for the envelope.
+ * A non-record (`null`, an array, a string) is not negative: whether the SHAPE
+ * is acceptable is the caller's question, this helper only reads a "no".
+ */
+export function negativeReceipt(value: unknown, options: { allowFalseSuccess?: boolean } = {}): boolean {
+  const record = asRecord(value);
+  if (!record) return false;
+  return receiptFieldPresent(record.error)
+    || receiptFieldPresent(record.errors)
+    || record.hasError === true
+    || (options.allowFalseSuccess !== true && record.success === false);
+}
+
 // OnlyFans ids arrive as numbers in message payloads and as strings in
 // notification payloads; SyncEvent serializes them all as strings.
 export function idToString(value: unknown): string | null {

@@ -8,7 +8,7 @@
 // short-circuit, and conversation heads only advance forward.
 
 import {
-  findPageByOfapiAccountId,
+  findActiveOfapiPageForLiveConsumer,
   deletePageDmMessageByPlatformMessageId,
   getExistingPageDmMessageIds,
   isDmArchiveScopeFenced,
@@ -446,7 +446,7 @@ export async function projectOfapiDmEvent(
   }
 
   const page = row.ofapiAccountId
-    ? await findPageByOfapiAccountId(app.db, row.ofapiAccountId)
+    ? await findActiveOfapiPageForLiveConsumer(app.db, row.ofapiAccountId)
     : null;
   if (!page) {
     return {

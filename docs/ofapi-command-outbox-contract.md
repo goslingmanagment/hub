@@ -20,6 +20,42 @@ The v1 boundary remains deliberately narrow:
   Uploading, liking, reply-to sends, and arbitrary vendor write paths remain outside this command
   version.
 
+## Binding and credential dispatch guard (Decision #252)
+
+Migration `0150` records the page binding generation on each outbox row. Before
+any physical vendor attempt, dispatch requires that row's account and generation
+to match the page's current binding and requires verified expected-team adoption
+of the runtime key. A page advisory lock serializes dispatch with replacement
+and lifecycle changes. Outbox state itself commits outside that lock transaction
+so concurrent webhook confirmation can observe and settle the in-flight row.
+Replacing a binding never makes an older queued or indeterminate row sendable.
+This is an internal guard; existing client payloads and retry rules are unchanged.
+
+Guard refusals settle the claimed command as `failed_terminal` with
+`verifierResult.source = "local_precondition"`; they carry a `reason` and optional
+diagnostic `detail`, never a command-response `httpStatus`. The reasons are
+`credential_not_verified`, `binding_replaced`, `account_unavailable` and
+`auth_action_required`. Error codes are `ofapi_<reason>`, except that
+`account_unavailable` retains `ofapi_account_not_found`. A provider denial of
+the separate `whoami` request remains credential evidence, not a response to a
+command that was never sent. Actual command HTTP responses retain
+`source = "ofapi_response"` and their status; the existing account-health gate
+retains `source = "auth_gate"`. Command-result observations preserve the same
+local/remote distinction. Claiming still increments `attemptCount` once, and
+no local refusal schedules an automatic resend.
+
+Credit-accounting readiness is proven BEFORE the claim (a pending
+credit-receipt backlog deeper than one bounded drain, or a receipt whose
+settlement keeps failing, is a process-wide condition, not a verdict on the
+command), so an unready ledger leaves the row `queued` for the next sweep
+instead of spending its single attempt.
+A key-scope declaration lookup that cannot complete after the claim (a
+database blip before any HTTP) is the one local refusal that
+settles `failed_retryable` rather than `failed_terminal`: reason
+`key_scope_unavailable`, code `ofapi_key_scope_unavailable`, still
+`source = "local_precondition"` and never `indeterminate` — nothing left the
+process, so a human retry (a new row with lineage) is safe.
+
 ## Version 1 Commands
 
 Text send:
@@ -113,6 +149,12 @@ later read workflow action is a fresh command.
 - New canonical request: `202`, `deduplicated=false`, state `queued`.
 - Exact duplicate: `200`, `deduplicated=true`, returns the existing command.
 - Reused client id with any canonical-field mismatch: `409`.
+- `send_message_v2` with `reuseProviderOperation` whose original provider operation can no
+  longer be replayed (missing; team, account, endpoint or body changed; outside its 24-hour
+  window; or the runtime credential cannot be verified right now): `409` with
+  `error = "provider_operation_reuse_unavailable"` and NO command row. The client keeps the
+  original in its unconfirmed recovery state rather than showing a failed retry. An exact replay
+  of an already-accepted recovery still dedupes to `200`. Dispatch re-checks the same rule.
 - Intake disabled: `503`.
 
 ### Read
@@ -341,6 +383,14 @@ page-attributed. Other commands use normal OFAPI response credit observation.
 
 The stored error surface is a bounded code/class/status only. Raw vendor bodies and payload text
 are not persisted in command outcome metadata.
+
+One-use `ofapi_media_*` custody (migration `0160`, fence `0168`) follows the same verdicts
+(migration `0170`): it is RELEASED — marked `released_at`/`released_reason`, never deleted —
+only when the material was definitely not spent: a local pre-dispatch refusal (no HTTP), a
+definite `4xx` rejection other than `408`/`429`, or a queued row cancelled/expired before
+dispatch. Indeterminate, `5xx`, `429` and confirmed outcomes keep the reservation, and a reuse
+child never releases the reservation it inherited from its parent. A released token is free for
+a new command, an owner action or a handoff; the next claim re-arms the same row and fence.
 
 ### Webhook Verification
 

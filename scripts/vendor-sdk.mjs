@@ -89,12 +89,12 @@ mkdirSync(join(staging, "src/shared"), { recursive: true });
 // is dependency-free (or types-only on each other). ai-stop-reason carries the
 // coach-chat isOutputExhausted predicate (spec §8) the contracts barrel
 // re-exports so out-of-workspace consumers (the extension) can apply it.
-for (const file of ["types.ts", "time.ts", "spender-retention.ts", "ai-stop-reason.ts"]) {
+for (const file of ["types.ts", "time.ts", "spender-retention.ts", "ai-stop-reason.ts", "ofapi-vendor-usage.ts", "ofapi-collection-registry.ts", "ofapi-extended-commands.ts", "ofapi-read-catalog.ts", "ofapi-export-profiles.ts"]) {
   stageFile(`packages/shared/src/${file}`, join(staging, `src/shared/${file}`), []);
 }
 writeFileSync(
   join(staging, "src/shared/index.ts"),
-  'export * from "./types";\nexport * from "./time";\nexport * from "./spender-retention";\nexport * from "./ai-stop-reason";\n',
+  'export * from "./types";\nexport * from "./time";\nexport * from "./spender-retention";\nexport * from "./ai-stop-reason";\nexport * from "./ofapi-vendor-usage";\nexport * from "./ofapi-collection-registry";\nexport * from "./ofapi-extended-commands";\nexport * from "./ofapi-read-catalog";\nexport * from "./ofapi-export-profiles";\n',
 );
 
 const toShared = [["@agency_hub_core/shared", "../shared/index"]];
@@ -109,6 +109,21 @@ for (const file of [
   // Owner administration of the plane's keys (slice B). routes.ts spreads these
   // into routeSchemas too, so the same rule applies: no file, no compile.
   "routes-agent-keys.ts",
+  "routes-ofapi-vendor.ts",
+  "ofapi-vendor-usage.ts",
+  "routes-ofapi-collection.ts",
+  "routes-ofapi-marketing.ts",
+  "ofapi-smart-links.ts",
+  "ofapi-extended-commands.ts",
+  "routes-ofapi-banned-words.ts",
+  "routes-ofapi-read-collections.ts",
+  "routes-ofapi-exports.ts",
+    "routes-ofapi-media.ts",
+  "ofapi-actions.ts",
+  "ofapi-actions-collections.ts",
+  "ofapi-actions-publishing.ts",
+  "ofapi-actions-account.ts",
+  "routes-ofapi-actions.ts",
   "sdk-runtime.ts",
   "domain-event-cursor.ts",
   "authorization-policy.ts",

@@ -1,10 +1,16 @@
+import { OFAPI_EXTENDED_COMMAND_KINDS, millsFromCents, type OfapiExtendedCommandKind, type OfapiExtendedCommandPayload, type OfapiSendV2Payload } from "@agency_hub_core/shared";
+import { reserveOfapiProviderOperation, reserveOfapiLegacyMediaTokens, releaseOfapiMediaTokenCustody, OfapiProviderOperationRefused } from "@agency_hub_core/db";
+import { buildOfapiSendV2Body, ofapiSentWebhookMatchesV2 } from "./ofapi-command-composer.ts";
 import { createHash } from "node:crypto";
+import { OfapiKeyPermissionDeniedError, OfapiKeyScopeUnavailableError } from "./ofapi-vendor-usage.ts";
 
 import {
   claimQueuedOfapiCommand,
   expireStaleQueuedOfapiCommands,
   finalizeOfapiCommand,
   findPageById,
+  withOfapiBindingLock,
+  markOfapiBindingUnavailable,
   getOfapiCommandById,
   insertObservation,
   listOfapiCommandVerificationCandidates,
@@ -18,12 +24,13 @@ import { millsFromDollars, normalizeDmMessageText } from "@agency_hub_core/share
 import type { PgBoss } from "pg-boss";
 
 import type { AppContext } from "../bootstrap.ts";
+import { notifyOfapiAuthIncident } from "./notification-incidents.ts";
 import { loadEffectiveConfig } from "./effective-config.ts";
 import {
   isOfapiDmColdArchiveEnabled,
   resolveOfapiDmColdArchiveRetentionDays,
 } from "./ofapi-dm-archive.ts";
-import { OfapiApiError } from "./ofapi.ts";
+import { OfapiApiError, OfapiCreditAccountingUnavailableError, OfapiCredentialNotReadyError, ofapiAccountNotFound } from "./ofapi.ts";
 import {
   isOfapiAccountHealthEnabled,
   ofapiAuthStatusNeedsAction,
@@ -64,7 +71,48 @@ export type OfapiCommandFailure = {
   httpStatus: number | null;
 };
 
+/** The command was claimed, but its local guard refused any vendor dispatch. */
+export class OfapiLocalDispatchRefusal extends Error {
+  constructor(
+    readonly reason: "account_unavailable" | "binding_replaced" | "auth_action_required" | "credential_not_verified" | "credit_accounting_unavailable" | "key_scope_denied" | "key_scope_unavailable" | "provider_replay_unavailable" | "media_token_already_used",
+    readonly detail: string | null = null,
+  ) {
+    super(`OFAPI command refused before dispatch: ${reason}`);
+    this.name = "OfapiLocalDispatchRefusal";
+  }
+}
+
+/** Typed pre-dispatch refusals raised inside the vendor client, mapped to the
+ * executor's local verdict. Every one of them is thrown BEFORE any HTTP request,
+ * so none may ever read as an indeterminate vendor outcome. Null = not local. */
+export function localDispatchRefusalFrom(error: unknown): OfapiLocalDispatchRefusal | null {
+  if (error instanceof OfapiLocalDispatchRefusal) return error;
+  if (error instanceof OfapiProviderOperationRefused) return new OfapiLocalDispatchRefusal(error.reason === "replay_unavailable" ? "provider_replay_unavailable" : error.reason);
+  if (error instanceof OfapiCredentialNotReadyError) return new OfapiLocalDispatchRefusal("credential_not_verified", error.reason ?? error.preflightStatus);
+  if (error instanceof OfapiCreditAccountingUnavailableError) return new OfapiLocalDispatchRefusal("credit_accounting_unavailable");
+  if (error instanceof OfapiKeyPermissionDeniedError) return new OfapiLocalDispatchRefusal("key_scope_denied");
+  // A key-scope lookup the kernel could not complete (DB blip) is not a policy
+  // verdict and not a vendor outcome: the command never left the process.
+  if (error instanceof OfapiKeyScopeUnavailableError) return new OfapiLocalDispatchRefusal("key_scope_unavailable", "key_declaration_lookup_failed");
+  return null;
+}
+
 export function classifyOfapiCommandFailure(error: unknown): OfapiCommandFailure {
+  if (error instanceof OfapiLocalDispatchRefusal) {
+    // Nothing was sent and no policy refused it: a human retry is safe, so the
+    // row settles retryable rather than terminal (the state machine never
+    // requeues a claimed row — retry is always a new row with lineage).
+    if (error.reason === "key_scope_unavailable") return {
+      state: "failed_retryable", errorClass: "retryable", httpStatus: null, errorCode: "ofapi_key_scope_unavailable",
+    };
+    return {
+      state: "failed_terminal", errorClass: "terminal", httpStatus: null,
+      errorCode: error.reason === "account_unavailable" ? "ofapi_account_not_found" : `ofapi_${error.reason}`,
+    };
+  }
+  if (error instanceof OfapiApiError && ofapiAccountNotFound(error.status, error.body)) return {
+    state: "failed_terminal" as const, errorCode: "ofapi_account_not_found", errorClass: "terminal" as const, httpStatus: error.status,
+  };
   const status = error instanceof OfapiApiError
     ? error.upstreamStatus ?? error.status
     : null;
@@ -106,6 +154,50 @@ export function classifyOfapiCommandFailure(error: unknown): OfapiCommandFailure
     errorClass: "indeterminate",
     httpStatus: null,
   };
+}
+
+/** Only these kinds reserve one-use `ofapi_media_*` custody at dispatch. */
+const MEDIA_CUSTODY_COMMAND_KINDS: ReadonlySet<string> = new Set(["send_message_v2", "send_media_message_v1"]);
+
+/**
+ * Migration 0170: one-use media custody is released ONLY when the vendor
+ * DEFINITELY did not consume the material — a local refusal (no HTTP happened)
+ * or a definite pre-delivery 4xx other than 408/429 as classified above.
+ * Indeterminate, 5xx, 429 and confirmed outcomes keep the reservation; a
+ * reservation refusal has nothing to release (its transaction rolled back).
+ * Returns the release reason, or null to keep custody.
+ */
+export function ofapiMediaCustodyReleaseReason(
+  localRefusal: OfapiLocalDispatchRefusal | null,
+  failure: OfapiCommandFailure,
+): string | null {
+  if (localRefusal) {
+    return localRefusal.reason === "provider_replay_unavailable" || localRefusal.reason === "media_token_already_used"
+      ? null
+      : `local_refusal_${localRefusal.reason}`;
+  }
+  if (failure.state !== "failed_terminal" || failure.httpStatus === null) return null;
+  if (failure.httpStatus < 400 || failure.httpStatus >= 500 || failure.httpStatus === 408 || failure.httpStatus === 429) return null;
+  return `vendor_rejected_${failure.httpStatus}`;
+}
+
+/** Best-effort after the terminal outcome is committed: a release hiccup keeps
+ * custody held (fail closed) and must never unsettle a settled command. */
+async function releaseCommandMediaCustody(
+  app: Pick<AppContext, "db" | "logger">,
+  command: Pick<OfapiCommandRow, "id" | "kind">,
+  reason: string,
+  now: Date,
+): Promise<number> {
+  if (!MEDIA_CUSTODY_COMMAND_KINDS.has(command.kind)) return 0;
+  try {
+    const released = await releaseOfapiMediaTokenCustody(app.db, { commandId: command.id, reason, now });
+    if (released > 0) app.logger.info({ commandId: command.id, reason, released }, "OFAPI one-use media custody released: material was definitely not spent");
+    return released;
+  } catch (error) {
+    app.logger.error({ err: error, commandId: command.id, reason }, "OFAPI media custody release failed — reservation stays held");
+    return 0;
+  }
 }
 
 export function isOfapiCommandExecutionEnabled(
@@ -222,13 +314,13 @@ async function recordConfirmedSendFact(
   if (!isOfapiDmColdArchiveEnabled(app.config)) {
     return;
   }
-  if (command.kind !== "send_text_message_v1" && command.kind !== "send_media_message_v1") {
+  if (command.kind !== "send_text_message_v1" && command.kind !== "send_media_message_v1" && command.kind !== "send_message_v2") {
     return;
   }
   try {
-    const payload = command.payload as { text?: unknown; price?: unknown };
+    const payload = command.payload as { text?: unknown; price?: unknown; priceCents?: number };
     const text = typeof payload.text === "string" ? normalizeDmMessageText(payload.text) : "";
-    const priceMills = command.kind === "send_media_message_v1"
+    const priceMills = command.kind === "send_message_v2" && payload.priceCents ? millsFromCents(payload.priceCents) : command.kind === "send_media_message_v1"
       && typeof payload.price === "number" && payload.price > 0
       ? millsFromDollars(payload.price)
       : null;
@@ -275,6 +367,7 @@ function canExecuteCommandKind(
   app: AppContext,
   command: Pick<OfapiCommandRow, "kind">,
 ): boolean {
+  if ((OFAPI_EXTENDED_COMMAND_KINDS as readonly string[]).includes(command.kind)) return typeof app.ofapi?.executeExtendedCommand === "function";
   switch (command.kind) {
     case "send_text_message_v1":
       return typeof app.ofapi?.sendTextMessage === "function";
@@ -286,6 +379,7 @@ function canExecuteCommandKind(
       return typeof app.ofapi?.unsendMessage === "function";
     case "mark_chat_read_v1":
       return typeof app.ofapi?.markChatRead === "function";
+    default: return false;
   }
 }
 
@@ -360,10 +454,11 @@ function unsendPayload(command: OfapiCommandRow): { messageId: string } {
   return { messageId: payload.messageId };
 }
 
-export async function executeOfapiCommand(
+async function executeCurrentOfapiCommand(
   app: AppContext,
   commandId: string,
   now = new Date(),
+  bindingLockDb = app.db,
 ) {
   if (!isOfapiCommandExecutionEnabled(app.config)) {
     return { status: "execution_disabled" as const };
@@ -375,6 +470,19 @@ export async function executeOfapiCommand(
   if (!canExecuteCommandKind(app, queued)) {
     app.logger.warn({ commandId }, "OFAPI command execution unavailable; command remains queued");
     return { status: "client_unavailable" as const };
+  }
+
+  // Credit accounting readiness is a process-wide precondition, not a property
+  // of this command: prove it BEFORE the claim (the way the auth gate is
+  // checked) so an unready ledger — a receipt backlog deeper than one bounded
+  // drain, or one receipt whose settle keeps failing — leaves the row `queued`
+  // for the next sweep instead of spending its single attempt on a terminal
+  // local failure. The client's own admission check remains the belt.
+  try {
+    await app.ofapi?.assertCreditAccountingReady?.();
+  } catch (error) {
+    app.logger.warn({ err: error, commandId }, "OFAPI credit accounting not ready; command remains queued");
+    return { status: "accounting_unavailable" as const };
   }
 
   // W3.2 belt (decision #125): a row older than the queued TTL is
@@ -406,7 +514,7 @@ export async function executeOfapiCommand(
         fromStates: ["in_flight"],
         state: "failed_terminal",
         now: failedAt,
-        lastErrorCode: "ofapi_auth_action_required",
+        lastErrorCode: stored.page.ofapiAuthStatus === "account_not_found" ? "ofapi_account_not_found" : "ofapi_auth_action_required",
         lastErrorClass: "terminal",
         verifierResult: {
           source: "auth_gate",
@@ -423,7 +531,7 @@ export async function executeOfapiCommand(
         command,
         state: "failed_terminal",
         outcome: {
-          errorCode: "ofapi_auth_action_required",
+          errorCode: stored.page.ofapiAuthStatus === "account_not_found" ? "ofapi_account_not_found" : "ofapi_auth_action_required",
           errorClass: "terminal",
           authStatus: stored.page.ofapiAuthStatus,
         },
@@ -437,12 +545,42 @@ export async function executeOfapiCommand(
   }
 
   try {
+    const binding = await findPageById(app.db, command.pageId);
+    if (binding?.page.ofapiAuthStatus === "account_not_found") throw new OfapiLocalDispatchRefusal("account_unavailable");
+    if (!binding || binding.page.ofapiAccountId !== command.ofapiAccountId ||
+        binding.page.ofapiBindingGeneration !== command.bindingGeneration) {
+      throw new OfapiLocalDispatchRefusal("binding_replaced");
+    }
+    if (ofapiAuthStatusNeedsAction(binding.page.ofapiAuthStatus)) throw new OfapiLocalDispatchRefusal("auth_action_required");
+    await app.ofapi?.assertCredentialReady?.();
     let platformMessageId: string | null = null;
     const verifierResult: Record<string, unknown> = {
       source: "ofapi_response",
       commandKind: command.kind,
     };
-    if (command.kind === "send_text_message_v1") {
+    if ((OFAPI_EXTENDED_COMMAND_KINDS as readonly string[]).includes(command.kind)) {
+      let providerKey: string | undefined;
+      if (command.kind === "send_message_v2") {
+        const preflight = await app.ofapi?.getCredentialPreflight?.();
+        if (preflight?.status !== "verified" || !preflight.observedTeam) throw new OfapiLocalDispatchRefusal("credential_not_verified");
+        const payload = command.payload as OfapiSendV2Payload;
+        const body = buildOfapiSendV2Body(payload);
+        const operation = await reserveOfapiProviderOperation(app.db, {
+          commandId: command.id, parentCommandId: command.retryOfCommandId, reuse: payload.reuseProviderOperation,
+          teamSlug: preflight.observedTeam, accountId: command.ofapiAccountId,
+          endpoint: `/${command.ofapiAccountId}/chats/${command.conversationId}/messages`,
+          bodyHash: createHash("sha256").update(JSON.stringify(body)).digest("hex"),
+          tokens: payload.mediaFiles.filter(id => id.startsWith("ofapi_media_")), now,
+        });
+        providerKey = operation.providerKey;
+        verifierResult.providerOperationId = operation.operationId;
+        verifierResult.firstAttemptAt = operation.firstAttemptAt;
+      }
+      const result = await app.ofapi!.executeExtendedCommand!({ pageId: command.pageId }, command.ofapiAccountId, command.conversationId,
+        command.kind as OfapiExtendedCommandKind, command.payload as OfapiExtendedCommandPayload, providerKey);
+      platformMessageId = result.messageId ?? null;
+      if (result.creditAccounting) verifierResult.creditAccounting = result.creditAccounting;
+    } else if (command.kind === "send_text_message_v1") {
       const result = await app.ofapi!.sendTextMessage!(
         { pageId: command.pageId },
         command.ofapiAccountId,
@@ -450,35 +588,45 @@ export async function executeOfapiCommand(
         textPayload(command),
       );
       platformMessageId = result.messageId;
+      if (result.creditAccounting) verifierResult.creditAccounting = result.creditAccounting;
     } else if (command.kind === "send_media_message_v1") {
+      const payload = mediaPayload(command);
+      await reserveOfapiLegacyMediaTokens(app.db, {
+        commandId: command.id, accountId: command.ofapiAccountId,
+        tokens: payload.mediaFiles.filter(id => id.startsWith("ofapi_media_")),
+      });
       const result = await app.ofapi!.sendMediaMessage!(
         { pageId: command.pageId },
         command.ofapiAccountId,
         command.conversationId,
-        mediaPayload(command),
+        payload,
       );
       platformMessageId = result.messageId;
+      if (result.creditAccounting) verifierResult.creditAccounting = result.creditAccounting;
     } else if (command.kind === "typing_active_v1") {
-      await app.ofapi!.startTyping!(
+      const result = await app.ofapi!.startTyping!(
         { pageId: command.pageId },
         command.ofapiAccountId,
         command.conversationId,
       );
+      if (result.creditAccounting) verifierResult.creditAccounting = result.creditAccounting;
     } else if (command.kind === "unsend_message_v1") {
       const { messageId } = unsendPayload(command);
-      await app.ofapi!.unsendMessage!(
+      const result = await app.ofapi!.unsendMessage!(
         { pageId: command.pageId },
         command.ofapiAccountId,
         command.conversationId,
         messageId,
       );
+      if (result.creditAccounting) verifierResult.creditAccounting = result.creditAccounting;
       platformMessageId = messageId;
     } else {
-      await app.ofapi!.markChatRead!(
+      const result = await app.ofapi!.markChatRead!(
         { pageId: command.pageId },
         command.ofapiAccountId,
         command.conversationId,
       );
+      if (result.creditAccounting) verifierResult.creditAccounting = result.creditAccounting;
     }
     const confirmedAt = new Date();
     verifierResult.confirmedAt = confirmedAt.toISOString();
@@ -516,7 +664,18 @@ export async function executeOfapiCommand(
     );
     return { status: "confirmed" as const, commandId: command.id };
   } catch (error) {
-    const failure = classifyOfapiCommandFailure(error);
+    const localRefusal = localDispatchRefusalFrom(error);
+    if (error instanceof OfapiApiError && ofapiAccountNotFound(error.status, error.body)) {
+      const marked = await markOfapiBindingUnavailable(bindingLockDb, command.ofapiAccountId, command.bindingGeneration);
+      if (marked) await notifyOfapiAuthIncident({ ...app, db: bindingLockDb }, {
+        platformAccountId: marked.page.id, pageLabel: marked.page.label, platform: "onlyfans",
+        authStatus: "account_not_found", occurredAt: marked.markedAt,
+      });
+    }
+    const failure = classifyOfapiCommandFailure(localRefusal ?? error);
+    const failureEvidence = localRefusal
+      ? { source: "local_precondition", reason: localRefusal.reason, detail: localRefusal.detail }
+      : { source: "ofapi_response", httpStatus: failure.httpStatus, ...(error instanceof OfapiApiError && error.status === 422 && error.validationResponse ? { validationResponse: error.validationResponse } : {}) };
     const finishedAt = new Date();
     const finalized = await finalizeOfapiCommand(app.db, {
       commandId: command.id,
@@ -526,8 +685,7 @@ export async function executeOfapiCommand(
       lastErrorCode: failure.errorCode,
       lastErrorClass: failure.errorClass,
       verifierResult: {
-        source: "ofapi_response",
-        httpStatus: failure.httpStatus,
+        ...failureEvidence,
         observedAt: finishedAt.toISOString(),
       },
     });
@@ -547,13 +705,18 @@ export async function executeOfapiCommand(
         raced: true,
       };
     }
+    // We own the terminal outcome (the webhook did not confirm a landed send):
+    // free one-use material the vendor definitely never spent.
+    const releaseReason = ofapiMediaCustodyReleaseReason(localRefusal, failure);
+    const mediaTokensReleased = releaseReason === null ? 0 : await releaseCommandMediaCustody(app, command, releaseReason, finishedAt);
     await recordCommandResultObservation(app, {
       command,
       state: failure.state,
       outcome: {
         errorCode: failure.errorCode,
         errorClass: failure.errorClass,
-        httpStatus: failure.httpStatus ?? null,
+        ...failureEvidence,
+        ...(mediaTokensReleased > 0 ? { mediaTokensReleased } : {}),
       },
     });
     app.logger.warn(
@@ -562,7 +725,7 @@ export async function executeOfapiCommand(
         pageId: command.pageId,
         state: failure.state,
         errorCode: failure.errorCode,
-        httpStatus: failure.httpStatus,
+        ...failureEvidence,
       },
       "OFAPI command attempt reached a non-confirmed outcome",
     );
@@ -592,10 +755,14 @@ export async function sweepOfapiCommands(
   });
   const expired = [...expiredTyping, ...expiredGeneral];
   for (const command of expired) {
+    // A queued row never dispatched: any one-use custody it holds (reserved
+    // only at dispatch today; this keeps the rule true if that ever moves
+    // earlier) is definitely unspent.
+    const mediaTokensReleased = await releaseCommandMediaCustody(app, command, "expired_queued_ttl", now);
     await recordCommandResultObservation(app, {
       command,
       state: "cancelled",
-      outcome: { errorCode: "expired_queued_ttl", queuedTtlMs: ttlMs },
+      outcome: { errorCode: "expired_queued_ttl", queuedTtlMs: ttlMs, ...(mediaTokensReleased > 0 ? { mediaTokensReleased } : {}) },
     });
   }
   if (expired.length > 0) {
@@ -695,6 +862,7 @@ export async function verifyOfapiCommandFromSentWebhook(
     attemptStartedTo: new Date(row.receivedAt.getTime() + WEBHOOK_CLOCK_SKEW_MS),
   });
   const matches = candidates.filter((candidate) => {
+    if (candidate.kind === "send_message_v2") return ofapiSentWebhookMatchesV2(candidate.payload, payload ?? {});
     if (candidate.kind === "send_text_message_v1") {
       const candidatePayload = candidate.payload as { text?: unknown };
       return normalizeDmMessageText(
@@ -787,4 +955,11 @@ export async function startOfapiCommandWorker(
       );
     }
   });
+}
+
+export async function executeOfapiCommand(app: AppContext, commandId: string, now = new Date()) {
+  if (!isOfapiCommandExecutionEnabled(app.config)) return { status: "execution_disabled" as const };
+  const command = await getOfapiCommandById(app.db, { commandId });
+  if (!command) return { status: "not_claimed" as const };
+  return withOfapiBindingLock(app.db, command.pageId, db => executeCurrentOfapiCommand(app, commandId, now, db));
 }

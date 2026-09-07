@@ -213,18 +213,47 @@ describe("ofapi-webhook canonicalizer (Stage 8)", () => {
     });
   });
 
-  it("declares no canonicalizer for unmapped kinds", () => {
+  it("leaves typing transient and declares content queue events without accepting malformed bodies", () => {
     // users.typing: ephemeral, unmapped by design.
     expect(OFAPI_WEBHOOK_CANONICALIZED_KINDS.has("users.typing")).toBe(false);
     expect(canonicalizeOfapiWebhookObservation(observation("users_typing"))).toEqual([]);
     for (const kind of ["chat_queue.updated", "chat_queue.finished"]) {
-      expect(OFAPI_WEBHOOK_CANONICALIZED_KINDS.has(kind)).toBe(false);
+      expect(OFAPI_WEBHOOK_CANONICALIZED_KINDS.has(kind)).toBe(true);
       expect(canonicalizeOfapiWebhookObservation({
         ...observation("users_typing"),
         kind,
         payload: { event: kind, account_id: "acct_test", payload: {} },
       })).toEqual([]);
     }
+  });
+
+  it("uses expiry time and the existing ended vocabulary without inventing a missing period", () => {
+    const expired = observation("subscriptions_new", {
+      kind: "subscriptions.expired",
+      payload: { event: "subscriptions.expired", payload: {
+        id: "55:2026-06-01", user: { id: 55 }, expiredAt: "2026-06-01T00:00:00Z",
+        createdAt: "2026-06-02T00:00:00Z",
+      } },
+    });
+    expect(canonicalizeOfapiWebhookObservation(expired)[0]).toMatchObject({
+      type: "subscription.ended", occurredAt: new Date("2026-06-01T00:00:00Z"),
+      fanIdentityRef: "55", data: { periodIdentity: "55:2026-06-01" },
+    });
+    expect(canonicalizeOfapiWebhookObservation({ ...expired, payload: {
+      payload: { user: { id: 55 }, expiredAt: "not-a-date" },
+    } })).toEqual([]);
+  });
+
+  it("dates disconnected and authentication facts by provider time while preserving old auth dedup keys", () => {
+    const disconnected = observation("subscriptions_new", {
+      kind: "accounts.disconnected", payload: { payload: { disconnected_at: "2026-06-20T00:00:00Z" } },
+    });
+    const event = canonicalizeOfapiWebhookObservation(disconnected)[0]!;
+    expect(event).toMatchObject({ type: "account.auth_changed", occurredAt: new Date("2026-06-20T00:00:00Z") });
+    expect(event.dedupKey).toBe(`auth:disconnected:${RECEIVED_AT.toISOString()}`);
+    expect(canonicalizeOfapiWebhookObservation({ ...disconnected, kind: "accounts.reconnected", payload: {
+      payload: { latestAuthAttempt: { started_at: "2026-06-20T00:01:00Z", completed_at: "2026-06-20T00:02:00Z" } },
+    } })[0]?.occurredAt).toEqual(new Date("2026-06-20T00:02:00Z"));
   });
 
   it("yields zero events on malformed payloads instead of throwing", () => {

@@ -22,3 +22,10 @@ export * from "./spender-retention.ts";
 export * from "./time.ts";
 export * from "./unicode.ts";
 export * from "./types.ts";
+
+export type * from "./ofapi-vendor-usage.ts";
+export * from "./ofapi-collection-registry.ts";
+
+export * from "./ofapi-extended-commands.ts";
+export * from "./ofapi-read-catalog.ts";
+export * from "./ofapi-export-profiles.ts";

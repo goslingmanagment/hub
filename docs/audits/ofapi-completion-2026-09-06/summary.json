@@ -1,0 +1,47 @@
+{
+  "endToEndEvidenceComplete": true,
+  "missingEvidence": [],
+  "head": "41679950c9926bf4137d9002b54a52015fa42740",
+  "dirty": false,
+  "originalSha256": "c133e5cef5cea2d06502919e531ea06c2215dbea67704933710d96e8c5fcece4",
+  "operations": 294,
+  "catalogOperations": 81,
+  "migrations": [
+    "0150_ofapi_binding_history.sql",
+    "0151_ofapi_binding_conflict_incident.sql",
+    "0154_ofapi_credit_receipts.sql",
+    "0156_ofapi_vendor_usage_scope.sql",
+    "0157_ofapi_webhook_lifecycle.sql",
+    "0158_ofapi_webhook_recovery.sql",
+    "0159_ofapi_collection_policy.sql",
+    "0160_ofapi_command_composer.sql",
+    "0161_ofapi_read_collections.sql",
+    "0162_ofapi_collection_capture_kind.sql",
+    "0163_ofapi_typed_exports.sql",
+    "0164_ofapi_media_uploads.sql",
+    "0165_ofapi_smart_links.sql",
+    "0166_ofapi_content_events.sql"
+  ],
+  "byStatus": {
+    "implemented_scoped": 140,
+    "excluded_by_plan": 154
+  },
+  "supportedByMethod": {
+    "GET": 107,
+    "DELETE": 9,
+    "POST": 20,
+    "PUT": 2,
+    "PATCH": 2
+  },
+  "unresolved": [],
+  "unmatchedSignatures": [],
+  "methodology": "Finite method/path inventory plus exact gateway allowlist. Catalog paths are exercised by existing exhaustive catalog tests; evidence denotes code and test coverage, not live provider verification or complete parameter parity. Conditional feature selection and default-off rollout are documented separately. No vendor requests or app bootstrap.",
+  "events": {
+    "total": 32,
+    "canonical": 30,
+    "baselineSubscriptions": 19,
+    "optionalSubscriptions": 12,
+    "ephemeral": 1,
+    "excludedProviderAi": 1
+  }
+}

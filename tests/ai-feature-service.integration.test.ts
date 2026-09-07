@@ -432,7 +432,7 @@ describe("AI feature service pilot (Stage 30)", () => {
     // the user blocks.
     const body = capture.input!.body;
     expect(body.feature).toBe("fast-reply");
-    // Decision #252: reply features default to Sonnet 5 at low effort.
+    // Decision #273: reply features default to Sonnet 5 at low effort.
     expect(body.model).toBe("anthropic:claude-sonnet-5");
     expect(body.reasoningEffort).toBe("low");
     const lora = createBundledPersonalities()[0]!;

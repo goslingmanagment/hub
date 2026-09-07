@@ -1,13 +1,21 @@
+import type { OfapiExtendedCommandKind, OfapiExtendedCommandPayload } from "@agency_hub_core/shared";
+import { buildOfapiSendV2Body, ofapiExtendedAction } from "./ofapi-command-composer.ts";
+import { ofapiResponseEvidence } from "./ofapi-response-evidence.ts";
+import type { OfapiUsageWindow } from "@agency_hub_core/contracts";
+import type { OfapiCollectionContext } from "@agency_hub_core/shared";
+import type { OfapiCollectionDispatch } from "./ofapi-collection-policy.ts";
 // Client for the onlyfansapi.com API: webhook CRUD + account list (admin flow)
 // plus credit-budgeted, observed chat/message reads for the DM sync (Phase 2 of
 // docs/ofapi-integration-plan.md). Not to be confused with packages/onlyfans,
 // which is the OnlyMonster adapter.
 
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 
 import {
+  classifyTransportFailure,
   executeObservedRequest,
+  iterateErrorChain,
   type HttpRequestObserver,
 } from "@agency_hub_core/shared";
 import type { Dispatcher } from "undici";
@@ -19,6 +27,8 @@ import type { EgressPacer } from "./egress/pacer.ts";
 import { normalizeOnlyFansAvatarUrl } from "./onlyfans.ts";
 
 const OFAPI_REQUEST_TIMEOUT_MS = 15_000;
+// The free, bounded delivery-history GET can outlast the generic admin deadline.
+const OFAPI_HISTORY_READ_TIMEOUT_MS = 60_000;
 // Live-bug fix (2026-07-05): chat-message history reads scrape OnlyFans
 // server-side and scale with chat size — two prod conversations consistently
 // exceeded the 15 s abort (400 wasted attempts/24 h, zero successes ever on
@@ -36,15 +46,29 @@ const OFAPI_FANS_PAGE_LIMIT = 20;
 export const OFAPI_DEFAULT_BASE_URL = "https://app.onlyfansapi.com/api";
 
 export class OfapiApiError extends Error {
+  declare readonly validationResponse?: string;
   constructor(
     message: string,
     readonly status: number | null,
     readonly body: string | null,
     readonly upstreamStatus: number | null = null,
+    validationResponse?: string,
   ) {
     super(message);
     this.name = "OfapiApiError";
+    // Explicit draft feedback is available to the outbox, never generic error serialization.
+    if (validationResponse !== undefined) Object.defineProperty(this, "validationResponse", { value: validationResponse, enumerable: false });
   }
+}
+
+/** A missing account is a typed provider diagnosis, never a generic 404. */
+export function ofapiAccountNotFound(status: number | null, body: string | null): boolean {
+  if (status !== 404 || !body) return false;
+  try {
+    const parsed = asRecord(JSON.parse(body));
+    const error = asRecord(parsed?.error);
+    return (error?.code ?? parsed?.code ?? parsed?.error) === "account_not_found";
+  } catch { return false; }
 }
 
 export interface OfapiWebhookRegistrationInput {
@@ -56,6 +80,7 @@ export interface OfapiWebhookRegistrationInput {
 
 export interface OfapiWebhookRecord {
   id: string | null;
+  creditAccounting?: "pending";
 }
 
 export interface OfapiAccountRecord {
@@ -64,13 +89,16 @@ export interface OfapiAccountRecord {
   displayName: string | null;
   onlyfansName: string | null;
   onlyfansUserId: string | null;
+  isAuthenticated?: boolean;
+  identityStatus?: "verified" | "nested_fallback" | "missing" | "conflict";
   avatarUrl: string | null;
 }
 
 export interface OfapiRequestContext {
+  collectionContext?: OfapiCollectionContext;
   requestObserver?: HttpRequestObserver | null;
-  // Account-scoped OFAPI reads must use the page egress dispatcher so large
-  // response bodies do not go through the hub VPS direct route.
+  // Governed/gateway callers resolve the vendor transport in ofapi-egress.
+  // Production OFAPI is vendor-direct; a page proxy is not account identity.
   dispatcher?: Dispatcher | null;
   egressKey?: string | null;
   // Attributes the request's credit spend to a page in the ledger (D2);
@@ -117,20 +145,99 @@ export interface OfapiGovernedRawResponse {
   receivedAt: Date;
 }
 
+export interface OfapiTransportDiagnostics {
+  stage: "response_headers" | "response_body";
+  transportClass: "connect" | "timeout" | "transport" | null;
+  causeName: string | null;
+  causeCode: string | null;
+  elapsedMs: number;
+  timeoutMs: number;
+  status: number | null;
+  declaredLength: number | null;
+  bytesRead: number;
+  maxResponseBytes: number;
+}
+
+// Names/codes are untrusted strings too. Only known machine values may cross
+// into durable/operator diagnostics; no message, URL, socket or proxy fields.
+const DIAGNOSTIC_ERROR_NAMES = new Set([
+  "Error", "TypeError", "AbortError", "TimeoutError", "ConnectTimeoutError",
+  "HeadersTimeoutError", "BodyTimeoutError", "SocketError", "SocksClientError",
+]);
+const DIAGNOSTIC_ERROR_CODES = new Set([
+  "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_HEADERS_TIMEOUT", "UND_ERR_BODY_TIMEOUT",
+  "UND_ERR_SOCKET", "ECONNREFUSED", "ECONNRESET", "ETIMEDOUT", "EHOSTUNREACH",
+  "ENETUNREACH", "ENOTFOUND", "EAI_AGAIN", "EHOSTDOWN", "ENETDOWN", "EPIPE",
+  "CERT_HAS_EXPIRED", "DEPTH_ZERO_SELF_SIGNED_CERT", "ERR_TLS_CERT_ALTNAME_INVALID",
+  // PostgreSQL machine codes can identify failed durable capture without SQL text.
+  "22003", "23502", "23503", "23505", "23514", "42501", "42P01", "42703", "40P01", "40001", "57014", "53300", "08006",
+]);
+
+/** Fixed machine identifiers only; never include error messages, SQL or endpoint data. */
+export function ofapiSafeErrorDiagnostics(error: unknown) {
+  let causeName: string | null = null;
+  let causeCode: string | null = null;
+  for (const cause of iterateErrorChain(error)) {
+    if (!(cause instanceof Error)) continue;
+    if (DIAGNOSTIC_ERROR_NAMES.has(cause.name)) causeName = cause.name;
+    const code = (cause as Error & { code?: unknown }).code;
+    if (typeof code === "string" && DIAGNOSTIC_ERROR_CODES.has(code)) causeCode = code;
+  }
+  return { causeName, causeCode };
+}
+
+export type OfapiHistoryRequestStage = "admission" | "authorization" | "response_headers" | "response_body" | "response_capture" | "credit_receipt" | "response_contract";
+/** Restricted to the free delivery-history GET; other admin/mutation errors keep their existing behavior. */
+export class OfapiHistoryRequestError extends OfapiApiError {
+  readonly diagnostics: {
+    stage: OfapiHistoryRequestStage; status: number | null; elapsedMs: number;
+    timeoutMs: number; causeName: string | null; causeCode: string | null;
+    transportClass: "connect" | "timeout" | "transport" | null;
+  };
+  constructor(error: unknown, stage: OfapiHistoryRequestStage, status: number | null, startedAt: number, timeoutMs: number) {
+    super(`OFAPI delivery history ${stage} failed`, error instanceof OfapiApiError ? error.status : null, null,
+      error instanceof OfapiApiError ? error.upstreamStatus : null);
+    this.name = "OfapiHistoryRequestError";
+    this.diagnostics = { stage, status, elapsedMs: Math.max(0, Date.now() - startedAt),
+      timeoutMs, ...ofapiSafeErrorDiagnostics(error),
+      transportClass: stage === "response_headers" || stage === "response_body" ? classifyTransportFailure(error) : null };
+  }
+}
+
+function transportDiagnostics(
+  error: unknown,
+  input: Omit<OfapiTransportDiagnostics, "transportClass" | "causeName" | "causeCode" | "elapsedMs"> & {
+    startedAt: number;
+  },
+): OfapiTransportDiagnostics {
+  const { causeName, causeCode } = ofapiSafeErrorDiagnostics(error);
+  const { startedAt, ...fields } = input;
+  return {
+    ...fields,
+    transportClass: error === null ? null : classifyTransportFailure(error),
+    causeName,
+    causeCode,
+    elapsedMs: Math.max(0, Date.now() - startedAt),
+  };
+}
+
 export class OfapiGovernedRequestError extends Error {
+  readonly diagnostics: OfapiTransportDiagnostics | undefined;
   constructor(
     message: string,
     readonly phase: "pre_dispatch" | "post_dispatch",
     readonly reason: "cancelled" | "deadline" | "transport" | "body_read" | "body_too_large",
-    options?: { cause?: unknown },
+    options?: { cause?: unknown; diagnostics?: OfapiTransportDiagnostics },
   ) {
     super(message, options);
     this.name = "OfapiGovernedRequestError";
+    this.diagnostics = options?.diagnostics;
   }
 }
 
 export interface OfapiSentMessage {
   messageId: string;
+  creditAccounting?: "pending";
 }
 
 export interface OfapiMediaMessageInput {
@@ -142,20 +249,24 @@ export interface OfapiMediaMessageInput {
 
 export interface OfapiTypingResult {
   success: true;
+  creditAccounting?: "pending";
 }
 
 export interface OfapiUnsendResult {
   success: true;
+  creditAccounting?: "pending";
 }
 
 export interface OfapiMarkReadResult {
   success: true;
+  creditAccounting?: "pending";
 }
 
 // One credit-spend report per response that reached the server (retry attempts
 // included — OFAPI charged each). Emitted by the client itself on BOTH request
 // paths, so callers cannot forget to account spend (D1).
 export interface OfapiCreditSpendObservation {
+  responseEvidence?: ReturnType<typeof ofapiResponseEvidence>["evidence"];
   operation: string;
   httpStatus: number;
   credits: number;
@@ -167,11 +278,22 @@ export interface OfapiCreditSpendObservation {
   isCached: boolean | null;
   actorUserId: number | null;
   budgetScope?: "audience" | "backfill" | "link_stats" | null;
+  receivedAt?: string;
 }
 
-export type OfapiCreditSpendSink = (
+export type OfapiCreditSpendSink = ((
   observation: OfapiCreditSpendObservation,
-) => Promise<boolean | null | void> | boolean | null | void;
+) => Promise<boolean | null | void> | boolean | null | void) & {
+  recoverPending?: () => Promise<boolean>;
+};
+
+/** A new request was refused locally; an earlier response still needs accounting. */
+export class OfapiCreditAccountingUnavailableError extends OfapiApiError {
+  constructor() {
+    super("OFAPI credit accounting unavailable before dispatch", null, null);
+    this.name = "OfapiCreditAccountingUnavailableError";
+  }
+}
 
 /**
  * Maps one HTTP response to its ledger spend, or null for no row. Server-reported
@@ -202,10 +324,27 @@ export function resolveOfapiCreditSpend(input: {
   return null;
 }
 
+export interface OfapiAdminCapture { observationId: number; receivedAt: Date }
+
 export interface OfapiClient {
+  getBannedWordsPage?(page: number): Promise<{ body: unknown; evidence: OfapiAdminCapture | null }>;
+  executeExtendedCommand?(context: OfapiRequestContext, accountId: string, conversationId: string, kind: OfapiExtendedCommandKind, payload: OfapiExtendedCommandPayload, providerKey?: string): Promise<{ messageId?: string; creditAccounting?: "pending" }>;
+  getCreditUsage?(window: OfapiUsageWindow): Promise<{ body: unknown; evidence: OfapiAdminCapture | null }>;
   createWebhook(input: OfapiWebhookRegistrationInput): Promise<OfapiWebhookRecord>;
   updateWebhook(id: string, input: OfapiWebhookRegistrationInput): Promise<OfapiWebhookRecord>;
   listAccounts(): Promise<OfapiAccountRecord[]>;
+  listAccountsSnapshot?(): Promise<{ accounts: OfapiAccountRecord[]; evidence: OfapiAdminCapture | null }>;
+  getCredentialPreflight?(): Promise<OfapiCredentialPreflight>;
+  assertCredentialReady?(): Promise<void>;
+  /** Drains pending credit receipts; rejects with OfapiCreditAccountingUnavailableError while accounting is unready. */
+  assertCreditAccountingReady?(): Promise<void>;
+  getWebhook?(id: string): Promise<Record<string, unknown>>;
+  listWebhookEvents?(): Promise<{ body: unknown; capture: OfapiAdminCapture | null }>;
+  listWebhooks?(): Promise<Record<string, unknown>[]>;
+  listWebhookDeliveries?(id: string, params: { from: string; to: string; limit: number; offset: number }): Promise<{ body: unknown; capture: OfapiAdminCapture | null }>;
+  redeliverWebhookDelivery?(id: string, attemptId: number): Promise<{ body: unknown; capture: OfapiAdminCapture | null }>;
+
+  listDataExports?(input: { page: number; perPage: number; type: string }): Promise<{ body: unknown; capture: OfapiAdminCapture | null }>;
   listChats(
     context: OfapiRequestContext,
     accountId: string,
@@ -305,10 +444,8 @@ export interface OfapiClient {
     accountId: string,
     params: { limit?: number; offset?: number },
   ): Promise<OfapiListPage>;
-  // One cheap (1-credit) account-scoped request purely to observe the credit
-  // balance: GET /accounts carries no _meta per the OFAPI OpenAPI spec, so the
-  // ping reads a minimal chats page instead (reconciliation anchor on quiet days).
-  pingBalance(context: OfapiRequestContext, accountId: string): Promise<OfapiListPage>;
+  // Free, account-independent usage balance probe; retained method name for callers.
+  pingBalance(context: OfapiRequestContext, accountId?: string): Promise<OfapiListPage>;
   // Read-only desktop gateway path. The caller supplies an already validated
   // pathname/query pair and a bounded operation name. Exactly one upstream
   // attempt is made: desktop remains the retry authority during migration.
@@ -331,7 +468,7 @@ export interface OfapiClient {
     input: {
       attemptId: string;
       operation: string;
-      method: "GET" | "POST" | "DELETE" | "PATCH";
+      method: "GET" | "POST" | "PUT" | "DELETE" | "PATCH";
       pathname: string;
       query?: Record<string, string>;
       bodyBytes?: Buffer | null;
@@ -340,9 +477,11 @@ export interface OfapiClient {
       deadlineAt: Date;
       timeoutMs?: number;
       maxResponseBytes?: number;
+      deferAccountResponse?: boolean;
       beforeDispatch: () => Promise<boolean>;
     },
   ): Promise<OfapiGovernedRawResponse>;
+  recordGovernedAccountResponse?(accountId: string, generation: number, status: number, body: string): Promise<void>;
   // Decision #56: exactly one text-send attempt. Optional for legacy test
   // doubles; production createOfapiClient always implements it.
   sendTextMessage?(
@@ -439,10 +578,10 @@ function toWebhookRecord(value: unknown): OfapiWebhookRecord {
   };
 }
 
-function toAccountRecords(value: unknown): OfapiAccountRecord[] {
+export function toAccountRecords(value: unknown): OfapiAccountRecord[] {
   const data = unwrapData(value);
   if (!Array.isArray(data)) {
-    return [];
+    throw new OfapiApiError("OFAPI account roster shape unavailable", 200, null);
   }
 
   const accounts: OfapiAccountRecord[] = [];
@@ -455,8 +594,16 @@ function toAccountRecords(value: unknown): OfapiAccountRecord[] {
 
     const onlyfansUserData = asRecord(record?.onlyfans_user_data)
       ?? asRecord(record?.onlyfansUserData);
+    const top = asStringId(record?.onlyfans_id);
+    const nested = [onlyfansUserData?.id, record?.onlyfans_user_id, record?.onlyfansUserId]
+      .map(asStringId).filter((id): id is string => id !== null);
+    const ids = [...new Set([top, ...nested].filter((id): id is string => id !== null))];
+    const invalidNumericId = [record?.onlyfans_id, onlyfansUserData?.id, record?.onlyfans_user_id, record?.onlyfansUserId]
+      .some(value => typeof value === "number" && !Number.isSafeInteger(value));
+    const conflict = invalidNumericId || ids.length > 1 || ids.some(id => !/^[1-9]\d*$/.test(id));
     accounts.push({
       id,
+      ...(typeof record?.is_authenticated === "boolean" ? { isAuthenticated: record.is_authenticated } : {}),
       username: firstNonEmptyString(
         record?.onlyfans_username,
         record?.onlyfansUsername,
@@ -465,11 +612,8 @@ function toAccountRecords(value: unknown): OfapiAccountRecord[] {
       ),
       displayName: firstNonEmptyString(record?.display_name, record?.displayName),
       onlyfansName: firstNonEmptyString(onlyfansUserData?.name, record?.name),
-      onlyfansUserId: asStringId(
-        onlyfansUserData?.id
-          ?? record?.onlyfans_user_id
-          ?? record?.onlyfansUserId,
-      ),
+      onlyfansUserId: conflict ? null : ids[0] ?? null,
+      identityStatus: conflict ? "conflict" : top ? "verified" : ids.length ? "nested_fallback" : "missing",
       avatarUrl: normalizeOnlyFansAvatarUrl(firstNonEmptyString(
         record?.avatar,
         record?.avatar_url,
@@ -493,25 +637,9 @@ function webhookRequestBody(input: OfapiWebhookRegistrationInput) {
   };
 }
 
-function asNumberOrNull(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
-function parseResponseMeta(body: unknown): OfapiResponseMeta | null {
-  const meta = asRecord(asRecord(body)?._meta);
-  if (!meta) {
-    return null;
-  }
-
-  const credits = asRecord(meta._credits);
-  const cache = asRecord(meta._cache);
-  const rateLimits = asRecord(meta._rate_limits);
-  return {
-    creditsUsed: asNumberOrNull(credits?.used),
-    creditBalance: asNumberOrNull(credits?.balance),
-    isCached: typeof cache?.is_cached === "boolean" ? cache.is_cached : null,
-    rateRemainingMinute: asNumberOrNull(rateLimits?.remaining_minute),
-  };
+export function parseResponseMeta(body: unknown, headers?: Headers | Record<string, string>): OfapiResponseMeta | null {
+  const parsed = ofapiResponseEvidence(body, headers);
+  return parsed.present ? parsed.meta : null;
 }
 
 function parseNextMarker(pagination: Record<string, unknown> | null) {
@@ -532,25 +660,40 @@ function parseNextMarker(pagination: Record<string, unknown> | null) {
   }
 }
 
-function toListPage(body: unknown): OfapiListPage {
+function toListPage(body: unknown, arrayOnlyLimit?: number): OfapiListPage {
   const record = asRecord(body);
   const dataRecord = asRecord(record?.data);
   const data = Array.isArray(record?.data)
     ? record.data
     : Array.isArray(dataRecord?.list)
       ? dataRecord.list
-      : [];
+      : null;
+  if (data === null) throw new OfapiApiError("OFAPI list page shape unavailable", 200, null);
   const pagination = asRecord(record?._pagination);
   const nextPage = pagination?.next_page;
   const nextMarker = parseNextMarker(dataRecord) ?? parseNextMarker(pagination);
+  const hasMore = dataRecord?.hasMore;
+  if (hasMore !== undefined && typeof hasMore !== "boolean") {
+    throw new OfapiApiError("OFAPI list page continuation invalid", 200, null);
+  }
+  if (nextPage !== undefined && nextPage !== null && typeof nextPage !== "string") {
+    throw new OfapiApiError("OFAPI list page continuation invalid", 200, null);
+  }
+  // Spenders alone document an unpaginated array family. Every other list
+  // needs explicit continuation/termination evidence; missing is not empty.
+  if (typeof hasMore !== "boolean" && nextPage === undefined && nextMarker === null &&
+      !(arrayOnlyLimit !== undefined && Array.isArray(record?.data))) {
+    throw new OfapiApiError("OFAPI list page continuation unavailable", 200, null);
+  }
   return {
-    items: data.flatMap((item) => {
+    items: data.map((item) => {
       const itemRecord = asRecord(item);
-      return itemRecord ? [itemRecord] : [];
+      if (!itemRecord) throw new OfapiApiError("OFAPI list item shape unavailable", 200, null);
+      return itemRecord;
     }),
-    hasNextPage: typeof dataRecord?.hasMore === "boolean"
-      ? dataRecord.hasMore
-      : typeof nextPage === "string" && nextPage.length > 0,
+    hasNextPage: (typeof nextPage === "string" && nextPage.length > 0) ||
+      (typeof hasMore === "boolean" ? hasMore : nextMarker !== null ? true : nextPage === null ? false :
+        arrayOnlyLimit !== undefined && data.length >= arrayOnlyLimit),
     nextMarker,
     nextPageUrl: typeof nextPage === "string" && nextPage.length > 0 ? nextPage : null,
     meta: parseResponseMeta(body),
@@ -571,12 +714,19 @@ export function toFansListPage(body: unknown): OfapiListPage {
     : Array.isArray(data)
       ? data
       : [];
+  if (!Array.isArray(dataRecord?.list) && !Array.isArray(data)) {
+    throw new OfapiApiError("OFAPI fan page shape unavailable", 200, null);
+  }
   const pagination = asRecord(record?._pagination);
   const nextPage = pagination?.next_page;
+  if (typeof dataRecord?.hasMore !== "boolean" && nextPage !== null && typeof nextPage !== "string") {
+    throw new OfapiApiError("OFAPI fan page continuation unavailable", 200, null);
+  }
   return {
-    items: list.flatMap((item) => {
+    items: list.map(item => {
       const itemRecord = asRecord(item);
-      return itemRecord ? [itemRecord] : [];
+      if (!itemRecord) throw new OfapiApiError("OFAPI fan item shape unavailable", 200, null);
+      return itemRecord;
     }),
     hasNextPage: typeof dataRecord?.hasMore === "boolean"
       ? dataRecord.hasMore
@@ -600,7 +750,38 @@ function resolveRetryAfterMs(retryAfter: string | null, attemptNumber: number) {
   return fallbackMs;
 }
 
+export interface OfapiCredentialPreflight {
+  status: "verified" | "unknown" | "mismatch" | "denied";
+  expectedTeam: string | null;
+  observedTeam: string | null;
+  credentialFingerprint: string;
+  checkedAt: string;
+  reason: string | null;
+  rosterScope: "unknown";
+}
+
+/** A local adoption refusal, distinguishable from an HTTP response. The base
+ * class keeps existing non-command callers' error mapping compatible. */
+export class OfapiCredentialNotReadyError extends OfapiApiError {
+  constructor(
+    readonly preflightStatus: OfapiCredentialPreflight["status"],
+    readonly reason: string | null,
+  ) {
+    super(`OFAPI credential preflight ${preflightStatus}`, 403, null);
+    this.name = "OfapiCredentialNotReadyError";
+  }
+}
+
 export function createOfapiClient(input: {
+  beforeCollectionRequest?: (input: OfapiCollectionDispatch) => Promise<void>;
+  onCollectionResponse?: (requestId: string, actualCredits: number | null) => Promise<void>;
+  onCollectionCancelled?: (requestId: string) => Promise<void>;
+  credentialPolicy?: { expectedTeamSlug: string | null };
+  beforeOperationRequest?: (request: { operation: string; accountId: string | null; method: string }) => Promise<void>;
+  beforeAccountRequest?: (pageId: number | null | undefined, accountId: string, generation?: number) => Promise<number>;
+  onAccountResponse?: (accountId: string, generation: number, status: number, body: string) => Promise<void>;
+  onAdminResponse?: (response: { operation: string; status: number; body: string; receivedAt: Date; headers?: Record<string, string>; pageId?: number | null; accountId?: string }) => Promise<void | OfapiAdminCapture>;
+  onPreflight?: (result: OfapiCredentialPreflight) => Promise<void>;
   baseUrl?: string;
   apiKey: string;
   restDelayMs?: number;
@@ -618,6 +799,80 @@ export function createOfapiClient(input: {
   const baseUrl = (input.baseUrl ?? OFAPI_DEFAULT_BASE_URL).replace(/\/+$/, "");
   const restDelayMs = Math.max(0, input.restDelayMs ?? OFAPI_DEFAULT_REST_DELAY_MS);
   const onCreditSpend = input.onCreditSpend ?? null;
+  async function authorizeOperation(operation: string, method: string, pathname: string) {
+    const segment = pathname.split("/")[1];
+    await input.beforeOperationRequest?.({ operation, method,
+      accountId: segment?.startsWith("acct_") ? decodeURIComponent(segment) : null });
+  }
+  let pendingCreditReceipts = new Map<string, OfapiCreditSpendObservation>();
+  function retirePendingReceipt(key: string) {
+    // Retire only process memory; the durable financial receipt stays retained.
+    pendingCreditReceipts = new Map([...pendingCreditReceipts].filter(([pendingKey]) => pendingKey !== key));
+  }
+  let accountingRecovery: Promise<void> | null = null;
+  async function assertCreditAccountingReady() {
+    accountingRecovery ??= (async () => {
+      if (!onCreditSpend) return;
+      for (const [key, receipt] of pendingCreditReceipts) {
+        let result: boolean | null | void;
+        try { result = await onCreditSpend(receipt); }
+        catch { throw new OfapiCreditAccountingUnavailableError(); }
+        if (result === false) throw new OfapiCreditAccountingUnavailableError();
+        retirePendingReceipt(key);
+      }
+      if (onCreditSpend.recoverPending && !await onCreditSpend.recoverPending()) {
+        throw new OfapiCreditAccountingUnavailableError();
+      }
+    })();
+    try { await accountingRecovery; }
+    finally { accountingRecovery = null; }
+  }
+
+  let preflight: Promise<OfapiCredentialPreflight> | null = null;
+  let preflightRetryAt = 0;
+  async function getCredentialPreflight(): Promise<OfapiCredentialPreflight> {
+    // A single shared in-flight promise owns refresh. Do not move the retry
+    // deadline at start: concurrent callers must await that same fresh result.
+    if (preflight && Date.now() >= preflightRetryAt) preflight = null;
+    preflight ??= (async () => {
+      const result: OfapiCredentialPreflight = {
+        status: "unknown", expectedTeam: input.credentialPolicy?.expectedTeamSlug ?? null,
+        observedTeam: null, credentialFingerprint: createHash("sha256").update(input.apiKey).digest("hex"),
+        checkedAt: new Date().toISOString(), reason: "expected_team_unconfigured", rosterScope: "unknown",
+      };
+      if (result.expectedTeam) {
+        try {
+          const body = await request("ofapi_credential_preflight", "GET", "/whoami");
+          result.observedTeam = firstNonEmptyString(asRecord(asRecord(body)?.team)?.slug);
+          result.status = result.observedTeam === null ? "unknown" : result.observedTeam === result.expectedTeam ? "verified" : "mismatch";
+          result.reason = result.status === "verified" ? null : result.status === "mismatch" ? "team_mismatch" : "team_missing";
+        } catch (error) {
+          // HTML edge rejection is indeterminate access, not provider IAM.
+          const denied = error instanceof OfapiApiError && [401, 403].includes(error.status ?? 0) &&
+            error.body?.trimStart().startsWith("{");
+          result.status = denied ? "denied" : "unknown";
+          result.reason = denied ? "provider_access_denied" : "preflight_unavailable";
+        }
+      }
+      try {
+        await input.onPreflight?.(result);
+      } catch {
+        result.status = "unknown";
+        result.reason = "preflight_persistence_unavailable";
+      }
+      preflightRetryAt = result.status === "verified" || result.status === "mismatch" ||
+        result.reason === "expected_team_unconfigured" ? Infinity : Date.now() + 30_000;
+      return result;
+    })();
+    // Infinity denotes in-flight, too; only settlement sets a retry deadline.
+    if (preflightRetryAt <= Date.now()) preflightRetryAt = Infinity;
+    return preflight;
+  }
+  async function assertCredentialReady() {
+    if (!input.credentialPolicy) return; // Injection-only clients have no adoption policy.
+    const checked = await getCredentialPreflight();
+    if (checked.status !== "verified") throw new OfapiCredentialNotReadyError(checked.status, checked.reason);
+  }
 
   // Reports one physical response's spend before retry/return. A configured
   // sink can fail closed so a billed attempt is never followed by more egress
@@ -625,6 +880,7 @@ export function createOfapiClient(input: {
   async function reportCreditSpend(report: {
     operation: string;
     httpStatus: number;
+    headers?: Headers;
     body: unknown;
     requestId: string;
     pageId: number | null;
@@ -638,11 +894,11 @@ export function createOfapiClient(input: {
     actorUserId?: number | null;
     budgetScope?: "audience" | "backfill" | "link_stats" | null;
   }) {
+    const meta = parseResponseMeta(report.body, report.headers);
+    await input.onCollectionResponse?.(`${report.requestId}:${report.attemptNumber}`, meta?.creditsUsed ?? null);
     if (!onCreditSpend) {
       return null;
     }
-
-    const meta = parseResponseMeta(report.body);
     const spend = report.httpStatus >= 200
       && report.httpStatus < 300
       && meta?.creditsUsed == null
@@ -660,8 +916,8 @@ export function createOfapiClient(input: {
       return null;
     }
 
-    try {
-      const outcome = await onCreditSpend({
+    const observation: OfapiCreditSpendObservation = {
+        responseEvidence: ofapiResponseEvidence(report.body, report.headers).evidence,
         operation: report.operation,
         httpStatus: report.httpStatus,
         credits: spend.credits,
@@ -672,8 +928,14 @@ export function createOfapiClient(input: {
         attemptNumber: report.attemptNumber,
         isCached: meta?.isCached ?? null,
         actorUserId: report.actorUserId ?? null,
+        receivedAt: new Date().toISOString(),
         ...(report.budgetScope ? { budgetScope: report.budgetScope } : {}),
-      });
+    };
+    const key = `${observation.requestId}:${observation.attemptNumber}`;
+    pendingCreditReceipts.set(key, observation);
+    try {
+      const outcome = await onCreditSpend(observation);
+      if (outcome !== false) retirePendingReceipt(key);
       // Existing injected sinks are observational and return void. Treat that
       // as acknowledgement; the production sink returns explicit true/false.
       return outcome === undefined ? true : outcome;
@@ -690,7 +952,8 @@ export function createOfapiClient(input: {
   const pacer = input.pacer ?? null;
   let nextRequestSlotAt = 0;
 
-  async function waitForRequestSlot(priorityClass: EgressPriorityClass = "bulk") {
+  async function waitForRequestSlot(priorityClass: EgressPriorityClass = "bulk", checkAccounting = true) {
+    if (checkAccounting) await assertCreditAccountingReady();
     if (pacer && pacer.mode === "enforce") {
       return pacer.pace(priorityClass);
     }
@@ -740,7 +1003,10 @@ export function createOfapiClient(input: {
     }
     const url = `${baseUrl}${options.pathname}${query.size > 0 ? `?${query.toString()}` : ""}`;
     const requestId = `${options.operation}:${randomUUID()}`;
+    const accountId = options.pathname.split("/")[1]!;
+    const generation = await input.beforeAccountRequest?.(options.context.pageId, accountId);
 
+    let collectionAttempt = 0;
     return executeObservedRequest<{ response: Response; text: string }, OfapiListPage>({
       observer: options.context.requestObserver,
       requestId,
@@ -753,8 +1019,17 @@ export function createOfapiClient(input: {
       },
       requestMetadata: options.requestMetadata,
       retries: options.retries ?? OFAPI_OBSERVED_RETRIES,
-      waitForRateLimit: () => waitForRequestSlot("bulk"),
+      waitForRateLimit: async () => {
+        const waited = await waitForRequestSlot("bulk");
+        // Admission is outside the transport retry catch, but is evaluated
+        // before every physical attempt, including a permitted HTTP retry.
+        await authorizeOperation(options.operation, "GET", options.pathname);
+        return waited;
+      },
       execute: async () => {
+        await input.beforeAccountRequest?.(options.context.pageId, accountId, generation);
+        collectionAttempt += 1;
+        await input.beforeCollectionRequest?.({ operation: options.operation, method: "GET", accountId, pageId: options.context.pageId, requestId: `${requestId}:${collectionAttempt}`, context: options.context.collectionContext });
         const response = await fetch(url, {
           method: "GET",
           headers: {
@@ -763,9 +1038,25 @@ export function createOfapiClient(input: {
           },
           signal: AbortSignal.timeout(options.timeoutMs ?? OFAPI_REQUEST_TIMEOUT_MS),
         });
-        return { response, text: await response.text() };
+        const text = await response.text();
+        if (generation !== undefined) await input.onAccountResponse?.(accountId, generation, response.status, text);
+        return { response, text };
       },
       onTransportError: (error, executionContext) => {
+        // A collection-policy refusal happens before any fetch: it is a local
+        // decision, not a vendor outage. It gets its own attempt failure kind
+        // and surfaces unchanged so the executor can read `reason`/`retryAt`
+        // (review #136). Never a transport retry.
+        if (error instanceof Error && error.name === "OfapiCollectionPolicyError") {
+          return {
+            kind: "failed",
+            failureKind: "policy",
+            errorMessage: `OFAPI collection policy refused ${options.operation}: ${
+              (error as { reason?: unknown }).reason ?? "unknown"
+            }`,
+            error,
+          };
+        }
         const errorMessage = `OFAPI request failed: GET ${options.pathname}: ${
           error instanceof Error ? error.message : String(error)
         }`;
@@ -804,6 +1095,7 @@ export function createOfapiClient(input: {
         const creditSpendRecorded = await reportCreditSpend({
           operation: options.operation,
           httpStatus: response.status,
+          headers: response.headers,
           body,
           requestId,
           pageId: options.context.pageId ?? null,
@@ -907,6 +1199,10 @@ export function createOfapiClient(input: {
     const requestId = `${options.operation}:${randomUUID()}`;
     await waitForRequestSlot("interactive");
 
+    const accountId = options.pathname.split("/")[1]!;
+    const generation = await input.beforeAccountRequest?.(context.pageId, accountId);
+    await authorizeOperation(options.operation, "GET", options.pathname);
+    await input.beforeCollectionRequest?.({ operation: options.operation, method: "GET", accountId, pageId: context.pageId, requestId: `${requestId}:1`, context: context.collectionContext, interactive: true, reservedCredits: options.fallbackCredits });
     let response: Response;
     try {
       const init: RequestInit & { dispatcher?: Dispatcher } = {
@@ -943,6 +1239,7 @@ export function createOfapiClient(input: {
         null,
       );
     }
+    if (generation !== undefined) await input.onAccountResponse?.(accountId, generation, response.status, text);
     let body: unknown = null;
     if (text.length > 0) {
       try {
@@ -952,9 +1249,10 @@ export function createOfapiClient(input: {
       }
     }
 
-    await reportCreditSpend({
+    const creditAccounted = await reportCreditSpend({
       operation: options.operation,
       httpStatus: response.status,
+      headers: response.headers,
       body,
       requestId,
       pageId: context.pageId ?? null,
@@ -964,12 +1262,16 @@ export function createOfapiClient(input: {
       actorUserId: context.actorUserId ?? null,
     });
 
+    if (creditAccounted === false) throw new OfapiApiError("OFAPI read credit accounting unavailable", null, null);
+
     const headers: Record<string, string> = {};
     for (const name of [
       "content-type",
       "retry-after",
       "x-ofapi-credits-used",
       "x-ofapi-credits-balance",
+      "x-ofapi-is-cached",
+      "idempotent-replayed",
       "x-rate-limit-remaining-minute",
       "x-rate-limit-limit-minute",
     ]) {
@@ -986,17 +1288,24 @@ export function createOfapiClient(input: {
     };
   }
 
-  async function readGovernedResponseBytes(response: Response, maxBytes: number) {
+  async function readGovernedResponseBytes(
+    response: Response, maxBytes: number, startedAt: number, timeoutMs: number,
+  ) {
     const contentLength = response.headers.get("content-length");
-    if (contentLength !== null) {
-      const declaredLength = Number(contentLength);
-      if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
-        throw new OfapiGovernedRequestError(
-          `OFAPI response exceeds ${maxBytes} byte capture limit`,
-          "post_dispatch",
-          "body_too_large",
-        );
-      }
+    const length = contentLength === null ? NaN : Number(contentLength);
+    const declaredLength = Number.isFinite(length) && length >= 0 ? length : null;
+    const details = (error: unknown, bytesRead: number) => transportDiagnostics(error, {
+      startedAt, timeoutMs, stage: "response_body", status: response.status,
+      declaredLength, bytesRead, maxResponseBytes: maxBytes,
+    });
+    if (declaredLength !== null && declaredLength > maxBytes) {
+      await response.body?.cancel().catch(() => undefined);
+      throw new OfapiGovernedRequestError(
+        `OFAPI response exceeds ${maxBytes} byte capture limit`,
+        "post_dispatch",
+        "body_too_large",
+        { diagnostics: details(null, 0) },
+      );
     }
 
     if (!response.body) {
@@ -1015,11 +1324,12 @@ export function createOfapiClient(input: {
         const chunk = Buffer.from(result.value);
         totalBytes += chunk.byteLength;
         if (totalBytes > maxBytes) {
-          await reader.cancel();
+          await reader.cancel().catch(() => undefined);
           throw new OfapiGovernedRequestError(
             `OFAPI response exceeds ${maxBytes} byte capture limit`,
             "post_dispatch",
             "body_too_large",
+            { diagnostics: details(null, totalBytes) },
           );
         }
         chunks.push(chunk);
@@ -1032,7 +1342,7 @@ export function createOfapiClient(input: {
         "OFAPI governed response body read failed",
         "post_dispatch",
         "body_read",
-        { cause: error },
+        { cause: error, diagnostics: details(error, totalBytes) },
       );
     } finally {
       reader.releaseLock();
@@ -1044,7 +1354,13 @@ export function createOfapiClient(input: {
     context: OfapiRequestContext,
     options: Parameters<NonNullable<OfapiClient["dispatchGovernedRaw"]>>[1],
   ): Promise<OfapiGovernedRawResponse> {
-    await waitForRequestSlot(options.priorityClass);
+    try {
+      await waitForRequestSlot(options.priorityClass);
+      await authorizeOperation(options.operation, options.method, options.pathname);
+    }
+    catch (error) {
+      throw new OfapiGovernedRequestError("OFAPI dispatch admission unavailable", "pre_dispatch", "cancelled", { cause: error });
+    }
     if (Date.now() >= options.deadlineAt.getTime()) {
       throw new OfapiGovernedRequestError(
         `OFAPI governed attempt ${options.attemptId} missed its deadline`,
@@ -1053,12 +1369,38 @@ export function createOfapiClient(input: {
       );
     }
 
-    const mayDispatch = await options.beforeDispatch();
+    const accountId = options.pathname.split("/")[1]!;
+    let generation: number | undefined;
+    if (accountId.startsWith("acct_")) {
+      try { generation = await input.beforeAccountRequest?.(context.pageId, accountId); }
+      catch (error) { throw new OfapiGovernedRequestError("OFAPI binding unavailable", "pre_dispatch", "cancelled", { cause: error }); }
+    }
+    try {
+      await input.beforeCollectionRequest?.({ operation: options.operation, method: options.method, accountId: options.pathname.split("/")[1]!, pageId: context.pageId, requestId: options.attemptId, context: context.collectionContext, interactive: options.priorityClass === "interactive" && context.actorUserId != null });
+    } catch (error) {
+      throw new OfapiGovernedRequestError("OFAPI collection policy refused dispatch", "pre_dispatch", "cancelled", { cause: error });
+    }
+    let mayDispatch = false;
+    let dispatchError: unknown;
+    try {
+      mayDispatch = await options.beforeDispatch();
+    } catch (error) {
+      dispatchError = error;
+    }
     if (!mayDispatch) {
+      // The callback checks changing authority as well as the durable fence.
+      // A thrown check still precedes HTTP and must release unused admission.
+      try {
+        await input.onCollectionCancelled?.(options.attemptId);
+      } catch (error) {
+        dispatchError = dispatchError === undefined ? error
+          : new AggregateError([dispatchError, error], "OFAPI pre-dispatch cleanup failed");
+      }
       throw new OfapiGovernedRequestError(
         `OFAPI governed attempt ${options.attemptId} lost its dispatch fence`,
         "pre_dispatch",
         "cancelled",
+        { cause: dispatchError },
       );
     }
 
@@ -1074,11 +1416,14 @@ export function createOfapiClient(input: {
     }
 
     let response: Response;
+    const startedAt = Date.now();
+    const timeoutMs = options.timeoutMs ?? OFAPI_PROXY_READ_TIMEOUT_MS;
+    const maxResponseBytes = Math.max(1, options.maxResponseBytes ?? 10 * 1024 * 1024);
     try {
       const init: RequestInit & { dispatcher?: Dispatcher } = {
         method: options.method,
         headers,
-        signal: AbortSignal.timeout(options.timeoutMs ?? OFAPI_PROXY_READ_TIMEOUT_MS),
+        signal: AbortSignal.timeout(timeoutMs),
       };
       if (options.bodyBytes) {
         init.body = Uint8Array.from(options.bodyBytes);
@@ -1089,24 +1434,30 @@ export function createOfapiClient(input: {
       response = await fetch(url, init);
     } catch (error) {
       throw new OfapiGovernedRequestError(
-        `OFAPI governed request failed: ${options.method} ${options.pathname}`,
+        "OFAPI governed request failed before response headers",
         "post_dispatch",
         "transport",
-        { cause: error },
+        { cause: error, diagnostics: transportDiagnostics(error, {
+          startedAt, timeoutMs, stage: "response_headers", status: null,
+          declaredLength: null, bytesRead: 0, maxResponseBytes,
+        }) },
       );
     }
 
     const receivedAt = new Date();
     const bodyBytes = await readGovernedResponseBytes(
       response,
-      Math.max(1, options.maxResponseBytes ?? 10 * 1024 * 1024),
+      maxResponseBytes, startedAt, timeoutMs,
     );
+    if (generation !== undefined && !options.deferAccountResponse) await input.onAccountResponse?.(accountId, generation, response.status, bodyBytes.toString("utf8"));
     const responseHeaders: Record<string, string> = {};
     for (const name of [
       "content-type",
       "retry-after",
       "x-ofapi-credits-used",
       "x-ofapi-credits-balance",
+      "x-ofapi-is-cached",
+      "idempotent-replayed",
       "x-rate-limit-remaining-minute",
       "x-rate-limit-limit-minute",
     ]) {
@@ -1129,19 +1480,27 @@ export function createOfapiClient(input: {
     price?: number;
     mediaFiles?: Array<string | number>;
     previews?: Array<string | number>;
-    lockedText?: true;
+    lockedText?: boolean;
+    replyToMessageId?: string | number;
+    giphyId?: string;
+    rfTag?: Array<string | number>;
+    rfPartner?: Array<string | number>;
+    rfGuest?: Array<string | number>;
+    blockBannedWords?: string;
   };
 
   function toWireMediaId(id: string): string | number {
-    return /^[0-9]+$/.test(id) ? Number(id) : id;
+    const numeric = /^[0-9]+$/.test(id) ? Number(id) : NaN;
+    return Number.isSafeInteger(numeric) ? numeric : id;
   }
 
   async function sendMessageRequest(
     context: OfapiRequestContext,
     accountId: string,
     conversationId: string,
-    operation: "ofapi_command_send_text" | "ofapi_command_send_media",
+    operation: "ofapi_command_send_text" | "ofapi_command_send_media" | "ofapi_command_send_v2",
     body: OfapiCommandMessageBody,
+    providerKey?: string,
   ): Promise<OfapiSentMessage> {
     const pathname = `/${encodeURIComponent(accountId)}/chats/${
       encodeURIComponent(conversationId)
@@ -1149,6 +1508,7 @@ export function createOfapiClient(input: {
     const requestId = `${operation}:${randomUUID()}`;
     await waitForRequestSlot("commands");
 
+    await authorizeOperation(operation, "POST", pathname);
     let response: Response;
     try {
       response = await fetch(`${baseUrl}${pathname}`, {
@@ -1157,6 +1517,7 @@ export function createOfapiClient(input: {
           authorization: `Bearer ${input.apiKey}`,
           accept: "application/json",
           "content-type": "application/json",
+          ...(providerKey ? { "Idempotency-Key": providerKey } : {}),
         },
         body: JSON.stringify(body),
         signal: AbortSignal.timeout(OFAPI_REQUEST_TIMEOUT_MS),
@@ -1170,6 +1531,12 @@ export function createOfapiClient(input: {
     }
 
     const text = await response.text();
+    let captureError: unknown;
+    if (operation === "ofapi_command_send_v2") {
+      try { await input.onAdminResponse?.({ operation, status: response.status, body: text, receivedAt: new Date(), pageId: context.pageId ?? null, accountId,
+        headers: Object.fromEntries(["x-ofapi-credits-used", "x-ofapi-credits-balance", "idempotent-replayed"].flatMap(name => { const value = response.headers.get(name); return value === null ? [] : [[name, value]]; })) }); }
+      catch (error) { captureError = error; }
+    }
     let responseBody: unknown = null;
     let bodyIsJson = text.length === 0;
     if (text.length > 0) {
@@ -1181,15 +1548,17 @@ export function createOfapiClient(input: {
       }
     }
 
-    await reportCreditSpend({
+    const creditAccounted = await reportCreditSpend({
       operation,
       httpStatus: response.status,
+      headers: response.headers,
       body: responseBody,
       requestId,
       pageId: context.pageId ?? null,
       attemptNumber: 1,
     });
 
+    if (captureError) throw new OfapiApiError("OFAPI response capture unavailable after dispatch", null, null);
     if (!response.ok) {
       const upstreamStatus = wrappedOnlyFansStatus(responseBody);
       throw new OfapiApiError(
@@ -1197,6 +1566,7 @@ export function createOfapiClient(input: {
         response.status,
         null,
         upstreamStatus,
+        operation === "ofapi_command_send_v2" && response.status === 422 ? text.slice(0, 4000) : undefined,
       );
     }
     if (!bodyIsJson) {
@@ -1211,7 +1581,7 @@ export function createOfapiClient(input: {
     const rawId = record?.id;
     const messageId = typeof rawId === "string" && rawId.length > 0
       ? rawId
-      : typeof rawId === "number" && Number.isFinite(rawId)
+      : typeof rawId === "number" && Number.isSafeInteger(rawId)
         ? String(rawId)
         : null;
     if (!messageId) {
@@ -1221,7 +1591,7 @@ export function createOfapiClient(input: {
         null,
       );
     }
-    return { messageId };
+    return { messageId, ...(creditAccounted === false ? { creditAccounting: "pending" as const } : {}) };
   }
 
   async function sendTextMessageRequest(
@@ -1277,6 +1647,7 @@ export function createOfapiClient(input: {
     const requestId = `${operation}:${randomUUID()}`;
     await waitForRequestSlot("commands");
 
+    await authorizeOperation(operation, "POST", pathname);
     let response: Response;
     try {
       response = await fetch(`${baseUrl}${pathname}`, {
@@ -1307,9 +1678,10 @@ export function createOfapiClient(input: {
       }
     }
 
-    await reportCreditSpend({
+    const creditAccounted = await reportCreditSpend({
       operation,
       httpStatus: response.status,
+      headers: response.headers,
       body: responseBody,
       requestId,
       pageId: context.pageId ?? null,
@@ -1334,7 +1706,7 @@ export function createOfapiClient(input: {
       );
     }
 
-    return { success: true };
+    return { success: true, ...(creditAccounted === false ? { creditAccounting: "pending" as const } : {}) };
   }
 
   async function unsendMessageRequest(
@@ -1350,6 +1722,7 @@ export function createOfapiClient(input: {
     const requestId = `${operation}:${randomUUID()}`;
     await waitForRequestSlot("commands");
 
+    await authorizeOperation(operation, "DELETE", pathname);
     let response: Response;
     try {
       response = await fetch(`${baseUrl}${pathname}`, {
@@ -1380,9 +1753,10 @@ export function createOfapiClient(input: {
       }
     }
 
-    await reportCreditSpend({
+    const creditAccounted = await reportCreditSpend({
       operation,
       httpStatus: response.status,
+      headers: response.headers,
       body: responseBody,
       requestId,
       pageId: context.pageId ?? null,
@@ -1404,7 +1778,7 @@ export function createOfapiClient(input: {
       );
     }
     if (text.length === 0) {
-      return { success: true };
+      return { success: true, ...(creditAccounted === false ? { creditAccounting: "pending" as const } : {}) };
     }
 
     const record = asRecord(unwrapData(responseBody));
@@ -1415,7 +1789,7 @@ export function createOfapiClient(input: {
         null,
       );
     }
-    return { success: true };
+    return { success: true, ...(creditAccounted === false ? { creditAccounting: "pending" as const } : {}) };
   }
 
   async function markChatReadRequest(
@@ -1430,6 +1804,7 @@ export function createOfapiClient(input: {
     const requestId = `${operation}:${randomUUID()}`;
     await waitForRequestSlot("commands");
 
+    await authorizeOperation(operation, "POST", pathname);
     let response: Response;
     try {
       response = await fetch(`${baseUrl}${pathname}`, {
@@ -1460,9 +1835,10 @@ export function createOfapiClient(input: {
       }
     }
 
-    await reportCreditSpend({
+    const creditAccounted = await reportCreditSpend({
       operation,
       httpStatus: response.status,
+      headers: response.headers,
       body: responseBody,
       requestId,
       pageId: context.pageId ?? null,
@@ -1484,7 +1860,7 @@ export function createOfapiClient(input: {
       );
     }
     if (text.length === 0) {
-      return { success: true };
+      return { success: true, ...(creditAccounted === false ? { creditAccounting: "pending" as const } : {}) };
     }
 
     const record = asRecord(unwrapData(responseBody));
@@ -1495,93 +1871,187 @@ export function createOfapiClient(input: {
         null,
       );
     }
-    return { success: true };
+    return { success: true, ...(creditAccounted === false ? { creditAccounting: "pending" as const } : {}) };
   }
 
-  async function request(
+  async function requestCaptured(
     operation: string,
     method: string,
     path: string,
     body?: unknown,
-  ): Promise<unknown> {
-    let response: Response;
+    priorityClass: EgressPriorityClass = "interactive",
+    context?: OfapiRequestContext,
+  ): Promise<{ body: unknown; capture: OfapiAdminCapture | null; creditAccounting?: "pending" }> {
+    const historyRead = operation === "ofapi_webhook_deliveries" && method === "GET";
+    const timeoutMs = historyRead ? OFAPI_HISTORY_READ_TIMEOUT_MS : OFAPI_REQUEST_TIMEOUT_MS;
+    const startedAt = Date.now();
+    let stage: OfapiHistoryRequestStage = "admission";
+    let status: number | null = null;
     try {
-      response = await fetch(`${baseUrl}${path}`, {
-        method,
-        headers: {
-          authorization: `Bearer ${input.apiKey}`,
-          accept: "application/json",
-          ...(body === undefined ? {} : { "content-type": "application/json" }),
-        },
-        body: body === undefined ? undefined : JSON.stringify(body),
-        signal: AbortSignal.timeout(OFAPI_REQUEST_TIMEOUT_MS),
-      });
-    } catch (error) {
-      throw new OfapiApiError(
-        `OFAPI request failed: ${method} ${path}: ${error instanceof Error ? error.message : String(error)}`,
-        null,
-        null,
-      );
-    }
-
-    const text = await response.text();
-    let responseBody: unknown = null;
-    let bodyIsJson = text.length === 0;
-    if (text.length > 0) {
+      if (method !== "GET") await assertCredentialReady();
+      const freeRead = method === "GET" && ["ofapi_balance_ping", "ofapi_credential_preflight", "ofapi_webhook_inventory", "ofapi_webhook_event_catalog", "ofapi_admin_accounts", "ofapi_vendor_usage", "ofapi_webhook_deliveries", "ofapi_export_inventory"].includes(operation);
+      await waitForRequestSlot(priorityClass, !freeRead);
+      stage = "authorization";
+      await authorizeOperation(operation, method, path);
+      stage = "response_headers";
+      let response: Response;
       try {
-        responseBody = JSON.parse(text) as unknown;
-        bodyIsJson = true;
-      } catch {
-        bodyIsJson = false;
+        response = await fetch(`${baseUrl}${path}`, {
+          method,
+          headers: {
+            authorization: `Bearer ${input.apiKey}`,
+            accept: "application/json",
+            ...(body === undefined ? {} : { "content-type": "application/json" }),
+          },
+          body: body === undefined ? undefined : JSON.stringify(body),
+          signal: AbortSignal.timeout(timeoutMs),
+        });
+      } catch (error) {
+        if (historyRead) throw error;
+        throw new OfapiApiError(
+          `OFAPI request failed: ${method} ${path}: ${error instanceof Error ? error.message : String(error)}`,
+          null,
+          null,
+        );
       }
+
+      status = response.status;
+      stage = "response_body";
+      const text = await response.text();
+      stage = "response_capture";
+      // Fix the transport boundary before capture can wait for a DB connection/nextval.
+      const receivedAt = new Date();
+      const capture = (await input.onAdminResponse?.({ operation, status: response.status, body: text, receivedAt, pageId: context?.pageId ?? null, headers: Object.fromEntries(["x-ofapi-credits-used", "x-ofapi-credits-balance", "x-ofapi-is-cached", "idempotent-replayed"].flatMap(name => { const value = response.headers.get(name); return value === null ? [] : [[name, value]]; })) })) ?? null;
+      let responseBody: unknown = null;
+      let bodyIsJson = text.length === 0;
+      if (text.length > 0) {
+        try {
+          responseBody = JSON.parse(text) as unknown;
+          bodyIsJson = true;
+        } catch {
+          bodyIsJson = false;
+        }
+      }
+
+      // The admin path spends credits too (D1) — report before any throw so
+      // failed registrations and 4xx/5xx responses with _meta still land.
+      stage = "credit_receipt";
+      const creditAccounted = await reportCreditSpend({
+        operation,
+        httpStatus: response.status,
+        headers: response.headers,
+        body: responseBody,
+        requestId: `${operation}:${randomUUID()}`,
+        pageId: context?.pageId ?? null,
+        attemptNumber: 1,
+        ...(["ofapi_balance_ping", "ofapi_credential_preflight", "ofapi_webhook_inventory", "ofapi_webhook_event_catalog", "ofapi_admin_accounts", "ofapi_vendor_usage", "ofapi_webhook_deliveries", "ofapi_webhook_redelivery", "ofapi_export_inventory"].includes(operation)
+          ? { fallbackCredits: 0, fallbackEstimated: false } : {}),
+      });
+
+      if (creditAccounted === false && method === "GET" && !freeRead) {
+        throw new OfapiApiError("OFAPI admin read credit accounting unavailable", null, null);
+      }
+
+      stage = "response_contract";
+      if (!response.ok) {
+        throw new OfapiApiError(
+          `OFAPI request failed: ${method} ${path} returned ${response.status}`,
+          response.status,
+          text.slice(0, 2000),
+        );
+      }
+
+      if (!bodyIsJson) {
+        throw new OfapiApiError(
+          `OFAPI request failed: ${method} ${path} returned non-JSON body`,
+          response.status,
+          text.slice(0, 2000),
+        );
+      }
+
+      return { body: responseBody, capture, ...(creditAccounted === false ? { creditAccounting: "pending" as const } : {}) };
+    } catch (error) {
+      if (historyRead) throw new OfapiHistoryRequestError(error, stage, status, startedAt, timeoutMs);
+      throw error;
     }
+  }
 
-    // The admin path spends credits too (D1) — report before any throw so
-    // failed registrations and 4xx/5xx responses with _meta still land.
-    await reportCreditSpend({
-      operation,
-      httpStatus: response.status,
-      body: responseBody,
-      requestId: `${operation}:${randomUUID()}`,
-      pageId: null,
-      attemptNumber: 1,
-    });
-
-    if (!response.ok) {
-      throw new OfapiApiError(
-        `OFAPI request failed: ${method} ${path} returned ${response.status}`,
-        response.status,
-        text.slice(0, 2000),
-      );
-    }
-
-    if (!bodyIsJson) {
-      throw new OfapiApiError(
-        `OFAPI request failed: ${method} ${path} returned non-JSON body`,
-        response.status,
-        text.slice(0, 2000),
-      );
-    }
-
-    return responseBody;
+  async function request(operation: string, method: string, path: string, body?: unknown): Promise<unknown> {
+    return (await requestCaptured(operation, method, path, body)).body;
   }
 
   return {
+    async executeExtendedCommand(context, accountId, conversationId, kind, payload, providerKey) {
+      await assertCredentialReady();
+      if (kind === "send_message_v2") return sendMessageRequest(context, accountId, conversationId, "ofapi_command_send_v2", buildOfapiSendV2Body(payload), providerKey);
+      const action = ofapiExtendedAction(kind, accountId, conversationId, payload);
+      const result = await requestCaptured(`ofapi_command_${kind}`, action.method, action.path, action.body, "commands", context);
+      const record = asRecord(unwrapData(result.body));
+      const success = kind === "set_fan_custom_name_v1" ? String(record?.id ?? "") === conversationId && typeof record?.displayName === "string"
+        : result.body === null || record?.success === true;
+      if (!success) throw new OfapiApiError("OFAPI action response did not confirm the requested result", 200, null);
+      return { ...(result.creditAccounting ? { creditAccounting: result.creditAccounting } : {}) };
+    },
+    async getBannedWordsPage(page) {
+      const result = await requestCaptured("ofapi_banned_words", "GET", `/banned-words?per_page=100&page=${page}`);
+      return { body: result.body, evidence: result.capture };
+    },
+    async getCreditUsage(window) {
+      const query = new URLSearchParams({ from: window.from, to: window.to, group_by: window.groupBy, include_today: String(window.includeToday) });
+      if (window.accountId) query.set("account_id", window.accountId);
+      const result = await requestCaptured("ofapi_vendor_usage", "GET", `/usage/credits?${query}`);
+      return { body: result.body, evidence: result.capture };
+    },
+    getCredentialPreflight,
+    assertCredentialReady,
+    assertCreditAccountingReady,
+    async getWebhook(id) {
+      const body = await request("ofapi_webhook_inventory", "GET", `/webhooks/${encodeURIComponent(id)}`);
+      const record = asRecord(unwrapData(body));
+      if (!record || record.id !== id) throw new OfapiApiError("OFAPI webhook identity unavailable", 200, null);
+      return record;
+    },
+    async listDataExports(options) {
+      const query = new URLSearchParams({ page: String(options.page), per_page: String(options.perPage), type: options.type, download_url_expires_in: "1" });
+      return requestCaptured("ofapi_export_inventory", "GET", `/data-exports?${query}`);
+    },
+    async listWebhookEvents() {
+      return requestCaptured("ofapi_webhook_event_catalog", "GET", "/webhooks/events");
+    },
+    async listWebhooks() {
+      const body = unwrapData(await request("ofapi_webhook_inventory", "GET", "/webhooks"));
+      if (!Array.isArray(body)) throw new OfapiApiError("OFAPI webhook inventory unavailable", 200, null);
+      return body.flatMap(value => asRecord(value) ? [asRecord(value)!] : []);
+    },
+    async listWebhookDeliveries(id, params) {
+      const query = new URLSearchParams({ date_start: params.from, date_end: params.to,
+        limit: String(params.limit), offset: String(params.offset) });
+      return requestCaptured("ofapi_webhook_deliveries", "GET", `/webhooks/${encodeURIComponent(id)}/deliveries?${query}`, undefined, "bulk");
+    },
+    async redeliverWebhookDelivery(id, attemptId) {
+      return requestCaptured("ofapi_webhook_redelivery", "POST", `/webhooks/${encodeURIComponent(id)}/deliveries/${attemptId}/redeliver`);
+    },
     async createWebhook(registration) {
-      return toWebhookRecord(await request(
+      const result = await requestCaptured(
         "ofapi_webhook_crud",
         "POST",
         "/webhooks",
         webhookRequestBody(registration),
-      ));
+      );
+      return { ...toWebhookRecord(result.body), ...(result.creditAccounting ? { creditAccounting: result.creditAccounting } : {}) };
     },
     async updateWebhook(id, registration) {
-      return toWebhookRecord(await request(
+      const result = await requestCaptured(
         "ofapi_webhook_crud",
         "PUT",
         `/webhooks/${encodeURIComponent(id)}`,
         webhookRequestBody(registration),
-      ));
+      );
+      return { ...toWebhookRecord(result.body), ...(result.creditAccounting ? { creditAccounting: result.creditAccounting } : {}) };
+    },
+    async listAccountsSnapshot() {
+      const { body, capture } = await requestCaptured("ofapi_admin_accounts", "GET", "/accounts");
+      return { accounts: toAccountRecords(body), evidence: capture };
     },
     async listAccounts() {
       return toAccountRecords(await request("ofapi_admin_accounts", "GET", "/accounts"));
@@ -1733,6 +2203,7 @@ export function createOfapiClient(input: {
         pageIndex: params.offset != null ? Math.floor(params.offset / limit) : 0,
         cursorPresent: false,
         requestMetadata: { limit, offset: params.offset ?? 0, trackingLinkId, kind },
+        ...(kind === "spenders" ? { mapResponse: (body: unknown) => toListPage(body, limit) } : {}),
       });
     },
     async listTrialLinks(context, accountId, params) {
@@ -1801,37 +2272,42 @@ export function createOfapiClient(input: {
         requestMetadata: { limit, offset: params.offset ?? 0 },
       });
     },
-    async pingBalance(context, accountId) {
-      return observedListRequest({
-        context,
-        operation: "ofapi_balance_ping",
-        endpointTemplate: "/:accountId/chats",
-        pathname: `/${encodeURIComponent(accountId)}/chats`,
-        query: { limit: "1" },
-        pageIndex: 0,
-        cursorPresent: false,
-        requestMetadata: { purpose: "balance_ping" },
-      });
+    async pingBalance() {
+      const day = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
+      const body = await request("ofapi_balance_ping", "GET", `/usage/credits?from=${day}&to=${day}`);
+      return { items: [], hasNextPage: false, meta: parseResponseMeta(body), creditSpendAccounted: true };
     },
     async proxyRead(context, options) {
       return proxyReadRequest(context, options);
     },
     async dispatchGovernedRaw(context, options) {
+      if (options.method !== "GET") {
+        try { await assertCredentialReady(); }
+        catch (error) { throw new OfapiGovernedRequestError("OFAPI credential preflight unavailable", "pre_dispatch", "cancelled", { cause: error }); }
+      }
       return dispatchGovernedRawRequest(context, options);
     },
+    async recordGovernedAccountResponse(accountId, generation, status, body) {
+      await input.onAccountResponse?.(accountId, generation, status, body);
+    },
     async sendTextMessage(context, accountId, conversationId, command) {
+      await assertCredentialReady();
       return sendTextMessageRequest(context, accountId, conversationId, command);
     },
     async sendMediaMessage(context, accountId, conversationId, command) {
+      await assertCredentialReady();
       return sendMediaMessageRequest(context, accountId, conversationId, command);
     },
     async startTyping(context, accountId, conversationId) {
+      await assertCredentialReady();
       return startTypingRequest(context, accountId, conversationId);
     },
     async unsendMessage(context, accountId, conversationId, messageId) {
+      await assertCredentialReady();
       return unsendMessageRequest(context, accountId, conversationId, messageId);
     },
     async markChatRead(context, accountId, conversationId) {
+      await assertCredentialReady();
       return markChatReadRequest(context, accountId, conversationId);
     },
   };
