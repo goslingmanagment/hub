@@ -438,7 +438,7 @@ describe('template variable substitution', () => {
     expect(result.user.match(/## Current Draft/g)).toHaveLength(1);
   });
 
-  it('tells improve-draft to convert internal-language drafts into the fan language', () => {
+  it('tells improve-draft to convert internal-language drafts into English', () => {
     const result = buildPrompt(
       buildTestInput({
         feature: 'improve-draft',
@@ -451,11 +451,11 @@ describe('template variable substitution', () => {
       "The current draft may be written in the chatter's internal language",
     );
     expect(result.user).toContain(
-      "Infer the fan's language from the transcript and write the final message in the fan's language",
+      "Write every proposed fan message entirely in English, regardless of the language of the fan or chatter.",
     );
     expect(result.user).toContain('Think like a subtle psychologist');
     expect(result.user).toContain(
-      "Output only the improved message text in the fan's language.",
+      "Output only the improved message text in English.",
     );
   });
 

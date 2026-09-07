@@ -11432,3 +11432,56 @@ main's Decision 252 already governs OFAPI binding custody. Both decision
 histories are retained; older prompt-branch commit messages keep their
 historical number. The existing OFAPI decision and current main runtime
 changes are preserved in full.
+
+
+**Decision #201 amendment (2026-09-07, proposed fan messages are always
+English).** The owner reported Russian phrases leaking into proposed fan
+messages in Coach and possibly Review, then explicitly answered «Всегда на
+английском» when asked whether those messages follow English or the fan's
+language. This supersedes #201's fan-language inference rule for generated
+fan messages. Russian chatter-facing analysis and original-language evidence
+quotes remain separate from proposed wording.
+
+Ordinary Coach previously instructed the model to answer in the chatter's
+language without an explicit language for draft fences. The situation preset
+used the fan's language. Review ended with the blanket task "Write in Russian"
+even though replacement messages shared the same response. Help had an audience
+split but still followed fan-language inference. These prompts now state that
+every proposed fan message is entirely English regardless of the fan, chatter,
+transcript, unsent draft, history, recap, dossier or persona-note language.
+Both static instructions and the final uncached task carry the distinction;
+Coach labels and explanations remain outside draft fences, Help coaching stays
+outside the suggestion tags, and Review explanations stay outside replacement
+quotes. The situation preset retains four Russian advice blocks and exactly
+two English drafts.
+
+The same English-only rule covers Reply, Fix, Hi, Ping and Voice Script so a
+follow-up action cannot switch the draft back to the fan's language. Fix's
+explicit language-inference instruction is removed. Tone, split/variant
+protocols, Voice audio tags, model selection, quotas and automatic-retry
+behavior are unchanged. Template sources, compiled string mirrors and manifest
+hashes are updated together. Assembly tests cover multilingual inputs and the
+cached/uncached boundary; they verify the instructions supplied to the model,
+not a deterministic guarantee of model compliance.
+
+The Fansly extension separately fixes a display parser that included Russian
+commentary after a quoted Review replacement in its example card, and blocks
+Copy/Insert for Coach drafts containing Cyrillic (extension E91). That guard
+is deliberately a Cyrillic detector, not a semantic English classifier.
+Original output remains visible and no translation or generation is retried
+automatically. These client changes do not deploy the kernel prompt changes.
+The original patch was prepared on production source revision 2475b3046332.
+It is restored onto the integrated main plus Decision #273 prompt stack,
+preserving the newer reply style, model defaults and separate cached Coach
+history block. Compiled mirrors and manifest hashes are synchronized for the
+combined revision before validation and rollout.
+
+
+Release validation for the integrated Decisions #273 and #201 changes
+(2026-09-07): `pnpm check` passed with 3,026 unit tests (nine existing skips),
+the strictness ratchet, lint and dashboard build. The feature service,
+restricted-capture/internal classifier and gateway integration suites passed
+all 85 tests with Docker-backed Postgres. The 27 prompt manifest hashes match.
+Independent review found no blocking issue. No additional model comparison
+or paid generation was performed. Deployment is authorized by the owner's
+explicit "Выкатить сейчас" reply; its outcome is recorded separately.

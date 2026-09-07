@@ -115,7 +115,7 @@ describe("coach-chat prompt", () => {
     expect(taskBlock?.text).toContain("как продать ppv?");
   });
 
-  it("keeps the normal uncached task block byte-identical with an empty preset slot", () => {
+  it("pins the normal English-draft task with an empty preset slot", () => {
     const built = buildPrompt({ ...baseInput });
     const taskBlock = built.userBlocks[3];
     expect(taskBlock?.text).toBe(`## Your Task
@@ -128,7 +128,7 @@ The chatter asks:
 
 
 
-Answer the chatter now. Use a draft fence for any proposed fan message.
+Answer the chatter now in the language they asked in. Use a draft fence for any proposed fan message, entirely in English. Keep the explanation outside the fence.
 `);
     expect(built.user).not.toContain("## Preset Turn");
     expect(built.user).not.toContain("{presetInstructions}");
@@ -139,7 +139,7 @@ Answer the chatter now. Use a draft fence for any proposed fan message.
     });
     expect(
       createHash("sha256").update(JSON.stringify(withDraft.userBlocks)).digest("hex"),
-    ).toBe("c0475c06636a8f04c2a4c763758901cb9c661c17eb8cfde2b7365af1c3361487");
+    ).toBe("844c34e9df9ae9678c9621287ccb80a06daae2fc18ca4d771ea26e89f16720b2");
   });
 
   it("renders the situation preset only in the uncached task block", () => {
@@ -167,7 +167,7 @@ Answer the chatter now. Use a draft fence for any proposed fan message.
       taskBlock!.text.indexOf("## Preset Turn"),
     );
     expect(taskBlock?.text.indexOf("## Preset Turn")).toBeLessThan(
-      taskBlock!.text.indexOf("Answer the chatter now."),
+      taskBlock!.text.indexOf("Answer the chatter now in the language they asked in."),
     );
     expect(built.user).not.toContain("{presetInstructions}");
   });
