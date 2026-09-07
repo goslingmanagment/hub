@@ -1167,6 +1167,11 @@ describe("AI feature registry gates (Stage 30 Task 4)", () => {
     // help-me (analysis preamble) streams.
     const helpMe = await call("help-me");
     expect(helpMe.statusCode, helpMe.body).toBe(200);
+    expect(capture.input!.body).toMatchObject({
+      feature: "help-me",
+      model: "anthropic:claude-sonnet-5",
+      reasoningEffort: "low",
+    });
 
     // hi-greeting: allowed on a short conversation, WITHOUT earnings blocks.
     const hi = await call("hi-greeting");
@@ -1711,6 +1716,11 @@ describe("coach-chat gates", () => {
     const meta = frames.find((frame) => frame.type === "meta");
     expect(meta?.feature).toBe("coach-chat");
     expect(meta).not.toHaveProperty("presetQuestion");
+    expect(capture.input!.body).toMatchObject({
+      feature: "coach-chat",
+      model: "anthropic:claude-sonnet-5",
+      reasoningEffort: "low",
+    });
     expect(aiFeatureStreamFrameSchema.safeParse(meta).success).toBe(true);
     expect(frames.at(-1)?.type).toBe("done");
     // The capturing provider saw the assembled prompt with the question and the

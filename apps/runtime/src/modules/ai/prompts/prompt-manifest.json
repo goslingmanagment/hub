@@ -153,9 +153,9 @@
     },
     "feature-policies.ts": {
       "sourceSha256": "832ff495138694e0a05d8c8b5c8010befdadf1e5331df2b3c803bc58e47c6e80",
-      "coreSha256": "59d1d35bc05e6ca4e6146178cc7af7a30fe11350c1d2f8ca75b0d0bd65161708",
+      "coreSha256": "b349ea78507daa154747ab069384a022c8be0a2b4fb03fdf6f50b7d454ecf9da",
       "byteIdenticalToSource": false,
-      "note": "Decision #136: usesFanProfile flag (dossier injection gate). Coach feature: includesFanBio policy flag (true for hi-greeting/help-me/coach-chat) replaces the hard-coded bio check; coach-chat registered in OPERATION_FEATURES/FEATURE_POLICIES + model/reasoning defaults. Voice notes: voice-script policy added to OPERATION_FEATURES + FEATURE_POLICIES (net-new post-freeze feature, no desktop twin). Decision #252 fourth commit (2026-09-07, owner go): DEFAULT_REPLY_MODEL_ID = anthropic:claude-sonnet-5 for fast-reply and ping (improve-draft / hi-greeting / voice-script delegate) with reasoning 'low', on a blind pairwise judge (71% wins vs Sonnet 4.6 medium, heavy moments 15/1, lower list price); analysis features stay on DEFAULT_MODEL_ID. The desktop's verbatim constants are no longer the source of truth for these two rows."
+      "note": "Decision #136: usesFanProfile flag (dossier injection gate). Coach feature: includesFanBio policy flag (true for hi-greeting/help-me/coach-chat) replaces the hard-coded bio check; coach-chat registered in OPERATION_FEATURES/FEATURE_POLICIES + model/reasoning defaults. Voice notes: voice-script policy added to OPERATION_FEATURES + FEATURE_POLICIES (net-new post-freeze feature, no desktop twin). Decision #252 fourth commit (2026-09-07, owner go): DEFAULT_REPLY_MODEL_ID = anthropic:claude-sonnet-5 for fast-reply and ping (improve-draft / hi-greeting / voice-script delegate) with reasoning 'low', on a blind pairwise judge (71% wins vs Sonnet 4.6 medium, heavy moments 15/1, lower list price); analysis features stay on DEFAULT_MODEL_ID. The desktop's verbatim constants are no longer the source of truth for these two rows. Decision #252 owner follow-up (2026-09-07): DEFAULT_MODEL_ID is now Sonnet 5 as well, with low reasoning for help-me, chat-review and coach-chat. This extends the migration by explicit owner direction without another model-quality comparison; fan-summary remains Opus 4.6 and client overrides are preserved."
     }
   }
 }

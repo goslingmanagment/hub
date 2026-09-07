@@ -24,8 +24,8 @@ describe("coach-chat feature policy", () => {
       requiresDraft: false,
       usesPingSegment: false,
     });
-    expect(DEFAULT_FEATURE_MODELS["coach-chat"]).toBeTruthy();
-    expect(DEFAULT_FEATURE_REASONING["coach-chat"]).toBe("medium");
+    expect(DEFAULT_FEATURE_MODELS["coach-chat"]).toBe("anthropic:claude-sonnet-5");
+    expect(DEFAULT_FEATURE_REASONING["coach-chat"]).toBe("low");
   });
 
   it("moves the bio decision into policy", () => {
