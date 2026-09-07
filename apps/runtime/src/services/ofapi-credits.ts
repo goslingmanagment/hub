@@ -13,7 +13,6 @@ import {
   hasOfapiCreditSpendRequestAttempt,
   insertOfapiCreditLedgerEntry,
   listOfapiBalanceObservationsAfter,
-  listOfapiMappedPages,
   recordOfapiPhysicalCreditUsage,
   recordOfapiCreditSpend,
   setOfapiCreditReconcileCursor,
@@ -403,13 +402,8 @@ export async function runOfapiCreditBurnMonitor(app: AppContext, now = new Date(
   }
 }
 
-/**
- * Optional daily balance ping (default off): one 1-credit request purely to
- * anchor reconciliation on no-traffic days. GET /accounts carries no _meta per
- * the OFAPI spec, so the ping reads a minimal chats page on the first mapped
- * page; with no mapped pages it falls back to listAccounts (defensive — if a
- * balance ever appears there, the sink records it).
- */
+/** Optional daily free, account-independent balance observation. A zero balance
+ * or lack of mapped pages never routes this diagnostic through paid chats. */
 export async function runOfapiBalancePing(app: AppContext) {
   if (
     !isOfapiCreditLedgerEnabled(app.config) ||
@@ -420,13 +414,7 @@ export async function runOfapiBalancePing(app: AppContext) {
   }
 
   try {
-    const mappedPages = await listOfapiMappedPages(app.db);
-    const target = mappedPages.find((page) => page.platform === "onlyfans") ?? mappedPages[0];
-    if (target) {
-      await app.ofapi.pingBalance({ pageId: target.id }, target.ofapiAccountId);
-    } else {
-      await app.ofapi.listAccounts();
-    }
+    await app.ofapi.pingBalance({});
   } catch (error) {
     app.logger.warn({ err: error }, "OFAPI balance ping failed; continuing");
   }

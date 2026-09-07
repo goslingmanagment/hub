@@ -7,6 +7,10 @@ import { resolveMessageForIncident } from "../apps/runtime/src/services/notifica
 // delivering again". The resolver must be exhaustive over the kind union.
 
 describe("resolveMessageForIncident", () => {
+  it("names resolved OFAPI custody conflicts", () => {
+    expect(resolveMessageForIncident({ kind: "ofapi_binding_conflict", pageLabel: null, platform: null }))
+      .toContain("OFAPI binding custody conflict cleared");
+  });
   it("golden_signal_lag resolves with its own text, not the webhook fallthrough", () => {
     const message = resolveMessageForIncident({
       kind: "golden_signal_lag",

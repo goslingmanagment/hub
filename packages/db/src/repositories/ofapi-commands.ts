@@ -45,6 +45,7 @@ export async function createOrGetOfapiCommand(
       pageId: input.pageId,
       chatterUserId: input.chatterUserId,
       ofapiAccountId: input.ofapiAccountId,
+      bindingGeneration: sql`(select ofapi_binding_generation from pages where id = ${input.pageId})`,
       conversationId: input.conversationId,
       kind: input.kind,
       payload: input.payload,

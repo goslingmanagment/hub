@@ -5,6 +5,8 @@ import {
   expireStaleQueuedOfapiCommands,
   finalizeOfapiCommand,
   findPageById,
+  withOfapiBindingLock,
+  markOfapiBindingUnavailable,
   getOfapiCommandById,
   insertObservation,
   listOfapiCommandVerificationCandidates,
@@ -18,12 +20,13 @@ import { millsFromDollars, normalizeDmMessageText } from "@agency_hub_core/share
 import type { PgBoss } from "pg-boss";
 
 import type { AppContext } from "../bootstrap.ts";
+import { notifyOfapiAuthIncident } from "./notification-incidents.ts";
 import { loadEffectiveConfig } from "./effective-config.ts";
 import {
   isOfapiDmColdArchiveEnabled,
   resolveOfapiDmColdArchiveRetentionDays,
 } from "./ofapi-dm-archive.ts";
-import { OfapiApiError } from "./ofapi.ts";
+import { OfapiApiError, OfapiCredentialNotReadyError, ofapiAccountNotFound } from "./ofapi.ts";
 import {
   isOfapiAccountHealthEnabled,
   ofapiAuthStatusNeedsAction,
@@ -64,7 +67,25 @@ export type OfapiCommandFailure = {
   httpStatus: number | null;
 };
 
+/** The command was claimed, but its local guard refused any vendor dispatch. */
+export class OfapiLocalDispatchRefusal extends Error {
+  constructor(
+    readonly reason: "account_unavailable" | "binding_replaced" | "auth_action_required" | "credential_not_verified",
+    readonly detail: string | null = null,
+  ) {
+    super(`OFAPI command refused before dispatch: ${reason}`);
+    this.name = "OfapiLocalDispatchRefusal";
+  }
+}
+
 export function classifyOfapiCommandFailure(error: unknown): OfapiCommandFailure {
+  if (error instanceof OfapiLocalDispatchRefusal) return {
+    state: "failed_terminal", errorClass: "terminal", httpStatus: null,
+    errorCode: error.reason === "account_unavailable" ? "ofapi_account_not_found" : `ofapi_${error.reason}`,
+  };
+  if (error instanceof OfapiApiError && ofapiAccountNotFound(error.status, error.body)) return {
+    state: "failed_terminal" as const, errorCode: "ofapi_account_not_found", errorClass: "terminal" as const, httpStatus: error.status,
+  };
   const status = error instanceof OfapiApiError
     ? error.upstreamStatus ?? error.status
     : null;
@@ -360,10 +381,11 @@ function unsendPayload(command: OfapiCommandRow): { messageId: string } {
   return { messageId: payload.messageId };
 }
 
-export async function executeOfapiCommand(
+async function executeCurrentOfapiCommand(
   app: AppContext,
   commandId: string,
   now = new Date(),
+  bindingLockDb = app.db,
 ) {
   if (!isOfapiCommandExecutionEnabled(app.config)) {
     return { status: "execution_disabled" as const };
@@ -406,7 +428,7 @@ export async function executeOfapiCommand(
         fromStates: ["in_flight"],
         state: "failed_terminal",
         now: failedAt,
-        lastErrorCode: "ofapi_auth_action_required",
+        lastErrorCode: stored.page.ofapiAuthStatus === "account_not_found" ? "ofapi_account_not_found" : "ofapi_auth_action_required",
         lastErrorClass: "terminal",
         verifierResult: {
           source: "auth_gate",
@@ -423,7 +445,7 @@ export async function executeOfapiCommand(
         command,
         state: "failed_terminal",
         outcome: {
-          errorCode: "ofapi_auth_action_required",
+          errorCode: stored.page.ofapiAuthStatus === "account_not_found" ? "ofapi_account_not_found" : "ofapi_auth_action_required",
           errorClass: "terminal",
           authStatus: stored.page.ofapiAuthStatus,
         },
@@ -437,6 +459,14 @@ export async function executeOfapiCommand(
   }
 
   try {
+    const binding = await findPageById(app.db, command.pageId);
+    if (binding?.page.ofapiAuthStatus === "account_not_found") throw new OfapiLocalDispatchRefusal("account_unavailable");
+    if (!binding || binding.page.ofapiAccountId !== command.ofapiAccountId ||
+        binding.page.ofapiBindingGeneration !== command.bindingGeneration) {
+      throw new OfapiLocalDispatchRefusal("binding_replaced");
+    }
+    if (ofapiAuthStatusNeedsAction(binding.page.ofapiAuthStatus)) throw new OfapiLocalDispatchRefusal("auth_action_required");
+    await app.ofapi?.assertCredentialReady?.();
     let platformMessageId: string | null = null;
     const verifierResult: Record<string, unknown> = {
       source: "ofapi_response",
@@ -516,7 +546,21 @@ export async function executeOfapiCommand(
     );
     return { status: "confirmed" as const, commandId: command.id };
   } catch (error) {
-    const failure = classifyOfapiCommandFailure(error);
+    const localRefusal = error instanceof OfapiLocalDispatchRefusal ? error
+      : error instanceof OfapiCredentialNotReadyError
+        ? new OfapiLocalDispatchRefusal("credential_not_verified", error.reason ?? error.preflightStatus)
+        : null;
+    if (error instanceof OfapiApiError && ofapiAccountNotFound(error.status, error.body)) {
+      const marked = await markOfapiBindingUnavailable(bindingLockDb, command.ofapiAccountId, command.bindingGeneration);
+      if (marked) await notifyOfapiAuthIncident({ ...app, db: bindingLockDb }, {
+        platformAccountId: marked.page.id, pageLabel: marked.page.label, platform: "onlyfans",
+        authStatus: "account_not_found", occurredAt: marked.markedAt,
+      });
+    }
+    const failure = classifyOfapiCommandFailure(localRefusal ?? error);
+    const failureEvidence = localRefusal
+      ? { source: "local_precondition", reason: localRefusal.reason, detail: localRefusal.detail }
+      : { source: "ofapi_response", httpStatus: failure.httpStatus };
     const finishedAt = new Date();
     const finalized = await finalizeOfapiCommand(app.db, {
       commandId: command.id,
@@ -526,8 +570,7 @@ export async function executeOfapiCommand(
       lastErrorCode: failure.errorCode,
       lastErrorClass: failure.errorClass,
       verifierResult: {
-        source: "ofapi_response",
-        httpStatus: failure.httpStatus,
+        ...failureEvidence,
         observedAt: finishedAt.toISOString(),
       },
     });
@@ -553,7 +596,7 @@ export async function executeOfapiCommand(
       outcome: {
         errorCode: failure.errorCode,
         errorClass: failure.errorClass,
-        httpStatus: failure.httpStatus ?? null,
+        ...failureEvidence,
       },
     });
     app.logger.warn(
@@ -562,7 +605,7 @@ export async function executeOfapiCommand(
         pageId: command.pageId,
         state: failure.state,
         errorCode: failure.errorCode,
-        httpStatus: failure.httpStatus,
+        ...failureEvidence,
       },
       "OFAPI command attempt reached a non-confirmed outcome",
     );
@@ -787,4 +830,11 @@ export async function startOfapiCommandWorker(
       );
     }
   });
+}
+
+export async function executeOfapiCommand(app: AppContext, commandId: string, now = new Date()) {
+  if (!isOfapiCommandExecutionEnabled(app.config)) return { status: "execution_disabled" as const };
+  const command = await getOfapiCommandById(app.db, { commandId });
+  if (!command) return { status: "not_claimed" as const };
+  return withOfapiBindingLock(app.db, command.pageId, db => executeCurrentOfapiCommand(app, commandId, now, db));
 }

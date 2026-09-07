@@ -1,3 +1,5 @@
+import { notifyOfapiGlobalIncident, resolveOfapiGlobalIncident } from "./notification-incidents.ts";
+import { listHistoricalOfapiBindings } from "@agency_hub_core/db";
 // Canonicalization driver (Stage 8). The minutely sweep IS the replay
 // executor: it walks observations whose parse_version is below their
 // family's current version, runs the pure canonicalizer, appends events
@@ -128,6 +130,8 @@ export async function ensureCanonicalizeSchedule(boss: QueueCreationClient) {
 }
 
 export interface CanonicalizationRunResult {
+  /** Conflicting refs are held unmapped; dry-run reports without incident mutations. */
+  bindingConflicts: string[];
   scanned: number;
   appended: number;
   deduped: number;
@@ -614,11 +618,29 @@ async function runFamily(
   return budgetExhausted;
 }
 
+/** One global latch; CLI/test stubs without config only log. Never called in dry-run. */
+async function reportOfapiBindingConflicts(
+  app: Pick<AppContext, "db" | "logger"> & Partial<Pick<AppContext, "config">>, refs: string[],
+) {
+  if (!app.config) return;
+  const incidentApp = { db: app.db, logger: app.logger, config: app.config };
+  if (refs.length > 0) {
+    await notifyOfapiGlobalIncident(incidentApp, {
+      kind: "ofapi_binding_conflict",
+      errorSummary: `OFAPI account(s) claimed by two pages: ${refs.join(", ")} — facts for these refs are held back until custody is settled`,
+      occurredAt: new Date(),
+    });
+  } else {
+    await resolveOfapiGlobalIncident(incidentApp, { kind: "ofapi_binding_conflict", recoveredAt: new Date() });
+  }
+}
+
 export async function runCanonicalization(
-  app: Pick<AppContext, "db" | "logger">,
+  app: Pick<AppContext, "db" | "logger"> & Partial<Pick<AppContext, "config">>,
   options: CanonicalizationRunOptions = {},
 ): Promise<CanonicalizationRunResult> {
   const totals: CanonicalizationRunResult = {
+    bindingConflicts: [],
     scanned: 0,
     appended: 0,
     deduped: 0,
@@ -655,6 +677,25 @@ export async function runCanonicalization(
       accountIdByNativeRef.set(`${page.platform}:${page.ofapiAccountId}`, page.id);
     }
   }
+  for (const binding of await listHistoricalOfapiBindings(app.db)) {
+    const key = `onlyfans:${binding.account_id}`;
+    const current = accountIdByNativeRef.get(key);
+    if (current !== undefined && current !== binding.page_id) {
+      // Two pages claim one provider account. Neither may receive its facts until an operator
+      // settles custody: the ref is quarantined (its rows stay skippedUnmapped and self-heal once
+      // the map is unambiguous), every other ref and family runs normally.
+      accountIdByNativeRef.delete(key);
+      totals.bindingConflicts.push(binding.account_id);
+      continue;
+    }
+    accountIdByNativeRef.set(key, binding.page_id);
+  }
+  if (totals.bindingConflicts.length > 0) {
+    app.logger.error({ bindingConflicts: totals.bindingConflicts, dryRun: options.dryRun === true },
+      "OFAPI binding custody conflict: refs quarantined from canonicalization");
+  }
+  // Stage 8 contract: a dry run writes NOTHING — no incident open, no incident resolve, no Telegram.
+  if (options.dryRun !== true) await reportOfapiBindingConflicts(app, totals.bindingConflicts);
   const runContext = {
     nativeAccountRefByAccountId: new Map(
       pages.map((page) => [page.id, page.nativeAccountRef] as const),

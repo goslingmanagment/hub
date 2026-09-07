@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   createModel,
@@ -21,7 +21,8 @@ import {
   sweepOfapiCommands,
   verifyOfapiCommandFromSentWebhook,
 } from "../apps/runtime/src/services/ofapi-command-executor.ts";
-import { OfapiApiError } from "../apps/runtime/src/services/ofapi.ts";
+import { createOfapiClient, OfapiApiError } from "../apps/runtime/src/services/ofapi.ts";
+import { ofapiCredentialPolicy } from "../apps/runtime/src/services/ofapi-credential-policy.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
@@ -47,6 +48,8 @@ afterAll(async () => {
   await apiServer?.close();
   await testDb?.stop();
 });
+
+afterEach(() => vi.unstubAllGlobals());
 
 beforeEach(async (context) => {
   if (!testDb) {
@@ -647,6 +650,111 @@ describe("OFAPI command outbox intake", () => {
       retryOfCommandId: originalId,
     }));
     expect(markReadRetry.statusCode, markReadRetry.body).toBe(400);
+  });
+
+  it("refuses a queued command from an earlier binding generation without sending", async () => {
+    appContext.config.ofapiDesktopCommandExecutionEnabled = true;
+    const sendTextMessage = vi.fn();
+    appContext.ofapi = { sendTextMessage } as unknown as AppContext["ofapi"];
+    const created = await createCommand(commandBody());
+    const commandId = (created.json() as { commandId: string }).commandId;
+    await testDb!.pool.query("update pages set ofapi_binding_generation=ofapi_binding_generation+1 where ofapi_account_id=$1", [ACCOUNT_ONE]);
+    await executeOfapiCommand(appContext, commandId);
+    await executeOfapiCommand(appContext, commandId);
+    expect(sendTextMessage).not.toHaveBeenCalled();
+    const result = (await getCommand(commandId)).json();
+    expect(result).toMatchObject({
+      state: "failed_terminal", attemptCount: 1, lastErrorCode: "ofapi_binding_replaced",
+      verifierResult: { source: "local_precondition", reason: "binding_replaced" },
+    });
+    expect(result.verifierResult).not.toHaveProperty("httpStatus");
+    const observations = await testDb!.pool.query(
+      "select payload from observations where kind='command.failed_terminal' and payload->>'commandId'=$1",
+      [commandId],
+    );
+    expect(observations.rows).toHaveLength(1);
+    expect(observations.rows[0].payload).toMatchObject({ source: "local_precondition", reason: "binding_replaced" });
+    expect(observations.rows[0].payload).not.toHaveProperty("httpStatus");
+  });
+
+  it.each([
+    { expectedTeam: null, body: {}, status: 200, detail: "expected_team_unconfigured", calls: 0 },
+    { expectedTeam: "expected", body: { team: { slug: "different" } }, status: 200, detail: "team_mismatch", calls: 1 },
+    { expectedTeam: "expected", body: { error: "forbidden" }, status: 403, detail: "provider_access_denied", calls: 1 },
+    { expectedTeam: "expected", body: {}, status: 200, detail: "team_missing", calls: 1 },
+  ])("records a local credential refusal for $detail without a send or fake HTTP response", async ({ expectedTeam, body, status, detail, calls }) => {
+    appContext.config.ofapiDesktopCommandExecutionEnabled = true;
+    appContext.config.ofapiExpectedTeamSlug = expectedTeam;
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(body), { status }));
+    vi.stubGlobal("fetch", fetchMock);
+    appContext.ofapi = createOfapiClient({
+      apiKey: "synthetic-credential", restDelayMs: 0,
+      ...ofapiCredentialPolicy(appContext.db, appContext.config, appContext.logger),
+    });
+    const created = await createCommand(commandBody());
+    const commandId = (created.json() as { commandId: string }).commandId;
+    await expect(executeOfapiCommand(appContext, commandId)).resolves.toMatchObject({ status: "failed_terminal" });
+    await executeOfapiCommand(appContext, commandId);
+    expect(fetchMock).toHaveBeenCalledTimes(calls);
+    for (const [url, init] of fetchMock.mock.calls) {
+      expect(String(url)).toMatch(/\/whoami$/);
+      expect(init).toMatchObject({ method: "GET" });
+    }
+    const result = (await getCommand(commandId)).json();
+    expect(result).toMatchObject({
+      state: "failed_terminal", attemptCount: 1, lastErrorCode: "ofapi_credential_not_verified",
+      verifierResult: { source: "local_precondition", reason: "credential_not_verified", detail },
+    });
+    expect(result.verifierResult).not.toHaveProperty("httpStatus");
+    const observations = await testDb!.pool.query(
+      "select payload from observations where kind='command.failed_terminal' and payload->>'commandId'=$1",
+      [commandId],
+    );
+    expect(observations.rows).toHaveLength(1);
+    expect(observations.rows[0].payload).toMatchObject({ source: "local_precondition", reason: "credential_not_verified", detail });
+    expect(observations.rows[0].payload).not.toHaveProperty("httpStatus");
+  });
+
+  it.each([
+    ["account_not_found", "account_unavailable", "ofapi_account_not_found"],
+    ["authentication_failed", "auth_action_required", "ofapi_auth_action_required"],
+  ])("keeps an existing %s marker local without redispatch or re-parking", async (authStatus, reason, errorCode) => {
+    appContext.config.ofapiDesktopCommandExecutionEnabled = true;
+    appContext.config.ofapiAccountHealthEnabled = false;
+    const sendTextMessage = vi.fn();
+    appContext.ofapi = { sendTextMessage } as unknown as AppContext["ofapi"];
+    const created = await createCommand(commandBody());
+    const commandId = (created.json() as { commandId: string }).commandId;
+    await testDb!.pool.query("update pages set ofapi_auth_status=$1 where ofapi_account_id=$2", [authStatus, ACCOUNT_ONE]);
+    await executeOfapiCommand(appContext, commandId);
+    expect(sendTextMessage).not.toHaveBeenCalled();
+    const result = (await getCommand(commandId)).json();
+    expect(result).toMatchObject({
+      state: "failed_terminal", attemptCount: 1, lastErrorCode: errorCode,
+      verifierResult: { source: "local_precondition", reason },
+    });
+    expect(result.verifierResult).not.toHaveProperty("httpStatus");
+    const page = await testDb!.pool.query("select ofapi_auth_changed_at from pages where ofapi_account_id=$1", [ACCOUNT_ONE]);
+    expect(page.rows[0].ofapi_auth_changed_at).toBeNull();
+  });
+
+  it("keeps a real command HTTP 403 distinct from a local credential refusal", async () => {
+    appContext.config.ofapiDesktopCommandExecutionEnabled = true;
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ team: { slug: "expected" } }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: "forbidden" }), { status: 403 }));
+    vi.stubGlobal("fetch", fetchMock);
+    appContext.ofapi = createOfapiClient({ apiKey: "synthetic-credential", restDelayMs: 0, credentialPolicy: { expectedTeamSlug: "expected" } });
+    const created = await createCommand(commandBody());
+    const commandId = (created.json() as { commandId: string }).commandId;
+    await executeOfapiCommand(appContext, commandId);
+    await executeOfapiCommand(appContext, commandId);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({ method: "POST" });
+    expect((await getCommand(commandId)).json()).toMatchObject({
+      state: "failed_terminal", attemptCount: 1, lastErrorCode: "ofapi_http_403",
+      verifierResult: { source: "ofapi_response", httpStatus: 403 },
+    });
   });
 
   it("executes one vendor attempt and confirms from the response id", async () => {

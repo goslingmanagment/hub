@@ -16,6 +16,21 @@ import {
   parseOfapiActiveFan,
 } from "../apps/runtime/src/services/sync/ofapi-audience-sync.ts";
 
+import { emptyOfapiAudienceCursorState, parseOfapiAudienceCursorState, ofapiAudienceQualityHoldFor } from "../apps/runtime/src/services/sync/cursor-state.ts";
+
+describe("audience quality checkpoint", () => {
+  it("defaults legacy checkpoints and preserves the durable hold and cross-chunk count", () => {
+    const empty = emptyOfapiAudienceCursorState();
+    expect(empty).toMatchObject({ observedFans: 0, lastSweepUnverifiedAt: null });
+    const { observedFans: _count, lastSweepUnverifiedAt: _hold, ...legacy } = empty;
+    expect(parseOfapiAudienceCursorState(legacy)).toEqual(empty);
+    const held = { ...legacy, observedFans: 7, lastSweepUnverifiedAt: "2026-09-06T00:00:00.000Z" };
+    expect(parseOfapiAudienceCursorState(held)).toEqual(held);
+    expect(ofapiAudienceQualityHoldFor(held)).toBe("subscribers_empty_sweep_guard");
+    expect(ofapiAudienceQualityHoldFor(empty)).toBeNull();
+  });
+});
+
 const FIXTURES_DIR = path.resolve("tests/fixtures/ofapi-webhooks");
 
 function loadFixturePayload(name: string): Record<string, unknown> {

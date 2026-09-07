@@ -153,7 +153,7 @@ describe("OFAPI fan identities (tracking/trial links)", () => {
       trackingUsers: new Map([
         ["42:subscribers", [linkUser(100001, "user1", "User One"), linkUser(100002, "user2", "User Two")]],
         // user2 also spent — dedupe happens naturally via the fans upsert.
-        ["42:spenders", [linkUser(100002, "user2", "User Two")]],
+        ["42:spenders", [{ onlyfans_id: "100002", username: "user2", name: "User Two" }, { onlyfans_id: "100004", username: "spender", name: "Spender Only" }]],
       ]),
       trialSubscribers: new Map([
         ["7", [linkUser(100003, "user3", "Deleted user")]],
@@ -196,6 +196,7 @@ describe("OFAPI fan identities (tracking/trial links)", () => {
       { platform_user_id: "100002", username: "user2", display_name: "User Two", on_page: true },
       // "Deleted user" display names are dropped; the fan row still lands.
       { platform_user_id: "100003", username: "user3", display_name: null, on_page: true },
+      { platform_user_id: "100004", username: "spender", display_name: "Spender Only", on_page: true },
     ]);
   });
 

@@ -1,3 +1,5 @@
+import { ServiceUnavailableError } from "../../services/errors.ts";
+import { refreshOfapiBinding } from "../../services/ofapi-binding-refresh.ts";
 import { routeSchemas } from "@agency_hub_core/contracts";
 
 import {
@@ -123,6 +125,23 @@ export async function registerIngestRoutes(server: ApiServer, ctx: ApiModuleCont
     requireOwner(principal);
 
     return getOfapiWebhookStatus(appContext);
+  });
+
+  server.post("/api/v1/admin/ofapi/webhook/bindings", {
+    schema: routeSchemas.adminOfapiBindingRefresh,
+  }, async request => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    return refreshOfapiBinding(appContext, request.body, principal.user.id);
+  });
+  server.get("/api/v1/admin/ofapi/webhook/preflight", {
+    schema: routeSchemas.adminOfapiCredentialPreflight,
+  }, async request => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    const proof = await appContext.ofapi?.getCredentialPreflight?.();
+    if (!proof) throw new ServiceUnavailableError("OFAPI preflight unavailable");
+    return proof;
   });
 
   server.post("/api/v1/admin/ofapi/webhook", {

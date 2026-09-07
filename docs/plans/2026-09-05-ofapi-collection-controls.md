@@ -1,5 +1,10 @@
 # OFAPI: управление сбором данных и расходами
 
+Implementation note, 2026-09-05: the first technical release has a separate
+[implementation and live-acceptance runbook](../runbooks/ofapi-refresh-release1.md).
+Its code covers S0/S1/S4a and the minimum S5 prerequisite. This does not mark
+production recovery, posts capture, S-POL or S-UI complete.
+
 05.09.2026. Спецификация двух отдельных этапов плана PR #131: S-POL (серверный контроль) и S-UI (интерфейс). Статус: проект контрактов и поведения; настройки production не менялись. Fansly исключён.
 
 ## Решение владельца и изменение приоритета

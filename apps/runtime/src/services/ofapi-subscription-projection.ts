@@ -8,7 +8,7 @@
 // sweep last wrote and only ever advance forward.
 
 import {
-  findPageByOfapiAccountId,
+  findActiveOfapiPageForLiveConsumer,
   findPageSubscription,
   listOfapiWebhookEventsForDmProjection,
   markOfapiWebhookEventProjection,
@@ -135,7 +135,7 @@ async function projectOfapiSubscriptionEvent(
   }
 
   const page = row.ofapiAccountId
-    ? await findPageByOfapiAccountId(app.db, row.ofapiAccountId)
+    ? await findActiveOfapiPageForLiveConsumer(app.db, row.ofapiAccountId)
     : null;
   if (!page) {
     return {

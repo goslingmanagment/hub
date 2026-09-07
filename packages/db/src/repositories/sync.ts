@@ -477,6 +477,14 @@ export async function getCheckpoint(
   })) ?? null;
 }
 
+/** A bounded read for lightweight status summaries; never seeds sync state. */
+export async function listCheckpointStates(db: Database, pageIds: number[], stream: SyncStream) {
+  if (pageIds.length === 0) return [];
+  return db.select({ pageId: pageSyncCursors.pageId, state: pageSyncCursors.state })
+    .from(pageSyncCursors)
+    .where(and(inArray(pageSyncCursors.pageId, pageIds), eq(pageSyncCursors.stream, stream)));
+}
+
 export interface FanslyDmRawPayloadCursorRow {
   id: number;
   responsePayload: unknown;

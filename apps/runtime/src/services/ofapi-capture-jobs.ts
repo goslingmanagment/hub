@@ -34,7 +34,7 @@ import {
   parseStrictOfapiMessagePage,
   parseStrictOfapiPostPage,
 } from "./ofapi-capture-contract.ts";
-import { resolveOfapiEgressContext } from "./ofapi-egress.ts";
+import { OfapiBindingUnavailableError, resolveOfapiEgressContext } from "./ofapi-egress.ts";
 import { OFAPI_CAPTURE_MATERIALIZER_VERSION } from "./ofapi-capture-materialization.ts";
 import {
   buildOfapiExportQuoteRequest,
@@ -1332,7 +1332,7 @@ export async function executeOfapiCaptureJobChunk(
     await blockJob(
       app,
       job,
-      "egress_unavailable",
+      error instanceof OfapiBindingUnavailableError ? "binding_unavailable" : "egress_unavailable",
       error instanceof Error ? error.message : String(error),
     );
     return { kind: "blocked", pageId, jobId: job.id };
@@ -1393,9 +1393,26 @@ export async function executeOfapiCaptureJobChunk(
     // name allowlist. Every safe GET is repeatable after conservatively
     // settling the uncertain attempt as billed; stateful requests remain
     // parked for operator reconciliation.
-    const indeterminateRetryAt = requestPlan.requestSemantics === "safe_read"
-      ? new Date(Date.now() + 60_000)
-      : null;
+    // Anchor retry to the failure transition: a slow response or failed capture
+    // commit can outlast the entire retry delay. Use one clock sample for the
+    // repository invariant and retry so elapsed HTTP time cannot strand a lease.
+    const indeterminateTiming = () => {
+      const now = new Date();
+      return {
+        now,
+        retrySafeReadAt: requestPlan.requestSemantics === "safe_read"
+          ? new Date(now.getTime() + 60_000)
+          : null,
+      };
+    };
+    const logIndeterminateSettlementFailure = (error: unknown) => {
+      app.logger.error({
+        jobId: job.id,
+        attemptId: reservation.attemptId,
+        errorName: error instanceof Error ? error.name : "UnknownError",
+        recovery: "expired_job_lease",
+      }, "OFAPI capture settlement failed; awaiting lease recovery");
+    };
     try {
       raw = await app.ofapi.dispatchGovernedRaw({
         pageId: job.pageId,
@@ -1430,21 +1447,20 @@ export async function executeOfapiCaptureJobChunk(
           retryAt: new Date(Date.now() + 60_000),
         });
       } else {
+        const details = error instanceof OfapiGovernedRequestError
+          ? { reason: error.reason, phase: error.phase, ...error.diagnostics }
+          : { reason: "transport", phase: "post_dispatch" };
+        app.logger.warn({
+          jobId: job.id, pageId: job.pageId, attemptId: reservation.attemptId,
+          ...details,
+        }, "OFAPI capture transport failed");
         await markOfapiAttemptIndeterminate(app.db, {
           attemptId: reservation.attemptId,
           fenceToken: reservation.fenceToken,
           outcome: "transport",
-          details: {
-            error: error instanceof Error ? error.message : String(error),
-            // The governed reason is what an operator needs when the bound
-            // parks the job: `body_too_large` is a plan to change,
-            // `transport` is a network to look at.
-            ...(error instanceof OfapiGovernedRequestError
-              ? { reason: error.reason, phase: error.phase }
-              : {}),
-          },
-          retrySafeReadAt: indeterminateRetryAt,
-        });
+          details,
+          ...indeterminateTiming(),
+        }).catch(logIndeterminateSettlementFailure);
       }
       return { kind: "failed", pageId, jobId: job.id };
     }
@@ -1481,8 +1497,8 @@ export async function executeOfapiCaptureJobChunk(
         details: {
           error: captureError instanceof Error ? captureError.message : String(captureError),
         },
-        retrySafeReadAt: indeterminateRetryAt,
-      }).catch(() => undefined);
+        ...indeterminateTiming(),
+      }).catch(logIndeterminateSettlementFailure);
       return { kind: "failed", pageId, jobId: job.id };
     }
 

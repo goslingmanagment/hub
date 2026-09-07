@@ -522,7 +522,8 @@ describe("ofapi credit ledger integration", () => {
     expect(await listNotificationIncidents(appContext.db, { status: "resolved" })).toHaveLength(1);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("anchors reconciliation with the optional balance ping", async (context) => {
+  for (const balance of [0, 23_950]) {
+  it(`anchors free balance ${balance} without a mapped account`, async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -533,7 +534,6 @@ describe("ofapi credit ledger integration", () => {
       return;
     }
 
-    const page = await seedMappedPage("lora-of-ping", "acct_ping");
     const pingContext: AppContext = {
       ...createTestAppContext(testDb, {
         ofapiCreditLedgerEnabled: true,
@@ -542,7 +542,7 @@ describe("ofapi credit ledger integration", () => {
     };
     pingContext.ofapi = buildClient(baseUrl, pingContext);
 
-    scriptResponse({ status: 200, body: metaBody([], { used: 1, balance: 23_950 }) });
+    scriptResponse({ status: 200, body: metaBody([], { used: 0, balance }) });
     await runOfapiBalancePing(pingContext);
 
     const rows = await listLedgerRows();
@@ -550,9 +550,9 @@ describe("ofapi credit ledger integration", () => {
     expect(rows[0]).toMatchObject({
       source: "rest",
       operation: "ofapi_balance_ping",
-      credits: 1,
-      balance_after: 23_950,
-      page_id: page.id,
+      credits: 0,
+      balance_after: balance,
+      page_id: null,
     });
 
     // Ping without the ledger (or with the ping flag off) is inert.
@@ -563,4 +563,5 @@ describe("ofapi credit ledger integration", () => {
     await runOfapiBalancePing(disabledContext);
     expect(await listLedgerRows()).toHaveLength(1);
   }, INTEGRATION_TEST_TIMEOUT_MS);
+  }
 });

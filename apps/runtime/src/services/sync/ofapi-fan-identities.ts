@@ -74,9 +74,10 @@ async function upsertLinkUsers(
   app: AppContext,
   pageId: number,
   items: Record<string, unknown>[],
+  kind: "subscribers" | "spenders",
 ) {
   const fanInputs = items.flatMap((item) => {
-    const platformUserId = idToString(item.id);
+    const platformUserId = idToString(kind === "spenders" ? item.onlyfans_id : item.id);
     if (!platformUserId) {
       return [];
     }
@@ -350,9 +351,9 @@ export async function syncOfapiFanIdentities(
   }
 
   // Phase 2: each link's users -> fans/page_fans.
-  const consumeUsers = async (items: Record<string, unknown>[]) => {
+  const consumeUsers = async (items: Record<string, unknown>[], kind: "subscribers" | "spenders") => {
     stats.userPages += 1;
-    stats.upsertedFans += await upsertLinkUsers(app, input.pageContext.page.id, items);
+    stats.upsertedFans += await upsertLinkUsers(app, input.pageContext.page.id, items, kind);
   };
 
   const targets: Array<{ key: string; fetchPage: GuardedFetch }> = [];
@@ -415,7 +416,7 @@ export async function syncOfapiFanIdentities(
       const page = await target.fetchPage(offset, pageLimit);
       await guard.recordResponse(page);
       stats.requestsUsed += 1;
-      await consumeUsers(page.items);
+      await consumeUsers(page.items, target.key.endsWith(":spenders") ? "spenders" : "subscribers");
       if (page.items.length < pageLimit) {
         completedTargetKeys.add(target.key);
         cursor = { ...cursor, activeTargetKey: null, activeOffset: 0 };

@@ -102,6 +102,25 @@ describe("OfapiCreditsPage", () => {
     expect(markup).not.toContain('role="alert"');
   });
 
+  it("keeps an unexplained balance drop visible without presenting it as recurring spend", () => {
+    queryMocks.useAdminOfapiCreditsSummary.mockReturnValue({
+      data: summaryFixture({ forecast: {
+        basis: "recorded_activity", avgDailySpend7d: 100, daysLeft: 10,
+        runOutDate: "2026-06-22", monthToDateSpend: 100, monthEndProjection: 1000,
+        monthUnverifiedResidualCredits: 38_795,
+        unverifiedResidual: { credits: 38_795, from: "2026-06-05T12:00:00.000Z", to: "2026-06-12T12:00:00.000Z" },
+        refillRecommendation: { targetDays: 30, credits: 0 },
+      } }), isLoading: false, isError: false,
+    });
+    const markup = renderPage();
+    expect(markup).toContain("Прогноз по операциям");
+    expect(markup).toContain("Необъяснённая разница баланса в прогноз не включена");
+    expect(markup).toContain(`38${NBSP}795`);
+    expect(markup).toContain("2026-06-05 12:00 UTC");
+    expect(markup).toContain("Уточнить расход");
+    expect(markup).toContain("Фактический расход может быть выше прогноза");
+  });
+
   it("shows today's spend with a per-source split and labelled budget meters", () => {
     queryMocks.useAdminOfapiCreditsSummary.mockReturnValue({
       data: summaryFixture(),
@@ -110,12 +129,12 @@ describe("OfapiCreditsPage", () => {
     });
 
     const markup = renderPage();
-    expect(markup).toContain("Потрачено сегодня · 2026-06-12");
+    expect(markup).toContain("Учтено сегодня · 2026-06-12");
     expect(markup).toContain("137");
     // Only non-zero sources are listed (adjustment 0 is omitted).
     expect(markup).toContain("Приложение");
     expect(markup).toContain("Вебхуки");
-    expect(markup).toContain("Вне приложения");
+    expect(markup).toContain("Сверка баланса");
     // Budget meters use plain-language stream names.
     expect(markup).toContain("Синк сообщений");
     expect(markup).toContain("84 из 500 кр");
@@ -124,6 +143,50 @@ describe("OfapiCreditsPage", () => {
     // The floor reads as what it does, not "floor 500 OK".
     expect(markup).toContain("Порог автостопа: 500 кр");
     expect(markup).toContain("остановятся");
+  });
+
+  it("shows negative corrections alongside the net daily total", () => {
+    queryMocks.useAdminOfapiCreditsSummary.mockReturnValue({
+      data: summaryFixture({ today: {
+        day: "2026-06-12", total: 0,
+        bySource: { rest: 1, adjustment: -1, webhookAccrual: 0, external: 0 },
+      } }), isLoading: false, isError: false,
+    });
+    const markup = renderPage();
+    expect(markup).toContain("Приложение 1");
+    expect(markup).toContain("Корректировки -1");
+    expect(markup).not.toContain("Сегодня пока ничего не потрачено");
+  });
+
+  it("keeps a negative net budget amount visible while clamping its visual meter", () => {
+    queryMocks.useAdminOfapiCreditsSummary.mockReturnValue({
+      data: summaryFixture({ budgets: [{
+        stream: "dm", spentToday: -25, dailyCeiling: 500, state: "ok", retryAt: null,
+      }] }), isLoading: false, isError: false,
+    });
+    const markup = renderPage();
+    expect(markup).toContain("-25 из 500 кр");
+    expect(markup).toContain('aria-valuenow="0"');
+    expect(markup).toContain('style="width:0%"');
+    expect(markup).not.toContain('style="width:-');
+  });
+
+  it("omits percentage shares for a mixed-sign operation window", () => {
+    queryMocks.useAdminOfapiCreditsSummary.mockReturnValue({
+      data: summaryFixture(), isLoading: false, isError: false,
+    });
+    queryMocks.useAdminOfapiCreditsDaily.mockReturnValue({
+      data: { ...emptyDaily, byOperation: [
+        { operation: "ofapi_chats", requests: 1, credits: 10 },
+        { operation: "ofapi_chat_messages", requests: 0, credits: -9 },
+      ] }, isLoading: false, isError: false,
+    });
+    const markup = renderPage();
+    expect(markup).toContain(">-9</td>");
+    expect(markup).toContain(">10</td>");
+    expect(markup).not.toContain("1000%");
+    expect(markup).not.toContain("-900%");
+    expect(markup).not.toContain('style="width:-');
   });
 
   it("keeps system health collapsed and quiet while everything passes", () => {
@@ -174,7 +237,7 @@ describe("OfapiCreditsPage", () => {
     expect(markup).toContain("config-ofapiCreditLedgerEnabled");
     expect(markup).not.toContain("OFAPI_CREDIT_LEDGER_ENABLED");
     // Ledger-derived sections are hidden with the flag off.
-    expect(markup).not.toContain("Траты по дням");
+    expect(markup).not.toContain("Движение кредитов по дням");
     expect(markup).not.toContain("Куда уходят кредиты");
     expect(markup).not.toContain("Журнал операций");
   });
@@ -273,6 +336,34 @@ describe("OfapiCreditsPage", () => {
     expect(markup).toContain('aria-expanded="false"');
     expect(markup).toContain('aria-label="Развернуть детали записи"');
     expect(markup).toContain("aria-controls=");
+  });
+
+  it.each([
+    ["rest", "Оценка при учёте HTTP-запроса; подтверждения и уточнения отражаются отдельными корректировками"],
+    ["webhook_accrual", "Оценка по числу полученных вебхуков, а не подтверждённое списание OFAPI"],
+    ["external", "Необъяснённое уменьшение баланса после учтённых расходов; источник не подтверждён"],
+    ["refill", "Увеличение баланса после учтённых расходов; платёж не подтверждён"],
+    ["adjustment", "Оценочная корректировка учёта кредитов"],
+  ])("explains estimated %s rows using their actual evidence source", (source, explanation) => {
+    queryMocks.useAdminOfapiCreditsSummary.mockReturnValue({
+      data: summaryFixture(), isLoading: false, isError: false,
+    });
+    queryMocks.useAdminOfapiCreditsLedger.mockReturnValue({
+      isLoading: false,
+      data: {
+        total: 1, pageOptions: [],
+        rows: [{
+          id: 12, occurredAt: "2026-06-12T10:30:00.000Z", source,
+          operation: source === "rest" ? "ofapi_capture_posts" : null,
+          pageId: null, pageLabel: null, httpStatus: source === "rest" ? 200 : null,
+          credits: source === "refill" ? -100 : 1, estimated: true,
+          balanceAfter: null, requestId: null, accrualDay: null,
+        }],
+      },
+    });
+    const markup = renderPage();
+    expect(markup).toContain(explanation);
+    expect(markup).not.toContain("точная сумма спишется с дневным начислением вебхуков");
   });
 
   it("offers an operation datalist from the breakdown operations", () => {
@@ -530,7 +621,7 @@ describe("OfapiCreditsPage", () => {
 
     const markup = renderPage();
     expect(markup).toContain('role="alert"');
-    expect(markup).toContain("Кредиты сгорают быстро");
+    expect(markup).toContain("Журнал показывает расход или разницу баланса");
     expect(markup).toContain("450 кр за последние");
     expect(markup).toContain("Синк чатов (300 кр)");
     expect(markup).toContain("lora-of (150 кр)");
@@ -602,7 +693,7 @@ describe("OfapiCreditsPage", () => {
 
     const markup = renderPage();
     expect(markup).toContain("Не нужно");
-    expect(markup).toContain("баланса хватает больше чем на 30 дней");
+    expect(markup).toContain("по учтённым операциям баланса хватит больше чем на 30 дней");
   });
 
   it("shows the error panel when the summary fails", () => {

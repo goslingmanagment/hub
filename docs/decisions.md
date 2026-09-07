@@ -252,6 +252,15 @@ appends a row here in the same change (family law: updated-in-change).
 | 249 | An explicit posts request is the manual action | `POST /admin/sync/trigger {scope: posts}` — the explicit per-page operator action — now clears a `manual_action_required` block on the posts stream (`clearPageSyncManualActionBlock`, that blocker kind only) BEFORE recording the request, so the request lands on a runnable row. Production 2026-09-04: after #128's cancel/resolve the streams stayed `blocked` with the old `ofapi_capture_job_*` codes because `resumePageSync` only lifts `paused` and nothing ever cleared a manual block; the explicit request the code itself calls "an explicit per-page operator action" was a no-op on exactly the state it exists for. `provider_bad_data`/`dependency` blocks are untouched. The posts handler also forgets an owner-cancelled pending job (checkpoint still named it) and seeds a fresh one through the ordinary slot path. |
 | 250 | OFAPI UI inherits the existing Anthropic-inspired Hub design | Owner requirement for the OFAPI refresh: use the current dashboard theme, typography, spacing and shared components across collection controls and other new OFAPI screens. The concrete source is globals.css plus Settings and OFAPI Credits; token reuse and visual consistency are acceptance criteria. |
 | 251 | OFAPI collection policy and UI are separate stages | Owner separates backend S-POL from frontend S-UI, each with independent implementation and acceptance. Saved mockups are non-normative references outside the implementation plan. New collection still requires both applicable stages plus explicit staged activation; existing Hub design tokens remain authoritative. |
+| 252 | OFAPI binding custody, credential adoption and free balance | S0/S1/S4a and minimum S5 use verified creator identity, a preview bound to current generation, durable historical attribution and narrow recovery. Expected team comes from independent configuration; unknown access fails closed for writes. The optional balance probe uses free usage. Code acceptance and live acceptance stay separate. |
+| 253 | OFAPI roster capture | Account roster is restricted identity evidence; typed projection excludes session material before capture and preserves identity conflicts |
+| 254 | OFAPI missing binding | Park only unblocked work and current-generation auth; repeated 404 preserves state versions and retries notifications with the original marker time |
+| 255 | OFAPI recovery evidence | Authenticated target required; roster transport receipt is persisted as the binding recovery watermark and audit evidence |
+| 256 | OFAPI owner pause recovery | Auth marker and owner pause are separate; recovery locks sync rows before reread and clears only its marker, leaving Resume to the owner |
+| 257 | OFAPI permanent custody | Every initial binding checks historical ownership; ambiguous refs are quarantined, lifecycle is gated after ownership, and dry-run never mutates incidents |
+| 258 | OFAPI audience quality | Unverified empty sweeps preserve membership and freshness; checkpoint hold drives both status readers until certification |
+| 259 | OFAPI capture uses vendor transport | Binding authorizes the account; Hub-to-OFAPI capture and gateway reads use the canonical vendor-direct route with one client pacing claim. Page-proxy availability cannot gate OFAPI capture; bounded diagnostics preserve dispatch certainty and omit arbitrary causes. |
+| 260 | OFAPI accounting evidence | Complete pages count once; exact zero-delta receipts remain append-only evidence; signed corrections reach attributed read models. Activity forecasts exclude visibly reported unverified balance drift. Local command refusals are not provider HTTP responses. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -10719,3 +10728,195 @@ are ready and the owner explicitly activates one bounded lane through the
 existing staged rollout. Separating the UI does not relax server-side budget
 enforcement, capture-first retention or the activation gate. No application
 code, migration or production configuration is changed by this decision.
+
+
+## OFAPI first refresh release: identity and recovery boundaries (2026-09-05)
+
+**Decision #252:** Implement the S0/S1/S4a and minimum-S5 release from
+[PR #131](https://github.com/goslingmanagment/core/pull/131), merged as
+`f1834cd9`. This decision records implementation boundaries, not production
+acceptance. The [release runbook](runbooks/ofapi-refresh-release1.md) records
+configuration, migration, acceptance and recovery requirements.
+
+A provider account is a replaceable connection, not the creator identity.
+`onlyfans_id` is the primary creator evidence; nested fallback is explicit,
+and conflicting or unsafe numeric identities fail closed. Replacing a binding
+requires an owner-session preview with stable creator evidence, the exact
+current account/generation and versioned recovery candidates. Applying it
+atomically retains custody history and an operator observation. Usernames alone
+cannot seed an existing page. Imported historical references keep unknown time
+boundaries rather than inventing dates.
+
+Historical account lookup serves attribution and replay, including late
+redelivery. Auth, gateway and commands keep the current binding boundary.
+Replacement, lifecycle changes and command dispatch share a page lock. Outbox
+state commits remain independently visible so a webhook can win confirmation
+while a send is in flight. A queued command from a former generation cannot be
+sent; existing indeterminate rows never restart automatically. Recovery clears
+only the previewed auth blockers of the replaced generation and preserves
+checkpoints, user pauses, collection flags and budgets. Legacy blockers without
+a provable generation remain for explicit review.
+
+Credential adoption compares vendor `whoami.team.slug` with an independently
+configured expected team and caches the result for that credential/client.
+Unknown, mismatch and denied are distinct; none admits stateful vendor actions.
+A visible account roster never proves full scope. Webhook registration inspects
+remote state before a stable noop; a 404 only permits durable recreation after
+configured team-wide management visibility and successful inventory absence
+proof. Ambiguous creation remains in the existing reconciliation flow.
+
+The optional balance probe reads free `/usage/credits`, independent of account
+bindings and the paid-read credit floor. Zero is observed zero; unavailable
+metadata remains unknown. S4b spending reconciliation, additional collectors,
+S-POL/S-UI and broader commands/events remain separate. Posts capture remains
+an unresolved defect with its own live acceptance.
+
+
+## OFAPI roster capture excludes session material (2026-09-06)
+
+**Decision #253:** `ofapi_admin_accounts` is control-plane identity evidence, not a
+business fact. Capture uses a typed allowlist, excludes nested session material
+and `_meta`, and withholds non-200 bodies. The payload hash describes stored
+bytes; the source hash and UTF-8 byte count remain in redaction metadata.
+Historical binding evidence must preserve creator identity and conflict verdicts
+through projection, including alias precedence and unsafe/non-finite numeric IDs.
+Finite unsafe IDs remain numeric so the parser rejects them; non-finite values
+become invalid strings rather than JSON null. The kind is restricted for tiering
+and explicitly refused by Agent Read. Other captures retain their existing contract.
+
+
+## Missing OFAPI bindings preserve blocker ownership (2026-09-06)
+
+**Decision #254:** Missing-account handling may park runnable work without a
+blocker and auth rows of the same binding generation, revoking their leases.
+It preserves unrelated blockers, legacy generations and owner/gate pauses.
+State changes use the page binding lock and ordered sync-row locks. A repeated
+404 returns the original marker timestamp without rewriting versions; callers
+still use existing bounded incident delivery retries. Recovery tombstones can
+suppress a late notification by that original occurrence time.
+
+
+## Verified binding recovery records its evidence boundary (2026-09-06)
+
+**Decision #255:** Preview and apply require `is_authenticated=true`. The client
+records JS time immediately after the full roster body is read, before DB or
+credit-ledger waits, and propagates it into `insertObservation.receivedAt`.
+The apply-time roster observation ID and receipt remain in custody and audit;
+the receipt becomes `ofapi_auth_changed_at` with null status. New-account events
+received before it are stale; events at or after it still advance. The timestamp
+is excluded from the preview token so the fresh apply-time fetch remains usable.
+This receipt is not vendor event time and does not replay events already skipped
+before the new binding existed.
+
+
+## Auth recovery preserves owner pause without stranding its blocker (2026-09-06)
+
+**Decision #256:** Verified apply and same-generation connected/reconnected clear
+a confirmed auth blocker from an owner-paused row while preserving its pause.
+Apply locks all page sync rows in the same order as Pause/Resume before rereading
+the recovery snapshot and retains those locks through cleanup. Resume either
+precedes that decision and causes a preview conflict, or waits until the marker
+is gone. Connected recovery uses one UPDATE with a per-row pause decision.
+Checkpoints and unknown-generation legacy blockers are unchanged.
+
+
+## OFAPI initial mapping obeys permanent custody (2026-09-06)
+
+**Decision #257:** Every binding writer checks and maintains `ofapi_account_bindings`.
+Initial mapping/unmapping uses the same page and custody locks as verified apply;
+non-null replacement requires preview/apply. Account custody cannot move between
+Hub pages. Historical lookup considers owners regardless of lifecycle status;
+only the separate active gate admits live projection writes. A conflicting ref
+is held unmapped and opens `ofapi_binding_conflict` while other refs continue.
+Dry-run reports conflicts but never opens/resolves incidents. Clearing a claim
+restores canonicalization; already-skipped live events need bounded owner repair.
+
+
+## Empty OFAPI audience sweeps require certification (2026-09-06)
+
+**Decision #258:** An audience generation counts parsed fans across chunks. A
+completed all-empty sweep with existing current subscriptions cannot expire that
+membership or advance the successful checkpoint. It records an anomaly and a
+persistent `lastSweepUnverifiedAt`, and settles as `qualityHold`: the executor
+releases the lease with `skipPageSync`, records a skipped run and preserves
+success/progress timestamps, failures and open incidents. A subsequent
+`sweep_not_due` retains the hold. A certified sweep clears it. Detailed monitor
+and lightweight connections/overview summaries read the checkpoint, independent
+of unrelated run completions. They report Unverified without requiring a
+credential action. Ordinary partial chunks retain their existing retry/progress
+and incident recovery semantics; a hold is a completed uncertified attempt.
+Legacy checkpoints default the count to zero and the hold to null.
+
+## OFAPI capture and gateway use the vendor transport (2026-09-06)
+
+**Decision #259:** Account binding and transport identity are separate. The
+OFAPI egress helper checks the current page/platform/account before admission,
+then obtains `vendor:ofapi` from the canonical resolver, just as the recorded
+vendor policy specifies. Capture and desktop reads no longer require or decrypt
+the page proxy. The helper exposes only dispatcher/key/close; the existing OFAPI
+client owns the one pacing claim, and a null dispatcher leaves the shared native
+pool open. A binding mismatch is `binding_unavailable`, not a network diagnosis.
+Chargebacks and transaction backfill also stop constructing page-proxy agents
+that their list transport never consumed. Fansly and AI service routes keep
+their own existing policies. The unused legacy page-scope resolver branch is
+not a supported OFAPI route.
+
+This reverses the June 23 page-proxy workaround for large responses. Production
+controls on September 6 found the two affected pages' common proxy unreachable
+over TCP from API (10 seconds) and worker (65 seconds). Exact posts `limit=100`
+direct controls returned HTTP 200 with complete bodies of 357,906 and 381,786
+bytes in 5.57 and 7.41 seconds. Historical attempts prove only transport failure
+before headers: their nested cause was not retained. The earlier 10 MiB theory
+is not the diagnosis of this incident; neither cap nor request timeout changes.
+
+Governed failures expose only allowlisted machine class/name/code, header/body
+stage, elapsed time, timeout, status and byte counts. These reach structured
+logs and existing ledger details; the job reason includes the bounded transport
+class. No raw cause message, URL or credentials cross this boundary. A connect
+classification does not change dispatch certainty, assumed billing, safe-read
+retry bounds or the prohibition on automatically repeating stateful requests.
+
+Recovery uses the existing #246/#249 owner cancel and per-page posts request,
+one job at a time, retaining attempts and anchors. Balance above the effective
+floor plus unsettled reservations is an independent prerequisite. See
+`docs/runbooks/ofapi-posts-transport-recovery.md` for checks and proof of success.
+
+## OFAPI accounting separates activity from balance inference (2026-09-06)
+
+**Decision #260:** A balance discontinuity is evidence of a changed balance,
+not proof of an external payment or charge. Historical credit observations do
+not establish credential/team continuity. Their inferred `external` and `refill`
+rows remain in the append-only audit history; changing a key does not authorize
+deleting those rows or inventing a historical provider receipt. Runway and refill
+recommendations use net recorded activity and expose the excluded unverified
+residual and its window. The UI distinguishes reconciliation from an actual
+payment, qualifies estimates by their source, and does not turn a residual-only
+window into assurance that further funding is unnecessary. Live balance,
+admission, reservation and conservative burn-monitor policy remain independent
+of this forecast basis.
+
+Provider certainty is evidence even when actual credits equal the reservation.
+The capture ledger records that zero-delta confirmation and any reported balance
+once under the existing attempt/phase identity. It does not become another
+request or expense, and zero-credit observations do not extend the observed
+spending window. Signed provider corrections participate in period totals and
+page, operation and chatter attribution; a cached zero-cost response cannot
+retain its original estimated charge in one view while being free in another.
+
+Capture completion counts the final accepted page/items in the same fenced
+transaction as terminal settlement. Retry, blocked-parser recovery and replay
+retain their existing cursor ownership. Historical terminal facts/results stay
+authoritative for old completed jobs whose raw progress counters omitted their
+last page; this change does not claim a historical counter backfill.
+
+Command credential/binding/auth preconditions use typed local evidence and no
+fabricated vendor HTTP status in the outbox result. A real provider rejection
+keeps its HTTP evidence. One claimed attempt remains terminal on local refusal;
+neither a key change nor this classification authorizes automatic send replay.
+
+The chatter response retains the nonnegative legacy estimate fields accepted by
+already-installed SDK validators. Additive net fields carry the exact signed
+amounts, including negative correction windows. Only the legacy representation
+is floored at zero; ledger facts and the new net fields are not. Existing clients
+continue to accept the response, while displaying negative windows requires
+adoption of the additive net fields.

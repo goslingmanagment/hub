@@ -254,6 +254,7 @@ export const notificationIncidentKindEnum = pgEnum("notification_incident_kind",
   // G5 slice 1 (0124): the content-addressed capture copy disagrees with the
   // inline authority, or points at an object that is not there.
   "capture_payload_parity",
+  "ofapi_binding_conflict",
 ]);
 export const notificationIncidentStatusEnum = pgEnum("notification_incident_status", [
   "open",
@@ -304,7 +305,9 @@ export const pages = pgTable(
     // Latest accounts.* webhook state for the mapped OFAPI account (raw event
     // suffix, e.g. "connected" / "authentication_failed"); forward-only by
     // received_at. Null until the first accounts.* event is projected.
+    ofapiBindingGeneration: integer("ofapi_binding_generation").notNull().default(1),
     ofapiAuthStatus: text("ofapi_auth_status"),
+    // Verified apply stores null status with the authenticated roster receipt as the forward-only boundary.
     ofapiAuthChangedAt: timestamp("ofapi_auth_changed_at", { withTimezone: true }),
     username: text("username"),
     displayName: text("display_name"),
@@ -1468,6 +1471,7 @@ export const ofapiCommands = pgTable(
     chatterUserId: bigint("chatter_user_id", { mode: "number" })
       .references(() => users.id, { onDelete: "restrict" })
       .notNull(),
+    bindingGeneration: integer("binding_generation").notNull().default(1),
     ofapiAccountId: text("ofapi_account_id").notNull(),
     conversationId: text("conversation_id").notNull(),
     kind: text("kind").$type<OfapiCommandKind>().notNull(),

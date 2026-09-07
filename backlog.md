@@ -579,3 +579,9 @@ ari-1 ~440; пик 24 зап/мин (= пейсинг 2.5 с), lilly-2 акти�
 - **Закрыть:** читать link ids из последнего complete `page_link_stat_runs`
   вместо свежего discovery-обхода; перед этим зафиксировать freshness-контракт
   (bound на staleness каталога). Добавлено 2026-07-22.
+
+
+## OFAPI follow-ups outside PR #132 recovery fixes
+
+- Narrow the shared Fansly `pausePageSyncForAuth` / `markPageSyncAuthBlocked` ownership predicates separately; they still replace unrelated blockers.
+- Move direct Telegram delivery outside account-health transactions while preserving incident recovery ordering (P2).

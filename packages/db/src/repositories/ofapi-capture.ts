@@ -1900,8 +1900,11 @@ export async function markOfapiAttemptIndeterminate(
           : "indeterminate";
       // The governed cause travels in the job's own message, where the
       // operator status can show it — the ledger details are not on the wire.
+      const transportClass = input.details?.transportClass;
+      const classification = transportClass === "connect" || transportClass === "timeout"
+        || transportClass === "transport" ? `, ${transportClass}` : "";
       const cause = typeof input.details?.reason === "string"
-        ? ` (${input.details.reason}${typeof input.details.phase === "string" ? `, ${input.details.phase}` : ""})`
+        ? ` (${input.details.reason}${classification}${typeof input.details.phase === "string" ? `, ${input.details.phase}` : ""})`
         : "";
       const reasonMessage = retryBase && exhausted
         ? `Dispatch certainty unresolved ${consecutive} times in a row: ${input.outcome}${cause}`
@@ -2399,29 +2402,30 @@ export async function reconcileOfapiCapturedAttemptCredit(
       "response_observed_at",
     ) ?? now;
     const delta = actualCredits - priorCredits;
-    if (delta !== 0) {
-      await database.execute(sql`
-        insert into ofapi_credit_ledger (
-          occurred_at, source, operation, page_id, http_status, credits,
-          estimated, balance_after, request_id, details, actor_user_id,
-          attempt_id, attempt_entry_phase
-        ) values (
-          ${responseObservedAt},
-          'adjustment',
-          ${attempt.operation},
-          ${asNumber(attempt.page_id, "page_id")},
-          null,
-          ${delta},
-          false,
-          ${input.balanceAfter ?? null},
-          ${input.attemptId},
-          ${JSON.stringify({ certainty: "captured_meta", priorCredits, actualCredits })}::jsonb,
-          ${principalId},
-          ${input.attemptId}::uuid,
-          'certainty_adjustment'
-        )
-      `);
-    }
+    // An equal-cost receipt still proves the amount and carries the provider
+    // balance used by reconciliation. Preserve that evidence append-only even
+    // when it changes no spend; the attempt lock makes replay exactly-once.
+    await database.execute(sql`
+      insert into ofapi_credit_ledger (
+        occurred_at, source, operation, page_id, http_status, credits,
+        estimated, balance_after, request_id, details, actor_user_id,
+        attempt_id, attempt_entry_phase
+      ) values (
+        ${responseObservedAt},
+        'adjustment',
+        ${attempt.operation},
+        ${asNumber(attempt.page_id, "page_id")},
+        null,
+        ${delta},
+        false,
+        ${input.balanceAfter ?? null},
+        ${input.attemptId},
+        ${JSON.stringify({ certainty: "captured_meta", priorCredits, actualCredits })}::jsonb,
+        ${principalId},
+        ${input.attemptId}::uuid,
+        'certainty_adjustment'
+      )
+    `);
 
     await adjustReservationCounters(database, {
       reservationDay: dateOnly(attempt.reservation_day)!,
@@ -2787,6 +2791,8 @@ export async function settleOfapiCaptureParse(
               terminal_observation_id = ${terminal.observationId},
               terminal_observation_received_at = ${terminal.receivedAt},
               result = ${JSON.stringify(input.disposition.result ?? {})}::jsonb,
+              accepted_items = accepted_items + ${counts.accepted},
+              accepted_pages = accepted_pages + 1,
               completed_at = ${now},
               reason_code = null,
               reason_message = null,

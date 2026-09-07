@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   classifyOfapiCommandFailure,
+  OfapiLocalDispatchRefusal,
 } from "../apps/runtime/src/services/ofapi-command-executor.ts";
 import {
   createOfapiClient,
@@ -17,6 +18,17 @@ afterEach(() => {
 });
 
 describe("OFAPI command failure classification", () => {
+  it.each([
+    ["account_unavailable", "ofapi_account_not_found"],
+    ["binding_replaced", "ofapi_binding_replaced"],
+    ["auth_action_required", "ofapi_auth_action_required"],
+    ["credential_not_verified", "ofapi_credential_not_verified"],
+  ] as const)("classifies local %s without a vendor HTTP status", (reason, errorCode) => {
+    expect(classifyOfapiCommandFailure(new OfapiLocalDispatchRefusal(reason))).toEqual({
+      state: "failed_terminal", errorCode, errorClass: "terminal", httpStatus: null,
+    });
+  });
+
   it.each([
     [429, "failed_retryable", "ofapi_rate_limited"],
     [400, "failed_terminal", "ofapi_http_400"],
@@ -82,6 +94,7 @@ describe("OFAPI account client", () => {
       displayName: "LoraVie FREE",
       onlyfansName: "Lora Vie",
       onlyfansUserId: "123",
+      identityStatus: "nested_fallback",
       avatarUrl: "https://public.onlyfans.com/files/lora/avatar.jpg",
     }, {
       id: "acct_signed",
@@ -89,6 +102,7 @@ describe("OFAPI account client", () => {
       displayName: "Signed",
       onlyfansName: null,
       onlyfansUserId: null,
+      identityStatus: "missing",
       avatarUrl: null,
     }]);
   });

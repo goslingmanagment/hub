@@ -53,6 +53,10 @@ export function validateOfapiInteractiveResponseShape(
   operation: string,
   body: unknown,
 ): boolean {
+  if (operation === "ofapi_gateway_chat_search") {
+    const ids = asRecord(body)?.data;
+    return Array.isArray(ids) && ids.every(id => itemId(id) !== null && /^\d+$/.test(itemId(id)!));
+  }
   const listEnvelope = INTERACTIVE_LIST_ENVELOPES.get(operation);
   if (listEnvelope) {
     const root = asRecord(body);

@@ -15,6 +15,7 @@ const INCIDENT_KIND_LABELS = {
   proxy_missing: "Proxy Missing",
   stream_failed_threshold: "Stream Failed 3x",
   ofapi_auth: "OFAPI Auth",
+  ofapi_binding_conflict: "OFAPI Binding Conflict",
   ofapi_low_credit: "OFAPI Low Credit",
   ofapi_webhook_silence: "OFAPI Webhook Silence",
   ofapi_burn_rate: "OFAPI Burn Rate",

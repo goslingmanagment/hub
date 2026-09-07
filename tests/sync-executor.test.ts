@@ -246,6 +246,24 @@ describe("sync executor", () => {
     });
   });
 
+  it("settles an unverified audience sweep without success or incident recovery", async () => {
+    const app = { db: {}, logger: { warn: vi.fn(), error: vi.fn() } } as never;
+    dbMocks.acquirePageSyncLease.mockResolvedValueOnce({ ...taskLease, stream: "subscribers" });
+    handlerMocks.executeStreamChunk.mockResolvedValue({
+      satisfied: true, yieldReason: null, qualityHold: "subscribers_empty_sweep_guard",
+      stats: { fullSweepCompleted: true, destructiveFinalizationSkipped: true },
+    });
+    expect(await executeNextSyncPageChunk(app, 55)).toMatchObject({ kind: "skipped", stream: "subscribers" });
+    expect(dbMocks.skipPageSync).toHaveBeenCalledOnce();
+    expect(dbMocks.skipPageSync.mock.calls[0]?.[1]).not.toHaveProperty("progressedAt");
+    expect(dbMocks.completePageSync).not.toHaveBeenCalled();
+    expect(telemetryMocks.instances[0]?.finish).toHaveBeenCalledWith("skipped", "subscribers_empty_sweep_guard",
+      expect.objectContaining({ qualityHold: "subscribers_empty_sweep_guard" }));
+    expect(telemetryMocks.instances[0]?.finish.mock.calls[0]?.[2]).not.toHaveProperty("gatedSkip");
+    expect(notificationMocks.resolveSyncChunkRecoveryIncidents).not.toHaveBeenCalled();
+    expect(notificationMocks.resolveOfapiGlobalIncident).not.toHaveBeenCalled();
+  });
+
   it("settles a gated no-op as skipped without claiming data success", async () => {
     const app = {
       db: {},

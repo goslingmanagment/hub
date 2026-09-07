@@ -87,7 +87,7 @@ export async function executeCaptureFirstInteractiveRead(
     principalUserId: number;
     pageId: number;
     ofapiAccountId: string;
-    dispatcher: Dispatcher;
+    dispatcher: Dispatcher | null;
     egressKey: string;
     operation: string;
     surface: string;
@@ -198,15 +198,19 @@ export async function executeCaptureFirstInteractiveRead(
         reasonCode: error.reason,
       });
     } else {
+      const details = error instanceof OfapiGovernedRequestError
+        ? { reason: error.reason, phase: error.phase, ...error.diagnostics }
+        : { reason: "transport", phase: "post_dispatch" };
+      app.logger.warn({
+        pageId: input.pageId, attemptId: reservation.attemptId, ...details,
+      }, "OFAPI interactive capture transport failed");
       await markOfapiAttemptIndeterminate(app.db, {
         attemptId: reservation.attemptId,
         fenceToken: reservation.fenceToken,
         outcome: error instanceof OfapiGovernedRequestError && error.reason === "deadline"
           ? "vendor_slow"
           : "transport",
-        details: {
-          error: error instanceof Error ? error.message : String(error),
-        },
+        details,
       });
     }
     throw new ServiceUnavailableError("OFAPI upstream is unavailable");

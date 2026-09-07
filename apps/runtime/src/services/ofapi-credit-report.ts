@@ -127,7 +127,7 @@ async function getChatterSpendWindow(
     enabled: boolean;
   },
 ): Promise<Omit<OfapiCreditsChatterSummaryResponse["today"], "day">> {
-  const [restCredits, webhookEventCount] = await Promise.all([
+  const [netRestCredits, webhookEventCount] = await Promise.all([
     input.enabled
       ? sumOfapiRestCreditsForPagesBetween(app.db, {
         pageIds: input.pageIds,
@@ -144,6 +144,9 @@ async function getChatterSpendWindow(
       : Promise.resolve(0),
   ]);
   const estimatedWebhookCredits = webhookAccrualCredits(webhookEventCount);
+  // Installed SDKs require nonnegative legacy fields and a component-sum total.
+  // Preserve exact signed corrections separately for clients that support them.
+  const restCredits = Math.max(0, netRestCredits);
 
   return {
     from: input.from.toISOString(),
@@ -154,6 +157,8 @@ async function getChatterSpendWindow(
       estimatedCredits: estimatedWebhookCredits,
     },
     totalEstimatedCredits: restCredits + estimatedWebhookCredits,
+    netRestCredits,
+    netTotalEstimatedCredits: netRestCredits + estimatedWebhookCredits,
   };
 }
 
@@ -197,7 +202,8 @@ export async function getChatterOfapiCreditsSummary(
       ? [
         "webhook credits are estimated from assigned-page journal events",
         "REST credits include only ledger rows attributed to assigned pages",
-        "owner-only balance, refills, external drift, and adjustments are omitted",
+        "legacy credit fields floor negative REST net at zero; signed net fields preserve corrections",
+        "owner-only balance, refills, external drift, and unattributed adjustments are omitted",
       ]
       : ["ledger disabled; page-scoped credit summary unavailable"],
   };
@@ -222,7 +228,9 @@ export async function getOfapiCreditsSummary(
     dmSpentToday,
     audienceSpentToday,
     spendWindow,
+    residualWindow,
     monthWindow,
+    monthResidualWindow,
     burnWindow,
     burnOps,
     burnPages,
@@ -244,12 +252,14 @@ export async function getOfapiCreditsSummary(
       from: dayStart,
       to: nextDayStart,
     }),
-    // Net spend AND the earliest effective spend start share one query so the
-    // runway numerator and denominator use the same window semantics.
-    summarizeOfapiSpendWindowBetween(app.db, { from: spendWindowSince, to: now }),
-    // Month-to-date spend (D5) reuses the same refill-excluded/external-prorated
-    // semantics as the runway numerator.
-    summarizeOfapiSpendWindowBetween(app.db, { from: monthStart, to: now }),
+    // Forecast only net recorded activity, never an unexplained balance
+    // bridge. Preserve all-source residuals separately for investigation.
+    summarizeOfapiSpendWindowBetween(app.db, { from: spendWindowSince, to: now, scope: "recorded_activity" }),
+    summarizeOfapiSpendWindowBetween(app.db, { from: spendWindowSince, to: now, scope: "external_residual" }),
+    // Month-to-date uses the same recorded-activity basis, with its residual
+    // exposed separately so the original all-source total remains explainable.
+    summarizeOfapiSpendWindowBetween(app.db, { from: monthStart, to: now, scope: "recorded_activity" }),
+    summarizeOfapiSpendWindowBetween(app.db, { from: monthStart, to: now, scope: "external_residual" }),
     // Trailing-hour burn (D3) mirrors the ofapi_burn_rate monitor exactly.
     summarizeOfapiSpendWindowBetween(app.db, { from: burnSince, to: now }),
     listOfapiOperationBreakdownBetween(app.db, { from: burnSince, to: now }),
@@ -332,13 +342,13 @@ export async function getOfapiCreditsSummary(
 
   // D5: project the calendar-month total from month-to-date spend plus the daily
   // rate over the remaining UTC days (exclusive of today, already in MTD).
-  const monthToDateSpend = Math.max(0, monthWindow.total);
+  const monthToDateSpend = monthWindow.total;
   const nextMonthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
   const remainingDaysInMonth = Math.max(
     0,
     Math.ceil((nextMonthStart.getTime() - nextDayStart.getTime()) / MS_PER_DAY),
   );
-  const monthEndProjection = monthToDateSpend + Math.round(avgDailySpend7d * remainingDaysInMonth);
+  const monthEndProjection = Math.max(0, monthToDateSpend + Math.round(avgDailySpend7d * remainingDaysInMonth));
   // Credits to refill now to keep `REFILL_TARGET_DAYS` of runway above the floor.
   // Only meaningful once a balance has been observed.
   const refillRecommendation = credit.lastBalance === null
@@ -352,8 +362,8 @@ export async function getOfapiCreditsSummary(
     };
 
   // D3: recent-burn drivers. `total` is all-source (matches the monitor); the
-  // top-operation/top-page lists are REST-only (webhook/external have no operation
-  // or page attribution).
+  // top-operation/top-page lists net attributed REST corrections; webhook and
+  // reconciliation residuals have no operation or page attribution.
   const burnThreshold = Math.max(
     0,
     effective?.ofapiBurnAlertCreditsPerHour ?? app.config.ofapiBurnAlertCreditsPerHour
@@ -382,6 +392,13 @@ export async function getOfapiCreditsSummary(
     budgets,
     floor: { value: creditFloor, blocked: floorBlocked },
     forecast: {
+      basis: "recorded_activity",
+      unverifiedResidual: {
+        credits: residualWindow.total,
+        from: spendWindowSince.toISOString(),
+        to: now.toISOString(),
+      },
+      monthUnverifiedResidualCredits: monthResidualWindow.total,
       avgDailySpend7d,
       daysLeft,
       runOutDate: daysLeft !== null

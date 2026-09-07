@@ -39,6 +39,15 @@ export interface WrittenObservationKind {
 }
 
 export const WRITTEN_OBSERVATION_KINDS: readonly WrittenObservationKind[] = [
+  { kind: "ofapi_gateway_chat_search", source: "readthrough", writer: "services/ofapi-read-gateway.ts" },
+  // Release 1 control-plane witnesses; these do not start business collectors.
+  { kind: "ofapi.binding.replaced", source: "operator", writer: "services/ofapi-binding-refresh.ts" },
+  { kind: "ofapi.account.response", source: "pull", writer: "services/ofapi-credential-policy.ts" },
+  { kind: "ofapi_admin_accounts", source: "operator", writer: "services/ofapi-credential-policy.ts" },
+  { kind: "ofapi_credential_preflight", source: "operator", writer: "services/ofapi-credential-policy.ts" },
+  { kind: "ofapi_webhook_inventory", source: "operator", writer: "services/ofapi-credential-policy.ts" },
+  { kind: "ofapi_webhook_crud", source: "operator", writer: "services/ofapi-credential-policy.ts" },
+  { kind: "ofapi_balance_ping", source: "operator", writer: "services/ofapi-credential-policy.ts" },
   // ── the sync plane: `RawPayloadInsertRow.endpoint` → observations.kind ────
   // (services/sync/shared.ts persistRawPayload). This is the seam BL-C3 went
   // through, and the seam ~27–30 of this initiative's new Fansly kinds will
@@ -414,6 +423,14 @@ export interface RawOnlyObservationKind {
 }
 
 export const RAW_ONLY_OBSERVATION_KINDS: readonly RawOnlyObservationKind[] = [
+  { kind: "ofapi_gateway_chat_search", justification: "A query-scoped list of message IDs; retained as read evidence, never a message body or full-history coverage assertion." },
+  { kind: "ofapi.binding.replaced", justification: "Control-plane audit evidence. Binding, access and credit state use their existing control repositories; this response is not a business fact." },
+  { kind: "ofapi.account.response", justification: "Control-plane audit evidence. Binding, access and credit state use their existing control repositories; this response is not a business fact." },
+  { kind: "ofapi_admin_accounts", justification: "Journaled as an identity projection at every HTTP status; session material and _meta are removed before insert, non-200 bodies withheld. Control-plane audit evidence. Binding, access and credit state use their existing control repositories; this response is not a business fact." },
+  { kind: "ofapi_credential_preflight", justification: "Control-plane audit evidence. Binding, access and credit state use their existing control repositories; this response is not a business fact." },
+  { kind: "ofapi_webhook_inventory", justification: "Control-plane audit evidence. Binding, access and credit state use their existing control repositories; this response is not a business fact." },
+  { kind: "ofapi_webhook_crud", justification: "Control-plane audit evidence. Binding, access and credit state use their existing control repositories; this response is not a business fact." },
+  { kind: "ofapi_balance_ping", justification: "Control-plane audit evidence. Binding, access and credit state use their existing control repositories; this response is not a business fact." },
   {
     kind: "account_lookup",
     justification:

@@ -34,7 +34,7 @@ import {
   executeOfapiCaptureJobChunk,
   isOfapiBackgroundCaptureRunnable,
 } from "../ofapi-capture-jobs.ts";
-import { OfapiApiError } from "../ofapi.ts";
+import { OfapiApiError, ofapiAccountNotFound } from "../ofapi.ts";
 import {
   notifyAuthFailedIncident,
   notifyOfapiGlobalIncident,
@@ -231,6 +231,10 @@ function classifyOfapiApiError(
   failure: ReturnType<typeof buildNormalizedSyncError>,
 ): ReturnType<typeof classifyTaskFailure> {
   const status = error.status;
+  if (ofapiAccountNotFound(status, error.body)) return {
+    mode: "blocked", blockerType: "manual_action_required", blockerCode: "ofapi_account_not_found",
+    blockerReason: "OFAPI account binding is unavailable",
+  };
   if (status === null) {
     // A transport failure before any status: the one shape the old generic
     // fallback described correctly.
@@ -614,7 +618,8 @@ export async function executeNextSyncPageChunk(
 
     if (result.satisfied) {
       const skipped = Boolean(result.gatedSkip);
-      const applied = skipped
+      const held = !skipped && Boolean(result.qualityHold);
+      const applied = skipped || held
         ? await skipPageSync(app.db, {
           pageId: platformAccountId,
           stream: taskLease.stream,
@@ -659,6 +664,15 @@ export async function executeNextSyncPageChunk(
           // stream since long before ramp gates existed.
           gatedSkip: result.gatedSkip,
         });
+      } else if (held) {
+        await telemetry.finish("skipped", result.qualityHold, {
+          chunkBudget: {
+            requestCount: budget.totalRequests,
+            elapsedMs: budget.elapsedMs,
+          },
+          ...result.stats,
+          qualityHold: result.qualityHold,
+        });
       } else {
         const recoveredAt = new Date();
         await telemetry.finish("success", null, {
@@ -686,7 +700,7 @@ export async function executeNextSyncPageChunk(
         platformAccountId,
         taskLease.stream,
         run.id,
-        skipped ? "skipped" : "success",
+        skipped || held ? "skipped" : "success",
         continuationPriority,
       );
     }

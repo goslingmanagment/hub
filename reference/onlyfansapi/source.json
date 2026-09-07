@@ -1,0 +1,13 @@
+{
+  "url": "https://app.onlyfansapi.com/scribe-docs/openapi.yaml",
+  "retrievedAt": "2026-09-05",
+  "sha256": "3adfee8d170567a8399d6716b9c99b6c979d734f1d149124f703e373fd846c34",
+  "bytes": 3212908,
+  "operations": 294,
+  "historicalComparison": {
+    "file": "of-desktop/docs/vendor/onlyfansapi/openapi.json",
+    "sha256": "a7c01907f27adc1963d6b9ab5e785397ccb4069262d86872e265a9371c760ef6",
+    "operations": 266
+  },
+  "scope": "OnlyFans and shared OFAPI operations. No client SDK re-vendor or Fansly reference changes."
+}

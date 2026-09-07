@@ -26,7 +26,7 @@ let testDb: StartedTestDatabase | null = null;
 let appContext: AppContext;
 let journalId = 0;
 
-async function seedPage(label = "lora-of") {
+async function seedPage(label = "lora-of", accountId = `acct-${label}`) {
   const model = await createModel(appContext.db, {
     slug: `model-${label}`,
     name: `Model ${label}`,
@@ -41,14 +41,12 @@ async function seedPage(label = "lora-of") {
   // Stage 13: pages holding OFAPI projection events are OFAPI-mapped in
   // reality; the mapping assigns transactions_writer='ofapi', which the
   // single-writer gate requires before the ingest may touch the page.
-  await setPageOfapiAccountId(appContext.db, { pageId: page.id, ofapiAccountId: `acct-${label}` });
+  await setPageOfapiAccountId(appContext.db, { pageId: page.id, ofapiAccountId: accountId });
   return page;
 }
 
 async function seedOfapiPage(label: string, ofapiAccountId: string) {
-  const page = await seedPage(label);
-  await setPageOfapiAccountId(appContext.db, { pageId: page.id, ofapiAccountId });
-  return page;
+  return seedPage(label, ofapiAccountId);
 }
 
 function fakeOfapiTransactionsClient(input: {
