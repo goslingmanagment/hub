@@ -216,6 +216,20 @@ describe("compose config", () => {
     expect(text).toContain("trap cleanup_deploy EXIT");
   });
 
+  it("deploy-production.sh rebuilds the pinned hub CLI only after every health gate, never fatally", async () => {
+    const text = await readComposeFile("scripts/deploy-production.sh");
+    const rebuild = getShellFunction(text, "rebuild_local_hub_cli");
+
+    expect(rebuild).toContain('"${SCRIPT_DIR}/rebuild-hub-cli-prod.sh" "$APP_SOURCE_REVISION"');
+    expect(rebuild).toContain("unknown|*-dirty)");
+    expect(text).toContain("--skip-hub-cli-rebuild");
+    expect(text).toContain("DEPLOY_SKIP_HUB_CLI_REBUILD");
+    expect(text).toContain('rebuild_local_hub_cli || log "WARNING');
+    expect(text).not.toContain("rebuild_local_hub_cli || fail");
+    expect(text.indexOf("rebuild_local_hub_cli || log")).toBeGreaterThan(text.indexOf("verify_post_deploy_image_labels\n"));
+    expect(text.indexOf("rebuild_local_hub_cli || log")).toBeGreaterThan(text.indexOf("publish_remote_clean_full_base_image \\"));
+  });
+
   it("deploy-production.sh derives per-run release tags and one dependency-keyed clean full base", async () => {
     const text = await readComposeFile("scripts/deploy-production.sh");
     const initializer = getShellFunction(text, "initialize_deploy_metadata_and_tags");
