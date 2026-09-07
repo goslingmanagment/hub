@@ -69,6 +69,17 @@ It does not grant another request; an exhausted job without that response stays
 non-resumable. Verify one original physical request, the completed local snapshot
 and unchanged spend after recovery. Do not raise the allowance to repair parsing.
 
+Collection transport failures retain bounded diagnostics in the indeterminate
+credit receipt and log `OFAPI collection transport failed` with operation and
+collection job ID. The fields distinguish response headers from body reading,
+reported HTTP status, bytes read versus the size ceiling, elapsed time versus
+timeout, and allowlisted transport cause names/codes. Logs and receipt details do
+not include URLs, account/fan IDs, headers, response bodies or raw errors. A
+`body_too_large` reason proves the explicit size guard; `body_read` needs its
+transport/cause fields to distinguish an abort from a socket failure. Missing
+diagnostics on older receipts remain unknown. These diagnostics do not change
+timeouts, limits, accounting certainty or retry authorization.
+
 ## Exact GET catalog
 
 Query names, limits, response families and category/detail flags live in `packages/shared/src/ofapi-read-catalog.ts` and are returned by the SDK catalog. Every request rejects unknown keys. IDs remain strings, including values above JavaScript's safe integer range.
