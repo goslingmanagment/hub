@@ -151,6 +151,20 @@ describe("OFAPI effective collection control", () => {
       { event_type: "admin.ofapi_collection_job_resumed", actor_user_id: 1, platform_account_id: pageId, metadata: { revision: 2, jobId: job.id, pageId, category: "posts_comments", action: "resume_checkpoint" } },
     ]);
   });
+  it("a policy revision wakes the streams the policy parked or put to sleep (review #136)", async () => {
+    await ensurePageSyncStates(app.db, { pageId });
+    await testDb.pool.query(`update page_sync_states set status='blocked',blocker_kind='manual_action_required',blocker_code='ofapi_collection_collection_off',blocker_message='off',blocked_at=now() where page_id=$1 and stream='dm_conversations'`, [pageId]);
+    await testDb.pool.query(`update page_sync_states set status='retrying',retry_kind='ofapi_collection_policy',retry_at=now()+interval '1 day' where page_id=$1 and stream='subscribers'`, [pageId]);
+    // A park the policy did not cause is not the policy's to lift.
+    await testDb.pool.query(`update page_sync_states set status='blocked',blocker_kind='manual_action_required',blocker_code='proxy_missing',blocker_message='proxy',blocked_at=now() where page_id=$1 and stream='transactions'`, [pageId]);
+    await applyOfapiCollectionPolicy(app.db, { expectedRevision: 0, changes: [settings({ category: "core_messages" })] }, 1);
+    const rows = (await testDb.pool.query("select stream,status,blocker_code,retry_kind,retry_at<=now() as due from page_sync_states where page_id=$1 and stream in ('dm_conversations','subscribers','transactions') order by stream", [pageId])).rows;
+    expect(rows).toEqual([
+      { stream: "dm_conversations", status: "idle", blocker_code: null, retry_kind: null, due: null },
+      { stream: "subscribers", status: "retrying", blocker_code: null, retry_kind: "ofapi_collection_policy", due: true },
+      { stream: "transactions", status: "blocked", blocker_code: "proxy_missing", retry_kind: null, due: null },
+    ]);
+  });
   it("a lost dispatch fence releases the unused category reservation", async () => {
     await applyOfapiCollectionPolicy(app.db, { expectedRevision: 0, changes: [settings()] }, 1);
     const fetch = vi.fn(); vi.stubGlobal("fetch", fetch);

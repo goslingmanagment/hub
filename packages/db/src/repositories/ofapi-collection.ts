@@ -128,6 +128,16 @@ export async function applyOfapiCollectionPolicy(db: Database, input: OfapiColle
     } else if (input.changes.length === 0) {
       await insertAuditEvent(database, { actorUserId, source: "api", eventType: "admin.ofapi_collection_policy_applied", metadata: { revision, action: "apply" } });
     }
+    // A revision may have lifted the cause of a sync stream this policy parked
+    // (blocker ofapi_collection_<reason>) or put to sleep until a cap resets
+    // (retry class ofapi_collection_policy): wake them so the change takes
+    // effect on the next scheduler pass, not at midnight or after an
+    // operator's unblock. A cause that persists re-parks the stream on its
+    // next run — the refusal is local and costs no vendor call.
+    await database.execute(sql`update page_sync_states set status=case when request_seq>applied_seq then 'pending'::page_sync_status else 'idle'::page_sync_status end,
+      retry_kind=null,retry_at=null,blocker_kind=null,blocker_code=null,blocker_message=null,blocked_at=null,updated_at=now()
+      where status='blocked' and blocker_kind='manual_action_required' and blocker_code like 'ofapi\\_collection\\_%'`);
+    await database.execute(sql`update page_sync_states set retry_at=now(),updated_at=now() where status='retrying' and retry_kind='ofapi_collection_policy'`);
     return { revision, state: "applied" as const };
   });
 }
