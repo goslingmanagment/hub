@@ -14,6 +14,11 @@ import type {
   CanonicalizableObservation,
   CanonicalEventDraft,
 } from "./types.ts";
+
+export function ofapiReadSnapshotEventKey(observationId: number): string {
+  return `ofapi-read:${observationId}:v1`;
+}
+
 function captured(observation: CanonicalizableObservation) {
   const response = capturePayloadResponse(observation.payload);
   const request = ofapiReadRecord(
@@ -72,7 +77,7 @@ export function canonicalizeOfapiReadObservation(
       type: "ofapi.read_snapshot_observed",
       occurredAt: observation.receivedAt,
       schemaVersion: 1,
-      dedupKey: `ofapi-read:${observation.id}:v1`,
+      dedupKey: ofapiReadSnapshotEventKey(observation.id),
       data: {
         pageId: observation.accountId,
         source: "onlyfansapi",

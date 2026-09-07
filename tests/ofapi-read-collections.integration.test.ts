@@ -1,7 +1,7 @@
 import { ofapiCollectionHandlers } from "../apps/runtime/src/services/ofapi-collection-handlers.ts";
 import { executeErasure } from "../apps/runtime/src/services/erasure/index.ts";
 import { rebuildOfapiReadSnapshotProjection } from "../apps/runtime/src/services/projections/ofapi-read-snapshots.ts";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { sha256Hex } from "@agency_hub_core/shared";
 import { insertAgentKey, setConfigOverride } from "@agency_hub_core/db";
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
@@ -32,6 +32,7 @@ import {
   claimOfapiCollectionJob,
   checkpointOfapiCollectionJob,
   reserveOfapiCollectionRequest,
+  resumeOfapiCollectionJob,
   saveOfapiReadSnapshot,
   upsertFans,
 } from "@agency_hub_core/db";
@@ -40,6 +41,7 @@ import { ofapiCollectionPolicyHooks } from "../apps/runtime/src/services/ofapi-c
 import {
   runOfapiCollectionJob,
   materializeOfapiReadSnapshot,
+  planOfapiReadCollection,
 } from "../apps/runtime/src/services/ofapi-collection-runner.ts";
 import {
   captureOfapiCollectionRead,
@@ -116,6 +118,72 @@ const response = (data: unknown, next?: string | null) =>
     }),
   );
 describe("resumable OFAPI collection reads", () => {
+  it("reuses the paid step after its plan round-trips through JSONB and local materialization fails", async () => {
+    const fetch = vi.fn(async () => response({ id: "55", username: "creator" }));
+    vi.stubGlobal("fetch", fetch);
+    const approved = await createOfapiCollectionJob(app.db, {
+      pageId, category: "profile_notifications", expectedRevision: 0,
+      maxCalls: 1, maxCredits: 1, maxBytes: 100000,
+      from: null, to: null, selection: ["me"],
+    }, actor);
+    const materialize = vi.fn().mockRejectedValueOnce(new Error("Local projection temporarily unavailable")).mockResolvedValue(undefined);
+    const handlers = { profile_notifications: { plan: planOfapiReadCollection, materialize } };
+    expect(await runOfapiCollectionJob(app, approved.id, handlers)).toEqual({ state: "queued", reason: "Local projection temporarily unavailable" });
+    const checkpoint = (await getOfapiCollectionJob(app.db, approved.id))!;
+    expect(checkpoint.used_calls).toBe(1);
+    expect(Number(checkpoint.used_credits)).toBe(1);
+    expect(await runOfapiCollectionJob(app, approved.id, handlers)).toEqual({ state: "completed" });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    const completed = (await getOfapiCollectionJob(app.db, approved.id))!;
+    expect(Number(completed.used_credits)).toBe(1);
+    expect(completed.used_calls).toBe(1);
+    expect(Number(completed.used_bytes)).toBeGreaterThan(0);
+    expect((await db.pool.query("select count(*)::int count from ofapi_capture_jobs where kind='collection_read'")).rows[0].count).toBe(1);
+    expect(await readOfapiStoredSnapshots(app.db, { pageId })).toHaveLength(1);
+  });
+  it.each(["retained", "wrong_query", "changed_binding", "no_response"] as const)("recovers an exhausted legacy checkpoint only from its exact captured response: %s", async (scenario) => {
+    const fetch = vi.fn(async () => response({ id: "55", username: "creator" }));
+    vi.stubGlobal("fetch", fetch);
+    const approved = await createOfapiCollectionJob(app.db, {
+      pageId, category: "profile_notifications", expectedRevision: 0,
+      maxCalls: 1, maxCredits: 1, maxBytes: 100000,
+      from: null, to: null, selection: ["me"],
+    }, actor);
+    const step = { operation: "ofapi_read_me", pathname: "/acct_test/me", query: {}, detail: false };
+    const token = (await claimOfapiCollectionJob(app.db, approved.id))!;
+    await checkpointOfapiCollectionJob(app.db, { id: approved.id, token, checkpoint: { plan: [step] }, state: "running" });
+    if (scenario === "no_response") {
+      await reserveOfapiCollectionRequest(app.db, { pageId, operation: step.operation, requestId: randomUUID(),
+        context: { category: "profile_notifications", purpose: "one_off", jobId: approved.id } });
+    } else {
+      // Match the slot spelling deployed before canonical JSON identity. The
+      // runner must adopt this paid response despite a different current slot.
+      await captureOfapiCollectionRead(app, {
+        pageId, accountId: "acct_test", step,
+        stepKey: `${approved.id}:0:${createHash("sha256").update(JSON.stringify(step)).digest("hex")}`,
+        context: { category: "profile_notifications", purpose: "one_off", jobId: approved.id },
+        maxBytes: 100000, beforeDispatch: async () => true,
+      });
+    }
+    const checkpoint = { plan: [step], ...(scenario === "wrong_query" ? { nextQuery: { changed: "scope" } } : {}) };
+    await checkpointOfapiCollectionJob(app.db, { id: approved.id, token, checkpoint, state: "paused", reason: "local_recovery_failed" });
+    if (scenario === "changed_binding") await db.pool.query("update pages set ofapi_account_id='acct_changed' where id=$1", [pageId]);
+    if (scenario !== "retained") {
+      await expect(resumeOfapiCollectionJob(app.db, approved.id, 0, actor)).rejects.toThrow("job_not_resumable");
+      expect(fetch).toHaveBeenCalledTimes(scenario === "no_response" ? 0 : 1);
+      return;
+    }
+    expect(await resumeOfapiCollectionJob(app.db, approved.id, 0, actor)).toMatchObject({ state: "queued", revision: 1 });
+    expect(await runOfapiCollectionJob(app, approved.id)).toEqual({ state: "completed" });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    const completed = (await getOfapiCollectionJob(app.db, approved.id))!;
+    expect(completed.used_calls).toBe(1);
+    expect(Number(completed.used_credits)).toBe(1);
+    expect(Number(completed.max_credits)).toBe(1);
+    expect(completed.max_calls).toBe(1);
+    expect(Number(completed.used_bytes)).toBeGreaterThan(0);
+    expect((await db.pool.query("select count(*)::int count from ofapi_capture_jobs where kind='collection_read'")).rows[0].count).toBe(1);
+  });
   it("captures list preview and explicit member pages, rebuilds their identity, and serves owner CRM context locally", async () => {
     const [fan] = await upsertFans(app.db, [
       { platform: "onlyfans", platformUserId: "9007199254740993" },

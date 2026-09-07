@@ -3,6 +3,7 @@ import { sql } from "drizzle-orm";
 import { findOfapiReadDefinition, OFAPI_COLLECTION_REGISTRY, OFAPI_COLLECTION_LEGACY_OPERATIONS, classifyOfapiCollectionOperation, type OfapiCollectionCategory, type OfapiCollectionContext, type OfapiCollectionSettings } from "@agency_hub_core/shared";
 import type { Database } from "../client.ts";
 import { insertAuditEvent } from "./auth.ts";
+import { findOfapiCollectionCaptureJob, hashOfapiCaptureValue } from "./ofapi-capture.ts";
 
 /**
  * A local refusal at the collection boundary — never a vendor or transport
@@ -162,8 +163,15 @@ export async function resumeOfapiCollectionJob(db: Database, id: string, expecte
     const current = await state(database, true);
     if (current.revision !== expectedRevision) throw new OfapiCollectionPolicyError("revision_conflict");
     if (current.background_paused) throw new OfapiCollectionPolicyError("background_paused");
+    const candidate = await getOfapiCollectionJob(database, id);
+    if (!candidate || candidate.state !== "paused") throw new OfapiCollectionPolicyError("job_not_resumable");
+    const hasAllowance = Number(candidate.used_credits) < Number(candidate.max_credits)
+      && candidate.used_calls < candidate.max_calls && Number(candidate.used_bytes) < Number(candidate.max_bytes);
+    if (!hasAllowance && !await hasCapturedCollectionCheckpoint(database, candidate)) {
+      throw new OfapiCollectionPolicyError("job_not_resumable");
+    }
     const resumed = await database.execute<{ id: string; page_id: string | number; category: OfapiCollectionCategory }>(sql`update ofapi_collection_jobs set state='queued',reason=null,policy_revision=${current.revision + 1},updated_at=now()
-      where id=${id}::uuid and state='paused' and used_credits<max_credits and used_calls<max_calls and used_bytes<max_bytes returning id,page_id,category`);
+      where id=${id}::uuid and state='paused' returning id,page_id,category`);
     const job = resumed.rows[0];
     if (!job) throw new OfapiCollectionPolicyError("job_not_resumable");
     await database.execute(sql`update ofapi_collection_state set revision=revision+1,updated_at=now() where id=1`);
@@ -172,6 +180,24 @@ export async function resumeOfapiCollectionJob(db: Database, id: string, expecte
       metadata: { revision: current.revision + 1, jobId: id, pageId: Number(job.page_id), category: job.category, action: "resume_checkpoint" } });
     return { id, state: "queued" as const, revision: current.revision + 1 };
   });
+}
+
+/** Exhausted work can finish an already paid current step; this grants no new allowance. */
+async function hasCapturedCollectionCheckpoint(db: Database, job: NonNullable<Awaited<ReturnType<typeof getOfapiCollectionJob>>>) {
+  const checkpoint = job.checkpoint;
+  const index = Number(checkpoint.index ?? 0);
+  const step = Array.isArray(checkpoint.plan) && Number.isSafeInteger(index) && index >= 0 ? checkpoint.plan[index] : null;
+  if (!step || typeof step !== "object" || Array.isArray(step)) return false;
+  const query = checkpoint.nextQuery ?? step.query;
+  if (!query || typeof query !== "object" || Array.isArray(query)) return false;
+  const binding = await db.execute<{ ofapi_account_id: string | null }>(sql`select ofapi_account_id from pages where id=${Number(job.page_id)} and deleted_at is null`);
+  const accountId = binding.rows[0]?.ofapi_account_id;
+  if (!accountId) return false;
+  const retained = await findOfapiCollectionCaptureJob(db, {
+    pageId: Number(job.page_id), ofapiAccountId: accountId, collectionJobId: job.id,
+    targetHash: hashOfapiCaptureValue({ ...step, query, collectionJobId: job.id }),
+  });
+  return Boolean(retained && (retained.pendingObservationId || retained.state === "complete"));
 }
 
 export interface OfapiCollectionAdmissionInput {
