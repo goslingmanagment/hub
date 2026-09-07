@@ -165,11 +165,41 @@ function parseQuery(raw: RawQuery, rules: Record<string, QueryRule>) {
   return parsed;
 }
 
+/**
+ * Every operation this resolver can emit for a hand-written (non-catalog)
+ * route. `proxy()` accepts only these, so the compiler refuses a route whose
+ * operation is not in the table, and tests/ofapi-collection-coverage derives
+ * the admission audit from the table instead of a hand-kept list: each entry
+ * is proven to be either an enumerated legacy operation or classified into a
+ * category that is on by default — nothing may fall silently into an
+ * off-by-default category the way `ofapi_gateway_fans_all` did (review #136).
+ * Catalog routes carry their category explicitly in `collectionContext`.
+ */
+export const OFAPI_READ_GATEWAY_OPERATIONS = [
+  "ofapi_gateway_chats",
+  "ofapi_gateway_chat_messages",
+  "ofapi_gateway_chat_search",
+  "ofapi_gateway_chat_message",
+  "ofapi_gateway_chat_media",
+  "ofapi_gateway_users_list",
+  "ofapi_gateway_user",
+  "ofapi_gateway_transactions",
+  "ofapi_gateway_fans_all",
+  "ofapi_gateway_fans_active",
+  "ofapi_gateway_user_lists",
+  "ofapi_gateway_user_list_users",
+  "ofapi_gateway_vault_media",
+  "ofapi_gateway_vault_lists",
+  "ofapi_gateway_vault_media_item",
+  "ofapi_gateway_upload_status",
+] as const;
+export type OfapiReadGatewayOperation = typeof OFAPI_READ_GATEWAY_OPERATIONS[number];
+
 function proxy(
   accountId: string,
   segments: string[],
   query: Record<string, string>,
-  operation: string,
+  operation: OfapiReadGatewayOperation,
   fallbackCredits = 1,
   fallbackEstimated = true,
 ): ProxyRequest {
@@ -324,7 +354,7 @@ export function resolveOfapiReadGatewayRequest(
       "filter[online]": enumRule(["1"]),
       "filter[total_spent]": integerRule(0, 1_000_000),
       "filter[max_total_spent]": integerRule(0, 1_000_000),
-    }), `ofapi_gateway_fans_${segments[2]}`);
+    }), segments[2] === "all" ? "ofapi_gateway_fans_all" : "ofapi_gateway_fans_active");
   }
 
   if (segments.length === 2 && segments[1] === "user-lists") {

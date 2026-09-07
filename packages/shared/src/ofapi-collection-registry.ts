@@ -46,6 +46,10 @@ export function ofapiCollectionRefusalDisposition(reason: string): OfapiCollecti
 /** Existing callers may use their old config only until this category receives a policy. */
 export const OFAPI_COLLECTION_LEGACY_OPERATIONS = [
   "ofapi_chats", "ofapi_chat_messages", "ofapi_transactions", "ofapi_chargebacks", "ofapi_fans_active",
+  // The desktop's fan roster (`/:acct/fans/all`) shipped with the gateway from
+  // day one; it was missing here, so admission refused it as collection_off
+  // while its `active` sibling worked (review #136).
+  "ofapi_gateway_fans_all", "ofapi_gateway_fans_active",
   "ofapi_tracking_links", "ofapi_trial_links", "ofapi_trial_link_subscribers",
   "ofapi_capture_chat_messages", "ofapi_capture_posts", "ofapi_export_quote_create", "ofapi_export_quote_status", "ofapi_export_start",
   "ofapi_gateway_chats", "ofapi_gateway_chat_messages", "ofapi_gateway_chat_search", "ofapi_gateway_chat_message", "ofapi_gateway_chat_media",
@@ -79,7 +83,7 @@ export function classifyOfapiCollectionOperation(operation: string): OfapiCollec
     "ofapi_stored_tracking_links", "ofapi_stored_trial_links"].includes(operation)) return "diagnostic";
   if (/chat|message/.test(operation) && !/export/.test(operation)) return "core_messages";
   if (/transaction|chargeback/.test(operation)) return "core_payments";
-  if (/fans_active|subscriber|fan_profile|user_detail|users_get/.test(operation) && !/link/.test(operation)) return "core_audience";
+  if (/fans_active|fans_all|subscriber|fan_profile|user_detail|users_get/.test(operation) && !/link/.test(operation)) return "core_audience";
   if (["ofapi_gateway_user", "ofapi_gateway_users_list", "ofapi_gateway_user_lists", "ofapi_gateway_user_list_users"].includes(operation)) return "core_audience";
   if (["ofapi_gateway_upload_status", "ofapi_export_quote_status"].includes(operation)) return "diagnostic";
   if (/visitor/.test(operation)) return "visitors";
