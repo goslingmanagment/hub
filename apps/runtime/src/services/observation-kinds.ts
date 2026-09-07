@@ -203,6 +203,11 @@ export const WRITTEN_OBSERVATION_KINDS: readonly WrittenObservationKind[] = [
   },
   { kind: "ofapi.data_export_control.v1", source: "ofapi_capture", writer: "services/ofapi-export-quotes.ts" },
   { kind: "ofapi_export_inventory", source: "operator", writer: "services/ofapi-credential-policy.ts" },
+  // Written as `kind: value.operation` by onAdminResponse (ofapi-credential-policy.ts):
+  // the literal never appears at the writer, so the census cannot grep them.
+  { kind: "ofapi_command_send_v2", source: "operator", writer: "services/ofapi-credential-policy.ts" },
+  { kind: "ofapi_banned_words", source: "operator", writer: "services/ofapi-credential-policy.ts" },
+  { kind: "ofapi_vendor_usage", source: "operator", writer: "services/ofapi-credential-policy.ts" },
   { kind: "ofapi.media_source.v1", source: "operator", writer: "services/ofapi-media-sources.ts" },
   { kind: "ofapi.media_upload_response.v1", source: "ofapi_capture", writer: "services/ofapi-media-uploads.ts" },
   { kind: "ofapi.typed_export_artifact.v1", source: "ofapi_capture", writer: "services/ofapi-typed-exports.ts" },
@@ -527,6 +532,15 @@ export const RAW_ONLY_OBSERVATION_KINDS: readonly RawOnlyObservationKind[] = [
   },
   {
     kind: "ofapi_export_inventory", justification: "Credential-visible owner control inventory, captured before parsing and read locally; it does not authorize export work or certify imported facts.",
+  },
+  {
+    kind: "ofapi_command_send_v2", justification: "Transport receipt of one v2 send attempt, journaled before the executor parses it; the command outbox settles from its own captured result, and the delivered message reaches the archive through the webhook lane, not this row.",
+  },
+  {
+    kind: "ofapi_banned_words", justification: "One page of the vendor's banned-word list, captured as the evidence behind the local policy check; a vocabulary snapshot, not a business fact about a fan or a page.",
+  },
+  {
+    kind: "ofapi_vendor_usage", justification: "Vendor-side credit usage report for the owner's cost view; the ledger and the reservation tables remain the accounting authority, this row is read-only corroboration.",
   },
   {
     kind: "ofapi.data_export_status.v1",

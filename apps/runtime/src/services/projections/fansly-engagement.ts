@@ -176,9 +176,12 @@ export async function runFanslyEngagementProjection(
 
         switch (event.type) {
           case "ofapi.post_like_observed": {
+            // OnlyFans by construction: the event is minted only by the webhook
+            // family from `posts.liked` observations the OFAPI capture journals
+            // with platform "onlyfans", so the page platform is not re-checked.
             const sourceAt=isoDate(data.sourceAt), observedAt=isoDate(data.observedAt);
             const subjectRef=asText(data.postRef), fanRef=asText(data.likerRef);
-            if(platform!=="onlyfans" || !sourceAt || !observedAt || !subjectRef || !fanRef || event.fanIdentityRef!==fanRef || event.postRef!==subjectRef) continue;
+            if(!sourceAt || !observedAt || !subjectRef || !fanRef || event.fanIdentityRef!==fanRef || event.postRef!==subjectRef) continue;
             const result=await upsertPostLike(app.db,{pageId:accountId,platform:"onlyfans",subjectKind:"post",subjectRef,
               likerPlatformUserId:fanRef,state:"active",occurredAt:sourceAt,notificationRef,discoveredVia:"ofapi_webhook",
               observedAt,contentHash,sourceEventId:event.id,sourceObservationId:event.observationId,sourceAccountSeq:event.accountSeq});

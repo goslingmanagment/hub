@@ -16,6 +16,7 @@ import {
   assertDomainEventTargetMonthsAttached,
   type DomainEventPartitionCoverage,
   DomainEventTargetMonthsUnattachedError,
+  isDmArchiveScopeFenced,
   listObservationsForReplay,
   listDetachedPartitionsHoldingAccount,
   listObservedPostRefsForCapture,
@@ -23,6 +24,7 @@ import {
   loadDomainEventPartitionCoverage,
   markObservationParsed,
   type ReplayObservationRow,
+  tryAcquireDmArchiveWriterFenceLock,
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
@@ -575,7 +577,6 @@ async function runFamily(
               // Team exports retain shared bytes after page erasure. Append
               // each account under its material-time fence so replay cannot
               // recreate that account's deleted canonical lifecycle facts.
-              const { isDmArchiveScopeFenced, tryAcquireDmArchiveWriterFenceLock } = await import("@agency_hub_core/db");
               const result = await app.db.transaction(async tx => {
                 if (!await tryAcquireDmArchiveWriterFenceLock(tx, targetAccountId!)) throw new Error("Erasure is in progress");
                 if (await isDmArchiveScopeFenced(tx, { pageId: targetAccountId!, refs: [], materialAt: row.receivedAt })) return { appended: 0, deduped: 0 };
@@ -585,7 +586,6 @@ async function runFamily(
               continue;
             }
             if (inputs.some(event => event.type === "ofapi.post_like_observed" || event.type === "ofapi.chat_queue_observed")) {
-              const { isDmArchiveScopeFenced, tryAcquireDmArchiveWriterFenceLock } = await import("@agency_hub_core/db");
               const materialAt = new Date(Math.min(row.receivedAt.getTime(), ...inputs.flatMap(event => [event.data.sourceAt,event.data.queueDate].filter((value):value is string=>typeof value === "string").map(value=>Date.parse(value)).filter(Number.isFinite))));
               const result = await app.db.transaction(async tx => {
                 if (!await tryAcquireDmArchiveWriterFenceLock(tx,targetAccountId!)) throw new Error("Erasure is in progress");
