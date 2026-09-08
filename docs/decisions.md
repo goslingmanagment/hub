@@ -281,6 +281,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 278 | Fansly reply material before A0 | Parent/root refs and explicit clears use the common material ledger with independent field clocks; v6 retained replay repairs links without replacing a newer body or duplicating message events. |
 | 279 | Fresh capture during Fansly reply replay | The sync-pull sweep shares its existing page/time allowance between never-parsed capture and retained replay, with independent durable cursors; v6 stamps and the original history cursor remain unchanged. |
 | 280 | Sync monitor activity query | Select the current running run before reading attempt/event activity through existing run indexes; retain historical physical-failure debt and deploy gates |
+| 281 | Agent transcript window candidates | Select in-window message refs before loading their full material; retain every source version of those refs so source priority, tombstones and purchases stay authoritative across timestamp changes. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -11756,3 +11757,37 @@ Rollback is the prior code with identical schema and data. Any new deployment
 remains owner-gated and must pass the normal sync-health gate; the pre-A0
 acceptance work and events migration gates remain open. Reproduction and
 validation: investigations/sync-health-query-2026-09-08/REPORT.md.
+
+## Decision 281: Select transcript window refs before loading material (2026-09-08)
+
+Pre-A0 reply acceptance exposed a repeatable Agent transcript timeout for one
+lora-1 conversation. Its thread inventory reports 10298 stored messages. The
+same exact-message read timed out with both a two-second and a two-millisecond
+window; three cohort targets remain unaccepted. Production logs expose the
+10-second request failure, not the failing SQL subquery or execution plan.
+No restricted base-table access or increased timeout is part of this fix.
+
+The transcript UNION loaded every wide row in the conversation before applying
+the requested time window. A local Postgres fixture with 10298 archive and
+10298 hot rows materialized all 20596 candidates for one narrow result. Select
+message refs whose timestamp is null or inside [from, to) from the same three
+scoped stores first. Then fetch all versions of those refs within the original
+page/conversation scopes and apply the existing dominance and final filters.
+
+Do not filter each material arm directly by time. A higher-priority version
+outside the window must still suppress an older in-window copy; a null-time
+version must retain its existing semantics. Account-wide delete stubs and
+out-of-window hot purchase receipts still affect selected refs. The independent
+unbounded archive floor, source witnesses, keyset order, count probe, caller
+filters, budgets, audit and error contract remain unchanged. No flag, schema,
+provider dispatch, projection change or migration is introduced.
+
+The local narrow fixture now materializes two rows with identical output and
+count. This demonstrates bounded material work, not the complete production RCA
+or a promise that the separate sync-health timeout is fixed. Wide-window output
+is also compared. Deploy the independently reviewed revision only after an
+explicit owner yes, then retry the blocked exact serving targets before any
+remaining page replay. The previously approved scopes stay bounded; lilly-2
+head recovery and A0/A1 are not authorized by this change. Rollback is the
+previous code with identical schema and data. Evidence and validation are in
+investigations/agent-transcript-window-2026-09-08/.
