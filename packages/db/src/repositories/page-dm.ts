@@ -263,6 +263,39 @@ export async function markPageDmConversationsInvisibleByGeneration(
   `);
 }
 
+/**
+ * How many threads `markPageDmConversationsInvisibleByGeneration` WOULD hide
+ * for this generation — the same predicate, counted instead of applied.
+ *
+ * The Fansly dm_conversations empty-sweep guard is its only caller, and only
+ * on a sweep that observed nothing at all: a provider response that lists zero
+ * conversations while the page still shows threads is the one shape where the
+ * destructive pass would empty a whole inbox off a single bad answer. Keeping
+ * the two statements' where-clauses identical is the point — this must count
+ * exactly the rows that pass would blank, or the guard measures the wrong set.
+ */
+export async function countPageDmVisibleThreadsBelowGeneration(
+  db: Database,
+  input: {
+    platformAccountId: number;
+    generation: number;
+  },
+) {
+  const result = await db.execute<{ count: string | number }>(sql`
+    select count(*)::bigint as count
+    from page_dm_threads
+    where platform_account_id = ${input.platformAccountId}
+      and is_visible = true
+      and (last_seen_generation is null or last_seen_generation < ${input.generation})
+  `);
+
+  const count = Number(result.rows[0]?.count ?? 0);
+  if (!Number.isSafeInteger(count) || count < 0) {
+    throw new Error("Expected page_dm_threads visible-below-generation count to be a non-negative safe integer");
+  }
+  return count;
+}
+
 export async function maxPageDmThreadGeneration(db: Database, platformAccountId: number) {
   const result = await db.execute(sql`
     select coalesce(max(last_seen_generation), 0)::bigint as generation

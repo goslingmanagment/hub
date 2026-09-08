@@ -21,6 +21,7 @@ import {
   ensurePageSyncStates,
   findPageById,
   getCheckpoint,
+  getPageDmSyncCoverage,
   startSyncRun,
   upsertPageDmConversation,
 } from "@agency_hub_core/db";
@@ -518,7 +519,7 @@ describe("Fansly dm_conversations sweep — request-level characterization", () 
     expect(telemetry.addNote).not.toHaveBeenCalled();
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("certifies an EMPTY first page and hides every previously visible thread", async (context) => {
+  it("withholds an EMPTY first page and keeps every previously visible thread", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -532,16 +533,110 @@ describe("Fansly dm_conversations sweep — request-level characterization", () 
 
     const { result } = await runChunk(stored, telemetry, 5);
 
+    // The requests are unchanged by the guard: the walk still ends on the one
+    // page the provider served.
     expect(calls).toEqual([
       { method: "messaging_groups", offset: 0, limit: 100, sortOrder: 1, flags: 0 },
     ]);
-    // CURRENT BEHAVIOR, worth a second look in the refactor: 0 observed
-    // reproduces 0 stamped rows, so the membership check certifies the sweep
-    // and the destructive pass runs on an empty provider page. There is no
-    // empty-sweep hold here like the OFAPI audience sweep's
-    // `subscribers_empty_sweep_guard` (cursor-state.ts:505) — one empty or
-    // truncated response with `total: 0` hides the whole inbox until the next
-    // sweep re-lists it.
+    // 0 observed reproduces 0 stamped rows, so the bare membership check would
+    // certify the sweep and the destructive pass would hide the whole inbox off
+    // one empty or truncated `total: 0` response. The empty-sweep guard —
+    // mirroring the OFAPI audience sweep's `subscribers_empty_sweep_guard` —
+    // refuses to read "nothing" as membership evidence while the page still has
+    // a visible thread.
+    expect(result).toMatchObject({
+      satisfied: false,
+      continuationRequestSource: "scheduled",
+      stats: {
+        generation: 2,
+        observedCount: 0,
+        generationSetCount: 0,
+        processedConversations: 0,
+        membershipCertified: false,
+        destructiveFinalization: false,
+        finalizationWithheld: true,
+        emptySweepGuard: true,
+        fullSweepCompleted: false,
+      },
+    });
+    // Same throttled retry as any other uncertified sweep, and a fresh walk.
+    expect(result.continuationRetryAt).toBeInstanceOf(Date);
+    expect(telemetry.addAnomaly).toHaveBeenCalledWith(expect.objectContaining({
+      code: "dm_conversations_empty_sweep_guard",
+      severity: "warn",
+      details: expect.objectContaining({
+        generation: 2,
+        observedCount: 0,
+        generationSetCount: 0,
+        visibleThreadCount: 1,
+        providerTotalMode: "present",
+        providerReportedTotal: 0,
+        finalizationWithheld: true,
+      }),
+    }));
+    // Untouched: the thread the pre-guard sweep hid on exactly this evidence.
+    expect(await readThreads(stored.page.id)).toEqual({
+      "grp-live": {
+        generation: 1,
+        isVisible: true,
+        lastMessageId: "msg-grp-live",
+        unreadCount: 0,
+        conversationFlags: 0,
+        subscriptionTierId: null,
+        lastUnreadMessageId: null,
+      },
+    });
+    const checkpoint = await getCheckpoint(appContext.db, stored.page.id, "dm_conversations");
+    // The withheld document, not the certified one: same completed shape (no
+    // `mode`, so the next dispatch opens a fresh sweep) with the verdict flags
+    // false and the coverage timestamp left where it was — here, never set.
+    expect(checkpoint?.state).toEqual({
+      version: 2,
+      generation: 2,
+      observedCount: 0,
+      generationSetCount: 0,
+      providerTotalMode: "present",
+      providerReportedTotal: 0,
+      destructiveFinalization: false,
+      membershipCertified: false,
+      lastFullSweepCompletedAt: null,
+    });
+    // A refused finalization is not this stream's last successful run.
+    expect(checkpoint?.cursorLastSucceededRunId ?? null).toBeNull();
+    // ...and the coverage view, which reads that one timestamp, does not
+    // advertise a full sweep the guard refused to certify.
+    expect((await getPageDmSyncCoverage(appContext.db, stored.page.id)).lastConversationFullSweepAt)
+      .toBeNull();
+    // No conversation was applied, so no follow-up was requested: dm_messages
+    // still carries exactly what page seeding left there.
+    expect(await readDmMessagesRequest(stored.page.id)).toEqual({
+      requestSeq: DM_MESSAGES_SEED_REQUEST_SEQ,
+      requestSource: "recovery",
+    });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("certifies an empty response on a page with nothing visible to lose", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const telemetry = fakeTelemetry();
+    const { stored, calls } = await seedPage("sweep-empty-no-visible", {
+      pages: [groupsPage({ conversations: [], total: 0, offset: 0, done: true })],
+    });
+    // Already hidden by an earlier sweep: the destructive pass has nothing left
+    // to take, so the guard has nothing to protect and stays out of the way.
+    await upsertPageDmConversation(appContext.db, {
+      ...seedThreadInput(stored.page.id, "grp-hidden", 1),
+      isVisible: false,
+    });
+
+    const { result, runId } = await runChunk(stored, telemetry, 5);
+
+    expect(calls).toEqual([
+      { method: "messaging_groups", offset: 0, limit: 100, sortOrder: 1, flags: 0 },
+    ]);
     expect(result).toMatchObject({
       satisfied: true,
       stats: {
@@ -551,14 +646,16 @@ describe("Fansly dm_conversations sweep — request-level characterization", () 
         processedConversations: 0,
         membershipCertified: true,
         destructiveFinalization: true,
+        finalizationWithheld: false,
+        emptySweepGuard: false,
         fullSweepCompleted: true,
       },
     });
     expect(await readThreads(stored.page.id)).toEqual({
-      "grp-live": {
+      "grp-hidden": {
         generation: 1,
         isVisible: false,
-        lastMessageId: "msg-grp-live",
+        lastMessageId: "msg-grp-hidden",
         unreadCount: 0,
         conversationFlags: 0,
         subscriptionTierId: null,
@@ -577,8 +674,9 @@ describe("Fansly dm_conversations sweep — request-level characterization", () 
       membershipCertified: true,
       lastFullSweepCompletedAt: expect.any(String),
     });
-    // No conversation was applied, so no follow-up was requested: dm_messages
-    // still carries exactly what page seeding left there.
+    expect(checkpoint?.cursorLastSucceededRunId).toBe(runId);
+    expect((await getPageDmSyncCoverage(appContext.db, stored.page.id)).lastConversationFullSweepAt)
+      .toBeInstanceOf(Date);
     expect(await readDmMessagesRequest(stored.page.id)).toEqual({
       requestSeq: DM_MESSAGES_SEED_REQUEST_SEQ,
       requestSource: "recovery",
