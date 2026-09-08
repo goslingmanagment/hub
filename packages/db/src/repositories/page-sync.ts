@@ -2566,7 +2566,12 @@ export async function yieldPageSync(
   };
 }
 
-function resolveRetryDelayMs(consecutiveFailures: number) {
+/** The durable per-stream backoff ladder: 60s doubling per consecutive
+ * failure, capped at 30 minutes. Exported because a caller that supplies its
+ * own `retryAt` (a provider `Retry-After`, a policy reset instant) has to be
+ * able to take the LATER of the two — an explicit deadline may postpone a
+ * stream, never pull it forward into the same wall it just hit. */
+export function pageSyncRetryBackoffMs(consecutiveFailures: number) {
   const seconds = 60 * (2 ** Math.max(0, consecutiveFailures - 1));
   return Math.min(seconds, 30 * 60) * 1000;
 }
@@ -2594,7 +2599,7 @@ export async function retryPageSync(
   const now = input.now ?? new Date();
   const row = await getPageSyncState(db, input.pageId, input.stream);
   const nextFailures = (row?.consecutiveFailures ?? 0) + 1;
-  const retryAt = input.retryAt ?? new Date(now.getTime() + resolveRetryDelayMs(nextFailures));
+  const retryAt = input.retryAt ?? new Date(now.getTime() + pageSyncRetryBackoffMs(nextFailures));
   const result = await db.execute(sql<{ status: PageSyncStatus; retryKind: string | null }>`
     update ${pageSyncStates}
     set status = case

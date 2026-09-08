@@ -23,6 +23,7 @@ import {
   type SyncWorkClass,
   yieldPageSync,
   getSyncStreamsForPlatform,
+  pageSyncRetryBackoffMs,
   pausePageSyncForAuth,
   OfapiCollectionPolicyError,
 } from "@agency_hub_core/db";
@@ -302,12 +303,34 @@ async function resolveOfapiCreditsIncidentIfRecovered(
   await resolveOfapiGlobalIncident(app, { ...OFAPI_INSUFFICIENT_CREDITS_INCIDENT, recoveredAt });
 }
 
+/** A provider that named its own deadline outranks the local ladder, but only
+ * upward: `retry_at` becomes the LATER of the two. Fansly answers a 429 with a
+ * `Retry-After` far beyond anything the in-process loop may sleep (600s against
+ * a 60s clamp), and without this the page woke on the 60s rung and walked
+ * straight back into the same limit. Taking the max also keeps the ladder's
+ * anti-hammering property: a 1s `Retry-After` on the fifth consecutive failure
+ * cannot reset the stream to a hot loop. */
+function resolveProviderRetryAt(
+  retryAfterAt: Date | null,
+  input: { previousConsecutiveFailures: number; now: Date },
+): Date | undefined {
+  if (retryAfterAt === null) {
+    return undefined;
+  }
+  // retryPageSync computes the same rung from `consecutiveFailures + 1`.
+  const backoffAt = new Date(
+    input.now.getTime() + pageSyncRetryBackoffMs(input.previousConsecutiveFailures + 1),
+  );
+  return retryAfterAt.getTime() > backoffAt.getTime() ? retryAfterAt : backoffAt;
+}
+
 function classifyTaskFailure(
   error: unknown,
   failure: ReturnType<typeof buildNormalizedSyncError>,
   input: {
     previousConsecutiveFailures: number;
     previousRetryKind: string | null;
+    now?: Date;
   },
 ): {
   mode: "retry" | "blocked";
@@ -388,10 +411,17 @@ function classifyTaskFailure(
   }
 
   if (error instanceof FanslyApiError) {
+    // The class stays exactly what it was; only the wake-up instant moves.
+    const providerRetryAt = resolveProviderRetryAt(error.retryAfterAt, {
+      previousConsecutiveFailures: input.previousConsecutiveFailures,
+      now: input.now ?? new Date(),
+    });
+
     if (error.status === 429) {
       return {
         mode: "retry",
         retryClass: "rate_limit",
+        ...(providerRetryAt ? { retryAt: providerRetryAt } : {}),
       };
     }
 
@@ -399,6 +429,7 @@ function classifyTaskFailure(
       return {
         mode: "retry",
         retryClass: "provider_5xx",
+        ...(providerRetryAt ? { retryAt: providerRetryAt } : {}),
       };
     }
 
@@ -888,6 +919,9 @@ export async function executeNextSyncPageChunk(
     const classified = classifyTaskFailure(error, failure, {
       previousConsecutiveFailures: taskLease.consecutiveFailures,
       previousRetryKind: taskLease.retryKind,
+      // Same clock sample as the persistence below: a retry deadline anchored
+      // to a second `Date.now()` would drift past the row it is written into.
+      now: failedAt,
     });
     if (classified.mode === "blocked") {
       const blockResult = await blockPageSync(app.db, {

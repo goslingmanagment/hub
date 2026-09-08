@@ -74,6 +74,12 @@ describe("adapter hardening", () => {
   it("refuses proxyless Fansly dispatch fail-closed (decision #124)", async () => {
     const { FanslyAdapter, fetchMock } = await loadAdapters();
     const { requestObserver } = captureEvents();
+    // The refusal is raised inside `execute`, so the loop treats it as a
+    // transport failure and sleeps the shared exponential ladder between its
+    // three attempts — up to 35s of real wall clock against a 30s test
+    // timeout. What is under test is the refusal, not the wait.
+    const httpClient = await import("../packages/shared/src/http-client.ts");
+    vi.spyOn(httpClient, "exponentialRetryDelayMs").mockReturnValue(1);
 
     const adapter = new FanslyAdapter({
       baseUrl: "https://fansly.example",

@@ -1546,6 +1546,80 @@ describe("sync executor", () => {
     }));
   });
 
+  it("sleeps a rate-limited page until the provider's own Retry-After deadline", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-03-14T12:00:00.000Z"));
+    const app = {
+      db: {},
+      logger: { warn: vi.fn(), error: vi.fn() },
+    } as never;
+    // Fansly answered `Retry-After: 600`; the adapter stopped retrying in
+    // process and handed the deadline over.
+    const retryAfterAt = new Date("2026-03-14T12:10:00.000Z");
+
+    dbMocks.acquirePageSyncLease.mockResolvedValueOnce(taskLease);
+    handlerMocks.executeStreamChunk.mockRejectedValue(
+      new FanslyApiError("rate limited", 429, undefined, undefined, retryAfterAt),
+    );
+
+    await executeNextSyncPageChunk(app, 55);
+
+    // Without this the row woke on the 60s rung of the ladder and walked
+    // straight back into the same limit, three times over.
+    expect(dbMocks.retryPageSync).toHaveBeenCalledWith({}, expect.objectContaining({
+      pageId: 55,
+      stream: "followers",
+      retryKind: "rate_limit",
+      retryAt: retryAfterAt,
+    }));
+    expect(dbMocks.blockPageSync).not.toHaveBeenCalled();
+  });
+
+  it("keeps the durable ladder when it outlasts the provider's deadline", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-03-14T12:00:00.000Z"));
+    const app = {
+      db: {},
+      logger: { warn: vi.fn(), error: vi.fn() },
+    } as never;
+
+    dbMocks.acquirePageSyncLease.mockResolvedValueOnce({
+      ...taskLease,
+      // Sixth consecutive failure: the ladder is already at its 30 min cap.
+      consecutiveFailures: 5,
+      retryKind: "provider_5xx",
+    });
+    handlerMocks.executeStreamChunk.mockRejectedValue(
+      new FanslyApiError("unavailable", 503, undefined, undefined, new Date("2026-03-14T12:00:30.000Z")),
+    );
+
+    await executeNextSyncPageChunk(app, 55);
+
+    // A short Retry-After may not pull a repeatedly failing stream forward
+    // into a hot loop: the wake-up is the LATER of the two.
+    expect(dbMocks.retryPageSync).toHaveBeenCalledWith({}, expect.objectContaining({
+      retryKind: "provider_5xx",
+      retryAt: new Date("2026-03-14T12:30:00.000Z"),
+    }));
+  });
+
+  it("leaves the ladder to itself when the provider named no deadline", async () => {
+    const app = {
+      db: {},
+      logger: { warn: vi.fn(), error: vi.fn() },
+    } as never;
+
+    dbMocks.acquirePageSyncLease.mockResolvedValueOnce(taskLease);
+    handlerMocks.executeStreamChunk.mockRejectedValue(new FanslyApiError("rate limited", 429));
+
+    await executeNextSyncPageChunk(app, 55);
+
+    const call = dbMocks.retryPageSync.mock.calls[0]?.[1] as { retryKind: string };
+    expect(call.retryKind).toBe("rate_limit");
+    // No `retryAt` key at all — retryPageSync computes the rung itself.
+    expect(call).not.toHaveProperty("retryAt");
+  });
+
   it("blocks an unsafe follower reconcile snapshot without retrying", async () => {
     const app = {
       db: {},

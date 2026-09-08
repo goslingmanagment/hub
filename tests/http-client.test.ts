@@ -361,6 +361,27 @@ describe("shared http client helpers", () => {
     expect(resolveRetryDelayMs("3600", 1, now)).toBe(60_000);
   });
 
+  it("keeps the provider's own retry-after deadline unclamped, in both header forms", async () => {
+    const { parseRetryAfterDelayMsUnclamped, parseRetryAfterInstant } = await loadHttpClientModule();
+    const now = Date.parse("2026-03-13T00:00:00.000Z");
+
+    // The clamped parser is an in-process sleep budget; the deadline handed to
+    // durable state is the provider's, whole.
+    expect(parseRetryAfterDelayMsUnclamped("600", now)).toBe(600_000);
+    expect(parseRetryAfterDelayMsUnclamped("Fri, 13 Mar 2026 12:00:00 GMT", now)).toBe(12 * 3_600_000);
+
+    expect(parseRetryAfterInstant("600", now)).toEqual(new Date(now + 600_000));
+    expect(parseRetryAfterInstant("Fri, 13 Mar 2026 00:10:00 GMT", now))
+      .toEqual(new Date("2026-03-13T00:10:00.000Z"));
+    // A deadline already in the past is "now", never a negative wait.
+    expect(parseRetryAfterInstant("Thu, 12 Mar 2026 23:00:00 GMT", now)).toEqual(new Date(now));
+    expect(parseRetryAfterInstant(null, now)).toBeNull();
+    expect(parseRetryAfterInstant("not-a-date", now)).toBeNull();
+    // A negative delta-seconds is not a delay; it falls through to the date
+    // branch and floors at "now" like any past deadline.
+    expect(parseRetryAfterInstant("-5", now)).toEqual(new Date(now));
+  });
+
   it("builds proxy cache keys without exposing raw credentials", () => {
     const key = buildProxyDispatcherCacheKey({
       url: "socks5://proxy-user:proxy-pass@127.0.0.1:1080",
