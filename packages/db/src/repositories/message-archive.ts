@@ -125,6 +125,79 @@ function headDate(value: unknown): Date | null {
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
+async function applyReplyMaterial(
+  db: Database,
+  input: {
+    accountId: number;
+    platform: string;
+    messageRef: string;
+    targetTable: ArchiveTargetTable | undefined;
+    reply: Record<string, unknown> | null;
+    observedAt: Date;
+  },
+): Promise<void> {
+  const target = archiveTable(input.targetTable);
+  const observesParent = input.reply === null || Object.hasOwn(input.reply, "messageId");
+  const observesRoot = input.reply === null || Object.hasOwn(input.reply, "rootMessageId");
+  const parent = typeof input.reply?.messageId === "string" ? input.reply.messageId : null;
+  const root = typeof input.reply?.rootMessageId === "string" ? input.reply.rootMessageId : null;
+  // The row lock makes field comparison and application one operation. A
+  // failed reply update propagates, so the projection watermark cannot pass it;
+  // retrying the already-applied body is safe. Whole-head provenance stays put.
+  await db.execute(sql`
+    with current as materialized (
+      select id, in_reply_to_ref, reply_metadata,
+        ${observesParent} and ${input.observedAt}::timestamptz >= coalesce(
+          reply_parent_observed_at,
+          case when in_reply_to_ref is not null then material_observed_at end,
+          '-infinity'::timestamptz
+        ) as accept_parent,
+        ${input.observedAt}::timestamptz >= coalesce(
+          reply_root_observed_at,
+          case when reply_metadata->>'rootMessageId' is not null then material_observed_at end,
+          '-infinity'::timestamptz
+        ) as root_due
+      from ${target}
+      where account_id = ${input.accountId} and platform = ${input.platform}
+        and message_ref = ${input.messageRef}
+      for update
+    ), parent_change as (
+      select *, accept_parent and in_reply_to_ref is not null
+        and in_reply_to_ref is distinct from ${parent}::text as changed_parent
+      from current
+    ), accepted as (
+      select *, (${observesRoot} or changed_parent) and root_due
+        and not (${observesParent} and not accept_parent
+          and in_reply_to_ref is distinct from ${parent}::text) as accept_root
+      from parent_change
+    ), merged as (
+      select *,
+        (case when changed_parent
+          then case when reply_metadata ? 'rootMessageId'
+            then jsonb_build_object('rootMessageId', reply_metadata->'rootMessageId')
+            else '{}'::jsonb end
+          else coalesce(reply_metadata, '{}'::jsonb) end)
+        || (case when accept_parent then jsonb_build_object('messageId', ${parent}::text) else '{}'::jsonb end)
+        || (case when accept_root then jsonb_build_object('rootMessageId', ${root}::text) else '{}'::jsonb end)
+          as next_metadata
+      from accepted
+    )
+    update ${target} as target set
+      in_reply_to_ref = case when merged.accept_parent then ${parent}::text else target.in_reply_to_ref end,
+      reply_metadata = case
+        when merged.next_metadata->>'messageId' is null
+          and merged.next_metadata->>'rootMessageId' is null then null
+        else merged.next_metadata end,
+      reply_parent_observed_at = case when merged.accept_parent
+        then ${input.observedAt}::timestamptz else target.reply_parent_observed_at end,
+      reply_root_observed_at = case when merged.accept_root
+        then ${input.observedAt}::timestamptz else target.reply_root_observed_at end,
+      updated_at = now()
+    from merged where target.id = merged.id
+      and (merged.accept_parent or merged.accept_root)
+  `);
+}
+
 /**
  * Applies one account's message.* events (ordered by account_seq) onto the
  * archive. received/sent insert (first writer wins — cross-producer dedup
@@ -161,7 +234,10 @@ export async function applyMessageEventsToArchive(
       if (!head || typeof head.isSentByMe !== "boolean") continue;
       const fieldPresence = recordField(head, "fieldPresence");
       const observesMedia = fieldPresence?.media !== false;
-      const observesReply = fieldPresence?.reply !== false;
+      // v5 Fansly sidecars falsely declared reply:null as observed. Reply v1
+      // is applied separately, with field clocks, including on stale replays.
+      const observesReply = fieldPresence?.reply !== false
+        && head.originClass !== "fansly_dm_sidecar";
       const observesTipText = fieldPresence?.tipText !== false;
       const reply = typeof head.reply === "object" && head.reply !== null && !Array.isArray(head.reply)
         ? head.reply as Record<string, unknown>
@@ -208,8 +284,8 @@ export async function applyMessageEventsToArchive(
           ${head.isTip === true},
           ${headMills(head.tipAmountMills) ?? 0n},
           ${typeof head.tipTextPlain === "string" ? head.tipTextPlain : null},
-          ${typeof reply?.messageId === "string" ? reply.messageId : null},
-          ${reply === null ? null : JSON.stringify(reply)}::jsonb,
+          ${observesReply && typeof reply?.messageId === "string" ? reply.messageId : null},
+          ${!observesReply || reply === null ? null : JSON.stringify(reply)}::jsonb,
           ${JSON.stringify(media)}::jsonb,
           ${typeof head.originClass === "string" ? head.originClass : null},
           ${materialObservedAt},
@@ -275,6 +351,12 @@ export async function applyMessageEventsToArchive(
            )
         returning id
       `);
+      if (head.replyContractVersion === 1 && fieldPresence?.reply === true) {
+        await applyReplyMaterial(db, {
+          accountId: input.accountId, platform: input.platform, messageRef: event.messageRef,
+          targetTable: input.targetTable, reply, observedAt: materialObservedAt,
+        });
+      }
       inserted += result.rows.length;
     } else if (event.type === "message.received" || event.type === "message.sent") {
       if (!event.messageRef) {
@@ -512,6 +594,7 @@ export async function liftLegacySeedRowsToShadow(
       account_id, platform, native_account_ref, conversation_ref, message_ref,
       fan_native_id, sender_role, is_sent_by_me, occurred_at, text_plain,
       price_mills, is_tip, tip_amount_mills, in_reply_to_ref, media_metadata,
+      reply_metadata, material_observed_at, reply_parent_observed_at, reply_root_observed_at,
       content_pending, deleted_at, source_event_id, backfill_source,
       archived_at, updated_at
     )
@@ -519,6 +602,7 @@ export async function liftLegacySeedRowsToShadow(
       account_id, platform, native_account_ref, conversation_ref, message_ref,
       fan_native_id, sender_role, is_sent_by_me, occurred_at, text_plain,
       price_mills, is_tip, tip_amount_mills, in_reply_to_ref, media_metadata,
+      reply_metadata, material_observed_at, reply_parent_observed_at, reply_root_observed_at,
       content_pending, deleted_at, source_event_id, backfill_source,
       archived_at, updated_at
     from message_archive

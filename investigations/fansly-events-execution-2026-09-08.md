@@ -8,8 +8,8 @@ and evidence now live in `investigations/`.
 
 | Stage | State | Measurement / next gate |
 |---|---|---|
-| Pre-A0: stale follow-up + lilly-2 debt | Green locally, independent review passed; branch `fix/fansly-dm-head-debt`, base `a6631a70` | Fixed raw cohort at 11:02:47 UTC: lilly-2 2,767 missing / 5,615 known; ari-1 1, lilly-1 4, lora-1 1, lora-2/3 0. Deploy and each page activation require separate owner yes. |
-| Pre-A0: reply links | Pending separate PR | Text, attachment and existing-link fixtures; replay of retained evidence, separately approved on production. |
+| Pre-A0: stale follow-up + lilly-2 debt | [PR #157](https://github.com/goslingmanagment/core/pull/157) merged as `93f50bd6`; local and CI green, independent review passed | Fixed raw cohort at 11:02:47 UTC: lilly-2 2,767 missing / 5,615 known; ari-1 1, lilly-1 4, lora-1 1, lora-2/3 0. Deploy and each page activation require separate owner yes. |
+| Pre-A0: reply links | Branch `fix/fansly-dm-reply-material` on `93f50bd6`; independent review passed, local validation recorded in reply investigation | v6 deployment includes automatic retained reparse and needs owner yes. The original raw window still contains 994 distinct reply IDs at 11:44 UTC; archive repair not yet performed. |
 | A0 + T0 | Not started; prerequisites not exited | Offline retained corpus, then default-off shadow/report; runtime shadow >=7 full days on all six pages. Physical-attempt baseline remains unmeasured. |
 | C1 | Not started | Diagnostic counts of the three anomaly branches before a narrow fix. |
 | C2a | Not started | Earnings identity correctness, A-B-A/replay/stale ordering; retain repair plan. |
@@ -29,3 +29,11 @@ freshness and Management Session WebSocket scope remain unproven as in the plan.
 The pre-A0 [runbook](../docs/runbooks/fansly-dm-head-catchup.md) and
 [read-only report](fansly-dm-head-debt-2026-09-08/report.sql) are the next
 operational artifacts. Nothing in this record authorizes a production action.
+
+
+Reply repair: [runbook](../docs/runbooks/fansly-dm-reply-repair.md) and
+[review/validation](fansly-dm-reply-material-2026-09-08/REVIEW.md).
+The next approval is a concrete deployment of the reviewed prerequisite
+revision with head allowlist `none` and automatic v6 database reparse included.
+Activating per-page head recovery, lilly-2 recovery and moving to A1 remain
+separate yes gates. A0 has not started; its clock is not running.

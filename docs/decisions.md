@@ -278,6 +278,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 275 | Fansly `Retry-After` reaches the durable retry | A provider `Retry-After` beyond the 60s in-process clamp ends the in-process retry loop at once (no burned attempts) and travels on `FanslyApiError.retryAfterAt`; `classifyTaskFailure` sets `retry_at = max(retryAfterAt, backoff ladder)` — the deadline moves the wake-up only forward, the failure class never changes. Transport retries use the shared `exponentialRetryDelayMs`. |
 | 276 | OFAPI webhook freshness and history precision | Accepted receipts canonicalize their exact observation after settle; the bounded recovery sweep persists per-family/version/scope traversal with CAS. Delivery-history windows include complete boundary seconds; legacy pagination keeps its frozen wire query. |
 | 277 | Fansly known-head debt before A0 | Exact ID receipts replace successful-attempt timestamps for allowlisted recovery; bounded retries retain exhausted debt separately from history coverage. Plan and reviews are versioned under investigations; production activation remains owner-gated. |
+| 278 | Fansly reply material before A0 | Parent/root refs and explicit clears use the common material ledger with independent field clocks; v6 retained replay repairs links without replacing a newer body or duplicating message events. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -11640,3 +11641,47 @@ not finish an ordinary incremental catch-up that has not reached prior stored
 ground. Its normal `before` cursor continues without the recovery rider until
 overlap/exhaustion. The cap bounds additional target search, not delivery of a
 burst's intervening messages. This preserves the pre-existing history path.
+
+
+## Decision 278: Fansly reply material before A0 (2026-09-08)
+
+The 8 September diagnostic found exact parent IDs in retained Fansly responses
+but missing reply links in five of six sampled archive transcripts. Text
+messages emitted only immutable `msg:direction:id` facts; attached material
+falsely declared `reply: null` as observed. This is the third pre-A0 defect.
+
+Sync-pull v6 carries parent/root references through `message.material_observed`,
+including text-only replies and explicit nulls. Presence follows actual JSON
+fields; text without either reply field and without attachments remains an
+ordinary message event. Existing message dedup keys stay unchanged. The common
+material contains `replyContractVersion: 1`; its content fingerprint includes
+the original observation time and the new fields.
+
+Migration 0173 adds nullable parent/root observation clocks to the archive and
+its rebuild shadow. A required row-locked reply update follows the body upsert;
+its failure propagates before the projection watermark. Each field accepts
+only an equally recent or newer observation, including explicit clears. The
+body retains its original freshness/provenance guard. A retained old reply can
+therefore repair unknown links under newer sparse body material, without
+rolling text/media back. A known parent change invalidates an older root and
+advances its clock; a newer root observation survives. Known legacy refs use
+the material timestamp as a lazy fallback, while unknown legacy nulls have no
+clock. No bulk archive rewrite is needed.
+
+Old Fansly sidecar events no longer clear reply fields during projection or
+rebuild: v5 always manufactured that null. OFAPI's existing material-presence
+and explicit-clear semantics remain unchanged. This does not establish complete
+Fansly edit/delete coverage or recovery of messages never captured.
+
+Version 6 makes retained sync-pull family observations eligible for the normal
+bounded canonicalizer sweep immediately after deployment. The deployment
+approval MUST include this database-only background reparse of the family's
+retained kinds, not just newly arriving DMs. There is no provider request or
+new runtime flag. A separate manual scoped replay, if needed, still requires
+its own production approval. Downgrading code stops new v6 parsing but does not
+undo repaired data or parse stamps; repair of an incorrect write is a new
+forward correction, never a destructive rebuild or a parse-version inflation.
+
+Validation and operational acceptance are recorded in the reply investigation
+and `docs/runbooks/fansly-dm-reply-repair.md`. A0 remains gated until all three
+preconditions have production acceptance.
