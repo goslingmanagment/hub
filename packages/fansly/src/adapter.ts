@@ -10,7 +10,10 @@ import {
   createProxyRequestDispatcher,
   createRequestDispatcher,
   executeObservedRequest,
+  exponentialRetryDelayMs,
+  MAX_RETRY_DELAY_MS,
   millsFromInteger,
+  parseRetryAfterInstant,
   sanitizeError,
   redactSensitiveText,
   resolveRetryDelayMs,
@@ -2026,7 +2029,7 @@ export class FanslyAdapter {
           return {
             kind: "retry",
             failureKind,
-            retryDelayMs: retryDelayMs(executionContext.attemptNumber),
+            retryDelayMs: exponentialRetryDelayMs(executionContext.attemptNumber),
             errorMessage: sanitizeError(error, { format: "chain" }).message,
             error,
           };
@@ -2046,6 +2049,18 @@ export class FanslyAdapter {
         // Redact BEFORE slicing: a cut through a credential URL leaves a
         // fragment the redactor no longer recognises as one (decision #248).
         const responseSnippet = redactSensitiveText(text).slice(0, 400);
+        const retryAfterHeader = response.headers.get("retry-after");
+        const observedAt = Date.now();
+        // Unclamped on purpose: the provider's deadline is a fact, and a
+        // terminal failure carries it to the durable retry.
+        const retryAfterAt = parseRetryAfterInstant(retryAfterHeader, observedAt);
+        // A Retry-After beyond what this loop may sleep cannot be waited out
+        // in process: clamping it to 60s would burn every remaining attempt on
+        // a window the provider already told us is closed, and each attempt is
+        // one more 429 against the same page. Stop here and let the caller
+        // sleep durably until `retryAfterAt`.
+        const retryAfterExceedsInProcessClamp = retryAfterAt !== null
+          && retryAfterAt.getTime() - observedAt > MAX_RETRY_DELAY_MS;
         const failureResponseMetadata = {
           bodyLength: text.length,
           errorCode: envelope?.error?.code ?? null,
@@ -2087,14 +2102,19 @@ export class FanslyAdapter {
           };
         }
 
-        if ([429, 500, 502, 503, 504].includes(response.status) && executionContext.retriesRemaining > 0) {
+        if (
+          [429, 500, 502, 503, 504].includes(response.status)
+          && executionContext.retriesRemaining > 0
+          && !retryAfterExceedsInProcessClamp
+        ) {
           return {
             kind: "retry",
             failureKind: "http",
             httpStatus: response.status,
             retryDelayMs: resolveRetryDelayMs(
-              response.headers.get("retry-after"),
+              retryAfterHeader,
               executionContext.attemptNumber,
+              observedAt,
             ),
             responseMetadata: failureResponseMetadata,
             errorMessage: envelopeMessage ?? `Fansly request failed (${response.status})`,
@@ -2113,6 +2133,7 @@ export class FanslyAdapter {
               response.status,
               envelope?.error?.code,
               responseSnippet,
+              retryAfterAt,
             ),
           };
         }
@@ -2301,11 +2322,4 @@ export class FanslyAdapter {
     await delay(waitedMs);
     return waitedMs;
   }
-}
-
-function retryDelayMs(attemptNumber: number) {
-  const delay = 5000 * attemptNumber;
-  // Jitter the transport-retry backoff so concurrent failures on a shared
-  // egress don't all reconnect on the same boundary (thundering herd).
-  return Math.round(delay * (0.5 + Math.random() * 0.5));
 }

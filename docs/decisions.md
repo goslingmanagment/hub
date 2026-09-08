@@ -275,6 +275,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 271 | OFAPI content webhook evidence | Queue progress and post likes canonicalize from raw captures into rebuildable, source-fenced projections; local owner report never claims delivery or complete liker coverage. |
 | 272 | Typed OFAPI owner actions | Closed action schemas share encrypted durable intents, frozen binding and accounting mode, nonblocking dispatch locks, exact response capture, local replay and owner controls. No subscribe-to-user or automatic enabling. |
 | 274 | Fansly `dm_conversations` empty-sweep guard | A completed sweep that observed zero conversations while the page still has visible threads certifies nothing: no thread hidden, no success stamp, `lastFullSweepCompletedAt` unchanged, `dm_conversations_empty_sweep_guard` (warn), +15min retry. Mirrors #258. No escape hatch: a genuinely emptied inbox keeps its old threads visible until an operator retires them. |
+| 275 | Fansly `Retry-After` reaches the durable retry | A provider `Retry-After` beyond the 60s in-process clamp ends the in-process retry loop at once (no burned attempts) and travels on `FanslyApiError.retryAfterAt`; `classifyTaskFailure` sets `retry_at = max(retryAfterAt, backoff ladder)` — the deadline moves the wake-up only forward, the failure class never changes. Transport retries use the shared `exponentialRetryDelayMs`. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -11514,3 +11515,32 @@ emptied to zero keeps its old threads visible, with this anomaly on every
 sweep, until a human retires them. That is the cheap side of the trade: a
 stale visible thread is recoverable, a blanked inbox is not. A page that has
 no visible threads and receives an empty answer still certifies as before.
+
+## Decision 275: Fansly `Retry-After` reaches the durable retry (2026-09-08)
+
+Until now the Fansly adapter honoured `Retry-After` only inside its in-process
+retry loop, clamped to `MAX_RETRY_DELAY_MS` (60s). A `Retry-After: 600` was
+therefore waited out as three 60s sleeps — three more attempts against a
+window the provider had just closed — and once the attempts were exhausted
+the `FanslyApiError` carried no deadline at all, so the stream woke on the
+first rung of the page-sync ladder (60s) and walked straight back into the
+same limit. Retries also used a private linear backoff next to the shared
+exponential one.
+
+The rule: a deadline the provider named outranks the local ladder, but only
+upward. `Retry-After` is parsed once, unclamped and absolute
+(`parseRetryAfterInstant`, both wire forms). Within the clamp the in-process
+loop behaves as before. Beyond it the loop stops at once — no attempt is
+burned — and the terminal `FanslyApiError` carries `retryAfterAt`.
+`classifyTaskFailure` keeps the failure class exactly as it was (`rate_limit`,
+`provider_5xx`) and sets `retry_at = max(retryAfterAt, ladder)`; the ladder's
+anti-hammering property survives, because a short `Retry-After` on a deep
+failure streak cannot pull the stream forward into a hot loop. Transport
+retries use the shared `exponentialRetryDelayMs`; the adapter's own linear
+backoff is gone.
+
+`retryAfterAt` lives on the throwable only: `PersistedSyncError` allowlists
+the ledger fields, no SSE frame or incident summary reads it, and no client
+contract mentions `FanslyApiError`. The OFAPI path still has two independent
+`Retry-After` parsers (`services/ofapi.ts`, `ofapi-capture-jobs.ts`); this
+decision is the rule they should converge on when touched.

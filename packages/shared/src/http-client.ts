@@ -311,7 +311,7 @@ export function normalizeProviderStreamFailure(
       "provider_rate_limited",
       "provider_response",
       status,
-      parseProviderRetryAfterFrameMs(metadata.retryAfterHeader, input?.now),
+      parseRetryAfterDelayMsUnclamped(metadata.retryAfterHeader, input?.now),
     );
   }
   if (
@@ -341,7 +341,7 @@ export function normalizeProviderStreamFailure(
       "provider_rate_limited",
       "provider_response",
       status,
-      parseProviderRetryAfterFrameMs(metadata.retryAfterHeader, input?.now),
+      parseRetryAfterDelayMsUnclamped(metadata.retryAfterHeader, input?.now),
     );
   }
   if (status === 529 || (status !== null && status >= 500 && status <= 599)) {
@@ -506,7 +506,11 @@ function sdkFailureKindFromName(name: string): AiProviderSdkFailureKind | null {
   }
 }
 
-function parseProviderRetryAfterFrameMs(retryAfterHeader: string | null, now = Date.now()) {
+/** `Retry-After` as the provider stated it — both wire forms (delta-seconds and
+ * HTTP-date), never clamped. This is the provider's own deadline, so it is what
+ * a durable sleep or a display countdown is anchored to; an in-process wait uses
+ * the clamped `parseRetryAfterDelayMs` instead. */
+export function parseRetryAfterDelayMsUnclamped(retryAfterHeader: string | null, now = Date.now()) {
   if (!retryAfterHeader) {
     return null;
   }
@@ -519,6 +523,15 @@ function parseProviderRetryAfterFrameMs(retryAfterHeader: string | null, now = D
     return null;
   }
   return Math.min(Math.max(0, retryAt - now), Number.MAX_SAFE_INTEGER);
+}
+
+/** The same header as an absolute instant. A caller that hands the deadline to
+ * durable state (page-sync `retry_at`) must not carry a relative delay across
+ * the persistence boundary — the wait is measured from the response, not from
+ * whenever the row is finally written. */
+export function parseRetryAfterInstant(retryAfterHeader: string | null, now = Date.now()) {
+  const delayMs = parseRetryAfterDelayMsUnclamped(retryAfterHeader, now);
+  return delayMs === null ? null : new Date(now + delayMs);
 }
 
 /** Wraps a fetch so that once a connect-level failure is observed, every
@@ -543,6 +556,10 @@ export function createStickyConnectFailureFetch(fetchImpl: typeof fetch): typeof
   };
 }
 
+/** `Retry-After` bounded to what an in-process retry loop may sleep
+ * (`MAX_RETRY_DELAY_MS`). A longer deadline is NOT a shorter one: a caller that
+ * clamps must not then keep retrying against a window the provider closed —
+ * hand `parseRetryAfterInstant` to durable state instead. */
 export function parseRetryAfterDelayMs(retryAfterHeader: string | null, now = Date.now()) {
   if (!retryAfterHeader) {
     return null;
