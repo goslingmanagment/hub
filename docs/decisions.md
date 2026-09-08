@@ -279,6 +279,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 276 | OFAPI webhook freshness and history precision | Accepted receipts canonicalize their exact observation after settle; the bounded recovery sweep persists per-family/version/scope traversal with CAS. Delivery-history windows include complete boundary seconds; legacy pagination keeps its frozen wire query. |
 | 277 | Fansly known-head debt before A0 | Exact ID receipts replace successful-attempt timestamps for allowlisted recovery; bounded retries retain exhausted debt separately from history coverage. Plan and reviews are versioned under investigations; production activation remains owner-gated. |
 | 278 | Fansly reply material before A0 | Parent/root refs and explicit clears use the common material ledger with independent field clocks; v6 retained replay repairs links without replacing a newer body or duplicating message events. |
+| 279 | Fresh capture during Fansly reply replay | The sync-pull sweep shares its existing page/time allowance between never-parsed capture and retained replay, with independent durable cursors; v6 stamps and the original history cursor remain unchanged. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -11685,3 +11686,42 @@ forward correction, never a destructive rebuild or a parse-version inflation.
 Validation and operational acceptance are recorded in the reply investigation
 and `docs/runbooks/fansly-dm-reply-repair.md`. A0 remains gated until all three
 preconditions have production acceptance.
+
+
+## Decision 279: Fresh capture during Fansly reply replay (2026-09-08)
+
+The owner-approved sync-pull v6 replay exposed a freshness regression before
+A0 acceptance. At 13:48 UTC, 1,422 never-parsed observations (including 507 DM
+responses) waited behind 295,738 v5 observations. The durable sweep ordered
+both groups by observation ID. Family rotation prevents another family from
+being excluded forever, but does not distinguish new capture from old replay
+within a family. The original ari canary target was captured and readable from
+the hot table, yet still unstamped and not accepted in the archive.
+
+Only the sync-pull family opts into prioritizing unparsed capture. The existing
+cursor-driven sweep first selects parse_version < 1 with a separate durable
+cursor. The first pass gets at most half the remaining wall-clock allowance
+and half the family page allowance; the second gets the unused allowance.
+The existing 20-page family cap and 600-second run budget remain; an in-flight page still finishes before the budget takes
+effect. CLI, dry-run and explicitly single-page traversals keep their prior
+ordering. Other families do not opt in.
+
+Selection at version zero does not change parser identity: captured facts use
+and stamp v6. Replay's existing cursor key is preserved byte-for-byte; the new
+cursor has an unparsed namespace and the same family/version/scope identity.
+A third namespaced cursor stores the next pass (1 = replay owed; null =
+capture first). The opposite turn is persisted through CAS before work starts,
+so a page overshoot or crash gives the other pass the first turn next time.
+After both passes run, capture-first order resumes. Poison/unmapped rows remain
+unstamped and their traversal advances and wraps under the existing CAS rules. Raw facts, event dedup, reply field clocks,
+projection receipts and provider collection remain on their existing paths.
+There is no new queue, runtime flag, migration or provider request.
+
+This changes bounded service order; it does not prove a production latency
+percentile or remove projection load. Production acceptance must compare new
+parse-zero age and ingestion with historical progress, then verify the exact
+recovered heads and reply corpus in serving. Deploy remains separately
+owner-gated. Reverting code restores the old traversal while retaining v6
+facts/stamps and all cursor records; no cursor reset or data deletion is part
+of rollback. Evidence and independent review belong to
+investigations/fansly-replay-freshness-2026-09-08/. A0 remains gated.

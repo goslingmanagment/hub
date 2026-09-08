@@ -86,6 +86,8 @@ export interface CanonicalizerFamily {
   /** null = all kinds of the source (the function is total over them). */
   kinds: readonly string[] | null;
   version: number;
+  /** Share the existing sweep budget between never-parsed capture and replay. */
+  prioritizeUnparsed?: boolean;
   canonicalize: Canonicalizer;
   /**
    * Shape gate. `false` = the payload matches NO shape this family knows, so
@@ -156,6 +158,7 @@ export const CANONICALIZER_FAMILIES: readonly CanonicalizerFamily[] = [
     lane: "sync",
     kinds: [...SYNC_PULL_CANONICALIZED_KINDS],
     version: SYNC_PULL_CANONICALIZER_VERSION,
+    prioritizeUnparsed: true,
     canonicalize: canonicalizeSyncPullObservation,
     mixed: true,
   },

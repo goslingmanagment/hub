@@ -21,6 +21,35 @@ change the head-recovery allowlist, deep-history budgets or any other flag.
 Use the existing production deployment runbook from the approved clean revision;
 verify the exact image source revision, migrations, health, logs and free disk.
 
+### Fresh capture during replay (Decision 279)
+
+The reviewed follow-up gives never-parsed sync-pull capture an independent
+durable sweep cursor. It selects version-zero rows before retained replay,
+sharing the existing time and family page allowance with historical replay.
+The first pass gets at most half; the second gets the unused allowance. A
+separate CAS turn marker is saved before work so overshoot or a worker crash
+gives the other pass first turn next time. After both passes run, new capture
+starts first again. Historical replay retains its original cursor. Both passes use and
+stamp the current v6 parser. This adds no flag, migration or provider requests.
+The original page/run limits still apply, including completion of an in-flight
+page after a time budget expires. Other families and CLI replay keep their
+existing traversal.
+
+Before approving its deployment, retain the version-zero count/oldest receipt
+and the older-version backlog separately. After deployment, compare both over
+successive completed sweeps: new capture must progress while replay also
+advances. A shrinking total backlog alone does not prove fresh materialization.
+Keep the head catch-up allowlist `none` during this verification. Check the
+exact canary target in Agent transcript and finish the reply corpus comparison
+before declaring acceptance. Do not infer a latency percentile from the
+configured time budget.
+
+For a separately approved code rollback, preserve all cursor rows, all parse
+stamps and material events. The older binary ignores the extra cursor and
+restores the old ordering; it cannot undo repaired data. See the bounded
+read-only query in
+`investigations/fansly-replay-freshness-2026-09-08/evidence/parse-lanes.sql`.
+
 ## Read-only acceptance
 
 1. Record the sync-pull v6 backlog and canonicalizer/projection errors from

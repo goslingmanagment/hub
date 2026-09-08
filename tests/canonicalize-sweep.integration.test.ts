@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   appendDomainEvents,
@@ -19,6 +19,7 @@ import {
   resetCanonicalizeSweepRuntime,
   runCanonicalization,
 } from "../apps/runtime/src/services/canonicalize-driver.ts";
+import { CANONICALIZER_FAMILIES } from "../apps/runtime/src/services/canonicalize/index.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
@@ -161,6 +162,85 @@ async function seedCorpus() {
 }
 
 describe("canonicalization sweep (Stage 8)", () => {
+  it("persists alternating turns when either pass overruns its budget", async () => {
+    const ids: number[] = [];
+    for (let index = 0; index < 4; index += 1) {
+      const receipt = await insertObservation(testDb!.db, {
+        source: "pull", producer: "freshness-test", platform: "fansly", accountId: 3,
+        kind: "earnings_transactions", payload: {}, payloadHash: sha256(index), idempotencyKey: `turn:${index}`,
+      });
+      ids.push(receipt.observationId);
+      if (index < 2) await markObservationParsed(testDb!.db, {
+        observationId: receipt.observationId, receivedAt: receipt.receivedAt, parseVersion: 5,
+      });
+    }
+    let clock = Date.now();
+    const now = vi.spyOn(Date, "now").mockImplementation(() => clock);
+    try {
+      const processed: number[] = [];
+      const family = {
+        source: "pull" as const, lane: "turn-test", version: 6, kinds: ["earnings_transactions"],
+        prioritizeUnparsed: true,
+        canonicalize: (observation: { id: number }) => { processed.push(observation.id); clock += 120; return []; },
+      };
+      for (let run = 0; run < 3; run += 1) {
+        resetCanonicalizeSweepRuntime();
+        expect(await runCanonicalization(appStub(), {
+          families: [family], useSweepCursor: true, pageSize: 1, maxPagesPerFamily: 4, maxDurationMs: 100,
+        })).toMatchObject({ scanned: 1, stamped: 1, errored: 0, truncatedByBudget: true });
+      }
+      expect(processed).toEqual([ids[2], ids[0], ids[3]]);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it.each([false, true])("keeps new capture and v6 replay moving after restart (unmapped capture: %s)", async (unmapped) => {
+    const family = CANONICALIZER_FAMILIES.find(item => item.source === "pull" && item.lane === "sync")!;
+    async function capture(name: string, accountId: number | null = 3, parsed = false) {
+      const receipt = await insertObservation(testDb!.db, {
+        source: "pull", producer: "sync:fansly:transactions", platform: "fansly", accountId,
+        kind: "earnings_transactions",
+        payload: { total: 1, data: [{ transactionId: name, correlationAccountId: "fan-2", type: 2110,
+          amount: 100, destinationAmount: 80, status: 2, createdAt: Date.parse("2026-09-07T09:00:00Z") }] },
+        payloadHash: sha256(name), idempotencyKey: `freshness:${name}`,
+      });
+      if (parsed) await markObservationParsed(testDb!.db, {
+        observationId: receipt.observationId, receivedAt: receipt.receivedAt, parseVersion: family.version - 1,
+      });
+      return receipt.observationId;
+    }
+    const old: number[] = [];
+    for (const name of ["old-1", "old-2", "old-3"]) old.push(await capture(name, 3, true));
+    const poison = unmapped ? await capture("unmapped", null) : null;
+    const fresh = await capture("fresh");
+    const options = { useSweepCursor: true, pageSize: 1, maxPagesPerFamily: 2, families: [family] };
+
+    const first = await runCanonicalization(appStub(), options);
+    expect(first).toMatchObject({ scanned: 2, stamped: unmapped ? 1 : 2, skippedUnmapped: unmapped ? 1 : 0, errored: 0 });
+    async function versions() {
+      const rows = await testDb!.pool.query<{ id: string; parse_version: number }>(
+        "select id::text,parse_version from observations where idempotency_key like 'freshness:%' order by id",
+      );
+      return new Map(rows.rows.map(item => [Number(item.id), item.parse_version]));
+    }
+    const afterFirst = await versions();
+    expect(afterFirst.get(fresh)).toBe(unmapped ? 0 : family.version);
+    expect(old.map(id => afterFirst.get(id))).toEqual([family.version, family.version - 1, family.version - 1]);
+
+    // The fresh cursor must not move the replay cursor beyond old-2. A stuck
+    // unmapped row must not pin the fresh cursor after a process restart.
+    resetCanonicalizeSweepRuntime();
+    const nextFresh = unmapped ? fresh : await capture("fresh-after-restart");
+    expect(await runCanonicalization(appStub(), options)).toMatchObject({ scanned: 2, stamped: 2, errored: 0 });
+    const afterRestart = await versions();
+    expect(afterRestart.get(nextFresh)).toBe(family.version);
+    expect(old.map(id => afterRestart.get(id))).toEqual([family.version, family.version, family.version - 1]);
+    if (poison !== null) expect(afterRestart.get(poison)).toBe(0);
+    const events = await listEventsSince(testDb!.db, { accountId: 3, afterSeq: 0 });
+    expect(events.filter(event => event.dedupKey === "txn:fresh")).toHaveLength(1);
+  });
+
   it("rejects stale cursor writers, including a writer from before a wrap", async () => {
     const first = await getCanonicalizeSweepCursor(testDb!.db, "concurrent-sweep");
     const second = await getCanonicalizeSweepCursor(testDb!.db, first.key);

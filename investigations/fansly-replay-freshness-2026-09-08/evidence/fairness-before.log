@@ -1,0 +1,37 @@
+
+ RUN  v4.1.10 /Users/dmitriy/.codex/worktrees/hub-fansly-replay-freshness
+
+ ❯ tests/canonicalize-budget.test.ts (17 tests | 1 failed | 16 skipped) 6ms
+     × gives the other pass its turn after page overshoot and process restart 5ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  tests/canonicalize-budget.test.ts > canonicalization sweep wall-clock budget > gives the other pass its turn after page overshoot and process restart
+AssertionError: expected [ 1, 1, 1 ] to deeply equal [ 1, 6, 1 ]
+
+- Expected
++ Received
+
+  [
+    1,
+-   6,
++   1,
+    1,
+  ]
+
+ ❯ tests/canonicalize-budget.test.ts:216:97
+    214|       expect(await runCanonicalization(appStub(), options)).toMatchObj…
+    215|     }
+    216|     expect(dbMocks.listObservationsForReplay.mock.calls.map(call => ca…
+       |                                                                                                 ^
+    217|   });
+    218|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 16 skipped (17)
+   Start at  17:00:16
+   Duration  3.74s (transform 377ms, setup 0ms, import 688ms, tests 6ms, environment 0ms)
+

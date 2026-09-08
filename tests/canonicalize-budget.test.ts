@@ -154,6 +154,80 @@ describe("canonicalization sweep wall-clock budget", () => {
     vi.useRealTimers();
   });
 
+  it("processes new capture before versioned replay without spending another page", async () => {
+    const pending = [
+      { ...row(1, "kind_a"), parseVersion: 5 },
+      { ...row(2, "kind_a"), parseVersion: 5 },
+      row(3, "kind_a"),
+    ];
+    dbMocks.listObservationsForReplay.mockImplementation(async (_db, query) => pending
+      .filter(item => item.parseVersion < query.belowParseVersion && item.id > (query.afterId ?? 0))
+      .slice(0, query.limit));
+    dbMocks.markObservationParsed.mockImplementation(async (_db, input) => {
+      pending.find(item => item.id === input.observationId)!.parseVersion = input.parseVersion;
+    });
+
+    const result = await runCanonicalization(appStub(), {
+      useSweepCursor: true, pageSize: 1, maxPagesPerFamily: 2,
+      families: [{ ...endlessFamily("a"), version: 6, prioritizeUnparsed: true }],
+    });
+
+    expect(dbMocks.markObservationParsed.mock.calls.map(call => call[1].observationId)).toEqual([3, 1]);
+    expect(result).toMatchObject({ scanned: 2, stamped: 2, errored: 0 });
+    expect(pending.map(item => item.parseVersion)).toEqual([6, 5, 6]);
+  });
+
+  it("gives replay the whole page allowance when no new capture is pending", async () => {
+    let id = 0;
+    dbMocks.listObservationsForReplay.mockImplementation(async (_db, query) => query.belowParseVersion === 1
+      ? [] : Array.from({ length: query.limit }, () => row(++id, "kind_a")));
+    expect(await runCanonicalization(appStub(), {
+      useSweepCursor: true, pageSize: 2, maxPagesPerFamily: 2,
+      families: [{ ...endlessFamily("a"), version: 6, prioritizeUnparsed: true }],
+    })).toMatchObject({ scanned: 4, stamped: 4 });
+    expect(dbMocks.listObservationsForReplay.mock.calls.map(call => call[1].belowParseVersion)).toEqual([1, 6, 6]);
+  });
+
+  it("shares the wall-clock budget across capture and replay and keeps family rotation", async () => {
+    serveEndlessPages(60);
+    const options = {
+      useSweepCursor: true, pageSize: 1, maxPagesPerFamily: 3, maxDurationMs: 100,
+      families: [{ ...endlessFamily("a"), version: 6, prioritizeUnparsed: true }, endlessFamily("b")],
+    };
+    expect(await runCanonicalization(appStub(), options)).toMatchObject({
+      scanned: 2, stamped: 2, truncatedByBudget: true, skippedFamilies: ["pull:b"],
+    });
+    expect(dbMocks.listObservationsForReplay.mock.calls.map(call => call[1].belowParseVersion)).toEqual([1, 6]);
+    dbMocks.listObservationsForReplay.mockClear();
+    await runCanonicalization(appStub(), options);
+    expect(scannedKinds()[0]).toBe("kind_b");
+  });
+
+  it("gives the other pass its turn after page overshoot and process restart", async () => {
+    serveEndlessPages(120);
+    const options = {
+      useSweepCursor: true, pageSize: 1, maxPagesPerFamily: 4, maxDurationMs: 100,
+      families: [{ ...endlessFamily("a"), version: 6, prioritizeUnparsed: true }],
+    };
+    for (let run = 0; run < 3; run += 1) {
+      resetCanonicalizeSweepRuntime();
+      expect(await runCanonicalization(appStub(), options)).toMatchObject({ scanned: 1, truncatedByBudget: true });
+    }
+    expect(dbMocks.listObservationsForReplay.mock.calls.map(call => call[1].belowParseVersion)).toEqual([1, 6, 1]);
+  });
+
+  it.each([{ useSweepCursor: false }, { useSweepCursor: true, dryRun: true }, { useSweepCursor: true, maxPagesPerFamily: 1 }])(
+    "keeps CLI, dry-run and single-page runs on their original traversal (%j)", async options => {
+      serveEndlessPages(0);
+      await runCanonicalization(appStub(), {
+        pageSize: 1, maxPagesPerFamily: 2, ...options,
+        families: [{ ...endlessFamily("a"), version: 6, prioritizeUnparsed: true }],
+      });
+      expect(dbMocks.listObservationsForReplay.mock.calls.every(call => call[1].belowParseVersion === 6)).toBe(true);
+      if (options.dryRun) expect(dbMocks.markObservationParsed).not.toHaveBeenCalled();
+    },
+  );
+
   it("separates persisted cursors by scope and parser version", async () => {
     serveEndlessPages(0);
     const family = endlessFamily("a");

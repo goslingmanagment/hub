@@ -1,0 +1,5 @@
+/agency-hub-api-1 health=healthy restarts=0 revision=b47f552abb97
+/agency-hub-worker-1 health=healthy restarts=0 revision=b47f552abb97
+/agency-hub-scheduler-1 health=healthy restarts=0 revision=b47f552abb97
+{"status":"ok","timestamp":"2026-09-08T14:06:36.940Z","contractHash":"da876ec6191cf75b84db068747a43f17e878ad3789a224f49d8a9fcc2e24654b","capabilities":["desktop-lifecycle-v2"],"checks":{"api":{"status":"ok"},"database":{"status":"ok","latencyMs":1,"error":null}}}Filesystem      Size  Used Avail Use% Mounted on
+/dev/sda1        79G   47G   31G  61% /
