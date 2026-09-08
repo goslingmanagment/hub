@@ -1,0 +1,9 @@
+
+ RUN  v4.1.10 /Users/dmitriy/.codex/worktrees/hub-fansly-replay-freshness
+
+
+ Test Files  2 passed (2)
+      Tests  5 passed (5)
+   Start at  17:05:56
+   Duration  6.00s (transform 800ms, setup 0ms, import 1.88s, tests 1.13s, environment 0ms)
+

@@ -409,6 +409,7 @@ async function runFamily(
   partitionGate: PartitionGate,
   /** Epoch ms after which this family must take no NEW page; null = no budget. */
   deadlineAt: number | null,
+  pass: "unparsed" | "replay" | null = null,
 ): Promise<boolean> {
   const kinds = options.kinds !== undefined
     ? (family.kinds === null
@@ -424,7 +425,38 @@ async function runFamily(
   const useCursor = options.useSweepCursor === true && options.dryRun !== true;
   const pageSize = options.pageSize ?? SWEEP_PAGE_SIZE;
   const maxPages = options.maxPagesPerFamily ?? SWEEP_MAX_PAGES_PER_FAMILY;
-  let cursor = useCursor ? await getCanonicalizeSweepCursor(app.db, sweepCursorKey(family, options)) : null;
+  if (pass === null && family.prioritizeUnparsed && useCursor && belowParseVersion > 1
+    && (family.minimumParseVersion ?? 0) < 1 && maxPages > 1) {
+    // A parser bump makes old, already-served observations eligible again.
+    // Do not put newly captured facts behind that entire historical replay.
+    // A separate cursor namespace keeps this pass durable; the
+    // existing replay cursor and its scope remain unchanged. Unstampable
+    // capture advances and wraps normally instead of pinning this pass.
+    // This namespaced cursor stores a turn marker, not an observation ID:
+    // 1 means replay is owed; null means capture starts. Persist the opposite
+    // turn BEFORE work, so a page overshoot or crash cannot always deny the
+    // same pass its turn. The observation cursors remain independent.
+    let turn = await getCanonicalizeSweepCursor(app.db, `next-pass:${sweepCursorKey(family, options)}`);
+    const passes: Array<"unparsed" | "replay"> = turn.afterId === 1
+      ? ["replay", "unparsed"] : ["unparsed", "replay"];
+    let remainingPages = maxPages;
+    for (const [index, nextPass] of passes.entries()) {
+      turn = await advanceCanonicalizeSweepCursor(app.db, turn, nextPass === "unparsed" ? 1 : null);
+      const passDeadlineAt = index === 0 && deadlineAt !== null
+        ? Date.now() + Math.max(0, Math.floor((deadlineAt - Date.now()) / 2)) : deadlineAt;
+      const scannedBefore = totals.scanned;
+      await runFamily(app, family, {
+        ...options, maxPagesPerFamily: index === 0 ? Math.floor(maxPages / 2) : remainingPages,
+      }, totals, runContext, partitionGate, passDeadlineAt, nextPass);
+      remainingPages -= Math.ceil((totals.scanned - scannedBefore) / pageSize);
+      if (deadlineAt !== null && Date.now() >= deadlineAt) return true;
+    }
+    // Both passes got their turn; return to ordinary capture-first order.
+    if (turn.afterId !== null) await advanceCanonicalizeSweepCursor(app.db, turn, null);
+    return false;
+  }
+  const cursorKey = `${pass === "unparsed" ? "unparsed:" : ""}${sweepCursorKey(family, options)}`;
+  let cursor = useCursor ? await getCanonicalizeSweepCursor(app.db, cursorKey) : null;
   let afterId: number | null = cursor ? cursor.afterId : options.afterId ?? null;
   let budgetExhausted = false;
   const checkedAcceptedLedgers = new Set<number>();
@@ -439,7 +471,9 @@ async function runFamily(
       break;
     }
     const rows: ReplayObservationRow[] = await listObservationsForReplay(app.db, {
-      belowParseVersion,
+      // Selection at zero still applies and stamps the CURRENT parser; the
+      // CLI's belowParseVersion override keeps its original stamp semantics.
+      belowParseVersion: pass === "unparsed" ? 1 : belowParseVersion,
       ...(options.observationId !== undefined ? { observationId: options.observationId } : {}),
       ...(family.minimumParseVersion === undefined ? {} : { atLeastParseVersion: family.minimumParseVersion }),
       source: family.source,
