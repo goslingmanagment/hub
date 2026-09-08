@@ -2208,33 +2208,19 @@ export async function listSyncMonitorStreamRows(
       from dm_deep_backfill_candidates
       group by "pageId"
     ),
-    request_activity as (
-      select a.sync_run_id as "runId",
-             max(coalesce(a.finished_at, a.started_at)) as "lastAttemptAt"
-      from ${syncHttpAttempts} a
-      inner join visible_pages vp on vp."pageId" = a.page_id
-      group by a.sync_run_id
-    ),
-    event_activity as (
-      select e.sync_run_id as "runId",
-             max(e.emitted_at) as "lastEventAt"
-      from ${syncRunEvents} e
-      inner join visible_pages vp on vp."pageId" = e.page_id
-      group by e.sync_run_id
-    ),
     running_runs as (
-      select ranked.*
+      select ranked.*,
+             greatest(
+               ranked."runningStartedAt",
+               ra."lastAttemptAt",
+               ea."lastEventAt"
+             ) as "runningLastActivityAt"
       from (
         select sr.page_id as "pageId",
                sr.stream as "stream",
                sr.id as "runningRunId",
                coalesce(sr.source::text, 'scheduled') as "runningTrigger",
                sr.started_at as "runningStartedAt",
-               greatest(
-                 sr.started_at,
-                 coalesce(ra."lastAttemptAt", sr.started_at),
-                 coalesce(ea."lastEventAt", sr.started_at)
-               ) as "runningLastActivityAt",
                sr.stats as "runningStats",
                sr.error_summary as "runningErrorSummary",
                row_number() over (
@@ -2243,11 +2229,21 @@ export async function listSyncMonitorStreamRows(
                ) as "rank"
         from ${syncRuns} sr
         inner join visible_pages vp on vp."pageId" = sr.page_id
-        left join request_activity ra on ra."runId" = sr.id
-        left join event_activity ea on ea."runId" = sr.id
         where sr.outcome = 'running'
           and sr.stream = any(${requestedStreamsSql})
       ) ranked
+      -- Activity belongs only to the selected running run. The run/time indexes
+      -- avoid aggregating retained attempts/events for every historical run.
+      left join lateral (
+        select max(coalesce(a.finished_at, a.started_at)) as "lastAttemptAt"
+        from ${syncHttpAttempts} a
+        where a.sync_run_id = ranked."runningRunId"
+      ) ra on true
+      left join lateral (
+        select max(e.emitted_at) as "lastEventAt"
+        from ${syncRunEvents} e
+        where e.sync_run_id = ranked."runningRunId"
+      ) ea on true
       where ranked."rank" = 1
     ),
     completed_runs as (

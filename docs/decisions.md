@@ -280,6 +280,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 277 | Fansly known-head debt before A0 | Exact ID receipts replace successful-attempt timestamps for allowlisted recovery; bounded retries retain exhausted debt separately from history coverage. Plan and reviews are versioned under investigations; production activation remains owner-gated. |
 | 278 | Fansly reply material before A0 | Parent/root refs and explicit clears use the common material ledger with independent field clocks; v6 retained replay repairs links without replacing a newer body or duplicating message events. |
 | 279 | Fresh capture during Fansly reply replay | The sync-pull sweep shares its existing page/time allowance between never-parsed capture and retained replay, with independent durable cursors; v6 stamps and the original history cursor remain unchanged. |
+| 280 | Sync monitor activity query | Select the current running run before reading attempt/event activity through existing run indexes; retain historical physical-failure debt and deploy gates |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -11725,3 +11726,33 @@ owner-gated. Reverting code restores the old traversal while retaining v6
 facts/stamps and all cursor records; no cursor reset or data deletion is part
 of rollback. Evidence and independent review belong to
 investigations/fansly-replay-freshness-2026-09-08/. A0 remains gated.
+
+
+## Decision 280: Scope sync monitor activity to the selected run (2026-09-08)
+
+The owner-approved PR159 deployment failed six 150-second sync-health reads
+and automatically rolled back to PR158. Read-only production evidence showed
+high database CPU and slow projection ticks, but the monitoring role cannot
+see other roles' query text. The exact cause of that incident is not proven.
+
+A local Postgres 16 reproduction did identify unnecessary historical work in
+`listSyncMonitorStreamRows`: attempt/event activity was aggregated for every
+retained run and only then joined to the latest running run. With six pages,
+166286 runs, 665120 attempts, 1163960 events and 576000 DM messages, the plan
+scanned all events six times. The query took 4324 ms under EXPLAIN ANALYZE;
+this fixture does not reproduce the production 150-second timeout.
+
+Keep the existing latest-running selection (started_at descending, ID tie-break)
+and calculate its activity with lateral aggregates keyed by that run ID. The
+existing run/time indexes suffice. The same fixture returns all 102 monitor
+rows unchanged in 1113 ms, and the historical event scans disappear. Physical
+attempt health still reads historical failures/stale attempts since the last
+success; its counters and the completed-run, freshness and coverage definitions
+are unchanged. No flag, migration, retention action, timeout increase or gate
+bypass is introduced.
+
+This is a measured query improvement, not production acceptance of PR159.
+Rollback is the prior code with identical schema and data. Any new deployment
+remains owner-gated and must pass the normal sync-health gate; the pre-A0
+acceptance work and events migration gates remain open. Reproduction and
+validation: investigations/sync-health-query-2026-09-08/REPORT.md.
