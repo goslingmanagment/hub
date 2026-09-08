@@ -82,8 +82,8 @@ existing API suites validate route evidence, authentication, grants and budgets.
 121-file baseline without a budget change; lint passed; 280 unit files passed,
 3110 tests passed and 9 existing tests skipped; dashboard build passed.
 `pnpm build:production` and `git diff --check` also passed. Full command logs
-are retained beside this report. Independent review is recorded separately in
-`REVIEW.md` when complete. No
+are retained beside this report. Independent review of immutable implementation
+`d77d6aaf8855354aee0edca39d878d9e91ceeeb9` found no blockers; see `REVIEW.md`. No
 production deployment, flag change, additional replay or restricted SQL access
 was performed for this code change. The production replay evidence remains in
 the operator workspace at
