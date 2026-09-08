@@ -3,8 +3,10 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
   appendDomainEvents,
+  advanceCanonicalizeSweepCursor,
   applyVerifiedOfapiBinding,
   getOfapiBindingPage,
+  getCanonicalizeSweepCursor,
   createModel,
   createOnlyFansPage,
   insertObservation,
@@ -14,7 +16,7 @@ import {
 } from "@agency_hub_core/db";
 
 import {
-  resetCanonicalizeSweepCursors,
+  resetCanonicalizeSweepRuntime,
   runCanonicalization,
 } from "../apps/runtime/src/services/canonicalize-driver.ts";
 import {
@@ -37,8 +39,8 @@ beforeEach(async () => {
   if (testDb) {
     await resetIntegrationDatabase(testDb.pool);
   }
-  // W5.3: the sweep cursor is module-level state; isolate tests.
-  resetCanonicalizeSweepCursors();
+  // Reset process-local family rotation; the database reset clears durable cursors.
+  resetCanonicalizeSweepRuntime();
 });
 
 function sha256(payload: unknown): Buffer {
@@ -159,6 +161,16 @@ async function seedCorpus() {
 }
 
 describe("canonicalization sweep (Stage 8)", () => {
+  it("rejects stale cursor writers, including a writer from before a wrap", async () => {
+    const first = await getCanonicalizeSweepCursor(testDb!.db, "concurrent-sweep");
+    const second = await getCanonicalizeSweepCursor(testDb!.db, first.key);
+    const advanced = await advanceCanonicalizeSweepCursor(testDb!.db, first, 10);
+    await expect(advanceCanonicalizeSweepCursor(testDb!.db, second, 20)).rejects.toThrow("changed concurrently");
+    const wrapped = await advanceCanonicalizeSweepCursor(testDb!.db, advanced, null);
+    await expect(advanceCanonicalizeSweepCursor(testDb!.db, advanced, 30)).rejects.toThrow("changed concurrently");
+    expect(await getCanonicalizeSweepCursor(testDb!.db, first.key)).toEqual(wrapped);
+  });
+
   it("settles the corpus, leaves undeclared/unmapped pending, and replays idempotently", async (context) => {
     if (!testDb) {
       context.skip();
@@ -582,11 +594,18 @@ describe("canonicalization sweep (Stage 8)", () => {
     const first = await runCanonicalization(appStub(), { useSweepCursor: true, ...bounds });
     expect(first).toMatchObject({ scanned: 4, skippedUnmapped: 4, appended: 0, stamped: 0 });
 
+    const snapshot = () => testDb!.pool.query("select * from canonicalize_sweep_cursors order by key");
+    const beforeDryRun = (await snapshot()).rows;
+    const dryRun = await runCanonicalization(appStub(), { useSweepCursor: true, dryRun: true, ...bounds });
+    expect(dryRun).toMatchObject({ scanned: 4, stamped: 0 });
+    expect((await snapshot()).rows).toEqual(beforeDryRun);
+
     // A CLI-style run (no cursor) rescans from the head — deterministic —
     // and does NOT move the sweep cursor.
     const cli = await runCanonicalization(appStub(), { ...bounds });
     expect(cli).toMatchObject({ scanned: 4, skippedUnmapped: 4, appended: 0 });
 
+    resetCanonicalizeSweepRuntime(); // worker restart must preserve database progress
     // Run 2 (sweep): resumes past the stuck head — the fresh rows finally
     // process. Pre-fix, this run would have rescanned the same head forever.
     const second = await runCanonicalization(appStub(), { useSweepCursor: true, ...bounds });

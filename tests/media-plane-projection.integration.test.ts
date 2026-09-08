@@ -32,7 +32,7 @@ import {
 } from "@agency_hub_core/db";
 
 import {
-  resetCanonicalizeSweepCursors,
+  resetCanonicalizeSweepRuntime,
   runCanonicalization,
 } from "../apps/runtime/src/services/canonicalize-driver.ts";
 import {
@@ -65,7 +65,7 @@ beforeEach(async () => {
   if (testDb) {
     await resetIntegrationDatabase(testDb.pool);
   }
-  resetCanonicalizeSweepCursors();
+  resetCanonicalizeSweepRuntime();
 });
 
 const OWN_REF = "acct-creator-plane";
@@ -444,7 +444,7 @@ describe("media plane — one paid DM page, end to end", () => {
       [page.id],
     );
 
-    resetCanonicalizeSweepCursors();
+    resetCanonicalizeSweepRuntime();
     const second = await runCanonicalization(appStub(), { kinds: ["dm_messages"] });
     // Already stamped at v5, so the sweep re-reads nothing and appends nothing.
     expect(second.appended).toBe(0);

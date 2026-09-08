@@ -84,6 +84,98 @@ beforeEach(async () => {
 });
 
 describe("OFAPI delivery recovery", () => {
+  it("canonicalizes a receipt immediately despite old unmapped facts, and repeated processing keeps one event and SSE identity", async () => {
+    const model = await createModel(app.db, { slug: "live-canonical", name: "Live canonical" });
+    const page = await createOnlyFansPage(app.db, { modelId: model!.id, label: "live-canonical-of" });
+    await setPageOfapiAccountId(app.db, { pageId: page!.id, ofapiAccountId: "acct_recovery" });
+    for (let i = 0; i < 5; i += 1) {
+      await insertObservation(app.db, { source: "webhook", producer: "ofapi:webhook", platform: "onlyfans",
+        nativeAccountRef: "acct_unmapped_old", kind: "messages.received", idempotencyKey: `old-${i}`,
+        payloadHash: createHash("sha256").update(String(i)).digest(),
+        payload: { event: "messages.received", payload: { id: 9400 + i, fromUser: { id: 777 } } } });
+    }
+    const body = JSON.stringify({ event: "messages.received", account_id: "acct_recovery",
+      payload: { id: 9500, createdAt: new Date().toISOString(), fromUser: { id: 777 }, text: "synthetic live" } });
+    expect((await server.inject({ method: "POST", url: "/api/v1/ofapi/webhook", payload: body,
+      headers: { "content-type": "application/json", signature: createHmac("sha256", SECRET).update(body).digest("hex"),
+        "x-ofapi-idempotency-key": "live-canonical" } })).statusCode).toBe(200);
+    const eventId = Number((await testDb.pool.query("select id from ofapi_webhook_events where idempotency_key='live-canonical'")).rows[0].id);
+    await processOfapiWebhookEvent(app, eventId);
+    const first = (await testDb.pool.query("select fanout_seq,status from ofapi_webhook_events where id=$1", [eventId])).rows[0];
+    expect(first.status).toBe("processed");
+    expect((await testDb.pool.query("select parse_version from observations where idempotency_key='live-canonical'")).rows[0].parse_version)
+      .toBe(OFAPI_WEBHOOK_CANONICALIZER_VERSION);
+    await processOfapiWebhookEvent(app, eventId);
+    expect((await testDb.pool.query("select fanout_seq,status from ofapi_webhook_events where id=$1", [eventId])).rows[0]).toEqual(first);
+    expect((await testDb.pool.query("select count(*)::int n from domain_events where type='message.received' and account_id=$1", [page!.id])).rows[0].n).toBe(1);
+    expect((await testDb.pool.query("select count(*)::int n from observations where idempotency_key like 'old-%' and parse_version=0")).rows[0].n).toBe(5);
+    expect(read).not.toHaveBeenCalled(); expect(send).not.toHaveBeenCalled();
+  });
+
+  it("keeps a settled receipt and its SSE identity when canonical stamping fails, then repairs without a duplicate fact", async () => {
+    const model = await createModel(app.db, { slug: "live-failure", name: "Live failure" });
+    const page = await createOnlyFansPage(app.db, { modelId: model!.id, label: "live-failure-of" });
+    await setPageOfapiAccountId(app.db, { pageId: page!.id, ofapiAccountId: "acct_recovery" });
+    const body = JSON.stringify({ event: "messages.received", account_id: "acct_recovery",
+      payload: { id: 9600, createdAt: new Date().toISOString(), fromUser: { id: 777 }, text: "synthetic failure" } });
+    expect((await server.inject({ method: "POST", url: "/api/v1/ofapi/webhook", payload: body,
+      headers: { "content-type": "application/json", signature: createHmac("sha256", SECRET).update(body).digest("hex"),
+        "x-ofapi-idempotency-key": "live-failure" } })).statusCode).toBe(200);
+    const eventId = Number((await testDb.pool.query("select id from ofapi_webhook_events where idempotency_key='live-failure'")).rows[0].id);
+    await testDb.pool.query(`create function test_canonical_stamp_failure() returns trigger language plpgsql as $$
+      begin if new.idempotency_key='live-failure' and new.parse_version>old.parse_version then
+      raise exception 'synthetic stamp failure'; end if; return new; end $$;
+      create trigger test_canonical_stamp_failure before update on observations
+      for each row execute function test_canonical_stamp_failure()`);
+    let first: Record<string, unknown>;
+    try {
+      await expect(processOfapiWebhookEvent(app, eventId)).resolves.toBeUndefined();
+      first = (await testDb.pool.query("select fanout_seq,status from ofapi_webhook_events where id=$1", [eventId])).rows[0];
+      expect(first.status).toBe("processed");
+      expect(first.fanout_seq).not.toBeNull();
+      expect((await testDb.pool.query("select parse_version from observations where idempotency_key='live-failure'")).rows[0].parse_version).toBe(0);
+    } finally {
+      await testDb.pool.query("drop trigger test_canonical_stamp_failure on observations; drop function test_canonical_stamp_failure()");
+    }
+    await processOfapiWebhookEvent(app, eventId);
+    expect((await testDb.pool.query("select fanout_seq,status from ofapi_webhook_events where id=$1", [eventId])).rows[0]).toEqual(first);
+    expect((await testDb.pool.query("select parse_version from observations where idempotency_key='live-failure'")).rows[0].parse_version).toBe(OFAPI_WEBHOOK_CANONICALIZER_VERSION);
+    expect((await testDb.pool.query("select count(*)::int n from domain_events where type='message.received' and account_id=$1", [page!.id])).rows[0].n).toBe(1);
+    expect(read).not.toHaveBeenCalled(); expect(send).not.toHaveBeenCalled();
+  });
+
+  it("resumes a fractional-second legacy window without resetting its page cursor", async () => {
+    const second = Math.floor((Date.now() - 3600_000) / 1000) * 1000;
+    from = new Date(second + 398).toISOString();
+    to = new Date(second + 1800_638).toISOString();
+    const id = randomUUID();
+    await testDb.pool.query(`insert into ofapi_webhook_delivery_scans
+      (id,webhook_id,credential_fingerprint,observed_team,window_start,window_end,state,next_offset,captured_attempts,error_code)
+      values($1,'wh_recovery','test-fingerprint','test-team',$2,$3,'failed',100,100,'history_window_failed')`, [id, from, to]);
+    read.mockImplementationOnce(async () => capture({ data: [
+      { ...attempt(101, true), created_at: new Date(second).toISOString() },
+    ], _pagination: { next_page: null } }));
+    expect(await scan(id)).toMatchObject({ state: "complete", nextOffset: 101, capturedAttempts: 101, from, to });
+    expect(read).toHaveBeenCalledExactlyOnceWith("wh_recovery", { from, to, limit: 100, offset: 100 });
+    const stored = (await testDb.pool.query("select source_created_at from ofapi_webhook_delivery_attempts where attempt_id=101")).rows[0];
+    expect(new Date(stored.source_created_at).getTime()).toBe(second);
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("freezes new history windows at provider second precision and keeps the whole boundary second", async () => {
+    const second = Math.floor((Date.now() - 3600_000) / 1000) * 1000;
+    from = new Date(second + 398).toISOString();
+    to = new Date(second + 1800_638).toISOString();
+    rows = [
+      { ...attempt(1), created_at: new Date(second).toISOString() },
+      { ...attempt(2, true), created_at: new Date(second + 1800_999).toISOString() },
+    ];
+    const result = await scan();
+    expect(result).toMatchObject({ state: "complete", capturedAttempts: 2,
+      from: new Date(second).toISOString(), to: new Date(second + 1800_999).toISOString() });
+    expect(read).toHaveBeenCalledExactlyOnceWith("wh_recovery", { from: result.from, to: result.to, limit: 100, offset: 0 });
+  });
+
   it("captures the vendor event catalog before local diagnostics and never enables an unknown event", async () => {
     const fetch=vi.fn(async()=>new Response(JSON.stringify({data:[{value:"messages.received",description:"Message received"},{value:"subscriptions.expired",description:"Subscription expired"},{value:"new_family.future_event",description:"Unrecognized future event"}]})));
     vi.stubGlobal("fetch",fetch);

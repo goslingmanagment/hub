@@ -4,6 +4,7 @@ import {
   deleteExpiredOfapiWebhookEvents,
   findActiveOfapiPageForLiveConsumer,
   findPageById,
+  findObservationByKey,
   getOfapiWebhookEventById,
   listPendingOfapiWebhookEventIds,
   OFAPI_SYNC_EVENT_CHANNEL,
@@ -56,6 +57,8 @@ import {
 } from "./ofapi-payloads.ts";
 import { ensureQueueCreated, type QueueCreationClient } from "./sync-queue.ts";
 import { OFAPI_EPHEMERAL_EVENT_TYPES, finalizeOfapiWebhookRaw } from "./ofapi-webhook-capture.ts";
+import { runCanonicalization } from "./canonicalize-driver.ts";
+import { OFAPI_WEBHOOK_CANONICALIZED_KINDS } from "./canonicalize/ofapi-webhook.ts";
 
 export { ofapiWebhookEnvelopeSchema, type OfapiWebhookEnvelope } from "./ofapi-payloads.ts";
 
@@ -117,6 +120,18 @@ async function runPostSettleOfapiProjections(app: AppContext, row: SettledOfapiE
   await runOfapiSpendProjectionForSettledRow(app, projectionRow);
   await runOfapiAccountHealthProjectionForSettledRow(app, projectionRow);
   await runOfapiAsyncLifecycleForSettledRow(app, projectionRow);
+  // The receipt job owns live canonicalization. Historical replay is a safety
+  // net, not the delivery queue for today's business facts (Stage 8).
+  // Settle/SSE and operational projections have already committed. Failures
+  // leave the observation unstamped for replay; they cannot undo receipt ACK.
+  if (settledRow?.captureState === "accepted" && OFAPI_WEBHOOK_CANONICALIZED_KINDS.has(projectionRow.eventType)) {
+    try {
+      const observation = await findObservationByKey(app.db, "webhook", projectionRow.idempotencyKey);
+      if (observation) await runCanonicalization(app, { observationId: observation.id, kinds: [projectionRow.eventType] });
+    } catch {
+      app.logger.warn({ eventId: row.id }, "OFAPI receipt canonicalization deferred to replay");
+    }
+  }
 }
 
 /**

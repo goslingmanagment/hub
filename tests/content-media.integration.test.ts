@@ -11,7 +11,7 @@ import type { AgentDatasetQueryResponse } from "@agency_hub_core/contracts";
 import { sha256Hex } from "@agency_hub_core/shared";
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import { AGENT_KEY_TOKEN_PREFIX } from "../apps/runtime/src/services/auth.ts";
-import { runCanonicalization, resetCanonicalizeSweepCursors } from "../apps/runtime/src/services/canonicalize-driver.ts";
+import { runCanonicalization, resetCanonicalizeSweepRuntime } from "../apps/runtime/src/services/canonicalize-driver.ts";
 import { buildOnlyFansPostDrafts } from "../apps/runtime/src/services/canonicalize/onlyfans-post-media.ts";
 import { buildPostObservedDraft } from "../apps/runtime/src/services/canonicalize/posts.ts";
 import { parseStrictOfapiPostPage } from "../apps/runtime/src/services/ofapi-capture-contract.ts";
@@ -36,7 +36,7 @@ beforeAll(async () => {
 afterAll(async () => { await server?.close(); await db?.stop(); });
 beforeEach(async () => {
   await server?.close(); server = undefined;
-  await resetIntegrationDatabase(db.pool); resetCanonicalizeSweepCursors();
+  await resetIntegrationDatabase(db.pool); resetCanonicalizeSweepRuntime();
   const model = (await createModel(db.db, { slug: "media", name: "Media" }))!;
   pageId = (await createFanslyPage(db.db, { modelId: model.id, label: "media-page" }))!.id;
   await db.pool.query("update pages set external_page_id = 'creator-1' where id = $1", [pageId]);

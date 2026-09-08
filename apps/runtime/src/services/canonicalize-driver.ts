@@ -1,6 +1,7 @@
 import { parseOfapiAsyncLifecycle } from "./ofapi-async-lifecycle.ts";
 import { notifyOfapiGlobalIncident, resolveOfapiGlobalIncident } from "./notification-incidents.ts";
 import { listHistoricalOfapiBindings } from "@agency_hub_core/db";
+import { createHash } from "node:crypto";
 // Canonicalization driver (Stage 8). The minutely sweep IS the replay
 // executor: it walks observations whose parse_version is below their
 // family's current version, runs the pure canonicalizer, appends events
@@ -10,6 +11,8 @@ import { listHistoricalOfapiBindings } from "@agency_hub_core/db";
 // case. The events:replay CLI runs the same engine with narrowing filters.
 
 import {
+  advanceCanonicalizeSweepCursor,
+  getCanonicalizeSweepCursor,
   appendDomainEvents,
   appendMixedDomainEvents,
   appendProjectionOnlyDomainEvents,
@@ -238,7 +241,8 @@ export interface CanonicalizationRunOptions {
   /** W5.3 (B3, decision #123 semantics): resume each family from where the
    * last sweep stopped instead of restarting at the head every minute.
    * Permanently-unstampable rows (poison, skippedUnmapped) used to occupy
-   * the scan head forever — ≥4000 stuck rows starved the whole family. Only
+   * the scan head forever — ≥4000 stuck rows starved the whole family.
+   * Progress is durable across restarts (#276). Only
    * the minutely sweep worker sets this; CLI/replay paths (kinds/account/
    * from/to filters) stay cursor-free so narrowed replays are deterministic. */
   useSweepCursor?: boolean;
@@ -250,7 +254,7 @@ export interface CanonicalizationRunOptions {
    * `lastObservationId`, and passing it back here resumes EXACTLY where it
    * stopped — which is what makes a dry run (which stamps nothing, so it
    * cannot advance by itself) able to cover a large corpus. Ignored when
-   * `useSweepCursor` is set. */
+   * `useSweepCursor` is set in a write-mode run. */
   afterId?: number | null;
   /** Counts-only parser diagnostics sink, handed to every canonicalizer. */
   diagnostics?: { record: (code: string) => void };
@@ -270,18 +274,20 @@ export interface CanonicalizationRunOptions {
   maxDurationMs?: number;
 }
 
-/** Where each family's NEXT sweep resumes (see useSweepCursor). Module-level
- * on purpose, mirroring the corrections reconciler (#123): a wrap resets to
- * the head, so skipped rows are retried once per full cycle, not once per
- * minute. In-memory is enough — a worker restart costs one head pass. */
-const sweepCursors = new Map<string, number | null>();
-
-function sweepCursorKey(family: CanonicalizerFamily): string {
+function sweepCursorKey(family: CanonicalizerFamily, options: CanonicalizationRunOptions): string {
   // Multiple independently-versioned families may share one observation
   // source (pull/posts is projection-only while the general pull family is
   // deliverable). Include the declared kind lane so their sweep cursors can
   // never alias when their version numbers happen to match.
-  return `${family.source}:${family.kinds?.join(",") ?? "*"}:v${family.version}`;
+  const scope = JSON.stringify({ source: family.source, lane: family.lane, version: family.version,
+    belowParseVersion: options.belowParseVersion ?? family.version,
+    minimumVersion: family.minimumParseVersion ?? null,
+    kinds: [...(options.kinds ?? family.kinds ?? [])].sort(),
+    observationId: options.observationId ?? null, accountId: options.accountId ?? null,
+    accountIds: options.accountIds === undefined ? null : [...options.accountIds].sort((a, b) => a - b),
+    from: options.from?.toISOString() ?? null, to: options.to?.toISOString() ?? null });
+  // Keep the indexed key bounded even for a large explicit account/kind set.
+  return `${family.source}:${family.lane}:v${family.version}:${createHash("sha256").update(scope).digest("hex")}`;
 }
 
 /**
@@ -295,11 +301,8 @@ function sweepCursorKey(family: CanonicalizerFamily): string {
  * budgeted run therefore resumes at the family AFTER the one that ran the
  * budget out, so every family reaches the head within a few ticks.
  *
- * Module-level and in-memory, deliberately mirroring `sweepCursors` above: a
- * worker restart costs one pass that starts at the head, and the per-family
- * cursors (which ARE the durable "where was I" state within a family) are
- * untouched by rotation — a family resumes its own scan exactly where it
- * stopped whenever its turn comes round.
+ * Only rotation is process-local. Each family's traversal cursor lives in the
+ * database and survives a worker restart independently of rotation.
  *
  * Rotation is safe ONLY because families of the same `source` claim DISJOINT
  * kinds (the one family with `kinds: null` is command_result, the only family
@@ -327,9 +330,8 @@ function rotateFamilies(
   return start <= 0 ? families : [...families.slice(start), ...families.slice(0, start)];
 }
 
-/** Test hook: start every family's next sweep from the signal head. */
-export function resetCanonicalizeSweepCursors() {
-  sweepCursors.clear();
+/** Test hook: simulate process restart without discarding durable traversal. */
+export function resetCanonicalizeSweepRuntime() {
   sweepFamilyRotationKey = null;
 }
 
@@ -419,13 +421,11 @@ async function runFamily(
   const belowParseVersion = options.belowParseVersion ?? family.version;
   const now = options.now ?? new Date();
 
-  const useCursor = options.useSweepCursor === true;
+  const useCursor = options.useSweepCursor === true && options.dryRun !== true;
   const pageSize = options.pageSize ?? SWEEP_PAGE_SIZE;
   const maxPages = options.maxPagesPerFamily ?? SWEEP_MAX_PAGES_PER_FAMILY;
-  let afterId: number | null = useCursor
-    ? sweepCursors.get(sweepCursorKey(family)) ?? null
-    : options.afterId ?? null;
-  let reachedEnd = false;
+  let cursor = useCursor ? await getCanonicalizeSweepCursor(app.db, sweepCursorKey(family, options)) : null;
+  let afterId: number | null = cursor ? cursor.afterId : options.afterId ?? null;
   let budgetExhausted = false;
   const checkedAcceptedLedgers = new Set<number>();
   for (let pageIndex = 0; pageIndex < maxPages; pageIndex += 1) {
@@ -452,7 +452,9 @@ async function runFamily(
       limit: pageSize,
     });
     if (rows.length === 0) {
-      reachedEnd = true;
+      if (cursor && cursor.afterId !== null) {
+        await advanceCanonicalizeSweepCursor(app.db, cursor, null);
+      }
       break;
     }
     afterId = rows[rows.length - 1]!.id;
@@ -643,17 +645,9 @@ async function runFamily(
       }
     }
 
-    if (rows.length < pageSize) {
-      reachedEnd = true;
-      break;
-    }
-  }
-  if (useCursor) {
-    // End of signal → wrap to the head next run (skipped rows get their
-    // once-per-cycle retry); mid-signal → resume where this run stopped.
-    // A budget-truncated family is mid-signal by construction, so its cursor
-    // holds the exact continuation point until its next turn.
-    sweepCursors.set(sweepCursorKey(family), reachedEnd ? null : afterId);
+    const reachedEnd = rows.length < pageSize;
+    if (cursor) cursor = await advanceCanonicalizeSweepCursor(app.db, cursor, reachedEnd ? null : afterId);
+    if (reachedEnd) break;
   }
   return budgetExhausted;
 }
@@ -747,7 +741,7 @@ export async function runCanonicalization(
   // Only the cursor-driven minutely sweep rotates. CLI and replay runs keep
   // the registry order so a narrowed replay stays deterministic — and they
   // pass no budget, so there is nothing for a rotation to be fair about.
-  const rotates = options.useSweepCursor === true;
+  const rotates = options.useSweepCursor === true && options.dryRun !== true;
   const ordered = rotates ? rotateFamilies(families) : families;
   /** Index in `ordered` the NEXT run should start at; null = a full pass. */
   let nextStartIndex: number | null = null;

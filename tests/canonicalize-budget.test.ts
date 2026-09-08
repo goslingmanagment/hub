@@ -15,6 +15,8 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 
 const dbMocks = vi.hoisted(() => ({
+  getCanonicalizeSweepCursor: vi.fn(),
+  advanceCanonicalizeSweepCursor: vi.fn(),
   listPageNativeAccountRefs: vi.fn(async () => [] as unknown[]),
   listHistoricalOfapiBindings: vi.fn(async () => []),
   listObservationsForReplay: vi.fn(),
@@ -41,7 +43,7 @@ const {
   DM_RECONCILE_SWEEP_QUEUE,
   ensureCanonicalizeQueues,
   ensureCanonicalizeSchedule,
-  resetCanonicalizeSweepCursors,
+  resetCanonicalizeSweepRuntime,
   runCanonicalization,
 } = await import("../apps/runtime/src/services/canonicalize-driver.ts");
 const {
@@ -133,11 +135,40 @@ describe("canonicalization sweep wall-clock budget", () => {
     }
     dbMocks.listPageNativeAccountRefs.mockResolvedValue([]);
     dbMocks.markObservationParsed.mockResolvedValue(undefined);
-    resetCanonicalizeSweepCursors();
+    const cursors = new Map<string, { key: string; afterId: number | null; revision: number }>();
+    dbMocks.getCanonicalizeSweepCursor.mockImplementation(async (_db: unknown, key: string) => {
+      const cursor = cursors.get(key) ?? { key, afterId: null, revision: 0 };
+      cursors.set(key, cursor);
+      return { ...cursor };
+    });
+    dbMocks.advanceCanonicalizeSweepCursor.mockImplementation(async (_db: unknown,
+      cursor: { key: string; revision: number }, afterId: number | null) => {
+      const next = { key: cursor.key, afterId, revision: cursor.revision + 1 };
+      cursors.set(cursor.key, next);
+      return next;
+    });
+    resetCanonicalizeSweepRuntime();
   });
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it("separates persisted cursors by scope and parser version", async () => {
+    serveEndlessPages(0);
+    const family = endlessFamily("a");
+    const base = { useSweepCursor: true, pageSize: 2, maxPagesPerFamily: 1, families: [family] };
+    await runCanonicalization(appStub(), base);
+    const firstKey = dbMocks.getCanonicalizeSweepCursor.mock.calls[0]![1];
+    resetCanonicalizeSweepRuntime();
+    await runCanonicalization(appStub(), base);
+    expect(dbMocks.listObservationsForReplay.mock.calls[1]![1]).toMatchObject({ afterId: 2 });
+    for (const changed of [{ accountId: 3 }, { from: START }, { belowParseVersion: 2 },
+      { families: [{ ...family, version: 2 }] }, { kinds: ["kind_a", "kind_other"] }]) {
+      await runCanonicalization(appStub(), { ...base, ...changed });
+      expect(dbMocks.getCanonicalizeSweepCursor.mock.lastCall![1]).not.toBe(firstKey);
+      expect(dbMocks.listObservationsForReplay.mock.lastCall![1]).toMatchObject({ afterId: null });
+    }
   });
 
   it("stops between pages, names the families it never reached, and returns normally", async () => {

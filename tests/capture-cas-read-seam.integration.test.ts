@@ -38,7 +38,7 @@ import {
 } from "../apps/runtime/src/services/capture-cas-dual-write.ts";
 import { runCapturePayloadParityCheck } from "../apps/runtime/src/services/capture-payload-parity.ts";
 import {
-  resetCanonicalizeSweepCursors,
+  resetCanonicalizeSweepRuntime,
   runCanonicalization,
 } from "../apps/runtime/src/services/canonicalize-driver.ts";
 import { buildMessagePayloadEnrichments } from "../apps/runtime/src/services/domain-events-enrich.ts";
@@ -83,7 +83,7 @@ afterAll(async () => {
 beforeEach(async () => {
   resetCaptureCasDualWriteForTests();
   resetCaptureCasReadForTests();
-  resetCanonicalizeSweepCursors();
+  resetCanonicalizeSweepRuntime();
   if (testDb) {
     await resetIntegrationDatabase(testDb.pool);
   }
@@ -260,7 +260,7 @@ describe("capture CAS read seam — observation replay reader (runCanonicalizati
 
     for (const mode of ["inline", "shadow", "serve"] as CaptureCasReadMode[]) {
       await resetIntegrationDatabase(testDb.pool);
-      resetCanonicalizeSweepCursors();
+      resetCanonicalizeSweepRuntime();
       resetCaptureCasDualWriteForTests();
 
       const page = await seedPage(`no-ref-${mode}`);

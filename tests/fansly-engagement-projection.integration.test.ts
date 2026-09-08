@@ -33,7 +33,7 @@ import {
 } from "@agency_hub_core/db";
 
 import {
-  resetCanonicalizeSweepCursors,
+  resetCanonicalizeSweepRuntime,
   runCanonicalization,
 } from "../apps/runtime/src/services/canonicalize-driver.ts";
 import {
@@ -67,7 +67,7 @@ beforeEach(async () => {
   if (testDb) {
     await resetIntegrationDatabase(testDb.pool);
   }
-  resetCanonicalizeSweepCursors();
+  resetCanonicalizeSweepRuntime();
 });
 
 const FIXTURES = path.resolve("tests/fixtures/fansly-engagement");
@@ -298,7 +298,7 @@ describe("[sync-critical] WP-F2 engagement projections", () => {
       [page.id],
     );
 
-    resetCanonicalizeSweepCursors();
+    resetCanonicalizeSweepRuntime();
     const second = await project(page.id);
     // The same bodies mint the same dedup keys, so nothing is appended and no
     // head moves.
@@ -340,7 +340,7 @@ describe("[sync-critical] WP-F2 engagement projections", () => {
 
     // Capture 2, appended LATER (higher account_seq) and dated EARLIER — a
     // backfill page restating the same notification with an older instant.
-    resetCanonicalizeSweepCursors();
+    resetCanonicalizeSweepRuntime();
     await seedObservation(page.id, "backfilled", {
       ...base,
       notifications: [{ ...target, createdAt: 1660000000, acknowledgedAt: 1660000200 }],
