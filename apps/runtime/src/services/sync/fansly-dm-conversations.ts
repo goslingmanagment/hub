@@ -23,6 +23,7 @@
 import {
   assertOwnedPageSyncLease,
   countPageDmThreadsByGeneration,
+  countPageDmVisibleThreadsBelowGeneration,
   findErasureLogTouchingPageSince,
   getCheckpoint,
   listPageDmConversationsByPlatformConversationIds,
@@ -96,6 +97,28 @@ import type { ExecutorRequestContext, StreamChunkResult } from "./executor-types
  *  side generation set did not reproduce the count the sweep observed, and no
  *  erasure explains the gap, so the destructive finalization was withheld. */
 const DM_SWEEP_GENERATION_MEMBERSHIP_ANOMALY_CODE = "dm_conversations_generation_membership_guard";
+/**
+ * The empty-sweep guard, mirroring the OFAPI audience sweep's
+ * `subscribers_empty_sweep_guard` (cursor-state.ts, ofapi-audience-sync.ts):
+ * a walk that observed ZERO conversations certifies nothing while the page
+ * still has visible threads.
+ *
+ * Without it the membership check reads `0 === 0` and certifies — one empty or
+ * truncated provider answer (`data: []`, `total: 0`) then hides EVERY visible
+ * thread on the page until the next sweep re-lists it, which is exactly the
+ * disappearing-inbox failure decision #208 refuses to risk. Zero observations
+ * are no evidence at all, so this treats them as an uncertified membership:
+ * nothing is hidden, the run is not the stream's last successful one, and
+ * `lastFullSweepCompletedAt` does not move.
+ *
+ * ESCAPE HATCH: none, deliberately — the audience sweep has none either. The
+ * hold lifts on its own the moment one sweep observes a conversation again;
+ * a page whose inbox genuinely emptied to zero keeps its old threads VISIBLE
+ * (and this anomaly on every sweep) until a human retires them. That is the
+ * same price the subscribers guard pays, and it is the cheap side of the
+ * trade: a stale visible thread is recoverable, a blanked inbox is not.
+ */
+const DM_SWEEP_EMPTY_SWEEP_GUARD_ANOMALY_CODE = "dm_conversations_empty_sweep_guard";
 const DM_CONVERSATIONS_ERASURE_FENCE_DEFERRED_NOTE_CODE = "dm_conversations_erasure_fence_deferred";
 /** An erasure's delete transaction is seconds-to-minutes work, not an hour's:
  *  park the stream long enough to let it finish, short enough that a page's
@@ -914,6 +937,21 @@ export async function fanslyDmConversationsChunk(
           }
         }
 
+        // The empty-sweep guard (see the anomaly code's JSDoc): a sweep that
+        // observed nothing reproduces its own zero trivially, so the check
+        // below would certify it and the destructive pass would blank every
+        // visible thread on the page. Counted with the destructive pass's own
+        // predicate, inside the same transaction, so it measures exactly the
+        // rows that pass would hide — and only on an empty sweep, which is the
+        // one shape where a single provider answer can cost a whole inbox.
+        const emptySweepVisibleThreadCount = finalObservedCount === 0
+          ? await countPageDmVisibleThreadsBelowGeneration(dbTx, {
+            platformAccountId: input.pageContext.page.id,
+            generation: state.generation,
+          })
+          : 0;
+        const emptySweepGuardHeld = emptySweepVisibleThreadCount > 0;
+
         // The whole point of G3: invisibility only after the row-side set
         // reproduces the count the sweep claims to have observed — EXACTLY,
         // with no excuse accepted. Any gap, in either direction and however
@@ -922,7 +960,8 @@ export async function fanslyDmConversationsChunk(
         // disappearing from every chatter's list) this refuses to risk.
         // Decision #208 prefers stale visibility to that, and the re-sweep
         // under a fresh generation converges on its own.
-        const membershipCertified = generationSetCount === finalObservedCount;
+        const membershipCertified = !emptySweepGuardHeld &&
+          generationSetCount === finalObservedCount;
         const destructiveFinalization = state.providerTotalMode === "present" &&
           membershipCertified;
         // Independent of the total mode: a total-less sweep runs no destructive
@@ -963,6 +1002,8 @@ export async function fanslyDmConversationsChunk(
           destructiveFinalization,
           finalizationWithheld,
           membershipCertified,
+          emptySweepGuardHeld,
+          emptySweepVisibleThreadCount,
           dmMessagesFollowupNeeded,
           generationSetCount,
           erasureDelta,
@@ -1085,7 +1126,31 @@ export async function fanslyDmConversationsChunk(
     }
 
     if (pageWrite.kind === "complete") {
-      if (pageWrite.erasureDelta !== null) {
+      if (pageWrite.emptySweepGuardHeld) {
+        // Ahead of the membership verdict below on purpose: "the provider
+        // listed nothing" is the cause, and reporting it as a generation-set
+        // mismatch would send the reader hunting for a lost stamp that never
+        // existed.
+        await input.telemetry.addAnomaly({
+          code: DM_SWEEP_EMPTY_SWEEP_GUARD_ANOMALY_CODE,
+          // warn, like the audience sweep's twin: an empty answer is a
+          // provider-side fact this stream absorbs and recovers from, not the
+          // internal inconsistency the membership guard reports as an error.
+          severity: "warn",
+          message:
+            "DM conversation sweep observed no conversations while the page still has visible threads; refusing destructive finalization",
+          details: {
+            generation: state.generation,
+            pageCount: nextPageCount,
+            observedCount: finalObservedCount,
+            generationSetCount: pageWrite.generationSetCount,
+            visibleThreadCount: pageWrite.emptySweepVisibleThreadCount,
+            providerTotalMode: state.providerTotalMode,
+            providerReportedTotal: state.providerReportedTotal,
+            finalizationWithheld: pageWrite.finalizationWithheld,
+          },
+        });
+      } else if (pageWrite.erasureDelta !== null) {
         // Same withheld outcome as any other uncertified sweep — only the
         // volume differs. A shortfall an erasure could plausibly have caused
         // is not an incident, so it reports as a note; the sweep still refuses
@@ -1158,6 +1223,7 @@ export async function fanslyDmConversationsChunk(
           destructiveFinalization: pageWrite.destructiveFinalization,
           membershipCertified: pageWrite.membershipCertified,
           finalizationWithheld: pageWrite.finalizationWithheld,
+          emptySweepGuard: pageWrite.emptySweepGuardHeld,
           fullSweepCompleted: !pageWrite.finalizationWithheld,
         },
       } satisfies StreamChunkResult;

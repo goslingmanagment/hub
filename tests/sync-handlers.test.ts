@@ -17,6 +17,7 @@ const dbMocks = vi.hoisted(() => ({
   countRecentTerminalDmMessageConversationFailureStreak: vi.fn(),
   countActivePageFollows: vi.fn(),
   countPageDmThreadsByGeneration: vi.fn(),
+  countPageDmVisibleThreadsBelowGeneration: vi.fn(),
   countPageFollowsByGeneration: vi.fn(),
   deactivatePageFollowsByGeneration: vi.fn(),
   deactivatePageSubscriptionsByGeneration: vi.fn(),
@@ -259,6 +260,9 @@ describe("sync executor handlers", () => {
     // set with stubGenerationSetCount(); the default is "no rows stamped",
     // which is only ever read by tests that never write.
     dbMocks.countPageDmThreadsByGeneration.mockResolvedValue(0);
+    // The empty-sweep guard's reading: "no visible thread would be hidden".
+    // Only a sweep that observes nothing at all ever asks.
+    dbMocks.countPageDmVisibleThreadsBelowGeneration.mockResolvedValue(0);
     // No id on an incoming page is already stamped with this sweep's
     // generation — the non-overlapping case every other test assumes.
     dbMocks.listPageDmThreadIdsStampedWithGeneration.mockResolvedValue([]);
@@ -3717,6 +3721,173 @@ it("finalizes follower reconcile when offset drift duplicates raw rows but the u
       expect(dbMocks.upsertCheckpointProgress.mock.calls.at(-1)?.[1]?.state).toMatchObject({
         generationSetCount: 0,
         observedCount: 2,
+      });
+    });
+  });
+
+  // The dm_conversations twin of "guards against destructive subscriber
+  // finalization on an empty first page" above: a sweep that observed nothing
+  // may not read its own zero as proof of an empty inbox.
+  describe("dm_conversations empty sweep guard", () => {
+    function emptyPageApp() {
+      const getMessagingGroupsPage = vi.fn(async () => ({
+        total: 0,
+        items: [],
+        accounts: [],
+        groups: [],
+        offset: 0,
+        raw: { data: [], aggregationData: { total: 0, accounts: [], groups: [] } },
+        done: true,
+      }));
+      const db = {};
+      return {
+        db,
+        getMessagingGroupsPage,
+        app: {
+          db,
+          config: { syncSharedRateLimitEnabled: true },
+          adapter: { getMessagingGroupsPage },
+        } as never,
+      };
+    }
+
+    function chunkInput(telemetry: ReturnType<typeof createTelemetry>) {
+      return {
+        pageContext: {
+          platform: "fansly",
+          page: { id: 55, label: "dm-page", platformAccountId: "acct-dm", metadata: {} },
+          session: { authorization: "token" },
+          proxy: null,
+        },
+        streamState: { requestSeq: 42 },
+        syncRunId: 900,
+        telemetry: telemetry as never,
+        budget: new SyncChunkBudget(1),
+      } as never;
+    }
+
+    it("withholds the finalization when an empty sweep would hide visible threads", async () => {
+      const telemetry = createTelemetry();
+      const { db, app } = emptyPageApp();
+      dbMocks.getCheckpoint.mockResolvedValue(null);
+      stubGenerationSetCount(0);
+      // Three threads the destructive pass would have blanked on this answer.
+      dbMocks.countPageDmVisibleThreadsBelowGeneration.mockResolvedValue(3);
+
+      const result = await fanslyDmConversationsChunk(app, chunkInput(telemetry));
+
+      expect(dbMocks.countPageDmVisibleThreadsBelowGeneration).toHaveBeenCalledWith(db, {
+        platformAccountId: 55,
+        generation: 1,
+      });
+      expect(result).toMatchObject({
+        satisfied: false,
+        continuationRequestSource: "scheduled",
+        stats: {
+          observedCount: 0,
+          generationSetCount: 0,
+          membershipCertified: false,
+          destructiveFinalization: false,
+          finalizationWithheld: true,
+          emptySweepGuard: true,
+          fullSweepCompleted: false,
+        },
+      });
+      expect(result.continuationRetryAt).toBeInstanceOf(Date);
+      expect(telemetry.addAnomaly).toHaveBeenCalledWith({
+        code: "dm_conversations_empty_sweep_guard",
+        severity: "warn",
+        message:
+          "DM conversation sweep observed no conversations while the page still has visible threads; refusing destructive finalization",
+        details: {
+          generation: 1,
+          pageCount: 1,
+          observedCount: 0,
+          generationSetCount: 0,
+          visibleThreadCount: 3,
+          providerTotalMode: "present",
+          providerReportedTotal: 0,
+          finalizationWithheld: true,
+        },
+      });
+      // Not the membership guard: nothing was lost, nothing was listed.
+      expect(telemetry.addNote).not.toHaveBeenCalled();
+      expect(dbMocks.markPageDmConversationsInvisibleByGeneration).not.toHaveBeenCalled();
+      expect(dbMocks.upsertCheckpoint).not.toHaveBeenCalled();
+      expect(dbMocks.upsertCheckpointProgress.mock.calls.at(-1)?.[1]?.state).toMatchObject({
+        membershipCertified: false,
+        destructiveFinalization: false,
+        observedCount: 0,
+        generationSetCount: 0,
+        lastFullSweepCompletedAt: null,
+      });
+    });
+
+    it("certifies an empty sweep when no visible thread stands to be hidden", async () => {
+      const telemetry = createTelemetry();
+      const { app } = emptyPageApp();
+      dbMocks.getCheckpoint.mockResolvedValue(null);
+      stubGenerationSetCount(0);
+      dbMocks.countPageDmVisibleThreadsBelowGeneration.mockResolvedValue(0);
+
+      const result = await fanslyDmConversationsChunk(app, chunkInput(telemetry));
+
+      expect(result).toMatchObject({
+        satisfied: true,
+        stats: {
+          observedCount: 0,
+          membershipCertified: true,
+          destructiveFinalization: true,
+          finalizationWithheld: false,
+          emptySweepGuard: false,
+          fullSweepCompleted: true,
+        },
+      });
+      expect(telemetry.addAnomaly).not.toHaveBeenCalled();
+      expect(dbMocks.markPageDmConversationsInvisibleByGeneration).toHaveBeenCalled();
+      expect(dbMocks.upsertCheckpoint).toHaveBeenCalled();
+    });
+
+    it("never asks the guard's question on a sweep that observed a conversation", async () => {
+      const telemetry = createTelemetry();
+      const getMessagingGroupsPage = vi.fn(async () => ({
+        total: 1,
+        items: [{
+          groupId: "group-a",
+          flags: 0,
+          unreadCount: 0,
+          partnerAccountId: "fan-1",
+          lastMessageId: "msg-1",
+        }],
+        accounts: [],
+        groups: [{
+          id: "group-a",
+          users: [{ groupId: "group-a", userId: "acct-dm" }, { groupId: "group-a", userId: "fan-1" }],
+          lastMessage: { id: "msg-1", senderId: "fan-1", content: "hi", createdAt: 1_773_000_000_000 },
+        }],
+        offset: 0,
+        raw: { data: [], aggregationData: { total: 1, accounts: [], groups: [] } },
+        done: true,
+      }));
+      const db = {};
+      const app = {
+        db,
+        config: { syncSharedRateLimitEnabled: true },
+        adapter: { getMessagingGroupsPage },
+      } as never;
+      dbMocks.getCheckpoint.mockResolvedValue(null);
+      dbMocks.upsertPageDmConversation.mockResolvedValue(null);
+      fanHydrationMocks.upsertHydratedFansForPage.mockResolvedValue(new Map([["fan-1", 101]]));
+      stubGenerationSetCount(1);
+
+      const result = await fanslyDmConversationsChunk(app, chunkInput(telemetry));
+
+      // A non-empty sweep pays for no extra count: the destructive pass is
+      // bounded by what it actually observed.
+      expect(dbMocks.countPageDmVisibleThreadsBelowGeneration).not.toHaveBeenCalled();
+      expect(result).toMatchObject({
+        satisfied: true,
+        stats: { observedCount: 1, membershipCertified: true, emptySweepGuard: false },
       });
     });
   });

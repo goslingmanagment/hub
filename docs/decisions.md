@@ -274,6 +274,7 @@ appends a row here in the same change (family law: updated-in-change).
 
 | 271 | OFAPI content webhook evidence | Queue progress and post likes canonicalize from raw captures into rebuildable, source-fenced projections; local owner report never claims delivery or complete liker coverage. |
 | 272 | Typed OFAPI owner actions | Closed action schemas share encrypted durable intents, frozen binding and accounting mode, nonblocking dispatch locks, exact response capture, local replay and owner controls. No subscribe-to-user or automatic enabling. |
+| 274 | Fansly `dm_conversations` empty-sweep guard | A completed sweep that observed zero conversations while the page still has visible threads certifies nothing: no thread hidden, no success stamp, `lastFullSweepCompletedAt` unchanged, `dm_conversations_empty_sweep_guard` (warn), +15min retry. Mirrors #258. No escape hatch: a genuinely emptied inbox keeps its old threads visible until an operator retires them. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -11485,3 +11486,31 @@ all 85 tests with Docker-backed Postgres. The 27 prompt manifest hashes match.
 Independent review found no blocking issue. No additional model comparison
 or paid generation was performed. Deployment is authorized by the owner's
 explicit "Выкатить сейчас" reply; its outcome is recorded separately.
+
+## Decision 274: Fansly `dm_conversations` empty-sweep guard (2026-09-08)
+
+The request-level characterization of the `dm_conversations` sweep (PR #153)
+pinned a destructive edge: a completed walk that listed ZERO conversations
+(`data: []`, `total: 0`) satisfied the #214 membership check trivially
+(`0 === 0`), certified membership, and the destructive visibility pass hid
+every visible thread on the page until the next sweep re-listed it. One empty
+or truncated provider answer could blank a whole inbox — the failure #208
+refuses to risk for follower reconcile, and #258 refuses for the OFAPI
+audience sweep.
+
+Zero observations are no evidence. A sweep that observed nothing while the
+page still has visible threads (counted with the destructive pass's own
+predicate, inside the same transaction) is treated as an UNCERTIFIED
+membership: nothing is hidden, the run is not the stream's last successful
+one, `lastFullSweepCompletedAt` does not move, the stream yields with the
+same +15min `continuationRetryAt` every uncertified sweep gets, and the
+anomaly `dm_conversations_empty_sweep_guard` (warn) names the cause ahead of
+the generation-set verdict. The persisted checkpoint document is the existing
+completed form — no new keys, so a rolled-back binary reads it unchanged.
+
+No escape hatch, deliberately, as in #258: the hold lifts on its own the
+moment one sweep observes a conversation again. A page whose inbox genuinely
+emptied to zero keeps its old threads visible, with this anomaly on every
+sweep, until a human retires them. That is the cheap side of the trade: a
+stale visible thread is recoverable, a blanked inbox is not. A page that has
+no visible threads and receives an empty answer still certifies as before.
