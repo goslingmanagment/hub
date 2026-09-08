@@ -85,7 +85,27 @@ Run against the approved production runtime using the existing CLI runbook.
 Do not use an inflated parse version (such as 99), reset stamps, launch archive
 rebuild, or re-fetch provider history as a shortcut. Capture scanned/appended/
 deduped/stamped/errors/partitionBlocked and verify transcript parity afterwards.
-Dry-run is database-read-only; actual replay writes and needs the explicit yes.
+The canonicalizer's dry-run does not append events or stamp observations. The
+standard runtime bootstrap still performs its configured OFAPI credential
+preflight (`GET /whoami`) and records that proof before dispatching the command;
+do not describe the entire CLI process as zero-HTTP or globally read-only.
+Actual replay appends/stamps and needs the explicit yes above.
+
+### A transcript timeout is an acceptance blocker
+
+If a bounded transcript read times out, preserve the failed scope and follow its
+narrow-window remedy once. If the same exact message still times out, stop that
+page's acceptance and do not start the next page's replay. Other readable targets
+can be checked with the excluded IDs explicitly listed; a reduced cohort does
+not pass the original gate. Never raise the Agent statement timeout, bypass its
+principal/evidence path, or treat v6 stamps as serving proof.
+
+Decision 281 selects window candidate refs before loading their material while
+retaining out-of-window versions for dominance. Its local benchmark is not proof
+of production recovery. After a separately approved deployment, retry the exact
+blocked targets, then complete the original cohort before resuming the already
+approved remaining page scopes. No repeat replay is needed for an already-v6
+window merely because its serving verification timed out.
 
 ## Shadow fidelity check (only for a separately approved rebuild)
 

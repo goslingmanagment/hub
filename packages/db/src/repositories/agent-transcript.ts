@@ -133,12 +133,40 @@ function buildUnionQuery(input: AgentTranscriptInput): SQL {
       : filters.direction === "inbound"
         ? sql`not u.is_sent_by_me and u.sender_role <> 'system'`
         : sql`u.sender_role = 'unknown'`;
+  const inWindow = (eventTime: SQL) => sql`(
+    ${eventTime} is null or (${eventTime} >= ${input.from} and ${eventTime} < ${input.to})
+  )`;
 
   return sql`
     with page as (
       select p.id as page_id, p.ofapi_account_id
       from pages p
       where p.id = ${input.pageId}
+    ),
+    -- Select only refs here, then load EVERY version of those refs below.
+    -- Filtering the wide arms by time would let an older in-window copy win
+    -- when the preferred source moved that message outside the window.
+    window_refs as materialized (
+      select ma.message_ref
+      from message_archive ma
+      where ma.account_id = ${input.pageId}
+        and ma.platform = ${input.platform}
+        and ma.conversation_ref = ${input.conversationRef}
+        and ${inWindow(sql`ma.occurred_at`)}
+      union
+      select d.platform_message_id as message_ref
+      from dm_message_archive d
+      where d.platform = ${input.platform}
+        and d.platform_account_id = ${input.pageId}
+        and d.platform_conversation_id = ${input.conversationRef}
+        and ${inWindow(sql`d.message_created_at`)}
+      union
+      select m.platform_message_id as message_ref
+      from page_dm_messages m
+      join page_dm_threads t on t.id = m.conversation_id
+      where t.platform_account_id = ${input.pageId}
+        and t.platform_conversation_id = ${input.conversationRef}
+        and ${inWindow(sql`m.created_at`)}
     ),
     archive_arm as (
       select ma.message_ref,
@@ -170,6 +198,7 @@ function buildUnionQuery(input: AgentTranscriptInput): SQL {
              'message_archive'::text as source_plane,
              1 as source_rank
       from message_archive ma
+      join window_refs r on r.message_ref = ma.message_ref
       where ma.account_id = ${input.pageId}
         and ma.platform = ${input.platform}
         and ma.conversation_ref = ${input.conversationRef}
@@ -206,6 +235,7 @@ function buildUnionQuery(input: AgentTranscriptInput): SQL {
              'dm_message_archive'::text as source_plane,
              2 as source_rank
       from dm_message_archive d
+      join window_refs r on r.message_ref = d.platform_message_id
       where d.platform = ${input.platform}
         and d.platform_account_id = ${input.pageId}
         and d.platform_conversation_id = ${input.conversationRef}
@@ -241,6 +271,7 @@ function buildUnionQuery(input: AgentTranscriptInput): SQL {
              0 as source_rank
       from page_dm_messages m
       join page_dm_threads t on t.id = m.conversation_id
+      join window_refs r on r.message_ref = m.platform_message_id
       where t.platform_account_id = ${input.pageId}
         and t.platform_conversation_id = ${input.conversationRef}
     ),
@@ -271,6 +302,7 @@ function buildUnionQuery(input: AgentTranscriptInput): SQL {
       select m.platform_message_id as message_ref, m.purchased_at
       from page_dm_messages m
       join page_dm_threads t on t.id = m.conversation_id
+      join window_refs r on r.message_ref = m.platform_message_id
       where t.platform_account_id = ${input.pageId}
         and t.platform_conversation_id = ${input.conversationRef}
         and m.purchased_at is not null
@@ -326,7 +358,7 @@ function buildUnionQuery(input: AgentTranscriptInput): SQL {
            u.k_sort,
            u.k_key
     from u
-    where (u.event_time is null or (u.event_time >= ${input.from} and u.event_time < ${input.to}))
+    where ${inWindow(sql`u.event_time`)}
       and ${keysetPredicate(direction, input.after)}
       and (${includeDeleted} or not u.is_tombstoned)
       and ${directionPredicate}
