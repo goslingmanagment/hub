@@ -26,6 +26,9 @@ import {
   countPageDmVisibleThreadsBelowGeneration,
   findErasureLogTouchingPageSince,
   getCheckpoint,
+  observeFanslyDmHead,
+  hasUnresolvedFanslyDmHead,
+  nextFanslyDmHeadRetryAt,
   listPageDmConversationsByPlatformConversationIds,
   listPageDmThreadIdsStampedWithGeneration,
   markPageDmConversationsInvisibleByGeneration,
@@ -51,6 +54,8 @@ import {
   type FanslyDmMessageSyncExcludedReason,
 } from "@agency_hub_core/shared";
 
+import { loadEffectiveConfig } from "../effective-config.ts";
+import { isPageAllowlisted } from "./fansly-stream-gate.ts";
 import type { AppContext } from "../../bootstrap.ts";
 import { resolveFanslyPlatformAccountId } from "../fansly.ts";
 import { summarizeCheckpoint } from "./observability.ts";
@@ -203,7 +208,7 @@ export function shouldRequestDmMessagesFollowup(conversation: {
   lastMessageSyncAt: Date | null;
   messageCoverageStatus: MessageCoverageStatus;
   metadata: Record<string, unknown>;
-}) {
+}, headDebtDue?: boolean) {
   if (
     !conversation.isVisible ||
     conversation.fanId === null ||
@@ -211,6 +216,8 @@ export function shouldRequestDmMessagesFollowup(conversation: {
   ) {
     return false;
   }
+
+  if (headDebtDue !== undefined) return headDebtDue;
 
   if (conversation.messageCoverageStatus === "pending_backfill") {
     return true;
@@ -237,6 +244,10 @@ export async function fanslyDmConversationsChunk(
 
   assertDmSharedRateLimitEnabled(app);
   await input.telemetry.recordPhaseStarted("dm_conversations");
+  const effective = await loadEffectiveConfig(app.db, app.config);
+  const headCatchupEnabled = isPageAllowlisted(
+    effective.fanslyDmHeadCatchupPageAllowlist, input.pageContext.page.label,
+  );
 
   const requestContext = {
     session: input.pageContext.session,
@@ -508,6 +519,8 @@ export async function fanslyDmConversationsChunk(
     const hydratedAccountsById = new Map<string, FanslyAccount>();
     const fallbackPartnerIds = new Set<string>();
     const conversationWrites: Array<{
+      observedHeadId: string | null;
+      observedHeadAt: Date | null;
       existingFanId: number | null;
       partnerPlatformUserId: string | null;
       partnerUsername: string | null;
@@ -785,6 +798,8 @@ export async function fanslyDmConversationsChunk(
       }
 
       conversationWrites.push({
+        observedHeadId: incomingLastMessageId,
+        observedHeadAt: lastMessageAt,
         existingFanId: partnerMissingFromAggregationAccounts
           ? (existing?.fanId ?? null)
           : null,
@@ -894,7 +909,21 @@ export async function fanslyDmConversationsChunk(
           lastSeenGeneration: conversationWrite.lastSeenGeneration,
           metadata: conversationWrite.metadata,
         });
-        if (upsertedConversation && shouldRequestDmMessagesFollowup(upsertedConversation)) {
+        if (!upsertedConversation) continue;
+        await observeFanslyDmHead(dbTx, {
+          conversationId: upsertedConversation.id,
+          messageId: conversationWrite.observedHeadId,
+          messageAt: conversationWrite.observedHeadAt,
+        });
+        const retryAt = headCatchupEnabled ? await nextFanslyDmHeadRetryAt(dbTx, {
+          platformAccountId: input.pageContext.page.id,
+          conversationId: upsertedConversation.id,
+        }) : null;
+        const pendingHistory = headCatchupEnabled &&
+          upsertedConversation.messageCoverageStatus === "pending_backfill" &&
+          !(await hasUnresolvedFanslyDmHead(dbTx, upsertedConversation.id));
+        if (shouldRequestDmMessagesFollowup(upsertedConversation,
+          headCatchupEnabled ? pendingHistory || (retryAt !== null && retryAt <= new Date()) : undefined)) {
           dmMessagesFollowupNeeded = true;
         }
       }

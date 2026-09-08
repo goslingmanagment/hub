@@ -70,6 +70,7 @@ type DmMessagesCursorState = {
   currentBeforeMessageId: string | null;
   currentMode: "backfill" | "deep_backfill" | "incremental" | null;
   liveMessageRequestsSinceDeepBackfill?: number;
+  headCatchup?: { messageId: string; startedAt: string; pagesRead: number; overlapReached?: boolean };
 };
 
 // OFAPI-fed OnlyFans dm_conversations checkpoint (mode "ofapi" keeps it
@@ -709,7 +710,22 @@ export function parseDmMessagesCursorState(value: unknown): DmMessagesCursorStat
     return null;
   }
 
+  const headCatchup = asRecord(state.headCatchup);
+  if (state.headCatchup !== undefined && (
+    !headCatchup || typeof headCatchup.messageId !== "string" || !headCatchup.messageId ||
+    typeof headCatchup.startedAt !== "string" || !Number.isFinite(Date.parse(headCatchup.startedAt)) ||
+    typeof headCatchup.pagesRead !== "number" || !Number.isInteger(headCatchup.pagesRead) ||
+    headCatchup.pagesRead < 0 || headCatchup.pagesRead >= 5 ||
+    (currentMode !== "incremental" && currentMode !== "backfill")
+  )) return null;
+
   return {
+    ...(headCatchup ? { headCatchup: {
+      messageId: headCatchup.messageId as string,
+      startedAt: headCatchup.startedAt as string,
+      pagesRead: headCatchup.pagesRead as number,
+      ...(headCatchup.overlapReached === true ? { overlapReached: true } : {}),
+    } } : {}),
     version: 1,
     currentConversationId,
     currentPlatformConversationId,

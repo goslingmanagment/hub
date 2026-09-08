@@ -1,3 +1,5 @@
+import { resolveCapturedFanslyDmHeads } from "./fansly-dm-head-debt.ts";
+
 import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY } from "@agency_hub_core/shared";
 
@@ -974,6 +976,7 @@ export async function finalizePageDmConversationMessageSync(
   const lastMessageSyncAt = input.lastMessageSyncAt ?? new Date();
   return db.transaction(async (tx) => {
     const database = tx as unknown as Database;
+    await resolveCapturedFanslyDmHeads(database, input.conversationId);
     let deletedCount = 0;
     if (input.enforceRetention !== false) {
       const retentionLimit = await getPageDmMessageRetentionLimit(database, input.conversationId);
@@ -1078,13 +1081,18 @@ export async function selectNextPageDmMessageSyncCandidate(
   db: Database,
   input: {
     platformAccountId: number;
+    includeHeadDebt?: boolean;
     now?: Date;
   },
 ) {
   const now = input.now ?? new Date();
   const nowSql = sql`${now}::timestamptz`;
   const nowPlus21Days = sql`${now}::timestamptz + interval '21 days'`;
-  const staleHeadMismatchSql = sql`
+  const staleHeadMismatchSql = input.includeHeadDebt ? sql`exists (
+    select 1 from fansly_dm_head_debt d
+    where d.conversation_id = c.id and d.captured_at is null
+      and d.attempts < 5 and d.next_retry_at <= ${nowSql}
+  )` : sql`
     c.last_message_id is distinct from c.newest_stored_message_id
     and (
       c.last_message_sync_at is null
@@ -1142,7 +1150,11 @@ export async function selectNextPageDmMessageSyncCandidate(
       )
       and (
         ${staleHeadMismatchSql}
-        or c.message_coverage_status = 'pending_backfill'::dm_message_coverage_status
+        or (c.message_coverage_status = 'pending_backfill'::dm_message_coverage_status
+          and ${input.includeHeadDebt ? sql`not exists (
+            select 1 from fansly_dm_head_debt d
+            where d.conversation_id = c.id and d.captured_at is null
+          )` : sql`true`})
       )
     order by
       case
