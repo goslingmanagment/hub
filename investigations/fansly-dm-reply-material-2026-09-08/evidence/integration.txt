@@ -1,0 +1,8 @@
+
+ RUN  v4.1.10 /Users/dmitriy/.codex/worktrees/hub-fansly-dm-reply-material
+
+
+ Test Files  7 passed (7)
+      Tests  55 passed (55)
+   Start at  14:48:10
+   Duration  15.71s (transform 1.24s, setup 0ms, import 4.67s, tests 7.79s, environment 0ms)

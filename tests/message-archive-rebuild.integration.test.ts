@@ -147,6 +147,14 @@ async function recreateShadowTable() {
     "utf8",
   );
   await testDb!.pool.query(migration);
+  // Recreate the current shadow schema, including forward-added material and
+  // reply clocks. Replaying just 0083 leaves later tests on an obsolete table.
+  for (const name of ["0099_ofapi_full_message_material.sql", "0173_fansly_reply_field_clocks.sql"]) {
+    const forward = await readFile(path.resolve("packages/db/migrations", name), "utf8");
+    const shadowAlter = forward.match(/ALTER TABLE message_archive_shadow[\s\S]*?;/)?.[0];
+    if (!shadowAlter) throw new Error(`No shadow migration in ${name}`);
+    await testDb!.pool.query(shadowAlter);
+  }
 }
 
 const RAW_HTML = "<p>Hello</p><br>world &amp; more";

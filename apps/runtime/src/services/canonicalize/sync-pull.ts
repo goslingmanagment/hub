@@ -39,7 +39,10 @@ import {
 // re-read and re-stamped). No flag gates emission: the driver stamps an
 // observation whether or not the family produced events, so a flag-off family
 // would consume its corpus irreversibly.
-export const SYNC_PULL_CANONICALIZER_VERSION = 5;
+// v6: preserve Fansly parent/root reply refs in the common material event,
+// including text replies. Replaying v5 rows emits new material fingerprints;
+// ordinary msg:<direction>:<id> events retain their original dedup identity.
+export const SYNC_PULL_CANONICALIZER_VERSION = 6;
 
 /** Per-run context: page -> own platform-native account id. Direction of a
  *  Fansly DM (sent vs received) is decidable only against the page's OWN
@@ -909,9 +912,20 @@ function materialDrafts(
   for (const message of sources.messages) {
     const messageId = asString(message.id);
     const attachments = recordArray(message.attachments);
-    if (messageId === null || attachments.length === 0) {
+    const parentRef = asString(message.inReplyTo);
+    const rootRef = asString(message.inReplyToRoot);
+    const observesParent = Object.hasOwn(message, "inReplyTo");
+    const observesRoot = Object.hasOwn(message, "inReplyToRoot");
+    // Text replies need the same archive material path as attached messages.
+    // Explicit nulls are observations too: a text-only clear must survive dedup.
+    if (messageId === null || (attachments.length === 0 && !observesParent && !observesRoot)) {
       continue;
     }
+    const clearsReply = observesParent && observesRoot && parentRef === null && rootRef === null;
+    const reply = (observesParent || observesRoot) && !clearsReply ? {
+      ...(observesParent ? { messageId: parentRef } : {}),
+      ...(observesRoot ? { rootMessageId: rootRef } : {}),
+    } : null;
     const senderRef = asString(message.senderId);
     const isSentByMe = senderRef !== null && ownRef !== null && senderRef === ownRef;
     const media = attachments.flatMap((attachment) => {
@@ -961,13 +975,18 @@ function materialDrafts(
       isTip: tipMills !== "0",
       tipAmountMills: tipMills,
       tipTextPlain: null,
-      reply: null,
+      reply,
+      replyContractVersion: 1,
       media,
       // Fansly DM pages serve attachments and reply refs but no tip note —
       // the exact note lives in transaction_tip_contexts. Declaring tipText
       // unobserved keeps the archive's coalesce from wiping another
       // producer's value.
-      fieldPresence: { media: true, reply: true, tipText: false },
+      fieldPresence: {
+        media: Array.isArray(message.attachments),
+        reply: observesParent || observesRoot,
+        tipText: false,
+      },
       vendorChangedAt: null,
       materialObservedAt: observation.receivedAt.toISOString(),
       originClass: "fansly_dm_sidecar",

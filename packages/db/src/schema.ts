@@ -3546,6 +3546,8 @@ export const messageArchive = pgTable(
     mediaMetadata: jsonbSafe("media_metadata").$type<Array<Record<string, unknown>>>().default([]).notNull(),
     originClass: text("origin_class"),
     materialObservedAt: timestamp("material_observed_at", { withTimezone: true }),
+    replyParentObservedAt: timestamp("reply_parent_observed_at", { withTimezone: true }),
+    replyRootObservedAt: timestamp("reply_root_observed_at", { withTimezone: true }),
     vendorChangedAt: timestamp("vendor_changed_at", { withTimezone: true }),
     sourceAccountSeq: bigint("source_account_seq", { mode: "number" }),
     servingContractVersion: integer("serving_contract_version").default(0).notNull(),

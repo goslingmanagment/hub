@@ -97,6 +97,8 @@ const MESSAGE_ARCHIVE_COLUMNS = [
   "platform",
   "price_mills",
   "reply_metadata",
+  "reply_parent_observed_at",
+  "reply_root_observed_at",
   "sender_role",
   "serving_contract_version",
   "source_account_seq",
@@ -326,7 +328,7 @@ describe("media plane — one paid DM page, end to end", () => {
     expect(String(joined[0]!.price_mills)).toBe("79000");
   });
 
-  it("A17-4 VARIANT B: message_archive and its shadow gain NO columns", async (context) => {
+  it("A17-4 VARIANT B: archive and shadow retain matching schemas, with decision 278 reply clocks", async (context) => {
     if (!testDb) {
       context.skip();
       return;

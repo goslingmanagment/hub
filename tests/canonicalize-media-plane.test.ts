@@ -193,9 +193,9 @@ function only(events: CanonicalEventDraft[], type: string) {
   return found[0]!;
 }
 
-describe("sync-pull v5 media plane — golden shapes", () => {
-  it("is at version 5 and emits four types from one paid-video DM page", () => {
-    expect(SYNC_PULL_CANONICALIZER_VERSION).toBe(5);
+describe("sync-pull media plane — golden shapes", () => {
+  it("is at version 6 and emits four types from one paid-video DM page", () => {
+    expect(SYNC_PULL_CANONICALIZER_VERSION).toBe(6);
     const events = canonicalizeSyncPullObservation(dmObservation(paidVideoPayload()), CONTEXT);
     expect(events.map((event) => event.type).sort()).toEqual([
       "media.observed",
@@ -371,6 +371,43 @@ describe("sync-pull v5 media plane — golden shapes", () => {
     // value with a null.
     expect(head.fieldPresence).toEqual({ media: true, reply: true, tipText: false });
     expect(material.dedupKey).toMatch(/^msg-material:message-1:[0-9a-f]{64}$/);
+  });
+});
+
+describe("Fansly reply material", () => {
+  it.each([false, true])("preserves parent/root on text and attached replies (attached=%s)", (attached) => {
+    const payload = paidVideoPayload({ includeOrder: false });
+    const message = { ...payload.messages[0]!, content: "<p>reply</p>",
+      inReplyTo: "parent-1", inReplyToRoot: "root-1",
+      attachments: attached ? payload.messages[0]!.attachments : [] };
+    const events = canonicalizeSyncPullObservation(dmObservation({ messages: [message] }), CONTEXT);
+    expect(only(events, "message.sent").dedupKey).toBe("msg:sent:message-1");
+    expect(only(events, "message.material_observed").data.head).toMatchObject({
+      reply: { messageId: "parent-1", rootMessageId: "root-1" },
+      textHtml: "<p>reply</p>", isSentByMe: true,
+      fieldPresence: { media: true, reply: true, tipText: false },
+    });
+  });
+
+  it("distinguishes absent reply fields, a sparse root clear, and an explicit full clear", () => {
+    const message = { ...paidVideoPayload().messages[0]! } as Record<string, unknown>;
+    delete message.inReplyTo;
+    delete message.inReplyToRoot;
+    const head = (fields: Record<string, unknown>) => only(canonicalizeSyncPullObservation(
+      dmObservation({ messages: [{ ...message, ...fields }] }), CONTEXT,
+    ), "message.material_observed").data.head;
+    expect(head({})).toMatchObject({ reply: null, fieldPresence: { reply: false } });
+    expect(head({ inReplyToRoot: null })).toMatchObject({ reply: { rootMessageId: null }, fieldPresence: { reply: true } });
+    expect(head({ inReplyTo: null, inReplyToRoot: null })).toMatchObject({ reply: null, fieldPresence: { reply: true } });
+    expect(head({ inReplyToRoot: "root-only" })).toMatchObject({ reply: { rootMessageId: "root-only" } });
+  });
+
+  it("does not add material for ordinary unlinked text", () => {
+    const message = { ...paidVideoPayload().messages[0]!, attachments: [] } as Record<string, unknown>;
+    delete message.inReplyTo;
+    delete message.inReplyToRoot;
+    const events = canonicalizeSyncPullObservation(dmObservation({ messages: [message] }), CONTEXT);
+    expect(events.map((event) => event.type)).toEqual(["message.sent"]);
   });
 });
 
