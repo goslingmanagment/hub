@@ -2605,6 +2605,13 @@ export interface OfapiWebhookPendingRegistration {
   preparedAt: string;
 }
 
+export const canonicalizeSweepCursors = pgTable("canonicalize_sweep_cursors", {
+  key: text("key").primaryKey(),
+  afterId: bigint("after_id", { mode: "number" }),
+  revision: bigint("revision", { mode: "number" }).default(0).notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
 export const ofapiWebhookConfig = pgTable("ofapi_webhook_config", {
   id: integer("id").primaryKey().default(1),
   externalWebhookId: text("external_webhook_id"),

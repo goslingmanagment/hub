@@ -110,7 +110,14 @@ describe("OFAPI lifecycle audit regressions", () => {
     expect(await currentSubscription()).toMatchObject({ isCurrent: false, canonicalStatus: "expired", priceMills: 10000n, endsAt: new Date(at("30")) });
     await runCanonicalization(app, { kinds: ["subscriptions.expired", "subscriptions.renewed"] });
     const history = (await testDb.pool.query("select type,occurred_at from domain_events where account_id=$1 order by occurred_at", [pageId])).rows;
-    expect(history.map(row => row.type)).toEqual(["subscription.ended", "subscription.renewed", "subscription.ended"]);
+    // The live receipt also records the delayed `new` fact. Its timestamp
+    // belongs in history; it must not reactivate the newer expired state.
+    expect(history.map(row => [row.type, row.occurred_at.toISOString()])).toEqual([
+      ["subscription.ended", new Date(at("10")).toISOString()],
+      ["subscription.renewed", new Date(at("20")).toISOString()],
+      ["subscription.started", new Date(at("25")).toISOString()],
+      ["subscription.ended", new Date(at("30")).toISOString()],
+    ]);
   });
 
   it("W3 orders account failures by authentication attempt and suppresses stale failure SSE", async () => {
@@ -143,15 +150,17 @@ describe("OFAPI lifecycle audit regressions", () => {
   });
 
   it("records all export transitions without account_id and retains completed without claiming import", async () => {
-    for (const status of ["completed", "calculating_credits", "calculating_credits_completed", "calculating_credits_failed", "in_progress", "failed", "cancelled"]) {
+    const statuses = ["completed", "calculating_credits", "calculating_credits_completed", "calculating_credits_failed", "in_progress", "failed", "cancelled"];
+    for (const status of statuses) {
       await deliver(`data_exports.${status}`, { id: "data_export_lifecycle", account_ids: [ACCOUNT], status, created_at: at("00"), credit_cost: 12 }, { accountId: null });
     }
     const state = await getOfapiAsyncLifecycle(app, { resourceKind: "data_export", resourceId: "data_export_lifecycle", ofapiAccountId: ACCOUNT });
     expect(state?.rank).toBe(4);
     expect(state?.conflictingTerminal).toBe(true);
     await runCanonicalization(app, { kinds: ["data_exports.completed"] });
-    const events = (await testDb.pool.query("select type,data from domain_events where account_id=$1", [pageId])).rows;
-    expect(events).toHaveLength(1);
+    const events = (await testDb.pool.query("select type,data from domain_events where account_id=$1 order by id", [pageId])).rows;
+    expect(events.map(row => row.data.status)).toEqual(statuses);
+    expect(events.every(row => row.type === "data_export.status_changed" && row.data.artifactAccepted === false)).toBe(true);
     expect(events[0]).toMatchObject({ type: "data_export.status_changed", data: { status: "completed", artifactAccepted: false } });
     expect(await getOfapiAsyncLifecycle(app, { resourceKind: "data_export", resourceId: "data_export_lifecycle", ofapiAccountId: "acct_other" })).toBeNull();
   });

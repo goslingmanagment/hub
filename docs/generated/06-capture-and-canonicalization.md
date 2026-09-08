@@ -1,192 +1,118 @@
-> Generated 2026-07-15 from docs/generated/REGENERATION-PROMPT.md at commit 7df9a45.
+> Generated 2026-09-08 from docs/generated/REGENERATION-PROMPT.md at commit 92751418.
 > Machine-generated reference — regenerate by re-running that prompt in a
 > fresh session; do not hand-edit.
 
-# Capture and Canonicalization
+# Capture and canonicalization
 
-This map follows facts from durable capture into the per-account domain-event
-ledger and its immediate projections. The central rule is capture first:
-provider and client inputs are journaled before interpretation, while
-canonicalization is replayable and versioned.
+This map describes the shared observation-to-event engine and its OFAPI receipt
+and recovery entrypoints. Source paths below are relative to the repository root.
 
-## 1. Durable observations
+## Observation identity and retained bodies
 
-`packages/db/src/repositories/observations.ts` is the write/read seam for the
-partitioned `observations` journal. Producers supply a source, producer stamp,
-kind, raw payload, payload hash, and idempotency key; account, platform,
-observed time, actor, and native account reference are optional metadata. The
-repository uses an idempotency claim before inserting the journal row. A
-duplicate returns the original row's exact `(id, received_at)` pair, just as a
-new insert does, so immediate projectors can stamp the right partitioned row.
+`packages/db/src/repositories/observations.ts` owns durable inserts, observation
+keys and replay selection. `findObservationByKey` resolves the original journal
+row through `(source, idempotency_key)` and its exact partition coordinate
+`(observation_id, received_at)`. Observation identity and domain-event dedup
+identity are separate. Replay selection uses qualified observation IDs and
+parse-version, source/kind, account and received-time filters.
 
-Observation inserts and claims are transaction-coupled. Callers that wrap a
-batch in one database transaction either persist every claim and row or none.
-`packages/db/migrations/0082_w8_future_catchall_partitions.sql`
-adds catch-all partitions beginning at 2031; runtime partition pre-creation
-therefore stops at that boundary rather than overlapping it.
+`apps/runtime/src/services/payload-reader.ts` resolves the retained body before
+the driver calls a family's shape gate or canonicalizer. An unavailable capture
+body leaves the observation unstamped and increments `skippedUnavailable`.
+`parse_version` records consumption by a parser version; a traversal cursor does
+not mark observations consumed. Unknown kinds outside the registry remain
+available for future support.
 
-The journal has two independent replay coordinates:
+## Shared driver and registry
 
-- `parse_version` records which canonicalizer version has consumed a row.
-- `(id, received_at)` addresses the exact row across time partitions.
+`apps/runtime/src/services/canonicalize-driver.ts::runCanonicalization` serves
+live exact-observation work, the background sweep and `events:replay` in
+`apps/runtime/src/cli.ts`. `canonicalize/index.ts` declares these families:
 
-An unmapped fact may remain in the journal with a null account. It is retained
-without being allowed to mint an account-scoped domain event.
+| Source | Lane | Version | Kinds | Append mode |
+|---|---|---:|---:|---|
+| ofapi_capture | read_collections | 1 | 1 | projection-only |
+| ofapi_capture | ofapi-posts | 8 | 1 | projection-only |
+| webhook | ofapi | 5 | 30 | mixed |
+| pull | posts | 8 | 2 | projection-only |
+| pull | sync | 5 | 5 | mixed |
+| pull | stats | 2 | 11 | projection-only |
+| pull | engagement | 1 | 1 | projection-only |
+| pull | catalog | 3 | 10 | projection-only |
+| pull | comments | 1 | 1 | projection-only |
+| pull | payouts | 1 | 2 | projection-only |
+| command_result | result | 1 | all | deliverable |
+| client_capture | desktop | 2 | 13 | deliverable |
 
-## 2. Capture producers
+These counts are parser coverage, not provider catalog size or configured webhook
+subscriptions. The OFAPI family delegates content facts and async lifecycle facts
+to their shared parsers. Its shape gate leaves unrecognized content observations
+pending. The retained OFAPI-post family additionally requires minimum parse
+version 7 and accepted-post context from the attached ledger.
 
-The main writers are visible at these boundaries:
+The driver loads current page references and historical OFAPI custody. Conflicting
+ownership is held back; live intake does not guess a page for such a fact.
+Append operations use `packages/db/src/repositories/domain-events.ts` for
+per-account sequencing and dedup. Projection-only and mixed families use their
+corresponding checkpoint-aware append paths. The partition gate refuses appends
+into unattached target months. Applicable material writes acquire erasure fences.
 
-| Source | Producer path | Captured material |
-|---|---|---|
-| `webhook` | `apps/runtime/src/services/ofapi-webhooks.ts` | signed OFAPI deliveries, before projection |
-| `pull` | `apps/runtime/src/services/sync/executor-handlers.ts` | successful raw sync responses and best-effort failed-fetch records |
-| `command_result` | `apps/runtime/src/services/ofapi-command-executor.ts` | each terminal command outcome |
-| `client_capture` | `apps/runtime/src/services/ingest-observations.ts` | desktop telemetry and one-time harvested local tables |
-| read-gateway capture | `apps/runtime/src/services/ofapi-read-gateway-capture.ts` | successful proxied reads; chat-message v2 envelopes feed a dedicated projector |
-| repair producer | `apps/runtime/src/services/observations-rejournal.ts` | bounded replacement observations for historical observation-key collisions |
+Invalid or implausible event dates fall back to observation receipt time with
+`occurredAtRaw` and `occurredAtClamped` evidence. Keys are constructed before this
+clamp. A failed row does not prevent later rows in its page from being attempted.
+Append can commit before a later parse stamp fails; retry resolves the existing
+event through its dedup key before completing the stamp.
 
-`apps/runtime/src/services/observations-rejournal.ts` is append-only repair,
-not an in-place rewrite. Producer `rejournal:a22` re-journals affected sync
-facts in its bounded incident window under non-colliding keys; canonical event
-deduplication decides whether they add new truth.
+## Immediate OFAPI processing
 
-## 3. Client capture and harvest trust boundary
+`ofapi-webhook-capture.ts` and `ofapi-webhooks.ts` verify and retain signed inputs
+before acknowledging them. The durable `ofapi.events.process.v2` queue in
+`ofapi-events.ts` processes receipt IDs. Settling allocates the legacy fanout
+identity and commits its notification before post-settle consumers run.
 
-`POST /api/v1/ingest/observations` is registered in
-`apps/runtime/src/modules/ingest/index.ts` and implemented by
-`apps/runtime/src/services/ingest-observations.ts`.
+Post-settle work includes command correlation, DM archive and hot projection,
+subscriptions, presence, spend, account health and async lifecycle. The worker
+then resolves an accepted receipt's observation and invokes `runCanonicalization`
+with that exact ID and kind. This uses the existing queue; there is no separate
+`canonicalize.observation` queue. Typing is outside the 30 canonicalized kinds.
+A driver exception is logged with the receipt ID and fixed deferral message;
+retained debt remains replayable. Reprocessing a settled accepted receipt can
+repair debt without allocating a new legacy SSE identity or sending a provider
+request. Operational projections and canonical facts have separate completion
+states.
 
-The live allowlist is `ai_acceptance`, `guard_audit`, `send_audit`, `ai_spend`,
-`credit_spend`, and `data_purge_notice`. Allowed kinds are stored as
-`desktop.<kind>`; everything else becomes `desktop.unknown:<kind>` instead of
-being discarded. An unknown or out-of-scope page label is likewise captured
-with a null account.
+## Bounded recovery traversal
 
-The harvest namespace accepts only these producer-gated kinds:
-`harvest.messages`, `harvest.fan_transactions`, `harvest.outbox`,
-`harvest.message_guard_events`, `harvest.usage_events`,
-`harvest.ai_spend_log`, and `harvest.credit_log`. A `harvest-*` client version
-must reach the route through `requireHarvestDeviceToken`. The server derives
-the authorized machine id from that device token, and every trusted harvest
-payload must carry the same `machineId`.
+The minutely `canonicalize.sweep` processes 200 rows per page, at most 20 pages
+per family, with a 600,000 ms run budget checked between pages/families. Family
+rotation is process-local. Each family's traversal persists in
+`canonicalize_sweep_cursors`, introduced by migration 0171 and accessed through
+`packages/db/src/repositories/canonicalize-sweep.ts`.
 
-Normal client events deduplicate on
-`<principalUserId>:<clientEventId>`. Trusted harvest events deduplicate on
-`<authorizedMachineId>:<clientEventId>`, making retries stable across user
-principals. `hasHarvestObservationClientEvent` also recognizes legacy
-principal-keyed harvest rows through the expression index introduced by
-`packages/db/migrations/0090_device_token_harvest_capability.sql`.
-All `observedAt` values and all harvest machine bindings are validated before
-the transaction begins; the request batch is atomic.
+The key contains a readable source/lane/version prefix and a SHA-256 of the
+version floor, minimum version and query scope. Each completed attempted page
+advances `after_id` with a revision compare-and-swap. A stale writer cannot
+replace another traversal's progress or undo its wrap. A restart can repeat an
+unfinished page. End-of-scan wraps to the head so skipped evidence can be tried
+again; no fact is stamped merely to advance the cursor. Exact, CLI and dry replays
+bypass durable cursors. `resetCanonicalizeSweepRuntime` resets only process-local
+rotation, as used by restart regression tests.
 
-## 4. Canonicalization sweep
+`projections.dm-reconcile.sweep` is a separate minutely job for DM reconciles;
+its work is not behind the canonical sweep's wall-clock budget.
 
-`apps/runtime/src/services/canonicalize-driver.ts` owns queue
-`canonicalize.sweep`, scheduled every minute. For each family it reads rows
-below that family's parse-version floor, runs a pure canonicalizer, appends
-drafts to the domain-event ledger, and only then stamps the observation. A
-failed row is logged and left below the floor, while later rows in the same
-page continue.
+## OFAPI delivery-history recovery
 
-The scheduled worker scans 200 rows per page and at most 20 pages per family.
-Its in-memory per-family cursor resumes after the last bounded sweep and wraps
-to the head at the end, so poison or temporarily unmapped rows are retried once
-per full cycle without starving newer rows. Filtered CLI replay is deliberately
-cursor-free and deterministic.
+`ofapi-webhook-recovery.ts` captures each free provider delivery-history response
+before validating attempts. New closed windows include complete boundary seconds:
+start `.000`, inclusive end `.999`. A legacy scan resumes its original stored
+wire bounds and offset. Validation admits only timestamps from the first through
+last boundary second. A truly escaped page retains its raw capture and old offset
+with `history_window_failed`.
 
-Canonical event timestamps are constrained in this driver. Dates before
-2024-01-01, more than two months in the future, or invalid dates fall back to
-the observation's `received_at`. The event data records
-`occurredAtClamped: true` and the original value in `occurredAtRaw`. The
-canonicalizer builds the dedup key before clamping, so replay identity does not
-change.
-
-### Canonicalizer registry
-
-`apps/runtime/src/services/canonicalize/index.ts` currently declares four
-families:
-
-| Source | Version | Implementation | Result |
-|---|---:|---|---|
-| `webhook` | 3 | `canonicalize/ofapi-webhook.ts` | OFAPI messages, PPV unlocks, tips, transactions, subscriptions, presence, and auth |
-| `pull` | 3 | `canonicalize/sync-pull.ts` | pulled transactions, DMs, earnings, purchase history, and PPV unlocks |
-| `command_result` | 1 | `canonicalize/command-result.ts` | every `command.<state>` becomes `command.settled` |
-| `client_capture` | 2 | `canonicalize/client-capture.ts` | trusted `harvest.messages` becomes message facts; other declared desktop/harvest kinds validate and stamp with no domain event |
-
-Webhook renewal deliveries map to `subscription.renewed`. PPV unlock mapping
-uses `notificationChatId` and `extractMessageIdFromNotification` from
-`apps/runtime/src/services/ofapi-payloads.ts`; it does not treat a top-level
-creator `user_id` as the fan conversation. Fansly DM timestamps in the pull
-family pass through the epoch-seconds-aware `asFanslyTimestamp` helper.
-
-Harvested messages intentionally reuse the live message keys
-`msg:<direction>:<messageId>` and `msg:deleted:<messageId>`. Existing live facts
-therefore collapse while pre-capture history can append. Harvested transaction
-rows remain observation-only; their reconciliation truth is the transaction
-table, not synthetic historical domain events.
-
-## 5. Domain-event append protocol
-
-`packages/db/src/repositories/domain-events.ts` owns
-`appendDomainEvents`. In one transaction it locks the account's
-`domain_event_seq` row `FOR UPDATE`, claims each content dedup key, allocates
-sequence numbers through that counter, and inserts events without gaps. A
-deduplicated input returns the existing event id in the append outcome. The
-corrections reconciler uses that outcome to retain lineage even when another
-producer already emitted the same material fact.
-
-The canonical vocabulary emitted at this commit is:
-
-- `message.received`, `message.sent`, `message.deleted`,
-  `message.ppv_unlocked`
-- `tip.received`, `transaction.posted`, `fan.earnings_observed`
-- `subscription.started`, `subscription.renewed`, `subscription.ended`
-- `presence.online`, `presence.offline`
-- `account.auth_changed`, `command.settled`
-
-Identity references and payload detail stay in event columns/data; the type is
-the stable behavioral vocabulary. Replay queries can be bounded through an
-explicit `throughSeq`, which streaming uses to preserve a captured replay
-ceiling.
-
-## 6. Projectors and corrections
-
-`apps/runtime/src/services/projections/message-archive.ts`,
-`fan-earnings.ts`, and `ai-acceptance.ts` consume domain events behind their
-own durable projection cursors. Message archive consumes received, sent, and
-deleted messages. A schema-v2 superseding message event carries a complete
-`data.head`; the projector replaces material from that head rather than
-merging a partial historical payload.
-
-Wave-2 DM convergence is centered on
-`packages/db/src/repositories/dm-message-candidate.ts`. Webhook archive,
-readthrough REST reconciliation, and confirmed commands reduce candidates
-under a row lock with an erasure fence and source-aware field precedence.
-`apps/runtime/src/services/dm-corrections-reconciler.ts` compares material and
-emitted fingerprints. A mismatch emits a schema-v2 `message.received` or
-`message.sent` event with `supersedesEventId`, fingerprint, and complete head,
-then advances the emitted fingerprint. Rows without defensible source lineage
-remain pending rather than receiving invented lineage.
-
-Two bounded repair paths use supersession rather than mutation:
-
-- `apps/runtime/src/services/fansly-1970-repair.ts` repairs historical Fansly
-  message events whose seconds timestamps had been interpreted as milliseconds.
-- `apps/runtime/src/services/projections/message-archive-rebuild.ts` preflights retained
-  event coverage, builds a shadow archive from events plus allowed backfills,
-  verifies it, and switches tables under an advisory lock; migration 0083
-  supplies the shadow table.
-
-## 7. Operational invariants
-
-- Capture idempotency and domain-event content deduplication are separate
-  layers; a repaired observation can be new while its event is already known.
-- Observations with event drafts but no mapped account are not stamped, so a
-  later account mapping can make them projectable.
-- Empty canonicalization is a valid result and stamps the row for declared
-  validation-only kinds.
-- Parse-version bumps are the replay mechanism; canonicalizers must remain
-  total and deterministic for retained payloads.
-- Canonical events are append-only. Corrections supersede old material and
-  retain the old event as lineage.
+Provider attempt IDs identify attempts; delivery UUIDs connect repeated attempts.
+History success, local receipt, canonical state and operational projection state
+remain independently visible. Remote redelivery is a separate owner action with
+one-attempt semantics. `docs/runbooks/ofapi-webhook-recovery.md` holds operational
+checks and the prepared repair of current-account debt; Decision 276 records the
+production evidence and architectural choice.

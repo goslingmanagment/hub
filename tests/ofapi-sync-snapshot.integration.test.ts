@@ -431,9 +431,11 @@ describe("OFAPI sync snapshot", () => {
     subscription.account_id = ACCOUNT_ONE;
     const subscriptionId = await deliver(subscription);
     await processOfapiWebhookEvent(appContext, subscriptionId);
+    // The settled receipt already produced its canonical fact. The later
+    // pending message below still exercises the competing sweep path.
     expect(await runCanonicalization(appContext, {
       kinds: ["subscriptions.new"],
-    })).toMatchObject({ appended: 1, errored: 0 });
+    })).toMatchObject({ scanned: 0, appended: 0, errored: 0 });
 
     const message = await loadReceivedFixture();
     message.payload.id = 9_915_001;

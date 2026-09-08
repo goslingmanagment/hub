@@ -465,3 +465,20 @@ or money transfer. Retained response repair cannot redispatch the request.
 Encrypted commands/responses never enter audit metadata or error messages.
 
 Delivery-history GET diagnostics distinguish admission, authorization, response headers/body, durable capture and response contract failures. Local scan failures use `history_<stage>_failed` for missing capture, parsing, window validation or persistence; vendor HTTP refusals retain `vendor_http_<status>`. Only fixed machine fields cross into scan state/logs, with no raw error, SQL, URL, headers or payload. The free `ofapi_webhook_deliveries` GET uses a 60-second HTTP deadline; other admin requests keep 15 seconds. This does not change polling cadence or retry any write.
+
+
+### OFAPI receipt canonicalization and history windows (Decision #276)
+
+A settled accepted receipt attempts its exact observation through the shared
+canonicalizer after operational projections. Row-level failure remains parse
+debt in the retained observation and is recoverable by the bounded sweep or exact
+local replay. It does not roll back receipt/SSE state or trigger provider
+redelivery. An exception escaping the driver logs only the local event ID and a
+fixed deferral message. Background cursor CAS loss ends that family's pass without
+overwriting the winning cursor; already committed facts deduplicate on repetition.
+
+History validation includes the full boundary seconds. A fractional lower bound
+must not reject a provider timestamp within that same second. Outside those
+seconds `history_window_failed` still retains the raw page and old offset. A
+retry of a legacy scan uses its original query bounds and offset; normalization
+must never change the provider query halfway through pagination.

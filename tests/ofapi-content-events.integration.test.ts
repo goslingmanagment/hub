@@ -160,7 +160,9 @@ describe("content events raw-to-owner report", () => {
     await deliver("chat_queue.finished", queue(0, true));
     await deliver("chat_queue.updated", queue(5));
     const result = await project();
-    expect(result.appended).toBeGreaterThan(0);
+    // Receipt processing already canonicalized these facts; the recovery
+    // pass must find no parse debt and projections rebuild from that ledger.
+    expect(result).toMatchObject({ scanned: 0, appended: 0, errored: 0 });
     const report = await readOfapiContentEvents(app.db, { pageId });
     expect(report.likes).toHaveLength(1);
     expect(report.likes[0]).toMatchObject({

@@ -206,3 +206,17 @@ observations. Partitions: monthly, pre-created 2024-01 → now+3mo + `MINVALUE` 
 - [x] 3. **sync-pull + command-result (08.3, 0514cff).** Declared: fansly `earnings_transactions`→transaction.posted per item; OFAPI `dm_messages` items→message.received/sent (REST id = webhook id → keys collide by construction). **CI headline PROVEN:** same DM as webhook + REST page → 2 observations, 1 event, replay appends 0. Deliberately undeclared (journaled, wait at parse_version 0): fansly DM pages (direction needs the page's own Fansly account id — not decidable by a pure function; later version threads a context table), onlymonster pages (vendor retiring, 0 prod rows), subscriber/follower/audience pages (next canonicalizer version). command_result: every `command.<state>`→command.settled.
 - [x] 4. **Driver + sweep + replay CLI (08.4).** Minutely `canonicalize.sweep` (exclusive queue) IS the replay executor: walks parse_version < family-version per family (registry dispatch), appends, stamps forward-only; unmapped-account observations skip-and-retry (self-heal when mapping lands); undeclared kinds never stamped. `events:replay --kind --from --to --account --parse-version --dry-run` runs the same engine. Integration test: corpus settles (3 events), second sweep idle, version-bump replay dedupes 100%, dry-run writes nothing. **Elaboration:** no per-observation pg-boss job in this slice — the minutely sweep bounds lag at ≤~60 s, which is the recorded baseline; a hot-path enqueue at the webhook receiver is a later latency optimization if the p95 baseline demands it.
 - [ ] 5. Deploy (AFTER Stage 7 exits) + days-long type-coverage watch + staging replay drill + lag baseline record.
+
+
+### Follow-up: OFAPI receipt freshness, 2026-09-08 (Decision #276)
+
+The 08.4 elaboration deliberately deferred a per-observation job while minutely
+sweeps met the original latency baseline. Production later retained 452,533
+unmapped historical webhook observations; current facts then depended on that
+traversal, and worker restarts discarded its in-memory cursor. Decision #276
+implements the immediate-consumer intent in the existing durable OFAPI receipt
+job after settle/projections, using the same canonicalization engine for its
+exact observation. It also persists recovery traversal with page-level CAS in
+migration 0171. This follow-up is an implementation change, not evidence that
+the original slice deployed a separate `canonicalize.observation` queue.
+See `docs/runbooks/ofapi-webhook-recovery.md` for rollout and live acceptance.

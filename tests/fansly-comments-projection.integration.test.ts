@@ -33,7 +33,7 @@ import {
 } from "@agency_hub_core/db";
 
 import {
-  resetCanonicalizeSweepCursors,
+  resetCanonicalizeSweepRuntime,
   runCanonicalization,
 } from "../apps/runtime/src/services/canonicalize-driver.ts";
 import {
@@ -68,7 +68,7 @@ beforeEach(async () => {
   if (testDb) {
     await resetIntegrationDatabase(testDb.pool);
   }
-  resetCanonicalizeSweepCursors();
+  resetCanonicalizeSweepRuntime();
 });
 
 const FIXTURES = path.resolve("tests/fixtures/fansly-comments");

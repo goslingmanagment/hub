@@ -276,6 +276,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 272 | Typed OFAPI owner actions | Closed action schemas share encrypted durable intents, frozen binding and accounting mode, nonblocking dispatch locks, exact response capture, local replay and owner controls. No subscribe-to-user or automatic enabling. |
 | 274 | Fansly `dm_conversations` empty-sweep guard | A completed sweep that observed zero conversations while the page still has visible threads certifies nothing: no thread hidden, no success stamp, `lastFullSweepCompletedAt` unchanged, `dm_conversations_empty_sweep_guard` (warn), +15min retry. Mirrors #258. No escape hatch: a genuinely emptied inbox keeps its old threads visible until an operator retires them. |
 | 275 | Fansly `Retry-After` reaches the durable retry | A provider `Retry-After` beyond the 60s in-process clamp ends the in-process retry loop at once (no burned attempts) and travels on `FanslyApiError.retryAfterAt`; `classifyTaskFailure` sets `retry_at = max(retryAfterAt, backoff ladder)` — the deadline moves the wake-up only forward, the failure class never changes. Transport retries use the shared `exponentialRetryDelayMs`. |
+| 276 | OFAPI webhook freshness and history precision | Accepted receipts canonicalize their exact observation after settle; the bounded recovery sweep persists per-family/version/scope traversal with CAS. Delivery-history windows include complete boundary seconds; legacy pagination keeps its frozen wire query. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -11544,3 +11545,46 @@ the ledger fields, no SSE frame or incident summary reads it, and no client
 contract mentions `FanslyApiError`. The OFAPI path still has two independent
 `Retry-After` parsers (`services/ofapi.ts`, `ofapi-capture-jobs.ts`); this
 decision is the rule they should converge on when touched.
+
+
+## Decision 276: OFAPI receipt canonicalization and durable recovery traversal (2026-09-08)
+
+Production at `21e0ee332740` accepted and projected current webhooks while 135
+current-account observations remained below webhook parser v5. Another 452,533
+unmapped historical observations shared their ordered recovery scan. Its cursor
+lived only in worker memory, so restart repeated the old head. Separately,
+retained HTTP 200 delivery-history pages were rejected because a source timestamp
+at `23:45:27.000Z` preceded a JavaScript lower bound at `23:45:27.398Z`.
+
+The existing receipt worker now calls the shared canonicalization driver for the
+accepted receipt's exact observation and declared kind, after settle/SSE and
+operational projections. This implements Stage 8's immediate-consumer intent
+using the already durable receipt queue. It needs no additional provider read
+or send. The same parser, binding attribution, erasure/partition guards and
+content dedup apply to live work and replay. A canonicalization failure leaves
+parse debt; it cannot undo the accepted receipt or allocate a replacement SSE
+identity. Reprocessing a settled receipt may complete that debt idempotently.
+
+Migration 0171 adds rebuildable `canonicalize_sweep_cursors`. The key includes
+source, lane, parser version, requested version floor and every query scope.
+Progress commits after each complete attempted page with revision CAS, including
+wrap to the head; a crashed page can repeat, and stale concurrent writers cannot
+regress another sweep. This is traversal state, never a consumption watermark.
+Unmapped, malformed and unavailable observations keep their original parse state
+and are retried on the next full cycle. CLI, exact receipt and dry replays neither
+read nor advance background cursors. Family rotation remains process-local.
+
+Delivery-history windows explicitly cover complete seconds: new lower bounds
+floor to `.000`, inclusive upper bounds extend to `.999`. This also preserves
+coverage if a provider accepts fractional query bounds. Response validation is
+`floor(start) <= created_at < floor(end) + 1 second`; a genuinely out-of-window
+page still fails closed after raw capture. Legacy scans retain their original
+wire bounds, lease and offset, including nonzero offsets; changing a paginated
+query halfway through could skip or duplicate attempts. Attempts deduplicate by
+provider attempt ID, and source timestamps are never rewritten. Same scan ID
+means the same credential/webhook and normalized boundary seconds.
+
+This change does not alter subscriptions, history polling, redelivery policy or
+parser semantics/version. The historical unbound corpus remains retained. Live
+acceptance and the bounded repair of already-pending current receipts are separate
+rollout checks in `docs/runbooks/ofapi-webhook-recovery.md`.

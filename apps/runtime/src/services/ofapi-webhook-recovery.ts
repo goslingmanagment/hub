@@ -19,6 +19,9 @@ import { processOfapiWebhookEvent } from "./ofapi-events.ts";
 
 const PAGE_SIZE = 100;
 const DAY_MS = 86_400_000;
+// Delivery timestamps are reported at second precision. Keep the complete
+// boundary seconds; do not infer subsecond exclusion from a JS Date window.
+const historySecond = (date: Date) => Math.floor(date.getTime() / 1000) * 1000;
 const groupIds = Object.keys(OFAPI_OPTIONAL_WEBHOOK_GROUPS);
 type Group = keyof typeof OFAPI_OPTIONAL_WEBHOOK_GROUPS;
 
@@ -83,11 +86,11 @@ export async function syncOfapiWebhookDeliveries(app: AppContext, input: {
   if (!config?.externalWebhookId) throw new ConflictError("Register the OFAPI webhook first");
   const existing = await createWebhookDeliveryScan(app.db, {
     id: input.id, webhookId: config.externalWebhookId, credentialFingerprint: proof.credentialFingerprint,
-    observedTeam: proof.observedTeam, from, to,
+    observedTeam: proof.observedTeam, from: new Date(historySecond(from)), to: new Date(historySecond(to) + 999),
   });
   if (!existing) throw new Error("Delivery scan creation failed");
-  if (existing.webhook_id !== config.externalWebhookId || existing.window_start.getTime() !== from.getTime() ||
-      existing.window_end.getTime() !== to.getTime() || existing.credential_fingerprint !== proof.credentialFingerprint) {
+  if (existing.webhook_id !== config.externalWebhookId || historySecond(existing.window_start) !== historySecond(from) ||
+      historySecond(existing.window_end) !== historySecond(to) || existing.credential_fingerprint !== proof.credentialFingerprint) {
     throw new ConflictError("The scan identity belongs to a different window or credential scope");
   }
   if (existing.state === "complete") return scanResult(existing);
@@ -100,14 +103,21 @@ export async function syncOfapiWebhookDeliveries(app: AppContext, input: {
     for (let page = 0; page < Math.min(20, Math.max(1, input.maxPages ?? 20)); page += 1) {
       stage = "request";
       const response = await client.listWebhookDeliveries(scan.webhook_id, {
-        from: input.from, to: input.to, limit: PAGE_SIZE, offset: scan.next_offset,
+        // A legacy scan may already have a fractional-second window and a
+        // nonzero offset. Its wire query MUST remain frozen across continuation.
+        from: scan.window_start.toISOString(), to: scan.window_end.toISOString(), limit: PAGE_SIZE, offset: scan.next_offset,
       });
       stage = "capture_missing";
       if (!response.capture) throw new Error("Delivery history response has no durable observation");
       stage = "parse";
       const parsed = parseWebhookDeliveryPage(response.body);
       stage = "window";
-      if (parsed.attempts.some(attempt => attempt.createdAt < from || attempt.createdAt > to)) throw new Error("Delivery response escaped the requested window");
+      const windowStartMs = historySecond(scan.window_start);
+      const windowEndExclusiveMs = historySecond(scan.window_end) + 1000;
+      if (parsed.attempts.some(attempt => attempt.createdAt.getTime() < windowStartMs ||
+        attempt.createdAt.getTime() >= windowEndExclusiveMs)) {
+        throw new Error("Delivery response escaped the requested window");
+      }
       stage = "persistence";
       await captureWebhookDeliveryPage(app.db, { scan, ...parsed,
         observationId: response.capture.observationId, observationReceivedAt: response.capture.receivedAt });

@@ -36,7 +36,7 @@ import {
 } from "@agency_hub_core/db";
 
 import {
-  resetCanonicalizeSweepCursors,
+  resetCanonicalizeSweepRuntime,
   runCanonicalization,
 } from "../apps/runtime/src/services/canonicalize-driver.ts";
 import { replayWindowMonths } from "../apps/runtime/src/cli.ts";
@@ -61,7 +61,7 @@ beforeEach(async () => {
   if (testDb) {
     await resetIntegrationDatabase(testDb.pool);
   }
-  resetCanonicalizeSweepCursors();
+  resetCanonicalizeSweepRuntime();
   if (testDb) {
     // Detached relations survive a truncate-based reset; start every case from
     // a known partition set instead of inheriting the previous one.
@@ -427,7 +427,7 @@ describe("§3.2c(ii) partition census on the SWEEP path", () => {
       for values from ('${monthStart(DETACHED_MONTH.year, DETACHED_MONTH.month)}')
       to ('${monthStart(next.year, next.month)}')
     `);
-    resetCanonicalizeSweepCursors();
+    resetCanonicalizeSweepRuntime();
 
     const recovered = await runCanonicalization(appStub().app, { kinds: ["dm_messages"] });
     expect(recovered.partitionBlocked).toBe(0);
