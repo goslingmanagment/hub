@@ -1,0 +1,9 @@
+SET statement_timeout = '180s';
+select o.source, o.kind, o.producer, count(*) as n,
+       min(o.received_at) as first_seen, max(o.received_at) as last_seen
+from observations o
+where o.received_at >= timestamptz '2026-08-24 00:00:00+00'
+  and o.received_at <  timestamptz '2026-09-07 00:00:00+00'
+  and o.account_id in (1,2,3,4,5,10)
+group by 1,2,3
+order by n desc;

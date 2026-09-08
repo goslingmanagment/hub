@@ -1,0 +1,22 @@
+{
+  "revision": {
+    "exit_code": 0,
+    "stdout": "/agency-hub-api-1 a6631a709991 2026-09-08T10:10:51.984171641Z 0\n/agency-hub-worker-1 a6631a709991 2026-09-08T10:10:57.74862423Z 0\n/agency-hub-scheduler-1 a6631a709991 2026-09-08T10:10:51.986687034Z 0\n",
+    "stderr": ""
+  },
+  "containers": {
+    "exit_code": 0,
+    "stdout": "agency-hub-worker-1 Up About an hour (healthy)\nagency-hub-api-1 Up About an hour (healthy)\nagency-hub-scheduler-1 Up About an hour (healthy)\nagency-hub-postgres-1 Up About an hour (healthy)\ndeploy-bot-1 Up 7 weeks (healthy)\ndeploy-web-1 Up 7 weeks (healthy)\n",
+    "stderr": ""
+  },
+  "disk": {
+    "exit_code": 0,
+    "stdout": "Filesystem      Size  Used Avail Use% Mounted on\n/dev/sda1        79G   47G   31G  60% /\n",
+    "stderr": ""
+  },
+  "health": {
+    "exit_code": 0,
+    "stdout": "{\"status\":\"ok\",\"timestamp\":\"2026-09-08T11:21:57.335Z\",\"contractHash\":\"da876ec6191cf75b84db068747a43f17e878ad3789a224f49d8a9fcc2e24654b\",\"capabilities\":[\"desktop-lifecycle-v2\"],\"checks\":{\"api\":{\"status\":\"ok\"},\"database\":{\"status\":\"ok\",\"latencyMs\":1,\"error\":null}}}",
+    "stderr": ""
+  }
+}

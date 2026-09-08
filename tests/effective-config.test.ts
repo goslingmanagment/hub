@@ -158,6 +158,7 @@ describe("LIVE_CONFIG_KEYS", () => {
     // the whole request-count enforcement on the highest-volume lane in the
     // system) and the long-tail cycle, live because it re-aims a running
     // round-robin without a deploy.
-    expect(LIVE_CONFIG_KEYS.size).toBe(60);
+    expect(LIVE_CONFIG_KEYS.has("fanslyDmHeadCatchupPageAllowlist")).toBe(true);
+    expect(LIVE_CONFIG_KEYS.size).toBe(61);
   });
 });

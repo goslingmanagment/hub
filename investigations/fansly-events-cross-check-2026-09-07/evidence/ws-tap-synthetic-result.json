@@ -1,0 +1,13 @@
+{
+  "evidenceKind": "offline-synthetic-test",
+  "snippetPath": "docs/research/fansly-events-architecture-2026-09-07/evidence/ws-tap-snippet.js",
+  "snippetSha256": "6509ed1fbb1dc051d178b94b782d7138ce7ed8b56b6b408fc1423c32390710d4",
+  "networkConnections": 0,
+  "realSecretsUsed": false,
+  "realBusinessDataUsed": false,
+  "loggedFrames": 3,
+  "nestedAuthTokenLeaked": true,
+  "plainTokenLeaked": false,
+  "unrelatedSocketCaptured": true,
+  "messageBodyRetained": true
+}

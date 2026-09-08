@@ -1,0 +1,235 @@
+BEGIN
+SET
+          checked_at          | current_user
+------------------------------+--------------
+ 2026-09-07 05:04:46.96162+00 | read_only
+(1 row)
+
+ id |  label  | platform
+----+---------+----------
+  1 | lora-1  | fansly
+  2 | lora-2  | fansly
+  3 | lora-3  | fansly
+  4 | lilly-1 | fansly
+  5 | lilly-2 | fansly
+ 10 | ari-1   | fansly
+(6 rows)
+
+  label  |            producer             |              kind              | observations_24h |           latest           | min_parse | max_parse
+---------+---------------------------------+--------------------------------+------------------+----------------------------+-----------+-----------
+ ari-1   | sync:fansly:dm_messages         | dm_messages                    |              103 | 2026-09-07 04:37:04.343+00 |         5 |         5
+ ari-1   | sync:fansly:dm_conversations    | dm_conversations               |               55 | 2026-09-07 04:36:53.983+00 |         0 |         0
+ ari-1   | sync:fansly:notifications       | notifications                  |               48 | 2026-09-07 04:48:34.483+00 |         1 |         1
+ ari-1   | sync:fansly:media_stats         | media_offer_stats              |               26 | 2026-09-07 00:09:23.753+00 |         2 |         2
+ ari-1   | sync:fansly:light               | account_me                     |               24 | 2026-09-07 05:03:14.42+00  |         0 |         0
+ ari-1   | sync:fansly:followers           | account_me                     |               24 | 2026-09-07 04:52:48.323+00 |         0 |         0
+ ari-1   | sync:fansly:followers           | followers                      |               24 | 2026-09-07 04:52:51.046+00 |         0 |         0
+ ari-1   | sync:fansly:subscribers         | account_lookup                 |               24 | 2026-09-07 04:30:55.346+00 |         0 |         0
+ ari-1   | sync:fansly:subscribers         | subscribers                    |               24 | 2026-09-07 04:30:53.235+00 |         0 |         0
+ ari-1   | sync:fansly:top_spenders        | earnings_accounts              |               24 | 2026-09-07 04:12:54.686+00 |         0 |         0
+ ari-1   | sync:fansly:transactions        | account_lookup                 |               24 | 2026-09-07 04:25:24.491+00 |         0 |         0
+ ari-1   | sync:fansly:transactions        | earnings_transactions          |               24 | 2026-09-07 04:25:21.838+00 |         5 |         5
+ ari-1   | sync:fansly:followers_reconcile | account_me                     |               16 | 2026-09-07 03:52:27.118+00 |         0 |         0
+ ari-1   | sync:fansly:followers_reconcile | followers                      |               15 | 2026-09-07 03:52:24.573+00 |         0 |         0
+ ari-1   | sync:fansly:posts               | posts                          |               11 | 2026-09-07 01:04:24.078+00 |         8 |         8
+ ari-1   | sync:fansly:posts               | post_tips                      |                8 | 2026-09-07 01:04:21.429+00 |         8 |         8
+ ari-1   | sync:fansly:catalog             | vault_media                    |                7 | 2026-09-06 17:14:10.314+00 |         3 |         3
+ ari-1   | sync:fansly:fan_earnings        | fan_earnings_stats             |                7 | 2026-09-06 06:20:51.526+00 |         5 |         5
+ ari-1   | sync:fansly:fan_earnings        | fan_earnings_monthly           |                7 | 2026-09-06 06:20:54.125+00 |         5 |         5
+ ari-1   | sync:fansly:stats_snapshot      | discovery_feed                 |                2 | 2026-09-07 04:27:34.593+00 |         2 |         2
+ ari-1   | sync:fansly:catalog             | vault_album_walk_completed     |                2 | 2026-09-06 17:14:10.356+00 |         3 |         3
+ ari-1   | sync:fansly:stats_snapshot      | account_stats                  |                2 | 2026-09-07 04:27:19.833+00 |         2 |         2
+ ari-1   | sync:fansly:payouts             | payout_methods                 |                1 | 2026-09-06 11:54:24.536+00 |         1 |         1
+ ari-1   | sync:fansly:catalog             | automated_messages             |                1 | 2026-09-06 17:10:17.083+00 |         3 |         3
+ ari-1   | sync:fansly:catalog             | gift_codes                     |                1 | 2026-09-06 17:10:14.513+00 |         3 |         3
+ ari-1   | sync:fansly:catalog             | subscription_tiers             |                1 | 2026-09-06 17:10:11.898+00 |         3 |         3
+ ari-1   | sync:fansly:catalog             | uservault_albums               |                1 | 2026-09-06 17:10:09.367+00 |         3 |         3
+ ari-1   | sync:fansly:catalog             | vault_albums                   |                1 | 2026-09-06 17:10:07.073+00 |         3 |         3
+ ari-1   | sync:fansly:catalog             | account_walls                  |                1 | 2026-09-06 17:11:06.271+00 |         3 |         3
+ ari-1   | sync:fansly:payouts             | payout_requests                |                1 | 2026-09-06 11:54:26.874+00 |         1 |         1
+ ari-1   | sync:fansly:post_replies        | post_replies                   |                1 | 2026-09-06 08:32:23.564+00 |         1 |         1
+ ari-1   | sync:fansly:stats_snapshot      | broadcast_scheduled            |                1 | 2026-09-07 04:27:47.091+00 |         2 |         2
+ ari-1   | sync:fansly:stats_snapshot      | broadcast_stats                |                1 | 2026-09-07 04:27:38.346+00 |         2 |         2
+ ari-1   | sync:fansly:stats_snapshot      | broadcast_stats_deleted        |                1 | 2026-09-07 04:27:42.094+00 |         2 |         2
+ ari-1   | sync:fansly:stats_snapshot      | earnings_monthlystats_snapshot |                1 | 2026-09-07 04:27:27.11+00  |         2 |         2
+ ari-1   | sync:fansly:stats_snapshot      | earnings_stats_snapshot        |                1 | 2026-09-07 04:27:24.39+00  |         2 |         2
+ ari-1   | sync:fansly:stats_snapshot      | polls                          |                1 | 2026-09-07 04:27:51.3+00   |         2 |         2
+ ari-1   | sync:fansly:stats_snapshot      | recapstats                     |                1 | 2026-09-07 04:27:52.837+00 |         2 |         2
+ ari-1   | sync:fansly:stats_snapshot      | tracking_links                 |                1 | 2026-09-07 04:27:29.047+00 |         2 |         2
+ lilly-1 | sync:fansly:dm_conversations    | dm_conversations               |             1444 | 2026-09-07 05:03:20.512+00 |         0 |         0
+ lilly-1 | sync:fansly:followers_reconcile | followers                      |              238 | 2026-09-06 21:19:11.1+00   |         0 |         0
+ lilly-1 | sync:fansly:dm_messages         | dm_messages                    |              197 | 2026-09-07 02:33:31.939+00 |         5 |         5
+ lilly-1 | sync:fansly:fan_earnings        | fan_earnings_stats             |               98 | 2026-09-06 10:53:00.012+00 |         5 |         5
+ lilly-1 | sync:fansly:fan_earnings        | fan_earnings_monthly           |               98 | 2026-09-06 10:53:02.619+00 |         5 |         5
+ lilly-1 | sync:fansly:post_replies        | post_replies                   |               98 | 2026-09-07 01:18:19.039+00 |         1 |         1
+ lilly-1 | sync:fansly:transactions        | account_lookup                 |               72 | 2026-09-07 04:48:44.83+00  |         0 |         0
+ lilly-1 | sync:fansly:transactions        | earnings_transactions          |               72 | 2026-09-07 04:48:40.762+00 |         5 |         5
+ lilly-1 | sync:fansly:notifications       | notifications                  |               48 | 2026-09-07 04:42:43.077+00 |         1 |         1
+ lilly-1 | sync:fansly:light               | account_me                     |               24 | 2026-09-07 04:27:14.284+00 |         0 |         0
+ lilly-1 | sync:fansly:followers           | account_me                     |               24 | 2026-09-07 04:16:45.027+00 |         0 |         0
+ lilly-1 | sync:fansly:followers           | followers                      |               24 | 2026-09-07 04:16:47.842+00 |         0 |         0
+ lilly-1 | sync:fansly:subscribers         | account_lookup                 |               24 | 2026-09-07 04:54:43.863+00 |         0 |         0
+ lilly-1 | sync:fansly:subscribers         | subscribers                    |               24 | 2026-09-07 04:54:41.478+00 |         0 |         0
+ lilly-1 | sync:fansly:top_spenders        | earnings_accounts              |               24 | 2026-09-07 04:33:55.592+00 |         0 |         0
+ lilly-1 | sync:fansly:media_stats         | media_offer_stats              |               23 | 2026-09-07 00:09:00.382+00 |         2 |         2
+ lilly-1 | sync:fansly:followers_reconcile | account_me                     |               14 | 2026-09-06 21:19:13.587+00 |         0 |         0
+ lilly-1 | sync:fansly:posts               | posts                          |               10 | 2026-09-06 23:28:16.382+00 |         8 |         8
+ lilly-1 | sync:fansly:posts               | post_tips                      |                8 | 2026-09-06 23:28:13.65+00  |         8 |         8
+ lilly-1 | sync:fansly:stats_snapshot      | discovery_feed                 |                2 | 2026-09-07 02:50:24.681+00 |         2 |         2
+ lilly-1 | sync:fansly:stats_snapshot      | account_stats                  |                2 | 2026-09-07 02:50:12.386+00 |         2 |         2
+ lilly-1 | sync:fansly:payouts             | payout_requests                |                1 | 2026-09-06 16:18:41.577+00 |         1 |         1
+ lilly-1 | sync:fansly:catalog             | automated_messages             |                1 | 2026-09-06 21:34:42.185+00 |         3 |         3
+ lilly-1 | sync:fansly:catalog             | gift_codes                     |                1 | 2026-09-06 21:34:39.578+00 |         3 |         3
+ lilly-1 | sync:fansly:catalog             | subscription_tiers             |                1 | 2026-09-06 21:34:37.034+00 |         3 |         3
+ lilly-1 | sync:fansly:catalog             | uservault_albums               |                1 | 2026-09-06 21:34:34.417+00 |         3 |         3
+ lilly-1 | sync:fansly:catalog             | vault_albums                   |                1 | 2026-09-06 21:34:32.409+00 |         3 |         3
+ lilly-1 | sync:fansly:dm_conversations    | dm_conversations:failed        |                1 | 2026-09-06 23:30:26.558+00 |         0 |         0
+ lilly-1 | sync:fansly:payouts             | payout_methods                 |                1 | 2026-09-06 16:18:39.41+00  |         1 |         1
+ lilly-1 | sync:fansly:catalog             | account_walls                  |                1 | 2026-09-06 21:34:44.791+00 |         3 |         3
+ lilly-1 | sync:fansly:stats_snapshot      | broadcast_scheduled            |                1 | 2026-09-07 02:50:38.279+00 |         2 |         2
+ lilly-1 | sync:fansly:stats_snapshot      | broadcast_stats                |                1 | 2026-09-07 02:50:27.355+00 |         2 |         2
+ lilly-1 | sync:fansly:stats_snapshot      | broadcast_stats_deleted        |                1 | 2026-09-07 02:50:32.437+00 |         2 |         2
+ lilly-1 | sync:fansly:stats_snapshot      | earnings_monthlystats_snapshot |                1 | 2026-09-07 02:50:16.984+00 |         2 |         2
+ lilly-1 | sync:fansly:stats_snapshot      | earnings_stats_snapshot        |                1 | 2026-09-07 02:50:14.305+00 |         2 |         2
+ lilly-1 | sync:fansly:stats_snapshot      | polls                          |                1 | 2026-09-07 02:50:41.611+00 |         2 |         2
+ lilly-1 | sync:fansly:stats_snapshot      | recapstats                     |                1 | 2026-09-07 02:50:42.5+00   |         2 |         2
+ lilly-1 | sync:fansly:stats_snapshot      | tracking_links                 |                1 | 2026-09-07 02:50:19.502+00 |         2 |         2
+ lilly-2 | sync:fansly:dm_conversations    | dm_conversations               |             6729 | 2026-09-07 05:00:55.547+00 |         0 |         0
+ lilly-2 | sync:fansly:followers_reconcile | followers                      |              920 | 2026-09-07 03:18:25.441+00 |         0 |         0
+ lilly-2 | sync:fansly:dm_messages         | dm_messages                    |              538 | 2026-09-07 02:59:23.999+00 |         5 |         5
+ lilly-2 | sync:fansly:fan_earnings        | fan_earnings_stats             |              533 | 2026-09-07 05:04:43.927+00 |         0 |         5
+ lilly-2 | sync:fansly:fan_earnings        | fan_earnings_monthly           |              533 | 2026-09-07 05:04:46.952+00 |         0 |         5
+ lilly-2 | sync:fansly:transactions        | account_lookup                 |               69 | 2026-09-07 04:04:33.816+00 |         0 |         0
+ lilly-2 | sync:fansly:transactions        | earnings_transactions          |               69 | 2026-09-07 04:04:31.237+00 |         5 |         5
+ lilly-2 | sync:fansly:dm_conversations    | account_lookup                 |               47 | 2026-09-07 04:53:08.027+00 |         0 |         0
+ lilly-2 | sync:fansly:followers           | followers                      |               24 | 2026-09-07 04:34:15.352+00 |         0 |         0
+ lilly-2 | sync:fansly:followers           | account_me                     |               24 | 2026-09-07 04:34:12.112+00 |         0 |         0
+ lilly-2 | sync:fansly:light               | account_me                     |               24 | 2026-09-07 04:42:47.936+00 |         0 |         0
+ lilly-2 | sync:fansly:subscribers         | account_lookup                 |               24 | 2026-09-07 04:15:25.548+00 |         0 |         0
+ lilly-2 | sync:fansly:subscribers         | subscribers                    |               24 | 2026-09-07 04:15:23.163+00 |         0 |         0
+ lilly-2 | sync:fansly:top_spenders        | earnings_accounts              |               24 | 2026-09-07 04:48:50.111+00 |         0 |         0
+ lilly-2 | sync:fansly:posts               | posts                          |               11 | 2026-09-06 20:44:16.044+00 |         8 |         8
+ lilly-2 | sync:fansly:followers_reconcile | account_lookup                 |               10 | 2026-09-07 03:14:02.742+00 |         0 |         0
+ lilly-2 | sync:fansly:followers_reconcile | account_me                     |                8 | 2026-09-07 02:47:43.362+00 |         0 |         0
+ lilly-2 | sync:fansly:posts               | post_tips                      |                6 | 2026-09-06 20:44:13.382+00 |         8 |         8
+ lilly-2 | sync:fansly:dm_conversations    | dm_conversations:failed        |                4 | 2026-09-06 23:26:11.252+00 |         0 |         0
+ lilly-2 | sync:fansly:purchase_history    | purchase_history               |                2 | 2026-09-06 23:25:25.065+00 |         5 |         5
+ lilly-2 | sync:fansly:payouts             | payout_methods                 |                1 | 2026-09-06 07:34:19.023+00 |         1 |         1
+ lilly-2 | sync:fansly:payouts             | payout_requests                |                1 | 2026-09-06 07:34:21.189+00 |         1 |         1
+ lora-1  | sync:fansly:dm_conversations    | dm_conversations               |             3696 | 2026-09-07 04:52:37.951+00 |         0 |         0
+ lora-1  | sync:fansly:followers_reconcile | followers                      |              950 | 2026-09-07 02:36:04.054+00 |         0 |         0
+ lora-1  | sync:fansly:fan_earnings        | fan_earnings_monthly           |              732 | 2026-09-06 14:28:32.072+00 |         5 |         5
+ lora-1  | sync:fansly:fan_earnings        | fan_earnings_stats             |              732 | 2026-09-06 14:28:29.491+00 |         5 |         5
+ lora-1  | sync:fansly:dm_messages         | dm_messages                    |              167 | 2026-09-07 03:48:33.271+00 |         5 |         5
+ lora-1  | sync:fansly:media_stats         | media_offer_stats              |              167 | 2026-09-07 01:24:55.172+00 |         2 |         2
+ lora-1  | sync:fansly:post_replies        | post_replies                   |              100 | 2026-09-07 00:53:46.594+00 |         1 |         1
+ lora-1  | sync:fansly:notifications       | notifications                  |               96 | 2026-09-07 00:22:00.544+00 |         1 |         1
+ lora-1  | sync:fansly:transactions        | account_lookup                 |               72 | 2026-09-07 05:00:59.533+00 |         0 |         0
+ lora-1  | sync:fansly:transactions        | earnings_transactions          |               72 | 2026-09-07 05:00:55.938+00 |         5 |         5
+ lora-1  | sync:fansly:catalog             | vault_media                    |               54 | 2026-09-07 00:26:06.886+00 |         3 |         3
+ lora-1  | sync:fansly:light               | account_me                     |               24 | 2026-09-07 04:40:10.569+00 |         0 |         0
+ lora-1  | sync:fansly:followers           | account_me                     |               24 | 2026-09-07 04:28:59.125+00 |         0 |         0
+ lora-1  | sync:fansly:followers           | followers                      |               24 | 2026-09-07 04:29:00.957+00 |         0 |         0
+ lora-1  | sync:fansly:subscribers         | account_lookup                 |               24 | 2026-09-07 04:06:14.851+00 |         0 |         0
+ lora-1  | sync:fansly:subscribers         | subscribers                    |               24 | 2026-09-07 04:06:13.224+00 |         0 |         0
+ lora-1  | sync:fansly:top_spenders        | earnings_accounts              |               24 | 2026-09-07 04:45:22.789+00 |         0 |         0
+ lora-1  | sync:fansly:purchase_history    | purchase_history               |               21 | 2026-09-07 02:18:59.653+00 |         5 |         5
+ lora-1  | sync:fansly:posts               | posts                          |               18 | 2026-09-07 01:40:26.9+00   |         8 |         8
+ lora-1  | sync:fansly:posts               | post_tips                      |               12 | 2026-09-07 01:40:24.236+00 |         8 |         8
+ lora-1  | sync:fansly:followers_reconcile | account_me                     |               10 | 2026-09-07 02:28:11.722+00 |         0 |         0
+ lora-1  | sync:fansly:stats_snapshot      | discovery_feed                 |                2 | 2026-09-07 05:03:31.868+00 |         2 |         2
+ lora-1  | sync:fansly:stats_snapshot      | account_stats                  |                2 | 2026-09-07 05:03:20.001+00 |         2 |         2
+ lora-1  | sync:fansly:stats_snapshot      | broadcast_stats                |                1 | 2026-09-07 05:03:35.065+00 |         0 |         0
+ lora-1  | sync:fansly:stats_snapshot      | broadcast_stats_deleted        |                1 | 2026-09-07 05:03:43.913+00 |         0 |         0
+ lora-1  | sync:fansly:stats_snapshot      | earnings_monthlystats_snapshot |                1 | 2026-09-07 05:03:25.185+00 |         2 |         2
+ lora-1  | sync:fansly:stats_snapshot      | earnings_stats_snapshot        |                1 | 2026-09-07 05:03:21.244+00 |         2 |         2
+ lora-1  | sync:fansly:stats_snapshot      | polls                          |                1 | 2026-09-07 05:03:47.048+00 |         0 |         0
+ lora-1  | sync:fansly:stats_snapshot      | recapstats                     |                1 | 2026-09-07 05:03:49.672+00 |         0 |         0
+ lora-1  | sync:fansly:stats_snapshot      | tracking_links                 |                1 | 2026-09-07 05:03:26.22+00  |         2 |         2
+ lora-1  | sync:fansly:catalog             | account_walls                  |                1 | 2026-09-07 00:06:10.123+00 |         3 |         3
+ lora-1  | sync:fansly:catalog             | automated_messages             |                1 | 2026-09-07 00:05:41.504+00 |         3 |         3
+ lora-1  | sync:fansly:dm_conversations    | account_lookup                 |                1 | 2026-09-07 04:16:29.094+00 |         0 |         0
+ lora-1  | sync:fansly:catalog             | uservault_albums               |                1 | 2026-09-07 00:05:33.768+00 |         3 |         3
+ lora-1  | sync:fansly:catalog             | vault_albums                   |                1 | 2026-09-07 00:05:31.305+00 |         3 |         3
+ lora-1  | sync:fansly:catalog             | subscription_tiers             |                1 | 2026-09-07 00:05:36.305+00 |         3 |         3
+ lora-1  | sync:fansly:payouts             | payout_methods                 |                1 | 2026-09-06 18:30:05.877+00 |         1 |         1
+ lora-1  | sync:fansly:payouts             | payout_requests                |                1 | 2026-09-06 18:30:07.805+00 |         1 |         1
+ lora-1  | sync:fansly:catalog             | gift_codes                     |                1 | 2026-09-07 00:05:38.93+00  |         3 |         3
+ lora-1  | sync:fansly:stats_snapshot      | broadcast_scheduled            |                1 | 2026-09-07 05:03:45.202+00 |         0 |         0
+ lora-2  | sync:fansly:dm_conversations    | dm_conversations               |             1984 | 2026-09-07 05:02:19.111+00 |         0 |         0
+ lora-2  | sync:fansly:followers_reconcile | followers                      |              984 | 2026-09-07 02:51:02.582+00 |         0 |         0
+ lora-2  | sync:fansly:fan_earnings        | fan_earnings_stats             |              439 | 2026-09-07 05:04:45.72+00  |         0 |         5
+ lora-2  | sync:fansly:fan_earnings        | fan_earnings_monthly           |              439 | 2026-09-07 05:04:43.109+00 |         0 |         5
+ lora-2  | sync:fansly:dm_messages         | dm_messages                    |              358 | 2026-09-07 05:02:21.722+00 |         5 |         5
+ lora-2  | sync:fansly:media_stats         | media_offer_stats              |              164 | 2026-09-07 00:58:21.635+00 |         2 |         2
+ lora-2  | sync:fansly:post_replies        | post_replies                   |              100 | 2026-09-07 00:41:14.971+00 |         1 |         1
+ lora-2  | sync:fansly:notifications       | notifications                  |               96 | 2026-09-07 00:14:17.324+00 |         1 |         1
+ lora-2  | sync:fansly:transactions        | earnings_transactions          |               72 | 2026-09-07 04:17:32.017+00 |         5 |         5
+ lora-2  | sync:fansly:transactions        | account_lookup                 |               72 | 2026-09-07 04:17:34.49+00  |         0 |         0
+ lora-2  | sync:fansly:catalog             | vault_media                    |               54 | 2026-09-07 00:18:12.202+00 |         3 |         3
+ lora-2  | sync:fansly:followers           | account_me                     |               24 | 2026-09-07 04:45:21.504+00 |         0 |         0
+ lora-2  | sync:fansly:followers           | followers                      |               24 | 2026-09-07 04:45:29.768+00 |         0 |         0
+ lora-2  | sync:fansly:followers_reconcile | account_me                     |               24 | 2026-09-07 02:51:05.187+00 |         0 |         0
+ lora-2  | sync:fansly:light               | account_me                     |               24 | 2026-09-07 04:54:44.083+00 |         0 |         0
+ lora-2  | sync:fansly:subscribers         | account_lookup                 |               24 | 2026-09-07 04:23:18.736+00 |         0 |         0
+ lora-2  | sync:fansly:subscribers         | subscribers                    |               24 | 2026-09-07 04:23:15.531+00 |         0 |         0
+ lora-2  | sync:fansly:top_spenders        | earnings_accounts              |               24 | 2026-09-07 05:00:56.181+00 |         0 |         0
+ lora-2  | sync:fansly:posts               | posts                          |               15 | 2026-09-06 23:25:14.103+00 |         8 |         8
+ lora-2  | sync:fansly:dm_conversations    | account_lookup                 |               14 | 2026-09-07 05:01:09.323+00 |         0 |         0
+ lora-2  | sync:fansly:followers_reconcile | account_lookup                 |               12 | 2026-09-07 02:49:34.912+00 |         0 |         0
+ lora-2  | sync:fansly:posts               | post_tips                      |               12 | 2026-09-06 23:25:11.123+00 |         8 |         8
+ lora-2  | sync:fansly:dm_conversations    | dm_conversations:failed        |                5 | 2026-09-06 22:34:50.668+00 |         0 |         0
+ lora-2  | sync:fansly:stats_snapshot      | discovery_feed                 |                2 | 2026-09-07 02:18:27.086+00 |         2 |         2
+ lora-2  | sync:fansly:stats_snapshot      | account_stats                  |                2 | 2026-09-07 02:18:14.763+00 |         2 |         2
+ lora-2  | sync:fansly:payouts             | payout_methods                 |                1 | 2026-09-06 09:46:25.656+00 |         1 |         1
+ lora-2  | sync:fansly:catalog             | automated_messages             |                1 | 2026-09-07 00:05:28.077+00 |         3 |         3
+ lora-2  | sync:fansly:stats_snapshot      | broadcast_scheduled            |                1 | 2026-09-07 02:18:39.71+00  |         2 |         2
+ lora-2  | sync:fansly:stats_snapshot      | broadcast_stats                |                1 | 2026-09-07 02:18:31.091+00 |         2 |         2
+ lora-2  | sync:fansly:stats_snapshot      | broadcast_stats_deleted        |                1 | 2026-09-07 02:18:36.578+00 |         2 |         2
+ lora-2  | sync:fansly:catalog             | account_walls                  |                1 | 2026-09-07 00:05:44.596+00 |         3 |         3
+ lora-2  | sync:fansly:stats_snapshot      | earnings_monthlystats_snapshot |                1 | 2026-09-07 02:18:19.433+00 |         2 |         2
+ lora-2  | sync:fansly:stats_snapshot      | earnings_stats_snapshot        |                1 | 2026-09-07 02:18:16.724+00 |         2 |         2
+ lora-2  | sync:fansly:stats_snapshot      | polls                          |                1 | 2026-09-07 02:18:43.961+00 |         2 |         2
+ lora-2  | sync:fansly:stats_snapshot      | recapstats                     |                1 | 2026-09-07 02:18:44.909+00 |         2 |         2
+ lora-2  | sync:fansly:stats_snapshot      | tracking_links                 |                1 | 2026-09-07 02:18:21.901+00 |         2 |         2
+ lora-2  | sync:fansly:catalog             | vault_albums                   |                1 | 2026-09-07 00:05:17.985+00 |         3 |         3
+ lora-2  | sync:fansly:catalog             | uservault_albums               |                1 | 2026-09-07 00:05:20.352+00 |         3 |         3
+ lora-2  | sync:fansly:catalog             | subscription_tiers             |                1 | 2026-09-07 00:05:22.875+00 |         3 |         3
+ lora-2  | sync:fansly:catalog             | gift_codes                     |                1 | 2026-09-07 00:05:25.49+00  |         3 |         3
+ lora-2  | sync:fansly:payouts             | payout_requests                |                1 | 2026-09-06 09:46:28.329+00 |         1 |         1
+ lora-3  | sync:fansly:dm_conversations    | dm_conversations               |             1542 | 2026-09-07 04:48:58.431+00 |         0 |         0
+ lora-3  | sync:fansly:fan_earnings        | fan_earnings_stats             |              399 | 2026-09-06 20:05:47.084+00 |         5 |         5
+ lora-3  | sync:fansly:fan_earnings        | fan_earnings_monthly           |              399 | 2026-09-06 20:05:49.661+00 |         5 |         5
+ lora-3  | sync:fansly:dm_messages         | dm_messages                    |              338 | 2026-09-07 03:47:19.271+00 |         5 |         5
+ lora-3  | sync:fansly:followers_reconcile | followers                      |              228 | 2026-09-06 15:07:00.215+00 |         0 |         0
+ lora-3  | sync:fansly:post_replies        | post_replies                   |              100 | 2026-09-07 03:52:17.046+00 |         1 |         1
+ lora-3  | sync:fansly:notifications       | notifications                  |               96 | 2026-09-07 00:13:55.787+00 |         1 |         1
+ lora-3  | sync:fansly:media_stats         | media_offer_stats              |               95 | 2026-09-07 01:11:27.662+00 |         2 |         2
+ lora-3  | sync:fansly:transactions        | account_lookup                 |               72 | 2026-09-07 04:34:02.182+00 |         0 |         0
+ lora-3  | sync:fansly:transactions        | earnings_transactions          |               72 | 2026-09-07 04:33:58.882+00 |         5 |         5
+ lora-3  | sync:fansly:catalog             | vault_media                    |               54 | 2026-09-07 00:25:00.651+00 |         3 |         3
+ lora-3  | sync:fansly:dm_conversations    | account_lookup                 |               36 | 2026-09-06 23:15:56.16+00  |         0 |         0
+ lora-3  | sync:fansly:stats_snapshot      | earnings_stats_snapshot        |               25 | 2026-09-07 00:07:08.38+00  |         2 |         2
+ lora-3  | sync:fansly:top_spenders        | earnings_accounts              |               24 | 2026-09-07 04:17:01.594+00 |         0 |         0
+ lora-3  | sync:fansly:followers           | account_me                     |               24 | 2026-09-07 05:00:45.514+00 |         0 |         0
+ lora-3  | sync:fansly:followers           | followers                      |               24 | 2026-09-07 05:00:47.923+00 |         0 |         0
+ lora-3  | sync:fansly:subscribers         | account_lookup                 |               24 | 2026-09-07 04:40:16.065+00 |         0 |         0
+ lora-3  | sync:fansly:light               | account_me                     |               24 | 2026-09-07 04:13:04.935+00 |         0 |         0
+ lora-3  | sync:fansly:subscribers         | subscribers                    |               24 | 2026-09-07 04:40:13.92+00  |         0 |         0
+ lora-3  | sync:fansly:posts               | posts                          |               15 | 2026-09-07 02:12:22.667+00 |         8 |         8
+ lora-3  | sync:fansly:posts               | post_tips                      |               12 | 2026-09-07 02:12:19.835+00 |         8 |         8
+ lora-3  | sync:fansly:followers_reconcile | account_me                     |                6 | 2026-09-06 15:07:02.699+00 |         0 |         0
+ lora-3  | sync:fansly:payouts             | payout_requests                |                1 | 2026-09-07 01:02:32.99+00  |         1 |         1
+ lora-3  | sync:fansly:payouts             | payout_methods                 |                1 | 2026-09-07 01:02:30.398+00 |         1 |         1
+ lora-3  | sync:fansly:catalog             | account_walls                  |                1 | 2026-09-07 00:07:43.439+00 |         3 |         3
+ lora-3  | sync:fansly:dm_conversations    | dm_messages                    |                1 | 2026-09-06 23:14:20.969+00 |         5 |         5
+ lora-3  | sync:fansly:purchase_history    | purchase_history               |                1 | 2026-09-06 08:50:25.182+00 |         5 |         5
+ lora-3  | sync:fansly:dm_conversations    | dm_conversations:failed        |                1 | 2026-09-06 05:44:45.504+00 |         0 |         0
+ lora-3  | sync:fansly:catalog             | vault_albums                   |                1 | 2026-09-07 00:05:47.976+00 |         3 |         3
+ lora-3  | sync:fansly:catalog             | uservault_albums               |                1 | 2026-09-07 00:05:48.227+00 |         3 |         3
+ lora-3  | sync:fansly:catalog             | subscription_tiers             |                1 | 2026-09-07 00:05:50.775+00 |         3 |         3
+ lora-3  | sync:fansly:catalog             | gift_codes                     |                1 | 2026-09-07 00:05:53.368+00 |         3 |         3
+ lora-3  | sync:fansly:catalog             | automated_messages             |                1 | 2026-09-07 00:05:55.98+00  |         3 |         3
+(213 rows)
+
+COMMIT

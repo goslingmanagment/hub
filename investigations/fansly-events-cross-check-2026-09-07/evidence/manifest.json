@@ -1,0 +1,28 @@
+{
+  "recorded_at_utc": "2026-09-07T14:31:16.631714+00:00",
+  "local_head": "933d22f70242ee02804954361de04ab27823c1aa",
+  "origin_main": "933d22f70242ee02804954361de04ab27823c1aa",
+  "production_api_label_observed": "dcbba081d3bf",
+  "input_files": [
+    {
+      "path": "docs/research/fansly-events-cross-review-2026-09-07.md",
+      "sha256": "70c87b29a20650b061c661c48280c9b69c4541410a6903e5381de12df1e77912"
+    },
+    {
+      "path": "docs/research/fansly-events-architecture-2026-09-07/ARCHITECTURE.md",
+      "sha256": "0e5ceae1ec1ca1d0dc5eb05c3667e5a37d8279f6624f326874302b374b412ef2"
+    },
+    {
+      "path": "docs/research/fansly-events-architecture-2026-09-07/evidence/C-prod-volume.md",
+      "sha256": "27df5b82d9b01d20908663fac609105bd46fd2e535d304cc6703c4afbc9337d7"
+    },
+    {
+      "path": "docs/research/fansly-events-architecture-2026-09-07/evidence/A-fansly-ws-protocol.md",
+      "sha256": "1c8289f5f785c11a62d230c103ebd188ad86864b5af4442d751325f015c1462a"
+    },
+    {
+      "path": "docs/research/fansly-events-architecture-2026-09-07/evidence/ws-tap-snippet.js",
+      "sha256": "6509ed1fbb1dc051d178b94b782d7138ce7ed8b56b6b408fc1423c32390710d4"
+    }
+  ]
+}

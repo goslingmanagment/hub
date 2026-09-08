@@ -1,0 +1,4 @@
+BEGIN
+SET
+{"role": "read_only", "counts": [{"heads": 64, "label": "ari-1", "captured_heads": 63, "missing_message_capture": 1}, {"heads": 1671, "label": "lilly-1", "captured_heads": 1667, "missing_message_capture": 4}, {"heads": 5615, "label": "lilly-2", "captured_heads": 2848, "missing_message_capture": 2767}, {"heads": 43, "label": "lora-1", "captured_heads": 42, "missing_message_capture": 1}, {"heads": 21, "label": "lora-2", "captured_heads": 21, "missing_message_capture": 0}, {"heads": 13, "label": "lora-3", "captured_heads": 13, "missing_message_capture": 0}], "measured_at": "2026-09-08T11:02:47.020229+00:00"}
+COMMIT

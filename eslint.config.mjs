@@ -34,6 +34,11 @@ export default tseslint.config(
       ".playwright-cli/**",
     ],
   },
+  // Retained browser-console research snippet; preserve its evidence bytes.
+  {
+    files: ["investigations/fansly-events-architecture-2026-09-07/evidence/ws-tap-snippet.js"],
+    languageOptions: { globals: { window: "readonly", copy: "readonly", console: "readonly" } },
+  },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {

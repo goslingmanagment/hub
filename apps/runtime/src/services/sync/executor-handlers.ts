@@ -7,6 +7,9 @@ import {
   deactivatePageFollowsByGeneration,
   deactivatePageSubscriptionsByGeneration,
   finalizePageDmConversationMessageSync,
+  recordFanslyDmHeadAttempt,
+  getFanslyDmHeadTarget,
+  nextFanslyDmHeadRetryAt,
   getEarliestSpenderTransactionAt,
   getPageDmConversationById,
   getCheckpoint,
@@ -70,6 +73,7 @@ import { appPlatformRegistry } from "../../platforms/registry.ts";
 import type { AppContext } from "../../bootstrap.ts";
 import { resolveRawCapturePayloadRow } from "../payload-reader.ts";
 import { isPageDmPruneAllowed } from "../page-dm-retention.ts";
+import { isPageAllowlisted } from "./fansly-stream-gate.ts";
 import { loadEffectiveConfig } from "../effective-config.ts";
 import {
   resolvePageContextById,
@@ -2640,6 +2644,10 @@ export async function fanslyDmMessagesChunk(
 
   assertDmSharedRateLimitEnabled(app);
   await input.telemetry.recordPhaseStarted("dm_messages");
+  const effective = await loadEffectiveConfig(app.db, app.config);
+  const headCatchupEnabled = isPageAllowlisted(
+    effective.fanslyDmHeadCatchupPageAllowlist, input.pageContext.page.label,
+  );
 
   const chunkStartedAt = Date.now();
   const dmMessagesRequestObserver = new DmMessagesChunkRequestObserver();
@@ -2660,6 +2668,16 @@ export async function fanslyDmMessagesChunk(
   await input.telemetry.recordCheckpointLoaded("dm_messages", summarizeCheckpoint(checkpoint));
 
   let state = parseDmMessagesCursorState(checkpoint?.state) ?? emptyDmMessagesCursorState();
+  if (!headCatchupEnabled && state.headCatchup) {
+    if (state.headCatchup.overlapReached || state.headCatchup.pagesRead === 0) {
+      state = emptyDmMessagesCursorState();
+    } else {
+      delete state.headCatchup;
+    }
+    await upsertCheckpointProgress(app.db, {
+      platformAccountId: input.pageContext.page.id, stream: "dm_messages", state,
+    });
+  }
 
   if (!parseDmMessagesCursorState(checkpoint?.state)) {
     const progressCheckpoint = await upsertCheckpointProgress(app.db, {
@@ -2707,6 +2725,28 @@ export async function fanslyDmMessagesChunk(
         ? await getPageDmConversationById(app.db, state.currentConversationId)
         : null;
 
+      // A crash can occur after the attempt receipt commits but before the
+      // summary/checkpoint transaction. Do not spend another bounded walk.
+      if (conversation && state.headCatchup) {
+        const target = await getFanslyDmHeadTarget(app.db, {
+          conversationId: conversation.id, messageId: state.headCatchup.messageId,
+        });
+        if (!target || target.captured || target.attempts >= 5 ||
+          (target.lastAttemptAt !== null && target.lastAttemptAt >= new Date(state.headCatchup.startedAt))) {
+          if (state.headCatchup.overlapReached) {
+            state = emptyDmMessagesCursorState();
+            conversation = null;
+          } else {
+            // Another writer may confirm the target between chunks without
+            // covering our intervening history. Keep that ordinary cursor.
+            delete state.headCatchup;
+          }
+          await upsertCheckpointProgress(app.db, {
+            platformAccountId: input.pageContext.page.id, stream: "dm_messages", state,
+          });
+        }
+      }
+
       if (conversation && isFanslyDmMessageSyncExcluded(conversation.metadata)) {
         state = emptyDmMessagesCursorState();
         const progressCheckpoint = await upsertCheckpointProgress(app.db, {
@@ -2751,6 +2791,7 @@ export async function fanslyDmMessagesChunk(
 
         if (!conversation) {
           const candidate = await selectNextPageDmMessageSyncCandidate(app.db, {
+            ...(headCatchupEnabled ? { includeHeadDebt: true } : {}),
             platformAccountId: input.pageContext.page.id,
           });
           if (candidate) {
@@ -2800,11 +2841,16 @@ export async function fanslyDmMessagesChunk(
           break;
         }
 
+        const headTarget = headCatchupEnabled && currentMode !== "deep_backfill"
+          ? await getFanslyDmHeadTarget(app.db, { conversationId: conversation.id }) : null;
         const nextState: DmMessagesCursorState = {
+          ...(headTarget ? { headCatchup: {
+            messageId: headTarget.messageId, startedAt: new Date().toISOString(), pagesRead: 0,
+          } } : {}),
           ...emptyDmMessagesCursorState(),
           currentConversationId: conversation.id,
           currentPlatformConversationId: conversation.platformConversationId,
-          currentBeforeMessageId: currentMode === "backfill" || currentMode === "deep_backfill"
+          currentBeforeMessageId: headTarget ? null : currentMode === "backfill" || currentMode === "deep_backfill"
             ? conversation.oldestStoredMessageId
             : null,
           currentMode,
@@ -2834,6 +2880,7 @@ export async function fanslyDmMessagesChunk(
       }
 
       const currentMode = state.currentMode;
+      const headAttemptStartedAt = new Date(state.headCatchup?.startedAt ?? Date.now());
       let collectedThisConversation = 0;
       while (input.budget.hasRequestCapacity() && input.budget.hasWallClockCapacity()) {
         const currentConversation = conversation;
@@ -2972,7 +3019,18 @@ export async function fanslyDmMessagesChunk(
         const hitWindowCap =
           currentMode === "backfill" &&
           (currentConversation.storedMessageCount + collectedThisConversation) >= PAGE_DM_LIVE_BACKFILL_CAP;
-        const shouldComplete = currentMode === "deep_backfill"
+        const headCatchup = state.headCatchup;
+        const targetFound = headCatchup && normalizedMessages.some(
+          (message) => message.platformMessageId === headCatchup.messageId,
+        );
+        const targetAttemptFinished = headCatchup !== undefined &&
+          (targetFound || providerHistoryExhausted || hitWindowCap || headCatchup.pagesRead + 1 >= 5);
+        // A target receipt cannot replace the normal walk back to known ground.
+        // On success/cap without overlap, drop only the recovery rider and keep
+        // the ordinary incremental cursor, including across dispatches.
+        const shouldComplete = headCatchup
+          ? targetAttemptFinished && (overlapFound || headCatchup.overlapReached || providerHistoryExhausted || hitWindowCap)
+          : currentMode === "deep_backfill"
           ? true
           : currentMode === "incremental"
           ? overlapFound || providerHistoryExhausted
@@ -3003,6 +3061,10 @@ export async function fanslyDmMessagesChunk(
           // behavior — only finalize/checkpoint gets the debt treatment.
           await withOwnedPageSyncTransaction(app.db, async (dbTx) => {
             await upsertPageDmMessages(dbTx, normalizedMessages);
+            if (headCatchup) await recordFanslyDmHeadAttempt(dbTx, {
+              conversationId: currentConversation.id, messageId: headCatchup.messageId,
+              startedAt: headAttemptStartedAt,
+            });
           });
           let finalized: {
             finalizedConversation: Awaited<ReturnType<typeof finalizePageDmConversationMessageSync>>;
@@ -3097,10 +3159,19 @@ export async function fanslyDmMessagesChunk(
 
         state = {
           ...nextLiveRequestState,
+          ...(headCatchup ? { headCatchup: {
+            ...headCatchup, pagesRead: headCatchup.pagesRead + 1,
+            overlapReached: headCatchup.overlapReached === true || overlapFound,
+          } } : {}),
           currentBeforeMessageId: oldestMessageId,
         };
+        if (targetAttemptFinished) delete state.headCatchup;
         const progressCheckpoint = await withOwnedPageSyncTransaction(app.db, async (dbTx) => {
           await upsertPageDmMessages(dbTx, normalizedMessages);
+          if (headCatchup && targetAttemptFinished) await recordFanslyDmHeadAttempt(dbTx, {
+            conversationId: currentConversation.id, messageId: headCatchup.messageId,
+            startedAt: headAttemptStartedAt,
+          });
           return upsertCheckpointProgress(dbTx, {
             platformAccountId: input.pageContext.page.id,
             stream: "dm_messages",
@@ -3190,6 +3261,17 @@ export async function fanslyDmMessagesChunk(
           dmMessagesChunk,
         },
       } satisfies StreamChunkResult;
+    }
+
+    if (headCatchupEnabled) {
+      const retryAt = await nextFanslyDmHeadRetryAt(app.db, {
+        platformAccountId: input.pageContext.page.id,
+      });
+      if (retryAt) return {
+        satisfied: false, yieldReason: null,
+        continuationRetryAt: new Date(Math.max(retryAt.getTime(), Date.now() + 60_000)),
+        stats: { processedMessages, completedConversations, dmMessagesChunk, headDebtPending: true },
+      };
     }
 
     const completedCheckpoint = await upsertCheckpoint(app.db, {

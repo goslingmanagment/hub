@@ -277,6 +277,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 274 | Fansly `dm_conversations` empty-sweep guard | A completed sweep that observed zero conversations while the page still has visible threads certifies nothing: no thread hidden, no success stamp, `lastFullSweepCompletedAt` unchanged, `dm_conversations_empty_sweep_guard` (warn), +15min retry. Mirrors #258. No escape hatch: a genuinely emptied inbox keeps its old threads visible until an operator retires them. |
 | 275 | Fansly `Retry-After` reaches the durable retry | A provider `Retry-After` beyond the 60s in-process clamp ends the in-process retry loop at once (no burned attempts) and travels on `FanslyApiError.retryAfterAt`; `classifyTaskFailure` sets `retry_at = max(retryAfterAt, backoff ladder)` — the deadline moves the wake-up only forward, the failure class never changes. Transport retries use the shared `exponentialRetryDelayMs`. |
 | 276 | OFAPI webhook freshness and history precision | Accepted receipts canonicalize their exact observation after settle; the bounded recovery sweep persists per-family/version/scope traversal with CAS. Delivery-history windows include complete boundary seconds; legacy pagination keeps its frozen wire query. |
+| 277 | Fansly known-head debt before A0 | Exact ID receipts replace successful-attempt timestamps for allowlisted recovery; bounded retries retain exhausted debt separately from history coverage. Plan and reviews are versioned under investigations; production activation remains owner-gated. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -11588,3 +11589,54 @@ This change does not alter subscriptions, history polling, redelivery policy or
 parser semantics/version. The historical unbound corpus remains retained. Live
 acceptance and the bounded repair of already-pending current receipts are separate
 rollout checks in `docs/runbooks/ofapi-webhook-recovery.md`.
+
+
+## Decision 277: Fansly known-head debt before A0 (2026-09-08)
+
+The 8 September DM diagnostic showed that an HTTP-success timestamp removed
+an absent, already known head from both follow-up and selection. A separate
+lilly-2 raw-ID cohort still had 2,767 missing message captures at 11:02:47 UTC.
+History coverage must never certify capture of a newly observed ID.
+
+Migration 0172 adds operational debt keyed by conversation and exact message
+ID, seeded from absent current Fansly heads. The list writer records observed
+IDs under its existing owned transaction and erasure fence, even when sparse
+fields preserve the serving head. A new head cannot overwrite an earlier debt.
+Only an exact nondeleted stored message confirms capture; the receipt precedes
+retention pruning. Successful-but-stale reads cannot close debt. The report
+separates this receipt from history coverage and archive reader acceptance.
+
+The live `fanslyDmHeadCatchupPageAllowlist` defaults to `none`. Only allowlisted
+pages select debt instead of the old timestamp predicate. Selection uses the
+existing page executor, rate limit, budgets and history quota. A concrete ID is
+walked from the head for at most five message pages per attempt, past ordinary
+overlap; target/start/page-count persist as an optional cursor rider. Five
+unconfirmed completed attempts exhaust automatic recovery, with 1m/5m/15m/1h
+backoff. Exhaustion leaves visible unresolved work and never means deletion.
+Receipt/accounting commits with the message write before summary finalization;
+a resumed cursor recognizes a committed attempt. Replaying its receipt cannot
+spend another attempt. An exact later read can resolve exhausted debt.
+
+A read-only reporting view exposes operational IDs, deadlines, age and reasons
+without message text. There is no new business event, socket, scheduler, owner
+credential, or default freshness change. Removing a page from the allowlist
+abandons its recovery pin at the next chunk while preserving normal history
+cursors, all raw, prior facts and debt. The old binary remains schema-compatible
+but restores the original bug. Deployment, activation, and specifically lilly-2
+recovery are separate explicit owner gates in the runbook.
+
+The migration plan and reviews are versioned in `investigations/`. The owner's
+implementation-chat decisions are binding: no degraded freshness by default;
+Management Session only for WebSocket; A0 counts provider-deleted heads without
+repairing their semantics; B2 requires a separate decision. A0 cannot start
+until the known-head/recovery and reply-link prerequisites are accepted.
+
+References: `investigations/fansly-events-migration-plan-2026-09-07.md`,
+`investigations/fansly-events-execution-2026-09-08.md`,
+`docs/runbooks/fansly-dm-head-catchup.md`.
+
+Continuity clarification: reaching the target or the five-page search cap does
+not finish an ordinary incremental catch-up that has not reached prior stored
+ground. Its normal `before` cursor continues without the recovery rider until
+overlap/exhaustion. The cap bounds additional target search, not delivery of a
+burst's intervening messages. This preserves the pre-existing history path.

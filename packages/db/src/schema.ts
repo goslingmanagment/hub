@@ -2328,6 +2328,25 @@ export const fanFlags = pgTable(
 export const fanPages = pageFans;
 export const fanPageExternalNotes = pageFanExternalNotes;
 export const fanPageAliases = pageFanAliases;
+// Durable missing-head work; exact message receipts are independent of history coverage.
+export const fanslyDmHeadDebt = pgTable("fansly_dm_head_debt", {
+  conversationId: bigint("conversation_id", { mode: "number" })
+    .references(() => pageDmThreads.id, { onDelete: "cascade" }).notNull(),
+  messageId: text("message_id").notNull(),
+  messageAt: timestamp("message_at", { withTimezone: true }),
+  firstObservedAt: timestamp("first_observed_at", { withTimezone: true }).defaultNow().notNull(),
+  attempts: integer("attempts").default(0).notNull(),
+  nextRetryAt: timestamp("next_retry_at", { withTimezone: true }).defaultNow().notNull(),
+  lastAttemptAt: timestamp("last_attempt_at", { withTimezone: true }),
+  capturedAt: timestamp("captured_at", { withTimezone: true }),
+}, (table) => ({
+  pk: primaryKey({ columns: [table.conversationId, table.messageId] }),
+  attemptsCheck: check("fansly_dm_head_debt_attempts_check", sql`${table.attempts} between 0 and 5`),
+  pendingIdx: index("fansly_dm_head_debt_pending_idx")
+    .on(table.conversationId, table.nextRetryAt)
+    .where(sql`${table.capturedAt} is null and ${table.attempts} < 5`),
+}));
+
 export const pageDmConversations = pageDmThreads;
 export const dailyRevenue = revenueDaily;
 export const spenderDailyFacts = fanSpendDaily;

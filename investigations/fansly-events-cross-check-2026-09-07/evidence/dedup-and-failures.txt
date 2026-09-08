@@ -1,0 +1,34 @@
+BEGIN
+SET
+              now              | current_user
+-------------------------------+--------------
+ 2026-09-07 14:25:30.906889+00 | read_only
+(1 row)
+
+  page   | comparable_reqs | identical_to_prev_sweep | pct_unchanged_vs_prev_sweep
+---------+-----------------+-------------------------+-----------------------------
+ ari-1   |              95 |                      48 |                        50.5
+ lilly-1 |            2854 |                    2619 |                        91.8
+ lilly-2 |           13240 |                   11818 |                        89.3
+ lora-1  |            7315 |                    5876 |                        80.3
+ lora-2  |            3818 |                    3232 |                        84.7
+ lora-3  |            3040 |                    2705 |                        89.0
+(6 rows)
+
+            kind            |  n
+----------------------------+-----
+ dm_conversations:failed    | 172
+ stats_snapshot:failed      |  25
+ transactions:failed        |  23
+ dm_messages:failed         |  11
+ subscribers:failed         |   9
+ followers:failed           |   5
+ light:failed               |   4
+ fan_earnings:failed        |   3
+ followers_reconcile:failed |   3
+ notifications:failed       |   2
+ purchase_history:failed    |   1
+ top_spenders:failed        |   1
+(12 rows)
+
+COMMIT

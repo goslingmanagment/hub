@@ -1,0 +1,16 @@
+BEGIN
+SET
+              now              | current_user
+-------------------------------+--------------
+ 2026-09-07 14:28:27.133378+00 | read_only
+(1 row)
+
+          kind           | captured_rows_6d |     rows_per_day
+-------------------------+------------------+----------------------
+ dm_conversations        |            93063 |   15510.500000000000
+ account_lookup          |              681 | 113.5000000000000000
+ dm_messages             |              334 |  55.6666666666666667
+ dm_conversations:failed |               67 |  11.1666666666666667
+(4 rows)
+
+COMMIT

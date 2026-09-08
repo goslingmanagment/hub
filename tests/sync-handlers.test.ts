@@ -11,6 +11,11 @@ import {
 } from "@agency_hub_core/shared";
 
 const dbMocks = vi.hoisted(() => ({
+  observeFanslyDmHead: vi.fn(),
+  hasUnresolvedFanslyDmHead: vi.fn(async () => false),
+  nextFanslyDmHeadRetryAt: vi.fn(async () => null),
+  getFanslyDmHeadTarget: vi.fn<typeof DbModule.getFanslyDmHeadTarget>(async () => null),
+  recordFanslyDmHeadAttempt: vi.fn(),
   // The transactions executor now resolves live effective config (one read per
   // chunk); these chunk tests use a bare db so stub it to "no overrides".
   getConfigOverrides: vi.fn(async () => new Map()),
@@ -5529,6 +5534,146 @@ it("finalizes follower reconcile when offset drift duplicates raw rows but the u
       deepBackfillContinuationDelayMs: 22_000,
       deepBackfillContinuationRequestSource: "scheduled",
     });
+  });
+
+  function headCatchupHarness(targetAtPage: number | null) {
+    let checkpoint: Record<string, unknown> | null = null;
+    let completedAttempt = false;
+    dbMocks.getCheckpoint.mockImplementation(async () => checkpoint ? { state: checkpoint } : null);
+    dbMocks.upsertCheckpointProgress.mockImplementation(async (_db, input) => {
+      checkpoint = input.state;
+      return {};
+    });
+    dbMocks.selectNextPageDmMessageSyncCandidate.mockResolvedValueOnce(buildDmMessageSyncCandidate());
+    dbMocks.getPageDmConversationById.mockResolvedValue(buildDmConversation({
+      storedMessageCount: 100, newestStoredMessageId: "newer", messageCoverageStatus: "complete",
+    }));
+    dbMocks.getFanslyDmHeadTarget.mockImplementation(async () => ({
+      messageId: "expected", captured: false, attempts: completedAttempt ? 1 : 0,
+      lastAttemptAt: completedAttempt ? new Date() : null,
+    }));
+    dbMocks.recordFanslyDmHeadAttempt.mockImplementation(async () => { completedAttempt = true; });
+    const getMessagesPage = vi.fn(async (context, _params: { before: string | null }) => {
+      const n = getMessagesPage.mock.calls.length;
+      await context.requestObserver.onRequestEvent({
+        requestId: `head-${n}`, operation: "messages", endpointTemplate: "/message",
+        method: "GET", attemptNumber: 1, timestamp: new Date(), state: "started",
+      });
+      return {
+        items: [{ id: n === targetAtPage ? "expected" : `known-${n}`, senderId: "fan-1",
+          createdAt: 1_770_000_000, content: "body" }],
+        groupId: "group-1", before: null, done: false, raw: { messages: [] },
+      };
+    });
+    dbMocks.getExistingPageDmMessageIds.mockImplementation(async (_db, input) => new Set(input.platformMessageIds));
+    const app = { db: {}, config: { syncSharedRateLimitEnabled: true, fanslyDmHeadCatchupPageAllowlist: "dm-page" },
+      adapter: { getMessagesPage } };
+    const run = () => fanslyDmMessagesChunk(app as never, {
+      pageContext: { platform: "fansly", page: { id: 55, label: "dm-page", platformAccountId: "acct-dm", metadata: {} },
+        session: {}, proxy: null }, streamState: { requestSeq: 1 }, syncRunId: 905,
+      telemetry: createTelemetry(), budget: new SyncChunkBudget(1),
+    } as never);
+    return { app, run, getMessagesPage, checkpoint: () => checkpoint };
+  }
+
+  it("resumes a missing-head walk past overlap and only confirms the exact target", async () => {
+    const h = headCatchupHarness(2);
+    await h.run();
+    expect(h.checkpoint()).toMatchObject({ currentBeforeMessageId: "known-1", headCatchup: { messageId: "expected", pagesRead: 1 } });
+    expect(dbMocks.recordFanslyDmHeadAttempt).not.toHaveBeenCalled();
+    await h.run();
+    expect(h.getMessagesPage.mock.calls.map((call) => call[1].before)).toEqual([null, "known-1"]);
+    expect(dbMocks.recordFanslyDmHeadAttempt).toHaveBeenCalledExactlyOnceWith({}, expect.objectContaining({ messageId: "expected" }));
+    expect(h.checkpoint()).toMatchObject({ currentConversationId: null });
+  });
+
+  it("caps one missing-head attempt at five pages across chunk restarts", async () => {
+    const h = headCatchupHarness(null);
+    for (let i = 0; i < 5; i++) await h.run();
+    expect(h.getMessagesPage).toHaveBeenCalledTimes(5);
+    expect(dbMocks.recordFanslyDmHeadAttempt).toHaveBeenCalledTimes(1);
+    expect(h.checkpoint()).toMatchObject({ currentConversationId: null });
+    expect(dbMocks.finalizePageDmConversationMessageSync).toHaveBeenCalledWith({}, expect.objectContaining({ messageCoverageStatus: "complete" }));
+  });
+
+  it.each([1, null])("keeps incremental continuity beyond the target/cap (%s) until the old overlap", async (targetAtPage) => {
+    const h = headCatchupHarness(targetAtPage);
+    dbMocks.getExistingPageDmMessageIds.mockResolvedValue(new Set());
+    for (let i = 0; i < 6; i++) await h.run();
+    expect(h.getMessagesPage).toHaveBeenCalledTimes(6);
+    expect(h.checkpoint()).toMatchObject({ currentConversationId: 777, currentBeforeMessageId: "known-6" });
+    expect(h.checkpoint()).not.toHaveProperty("headCatchup");
+    expect(dbMocks.finalizePageDmConversationMessageSync).not.toHaveBeenCalled();
+    dbMocks.getExistingPageDmMessageIds.mockImplementation(async (_db, input) => new Set(input.platformMessageIds));
+    await h.run();
+    expect(h.getMessagesPage.mock.calls.at(-1)?.[1].before).toBe("known-6");
+    expect(dbMocks.recordFanslyDmHeadAttempt).toHaveBeenCalledTimes(1);
+    expect(h.checkpoint()).toMatchObject({ currentConversationId: null });
+  });
+
+  it("keeps the initial backfill window cap when a new thread head is captured", async () => {
+    const h = headCatchupHarness(1);
+    dbMocks.getPageDmConversationById.mockResolvedValue(buildDmConversation({
+      storedMessageCount: 0, messageCoverageStatus: "pending_backfill",
+    }));
+    dbMocks.getExistingPageDmMessageIds.mockResolvedValue(new Set());
+    h.getMessagesPage.mockImplementation(async (context) => {
+      await context.requestObserver.onRequestEvent({
+        requestId: "initial", operation: "messages", method: "GET", attemptNumber: 1,
+        timestamp: new Date(), state: "started",
+      });
+      return { items: Array.from({ length: 25 }, (_, i) => ({
+        id: i === 0 ? "expected" : `initial-${i}`, senderId: "fan-1", createdAt: 1_770_000_000, content: "body",
+      })), groupId: "group-1", before: null, done: false, raw: { messages: [] } };
+    });
+    await h.run();
+    expect(h.getMessagesPage).toHaveBeenCalledTimes(1);
+    expect(h.checkpoint()).toMatchObject({ currentConversationId: null });
+    expect(dbMocks.finalizePageDmConversationMessageSync).toHaveBeenCalledWith({}, expect.objectContaining({ messageCoverageStatus: "partial_window" }));
+  });
+
+  it("disabling the page allowlist drops only the recovery pin before the next request", async () => {
+    const h = headCatchupHarness(null);
+    await h.run();
+    h.app.config.fanslyDmHeadCatchupPageAllowlist = "none";
+    await h.run();
+    expect(h.getMessagesPage).toHaveBeenCalledTimes(1);
+    expect(dbMocks.recordFanslyDmHeadAttempt).not.toHaveBeenCalled();
+    expect(h.checkpoint()).toMatchObject({ currentConversationId: null });
+  });
+
+  it("rollback preserves the unfinished baseline cursor while disabling extra target search", async () => {
+    const h = headCatchupHarness(null);
+    dbMocks.getExistingPageDmMessageIds.mockResolvedValue(new Set());
+    await h.run();
+    h.app.config.fanslyDmHeadCatchupPageAllowlist = "none";
+    await h.run();
+    expect(h.getMessagesPage.mock.calls[1]?.[1].before).toBe("known-1");
+    expect(h.checkpoint()).toMatchObject({ currentConversationId: 777 });
+    expect(h.checkpoint()).not.toHaveProperty("headCatchup");
+    expect(dbMocks.recordFanslyDmHeadAttempt).not.toHaveBeenCalled();
+  });
+
+  it("an external target receipt preserves unfinished ordinary incremental history", async () => {
+    const h = headCatchupHarness(null);
+    dbMocks.getExistingPageDmMessageIds.mockResolvedValue(new Set());
+    await h.run();
+    dbMocks.getFanslyDmHeadTarget.mockResolvedValue({ messageId: "expected", captured: true, attempts: 0, lastAttemptAt: null });
+    await h.run();
+    expect(h.getMessagesPage).toHaveBeenCalledTimes(2);
+    expect(h.getMessagesPage.mock.calls[1]?.[1].before).toBe("known-1");
+    expect(h.checkpoint()).toMatchObject({ currentConversationId: 777, currentBeforeMessageId: "known-2" });
+    expect(h.checkpoint()).not.toHaveProperty("headCatchup");
+    expect(dbMocks.finalizePageDmConversationMessageSync).not.toHaveBeenCalled();
+  });
+
+  it("a persisted receipt prevents repeating a walk after a summary/checkpoint crash", async () => {
+    const h = headCatchupHarness(null);
+    await h.run();
+    dbMocks.getFanslyDmHeadTarget.mockResolvedValue({ messageId: "expected", captured: false, attempts: 1, lastAttemptAt: new Date(Date.now() + 1000) });
+    await h.run();
+    expect(h.getMessagesPage).toHaveBeenCalledTimes(1);
+    expect(h.checkpoint()).toMatchObject({ currentConversationId: null });
   });
 
   it("counts 429 retries in dm_messages chunk summaries", async () => {

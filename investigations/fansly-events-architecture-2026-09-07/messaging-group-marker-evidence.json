@@ -1,0 +1,386 @@
+{
+  "checked_on": "2026-09-07",
+  "scope": "Historical HAR fields-only aggregate, unique requests deduped by timestamp URL and body hash; no IDs/text/query values recorded. Presence of markers does not prove sort order, hidden coverage or edit/delete update semantics.",
+  "totals": {
+    "unique_response_count": 9,
+    "data_rows": 83,
+    "aggregated_groups": 83,
+    "non_null_data_lastMessageId": 83,
+    "non_null_data_lastUnreadMessageId": 19,
+    "data_row_matched_aggregate_id": 83,
+    "aggregate_lastMessage_object": 83,
+    "data_marker_matches_aggregate_lastMessage_id": 82
+  },
+  "data_field_occurrences": {
+    "account_id": 83,
+    "groupId": 83,
+    "partnerAccountId": 83,
+    "partnerUsername": 83,
+    "flags": 83,
+    "unreadCount": 83,
+    "subscriptionTierId": 83,
+    "lastMessageId": 83,
+    "lastUnreadMessageId": 83
+  },
+  "aggregate_group_field_occurrences": {
+    "id": 83,
+    "type": 83,
+    "groupFlags": 83,
+    "groupFlagsMetadata": 83,
+    "createdBy": 83,
+    "users": 83,
+    "permissionFlags": 83,
+    "recipients": 83,
+    "hasDmPermissionFlags": 83,
+    "dmPermissionFlags": 83,
+    "accountDmPermissionFlags": 83,
+    "lastMessage": 83
+  },
+  "nested_group_object_field_occurrences": {
+    "users": {
+      "groupId": 166,
+      "userId": 166,
+      "type": 166,
+      "permissionFlags": 166,
+      "userSettings": 166,
+      "dmPermissionFlags": 83
+    },
+    "dmPermissionFlags": {
+      "id": 156,
+      "accountId": 156,
+      "type": 156,
+      "flags": 156,
+      "metadata": 156,
+      "verificationFlags": 156,
+      "verificationMetadata": 156
+    },
+    "accountDmPermissionFlags": {
+      "flags": 83,
+      "metadata": 83
+    },
+    "lastMessage": {
+      "id": 83,
+      "type": 83,
+      "dataVersion": 83,
+      "content": 83,
+      "groupId": 83,
+      "senderId": 83,
+      "correlationId": 83,
+      "inReplyTo": 83,
+      "inReplyToRoot": 83,
+      "createdAt": 83,
+      "attachments": 83,
+      "embeds": 83,
+      "interactions": 83,
+      "likes": 83
+    }
+  },
+  "samples": [
+    {
+      "har": "artifacts/fansly-app-bundle-2026-08-20/fansly-app-bundle-2026-08-20.har",
+      "at": "2026-08-20T16:57:43.284+03:00",
+      "status": 200,
+      "query_keys": [
+        "flags",
+        "limit",
+        "ngsw-bypass",
+        "offset",
+        "sortOrder"
+      ],
+      "data_rows": 20,
+      "aggregate_groups": 20,
+      "data_fields": [
+        "account_id",
+        "flags",
+        "groupId",
+        "lastMessageId",
+        "lastUnreadMessageId",
+        "partnerAccountId",
+        "partnerUsername",
+        "subscriptionTierId",
+        "unreadCount"
+      ],
+      "aggregate_group_fields": [
+        "accountDmPermissionFlags",
+        "createdBy",
+        "dmPermissionFlags",
+        "groupFlags",
+        "groupFlagsMetadata",
+        "hasDmPermissionFlags",
+        "id",
+        "lastMessage",
+        "permissionFlags",
+        "recipients",
+        "type",
+        "users"
+      ]
+    },
+    {
+      "har": "artifacts/fansly-app-bundle-2026-08-20/fansly-app-bundle-2026-08-20.har",
+      "at": "2026-08-20T16:57:43.285+03:00",
+      "status": 200,
+      "query_keys": [
+        "flags",
+        "limit",
+        "ngsw-bypass",
+        "offset",
+        "sortOrder"
+      ],
+      "data_rows": 0,
+      "aggregate_groups": 0,
+      "data_fields": [],
+      "aggregate_group_fields": []
+    },
+    {
+      "har": "artifacts/fansly-network-capture-2026-08-19/fansly-session-2026-08-19.har",
+      "at": "2026-08-19T19:12:05.297+03:00",
+      "status": 200,
+      "query_keys": [
+        "flags",
+        "limit",
+        "ngsw-bypass",
+        "offset",
+        "sortOrder"
+      ],
+      "data_rows": 20,
+      "aggregate_groups": 20,
+      "data_fields": [
+        "account_id",
+        "flags",
+        "groupId",
+        "lastMessageId",
+        "lastUnreadMessageId",
+        "partnerAccountId",
+        "partnerUsername",
+        "subscriptionTierId",
+        "unreadCount"
+      ],
+      "aggregate_group_fields": [
+        "accountDmPermissionFlags",
+        "createdBy",
+        "dmPermissionFlags",
+        "groupFlags",
+        "groupFlagsMetadata",
+        "hasDmPermissionFlags",
+        "id",
+        "lastMessage",
+        "permissionFlags",
+        "recipients",
+        "type",
+        "users"
+      ]
+    },
+    {
+      "har": "artifacts/fansly-network-capture-2026-08-19/fansly-session-2026-08-19.har",
+      "at": "2026-08-19T19:12:05.299+03:00",
+      "status": 200,
+      "query_keys": [
+        "flags",
+        "limit",
+        "ngsw-bypass",
+        "offset",
+        "sortOrder"
+      ],
+      "data_rows": 1,
+      "aggregate_groups": 1,
+      "data_fields": [
+        "account_id",
+        "flags",
+        "groupId",
+        "lastMessageId",
+        "lastUnreadMessageId",
+        "partnerAccountId",
+        "partnerUsername",
+        "subscriptionTierId",
+        "unreadCount"
+      ],
+      "aggregate_group_fields": [
+        "accountDmPermissionFlags",
+        "createdBy",
+        "dmPermissionFlags",
+        "groupFlags",
+        "groupFlagsMetadata",
+        "hasDmPermissionFlags",
+        "id",
+        "lastMessage",
+        "permissionFlags",
+        "recipients",
+        "type",
+        "users"
+      ]
+    },
+    {
+      "har": "artifacts/fansly-network-capture-2026-08-19/fansly-session-2026-08-19.har",
+      "at": "2026-08-19T19:22:41.019+03:00",
+      "status": 200,
+      "query_keys": [
+        "flags",
+        "limit",
+        "ngsw-bypass",
+        "offset",
+        "sortOrder"
+      ],
+      "data_rows": 1,
+      "aggregate_groups": 1,
+      "data_fields": [
+        "account_id",
+        "flags",
+        "groupId",
+        "lastMessageId",
+        "lastUnreadMessageId",
+        "partnerAccountId",
+        "partnerUsername",
+        "subscriptionTierId",
+        "unreadCount"
+      ],
+      "aggregate_group_fields": [
+        "accountDmPermissionFlags",
+        "createdBy",
+        "dmPermissionFlags",
+        "groupFlags",
+        "groupFlagsMetadata",
+        "hasDmPermissionFlags",
+        "id",
+        "lastMessage",
+        "permissionFlags",
+        "recipients",
+        "type",
+        "users"
+      ]
+    },
+    {
+      "har": "artifacts/fansly-network-capture-2026-08-19/fansly-session-2026-08-19.har",
+      "at": "2026-08-19T19:22:41.020+03:00",
+      "status": 200,
+      "query_keys": [
+        "flags",
+        "limit",
+        "ngsw-bypass",
+        "offset",
+        "sortOrder"
+      ],
+      "data_rows": 20,
+      "aggregate_groups": 20,
+      "data_fields": [
+        "account_id",
+        "flags",
+        "groupId",
+        "lastMessageId",
+        "lastUnreadMessageId",
+        "partnerAccountId",
+        "partnerUsername",
+        "subscriptionTierId",
+        "unreadCount"
+      ],
+      "aggregate_group_fields": [
+        "accountDmPermissionFlags",
+        "createdBy",
+        "dmPermissionFlags",
+        "groupFlags",
+        "groupFlagsMetadata",
+        "hasDmPermissionFlags",
+        "id",
+        "lastMessage",
+        "permissionFlags",
+        "recipients",
+        "type",
+        "users"
+      ]
+    },
+    {
+      "har": "artifacts/fansly-network-capture-2026-08-19/fansly-session-2026-08-19.har",
+      "at": "2026-08-19T19:22:56.785+03:00",
+      "status": 200,
+      "query_keys": [
+        "flags",
+        "limit",
+        "ngsw-bypass",
+        "offset",
+        "search",
+        "sortOrder"
+      ],
+      "data_rows": 1,
+      "aggregate_groups": 1,
+      "data_fields": [
+        "account_id",
+        "flags",
+        "groupId",
+        "lastMessageId",
+        "lastUnreadMessageId",
+        "partnerAccountId",
+        "partnerUsername",
+        "subscriptionTierId",
+        "unreadCount"
+      ],
+      "aggregate_group_fields": [
+        "accountDmPermissionFlags",
+        "createdBy",
+        "dmPermissionFlags",
+        "groupFlags",
+        "groupFlagsMetadata",
+        "hasDmPermissionFlags",
+        "id",
+        "lastMessage",
+        "permissionFlags",
+        "recipients",
+        "type",
+        "users"
+      ]
+    },
+    {
+      "har": "artifacts/fansly-ui-walk-2026-08-21/fansly-ui-walk-2026-08-21-pre-rewalk.har",
+      "at": "2026-08-20T19:25:27.324+03:00",
+      "status": 200,
+      "query_keys": [
+        "flags",
+        "limit",
+        "ngsw-bypass",
+        "offset",
+        "sortOrder"
+      ],
+      "data_rows": 20,
+      "aggregate_groups": 20,
+      "data_fields": [
+        "account_id",
+        "flags",
+        "groupId",
+        "lastMessageId",
+        "lastUnreadMessageId",
+        "partnerAccountId",
+        "partnerUsername",
+        "subscriptionTierId",
+        "unreadCount"
+      ],
+      "aggregate_group_fields": [
+        "accountDmPermissionFlags",
+        "createdBy",
+        "dmPermissionFlags",
+        "groupFlags",
+        "groupFlagsMetadata",
+        "hasDmPermissionFlags",
+        "id",
+        "lastMessage",
+        "permissionFlags",
+        "recipients",
+        "type",
+        "users"
+      ]
+    },
+    {
+      "har": "artifacts/fansly-ui-walk-2026-08-21/fansly-ui-walk-2026-08-21-pre-rewalk.har",
+      "at": "2026-08-20T19:25:27.324+03:00",
+      "status": 200,
+      "query_keys": [
+        "flags",
+        "limit",
+        "ngsw-bypass",
+        "offset",
+        "sortOrder"
+      ],
+      "data_rows": 0,
+      "aggregate_groups": 0,
+      "data_fields": [],
+      "aggregate_group_fields": []
+    }
+  ]
+}
