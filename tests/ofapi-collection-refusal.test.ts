@@ -41,7 +41,9 @@ describe("OFAPI collection-policy refusals (review #136)", () => {
   });
 
   it("recognises the repository refusal raw and as a governed pre-dispatch cause, nothing else", () => {
-    const resetAt = new Date("2026-09-08T00:00:00.000Z");
+    // Relative to the clock: this path takes no injected `now`, so a fixed
+    // instant becomes a past deadline and the advice collapses to 0.
+    const resetAt = new Date(Date.now() + 2 * 3_600_000);
     const policy = new OfapiCollectionPolicyError("daily_limit", { retryAt: resetAt });
     expect(policy.code).toBe("ofapi_collection_daily_limit");
 
