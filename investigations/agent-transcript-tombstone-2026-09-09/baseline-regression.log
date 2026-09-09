@@ -32,4 +32,3 @@ AssertionError: expected [ 'deleted', 'other-platform' ] to deeply equal [ 'dele
       Tests  1 failed | 1 passed (2)
    Start at  20:40:15
    Duration  3.92s (transform 569ms, setup 0ms, import 993ms, tests 297ms, environment 0ms)
-

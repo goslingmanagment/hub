@@ -104,7 +104,13 @@ priority, nulls, time boundaries, purchases, keysets, witnesses and read budgets
 
 ## Release and remaining scope
 
-Independent review is required before merge. No new production deployment is
+Independent review of immutable implementation 708585d2 found no executable
+correctness or isolation blockers. The reviewer independently reran the two
+focused Docker-Postgres files (five tests, zero skips). One P3 finding corrected
+the earlier diff-check claim: the pre-stage working-tree check missed trailing
+whitespace in untracked logs. The six logs were normalized; the staged diff
+against main is checked before committing. See REVIEW.md. Final documentation
+confirmation and CI are still required before merge. No new production deployment is
 authorized. Prepare an immutable reviewed revision, retain normal deployment
 health/rollback gates, then obtain the deployment yes. After a successful deploy,
 read the three original blocked lora-1 targets and finish its full 143-ID cohort
