@@ -1,0 +1,8 @@
+Independent reviewer execution against executable files from 708585d249f5d9cd31e875e6bab28026925287b7
+Command: pnpm exec vitest run --no-file-parallelism tests/agent-transcript-tombstone.integration.test.ts tests/agent-transcript-window.integration.test.ts
+RUN v4.1.10 /Users/dmitriy/.codex/worktrees/hub-agent-transcript-tombstone
+Test Files 2 passed (2)
+Tests 5 passed (5)
+Start at 20:53:44
+Duration 4.60s (transform 457ms, setup 0ms, import 1.20s, tests 491ms, environment 0ms)
+Exit code 0

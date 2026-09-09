@@ -282,6 +282,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 279 | Fresh capture during Fansly reply replay | The sync-pull sweep shares its existing page/time allowance between never-parsed capture and retained replay, with independent durable cursors; v6 stamps and the original history cursor remain unchanged. |
 | 280 | Sync monitor activity query | Select the current running run before reading attempt/event activity through existing run indexes; retain historical physical-failure debt and deploy gates |
 | 281 | Agent transcript window candidates | Select in-window message refs before loading their full material; retain every source version of those refs so source priority, tombstones and purchases stay authoritative across timestamp changes. |
+| 282 | Agent transcript tombstone lookup | Resolve the current OFAPI binding once and use the platform/account/message key for chatless tombstones; avoid scanning unrelated cold history before checking an absent binding. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -11791,3 +11792,45 @@ remaining page replay. The previously approved scopes stay bounded; lilly-2
 head recovery and A0/A1 are not authorized by this change. Rollback is the
 previous code with identical schema and data. Evidence and validation are in
 investigations/agent-transcript-window-2026-09-08/.
+
+
+## Decision 282: Scope transcript tombstones before reading cold history (2026-09-09)
+
+After the approved Decision 281 deployment, the first exact lora-1 transcript
+read still failed with a 503 in 14.545 seconds. PostgreSQL error logs identify
+the main list SELECT as the timed-out statement; the subsequent count SELECT
+was rejected because that transaction was already aborted. The independent
+archive-floor query was not the failing statement in that request.
+
+With a separate owner-approved exception, one non-ANALYZE EXPLAIN of that fixed
+statement ran through postgres in a READ ONLY transaction. The estimated plan
+at 17:34 UTC searched dm_message_archive by message ID before checking the
+page's OFAPI binding. The index is keyed by platform, OFAPI account and message
+ID; the old tombstone lookup supplied neither leading column to that scan.
+This is a later plan snapshot, not actual execution instrumentation of the
+10:32 timeout. The ordinary read_only role was tried first and denied access.
+The one-time diagnostic exception does not authorize further privileged reads.
+
+Resolve the page's current OFAPI binding through a scalar subquery and add the
+requested platform to the tombstone lookup. The equality sees NULL when no
+binding exists, and supplies the existing index prefix for bound pages. Keep
+chatless delete stubs reachable without a conversation predicate; another
+platform or account's tombstone cannot delete this page's message. Existing
+candidate tombstones, source preference, purchase upgrades, keysets, counts,
+archive floor and witnesses remain unchanged. No index, migration, flag,
+timeout increase, runtime privilege change or provider request is introduced.
+
+A mixed-platform local fixture (10298 archive + 10298 hot Fansly messages and
+300000 unrelated OFAPI archive rows) reproduces unnecessary cold-history work.
+Before the change it scans all 300000 unrelated rows, including 30000 tombstones,
+before rejecting the unbound Fansly page. After the change that work disappears.
+EXPLAIN ANALYZE falls from 29.017 to 0.550 ms with identical row/material/witnesses
+and count. These are individual local samples, not production predictions or a
+complete RCA of the transcript and sync-health latency incidents.
+
+Rollback is the prior code on identical schema/data. A separately approved
+deployment must pass normal gates, then the original three lora-1 targets and
+full 143-ID cohort must pass before remaining approved Lilly reply work. No
+repeat v6 replay, head recovery, A0/T0 clock or A1 advancement is authorized by
+this query change. Evidence and regression checks:
+investigations/agent-transcript-tombstone-2026-09-09/REPORT.md.

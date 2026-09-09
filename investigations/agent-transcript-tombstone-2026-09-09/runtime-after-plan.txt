@@ -1,0 +1,23 @@
+2026-09-09T17:43:46Z
+/agency-hub-api-1|running|healthy|0|sha256:52709520fffe658bc65a9e71266b368b908bd232e2b7330980cced181f86dddf
+/agency-hub-worker-1|running|healthy|0|sha256:52709520fffe658bc65a9e71266b368b908bd232e2b7330980cced181f86dddf
+/agency-hub-scheduler-1|running|healthy|0|sha256:52709520fffe658bc65a9e71266b368b908bd232e2b7330980cced181f86dddf
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/sda1        79G   49G   29G  64% /
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AgencyHub</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#x2B22;</text></svg>">
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;600;700;800&display=swap" rel="stylesheet" />
+    <script type="module" crossorigin src="/assets/index-DAeTeFm-.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-DedFyLm9.css">
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>
