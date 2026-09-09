@@ -107,6 +107,15 @@ blocked targets, then complete the original cohort before resuming the already
 approved remaining page scopes. No repeat replay is needed for an already-v6
 window merely because its serving verification timed out.
 
+Decision 282 scopes the chatless tombstone lookup to the current platform and
+OFAPI binding. Its mixed-platform fixture removes a scan of unrelated cold
+history, but production serving acceptance still requires the exact reads above.
+A PostgreSQL timeout log may identify the failing statement without exposing
+message bodies. Use the normal read_only role for diagnostics; if EXPLAIN is
+permission-denied, preserve that denial and prepare an exact bounded proposal.
+A separately approved one-time diagnostic exception is exhausted by its one
+execution and does not change standing production access or authorize ANALYZE.
+
 ## Shadow fidelity check (only for a separately approved rebuild)
 
 The old shadow verifier does not compare reply clocks. Before any future

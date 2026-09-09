@@ -283,15 +283,16 @@ function buildUnionQuery(input: AgentTranscriptInput): SQL {
     candidate_refs as (select distinct c.message_ref from candidates c),
     -- A delete webhook carries no chat scope, so its tombstone stub has a NULL
     -- conversation id: it is reachable only through the account-wide unique key.
+    -- Resolve the binding once and supply the full index key. A join to pages
+    -- can check the binding only AFTER scanning another platform's tombstones.
     cross_tombstones as (
       select r.message_ref
       from candidate_refs r
-      cross join page
       join dm_message_archive d
-        on d.ofapi_account_id = page.ofapi_account_id
+        on d.platform = ${input.platform}
+       and d.ofapi_account_id = (select p.ofapi_account_id from page p)
        and d.platform_message_id = r.message_ref
-      where page.ofapi_account_id is not null
-        and d.deleted_at is not null
+      where d.deleted_at is not null
     ),
     tombstoned as (
       select c.message_ref from candidates c where c.deleted_at is not null
