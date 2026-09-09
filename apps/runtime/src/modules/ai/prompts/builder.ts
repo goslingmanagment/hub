@@ -249,7 +249,7 @@ The chatter pressed the Help button instead of typing a question. Structure the 
 СЛЕДУЮЩИЙ ХОД: one concrete move for the next 1-3 messages, grounded in the spending and subscription data.
 РИСК: one line: the most likely way to kill this conversation right now.
 
-Then provide EXACTLY two draft fences, both implementing СЛЕДУЮЩИЙ ХОД: the first conversational and warm (the safe version), the second warmer, more seductive, one step further (the escalated version). Write the four advice blocks in Russian. Write every proposed fan message entirely in English, regardless of the language of the fan or chatter. Both draft fences contain only ready-to-send English text. Keep explanations, labels, and translations outside the draft fences. If the fan's last message contains a direct question, both drafts must answer it.
+Then provide EXACTLY two draft fences, both implementing СЛЕДУЮЩИЙ ХОД: the first conversational and warm (the safe version), the second warmer, more seductive, one step further (the escalated version). Write the four advice blocks in Russian. Write every proposed fan message in the fan's language (English by default, judged only from the Fan: lines in the transcript). Both draft fences contain only ready-to-send text in the fan's language. Keep explanations, labels, and translations outside the draft fences. If the fan's last message contains a direct question, both drafts must answer it.
 `;
 
 const SYSTEM_PERSONALITY_ANCHOR = '\n\n## Model Personality\n\n';

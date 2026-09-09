@@ -11834,3 +11834,46 @@ full 143-ID cohort must pass before remaining approved Lilly reply work. No
 repeat v6 replay, head recovery, A0/T0 clock or A1 advancement is authorized by
 this query change. Evidence and regression checks:
 investigations/agent-transcript-tombstone-2026-09-09/REPORT.md.
+
+## Decision 283: Proposed fan messages follow the fan's own language (2026-09-09)
+
+Two days after the Decision #201 amendment made every proposed fan message
+"entirely in English, regardless of the language of the fan or chatter", the
+owner showed the flip side: a Russian-speaking fan (Serbian and Russian, the
+whole thread in Russian) pressed through Fix produced an English message. The
+amendment had closed a real leak (Russian phrases from the chatter's question
+and draft surfacing in Coach drafts for English-speaking fans), but it closed
+it with a blanket that also overrode the fan's actual language. Fix's older
+rule ("infer the fan's language from the transcript, default English") had
+been removed with it so a follow-up action could not flip a Coach draft back.
+
+This decision replaces the blanket with the precise form of the same rule.
+Every proposed fan message is written in the fan's language, where the fan's
+language is English unless the fan writes in another language, judged only
+from the lines marked `Fan:` in the transcript, weighting the most recent
+ones; lines that are English or too short to tell mean English. The chatter's
+draft, question, coach history, recaps, fan dossier and persona notes are
+named explicitly as never being a language signal, so a Russian draft for an
+English-speaking fan still becomes English. The rule is identical in every
+proposed-message surface: Reply, Fix, Hi, Ping, Voice Script, Coach including
+the situation preset, Help suggestions and Review replacements, so no
+follow-up action can flip the language. Russian chatter-facing analysis,
+original-language evidence quotes and the recap language are unchanged.
+
+Fix additionally names the chatter's Russian draft as a non-signal and gains
+one Russian-fan example beside the existing Russian-draft examples, which are
+now annotated as English-fan cases. Voice scripts follow the same rule; the
+synthesis model (`eleven_v3`) is multilingual, so a Russian script is a
+product choice, not a technical failure. Template sources, compiled string
+mirrors and manifest hashes move together; the assembly tests verify the
+instructions supplied to the model for English, Spanish, Russian and
+emoji-only fan lines across all eight features and the cached/uncached
+boundary, and pin that the static prefix stays fan-agnostic. They are not a
+guarantee of model compliance: the language is still inferred by the model,
+and the deterministic alternative (a client-computed fan-language hint in the
+request) stays open if inference misfires.
+
+The Fansly extension separately relaxes its E91 Cyrillic guard on Coach
+Copy/Insert to the same signal (Cyrillic in the fan's own live transcript
+lines) so Coach stays usable for Russian-speaking fans. That client change
+does not deploy these prompts; deployment status is recorded separately.
