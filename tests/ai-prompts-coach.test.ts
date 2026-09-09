@@ -128,7 +128,7 @@ The chatter asks:
 
 
 
-Answer the chatter now in the language they asked in. Use a draft fence for any proposed fan message, entirely in English. Keep the explanation outside the fence.
+Answer the chatter now in the language they asked in. Use a draft fence for any proposed fan message, in the fan's language (English by default). Keep the explanation outside the fence.
 `);
     expect(built.user).not.toContain("## Preset Turn");
     expect(built.user).not.toContain("{presetInstructions}");
@@ -139,7 +139,7 @@ Answer the chatter now in the language they asked in. Use a draft fence for any 
     });
     expect(
       createHash("sha256").update(JSON.stringify(withDraft.userBlocks)).digest("hex"),
-    ).toBe("844c34e9df9ae9678c9621287ccb80a06daae2fc18ca4d771ea26e89f16720b2");
+    ).toBe("a27e53c16324f65f46804a55775f0688e061d78dc3afc7dc1f097a87e8cd72b3");
   });
 
   it("renders the situation preset only in the uncached task block", () => {
@@ -262,9 +262,14 @@ Answer the chatter now in the language they asked in. Use a draft fence for any 
       // to move with the system preamble: bytes added there (Decision #189's
       // writing rules) come straight out of the budget under test, and a fixed
       // 50k would silently start shedding the recap this case asserts is KEPT.
+      // The same goes for the coach template itself: it was 2_191 chars when
+      // this case was calibrated, and every later template edit (Decision
+      // #283's fan-language rule, for one) must come out of the padding too.
       personality: {
         ...baseInput.personality,
-        content: amp.repeat(50_000 - ANALYSIS_SAFETY_PREAMBLE.length),
+        content: amp.repeat(
+          50_000 - ANALYSIS_SAFETY_PREAMBLE.length - (COACH_CHAT_TEMPLATE.length - 2_191),
+        ),
       },
       transcript: "TRANSCRIPT_HEAD\n" + amp.repeat(2_000) + "\nTRANSCRIPT_TAIL",
       fanSpendingData: amp.repeat(20_000),
