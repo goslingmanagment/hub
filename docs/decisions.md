@@ -285,7 +285,8 @@ appends a row here in the same change (family law: updated-in-change).
 | 282 | Agent transcript tombstone lookup | Resolve the current OFAPI binding once and use the platform/account/message key for chatless tombstones; avoid scanning unrelated cold history before checking an absent binding. |
 | 284 | Fansly A0/T0 diagnostics | Default-off virtual-stop measurement preserves the full sweep; bounded read operations expose physical-attempt coverage and retained metadata without base-table grants. |
 | 285 | Fansly C2a earnings identity | Observation-scoped v2 snapshots preserve A-B-A, replay ordering and legacy SSE edges; daily rotation unchanged. |
-| 287 | Fansly W0 offline diagnostics | Received-only bounded metadata export excludes secrets and correspondence; synthetic protocol fixtures do not establish live binding or coverage. |
+| 286 | Settings UX and reviewed writes | Task-based navigation, friendly configuration copy and snapshot-bound editors; drafts survive refresh/filter, write receipts survive read failure, staged prerequisites remain visible. Owner permits merge after independent reviews and required checks; deployment remains separate. |
+| 288 | Fansly W0 offline diagnostics | Received-only bounded metadata export excludes secrets and correspondence; synthetic protocol fixtures do not establish live binding or coverage. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -11962,7 +11963,34 @@ projection mismatch requires a separately approved page-scoped rebuild. These
 are explicit production gates, not implied by merging this change. See the
 [repair runbook](runbooks/fansly-earnings-correctness.md).
 
-## Decision 287: Prepare safe offline Fansly socket diagnostics (2026-09-10)
+## Decision 286: Simplify settings while preserving reviewed writes (2026-09-10)
+
+The owner requested simpler, friendlier configuration and settings, with a visible
+before/after comparison before application. The local comparison includes the
+original interface, first proposal and polished version. After adversarial fixes,
+the owner authorized merge if independent engineering, quality and performance
+reviews approve and required checks pass. Deployment remains a separate action.
+
+Settings are grouped by task and retain existing tab URLs and owner access. Live
+configuration comes first; search covers metadata only. Friendly descriptions and
+units accompany controls; technical details remain expandable. Boot flags keep
+one canonical row, server-derived runtime/desired state, dependency order,
+acknowledgement and atomic dependent disable. Operational prerequisites appear
+before acknowledgement, and filtering cannot hide an open confirmation.
+
+Scalar/boolean drafts capture the reviewed version and survive polling/filtering.
+Conflicts require review. Empty string overrides and invalid numbers match server
+validation; reset inherits environment rather than promising code defaults. Write
+receipts retain the server-returned value/version when refresh fails and prevent
+another write until reconciliation; later changes invalidate stale success.
+
+The same pass corrects stale onboarding verification, unsupported OnlyFans
+credential controls, false-empty team errors, deactivation copy and table overflow.
+No runtime or SDK contract changes are included. See
+[the review record](settings-ux-review-2026-09-10.md) for evidence and known limits;
+local fixture and screenshot artifacts are excluded from the product commit.
+
+## Decision 288: Prepare safe offline Fansly socket diagnostics (2026-09-10)
 
 **Numbering.** Based on main Decision 285; 286 is reserved by the open C1
 [PR166](https://github.com/goslingmanagment/core/pull/166). Recheck both at merge.

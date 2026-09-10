@@ -1,7 +1,7 @@
 # Fansly W0 — offline protocol preparation
 
 Branch `feat/fansly-w0-protocol`, based on main `f0a53aee` (Decision 285).
-Decision 287 reserves the next slot after C1 draft PR166 / Decision 286; recheck
+Decision 288 reserves the next slot after C1 draft PR166 / Decision 287; recheck
 the numbering against main before merge. This is [W0 draft PR167](
 https://github.com/goslingmanagment/core/pull/167), not B0 readiness.
 
@@ -46,3 +46,7 @@ The [sample report](evidence/synthetic-report.json) was generated exclusively
 from synthetic fixtures: four records, zero provider connections, unverified
 binding. Its receipt times are fabricated fixture values; `generatedAt` is the
 local export time. No real credential, message or identity was used.
+
+Main PR168 took Decision 286. The branch now merges main `940ec69f`; W0
+reserves 288 after C1 / 287. Only decision/runbook numbering changed; live
+protocol evidence and every production gate remain pending.

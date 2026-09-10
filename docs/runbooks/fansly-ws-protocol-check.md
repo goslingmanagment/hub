@@ -1,6 +1,6 @@
 # Fansly W0 protocol check
 
-Authority: the accepted events plan §7 and cross-check DECISION §7; Decision 287.
+Authority: the accepted events plan §7 and cross-check DECISION §7; Decision 288.
 One W0 draft PR holds offline preparation and later approved evidence. An offline
 fixture pass does not establish the live protocol or authorize a new connection.
 
