@@ -107,7 +107,7 @@ describe("ConfigurationTab boolean live editor rendering", () => {
     const html = renderTab([configItem()]);
     expect(html).toContain('role="switch"');
     expect(html).toContain('aria-checked="false"');
-    expect(html).toContain('aria-label="Fansly deep backfill: ignore retention cap value"');
+    expect(html).toContain('aria-label="История без ограничения чата value"');
   });
 
   it("seeds the switch from the desired override when one exists", () => {
@@ -116,7 +116,7 @@ describe("ConfigurationTab boolean live editor rendering", () => {
     ]);
     expect(html).toContain('aria-checked="true"');
     // The override row also gets the revert-to-env button, like the numeric editor.
-    expect(html).toContain("Сбросить");
+    expect(html).toContain("Вернуть настройку сервера");
   });
 
   it("renders a text input for string live keys", () => {
@@ -142,7 +142,7 @@ describe("ConfigurationTab boolean live editor rendering", () => {
     ]);
     expect(html).not.toContain('role="switch"');
     expect(html).toContain('type="text"');
-    expect(html).toContain('aria-label="Fansly new-stream page allowlist value"');
+    expect(html).toContain('aria-label="Страницы доходов и покупок Fansly value"');
   });
 
   it("still renders the numeric input for number live keys", () => {

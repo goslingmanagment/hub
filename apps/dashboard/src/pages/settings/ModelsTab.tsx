@@ -79,7 +79,7 @@ export function ModelsTab() {
           <p className="text-sm text-text-muted">No models configured.</p>
         )}
         {items.length > 0 && (
-          <section className="overflow-hidden rounded-xl border border-border bg-card">
+          <section className="overflow-x-auto rounded-xl border border-border bg-card">
             <table className="w-full border-collapse">
               <thead>
                 <tr className="bg-hover-alt">
