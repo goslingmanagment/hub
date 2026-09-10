@@ -11992,7 +11992,7 @@ local fixture and screenshot artifacts are excluded from the product commit.
 
 ## Decision 288: Prepare safe offline Fansly socket diagnostics (2026-09-10)
 
-**Numbering.** Based on main Decision 285; 286 is reserved by the open C1
+**Numbering.** Based on main Decision 286; 287 is reserved by the open C1
 [PR166](https://github.com/goslingmanagment/core/pull/166). Recheck both at merge.
 
 **Problem.** The historical research snippet leaks the actual nested auth shape
