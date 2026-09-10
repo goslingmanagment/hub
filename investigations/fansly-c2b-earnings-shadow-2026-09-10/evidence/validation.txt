@@ -1,0 +1,28 @@
+Local validation on main base 940ec69f plus the C2b implementation.
+
+$ pnpm check
+strictness-ratchet: OK — 1908 known error(s) within budget (121 file(s) with debt).
+ Test Files  291 passed (291)
+      Tests  3190 passed | 9 skipped (3199)
+   Duration  29.10s (transform 19.69s, setup 0ms, import 240.50s, tests 58.97s, environment 15ms)
+✓ built in 2.48s
+Exit code: 0; lint passed; existing bundle-size warning only.
+
+$ pnpm exec vitest run --no-file-parallelism
+  tests/fan-earnings-dirty.integration.test.ts
+  tests/fan-earnings-receipts.integration.test.ts
+  tests/fan-earnings-capture.integration.test.ts
+  tests/fan-earnings-erasure.integration.test.ts
+  tests/fansly-fan-earnings-cursor.integration.test.ts
+  tests/fan-earnings-identity.integration.test.ts
+  tests/transactions-writer-gate.integration.test.ts
+  tests/fansly-engagement-projection.integration.test.ts
+  tests/erasure-fan-ref-columns.integration.test.ts
+  tests/erasure-page-owned-tables.integration.test.ts
+ Test Files  10 passed (10)
+      Tests  57 passed (57)
+   Duration  23.01s (transform 1.56s, setup 0ms, import 6.62s, tests 12.96s, environment 0ms)
+Exit code: 0; Docker-Postgres ran, zero integration skips.
+
+Independent static re-review: no actionable findings after fixes.
+No production reads, writes, live provider calls or socket connections for C2b.

@@ -286,6 +286,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 284 | Fansly A0/T0 diagnostics | Default-off virtual-stop measurement preserves the full sweep; bounded read operations expose physical-attempt coverage and retained metadata without base-table grants. |
 | 285 | Fansly C2a earnings identity | Observation-scoped v2 snapshots preserve A-B-A, replay ordering and legacy SSE edges; daily rotation unchanged. |
 | 286 | Settings UX and reviewed writes | Task-based navigation, friendly configuration copy and snapshot-bound editors; drafts survive refresh/filter, write receipts survive read failure, staged prerequisites remain visible. Owner permits merge after independent reviews and required checks; deployment remains separate. |
+| 289 | Fansly C2b earnings shadow | Atomic semantic transaction revisions and independent endpoint receipts measure the existing daily rotation; unchanged and missing results remain explicit debt. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -11988,3 +11989,51 @@ credential controls, false-empty team errors, deactivation copy and table overfl
 No runtime or SDK contract changes are included. See
 [the review record](settings-ux-review-2026-09-10.md) for evidence and known limits;
 local fixture and screenshot artifacts are excluded from the product commit.
+
+## Decision 289: Measure semantic earnings refresh signals (2026-09-10)
+
+**Context.** C2a fixes repeated snapshot identity. C2b must establish whether
+semantic transaction changes predict earnings corrections before C2c can change
+daily rotation. Main's latest decision is 286; open C1 and W0 reserve 287 and
+288 respectively. Recheck these numbers before merge.
+
+**Decision.** The live `fanslyFanEarningsShadowPageAllowlist` defaults to `none`.
+On scoped pages, the existing owned Fansly transaction writer compares persisted
+business fields before/after the upsert and commits dirty intent in the same
+transaction. Receipt timestamps, scan tokens and wallet balance do not retrigger
+it. Old and new native/local fan bindings are retained, including zero/negative
+spend and identities absent from the roster. Missing or inconsistent attribution
+has explicit transaction-scoped debt; identical persisted upserts add no revision.
+
+Extend operational `subject_refresh_state` with separate lifetime and monthly
+planes and requested/applied revisions, token, claim deadline and due/retry time.
+The existing daily spender walk alone selects requests. Each endpoint response
+is captured before parsing, settlement or the next call. A claim for R settles
+at most R; a concurrent R+1 stays pending. Empty, malformed, rejected, missing
+and lost-claim results cannot certify a check. Failure-receipt writes preserve
+the original provider error, including its Retry-After and existing walk policy.
+
+The first valid nonempty bound response establishes a baseline. Later checks
+and content changes have separate times, counters and observation provenance.
+An unchanged or first baseline after a transaction signal remains unconfirmed:
+it does not prove that Fansly recalculated. A changed snapshot can acknowledge
+the claimed revision, without proving every underlying correction is included.
+Stored retry debt has a fifteen-minute floor and honors a longer provider
+deadline; C2b does not use it to fetch extra targets. Legacy refresh planes keep
+their existing behavior. Fan erasure removes new endpoint/debt references with
+page-scoped attribution matching, serialized against their writers.
+
+The restricted metadata report shows endpoint ages, pending revisions, unknown
+attribution, targets outside the daily spender roster, unpaired visits/receipts,
+and changes without a pending signal at claim time. Preserve the previous full
+spender-sweep completion across partial walks. A recent fan is not page-wide
+freshness, an endpoint visit is not a physical HTTP attempt, and an untracked
+fan/window is not covered. This shadow has no request savings or latency claim.
+
+**Operations.** Deploy and enable one page only after explicit approval, with
+the inherited C2a reader-before-worker/reparse and compatible rollback scope.
+Disable only this allowlist to stop diagnostics, preserving operational debt,
+captured facts and daily rotation. Independent daily checks remain required
+until quiet corrections are proven detectable within the previous freshness
+bound, or the owner separately accepts a new max-age. See the
+[C2b runbook](runbooks/fansly-earnings-shadow.md).
