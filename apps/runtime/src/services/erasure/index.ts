@@ -1350,6 +1350,7 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
     ["page_poll_options", "page_id"],
     ["ofapi_credit_ledger", "page_id"],
     ["ofapi_request_attempts", "page_id"],
+    ["fansly_dm_shadow_sweeps", "page_id"],
     ["sync_http_attempts", "page_id"],
     ["sync_run_events", "page_id"],
     ["sync_raw_payloads", "page_id"],

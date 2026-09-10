@@ -283,6 +283,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 280 | Sync monitor activity query | Select the current running run before reading attempt/event activity through existing run indexes; retain historical physical-failure debt and deploy gates |
 | 281 | Agent transcript window candidates | Select in-window message refs before loading their full material; retain every source version of those refs so source priority, tombstones and purchases stay authoritative across timestamp changes. |
 | 282 | Agent transcript tombstone lookup | Resolve the current OFAPI binding once and use the platform/account/message key for chatless tombstones; avoid scanning unrelated cold history before checking an absent binding. |
+| 284 | Fansly A0/T0 diagnostics | Default-off virtual-stop measurement preserves the full sweep; bounded read operations expose physical-attempt coverage and retained metadata without base-table grants. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -11877,3 +11878,46 @@ The Fansly extension separately relaxes its E91 Cyrillic guard on Coach
 Copy/Insert to the same signal (Cyrillic in the fan's own live transcript
 lines) so Coach stays usable for Russian-speaking fans. That client change
 does not deploy these prompts; deployment status is recorded separately.
+
+
+## Decision 284: Measure Fansly full sweeps before reducing polling (2026-09-10)
+
+**Context.** The accepted Fansly events plan starts with A0/T0 after the DM
+correctness sweep. A candidate early stop is not yet proven safe; mutable offset
+can miss delete+insert without a duplicate or changed total. Production request
+offsets are not available to the existing read_only role through observations.
+
+**Decision.** Keep all provider requests, legacy unchanged-page behavior,
+checkpoint version/mode, membership authority, follow-ups and 1800-second slots.
+The live `fanslyDmShadowPageAllowlist` defaults to `none`. When enabled, bounded
+scalar diagnostics travel as optional cursor state; the parser preserves them
+across chunks and discards only malformed diagnostics. Candidate depth 3 and
+60-second overlap use a certified completed predecessor. Raw timestamps and
+list/embedded IDs must agree. The full sweep continues past the virtual stop.
+
+Separate `fansly_dm_shadow_sweeps` reports survive telemetry retention and join
+the page-erasure inventory. Independent sync-run notes make failed report writes
+visible; unfinished, failed, partial or missing evidence is never implicit zero.
+Pre-apply exact non-deleted hot message IDs distinguish metadata changes from
+missing hot material. Known head-debt receipts provide scoped capture-lag
+samples; archive/serving parity and pending-history origin age remain separate.
+
+T0 adds counters for lost attempt inserts and terminal updates, and a bounded
+read operation over physical attempts. It retains run sources, retries,
+unknown bytes, old/unfinished telemetry and boundary-crossing run loss. A
+concurrent finished-at index complements the existing started-at index for
+overlapping/open runs; the full report plan is tested at 50,000 runs. Fixed
+read functions grant no base-table access; corpus export returns retained
+request offsets and head metadata only, in capped primary-key batches. Save
+exports and manifests outside the observability retention window. The offline
+analyzer compares certified raw sweeps at nine depth/overlap settings and
+preserves incomplete denominators and the mutable-offset counterexample.
+
+**Gates and rollback.** Deploy the reviewed revision inert after approval, export
+the September 1–6 corpus through read_only, then separately approve runtime
+shadow. At least seven complete days across all six pages, sufficient activity,
+explained discrepancies and freshness scope are still required. A1 does not
+follow automatically; B2 needs a separate decision. Set only this allowlist to
+`none` to disable diagnostics; preserve reports and business state. See the
+[A0 runbook](runbooks/fansly-events-shadow.md) and
+[implementation evidence](../investigations/fansly-a0-shadow-2026-09-10/STATUS.md).

@@ -327,8 +327,9 @@ describe("the three journaling call sites", () => {
       expect(match[1]).toBe("FANSLY_FOLLOWERS_CAPTURE_MAPPER_VERSION");
     }
     const groups = [...conversationSource.matchAll(
-      /responsePayload: trimFanslyMessagingGroupsPayload\(page\.raw\),\s*\n\s*mapperVersion: (\w+),/g,
+      /responsePayload: capturedPayload,\s*\n\s*mapperVersion: (\w+),/g,
     )];
+    expect(conversationSource).toContain("const capturedPayload = trimFanslyMessagingGroupsPayload(page.raw)");
     expect(groups).toHaveLength(1);
     expect(groups[0]![1]).toBe("FANSLY_GROUPS_CAPTURE_MAPPER_VERSION");
 

@@ -159,6 +159,7 @@ describe("LIVE_CONFIG_KEYS", () => {
     // system) and the long-tail cycle, live because it re-aims a running
     // round-robin without a deploy.
     expect(LIVE_CONFIG_KEYS.has("fanslyDmHeadCatchupPageAllowlist")).toBe(true);
-    expect(LIVE_CONFIG_KEYS.size).toBe(61);
+    expect(LIVE_CONFIG_KEYS.has("fanslyDmShadowPageAllowlist")).toBe(true);
+    expect(LIVE_CONFIG_KEYS.size).toBe(62);
   });
 });

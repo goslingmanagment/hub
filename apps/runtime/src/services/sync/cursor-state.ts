@@ -1,3 +1,5 @@
+import { parseDmShadowState, type DmShadowState } from "./dm-shadow-state.ts";
+
 type SubscribersCursorState = {
   revision: number;
   generation: number;
@@ -61,6 +63,7 @@ type DmConversationCursorState = {
   unchangedPageStreak: number;
   fullSweepStartedAt: string;
   lastFullSweepCompletedAt: string | null;
+  diagnostics?: DmShadowState;
 };
 
 type DmMessagesCursorState = {
@@ -387,6 +390,7 @@ export function parseDmConversationCursorState(value: unknown): DmConversationCu
     return null;
   }
 
+  const diagnostics = parseDmShadowState(state.diagnostics);
   return {
     version: 2,
     mode: "full_scan",
@@ -399,6 +403,7 @@ export function parseDmConversationCursorState(value: unknown): DmConversationCu
     unchangedPageStreak,
     fullSweepStartedAt,
     lastFullSweepCompletedAt,
+    ...(diagnostics === undefined ? {} : { diagnostics }),
   };
 }
 
@@ -448,6 +453,7 @@ type DmConversationSweepInProgressState = {
   unchangedPageStreak: number;
   fullSweepStartedAt: string;
   lastFullSweepCompletedAt: string | null;
+  diagnostics?: DmShadowState;
 };
 
 type DmConversationSweepCompletedState = {
@@ -463,6 +469,7 @@ type DmConversationSweepCompletedState = {
    *  entirely otherwise, which is what it has always done. */
   erasureDelta: number | null;
   lastFullSweepCompletedAt: string | null;
+  diagnostics?: DmShadowState;
 };
 
 type DmConversationSweepState =
@@ -503,6 +510,7 @@ function parseCompletedDmConversationSweepState(
     return null;
   }
 
+  const diagnostics = parseDmShadowState(state.diagnostics);
   return {
     kind: "completed",
     generation,
@@ -514,6 +522,7 @@ function parseCompletedDmConversationSweepState(
     membershipCertified: state.membershipCertified,
     erasureDelta,
     lastFullSweepCompletedAt,
+    ...(diagnostics === undefined ? {} : { diagnostics }),
   };
 }
 
@@ -560,6 +569,7 @@ export function serializeDmConversationSweepState(
       membershipCertified: state.membershipCertified,
       lastFullSweepCompletedAt: state.lastFullSweepCompletedAt,
       ...(state.erasureDelta === null ? {} : { erasureDelta: state.erasureDelta }),
+      ...(state.diagnostics === undefined ? {} : { diagnostics: state.diagnostics }),
     };
   }
 
@@ -576,6 +586,7 @@ export function serializeDmConversationSweepState(
     fullSweepStartedAt: state.fullSweepStartedAt,
     lastFullSweepCompletedAt: state.lastFullSweepCompletedAt,
     ...(telemetry === undefined ? {} : { generationSetCount: telemetry.generationSetCount }),
+    ...(state.diagnostics === undefined ? {} : { diagnostics: state.diagnostics }),
   };
 }
 

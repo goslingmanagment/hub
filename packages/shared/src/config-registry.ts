@@ -111,6 +111,20 @@ export const CONFIG_DESCRIPTORS: readonly ConfigDescriptor[] = [
   { key: "isProduction", envName: "NODE_ENV", configField: "isProduction", kind: "derived", subsystem: "Core", label: "Production mode", default: "false", editability: NEVER, runtimeApply: "none", comparable: true, note: "Derived from NODE_ENV." },
 
   // ── Fansly ────────────────────────────────────────────────────────────────
+  {
+    key: "fanslyDmShadowPageAllowlist",
+    envName: "FANSLY_DM_SHADOW_PAGE_ALLOWLIST",
+    configField: "fanslyDmShadowPageAllowlist",
+    kind: "string",
+    subsystem: "Fansly",
+    label: "Fansly DM sweep shadow pages",
+    default: "none",
+    editability: EDITABLE,
+    runtimeApply: "live",
+    comparable: true,
+    note: "Comma-separated page labels; none disables diagnostics. " +
+      "Measures a virtual stop on existing full-sweep responses without changing polling.",
+  },
   { key: "fanslyBaseUrl", envName: "FANSLY_BASE_URL", configField: "fanslyBaseUrl", kind: "url", subsystem: "Fansly", label: "Fansly base URL", default: "https://apiv3.fansly.com/api/v1", editability: NEVER, runtimeApply: "none", comparable: true },
   { key: "fanslyDefaultDelayMs", envName: "FANSLY_DEFAULT_DELAY_MS", configField: "fanslyDefaultDelayMs", kind: "number", subsystem: "Fansly", label: "Fansly default delay (ms)", default: "2500", editability: EDITABLE, runtimeApply: "none", comparable: true, min: 1, costWarning: "Lowering reduces politeness against Fansly's unofficial API; raises ban/throttle risk.", note: "Captured by the Fansly adapter at boot — applies after restart." },
   { key: "fanslyGlobalDelayMs", envName: "FANSLY_GLOBAL_DELAY_MS", configField: "fanslyDefaultDelayMs", kind: "alias", subsystem: "Fansly", label: "Fansly global delay (legacy alias)", default: "(unset)", editability: NEVER, runtimeApply: "none", comparable: false, note: "Legacy fallback feeding Fansly default delay." },

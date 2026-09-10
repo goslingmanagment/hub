@@ -1,0 +1,117 @@
+import type { ConversationHeadDiffReason } from "./fansly-dm-head-diff.ts";
+import type { DmShadowState } from "./dm-shadow-state.ts";
+
+export type DmShadowConversation = {
+  reasons: readonly ConversationHeadDiffReason[];
+  listMessageId: string | null;
+  embeddedMessageId: string | null;
+  // Raw provider timestamp, before any repair or fallback to stored material.
+  timestampMs: number | null;
+  previousTimestampMs: number | null;
+  previousMessageId: string | null;
+  materialConfirmed: boolean | null;
+  discoveryToCaptureMs: number | null;
+  historyPending: boolean;
+  lastHistorySyncAtMs: number | null;
+};
+
+function validTimestamp(value: number | null): value is number {
+  return value !== null && Number.isSafeInteger(value) && value > 0;
+}
+
+function hasValidMarker(conversation: DmShadowConversation) {
+  return Boolean(conversation.listMessageId) &&
+    conversation.listMessageId === conversation.embeddedMessageId &&
+    validTimestamp(conversation.timestampMs);
+}
+
+function countDiscrepancies(state: DmShadowState, item: DmShadowConversation) {
+  const reasons = new Set(item.reasons);
+  if (reasons.has("missing_row")) state.newHeadsBelowStop += 1;
+  if (reasons.has("last_message_id")) state.changedHeadsBelowStop += 1;
+  if (item.reasons.length > 0) state.stateChangesBelowStop += 1;
+  if (reasons.has("unread_count") || reasons.has("last_unread_message_id")) {
+    state.unreadChangesBelowStop += 1;
+  }
+  if (reasons.has("conversation_flags")) state.flagsChangesBelowStop += 1;
+  if (item.previousMessageId !== null && (
+    item.listMessageId === null ||
+    (validTimestamp(item.timestampMs) && validTimestamp(item.previousTimestampMs) &&
+      item.timestampMs < item.previousTimestampMs)
+  )) {
+    // A discrepancy category, not a claim that a provider-side deletion happened.
+    state.headRollbacksBelowStop += 1;
+  }
+  if (item.listMessageId !== null && item.materialConfirmed === false) {
+    state.missingHotHeadsBelowStop += 1;
+  }
+}
+
+/** Candidate stop only. The caller still fetches, applies and finalizes its
+ * full sweep. A page that establishes the stop is included in its cost. */
+export function advanceDmShadow(state: DmShadowState, page: {
+  observedAtMs: number;
+  responseBytes: number;
+  conversations: readonly DmShadowConversation[];
+}): DmShadowState {
+  const next = { ...state };
+  const belowStop = state.stopPage !== null;
+  next.pageCount += 1;
+  next.maxObservationGapMs = Math.max(
+    next.maxObservationGapMs,
+    Math.max(0, page.observedAtMs - next.lastObservedAtMs),
+  );
+  next.lastObservedAtMs = page.observedAtMs;
+  let unchanged = page.conversations.length > 0;
+  let behindBoundary = state.boundaryMs !== null;
+
+  for (const item of page.conversations) {
+    if (item.materialConfirmed === true && item.discoveryToCaptureMs !== null &&
+      item.discoveryToCaptureMs >= 0) {
+      next.materialLagSamples += 1;
+      next.maxDiscoveryToCaptureMs = Math.max(next.maxDiscoveryToCaptureMs, item.discoveryToCaptureMs);
+    }
+    if (item.materialConfirmed === null) next.unknownMaterialChecks += 1;
+    const markerValid = hasValidMarker(item);
+    if (!markerValid) {
+      next.invalidMarkers += 1;
+      if (belowStop) next.invalidMarkersBelowStop += 1;
+    }
+    unchanged &&= item.reasons.length === 0 && markerValid;
+    // Strictly below: timestamp ties never establish the boundary.
+    behindBoundary &&= markerValid && validTimestamp(item.timestampMs) &&
+      state.boundaryMs !== null && item.timestampMs < state.boundaryMs - state.overlapMs;
+    if (validTimestamp(item.timestampMs)) {
+      if (next.previousTimestampMs === item.timestampMs) next.timestampTies += 1;
+      next.previousTimestampMs = item.timestampMs;
+      if (item.materialConfirmed === false) {
+        next.maxUnconfirmedHeadAgeMs = Math.max(
+          next.maxUnconfirmedHeadAgeMs,
+          Math.max(0, page.observedAtMs - item.timestampMs),
+        );
+      }
+    }
+    if (item.historyPending) {
+      next.pendingHistoryCount += 1;
+      // Last sync time cannot tell when unfinished history first became due.
+      next.unknownHistoryAgeCount += 1;
+      if (item.lastHistorySyncAtMs !== null) {
+        next.maxHistorySyncAgeMs = Math.max(
+          next.maxHistorySyncAgeMs,
+          Math.max(0, page.observedAtMs - item.lastHistorySyncAtMs),
+        );
+      }
+    }
+    if (belowStop) countDiscrepancies(next, item);
+  }
+
+  if (belowStop) {
+    next.pagesBelowStop += 1;
+    next.bytesBelowStop += page.responseBytes;
+    next.conversationsBelowStop += page.conversations.length;
+  } else {
+    next.unchangedStreak = unchanged && behindBoundary ? next.unchangedStreak + 1 : 0;
+    if (next.unchangedStreak >= state.depth) next.stopPage = next.pageCount;
+  }
+  return next;
+}
