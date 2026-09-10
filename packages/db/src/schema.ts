@@ -5580,6 +5580,7 @@ export const fanEarningsStats = pgTable(
     currency: char("currency", { length: 3 }).default("USD").notNull(),
     observedAt: timestamp("observed_at", { withTimezone: true }).notNull(),
     sourceEventId: bigint("source_event_id", { mode: "number" }).notNull(),
+    sourceObservationId: bigint("source_observation_id", { mode: "number" }).default(0).notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => ({

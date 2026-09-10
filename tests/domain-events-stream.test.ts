@@ -301,7 +301,9 @@ async function runV2Stream(input: {
   return parseStreamFrames(writes);
 }
 
-async function makeLiveHarness(rows: number[], head: number) {
+async function makeLiveHarness(
+  rows: number[], head: number, eventForSeq: (seq: number) => ReturnType<typeof event> = event,
+) {
   const client = Object.assign(new EventEmitter(), {
     query: vi.fn(async () => undefined),
     release: vi.fn(),
@@ -316,7 +318,7 @@ async function makeLiveHarness(rows: number[], head: number) {
     async (_db: unknown, input: { afterSeq: number; throughSeq: number; limit: number }) => rows
       .filter((seq) => seq > input.afterSeq && seq <= input.throughSeq)
       .slice(0, input.limit)
-      .map((seq) => event(seq)),
+      .map(eventForSeq),
   );
   const app = {
     db: {},
@@ -345,6 +347,18 @@ async function makeLiveHarness(rows: number[], head: number) {
 }
 
 describe("domain event hub live continuity", () => {
+  it("keeps legacy earnings visible and hides only checkpointed v2 earnings live", async () => {
+    const harness = await makeLiveHarness([1, 2, 3, 4], 4, (seq) => ({
+      ...event(seq),
+      type: seq < 3 ? "fan.earnings_observed" : seq === 3 ? "stream.projection_checkpoint" : "message.created",
+      schemaVersion: seq === 2 ? 2 : 1,
+      data: seq === 3 ? { hiddenCount: 1 } : {},
+    }));
+    hub = harness.created;
+    await vi.waitFor(() => expect(harness.delivered).toEqual([1, 3, 4]));
+    expect(harness.continuityLosses).toEqual([]);
+  });
+
   it("detects an internal retained-ledger hole before broadcasting a later row", async () => {
     const h = await makeLiveHarness([1, 3], 3);
     hub = h.created;

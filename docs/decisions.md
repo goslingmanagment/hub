@@ -284,6 +284,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 281 | Agent transcript window candidates | Select in-window message refs before loading their full material; retain every source version of those refs so source priority, tombstones and purchases stay authoritative across timestamp changes. |
 | 282 | Agent transcript tombstone lookup | Resolve the current OFAPI binding once and use the platform/account/message key for chatless tombstones; avoid scanning unrelated cold history before checking an absent binding. |
 | 284 | Fansly A0/T0 diagnostics | Default-off virtual-stop measurement preserves the full sweep; bounded read operations expose physical-attempt coverage and retained metadata without base-table grants. |
+| 285 | Fansly C2a earnings identity | Observation-scoped v2 snapshots preserve A-B-A, replay ordering and legacy SSE edges; daily rotation unchanged. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -11921,3 +11922,41 @@ follow automatically; B2 needs a separate decision. Set only this allowlist to
 `none` to disable diagnostics; preserve reports and business state. See the
 [A0 runbook](runbooks/fansly-events-shadow.md) and
 [implementation evidence](../investigations/fansly-a0-shadow-2026-09-10/STATUS.md).
+
+
+## Decision 285: Preserve repeated Fansly earnings observations (2026-09-10)
+
+**Context.** Content-only earnings keys can discard the third snapshot in
+A → B → A. The existing 32-bit hash also allows content collisions to suppress
+money snapshots. The accepted C2a stage requires stateless replay and repair;
+production incidence has not been established by the offline counterexample.
+
+**Decision.** Move only `fan_earnings_stats` and `fan_earnings_monthly` from
+pull/sync v6 to a dedicated pull/earnings v7 family, prioritizing new captures.
+One observation/fan/window owns one `fan.earnings_observed` v2 key; SHA-256
+content fingerprint is separate. The same observation remains idempotent;
+later identical content can apply again. Provider-derived mills and parser
+validation remain authoritative. The projector orders by observation time and
+observation ID, independent of the sequence in which a replay allocates events.
+Migration 0178 stores that tie-breaker in the rebuildable projection.
+
+Only new v2 earnings are projection-only and checkpointed. Historical v1
+rows retain delivery semantics because they lack covering checkpoints. The
+append guards, SQL replay filters and live hub classify type plus version;
+the sequence validator remains strict. No observations or ledger rows are
+rewritten. New versions do not reopen already parsed DM/purchase observations.
+
+An empty array without fan/window context is unknown, not a minted zero.
+An explicit valid zero is preserved. Receipt time cannot reveal a provider
+correction's undisclosed source timestamp. `observed_at` is not relabelled
+`last_changed_at`; operational check/change receipts belong to C2b, the first
+consumer of the new refresh planes. Daily rotation and request selection do
+not change. No savings, freshness improvement or production repair is claimed.
+
+**Operations.** Deploy compatible readers before activating v7 workers. After
+v2 emission a whole-image rollback to the old reader is unsafe; the compatible
+rollback keeps the classifier and schema while reverting the producer/projector.
+Retained earnings observations must all be replayed and checked; any remaining
+projection mismatch requires a separately approved page-scoped rebuild. These
+are explicit production gates, not implied by merging this change. See the
+[repair runbook](runbooks/fansly-earnings-correctness.md).

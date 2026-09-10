@@ -119,7 +119,7 @@ export function createDomainEventHub(app: AppContext): DomainEventHub {
   let drainRetryDelayMs = DRAIN_RETRY_MIN_MS;
 
   function broadcast(event: DomainEventRow) {
-    if (isProjectionOnlyDomainEventType(event.type)) {
+    if (isProjectionOnlyDomainEventType(event.type, event.schemaVersion)) {
       // Projection-only rows advance the shared durable drain, but never enter
       // per-client buffers. Their atomic checkpoint carries the cursor jump.
       return;
