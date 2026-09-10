@@ -285,6 +285,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 282 | Agent transcript tombstone lookup | Resolve the current OFAPI binding once and use the platform/account/message key for chatless tombstones; avoid scanning unrelated cold history before checking an absent binding. |
 | 284 | Fansly A0/T0 diagnostics | Default-off virtual-stop measurement preserves the full sweep; bounded read operations expose physical-attempt coverage and retained metadata without base-table grants. |
 | 285 | Fansly C2a earnings identity | Observation-scoped v2 snapshots preserve A-B-A, replay ordering and legacy SSE edges; daily rotation unchanged. |
+| 286 | Fansly C1 diagnostics | Retain all three existing trigger branches and queue semantics; record bounded decision/queue receipts before selecting a follower fix. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -11960,3 +11961,37 @@ Retained earnings observations must all be replayed and checked; any remaining
 projection mismatch requires a separately approved page-scoped rebuild. These
 are explicit production gates, not implied by merging this change. See the
 [repair runbook](runbooks/fansly-earnings-correctness.md).
+
+
+## Decision 286: Measure Fansly follower reconcile decisions (2026-09-10)
+
+**Context.** C1 requires a measured RCA of three OR branches before choosing a
+narrow fix. Cooldown does not exist. Current production read_only access does
+not expose sync-run telemetry, and the existing trigger does not journal which
+branches fired. Neither headline/active mismatch nor a 48-hour policy proves
+that a reconcile request was redundant.
+
+**Decision.** Name the existing three predicates without changing them. After
+the current queue call settles, retain one diagnostic note for both requested
+and no-request decisions. Preserve counts, boundary context and an opt-in
+queue receipt from the already locked requestPageSync row. Ordinary callers
+retain their exact previous result shape and queue behavior. No extra provider
+call, cooldown, cadence, presence or destructive reconciliation change ships.
+
+Migration 0179 adds a fixed, bounded read operation accessible to read_only.
+It counts missing, malformed, contradictory, duplicate and boundary-crossing
+receipts explicitly; invalid evidence does not enter the valid denominator.
+All OR combinations are retained. Queue counts distinguish known receipts,
+unknown receipts and requests arriving with unapplied work. The last count is
+a coalescing opportunity, not a claim that completed generations were combined.
+The report exposes aggregates only, with no underlying table grants.
+
+**C1 gate.** This remains the diagnostic portion of one draft PR. Production
+activation requires an approved revision; its branch includes the preceding
+C2a changes and cannot be treated as an inert whole-worker deployment. Retain
+read reports outside telemetry retention, establish branch frequencies and
+actual reconcile-generation consolidation, investigate headline/active,
+deleted-account and pagination semantics, then add the proven narrow fix in
+this same PR. Snapshot-drift/blast-radius guards and presence consumers remain
+exit criteria. No production counters, savings or completed C1 are claimed.
+See the [diagnostic runbook](runbooks/fansly-followers-diagnostics.md).

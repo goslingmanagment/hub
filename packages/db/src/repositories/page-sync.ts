@@ -3029,11 +3029,17 @@ export async function requestPageSync(
     requestPayloadByStream?: Partial<Record<SyncStream, Record<string, unknown> | null>>;
     now?: Date;
     dependencyOptions?: PageSyncDependencyOptions;
+    /** Diagnostic receipt from the same locked row; omitted for ordinary callers. */
+    includeQueueState?: boolean;
   },
 ) {
   const now = input.now ?? new Date();
   const requestedStreams = normalizePageSyncRequestStreams(input.streams);
-  const results: Array<{ stream: SyncStream; requestedSeq: number }> = [];
+  const results: Array<{
+    stream: SyncStream;
+    requestedSeq: number;
+    queueBefore?: { requestedSeq: number; appliedSeq: number };
+  }> = [];
 
   await ensurePageSyncStates(db, {
     pageId: input.pageId,
@@ -3126,6 +3132,9 @@ export async function requestPageSync(
       results.push({
         stream,
         requestedSeq: nextRequestSeq,
+        ...(input.includeQueueState ? {
+          queueBefore: { requestedSeq: current.requestSeq, appliedSeq: current.appliedSeq },
+        } : {}),
       });
     }
 

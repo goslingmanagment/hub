@@ -571,7 +571,7 @@ export async function upsertPageFollow(
 }
 
 export async function countActivePageFollows(db: Database, platformAccountId: number) {
-  const result = await db.execute(sql`
+  const result = await db.execute<{ count: number }>(sql`
     select count(*)::int as count
     from page_follows
     where platform_account_id = ${platformAccountId}

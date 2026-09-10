@@ -1,0 +1,5 @@
+BEGIN
+SET
+read_only|on
+pgboss|job_table_run_async|command_name text, version integer, command text, tbl_name text, queue_name text
+COMMIT
