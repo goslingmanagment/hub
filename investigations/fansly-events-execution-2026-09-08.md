@@ -13,7 +13,7 @@ and evidence now live in `investigations/`.
 | A0 + T0 | [PR164](https://github.com/goslingmanagment/core/pull/164) merged; Decision 284, not deployed | Narrow read operations precede the retained September 1–6 export; runtime shadow >=7 full days on all six pages is not started. Physical-attempt savings unmeasured. |
 | C1 | [PR166](https://github.com/goslingmanagment/core/pull/166) draft, Decision 287 | Three-branch diagnostic code tested/reviewed; production timeline and narrow policy fix pending in this PR. |
 | C2a | [PR165](https://github.com/goslingmanagment/core/pull/165) merged, Decision 285; not deployed | A-B-A/replay/stale-ordering tests pass; production replay/repair remains separately gated. |
-| C2b | Shadow implementation tested and independently reviewed, Decision 289 | Atomic semantic dirty, independent endpoint receipts and restricted report; daily rotation unchanged. Production deployment/enablement and measurements pending. |
+| C2b | [PR169](https://github.com/goslingmanagment/core/pull/169) open; tested and independently reviewed, Decision 289 | Atomic semantic dirty, independent endpoint receipts and restricted report; daily rotation unchanged. Production deployment/enablement and measurements pending. |
 | C2c | Gated | Coverage, costs and per-fan max-age proof before selection/rotation changes. |
 | W0 | [PR167](https://github.com/goslingmanagment/core/pull/167) draft, Decision 288 | Offline diagnostics tested/reviewed; live Management Session binding, fan-out, presence and six-hour continuity still gated. |
 | B0 | Gated by W0 | Capture-only receiver, >=7 days with sufficient event variety. |

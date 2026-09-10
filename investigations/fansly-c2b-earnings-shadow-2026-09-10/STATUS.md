@@ -1,6 +1,8 @@
 # Fansly C2b — semantic earnings shadow
 
 Branch `feat/fansly-c2b-dirty`, based on current main `940ec69f`.
+PR: [169](https://github.com/goslingmanagment/core/pull/169). Local validation
+and independent review are complete; required GitHub CI is running.
 Decision 289 follows main 286 and open C1/W0 reservations 287/288.
 Migrations 0180/0181 follow C1's reserved 0179; recheck before merge.
 
