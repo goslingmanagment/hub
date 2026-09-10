@@ -10,9 +10,9 @@ and evidence now live in `investigations/`.
 |---|---|---|
 | Pre-A0: stale follow-up + lilly-2 debt | PR157 deployed; Lilly-2 one-hour canary completed and rolled back | Frozen Lilly-2 5615/5615 raw; canary had 0 eligible targets / 0 recovery attempts, 104 excluded debts unchanged; 8/8 selected material passed after rollback. Separate old Lilly-1/Lora-1/Ari discrepancies remain explicit. |
 | Pre-A0: reply links / honest sweep | PR158–162 deployed; original bounded corpus accepted | 994/994 reply IDs, 2893 observations, 27 attached messages across separately timestamped reads; not an atomic census or fresh-event latency claim. |
-| A0 + T0 | Default-off implementation and validation in progress, Decision 284 | Narrow read operations precede the retained September 1–6 export; runtime shadow >=7 full days on all six pages is not started. Physical-attempt savings unmeasured. |
+| A0 + T0 | [PR164](https://github.com/goslingmanagment/core/pull/164) merged; Decision 284, not deployed | Narrow read operations precede the retained September 1–6 export; runtime shadow >=7 full days on all six pages is not started. Physical-attempt savings unmeasured. |
 | C1 | Not started | Diagnostic counts of the three anomaly branches before a narrow fix. |
-| C2a | Not started | Earnings identity correctness, A-B-A/replay/stale ordering; retain repair plan. |
+| C2a | Implementation validated and independently reviewed, Decision 285; not deployed | Earnings identity correctness, A-B-A/replay/stale ordering; retain repair plan. |
 | C2b | Not started | Dirty/receipt shadow; daily rotation unchanged. |
 | C2c | Gated | Coverage, costs and per-fan max-age proof before selection/rotation changes. |
 | W0 | Not started | Offline fixtures; live socket probes need explicit approval. Management Session only. |

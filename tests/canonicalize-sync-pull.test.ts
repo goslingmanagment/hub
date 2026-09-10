@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { canonicalizeCommandResultObservation } from "../apps/runtime/src/services/canonicalize/command-result.ts";
 import { familyForObservation } from "../apps/runtime/src/services/canonicalize/index.ts";
+import { canonicalizeFanslyEarningsObservation } from "../apps/runtime/src/services/canonicalize/fansly-earnings.ts";
 import { canonicalizeSyncPullObservation } from "../apps/runtime/src/services/canonicalize/sync-pull.ts";
 import type { CanonicalizableObservation } from "../apps/runtime/src/services/canonicalize/types.ts";
 
@@ -233,7 +234,7 @@ describe("sync-pull canonicalizer (Stage 8)", () => {
   });
 
   it("poisons an entire Fansly fan/window on malformed money or aggregate overflow", () => {
-    const lifetime = canonicalizeSyncPullObservation(observation({
+    const lifetime = canonicalizeFanslyEarningsObservation(observation({
       kind: "fan_earnings_stats",
       payload: [
         { correlationAccountId: "fan-valid", totalGross: 5_000, totalNet: 4_000, type: 2010 },
@@ -259,7 +260,7 @@ describe("sync-pull canonicalizer (Stage 8)", () => {
       data: { window: "lifetime", grossMills: 7_000, netMills: 5_600 },
     });
 
-    const monthly = canonicalizeSyncPullObservation(observation({
+    const monthly = canonicalizeFanslyEarningsObservation(observation({
       kind: "fan_earnings_monthly",
       payload: [
         { correlationAccountId: "fan-valid", year: 2026, month: 7, totalGross: 2_000, totalNet: 1_600 },

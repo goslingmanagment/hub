@@ -8,7 +8,7 @@
 // claim is the dedup signal — the sequence does not advance, so account_seq
 // stays gapless by construction under any job/worker concurrency.
 
-import { sql } from "drizzle-orm";
+import { sql, type SQL } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
 import { type CapturePayloadRef, capturePayloadRefFromColumns } from "./capture-payloads.ts";
@@ -163,8 +163,12 @@ const PROJECTION_ONLY_DOMAIN_EVENT_TYPES = new Set([
   "payout.method_list_observed",
 ]);
 
-export function isProjectionOnlyDomainEventType(type: string) {
-  return PROJECTION_ONLY_DOMAIN_EVENT_TYPES.has(type);
+const EARNINGS_PROJECTION_SCHEMA_VERSION = 2;
+
+/** v1 earnings predate atomic checkpoints and must retain their replay edges. */
+export function isProjectionOnlyDomainEventType(type: string, schemaVersion = 1) {
+  return PROJECTION_ONLY_DOMAIN_EVENT_TYPES.has(type)
+    || (type === "fan.earnings_observed" && schemaVersion >= EARNINGS_PROJECTION_SCHEMA_VERSION);
 }
 
 /** The SQL-side twin of the set above, DERIVED from it. Both exclusion sites
@@ -175,6 +179,13 @@ const PROJECTION_ONLY_TYPES_SQL = sql.join(
   [...PROJECTION_ONLY_DOMAIN_EVENT_TYPES].map((type) => sql`${type}`),
   sql`, `,
 );
+
+function projectionOnlyEventSql(type: SQL, schemaVersion: SQL) {
+  return sql`(
+    ${type} in (${PROJECTION_ONLY_TYPES_SQL})
+    or (${type} = 'fan.earnings_observed' and ${schemaVersion} >= ${EARNINGS_PROJECTION_SCHEMA_VERSION})
+  )`;
+}
 
 /**
  * Appends a batch of canonical events for ONE account. Self-transactional:
@@ -201,7 +212,7 @@ export async function appendProjectionOnlyDomainEvents(
   events: readonly DomainEventInput[],
   checkpoint: ProjectionCheckpointInput,
 ): Promise<AppendDomainEventsResult> {
-  if (events.some((event) => !isProjectionOnlyDomainEventType(event.type))) {
+  if (events.some((event) => !isProjectionOnlyDomainEventType(event.type, event.schemaVersion))) {
     throw new Error("Projection-only append received a deliverable domain event");
   }
   return appendDomainEventsBatch(db, accountId, events, checkpoint);
@@ -232,7 +243,7 @@ export async function appendMixedDomainEvents(
   events: readonly DomainEventInput[],
   checkpoint: ProjectionCheckpointInput | null,
 ): Promise<AppendDomainEventsResult> {
-  if (checkpoint === null && events.some((event) => isProjectionOnlyDomainEventType(event.type))) {
+  if (checkpoint === null && events.some((event) => isProjectionOnlyDomainEventType(event.type, event.schemaVersion))) {
     throw new Error("Mixed append received projection-only events without a checkpoint");
   }
   return appendDomainEventsBatch(db, accountId, events, checkpoint);
@@ -247,7 +258,7 @@ export async function appendProjectionOnlyDomainEventsInTransaction(
   events: readonly DomainEventInput[],
   checkpoint: ProjectionCheckpointInput,
 ): Promise<AppendDomainEventsResult> {
-  if (events.some((event) => !isProjectionOnlyDomainEventType(event.type))) {
+  if (events.some((event) => !isProjectionOnlyDomainEventType(event.type, event.schemaVersion))) {
     throw new Error("Projection-only append received a deliverable domain event");
   }
   return appendDomainEventsBatchInTransaction(db, accountId, events, checkpoint);
@@ -404,7 +415,7 @@ async function appendDomainEventsBatchInTransaction(
     `);
     nextSeq += 1;
     appended += 1;
-    if (isProjectionOnlyDomainEventType(event.type)) {
+    if (isProjectionOnlyDomainEventType(event.type, event.schemaVersion)) {
       hiddenAppended += 1;
     }
     return true;
@@ -416,9 +427,9 @@ async function appendDomainEventsBatchInTransaction(
   // is reordered, and it must be — see appendMixedDomainEvents.
   const slots = events.map((event, index) => ({ event, index }));
   const deliverableEvents = slots.filter(
-    ({ event }) => !isProjectionOnlyDomainEventType(event.type),
+    ({ event }) => !isProjectionOnlyDomainEventType(event.type, event.schemaVersion),
   );
-  const hiddenEvents = slots.filter(({ event }) => isProjectionOnlyDomainEventType(event.type));
+  const hiddenEvents = slots.filter(({ event }) => isProjectionOnlyDomainEventType(event.type, event.schemaVersion));
   for (const { event, index } of deliverableEvents) {
     await appendOne(event, index);
   }
@@ -615,7 +626,7 @@ export async function listDomainEventContiguousReplayEnds(
           on event.account_id = normalized.account_id
          and event.account_seq > normalized.base_seq
          and event.account_seq <= normalized.through_seq
-         and event.type not in (${PROJECTION_ONLY_TYPES_SQL})
+         and not ${projectionOnlyEventSql(sql`event.type`, sql`event.schema_version`)}
       ), classified as (
         select *,
                case
@@ -966,7 +977,7 @@ export async function listEventsSince(
       and de.account_seq > ${input.afterSeq}
       ${input.throughSeq === undefined ? sql`` : sql`and de.account_seq <= ${input.throughSeq}`}
       ${input.excludeProjectionOnly === true
-        ? sql`and de.type not in (${PROJECTION_ONLY_TYPES_SQL})`
+        ? sql`and not ${projectionOnlyEventSql(sql`de.type`, sql`de.schema_version`)} `
         : sql``}
     order by de.account_seq asc
     limit ${limit}

@@ -20,6 +20,13 @@ import {
   OFAPI_WEBHOOK_CANONICALIZER_VERSION,
 } from "./ofapi-webhook.ts";
 import {
+  canonicalizeFanslyEarningsObservation,
+  canParseFanslyEarningsObservation,
+  diagnoseFanslyEarningsRejection,
+  FANSLY_EARNINGS_CANONICALIZER_VERSION,
+  FANSLY_EARNINGS_KINDS,
+} from "./fansly-earnings.ts";
+import {
   canonicalizeSyncPullObservation,
   SYNC_PULL_CANONICALIZED_KINDS,
   SYNC_PULL_CANONICALIZER_VERSION,
@@ -149,6 +156,17 @@ export const CANONICALIZER_FAMILIES: readonly CanonicalizerFamily[] = [
     canonicalize: canonicalizePostsObservation,
     canParse: canParsePostsObservation,
     parseRejection: diagnosePostsObservationRejection,
+    projectionOnly: true,
+  },
+  {
+    source: "pull",
+    lane: "earnings",
+    kinds: [...FANSLY_EARNINGS_KINDS],
+    version: FANSLY_EARNINGS_CANONICALIZER_VERSION,
+    prioritizeUnparsed: true,
+    canonicalize: canonicalizeFanslyEarningsObservation,
+    canParse: canParseFanslyEarningsObservation,
+    parseRejection: diagnoseFanslyEarningsRejection,
     projectionOnly: true,
   },
   {

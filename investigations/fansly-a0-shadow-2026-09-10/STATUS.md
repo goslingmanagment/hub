@@ -2,7 +2,9 @@
 
 Authority: the migration plan and reviews dated 7 September, and the cross-check
 DECISION. Implementation branch: `feat/fansly-a0-shadow`, based on main
-`ce2485ae` / Decision 283. This stage adds measurement only; no production
+`ce2485ae` / Decision 283. [PR164](https://github.com/goslingmanagment/core/pull/164) merged as `a3caa0e9`
+after five green CI checks and the independent review below. Not deployed.
+This stage adds measurement only; no production
 shadow, savings result or A1 gate is claimed.
 
 The completed pre-A0 work is recorded separately from the new measurement:

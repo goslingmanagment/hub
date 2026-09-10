@@ -55,12 +55,6 @@ export interface SyncPullCanonicalizeContext {
 export const SYNC_PULL_CANONICALIZED_KINDS: ReadonlySet<string> = new Set([
   "earnings_transactions",
   "dm_messages",
-  // v3 (Stage 16 parse side): shapes derived from the extension's
-  // production-proven parsers (chatgoose shared/types.ts) — the ramp
-  // VERIFIES rather than discovers; units confirmed mills by core's own
-  // treatment of the same endpoint family (executor-handlers totalGross).
-  "fan_earnings_stats",
-  "fan_earnings_monthly",
   "purchase_history",
 ]);
 
@@ -229,10 +223,6 @@ export function canonicalizeSyncPullObservation(
         return ofapiRestMessages(observation);
       }
       return observation.platform === "fansly" ? fanslyDmMessages(observation, context) : [];
-    case "fan_earnings_stats":
-      return observation.platform === "fansly" ? fanslyEarningsObserved(observation, false) : [];
-    case "fan_earnings_monthly":
-      return observation.platform === "fansly" ? fanslyEarningsObserved(observation, true) : [];
     case "purchase_history":
       return observation.platform === "fansly"
         ? fanslyPurchaseHistory(observation, context)
@@ -240,12 +230,6 @@ export function canonicalizeSyncPullObservation(
     default:
       return [];
   }
-}
-
-interface EarningsAggregate {
-  grossMills: number;
-  netMills: number;
-  breakdown: Array<{ type: number | null; grossMills: number; netMills: number }>;
 }
 
 // Deep key-sorted copy: a replacer-array JSON.stringify would WHITELIST keys
@@ -262,123 +246,6 @@ function canonicalJson(value: unknown): unknown {
     );
   }
   return value;
-}
-
-function stableHash(value: unknown): string {
-  // Order-independent content hash so an unchanged snapshot re-fetch
-  // produces the same dedup key (spec: no new event on identical stats).
-  const canonical = JSON.stringify(canonicalJson(value));
-  let hash = 0;
-  for (let index = 0; index < canonical.length; index += 1) {
-    hash = (hash * 31 + canonical.charCodeAt(index)) | 0;
-  }
-  return (hash >>> 0).toString(16);
-}
-
-/** Both earnings kinds: rows aggregate per (fan, window); window = 'lifetime'
- *  for the stats snapshot, 'YYYY-MM' for monthly rows. Amounts are MILLS. */
-function fanslyEarningsObserved(
-  observation: CanonicalizableObservation,
-  monthly: boolean,
-): CanonicalEventDraft[] {
-  const rows = Array.isArray(observation.payload) ? observation.payload : null;
-  if (!rows) {
-    return [];
-  }
-
-  const perKey = new Map<string, { fan: string; window: string; aggregate: EarningsAggregate }>();
-  const poisonedKeys = new Set<string>();
-  for (const row of rows) {
-    if (!isRecord(row)) {
-      continue;
-    }
-    const fan = asString(row.correlationAccountId);
-    if (!fan) {
-      continue;
-    }
-    let window = "lifetime";
-    if (monthly) {
-      const year = asNumber(row.year);
-      const month = asNumber(row.month);
-      if (
-        year === null ||
-        month === null ||
-        !Number.isInteger(year) ||
-        !Number.isInteger(month) ||
-        year < 2000 ||
-        year > 2200 ||
-        month < 1 ||
-        month > 12
-      ) {
-        continue;
-      }
-      window = `${year}-${String(month).padStart(2, "0")}`;
-    }
-    // A missing amount is provider-contract drift, not a real zero. The raw
-    // observation remains durable for replay after a parser repair, but it
-    // must not mint a plausible-looking zero snapshot into the money plane.
-    const gross = asNumber(row.totalGross);
-    const net = asNumber(row.totalNet);
-    const key = `${fan}:${window}`;
-    if (poisonedKeys.has(key)) {
-      continue;
-    }
-    if (
-      gross === null ||
-      net === null ||
-      !Number.isSafeInteger(gross) ||
-      !Number.isSafeInteger(net)
-    ) {
-      // One malformed breakdown row invalidates the whole fan/window. Keeping
-      // the other rows would mint a plausible but understated money snapshot.
-      poisonedKeys.add(key);
-      continue;
-    }
-    const entry = perKey.get(key) ?? {
-      fan,
-      window,
-      aggregate: { grossMills: 0, netMills: 0, breakdown: [] },
-    };
-    const nextGrossMills = entry.aggregate.grossMills + gross;
-    const nextNetMills = entry.aggregate.netMills + net;
-    if (
-      !Number.isSafeInteger(nextGrossMills) ||
-      !Number.isSafeInteger(nextNetMills)
-    ) {
-      poisonedKeys.add(key);
-      continue;
-    }
-    entry.aggregate.grossMills = nextGrossMills;
-    entry.aggregate.netMills = nextNetMills;
-    entry.aggregate.breakdown.push({
-      type: asNumber(row.type),
-      grossMills: gross,
-      netMills: net,
-    });
-    perKey.set(key, entry);
-  }
-
-  const events: CanonicalEventDraft[] = [];
-  for (const [key, { fan, window, aggregate }] of perKey) {
-    if (poisonedKeys.has(key)) {
-      continue;
-    }
-    events.push({
-      type: "fan.earnings_observed",
-      occurredAt: observation.observedAt ?? observation.receivedAt,
-      fanIdentityRef: fan,
-      data: {
-        window,
-        grossMills: aggregate.grossMills,
-        netMills: aggregate.netMills,
-        breakdown: aggregate.breakdown,
-      },
-      schemaVersion: 1,
-      // Content-hashed: an unchanged snapshot re-fetch dedupes to nothing.
-      dedupKey: `fan_earnings:${fan}:${window}:${stableHash(aggregate)}`,
-    });
-  }
-  return events;
 }
 
 /** Inline DM order rows may omit orderId, while paginated order-history rows

@@ -70,6 +70,7 @@ export async function runFanEarningsProjection(
           netMills,
           observedAt: event.occurredAt,
           sourceEventId: event.id,
+          sourceObservationId: event.observationId,
         });
         totals.upserted += 1;
       }
