@@ -2,7 +2,8 @@
 
 Branch `feat/fansly-c1-followers`, based on main `f0a53aee` (C2a PR165).
 Decision 286, migration 0179. This is the diagnostic portion of the single C1
-draft PR, not completed C1. The measured cause and narrow fix remain pending.
+[draft PR166](https://github.com/goslingmanagment/core/pull/166), not completed C1.
+The measured cause and narrow fix remain pending.
 No production deployment, new flag, cooldown or cadence change is implied.
 
 Each incremental decision records the three existing OR predicates, including
