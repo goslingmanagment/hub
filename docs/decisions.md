@@ -12037,3 +12037,71 @@ captured facts and daily rotation. Independent daily checks remain required
 until quiet corrections are proven detectable within the previous freshness
 bound, or the owner separately accepts a new max-age. See the
 [C2b runbook](runbooks/fansly-earnings-shadow.md).
+
+## Decision 290: Ping reads the fan's names and stops seeding its own opener (2026-09-11)
+
+A chatter reported that Ping opens nearly every message with "hey stranger"
+instead of the fan's name (2026-09-11, four days after Decision #273 moved the
+reply features to Sonnet 5 at low reasoning). The generations were otherwise
+personal, so the intent of the template held; the opener did not.
+
+Four causes, all in the prompt stack. The ping template quoted "hey stranger"
+twice: once as the Check-in strategy and once in the silence-calibration
+paragraph that Decision #127 attached to the `Fan silence:` line, which is
+present on every segment-A ping, so the rule fired on nearly every call. The
+segment-A instruction, which sits in the uncached task block and is the last
+thing the model reads, quoted a second opener ("haven't talked in a while, was
+thinking about you"), the exact broadcast phrasing the template forbids above
+it. Decision #273 had already established on this model family that naming a
+phrase seeds it and that example shape is copied almost verbatim; low
+reasoning copies more literally. And the ping template had no name at all:
+`fanDisplayName` is computed for every feature but only hi-greeting rendered
+it, the transcript labels speakers `Fan:` / `Model:`, and the Fansly extension
+kept the chatter's saved fan name out of every prompt (ChatGoose E25: a saved
+label like "Max/Canada/45" read back to the fan would be an incident). With no
+name to open with, the quoted phrase filled the address slot.
+
+What changes. Both quoted openers are rephrased as descriptions of the move
+(days or weeks: playful about the silence itself; months: softer, no mention
+of how long; Check-in: notice the silence in your own words, then give him
+something specific to answer), and the What-to-Avoid bullet from Decision
+#273 drops its own quoted tell-phrase ("been thinking about you") for the
+same reason. The segment instructions lose their quoted
+examples; segment B is now "barely chatted" (hook onto what he wrote, his name
+or his bio, persona opener only as the fallback) rather than a cold-opener
+mode, because a fan with no messages is Hi's job, not Ping's. The template
+gains a `## Fan` section in the per-fan dynamic block (after the dossier,
+before the task anchor, so the cached static prefix stays fan-agnostic):
+`Fan username: {fanDisplayName}`, the new `{fanCustomNameLine}` slot, and
+`{fanBioSection}`. The name rule is explicit: address the fan by name only
+when one is actually known, in this order: a name that clearly comes up in the
+chat, then the chatter-saved name (name part only, the rest of the label is
+never repeated), then a clear first name inside the username; otherwise no
+address word, and never an invented nickname. One reread line closes the task
+block ("if it could have gone to any other fan, add the detail that makes it
+his"), the recency device Decision #273 measured on fast-reply. The rest of
+the template is deliberately untouched: the owner's ruling is that the
+personalization design worked before and needs its data and its seeded
+phrases fixed, not a structural rewrite.
+
+Contract. `clientContext.fanCustomName` (optional, max 200) joins the
+feature-lane body; the kernel passes it straight to the builder, where it is
+escaped like the bio. Kernel-context platforms send nothing today. Ping's
+policy turns `includesFanBio` on; the extension gates sending the bio by the
+same flag, so until it ships the section stays empty. The extension's side
+(re-vendored SDK, `fanCustomName` from the account lookup it already makes for
+every generation, the bio for ping, and the E25 boundary superseded with a
+tombstone) is a separate ChatGoose change; this decision deploys nothing on
+the client. The owner's explicit ruling supersedes the E25 boundary: the saved
+name usually is the fan's real name and belongs in the prompt, with the chat
+taking precedence when the two disagree.
+
+Not done, on purpose: no gate on pinging a fan who never wrote (Hi stays the
+tool for that, by chatter judgment), no change to Hi's limits, no model or
+reasoning change for ping. Verification is the builder suite (slot rendering,
+escaping, cache-block placement, no quoted opener in the assembled prompt),
+templates-sync and the manifest pins; the live check is the same chatter's
+next pings after deploy. If the opener still collapses onto one phrase on
+Sonnet 5 low, the next lever is the reasoning level for ping, not the
+template.
+

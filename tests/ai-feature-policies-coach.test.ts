@@ -32,5 +32,6 @@ describe("coach-chat feature policy", () => {
     expect(FEATURE_POLICIES["hi-greeting"].includesFanBio).toBe(true);
     expect(FEATURE_POLICIES["help-me"].includesFanBio).toBe(true); // owner: absence was a bug
     expect(FEATURE_POLICIES["fast-reply"].includesFanBio).toBe(false);
+    expect(FEATURE_POLICIES.ping.includesFanBio).toBe(true); // Decision 290: the bio is a ping hook
   });
 });
