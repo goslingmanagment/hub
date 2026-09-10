@@ -1,16 +1,12 @@
-import { lazy, Suspense, type ReactNode } from "react";
-import { Link, useNavigate } from "react-router";
-import { ArrowUpRight, RefreshCw } from "lucide-react";
+import { lazy, Suspense, useState, type ReactNode } from "react";
+import { Link } from "react-router";
+import { ArrowUpRight, RefreshCw, ChevronDown, Info } from "lucide-react";
 import {
   useAuthMe,
   useOverview,
   useOverviewRevenue,
-  useOverviewGrowth,
   useOverviewRevenueDaily,
-  useOverviewRevenueByModel,
 } from "@/api/queries";
-import { TrendSparkline } from "@/components/shared/TrendSparkline";
-import { DeltaIndicator } from "@/components/shared/DeltaIndicator";
 import { PeriodSelector } from "@/components/shared/PeriodSelector";
 import { StatusPanel } from "@/components/shared/StatusPanel";
 import { PlatformBadge } from "@/components/shared/PlatformBadge";
@@ -19,12 +15,21 @@ import {
   getSyncUxDisplayMode,
   getSyncUxExceptionKind,
 } from "@/components/shared/syncUxDisplay";
-import { buildPageRoute, buildSettingsRoute } from "@/lib/navigation";
+import {
+  buildPageRoute,
+  buildPageSectionRoute,
+  buildSettingsRoute,
+} from "@/lib/navigation";
 import { PLATFORM_DISPLAY_NAME } from "@/lib/platformUrls";
-import { formatUsdFromMills } from "@agency_hub_core/shared";
+import {
+  formatUsdFromMills,
+  millsFromInteger,
+  millsToNumber,
+} from "@agency_hub_core/shared";
 import { usePeriodStore } from "@/stores/periodStore";
 import type {
   OverviewResponse,
+  OverviewRevenueResponse,
   PlatformRevenueWindow,
 } from "@agency_hub_core/contracts";
 
@@ -33,9 +38,7 @@ const PageActivityChart = lazy(() =>
     default: m.PageActivityChart,
   })),
 );
-
-type OverviewPageItem = OverviewResponse["pages"][number];
-type PageMetric = OverviewPageItem["subscriberCount"];
+type Page = OverviewResponse["pages"][number];
 type QueryState = {
   data?: unknown;
   isLoading?: boolean;
@@ -44,84 +47,91 @@ type QueryState = {
   isPlaceholderData?: boolean;
   refetch?: () => unknown;
 };
-
+type EarningsRow = {
+  id: number;
+  label: string;
+  modelSlug: string;
+  modelName: string;
+  catalog: Page | undefined;
+  retired: boolean;
+  current: number | null;
+  previous: number | null;
+};
 const PERIOD_LABELS: Record<string, string> = {
   today: "Today",
   "7d": "7 Days",
   "30d": "30 Days",
   all: "All Time",
 };
-
-interface ModelGroup {
-  modelSlug: string;
-  modelName: string;
-  pages: OverviewPageItem[];
-}
-
-function groupByModel(pages: OverviewPageItem[]): ModelGroup[] {
-  const map = new Map<string, ModelGroup>();
-  for (const page of pages) {
-    let group = map.get(page.modelSlug);
-    if (!group) {
-      group = {
-        modelSlug: page.modelSlug,
-        modelName: page.modelName,
-        pages: [],
-      };
-      map.set(page.modelSlug, group);
-    }
-    group.pages.push(page);
-  }
-  return Array.from(map.values());
-}
+const SOURCE_LABELS: Record<string, string> = {
+  subscription: "Subscription payments",
+  tip: "Tips",
+  message_purchase: "Paid messages",
+  post_purchase: "Paid posts",
+  stream_tip: "Live stream tips",
+  chargeback: "Chargebacks",
+  refund: "Refunds",
+  other: "Unclassified",
+};
+const MS_PER_DAY = 86_400_000;
 
 function hasCurrentData(query: QueryState) {
-  return (
-    query.data !== undefined && query.data !== null && !query.isPlaceholderData
-  );
+  return query.data != null && !query.isPlaceholderData;
 }
-
 function isWaiting(query: QueryState) {
   return !hasCurrentData(query) && Boolean(query.isLoading || query.isFetching);
 }
-
-function formatGrowthValue(value: number) {
-  return `${value > 0 ? "+" : ""}${value.toLocaleString()}`;
-}
-
-function supportsFollowerGrowth(page: OverviewPageItem) {
-  return page.platform === "fansly";
-}
-
-function getPageMetricValue(metric: PageMetric) {
+function metricValue(metric: Page["subscriberCount"]) {
   return metric.available && typeof metric.value === "number"
     ? metric.value
     : null;
 }
+function difference(current: number, previous: number) {
+  return millsToNumber(millsFromInteger(current) - millsFromInteger(previous));
+}
+function signedMoney(value: number) {
+  return `${value > 0 ? "+" : value < 0 ? "−" : ""}${formatUsdFromMills(Math.abs(value))}`;
+}
+function dateLabel(value: string) {
+  return new Date(value).toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    timeZone: "UTC",
+  });
+}
+function windowLabel(from: string | null, to: string | null) {
+  return from && to
+    ? `${dateLabel(from)} – ${dateLabel(new Date(new Date(to).getTime() - 1).toISOString())}`
+    : "All captured history";
+}
 
-function summarizeValues(values: Array<number | null>) {
-  const known = values.filter((value): value is number => value !== null);
-  return {
-    value:
-      known.length > 0 ? known.reduce((sum, value) => sum + value, 0) : null,
-    known: known.length,
-    total: values.length,
-    partial: known.length > 0 && known.length < values.length,
-  };
+export function describeMixedRevenueWindows(
+  windows: PlatformRevenueWindow[] | undefined,
+  periodLabel: string,
+): string | null {
+  if (!windows || windows.length < 2) return null;
+  const spans = windows
+    .filter((window) => window.from && window.to)
+    .map((window) => ({
+      platform: PLATFORM_DISPLAY_NAME[window.platform] ?? window.platform,
+      days: Math.round(
+        (new Date(window.to!).getTime() - new Date(window.from!).getTime()) /
+          MS_PER_DAY,
+      ),
+    }));
+  if (spans.length < 2 || new Set(spans.map((span) => span.days)).size < 2)
+    return null;
+  return `“${periodLabel}” uses ${spans.map((span) => `${span.days} days on ${span.platform}`).join(", ")}. Each page is compared with its own preceding window.`;
 }
 
 function MetricValue({
   value,
   loading = false,
-  format = (n) => n.toLocaleString(),
-  growth = false,
-  partial = false,
+  money = false,
 }: {
   value: number | null;
   loading?: boolean;
-  format?: (value: number) => string;
-  growth?: boolean;
-  partial?: boolean;
+  money?: boolean;
 }) {
   if (loading)
     return (
@@ -141,27 +151,7 @@ function MetricValue({
         —
       </span>
     );
-  return (
-    <span
-      className={
-        growth && value !== 0
-          ? value > 0
-            ? "text-green"
-            : "text-danger"
-          : undefined
-      }
-    >
-      {format(value)}
-      {partial && (
-        <span
-          className="overview-partial"
-          title="Some page values are unavailable; this is a subtotal"
-        >
-          Partial
-        </span>
-      )}
-    </span>
-  );
+  return <>{money ? formatUsdFromMills(value) : value.toLocaleString()}</>;
 }
 
 function QueryNotice({ query, label }: { query: QueryState; label: string }) {
@@ -184,57 +174,320 @@ function QueryNotice({ query, label }: { query: QueryState; label: string }) {
   );
 }
 
-function SummaryMetric({
-  label,
-  value,
-  detail,
-  primary = false,
+function RevenueChange({
+  current,
+  previous,
+  loading = false,
 }: {
-  label: string;
-  value: ReactNode;
-  detail: ReactNode;
-  primary?: boolean;
+  current: number | null;
+  previous: number | null;
+  loading?: boolean;
 }) {
+  if (current === null || previous === null)
+    return <MetricValue value={null} loading={loading} />;
+  const delta = difference(current, previous);
+  const pct = previous === 0 ? null : (delta / Math.abs(previous)) * 100;
   return (
-    <div
-      className={`overview-summary-metric${primary ? " overview-summary-primary" : ""}`}
-    >
-      <dt>{label}</dt>
-      <dd className="overview-summary-value tabular-nums">{value}</dd>
-      <dd className="overview-summary-detail">{detail}</dd>
+    <div className="overview-change">
+      <span
+        className={delta < 0 ? "text-danger" : delta > 0 ? "text-green" : ""}
+      >
+        {signedMoney(delta)}
+        {pct !== null && (
+          <span className="overview-change-pct">
+            {Math.abs(pct).toFixed(1)}% {delta < 0 ? "↓" : delta > 0 ? "↑" : ""}
+          </span>
+        )}
+      </span>
+      <small>
+        from {formatUsdFromMills(previous)}
+        {previous === 0 && delta !== 0 ? " · no recorded previous earnings" : ""}
+      </small>
     </div>
   );
 }
-const MS_PER_DAY = 86_400_000;
 
-// Audit B2: OnlyFans trailing windows deliberately cover one more calendar day
-// than other platforms', so a mixed-platform total under one period label sums
-// different window widths. Returns the disclosure line, or null when every
-// platform's window has the same width (single platform, custom range, etc.).
-export function describeMixedRevenueWindows(
-  windows: PlatformRevenueWindow[] | undefined,
-  periodLabel: string,
-): string | null {
-  if (!windows || windows.length < 2) {
-    return null;
-  }
+function PageIdentity({
+  page,
+  label,
+  retired = false,
+  isOwner = false,
+}: {
+  page?: Page | undefined;
+  label: string;
+  retired?: boolean;
+  isOwner?: boolean;
+}) {
+  const tone = page ? getSyncUxTone(page.syncUx.state) : null;
+  const exception = page ? getSyncUxExceptionKind(page.syncUx) : null;
+  const showException =
+    page &&
+    getSyncUxDisplayMode(page.syncUx, "overview_row") === "exception" &&
+    exception &&
+    exception !== "credentials";
+  const content = (
+    <>
+      {page && tone && (
+        <span
+          className={`h-2 w-2 shrink-0 rounded-full ${tone.dot}`}
+          role="img"
+          aria-label={page.syncUx.label}
+          title={page.syncUx.headline}
+        />
+      )}
+      <span className="overview-page-label">{label}</span>
+      {page && <PlatformBadge platform={page.platform} />}
+      {retired ? (
+        <span className="overview-page-count">Retired</span>
+      ) : (
+        <ArrowUpRight
+          size={14}
+          className="overview-page-arrow"
+          aria-hidden="true"
+        />
+      )}
+    </>
+  );
+  return (
+    <>
+      {retired ? (
+        <span className="overview-page-link">{content}</span>
+      ) : (
+        <Link className="overview-page-link" to={buildPageRoute(label)}>
+          {content}
+        </Link>
+      )}
+      {showException && (
+        <div className={`overview-sync-notice ${tone?.panel}`}>
+          <span className={tone?.text}>
+            {exception === "off"
+              ? page.syncUx.headline
+              : "Data may be incomplete — updates need attention"}
+          </span>
+          {isOwner && (
+            <Link to={buildSettingsRoute("sync", label)}>
+              Check sync settings
+            </Link>
+          )}
+        </div>
+      )}
+    </>
+  );
+}
 
-  const spans = windows
-    .filter((window) => window.from && window.to)
-    .map((window) => ({
-      platform: PLATFORM_DISPLAY_NAME[window.platform] ?? window.platform,
-      days: Math.round(
-        (new Date(window.to!).getTime() - new Date(window.from!).getTime()) /
-          MS_PER_DAY,
-      ),
-    }));
+function earningsRows(
+  pages: Page[],
+  report?: OverviewRevenueResponse,
+): EarningsRow[] {
+  const catalog = new Map(pages.map((p) => [p.id, p]));
+  const amounts = new Map((report?.pages ?? []).map((p) => [p.pageId, p]));
+  const ids = new Set([...catalog.keys(), ...amounts.keys()]);
+  return [...ids].map((id) => {
+    const page = catalog.get(id);
+    const amount = amounts.get(id);
+    return {
+      id,
+      label: page?.label ?? amount?.pageLabel ?? String(id),
+      modelSlug: page?.modelSlug ?? amount?.modelSlug ?? "",
+      modelName: page?.modelName ?? amount?.modelName ?? "",
+      catalog: page,
+      retired: amount?.status === "deleted",
+      current: amount?.netEarningsMills ?? null,
+      previous: amount?.previousNetEarningsMills ?? null,
+    };
+  });
+}
 
-  if (spans.length < 2 || new Set(spans.map((span) => span.days)).size < 2) {
-    return null;
-  }
+function RevenueSources({
+  report,
+  loading,
+}: {
+  report?: OverviewRevenueResponse | undefined;
+  loading: boolean;
+}) {
+  const breakdown = report?.breakdown;
+  const sales = breakdown
+    ?.filter((r) => r.bucket === "revenue")
+    .sort((a, b) => b.netAmountMills - a.netAmountMills);
+  const adjustments = breakdown?.filter(
+    (r) =>
+      (r.bucket === "adjustment" || r.bucket === "unclassified") &&
+      r.netAmountMills !== 0,
+  );
+  return (
+    <section
+      className="overview-sources"
+      aria-labelledby="overview-sources-heading"
+    >
+      <div className="overview-section-heading">
+        <h2 id="overview-sources-heading">What earned money</h2>
+      </div>
+      <p className="overview-source-intro">
+        Net amounts from recorded transactions
+      </p>
+      {loading ? (
+        <ReportPlaceholder loading />
+      ) : !breakdown ? (
+        <p className="overview-empty">Revenue breakdown unavailable.</p>
+      ) : (
+        <>
+          {(sales?.length ?? 0) === 0 && (
+            <p className="overview-empty">No sales recorded for this period.</p>
+          )}
+          <div className="overview-source-list">
+            {sales?.map((source) => {
+              const share =
+                report.revenueMills > 0 && source.netAmountMills >= 0
+                  ? Math.min(
+                      100,
+                      (source.netAmountMills / report.revenueMills) * 100,
+                    )
+                  : null;
+              return (
+                <div key={source.canonicalType} className="overview-source">
+                  <div>
+                    <span>
+                      {SOURCE_LABELS[source.canonicalType] ??
+                        source.canonicalType}
+                    </span>
+                    <strong>{formatUsdFromMills(source.netAmountMills)}</strong>
+                  </div>
+                  {share !== null && (
+                    <div className="overview-source-bar" aria-hidden="true">
+                      <span style={{ width: `${share}%` }} />
+                    </div>
+                  )}
+                  {share !== null && (
+                    <small>{share.toFixed(1)}% of sales</small>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          {(adjustments?.length ?? 0) > 0 && (
+            <div className="overview-adjustments">
+              {adjustments?.map((item) => (
+                <div key={item.canonicalType}>
+                  <span>
+                    {SOURCE_LABELS[item.canonicalType] ?? item.canonicalType}
+                  </span>
+                  <strong>{signedMoney(item.netAmountMills)}</strong>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+      <p className="overview-source-note">
+        Subscription revenue comes from purchases and renewals. Free access does
+        not generate subscription revenue.
+      </p>
+    </section>
+  );
+}
 
-  const parts = spans.map((span) => `${span.days} days on ${span.platform}`);
-  return `“${periodLabel}” uses ${parts.join(", ")}. Revenue and comparisons follow each platform’s billing calendar.`;
+function AudienceSection({
+  pages,
+  isOwner,
+}: {
+  pages: Page[];
+  isOwner: boolean;
+}) {
+  if (!pages.length) return null;
+  return (
+    <details className="overview-audience">
+      <summary>
+        <span>
+          <strong>Audience by page</strong>
+          <small>Followers & access subscriptions · latest stored counts</small>
+        </span>
+        <ChevronDown size={18} aria-hidden="true" />
+      </summary>
+      <div className="overview-audience-content">
+        <p className="overview-audience-explanation">
+          Subscriptions measure access to a page, including free access and
+          trials. They do not tell you how many fans paid. Counts below are
+          independent of the selected revenue period.
+        </p>
+        <div className="overview-table-frame">
+          <table className="overview-table">
+            <caption className="sr-only">
+              Audience counts by page, without an agency total
+            </caption>
+            <thead>
+              <tr>
+                <th scope="col">Page</th>
+                <th scope="col">
+                  Followers<span>Fansly only</span>
+                </th>
+                <th scope="col">
+                  Access subscriptions<span>Free and paid together</span>
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {pages.map((page) => (
+                <tr key={page.id} className="overview-page-row">
+                  <th scope="row">
+                    <PageIdentity
+                      page={page}
+                      label={page.label}
+                      isOwner={isOwner}
+                    />
+                  </th>
+                  <td data-label="Followers">
+                    {page.platform === "fansly" ? (
+                      <Link to={buildPageSectionRoute(page.label, "followers")}>
+                        <MetricValue value={metricValue(page.followerCount)} />
+                      </Link>
+                    ) : (
+                      <span
+                        aria-label="Followers are not reported for OnlyFans"
+                        className="text-text-muted"
+                      >
+                        —
+                      </span>
+                    )}
+                  </td>
+                  <td data-label="Access subscriptions">
+                    <Link to={buildPageSectionRoute(page.label, "subscribers")}>
+                      <MetricValue value={metricValue(page.subscriberCount)} />
+                    </Link>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <dl className="overview-definitions">
+          <div>
+            <dt>Followers</dt>
+            <dd>
+              Fansly accounts following the page. Subscribers also count as
+              followers, so the two numbers overlap.
+            </dd>
+          </div>
+          <div>
+            <dt>Access subscriptions</dt>
+            <dd>
+              Fansly’s reported subscription count; on OnlyFans, subscription
+              records currently marked active in Hub. Neither is a count of
+              paying customers.
+            </dd>
+          </div>
+          <div>
+            <dt>Why there is no total or conversion rate</dt>
+            <dd>
+              The same fan can appear on several pages. Paid, free and
+              unknown-price subscriptions are not reliably separated. These
+              counts cannot establish agency-wide unique fans or a sales
+              conversion rate.
+            </dd>
+          </div>
+        </dl>
+      </div>
+    </details>
+  );
 }
 
 export function OverviewPage() {
@@ -242,60 +495,79 @@ export function OverviewPage() {
   const { period } = usePeriodStore();
   const overview = useOverview();
   const revenue = useOverviewRevenue(period);
-  const growth = useOverviewGrowth(period);
   const daily = useOverviewRevenueDaily(period);
-  const byModel = useOverviewRevenueByModel(period);
+  const [sort, setSort] = useState("earnings");
   const isOwner = auth?.user.role === "owner";
   const periodLabel = PERIOD_LABELS[period] ?? "30 Days";
-
   const overviewReady = hasCurrentData(overview);
   const revenueReady = hasCurrentData(revenue);
-  const growthReady = hasCurrentData(growth);
   const dailyReady = hasCurrentData(daily);
-  const modelsReady = hasCurrentData(byModel);
   const pages = overviewReady ? (overview.data?.pages ?? []) : [];
-  const groups = groupByModel(pages);
-  const revenueByPageId = new Map(
-    revenueReady
-      ? revenue.data?.pages.map((page) => [page.pageId, page.netEarningsMills])
-      : [],
+  const report = revenueReady ? revenue.data : undefined;
+  const rows = earningsRows(pages, report);
+  const hasComparisons =
+    period !== "all" &&
+    rows.some((row) => row.current !== null && row.previous !== null);
+  const activeSort = hasComparisons ? sort : "earnings";
+  const modelTotals = new Map(
+    (report?.models ?? []).map((model) => [model.modelSlug, model]),
   );
-  const growthByPageId = new Map(
-    growthReady ? growth.data?.pages.map((page) => [page.pageId, page]) : [],
+  const groups = [...new Set(rows.map((row) => row.modelSlug))].map((slug) => ({
+    slug,
+    name: rows.find((row) => row.modelSlug === slug)?.modelName ?? slug,
+    pages: rows.filter((row) => row.modelSlug === slug),
+    totals: modelTotals.get(slug),
+  }));
+  const order = (
+    a: { current: number | null; previous: number | null },
+    b: { current: number | null; previous: number | null },
+  ) =>
+    activeSort === "decrease"
+      ? (a.current !== null && a.previous !== null
+          ? difference(a.current, a.previous)
+          : Infinity) -
+        (b.current !== null && b.previous !== null
+          ? difference(b.current, b.previous)
+          : Infinity)
+      : (b.current ?? -Infinity) - (a.current ?? -Infinity);
+  groups.sort((a, b) =>
+    order(
+      {
+        current: a.totals?.netEarningsMills ?? null,
+        previous: a.totals?.previousNetEarningsMills ?? null,
+      },
+      {
+        current: b.totals?.netEarningsMills ?? null,
+        previous: b.totals?.previousNetEarningsMills ?? null,
+      },
+    ),
   );
-  const currentSubs = summarizeValues(
-    pages.map((page) => getPageMetricValue(page.subscriberCount)),
+  groups.forEach((group) => group.pages.sort(order));
+  const largestDecrease = rows
+    .filter(
+      (r) =>
+        r.current !== null && r.previous !== null && r.current < r.previous,
+    )
+    .sort(
+      (a, b) =>
+        difference(a.current!, a.previous!) -
+        difference(b.current!, b.previous!),
+    )[0];
+  const queries = [overview, revenue, daily];
+  const refreshing = queries.some((q) => q.isFetching);
+  const mixedNote = describeMixedRevenueWindows(
+    report?.platformWindows,
+    periodLabel,
   );
-  const newSubs = summarizeValues(
-    pages.map((page) => growthByPageId.get(page.id)?.newSubscribers ?? null),
+  const retired = rows.filter(
+    (row) => row.retired && (row.current !== 0 || row.previous !== 0),
   );
-  const newFollowers = summarizeValues(
-    pages
-      .filter(supportsFollowerGrowth)
-      .map((page) => growthByPageId.get(page.id)?.newFollowers ?? null),
-  );
-  const queries = [overview, revenue, growth, daily, byModel];
-  const refreshing = queries.some((query) => query.isFetching);
-  const mixedWindowsNote = revenueReady
-    ? describeMixedRevenueWindows(revenue.data?.platformWindows, periodLabel)
-    : null;
-  // Decision #131: agency totals retain historical revenue from deleted pages.
-  const retiredRevenuePages = revenueReady
-    ? (revenue.data?.pages ?? []).filter(
-        (page) => page.status === "deleted" && page.netEarningsMills !== 0,
-      )
-    : [];
-
   return (
     <div className="overview-page">
       <header className="overview-header">
         <div>
           <h1>Agency overview</h1>
-          <p>
-            {overviewReady
-              ? `${groups.length} ${groups.length === 1 ? "model" : "models"} · ${pages.length} ${pages.length === 1 ? "page" : "pages"}`
-              : "Revenue and audience across your pages"}
-          </p>
+          <p>Earnings, changes and the pages behind them</p>
         </div>
         <div className="overview-controls">
           <PeriodSelector />
@@ -317,106 +589,143 @@ export function OverviewPage() {
           </button>
         </div>
       </header>
-
-      <section aria-label="Agency summary">
-        <dl className="overview-summary">
-          <SummaryMetric
-            label="Net revenue"
-            primary
-            value={
-              <MetricValue
-                value={
-                  revenueReady ? (revenue.data?.netEarningsMills ?? null) : null
-                }
-                loading={isWaiting(revenue)}
-                format={formatUsdFromMills}
+      <QueryNotice query={revenue} label="Revenue" />
+      <section className="overview-earnings" aria-label="Agency earnings">
+        <div className="overview-earnings-main">
+          <div className="overview-earnings-head">
+            <div>
+              <p className="overview-eyebrow">Net earnings · {periodLabel}</p>
+              <div className="overview-net-value">
+                <MetricValue
+                  value={report?.netEarningsMills ?? null}
+                  loading={isWaiting(revenue)}
+                  money
+                />
+              </div>
+              <p className="overview-net-caption">
+                After platform fees · includes pending transactions
+              </p>
+            </div>
+            {period !== "all" && (
+              <div className="overview-period-change">
+                <span>vs previous period</span>
+                <RevenueChange
+                  current={report?.netEarningsMills ?? null}
+                  previous={report?.comparison?.netEarningsMills ?? null}
+                  loading={isWaiting(revenue)}
+                />
+              </div>
+            )}
+          </div>
+          <div className="overview-trend">
+            <QueryNotice query={daily} label="Revenue trend" />
+            {dailyReady && (daily.data?.series.length ?? 0) > 0 ? (
+              <Suspense
+                fallback={<ReportPlaceholder title="Revenue trend" loading />}
+              >
+                <PageActivityChart
+                  title="Daily net earnings"
+                  selectedPeriod={period}
+                  selectedPeriodLabel={periodLabel}
+                  points={(daily.data?.series ?? []).map((point) => ({
+                    businessDate: point.businessDate,
+                    value: point.netAmountMills,
+                  }))}
+                  valueFormatter={formatUsdFromMills}
+                  yAxisWidth={66}
+                  height={220}
+                  showYAxisLabel={false}
+                  color="var(--color-accent)"
+                />
+              </Suspense>
+            ) : (
+              <ReportPlaceholder
+                title="Revenue trend"
+                loading={isWaiting(daily)}
+                error={daily.isError}
               />
-            }
-            detail={
-              <>
-                <span>{periodLabel}</span>
-                {revenueReady &&
-                  period !== "all" &&
-                  revenue.data?.comparison?.deltaPct != null && (
-                    <>
-                      <DeltaIndicator pct={revenue.data.comparison.deltaPct} />
-                      <span>vs previous period</span>
-                    </>
-                  )}
-              </>
-            }
-          />
-          <SummaryMetric
-            label="Subscribers now"
-            value={
-              <MetricValue
-                value={currentSubs.value}
-                loading={isWaiting(overview)}
-                partial={currentSubs.partial}
-              />
-            }
-            detail={
-              currentSubs.partial
-                ? `${currentSubs.known} of ${currentSubs.total} pages reporting`
-                : "Current audience · all platforms"
-            }
-          />
-          <SummaryMetric
-            label="New followers"
-            value={
-              <MetricValue
-                value={newFollowers.value}
-                loading={isWaiting(overview) || isWaiting(growth)}
-                growth
-                format={formatGrowthValue}
-                partial={newFollowers.partial}
-              />
-            }
-            detail={`${periodLabel} · Fansly only`}
-          />
-          <SummaryMetric
-            label="New subscribers"
-            value={
-              <MetricValue
-                value={newSubs.value}
-                loading={isWaiting(overview) || isWaiting(growth)}
-                growth
-                format={formatGrowthValue}
-                partial={newSubs.partial}
-              />
-            }
-            detail={`${periodLabel} · all platforms`}
-          />
-        </dl>
-        <QueryNotice query={revenue} label="Revenue" />
-        <QueryNotice query={growth} label="Audience growth" />
-        {mixedWindowsNote && (
-          <p className="overview-footnote">{mixedWindowsNote}</p>
-        )}
-        {retiredRevenuePages.length > 0 && (
-          <p className="overview-footnote">
-            Totals include {retiredRevenuePages.length} retired{" "}
-            {retiredRevenuePages.length === 1 ? "page" : "pages"} (
-            {retiredRevenuePages.map((page) => page.pageLabel).join(", ")}).
-            History is kept after deletion.
+            )}
+          </div>
+        </div>
+        <RevenueSources report={report} loading={isWaiting(revenue)} />
+      </section>
+      <div className="overview-period-context">
+        {mixedNote && <p>{mixedNote}</p>}
+        {period !== "all" && (
+          <p>
+            Today is still in progress; the previous period includes full days.
+            Dates are UTC.
           </p>
         )}
-      </section>
-
+        <details>
+          <summary>
+            <Info size={13} aria-hidden="true" /> Dates and calculation
+          </summary>
+          <div className="overview-period-details">
+            {report?.platformWindows?.map((window) => (
+              <p key={window.platform}>
+                <strong>{PLATFORM_DISPLAY_NAME[window.platform]}</strong>{" "}
+                {windowLabel(window.from, window.to)}
+                {window.comparisonFrom && (
+                  <>
+                    {" "}
+                    · previous{" "}
+                    {windowLabel(window.comparisonFrom, window.comparisonTo)}
+                  </>
+                )}
+              </p>
+            ))}
+            <p>
+              Recorded sales, refunds, chargebacks and unclassified amounts
+              after platform fees. Payout reversals are excluded. This is not
+              the payout balance or agency profit.
+            </p>
+          </div>
+        </details>
+      </div>
       <section
         className="overview-pages"
         aria-labelledby="overview-pages-heading"
       >
         <div className="overview-section-heading">
-          <h2 id="overview-pages-heading">Models & pages</h2>
-          {pages.length > 0 && <span>
-            Open a page to see its details{" "}
-            <ArrowUpRight size={14} aria-hidden="true" />
-          </span>}
+          <div>
+            <h2 id="overview-pages-heading">Where earnings changed</h2>
+            <p>Models and pages · {periodLabel}</p>
+          </div>
+          <label className="overview-sort">
+            Sort{" "}
+            <select
+              value={activeSort}
+              onChange={(e) => setSort(e.target.value)}
+            >
+              <option value="earnings">Highest earnings</option>
+              <option value="decrease" disabled={!hasComparisons}>
+                Biggest decrease
+              </option>
+            </select>
+          </label>
         </div>
-        {isWaiting(overview) ? (
-          <OverviewSkeleton />
-        ) : !overviewReady ? (
+        {largestDecrease && (
+          <div className="overview-insight">
+            <span>Largest decrease</span>
+            {largestDecrease.retired ? (
+              <strong>{largestDecrease.label} · retired</strong>
+            ) : (
+              <Link to={buildPageRoute(largestDecrease.label)}>
+                {largestDecrease.label}
+                <ArrowUpRight size={13} aria-hidden="true" />
+              </Link>
+            )}
+            <strong>
+              {signedMoney(
+                difference(largestDecrease.current!, largestDecrease.previous!),
+              )}
+            </strong>
+            <span>vs its previous period</span>
+          </div>
+        )}
+        <QueryNotice query={overview} label="Page details" />
+        {!overviewReady && !isWaiting(overview) && (
           <StatusPanel
             title="Overview failed to load"
             description="Page details could not be fetched. Available revenue reports are shown separately."
@@ -431,12 +740,15 @@ export function OverviewPage() {
               </button>
             }
           />
-        ) : pages.length === 0 ? (
+        )}
+        {isWaiting(overview) && !rows.length ? (
+          <ReportPlaceholder title="Loading pages" loading />
+        ) : !rows.length && overviewReady ? (
           <StatusPanel
             title="No pages yet"
             description={
               isOwner
-                ? "Connect your first page to start tracking revenue and audience."
+                ? "Connect your first page to start tracking earnings."
                 : "Your assigned pages will appear here."
             }
             action={
@@ -451,282 +763,96 @@ export function OverviewPage() {
             }
           />
         ) : (
-          <>
-            <QueryNotice query={overview} label="Page details" />
+          rows.length > 0 && (
             <div className="overview-table-frame">
               <table className="overview-table">
                 <caption className="sr-only">
-                  Revenue and audience by model and page. Revenue and new
-                  audience use {periodLabel}; subscribers are the current count.
+                  Net earnings by model and page, compared with each platform’s
+                  preceding period
                 </caption>
                 <thead>
                   <tr>
                     <th scope="col">Model / page</th>
                     <th scope="col">
-                      Net revenue<span>{periodLabel}</span>
+                      Net earnings<span>{periodLabel}</span>
                     </th>
                     <th scope="col">
-                      Subscribers<span>Current</span>
-                    </th>
-                    <th scope="col">
-                      New followers<span>Fansly · {periodLabel}</span>
-                    </th>
-                    <th scope="col">
-                      New subscribers<span>{periodLabel}</span>
+                      Change<span>vs previous period</span>
                     </th>
                   </tr>
                 </thead>
                 {groups.map((group) => (
-                  <ModelGroupRows
-                    key={group.modelSlug}
-                    group={group}
-                    revenueByPageId={revenueByPageId}
-                    growthByPageId={growthByPageId}
-                    revenueLoading={isWaiting(revenue)}
-                    growthLoading={isWaiting(growth)}
-                    isOwner={isOwner}
-                  />
+                  <tbody key={group.slug}>
+                    <tr className="overview-model-row">
+                      <th scope="row">
+                        <span className="overview-model-name">
+                          {group.name}
+                        </span>
+                        <span className="overview-page-count">
+                          {group.pages.length}{" "}
+                          {group.pages.length === 1 ? "page" : "pages"}
+                        </span>
+                      </th>
+                      <td data-label="Net earnings">
+                        <MetricValue
+                          value={group.totals?.netEarningsMills ?? null}
+                          loading={isWaiting(revenue)}
+                          money
+                        />
+                      </td>
+                      <td data-label="Change">
+                        <RevenueChange
+                          current={group.totals?.netEarningsMills ?? null}
+                          previous={
+                            group.totals?.previousNetEarningsMills ?? null
+                          }
+                          loading={isWaiting(revenue)}
+                        />
+                      </td>
+                    </tr>
+                    {group.pages.map((row) => (
+                      <tr key={row.id} className="overview-page-row">
+                        <th scope="row">
+                          <PageIdentity
+                            page={row.catalog}
+                            label={row.label}
+                            retired={row.retired}
+                            isOwner={isOwner}
+                          />
+                        </th>
+                        <td data-label="Net earnings">
+                          <MetricValue
+                            value={row.current}
+                            loading={isWaiting(revenue)}
+                            money
+                          />
+                        </td>
+                        <td data-label="Change">
+                          <RevenueChange
+                            current={row.current}
+                            previous={row.previous}
+                            loading={isWaiting(revenue)}
+                          />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
                 ))}
               </table>
             </div>
-          </>
+          )
+        )}
+        {retired.length > 0 && (
+          <p className="overview-footnote">
+            Totals include {retired.length} retired{" "}
+            {retired.length === 1 ? "page" : "pages"} (
+            {retired.map((r) => r.label).join(", ")}). History is kept after
+            deletion.
+          </p>
         )}
       </section>
-
-      <section className="overview-charts" aria-label="Revenue reports">
-        <div className="overview-trend">
-          <QueryNotice query={daily} label="Revenue trend" />
-          {dailyReady && (daily.data?.series.length ?? 0) > 0 ? (
-            <Suspense
-              fallback={<ReportPlaceholder title="Revenue trend" loading />}
-            >
-              <PageActivityChart
-                title="Revenue trend"
-                selectedPeriod={period}
-                selectedPeriodLabel={periodLabel}
-                points={(daily.data?.series ?? []).map((point) => ({
-                  businessDate: point.businessDate,
-                  value: point.netAmountMills,
-                }))}
-                valueFormatter={formatUsdFromMills}
-                yAxisWidth={72}
-                color="var(--color-accent)"
-              />
-            </Suspense>
-          ) : (
-            <ReportPlaceholder
-              title="Revenue trend"
-              loading={isWaiting(daily)}
-              error={daily.isError}
-            />
-          )}
-        </div>
-        <div className="overview-model-report">
-          <div className="overview-section-heading">
-            <h2>Earnings by model</h2>
-            <span>{periodLabel}</span>
-          </div>
-          <QueryNotice query={byModel} label="Model earnings" />
-          {modelsReady && (byModel.data?.models.length ?? 0) > 0 ? (
-            <div className="overview-model-list">
-              {(byModel.data?.models ?? []).map((model) => (
-                <div key={model.modelSlug} className="overview-model-earnings">
-                  <div>
-                    <h3>{model.modelName}</h3>
-                    <p>
-                      {model.pageCount}{" "}
-                      {model.pageCount === 1 ? "page" : "pages"} ·{" "}
-                      {model.transactionCount.toLocaleString()} transactions
-                    </p>
-                  </div>
-                  <div className="overview-model-amount">
-                    <TrendSparkline
-                      values={model.series.map((point) => point.netAmountMills)}
-                    />
-                    <strong className="tabular-nums">
-                      {formatUsdFromMills(model.totalNetAmountMills)}
-                    </strong>
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <ReportPlaceholder
-              loading={isWaiting(byModel)}
-              error={byModel.isError}
-            />
-          )}
-        </div>
-      </section>
+      <AudienceSection pages={pages} isOwner={isOwner} />
     </div>
-  );
-}
-
-function ModelGroupRows({
-  group,
-  revenueByPageId,
-  growthByPageId,
-  revenueLoading,
-  growthLoading,
-  isOwner,
-}: {
-  group: ModelGroup;
-  revenueByPageId: Map<number, number>;
-  growthByPageId: Map<number, { newFollowers: number; newSubscribers: number }>;
-  revenueLoading: boolean;
-  growthLoading: boolean;
-  isOwner: boolean;
-}) {
-  const navigate = useNavigate();
-  const groupRevenue = summarizeValues(
-    group.pages.map((page) => revenueByPageId.get(page.id) ?? null),
-  );
-  const groupSubs = summarizeValues(
-    group.pages.map((page) => getPageMetricValue(page.subscriberCount)),
-  );
-  const groupNewFollowers = summarizeValues(
-    group.pages
-      .filter(supportsFollowerGrowth)
-      .map((page) => growthByPageId.get(page.id)?.newFollowers ?? null),
-  );
-  const groupNewSubs = summarizeValues(
-    group.pages.map(
-      (page) => growthByPageId.get(page.id)?.newSubscribers ?? null,
-    ),
-  );
-
-  return (
-    <tbody>
-      <tr className="overview-model-row">
-        <th scope="row">
-          <span className="overview-model-name">{group.modelName}</span>
-          <span className="overview-page-count">
-            {group.pages.length} {group.pages.length === 1 ? "page" : "pages"}
-          </span>
-        </th>
-        <td data-label="Net revenue">
-          <MetricValue
-            value={groupRevenue.value}
-            partial={groupRevenue.partial}
-            loading={revenueLoading}
-            format={formatUsdFromMills}
-          />
-        </td>
-        <td data-label="Subscribers now">
-          <MetricValue value={groupSubs.value} partial={groupSubs.partial} />
-        </td>
-        <td data-label="New followers · Fansly">
-          <MetricValue
-            value={groupNewFollowers.value}
-            partial={groupNewFollowers.partial}
-            loading={growthLoading}
-            growth
-            format={formatGrowthValue}
-          />
-        </td>
-        <td data-label="New subscribers">
-          <MetricValue
-            value={groupNewSubs.value}
-            partial={groupNewSubs.partial}
-            loading={growthLoading}
-            growth
-            format={formatGrowthValue}
-          />
-        </td>
-      </tr>
-      {group.pages.map((page) => {
-        const isFansly = supportsFollowerGrowth(page);
-        const syncMode = getSyncUxDisplayMode(page.syncUx, "overview_row");
-        const exceptionKind = getSyncUxExceptionKind(page.syncUx);
-        const tone = getSyncUxTone(page.syncUx.state);
-        return (
-          <tr
-            key={page.id}
-            className="overview-page-row"
-            onClick={(event) => {
-              if (
-                !(event.target as HTMLElement).closest("a, button") &&
-                !window.getSelection()?.toString()
-              )
-                navigate(buildPageRoute(page.label));
-            }}
-          >
-            <th scope="row">
-              <Link
-                to={buildPageRoute(page.label)}
-                className="overview-page-link"
-              >
-                <span
-                  className={`h-2 w-2 shrink-0 rounded-full ${tone.dot}`}
-                  role="img"
-                  aria-label={page.syncUx.label}
-                  title={page.syncUx.headline}
-                />
-                <span className="overview-page-label">{page.label}</span>
-                <PlatformBadge platform={page.platform} />
-                <ArrowUpRight
-                  size={14}
-                  className="overview-page-arrow"
-                  aria-hidden="true"
-                />
-              </Link>
-              {syncMode === "exception" &&
-                exceptionKind &&
-                exceptionKind !== "credentials" && (
-                  <div className={`overview-sync-notice ${tone.panel}`}>
-                    <span className={tone.text}>
-                      {exceptionKind === "off"
-                        ? page.syncUx.headline
-                        : "Data may be incomplete — updates need attention"}
-                    </span>
-                    {isOwner && (
-                      <Link to={buildSettingsRoute("sync", page.label)}>
-                        Check sync settings
-                      </Link>
-                    )}
-                  </div>
-                )}
-            </th>
-            <td data-label="Net revenue">
-              <MetricValue
-                value={revenueByPageId.get(page.id) ?? null}
-                loading={revenueLoading}
-                format={formatUsdFromMills}
-              />
-            </td>
-            <td data-label="Subscribers now">
-              <MetricValue value={getPageMetricValue(page.subscriberCount)} />
-            </td>
-            <td data-label="New followers · Fansly">
-              {isFansly ? (
-                <MetricValue
-                  value={growthByPageId.get(page.id)?.newFollowers ?? null}
-                  loading={growthLoading}
-                  growth
-                  format={formatGrowthValue}
-                />
-              ) : (
-                <span
-                  className="text-text-muted"
-                  title="Follower growth is available for Fansly pages only"
-                  aria-label="Follower growth is not available for this platform"
-                >
-                  —
-                </span>
-              )}
-            </td>
-            <td data-label="New subscribers">
-              <MetricValue
-                value={growthByPageId.get(page.id)?.newSubscribers ?? null}
-                loading={growthLoading}
-                growth
-                format={formatGrowthValue}
-              />
-            </td>
-          </tr>
-        );
-      })}
-    </tbody>
   );
 }
 
@@ -754,23 +880,6 @@ function ReportPlaceholder({
           "No revenue data for this period."
         )}
       </div>
-    </div>
-  );
-}
-
-function OverviewSkeleton() {
-  return (
-    <div
-      className="overview-table-skeleton"
-      role="status"
-      aria-label="Loading pages"
-    >
-      {Array.from({ length: 5 }, (_, index) => (
-        <div key={index}>
-          <span className="overview-value-skeleton" />
-          <span className="overview-value-skeleton" />
-        </div>
-      ))}
     </div>
   );
 }

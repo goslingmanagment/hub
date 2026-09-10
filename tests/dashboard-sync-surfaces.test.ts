@@ -302,24 +302,15 @@ describe("dashboard sync product surfaces", () => {
     expect(html).toContain("Try again");
   });
 
-  it("does not relabel the previous period's model earnings or audience as current", () => {
+  it("does not relabel the previous period's revenue as current", () => {
     queryMocks.useOverview.mockReturnValue({ data: buildOverviewPage() });
-    queryMocks.useOverviewRevenueByModel.mockReturnValue({
-      data: { models: [{ modelSlug: "old", modelName: "Previous-period model", pageCount: 1, transactionCount: 1, totalNetAmountMills: 999999, series: [] }] },
-      isPlaceholderData: true,
-      isFetching: true,
+    queryMocks.useOverviewRevenue.mockReturnValue({
+      data: { netEarningsMills: 999999, pages: [{ pageId: 1, netEarningsMills: 999999 }] },
+      isPlaceholderData: true, isFetching: true,
     });
-    queryMocks.useOverviewGrowth.mockReturnValue({
-      data: { pages: [{ pageId: 1, newFollowers: 9876, newSubscribers: 9876 }] },
-      isPlaceholderData: true,
-      isFetching: true,
-    });
-
+    queryMocks.useOverviewRevenueDaily.mockReturnValue({ isFetching: true, isPlaceholderData: true });
     const html = renderWithRouter(createElement(OverviewPage));
-
-    expect(html).not.toContain("Previous-period model");
     expect(html).not.toContain("$999.99");
-    expect(html).not.toContain("9,876");
     expect(html).toContain("Loading report");
     expect(html).toContain("Loading metric");
   });
@@ -337,15 +328,17 @@ describe("dashboard sync product surfaces", () => {
     expect(html).toContain("Revenue could not refresh. Showing saved data.");
   });
 
-  it("marks a subscriber subtotal when one page cannot report its audience", () => {
+  it("keeps unknown audience values missing and never invents an agency subscriber total", () => {
     const overview = buildOverviewPage();
     overview.pages.push(buildOverviewPageItem(buildSyncUx(), { id: 2, label: "lana-2", subscriberCount: buildPageMetric(null) }));
     queryMocks.useOverview.mockReturnValue({ data: overview });
 
     const html = renderWithRouter(createElement(OverviewPage));
 
-    expect(html).toContain("1 of 2 pages reporting");
-    expect(html).toContain("Partial");
+    expect(html).not.toContain("Subscribers now");
+    expect(html).not.toContain("New subscribers");
+    expect(html).toContain("Access subscriptions");
+    expect(html).toContain("Free and paid together");
     expect(html).toContain('aria-label="Not available"');
   });
 
@@ -372,11 +365,60 @@ describe("dashboard sync product surfaces", () => {
     const html = renderWithRouter(createElement(OverviewPage));
 
     expect(html).toContain("Revenue trend could not be loaded.");
-    expect(html).toContain("Model earnings could not be loaded.");
-    expect(html).toContain("Audience growth could not be loaded.");
+    expect(queryMocks.useOverviewGrowth).not.toHaveBeenCalled();
+    expect(queryMocks.useOverviewRevenueByModel).not.toHaveBeenCalled();
     expect(html).toContain("Try again");
     expect(html).not.toContain("No revenue data for this period.");
     expect(html).toContain('href="/pages/lana"');
+  });
+
+  it("keeps refunds and unclassified money visible in the earnings breakdown", () => {
+    queryMocks.useOverview.mockReturnValue({ data: buildOverviewPage() });
+    queryMocks.useOverviewRevenue.mockReturnValue({ data: {
+      netEarningsMills: 185000, revenueMills: 200000, pages: [],
+      breakdown: [
+        { canonicalType: "message_purchase", bucket: "revenue", netAmountMills: 200000 },
+        { canonicalType: "refund", bucket: "adjustment", netAmountMills: -20000 },
+        { canonicalType: "other", bucket: "unclassified", netAmountMills: 5000 },
+      ],
+    } });
+    const html = renderWithRouter(createElement(OverviewPage));
+    expect(html).toContain("$185.00");
+    expect(html).toContain("Paid messages");
+    expect(html).toContain("Refunds");
+    expect(html).toContain("−$20.00");
+    expect(html).toContain("Unclassified");
+    expect(html).toContain("+$5.00");
+    expect(html).toContain("includes pending transactions");
+  });
+
+  it("never adds OnlyFans access subscriptions to Fansly's follower or subscription counts", () => {
+    const overview = buildOverviewPage();
+    overview.pages.push(buildOverviewPageItem(buildSyncUx(), { id: 2, label: "of-page", platform: "onlyfans", subscriberCount: buildPageMetric(4371), followerCount: buildPageMetric(null) }));
+    queryMocks.useOverview.mockReturnValue({ data: overview });
+    const html = renderWithRouter(createElement(OverviewPage));
+    expect(html).toContain("4,371");
+    expect(html).not.toContain("4,383");
+    expect(html).not.toContain("New subscribers");
+    expect(html).toContain("Subscribers also count as followers");
+    expect(html).toContain('href="/pages/of-page/subscribers"');
+    expect(html).not.toContain('href="/pages/of-page/followers"');
+  });
+
+  it("retains a retired page's contribution to a decline and shows no fabricated zero for older servers", () => {
+    queryMocks.useOverview.mockReturnValue({ data: buildOverviewPage() });
+    queryMocks.useOverviewRevenue.mockReturnValue({ data: {
+      netEarningsMills: 10000, pages: [
+        { pageId: 1, pageLabel: "lana", modelSlug: "lana", modelName: "Lana", netEarningsMills: 10000 },
+        { pageId: 2, pageLabel: "retired", modelSlug: "lana", modelName: "Lana", netEarningsMills: 0, previousNetEarningsMills: 200000, status: "deleted" },
+      ],
+    } });
+    const html = renderWithRouter(createElement(OverviewPage));
+    expect(html).toContain("−$200.00");
+    expect(html).toContain("100.0% ↓");
+    expect(html).toContain("Totals include 1 retired page");
+    expect(html).not.toContain('href="/pages/retired"');
+    expect(html).toContain('aria-label="Not available"');
   });
 
   it("shows page detail attention with incomplete-data copy", () => {

@@ -348,18 +348,23 @@ function mergePageRevenueTotals(rows: Awaited<ReturnType<typeof getRevenuePageTo
 async function getRevenuePageTotalsByPlatform(
   app: AppContext,
   groupedPageIds: Map<Platform, number[]>,
-  input: PeriodInput & { modelSlug?: string },
+  input: PeriodInput & { modelSlug?: string; comparison?: boolean },
 ) {
   const now = input.now ?? new Date();
   const groups = Array.from(groupedPageIds.entries());
 
   return mergePageRevenueTotals(
-    await Promise.all(groups.map(([platform, pageIds]) => getRevenuePageTotals(app.db, {
-      platform,
-      pageIds,
-      period: resolveRevenuePeriodBoundsForPlatform(platform, input.period, now, input.custom),
-      modelSlug: input.modelSlug,
-    }))),
+    await Promise.all(groups.map(([platform, pageIds]) => {
+      const period = input.comparison
+        ? resolveRevenueComparisonPeriodBoundsForPlatform(platform, input.period, now, input.custom)
+        : resolveRevenuePeriodBoundsForPlatform(platform, input.period, now, input.custom);
+      return period ? getRevenuePageTotals(app.db, {
+        platform,
+        pageIds,
+        period,
+        modelSlug: input.modelSlug,
+      }) : Promise.resolve([]);
+    })),
   );
 }
 
@@ -513,13 +518,19 @@ export async function getOverviewRevenueReport(
   app: AppContext,
   input: PeriodInput & { pageIds?: number[] },
 ): Promise<OverviewRevenueResponse> {
+  // Pin one clock across current/previous totals and disclosed boundaries.
+  input = { ...input, now: input.now ?? new Date() };
   // W7.2 (A33, decision #131): revenue attribution reads ALL pages —
   // tombstoned pages keep their history in the rollups.
   const pageRows = await listRevenuePages(app.db, input.pageIds);
   const modelRows = await listRevenueModels(app.db, input.pageIds);
   const groupedPageIds = groupPageIdsByPlatform(pageRows);
-  const totals = await getRevenuePageTotalsByPlatform(app, groupedPageIds, input);
+  const [totals, previousTotals] = await Promise.all([
+    getRevenuePageTotalsByPlatform(app, groupedPageIds, input),
+    getRevenuePageTotalsByPlatform(app, groupedPageIds, { ...input, comparison: true }),
+  ]);
   const totalsByPageId = new Map(totals.map((row) => [row.pageId, row.netEarningsMills]));
+  const previousByPageId = new Map(previousTotals.map((row) => [row.pageId, row.netEarningsMills]));
   const current = await getRevenueBreakdownForGroups(app, groupedPageIds, input);
   const currentRows = current.rows;
   const currentTotal = summarizeRevenueRows(currentRows).netEarningsMills;
@@ -532,14 +543,22 @@ export async function getOverviewRevenueReport(
     modelName: page.modelName,
     netEarningsMills: millsToNumber(totalsByPageId.get(page.id) ?? 0n),
     totalNetMills: millsToNumber(totalsByPageId.get(page.id) ?? 0n),
+    previousNetEarningsMills: comparison.bounds
+      ? millsToNumber(previousByPageId.get(page.id) ?? 0n)
+      : null,
     status: page.status as "active" | "deleted",
   }));
 
   const totalsByModelSlug = new Map<string, bigint>();
+  const previousByModelSlug = new Map<string, bigint>();
   for (const page of pages) {
     totalsByModelSlug.set(
       page.modelSlug,
       (totalsByModelSlug.get(page.modelSlug) ?? 0n) + BigInt(page.netEarningsMills),
+    );
+    previousByModelSlug.set(
+      page.modelSlug,
+      (previousByModelSlug.get(page.modelSlug) ?? 0n) + millsFromInteger(page.previousNetEarningsMills ?? 0),
     );
   }
 
@@ -566,6 +585,9 @@ export async function getOverviewRevenueReport(
       pageCount: model.pageCount,
       netEarningsMills: millsToNumber(totalsByModelSlug.get(model.slug) ?? 0n),
       totalNetMills: millsToNumber(totalsByModelSlug.get(model.slug) ?? 0n),
+      previousNetEarningsMills: comparison.bounds
+        ? millsToNumber(previousByModelSlug.get(model.slug) ?? 0n)
+        : null,
       status: (model.activePageCount > 0 ? "active" : "retired") as "active" | "retired",
     })),
     pages,

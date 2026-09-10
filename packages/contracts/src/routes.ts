@@ -695,6 +695,9 @@ export const pageRevenueItemSchema = z.object({
   modelName: z.string(),
   netEarningsMills: mills,
   totalNetMills: mills,
+  previousNetEarningsMills: mills.nullable().optional().describe(
+    "Overview only: earnings for this page's platform-specific comparison window. Null for all time; absent on older servers. Includes retired pages and the same reporting buckets as netEarningsMills.",
+  ),
   // W7.2 (A33, decision #131): revenue rollups include tombstoned pages —
   // historical attribution is permanent. Optional (additive).
   status: z.enum(["active", "deleted"]).optional(),
@@ -707,6 +710,7 @@ export const modelRevenueItemSchema = z.object({
   pageCount: z.number().int(),
   netEarningsMills: mills,
   totalNetMills: mills,
+  previousNetEarningsMills: mills.nullable().optional(),
   // W7.2 (A33): 'retired' = every page of the model is tombstoned.
   status: z.enum(["active", "retired"]).optional(),
 });

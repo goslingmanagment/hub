@@ -287,6 +287,8 @@ appends a row here in the same change (family law: updated-in-change).
 | 285 | Fansly C2a earnings identity | Observation-scoped v2 snapshots preserve A-B-A, replay ordering and legacy SSE edges; daily rotation unchanged. |
 | 286 | Settings UX and reviewed writes | Task-based navigation, friendly configuration copy and snapshot-bound editors; drafts survive refresh/filter, write receipts survive read failure, staged prerequisites remain visible. Owner permits merge after independent reviews and required checks; deployment remains separate. |
 
+| 287 | Overview metric semantics | Revenue-led overview with per-page/model comparison windows, transaction sources and separate page audience counts; no summed subscribers or acquisition claims from mutable subscription records. |
+
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
 - **Frontend app shell (12/12):** React SPA with Vite and TanStack Query fits a desktop-only internal dashboard without SSR overhead.
@@ -11988,3 +11990,30 @@ credential controls, false-empty team errors, deactivation copy and table overfl
 No runtime or SDK contract changes are included. See
 [the review record](settings-ux-review-2026-09-10.md) for evidence and known limits;
 local fixture and screenshot artifacts are excluded from the product commit.
+
+
+## Overview metric semantics and revenue attribution (2026-09-10)
+
+**Decision #287:** The overview leads with recorded creator net earnings, their
+transaction sources, and changes by model/page. Audience is a separate expandable
+page-level view. It never sums subscriptions across platforms or pages, presents
+subscriptions as paying customers, adds Fansly followers and subscribers, or uses
+the mutable subscription rollup as a new-paying-customer KPI.
+
+The existing overview revenue report adds optional nullable
+`previousNetEarningsMills` per page/model. Each previous total uses the same
+platform-specific comparison resolver, rollup and page scope as the existing
+aggregate; one request clock fixes all boundaries. Retired-page attribution
+remains in both periods. All-time comparisons are null, and missing fields from
+older servers remain unavailable. No new endpoint or capture changes.
+
+The UI shows source amounts including adjustments and unclassified money, states
+that earnings include pending transactions, and discloses the unfinished current
+day plus the established mixed-platform windows (#51). Audience labels describe
+access, not payment. Missing prices can be stored as zero in legacy audience
+mappers, so this pass does not infer free-versus-paid segments from that column.
+The no-agency-total rule also avoids cross-page identity duplication.
+
+Only three overview queries remain: catalog/status, earnings and daily earnings.
+Their failures and stale refreshes stay independent. See
+[the metric audit and review](overview-ux-review-2026-09-10.md).

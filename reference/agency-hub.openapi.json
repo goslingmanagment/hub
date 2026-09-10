@@ -102099,6 +102099,19 @@
                             "minimum": -9007199254740991,
                             "maximum": 9007199254740991
                           },
+                          "previousNetEarningsMills": {
+                            "description": "Overview only: earnings for this page's platform-specific comparison window. Null for all time; absent on older servers. Includes retired pages and the same reporting buckets as netEarningsMills.",
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
                           "status": {
                             "type": "string",
                             "enum": [
@@ -106747,6 +106760,18 @@
                             "minimum": -9007199254740991,
                             "maximum": 9007199254740991
                           },
+                          "previousNetEarningsMills": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
                           "status": {
                             "type": "string",
                             "enum": [
@@ -106794,6 +106819,19 @@
                             "type": "integer",
                             "minimum": -9007199254740991,
                             "maximum": 9007199254740991
+                          },
+                          "previousNetEarningsMills": {
+                            "description": "Overview only: earnings for this page's platform-specific comparison window. Null for all time; absent on older servers. Includes retired pages and the same reporting buckets as netEarningsMills.",
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
                           },
                           "status": {
                             "type": "string",
