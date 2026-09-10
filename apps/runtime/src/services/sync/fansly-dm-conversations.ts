@@ -83,7 +83,12 @@ import {
   FANSLY_GROUPS_CAPTURE_MAPPER_VERSION,
   persistRawPayload,
   trimFanslyMessagingGroupsPayload,
+  normalizeFanslyTimestamp,
 } from "./shared.ts";
+import { advanceDmShadow, type DmShadowConversation } from "./dm-shadow.ts";
+import { createDmShadowState } from "./dm-shadow-state.ts";
+import { readDmShadowMaterial } from "./dm-shadow-material.ts";
+import { persistDmShadowReport } from "./dm-shadow-report.ts";
 import {
   assertDmSharedRateLimitEnabled,
   normalizeDmTimestampWithAnomaly,
@@ -248,6 +253,9 @@ export async function fanslyDmConversationsChunk(
   const headCatchupEnabled = isPageAllowlisted(
     effective.fanslyDmHeadCatchupPageAllowlist, input.pageContext.page.label,
   );
+  const shadowEnabled = isPageAllowlisted(
+    effective.fanslyDmShadowPageAllowlist, input.pageContext.page.label,
+  );
 
   const requestContext = {
     session: input.pageContext.session,
@@ -314,11 +322,59 @@ export async function fanslyDmConversationsChunk(
     );
   }
 
+  let shadow = shadowEnabled
+    ? state.diagnostics ?? createDmShadowState({
+      startedAtMs: Date.parse(state.fullSweepStartedAt),
+      boundaryMs: parsedState?.kind === "completed" && parsedState.membershipCertified &&
+        parsedState.lastFullSweepCompletedAt !== null
+        ? Date.parse(parsedState.lastFullSweepCompletedAt)
+        : null,
+      completeCoverage: state.pageCount === 0,
+    })
+    : undefined;
+  if (shadow) {
+    shadow = {
+      ...shadow,
+      resumes: shadow.resumes + (existingState === null ? 0 : 1),
+      completeCoverage: shadow.completeCoverage && shadow.pageCount === state.pageCount,
+    };
+    await persistDmShadowReport(app, {
+      telemetry: input.telemetry,
+      pageId: input.pageContext.page.id,
+      generation: state.generation,
+      state: shadow,
+      status: "running",
+    });
+  }
+  // Disabling diagnostics never changes the business cursor or its generation.
+  if (!shadowEnabled && state.diagnostics) {
+    await persistDmShadowReport(app, {
+      telemetry: input.telemetry,
+      pageId: input.pageContext.page.id,
+      generation: state.generation,
+      state: state.diagnostics,
+      status: "incomplete",
+      reason: "disabled_during_sweep",
+    });
+  }
+  const { diagnostics: _diagnostics, ...businessState } = state;
+  state = businessState;
+
   const restartSweepAfterCapturedContractDrift = async (guard: {
     code: string;
     message: string;
     details: Record<string, unknown>;
   }): Promise<never> => {
+    if (shadow) {
+      await persistDmShadowReport(app, {
+        telemetry: input.telemetry,
+        pageId: input.pageContext.page.id,
+        generation: state.generation,
+        state: shadow,
+        status: "incomplete",
+        reason: guard.code,
+      });
+    }
     const storedGeneration = await maxPageDmThreadGeneration(app.db, input.pageContext.page.id);
     const restartState: DmConversationSweepInProgressState = {
       kind: "in_progress",
@@ -383,12 +439,13 @@ export async function fanslyDmConversationsChunk(
       : null;
     const nextPageCount = state.pageCount + 1;
 
+    const capturedPayload = trimFanslyMessagingGroupsPayload(page.raw);
     await persistRawPayload(app.db, {
       platformAccountId: input.pageContext.page.id,
       syncRunId: input.syncRunId,
       endpoint: "dm_conversations",
       requestParams: { offset: state.offset, limit: 100, sortOrder: 1, flags: 0 },
-      responsePayload: trimFanslyMessagingGroupsPayload(page.raw),
+      responsePayload: capturedPayload,
       mapperVersion: FANSLY_GROUPS_CAPTURE_MAPPER_VERSION,
       payloadKind: "dm_metadata",
       retainUntil: dmRetentionDate(),
@@ -515,7 +572,16 @@ export async function fanslyDmConversationsChunk(
         conversation,
       ]),
     );
+    const shadowMaterial = shadow === undefined ? null : await readDmShadowMaterial(app,
+      page.items.flatMap((item) => {
+        const existing = existingByGroupId.get(item.groupId);
+        return existing && item.lastMessageId
+          ? [{ conversationId: existing.id, messageId: item.lastMessageId }]
+          : [];
+      }),
+    );
     let unchangedPage = true;
+    const shadowConversations: DmShadowConversation[] = [];
     const hydratedAccountsById = new Map<string, FanslyAccount>();
     const fallbackPartnerIds = new Set<string>();
     const conversationWrites: Array<{
@@ -790,11 +856,29 @@ export async function fanslyDmConversationsChunk(
       // / subscriptionTierId moved still counts as unchanged — exactly what the
       // inline predicate did, and what
       // tests/fansly-dm-conversations-sweep.integration.test.ts pins
-      // ("current behavior, not desired", unchangedPageStreak: 1). A0 switches
-      // this to `headDiff.changed`; `headDiff.reasons` already carries the full
-      // scope for a shadow read, so no predicate has to be rewritten for it.
+      // ("current behavior, not desired", unchangedPageStreak: 1). A0 uses
+      // the full reasons only in diagnostic state; this predicate stays intact.
       if (breaksLegacyUnchangedPage(headDiff.reasons)) {
         unchangedPage = false;
+      }
+      if (shadow) {
+        const rawHeadCreatedAt = group?.lastMessage?.createdAt;
+        shadowConversations.push({
+          reasons: headDiff.reasons,
+          listMessageId: incomingLastMessageId,
+          embeddedMessageId: group?.lastMessage?.id ?? null,
+          timestampMs: typeof rawHeadCreatedAt === "number" && Number.isFinite(rawHeadCreatedAt)
+            ? normalizeFanslyTimestamp(rawHeadCreatedAt).getTime()
+            : null,
+          previousTimestampMs: existing?.lastMessageAt?.getTime() ?? null,
+          previousMessageId: existing?.lastMessageId ?? null,
+          materialConfirmed: shadowMaterial === null ? null
+            : existing !== null && shadowMaterial.get(existing.id)?.present === true,
+          discoveryToCaptureMs: existing === null ? null
+            : shadowMaterial?.get(existing.id)?.discoveryToCaptureMs ?? null,
+          historyPending: existing?.messageBackfillComplete !== true,
+          lastHistorySyncAtMs: existing?.lastMessageSyncAt?.getTime() ?? null,
+        });
       }
 
       conversationWrites.push({
@@ -833,11 +917,18 @@ export async function fanslyDmConversationsChunk(
     }
     processedConversations += conversationWrites.length;
 
+    const nextShadow = shadow === undefined ? undefined : advanceDmShadow(shadow, {
+      observedAtMs: Date.now(),
+      responseBytes: Buffer.byteLength(JSON.stringify(capturedPayload), "utf8"),
+      conversations: shadowConversations,
+    });
+
     const nextState: DmConversationSweepInProgressState = {
       ...state,
       observedCount: finalObservedCount,
       unchangedPageStreak: unchangedPage ? state.unchangedPageStreak + 1 : 0,
       offset: page.done ? state.offset : state.offset + 100,
+      ...(nextShadow === undefined ? {} : { diagnostics: nextShadow }),
     };
     const pageWrite = await withOwnedPageSyncTransaction(app.db, async (dbTx) => {
       // G3 erasure fence (Stage 28 / PR4): with the cumulative array gone, the
@@ -1021,6 +1112,7 @@ export async function fanslyDmConversationsChunk(
           lastFullSweepCompletedAt: finalizationWithheld
             ? state.lastFullSweepCompletedAt
             : new Date().toISOString(),
+          ...(nextShadow === undefined ? {} : { diagnostics: nextShadow }),
         };
         // Note the completed state carries no `mode`, so the parser refuses it
         // as a resumable cursor and the next chunk opens a fresh sweep under a
@@ -1123,6 +1215,21 @@ export async function fanslyDmConversationsChunk(
       "dm_conversations",
       summarizeCheckpoint(pageWrite.checkpoint),
     );
+
+    if (nextShadow) {
+      shadow = nextShadow;
+      const complete = pageWrite.kind === "complete";
+      const certified = complete && pageWrite.membershipCertified && shadow.completeCoverage &&
+        shadow.boundaryMs !== null && shadow.unknownMaterialChecks === 0;
+      await persistDmShadowReport(app, {
+        telemetry: input.telemetry,
+        pageId: input.pageContext.page.id,
+        generation: state.generation,
+        state: shadow,
+        status: complete ? (certified ? "complete" : "incomplete") : "running",
+        ...(complete && !certified ? { reason: "uncertified_or_partial_diagnostics" } : {}),
+      });
+    }
 
     if (pageWrite.dmMessagesFollowupNeeded) {
       await requestPageSync(app.db, {

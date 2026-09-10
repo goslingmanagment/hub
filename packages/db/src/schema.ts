@@ -541,6 +541,7 @@ export const syncRuns = pgTable(
     finishedAt: timestamp("finished_at", { withTimezone: true }),
   },
   (table) => ({
+    finishedIdx: index("sync_runs_finished_idx").on(table.finishedAt),
     idPageStreamUniq: unique("sync_runs_id_page_stream_uniq").on(
       table.id,
       table.pageId,

@@ -167,7 +167,8 @@ describe("sync observability", () => {
     vi.spyOn(dbRepo, "finishSyncRequestAttempt").mockRejectedValueOnce(new Error("telemetry down"));
     vi.spyOn(dbRepo, "insertSyncRunEvent").mockResolvedValue({ id: 1 } as never);
 
-    const requestObserver = buildTelemetry().getRequestObserver();
+    const telemetry = buildTelemetry();
+    const requestObserver = telemetry.getRequestObserver();
     await requestObserver.onRequestEvent(STARTED_EVENT);
     await requestObserver.onRequestEvent(SUCCESS_EVENT);
 
@@ -176,6 +177,9 @@ describe("sync observability", () => {
     expect(stdoutLines).toHaveLength(2);
     const states = stdoutLines.map((line) => (JSON.parse(line) as { state: string }).state);
     expect(states).toEqual(["started", "success"]);
+    expect(telemetry.buildStats("success").requestTotals).toMatchObject({
+      unrecordedAttempts: 0, unfinishedAttempts: 1,
+    });
   });
 
   // Pinned invariant: when the DB write for an attempt fails, stdout must remain the
@@ -288,6 +292,9 @@ describe("sync observability", () => {
       "started",
       "success",
     ]);
+    expect(telemetry.buildStats("success").requestTotals).toMatchObject({
+      unrecordedAttempts: 1, unfinishedAttempts: 0,
+    });
     expect(telemetry.getRequestTotalsSnapshot()).toMatchObject({
       totalAttempts: 1,
       logicalRequests: 1,

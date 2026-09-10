@@ -13,8 +13,7 @@
 //   * `reasons` is the FULL scope, for a caller that wants the truth;
 //   * `LEGACY_UNCHANGED_PAGE_REASONS` is the subset the streak predicate looks
 //     at TODAY, so the sweep can reproduce its historical verdict byte for
-//     byte while A0 gets a full-scope signal it can switch to without touching
-//     the predicate.
+//     byte while A0 uses the full scope only in separate diagnostics.
 
 export type ConversationHeadDiffReason =
   /** No stored row at all — every field below is new by construction, so the
@@ -64,9 +63,8 @@ export type ConversationHeadDiff = {
 
 /**
  * The reasons the `unchangedPageStreak` predicate has always counted. Kept as
- * an explicit constant rather than a second inline condition: A0 flips the
- * streak to the full `reasons` list by deleting the filter that reads this,
- * and nothing else.
+ * an explicit constant rather than a second inline condition. A0 does not
+ * change this business streak; its diagnostic streak uses the full scope.
  */
 export const LEGACY_UNCHANGED_PAGE_REASONS = [
   "missing_row",

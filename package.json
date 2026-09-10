@@ -50,13 +50,15 @@
     "drizzle-kit": "^0.31.0",
     "esbuild": "0.25.12",
     "eslint": "^10.6.0",
+    "pg": "8.20.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "testcontainers": "^11.7.2",
     "tsx": "^4.20.0",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.63.0",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.10",
+    "zod": "4.3.6"
   },
   "dependencies": {
     "@agency_hub_core/platform-core": "workspace:*",

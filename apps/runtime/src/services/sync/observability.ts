@@ -438,6 +438,8 @@ export class SyncRunTelemetry {
    *  DB sink, consumed by the stdout sink: stdout is the surviving record of an
    *  attempt the DB could not keep (pinned in tests/observability.test.ts). */
   private readonly requestAttemptPersistenceFailures = new Set<string>();
+  private unrecordedAttempts = 0;
+  private unfinishedAttempts = 0;
   /** "started" lines held back by the stdout filter until the attempt turns out to
    *  be worth printing (retry / failure / lost DB row); dropped otherwise. */
   private readonly pendingStdoutStartedRecords = new Map<string, Record<string, unknown>>();
@@ -676,6 +678,8 @@ export class SyncRunTelemetry {
       health: this.resolveHealth(status),
       requestTotals: {
         totalAttempts: requestTotals.totalAttempts,
+        unrecordedAttempts: this.unrecordedAttempts,
+        unfinishedAttempts: this.unfinishedAttempts,
         logicalRequests: this.requestSummaryCollector.getRequestTotalsSnapshot().logicalRequests,
         retryAttempts: requestTotals.retryAttempts,
         failedAttempts: requestTotals.failedAttempts,
@@ -793,6 +797,7 @@ export class SyncRunTelemetry {
           if (createdAttemptId !== null) {
             this.requestAttemptIds.set(attemptKey(event), createdAttemptId);
           } else {
+            this.unrecordedAttempts += 1;
             this.requestAttemptPersistenceFailures.add(attemptKey(event));
           }
           return;
@@ -823,6 +828,7 @@ export class SyncRunTelemetry {
         );
 
         if (!finished) {
+          this.unfinishedAttempts += 1;
           this.requestAttemptPersistenceFailures.add(attemptKey(event));
         }
 
