@@ -11,11 +11,11 @@ and evidence now live in `investigations/`.
 | Pre-A0: stale follow-up + lilly-2 debt | PR157 deployed; Lilly-2 one-hour canary completed and rolled back | Frozen Lilly-2 5615/5615 raw; canary had 0 eligible targets / 0 recovery attempts, 104 excluded debts unchanged; 8/8 selected material passed after rollback. Separate old Lilly-1/Lora-1/Ari discrepancies remain explicit. |
 | Pre-A0: reply links / honest sweep | PR158–162 deployed; original bounded corpus accepted | 994/994 reply IDs, 2893 observations, 27 attached messages across separately timestamped reads; not an atomic census or fresh-event latency claim. |
 | A0 + T0 | [PR164](https://github.com/goslingmanagment/core/pull/164) merged; Decision 284, not deployed | Narrow read operations precede the retained September 1–6 export; runtime shadow >=7 full days on all six pages is not started. Physical-attempt savings unmeasured. |
-| C1 | Not started | Diagnostic counts of the three anomaly branches before a narrow fix. |
-| C2a | Implementation validated and independently reviewed, Decision 285; not deployed | Earnings identity correctness, A-B-A/replay/stale ordering; retain repair plan. |
+| C1 | [PR166](https://github.com/goslingmanagment/core/pull/166) diagnostic draft, Decision 286; not deployed | 3148 unit and 50 real-Postgres tests pass; independent review closed. Production causes and completed-generation consolidation remain unmeasured; narrow fix stays in this PR. |
+| C2a | [PR165](https://github.com/goslingmanagment/core/pull/165) merged, Decision 285; not deployed | Earnings identity correctness, A-B-A/replay/stale ordering; retain repair plan. |
 | C2b | Not started | Dirty/receipt shadow; daily rotation unchanged. |
 | C2c | Gated | Coverage, costs and per-fan max-age proof before selection/rotation changes. |
-| W0 | Not started | Offline fixtures; live socket probes need explicit approval. Management Session only. |
+| W0 | Offline diagnostic draft validated and independently reviewed, Decision 287 | 3172 unit and 10 existing-custody Postgres tests pass. Synthetic received-frame export only; live binding, fan-out, presence and six-hour continuity unmeasured. Management Session only. |
 | B0 | Gated by W0 | Capture-only receiver, >=7 days with sufficient event variety. |
 | B1 | Gated by B0 and T0 | Measured delivery lag, added attempts and history fairness. |
 | A1 | Owner/calendar/evidence gated | Separate yes after A0/T0 scope and freshness gate. |

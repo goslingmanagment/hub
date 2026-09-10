@@ -285,6 +285,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 282 | Agent transcript tombstone lookup | Resolve the current OFAPI binding once and use the platform/account/message key for chatless tombstones; avoid scanning unrelated cold history before checking an absent binding. |
 | 284 | Fansly A0/T0 diagnostics | Default-off virtual-stop measurement preserves the full sweep; bounded read operations expose physical-attempt coverage and retained metadata without base-table grants. |
 | 285 | Fansly C2a earnings identity | Observation-scoped v2 snapshots preserve A-B-A, replay ordering and legacy SSE edges; daily rotation unchanged. |
+| 287 | Fansly W0 offline diagnostics | Received-only bounded metadata export excludes secrets and correspondence; synthetic protocol fixtures do not establish live binding or coverage. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -11960,3 +11961,40 @@ Retained earnings observations must all be replayed and checked; any remaining
 projection mismatch requires a separately approved page-scoped rebuild. These
 are explicit production gates, not implied by merging this change. See the
 [repair runbook](runbooks/fansly-earnings-correctness.md).
+
+## Decision 287: Prepare safe offline Fansly socket diagnostics (2026-09-10)
+
+**Numbering.** Based on main Decision 285; 286 is reserved by the open C1
+[PR166](https://github.com/goslingmanagment/core/pull/166). Recheck both at merge.
+
+**Problem.** The historical research snippet leaks the actual nested auth shape
+and retains correspondence. The accepted W0 gate requires offline proof before
+any new live capture procedure. Historical bundle behavior does not establish a
+current server contract, Management Session capability or account binding.
+
+**Decision.** Add a standalone local diagnostic reader and synthetic fixtures.
+It accepts only explicitly received frames from the exact candidate account
+endpoint. The report contains times, byte counts, numeric envelope/service/event
+types, fixed allowlisted field names, and HMAC references for selected numeric
+business IDs. Outbound/ambiguous direction, unrelated or credential-bearing URLs
+are excluded before inspecting the frame. No URL, header, arbitrary field name,
+credential, correspondence or exception text is copied into output.
+
+Batch children retain their individual metadata or explicit unresolved reason.
+Alternate inner-service shapes are labeled candidates. Size, depth and count
+limits mark diagnostics incomplete; they are not a raw capture drop policy.
+Session-frame and pong labels are distinct and never certify binding. Even an
+incorrectly labeled outbound auth frame cannot expose its token in the report.
+
+Input and correlation-key files must be private; output is exclusive and mode
+0600. Each experiment uses a random 32-byte key, shared only across that
+experiment's independently observed streams. Keys remain outside reports. Raw
+test-account evidence needs separate approved custody and remains distinct from
+this deliberately incomplete diagnostic representation.
+
+**Gate.** W0 remains a draft through live Management Session binding, fan-out,
+presence and six-hour continuity/gap evidence. This code has no browser hooks,
+transport, receiver, business writer, configuration flag or production import.
+It neither starts B0 nor changes polling. Stop procedures and scope unknowns are
+in the [W0 runbook](runbooks/fansly-ws-protocol-check.md). Rollback for this
+offline slice is to stop using the reader while retaining evidence.
