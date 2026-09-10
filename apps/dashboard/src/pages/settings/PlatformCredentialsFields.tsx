@@ -64,15 +64,11 @@ export function PlatformCredentialsFields({
         </>
       ) : (
         <>
-          <Field label="Auth token">
-            <textarea
-              value={values.onlyFansToken}
-              onChange={(event) => onChange("onlyFansToken", event.target.value)}
-              rows={4}
-              className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm text-text-primary outline-none focus:border-accent"
-            />
-          </Field>
-          <Field label="Username">
+          <p className="text-sm text-text-muted">
+            Connect the account in OFAPI first, then enter its OnlyFans username.
+            OFAPI manages access and the connection; no token or proxy is needed here.
+          </p>
+          <Field label="OnlyFans username">
             <input
               value={values.onlyFansUsername}
               onChange={(event) => onChange("onlyFansUsername", event.target.value)}
@@ -82,12 +78,14 @@ export function PlatformCredentialsFields({
         </>
       )}
 
-      <ProxyInput
-        value={values.proxyRaw}
-        onChange={(value) => onChange("proxyRaw", value)}
-        initialStoredProxy={initialStoredProxy ?? null}
-        required={platform === "fansly"}
-      />
+      {platform === "fansly" && (
+        <ProxyInput
+          value={values.proxyRaw}
+          onChange={(value) => onChange("proxyRaw", value)}
+          initialStoredProxy={initialStoredProxy ?? null}
+          required
+        />
+      )}
     </>
   );
 }
@@ -119,13 +117,20 @@ export function buildCredentialsBody({
   initialStoredProxy?: { url: string; hasAuth: boolean } | null;
   requireCredentials?: boolean;
 }): VerifyCredentialsBody | UpdateCredentialsBody {
+  if (platform === "onlyfans") {
+    if (!requireCredentials) {
+      throw new Error("OnlyFans access is managed in OFAPI. Use Sync settings for connection diagnostics.");
+    }
+    return { platform: "onlyfans", username: values.onlyFansUsername.trim() };
+  }
+
   const proxyError = getProxyStringError(values.proxyRaw);
   if (proxyError) {
     throw new Error(proxyError);
   }
 
   const proxyConfig = buildProxyConfig(values.proxyRaw);
-  if (platform === "fansly" && requireCredentials && !proxyConfig) {
+  if (requireCredentials && !proxyConfig) {
     throw new Error("Proxy is required for Fansly");
   }
   if (!requireCredentials && hadStoredProxy && values.proxyRaw.trim().length === 0) {
@@ -144,38 +149,22 @@ export function buildCredentialsBody({
     ? undefined
     : proxyConfig;
 
-  if (platform === "fansly") {
-    const session = {
-      authorization: values.authorization.trim(),
-      fanslyClientId: values.fanslyClientId.trim() || undefined,
-      fanslyClientCheck: values.fanslyClientCheck.trim() || undefined,
-      fanslySessionId: values.fanslySessionId.trim() || undefined,
-    };
-    const hasSessionInput = Boolean(
-      session.authorization ||
-        session.fanslyClientId ||
-        session.fanslyClientCheck ||
-        session.fanslySessionId,
-    );
-
-    return {
-      platform: "fansly",
-      ...(requireCredentials || hasSessionInput ? { session } : {}),
-      proxy,
-    } as VerifyCredentialsBody | UpdateCredentialsBody;
-  }
-
-  const auth = {
-    token: values.onlyFansToken.trim(),
+  const session = {
+    authorization: values.authorization.trim(),
+    fanslyClientId: values.fanslyClientId.trim() || undefined,
+    fanslyClientCheck: values.fanslyClientCheck.trim() || undefined,
+    fanslySessionId: values.fanslySessionId.trim() || undefined,
   };
-  const username = values.onlyFansUsername.trim();
-  const hasAuthInput = Boolean(auth.token);
-  const hasUsernameInput = Boolean(username);
+  const hasSessionInput = Boolean(
+    session.authorization ||
+      session.fanslyClientId ||
+      session.fanslyClientCheck ||
+      session.fanslySessionId,
+  );
 
   return {
-    platform: "onlyfans",
-    ...(requireCredentials || hasAuthInput ? { auth } : {}),
-    ...(requireCredentials || hasUsernameInput ? { username } : {}),
+    platform: "fansly",
+    ...(requireCredentials || hasSessionInput ? { session } : {}),
     proxy,
   } as VerifyCredentialsBody | UpdateCredentialsBody;
 }

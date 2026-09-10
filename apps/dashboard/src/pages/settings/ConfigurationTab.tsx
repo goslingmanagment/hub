@@ -1,17 +1,19 @@
-import { useEffect, useId, useMemo, useState } from "react";
-import type { ReactNode } from "react";
-import { Link } from "react-router";
-import type { ConfigItem, ConfigUpdateBody, ConfigViewResponse } from "@agency_hub_core/contracts";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
+import type { ReactNode, RefObject } from "react";
+import { Search, RefreshCw, X, ChevronRight } from "lucide-react";
+import { Link, useInRouterContext, useLocation } from "react-router";
+import type { ConfigItem, ConfigViewResponse } from "@agency_hub_core/contracts";
 import {
   useAdminConfig,
-  useClearConfig,
   useStagedConfig,
-  useUpdateConfig,
 } from "@/api/adminConfig";
 import { KernelApiError } from "@/api/sdk";
 import { ModalShell } from "@/components/shared/ModalShell";
-import { Tooltip } from "@/components/shared/Tooltip";
 import { CONFIG_COPY_RU, SUBSYSTEM_COPY_RU } from "@/pages/settings/configCopyRu";
+
+import { ConfigEditor, BooleanConfigEditor, liveEditorKind } from "./ConfigurationEditors.js";
+import { CONFIG_FILTERS, CONFIG_SUBSYSTEM_LABELS, configSubsystemOrder, matchesConfigFilter, matchesConfigSearch, runningDiffersFromDefault, type ConfigFilter } from "./configurationView.js";
+export { booleanPatchBody, liveEditorKind, resolveBooleanToggle } from "./ConfigurationEditors.js";
 
 // The 3 staged flags that drive a sync stream: after a restart their paused Sync blocks
 // must be manually resumed on the Sync tab (no resume-all button by design).
@@ -51,14 +53,20 @@ function desiredOnFor(item: ConfigItem): boolean {
 
 function formatScalar(value: string | number | boolean | null): string {
   if (value === null) return "—";
-  if (typeof value === "boolean") return value ? "on" : "off";
-  return String(value);
+  if (typeof value === "boolean") return value ? "вкл." : "выкл.";
+  return value === "" ? "Пустая строка" : String(value);
 }
 
 function formatSeen(iso: string): string {
   const date = new Date(iso);
-  return Number.isNaN(date.getTime()) ? "?" : date.toLocaleTimeString();
+  return Number.isNaN(date.getTime()) ? "?" : date.toLocaleTimeString("ru-RU");
 }
+
+function settingTitle(item: ConfigItem): string {
+  return CONFIG_COPY_RU[item.key]?.title ?? item.label;
+}
+
+const ROLE_LABELS: Record<string, string> = { api: "Интерфейс", worker: "Обработка данных", scheduler: "Расписание" };
 
 function Badge({
   tone,
@@ -87,44 +95,6 @@ const ROLE_STATUS_RU: Record<string, string> = {
   missing: "нет данных",
 };
 
-// One honest status per row, collapsing the editability × runtimeApply matrix into the
-// single thing the user needs: can I change this here, or not? An "editable" key whose
-// runtimeApply is "none" (a tunable not yet wired to the live overlay) reads as read-only —
-// NOT as an inviting "editable", which the old two-badge combo wrongly implied.
-//
-// `rail` is the page's signature device: a left accent border that quietly highlights the
-// rows you can act on (blue = live, amber = staged) and stays invisible on read-only rows,
-// so the eye lands on what's actionable. `chip` says the same in words for color-blind users.
-function primaryStatus(item: ConfigItem): {
-  label: string;
-  title: string;
-  rail: string;
-  chip: string;
-} {
-  if (item.editability === "staged") {
-    return {
-      label: "поэтапно",
-      title: "Включается поэтапно — управление в разделе «Поэтапная раскатка» ниже",
-      rail: "border-l-amber-500/60",
-      chip: "border-amber-500/40 text-amber-600",
-    };
-  }
-  if (item.runtimeApply === "live") {
-    return {
-      label: "можно менять",
-      title: "Можно изменить здесь; применяется на лету (~60с), перезапуск не нужен",
-      rail: "border-l-sky-500/70",
-      chip: "border-sky-500/40 text-sky-600",
-    };
-  }
-  return {
-    label: "только чтение",
-    title: "Здесь не редактируется; задаётся администратором через переменные окружения",
-    rail: "border-l-transparent",
-    chip: "border-border text-text-muted",
-  };
-}
-
 // Sort within a subsystem so the few actionable (live-editable) rows surface to the top,
 // then staged flags, then plain read-only, then secrets — without losing subsystem grouping.
 function rowRank(item: ConfigItem): number {
@@ -136,28 +106,28 @@ function rowRank(item: ConfigItem): number {
 
 function RunningCell({ item }: { item: ConfigItem }) {
   if (item.running.length === 0) {
-    return <span className="text-text-muted">awaiting heartbeat…</span>;
+    return <span className="text-text-muted">Нет сигнала от процессов</span>;
   }
 
   if (item.secret || item.running[0]?.masked) {
     const stateTone = (state: string | null) =>
-      state === "set" ? "bg-emerald-500/15 text-emerald-600" : "bg-zinc-500/15 text-zinc-500";
+      state === "set" ? "bg-emerald-500/15 text-emerald-600" : state === "unknown" ? "bg-amber-500/15 text-amber-600" : "bg-zinc-500/15 text-zinc-500";
     // When live processes disagree on set/unset, show each one — a key set in api
     // but unset in worker is an operationally important drift.
-    if (item.drift) {
+    if (item.drift || item.running.some((running) => running.state === "unknown")) {
       return (
         <div className="flex flex-col gap-0.5">
           {item.running.map((r) => (
             <span key={`${r.role}:${r.instanceId}`} className="text-xs">
-              <span className="text-text-muted">{r.role}:</span>{" "}
-              <Badge tone={stateTone(r.state)}>{r.state ?? "unset"}</Badge>
+              <span className="text-text-muted">{ROLE_LABELS[r.role] ?? r.role}:</span>{" "}
+              <Badge tone={stateTone(r.state)}>{r.state === "set" ? "задан" : r.state === "unknown" ? "нет данных" : "не задан"}</Badge>
             </span>
           ))}
         </div>
       );
     }
     const state = item.running[0]?.state ?? "unset";
-    return <Badge tone={stateTone(state)}>{state}</Badge>;
+    return <Badge tone={stateTone(state)}>{state === "set" ? "задан" : state === "unknown" ? "нет данных" : "не задан"}</Badge>;
   }
 
   // An instance reporting under an older/mismatched snapshot shape shows as "unknown
@@ -169,9 +139,9 @@ function RunningCell({ item }: { item: ConfigItem }) {
       <div className="flex flex-col gap-0.5">
         {item.running.map((r) => (
           <span key={`${r.role}:${r.instanceId}`} className="font-mono text-xs">
-            <span className="text-text-muted">{r.role}:</span>{" "}
+            <span className="text-text-muted">{ROLE_LABELS[r.role] ?? r.role}:</span>{" "}
             {r.state === "unknown" ? (
-              <span className="text-amber-600">unknown (stale snapshot)</span>
+              <span className="text-amber-600">Нет актуального значения</span>
             ) : (
               formatScalar(r.value)
             )}
@@ -184,357 +154,49 @@ function RunningCell({ item }: { item: ConfigItem }) {
   return <span className="font-mono text-text-primary">{formatScalar(item.running[0]!.value)}</span>;
 }
 
-function seedValue(item: ConfigItem): string {
-  if (item.desired !== null && item.desired !== undefined) return String(item.desired);
-  const running = item.running[0]?.value;
-  if (running !== null && running !== undefined) return String(running);
-  return item.default;
-}
-
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : "Не удалось сохранить.";
 }
 
-function ConfigEditor({ item }: { item: ConfigItem }) {
-  const update = useUpdateConfig();
-  const clear = useClearConfig();
-  const [input, setInput] = useState(() => seedValue(item));
-  // Two-click confirm gate for cost/destructive keys. Save AND revert both change the
-  // live value, so both pass through it; the state tracks which action is armed.
-  const [confirm, setConfirm] = useState<null | "save" | "revert">(null);
-
-  const needsConfirm = Boolean(item.costWarning) || item.destructive;
-  const seeded = seedValue(item);
-  const dirty = input.trim() !== seeded && input.trim() !== "";
-  const pending = update.isPending || clear.isPending;
-  const error = update.error ?? clear.error;
-  const isConflict = error instanceof KernelApiError && error.status === 409;
-  const isString = item.kind === "string";
-
-  function save() {
-    update.mutate({
-      patches: [{
-        key: item.key,
-        value: isString ? input.trim() : Number(input),
-        expectedVersion: item.overrideVersion ?? 0,
-      }],
-    });
-    setConfirm(null);
-  }
-
-  function revert() {
-    // exactOptionalPropertyTypes: omit expectedVersion entirely when there is no
-    // override row (rather than passing an explicit undefined).
-    clear.mutate({
-      key: item.key,
-      ...(item.overrideVersion !== null ? { expectedVersion: item.overrideVersion } : {}),
-    });
-    setConfirm(null);
-  }
-
-  function onSaveClick() {
-    if (needsConfirm && confirm !== "save") {
-      setConfirm("save");
-      return;
-    }
-    save();
-  }
-
-  function onRevertClick() {
-    if (needsConfirm && confirm !== "revert") {
-      setConfirm("revert");
-      return;
-    }
-    revert();
-  }
-
-  return (
-    <div className="flex flex-col gap-1">
-      <div className="flex flex-wrap items-center gap-1.5">
-        <input
-          type={isString ? "text" : "number"}
-          aria-label={`${item.label} value`}
-          value={input}
-          disabled={pending}
-          onChange={(e) => {
-            setInput(e.target.value);
-            setConfirm(null);
-          }}
-          className={`${isString ? "w-56" : "w-24"} rounded border border-border bg-card px-1.5 py-0.5 text-xs font-mono text-text-primary disabled:opacity-50`}
-        />
-        <button
-          type="button"
-          onClick={onSaveClick}
-          disabled={pending || !dirty}
-          className={`rounded px-2 py-0.5 text-xs font-medium text-white transition-colors disabled:opacity-40 ${
-            confirm === "save" ? "bg-danger hover:opacity-90" : "bg-accent hover:opacity-90"
-          }`}
-        >
-          {confirm === "save" ? "Подтвердить" : "Сохранить"}
-        </button>
-        {item.source === "override" && (
-          <button
-            type="button"
-            onClick={onRevertClick}
-            disabled={pending}
-            className={`rounded px-2 py-0.5 text-xs disabled:opacity-40 ${
-              confirm === "revert"
-                ? "bg-danger text-white hover:opacity-90"
-                : "border border-border bg-card text-text-secondary hover:bg-hover"
-            }`}
-          >
-            {confirm === "revert" ? "Подтвердить сброс" : "Сбросить"}
-          </button>
-        )}
-        {confirm !== null && (
-          <button
-            type="button"
-            onClick={() => setConfirm(null)}
-            disabled={pending}
-            className="rounded border border-border bg-card px-2 py-0.5 text-xs text-text-secondary hover:bg-hover disabled:opacity-40"
-          >
-            Отмена
-          </button>
-        )}
-        {item.pendingApply && (
-          <Badge
-            tone="bg-amber-500/15 text-amber-600"
-            title="Сохранено — может занять до ~60с (один сигнал), чтобы примениться во всех процессах"
-          >
-            применяется…
-          </Badge>
-        )}
-      </div>
-      {confirm !== null && needsConfirm && (
-        <div className="text-[11px] text-amber-600">
-          {item.destructive ? "Необратимо: снижение или очистка безвозвратно удалит данные. " : ""}
-          {item.costWarning ?? ""}{" "}
-          {confirm === "revert" ? "Сбросить к значению по умолчанию?" : "Нажмите «Подтвердить», чтобы применить."}
-        </div>
-      )}
-      {error && (
-        <div className="text-[11px] text-red-600">
-          {isConflict
-            ? "Изменено в другом месте — значения обновлены, проверьте и повторите."
-            : errorMessage(error)}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// Which live keys get an inline editor: numbers and strings get a scalar input, booleans get the
-// on/off switch (added after a prod incident where a live boolean flag showed «можно
-// менять» but had no editor and had to be flipped via psql). Other kinds stay read-only
-// until they get a proper editor — which keeps each editor honest
-// about the value type it sends. Exported for tests.
-export function liveEditorKind(
-  item: Pick<ConfigItem, "runtimeApply" | "kind">,
-): "number" | "boolean" | "string" | null {
-  if (item.runtimeApply !== "live") return null;
-  if (item.kind === "number" || item.kind === "boolean" || item.kind === "string") return item.kind;
-  return null;
-}
-
-// The literal live-PATCH body a boolean flip sends: a REAL boolean value (the server's
-// validateConfigOverride rejects strings for kind "boolean") with the row's version as
-// expectedVersion (0 = "no override row yet", same convention as the numeric editor).
-// Exported for tests.
-export function booleanPatchBody(
-  item: Pick<ConfigItem, "key" | "overrideVersion">,
-  target: boolean,
-): ConfigUpdateBody {
-  return {
-    patches: [{ key: item.key, value: target, expectedVersion: item.overrideVersion ?? 0 }],
-  };
-}
-
-type BooleanConfirm = { action: "save"; target: boolean } | { action: "revert" };
-
-// What one switch click does. Keys with a costWarning (or destructive) go through the
-// same two-click confirm gate as the numeric editor: the first click only ARMS the
-// confirm (remembering the requested target), and only a second click for the SAME
-// target produces the real patch. Keys without a warning save on the first click — an
-// incident flip must be one action. Exported for tests (static render can't click).
-export function resolveBooleanToggle(opts: {
-  item: Pick<ConfigItem, "key" | "overrideVersion" | "costWarning" | "destructive">;
-  target: boolean;
-  confirm: BooleanConfirm | null;
-}): { kind: "arm" } | { kind: "save"; body: ConfigUpdateBody } {
-  const needsConfirm = Boolean(opts.item.costWarning) || opts.item.destructive;
-  const armed = opts.confirm?.action === "save" && opts.confirm.target === opts.target;
-  if (needsConfirm && !armed) {
-    return { kind: "arm" };
-  }
-  return { kind: "save", body: booleanPatchBody(opts.item, opts.target) };
-}
-
-// Inline editor for boolean live keys (the Stage 16/17 Fansly stream gates). Mirrors
-// ConfigEditor's plumbing exactly: same PATCH mutation, same optimistic concurrency
-// (overrideVersion → expectedVersion), same two-click confirm for cost/destructive keys
-// (with the costWarning text shown while armed), same revert-to-env button.
-function BooleanConfigEditor({ item }: { item: ConfigItem }) {
-  const update = useUpdateConfig();
-  const clear = useClearConfig();
-  const [confirm, setConfirm] = useState<BooleanConfirm | null>(null);
-
-  const needsConfirm = Boolean(item.costWarning) || item.destructive;
-  // Same seeding as the numeric editor: desired override, else running value, else default.
-  const current = seedValue(item) === "true";
-  const pending = update.isPending || clear.isPending;
-  const error = update.error ?? clear.error;
-  const isConflict = error instanceof KernelApiError && error.status === 409;
-
-  // Both the switch and the armed «Подтвердить» button land here: the target is always
-  // the opposite of the current effective value (SettingRow remounts this editor when
-  // the server value changes, so an armed confirm can't outlive the value it was for).
-  function onToggle() {
-    const target = !current;
-    const action = resolveBooleanToggle({ item, target, confirm });
-    if (action.kind === "arm") {
-      setConfirm({ action: "save", target });
-      return;
-    }
-    update.mutate(action.body);
-    setConfirm(null);
-  }
-
-  function onRevertClick() {
-    if (needsConfirm && confirm?.action !== "revert") {
-      setConfirm({ action: "revert" });
-      return;
-    }
-    // exactOptionalPropertyTypes: omit expectedVersion entirely when there is no
-    // override row (rather than passing an explicit undefined).
-    clear.mutate({
-      key: item.key,
-      ...(item.overrideVersion !== null ? { expectedVersion: item.overrideVersion } : {}),
-    });
-    setConfirm(null);
-  }
-
-  return (
-    <div className="flex flex-col gap-1">
-      <div className="flex flex-wrap items-center gap-1.5">
-        <button
-          type="button"
-          role="switch"
-          aria-checked={current}
-          aria-label={`${item.label} value`}
-          onClick={onToggle}
-          disabled={pending}
-          className={`relative inline-flex h-[18px] w-8 shrink-0 items-center rounded-full transition-colors disabled:opacity-50 ${
-            current ? "bg-accent" : "bg-border"
-          }`}
-        >
-          <span
-            className={`inline-block h-3.5 w-3.5 rounded-full bg-white transition-transform ${
-              current ? "translate-x-[15px]" : "translate-x-[2px]"
-            }`}
-          />
-        </button>
-        <span className="font-mono text-xs text-text-primary">{formatScalar(current)}</span>
-        {confirm?.action === "save" && (
-          <button
-            type="button"
-            onClick={onToggle}
-            disabled={pending}
-            className="rounded bg-danger px-2 py-0.5 text-xs font-medium text-white transition-colors hover:opacity-90 disabled:opacity-40"
-          >
-            {confirm.target ? "Подтвердить включение" : "Подтвердить выключение"}
-          </button>
-        )}
-        {item.source === "override" && (
-          <button
-            type="button"
-            onClick={onRevertClick}
-            disabled={pending}
-            className={`rounded px-2 py-0.5 text-xs disabled:opacity-40 ${
-              confirm?.action === "revert"
-                ? "bg-danger text-white hover:opacity-90"
-                : "border border-border bg-card text-text-secondary hover:bg-hover"
-            }`}
-          >
-            {confirm?.action === "revert" ? "Подтвердить сброс" : "Сбросить"}
-          </button>
-        )}
-        {confirm !== null && (
-          <button
-            type="button"
-            onClick={() => setConfirm(null)}
-            disabled={pending}
-            className="rounded border border-border bg-card px-2 py-0.5 text-xs text-text-secondary hover:bg-hover disabled:opacity-40"
-          >
-            Отмена
-          </button>
-        )}
-        {item.pendingApply && (
-          <Badge
-            tone="bg-amber-500/15 text-amber-600"
-            title="Сохранено — может занять до ~60с (один сигнал), чтобы примениться во всех процессах"
-          >
-            применяется…
-          </Badge>
-        )}
-      </div>
-      {confirm !== null && needsConfirm && (
-        <div className="text-[11px] text-amber-600">
-          {item.destructive ? "Необратимо: снижение или очистка безвозвратно удалит данные. " : ""}
-          {item.costWarning ?? ""}{" "}
-          {confirm.action === "revert"
-            ? "Сбросить к значению по умолчанию?"
-            : `Нажмите «Подтвердить», чтобы ${confirm.target ? "включить" : "выключить"}.`}
-        </div>
-      )}
-      {error && (
-        <div className="text-[11px] text-red-600">
-          {isConflict
-            ? "Изменено в другом месте — значения обновлены, проверьте и повторите."
-            : errorMessage(error)}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function InfoIcon() {
-  return (
-    <svg
-      viewBox="0 0 20 20"
-      width="13"
-      height="13"
-      fill="currentColor"
-      aria-hidden="true"
-      className="inline-block align-[-1px]"
-    >
-      <path d="M10 1.6a8.4 8.4 0 100 16.8 8.4 8.4 0 000-16.8zm0 1.5a6.9 6.9 0 110 13.8 6.9 6.9 0 010-13.8zM10 5.2a1.05 1.05 0 110 2.1 1.05 1.05 0 010-2.1zM9.1 8.7h1.8v6H9.1z" />
-    </svg>
-  );
-}
-
-// Shared label block: the (untranslated) English name with an optional ⓘ that reveals the
-// detailed Russian explanation on hover/focus, then the env var, the short Russian summary,
-// and any technical note. Used by both the table rows and the staged-flag rows.
 function SettingLabel({ item }: { item: ConfigItem }) {
   const copy = CONFIG_COPY_RU[item.key];
   return (
     <>
-      <div className="flex items-center gap-1">
-        <span className="text-sm font-medium text-text-primary">{item.label}</span>
-        {copy?.long && (
-          <Tooltip content={copy.long} focusable>
-            <span
-              aria-label={`Подробное описание: ${item.label}`}
-              className="cursor-help text-text-muted transition-colors hover:text-text-secondary"
-            >
-              <InfoIcon />
-            </span>
-          </Tooltip>
-        )}
-      </div>
-      <div className="font-mono text-[11px] text-text-muted">{item.envName}</div>
-      {copy?.short && <div className="mt-0.5 text-[12px] text-text-secondary">{copy.short}</div>}
-      {item.note && <div className="mt-0.5 text-[11px] text-text-muted">{item.note}</div>}
+      <div className="break-words text-sm font-semibold leading-6 text-text-primary">{settingTitle(item)}</div>
+      {copy?.short && <p id={`config-description-${item.key}`} className="mt-1 text-[13px] leading-[1.65] text-text-secondary">{copy.short}</p>}
+        <div className="mt-2 flex flex-wrap items-center gap-1.5 empty:hidden">
+          {item.drift && (
+            <Badge tone="bg-red-500/15 text-red-600" title="Запущенные процессы сообщают разные значения">
+              значения различаются
+            </Badge>
+          )}
+          {item.costWarning && (
+            <Badge tone="bg-amber-500/15 text-amber-600" title={CONFIG_COPY_RU[item.key]?.warning ?? item.costWarning}>
+              влияет на расходы
+            </Badge>
+          )}
+          {item.destructive && (
+            <Badge tone="bg-red-500/15 text-red-600" title="Снижение или очистка безвозвратно удаляет данные">
+              может удалить данные
+            </Badge>
+          )}
+        </div>
+      <details className="config-help">
+        <summary aria-label={`Подробнее: ${settingTitle(item)}`}><ChevronRight size={13} aria-hidden="true" />Подробнее</summary>
+        <div className="config-help-body">
+          {copy?.long && <p>{copy.long}</p>}
+          {item.costWarning && <p className="text-amber-700">{copy?.warning ?? item.costWarning}</p>}
+          <details>
+            <summary className="w-fit cursor-pointer text-xs text-text-muted">Технические сведения</summary>
+            <div className="mt-2 space-y-2 text-xs">
+              <p>{item.label}</p>
+              {item.note && <p>{item.note}</p>}
+              <div className="break-all font-mono text-[11px]">{item.envName}</div>
+              {runningDiffersFromDefault(item) && <p>Исходное значение программы: <span className="font-mono">{item.default}</span>. Настройка сервера может отличаться.</p>}
+            </div>
+          </details>
+        </div>
+      </details>
     </>
   );
 }
@@ -543,68 +205,32 @@ function SettingRow({ item }: { item: ConfigItem }) {
   // Number/string live keys get the scalar editor; boolean live keys get the
   // on/off switch. Other kinds stay read-only — see liveEditorKind.
   const editorKind = liveEditorKind(item);
-  const runningDiffersFromDefault =
-    item.running.length > 0
-    && !item.secret
-    && !item.running[0]?.masked
-    && formatScalar(item.running[0]!.value) !== item.default;
-  const status = primaryStatus(item);
 
   return (
     <div
-      // BOOT keys also render an actionable StagedFlagRow below (the staged-flags
-      // section filters on runtimeApply === "boot", NOT editability), and that row
-      // owns the canonical `config-<key>` anchor; this read-only readout must not
-      // duplicate the id (getElementById would land deep-links on this row). The
-      // old `editability === "staged"` condition left the two EDITABLE boot keys
-      // with duplicate ids and staged non-boot keys with none (W8.2 / A32, #133).
-      id={item.runtimeApply === "boot" ? undefined : `config-${item.key}`}
-      className={`scroll-mt-24 grid grid-cols-1 gap-y-2 border-l-2 ${status.rail} py-3.5 pl-4 pr-3 sm:grid-cols-[minmax(0,1fr)_104px_minmax(168px,auto)] sm:items-start sm:gap-x-5`}
+      id={`config-${item.key}`}
+      tabIndex={-1}
+      className="config-setting"
     >
-      <div className="min-w-0">
+      <div className="config-setting-main">
         <SettingLabel item={item} />
       </div>
-      <div className="text-sm sm:pt-0.5">
-        <RunningCell item={item} />
-        {runningDiffersFromDefault && (
-          <div className="mt-0.5 text-[11px] text-text-muted">
-            умолч. <span className="font-mono">{item.default}</span>
-          </div>
-        )}
-      </div>
-      <div className="flex flex-col items-start gap-2 sm:items-end">
-        <div className="flex flex-wrap items-center gap-1.5 sm:justify-end">
-          <span
-            title={status.title}
-            className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium ${status.chip}`}
-          >
-            {status.label}
-          </span>
-          {item.drift && (
-            <Badge tone="bg-red-500/15 text-red-600" title="Запущенные процессы сообщают разные значения">
-              рассинхрон
-            </Badge>
-          )}
-          {item.costWarning && (
-            <Badge tone="bg-amber-500/15 text-amber-600" title={item.costWarning}>
-              расходы
-            </Badge>
-          )}
-          {item.destructive && (
-            <Badge tone="bg-red-500/15 text-red-600" title="Снижение или очистка безвозвратно удаляет данные">
-              необратимо
-            </Badge>
-          )}
+      <div className="config-setting-control">
+        <div className="config-setting-current">
+          <span>Сейчас:</span><RunningCell item={item} />
+          {CONFIG_COPY_RU[item.key]?.unit && <span>{CONFIG_COPY_RU[item.key]?.unit}</span>}
         </div>
+
         {editorKind === "number" && (
-          <ConfigEditor key={`${item.overrideVersion ?? "env"}:${seedValue(item)}`} item={item} />
+          <ConfigEditor item={item} />
         )}
         {editorKind === "string" && (
-          <ConfigEditor key={`${item.overrideVersion ?? "env"}:${seedValue(item)}`} item={item} />
+          <ConfigEditor item={item} />
         )}
         {editorKind === "boolean" && (
-          <BooleanConfigEditor key={`${item.overrideVersion ?? "env"}:${seedValue(item)}`} item={item} />
+          <BooleanConfigEditor item={item} />
         )}
+        {!editorKind && <p className="text-xs leading-relaxed text-text-muted">Меняется в настройках сервера.</p>}
       </div>
     </div>
   );
@@ -613,6 +239,11 @@ function SettingRow({ item }: { item: ConfigItem }) {
 // --- Staged rollout (Stage C) ---------------------------------------------------------
 
 type ItemMap = Map<string, ConfigItem>;
+type StagedModalRequest = {
+  item: ConfigItem;
+  target: boolean | null;
+  keys: Array<{ key: string; desired: boolean | null }>;
+};
 
 // Walk the transitive `requires` chain (DAG; the registry chain is linear), nearest-first,
 // excluding the key itself. Mirrors transitiveRequires in staged-config.ts.
@@ -654,9 +285,10 @@ function RUNNING_STATE_TONE(state: RunningFlagState): string {
 function RUNNING_STATE_LABEL(state: RunningFlagState): string {
   switch (state) {
     case "partial":
-      return "partial (per-instance)";
-    default:
-      return state;
+      return "разные значения";
+    case "on": return "вкл.";
+    case "off": return "выкл.";
+    default: return "нет данных";
   }
 }
 
@@ -666,6 +298,7 @@ function StagedConfirmModal({
   keys,
   items,
   onClose,
+  restoreFocusRef,
 }: {
   item: ConfigItem;
   // true = enable, false = disable, null = revert to env (clear the override).
@@ -675,6 +308,7 @@ function StagedConfirmModal({
   keys: Array<{ key: string; desired: boolean | null }>;
   items: ItemMap;
   onClose: () => void;
+  restoreFocusRef: RefObject<HTMLElement | null>;
 }) {
   const staged = useStagedConfig();
   const [ack, setAck] = useState(false);
@@ -682,26 +316,31 @@ function StagedConfirmModal({
   const ackId = useId();
   const noteId = useId();
 
-  const verb = target === null ? "Revert" : target ? "Enable" : "Disable";
+  const verb = target === null ? "Вернуть настройку сервера" : target ? "Включить" : "Выключить";
+  const [prepared] = useState(() => keys.map((patch) => ({
+    ...patch,
+    expectedVersion: items.get(patch.key)?.overrideVersion ?? 0,
+    previous: items.get(patch.key)?.desiredEffective ?? null,
+  })));
+  const changed = prepared.some((patch) =>
+    !items.has(patch.key)
+    || patch.expectedVersion !== (items.get(patch.key)?.overrideVersion ?? 0)
+    || patch.previous !== (items.get(patch.key)?.desiredEffective ?? null));
   const isStream = STREAM_FLAG_KEYS.has(item.key);
   // Cost-warning copy: spend flags carry costWarning; balance-ping only carries a note
   // (~1 cr/day) — surface whichever is present in the same warning region (enable only).
-  const warning = item.costWarning ?? (target === true ? item.note : null);
+  const warning = CONFIG_COPY_RU[item.key]?.warning ?? item.costWarning;
   // The dependents a disable also flips off (everything in the patch except this key).
   const alsoKeys = keys.filter((k) => k.key !== item.key);
   const error = staged.error;
   const isConflict = error instanceof KernelApiError && error.status === 409;
 
   function submit() {
-    if (!ack) return;
+    if (!ack || changed || staged.isPending) return;
     staged.mutate(
       {
-        // Per-key expectedVersion from the current view so each key is version-checked.
-        patches: keys.map((k) => ({
-          key: k.key,
-          desired: k.desired,
-          expectedVersion: items.get(k.key)?.overrideVersion ?? 0,
-        })),
+        // The acknowledgement belongs to the reviewed snapshot, not the next poll.
+        patches: prepared.map(({ key, desired, expectedVersion }) => ({ key, desired, expectedVersion })),
         note: note.trim() === "" ? undefined : note.trim(),
         ack: true,
       },
@@ -710,25 +349,38 @@ function StagedConfirmModal({
   }
 
   return (
-    <ModalShell title={`${verb} ${item.label}`} onClose={onClose}>
+    <ModalShell
+      closeLabel="Закрыть"
+      title={`${verb}: ${settingTitle(item)}`}
+      onClose={() => { if (!staged.isPending) onClose(); }}
+      restoreFocusRef={restoreFocusRef}
+    >
       <div className="space-y-4 text-sm">
-        <div>
-          <div className="font-mono text-[11px] text-text-muted">{item.envName}</div>
-          {item.note && <p className="mt-1 text-text-secondary">{item.note}</p>}
+        {CONFIG_COPY_RU[item.key]?.short && <p className="leading-relaxed text-text-secondary">{CONFIG_COPY_RU[item.key]?.short}</p>}
+        <div className="space-y-2 rounded-lg border border-border bg-hover px-3 py-3 text-[13px] leading-relaxed text-text-secondary">
+          <p className="font-medium text-text-primary">Перед применением</p>
+          {CONFIG_COPY_RU[item.key]?.long && <p>{CONFIG_COPY_RU[item.key]?.long}</p>}
+          {item.note && <p className="break-words text-xs"><span className="font-medium">Условия сервера: </span>{item.note}</p>}
         </div>
+
+        <div className="rounded-lg border border-border bg-hover px-3 py-2">
+          <div className="mb-2 text-xs font-medium text-text-secondary">Сейчас задано → Будет задано</div>
+          {prepared.map((patch) => <div key={patch.key} className="flex flex-wrap justify-between gap-x-4 gap-y-1 py-1 text-xs"><span>{CONFIG_COPY_RU[patch.key]?.title ?? items.get(patch.key)?.label ?? patch.key}</span><span className="shrink-0 font-medium">{formatScalar(patch.previous)} → {patch.desired === null ? "настройка сервера" : formatScalar(patch.desired)}</span></div>)}
+          {item.pendingApply && <p className="mt-2 border-t border-border pt-2 text-xs text-text-secondary">Предыдущее изменение ещё не применилось. Сейчас работает: {RUNNING_STATE_LABEL(item.runningState)}.</p>}
+        </div>
+        {changed && <p role="alert" className="text-sm text-danger">Настройки изменились после открытия окна. Закройте его и проверьте изменения заново.</p>}
 
         {target === true && warning && (
           <div className="rounded border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[13px] text-amber-700">
-            ⚠ {warning}
+            {warning}
           </div>
         )}
 
         {alsoKeys.length > 0 && (
           <div className="rounded border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[13px] text-amber-700">
-            This also disables {alsoKeys.length} dependent flag{alsoKeys.length === 1 ? "" : "s"} in the
-            same atomic change:{" "}
-            <span className="font-mono">
-              {alsoKeys.map((k) => items.get(k.key)?.envName ?? k.key).join(", ")}
+            Заодно выключатся функции, которым нужна эта настройка ({alsoKeys.length}):{" "}
+            <span>
+              {alsoKeys.map((k) => CONFIG_COPY_RU[k.key]?.title ?? items.get(k.key)?.label ?? k.key).join(", ")}
             </span>
             .
           </div>
@@ -736,24 +388,23 @@ function StagedConfirmModal({
 
         {target === null && (
           <div className="rounded border border-border bg-hover px-3 py-2 text-[13px] text-text-secondary">
-            Reverting drops the explicit override and inherits the deployed env default after a
-            restart.
+            Уберём ваше ручное значение. После перезапуска Hub возьмёт настройку сервера. Она может отличаться от исходного значения программы.
           </div>
         )}
 
         {target === true && isStream && (
           <div className="rounded border border-border bg-hover px-3 py-2 text-[13px] text-text-secondary">
-            After restart, resume the paused sync blocks for affected pages on the{" "}
+            После перезапуска откройте{" "}
             <Link to="/settings?tab=sync" className="text-accent underline hover:opacity-90">
-              Sync tab
+              «Синхронизация»
             </Link>
-            .
+            {" "}и возобновите нужные потоки данных.
           </div>
         )}
 
         <div className="rounded border border-border bg-card px-3 py-2 text-[13px] text-text-secondary">
-          This is a boot-applied flag: it is saved as a desired override now and{" "}
-          <span className="font-medium text-text-primary">takes effect after a restart/deploy</span>.
+          Сохраним ваш выбор сейчас. Настройка начнёт работать{" "}
+          <span className="font-medium text-text-primary">после перезапуска Hub</span> — его нужно выполнить отдельно.
         </div>
 
         <label htmlFor={ackId} className="flex items-start gap-2 text-text-secondary">
@@ -761,32 +412,33 @@ function StagedConfirmModal({
             id={ackId}
             type="checkbox"
             checked={ack}
+            disabled={staged.isPending || changed}
             onChange={(e) => setAck(e.target.checked)}
             className="mt-0.5"
           />
           <span>
-            I understand this applies after a restart and I&apos;ve verified the previous phase is
-            running.
+            Изменения проверены. Понимаю, что нужен перезапуск Hub.
           </span>
         </label>
 
         <div>
           <label htmlFor={noteId} className="mb-1 block text-[12px] text-text-muted">
-            Note (optional — stored in the audit log)
+            Комментарий к изменению · необязательно
           </label>
           <input
             id={noteId}
             type="text"
             value={note}
+            disabled={staged.isPending}
             onChange={(e) => setNote(e.target.value)}
-            className="w-full rounded border border-border bg-card px-2 py-1 text-sm text-text-primary"
+            className="settings-input"
           />
         </div>
 
         {error && (
-          <div className="text-[12px] text-red-600">
+          <div role="alert" className="text-[12px] text-red-600">
             {isConflict
-              ? "Изменено в другом месте — значения обновлены, проверьте и повторите."
+              ? "Настройки изменились. Закройте окно и проверьте актуальные значения перед повтором."
               : errorMessage(error)}
           </div>
         )}
@@ -797,19 +449,19 @@ function StagedConfirmModal({
           type="button"
           onClick={onClose}
           disabled={staged.isPending}
-          className="rounded-lg border border-border bg-card px-3 py-2 text-sm text-text-secondary hover:bg-hover disabled:opacity-50"
+          className="settings-button"
         >
-          Cancel
+          Отмена
         </button>
         <button
           type="button"
           onClick={submit}
-          disabled={!ack || staged.isPending}
-          className={`rounded-lg px-3 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50 ${
-            target === true ? "bg-accent" : "bg-danger"
+          disabled={!ack || changed || isConflict || staged.isPending}
+          className={`settings-button ${
+            target === false ? "settings-button-danger" : "settings-button-primary"
           }`}
         >
-          {staged.isPending ? "Saving…" : verb}
+          {staged.isPending ? "Сохраняем…" : verb}
         </button>
       </div>
     </ModalShell>
@@ -820,20 +472,20 @@ function StagedFlagRow({
   item,
   items,
   all,
+  onReveal,
+  onOpen,
 }: {
   item: ConfigItem;
   items: ItemMap;
   all: ConfigItem[];
+  onReveal: (key: string) => void;
+  onOpen: (request: StagedModalRequest) => void;
 }) {
   // The staged confirm modal carries the target (enable=true / disable=false / revert=null)
   // and the full set of keys to flip in one atomic patch (this key plus, for a disable, its
   // still-on dependents). Revert-to-env goes through the SAME staged endpoint (desired:null
   // + ack), never the generic DELETE (useClearConfig stays for live editable keys only), so
   // the order rules + version check still apply.
-  const [modal, setModal] = useState<
-    null | { target: boolean | null; keys: Array<{ key: string; desired: boolean | null }> }
-  >(null);
-
   // Authoritative running state for the lock/decision badge is the server's runningState.
   // The client summary is computed ONLY to surface a "partial" (mixed-fleet) breakdown.
   const state = item.runningState;
@@ -841,19 +493,22 @@ function StagedFlagRow({
   // The desired baseline (override boolean, else env) comes from the server's
   // desiredEffective — so an env-on staged flag shows Disable + the correct locks.
   const desiredOn = desiredOnFor(item);
-  const isStream = STREAM_FLAG_KEYS.has(item.key);
 
   // ENABLE lock: every transitive prerequisite must be RUNNING-on and not pending. The
   // first unsatisfied prerequisite names the tooltip ("Enable + restart <prereq> first").
   const unsatisfiedPrereq = transitiveRequires(item.key, items).find((reqKey) => {
     const req = items.get(reqKey);
     if (!req) return true;
-    return !isRunningOn(req) || req.pendingApply;
+    return !isRunningOn(req) || !desiredOnFor(req) || req.pendingApply;
   });
   const enableLocked = unsatisfiedPrereq !== undefined;
-  const enableTooltip = enableLocked
-    ? `Enable + restart ${items.get(unsatisfiedPrereq!)?.envName ?? unsatisfiedPrereq} first`
-    : undefined;
+  const prerequisite = unsatisfiedPrereq ? items.get(unsatisfiedPrereq) : undefined;
+  const prerequisiteTitle = prerequisite ? settingTitle(prerequisite) : unsatisfiedPrereq;
+  const enableTooltip = !enableLocked ? undefined : !prerequisite || prerequisite.runningState === "unknown"
+    ? `Пока нет актуальных данных о настройке «${prerequisiteTitle}». Проверьте её состояние.`
+    : prerequisite.pendingApply
+      ? `Дождитесь применения настройки «${prerequisiteTitle}» после перезапуска.`
+      : `Сначала включите «${prerequisiteTitle}» и перезапустите Hub.`;
 
   // DISABLE: the transitive dependents still desired-on. A single-key disable would be
   // 400'd by the server while any remain, so we instead send ONE multi-key staged patch
@@ -870,8 +525,8 @@ function StagedFlagRow({
   );
   const disableTooltip =
     blockingDependents.length > 0
-      ? `Also disables ${blockingDependents
-          .map((depKey) => items.get(depKey)?.envName ?? depKey)
+      ? `Также выключит: ${blockingDependents
+          .map((depKey) => CONFIG_COPY_RU[depKey]?.title ?? items.get(depKey)?.label ?? depKey)
           .join(", ")}`
       : undefined;
 
@@ -883,156 +538,60 @@ function StagedFlagRow({
   ];
 
   return (
-    <div id={`config-${item.key}`} className="scroll-mt-24 flex flex-col gap-1.5 border-b border-l-2 border-border/60 border-l-amber-500/50 py-3 pl-4 pr-4 last:border-b-0">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <SettingLabel item={item} />
-        </div>
-
-        <div className="flex flex-wrap items-center gap-1.5">
-          <span className="text-[11px] text-text-muted">running</span>
+    <div id={`config-${item.key}`} tabIndex={-1} className="config-setting">
+      <div className="config-setting-main">
+        <SettingLabel item={item} />
+      </div>
+      <div className="config-setting-control">
+        <div className="config-setting-current">
+          <span>Сейчас работает:</span>
           <Badge tone={RUNNING_STATE_TONE(state)}>{RUNNING_STATE_LABEL(state)}</Badge>
-          <span className="text-[11px] text-text-muted">· desired</span>
-          <Badge tone={desiredOn ? "bg-emerald-500/15 text-emerald-600" : "bg-zinc-500/15 text-zinc-500"}>
-            {desiredOn ? "on" : "off"}
-          </Badge>
+        </div>
+        <div className="config-setting-current">
+          <span>{item.source === "override" ? "Задано вручную:" : "Задано на сервере:"}</span>
+          <span className="font-medium text-text-primary">{desiredOn ? "вкл." : "выкл."}</span>
+        </div>
+        {item.pendingApply && <p className="text-xs leading-relaxed text-amber-700">Сохранено. Начнёт работать после перезапуска Hub.</p>}
+        {item.costWarning && <p className="text-xs text-amber-700">{CONFIG_COPY_RU[item.key]?.warning ?? item.costWarning}</p>}
+        {(clientState === "partial" || clientState === "unknown") && item.running.length > 0 && (
+          <div className="flex flex-col gap-1">
+            {item.running.map((r) => (
+              <span key={`${r.role}:${r.instanceId}`} className="text-xs">
+                <span className="text-text-muted">{ROLE_LABELS[r.role] ?? r.role}:</span> {r.state === "unknown" ? "нет актуального значения" : formatScalar(r.value)}
+              </span>
+            ))}
+          </div>
+        )}
+        <div className="flex flex-wrap items-center gap-2">
+          {desiredOn ? (
+            <button type="button" onClick={() => onOpen({ item, target: false, keys: disableKeys })} title={disableTooltip} className="settings-button">
+              Выключить
+            </button>
+          ) : (
+            <button type="button" onClick={() => onOpen({ item, target: true, keys: [{ key: item.key, desired: true }] })} disabled={enableLocked} title={enableTooltip} className="settings-button settings-button-primary">
+              Включить
+            </button>
+          )}
           {item.source === "override" && (
-            <Badge tone="bg-sky-500/15 text-sky-600" title="An explicit DB override is set">
-              override
-            </Badge>
-          )}
-          {item.costWarning && (
-            <Badge tone="bg-amber-500/15 text-amber-600" title={item.costWarning}>
-              ⚠ cost
-            </Badge>
-          )}
-          {item.pendingApply && (
-            <Badge
-              tone="bg-amber-500/15 text-amber-600"
-              title="Desired is set but not yet running everywhere — apply on next restart/deploy"
-            >
-              pending restart{isStream ? " · resume on Sync after restart" : ""}
-            </Badge>
+            <button type="button" onClick={() => onOpen({ item, target: null, keys: [{ key: item.key, desired: null }] })} title="Убрать ручное значение. Настройка сервера применится после перезапуска." className="settings-button">
+              Вернуть настройку сервера
+            </button>
           )}
         </div>
-      </div>
-
-      {clientState === "partial" && (
-        <div className="flex flex-col gap-0.5 pl-1">
-          {item.running.map((r) => (
-            <span key={`${r.role}:${r.instanceId}`} className="font-mono text-[11px]">
-              <span className="text-text-muted">{r.role}:</span> {formatScalar(r.value)}
-            </span>
-          ))}
-        </div>
-      )}
-
-      <div className="flex flex-wrap items-center gap-1.5">
-        {desiredOn ? (
-          <button
-            type="button"
-            onClick={() => setModal({ target: false, keys: disableKeys })}
-            title={disableTooltip}
-            className="rounded px-2 py-0.5 text-xs font-medium text-white transition-colors hover:opacity-90 bg-danger"
-          >
-            Disable
-          </button>
-        ) : (
-          <button
-            type="button"
-            onClick={() => setModal({ target: true, keys: [{ key: item.key, desired: true }] })}
-            disabled={enableLocked}
-            title={enableTooltip}
-            className="rounded px-2 py-0.5 text-xs font-medium text-white transition-colors hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40 bg-accent"
-          >
-            Enable
-          </button>
-        )}
-        {item.source === "override" && (
-          <button
-            type="button"
-            onClick={() => setModal({ target: null, keys: [{ key: item.key, desired: null }] })}
-            title="Revert to the deployed env default (clears the override via the staged endpoint)"
-            className="rounded border border-border bg-card px-2 py-0.5 text-xs text-text-secondary hover:bg-hover"
-          >
-            Revert to env
-          </button>
-        )}
         {enableLocked && !desiredOn && enableTooltip && (
-          <span className="text-[11px] text-text-muted">{enableTooltip}</span>
+          <p className="text-xs leading-relaxed text-text-muted">
+            {enableTooltip}{" "}
+            {unsatisfiedPrereq && <a href={`#config-${unsatisfiedPrereq}`} onClick={() => onReveal(unsatisfiedPrereq)} className="text-accent underline underline-offset-2">Перейти к настройке</a>}
+          </p>
         )}
-        {desiredOn && disableTooltip && (
-          <span className="text-[11px] text-text-muted">{disableTooltip}</span>
-        )}
+        {desiredOn && disableTooltip && <p className="text-xs leading-relaxed text-text-muted">{disableTooltip}</p>}
       </div>
 
-      {modal && (
-        <StagedConfirmModal
-          item={item}
-          target={modal.target}
-          keys={modal.keys}
-          items={items}
-          onClose={() => setModal(null)}
-        />
-      )}
     </div>
   );
 }
 
-function StagedRolloutSection({ items }: { items: ConfigItem[] }) {
-  const bootFlags = useMemo(() => items.filter((it) => it.runtimeApply === "boot"), [items]);
-  const itemMap = useMemo<ItemMap>(() => new Map(items.map((it) => [it.key, it])), [items]);
-
-  if (bootFlags.length === 0) return null;
-
-  // Group by stagedGroup ("#49" then "#50", any others after), each ordered by stagedOrder.
-  const byGroup = new Map<string, ConfigItem[]>();
-  for (const flag of bootFlags) {
-    const group = flag.stagedGroup ?? "ungrouped";
-    const list = byGroup.get(group) ?? [];
-    list.push(flag);
-    byGroup.set(group, list);
-  }
-  const groupOrder = (g: string) => (g === "#49" ? 0 : g === "#50" ? 1 : 2);
-  const groups = [...byGroup.entries()].sort((a, b) => groupOrder(a[0]) - groupOrder(b[0]));
-
-  return (
-    <section>
-      <div className="mb-3">
-        <div className="flex items-baseline gap-2.5">
-          <h2 className="text-xs font-semibold uppercase tracking-[0.08em] text-text-secondary">
-            Поэтапная раскатка
-          </h2>
-          <span className="font-mono text-[11px] text-text-muted">{bootFlags.length}</span>
-        </div>
-        <p className="mt-1 max-w-3xl text-[13px] text-text-muted">
-          Флаги функций, применяемые при запуске. Сохранение задаёт нужное значение сейчас, а в силу
-          оно вступит после следующего перезапуска. Каждый флаг разблокируется, только когда работает
-          его предшественник — включайте по порядку.
-        </p>
-      </div>
-      <div className="space-y-5">
-        {groups.map(([group, flags]) => {
-          const ordered = [...flags].sort((a, b) => (a.stagedOrder ?? 0) - (b.stagedOrder ?? 0));
-          return (
-            <div key={group} className="overflow-hidden rounded-lg border border-border bg-card">
-              <div className="border-b border-border bg-hover px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-text-secondary">
-                {group}
-              </div>
-              <div>
-                {ordered.map((flag) => (
-                  <StagedFlagRow key={flag.key} item={flag} items={itemMap} all={bootFlags} />
-                ))}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </section>
-  );
-}
-
-function StagedPendingBanner({ data }: { data: ConfigViewResponse }) {
+function StagedPendingBanner({ data, onReveal }: { data: ConfigViewResponse; onReveal: (key: string) => void }) {
   const allItems = data.subsystems.flatMap((g) => g.items);
   const pendingStaged = allItems.filter(
     (it) => it.runtimeApply === "boot" && it.pendingApply,
@@ -1046,20 +605,19 @@ function StagedPendingBanner({ data }: { data: ConfigViewResponse }) {
   return (
     <div className="space-y-2">
       {pendingStaged.length > 0 && (
-        <div className="rounded border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-700">
-          {pendingStaged.length} staged flag{pendingStaged.length === 1 ? "" : "s"} saved — apply on
-          next deploy/restart:{" "}
-          <span className="font-mono">
-            {pendingStaged.map((it) => it.envName).join(", ")}
-          </span>
+        <div className="config-notice">
+          <div className="font-medium">Сохранено — нужен перезапуск: {pendingStaged.length}</div>
+          <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1">
+            {pendingStaged.map((item) => <a key={item.key} href={`#config-${item.key}`} onClick={() => onReveal(item.key)} className="text-xs underline underline-offset-2">{settingTitle(item)}</a>)}
+          </div>
         </div>
       )}
       {skipped.length > 0 && (
         <div className="rounded border border-red-500/40 bg-danger/10 px-3 py-2 text-sm text-red-600">
-          <div className="font-semibold">Override rejected at boot:</div>
+          <div className="font-semibold">Некоторые настройки не удалось применить при запуске:</div>
           <ul className="mt-1 list-disc pl-5">
             {skipped.map((s) => (
-              <li key={`${s.role}:${s.key}`} className="font-mono text-[12px]">
+              <li key={`${s.role}:${s.key}`} className="break-all font-mono text-[12px]">
                 {s.role}: {s.key} — {s.reason}
               </li>
             ))}
@@ -1071,116 +629,192 @@ function StagedPendingBanner({ data }: { data: ConfigViewResponse }) {
 }
 
 export function ConfigurationTab() {
-  const { data, isLoading, isError } = useAdminConfig();
+  const routed = useInRouterContext();
+  return routed ? <RoutedConfiguration /> : <ConfigurationView hash="" />;
+}
 
-  // Deep-link support: pages that link here with `#config-<key>` (e.g. the OFAPI
-  // Credits page's budget/floor/burn shortcuts) scroll to and briefly highlight
-  // the matching row once the config data has rendered.
+function RoutedConfiguration() {
+  const { hash } = useLocation();
+  return <ConfigurationView hash={hash} />;
+}
+
+function ConfigurationView({ hash }: { hash: string }) {
+  const { data, isLoading, isError, isFetching, refetch } = useAdminConfig();
+  const searchRef = useRef<HTMLInputElement>(null);
+  const [query, setQuery] = useState("");
+  const [subsystem, setSubsystem] = useState("");
+  const [filter, setFilter] = useState<ConfigFilter>("live");
+  const [pendingAnchor, setPendingAnchor] = useState<string | null>(null);
+  const [stagedModal, setStagedModal] = useState<StagedModalRequest | null>(null);
+  const groups = useMemo(() => [...(data?.subsystems ?? [])].sort((a, b) => configSubsystemOrder(a.subsystem) - configSubsystemOrder(b.subsystem)), [data]);
+  const allItems = useMemo(() => groups.flatMap((group) => group.items), [groups]);
+  const itemMap = useMemo<ItemMap>(() => new Map(allItems.map((item) => [item.key, item])), [allItems]);
+  const bootFlags = useMemo(() => allItems.filter((item) => item.runtimeApply === "boot"), [allItems]);
+  const searchMatches = useMemo(() => allItems.filter((item) =>
+    (!subsystem || item.subsystem === subsystem) && matchesConfigSearch(item, query)), [allItems, query, subsystem]);
+  const visibleKeys = useMemo(() => new Set(searchMatches.filter((item) => matchesConfigFilter(item, filter)).map((item) => item.key)), [searchMatches, filter]);
+
+  function resetFilters() { setQuery(""); setSubsystem(""); setFilter("live"); }
+  function reveal(key: string) { setQuery(""); setSubsystem(""); setFilter("all"); setPendingAnchor(key); }
+
   useEffect(() => {
-    if (isLoading || isError || typeof document === "undefined") return;
-    const hash = window.location.hash;
     if (!hash.startsWith("#config-")) return;
-    const el = document.getElementById(hash.slice(1));
-    if (!el) return;
-    el.scrollIntoView({ block: "center" });
-    el.style.outline = "2px solid var(--color-accent)";
-    el.style.outlineOffset = "2px";
-    el.style.borderRadius = "8px";
-    const timer = setTimeout(() => {
-      el.style.outline = "";
-      el.style.outlineOffset = "";
-      el.style.borderRadius = "";
-    }, 2200);
-    return () => clearTimeout(timer);
-  }, [isLoading, isError]);
+    setQuery(""); setSubsystem(""); setFilter("all");
+    setPendingAnchor(hash.slice("#config-".length));
+  }, [hash]);
 
-  if (isLoading) {
-    return <div className="text-sm text-text-muted">Loading configuration…</div>;
-  }
-  if (isError || !data) {
-    return <div className="text-sm text-red-600">Failed to load configuration.</div>;
+  useEffect(() => {
+    if (!pendingAnchor || !visibleKeys.has(pendingAnchor)) return;
+    const element = document.getElementById(`config-${pendingAnchor}`);
+    if (!element) return;
+    element.scrollIntoView({ block: "center" });
+    element.focus({ preventScroll: true });
+    setPendingAnchor(null);
+  }, [pendingAnchor, visibleKeys]);
+
+  if (!data) {
+    return <div role={isError ? "alert" : "status"} className="rounded-xl border border-border bg-card p-6 text-sm text-text-secondary">
+      {isLoading ? "Загружаем настройки…" : "Не удалось загрузить настройки."}
+      {isError && <button type="button" onClick={() => void refetch()} className="ml-3 text-accent underline">Повторить</button>}
+    </div>;
   }
 
   return (
-    <div className="space-y-6">
-      <p className="max-w-3xl text-sm leading-relaxed text-text-muted">
-        Текущие рабочие настройки приложения — как их сообщает каждый запущенный процесс. Те, что
-        можно менять прямо здесь, снабжены полем ввода или переключателем и применяются без перезапуска (до ~60 секунд на
-        распространение между процессами). Остальные задаёт администратор через переменные окружения,
-        и они вступают в силу после развёртывания. Секреты показывают только состояние: «задан» или
-        «не задан». Наведите на значок&nbsp;ⓘ у названия, чтобы увидеть подробное объяснение настройки.
-      </p>
+    <div className="space-y-5">
+      {isError && <div role="alert" className="rounded-lg border border-danger/30 bg-danger/5 px-4 py-3 text-sm text-danger">Не удалось обновить настройки. Показаны последние полученные значения — {formatSeen(data.generatedAt)}. Попробуйте «Обновить».</div>}
 
       {data.roleStatuses.some((role) => role.status !== "active") && (
-        <div className="rounded border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-700">
-          {data.roleStatuses
-            .filter((role) => role.status !== "active")
-            .map((role) => `${role.role}: ${ROLE_STATUS_RU[role.status] ?? role.status}`)
-            .join(" · ")}
-          {" — значения ниже отражают только работающий(е) процесс(ы)."}
+        <div role="status" className="rounded-lg border border-warning/40 bg-warning/10 px-4 py-3 text-sm text-warning-dark">
+          {data.roleStatuses.filter((role) => role.status !== "active").map((role) => `${ROLE_LABELS[role.role] ?? role.role}: ${ROLE_STATUS_RU[role.status] ?? role.status}`).join(" · ")}
+          {". Часть Hub давно не выходила на связь. Её значения пока нельзя подтвердить."}
+        </div>
+      )}
+      <div className="space-y-3">
+        <div className="config-searchbar">
+          <label className="config-search-field relative min-w-0">
+            <span className="sr-only">Поиск настроек</span>
+            <Search size={16} aria-hidden="true" className="pointer-events-none absolute left-3 top-3 text-text-muted" />
+            <input
+              ref={searchRef}
+              type="search"
+              value={query}
+              onChange={(event) => {
+                setQuery(event.target.value);
+                setFilter(event.target.value ? "all" : "live");
+              }}
+              placeholder={subsystem ? "Поиск в выбранном разделе" : "Найти настройку…"}
+              className="settings-input"
+              style={{ paddingLeft: 36 }}
+            />
+          </label>
+          <label>
+            <span className="sr-only">Подсистема</span>
+            <select value={subsystem} onChange={(event) => setSubsystem(event.target.value)} className="settings-input">
+              <option value="">Все разделы</option>
+              {groups.map((group) => <option key={group.subsystem} value={group.subsystem}>{CONFIG_SUBSYSTEM_LABELS[group.subsystem] ?? group.subsystem}</option>)}
+            </select>
+          </label>
+          <label className="config-mobile-filter">
+            <span className="sr-only">Показать настройки</span>
+            <select value={filter} onChange={(event) => setFilter(event.target.value as ConfigFilter)} className="settings-input">
+              {CONFIG_FILTERS.map((entry) => <option key={entry.key} value={entry.key}>{entry.label}</option>)}
+            </select>
+          </label>
+        </div>
+        <div className="config-filters" role="group" aria-label="Фильтр настроек">
+          {CONFIG_FILTERS.map((entry) => (
+            <button key={entry.key} type="button" aria-pressed={filter === entry.key} onClick={() => setFilter(entry.key)}>
+              {entry.label} <span className="config-filter-count">{searchMatches.filter((item) => matchesConfigFilter(item, entry.key)).length}</span>
+            </button>
+          ))}
+        </div>
+        <div className="flex items-center justify-between gap-3 text-xs text-text-muted">
+          <span className="shrink-0" role="status" aria-live="polite">Показано {visibleKeys.size} из {allItems.length}</span>
+          <div className="flex flex-wrap items-center justify-end gap-3">
+            {(query || subsystem || filter !== "live") && <button type="button" onClick={resetFilters} className="inline-flex min-h-9 items-center gap-1 text-accent hover:underline"><X size={13} aria-hidden="true" />Сбросить фильтры</button>}
+            <button type="button" onClick={() => void refetch()} disabled={isFetching} className="inline-flex min-h-9 shrink-0 items-center gap-1.5 text-text-secondary hover:text-accent disabled:opacity-50">
+              <RefreshCw size={13} className={isFetching ? "animate-spin" : ""} aria-hidden="true" />
+              {isFetching ? "Обновляем…" : "Обновить"}
+            </button>
+          </div>
+        </div>
+        {!query && filter === "live" && <p className="hidden text-xs sm:block leading-relaxed text-text-muted">Изменения в этом списке начнут работать без перезапуска — обычно в течение минуты.</p>}
+      </div>
+
+      <StagedPendingBanner data={data} onReveal={reveal} />
+
+      {visibleKeys.size === 0 && (
+        <div className="config-empty">
+          <p className="text-sm font-semibold text-text-primary">{query ? "По этому запросу ничего не нашлось" : filter === "attention" ? "Всё в порядке" : "Здесь пока нет таких настроек"}</p>
+          <p className="mt-2 text-sm leading-relaxed text-text-secondary">{query ? "Попробуйте более короткое название или ключ настройки." : filter === "attention" ? "Среди выбранных настроек нет ожидающих применения или требующих проверки." : filter === "live" ? "Посмотрите настройки, для которых нужен перезапуск или доступ к серверу." : "Выберите другой раздел или откройте полный список."}</p>
+          {query && subsystem ? <button type="button" onClick={() => { setSubsystem(""); setFilter("all"); }} className="settings-button mt-4">Искать во всех разделах</button>
+            : filter !== "all" && <button type="button" onClick={() => setFilter("all")} className="settings-button mt-4">Показать все настройки</button>}
         </div>
       )}
 
-      <StagedPendingBanner data={data} />
-
-      <div className="rounded-lg border border-border bg-card px-4 py-3">
-        <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-text-muted">
-          Процессы
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          {data.roleStatuses.map((role) => (
-            <span
-              key={`role:${role.role}`}
-              className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium ${
-                role.status === "active"
-                  ? "bg-emerald-500/15 text-emerald-600"
-                  : role.status === "stale"
-                    ? "bg-amber-500/15 text-amber-600"
-                    : "bg-red-500/15 text-red-600"
-              }`}
-            >
-              {role.role}: {ROLE_STATUS_RU[role.status] ?? role.status}
-            </span>
-          ))}
-          {data.instances.map((instance) => (
-            <span
-              key={`${instance.role}:${instance.instanceId}`}
-              title={`${instance.role} · ${instance.instanceId}`}
-              className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs"
-            >
-              <span className={`h-1.5 w-1.5 rounded-full ${instance.status === "active" ? "bg-emerald-500" : "bg-amber-500"}`} />
-              <span className="font-medium text-text-primary">{instance.role}</span>
-              <span className="text-text-muted">· сигнал {formatSeen(instance.lastSeenAt)}</span>
-              {instance.imageTag && <span className="text-text-muted">· {instance.imageTag}</span>}
-            </span>
-          ))}
-        </div>
-      </div>
-
-      <div className="space-y-8">
-        {data.subsystems.map((group) => (
-          <section key={group.subsystem}>
-            <div className="mb-3">
-              <div className="flex items-baseline gap-2.5">
-                <h2 className="text-xs font-semibold uppercase tracking-[0.08em] text-text-secondary">
-                  {group.subsystem}
-                </h2>
-                <span className="font-mono text-[11px] text-text-muted">{group.items.length}</span>
-              </div>
-              {SUBSYSTEM_COPY_RU[group.subsystem] && (
-                <p className="mt-1 text-[13px] text-text-muted">{SUBSYSTEM_COPY_RU[group.subsystem]}</p>
-              )}
+      {/* Hide rather than unmount: searching and filtering must not discard a draft. */}
+      <div className="space-y-5">
+        {groups.map((group) => (
+          <section className="config-group" key={group.subsystem} hidden={!group.items.some((item) => visibleKeys.has(item.key))}>
+            <div className="config-group-heading">
+              <h3 className="text-sm font-semibold text-text-primary">
+                {CONFIG_SUBSYSTEM_LABELS[group.subsystem] ?? group.subsystem}
+                <span className="ml-2 text-xs font-normal tabular-nums text-text-muted">
+                  {group.items.filter((item) => visibleKeys.has(item.key)).length}
+                </span>
+              </h3>
+              {SUBSYSTEM_COPY_RU[group.subsystem] && <p className="mt-1 text-xs leading-relaxed text-text-secondary">{SUBSYSTEM_COPY_RU[group.subsystem]}</p>}
             </div>
-            <div className="divide-y divide-border/60 overflow-hidden rounded-lg border border-border bg-card">
-              {[...group.items].sort((a, b) => rowRank(a) - rowRank(b)).map((item) => (
-                <SettingRow key={item.key} item={item} />
-              ))}
+            <div className="config-group-items">
+              {[...group.items]
+                .sort((a, b) => rowRank(a) - rowRank(b) || (a.stagedOrder ?? 0) - (b.stagedOrder ?? 0))
+                .map((item) => (
+                  <div key={item.key} hidden={!visibleKeys.has(item.key)}>
+                    {item.runtimeApply === "boot" ? (
+                      <StagedFlagRow
+                        item={item}
+                        items={itemMap}
+                        all={bootFlags}
+                        onReveal={reveal}
+                        onOpen={setStagedModal}
+                      />
+                    ) : <SettingRow item={item} />}
+                  </div>
+                ))}
             </div>
           </section>
         ))}
       </div>
+      {/* A poll may remove a row from the attention filter while its dialog is open.
+          Keep the dialog outside hidden groups, with its reviewed patch and version. */}
+      {stagedModal && (
+        <StagedConfirmModal
+          key={stagedModal.item.key}
+          item={itemMap.get(stagedModal.item.key) ?? stagedModal.item}
+          target={stagedModal.target}
+          keys={stagedModal.keys}
+          items={itemMap}
+          onClose={() => setStagedModal(null)}
+          restoreFocusRef={searchRef}
+        />
+      )}
+      <details className="config-status-strip">
+        <summary className="w-fit cursor-pointer py-2 text-xs text-text-secondary">
+          <span className="font-medium text-text-primary">Связь с сервером</span>
+          <span className="ml-2">{data.roleStatuses.length > 0 && data.roleStatuses.every((role) => role.status === "active") ? "Все на связи" : "Требует проверки"}</span>
+        </summary>
+        <div className="mt-3 flex flex-wrap gap-2">
+          {data.instances.map((instance) => (
+            <span key={`${instance.role}:${instance.instanceId}`} className="min-w-0 break-all rounded-md border border-border px-2 py-1 text-xs text-text-secondary">
+              <span className="font-medium text-text-primary">{ROLE_LABELS[instance.role] ?? instance.role}</span> · {ROLE_STATUS_RU[instance.status] ?? instance.status} · сигнал {formatSeen(instance.lastSeenAt)}
+              {instance.imageTag && ` · ${instance.imageTag}`}
+              <span className="block text-text-muted">{instance.instanceId}</span>
+            </span>
+          ))}
+          {data.instances.length === 0 && <p className="text-xs text-text-muted">Процессы ещё не сообщили свои значения.</p>}
+        </div>
+      </details>
 
-      <StagedRolloutSection items={data.subsystems.flatMap((group) => group.items)} />
     </div>
   );
 }

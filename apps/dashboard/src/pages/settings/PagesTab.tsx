@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "react-router";
 import type { AssignedPage } from "@agency_hub_core/contracts";
 import {
   useAdminPages,
@@ -12,6 +13,7 @@ import { ConfirmModal } from "@/components/shared/ConfirmModal";
 import { StatusPanel } from "@/components/shared/StatusPanel";
 import { StaleDataNotice } from "@/components/shared/StaleDataNotice";
 import { formatRelativeTime } from "@/lib/format";
+import { buildSettingsRoute } from "@/lib/navigation";
 import { toast } from "sonner";
 import { CreatePageModal } from "./CreatePageModal.js";
 import { EditPageModal } from "./EditPageModal.js";
@@ -141,7 +143,7 @@ export function PagesTab() {
         )}
 
         {items.length > 0 && (
-          <section className="overflow-hidden rounded-xl border border-border bg-card">
+          <section className="overflow-x-auto rounded-xl border border-border bg-card">
             <table className="w-full border-collapse">
               <thead>
                 <tr className="bg-hover-alt">
@@ -210,7 +212,11 @@ function PageRow({
     try {
       const result = await verifyPage.mutateAsync();
       if (result.verified) {
-        toast.success(`${page.label} verified — @${result.username ?? "unknown"}`);
+        if (result.syncUnblocked === false) {
+          toast.warning(`${page.label} credentials verified, but sync is still blocked. Open Sync settings for details.`);
+        } else {
+          toast.success(`${page.label} verified — @${result.username ?? "unknown"}`);
+        }
       } else {
         toast.error(`${page.label} verification failed`);
       }
@@ -244,28 +250,40 @@ function PageRow({
           >
             Edit
           </button>
-          <button
-            type="button"
-            disabled={verifyPage.isPending}
-            onClick={handleVerify}
-            className="rounded-lg border border-border bg-card px-2.5 py-1 text-xs font-medium text-text-secondary transition-colors hover:bg-hover disabled:opacity-50"
-          >
-            {verifyPage.isPending ? "..." : "Verify"}
-          </button>
-          <button
-            type="button"
-            disabled={credentialsDisabled}
-            onClick={onCredentials}
-            className="rounded-lg border border-border bg-card px-2.5 py-1 text-xs font-medium text-text-secondary transition-colors hover:bg-hover disabled:opacity-50"
-          >
-            Creds
-          </button>
+          {page.platform === "onlyfans" ? (
+            <Link
+              to={buildSettingsRoute("sync", page.label)}
+              title="OnlyFans access is managed in OFAPI. Open Sync to inspect connection blocks."
+              className="rounded-lg border border-border bg-card px-2.5 py-1 text-xs font-medium text-text-secondary transition-colors hover:bg-hover"
+            >
+              Connection
+            </Link>
+          ) : (
+            <>
+              <button
+                type="button"
+                disabled={verifyPage.isPending}
+                onClick={handleVerify}
+                className="rounded-lg border border-border bg-card px-2.5 py-1 text-xs font-medium text-text-secondary transition-colors hover:bg-hover disabled:opacity-50"
+              >
+                {verifyPage.isPending ? "..." : "Verify"}
+              </button>
+              <button
+                type="button"
+                disabled={credentialsDisabled}
+                onClick={onCredentials}
+                className="rounded-lg border border-border bg-card px-2.5 py-1 text-xs font-medium text-text-secondary transition-colors hover:bg-hover disabled:opacity-50"
+              >
+                Credentials
+              </button>
+            </>
+          )}
           <button
             type="button"
             onClick={onDelete}
             className="rounded-lg border border-border bg-card px-2.5 py-1 text-xs font-medium text-text-secondary transition-colors hover:bg-hover"
           >
-            Delete
+            Deactivate
           </button>
         </div>
       </td>
@@ -285,7 +303,7 @@ function DeletePageConfirm({
   async function handleConfirm() {
     try {
       await deletePage.mutateAsync();
-      toast.success("Page deleted");
+      toast.success("Page deactivated — history preserved");
       onClose();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to delete page");
@@ -294,8 +312,9 @@ function DeletePageConfirm({
 
   return (
     <ConfirmModal
-      title={`Delete page: ${page.label}`}
-      message={`Are you sure you want to delete "${page.label}"? This will remove all associated data and cannot be undone.`}
+      title={`Deactivate page: ${page.label}`}
+      message={`This hides "${page.label}" from active pages and stops synchronization. Captured history and stored credentials are preserved. Reactivation is not available in this interface.`}
+      confirmLabel="Deactivate"
       isPending={deletePage.isPending}
       onConfirm={handleConfirm}
       onClose={onClose}
