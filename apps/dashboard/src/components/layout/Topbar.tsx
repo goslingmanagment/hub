@@ -73,6 +73,8 @@ export function Topbar({ user, onOpenNavigation }: TopbarProps) {
           <button
             type="button"
             onClick={() => setMenuOpen((open) => !open)}
+            aria-label="Account menu"
+            aria-expanded={menuOpen}
             className="flex items-center gap-2 rounded-full border border-border bg-card px-2 py-1 hover:bg-hover-alt"
           >
             <div className="w-8 h-8 rounded-full bg-hover flex items-center justify-center text-[13px] text-text-secondary font-semibold">
@@ -105,7 +107,7 @@ export function Topbar({ user, onOpenNavigation }: TopbarProps) {
 
 function getPeriodSelectorMode(pathname: string): "dashboard" | "spender" | "topSupporters" | null {
   const parts = pathname.split("/").filter(Boolean);
-  if (parts.length === 0) return "dashboard"; // Overview
+  if (parts.length === 0) return null; // Overview owns its period controls next to its summary.
   if (parts[0] === "pages" && parts[1]) {
     if (!parts[2]) return "dashboard"; // PageDetail
     if (parts[2] === "top-supporters") return "topSupporters";

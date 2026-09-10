@@ -291,6 +291,94 @@ describe("dashboard sync product surfaces", () => {
     expect(html).not.toContain("Loading...");
   });
 
+  it("keeps available agency revenue visible when the page catalog fails", () => {
+    queryMocks.useOverview.mockReturnValue({ isError: true });
+    queryMocks.useOverviewRevenue.mockReturnValue({ data: { netEarningsMills: 123450, pages: [] } });
+
+    const html = renderWithRouter(createElement(OverviewPage));
+
+    expect(html).toContain("$123.45");
+    expect(html).toContain("Overview failed to load");
+    expect(html).toContain("Try again");
+  });
+
+  it("does not relabel the previous period's model earnings or audience as current", () => {
+    queryMocks.useOverview.mockReturnValue({ data: buildOverviewPage() });
+    queryMocks.useOverviewRevenueByModel.mockReturnValue({
+      data: { models: [{ modelSlug: "old", modelName: "Previous-period model", pageCount: 1, transactionCount: 1, totalNetAmountMills: 999999, series: [] }] },
+      isPlaceholderData: true,
+      isFetching: true,
+    });
+    queryMocks.useOverviewGrowth.mockReturnValue({
+      data: { pages: [{ pageId: 1, newFollowers: 9876, newSubscribers: 9876 }] },
+      isPlaceholderData: true,
+      isFetching: true,
+    });
+
+    const html = renderWithRouter(createElement(OverviewPage));
+
+    expect(html).not.toContain("Previous-period model");
+    expect(html).not.toContain("$999.99");
+    expect(html).not.toContain("9,876");
+    expect(html).toContain("Loading report");
+    expect(html).toContain("Loading metric");
+  });
+
+  it("preserves cached values with a visible warning after a failed refresh", () => {
+    queryMocks.useOverview.mockReturnValue({ data: buildOverviewPage() });
+    queryMocks.useOverviewRevenue.mockReturnValue({
+      data: { netEarningsMills: 123450, pages: [{ pageId: 1, netEarningsMills: 123450 }] },
+      isError: true,
+    });
+
+    const html = renderWithRouter(createElement(OverviewPage));
+
+    expect(html).toContain("$123.45");
+    expect(html).toContain("Revenue could not refresh. Showing saved data.");
+  });
+
+  it("marks a subscriber subtotal when one page cannot report its audience", () => {
+    const overview = buildOverviewPage();
+    overview.pages.push(buildOverviewPageItem(buildSyncUx(), { id: 2, label: "lana-2", subscriberCount: buildPageMetric(null) }));
+    queryMocks.useOverview.mockReturnValue({ data: overview });
+
+    const html = renderWithRouter(createElement(OverviewPage));
+
+    expect(html).toContain("1 of 2 pages reporting");
+    expect(html).toContain("Partial");
+    expect(html).toContain('aria-label="Not available"');
+  });
+
+  it("keeps zero distinct from missing growth and makes pages keyboard-accessible links", () => {
+    const overview = buildOverviewPage();
+    overview.pages.push(buildOverviewPageItem(buildSyncUx(), { id: 2, label: "lana-2" }));
+    queryMocks.useOverview.mockReturnValue({ data: overview });
+
+    const html = renderWithRouter(createElement(OverviewPage));
+
+    expect(html).toContain('href="/pages/lana"');
+    expect(html).toContain('href="/pages/lana-2"');
+    expect(html).toContain('aria-pressed="true"');
+    expect(html).not.toContain("+0");
+    expect(html).toContain('aria-label="Not available"');
+  });
+
+  it("shows independent report errors with a retry instead of hiding those sections", () => {
+    queryMocks.useOverview.mockReturnValue({ data: buildOverviewPage() });
+    queryMocks.useOverviewRevenueDaily.mockReturnValue({ isError: true });
+    queryMocks.useOverviewRevenueByModel.mockReturnValue({ isError: true });
+    queryMocks.useOverviewGrowth.mockReturnValue({ isError: true });
+
+    const html = renderWithRouter(createElement(OverviewPage));
+
+    expect(html).toContain("Revenue trend could not be loaded.");
+    expect(html).toContain("Model earnings could not be loaded.");
+    expect(html).toContain("Audience growth could not be loaded.");
+    expect(html).toContain("Try again");
+    expect(html).not.toContain("No revenue data for this period.");
+    expect(html).toContain('href="/pages/lana"');
+  });
+
   it("shows page detail attention with incomplete-data copy", () => {
     const overview = buildOverviewPage(buildSyncUx({
       state: "attention",

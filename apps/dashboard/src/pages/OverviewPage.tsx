@@ -1,24 +1,49 @@
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router";
-import { useAuthMe, useOverview, useOverviewRevenue, useOverviewGrowth, useOverviewRevenueDaily, useOverviewRevenueByModel } from "@/api/queries";
+import { ArrowUpRight, RefreshCw } from "lucide-react";
+import {
+  useAuthMe,
+  useOverview,
+  useOverviewRevenue,
+  useOverviewGrowth,
+  useOverviewRevenueDaily,
+  useOverviewRevenueByModel,
+} from "@/api/queries";
 import { TrendSparkline } from "@/components/shared/TrendSparkline";
 import { DeltaIndicator } from "@/components/shared/DeltaIndicator";
+import { PeriodSelector } from "@/components/shared/PeriodSelector";
 import { StatusPanel } from "@/components/shared/StatusPanel";
+import { PlatformBadge } from "@/components/shared/PlatformBadge";
 import { getSyncUxTone } from "@/components/shared/SyncUxBadge";
-import { getSyncUxDisplayMode, getSyncUxExceptionKind } from "@/components/shared/syncUxDisplay";
+import {
+  getSyncUxDisplayMode,
+  getSyncUxExceptionKind,
+} from "@/components/shared/syncUxDisplay";
 import { buildPageRoute, buildSettingsRoute } from "@/lib/navigation";
-import { PLATFORM_COLORS } from "@/lib/constants";
 import { PLATFORM_DISPLAY_NAME } from "@/lib/platformUrls";
 import { formatUsdFromMills } from "@agency_hub_core/shared";
 import { usePeriodStore } from "@/stores/periodStore";
-import type { OverviewResponse, PlatformRevenueWindow } from "@agency_hub_core/contracts";
+import type {
+  OverviewResponse,
+  PlatformRevenueWindow,
+} from "@agency_hub_core/contracts";
 
 const PageActivityChart = lazy(() =>
-  import("@/components/page/PageActivityChart").then((m) => ({ default: m.PageActivityChart })),
+  import("@/components/page/PageActivityChart").then((m) => ({
+    default: m.PageActivityChart,
+  })),
 );
 
 type OverviewPageItem = OverviewResponse["pages"][number];
 type PageMetric = OverviewPageItem["subscriberCount"];
+type QueryState = {
+  data?: unknown;
+  isLoading?: boolean;
+  isFetching?: boolean;
+  isError?: boolean;
+  isPlaceholderData?: boolean;
+  refetch?: () => unknown;
+};
 
 const PERIOD_LABELS: Record<string, string> = {
   today: "Today",
@@ -33,14 +58,16 @@ interface ModelGroup {
   pages: OverviewPageItem[];
 }
 
-const GROWTH_PLACEHOLDER = "—";
-
 function groupByModel(pages: OverviewPageItem[]): ModelGroup[] {
   const map = new Map<string, ModelGroup>();
   for (const page of pages) {
     let group = map.get(page.modelSlug);
     if (!group) {
-      group = { modelSlug: page.modelSlug, modelName: page.modelName, pages: [] };
+      group = {
+        modelSlug: page.modelSlug,
+        modelName: page.modelName,
+        pages: [],
+      };
       map.set(page.modelSlug, group);
     }
     group.pages.push(page);
@@ -48,8 +75,22 @@ function groupByModel(pages: OverviewPageItem[]): ModelGroup[] {
   return Array.from(map.values());
 }
 
-function formatGrowthValue(value: number | null) {
-  return value === null ? GROWTH_PLACEHOLDER : `+${value.toLocaleString()}`;
+function hasCurrentData(query: QueryState) {
+  return (
+    query.data !== undefined && query.data !== null && !query.isPlaceholderData
+  );
+}
+
+function isWaiting(query: QueryState) {
+  return !hasCurrentData(query) && Boolean(query.isLoading || query.isFetching);
+}
+
+function formatGrowthValue(value: number) {
+  return `${value > 0 ? "+" : ""}${value.toLocaleString()}`;
+}
+
+function supportsFollowerGrowth(page: OverviewPageItem) {
+  return page.platform === "fansly";
 }
 
 function getPageMetricValue(metric: PageMetric) {
@@ -58,46 +99,112 @@ function getPageMetricValue(metric: PageMetric) {
     : null;
 }
 
-function formatPageMetric(metric: PageMetric) {
-  const value = getPageMetricValue(metric);
-  return value === null ? "N/A" : value.toLocaleString();
+function summarizeValues(values: Array<number | null>) {
+  const known = values.filter((value): value is number => value !== null);
+  return {
+    value:
+      known.length > 0 ? known.reduce((sum, value) => sum + value, 0) : null,
+    known: known.length,
+    total: values.length,
+    partial: known.length > 0 && known.length < values.length,
+  };
 }
 
-function sumPageMetrics(metrics: PageMetric[]) {
-  let availableCount = 0;
-  let total = 0;
-
-  for (const metric of metrics) {
-    const value = getPageMetricValue(metric);
-    if (value === null) {
-      continue;
-    }
-
-    availableCount += 1;
-    total += value;
-  }
-
-  return availableCount === 0 ? null : total;
+function MetricValue({
+  value,
+  loading = false,
+  format = (n) => n.toLocaleString(),
+  growth = false,
+  partial = false,
+}: {
+  value: number | null;
+  loading?: boolean;
+  format?: (value: number) => string;
+  growth?: boolean;
+  partial?: boolean;
+}) {
+  if (loading)
+    return (
+      <span
+        className="overview-value-skeleton"
+        role="status"
+        aria-label="Loading metric"
+      />
+    );
+  if (value === null)
+    return (
+      <span
+        className="text-text-muted"
+        aria-label="Not available"
+        title="Data is not available"
+      >
+        —
+      </span>
+    );
+  return (
+    <span
+      className={
+        growth && value !== 0
+          ? value > 0
+            ? "text-green"
+            : "text-danger"
+          : undefined
+      }
+    >
+      {format(value)}
+      {partial && (
+        <span
+          className="overview-partial"
+          title="Some page values are unavailable; this is a subtotal"
+        >
+          Partial
+        </span>
+      )}
+    </span>
+  );
 }
 
-function formatMetricTotal(total: number | null) {
-  return total === null ? "N/A" : total.toLocaleString();
+function QueryNotice({ query, label }: { query: QueryState; label: string }) {
+  if (!query.isError) return null;
+  return (
+    <div role="alert" className="overview-query-notice">
+      <span>
+        {hasCurrentData(query)
+          ? `${label} could not refresh. Showing saved data.`
+          : `${label} could not be loaded.`}
+      </span>
+      <button
+        type="button"
+        disabled={query.isFetching}
+        onClick={() => void query.refetch?.()}
+      >
+        {query.isFetching ? "Retrying…" : "Try again"}
+      </button>
+    </div>
+  );
 }
 
-function getOverviewExceptionMessage(
-  summary: OverviewPageItem["syncUx"],
-  kind: NonNullable<ReturnType<typeof getSyncUxExceptionKind>>,
-) {
-  switch (kind) {
-    case "off":
-      return summary.headline;
-    case "attention":
-      return "Data may be incomplete \u2014 updates need attention";
-    default:
-      return null;
-  }
+function SummaryMetric({
+  label,
+  value,
+  detail,
+  primary = false,
+}: {
+  label: string;
+  value: ReactNode;
+  detail: ReactNode;
+  primary?: boolean;
+}) {
+  return (
+    <div
+      className={`overview-summary-metric${primary ? " overview-summary-primary" : ""}`}
+    >
+      <dt>{label}</dt>
+      <dd className="overview-summary-value tabular-nums">{value}</dd>
+      <dd className="overview-summary-detail">{detail}</dd>
+    </div>
+  );
 }
-
 const MS_PER_DAY = 86_400_000;
 
 // Audit B2: OnlyFans trailing windows deliberately cover one more calendar day
@@ -117,7 +224,8 @@ export function describeMixedRevenueWindows(
     .map((window) => ({
       platform: PLATFORM_DISPLAY_NAME[window.platform] ?? window.platform,
       days: Math.round(
-        (new Date(window.to!).getTime() - new Date(window.from!).getTime()) / MS_PER_DAY,
+        (new Date(window.to!).getTime() - new Date(window.from!).getTime()) /
+          MS_PER_DAY,
       ),
     }));
 
@@ -126,401 +234,543 @@ export function describeMixedRevenueWindows(
   }
 
   const parts = spans.map((span) => `${span.days} days on ${span.platform}`);
-  return `“${periodLabel}” spans ${parts.join(", ")} (platform billing offsets); totals and Δ combine these windows.`;
+  return `“${periodLabel}” uses ${parts.join(", ")}. Revenue and comparisons follow each platform’s billing calendar.`;
 }
 
 export function OverviewPage() {
-  const navigate = useNavigate();
   const { data: auth } = useAuthMe();
   const { period } = usePeriodStore();
-  const selectedPeriod = period;
-
-  const { data, isLoading: isOverviewLoading, isError: isOverviewError } = useOverview();
-  const {
-    data: revenueData,
-    isLoading: isRevenueLoading,
-    isError: isRevenueError,
-  } = useOverviewRevenue(selectedPeriod);
-  const {
-    data: revenueDailyData,
-    isLoading: isRevenueDailyLoading,
-    isError: isRevenueDailyError,
-  } = useOverviewRevenueDaily(selectedPeriod);
-  const { data: revenueByModelData } = useOverviewRevenueByModel(selectedPeriod);
-  const {
-    data: growthData,
-    isLoading: isGrowthLoading,
-    isFetching: isGrowthFetching,
-    isPlaceholderData: isGrowthPlaceholderData,
-  } = useOverviewGrowth(selectedPeriod);
-  const growthState = growthData && !isGrowthPlaceholderData
-    ? "ready"
-    : isGrowthLoading || isGrowthFetching
-      ? "loading"
-      : "idle";
-  const growthReady = growthState === "ready";
-
-  if (isOverviewLoading || !data) {
-    if (isOverviewLoading) {
-      return <OverviewSkeleton />;
-    }
-    if (isOverviewError) {
-      return (
-        <StatusPanel
-          title="Overview failed to load"
-          description="The dashboard summary could not be fetched."
-          tone="error"
-        />
-      );
-    }
-    return <OverviewSkeleton />;
-  }
-
-  const pages = (data.pages ?? []) as OverviewPageItem[];
-  const groups = groupByModel(pages);
-
-  const revenueByPageId = new Map<number, number>();
-  if (revenueData?.pages) {
-    for (const rp of revenueData.pages) {
-      revenueByPageId.set(rp.pageId, rp.netEarningsMills);
-    }
-  }
-
-  const followersByPageId = new Map<number, number>();
-  const subsByPageId = new Map<number, number>();
-  if (growthData?.pages) {
-    for (const gp of growthData.pages) {
-      followersByPageId.set(gp.pageId, gp.newFollowers);
-      subsByPageId.set(gp.pageId, gp.newSubscribers);
-    }
-  }
-
-  const totalRevenue = revenueData?.netEarningsMills ?? 0;
-  const revenueReady = Boolean(revenueData) && !isRevenueLoading && !isRevenueError;
-  const revenueDailyReady = Boolean(revenueDailyData) && !isRevenueDailyLoading && !isRevenueDailyError;
-  const totalSubs = sumPageMetrics(pages.map((page) => page.subscriberCount));
-  const totalNewSubs = growthReady
-    ? pages.reduce((sum, p) => sum + (subsByPageId.get(p.id) ?? 0), 0)
-    : null;
-  const totalNewFollowers = growthReady
-    ? pages.reduce((sum, p) => sum + (followersByPageId.get(p.id) ?? 0), 0)
-    : null;
+  const overview = useOverview();
+  const revenue = useOverviewRevenue(period);
+  const growth = useOverviewGrowth(period);
+  const daily = useOverviewRevenueDaily(period);
+  const byModel = useOverviewRevenueByModel(period);
   const isOwner = auth?.user.role === "owner";
+  const periodLabel = PERIOD_LABELS[period] ?? "30 Days";
 
-  const periodLabel = PERIOD_LABELS[selectedPeriod] ?? "30 Days";
+  const overviewReady = hasCurrentData(overview);
+  const revenueReady = hasCurrentData(revenue);
+  const growthReady = hasCurrentData(growth);
+  const dailyReady = hasCurrentData(daily);
+  const modelsReady = hasCurrentData(byModel);
+  const pages = overviewReady ? (overview.data?.pages ?? []) : [];
+  const groups = groupByModel(pages);
+  const revenueByPageId = new Map(
+    revenueReady
+      ? revenue.data?.pages.map((page) => [page.pageId, page.netEarningsMills])
+      : [],
+  );
+  const growthByPageId = new Map(
+    growthReady ? growth.data?.pages.map((page) => [page.pageId, page]) : [],
+  );
+  const currentSubs = summarizeValues(
+    pages.map((page) => getPageMetricValue(page.subscriberCount)),
+  );
+  const newSubs = summarizeValues(
+    pages.map((page) => growthByPageId.get(page.id)?.newSubscribers ?? null),
+  );
+  const newFollowers = summarizeValues(
+    pages
+      .filter(supportsFollowerGrowth)
+      .map((page) => growthByPageId.get(page.id)?.newFollowers ?? null),
+  );
+  const queries = [overview, revenue, growth, daily, byModel];
+  const refreshing = queries.some((query) => query.isFetching);
   const mixedWindowsNote = revenueReady
-    ? describeMixedRevenueWindows(revenueData?.platformWindows, periodLabel)
+    ? describeMixedRevenueWindows(revenue.data?.platformWindows, periodLabel)
     : null;
-
-  // W7.2 (A33, decision #131): rollups include tombstoned pages; they carry
-  // no row in the (active-only) navigation table, so annotate the totals.
+  // Decision #131: agency totals retain historical revenue from deleted pages.
   const retiredRevenuePages = revenueReady
-    ? (revenueData?.pages ?? []).filter(
-      (rp) => rp.status === "deleted" && rp.netEarningsMills !== 0,
-    )
+    ? (revenue.data?.pages ?? []).filter(
+        (page) => page.status === "deleted" && page.netEarningsMills !== 0,
+      )
     : [];
-  const retiredRevenueNote = retiredRevenuePages.length > 0
-    ? `Totals include ${retiredRevenuePages.length} retired ${
-      retiredRevenuePages.length === 1 ? "page" : "pages"
-    } (${retiredRevenuePages.map((rp) => rp.pageLabel).join(", ")}) — history is kept after deletion.`
-    : null;
 
   return (
-    <div>
-      <table className="w-full border-collapse overflow-hidden rounded-xl border border-border bg-card">
-        <colgroup>
-          <col />
-          <col className="w-[120px]" />
-          <col className="w-[100px]" />
-          <col className="w-[120px]" />
-          <col className="w-[100px]" />
-        </colgroup>
-        <thead>
-          <tr className="bg-hover-alt">
-            <th className="px-4 py-3 text-left text-[12px] font-semibold uppercase tracking-wider text-text-muted">
-              Page
-            </th>
-            <th className="px-4 py-3 text-right text-[12px] font-semibold uppercase tracking-wider text-text-muted">
-              {periodLabel}
-            </th>
-            <th className="px-4 py-3 text-right text-[12px] font-semibold uppercase tracking-wider text-text-muted">
-              Subs
-            </th>
-            <th className="px-4 py-3 text-right text-[12px] font-semibold uppercase tracking-wider text-text-muted">
-              Followers {periodLabel}
-            </th>
-            <th className="px-4 py-3 text-right text-[12px] font-semibold uppercase tracking-wider text-text-muted">
-              Subs {periodLabel}
-            </th>
-          </tr>
-        </thead>
-        <tbody>
-          {groups.map((group) => (
-            <ModelGroupRows
-              key={group.modelSlug}
-              group={group}
-              navigate={navigate}
-              revenueByPageId={revenueByPageId}
-              revenueReady={revenueReady}
-              followersByPageId={followersByPageId}
-              subsByPageId={subsByPageId}
-              growthReady={growthReady}
-              isOwner={isOwner}
+    <div className="overview-page">
+      <header className="overview-header">
+        <div>
+          <h1>Agency overview</h1>
+          <p>
+            {overviewReady
+              ? `${groups.length} ${groups.length === 1 ? "model" : "models"} · ${pages.length} ${pages.length === 1 ? "page" : "pages"}`
+              : "Revenue and audience across your pages"}
+          </p>
+        </div>
+        <div className="overview-controls">
+          <PeriodSelector />
+          <button
+            type="button"
+            className="overview-refresh"
+            disabled={refreshing}
+            onClick={() =>
+              void Promise.all(queries.map((query) => query.refetch()))
+            }
+            aria-label="Refresh overview"
+          >
+            <RefreshCw
+              size={15}
+              className={refreshing ? "animate-spin" : ""}
+              aria-hidden="true"
             />
-          ))}
-          <tr className="border-t-2 border-border bg-hover-alt">
-            <td className="px-4 py-3 text-[15px] font-bold text-text-primary">Agency Total</td>
-            <td className="px-4 py-3 text-right tabular-nums text-lg font-bold text-text-primary">
-              <div className="flex items-center justify-end gap-2">
-                {revenueReady ? formatUsdFromMills(totalRevenue) : "—"}
-                {selectedPeriod !== "all" && (
-                  <DeltaIndicator pct={revenueData?.comparison?.deltaPct ?? null} />
-                )}
-              </div>
-            </td>
-            <td className="px-4 py-3 text-right tabular-nums text-[15px] font-bold text-text-primary">
-              {formatMetricTotal(totalSubs)}
-            </td>
-            <td
-              className={`px-4 py-3 text-right tabular-nums text-[15px] font-bold ${
-                totalNewFollowers === null ? "text-text-muted" : "text-green"
-              }`}
-            >
-              {formatGrowthValue(totalNewFollowers)}
-            </td>
-            <td
-              className={`px-4 py-3 text-right tabular-nums text-[15px] font-bold ${
-                totalNewSubs === null ? "text-text-muted" : "text-green"
-              }`}
-            >
-              {formatGrowthValue(totalNewSubs)}
-            </td>
-          </tr>
-        </tbody>
-      </table>
+            <span>{refreshing ? "Updating…" : "Refresh"}</span>
+          </button>
+        </div>
+      </header>
 
-      {mixedWindowsNote && (
-        <p className="mt-2 px-1 text-xs text-text-muted">{mixedWindowsNote}</p>
-      )}
-      {retiredRevenueNote && (
-        <p className="mt-2 px-1 text-xs text-text-muted">{retiredRevenueNote}</p>
-      )}
-
-      <Suspense
-        fallback={
-          <div className="mt-5 rounded-xl border border-border bg-card p-5">
-            <div className="h-[300px] flex items-center justify-center text-sm text-text-muted">
-              Loading chart...
-            </div>
-          </div>
-        }
-      >
-        {revenueDailyReady && (revenueDailyData?.series ?? []).length > 0 && (
-          <div className="mt-5">
-            <PageActivityChart
-              title="AGENCY REVENUE"
-              selectedPeriod={selectedPeriod}
-              selectedPeriodLabel={periodLabel}
-              points={(revenueDailyData?.series ?? []).map((d) => ({
-                businessDate: d.businessDate,
-                value: d.netAmountMills,
-              }))}
-              valueFormatter={(v) => formatUsdFromMills(v)}
-              yAxisWidth={72}
-              color="var(--color-accent)"
-            />
-          </div>
+      <section aria-label="Agency summary">
+        <dl className="overview-summary">
+          <SummaryMetric
+            label="Net revenue"
+            primary
+            value={
+              <MetricValue
+                value={
+                  revenueReady ? (revenue.data?.netEarningsMills ?? null) : null
+                }
+                loading={isWaiting(revenue)}
+                format={formatUsdFromMills}
+              />
+            }
+            detail={
+              <>
+                <span>{periodLabel}</span>
+                {revenueReady &&
+                  period !== "all" &&
+                  revenue.data?.comparison?.deltaPct != null && (
+                    <>
+                      <DeltaIndicator pct={revenue.data.comparison.deltaPct} />
+                      <span>vs previous period</span>
+                    </>
+                  )}
+              </>
+            }
+          />
+          <SummaryMetric
+            label="Subscribers now"
+            value={
+              <MetricValue
+                value={currentSubs.value}
+                loading={isWaiting(overview)}
+                partial={currentSubs.partial}
+              />
+            }
+            detail={
+              currentSubs.partial
+                ? `${currentSubs.known} of ${currentSubs.total} pages reporting`
+                : "Current audience · all platforms"
+            }
+          />
+          <SummaryMetric
+            label="New followers"
+            value={
+              <MetricValue
+                value={newFollowers.value}
+                loading={isWaiting(overview) || isWaiting(growth)}
+                growth
+                format={formatGrowthValue}
+                partial={newFollowers.partial}
+              />
+            }
+            detail={`${periodLabel} · Fansly only`}
+          />
+          <SummaryMetric
+            label="New subscribers"
+            value={
+              <MetricValue
+                value={newSubs.value}
+                loading={isWaiting(overview) || isWaiting(growth)}
+                growth
+                format={formatGrowthValue}
+                partial={newSubs.partial}
+              />
+            }
+            detail={`${periodLabel} · all platforms`}
+          />
+        </dl>
+        <QueryNotice query={revenue} label="Revenue" />
+        <QueryNotice query={growth} label="Audience growth" />
+        {mixedWindowsNote && (
+          <p className="overview-footnote">{mixedWindowsNote}</p>
         )}
-      </Suspense>
+        {retiredRevenuePages.length > 0 && (
+          <p className="overview-footnote">
+            Totals include {retiredRevenuePages.length} retired{" "}
+            {retiredRevenuePages.length === 1 ? "page" : "pages"} (
+            {retiredRevenuePages.map((page) => page.pageLabel).join(", ")}).
+            History is kept after deletion.
+          </p>
+        )}
+      </section>
 
-      {(revenueByModelData?.models ?? []).length > 0 && (
-        <div className="mt-5 rounded-xl border border-border bg-card">
-          <div className="border-b border-border px-4 py-3 text-[12px] font-semibold uppercase tracking-wider text-text-muted">
-            Earnings by model · {periodLabel}
-          </div>
-          <div>
-            {(revenueByModelData?.models ?? []).map((model) => (
-              <div
-                key={model.modelSlug}
-                className="flex items-center gap-4 border-b border-border px-4 py-3 last:border-b-0"
+      <section
+        className="overview-pages"
+        aria-labelledby="overview-pages-heading"
+      >
+        <div className="overview-section-heading">
+          <h2 id="overview-pages-heading">Models & pages</h2>
+          {pages.length > 0 && <span>
+            Open a page to see its details{" "}
+            <ArrowUpRight size={14} aria-hidden="true" />
+          </span>}
+        </div>
+        {isWaiting(overview) ? (
+          <OverviewSkeleton />
+        ) : !overviewReady ? (
+          <StatusPanel
+            title="Overview failed to load"
+            description="Page details could not be fetched. Available revenue reports are shown separately."
+            tone="error"
+            action={
+              <button
+                type="button"
+                className="overview-text-button"
+                onClick={() => void overview.refetch()}
               >
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-sm font-medium">{model.modelName}</div>
-                  <div className="text-xs text-text-muted">
-                    {model.pageCount} {model.pageCount === 1 ? "page" : "pages"} · {model.transactionCount} txns
+                Try again
+              </button>
+            }
+          />
+        ) : pages.length === 0 ? (
+          <StatusPanel
+            title="No pages yet"
+            description={
+              isOwner
+                ? "Connect your first page to start tracking revenue and audience."
+                : "Your assigned pages will appear here."
+            }
+            action={
+              isOwner ? (
+                <Link
+                  className="overview-text-button"
+                  to={buildSettingsRoute("pages")}
+                >
+                  Manage pages
+                </Link>
+              ) : undefined
+            }
+          />
+        ) : (
+          <>
+            <QueryNotice query={overview} label="Page details" />
+            <div className="overview-table-frame">
+              <table className="overview-table">
+                <caption className="sr-only">
+                  Revenue and audience by model and page. Revenue and new
+                  audience use {periodLabel}; subscribers are the current count.
+                </caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Model / page</th>
+                    <th scope="col">
+                      Net revenue<span>{periodLabel}</span>
+                    </th>
+                    <th scope="col">
+                      Subscribers<span>Current</span>
+                    </th>
+                    <th scope="col">
+                      New followers<span>Fansly · {periodLabel}</span>
+                    </th>
+                    <th scope="col">
+                      New subscribers<span>{periodLabel}</span>
+                    </th>
+                  </tr>
+                </thead>
+                {groups.map((group) => (
+                  <ModelGroupRows
+                    key={group.modelSlug}
+                    group={group}
+                    revenueByPageId={revenueByPageId}
+                    growthByPageId={growthByPageId}
+                    revenueLoading={isWaiting(revenue)}
+                    growthLoading={isWaiting(growth)}
+                    isOwner={isOwner}
+                  />
+                ))}
+              </table>
+            </div>
+          </>
+        )}
+      </section>
+
+      <section className="overview-charts" aria-label="Revenue reports">
+        <div className="overview-trend">
+          <QueryNotice query={daily} label="Revenue trend" />
+          {dailyReady && (daily.data?.series.length ?? 0) > 0 ? (
+            <Suspense
+              fallback={<ReportPlaceholder title="Revenue trend" loading />}
+            >
+              <PageActivityChart
+                title="Revenue trend"
+                selectedPeriod={period}
+                selectedPeriodLabel={periodLabel}
+                points={(daily.data?.series ?? []).map((point) => ({
+                  businessDate: point.businessDate,
+                  value: point.netAmountMills,
+                }))}
+                valueFormatter={formatUsdFromMills}
+                yAxisWidth={72}
+                color="var(--color-accent)"
+              />
+            </Suspense>
+          ) : (
+            <ReportPlaceholder
+              title="Revenue trend"
+              loading={isWaiting(daily)}
+              error={daily.isError}
+            />
+          )}
+        </div>
+        <div className="overview-model-report">
+          <div className="overview-section-heading">
+            <h2>Earnings by model</h2>
+            <span>{periodLabel}</span>
+          </div>
+          <QueryNotice query={byModel} label="Model earnings" />
+          {modelsReady && (byModel.data?.models.length ?? 0) > 0 ? (
+            <div className="overview-model-list">
+              {(byModel.data?.models ?? []).map((model) => (
+                <div key={model.modelSlug} className="overview-model-earnings">
+                  <div>
+                    <h3>{model.modelName}</h3>
+                    <p>
+                      {model.pageCount}{" "}
+                      {model.pageCount === 1 ? "page" : "pages"} ·{" "}
+                      {model.transactionCount.toLocaleString()} transactions
+                    </p>
+                  </div>
+                  <div className="overview-model-amount">
+                    <TrendSparkline
+                      values={model.series.map((point) => point.netAmountMills)}
+                    />
+                    <strong className="tabular-nums">
+                      {formatUsdFromMills(model.totalNetAmountMills)}
+                    </strong>
                   </div>
                 </div>
-                <TrendSparkline
-                  values={model.series.map((point) => point.netAmountMills)}
-                />
-                <div className="w-[110px] text-right text-sm font-semibold tabular-nums">
-                  {formatUsdFromMills(model.totalNetAmountMills)}
-                </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          ) : (
+            <ReportPlaceholder
+              loading={isWaiting(byModel)}
+              error={byModel.isError}
+            />
+          )}
         </div>
-      )}
+      </section>
     </div>
   );
 }
 
 function ModelGroupRows({
   group,
-  navigate,
   revenueByPageId,
-  revenueReady,
-  followersByPageId,
-  subsByPageId,
-  growthReady,
+  growthByPageId,
+  revenueLoading,
+  growthLoading,
   isOwner,
 }: {
   group: ModelGroup;
-  navigate: ReturnType<typeof useNavigate>;
   revenueByPageId: Map<number, number>;
-  revenueReady: boolean;
-  followersByPageId: Map<number, number>;
-  subsByPageId: Map<number, number>;
-  growthReady: boolean;
+  growthByPageId: Map<number, { newFollowers: number; newSubscribers: number }>;
+  revenueLoading: boolean;
+  growthLoading: boolean;
   isOwner: boolean;
 }) {
-  const modelName = group.modelName;
-  const groupRevenue = revenueReady
-    ? group.pages.reduce((sum, p) => sum + (revenueByPageId.get(p.id) ?? 0), 0)
-    : null;
-  const groupSubs = sumPageMetrics(group.pages.map((page) => page.subscriberCount));
-  const groupNewSubs = growthReady
-    ? group.pages.reduce((sum, p) => sum + (subsByPageId.get(p.id) ?? 0), 0)
-    : null;
-  const groupNewFollowers = growthReady
-    ? group.pages.reduce((sum, p) => sum + (followersByPageId.get(p.id) ?? 0), 0)
-    : null;
+  const navigate = useNavigate();
+  const groupRevenue = summarizeValues(
+    group.pages.map((page) => revenueByPageId.get(page.id) ?? null),
+  );
+  const groupSubs = summarizeValues(
+    group.pages.map((page) => getPageMetricValue(page.subscriberCount)),
+  );
+  const groupNewFollowers = summarizeValues(
+    group.pages
+      .filter(supportsFollowerGrowth)
+      .map((page) => growthByPageId.get(page.id)?.newFollowers ?? null),
+  );
+  const groupNewSubs = summarizeValues(
+    group.pages.map(
+      (page) => growthByPageId.get(page.id)?.newSubscribers ?? null,
+    ),
+  );
 
   return (
-    <>
-      <tr className="bg-hover-alt/50">
-        <td className="px-4 pt-4 pb-2">
-          <span className="text-accent font-bold">{modelName}</span>
-          <span className="ml-2 text-text-muted text-xs">
+    <tbody>
+      <tr className="overview-model-row">
+        <th scope="row">
+          <span className="overview-model-name">{group.modelName}</span>
+          <span className="overview-page-count">
             {group.pages.length} {group.pages.length === 1 ? "page" : "pages"}
           </span>
+        </th>
+        <td data-label="Net revenue">
+          <MetricValue
+            value={groupRevenue.value}
+            partial={groupRevenue.partial}
+            loading={revenueLoading}
+            format={formatUsdFromMills}
+          />
         </td>
-        <td className="px-4 pt-4 pb-2 text-right tabular-nums text-[15px] font-semibold text-accent">
-          {groupRevenue === null ? "—" : formatUsdFromMills(groupRevenue)}
+        <td data-label="Subscribers now">
+          <MetricValue value={groupSubs.value} partial={groupSubs.partial} />
         </td>
-        <td className="px-4 pt-4 pb-2 text-right tabular-nums font-semibold">
-          {formatMetricTotal(groupSubs)}
+        <td data-label="New followers · Fansly">
+          <MetricValue
+            value={groupNewFollowers.value}
+            partial={groupNewFollowers.partial}
+            loading={growthLoading}
+            growth
+            format={formatGrowthValue}
+          />
         </td>
-        <td
-          className={`px-4 pt-4 pb-2 text-right tabular-nums font-semibold ${
-            groupNewFollowers === null ? "text-text-muted" : "text-green"
-          }`}
-        >
-          {formatGrowthValue(groupNewFollowers)}
-        </td>
-        <td
-          className={`px-4 pt-4 pb-2 text-right tabular-nums font-semibold ${
-            groupNewSubs === null ? "text-text-muted" : "text-green"
-          }`}
-        >
-          {formatGrowthValue(groupNewSubs)}
+        <td data-label="New subscribers">
+          <MetricValue
+            value={groupNewSubs.value}
+            partial={groupNewSubs.partial}
+            loading={growthLoading}
+            growth
+            format={formatGrowthValue}
+          />
         </td>
       </tr>
       {group.pages.map((page) => {
-        const platform = page.platform as keyof typeof PLATFORM_COLORS;
-        const platformCfg = PLATFORM_COLORS[platform];
-        const pageRevenue = revenueReady ? (revenueByPageId.get(page.id) ?? 0) : null;
-        const isFansly = page.platform === "fansly";
-        const pageFollowers = growthReady ? (followersByPageId.get(page.id) ?? 0) : null;
-        const pageSubscribers = growthReady ? (subsByPageId.get(page.id) ?? 0) : null;
+        const isFansly = supportsFollowerGrowth(page);
         const syncMode = getSyncUxDisplayMode(page.syncUx, "overview_row");
         const exceptionKind = getSyncUxExceptionKind(page.syncUx);
         const tone = getSyncUxTone(page.syncUx.state);
-
         return (
           <tr
             key={page.id}
-            onClick={() => navigate(buildPageRoute(page.label))}
-            className="cursor-pointer border-t border-border transition-colors hover:bg-hover"
+            className="overview-page-row"
+            onClick={(event) => {
+              if (
+                !(event.target as HTMLElement).closest("a, button") &&
+                !window.getSelection()?.toString()
+              )
+                navigate(buildPageRoute(page.label));
+            }}
           >
-            <td className="px-4 py-3">
-              <div className="flex items-center gap-2">
-                <span className={`inline-block h-2 w-2 flex-shrink-0 rounded-full ${tone.dot}`} title={page.syncUx.state} />
-                <span className="text-[15px] font-semibold text-text-primary">{page.label}</span>
-                {platformCfg && (
-                  <span
-                    className="inline-block rounded-md px-2 py-0.5 font-semibold"
-                    style={{ fontSize: 11, backgroundColor: platformCfg.bg, color: platformCfg.text }}
-                  >
-                    {platformCfg.label}
-                  </span>
+            <th scope="row">
+              <Link
+                to={buildPageRoute(page.label)}
+                className="overview-page-link"
+              >
+                <span
+                  className={`h-2 w-2 shrink-0 rounded-full ${tone.dot}`}
+                  role="img"
+                  aria-label={page.syncUx.label}
+                  title={page.syncUx.headline}
+                />
+                <span className="overview-page-label">{page.label}</span>
+                <PlatformBadge platform={page.platform} />
+                <ArrowUpRight
+                  size={14}
+                  className="overview-page-arrow"
+                  aria-hidden="true"
+                />
+              </Link>
+              {syncMode === "exception" &&
+                exceptionKind &&
+                exceptionKind !== "credentials" && (
+                  <div className={`overview-sync-notice ${tone.panel}`}>
+                    <span className={tone.text}>
+                      {exceptionKind === "off"
+                        ? page.syncUx.headline
+                        : "Data may be incomplete — updates need attention"}
+                    </span>
+                    {isOwner && (
+                      <Link to={buildSettingsRoute("sync", page.label)}>
+                        Check sync settings
+                      </Link>
+                    )}
+                  </div>
                 )}
-              </div>
-              {syncMode === "exception" && exceptionKind && exceptionKind !== "credentials" && (
-                <div className={`mt-2 flex flex-wrap items-center gap-2 rounded-lg border px-3 py-2 text-[12px] ${tone.panel}`}>
-                  <span className={`font-medium ${tone.text}`}>
-                    {getOverviewExceptionMessage(page.syncUx, exceptionKind)}
-                  </span>
-                  {isOwner && (
-                    <Link
-                      to={buildSettingsRoute("sync", page.label)}
-                      onClick={(event) => event.stopPropagation()}
-                      className="font-semibold text-accent hover:underline"
-                    >
-                      Check sync settings
-                    </Link>
-                  )}
-                </div>
-              )}
+            </th>
+            <td data-label="Net revenue">
+              <MetricValue
+                value={revenueByPageId.get(page.id) ?? null}
+                loading={revenueLoading}
+                format={formatUsdFromMills}
+              />
             </td>
-            <td className="px-4 py-3 text-right tabular-nums text-[15px] font-medium text-text-secondary">
-              {pageRevenue === null ? "—" : formatUsdFromMills(pageRevenue)}
+            <td data-label="Subscribers now">
+              <MetricValue value={getPageMetricValue(page.subscriberCount)} />
             </td>
-            <td className="px-4 py-3 text-right tabular-nums text-[15px] font-medium text-text-secondary">
-              {formatPageMetric(page.subscriberCount)}
-            </td>
-            <td className="px-4 py-3 text-right tabular-nums text-[14px]">
+            <td data-label="New followers · Fansly">
               {isFansly ? (
-                <span className={pageFollowers === null ? "text-text-muted" : "font-bold text-green"}>
-                  {formatGrowthValue(pageFollowers)}
-                </span>
+                <MetricValue
+                  value={growthByPageId.get(page.id)?.newFollowers ?? null}
+                  loading={growthLoading}
+                  growth
+                  format={formatGrowthValue}
+                />
               ) : (
-                <span className="text-text-muted">{GROWTH_PLACEHOLDER}</span>
+                <span
+                  className="text-text-muted"
+                  title="Follower growth is available for Fansly pages only"
+                  aria-label="Follower growth is not available for this platform"
+                >
+                  —
+                </span>
               )}
             </td>
-            <td
-              className={`px-4 py-3 text-right tabular-nums text-[14px] font-bold ${
-                pageSubscribers === null ? "text-text-muted" : "text-green"
-              }`}
-            >
-              {formatGrowthValue(pageSubscribers)}
+            <td data-label="New subscribers">
+              <MetricValue
+                value={growthByPageId.get(page.id)?.newSubscribers ?? null}
+                loading={growthLoading}
+                growth
+                format={formatGrowthValue}
+              />
             </td>
           </tr>
         );
       })}
-    </>
+    </tbody>
+  );
+}
+
+function ReportPlaceholder({
+  title,
+  loading = false,
+  error = false,
+}: {
+  title?: string;
+  loading?: boolean;
+  error?: boolean;
+}) {
+  return (
+    <div className="overview-report-placeholder" role="status">
+      {title && <h2>{title}</h2>}
+      <div>
+        {loading ? (
+          <>
+            <span className="overview-value-skeleton" />
+            <span className="sr-only">Loading report</span>
+          </>
+        ) : error ? (
+          "Report unavailable. Try again above."
+        ) : (
+          "No revenue data for this period."
+        )}
+      </div>
+    </div>
   );
 }
 
 function OverviewSkeleton() {
   return (
-    <div>
-      <div className="overflow-hidden rounded-xl border border-border bg-card">
-        <div className="bg-hover-alt px-4 py-3 flex gap-4">
-          {[100, 80, 60, 80, 60].map((w, i) => (
-            <div key={i} className="h-3 rounded bg-border animate-pulse" style={{ width: `${w}px` }} />
-          ))}
+    <div
+      className="overview-table-skeleton"
+      role="status"
+      aria-label="Loading pages"
+    >
+      {Array.from({ length: 5 }, (_, index) => (
+        <div key={index}>
+          <span className="overview-value-skeleton" />
+          <span className="overview-value-skeleton" />
         </div>
-        {Array.from({ length: 4 }, (_, i) => (
-          <div key={i} className="flex gap-4 border-t border-border px-4 py-3.5">
-            <div className="h-4 w-28 rounded bg-hover-alt animate-pulse" style={{ animationDelay: `${i * 80}ms` }} />
-            <div className="h-4 w-16 rounded bg-hover-alt animate-pulse ml-auto" style={{ animationDelay: `${i * 80 + 40}ms` }} />
-            <div className="h-4 w-12 rounded bg-hover-alt animate-pulse" style={{ animationDelay: `${i * 80 + 80}ms` }} />
-            <div className="h-4 w-14 rounded bg-hover-alt animate-pulse" style={{ animationDelay: `${i * 80 + 120}ms` }} />
-            <div className="h-4 w-12 rounded bg-hover-alt animate-pulse" style={{ animationDelay: `${i * 80 + 160}ms` }} />
-          </div>
-        ))}
-      </div>
+      ))}
     </div>
   );
 }

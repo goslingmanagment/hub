@@ -1,0 +1,489 @@
+.overview-page {
+  display: grid;
+  gap: 28px;
+}
+.overview-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 18px;
+}
+.overview-header h1 {
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: -0.035em;
+  line-height: 1.25;
+}
+.overview-header p {
+  margin-top: 6px;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+}
+.overview-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+.overview-controls button {
+  min-height: 36px;
+  white-space: nowrap;
+}
+.overview-refresh {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border-radius: 8px;
+  padding: 7px 10px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+.overview-refresh:hover {
+  background: var(--color-hover);
+}
+.overview-refresh:disabled {
+  opacity: 0.65;
+  cursor: wait;
+}
+.overview-page :is(a, button):focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 3px;
+}
+.overview-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--color-card);
+}
+.overview-summary-metric {
+  min-width: 0;
+  padding: 21px 20px;
+}
+.overview-summary-metric + .overview-summary-metric {
+  border-left: 1px solid var(--color-border);
+}
+.overview-summary-primary {
+  background: var(--color-hover-alt);
+}
+.overview-summary-metric dt {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+}
+.overview-summary-value {
+  margin-top: 10px;
+  font-size: clamp(23px, 2.1vw, 30px);
+  line-height: 1.2;
+  font-weight: 600;
+  letter-spacing: -0.04em;
+  overflow-wrap: anywhere;
+}
+.overview-summary-detail {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 7px;
+  margin-top: 10px;
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.overview-summary-detail > span:first-child {
+  width: 100%;
+}
+.overview-footnote {
+  margin-top: 9px;
+  padding-inline: 2px;
+  font-size: 11px;
+  line-height: 1.65;
+  color: var(--color-text-secondary);
+}
+.overview-partial {
+  display: inline-block;
+  margin-left: 6px;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: normal;
+  color: var(--color-text-secondary);
+  vertical-align: middle;
+}
+.overview-query-notice {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-block: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-danger);
+  border-radius: 8px;
+  color: var(--color-text-secondary);
+  background: var(--color-card);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.overview-query-notice button,
+.overview-text-button {
+  color: var(--color-accent);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.overview-query-notice button:disabled {
+  opacity: 0.6;
+}
+.overview-section-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin-bottom: 12px;
+}
+.overview-section-heading h2 {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+}
+.overview-section-heading > span {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+.overview-pages {
+  container-type: inline-size;
+}
+.overview-table-frame {
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--color-card);
+}
+.overview-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: right;
+  font-size: 13px;
+}
+.overview-table :is(th, td) {
+  padding: 13px 16px;
+  font-variant-numeric: tabular-nums;
+  vertical-align: middle;
+}
+.overview-table th:first-child {
+  text-align: left;
+}
+.overview-table thead {
+  background: var(--color-hover-alt);
+  color: var(--color-text-secondary);
+}
+.overview-table thead th {
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.overview-table thead th span {
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+  font-weight: 400;
+}
+.overview-model-row {
+  background: var(--color-hover-alt);
+  border-top: 1px solid var(--color-border);
+  font-weight: 600;
+}
+.overview-model-name {
+  color: var(--color-accent);
+  font-size: 14px;
+}
+.overview-page-count {
+  margin-left: 8px;
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  font-weight: 400;
+  white-space: nowrap;
+}
+.overview-page-row {
+  border-top: 1px solid var(--color-border-light);
+  cursor: pointer;
+}
+.overview-page-row:hover,
+.overview-page-row:focus-within {
+  background: var(--color-hover);
+}
+.overview-page-row th {
+  font-weight: 400;
+}
+.overview-page-row td {
+  color: var(--color-text-secondary);
+}
+.overview-page-row td:first-of-type {
+  color: var(--color-text-primary);
+  font-weight: 500;
+}
+.overview-page-link {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: fit-content;
+  max-width: 100%;
+  border-radius: 4px;
+}
+.overview-page-label {
+  font-size: 14px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+.overview-page-arrow {
+  color: var(--color-text-muted);
+  flex-shrink: 0;
+  opacity: 0;
+}
+.overview-page-row:is(:hover, :focus-within) .overview-page-arrow {
+  opacity: 1;
+}
+.overview-sync-notice {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  max-width: 310px;
+  margin-top: 9px;
+  padding: 7px 9px;
+  border-width: 1px;
+  border-radius: 7px;
+  font-size: 11px;
+  line-height: 1.5;
+}
+.overview-sync-notice a {
+  font-weight: 600;
+  color: var(--color-accent);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.overview-charts {
+  display: grid;
+  grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr);
+  gap: 20px;
+}
+.overview-trend {
+  min-width: 0;
+}
+.overview-trend > div:last-child {
+  margin-bottom: 0;
+}
+.overview-model-report {
+  min-width: 0;
+  padding: 20px;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--color-card);
+}
+.overview-model-report .overview-section-heading {
+  padding-bottom: 8px;
+}
+.overview-model-earnings {
+  display: grid;
+  gap: 10px;
+  padding-block: 16px;
+  border-top: 1px solid var(--color-border-light);
+}
+.overview-model-earnings h3 {
+  font-size: 14px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+.overview-model-earnings p {
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--color-text-secondary);
+}
+.overview-model-amount {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.overview-model-amount strong {
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+.overview-report-placeholder {
+  min-height: 300px;
+  padding: 20px;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--color-card);
+}
+.overview-report-placeholder h2 {
+  font-size: 13px;
+  font-weight: 500;
+}
+.overview-report-placeholder > div {
+  min-height: 220px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+.overview-model-report .overview-report-placeholder {
+  border: 0;
+  padding: 0;
+}
+.overview-value-skeleton {
+  display: inline-block;
+  width: 4.5em;
+  max-width: 100%;
+  height: 0.8em;
+  border-radius: 4px;
+  background: var(--color-border);
+  animation: overview-pulse 1.5s ease-in-out infinite;
+}
+.overview-table-skeleton {
+  padding: 8px 20px;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--color-card);
+}
+.overview-table-skeleton > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 52px;
+  border-bottom: 1px solid var(--color-border-light);
+}
+@keyframes overview-pulse {
+  50% {
+    opacity: 0.4;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .overview-page :is(.overview-value-skeleton, .animate-spin) {
+    animation: none;
+  }
+}
+@media (max-width: 1199px) {
+  .overview-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .overview-summary-metric:nth-child(3) {
+    border-left: 0;
+  }
+  .overview-summary-metric:nth-child(n + 3) {
+    border-top: 1px solid var(--color-border);
+  }
+  .overview-charts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .overview-model-earnings {
+    grid-template-columns: 1fr 1fr;
+    align-items: center;
+    gap: 20px;
+  }
+}
+@media (max-width: 767px) {
+  .overview-page {
+    padding: 22px 16px;
+    gap: 24px;
+  }
+  .overview-header h1 {
+    font-size: 24px;
+  }
+  .overview-controls {
+    width: 100%;
+    gap: 6px;
+    justify-content: space-between;
+  }
+  .overview-refresh {
+    padding-inline: 6px;
+  }
+  .overview-summary-metric {
+    padding: 17px 14px;
+  }
+  .overview-summary-value {
+    font-size: clamp(21px, 6.65vw, 26px);
+  }
+  .overview-summary-detail {
+    font-size: 11px;
+  }
+  .overview-page-arrow {
+    opacity: 1;
+  }
+}
+@media (max-width: 380px) {
+  .overview-refresh span {
+    display: none;
+  }
+}
+@container (max-width: 720px) {
+  .overview-table-frame {
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    overflow: visible;
+  }
+  .overview-table,
+  .overview-table tbody {
+    display: block;
+  }
+  .overview-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .overview-table tbody {
+    overflow: hidden;
+    border: 1px solid var(--color-border);
+    border-radius: 12px;
+    background: var(--color-card);
+  }
+  .overview-table tbody + tbody {
+    margin-top: 16px;
+  }
+  .overview-table tr {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    text-align: left;
+    padding: 12px 16px;
+    gap: 12px 20px;
+  }
+  .overview-table :is(th, td) {
+    padding: 0;
+    min-width: 0;
+  }
+  .overview-table tr > th {
+    grid-column: 1 / -1;
+  }
+  .overview-table td::before {
+    content: attr(data-label);
+    display: block;
+    margin-bottom: 3px;
+    color: var(--color-text-secondary);
+    font-size: 10px;
+    font-weight: 400;
+  }
+  .overview-table .overview-model-row {
+    border-top: 0;
+  }
+  .overview-model-row td {
+    font-size: 14px;
+  }
+  .overview-page-row {
+    border-color: var(--color-border);
+  }
+  .overview-sync-notice {
+    max-width: none;
+  }
+}

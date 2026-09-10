@@ -47,13 +47,14 @@ export function PeriodSelector({ mode = "dashboard" }: PeriodSelectorProps) {
   }
 
   return (
-    <div className="flex items-center gap-1">
+    <div className="flex items-center gap-1" role="group" aria-label="Reporting period">
       {options.map((opt) => {
         const isActive = selectedKey === opt.key;
         return (
           <button
             key={opt.key}
             type="button"
+            aria-pressed={isActive}
             onClick={() => handleSelect(opt.key)}
             className={`rounded-button px-3 py-1.5 text-[13px] font-medium transition-colors ${
               isActive
