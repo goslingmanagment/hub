@@ -1,7 +1,7 @@
 # Fansly C1 — followers reconcile diagnostics
 
 Branch `feat/fansly-c1-followers`, based on main `f0a53aee` (C2a PR165).
-Decision 286, migration 0179. This is the diagnostic portion of the single C1
+Decision 287, migration 0179. This is the diagnostic portion of the single C1
 [draft PR166](https://github.com/goslingmanagment/core/pull/166), not completed C1.
 The measured cause and narrow fix remain pending.
 No production deployment, new flag, cooldown or cadence change is implied.
@@ -47,3 +47,6 @@ a separate path. Follow the [runbook](../../docs/runbooks/fansly-followers-diagn
 This branch includes C2a, whose worker starts earnings v7 reparse; any deployment
 approval must cover that scope and compatible readers. PR164 remains the earlier
 A0-only target. Nothing here starts A0's seven-day clock or authorizes A1.
+
+Main PR168 took Decision 286. The branch now merges main `940ec69f`; only
+the C1 decision/runbook numbering changed. C1 remains one draft PR.

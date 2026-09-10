@@ -1,6 +1,6 @@
 # Fansly C1 diagnostic runbook
 
-Authority: the accepted events plan §4/§6 and Decision 286. This is the
+Authority: the accepted events plan §4/§6 and Decision 287. This is the
 diagnostic portion of one C1 draft PR. Production cause counts and the narrow
 policy fix remain pending. There is no new flag, cooldown or cadence change.
 
