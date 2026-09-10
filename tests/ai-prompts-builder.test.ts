@@ -83,9 +83,9 @@ const TEMPLATES: Record<PromptFeature, string> = {
 };
 const PING_SEGMENT_INSTRUCTIONS = {
   'segment-a':
-    'Segment A. Was active, went silent: This fan has chatted before but has gone quiet. Reference specific past conversation topics, show you remember them, create curiosity, use time-based hooks ("haven\'t talked in a while, was thinking about you").',
+    'Segment A. Was active, went silent: This fan has chatted before but has gone quiet. Reference specific past conversation topics, show you remember them, create curiosity. Noticing the gap is fine in your own words, but a specific reference is what carries the message.',
   'segment-b':
-    'Segment B. Never really chatted: This fan has little or no chat history. Use a warm first impression, low-pressure opener, spark curiosity based on the model\'s personality. Do NOT claim "we\'ve never talked" or make absolute statements about conversation history; use neutral openers that work regardless.',
+    'Segment B. Barely chatted: This fan has little chat history in the loaded messages. Hook onto whatever he did write, his name, or his bio; if none of that gives you anything personal, lean on the model\'s personality for a warm, low-pressure opener. Do NOT claim "we\'ve never talked" or make absolute statements about conversation history; use neutral openers that work regardless.',
   active: 'This fan is still active. This segment should not be used for ping generation.',
 } as const;
 
@@ -218,6 +218,13 @@ function applyTemplate(template: string, replacements: Record<string, string>): 
   return template.replace(/\{(\w+)\}/g, (match, key: string) => replacements[key] ?? match);
 }
 
+// Decision 290: the chatter's saved fan name rides the {fanCustomNameLine}
+// slot (ping today); escaped like the bio, empty when absent.
+function buildFanCustomNameLine(fanCustomName: string | undefined): string {
+  const trimmed = fanCustomName?.trim() ?? '';
+  return trimmed ? `Name the chatter saved for this fan: ${escapeForPrompt(trimmed)}` : '';
+}
+
 function buildExpectedFlatSystem(input: PromptBuildInput): string {
   const preamble =
     input.feature === 'help-me' ||
@@ -236,6 +243,7 @@ function buildExpectedFlatUser(input: PromptBuildInput): string {
     fanSubscriptionSection: buildFanSubscriptionSection(input.fanSubscriptionData),
     fanDisplayName: escapeForPrompt(input.fanDisplayName),
     fanBioSection: buildFanBioSection(input.fanBio),
+    fanCustomNameLine: buildFanCustomNameLine(input.fanCustomName),
     fanProfileSection: buildFanProfileSectionOracle(input.fanProfile),
     draftSection: buildDraftSection(input.draftText),
     splitReplyInstructions: buildSplitReplyInstructions(input.feature, input.replyMode),
@@ -774,7 +782,7 @@ describe('ping segment substitution', () => {
       }),
     );
     expect(result.user).toContain('Segment B');
-    expect(result.user).toContain('Never really chatted');
+    expect(result.user).toContain('Barely chatted');
   });
 
   it('does not include segment instructions for non-ping features', () => {
@@ -1025,5 +1033,51 @@ describe('voice-script prompt', () => {
     const taskBlock = result.userBlocks[result.userBlocks.length - 1];
     expect(taskBlock?.text).toContain('Tone for this reply: flirty.');
     expect(taskBlock?.cache).toBe('none');
+  });
+});
+
+// ─── Decision 290: ping reads the fan's names ───────────────────────────
+
+describe('ping fan names (Decision 290)', () => {
+  const pingInput = (overrides: Partial<PromptBuildInput> = {}) =>
+    buildTestInput({ feature: 'ping', pingSegment: 'segment-a', draftText: undefined, ...overrides });
+
+  it('renders the username, the chatter-saved name and the bio in the Fan section', () => {
+    const result = buildPrompt(pingInput({ fanCustomName: 'Mike', fanBio: 'dad of two, into rally' }));
+    expect(result.user).toContain('## Fan\n\nFan username: TestFan\nName the chatter saved for this fan: Mike\nFan bio: dad of two, into rally\n');
+    expect(result.user).not.toContain('{fanCustomNameLine}');
+    expect(result.user).not.toContain('{fanBioSection}');
+  });
+
+  it('leaves the name line out (no placeholder residue) when the chatter saved no name', () => {
+    const result = buildPrompt(pingInput());
+    expect(result.user).toContain('Fan username: TestFan\n');
+    expect(result.user).not.toContain('Name the chatter saved for this fan');
+    expect(result.user).not.toContain('{fanCustomNameLine}');
+  });
+
+  it('escapes the chatter-saved name like every other untrusted input', () => {
+    const result = buildPrompt(pingInput({ fanCustomName: '<Mike & Co>' }));
+    expect(result.user).toContain('Name the chatter saved for this fan: &lt;Mike &amp; Co&gt;');
+    expect(result.user).not.toContain('<Mike & Co>');
+  });
+
+  it('keeps the Fan section inside the per-fan dynamic block, not the cached static prefix', () => {
+    const result = buildPrompt(pingInput({ fanCustomName: 'Mike' }));
+    const staticPrefix = result.userBlocks[0]!.text;
+    expect(staticPrefix).not.toContain('Fan username');
+    expect(staticPrefix).not.toContain('Mike');
+  });
+
+  it('is ignored by templates without the slot', () => {
+    const result = buildPrompt(buildTestInput({ feature: 'fast-reply', fanCustomName: 'Mike' }));
+    expect(result.user).not.toContain('Name the chatter saved for this fan');
+    expect(result.user).not.toContain('{fanCustomNameLine}');
+  });
+
+  it('no longer quotes an opener for the model to copy', () => {
+    const result = buildPrompt(pingInput({ fanSilenceDays: 9 }));
+    expect(result.user).not.toMatch(/hey stranger/i);
+    expect(result.user).not.toMatch(/thinking about you/i);
   });
 });

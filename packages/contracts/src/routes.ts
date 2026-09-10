@@ -2185,6 +2185,10 @@ export const aiFeatureStreamBodySchema = z.object({
     fanSpendingData: z.string().max(20_000).default(""),
     fanSubscriptionData: z.string().max(20_000).default(""),
     fanBio: z.string().max(5_000).optional(),
+    // Decision 290: the chatter's own saved name for the fan (Fansly rename,
+    // account note contentType 12002). Read by the ping template today;
+    // optional for clients released before it.
+    fanCustomName: z.string().max(200).optional(),
     pingSegment: z.enum(["segment-a", "segment-b", "active"]).optional(),
     // Whole days since the fan's latest text message, computed from the same
     // analysis (and clock) that selected pingSegment. Ping only; optional for

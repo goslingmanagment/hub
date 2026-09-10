@@ -104,6 +104,8 @@ export interface AiFeatureRequestBody {
     fanSpendingData: string;
     fanSubscriptionData: string;
     fanBio?: string;
+    /** Decision 290: the chatter's saved name for the fan (Fansly rename). */
+    fanCustomName?: string;
     pingSegment?: PingSegment;
     /** Whole days since the fan's last text message (same clock as pingSegment). */
     fanSilenceDays?: number;
@@ -326,6 +328,7 @@ export async function prepareAiFeatureStream(
     fanSubscriptionData: string;
     fanDisplayName: string;
     fanBio: string | undefined;
+    fanCustomName: string | undefined;
     pingSegment: PingSegment | undefined;
     fanSilenceDays: number | undefined;
   };
@@ -381,6 +384,7 @@ export async function prepareAiFeatureStream(
       fanSubscriptionData: policy.includesEarnings ? clientContext.fanSubscriptionData : "",
       fanDisplayName: clientContext.fanDisplayName,
       fanBio: policy.includesFanBio ? clientContext.fanBio : undefined,
+      fanCustomName: clientContext.fanCustomName,
       pingSegment: policy.usesPingSegment ? clientContext.pingSegment : undefined,
       fanSilenceDays: policy.usesPingSegment ? clientContext.fanSilenceDays : undefined,
     };
@@ -432,6 +436,8 @@ export async function prepareAiFeatureStream(
       fanBio: policy.includesFanBio
         ? await loadFanBio(app, { fanRef, platform: stored.page.platform })
         : undefined,
+      // Kernel-context platforms carry no chatter-saved fan name today.
+      fanCustomName: undefined,
       pingSegment: pingAnalysis?.segment,
       fanSilenceDays: pingAnalysis && pingAnalysis.latestFanTextAtMs !== null
         ? Math.min(
@@ -581,6 +587,7 @@ export async function prepareAiFeatureStream(
     fanSubscriptionData: contextValues.fanSubscriptionData,
     fanDisplayName: contextValues.fanDisplayName,
     fanBio: contextValues.fanBio,
+    fanCustomName: contextValues.fanCustomName,
     fanProfile: fanProfile
       ? { body: fanProfile.body, generatedAt: fanProfile.generatedAt }
       : undefined,
