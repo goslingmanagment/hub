@@ -2,7 +2,8 @@
 
 Branch `feat/fansly-w0-protocol`, based on main `f0a53aee` (Decision 285).
 Decision 287 reserves the next slot after C1 draft PR166 / Decision 286; recheck
-the numbering against main before merge. This is one W0 draft, not B0 readiness.
+the numbering against main before merge. This is [W0 draft PR167](
+https://github.com/goslingmanagment/core/pull/167), not B0 readiness.
 
 | Gate | Evidence and state |
 |---|---|

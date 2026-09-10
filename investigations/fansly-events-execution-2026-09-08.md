@@ -15,7 +15,7 @@ and evidence now live in `investigations/`.
 | C2a | [PR165](https://github.com/goslingmanagment/core/pull/165) merged, Decision 285; not deployed | Earnings identity correctness, A-B-A/replay/stale ordering; retain repair plan. |
 | C2b | Not started | Dirty/receipt shadow; daily rotation unchanged. |
 | C2c | Gated | Coverage, costs and per-fan max-age proof before selection/rotation changes. |
-| W0 | Offline diagnostic draft validated and independently reviewed, Decision 287 | 3172 unit and 10 existing-custody Postgres tests pass. Synthetic received-frame export only; live binding, fan-out, presence and six-hour continuity unmeasured. Management Session only. |
+| W0 | [PR167](https://github.com/goslingmanagment/core/pull/167) offline diagnostic draft validated and independently reviewed, Decision 287 | 3172 unit and 10 existing-custody Postgres tests pass. Synthetic received-frame export only; live binding, fan-out, presence and six-hour continuity unmeasured. Management Session only. |
 | B0 | Gated by W0 | Capture-only receiver, >=7 days with sufficient event variety. |
 | B1 | Gated by B0 and T0 | Measured delivery lag, added attempts and history fairness. |
 | A1 | Owner/calendar/evidence gated | Separate yes after A0/T0 scope and freshness gate. |
