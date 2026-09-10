@@ -160,6 +160,7 @@ describe("LIVE_CONFIG_KEYS", () => {
     // round-robin without a deploy.
     expect(LIVE_CONFIG_KEYS.has("fanslyDmHeadCatchupPageAllowlist")).toBe(true);
     expect(LIVE_CONFIG_KEYS.has("fanslyDmShadowPageAllowlist")).toBe(true);
-    expect(LIVE_CONFIG_KEYS.size).toBe(62);
+    expect(LIVE_CONFIG_KEYS.has("fanslyFanEarningsShadowPageAllowlist")).toBe(true);
+    expect(LIVE_CONFIG_KEYS.size).toBe(63);
   });
 });
