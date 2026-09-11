@@ -5,6 +5,8 @@ import { ofapiMarketingIntentSchema, type OfapiMarketingAction } from "@agency_h
 import { ofapiMarketingSafePreviewValues } from "../apps/runtime/src/services/ofapi-smart-links.ts";
 vi.mock("../apps/dashboard/src/api/ofapiMarketing.ts",()=>({marketingActions:{},useOfapiMarketing:vi.fn()}));
 vi.mock("../apps/dashboard/src/api/adminOfapiCollection.ts",()=>({useAdminOfapiCollection:vi.fn()}));
+vi.mock("../apps/dashboard/src/api/queries.ts",()=>({useAuthMe:vi.fn()}));
+vi.mock("../apps/dashboard/src/lib/useSessionWorkspace.ts",()=>({useSessionWorkspace:vi.fn()}));
 import { MarketingIntentReview } from "../apps/dashboard/src/pages/OfapiMarketing.tsx";
 const LINK="01JQZ9MY9QZHBBEMYW0AN9N8EQ";
 function render(command:OfapiMarketingAction, shared=false, external=false) {

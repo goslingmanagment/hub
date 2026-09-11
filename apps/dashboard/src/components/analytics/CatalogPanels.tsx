@@ -38,6 +38,14 @@ function money(value: number | null): string {
   return value === null ? "—" : formatMills(value);
 }
 
+function mediaResponseLimit(data: StatsMediaResponse | undefined): string | undefined {
+  if (!data?.nextCursor && !data?.bucketsTruncated) return undefined;
+  return [
+    data.nextCursor ? "Показана часть каталога из ограниченного ответа сервера." : "",
+    data.bucketsTruncated ? "Часть точек динамики не вошла в ответ: просмотры и линии графиков относятся только к полученным точкам." : "",
+  ].filter(Boolean).join(" ");
+}
+
 /**
  * Panel 3 — top media, each with the sparkline of its own buckets.
  *
@@ -71,7 +79,7 @@ export function TopMediaPanel({
         .map((bucket) => bucket.views!);
       seriesByMedia.set(media.mediaOfferRef, points);
     }
-    return (data?.top ?? []).slice(0, 15).map((entry) => ({
+    return (data?.top ?? []).map((entry) => ({
       ...entry,
       series: seriesByMedia.get(entry.mediaOfferRef) ?? [],
       missingSeriesLabel: !mediaWithHeads.has(entry.mediaOfferRef)
@@ -87,6 +95,7 @@ export function TopMediaPanel({
       title="Top media"
       verdict={verdict}
       cached={state.status === "ready" && state.refreshFailed}
+      limited={mediaResponseLimit(data)}
       footnote={
         "Rank comes from the window Fansly itself ranked; the sparkline comes from our "
         + "own per-media buckets. A missing series says whether its catalogue head is "
@@ -102,7 +111,7 @@ export function TopMediaPanel({
           reason={emptyPanelReason(verdict, "No top-media window captured for this range.")}
         />
       ) : (
-        <div className="overflow-x-auto">
+        <div role="region" aria-label="Таблица аналитики" tabIndex={0} className="max-h-[32rem] overflow-auto">
           <table className="w-full text-[13px]">
             <thead>
               <tr className="text-left text-[11px] uppercase tracking-wider text-text-muted">
@@ -171,13 +180,14 @@ export function TopTagsPanel({
     return map;
   }, [data]);
 
-  const tags = (data?.topTags ?? []).slice(0, 20);
+  const tags = (data?.topTags ?? []);
 
   return (
     <AnalyticsPanel
       title="Top FYP tags"
       verdict={verdict}
       cached={state.status === "ready" && state.refreshFailed}
+      limited={data?.nextCursor ? "Показана часть списка из ограниченного ответа сервера. Значения относятся к полученным записям." : undefined}
       footnote={
         "A blank name is a tag whose name the response's own `tags[]` sidecar did not "
         + "carry. It is left blank rather than reconstructed from the id — a fabricated "
@@ -193,7 +203,7 @@ export function TopTagsPanel({
           reason={emptyPanelReason(verdict, "No tag window captured for this range.")}
         />
       ) : (
-        <div className="overflow-x-auto">
+        <div role="region" aria-label="Таблица аналитики" tabIndex={0} className="max-h-[32rem] overflow-auto">
           <table className="w-full text-[13px]">
             <thead>
               <tr className="text-left text-[11px] uppercase tracking-wider text-text-muted">
@@ -319,6 +329,7 @@ export function ContentPerformancePanel({
       title="Content performance"
       verdict={verdict}
       cached={state.status === "ready" && state.refreshFailed}
+      limited={mediaResponseLimit(data)}
       headerExtra={(
         <span className="text-[12px] text-text-secondary">
           Avg. watch{" "}
@@ -350,7 +361,7 @@ export function ContentPerformancePanel({
           reason={emptyPanelReason(verdict, "No media captured for this page yet.")}
         />
       ) : (
-        <div className="overflow-x-auto">
+        <div role="region" aria-label="Таблица аналитики" tabIndex={0} className="max-h-[32rem] overflow-auto">
           <table className="w-full text-[13px]">
             <thead>
               <tr className="text-left text-[11px] uppercase tracking-wider text-text-muted">
@@ -422,7 +433,7 @@ export function CommentsPanel({
   const likersVerdict = coverageRequestVerdict(coverage, () => LIKERS_LANE_VERDICT);
   const data = panelData(state);
   const cached = state.status === "ready" && state.refreshFailed;
-  const perPost = (data?.perPost ?? []).slice(0, 20);
+  const perPost = (data?.perPost ?? []);
 
   return (
     <>
@@ -446,7 +457,7 @@ export function CommentsPanel({
             reason={emptyPanelReason(verdict, "No comments captured in this window.")}
           />
         ) : (
-          <div className="overflow-x-auto">
+          <div role="region" aria-label="Таблица аналитики" tabIndex={0} className="max-h-[32rem] overflow-auto">
             <table className="w-full text-[13px]">
               <thead>
                 <tr className="text-left text-[11px] uppercase tracking-wider text-text-muted">

@@ -1,7 +1,7 @@
 import { OfapiContentEvidence } from "../OfapiContentEvidence.js";
 import { OfapiStoredReads } from "../OfapiStoredReads.js";
 import { OfapiWebhookRecovery } from "../OfapiWebhookRecovery.js";
-import { Fragment, useCallback, useEffect, useId, useMemo, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router";
 import { ofapiPageHref } from "@/lib/ofapiNavigation";
 import { QueryNotice } from "@/components/shared/QueryNotice";
@@ -25,11 +25,13 @@ import {
   type OfapiCollectionSnapshot,
 } from "@/api/adminOfapiCollection";
 import { useAdminUsers } from "@/api/adminUsers";
+import { useAuthMe } from "@/api/queries";
 import { KernelApiError } from "@/api/sdk";
 import { ModalShell } from "@/components/shared/ModalShell";
 import { StatusPanel } from "@/components/shared/StatusPanel";
 import { TableSkeleton } from "@/components/shared/TableSkeleton";
 import { Tooltip } from "@/components/shared/Tooltip";
+import { useCollectionJobCustody } from "./collectionJobCustody.js";
 
 import {
   categoryLabel,
@@ -70,6 +72,7 @@ import {
   parseSelection,
   relativeAge,
   restoreDraft,
+  removeAppliedChanges,
   rowState,
   ruPlural,
   sameSettings,
@@ -233,6 +236,13 @@ type Modal =
   | { kind: "job"; category: OfapiCollectionCategory; pageId: number | null };
 
 export function CollectionTab() {
+  const auth = useAuthMe();
+  const ownerId = auth.data?.user.id;
+  if (!ownerId) return <StatusPanel title="Проверяем сессию владельца…" />;
+  return <CollectionWorkspace key={ownerId} ownerId={ownerId} />;
+}
+
+function CollectionWorkspace({ ownerId }: { ownerId: number }) {
   const snapshotQuery = useAdminOfapiCollection();
   const [search, setSearch] = useSearchParams();
   const requestedPageLabel = search.get("page");
@@ -240,12 +250,17 @@ export function CollectionTab() {
   const preview = useOfapiCollectionPreview();
   const apply = useOfapiCollectionApply();
   const jobCreate = useOfapiCollectionJobCreate();
+  const jobCustody = useCollectionJobCustody(ownerId);
+  const policyFlight = useRef(false);
 
   const [draft, setDraft] = useState<CollectionDraft | null>(readStoredDraft);
   const [expanded, setExpanded] = useState<OfapiCollectionCategory | null>(null);
   const [modal, setModal] = useState<Modal | null>(null);
   const [applyPhase, setApplyPhase] = useState<ApplyPhase>({ kind: "idle" });
   const [conflictMessage, setConflictMessage] = useState<string | null>(null);
+  const [separateJobAcknowledged, setSeparateJobAcknowledged] = useState(false);
+
+  useEffect(() => { setSeparateJobAcknowledged(false); }, [jobCustody.launch?.launchId]);
 
   const snapshot = snapshotQuery.data;
   const requestedPage = snapshot?.pages.find((page) => page.label === requestedPageLabel);
@@ -340,9 +355,12 @@ export function CollectionTab() {
   }, []);
 
   const runPreview = useCallback((body: OfapiCollectionChangeBody, onSuccess: (result: OfapiCollectionPreview) => void) => {
+    if (policyFlight.current) return;
+    policyFlight.current = true;
     preview.mutate(body, {
       onSuccess,
       onError: (error) => handleMutationError(error, "preview"),
+      onSettled: () => { policyFlight.current = false; },
     });
   }, [handleMutationError, preview]);
 
@@ -363,28 +381,45 @@ export function CollectionTab() {
   }, [runPreview, snapshot]);
 
   const runApply = useCallback((body: OfapiCollectionChangeBody, clearDraft: boolean) => {
+    if (policyFlight.current) return;
+    policyFlight.current = true;
     setApplyPhase({ kind: "idle" });
     apply.mutate(body, {
       onSuccess: (result) => {
         setModal(null);
         setApplyPhase({ kind: "saved", revision: result.revision });
         setConflictMessage(null);
-        if (clearDraft) setDraft(null);
+        if (clearDraft) setDraft((current) => removeAppliedChanges(current, body));
         toast.message(`Сохранено как v${result.revision} · ждём подтверждения чтением`);
       },
       onError: (error) => handleMutationError(error, "apply"),
+      onSettled: () => { policyFlight.current = false; },
     });
   }, [apply, handleMutationError]);
 
-  const submitJob = useCallback((body: OfapiCollectionJobBody) => {
-    jobCreate.mutate(body, {
-      onSuccess: (result) => {
-        setModal(null);
-        toast.success(`Задача ${result.id.slice(0, 8)} поставлена в очередь.`);
-      },
-      onError: (error) => handleMutationError(error, "job"),
-    });
-  }, [handleMutationError, jobCreate]);
+  async function submitJob(body: OfapiCollectionJobBody) {
+    const pageLabel = snapshot?.pages.find((page) => page.id === body.pageId)?.label;
+    if (!pageLabel) return;
+    if (await jobCustody.submit(body, pageLabel, (frozen) => jobCreate.mutateAsync(frozen))) setModal(null);
+  }
+
+  const launchNotice = (jobCustody.launch || jobCustody.storageError || jobCustody.history.length > 0) && <section role="status" className={`${cardClass} space-y-3 p-4`}>
+    <h3 className="text-sm font-semibold text-text-primary">{jobCustody.pending ? "Отправляем разовую задачу…" : jobCustody.launch?.phase === "confirmed" ? "Задача поставлена в очередь" : "Результат запуска задачи"}</h3>
+    {jobCustody.launch && <>
+      <p className="break-words text-sm text-text-primary">{jobCustody.launch.pageLabel} · {categoryLabel(jobCustody.launch.body.category)} · {jobCustody.launch.body.maxCalls} вызовов / {jobCustody.launch.body.maxCredits} кредитов / {formatBytes(jobCustody.launch.body.maxBytes)}</p>
+      {jobCustody.launch.jobId && <p className="break-all text-sm">Номер задачи: {jobCustody.launch.jobId}. Постановка в очередь ещё не означает завершение сбора.</p>}
+      {jobCustody.launch.error && <p className="text-sm text-warning">{jobCustody.launch.error}</p>}
+      {jobCustody.launch.phase === "uncertain" && <p className="text-sm text-text-secondary">Проверьте проходы сбора ниже. Повтор может создать ещё одну задачу с отдельным расходом, поэтому новый запуск заблокирован до сверки исхода. Сохранённые параметры помогут найти исходный запуск в журнале.</p>}
+      <details className="text-xs text-text-secondary"><summary className="cursor-pointer">Исходные параметры запуска</summary><pre className="mt-2 whitespace-pre-wrap break-all">{JSON.stringify({ startedAt: jobCustody.launch.startedAt, ...jobCustody.launch.body }, null, 2)}</pre></details>
+      {jobCustody.launch.phase === "uncertain" && !jobCustody.storageError && <div className="space-y-2 border-t border-border pt-3">
+        <label className="flex items-start gap-2 text-sm text-text-secondary"><input type="checkbox" className="mt-1" checked={separateJobAcknowledged} onChange={event => setSeparateJobAcknowledged(event.target.checked)} />Я проверил очередь и понимаю, что первая задача могла запуститься. Отдельная новая задача может расходовать дополнительные кредиты.</label>
+        <button type="button" className={buttonClass} disabled={!separateJobAcknowledged} onClick={() => { if (jobCustody.allowSeparateJob(separateJobAcknowledged)) setSeparateJobAcknowledged(false); }}>Разрешить отдельную новую задачу</button>
+      </div>}
+    </>}
+    {jobCustody.history.length > 0 && <details className="text-xs text-text-secondary"><summary className="cursor-pointer">Предыдущие запуски после сверки: {jobCustody.history.length}</summary><div className="mt-2 space-y-3">{jobCustody.history.map(entry => <div key={entry.launchId} className="rounded-lg border border-border p-3"><p className="break-words font-medium">{entry.pageLabel} · {categoryLabel(entry.body.category)} · {entry.jobId ? `Задача ${entry.jobId}` : entry.phase === "refused" ? "Сервер отказал" : "Исход всё ещё не подтверждён"}</p><p>Вы разрешили отдельный новый запуск после сверки. Это не подтверждает отмену предыдущего.</p><pre className="mt-2 whitespace-pre-wrap break-all">{JSON.stringify({ startedAt: entry.startedAt, ...entry.body }, null, 2)}</pre></div>)}</div></details>}
+    {jobCustody.storageError && <p role="alert" className="text-sm text-warning">{jobCustody.storageError}</p>}
+    <div className="flex flex-wrap gap-2"><button type="button" className={buttonClass} onClick={() => void snapshotQuery.refetch()}>Обновить очередь</button>{jobCustody.storageError && <button type="button" className={buttonClass} onClick={jobCustody.recover}>Восстановить запись запуска</button>}{jobCustody.launch && !jobCustody.blocked && <button type="button" className={buttonClass} onClick={jobCustody.dismiss}>Закрыть результат</button>}</div>
+  </section>;
 
   const refreshAndCompare = useCallback(() => {
     void snapshotQuery.refetch();
@@ -395,6 +430,7 @@ export function CollectionTab() {
     return (
       <div className="flex flex-col gap-4">
         <PageHeading />
+        {launchNotice}
         <TableSkeleton rows={6} columns={6} />
       </div>
     );
@@ -404,6 +440,7 @@ export function CollectionTab() {
     return (
       <div className="flex flex-col gap-4">
         <PageHeading />
+        {launchNotice}
         <StatusPanel
           tone="error"
           title="Настройки сбора недоступны"
@@ -419,7 +456,7 @@ export function CollectionTab() {
   }
 
   if (requestedPageLabel !== null && !requestedPage) {
-    return <StatusPanel title="Аккаунт для сбора не найден" description="Выбранного аккаунта нет в каталоге OnlyFans. Черновик сохранён." tone="error" action={<button type="button" className={buttonClass} onClick={() => setScope({ kind: "all" })}>Все аккаунты</button>} />;
+    return <>{launchNotice}<StatusPanel title="Аккаунт для сбора не найден" description="Выбранного аккаунта нет в каталоге OnlyFans. Черновик сохранён." tone="error" action={<button type="button" className={buttonClass} onClick={() => setScope({ kind: "all" })}>Все аккаунты</button>} /></>;
   }
 
   const pill = describePolicyPill({
@@ -438,6 +475,7 @@ export function CollectionTab() {
 
   return (
     <div className="flex flex-col gap-4 pb-24">
+      {launchNotice}
       <QueryNotice error={snapshotQuery.isError} stale retry={snapshotQuery.refetch} />
       {snapshot.backgroundPaused && (
         <PausedBanner
@@ -538,9 +576,11 @@ export function CollectionTab() {
                             view={view}
                             draftEntry={draft?.entries[draftKey(scopePageId(scope), view.entry.id)] ?? null}
                             expanded={expanded === view.entry.id}
+                            busy={busy}
+                            jobBlocked={jobCustody.blocked}
                             onToggle={() => setExpanded((current) => (current === view.entry.id ? null : view.entry.id))}
-                            onChange={(patch) => updateEntry(view, patch)}
-                            onCreateJob={() => setModal({ kind: "job", category: view.entry.id, pageId: scopePageId(scope) })}
+                            onChange={(patch) => { if (!policyFlight.current) updateEntry(view, patch); }}
+                            onCreateJob={() => { if (!jobCustody.blocked) setModal({ kind: "job", category: view.entry.id, pageId: scopePageId(scope) }); }}
                           />
                         ))}
                       </Fragment>
@@ -584,7 +624,7 @@ export function CollectionTab() {
           preview={modal.preview}
           body={modal.body}
           pending={apply.isPending}
-          onClose={() => setModal(null)}
+          onClose={() => { if (!policyFlight.current) setModal(null); }}
           onApply={() => runApply(modal.body, true)}
         />
       )}
@@ -594,7 +634,7 @@ export function CollectionTab() {
           preview={modal.preview}
           resume={modal.resume}
           pending={apply.isPending}
-          onClose={() => setModal(null)}
+          onClose={() => { if (!policyFlight.current) setModal(null); }}
           onApply={() => runApply(modal.body, false)}
         />
       )}
@@ -632,8 +672,10 @@ export function CollectionTab() {
           snapshot={snapshot}
           category={modal.category}
           initialPageId={modal.pageId}
-          pending={jobCreate.isPending}
-          onClose={() => setModal(null)}
+          pending={jobCustody.pending || jobCreate.isPending}
+          blocked={jobCustody.blocked}
+          error={jobCustody.launch?.error ?? jobCustody.storageError}
+          onClose={() => { if (!jobCustody.pending) setModal(null); }}
           onSubmit={submitJob}
         />
       )}
@@ -847,6 +889,8 @@ function CategoryRow(props: {
   view: CategoryView;
   draftEntry: DraftEntry | null;
   expanded: boolean;
+  busy?: boolean;
+  jobBlocked?: boolean;
   onToggle: () => void;
   onChange: (patch: Partial<OfapiCollectionSettings>) => void;
   onCreateJob: () => void;
@@ -944,7 +988,7 @@ function CategoryRow(props: {
                 {view.entry.id === "vault_files" ? <Link className={smallButtonClass} to={collectionMediaHref(props.snapshot.pages, scopePageId(props.scope))} onClick={event => event.stopPropagation()}>Загрузить свой файл…</Link> : <button
                   type="button"
                   className={smallButtonClass}
-                  disabled={snapshot.backgroundPaused}
+                  disabled={snapshot.backgroundPaused || props.jobBlocked}
                   onClick={(event) => {
                     event.stopPropagation();
                     props.onCreateJob();
@@ -973,6 +1017,8 @@ function CategoryRow(props: {
               jobs={jobs}
               onChange={props.onChange}
               onCreateJob={props.onCreateJob}
+              busy={props.busy ?? false}
+              jobBlocked={props.jobBlocked ?? false}
             />
           </td>
         </tr>
@@ -989,6 +1035,8 @@ export function CategoryEditor(props: {
   jobs: OfapiCollectionJob[];
   onChange: (patch: Partial<OfapiCollectionSettings>) => void;
   onCreateJob: () => void;
+  busy?: boolean;
+  jobBlocked?: boolean;
 }) {
   const { view, snapshot, draftEntry } = props;
   const legendId = useId();
@@ -996,7 +1044,7 @@ export function CategoryEditor(props: {
   const settings: OfapiCollectionSettings = draftEntry?.settings
     ?? view.settings
     ?? { ...FALLBACK_SETTINGS, pageId, category: view.entry.id };
-  const editable = view.supportsToggle && !snapshot.backgroundPaused;
+  const editable = view.supportsToggle && !snapshot.backgroundPaused && !props.busy;
   const modes = view.entry.modes;
   const overrideLabels = view.overridePageIds.map((id) => scopeLabel(id, snapshot.pages));
   const legacy = view.sources.includes("legacy_baseline");
@@ -1108,7 +1156,7 @@ export function CategoryEditor(props: {
               <button
                 type="button"
                 className={`${buttonClass} mt-3`}
-                disabled={snapshot.backgroundPaused}
+                disabled={snapshot.backgroundPaused || props.jobBlocked}
                 onClick={props.onCreateJob}
               >
                 Создать задачу…
@@ -1205,7 +1253,7 @@ export function CategoryEditor(props: {
             <button
               type="button"
               className={`${smallButtonClass} mt-2`}
-              disabled={snapshot.backgroundPaused}
+              disabled={snapshot.backgroundPaused || props.jobBlocked}
               onClick={props.onCreateJob}
             >
               Создать задачу…
@@ -1580,7 +1628,7 @@ export function PreviewModal(props: {
   const enabling = preview.changes.some((change) => change.mode !== "off");
 
   return (
-    <ModalShell title="Проверить изменения" onClose={props.onClose}>
+    <ModalShell title="Проверить изменения" onClose={props.onClose} closeDisabled={props.pending}>
       <ModalSection title={`Изменится · ${preview.changes.length}`}>
         <ul className="space-y-2">
           {preview.changes.map((change) => {
@@ -1651,7 +1699,7 @@ export function PauseModal(props: {
       : rows.map((row) => `${categoryLabel(row.category)} (${row.pages} ${ruPlural(row.pages, "страница", "страницы", "страниц")})`).join(", ");
 
   return (
-    <ModalShell title={props.resume ? "Возобновить фоновый сбор?" : "Остановить фоновый сбор?"} onClose={props.onClose}>
+    <ModalShell title={props.resume ? "Возобновить фоновый сбор?" : "Остановить фоновый сбор?"} onClose={props.onClose} closeDisabled={props.pending}>
       <ModalSection title={props.resume ? "Возобновится" : "Остановится"}>
         <dl className="grid gap-x-4 gap-y-1.5 text-[13px] sm:grid-cols-[200px_1fr]">
           <dt className="text-text-secondary">Категории по расписанию</dt>
@@ -1757,6 +1805,8 @@ export function JobModal(props: {
   category: OfapiCollectionCategory;
   initialPageId: number | null;
   pending: boolean;
+  blocked?: boolean;
+  error?: string;
   onClose: () => void;
   onSubmit: (body: OfapiCollectionJobBody) => void;
 }) {
@@ -1771,13 +1821,15 @@ export function JobModal(props: {
   const [to, setTo] = useState("");
   const [selectionRaw, setSelectionRaw] = useState("");
   const selection = parseSelection(selectionRaw);
+  const selectionInvalid = selection.length > 100 || selection.some((value) => value.length > 200);
   const fromIso = localDateTimeToIso(from);
   const toIso = localDateTimeToIso(to);
   const windowInvalid = fromIso !== null && toIso !== null && fromIso >= toIso;
-  const canSubmit = pageId !== null && !windowInvalid && !props.pending;
+  const pageAvailable = snapshot.pages.some((page) => page.id === pageId);
+  const canSubmit = pageAvailable && !windowInvalid && !selectionInvalid && !props.pending && !props.blocked;
 
   function submit() {
-    if (pageId === null) return;
+    if (!canSubmit || pageId === null) return;
     const body: OfapiCollectionJobBody = {
       ...defaultJobBody(pageId, props.category, snapshot.revision),
       maxCredits: clampInt(String(maxCredits), 1, 100000),
@@ -1798,13 +1850,14 @@ export function JobModal(props: {
     </ModalShell>
   );
   return (
-    <ModalShell title={`Разовая задача · ${categoryLabel(props.category, entry?.label)}`} onClose={props.onClose}>
+    <ModalShell title={`Разовая задача · ${categoryLabel(props.category, entry?.label)}`} onClose={props.onClose} closeDisabled={props.pending}>
       <p className="text-[13px] text-text-secondary">
         Одна ограниченная задача: сервер не отправит ни одного запроса сверх потолков ниже. Задача привязана к политике
         v{snapshot.revision}; она не включает категорию и не меняет расписание.
         {entry && entry.prerequisites.length > 0 ? ` Требуется: ${entry.prerequisites.map(prerequisiteLabel).join(", ")}.` : ""}
       </p>
-      <div className="mt-4 grid gap-3 sm:grid-cols-2">
+      {props.error && <p role="alert" className="mt-3 text-sm text-warning">{props.error}</p>}
+      <fieldset disabled={props.pending || props.blocked} className="mt-4 grid gap-3 sm:grid-cols-2">
         <label className="block sm:col-span-2">
           <span className="mb-1 block text-[12px] text-text-secondary">Страница</span>
           <select
@@ -1813,6 +1866,7 @@ export function JobModal(props: {
             className={inputClass}
           >
             {snapshot.pages.length === 0 && <option value="">OF-страниц нет</option>}
+            {pageId !== null && !pageAvailable && <option value={pageId}>Выбранная страница больше недоступна</option>}
             {snapshot.pages.map((page) => <option key={page.id} value={page.id}>{page.label}</option>)}
           </select>
         </label>
@@ -1851,8 +1905,9 @@ export function JobModal(props: {
             className="w-full rounded-lg border border-border bg-card px-2.5 py-1.5 font-mono text-[12px] text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
           />
           <span className={fieldHintClass}>{selection.length} из 100 элементов.</span>
+          {selectionInvalid && <span role="alert" className="mt-1 block text-xs text-danger">Допустимо до 100 идентификаторов по 200 символов. Список не будет обрезан.</span>}
         </label>
-      </div>
+      </fieldset>
       <div className="mt-4 flex items-center justify-end gap-2 border-t border-border-light pt-3.5">
         <button type="button" className={buttonClass} onClick={props.onClose} disabled={props.pending}>Отмена</button>
         <Tooltip focusable content="Сервер проверит потолки и версию политики; задача попадёт в очередь только при совпадении версии.">

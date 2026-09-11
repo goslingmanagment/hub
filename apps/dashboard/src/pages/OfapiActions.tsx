@@ -1,6 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState, type SetStateAction } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { useSessionWorkspace } from "@/lib/useSessionWorkspace";
 import { useSearchParams } from "react-router";
 import type { OfapiAction, OfapiActionIntent } from "@agency_hub_core/contracts";
+import { useAuthMe } from "@/api/auth";
+import { acknowledgeActionCustody, clearActionCustody, readActionCustody, saveActionCustody, settleActionCustody, type PendingOfapiAction } from "@/lib/ofapiActionCustody";
 import { useAdminOfapiCollection } from "@/api/adminOfapiCollection";
 import { accountActions, useOfapiActions } from "@/api/ofapiActions";
 import { QueryNotice } from "@/components/shared/QueryNotice";
@@ -10,7 +14,7 @@ import { ofapiAccountForms } from "./ofapi-actions/account-forms.ts";
 import { ofapiPublishingForms } from "./ofapi-actions/publishing-forms.ts";
 import { ofapiCollectionForms } from "./ofapi-actions/collection-forms.ts";
 import type { OfapiActionField } from "./ofapi-actions/form-types.ts";
-import { actionDraftMatches, buildOfapiAction, createActionAdmissionRegistry, initialActionValues, isUncertainActionFailure, reviewActionFieldValue, type FormValues } from "./ofapi-actions/form-values.ts";
+import { actionDraftMatches, buildOfapiAction, initialActionValues, isUncertainActionFailure, reviewActionFieldValue, type FormValues } from "./ofapi-actions/form-values.ts";
 
 const forms = [...ofapiCollectionForms, ...ofapiPublishingForms, ...ofapiAccountForms];
 const sections = [...new Set(forms.map(form => form.section))];
@@ -56,13 +60,20 @@ function Value({ value, depth = 0 }: { value: unknown; depth?: number }) {
   return <dl className="min-w-0 space-y-2 border-l border-border pl-3">{entries.slice(0, limit).map(([key, item]) => <div key={key}><dt className="break-all text-xs text-text-muted">{key}</dt><dd><Value value={item} depth={depth + 1} /></dd></div>)}{entries.length > limit && <div><dt className="text-xs text-text-muted">Показано {limit} из {entries.length}</dt><dd><button type="button" className={buttonClass} onClick={() => setLimit(current => current + 100)}>Показать ещё</button></dd></div>}</dl>;
 }
 
-interface PendingAction { id: string; pageId: number; label: string; operation: "prepare" | "dispatch" | "cancel" | "repair"; command: OfapiAction }
+type PendingAction = PendingOfapiAction;
 
 export function OfapiActionCommandReview({ command, fields }: { command: FormValues; fields: OfapiActionField[] }) {
   return <dl className="space-y-2 text-sm">{fields.filter(field => field.name in command).map(field => <div key={field.name}><dt className="text-text-muted">{field.label}</dt><dd><Value value={reviewActionFieldValue(field, command[field.name])} /></dd></div>)}</dl>;
 }
 
 export function OfapiActions() {
+  const auth = useAuthMe();
+  const ownerId = auth.data?.user.id;
+  if (ownerId === undefined) return <StatusPanel title="Проверяем сессию владельца…" />;
+  return <OfapiActionsWorkspace key={ownerId} ownerId={ownerId} />;
+}
+
+function OfapiActionsWorkspace({ ownerId }: { ownerId: number }) {
   const collection = useAdminOfapiCollection();
   const pages = collection.data?.pages.filter(page => page.accountId) ?? [];
   const [search, setSearch] = useSearchParams();
@@ -76,66 +87,123 @@ export function OfapiActions() {
     setSearch(next, { replace });
   }
   const history = useOfapiActions(pageId);
-  const [section, setSection] = useState(sections[0]!);
-  const [action, setAction] = useState(forms[0]!.action);
+  const queryClient = useQueryClient();
+  const action = forms.find(item => item.action === search.get("action"))?.action ?? forms[0]!.action;
   const form = forms.find(item => item.action === action)!;
-  const [values, setValues] = useState<FormValues>(() => initialActionValues(form.fields));
-  const [selectedIntent, setIntent] = useState<OfapiActionIntent | null>(null);
-  const intent = selectedIntent?.pageId === pageId ? selectedIntent : null;
-  const [busy, setBusy] = useState(false);
-  const inFlight = useRef(false);
-  const [error, setError] = useState("");
-  const [pending, setPending] = useState<PendingAction | null>(null);
+  const section = form.section;
+  type Workspace = {
+    drafts: Record<string, FormValues>;
+    intents: Record<number, OfapiActionIntent | null>;
+    pending: PendingAction | null;
+    busy: boolean;
+    error: string;
+    operationPage: string;
+    admissions: Record<string, string>;
+    storageError: string;
+  };
+  const [workspace, setWorkspace, readWorkspace] = useSessionWorkspace<Workspace>(`ofapi-actions:${ownerId}`, () => {
+    let pending: PendingAction | null = null;
+    let storageError = "";
+    try { pending = readActionCustody(ownerId); }
+    catch { storageError = "Не удалось восстановить незавершённый запрос этой вкладки. Новые действия недоступны до восстановления записи."; }
+    return { drafts: {}, intents: {}, pending, busy: false, error: "", operationPage: "", storageError,
+      admissions: pending ? { [JSON.stringify(pending.command)]: pending.id } : {} };
+  });
+  const draftKey = `${pageId}:${action}`;
+  const values = workspace.drafts[draftKey] ?? initialActionValues(form.fields);
+  const setValues = (next: FormValues) => setWorkspace(current => ({ ...current, drafts: { ...current.drafts, [draftKey]: next } }));
+  const intent = pageId === null ? null : workspace.intents[pageId] ?? null;
+  const setIntent = (next: SetStateAction<OfapiActionIntent | null>) => setWorkspace(current => {
+    if (pageId === null) return current;
+    const resolved = typeof next === "function" ? next(current.intents[pageId] ?? null) : next;
+    return { ...current, intents: { ...current.intents, [resolved?.pageId ?? pageId]: resolved } };
+  });
+  const { busy, error, pending } = workspace;
+  const setError = (message: string) => setWorkspace(current => ({ ...current, error: message }));
   const [allowNewAfterUnknown, setAllowNewAfterUnknown] = useState(false);
-  const admission = useRef(createActionAdmissionRegistry(() => crypto.randomUUID()));
+  function actionId(command: OfapiAction, renew = false) {
+    const fingerprint = JSON.stringify(command);
+    const savedId = readWorkspace().admissions[fingerprint];
+    if (savedId && !renew) return savedId;
+    const id = crypto.randomUUID();
+    setWorkspace(current => ({ ...current, admissions: { ...current.admissions, [fingerprint]: id } }));
+    return id;
+  }
   useEffect(() => {
     if (requestedPage === null && selectedPage) selectPage(selectedPage.label, true);
   }, [requestedPage, selectedPage?.label]);
   useEffect(() => {
-    reset(action);
-    // Browser Back/Forward changes the draft target too; pending request custody stays intact.
-  }, [pageId]);
-  useEffect(() => {
-    setIntent(current => {
-      if (!current || !["prepared", "dispatching"].includes(current.state)) return current;
-      const latest = history.data?.intents.find(item => item.id === current.id);
-      return latest && latest.state !== "prepared" ? latest : current;
-    });
+    const current = pageId === null ? null : readWorkspace().intents[pageId];
+    if (!current || !["prepared", "dispatching"].includes(current.state)) return;
+    const latest = history.data?.intents.find(item => item.id === current.id);
+    if (latest && latest.state !== "prepared") setIntent(latest);
   }, [history.data]);
   function reset(nextAction: string) {
-    setAction(nextAction); setValues(initialActionValues(forms.find(item => item.action === nextAction)!.fields)); setError(""); setAllowNewAfterUnknown(false);
-    // Draft editing neither cancels an accepted intent nor replaces its identity.
+    const next = new URLSearchParams(search);
+    next.set("action", nextAction);
+    setSearch(next);
+    setError("");
+    setAllowNewAfterUnknown(false);
   }
   async function run(task: () => Promise<OfapiActionIntent>, recovery?: PendingAction) {
-    if (inFlight.current) return;
-    inFlight.current = true; setBusy(true); setError("");
+    // Query-cache custody covers Back/Forward and leaving the entire route while a request is pending.
+    if (readWorkspace().busy || (recovery && readWorkspace().storageError)) return;
+    if (recovery) {
+      try { saveActionCustody(ownerId, recovery); }
+      catch { setWorkspace(current => ({ ...current, storageError: "Не удалось сохранить запрос до отправки. Разрешите хранилище браузера и повторите проверку. Действие не отправлено." })); return; }
+    }
+    const operationPage = recovery ? pages.find(page => page.id === recovery.pageId)?.label ?? `Страница ${recovery.pageId}` : selectedPage?.label ?? "";
+    setWorkspace(current => ({ ...current, busy: true, error: "", operationPage }));
     try {
       const result = await task();
-      if (result.pageId !== pageId) reset(action);
-      setIntent(result);
-      const targetPage = pages.find(page => page.id === result.pageId);
-      if (targetPage) selectPage(targetPage.label, true);
+      let storageError = "";
+      let nextPending = readWorkspace().pending;
+      try { nextPending = settleActionCustody(ownerId, result, forms.find(item => item.action === result.action)?.label ?? result.action); }
+      catch { storageError = "Результат получен, но запись восстановления не закрылась. Проверьте хранилище перед новым действием."; }
+      setWorkspace(current => ({
+        ...current,
+        intents: { ...current.intents, [result.pageId]: result },
+        admissions: { ...current.admissions, [JSON.stringify(result.command)]: result.id },
+        pending: nextPending,
+        operationPage: result.pageLabel,
+        storageError,
+      }));
       setAllowNewAfterUnknown(false);
-      setPending(current => current?.id === result.id ? null : current);
-      // A list refresh failure must not erase a received operation result.
-      void history.refetch().catch(() => undefined);
+      // A late response belongs to its original account and never navigates the current screen.
+      void queryClient.invalidateQueries({ queryKey: ["admin", "ofapi-actions", result.pageId] });
     } catch (reason) {
-      if (recovery && isUncertainActionFailure(reason)) setPending(recovery);
-      setError(reason instanceof Error ? reason.message : "Не удалось получить результат");
-    } finally { inFlight.current = false; setBusy(false); }
+      // A later refusal cannot settle an earlier lost response with the same ID.
+      if (recovery && !isUncertainActionFailure(reason) && readWorkspace().pending?.id !== recovery.id) {
+        try { clearActionCustody(ownerId, recovery.id); } catch { /* Retain the marker conservatively on reload. */ }
+      }
+      setWorkspace(current => ({ ...current,
+        pending: recovery && isUncertainActionFailure(reason) ? recovery : current.pending,
+        error: reason instanceof Error ? reason.message : "Не удалось получить результат",
+      }));
+    } finally { setWorkspace(current => ({ ...current, busy: false })); }
   }
   async function prepare() {
-    if (!pageId || pending) return;
+    if (!pageId || pending || workspace.storageError) return;
     let command: OfapiAction;
     try { command = buildOfapiAction(form, pageId, values); }
     catch (reason) { setError(reason instanceof Error ? reason.message : "Проверьте поля"); return; }
-    const id = admission.current.forCommand(command);
+    const id = actionId(command);
     await run(() => accountActions.prepare(id, command), { id, pageId, label: form.label, command, operation: "prepare" });
   }
   function mutateIntent(operation: "dispatch" | "cancel" | "repair") {
-    if (!intent || pending) return;
+    if (!intent || (pending && !(operation === "repair" && pending.id === intent.id)) || workspace.storageError) return;
     const target = intent;
     void run(() => accountActions[operation](target.id), { id: target.id, pageId: target.pageId, label: forms.find(item => item.action === target.action)?.label ?? target.action, command: target.command, operation });
+  }
+  function acknowledgeUnknown() {
+    const current = readWorkspace();
+    if (current.busy || !current.pending || current.pending.outcome !== "indeterminate" || !allowNewAfterUnknown) return;
+    const reviewed = current.pending;
+    try { acknowledgeActionCustody(ownerId, reviewed.id); }
+    catch { setError("Не удалось сохранить проверку результата. Запрос остаётся незавершённым."); return; }
+    actionId(reviewed.command, true);
+    setWorkspace(saved => ({ ...saved, pending: null, intents: { ...saved.intents, [reviewed.pageId]: null } }));
+    setAllowNewAfterUnknown(false);
   }
   const primaryNames = new Set(["text", "mediaFiles", "previews", "priceCents", "scheduledDate", "saveForLater", "userIds", "userLists"]);
   const advancedFields = form.fields.length > 8 ? form.fields.filter(field => !field.required && !primaryNames.has(field.name)) : [];
@@ -147,11 +215,17 @@ export function OfapiActions() {
   return <div className="mx-auto max-w-6xl space-y-6 p-4 text-text-primary sm:p-6">
     <header><h1 className="text-2xl font-semibold">Управление OnlyFans</h1><p className="mt-1 text-sm text-text-secondary">Действия с аккаунтом, контентом и фанами. История запросов сохраняется здесь.</p></header>
     <QueryNotice error={collection.isError} stale={collection.data !== undefined} retry={() => collection.refetch()} />
-    <label className="block max-w-md space-y-2"><span className="text-sm">Аккаунт</span><select className={fieldClass} value={selectedPage?.label ?? ""} disabled={busy || !pages.length} onChange={event => { selectPage(event.target.value); reset(action); }}>{!pageId && <option value="">Выберите доступную страницу</option>}{pages.map(page => <option key={page.id} value={page.label}>{page.label} · {page.accountId}</option>)}</select></label>
+    <label className="block max-w-md space-y-2"><span className="text-sm">Аккаунт</span><select className={fieldClass} value={selectedPage?.label ?? ""} disabled={busy || !pages.length} onChange={event => { selectPage(event.target.value); setError(""); setAllowNewAfterUnknown(false); }}>{!pageId && <option value="">Выберите доступную страницу</option>}{pages.map(page => <option key={page.id} value={page.label}>{page.label} · {page.accountId}</option>)}</select></label>
     {collection.isLoading && !collection.data && <StatusPanel title="Загружаем доступные аккаунты…" />}
     {collection.data && !pageId && <StatusPanel title={requestedPage !== null ? "Аккаунт из ссылки недоступен" : "Нет привязанных аккаунтов OFAPI"} description="Выберите доступную страницу. Для выполнения действий нужна действующая привязка OFAPI." />}
-    {pending && <section role="alert" className="space-y-3 rounded-xl border border-amber-500 p-4"><p>Не получен ответ: {pending.label}. Проверьте сохранённое состояние этого запроса перед следующим действием.</p><p className="break-all text-xs text-text-muted">{pending.id}</p><div className="flex flex-wrap gap-2"><button type="button" className={buttonClass} disabled={busy} onClick={() => void run(() => accountActions.get(pending.id))}>Найти сохранённый запрос</button>{pending.operation === "prepare" && <button type="button" className={buttonClass} disabled={busy} onClick={() => void run(() => accountActions.prepare(pending.id, pending.command), pending)}>Повторить сохранение с тем же ID</button>}</div><p className="text-xs text-text-muted">Проверка и сохранение черновика не выполняют действие в OnlyFans.</p></section>}
-    <nav className="flex flex-wrap gap-2" aria-label="Разделы управления">{sections.map(item => <button key={item} type="button" disabled={busy} aria-pressed={item === section} className={`${buttonClass} ${item === section ? "bg-accent text-white" : ""}`} onClick={() => { setSection(item); reset(forms.find(entry => entry.section === item)!.action); }}>{item}</button>)}</nav>
+    {workspace.storageError && <section role="alert" className="space-y-2 rounded-xl border border-warning-dark p-4 text-sm"><p>{workspace.storageError}</p><button type="button" className={buttonClass} disabled={busy} onClick={() => {
+      try { const restored = readActionCustody(ownerId); setWorkspace(current => ({ ...current, pending: restored ?? current.pending, storageError: "" })); }
+      catch { /* Keep the readable error and the preserved record. */ }
+    }}>Повторить чтение сохранённого запроса</button></section>}
+    {pending && <section role="alert" className="space-y-3 rounded-xl border border-amber-500 p-4"><p>{pending.outcome ? stateLabels[pending.outcome] : "Не получен ответ"}: {pages.find(page => page.id === pending.pageId)?.label ?? `Страница ${pending.pageId}`} · {pending.label}. Проверьте сохранённое состояние этого запроса перед следующим действием.</p><p className="break-all text-xs text-text-muted">{pending.id}</p><div className="flex flex-wrap gap-2"><button type="button" className={buttonClass} disabled={busy} onClick={() => void run(() => accountActions.get(pending.id))}>Найти сохранённый запрос</button>{pending.operation === "prepare" && !pending.outcome && <button type="button" className={buttonClass} disabled={busy} onClick={() => void run(() => accountActions.prepare(pending.id, pending.command), pending)}>Повторить сохранение с тем же ID</button>}</div><p className="text-xs text-text-muted">Проверка и сохранение черновика не выполняют действие в OnlyFans.</p>{pending.outcome === "indeterminate" && <div className="space-y-2 border-t border-border pt-3"><label className="flex items-start gap-2 text-sm"><input type="checkbox" checked={allowNewAfterUnknown} disabled={busy} onChange={event => setAllowNewAfterUnknown(event.target.checked)} />Я проверил результат в OnlyFans и хочу подготовить отдельное новое действие.</label><button type="button" className={buttonClass} disabled={busy || !allowNewAfterUnknown} onClick={acknowledgeUnknown}>Завершить проверку и разрешить новое действие</button><p className="text-xs text-text-muted">Неизвестный результат останется в истории. Прежний запрос повторно не отправляется.</p></div>}</section>}
+    {busy && <p role="status" className="rounded-lg border border-border bg-card p-3 text-sm">{workspace.operationPage} · ожидаем ответ. Вернувшись на страницу, вы увидите сохранённый результат.</p>}
+    <label className="block space-y-2 md:hidden"><span className="text-sm">Раздел управления</span><select className={fieldClass} value={section} disabled={busy} onChange={event => reset(forms.find(item => item.section === event.target.value)!.action)}>{sections.map(item => <option key={item}>{item}</option>)}</select></label>
+    <nav className="hidden flex-wrap gap-2 md:flex" aria-label="Разделы управления">{sections.map(item => <button key={item} type="button" disabled={busy} aria-pressed={item === section} className={`${buttonClass} ${item === section ? "bg-accent text-white" : ""}`} onClick={() => { reset(forms.find(entry => entry.section === item)!.action); }}>{item}</button>)}</nav>
     <div className="grid min-w-0 gap-6 lg:grid-cols-2">
       <form className="min-w-0 space-y-4 rounded-xl border border-border bg-card p-5" onSubmit={event => { event.preventDefault(); void prepare(); }}>
         <h2 className="font-semibold">1. Параметры действия</h2>
@@ -159,11 +233,11 @@ export function OfapiActions() {
         <p className="text-sm text-text-secondary">{form.description}</p>
         <OfapiActionFields fields={mainFields} values={values} disabled={busy} update={next => { setValues(next); setAllowNewAfterUnknown(false); }} />
         {advancedFields.length > 0 && <details key={action} className="rounded-lg border border-border p-3"><summary className="cursor-pointer text-sm">Дополнительные параметры ({advancedFields.length})</summary><div className="mt-4 space-y-4"><OfapiActionFields fields={advancedFields} values={values} disabled={busy} update={next => { setValues(next); setAllowNewAfterUnknown(false); }} /></div></details>}
-        <button type="submit" disabled={busy || !pageId || pending !== null} className={`${buttonClass} bg-accent text-white`}>{busy ? "Обрабатываем…" : "Проверить действие"}</button>
+        <button type="submit" disabled={busy || !pageId || pending !== null || Boolean(workspace.storageError)} className={`${buttonClass} bg-accent text-white`}>{busy ? "Обрабатываем…" : "Проверить действие"}</button>
       </form>
       <section className="min-w-0 space-y-4 rounded-xl border border-border bg-card p-5" aria-label="Результат действия">
         <h2 className="font-semibold">2. Проверка и результат</h2>
-        {error && <p role="alert" className="rounded-lg border border-red-500 p-3 text-sm">{error}</p>}
+        {error && <p role="alert" className="rounded-lg border border-red-500 p-3 text-sm">{workspace.operationPage && `${workspace.operationPage} · `}{error}</p>}
         {intent ? <>
           <h2 className="font-semibold">{reviewedForm?.label ?? intent.action}</h2>
           <p className="break-all text-sm">{intent.pageLabel} · {intent.accountId}</p>
@@ -173,18 +247,18 @@ export function OfapiActions() {
           {!bindingMatches && <p role="alert" className="text-sm text-red-600">Привязка аккаунта изменилась. Выполнение этого запроса недоступно.</p>}
           <p className="text-sm">Резерв запроса: {intent.estimatedCredits} credits. Фактический расход: {intent.actualCredits ?? "ещё не сообщён"}.</p>
           <OfapiActionCommandReview command={intent.command as unknown as FormValues} fields={reviewedForm?.fields ?? []} />
-          {intent.state === "prepared" && !pending && <div className="flex flex-wrap gap-2"><button type="button" disabled={busy || !bindingMatches} className={`${buttonClass} bg-accent text-white`} onClick={() => mutateIntent("dispatch")}>Выполнить сохранённый запрос</button><button type="button" disabled={busy} className={buttonClass} onClick={() => mutateIntent("cancel")}>Отменить до отправки</button></div>}
+          {intent.state === "prepared" && !pending && <div className="flex flex-wrap gap-2"><button type="button" disabled={busy || !bindingMatches || Boolean(workspace.storageError)} className={`${buttonClass} bg-accent text-white`} onClick={() => mutateIntent("dispatch")}>Выполнить сохранённый запрос</button><button type="button" disabled={busy} className={buttonClass} onClick={() => mutateIntent("cancel")}>Отменить до отправки</button></div>}
           {intent.state === "indeterminate" && <p className="text-sm">Проверьте состояние в OnlyFans перед созданием нового действия. Этот запрос повторно не отправляется.</p>}
           {intent.state === "confirmed" && (intent.action.startsWith("campaign_") || intent.action.startsWith("queue_") || intent.action === "payout_withdrawal_request" || "scheduledDate" in intent.command) && <p className="text-xs text-text-muted">Провайдер подтвердил запрос. Доставка рассылки, публикация по расписанию и перевод выплаты могут завершиться позже.</p>}
           {intent.errorCode && <p className="text-sm">Причина: {intent.errorCode}</p>}
-          <div className="flex flex-wrap gap-2"><button type="button" disabled={busy} className={buttonClass} onClick={() => void run(() => accountActions.get(intent.id))}>Обновить сохранённый результат</button>{intent.responseObservationId !== null && (intent.state === "indeterminate" || intent.accountingState === "pending") && <button type="button" disabled={busy || pending !== null} className={buttonClass} onClick={() => mutateIntent("repair")}>Обработать сохранённый ответ ещё раз</button>}</div>
+          <div className="flex flex-wrap gap-2"><button type="button" disabled={busy} className={buttonClass} onClick={() => void run(() => accountActions.get(intent.id))}>Обновить сохранённый результат</button>{intent.responseObservationId !== null && (intent.state === "indeterminate" || intent.accountingState === "pending") && <button type="button" disabled={busy || (pending !== null && pending.id !== intent.id)} className={buttonClass} onClick={() => mutateIntent("repair")}>Обработать сохранённый ответ ещё раз</button>}</div>
           {intent.responseData !== null && <div className="max-h-96 overflow-auto text-sm"><Value value={intent.responseData} /></div>}
           {intent.responseMeta !== null && <div className="text-xs"><p>Продолжение списка</p><Value value={intent.responseMeta} /></div>}
-          {canStartNew && <div className="space-y-2 border-t border-border pt-3">{intent.state === "indeterminate" && <label className="flex items-start gap-2 text-sm"><input type="checkbox" checked={allowNewAfterUnknown} disabled={busy} onChange={event => setAllowNewAfterUnknown(event.target.checked)} />Я проверил результат в OnlyFans и хочу подготовить отдельное новое действие.</label>}<button type="button" className={buttonClass} disabled={busy || (intent.state === "indeterminate" && !allowNewAfterUnknown)} onClick={() => { admission.current.startNew(intent.command); setIntent(null); setAllowNewAfterUnknown(false); }}>Подготовить ещё одно такое действие</button></div>}
+          {canStartNew && <div className="space-y-2 border-t border-border pt-3">{intent.state === "indeterminate" && <label className="flex items-start gap-2 text-sm"><input type="checkbox" checked={allowNewAfterUnknown} disabled={busy} onChange={event => setAllowNewAfterUnknown(event.target.checked)} />Я проверил результат в OnlyFans и хочу подготовить отдельное новое действие.</label>}<button type="button" className={buttonClass} disabled={busy || (intent.state === "indeterminate" && !allowNewAfterUnknown)} onClick={() => { actionId(intent.command, true); setIntent(null); setAllowNewAfterUnknown(false); }}>Подготовить ещё одно такое действие</button></div>}
         </> : <p className="text-sm text-text-secondary">Заполните поля и проверьте действие. Перед выполнением здесь появятся аккаунт, выбранные параметры и оценка запроса.</p>}
       </section>
     </div>
-    <section className="space-y-3"><h2 className="font-semibold">Последние действия</h2>
+    <section className="space-y-3"><h2 className="font-semibold">Последние действия{history.data ? ` · ${history.data.intents.length} в ответе` : ""}</h2>
       {pageId !== null && <QueryNotice error={history.isError} stale={history.data !== undefined} retry={() => history.refetch()} />}
       {pageId !== null && history.isLoading && !history.data && <StatusPanel title="Загружаем историю действий…" />}
       {history.data && !history.isError && !history.data.intents.length && <StatusPanel title="Действий для этого аккаунта пока нет" description="После проверки параметров запрос появится здесь." />}

@@ -1,6 +1,7 @@
 import { Fragment, useState } from "react";
 import { useAdminIncidents } from "@/api/queries";
 import { EventDetailPanel, getEventDisplaySeverity, SEVERITY_STYLES } from "@/components/shared/EventDetailPanel";
+import { QueryNotice } from "@/components/shared/QueryNotice";
 import { QuerySection } from "@/components/shared/QuerySection";
 import { formatRelativeTime } from "@/lib/format";
 
@@ -44,11 +45,15 @@ export function IncidentsPage() {
     <div className="p-4 md:p-0">
       <div className="mb-5">
         <h1 className="text-xl font-extrabold text-text-primary">Incidents</h1>
-        <p className="text-sm text-text-muted mt-1">Sync anomalies aggregated from events</p>
+        <p className="text-sm text-text-muted mt-1">Предупреждения, ошибки и аномалии синхронизации. Сводка и журнал ниже показывают разные интервалы.</p>
       </div>
 
+      <QueryNotice error={isError && data !== undefined} stale retry={refetch} />
       {/* Summary cards */}
       {displaySummary.length > 0 && (
+        <section aria-label="Сводка инцидентов за 7 дней">
+        <h2 className="mb-2 text-sm font-semibold text-text-primary">Частые инциденты за последние 7 дней</h2>
+        <p className="mb-3 text-xs text-text-muted">До 20 групп по частоте. Числа относятся ко всем страницам и не меняются от фильтра журнала.</p>
         <div className="grid grid-cols-2 gap-3 mb-6 sm:grid-cols-3 lg:grid-cols-4">
           {displaySummary.map((s) => {
             const isActive = s.code !== null && codeFilter === s.code;
@@ -82,6 +87,7 @@ export function IncidentsPage() {
             );
           })}
         </div>
+        </section>
       )}
 
       {/* Active filter indicator */}
@@ -100,9 +106,11 @@ export function IncidentsPage() {
         </div>
       )}
 
-      {/* Incidents table */}
-      <QuerySection title="Инциденты синхронизации" hasData={data !== undefined} isError={isError} retry={refetch}>
-      <section className="overflow-x-auto rounded-xl border border-border bg-card">
+      {/* The seven-day summary is independent from this bounded all-time list. */}
+      <h2 className="mb-2 text-sm font-semibold text-text-primary">Журнал инцидентов</h2>
+      <p className="mb-3 text-xs text-text-muted">До 100 последних событий за всё время{codeFilter ? ` с кодом ${codeFilter}` : ""}. Это ограниченный срез, а не число из карточек сводки. Обновление каждые 30 секунд.</p>
+      <QuerySection title="Инциденты синхронизации" hasData={data !== undefined} isError={isError && data === undefined} retry={refetch}>
+      <section role="region" aria-label="Журнал инцидентов" tabIndex={0} className="overflow-x-auto rounded-xl border border-border bg-card">
         <table className="w-full border-collapse">
           <thead>
             <tr className="bg-hover-alt">

@@ -1,4 +1,4 @@
-import { ofapiMarketingActionSchema, type OfapiMarketingAction, type OfapiMarketingResource, type OfapiMarketingMetric, type OfapiMarketingPreviewValue } from "@agency_hub_core/contracts";
+import { KernelApiError, ofapiMarketingActionSchema, type OfapiMarketingAction, type OfapiMarketingResource, type OfapiMarketingMetric, type OfapiMarketingPreviewValue } from "@agency_hub_core/contracts";
 
 export const actionLabels: Record<OfapiMarketingAction["action"], string> = {
   smart_link_create: "Создать Smart Link", smart_link_delete: "Удалить Smart Link",
@@ -88,6 +88,22 @@ export function marketingFlag(label:string,value:boolean|null|undefined) {
   return `${label}: ${value === true ? "да" : value === false ? "нет" : "неизвестно"}`;
 }
 export function marketingPixelCanTest(platform:string|null) {return platform !== "creatortraffic";}
+
+export function marketingMatches(term: string, ...values: unknown[]) {
+  const needle = term.trim().toLocaleLowerCase();
+  return !needle || values.some(value => value != null && String(value).toLocaleLowerCase().includes(needle));
+}
+
+/** Freeze once before prepare; a lost reply must reuse this ID and exact command. */
+export function createMarketingPreparation(form: MarketingForm, id: string) {
+  return { id, command: structuredClone(buildMarketingCommand(form)) };
+}
+
+export function marketingFailureUncertain(error: unknown, previouslyUncertain = false) {
+  // A later refusal can concern changed access or policy before the server reads
+  // the original intent. It cannot prove that the first request did not execute.
+  return previouslyUncertain || !(error instanceof KernelApiError && error.category !== "contract" && error.status !== null && error.status >= 400 && error.status < 500);
+}
 
 export const marketingPreviewFieldLabels:Record<OfapiMarketingPreviewValue["field"],string>={
   name:"Название",link_type:"Предложение",free_trial_days:"Дней бесплатного доступа",tags:"Теги",label:"Название пикселя",platform:"Платформа",pixel_id:"ID рекламной платформы",

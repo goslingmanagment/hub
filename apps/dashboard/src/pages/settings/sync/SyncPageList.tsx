@@ -87,9 +87,9 @@ function PageCard({
   return (
     <div className="rounded-xl border border-border bg-card px-5 py-4">
       {/* Header */}
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <span className="text-sm font-semibold text-text-primary">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <span className="min-w-0 break-words [overflow-wrap:anywhere] text-sm font-semibold text-text-primary">
             {page.pageLabel}
           </span>
           <PlatformBadge platform={page.platform} />
@@ -102,7 +102,7 @@ function PageCard({
           onClick={onSelect}
           className="text-xs font-medium text-accent hover:underline shrink-0"
         >
-          View details &rarr;
+          Подробнее &rarr;
         </button>
       </div>
 
@@ -124,7 +124,8 @@ export function SyncPageList({
 }: {
   onSelectPage: (pageLabel: string) => void;
 }) {
-  const { data, isLoading, isError, error } = useSyncOverview();
+  const { data, isLoading, isError, error, refetch } = useSyncOverview();
+  const retry = <button type="button" className="text-sm text-accent underline" onClick={() => void refetch()}>Повторить запрос</button>;
 
   if (isLoading && !data) {
     return <p className="text-sm text-text-muted">Loading sync status...</p>;
@@ -136,6 +137,7 @@ export function SyncPageList({
         title="Sync status failed to load"
         description={error instanceof Error ? error.message : "The sync overview could not be fetched."}
         tone="error"
+        action={retry}
       />
     );
   }
@@ -146,7 +148,7 @@ export function SyncPageList({
     return (
       <div className="space-y-3">
         {isError && data && (
-          <StaleDataNotice error={error} />
+          <div className="space-y-2"><StaleDataNotice error={error} />{retry}</div>
         )}
         <EmptyState
           title="No pages configured"
@@ -159,7 +161,7 @@ export function SyncPageList({
   return (
     <div className="space-y-3">
       {isError && data && (
-        <StaleDataNotice error={error} />
+        <div className="space-y-2"><StaleDataNotice error={error} />{retry}</div>
       )}
       {data?.diagnosis && (
         <SyncDiagnosisNotice diagnosis={data.diagnosis} />

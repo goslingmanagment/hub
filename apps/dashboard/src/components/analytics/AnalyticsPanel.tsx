@@ -47,6 +47,7 @@ export function AnalyticsPanel({
   verdict,
   headerExtra,
   footnote,
+  limited,
   cached = false,
   children,
 }: {
@@ -55,6 +56,7 @@ export function AnalyticsPanel({
   verdict?: CoverageVerdict;
   headerExtra?: ReactNode;
   footnote?: string;
+  limited?: string | undefined;
   /** True when this panel's own data is cached and its refresh failed. */
   cached?: boolean;
   children: ReactNode;
@@ -81,11 +83,13 @@ export function AnalyticsPanel({
       {subtitle ? (
         <p className="mb-3 text-[12px] text-text-secondary">{subtitle}</p>
       ) : null}
+      {limited && <p role="status" className="mb-3 rounded-lg border border-warning-dark/40 p-3 text-xs text-warning-dark">{limited}</p>}
       {children}
       {footnote ? (
-        <p className="mt-3 border-t border-border pt-3 text-[11px] leading-relaxed text-text-muted">
-          {footnote}
-        </p>
+        <details className="mt-3 border-t border-border pt-3 text-[11px] leading-relaxed text-text-muted">
+          <summary className="cursor-pointer text-text-secondary">Методика и ограничения</summary>
+          <p className="mt-2">{footnote}</p>
+        </details>
       ) : null}
     </section>
   );
@@ -106,7 +110,7 @@ export function AnalyticsEmpty({ reason }: { reason: string }) {
  *  and only one of them is a measurement. */
 export function AnalyticsLoading({ what = "Loading…" }: { what?: string }) {
   return (
-    <div className="rounded-lg border border-dashed border-border px-4 py-8 text-center text-[13px] text-text-muted">
+    <div role="status" className="rounded-lg border border-dashed border-border px-4 py-8 text-center text-[13px] text-text-muted">
       {what}
     </div>
   );

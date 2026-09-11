@@ -309,8 +309,9 @@ export function useCreateFanNote(pageLabel: string, platformUserId: string) {
     meta: { suppressGlobalError: true },
     mutationFn: (body: { body: string }) =>
       kernel.createFanNote({ params: { pageLabel, platformUserId }, body }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["pageFanDetail", pageLabel, platformUserId] });
+    onMutate: () => ({ pageLabel, platformUserId }),
+    onSuccess: (_result, _variables, origin) => {
+      qc.invalidateQueries({ queryKey: ["pageFanDetail", origin.pageLabel, origin.platformUserId] });
     },
   });
 }

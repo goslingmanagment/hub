@@ -1,6 +1,10 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router";
 import { useAdminOfapiStoredReads } from "@/api/adminOfapiStoredReads";
 import { formatMills } from "@/lib/format";
+import { resolveOfapiPage } from "@/lib/ofapiNavigation";
+import { QueryNotice } from "@/components/shared/QueryNotice";
+import { StatusPanel } from "@/components/shared/StatusPanel";
 const label: Record<string, string> = {
   ofapi_read_user_lists: "Пользовательские списки",
   ofapi_read_user_list: "Сведения о списке",
@@ -28,14 +32,23 @@ export function OfapiStoredReads({
 }: {
   pages: { id: number; label: string }[];
 }) {
-  const [selectedPage, setSelectedPage] = useState<number | null>(null),
-    [operation, setOperation] = useState(""),
-    [snapshotId, setSnapshotId] = useState<string | null>(null);
-  const pageId = selectedPage ?? pages[0]?.id,
-    query = useAdminOfapiStoredReads(pageId, operation);
-  const snapshot =
-    query.data?.snapshots.find((row) => row.id === snapshotId) ??
-    query.data?.snapshots[0];
+  const [search, setSearch] = useSearchParams();
+  const selectedPage = resolveOfapiPage(pages, search.get("page"));
+  const pageId = selectedPage?.id;
+  const operation = search.get("storedOperation") ?? "";
+  const snapshotId = search.get("storedSnapshot");
+  const term = search.get("storedQuery") ?? "";
+  const [shown, setShown] = useState(100);
+  const query = useAdminOfapiStoredReads(pageId, operation);
+  const snapshot = snapshotId === null ? query.data?.snapshots[0] : query.data?.snapshots.find(row => row.id === snapshotId);
+  function update(values: Record<string, string | null>, replace = false) {
+    const next = new URLSearchParams(search);
+    for (const [key, value] of Object.entries(values)) value === null ? next.delete(key) : next.set(key, value);
+    setSearch(next, { replace });
+  }
+  useEffect(() => { setShown(100); }, [snapshot?.id, term]);
+  useEffect(() => { if (snapshotId === null && snapshot) update({ storedSnapshot: snapshot.id }, true); }, [snapshotId, snapshot?.id]);
+  const rows = snapshot?.items.filter(row => !term.trim() || JSON.stringify(row).toLocaleLowerCase().includes(term.trim().toLocaleLowerCase())) ?? [];
   const listPreview = [
     "ofapi_read_user_list",
     "ofapi_read_user_lists",
@@ -46,7 +59,7 @@ export function OfapiStoredReads({
   ].includes(snapshot?.operation ?? "");
   return (
     <details className="rounded-xl border border-border bg-card p-4">
-      <summary className="cursor-pointer text-sm font-semibold text-text-primary">
+      <summary className="min-h-10 cursor-pointer text-sm font-semibold text-text-primary focus-visible:outline-2">
         Сохранённые данные и участники списков
       </summary>
       <div className="mt-3 space-y-3 text-sm text-text-secondary">
@@ -57,29 +70,29 @@ export function OfapiStoredReads({
         <div className="flex flex-wrap gap-2">
           <select
             aria-label="Страница сохранённых данных"
-            className="rounded border border-border bg-card p-2"
-            value={pageId ?? ""}
+            className="min-h-10 min-w-0 max-w-full rounded border border-border bg-card p-2"
+            value={selectedPage?.label ?? ""}
             onChange={(event) => {
-              setSelectedPage(Number(event.target.value));
-              setSnapshotId(null);
+              update({ page: event.target.value, storedSnapshot: null });
             }}
           >
+            {!selectedPage && <option value="">Выберите страницу</option>}
             {pages.map((page) => (
-              <option key={page.id} value={page.id}>
+              <option key={page.id} value={page.label}>
                 {page.label}
               </option>
             ))}
           </select>
           <select
             aria-label="Набор сохранённых данных"
-            className="rounded border border-border bg-card p-2"
+            className="min-h-10 min-w-0 max-w-full rounded border border-border bg-card p-2"
             value={operation}
             onChange={(event) => {
-              setOperation(event.target.value);
-              setSnapshotId(null);
+              update({ storedOperation: event.target.value || null, storedSnapshot: null });
             }}
           >
             <option value="">Все наборы · последние 25 ответов</option>
+            {operation && !query.data?.catalog.some(item => item.operation === operation) && <option value={operation}>{operation}</option>}
             {query.data?.catalog.map((item) => (
               <option key={item.operation} value={item.operation}>
                 {label[item.operation] ?? item.id}
@@ -95,11 +108,10 @@ export function OfapiStoredReads({
             Обновить из Hub
           </button>
         </div>
-        {query.isError && (
-          <p role="alert">Не удалось прочитать данные. Повторите чтение.</p>
-        )}
-        {query.isLoading && <p>Чтение сохранённых данных…</p>}
-        {query.data && !query.data.snapshots.length && (
+        {!selectedPage && <StatusPanel title="Выберите страницу для сохранённых данных" description="Для просмотра отдельного ответа нужен доступный аккаунт. Страница из ссылки не подменяется первым аккаунтом." />}
+        <QueryNotice error={query.isError} stale={query.data !== undefined} retry={query.refetch} />
+        {pageId !== undefined && query.isLoading && !query.data && <p role="status">Чтение сохранённых данных…</p>}
+        {query.data && !query.isError && !query.data.snapshots.length && (
           <p>
             Сохранённых ответов пока нет. Нужный сбор разрешает владелец
             отдельной политикой или разовым заданием.
@@ -110,8 +122,9 @@ export function OfapiStoredReads({
             aria-label="Сохранённый ответ"
             className="max-w-full rounded border border-border bg-card p-2"
             value={snapshot?.id ?? ""}
-            onChange={(event) => setSnapshotId(event.target.value)}
+            onChange={(event) => update({ storedSnapshot: event.target.value })}
           >
+            {!snapshot && <option value="">Ответ из ссылки не найден среди последних 25</option>}
             {query.data.snapshots.map((row) => (
               <option key={row.id} value={row.id}>
                 {label[row.operation] ?? row.operation} · {row.observedAt} ·{" "}
@@ -120,6 +133,8 @@ export function OfapiStoredReads({
             ))}
           </select>
         )}
+        {snapshotId !== null && query.data && !snapshot && <p role="status" className="text-warning">Выбранного ответа нет в текущей выборке. Выберите сохранённый ответ из списка выше.</p>}
+        {query.data?.snapshots.length === 25 && <p className="text-xs text-text-muted">Показаны последние 25 ответов. Более ранние ответы могут не попасть в выборку; уточните набор данных.</p>}
         {snapshot && (
           <>
             <p>
@@ -132,7 +147,7 @@ export function OfapiStoredReads({
             <p>
               Окно: {snapshot.window.from ?? "не задано"} —{" "}
               {snapshot.window.to ?? "не задано"}. Полнота ответа:{" "}
-              {snapshot.coverage.state}
+              {{ complete: "полный ответ", partial: "частичный ответ", unknown: "неизвестна" }[snapshot.coverage.state]}
               {snapshot.coverage.reason ? ` · ${snapshot.coverage.reason}` : ""}
               .{" "}
               {snapshot.coverage.nextQuery
@@ -161,7 +176,10 @@ export function OfapiStoredReads({
                 ответе не удаляет его из списка.
               </p>
             )}
-            <div className="overflow-x-auto">
+            <label className="grid gap-1 text-xs">Поиск в выбранном ответе<input className="min-h-10 rounded border border-border bg-card px-3 py-2 text-sm" type="search" value={term} onChange={event => update({ storedQuery: event.target.value || null }, true)} placeholder="ID, имя или текст" /></label>
+            <p className="text-xs">Строк в ответе: {snapshot.items.length}. Найдено: {rows.length}. Показано: {Math.min(shown, rows.length)}.</p>
+            {rows.length === 0 && <p role="status">{snapshot.items.length === 0 ? "В этом сохранённом ответе нет строк. Полноту определяет состояние ответа выше." : "Совпадений в выбранном ответе нет."}</p>}
+            <div className="overflow-x-auto" role="region" aria-label="Строки сохранённого ответа" tabIndex={0}>
               <table className="w-full text-left text-xs">
                 <thead>
                   <tr>
@@ -173,7 +191,7 @@ export function OfapiStoredReads({
                   </tr>
                 </thead>
                 <tbody>
-                  {snapshot.items.slice(0, 100).map((raw, index) => {
+                  {rows.slice(0, shown).map((raw, index) => {
                     const row = record(raw);
                     return (
                       <tr
@@ -193,16 +211,14 @@ export function OfapiStoredReads({
                         <td className="p-2">
                           {value(row.listId)}
                           {listPreview
-                            ? ` · пользователей: ${value(row.usersCount)} · превью: ${Array.isArray(row.previewUsers) ? row.previewUsers.length : 0}`
+                            ? ` · пользователей: ${value(row.usersCount)} · превью: ${Array.isArray(row.previewUsers) ? row.previewUsers.length : "неизвестно"}`
                             : members
                               ? ` · ${value(row.membershipScope)}`
                               : ""}
                         </td>
                         <td className="max-w-md p-2">
                           {typeof row.text === "string" && (
-                            <p className="whitespace-pre-wrap">
-                              {row.text.slice(0, 500)}
-                            </p>
+                            <div className="whitespace-pre-wrap break-words">{row.text.slice(0, 500)}{row.text.length > 500 && <details><summary className="cursor-pointer text-accent">Показать текст целиком</summary>{row.text}</details>}</div>
                           )}
                           {Array.isArray(row.replies) &&
                             row.replies.length > 0 && (
@@ -237,9 +253,7 @@ export function OfapiStoredReads({
                 </tbody>
               </table>
             </div>
-            {snapshot.items.length > 100 && (
-              <p>Показаны первые 100 строк этого ответа.</p>
-            )}
+            {rows.length > shown && <button type="button" className="min-h-10 rounded border border-border px-3 py-2" onClick={() => setShown(current => current + 100)}>Показать ещё 100 строк</button>}
           </>
         )}
       </div>

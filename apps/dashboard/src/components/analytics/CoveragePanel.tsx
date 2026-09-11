@@ -1,6 +1,5 @@
 import type { StatsCoverageResponse } from "@agency_hub_core/contracts";
 
-import { formatDateTime } from "@/lib/format";
 import type { AnalyticsPanelState } from "@/pages/analytics-query-state";
 
 import {
@@ -13,7 +12,7 @@ import {
 type StreamRow = StatsCoverageResponse["streams"][number];
 
 function instant(value: string | null): string {
-  return value === null ? "—" : formatDateTime(value);
+  return value === null ? "—" : `${new Date(value).toLocaleString("ru-RU", { timeZone: "UTC" })} UTC`;
 }
 
 function count(value: number | null): string {
@@ -101,9 +100,7 @@ export function CoveragePanel({
       title="Coverage — what this page actually holds"
       cached={state.refreshFailed}
       subtitle={
-        "Read this before believing any chart above. An empty chart over a ramped, "
-        + "exhausted lane means the world was empty; the same chart over a lane whose "
-        + "flag is off means nobody looked."
+        "Здесь видно, какие данные собраны и за какой срок. Пустой график при неполном покрытии не означает отсутствие активности."
       }
     >
       <div className="space-y-6">
@@ -114,7 +111,7 @@ export function CoveragePanel({
           {data.planes.length === 0 ? (
             <AnalyticsEmpty reason="No capture-coverage rows: no lane has claimed anything for this page." />
           ) : (
-            <div className="overflow-x-auto">
+            <div role="region" aria-label="Границы покрытия" tabIndex={0} className="overflow-x-auto">
               <table className="w-full text-[13px]">
                 <thead>
                   <tr className="text-left text-[11px] uppercase tracking-wider text-text-muted">

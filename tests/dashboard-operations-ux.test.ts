@@ -1,5 +1,6 @@
 import { createElement, type ComponentType } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { QueryClient, QueryClientProvider } from "../apps/dashboard/node_modules/@tanstack/react-query/build/modern/index.js";
 import { MemoryRouter } from "../apps/dashboard/node_modules/react-router/dist/development/index.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ofapiPageHref, resolveOfapiPage } from "../apps/dashboard/src/lib/ofapiNavigation.ts";
@@ -36,13 +37,13 @@ function query(data: unknown = undefined, state: "ready" | "loading" | "error" =
   return { data, isLoading: state === "loading", isFetching: state === "loading", isError: state === "error", isSuccess: state === "ready", error: state === "error" ? new Error("Request failed") : null, refetch: vi.fn() };
 }
 function render(component: ComponentType, path: string) {
-  return renderToStaticMarkup(createElement(MemoryRouter, { initialEntries: [path] }, createElement(component)));
+  return renderToStaticMarkup(createElement(QueryClientProvider, { client: new QueryClient() }, createElement(MemoryRouter, { initialEntries: [path] }, createElement(component))));
 }
 const emptyMedia = { uploads: [], media: [], sources: [], totalMedia: 0, inventory: { state: "unknown", note: "Coverage unknown" } };
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mocks.auth.mockReturnValue(query({ user: { role: "team_lead" } }));
+  mocks.auth.mockReturnValue(query({ user: { id: 1, role: "team_lead" } }));
   mocks.pages.mockReturnValue(query({ pages: available, revision: 1, backgroundPaused: false }));
   mocks.media.mockReturnValue(query(emptyMedia));
   mocks.exports.mockReturnValue(query({ jobs: [] }));

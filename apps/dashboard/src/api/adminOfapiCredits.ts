@@ -34,9 +34,10 @@ export interface AdminOfapiCreditsLedgerParams {
   to?: string;
 }
 
-export function useAdminOfapiCreditsLedger(params: AdminOfapiCreditsLedgerParams) {
+export function useAdminOfapiCreditsLedger(params: AdminOfapiCreditsLedgerParams, options: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: ["admin", "ofapi-credits", "ledger", params],
+    enabled: options.enabled ?? true,
     queryFn: () => kernel.adminOfapiCreditsLedger({
       query: params as Parameters<typeof kernel.adminOfapiCreditsLedger>[0]["query"],
     }),

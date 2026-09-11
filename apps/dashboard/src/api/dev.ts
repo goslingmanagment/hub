@@ -24,6 +24,7 @@ export function useAdminSyncRunDetail(runId: number) {
 export function useAdminQueueJobs(params: { state?: string; limit?: number } = {}) {
   return useQuery({
     queryKey: ["admin", "queue", "jobs", params],
+    meta: { suppressGlobalError: true },
     queryFn: () => kernel.adminQueueJobs({
       query: params as Parameters<typeof kernel.adminQueueJobs>[0]["query"],
     }),
@@ -42,6 +43,7 @@ export function useAdminDbStats() {
 export function useAdminIncidents(params: { severity?: string; code?: string; limit?: number } = {}) {
   return useQuery({
     queryKey: ["admin", "incidents", params],
+    meta: { suppressGlobalError: true },
     queryFn: () => kernel.adminIncidents({
       query: params as Parameters<typeof kernel.adminIncidents>[0]["query"],
     }),

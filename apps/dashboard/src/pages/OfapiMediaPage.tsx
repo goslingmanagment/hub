@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Link, useSearchParams } from "react-router";
 import { useAuthMe } from "@/api/queries";
 import { useOfapiExportPages } from "@/api/ofapiExports";
@@ -6,13 +7,20 @@ import { ofapiMediaActions, useOfapiMedia } from "@/api/ofapiMedia";
 import { QueryNotice } from "@/components/shared/QueryNotice";
 import { StatusPanel } from "@/components/shared/StatusPanel";
 import { ofapiPageHref, resolveOfapiPage } from "@/lib/ofapiNavigation";
+import { useSessionWorkspace } from "@/lib/useSessionWorkspace";
+import { acknowledgeSeparateMediaUpload, findMediaUpload, mediaUploadFailure, mediaUploadUnresolved, mergeMediaUploadOutcome, readMediaUploadCustody, settleMediaUpload, startMediaUpload, type MediaUploadRecord } from "@/lib/ofapiMediaCustody";
+import { useCollectionJobCustody } from "./settings/collection/collectionJobCustody.js";
 const field =
   "min-w-0 max-w-full rounded border border-border bg-card px-3 py-2 text-sm text-text-primary";
 const button =
   "rounded border border-border px-3 py-2 text-sm text-text-primary hover:bg-hover disabled:opacity-40";
 const ready = (value: boolean | null) =>
   value === true ? "Готово" : value === false ? "Обрабатывается" : "Неизвестно";
+function useMediaState<T>(ownerId: number, name: string, initial: T | (() => T)) {
+  return useSessionWorkspace<T>(`ofapi-media:${ownerId}:${name}`, () => typeof initial === "function" ? (initial as () => T)() : initial);
+}
 export function OfapiMediaPage() {
+  const auth = useAuthMe();
   const pages = useOfapiExportPages();
   const [search, setSearch] = useSearchParams();
   const requestedPage = search.get("page");
@@ -25,71 +33,75 @@ export function OfapiMediaPage() {
   useEffect(() => {
     if (requestedPage === null && selected) selectPage(selected.label, true);
   }, [requestedPage, selected?.label]);
-  return <OfapiMediaContent pages={pages} pageId={selected?.id ?? 0} requestedPage={requestedPage} selectPage={selectPage} />;
+  if (!auth.data?.user.id) return <StatusPanel title="Проверяем сессию…" />;
+  return <OfapiMediaContent key={auth.data.user.id} ownerId={auth.data.user.id} owner={auth.data.user.role === "owner"} pages={pages} pageId={selected?.id ?? 0} requestedPage={requestedPage} selectPage={selectPage} />;
 }
 
-function OfapiMediaContent({ pages, pageId, requestedPage, selectPage }: {
+function OfapiMediaContent({ pages, pageId, requestedPage, selectPage, ownerId, owner }: {
   pages: ReturnType<typeof useOfapiExportPages>;
   pageId: number;
   requestedPage: string | null;
   selectPage: (label: string) => void;
+  ownerId: number;
+  owner: boolean;
 }) {
-  const auth = useAuthMe(),
-    owner = auth.data?.user.role === "owner";
-  const [offsets, setOffsets] = useState<Record<number, number>>({});
+  const queryClient = useQueryClient();
+  const [offsets, setOffsets] = useMediaState<Record<number, number>>(ownerId, "offsets", {});
   const offset = offsets[pageId] ?? 0;
   const setOffset = (value: number) => setOffsets(current => ({ ...current, [pageId]: value }));
   const saved = useOfapiMedia(pageId, offset);
-  const [files, setFiles] = useState<Record<number, File | null>>({});
+  const [files, setFiles] = useMediaState<Record<number, File | null>>(ownerId, "files", {});
   const file = files[pageId] ?? null;
   const setFile = (value: File | null) => setFiles(current => ({ ...current, [pageId]: value }));
-  const [sourceIds, setSourceIds] = useState<Record<number, string>>({});
+  const [sourceIds, setSourceIds] = useMediaState<Record<number, string>>(ownerId, "sources", {});
   const sourceId = sourceIds[pageId] ?? "";
   const setSourceId = (value: string) => setSourceIds(current => ({ ...current, [pageId]: value }));
-  const [uploadDrafts, setUploadDrafts] = useState<Record<number, { destination: "vault" | "cdn"; maxCredits: number }>>({});
+  const [uploadDrafts, setUploadDrafts] = useMediaState<Record<number, { destination: "vault" | "cdn"; maxCredits: number }>>(ownerId, "drafts", {});
   const uploadDraft: { destination: "vault" | "cdn"; maxCredits: number } = uploadDrafts[pageId] ?? { destination: "vault", maxCredits: 3 };
   const { destination, maxCredits } = uploadDraft;
   const setDestination = (value: "vault" | "cdn") => setUploadDrafts(current => ({ ...current, [pageId]: { ...(current[pageId] ?? uploadDraft), destination: value } }));
   const setMaxCredits = (value: number) => setUploadDrafts(current => ({ ...current, [pageId]: { ...(current[pageId] ?? uploadDraft), maxCredits: value } }));
-  const [busy, setBusy] = useState(false),
-    [error, setError] = useState(""),
-    [notice, setNotice] = useState("");
-  const [previews, setPreviews] = useState<Record<number, {
+  const [busy, setBusy, readBusy] = useMediaState(ownerId, "busy", false),
+    [error, setError] = useMediaState(ownerId, "error", ""),
+    [notice, setNotice] = useMediaState(ownerId, "notice", "");
+  const [previews, setPreviews] = useMediaState<Record<number, {
     body: Parameters<typeof ofapiMediaActions.upload>[0];
     pageLabel: string;
     sourceFilename: string;
     receipt: Awaited<ReturnType<typeof ofapiMediaActions.upload>>;
-  } | null>>({});
+  } | null>>(ownerId, "previews", {});
   const preview = previews[pageId] ?? null;
   const setPreview = (value: (typeof previews)[number]) => setPreviews(current => ({ ...current, [pageId]: value }));
-  const [collectionPreviews, setCollectionPreviews] = useState<Record<number, {
+  const [collectionPreviews, setCollectionPreviews] = useMediaState<Record<number, {
     selection: string[];
     revision: number;
     pageId: number;
     pageLabel: string;
-  } | null>>({});
+  } | null>>(ownerId, "collection-previews", {});
   const collectionPreview = collectionPreviews[pageId] ?? null;
   const setCollectionPreview = (value: (typeof collectionPreviews)[number]) => setCollectionPreviews(current => ({ ...current, [pageId]: value }));
-  const [handoffs, setHandoffs] = useState<Record<number, Awaited<ReturnType<typeof ofapiMediaActions.handoff>> | null>>({});
+  const [handoffs, setHandoffs] = useMediaState<Record<number, Awaited<ReturnType<typeof ofapiMediaActions.handoff>> | null>>(ownerId, "handoffs", {});
   const handoff = handoffs[pageId] ?? null;
   const setHandoff = (value: (typeof handoffs)[number]) => setHandoffs(current => ({ ...current, [pageId]: value }));
-  const inFlight = useRef(false);
-  const [operationPage, setOperationPage] = useState("");
-  async function run(action: () => Promise<void>) {
-    if (inFlight.current) return;
-    inFlight.current = true;
-    setOperationPage(pages.data?.pages.find(page => page.id === pageId)?.label ?? String(pageId));
+  const [operationPage, setOperationPage] = useMediaState(ownerId, "operation-page", "");
+  const [uploadCustody, setUploadCustody, readUploadCustody] = useMediaState(ownerId, "upload-custody", () => readMediaUploadCustody(ownerId));
+  const collectionCustody = useCollectionJobCustody(ownerId);
+  const [separateUploadAcknowledged, setSeparateUploadAcknowledged] = useState(false);
+  const uploadBlocked = Boolean(uploadCustody.error) || mediaUploadUnresolved(uploadCustody.current);
+  useEffect(() => { setSeparateUploadAcknowledged(false); }, [uploadCustody.current?.body.requestId]);
+  async function run(action: () => Promise<void>, targetPageId = pageId) {
+    if (readBusy()) return;
+    setOperationPage(pages.data?.pages.find(page => page.id === targetPageId)?.label ?? String(targetPageId));
     setBusy(true);
     setError("");
     setNotice("");
     try {
       await action();
-      await saved.refetch();
+      await queryClient.invalidateQueries({ queryKey: ["ofapi", "media", targetPageId] });
       await pages.refetch();
     } catch (error) {
       setError(error instanceof Error ? error.message : String(error));
     } finally {
-      inFlight.current = false;
       setBusy(false);
     }
   }
@@ -129,6 +141,7 @@ function OfapiMediaContent({ pages, pageId, requestedPage, selectPage }: {
     });
   }
   async function previewUpload() {
+    if (readUploadCustody().error || mediaUploadUnresolved(readUploadCustody().current)) return;
     await run(async () => {
       const body = {
         pageId,
@@ -152,6 +165,49 @@ function OfapiMediaContent({ pages, pageId, requestedPage, selectPage }: {
         receipt: await ofapiMediaActions.upload(body),
       });
     });
+  }
+  async function submitUpload(recover: boolean) {
+    if (!owner) return;
+    const current = readUploadCustody();
+    if (current.error || (!recover && mediaUploadUnresolved(current.current))) return;
+    const original = recover ? current.current : preview ? {
+      body: { ...preview.body, dryRun: false }, pageLabel: preview.pageLabel, sourceFilename: preview.sourceFilename,
+      startedAt: new Date().toISOString(), phase: "sending" as const, receipt: null, error: "",
+    } : null;
+    if (!original || (recover && !mediaUploadUnresolved(original))) return;
+    await run(async () => {
+      const sending: MediaUploadRecord = { ...original, phase: "sending", error: "" };
+      setOperationPage(original.pageLabel);
+      let retained: MediaUploadRecord | undefined;
+      try {
+        const admitted = startMediaUpload(ownerId, sending);
+        setUploadCustody(admitted);
+        retained = findMediaUpload(admitted, sending.body.requestId);
+      }
+      catch (error) { setUploadCustody(value => ({ ...value, error: "Не удалось сохранить точный запрос в этой вкладке. Отправка не началась; восстановите запись перед повтором." })); throw error; }
+      let outcome: MediaUploadRecord;
+      if (retained?.phase === "confirmed") outcome = retained;
+      else {
+        try {
+          const receipt = await ofapiMediaActions.upload(sending.body);
+          if (receipt.dryRun || !receipt.jobId || receipt.sourceId !== sending.body.sourceId || receipt.destination !== sending.body.destination || receipt.maxCredits !== sending.body.maxCredits) throw new Error("Сервер не подтвердил исходную загрузку.");
+          outcome = { ...sending, phase: "confirmed", receipt };
+        } catch (error) { outcome = { ...sending, ...mediaUploadFailure(error, recover) }; }
+      }
+      try {
+        const settled = settleMediaUpload(ownerId, outcome);
+        setUploadCustody(settled);
+        outcome = findMediaUpload(settled, sending.body.requestId) ?? outcome;
+      } catch {
+        const local = mergeMediaUploadOutcome(readUploadCustody(), outcome);
+        setUploadCustody({ ...local, error: "Исход получен, но не сохранился в этой вкладке. Сохраните номер задачи перед уходом." });
+        outcome = findMediaUpload(local, sending.body.requestId) ?? outcome;
+      }
+      if (outcome.phase === "confirmed") {
+        setPreviews(current => ({ ...current, [sending.body.pageId]: null }));
+        setNotice(`Загрузка поставлена в очередь: ${outcome.receipt!.jobId}. Следите за её обработкой в истории исходного аккаунта.`);
+      } else setError(outcome.error);
+    }, original.body.pageId);
   }
   async function copyMaterial(
     input: Parameters<typeof ofapiMediaActions.handoff>[0],
@@ -219,6 +275,33 @@ function OfapiMediaContent({ pages, pageId, requestedPage, selectPage }: {
       <QueryNotice error={pages.isError} stale={pages.data !== undefined} retry={() => pages.refetch()} />
       {pages.isLoading && !pages.data && <StatusPanel title="Загружаем список страниц…" />}
       {pages.data && !pageId && <StatusPanel title={requestedPage !== null ? "Страница из ссылки недоступна" : "Нет доступных OnlyFans-страниц"} description="Для работы выберите доступный аккаунт в списке выше." />}
+      {(uploadCustody.current || uploadCustody.error || uploadCustody.history.length > 0) && <section className="space-y-3 rounded-xl border border-border bg-card p-4 text-sm" aria-label="Сохранённый исход загрузки">
+        {uploadCustody.current && <>
+          <h2 className="font-semibold text-text-primary">{uploadCustody.current.phase === "confirmed" ? "Загрузка поставлена в очередь" : uploadCustody.current.phase === "sending" ? "Отправляем исходную загрузку…" : "Проверьте исход загрузки"}</h2>
+          <p className="break-words text-text-secondary">{uploadCustody.current.pageLabel} · {uploadCustody.current.sourceFilename} · {uploadCustody.current.body.destination === "vault" ? "Vault" : "Одноразовое вложение"} · до {uploadCustody.current.body.maxCredits} кр.</p>
+          {uploadCustody.current.receipt?.jobId && <p className="break-all">Номер задачи: {uploadCustody.current.receipt.jobId}. Это подтверждение очереди, а не завершения загрузки.</p>}
+          {uploadCustody.current.error && <p role="status" className="text-warning-dark">{uploadCustody.current.error}</p>}
+          <details><summary className="cursor-pointer text-text-secondary">Исходные параметры</summary><pre className="mt-2 whitespace-pre-wrap break-all text-xs">{JSON.stringify({ startedAt: uploadCustody.current.startedAt, ...uploadCustody.current.body }, null, 2)}</pre></details>
+          <Link className="inline-block text-accent underline" to={ofapiPageHref("/ofapi-media", uploadCustody.current.pageLabel)}>Открыть историю исходного аккаунта</Link>
+          {owner && uploadCustody.current.phase === "uncertain" && <>
+            <p className="text-text-secondary">Восстановление отправит исходные параметры с тем же ID. Сервер вернёт эту же задачу, если она уже создана; иначе поставит в очередь одну исходную загрузку. После изменения политики восстановление может быть отклонено — это не доказывает отсутствие первой задачи.</p>
+            <button type="button" className={button} disabled={busy || Boolean(uploadCustody.error)} onClick={() => void submitUpload(true)}>Восстановить исходную загрузку с тем же ID</button>
+            <div className="space-y-2 border-t border-border pt-3"><label className="flex items-start gap-2"><input type="checkbox" className="mt-1" disabled={busy} checked={separateUploadAcknowledged} onChange={event => setSeparateUploadAcknowledged(event.target.checked)} />Я проверил историю и понимаю, что первая загрузка могла выполниться. Хочу разрешить отдельную новую загрузку с отдельным расходом.</label><button type="button" className={button} disabled={busy || !separateUploadAcknowledged || Boolean(uploadCustody.error)} onClick={() => {
+              const original = readUploadCustody().current;
+              if (!original || readBusy()) return;
+              try { setUploadCustody(acknowledgeSeparateMediaUpload(ownerId, original.body.requestId, separateUploadAcknowledged)); setPreviews(current => ({ ...current, [original.body.pageId]: null })); setSeparateUploadAcknowledged(false); }
+              catch (error) { setError(error instanceof Error ? error.message : "Не удалось сохранить решение"); }
+            }}>Разрешить отдельную новую загрузку</button></div>
+          </>}
+        </>}
+        {uploadCustody.error && <p role="alert" className="text-warning-dark">{uploadCustody.error} <button type="button" className="text-accent underline" disabled={busy} onClick={() => setUploadCustody(readMediaUploadCustody(ownerId))}>Повторить чтение записи</button></p>}
+        {uploadCustody.history.length > 0 && <details><summary className="cursor-pointer text-text-secondary">Предыдущие запуски: {uploadCustody.history.length}</summary><div className="mt-2 space-y-2">{uploadCustody.history.map(item => <div key={item.body.requestId} className="rounded-lg border border-border p-3"><p className="break-words">{item.pageLabel} · {item.sourceFilename} · {item.receipt?.jobId ? `Задача ${item.receipt.jobId}` : item.phase === "refused" ? "Сервер отказал" : "Исход не подтверждён"}</p><pre className="mt-2 whitespace-pre-wrap break-all text-xs">{JSON.stringify({ startedAt: item.startedAt, ...item.body }, null, 2)}</pre></div>)}</div></details>}
+      </section>}
+      {(collectionCustody.launch || collectionCustody.storageError) && <section role="status" className="space-y-2 rounded-xl border border-border bg-card p-4 text-sm">
+        <p>Сбор метаданных: {collectionCustody.launch?.pageLabel ?? "сохранённый запуск"}{collectionCustody.launch?.jobId ? ` · задача ${collectionCustody.launch.jobId}` : ""}.</p>
+        <p className="text-text-secondary">{collectionCustody.storageError || collectionCustody.launch?.error || (collectionCustody.pending ? "Ожидаем подтверждение постановки в очередь." : "Результат и исходные параметры сохранены в управлении сбором.")}</p>
+        <Link className="inline-block text-accent underline" to={ofapiPageHref("/settings?tab=collection", collectionCustody.launch?.pageLabel ?? requestedPage)}>Проверить задачу и восстановить запуск</Link>
+      </section>}
       {error && (
         <p
           role="alert"
@@ -343,7 +426,7 @@ function OfapiMediaContent({ pages, pageId, requestedPage, selectPage }: {
             </label>
             <button
               className={button}
-              disabled={busy || !source || !pages.data}
+              disabled={busy || uploadBlocked || !source || !pages.data}
               onClick={() => void previewUpload()}
             >
               2. Проверить загрузку
@@ -369,17 +452,8 @@ function OfapiMediaContent({ pages, pageId, requestedPage, selectPage }: {
               </p>
               <button
                 className={`${button} mt-3`}
-                disabled={busy}
-                onClick={() =>
-                  void run(async () => {
-                    await ofapiMediaActions.upload({
-                      ...preview.body,
-                      dryRun: false,
-                    });
-                    setPreview(null);
-                    setNotice("Загрузка поставлена в очередь. Её состояние появится в истории ниже.");
-                  })
-                }
+                disabled={busy || uploadBlocked}
+                onClick={() => void submitUpload(false)}
               >
                 3. Подтвердить одну загрузку
               </button>
@@ -471,7 +545,7 @@ function OfapiMediaContent({ pages, pageId, requestedPage, selectPage }: {
                 {job.destination === "vault" && job.mediaRef && (
                   <button
                     className={button}
-                    disabled={busy || !pages.data}
+                    disabled={busy || collectionCustody.blocked || !pages.data}
                     onClick={() =>
                       setCollectionPreview({
                         selection: [`vault_item:${job.mediaRef}`],
@@ -514,7 +588,7 @@ function OfapiMediaContent({ pages, pageId, requestedPage, selectPage }: {
           {owner && (
             <button
               className={button}
-              disabled={busy || !pageId || !pages.data}
+              disabled={busy || collectionCustody.blocked || !pageId || !pages.data}
               onClick={() =>
                 setCollectionPreview({
                   selection: [
@@ -549,10 +623,10 @@ function OfapiMediaContent({ pages, pageId, requestedPage, selectPage }: {
             </p>
             <button
               className={`${button} mt-2`}
-              disabled={busy}
+              disabled={busy || collectionCustody.blocked}
               onClick={() =>
                 void run(async () => {
-                  await ofapiMediaActions.collect({
+                  const accepted = await collectionCustody.submit({
                     pageId: collectionPreview.pageId,
                     category: "vault_catalog",
                     expectedRevision: collectionPreview.revision,
@@ -562,7 +636,8 @@ function OfapiMediaContent({ pages, pageId, requestedPage, selectPage }: {
                     from: null,
                     to: null,
                     selection: collectionPreview.selection,
-                  });
+                  }, collectionPreview.pageLabel, frozen => ofapiMediaActions.collect(frozen));
+                  if (!accepted) return;
                   setCollectionPreview(null);
                   setNotice(
                     "Сбор метаданных с лимитами поставлен в очередь. Для большого каталога может потребоваться отдельное задание в управлении сбором.",

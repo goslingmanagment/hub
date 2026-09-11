@@ -1,5 +1,6 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { MemoryRouter } from "../apps/dashboard/node_modules/react-router/dist/development/index.js";
 import { describe, expect, it, vi } from "vitest";
 const query = vi.hoisted(() => vi.fn());
 vi.mock("../apps/dashboard/src/api/adminOfapiStoredReads.ts", () => ({
@@ -33,7 +34,7 @@ function render(operation: string, items: unknown[]) {
     refetch: vi.fn(),
   });
   return renderToStaticMarkup(
-    createElement(OfapiStoredReads, { pages: [{ id: 1, label: "Creator" }] }),
+    createElement(MemoryRouter, null, createElement(OfapiStoredReads, { pages: [{ id: 1, label: "Creator" }] })),
   );
 }
 describe("local collection snapshot consumer", () => {

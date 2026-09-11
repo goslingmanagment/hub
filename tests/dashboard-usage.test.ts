@@ -1,3 +1,5 @@
+import { MemoryRouter } from "../apps/dashboard/node_modules/react-router/dist/development/index.js";
+import { resolveUsageSearch } from "../apps/dashboard/src/lib/usageNavigation.ts";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -10,8 +12,8 @@ vi.mock("../apps/dashboard/src/api/queries.ts", () => queryMocks);
 
 import { UsagePage } from "../apps/dashboard/src/pages/UsagePage.tsx";
 
-function renderPage() {
-  return renderToStaticMarkup(createElement(UsagePage));
+function renderPage(path = "/usage") {
+  return renderToStaticMarkup(createElement(MemoryRouter, { initialEntries: [path] }, createElement(UsagePage)));
 }
 
 const zeroCost = {
@@ -219,5 +221,20 @@ describe("UsagePage", () => {
         process.env.TZ = previousTz;
       }
     }
+  });
+});
+
+
+describe("Usage URL context", () => {
+  it("restores a historical Moscow business date and preserves the query", () => {
+    expect(resolveUsageSearch(new URLSearchParams("mode=week&date=2026-04-01&q=anton"), "2026-09-11")).toEqual({ mode: "week", anchor: "2026-04-01", search: "anton", corrected: false });
+  });
+  it.each(["2026-02-30", "2026-13-01", "oops", "9999-01-01", ""])("marks invalid or future date %s without throwing", date => {
+    expect(resolveUsageSearch(new URLSearchParams({ mode: "bad", date }), "2026-09-11")).toEqual({ mode: "day", anchor: "2026-09-11", search: "", corrected: true });
+  });
+  it("keeps failed-only gateway activity visible even without a generation", () => {
+    queryMocks.useAdminChatterUsage.mockReturnValue({ data: { range: { from: "2026-09-11", to: "2026-09-11", timeZone: "Europe/Moscow" }, rows: [{ userId: 9, username: "failed-only", totalGenerations: 0, featureBreakdown: [], regenerateRatePct: 0, warning: false, cost: zeroCost, gateway: { ...zeroGateway, requestCount: 2, failedCount: 2 } }] }, isLoading: false, isError: false });
+    expect(renderPage()).toContain("failed-only");
+    expect(renderPage("/usage?q=someone-else")).toContain("Сотрудники по этому запросу не найдены");
   });
 });

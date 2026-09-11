@@ -555,8 +555,18 @@ export function parseSelection(raw: string): string[] {
   return raw
     .split(/\r?\n|,/)
     .map((line) => line.trim())
-    .filter((line) => line.length > 0)
-    .slice(0, 100);
+    .filter((line) => line.length > 0);
+}
+
+/** A late apply only consumes entries that still match the submitted change. */
+export function removeAppliedChanges(draft: CollectionDraft | null, body: OfapiCollectionChangeBody): CollectionDraft | null {
+  if (!draft) return null;
+  const entries = { ...draft.entries };
+  for (const applied of body.changes) {
+    const key = draftKey(applied.pageId, applied.category);
+    if (entries[key] && sameSettings(entries[key].settings, applied)) delete entries[key];
+  }
+  return Object.keys(entries).length ? { ...draft, entries } : null;
 }
 
 export function jobProgress(job: OfapiCollectionJob) {

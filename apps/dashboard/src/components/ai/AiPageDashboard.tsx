@@ -1,6 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Loader2, Play, RefreshCcw } from "lucide-react";
+import { QueryNotice } from "@/components/shared/QueryNotice";
+import { StatusPanel } from "@/components/shared/StatusPanel";
+import { useSessionWorkspace } from "@/lib/useSessionWorkspace";
+import { workboardV2AiSettingsBodySchema } from "@agency_hub_core/contracts";
 import { toast } from "sonner";
 
 import { useWorkboardV2Ai, useWorkboardV2AiClassify, useWorkboardV2AiSettings } from "@/api/workboard";
@@ -68,7 +72,7 @@ function StateDistribution({ states }: { states: AiReport["states"] }) {
         const count = finiteNumber(s.count) ?? 0;
         return (
           <div key={s.state} className="flex items-center gap-2 text-[12px]">
-            <span className="w-[150px] shrink-0 truncate text-text-secondary">{m.label}</span>
+            <span className="w-[110px] shrink-0 break-words text-text-secondary sm:w-[150px]">{m.label}</span>
             <div className="h-2.5 flex-1 overflow-hidden rounded-full bg-hover">
               <div className={`h-full rounded-full ${m.bar}`} style={{ width: `${Math.round((count / max) * 100)}%` }} />
             </div>
@@ -111,29 +115,37 @@ function RecentVerdicts({ recent }: { recent: AiReport["recent"] }) {
 function SettingsForm({ report, pageLabel }: { report: AiReport; pageLabel: string }) {
   const settings = useWorkboardV2AiSettings(pageLabel);
   const ov = report.settings.override;
-  const [enabledChoice, setEnabledChoice] = useState<EnabledChoice>("inherit");
-  const [capInput, setCapInput] = useState("");
-  const [modelInput, setModelInput] = useState("");
+  type Draft = { enabledChoice: EnabledChoice; capInput: string; modelInput: string };
+  const [draft, setDraft, readDraft] = useSessionWorkspace<Draft | null>(`ai-settings:${pageLabel}`, () => null);
+  const base: Draft = { enabledChoice: ov.enabled == null ? "inherit" : ov.enabled ? "on" : "off", capInput: ov.dailyCapMax == null ? "" : String(ov.dailyCapMax), modelInput: ov.model ?? "" };
+  const { enabledChoice, capInput, modelInput } = draft ?? base;
+  const setEnabledChoice = (value: EnabledChoice) => { setError(""); setDraft({ ...(draft ?? base), enabledChoice: value }); };
+  const setCapInput = (value: string) => { setError(""); setDraft({ ...(draft ?? base), capInput: value }); };
+  const setModelInput = (value: string) => { setError(""); setDraft({ ...(draft ?? base), modelInput: value }); };
+  const [error, setError] = useState("");
+  const saving = useRef(false);
 
-  useEffect(() => {
-    setEnabledChoice(ov.enabled == null ? "inherit" : ov.enabled ? "on" : "off");
-    setCapInput(ov.dailyCapMax == null ? "" : String(ov.dailyCapMax));
-    setModelInput(ov.model ?? "");
-  }, [ov.enabled, ov.dailyCapMax, ov.model]);
-
-  const onSave = () => {
-    const dailyCapMax = capInput.trim() === "" ? null : Math.max(1, Math.min(5000, Number(capInput) || 0));
-    settings.mutate(
-      {
-        enabled: enabledChoice === "inherit" ? null : enabledChoice === "on",
-        dailyCapMax,
-        model: modelInput.trim() === "" ? null : modelInput.trim(),
-      },
-      {
-        onSuccess: () => toast.success("Настройки ИИ сохранены"),
-        onError: () => toast.error("Не удалось сохранить настройки"),
-      },
-    );
+  const onSave = async () => {
+    if (saving.current || settings.isPending) return;
+    const parsed = workboardV2AiSettingsBodySchema.safeParse({
+      enabled: enabledChoice === "inherit" ? null : enabledChoice === "on",
+      dailyCapMax: capInput.trim() === "" ? null : Number(capInput),
+      model: modelInput.trim() === "" ? null : modelInput.trim(),
+    });
+    if (!parsed.success) {
+      setError("Лимит должен быть целым числом от 1 до 5000, название модели — не длиннее 120 символов. Пустое поле наследует общие настройки.");
+      return;
+    }
+    saving.current = true;
+    setError("");
+    const submittedDraft = readDraft();
+    try {
+      await settings.mutateAsync(parsed.data);
+      if (readDraft() === submittedDraft) setDraft(null);
+      toast.success(`${pageLabel} · настройки ИИ сохранены`);
+    } catch {
+      setError("Не удалось сохранить настройки. Черновик сохранён — проверьте соединение и повторите.");
+    } finally { saving.current = false; }
   };
 
   const choices: { key: EnabledChoice; label: string }[] = [
@@ -144,14 +156,15 @@ function SettingsForm({ report, pageLabel }: { report: AiReport; pageLabel: stri
 
   return (
     <div className="space-y-3 rounded-md border border-border bg-hover-alt/20 p-3">
-      <div className="flex flex-wrap items-end gap-4">
+      <fieldset disabled={settings.isPending} className="flex min-w-0 flex-wrap items-end gap-4">
         <div>
           <div className="mb-1 text-[11px] font-bold uppercase tracking-wide text-text-muted">Статус (эта страница)</div>
-          <div className="inline-flex overflow-hidden rounded-md border border-border">
+          <div className="inline-flex flex-wrap overflow-hidden rounded-md border border-border">
             {choices.map((c) => (
               <button
                 key={c.key}
                 type="button"
+                aria-pressed={enabledChoice === c.key}
                 onClick={() => setEnabledChoice(c.key)}
                 className={`px-2.5 py-1 text-[12px] transition-colors ${
                   enabledChoice === c.key ? "bg-accent/15 font-semibold text-accent" : "bg-card text-text-secondary hover:bg-hover"
@@ -167,6 +180,8 @@ function SettingsForm({ report, pageLabel }: { report: AiReport; pageLabel: stri
           <div className="mb-1 text-[11px] font-bold uppercase tracking-wide text-text-muted">Дневной лимит вызовов</div>
           <input
             type="number"
+            aria-label="Дневной лимит вызовов"
+            step={1}
             min={1}
             max={5000}
             value={capInput}
@@ -180,6 +195,8 @@ function SettingsForm({ report, pageLabel }: { report: AiReport; pageLabel: stri
           <div className="mb-1 text-[11px] font-bold uppercase tracking-wide text-text-muted">Модель</div>
           <input
             type="text"
+            aria-label="Модель ИИ"
+            maxLength={120}
             value={modelInput}
             onChange={(e) => setModelInput(e.target.value)}
             placeholder={`${report.settings.model} (env)`}
@@ -193,11 +210,13 @@ function SettingsForm({ report, pageLabel }: { report: AiReport; pageLabel: stri
           disabled={settings.isPending}
           className="rounded-button bg-accent px-3 py-1.5 text-[12px] font-semibold text-white transition-colors hover:bg-accent/90 disabled:opacity-50"
         >
-          Сохранить
+          {settings.isPending ? "Сохраняем…" : "Сохранить"}
         </button>
-      </div>
+      </fieldset>
+      {error && <p role="alert" className="text-sm text-danger">{error}</p>}
+      {draft && <p className="text-xs text-text-secondary">Есть несохранённые изменения. Обновление отчёта их не заменяет. <button type="button" disabled={settings.isPending} onClick={() => { setDraft(null); setError(""); }} className="text-accent underline">Вернуть сохранённые настройки</button></p>}
       <div className="text-[11px] text-text-muted">
-        Эффективно: <b className="text-text-secondary">{report.settings.enabled ? "включено" : "выключено"}</b> · модель{" "}
+        Сейчас действует: <b className="text-text-secondary">{report.settings.enabled ? "включено" : "выключено"}</b> · модель{" "}
         <b className="text-text-secondary">{report.settings.model}</b> · лимит{" "}
         <b className="text-text-secondary">{report.settings.dailyCapMax}</b>/день
       </div>
@@ -212,9 +231,11 @@ function SettingsForm({ report, pageLabel }: { report: AiReport; pageLabel: stri
 
 export function AiPageDashboard({ pageLabel, running = false }: { pageLabel: string; running?: boolean }) {
   // While a run is in flight, poll the report so coverage / states / verdicts fill in live.
-  const { data: report, isLoading } = useWorkboardV2Ai(pageLabel, { refetchInterval: running ? 3000 : false });
+  const { data: report, isLoading, isError, refetch } = useWorkboardV2Ai(pageLabel, { refetchInterval: running ? 3000 : false });
   const classify = useWorkboardV2AiClassify(pageLabel);
   const qc = useQueryClient();
+  const submitting = useRef(false);
+  const [runError, setRunError] = useState("");
 
   // When a run finishes (running: true → false), force one final refresh of the report + board.
   const prevRunning = useRef(running);
@@ -227,12 +248,15 @@ export function AiPageDashboard({ pageLabel, running = false }: { pageLabel: str
   }, [running, pageLabel, qc]);
 
   const runClassify = (reclassify: boolean) => {
+    if (submitting.current || running || classify.isPending) return;
     if (
       reclassify
       && !window.confirm("Очистить кэш вердиктов этой страницы и переклассифицировать всё заново? Это потратит вызовы API.")
     ) {
       return;
     }
+    submitting.current = true;
+    setRunError("");
     classify.mutate(
       { reclassify },
       {
@@ -242,19 +266,21 @@ export function AiPageDashboard({ pageLabel, running = false }: { pageLabel: str
               ? "Запуск уже выполняется — смотрите журнал внизу"
               : "Запущено в фоне — прогресс в журнале запусков ниже",
           ),
-        onError: () => toast.error("Не удалось запустить классификацию"),
+        onError: () => setRunError("Не удалось получить подтверждение запуска. Обновите журнал ниже и проверьте, появился ли запуск, прежде чем повторять."),
+        onSettled: () => { submitting.current = false; },
       },
     );
   };
 
   const busy = running || classify.isPending;
 
-  if (isLoading || !report) {
-    return <div className="rounded-card border border-border bg-card py-10 text-center text-[12px] text-text-muted">Загрузка…</div>;
+  if (!report) {
+    return isLoading ? <StatusPanel title="Загружаем отчёт ИИ…" /> : <StatusPanel title="Не удалось загрузить отчёт ИИ" tone="error" action={<button type="button" className="text-accent underline" onClick={() => void refetch()}>Повторить</button>} />;
   }
 
   return (
     <div className="space-y-4 rounded-card border border-border bg-card p-4">
+      <QueryNotice error={isError} stale retry={refetch} />
       <SettingsForm report={report} pageLabel={pageLabel} />
 
       <div>
@@ -302,6 +328,7 @@ export function AiPageDashboard({ pageLabel, running = false }: { pageLabel: str
         <RecentVerdicts recent={report.recent} />
       </div>
 
+      {runError && <p role="alert" className="text-sm text-danger">{runError}</p>}
       <div className="flex flex-wrap items-center gap-2 border-t border-border pt-3">
         <button
           type="button"

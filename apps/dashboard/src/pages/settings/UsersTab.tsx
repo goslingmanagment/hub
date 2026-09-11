@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
+import { useSearchParams } from "react-router";
 import type {
   AdminCreateUserBody,
   AdminUser,
@@ -10,6 +11,7 @@ import {
   useAdminDeactivateUser,
   useAdminPages,
   useAdminIssueApiKey,
+  useIssuedUserApiKeys,
   useAdminReactivateUser,
   useAdminRevokeApiKeys,
   useAdminSetPassword,
@@ -18,11 +20,11 @@ import {
   useAdminUnassignPage,
 } from "@/api/queries";
 import { ModalShell } from "@/components/shared/ModalShell";
-import { ConfirmModal } from "@/components/shared/ConfirmModal";
 import { Field } from "@/components/shared/Field";
 import { StatusPanel } from "@/components/shared/StatusPanel";
 import { StaleDataNotice } from "@/components/shared/StaleDataNotice";
 import { QueryNotice } from "@/components/shared/QueryNotice";
+import { SearchInput } from "@/components/shared/SearchInput";
 import { QuerySection } from "@/components/shared/QuerySection";
 import { formatRelativeTime, formatDateTime } from "@/lib/format";
 import { toast } from "sonner";
@@ -37,13 +39,12 @@ type ModalState =
   | null
   | { type: "addChatter" }
   | { type: "createUser" }
-  | { type: "assignPages"; username: string }
-  | { type: "confirmNewKey"; username: string }
-  | { type: "confirmRevoke"; username: string }
-  | { type: "confirmDeactivate"; username: string }
-  | { type: "confirmReactivate"; username: string }
-  | { type: "revealKey"; key: string; username: string }
-  | { type: "chatterDetail"; username: string };
+  | { type: "assignPages"; username: string; snapshot: AdminUser }
+  | { type: "confirmNewKey"; username: string; snapshot: AdminUser }
+  | { type: "confirmRevoke"; username: string; snapshot: AdminUser }
+  | { type: "confirmDeactivate"; username: string; snapshot: AdminUser }
+  | { type: "confirmReactivate"; username: string; snapshot: AdminUser }
+  | { type: "chatterDetail"; username: string; snapshot: AdminUser };
 
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                            */
@@ -83,7 +84,7 @@ const thClass =
   "whitespace-nowrap px-4 py-3 text-left text-[12px] font-semibold uppercase tracking-wider text-text-muted";
 const tdClass = "px-4 py-3 text-sm";
 const btnSecondary =
-  "whitespace-nowrap rounded-lg border border-border bg-card px-2.5 py-1 text-xs font-medium text-text-secondary transition-colors hover:bg-hover";
+  "min-h-8 whitespace-nowrap rounded-lg border border-border bg-card px-2.5 py-1 text-xs font-medium text-text-secondary transition-colors hover:bg-hover disabled:opacity-50";
 
 /* ------------------------------------------------------------------ */
 /*  PageChips — compact assignment chips; platform reads as a dot      */
@@ -93,7 +94,7 @@ const PAGE_CHIP_LIMIT = 5;
 
 function PageChips({ pages }: { pages: AdminUser["assignedPages"] }) {
   if (pages.length === 0) {
-    return <span className="text-text-muted">{"—"}</span>;
+    return <span className="text-text-muted">Нет назначений</span>;
   }
 
   const visible = pages.length <= PAGE_CHIP_LIMIT
@@ -118,12 +119,10 @@ function PageChips({ pages }: { pages: AdminUser["assignedPages"] }) {
         </span>
       ))}
       {overflow.length > 0 && (
-        <span
-          title={overflow.map((page) => page.label).join(", ")}
-          className="inline-flex items-center rounded-full border border-border bg-hover-alt px-2 py-0.5 text-xs text-text-muted"
-        >
-          +{overflow.length}
-        </span>
+        <details className="max-w-full rounded-lg border border-border bg-hover-alt px-2 py-0.5 text-xs text-text-muted">
+          <summary className="cursor-pointer" aria-label={`Показать ещё ${overflow.length} страниц`}>+{overflow.length}</summary>
+          <ul className="mt-2 space-y-1">{overflow.map((page) => <li key={page.id} className="break-all">{page.label} · {page.modelName}</li>)}</ul>
+        </details>
       )}
     </div>
   );
@@ -133,537 +132,141 @@ function PageChips({ pages }: { pages: AdminUser["assignedPages"] }) {
 /*  Main Component                                                     */
 /* ------------------------------------------------------------------ */
 
+const ROLE_LABELS: Record<AdminUser["role"], string> = { owner: "Владелец", team_lead: "Тимлид", chatter: "Чаттер", content_manager: "Контент-менеджер (прежняя роль)" };
+const ROLE_HELP: Record<AdminUser["role"], string> = {
+  owner: "Все страницы и управление Hub, командой и ключами.",
+  team_lead: "Панель и аналитика по назначенным страницам. Управление командой и ключами остаётся у владельца.",
+  chatter: "Вход в ChatGoose по паролю и работа с назначенными страницами. Панель Hub недоступна.",
+  content_manager: "Прежняя роль: новые аккаунты с ней не создаются; вход по паролю недоступен.",
+};
+
 export function UsersTab() {
-  const { data: users, isLoading, isError, error, isFetching, refetch } = useAdminUsers();
+  const { data: users, isError, error, isFetching, refetch } = useAdminUsers({ suppressGlobalError: true });
   const [modal, setModal] = useState<ModalState>(null);
-
-  if (isLoading && !users) {
-    return (
-      <div className="py-12 text-center text-sm text-text-muted">Loading users...</div>
-    );
-  }
-
-  if (isError && !users) {
-    return (
-      <div role="alert">
-        <StatusPanel
-          title="Не удалось загрузить команду"
-          description={error instanceof Error ? error.message : "Список участников недоступен. Попробуйте загрузить его снова."}
-          tone="error"
-          action={(
-            <button
-              type="button"
-              onClick={() => void refetch()}
-              disabled={isFetching}
-              className="rounded-lg border border-border bg-card px-3 py-2 text-sm text-text-secondary hover:bg-hover disabled:opacity-50"
-            >
-              {isFetching ? "Обновляем…" : "Повторить"}
-            </button>
-          )}
-        />
-      </div>
-    );
-  }
-
+  const { issued, acknowledge, pending: keyPending } = useIssuedUserApiKeys();
+  const receipt = issued[0];
+  const [search, setSearch] = useSearchParams();
+  const query = search.get("userQuery") ?? "";
+  const rawStatus = search.get("userStatus");
+  const status = rawStatus === "all" || rawStatus === "inactive" ? rawStatus : "active";
+  const rawRole = search.get("userRole");
+  const role = rawRole && Object.hasOwn(ROLE_LABELS, rawRole) ? rawRole : "all";
   const items = users ?? [];
-  const chatters = sortChattersByActivity(
-    items.filter((u) => u.role === "chatter" && !u.disabledAt),
-  );
-  const staff = items.filter((u) => u.role !== "chatter" && !u.disabledAt);
-  const deactivated = items.filter((u) => u.disabledAt);
-  const modalUser = modal && "username" in modal
-    ? findAdminUserByUsername(items, modal.username)
-    : null;
-
-  return (
-    <>
-      {isError && users && (
-        <div className="mb-4 flex flex-wrap items-center gap-2">
-          <StaleDataNotice title="Показан последний загруженный список" error={error} className="flex-1" />
-          <button
-            type="button"
-            onClick={() => void refetch()}
-            disabled={isFetching}
-            className="rounded-lg border border-border bg-card px-3 py-2 text-sm text-text-secondary hover:bg-hover disabled:opacity-50"
-          >
-            {isFetching ? "Обновляем…" : "Повторить"}
-          </button>
-        </div>
-      )}
-      <div className="space-y-8">
-        {/* ---- Chatters ---- */}
-        <div>
-          <div className="mb-3 flex items-center justify-between">
-            <h2 className="text-sm font-bold text-text-primary">
-              Chatters
-              {chatters.length > 0 && (
-                <span className="ml-1.5 font-normal text-text-muted">{chatters.length}</span>
-              )}
-            </h2>
-            <div className="flex items-center gap-4">
-              <span className="hidden items-center gap-3 text-[11px] text-text-muted sm:inline-flex">
-                <span className="inline-flex items-center gap-1.5">
-                  <span className="h-1.5 w-1.5 rounded-full bg-fansly" />
-                  Fansly
-                </span>
-                <span className="inline-flex items-center gap-1.5">
-                  <span className="h-1.5 w-1.5 rounded-full bg-onlyfans" />
-                  OnlyFans
-                </span>
-              </span>
-              <button
-                type="button"
-                onClick={() => setModal({ type: "addChatter" })}
-                className="rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:opacity-90"
-              >
-                Add Chatter
-              </button>
-            </div>
-          </div>
-
-          {chatters.length === 0 ? (
-            <p className="text-sm text-text-muted">No chatters yet. Add one to get started.</p>
-          ) : (
-            <section className="overflow-x-auto rounded-xl border border-border bg-card">
-              <table className="w-full border-collapse">
-                <thead>
-                  <tr className="bg-hover-alt">
-                    {["Username", "Key Status", "Last Active", "Pages", ""].map(
-                      (col) => (
-                        <th key={col} className={thClass}>
-                          {col}
-                        </th>
-                      ),
-                    )}
-                  </tr>
-                </thead>
-                <tbody>
-                  {chatters.map((user) => (
-                    <tr
-                      key={user.id}
-                      onClick={() =>
-                        setModal({ type: "chatterDetail", username: user.username })}
-                      className="cursor-pointer border-t border-border transition-colors hover:bg-hover-alt"
-                    >
-                      <td className={`${tdClass} font-medium text-text-primary`}>
-                        <span title={user.username} className="block max-w-[200px] truncate">
-                          {user.username}
-                        </span>
-                      </td>
-
-                      {/* Key Status */}
-                      <td className={`${tdClass} whitespace-nowrap`}>
-                        {hasActiveKey(user) ? (
-                          <span
-                            className="inline-flex items-center gap-1.5"
-                            title={`${user.apiKeyStatus!.activeKeyPrefix}…`}
-                          >
-                            <span className="inline-block h-2 w-2 rounded-full bg-green" />
-                            <span className="text-text-secondary">Active</span>
-                            <code className="font-mono text-xs text-text-muted">
-                              {shortKeyPrefix(user.apiKeyStatus!.activeKeyPrefix!)}
-                            </code>
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1.5">
-                            <span className="inline-block h-2 w-2 rounded-full bg-text-muted/40" />
-                            <span className="text-text-muted">No key</span>
-                          </span>
-                        )}
-                      </td>
-
-                      {/* Last Active — key OR device-token use (#116 chatters
-                          hold no key, so the key column alone reads "Never") */}
-                      <td
-                        className={`${tdClass} whitespace-nowrap text-text-muted`}
-                        title={user.lastActiveAt ? formatDateTime(user.lastActiveAt) : undefined}
-                      >
-                        {user.lastActiveAt
-                          ? formatRelativeTime(user.lastActiveAt)
-                          : "Never"}
-                      </td>
-
-                      {/* Pages */}
-                      <td className={tdClass}>
-                        <PageChips pages={user.assignedPages} />
-                      </td>
-
-                      {/* Actions; clicks stay in the cell (the row opens Manage) */}
-                      <td
-                        className={`${tdClass} text-right`}
-                        onClick={(event) => event.stopPropagation()}
-                      >
-                        <div className="flex items-center justify-end gap-1.5">
-                          {hasActiveKey(user) ? (
-                            <>
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  setModal({ type: "confirmNewKey", username: user.username })
-                                }
-                                className={btnSecondary}
-                              >
-                                New Key
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  setModal({ type: "confirmRevoke", username: user.username })
-                                }
-                                className={`${btnSecondary} !text-danger`}
-                              >
-                                Revoke
-                              </button>
-                            </>
-                          ) : (
-                            <IssueKeyButton
-                              username={user.username}
-                              onKeyIssued={(key) =>
-                                setModal({
-                                  type: "revealKey",
-                                  key,
-                                  username: user.username,
-                                })
-                              }
-                            />
-                          )}
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setModal({ type: "chatterDetail", username: user.username })
-                            }
-                            className={btnSecondary}
-                          >
-                            Manage
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </section>
-          )}
-        </div>
-
-        {/* ---- Staff ---- */}
-        <div>
-          <div className="mb-3 flex items-center justify-between">
-            <h2 className="text-sm font-bold text-text-primary">
-              Staff
-              {staff.length > 0 && (
-                <span className="ml-1.5 font-normal text-text-muted">{staff.length}</span>
-              )}
-            </h2>
-            <button
-              type="button"
-              onClick={() => setModal({ type: "createUser" })}
-              className="rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:opacity-90"
-            >
-              Create User
-            </button>
-          </div>
-
-          {staff.length === 0 ? (
-            <p className="text-sm text-text-muted">No staff users.</p>
-          ) : (
-            <section className="overflow-x-auto rounded-xl border border-border bg-card">
-              <table className="w-full border-collapse">
-                <thead>
-                  <tr className="bg-hover-alt">
-                    {["Username", "Role", "Assigned Pages", ""].map((col) => (
-                      <th key={col} className={thClass}>
-                        {col}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {staff.map((user) => (
-                    <tr
-                      key={user.id}
-                      onClick={() =>
-                        setModal({ type: "assignPages", username: user.username })}
-                      className="cursor-pointer border-t border-border transition-colors hover:bg-hover-alt"
-                    >
-                      <td className={`${tdClass} font-medium text-text-primary`}>
-                        {user.username}
-                      </td>
-                      <td className={`${tdClass} text-text-secondary capitalize`}>
-                        {user.role.replaceAll("_", " ")}
-                      </td>
-                      <td className={tdClass}>
-                        <PageChips pages={user.assignedPages} />
-                      </td>
-                      <td
-                        className={`${tdClass} text-right`}
-                        onClick={(event) => event.stopPropagation()}
-                      >
-                        <button
-                          type="button"
-                          onClick={() => setModal({ type: "assignPages", username: user.username })}
-                          className={btnSecondary}
-                        >
-                          Manage Pages
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </section>
-          )}
-        </div>
-
-        {/* ---- Deactivated (#126: tombstoned, not deleted) ---- */}
-        {deactivated.length > 0 && (
-          <DeactivatedSection
-            users={deactivated}
-            onReactivate={(username) =>
-              setModal({ type: "confirmReactivate", username })}
-          />
-        )}
-      </div>
-
-      {/* ---- Modals ---- */}
-      {modal?.type === "addChatter" && (
-        <AddChatterModal onClose={() => setModal(null)} />
-      )}
-      {modal?.type === "createUser" && (
-        <CreateUserModal onClose={() => setModal(null)} />
-      )}
-      {modal?.type === "assignPages" && modalUser && (
-        <UserPageAssignmentModal
-          user={modalUser}
-          onClose={() => setModal(null)}
-        />
-      )}
-      {modal?.type === "confirmNewKey" && modalUser && (
-        <NewKeyModal
-          user={modalUser}
-          onClose={() => setModal(null)}
-          onKeyIssued={(key) =>
-            setModal({ type: "revealKey", key, username: modalUser.username })
-          }
-        />
-      )}
-      {modal?.type === "confirmRevoke" && modalUser && (
-        <RevokeKeyModal
-          user={modalUser}
-          onClose={() => setModal(null)}
-        />
-      )}
-      {modal?.type === "revealKey" && (
-        <KeyRevealModal
-          keyValue={modal.key}
-          username={modal.username}
-          onClose={() => setModal(null)}
-        />
-      )}
-      {modal?.type === "confirmDeactivate" && modalUser && (
-        <DeactivateUserModal
-          user={modalUser}
-          onClose={() => setModal(null)}
-        />
-      )}
-      {modal?.type === "confirmReactivate" && modalUser && (
-        <ReactivateUserModal
-          user={modalUser}
-          onClose={() => setModal(null)}
-        />
-      )}
-      {modal?.type === "chatterDetail" && modalUser && (
-        <ChatterDetailModal
-          user={modalUser}
-          onClose={() => setModal(null)}
-          onDeactivate={() =>
-            setModal({ type: "confirmDeactivate", username: modalUser.username })}
-        />
-      )}
-    </>
-  );
-}
-
-/* ------------------------------------------------------------------ */
-/*  DeactivatedSection — collapsed list of tombstoned users (#126)     */
-/* ------------------------------------------------------------------ */
-
-function DeactivatedSection({
-  users,
-  onReactivate,
-}: {
-  users: AdminUser[];
-  onReactivate: (username: string) => void;
-}) {
-  const [open, setOpen] = useState(false);
-
-  return (
-    <div>
-      <button
-        type="button"
-        onClick={() => setOpen((current) => !current)}
-        className="mb-3 flex items-center gap-1.5 text-sm font-bold text-text-muted transition-colors hover:text-text-primary"
-      >
-        <span
-          className={`inline-block text-xs transition-transform ${open ? "rotate-90" : ""}`}
-        >
-          {"▸"}
-        </span>
-        Deactivated ({users.length})
-      </button>
-
-      {open && (
-        <section className="overflow-x-auto rounded-xl border border-border bg-card">
-          <table className="w-full border-collapse">
-            <thead>
-              <tr className="bg-hover-alt">
-                {["Username", "Role", "Deactivated", ""].map((col) => (
-                  <th key={col} className={thClass}>
-                    {col}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {users.map((user) => (
-                <tr key={user.id} className="border-t border-border">
-                  <td className={`${tdClass} font-medium text-text-muted`}>
-                    {user.username}
-                  </td>
-                  <td className={`${tdClass} capitalize text-text-muted`}>
-                    {user.role.replaceAll("_", " ")}
-                  </td>
-                  <td className={`${tdClass} text-text-muted`}>
-                    {user.disabledAt ? formatRelativeTime(user.disabledAt) : "—"}
-                  </td>
-                  <td className={`${tdClass} text-right`}>
-                    <button
-                      type="button"
-                      onClick={() => onReactivate(user.username)}
-                      className={btnSecondary}
-                    >
-                      Reactivate
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </section>
-      )}
+  const filtered = items.filter((user) => {
+    const statusMatches = status === "all" || (status === "inactive" ? Boolean(user.disabledAt) : !user.disabledAt);
+    return statusMatches && (role === "all" || user.role === role) && `${user.username} ${ROLE_LABELS[user.role]} ${user.role} ${user.assignedPages.map((page) => `${page.label} ${page.modelName}`).join(" ")}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase());
+  });
+  const visible = [...sortChattersByActivity(filtered.filter((user) => user.role === "chatter" && !user.disabledAt)), ...filtered.filter((user) => user.role !== "chatter" && !user.disabledAt), ...filtered.filter((user) => user.disabledAt)];
+  const currentModalUser = modal && "username" in modal ? findAdminUserByUsername(items, modal.username) : null;
+  const modalUser = currentModalUser ?? (modal && "snapshot" in modal ? modal.snapshot : null);
+  const actionsDisabled = !currentModalUser || Boolean(currentModalUser.disabledAt);
+  const modalActionsBlocked = keyPending || Boolean(receipt);
+  function openUserModal(type: "assignPages" | "confirmNewKey" | "confirmRevoke" | "confirmDeactivate" | "confirmReactivate" | "chatterDetail", user: AdminUser) {
+    if (!modalActionsBlocked) setModal({ type, username: user.username, snapshot: user });
+  }
+  function updateSearch(changes: Record<string, string | null>) {
+    setSearch((previous) => {
+      const next = new URLSearchParams(previous);
+      for (const [key, value] of Object.entries(changes)) { if (value) next.set(key, value); else next.delete(key); }
+      return next;
+    });
+  }
+  return <>
+    <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+      <p className="max-w-xl text-sm text-text-muted">Сотрудники входят в ChatGoose по паролю. API-ключ необязателен и нужен для прежних подключений или автоматики.</p>
+      <div className="flex flex-wrap gap-2"><button type="button" disabled={modalActionsBlocked} onClick={() => setModal({ type: "addChatter" })} className="min-h-10 rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white disabled:opacity-50">Добавить чаттера</button><button type="button" disabled={modalActionsBlocked} onClick={() => setModal({ type: "createUser" })} className="min-h-10 rounded-lg border border-border px-3 py-2 text-sm disabled:opacity-50">Добавить сотрудника</button></div>
     </div>
-  );
+    <details className="mb-4 rounded-lg border border-border bg-card px-3 py-2"><summary className="cursor-pointer text-sm font-semibold text-text-secondary">Что позволяют роли</summary><dl className="mt-3 space-y-2">{creatableUserRoles.map((entry) => <div key={entry}><dt className="text-sm font-medium">{ROLE_LABELS[entry]}</dt><dd className="text-xs text-text-muted">{ROLE_HELP[entry]}</dd></div>)}</dl></details>
+    {keyPending && <p role="status" className="mb-3 text-sm text-text-secondary">Выдаём ключ. Он появится здесь после завершения запроса, в том числе после возврата в раздел.</p>}
+    {isError && users && <div className="mb-4 flex flex-wrap items-center gap-2"><StaleDataNotice title="Показан последний загруженный список" error={error} className="flex-1" /><button type="button" onClick={() => void refetch()} disabled={isFetching} className="min-h-10 rounded-lg border border-border px-3 py-2 text-sm disabled:opacity-50">{isFetching ? "Обновляем…" : "Повторить"}</button></div>}
+    <div className="mb-4 flex flex-wrap items-end gap-3">
+      <SearchInput value={query} onChange={(value) => updateSearch({ userQuery: value })} placeholder="Найти сотрудника, страницу или модель…" />
+      <label className="text-xs text-text-secondary"><span className="mb-1 block">Роль</span><select value={role} onChange={(event) => updateSearch({ userRole: event.target.value === "all" ? null : event.target.value })} className="min-h-10 max-w-full rounded-lg border border-border bg-card px-3 py-2 text-sm"><option value="all">Все роли</option>{Object.entries(ROLE_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+      <label className="text-xs text-text-secondary"><span className="mb-1 block">Состояние</span><select value={status} onChange={(event) => updateSearch({ userStatus: event.target.value === "active" ? null : event.target.value })} className="min-h-10 rounded-lg border border-border bg-card px-3 py-2 text-sm"><option value="active">Активные</option><option value="inactive">Деактивированные</option><option value="all">Все участники</option></select></label>
+      {(query || role !== "all" || status !== "active") && <button type="button" onClick={() => updateSearch({ userQuery: null, userRole: null, userStatus: null })} className="min-h-10 text-sm text-accent">Сбросить фильтры</button>}
+      {users && <span className="py-2 text-xs text-text-muted">{visible.length} из {items.length}</span>}
+    </div>
+    {!users ? <StatusPanel title={isError ? "Не удалось загрузить команду" : "Загружаем команду…"} tone={isError ? "error" : "default"} description={isError ? error instanceof Error ? error.message : "Список участников недоступен." : "Получаем участников и действующие назначения страниц."} action={isError ? <button type="button" onClick={() => void refetch()} disabled={isFetching} className="text-accent disabled:opacity-50">Повторить</button> : undefined} /> : visible.length === 0 ? <StatusPanel title={items.length === 0 ? "В команде пока нет участников" : "Участники не найдены"} description={items.length === 0 ? "Добавьте сотрудника и настройте доступ к страницам." : "Измените запрос, роль или состояние. Деактивированные участники доступны через фильтр."} /> : <section className="overflow-x-auto rounded-xl border border-border bg-card"><table className="w-full min-w-[900px] border-collapse"><thead><tr className="bg-hover-alt">{["Участник", "Роль", "Доступ к страницам", "Последняя активность", "Ключ автоматики", "Действия"].map((col) => <th key={col} className={thClass}>{col}</th>)}</tr></thead><tbody>{visible.map((user) => <tr key={user.id} className={`border-t border-border ${user.disabledAt ? "bg-hover-alt text-text-muted" : "hover:bg-hover-alt"}`}>
+      <td className={`${tdClass} font-medium`}><span className="block max-w-[180px] break-all">{user.username}</span>{user.disabledAt && <span className="mt-1 block text-xs text-text-muted">Деактивирован {formatDateTime(user.disabledAt)}</span>}</td>
+      <td className={tdClass}><span title={ROLE_HELP[user.role]}>{ROLE_LABELS[user.role]}</span></td>
+      <td className={tdClass}>{user.role === "owner" ? <span className="text-sm text-text-secondary">Все страницы</span> : <PageChips pages={user.assignedPages} />}</td>
+      <td className={`${tdClass} whitespace-nowrap text-text-muted`} title={user.lastActiveAt ? formatDateTime(user.lastActiveAt) : undefined}>{user.lastActiveAt ? formatRelativeTime(user.lastActiveAt) : "Нет данных об активности"}</td>
+      <td className={tdClass}>{user.role !== "chatter" ? <span className="text-text-muted">Не используется</span> : hasActiveKey(user) ? <span className="text-green">Активен <code className="block text-xs text-text-muted" title={user.apiKeyStatus?.activeKeyPrefix ?? undefined}>{shortKeyPrefix(user.apiKeyStatus!.activeKeyPrefix!)}</code></span> : <span className="text-text-muted">{user.apiKeyStatus ? "Нет активного ключа" : "Нет данных"}</span>}</td>
+      <td className={tdClass}><div className="flex flex-wrap gap-1.5">{user.disabledAt ? <button type="button" disabled={modalActionsBlocked} aria-label={`Восстановить ${user.username}`} onClick={() => openUserModal("confirmReactivate", user)} className={btnSecondary}>Восстановить</button> : <>
+        <button type="button" disabled={modalActionsBlocked} aria-label={`Управлять доступом ${user.username}`} onClick={() => openUserModal(user.role === "chatter" ? "chatterDetail" : "assignPages", user)} className={btnSecondary}>{user.role === "chatter" ? "Управлять" : "Доступ"}</button>
+        {user.role === "chatter" && (hasActiveKey(user) ? <><button type="button" disabled={modalActionsBlocked} aria-label={`Заменить API-ключ ${user.username}`} onClick={() => openUserModal("confirmNewKey", user)} className={btnSecondary}>Заменить ключ</button><button type="button" disabled={modalActionsBlocked} aria-label={`Отозвать API-ключ ${user.username}`} onClick={() => openUserModal("confirmRevoke", user)} className={`${btnSecondary} !text-danger`}>Отозвать ключ</button></> : <IssueKeyButton username={user.username} disabled={modalActionsBlocked} />)}
+        {user.role !== "owner" && user.role !== "chatter" && <button type="button" disabled={modalActionsBlocked} aria-label={`Деактивировать ${user.username}`} onClick={() => openUserModal("confirmDeactivate", user)} className={`${btnSecondary} !text-danger`}>Деактивировать</button>}
+      </>}</div></td>
+    </tr>)}</tbody></table></section>}
+    {!receipt && modal?.type === "addChatter" && <AddChatterModal onClose={() => setModal(null)} />}
+    {!receipt && modal?.type === "createUser" && <CreateUserModal onClose={() => setModal(null)} />}
+    {!receipt && modal?.type === "assignPages" && modalUser && <UserPageAssignmentModal key={modalUser.id} user={modalUser} actionsDisabled={actionsDisabled} onClose={() => setModal(null)} />}
+    {!receipt && modal?.type === "confirmNewKey" && modalUser && <NewKeyModal disabled={actionsDisabled} user={modalUser} onClose={() => setModal(null)} onKeyIssued={() => setModal(null)} />}
+    {!receipt && modal?.type === "confirmRevoke" && modalUser && <RevokeKeyModal disabled={!currentModalUser} user={modalUser} onClose={() => setModal(null)} />}
+    {!receipt && modal?.type === "confirmDeactivate" && modalUser && <DeactivateUserModal disabled={actionsDisabled} user={modalUser} onClose={() => setModal(null)} />}
+    {!receipt && modal?.type === "confirmReactivate" && modalUser && <ReactivateUserModal disabled={!currentModalUser} user={modalUser} onClose={() => setModal(null)} />}
+    {!receipt && modal?.type === "chatterDetail" && modalUser && <ChatterDetailModal key={modalUser.id} user={modalUser} actionsDisabled={actionsDisabled} onClose={() => setModal(null)} onDeactivate={() => openUserModal("confirmDeactivate", modalUser)} />}
+    {receipt && <KeyRevealModal key={receipt.id} keyValue={receipt.result.key} username={receipt.username} onClose={() => { acknowledge(receipt.id); setModal(null); }} />}
+  </>;
 }
 
 /* ------------------------------------------------------------------ */
 /*  DeactivateUserModal / ReactivateUserModal                          */
 /* ------------------------------------------------------------------ */
 
-function DeactivateUserModal({
-  user,
-  onClose,
-}: {
-  user: AdminUser;
-  onClose: () => void;
+function UserActionModal({ title, message, confirmLabel, pending: externalPending = false, disabled = false, execute, onClose }: {
+  title: string; message: string; confirmLabel: string; pending?: boolean; disabled?: boolean;
+  execute: () => Promise<void>; onClose: () => void;
 }) {
+  const [error, setError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const inFlight = useRef(false);
+  const pending = externalPending || submitting;
+  function requestClose() { if (!inFlight.current && !externalPending) onClose(); }
+  async function submit() {
+    if (inFlight.current || pending || disabled) return;
+    inFlight.current = true;
+    setSubmitting(true);
+    setError("");
+    try { await execute(); onClose(); }
+    catch (error) { setError(error instanceof Error ? error.message : "Не удалось выполнить действие"); }
+    finally { inFlight.current = false; setSubmitting(false); }
+  }
+  return <ModalShell title={title} onClose={requestClose} closeDisabled={pending} closeLabel="Закрыть">
+    <p className="text-sm text-text-secondary">{message}</p>
+    {disabled && <p role="status" className="mt-3 text-sm text-warning-dark">Действие недоступно для текущего состояния пользователя. Обновите список команды.</p>}
+    {error && <p role="alert" className="mt-3 break-words text-sm text-danger">{error}</p>}
+    <div className="mt-6 flex flex-wrap justify-end gap-2"><button type="button" disabled={pending} onClick={requestClose} className="rounded-lg border border-border px-3 py-2 text-sm disabled:opacity-50">Отмена</button><button type="button" disabled={pending || disabled} onClick={submit} className="rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white disabled:opacity-50">{pending ? "Выполняем…" : confirmLabel}</button></div>
+  </ModalShell>;
+}
+
+function DeactivateUserModal({ user, onClose, disabled = false }: { user: AdminUser; onClose: () => void; disabled?: boolean }) {
   const deactivate = useAdminDeactivateUser(user.username);
-
-  async function handleConfirm() {
-    try {
-      const result = await deactivate.mutateAsync();
-      const revoked = result.revokedApiKeys + result.revokedDeviceTokens + result.revokedSessions;
-      toast.success(
-        revoked > 0
-          ? `${user.username} deactivated — signed out everywhere (${revoked} credential${revoked === 1 ? "" : "s"} revoked)`
-          : `${user.username} deactivated`,
-      );
-      onClose();
-    } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "Failed to deactivate user",
-      );
-    }
-  }
-
-  return (
-    <ConfirmModal
-      title={`Deactivate ${user.username}`}
-      message={`This signs ${user.username} out everywhere: their API key, device sessions, and dashboard sessions are revoked, and they move to the Deactivated list. History and attribution are preserved — you can reactivate them later.`}
-      confirmLabel="Deactivate"
-      isPending={deactivate.isPending}
-      onConfirm={handleConfirm}
-      onClose={onClose}
-    />
-  );
+  return <UserActionModal title={`Деактивировать ${user.username}?`} message="Все API-ключи, устройства и сессии пользователя будут отозваны. История и авторство сохранятся; пользователя можно восстановить позже." confirmLabel="Деактивировать" disabled={disabled || user.role === "owner" || Boolean(user.disabledAt)} onClose={onClose} execute={async () => {
+    await deactivate.mutateAsync();
+    toast.success(`${user.username}: доступ отключён, история сохранена`);
+  }} />;
 }
 
-function ReactivateUserModal({
-  user,
-  onClose,
-}: {
-  user: AdminUser;
-  onClose: () => void;
-}) {
+function ReactivateUserModal({ user, onClose, disabled = false }: { user: AdminUser; onClose: () => void; disabled?: boolean }) {
   const reactivate = useAdminReactivateUser(user.username);
-
-  async function handleConfirm() {
-    try {
-      await reactivate.mutateAsync();
-      toast.success(
-        `${user.username} reactivated — their password works again; keys and devices stay revoked`,
-      );
-      onClose();
-    } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "Failed to reactivate user",
-      );
-    }
-  }
-
-  return (
-    <ConfirmModal
-      title={`Reactivate ${user.username}`}
-      message={`${user.username} will be able to sign in with their existing password again immediately. Previously revoked API keys and device tokens stay revoked — issue fresh ones if needed.`}
-      confirmLabel="Reactivate"
-      isPending={reactivate.isPending}
-      onConfirm={handleConfirm}
-      onClose={onClose}
-    />
-  );
+  return <UserActionModal title={`Восстановить ${user.username}?`} message="Существующий пароль снова позволит войти. Отозванные API-ключи и устройства останутся отозванными; при необходимости сотрудник войдёт заново." confirmLabel="Восстановить" disabled={disabled || !user.disabledAt} onClose={onClose} execute={async () => {
+    await reactivate.mutateAsync();
+    toast.success(`${user.username}: восстановлен. Ключи и устройства остаются отозванными`);
+  }} />;
 }
 
-/* ------------------------------------------------------------------ */
-/*  IssueKeyButton — inline button that issues a key directly          */
-/* ------------------------------------------------------------------ */
-
-function IssueKeyButton({
-  username,
-  onKeyIssued,
-}: {
-  username: string;
-  onKeyIssued: (key: string) => void;
-}) {
+function IssueKeyButton({ username, disabled = false }: { username: string; disabled?: boolean }) {
   const issueKey = useAdminIssueApiKey(username);
-
+  const inFlight = useRef(false);
   async function handleClick() {
-    try {
-      const result = await issueKey.mutateAsync({});
-      onKeyIssued(result.key);
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to issue key");
-    }
+    if (inFlight.current || issueKey.isPending || disabled) return;
+    inFlight.current = true;
+    try { await issueKey.mutateAsync({}); }
+    catch (error) { toast.error(error instanceof Error ? error.message : "Не удалось выдать ключ"); }
+    finally { inFlight.current = false; }
   }
-
-  return (
-    <button
-      type="button"
-      disabled={issueKey.isPending}
-      onClick={handleClick}
-      className={`${btnSecondary} disabled:opacity-50`}
-    >
-      {issueKey.isPending ? "Issuing..." : "Issue Key"}
-    </button>
-  );
+  return <button type="button" aria-label={`Выдать API-ключ ${username}`} disabled={disabled || issueKey.isPending} onClick={handleClick} className={btnSecondary}>{issueKey.isPending ? "Выдаём…" : "Выдать ключ"}</button>;
 }
 
 /* ------------------------------------------------------------------ */
@@ -700,359 +303,123 @@ export async function provisionChatter(input: {
   }
 }
 
-function AddChatterModal({
-  onClose,
-}: {
-  onClose: () => void;
-}) {
+export function AddChatterModal({ onClose }: { onClose: () => void }) {
   const createUser = useAdminCreateUser();
-  const pagesQuery = useAdminPages();
+  const pagesQuery = useAdminPages({ suppressGlobalError: true });
   const allPages = pagesQuery.data;
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [selectedPage, setSelectedPage] = useState("");
-  const [isPending, setIsPending] = useState(false);
+  const [pending, setPending] = useState(false);
   const [createdUsername, setCreatedUsername] = useState<string | null>(null);
-
-  const setUserPassword = useAdminSetPassword(username.trim());
-  const assignPage = useAdminAssignPage(username.trim());
-
-  const passwordTooShort = password.length > 0 && password.length < 8;
-
+  const [appliedPassword, setAppliedPassword] = useState("");
+  const [error, setError] = useState("");
+  const inFlight = useRef(false);
+  const setUserPassword = useAdminSetPassword(createdUsername ?? username.trim());
+  const assignPage = useAdminAssignPage(createdUsername ?? username.trim());
+  const invalidPassword = password.length > 0 && (password.length < 8 || password.length > 256);
+  const pageAvailable = !selectedPage || Boolean(allPages?.some((page) => page.label === selectedPage));
+  function requestClose() { if (!inFlight.current) onClose(); }
   async function handleSubmit() {
-    const trimmed = username.trim();
-    if (!trimmed || passwordTooShort) return;
-
-    setIsPending(true);
+    const trimmed = createdUsername ?? username.trim();
+    if (inFlight.current || !trimmed || trimmed.length > 100 || invalidPassword || !pageAvailable) return;
+    inFlight.current = true;
+    setPending(true);
+    setError("");
     try {
       await provisionChatter({
-        username,
-        password,
-        pageLabel: selectedPage,
-        createdUsername,
-        createUser: async (name) => {
-          await createUser.mutateAsync({ username: name, role: "chatter" });
-        },
+        username: trimmed, password: password === appliedPassword ? "" : password, pageLabel: selectedPage, createdUsername,
+        createUser: async (name) => { await createUser.mutateAsync({ username: name, role: "chatter" }); },
         onUserCreated: setCreatedUsername,
-        setPassword: async (pw) => {
-          // mustChangePassword stays off (#116): no chatter-reachable surface
-          // can complete a forced change yet.
-          await setUserPassword.mutateAsync({
-            password: pw,
-            mustChangePassword: false,
-          });
-        },
-        assignPage: async (pageLabel) => {
-          await assignPage.mutateAsync({ pageLabel });
-        },
+        setPassword: async (value) => { await setUserPassword.mutateAsync({ password: value, mustChangePassword: false }); setAppliedPassword(value); },
+        assignPage: async (pageLabel) => { await assignPage.mutateAsync({ pageLabel }); },
       });
-
-      toast.success(
-        password
-          ? `${trimmed} created — they can now sign in from the extension/desktop`
-          : `${trimmed} created (no password — set one, or issue a key)`,
-      );
+      toast.success(password || appliedPassword ? `${trimmed}: готов к входу в ChatGoose${selectedPage ? "" : ". Назначьте страницы для работы"}` : `${trimmed}: создан без пароля. Задайте пароль через «Управлять»`);
       onClose();
-    } catch (error) {
-      setIsPending(false);
-      toast.error(
-        error instanceof Error ? error.message : "Failed to create chatter",
-      );
-    }
+    } catch (error) { setError(error instanceof Error ? error.message : "Не удалось закончить настройку чаттера"); }
+    finally { inFlight.current = false; setPending(false); }
   }
-
-  return (
-    <ModalShell title="Add Chatter" onClose={onClose}>
-      <div className="space-y-4">
-        <Field label="Username">
-          <input
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            placeholder="e.g. sarah"
-            className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm outline-none focus:border-accent"
-          />
-        </Field>
-
-        <Field label="Password">
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder="min 8 characters"
-            autoComplete="new-password"
-            className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm outline-none focus:border-accent"
-          />
-          <p className="mt-1 text-xs text-text-muted">
-            The chatter signs in with this in ChatGoose (extension or desktop)
-            to mint their own device token — no key to send around.
-          </p>
-          {passwordTooShort && (
-            <p className="mt-1 text-xs text-danger">
-              Password must be at least 8 characters.
-            </p>
-          )}
-        </Field>
-
-        <Field label="Assign a page (optional)">
-          <QuerySection title="Доступные страницы" hasData={allPages !== undefined} isError={pagesQuery.isError} retry={pagesQuery.refetch}>
-            {allPages?.length === 0 && <p className="mb-2 text-sm text-text-muted">В каталоге пока нет доступных страниц.</p>}
-            <select
-              value={selectedPage}
-              onChange={(e) => setSelectedPage(e.target.value)}
-              className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm outline-none focus:border-accent"
-            >
-              <option value="">None</option>
-              {allPages?.map((page) => (
-                <option key={page.id} value={page.label}>
-                  {page.label} ({page.platform} / {page.modelName})
-                </option>
-              ))}
-            </select>
-          </QuerySection>
-        </Field>
-      </div>
-
-      <div className="mt-6 flex items-center justify-end gap-2">
-        <button
-          type="button"
-          onClick={onClose}
-          className="rounded-lg border border-border bg-card px-3 py-2 text-sm text-text-secondary hover:bg-hover"
-        >
-          Cancel
-        </button>
-        <button
-          type="button"
-          disabled={isPending || !username.trim() || passwordTooShort}
-          onClick={handleSubmit}
-          className="rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50"
-        >
-          {isPending ? "Creating..." : "Create Chatter"}
-        </button>
-      </div>
-    </ModalShell>
-  );
+  return <ModalShell title="Добавить чаттера" onClose={requestClose} closeDisabled={pending} closeLabel="Закрыть">
+    <form onSubmit={(event) => { event.preventDefault(); return handleSubmit(); }} aria-busy={pending}>
+      {createdUsername && <p role="status" className="mb-4 rounded-lg border border-warning/30 px-3 py-2 text-sm text-text-secondary">Пользователь {createdUsername} уже создан. Продолжение завершит оставшиеся шаги для этого же аккаунта; повторного создания не будет.{appliedPassword && " Пароль уже сохранён; если оставить его без изменений, он не будет установлен повторно."}</p>}
+      <fieldset disabled={pending} className="space-y-4">
+        <Field label="Имя для входа"><input required maxLength={100} disabled={createdUsername !== null} value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="off" placeholder="Например, sarah" className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm disabled:opacity-60" /></Field>
+        <Field label="Пароль (можно задать позже)"><input type="password" minLength={8} maxLength={256} value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="new-password" className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm" /><p className="mt-1 text-xs text-text-muted">8–256 символов. Сотрудник использует имя и пароль в ChatGoose; без пароля войти не получится.</p>{invalidPassword && <p className="mt-1 text-xs text-danger">Введите от 8 до 256 символов или оставьте поле пустым.</p>}</Field>
+        <QueryNotice error={pagesQuery.isError} stale={allPages !== undefined} retry={pagesQuery.refetch} />
+        {!allPages && !pagesQuery.isError && <p role="status" className="text-sm text-text-muted">Загружаем страницы…</p>}
+        <Field label="Первая страница (необязательно)"><select value={selectedPage} onChange={(event) => setSelectedPage(event.target.value)} className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm"><option value="">Назначить позже</option>{selectedPage && !pageAvailable && <option value={selectedPage}>{selectedPage} · сейчас недоступна</option>}{allPages?.map((page) => <option key={page.id} value={page.label}>{page.label} ({page.platform} / {page.modelName})</option>)}</select>{!pageAvailable && <p role="status" className="mt-1 text-xs text-warning-dark">Выбранная страница исчезла из каталога. Обновите список или выберите «Назначить позже».</p>}</Field>
+      </fieldset>
+      {error && <p role="alert" className="mt-4 break-words rounded-lg border border-danger/30 bg-danger/5 px-3 py-2 text-sm text-danger">{error}</p>}
+      <div className="mt-6 flex flex-wrap justify-end gap-2"><button type="button" disabled={pending} onClick={requestClose} className="rounded-lg border border-border px-3 py-2 text-sm disabled:opacity-50">{createdUsername ? "Закрыть" : "Отмена"}</button><button type="submit" disabled={pending || !username.trim() || invalidPassword || !pageAvailable} className="rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white disabled:opacity-50">{pending ? "Настраиваем…" : createdUsername ? "Завершить настройку" : "Создать чаттера"}</button></div>
+    </form>
+  </ModalShell>;
 }
 
 /* ------------------------------------------------------------------ */
 /*  CreateUserModal — existing staff user creation (preserved)         */
 /* ------------------------------------------------------------------ */
 
-function CreateUserModal({ onClose }: { onClose: () => void }) {
+export function CreateUserModal({ onClose }: { onClose: () => void }) {
   const createUser = useAdminCreateUser();
   const [username, setUsername] = useState("");
   const [role, setRole] = useState<AdminCreateUserBody["role"]>("team_lead");
   const [password, setPassword] = useState("");
-
+  const [error, setError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const inFlight = useRef(false);
   const requiresPassword = role === "owner" || role === "team_lead";
-
+  const valid = Boolean(username.trim()) && username.trim().length <= 100 && (!requiresPassword || password.length >= 8 && password.length <= 256);
+  const pending = submitting || createUser.isPending;
+  function requestClose() { if (!inFlight.current) onClose(); }
   async function handleSubmit() {
-    const body: AdminCreateUserBody = {
-      username: username.trim(),
-      role,
-      password: requiresPassword ? password : undefined,
-    };
-
+    if (inFlight.current || !valid) return;
+    inFlight.current = true; setSubmitting(true); setError("");
     try {
-      await createUser.mutateAsync(body);
-      toast.success("User created");
+      await createUser.mutateAsync({ username: username.trim(), role, ...(requiresPassword ? { password } : {}) });
+      toast.success(role === "owner" ? `${username.trim()}: владелец создан с доступом ко всем страницам` : `${username.trim()}: создан. Настройте доступ к страницам${role === "chatter" ? " и пароль через «Управлять»" : ""}`);
       onClose();
-    } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "Failed to create user",
-      );
-    }
+    } catch (error) { setError(error instanceof Error ? error.message : "Не удалось создать пользователя"); }
+    finally { inFlight.current = false; setSubmitting(false); }
   }
-
-  return (
-    <ModalShell title="Create User" onClose={onClose}>
-      <div className="space-y-4">
-        <Field label="Username">
-          <input
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm outline-none focus:border-accent"
-          />
-        </Field>
-        <Field label="Role">
-          <select
-            value={role}
-            onChange={(e) => {
-              const nextRole = e.target.value as AdminCreateUserBody["role"];
-              setRole(nextRole);
-              if (nextRole !== "owner" && nextRole !== "team_lead") {
-                setPassword("");
-              }
-            }}
-            className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm outline-none focus:border-accent"
-          >
-            {creatableUserRoles.map((option) => (
-              <option key={option} value={option}>
-                {option.replaceAll("_", " ")}
-              </option>
-            ))}
-          </select>
-        </Field>
-        {requiresPassword && (
-          <Field label="Password">
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm outline-none focus:border-accent"
-            />
-          </Field>
-        )}
-      </div>
-
-      <div className="mt-6 flex items-center justify-end gap-2">
-        <button
-          type="button"
-          onClick={onClose}
-          className="rounded-lg border border-border bg-card px-3 py-2 text-sm text-text-secondary hover:bg-hover"
-        >
-          Cancel
-        </button>
-        <button
-          type="button"
-          disabled={createUser.isPending}
-          onClick={handleSubmit}
-          className="rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50"
-        >
-          Create
-        </button>
-      </div>
-    </ModalShell>
-  );
+  return <ModalShell title="Добавить сотрудника" onClose={requestClose} closeDisabled={pending} closeLabel="Закрыть">
+    <form onSubmit={(event) => { event.preventDefault(); return handleSubmit(); }} aria-busy={pending}>
+      <fieldset disabled={pending} className="space-y-4">
+        <Field label="Имя для входа"><input required maxLength={100} value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="off" className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm" /></Field>
+        <Field label="Роль"><select value={role} onChange={(event) => setRole(event.target.value as AdminCreateUserBody["role"])} className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm">{creatableUserRoles.map((entry) => <option key={entry} value={entry}>{ROLE_LABELS[entry]}</option>)}</select><p className="mt-2 text-xs text-text-muted">{ROLE_HELP[role]}</p></Field>
+        {requiresPassword ? <Field label="Пароль"><input type="password" required minLength={8} maxLength={256} value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="new-password" className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm" /><p className="mt-1 text-xs text-text-muted">8–256 символов.</p>{password && password.length < 8 && <p className="mt-1 text-xs text-danger">Пароль должен содержать не менее 8 символов.</p>}</Field> : <p className="text-xs text-text-muted">Чаттер будет создан без пароля и назначений. Для полной настройки за один шаг используйте «Добавить чаттера».</p>}
+      </fieldset>
+      {error && <p role="alert" className="mt-4 break-words rounded-lg border border-danger/30 bg-danger/5 px-3 py-2 text-sm text-danger">{error}</p>}
+      <div className="mt-6 flex flex-wrap justify-end gap-2"><button type="button" disabled={pending} onClick={requestClose} className="rounded-lg border border-border px-3 py-2 text-sm disabled:opacity-50">Отмена</button><button type="submit" disabled={pending || !valid} className="rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white disabled:opacity-50">{pending ? "Создаём…" : "Создать сотрудника"}</button></div>
+    </form>
+  </ModalShell>;
 }
 
 /* ------------------------------------------------------------------ */
 /*  NewKeyModal — confirm rotation then issue                          */
 /* ------------------------------------------------------------------ */
 
-function NewKeyModal({
-  user,
-  onClose,
-  onKeyIssued,
-}: {
-  user: AdminUser;
-  onClose: () => void;
-  onKeyIssued: (key: string) => void;
-}) {
+function NewKeyModal({ user, onClose, onKeyIssued, disabled = false }: { user: AdminUser; onClose: () => void; onKeyIssued: (key: string) => void; disabled?: boolean }) {
   const issueKey = useAdminIssueApiKey(user.username);
-
-  async function handleConfirm() {
-    try {
-      const result = await issueKey.mutateAsync({});
-      onKeyIssued(result.key);
-    } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "Failed to issue key",
-      );
-    }
-  }
-
-  return (
-    <ConfirmModal
-      title="New API Key"
-      message={`This will create a new key for ${user.username} and revoke their current one. You\u2019ll need to send them the new key.`}
-      confirmLabel="New Key"
-      isPending={issueKey.isPending}
-      onConfirm={handleConfirm}
-      onClose={onClose}
-    />
-  );
+  return <UserActionModal title={`Заменить API-ключ ${user.username}?`} message="Текущий API-ключ будет отозван сразу после выдачи нового. Пароль и вход с устройств не меняются. Сохраните новый ключ и обновите использующие его подключения." confirmLabel="Заменить ключ" pending={issueKey.isPending} disabled={disabled || user.role !== "chatter" || Boolean(user.disabledAt)} onClose={onClose} execute={async () => { const result = await issueKey.mutateAsync({}); onKeyIssued(result.key); }} />;
 }
-
-/* ------------------------------------------------------------------ */
-/*  RevokeKeyModal                                                     */
-/* ------------------------------------------------------------------ */
-
-function RevokeKeyModal({
-  user,
-  onClose,
-}: {
-  user: AdminUser;
-  onClose: () => void;
-}) {
+function RevokeKeyModal({ user, onClose, disabled = false }: { user: AdminUser; onClose: () => void; disabled?: boolean }) {
   const revokeKeys = useAdminRevokeApiKeys(user.username);
-
-  async function handleConfirm() {
-    try {
-      await revokeKeys.mutateAsync();
-      toast.success("Key revoked");
-      onClose();
-    } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "Failed to revoke key",
-      );
-    }
-  }
-
-  return (
-    <ConfirmModal
-      title="Revoke API Key"
-      message={`This will disconnect ${user.username}\u2019s browser extension immediately. They won\u2019t be able to connect until you issue a new key.`}
-      confirmLabel="Revoke Key"
-      isPending={revokeKeys.isPending}
-      onConfirm={handleConfirm}
-      onClose={onClose}
-    />
-  );
+  return <UserActionModal title={`Отозвать API-ключи ${user.username}?`} message="Подключения с API-ключом потеряют доступ. Пароль и токены устройств сохранятся. Для полного отключения пользователя используйте деактивацию." confirmLabel="Отозвать ключи" disabled={disabled} onClose={onClose} execute={async () => { await revokeKeys.mutateAsync(); toast.success(`${user.username}: API-ключи отозваны`); }} />;
 }
-
-/* ------------------------------------------------------------------ */
-/*  KeyRevealModal — shown once after issuing a key                    */
-/* ------------------------------------------------------------------ */
-
-function KeyRevealModal({
-  keyValue,
-  username,
-  onClose,
-}: {
-  keyValue: string;
-  username: string;
-  onClose: () => void;
-}) {
+export function KeyRevealModal({ keyValue, username, onClose }: { keyValue: string; username: string; onClose: () => void }) {
   const [copied, setCopied] = useState(false);
-
+  const [copyError, setCopyError] = useState("");
   async function handleCopy() {
-    await navigator.clipboard.writeText(keyValue);
-    setCopied(true);
-    toast.success("Copied to clipboard");
-    setTimeout(() => setCopied(false), 2000);
+    try { await navigator.clipboard.writeText(keyValue); setCopied(true); setCopyError(""); }
+    catch { setCopyError("Буфер обмена недоступен. Выделите ключ и скопируйте его вручную."); }
   }
-
-  return (
-    <ModalShell title={`API Key for ${username}`} onClose={onClose}>
-      <div className="space-y-4">
-        <p className="text-sm font-medium text-warning">
-          This key is shown only once. Copy it now and send it to the chatter.
-        </p>
-        <div className="flex items-center gap-2">
-          <code className="flex-1 select-all break-all rounded-lg border border-border bg-bg px-3 py-2.5 font-mono text-sm text-text-primary">
-            {keyValue}
-          </code>
-          <button
-            type="button"
-            onClick={handleCopy}
-            className="shrink-0 rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white hover:opacity-90"
-          >
-            {copied ? "Copied!" : "Copy"}
-          </button>
-        </div>
-      </div>
-
-      <div className="mt-6 flex items-center justify-end">
-        <button
-          type="button"
-          onClick={onClose}
-          className="rounded-lg border border-border bg-card px-3 py-2 text-sm text-text-secondary hover:bg-hover"
-        >
-          Done
-        </button>
-      </div>
-    </ModalShell>
-  );
+  return <ModalShell title={`API-ключ: ${username}`} onClose={onClose} closeDisabled={!copied} closeLabel="Закрыть">
+    <p className="mb-4 text-sm font-medium text-warning-dark">Сохраните ключ перед закрытием. После закрытия повторный показ недоступен. Для обычного входа сотрудника используйте пароль.</p>
+    <Field label="Секретный API-ключ"><textarea readOnly rows={3} value={keyValue} onFocus={(event) => event.target.select()} className="w-full rounded-lg border border-border bg-bg px-3 py-2 font-mono text-sm" /></Field>
+    <button type="button" onClick={handleCopy} className="mt-3 rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white">{copied ? "Скопировано" : "Скопировать ключ"}</button>
+    {copyError && <p role="alert" className="mt-2 text-sm text-danger">{copyError}</p>}
+    <div className="mt-6 flex justify-end"><button type="button" onClick={onClose} className="rounded-lg border border-border px-3 py-2 text-sm">Ключ сохранён — закрыть</button></div>
+  </ModalShell>;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1063,191 +430,106 @@ export function ChatterDetailModal({
   user,
   onClose,
   onDeactivate,
+  actionsDisabled = false,
 }: {
   user: AdminUser;
   onClose: () => void;
   onDeactivate: () => void;
+  actionsDisabled?: boolean;
 }) {
-  const keysQuery = useAdminUserApiKeys(user.username);
+  const keysQuery = useAdminUserApiKeys(user.username, { suppressGlobalError: true });
   const apiKeys = keysQuery.data;
-  const pagesQuery = useAdminPages();
+  const pagesQuery = useAdminPages({ suppressGlobalError: true });
   const allPages = pagesQuery.data;
   const assignPage = useAdminAssignPage(user.username);
   const unassignPage = useAdminUnassignPage(user.username);
   const setUserPassword = useAdminSetPassword(user.username);
   const [selectedLabel, setSelectedLabel] = useState("");
   const [newPassword, setNewPassword] = useState("");
+  const [actionError, setActionError] = useState("");
+  const [activeAction, setActiveAction] = useState<"password" | "assign" | "unassign" | null>(null);
+  const inFlight = useRef(false);
+  const pending = activeAction !== null || assignPage.isPending || unassignPage.isPending || setUserPassword.isPending;
+  const disabled = pending || actionsDisabled;
+  const validPassword = newPassword.length >= 8 && newPassword.length <= 256;
+  const assignedLabels = new Set(user.assignedPages.map((page) => page.label));
+  const availablePages = (allPages ?? []).filter((page) => !assignedLabels.has(page.label));
 
-  async function handleSetPassword() {
-    if (newPassword.length < 8) return;
-    try {
-      // mustChangePassword stays off (#116): no chatter-reachable surface
-      // can complete a forced change yet.
-      await setUserPassword.mutateAsync({
-        password: newPassword,
-        mustChangePassword: false,
-      });
+  function requestClose() {
+    if (!inFlight.current && !pending) onClose();
+  }
+  async function perform(action: "password" | "assign" | "unassign", execute: () => Promise<void>) {
+    if (inFlight.current || disabled) return;
+    inFlight.current = true;
+    setActiveAction(action);
+    setActionError("");
+    try { await execute(); }
+    catch (error) { setActionError(error instanceof Error ? error.message : "Не удалось сохранить изменения"); }
+    finally { inFlight.current = false; setActiveAction(null); }
+  }
+  function handleSetPassword() {
+    if (!validPassword) return;
+    return perform("password", async () => {
+      // #116: chatter clients cannot complete a forced password change.
+      await setUserPassword.mutateAsync({ password: newPassword, mustChangePassword: false });
       setNewPassword("");
-      toast.success(
-        `Password set for ${user.username} — their active sessions were signed out`,
-      );
-    } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "Failed to set password",
-      );
-    }
+      toast.success(`${user.username}: пароль сохранён, прежние сессии и устройства отключены`);
+    });
   }
-
-  const assignedLabels = new Set(user.assignedPages.map((p) => p.label));
-  const availablePages = (allPages ?? []).filter(
-    (p) => !assignedLabels.has(p.label),
-  );
-
-  async function handleAssign() {
-    if (!selectedLabel) return;
-    try {
+  function handleAssign() {
+    if (!availablePages.some((page) => page.label === selectedLabel)) return;
+    return perform("assign", async () => {
       await assignPage.mutateAsync({ pageLabel: selectedLabel });
-      toast.success(`Assigned ${selectedLabel} to ${user.username}`);
+      toast.success(`${selectedLabel}: назначена пользователю ${user.username}`);
       setSelectedLabel("");
-    } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "Failed to assign page",
-      );
-    }
+    });
   }
-
-  async function handleUnassign(pageLabel: string) {
-    try {
+  function handleUnassign(pageLabel: string) {
+    return perform("unassign", async () => {
       await unassignPage.mutateAsync(pageLabel);
-      toast.success(`Unassigned ${pageLabel} from ${user.username}`);
-    } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "Failed to unassign page",
-      );
-    }
+      toast.success(`${pageLabel}: прямое назначение снято. Доступ через модель, если он есть, сохраняется.`);
+    });
   }
 
   return (
-    <ModalShell title={`Manage ${user.username}`} onClose={onClose}>
-      <div className="space-y-6">
-        {/* Password (#116: the human credential — device tokens ride it) */}
+    <ModalShell title={`Управлять: ${user.username}`} onClose={requestClose} closeDisabled={pending} closeLabel="Закрыть">
+      <div className="space-y-6" aria-busy={pending}>
+        {actionsDisabled && <p role="status" className="text-sm text-warning-dark">Актуальный активный пользователь недоступен. Черновик сохранён; изменения пока заблокированы.</p>}
+        <form onSubmit={(event) => { event.preventDefault(); return handleSetPassword(); }}>
+          <fieldset disabled={disabled}>
+            <Field label="Новый пароль для ChatGoose">
+              <input type="password" required minLength={8} maxLength={256} value={newPassword} onChange={(event) => setNewPassword(event.target.value)} autoComplete="new-password" className="min-h-10 w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm outline-none focus:border-accent" />
+            </Field>
+            <p className="mt-2 text-xs text-text-muted">8–256 символов. Сохранение пароля отключит прежние сессии и устройства: сотруднику нужно будет войти заново. API-ключи сохранятся.</p>
+            {newPassword && !validPassword && <p className="mt-1 text-xs text-danger">Введите от 8 до 256 символов.</p>}
+            <button type="submit" disabled={disabled || !validPassword} className="mt-3 min-h-10 rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white disabled:opacity-50">{activeAction === "password" ? "Сохраняем…" : "Сохранить пароль"}</button>
+          </fieldset>
+        </form>
+        {actionError && <p role="alert" className="break-words rounded-lg border border-danger/30 bg-danger/5 px-3 py-2 text-sm text-danger">{actionError}</p>}
         <div>
-          <h3 className="mb-2 text-sm font-semibold text-text-primary">
-            Password
-          </h3>
-          <div className="flex items-center gap-2">
-            <input
-              type="password"
-              value={newPassword}
-              onChange={(e) => setNewPassword(e.target.value)}
-              placeholder="New password (min 8 characters)"
-              autoComplete="new-password"
-              className="flex-1 rounded-lg border border-border bg-bg px-3 py-2 text-sm outline-none focus:border-accent"
-            />
-            <button
-              type="button"
-              disabled={newPassword.length < 8 || setUserPassword.isPending}
-              onClick={handleSetPassword}
-              className="shrink-0 rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white transition-colors hover:opacity-90 disabled:opacity-50"
-            >
-              {setUserPassword.isPending ? "Setting..." : "Set password"}
-            </button>
-          </div>
-          <p className="mt-1 text-xs text-text-muted">
-            The chatter signs in with this in ChatGoose to mint a device token.
-            Setting a password signs out their active sessions.
-          </p>
-        </div>
-
-        {/* Key History */}
-        <div>
-          <h3 className="mb-2 text-sm font-semibold text-text-primary">
-            Key History
-          </h3>
+          <h3 className="mb-2 text-sm font-semibold text-text-primary">История API-ключей</h3>
+          <p className="mb-2 text-xs text-text-muted">API-ключи относятся к прежним подключениям и автоматике. Отсутствие ключа не мешает входу по паролю.</p>
           <QuerySection title="История ключей" hasData={apiKeys !== undefined} isError={keysQuery.isError} retry={keysQuery.refetch}>
-          {!apiKeys || apiKeys.length === 0 ? (
-            <p className="text-sm text-text-muted">No keys have been issued.</p>
-          ) : (
-            <div className="space-y-1.5">
-              {apiKeys.map((k) => (
-                <div
-                  key={k.id}
-                  className="flex items-center justify-between rounded-lg border border-border bg-bg px-3 py-2"
-                >
-                  <div className="flex items-center gap-2 text-sm">
-                    <code className="font-mono text-text-primary">
-                      {k.keyPrefix}...
-                    </code>
-                    {k.isActive ? (
-                      <span className="rounded bg-green/15 px-1.5 py-0.5 text-[11px] font-semibold uppercase text-green">
-                        Active
-                      </span>
-                    ) : (
-                      <span className="rounded bg-text-muted/10 px-1.5 py-0.5 text-[11px] font-semibold uppercase text-text-muted">
-                        Revoked
-                      </span>
-                    )}
-                    {k.revokedReason && (
-                      <span className="text-text-muted">
-                        ({k.revokedReason})
-                      </span>
-                    )}
-                  </div>
-                  <div className="text-xs text-text-muted">
-                    {formatDateTime(k.createdAt)}
-                    {k.lastUsedAt && (
-                      <span className="ml-2">
-                        last used {formatRelativeTime(k.lastUsedAt)}
-                      </span>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
+            {apiKeys?.length === 0 ? <p className="text-sm text-text-muted">API-ключи ещё не выдавались.</p> : <div className="space-y-1.5">
+              {apiKeys?.map((key) => <div key={key.id} className="rounded-lg border border-border bg-bg px-3 py-2">
+                <div className="flex flex-wrap items-center gap-2 text-sm"><code className="min-w-0 break-all font-mono text-text-primary">{key.keyPrefix}…</code><span className={`rounded px-1.5 py-0.5 text-[11px] font-semibold ${key.isActive ? "bg-green/15 text-green" : "bg-text-muted/10 text-text-muted"}`}>{key.isActive ? "Активен" : "Отозван"}</span>{key.revokedReason && <span className="break-words text-text-muted">({key.revokedReason})</span>}</div>
+                <div className="mt-1 text-xs text-text-muted">Выдан {formatDateTime(key.createdAt)} · Последнее использование: {key.lastUsedAt ? formatRelativeTime(key.lastUsedAt) : "не использовался"}</div>
+              </div>)}
+            </div>}
           </QuerySection>
         </div>
-
-        {/* Page Assignments */}
-        <QueryNotice error={pagesQuery.isError} stale={allPages !== undefined} retry={pagesQuery.refetch} />
-        {!allPages && !pagesQuery.isError && <p role="status" className="text-sm text-text-muted">Загружаем каталог страниц для назначения…</p>}
-        {allPages?.length === 0 && <p className="text-sm text-text-muted">В каталоге пока нет доступных страниц.</p>}
-        <PageAssignmentsEditor
-          assignedPages={user.assignedPages}
-          availablePages={availablePages}
-          selectedLabel={selectedLabel}
-          onSelectedLabelChange={setSelectedLabel}
-          onAssign={handleAssign}
-          onUnassign={handleUnassign}
-          assignPending={assignPage.isPending || allPages === undefined}
-          unassignPending={unassignPage.isPending}
-        />
-
-        {/* Deactivation (#126: tombstone, never delete) */}
-        <div className="flex items-center justify-between gap-3 rounded-lg border border-danger/25 bg-danger/5 px-3 py-2.5">
-          <p className="text-xs text-text-muted">
-            Deactivating signs {user.username} out everywhere and hides them
-            from the list. History is preserved; you can reactivate later.
-          </p>
-          <button
-            type="button"
-            onClick={onDeactivate}
-            className="shrink-0 rounded-lg border border-danger/25 bg-card px-3 py-1.5 text-xs font-medium text-danger transition-colors hover:bg-danger/10"
-          >
-            Deactivate
-          </button>
+        <div>
+          <QueryNotice error={pagesQuery.isError} stale={allPages !== undefined} retry={pagesQuery.refetch} />
+          {!allPages && !pagesQuery.isError && <p role="status" className="text-sm text-text-muted">Загружаем каталог страниц для назначения…</p>}
+          {allPages?.length === 0 && <p className="text-sm text-text-muted">В каталоге пока нет доступных страниц.</p>}
+          <PageAssignmentsEditor assignedPages={user.assignedPages} availablePages={availablePages} selectedLabel={selectedLabel} onSelectedLabelChange={setSelectedLabel} onAssign={handleAssign} onUnassign={handleUnassign} assignPending={activeAction === "assign" || assignPage.isPending} unassignPending={activeAction === "unassign" || unassignPage.isPending} disabled={disabled} availablePagesLoaded={allPages !== undefined} />
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-danger/25 bg-danger/5 px-3 py-2.5">
+          <p className="min-w-0 flex-1 text-xs text-text-muted">Деактивация отключит {user.username} на всех устройствах и отзовёт API-ключи. История сохранится; аккаунт можно восстановить позже.</p>
+          <button type="button" disabled={disabled} onClick={() => { if (!inFlight.current && !disabled) onDeactivate(); }} className="min-h-9 shrink-0 rounded-lg border border-danger/25 bg-card px-3 py-1.5 text-xs font-medium text-danger hover:bg-danger/10 disabled:opacity-50">Деактивировать</button>
         </div>
       </div>
-
-      <div className="mt-6 flex items-center justify-end">
-        <button
-          type="button"
-          onClick={onClose}
-          className="rounded-lg border border-border bg-card px-3 py-2 text-sm text-text-secondary hover:bg-hover"
-        >
-          Done
-        </button>
-      </div>
+      <div className="mt-6 flex justify-end"><button type="button" disabled={pending} onClick={requestClose} className="rounded-lg border border-border bg-card px-3 py-2 text-sm text-text-secondary hover:bg-hover disabled:opacity-50">Готово</button></div>
     </ModalShell>
   );
 }

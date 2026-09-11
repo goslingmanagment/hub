@@ -1,16 +1,17 @@
-import { useState } from "react";
+import { useRef } from "react";
 import { Link } from "react-router";
 import { toast } from "sonner";
 import { useReportHistory, useReportPreview, useSendReport, useNotificationsSettings } from "@/api/queries";
 import { StatusPanel } from "@/components/shared/StatusPanel";
 import { QueryNotice } from "@/components/shared/QueryNotice";
 import { formatDateTime } from "@/lib/format";
+import { NotificationDeliveryNotice } from "./NotificationDeliveryNotice.js";
 
 export function NotificationsReportsTab() {
   const { data: preview, refetch: fetchPreview, isFetching: previewLoading, isError: previewError } = useReportPreview();
   const settings = useNotificationsSettings();
-  const [outcome, setOutcome] = useState("");
   const sendReport = useSendReport();
+  const inFlight = useRef(false);
   const { data: history, isLoading: historyLoading, isError: historyError, refetch: refreshHistory } = useReportHistory();
 
   function handlePreview() {
@@ -18,23 +19,24 @@ export function NotificationsReportsTab() {
   }
 
   function handleSendNow() {
-    setOutcome("");
+    if (inFlight.current || sendReport.isPending || sendReport.deliveryBlocked || !settings.data?.configured || settings.isError) return;
+    inFlight.current = true;
     sendReport.mutate(undefined, {
       onSuccess: (result) => {
         if (result.status === "sent") {
-          setOutcome(`Отчёт отправлен в чат ${settings.data?.chatId}.`);
           toast.success("Отчёт отправлен");
         } else {
-          setOutcome(`Отчёт не отправлен: ${result.error ?? "Telegram не подтвердил доставку"}`);
-          toast.error(result.error ?? "Не удалось отправить отчёт");
+          toast.error(result.error ?? "Telegram не подтвердил отправку отчёта");
         }
       },
-      onError: () => { setOutcome("Подтверждение отправки не получено. Проверьте историю отчётов перед повторной отправкой."); toast.error("Не удалось получить результат отправки"); },
+      onError: () => { toast.error("Не удалось получить результат отправки. Сохранённый исход показан на экране."); },
+      onSettled: () => { inFlight.current = false; },
     });
   }
 
   return (
     <div className="space-y-6">
+      <NotificationDeliveryNotice current={sendReport.delivery} history={sendReport.deliveryHistory} error={sendReport.deliveryError} pending={sendReport.isPending} onRefresh={() => { void Promise.all([settings.refetch(), refreshHistory()]).then(() => sendReport.recoverDelivery()); }} onAllowSeparate={sendReport.allowSeparateDelivery} />
       <div className="space-y-2">
         <p className="text-sm text-text-secondary">{settings.data ? settings.data.configured ? `Отчёт отправится в Telegram: чат ${settings.data.chatId}.` : "Для отправки отчёта нужно подключение Telegram." : settings.isLoading ? "Проверяем получателя отчёта…" : "Получатель отчёта пока неизвестен."} <Link className="text-accent underline" to="/notifications?tab=settings">Проверить подключение</Link></p>
         <QueryNotice error={settings.isError} stale={settings.data !== undefined} retry={() => settings.refetch()} />
@@ -48,14 +50,13 @@ export function NotificationsReportsTab() {
         </button>
         <button
           onClick={handleSendNow}
-          disabled={sendReport.isPending || !settings.data?.configured || settings.isError}
+          disabled={sendReport.isPending || sendReport.deliveryBlocked || !settings.data?.configured || settings.isError}
           className="rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-white hover:opacity-90 disabled:opacity-40"
         >
           {sendReport.isPending ? "Отправляем…" : "Отправить отчёт в Telegram"}
         </button>
         </div>
       </div>
-      {outcome && <p role="status" className="rounded-lg border border-border bg-hover p-3 text-sm text-text-secondary">{outcome}</p>}
       <QueryNotice error={previewError} stale={preview !== undefined} retry={fetchPreview} />
 
       {preview && (
@@ -80,8 +81,8 @@ export function NotificationsReportsTab() {
           />
         ) : history.items.length === 0 ? (
           <StatusPanel
-            title="Попыток отправки ещё не было"
-            description="Включите ежедневный отчёт в настройках или отправьте его вручную."
+            title={historyError ? "Предыдущий ответ не содержал попыток отправки" : "Попыток отправки ещё не было"}
+            description={historyError ? "Текущая история не подтверждена. Повторите чтение перед новой отправкой." : "Включите ежедневный отчёт в настройках или отправьте его вручную."}
           />
         ) : (
           <div className="overflow-x-auto rounded-xl border border-border bg-card">
@@ -104,7 +105,7 @@ export function NotificationsReportsTab() {
                     </td>
                     <td className="px-4 py-2.5">
                       <span className={`text-[12px] font-medium ${item.status === "sent" ? "text-green" : "text-danger"}`}>
-                        {item.status === "sent" ? "Отправлен" : "Ошибка"}
+                        {item.status === "sent" ? "Отправлен" : item.status === "skipped" ? "Не отправлен" : item.status === "failed" ? "Ошибка" : "Исход не подтверждён"}
                       </span>
                     </td>
                     <td className="min-w-48 max-w-xs px-4 py-2.5 text-[12px] text-text-muted">{item.error ? <details><summary className="cursor-pointer">Показать причину</summary><p className="mt-2 break-words">{item.error}</p></details> : "—"}</td>

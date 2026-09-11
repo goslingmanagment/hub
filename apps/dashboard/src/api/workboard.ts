@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
   WorkboardV2AiRunsResponse,
   WorkboardV2AiSettingsBody,
@@ -61,8 +61,9 @@ export function useWorkboardV2Contact(pageLabel: string) {
   return useMutation({
     mutationFn: (body: { fanId: number; action?: "opened" | "handled" | "snoozed"; wasProductive?: boolean }) =>
       kernel.workboardV2Contact({ params: { pageLabel }, body }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["workboard-v2", pageLabel] });
+    onMutate: () => ({ pageLabel }),
+    onSuccess: (_result, _variables, origin) => {
+      qc.invalidateQueries({ queryKey: ["workboard-v2", origin.pageLabel] });
     },
   });
 }
@@ -72,8 +73,9 @@ export function useWorkboardV2Recompute(pageLabel: string) {
   return useMutation({
     mutationFn: () =>
       kernel.workboardV2Recompute({ params: { pageLabel } }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["workboard-v2", pageLabel] });
+    onMutate: () => ({ pageLabel }),
+    onSuccess: (_result, _variables, origin) => {
+      qc.invalidateQueries({ queryKey: ["workboard-v2", origin.pageLabel] });
     },
   });
 }
@@ -86,30 +88,31 @@ export function useWorkboardV2Snooze(pageLabel: string) {
         params: { pageLabel },
         body: body as Parameters<typeof kernel.workboardV2Snooze>[0]["body"],
       }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["workboard-v2", pageLabel] });
+    onMutate: () => ({ pageLabel }),
+    onSuccess: (_result, _variables, origin) => {
+      qc.invalidateQueries({ queryKey: ["workboard-v2", origin.pageLabel] });
     },
   });
 }
 
-export function useWorkboardV2Unsnooze(pageLabel: string) {
+export function useWorkboardV2Unsnooze() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (fanId: number) =>
-      kernel.workboardV2Unsnooze({ params: { pageLabel, fanId } }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["workboard-v2", pageLabel] });
+    mutationFn: (target: { pageLabel: string; fanId: number }) =>
+      kernel.workboardV2Unsnooze({ params: target }),
+    onSuccess: (_result, target) => {
+      qc.invalidateQueries({ queryKey: ["workboard-v2", target.pageLabel] });
     },
   });
 }
 
-export function useWorkboardV2UndoContact(pageLabel: string) {
+export function useWorkboardV2UndoContact() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (fanId: number) =>
-      kernel.workboardV2UndoContact({ params: { pageLabel, fanId } }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["workboard-v2", pageLabel] });
+    mutationFn: (target: { pageLabel: string; fanId: number }) =>
+      kernel.workboardV2UndoContact({ params: target }),
+    onSuccess: (_result, target) => {
+      qc.invalidateQueries({ queryKey: ["workboard-v2", target.pageLabel] });
     },
   });
 }
@@ -122,6 +125,7 @@ export function useWorkboardV2Ai(
 ) {
   return useQuery({
     queryKey: ["workboard-v2-ai", pageLabel],
+    meta: { suppressGlobalError: true },
     queryFn: () => kernel.workboardV2Ai({ params: { pageLabel } }),
     enabled: options.enabled ?? true,
     ...(options.refetchInterval === undefined ? {} : { refetchInterval: options.refetchInterval }),
@@ -130,27 +134,40 @@ export function useWorkboardV2Ai(
 
 export function useWorkboardV2AiSettings(pageLabel: string) {
   const qc = useQueryClient();
-  return useMutation({
+  const mutationKey = ["workboard-v2-ai-settings", pageLabel];
+  const pending = useIsMutating({ mutationKey });
+  const mutation = useMutation({
+    mutationKey,
+    meta: { suppressGlobalError: true },
     mutationFn: (body: WorkboardV2AiSettingsBody) =>
       kernel.workboardV2AiSettings({ params: { pageLabel }, body }),
-    onSuccess: (data) => {
-      qc.setQueryData(["workboard-v2-ai", pageLabel], data);
-      qc.invalidateQueries({ queryKey: ["workboard-v2", pageLabel] });
+    onMutate: () => ({ pageLabel, session: qc.getQueryCache().find({ queryKey: ["auth", "me"], exact: true }) }),
+    onSuccess: (data, _body, origin) => {
+      if (qc.getQueryCache().find({ queryKey: ["auth", "me"], exact: true }) !== origin.session) return;
+      qc.setQueryData(["workboard-v2-ai", origin.pageLabel], data);
+      qc.invalidateQueries({ queryKey: ["workboard-v2", origin.pageLabel] });
     },
   });
+  return { ...mutation, isPending: mutation.isPending || pending > 0 };
 }
 
 export function useWorkboardV2AiClassify(pageLabel: string) {
   const qc = useQueryClient();
-  return useMutation({
+  const mutationKey = ["workboard-v2-ai-classify", pageLabel];
+  const pending = useIsMutating({ mutationKey });
+  const mutation = useMutation({
+    mutationKey,
+    meta: { suppressGlobalError: true },
     mutationFn: (body: { reclassify?: boolean }) =>
       kernel.workboardV2AiClassify({ params: { pageLabel }, body }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["workboard-v2-ai", pageLabel] });
-      qc.invalidateQueries({ queryKey: ["workboard-v2", pageLabel] });
+    onMutate: () => ({ pageLabel }),
+    onSuccess: (_result, _body, origin) => {
+      qc.invalidateQueries({ queryKey: ["workboard-v2-ai", origin.pageLabel] });
+      qc.invalidateQueries({ queryKey: ["workboard-v2", origin.pageLabel] });
       qc.invalidateQueries({ queryKey: ["workboard-v2-ai-runs"] });
     },
   });
+  return { ...mutation, isPending: mutation.isPending || pending > 0 };
 }
 
 export function useWorkboardV2AiRuns(

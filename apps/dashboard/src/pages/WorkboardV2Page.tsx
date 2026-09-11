@@ -112,9 +112,10 @@ export function WorkboardV2Page() {
   const contact = useWorkboardV2Contact(label);
   const recompute = useWorkboardV2Recompute(label);
   const snooze = useWorkboardV2Snooze(label);
-  const unsnooze = useWorkboardV2Unsnooze(label);
-  const undoContact = useWorkboardV2UndoContact(label);
+  const unsnooze = useWorkboardV2Unsnooze();
+  const undoContact = useWorkboardV2UndoContact();
   const actionInFlight = useRef(false);
+  const actionPending = contact.isPending || snooze.isPending || undoContact.isPending || unsnooze.isPending;
 
   const counts = data?.counts ?? [];
   const tabCount = useMemo(() => {
@@ -162,13 +163,24 @@ export function WorkboardV2Page() {
     });
   };
 
+  const handleUndo = (kind: "contact" | "snooze", target: { pageLabel: string; fanId: number }) => {
+    if (actionInFlight.current) return;
+    actionInFlight.current = true;
+    const mutation = kind === "contact" ? undoContact : unsnooze;
+    mutation.mutate(target, {
+      onSuccess: () => toast.success(`${target.pageLabel} · действие отменено`),
+      onError: () => toast.error(`${target.pageLabel} · не удалось отменить действие`),
+      onSettled: () => { actionInFlight.current = false; },
+    });
+  };
+
   const handleDone = (fanId: number) => {
-    if (actionInFlight.current || contact.isPending || snooze.isPending) return;
+    if (actionInFlight.current || actionPending) return;
     actionInFlight.current = true;
     contact.mutate(
       { fanId, action: "handled", wasProductive: true },
       {
-        onSuccess: () => toast.success("Готово", { action: { label: "Отменить", onClick: () => undoContact.mutate(fanId) } }),
+        onSuccess: () => toast.success(`${label} · готово`, { action: { label: "Отменить", onClick: () => handleUndo("contact", { pageLabel: label, fanId }) } }),
         onError: () => toast.error("Не удалось отметить"),
         onSettled: () => { actionInFlight.current = false; },
       },
@@ -176,12 +188,12 @@ export function WorkboardV2Page() {
   };
 
   const handleSnooze = (fanId: number, days: number) => {
-    if (actionInFlight.current || contact.isPending || snooze.isPending) return;
+    if (actionInFlight.current || actionPending) return;
     actionInFlight.current = true;
     snooze.mutate(
       { fanId, days },
       {
-        onSuccess: () => toast.success(`Отложено на ${days}д`, { action: { label: "Отменить", onClick: () => unsnooze.mutate(fanId) } }),
+        onSuccess: () => toast.success(`${label} · отложено на ${days} дн.`, { action: { label: "Отменить", onClick: () => handleUndo("snooze", { pageLabel: label, fanId }) } }),
         onError: () => toast.error("Не удалось отложить"),
         onSettled: () => { actionInFlight.current = false; },
       },
@@ -438,7 +450,7 @@ export function WorkboardV2Page() {
                         onToggle={(id) => setExpandedFanId((prev) => (prev === id ? null : id))}
                         onHandled={handleDone}
                         onSnooze={handleSnooze}
-                        isHandling={contact.isPending || snooze.isPending}
+                        isHandling={actionPending}
                       />
                     ))}
                 </section>

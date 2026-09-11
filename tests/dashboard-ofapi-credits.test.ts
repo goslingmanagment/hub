@@ -507,6 +507,22 @@ describe("OfapiCreditsPage", () => {
     expect(markup).not.toContain("чтобы видеть стоимость");
   });
 
+  it.each([undefined, 0])("distinguishes missing per-page revenue from measured zero (%s)", (revenueMills) => {
+    queryMocks.useAdminOfapiCreditsSummary.mockReturnValue({ data: summaryFixture({ pricing: { microUsdPerCredit: 10_000 } }), isLoading: false });
+    queryMocks.useAdminOfapiCreditsDaily.mockReturnValue({ data: { ...emptyDaily, byPage: [{ pageId: 3, pageLabel: "synthetic-revenue", credits: 100, ...(revenueMills === undefined ? {} : { revenueMills }) }] }, isLoading: false });
+    const markup = renderPage();
+    const pageRow = markup.match(/<tr[^>]*>(?:(?!<\/tr>)[\s\S])*synthetic-revenue(?:(?!<\/tr>)[\s\S])*<\/tr>/)?.[0] ?? "";
+    expect(pageRow).toContain("synthetic-revenue");
+    if (revenueMills === undefined) {
+      expect(pageRow).toContain("Нет данных");
+      expect(pageRow).not.toContain("$0.00");
+      expect(pageRow).not.toContain("0.0×");
+    } else {
+      expect(pageRow).toContain("$0.00");
+      expect(pageRow).toContain("0.0×");
+    }
+  });
+
   it("hides the USD cost columns and nudges when no price is configured", () => {
     queryMocks.useAdminOfapiCreditsSummary.mockReturnValue({
       data: summaryFixture(),
@@ -722,3 +738,4 @@ describe("OfapiCreditsPage", () => {
     expect(markup).toContain("Не удалось загрузить кредиты OFAPI");
   });
 });
+vi.mock("../apps/dashboard/src/pages/settings/OfapiVendorEvidence.tsx", () => ({ OfapiVendorEvidence: () => null }));

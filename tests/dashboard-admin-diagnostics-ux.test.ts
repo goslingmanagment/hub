@@ -44,8 +44,8 @@ describe("access catalogs do not turn failures into absence", () => {
     expect(html).toContain("История ключей");
     expect(html).toContain("Не удалось загрузить данные");
     expect(html).toContain("Повторить");
-    expect(html).not.toContain("No keys have been issued");
-    expect(html).toContain("Assigned Pages");
+    expect(html).not.toContain("API-ключи ещё не выдавались");
+    expect(html).toContain("Доступ к страницам");
   });
 
   it("keeps known key history visible when refresh fails", () => {
@@ -56,7 +56,7 @@ describe("access catalogs do not turn failures into absence", () => {
     const html = renderToStaticMarkup(createElement(ChatterDetailModal, { user, onClose: vi.fn(), onDeactivate: vi.fn() }));
     expect(html).toContain("test_prefix");
     expect(html).toContain("ранее полученные данные");
-    expect(html).not.toContain("No keys have been issued");
+    expect(html).not.toContain("API-ключи ещё не выдавались");
   });
 
   it("explains an unavailable page catalog in the assignment dialog", () => {
@@ -64,7 +64,7 @@ describe("access catalogs do not turn failures into absence", () => {
     const html = renderToStaticMarkup(createElement(UserPageAssignmentModal, { user, onClose: vi.fn() }));
     expect(html).toContain("Данные не удалось загрузить");
     expect(html).toContain("Повторить");
-    expect(html).toContain("Assigned Pages");
+    expect(html).toContain("Доступ к страницам");
     expect(html).not.toContain("В каталоге пока нет доступных страниц");
   });
 

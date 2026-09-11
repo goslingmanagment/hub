@@ -652,7 +652,7 @@ describe("dashboard sync layout", () => {
     const html = renderWithRouter(createElement(SettingsPage), ["/settings?tab=sync"]);
 
     expect(html).toContain("Financials");
-    expect(html).toContain("View details");
+    expect(html).toContain("Подробнее");
     expect(html).not.toContain("Update Credentials");
   });
 
@@ -707,7 +707,7 @@ describe("dashboard sync layout", () => {
       showPause: false,
       showResume: true,
       showReset: true,
-      resumeLabel: "Resume top spenders",
+      resumeLabel: "Продолжить: top spenders",
     });
 
     expect(getSyncBlockActionPresentation({
@@ -716,6 +716,13 @@ describe("dashboard sync layout", () => {
     }, "onlyfans")).toMatchObject({
       showResume: false,
     });
+  });
+
+  it("does not offer the message-history reset rejected by the server", () => {
+    for (const platform of ["fansly", "onlyfans"] as const) {
+      expect(getSyncBlockActionPresentation(buildSyncBlock("messages_history") as SyncBlockStatus, platform).showReset).toBe(false);
+      expect(getSyncBlockActionPresentation(buildSyncBlock("financials") as SyncBlockStatus, platform).showReset).toBe(true);
+    }
   });
 
   it("shows an explicit sync overview load error", () => {
@@ -730,6 +737,7 @@ describe("dashboard sync layout", () => {
 
     expect(html).toContain("Sync status failed to load");
     expect(html).toContain("Sync API unavailable");
+    expect(html).toContain("Повторить запрос");
     expect(html).not.toContain("No pages configured");
   });
 
@@ -745,6 +753,7 @@ describe("dashboard sync layout", () => {
 
     expect(html).toContain("Showing cached data");
     expect(html).toContain("Sync overview timeout");
+    expect(html).toContain("Повторить запрос");
     expect(html).toContain("Financials");
     expect(html).not.toContain("Sync status failed to load");
   });
@@ -781,6 +790,7 @@ describe("dashboard sync layout", () => {
 
     expect(html).toContain("Sync page failed to load");
     expect(html).toContain("Details API unavailable");
+    expect(html).toContain("Повторить запрос");
     expect(html).not.toContain("Page not found");
   });
 

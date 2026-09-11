@@ -291,6 +291,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 292 | Overview selected layout and exact drilldown | Keep the compact variant-one table, order models by server net income, compare source deltas on the server, use scoped exact-window operations with one response snapshot, and persist navigation context in URLs. Supersedes #291's three-query-only UI plan. |
 | 293 | Dashboard subsystem context and truthful query states | Extend URL-owned navigation, independent loading/error states, exact revenue drilldowns, and preserved operation custody across account/audience, OFAPI, notifications, access and diagnostics. Keep literal colon suffixes in SDK paths. |
 | 294 | Dashboard catalog and owner-review continuity | URL-owned catalogs, role-gated shell, per-page verification flights, frozen hydration decisions with owner-bound per-tab recovery, and truthful database/run diagnostics. |
+| 295 | Dashboard nested workflows and interrupted actions | Keep account-bound drafts and pending outcomes across route remounts, preserve exact owner-bound recovery records before non-idempotent actions, show honest analytics/usage/credit limits, and make access and operational reviews explicit. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -12272,3 +12273,45 @@ when reading that history fails. Sync-run refresh errors keep known data and
 account-scoped return links. Query consumers with inline recovery opt out of
 duplicate global error toasts. See the implementation record for synthetic
 browser evidence and checks; no production action is part of this change.
+
+
+## Decision 295: Complete nested dashboard workflows and preserve interrupted outcomes (2026-09-11)
+
+The continuation of #293–294 covers the remaining nested workflows: employee and
+agent access, Usage, AI settings, analytics response limits, account actions,
+marketing, media, collection, webhook recovery, notifications and diagnostics.
+Overview and Configuration retain their accepted product design. Backend rules,
+provider authorization, money units and generated contracts are unchanged.
+
+UI drafts and reviewed targets may live in a session-only QueryClient workspace.
+Leaving a route must not discard an active operation or retarget its result.
+Workspace writes compare the query object lifetime so a late completion cannot
+recreate old private state after logout. Password and assignment mutations share
+pending state per employee; issued secrets remain in session mutation custody
+until acknowledged and are not copied to URL or browser storage.
+
+Before a consequential request, workflows preserve the exact original account,
+ID, body or safe reviewed intent in owner-bound per-tab storage as appropriate.
+This is client recovery custody, not new server idempotency. Explicit retries
+are offered only where existing backend identity admits the same operation.
+Non-idempotent Collection and notification sends require outcome review before
+a separate new request. A successful HTTP response describing dispatching or an
+indeterminate result remains unresolved. A later 4xx cannot settle an earlier
+unknown send, and a confirmed media receipt cannot be downgraded by a late reply.
+Storage failures retain evidence and block a new consequential request while
+read-only status/history remain usable. No recovery path automatically sends.
+
+Collection metadata launched from Media uses the same custody as Collection.
+Review caps, account and revision are frozen. Unsupported message-history reset
+is not offered. Notification settings save and explicit test/report sends remain
+separate, with delivery outcome visible across tabs and reload. Webhook policy,
+event catalog and history load independently; polling does not replace drafts.
+
+Analytics distinguishes collection coverage from bounded response delivery and
+bucket truncation. Usage preserves Moscow report dates, exposes errors/quota
+activity even when generation count is zero, and places summary columns before
+feature detail. Missing credit revenue is unknown rather than zero; an inverted
+UTC ledger range disables its query/export and keeps the invalid inputs visible.
+Queue details follow their source row; incident summary and event-list periods
+and limits are labelled separately. See the implementation record for the route
+coverage matrix, synthetic browser evidence and verification boundaries.

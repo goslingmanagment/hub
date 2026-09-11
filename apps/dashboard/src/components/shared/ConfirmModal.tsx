@@ -16,12 +16,13 @@ export function ConfirmModal({
   onClose: () => void;
 }) {
   return (
-    <ModalShell title={title} onClose={onClose}>
+    <ModalShell title={title} onClose={onClose} closeDisabled={isPending}>
       <p className="text-sm text-text-secondary">{message}</p>
       <div className="mt-6 flex items-center justify-end gap-2">
         <button
           type="button"
           onClick={onClose}
+          disabled={isPending}
           className="rounded-lg border border-border bg-card px-3 py-2 text-sm text-text-secondary hover:bg-hover"
         >
           Cancel

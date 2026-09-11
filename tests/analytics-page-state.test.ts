@@ -705,3 +705,30 @@ describe("AnalyticsPage coverage states", () => {
     expect(html).toContain("Nothing captured for this window");
   });
 });
+
+describe("analytics response bounds and catalog recovery", () => {
+  it("keeps the panels when only the cached page catalog fails to refresh", () => {
+    withCatalog();
+    pagesMocks.usePages.mockReturnValue({ data: [FANSLY_PAGE], isPending: false, isError: true, refetch: vi.fn() });
+    const html = renderAnalyticsPage();
+    expect(html).toContain("Показаны ранее полученные данные");
+    expect(html).toContain("Traffic by source");
+    expect(html).toContain("Content performance");
+    expect(html).not.toContain("The page list could not be loaded");
+  });
+  it("marks a paginated money response as partial even when capture coverage is complete", () => {
+    withCatalog({ useMoneyRevenueMix: ready({ ...EMPTY.revenue, nextCursor: "more-rows" }) });
+    const html = renderAnalyticsPage();
+    expect(panelMarkup(html, "Revenue mix")).toContain("Разбивка дохода получена частично");
+    expect(html).toContain("<details");
+    expect(html).toContain("Методика и ограничения");
+  });
+});
+
+
+it("marks truncated bucket series even when every catalog head fits in one response", () => {
+  withCatalog({ useStatsMedia: ready({ ...EMPTY.media, bucketsTruncated: true, nextCursor: null }) });
+  const html = renderAnalyticsPage();
+  expect(panelMarkup(html, "Top media")).toContain("Часть точек динамики не вошла в ответ");
+  expect(panelMarkup(html, "Content performance")).toContain("только к полученным точкам");
+});

@@ -1,5 +1,6 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { MemoryRouter } from "../apps/dashboard/node_modules/react-router/dist/development/index.js";
 import { describe, expect, it, vi } from "vitest";
 const query = vi.hoisted(() => vi.fn());
 vi.mock("../apps/dashboard/src/api/adminOfapiContentEvents.ts", () => ({
@@ -33,14 +34,15 @@ describe("owner content evidence consumer", () => {
       refetch: vi.fn(),
     });
     const html = renderToStaticMarkup(
-      createElement(OfapiContentEvidence, {
+      createElement(MemoryRouter, null, createElement(OfapiContentEvidence, {
         pages: [{ id: 1, label: "Creator" }],
-      }),
+      })),
     );
     expect(html).toContain("не подтверждает доставку");
-    expect(html).toContain("Без надёжной ссылки на пост: 2");
     expect(html).toContain("Завершение");
     expect(html).toContain("да / нет");
-    expect(html).toContain("2026-09-05T10:00:00Z");
+    const likes = renderToStaticMarkup(createElement(MemoryRouter, { initialEntries: ["/?contentView=likes"] }, createElement(OfapiContentEvidence, { pages: [{ id: 1, label: "Creator" }] })));
+    expect(likes).toContain("Без надёжной ссылки на пост: 2");
+    expect(likes).toContain("2026-09-05T10:00:00Z");
   });
 });

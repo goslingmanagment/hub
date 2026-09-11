@@ -11,6 +11,7 @@ import { StatusPanel } from "@/components/shared/StatusPanel";
 import { QueryNotice } from "@/components/shared/QueryNotice";
 import { ModalShell } from "@/components/shared/ModalShell";
 import { formatRelativeTime } from "@/lib/format";
+import { NotificationDeliveryNotice } from "./NotificationDeliveryNotice.js";
 
 type DiscoveredChat = { id: string; type: string; title: string };
 
@@ -28,22 +29,26 @@ export function NotificationsSettingsTab() {
   const [detectedChats, setDetectedChats] = useState<DiscoveredChat[] | null>(null);
   const [botUsername, setBotUsername] = useState<string | null>(null);
   const [resultNotice, setResultNotice] = useState("");
+  const updateInFlight = useRef(false);
+  const discoveryInFlight = useRef(false);
+  const discoveryRevision = useRef(0);
+  const deliveryNotice = <NotificationDeliveryNotice current={sendTest.delivery} history={sendTest.deliveryHistory} error={sendTest.deliveryError} pending={sendTest.isPending} onRefresh={() => { void refetch().then(() => sendTest.recoverDelivery()); }} onAllowSeparate={sendTest.allowSeparateDelivery} />;
 
   if (isLoading) {
     return (
-      <StatusPanel
+      <>{deliveryNotice}<StatusPanel
         title="Загружаем настройки уведомлений…"
-      />
+      /></>
     );
   }
 
   if (!data) {
     return (
-      <StatusPanel
+      <>{deliveryNotice}<StatusPanel
         title="Не удалось загрузить настройки уведомлений"
         action={<button type="button" className="text-accent underline" onClick={() => void refetch()}>Повторить</button>}
         tone="error"
-      />
+      /></>
     );
   }
 
@@ -57,14 +62,19 @@ export function NotificationsSettingsTab() {
       | "aiCriticalAlertsEnabled",
     value: boolean,
   ) {
-    updateSettings.mutate({ [field]: value }, { onError: (error) => toast.error(apiErrorMessage(error) ?? "Не удалось сохранить настройку") });
+    if (updateInFlight.current || updateSettings.isPending || sendTest.isPending || isError) return;
+    updateInFlight.current = true;
+    updateSettings.mutate({ [field]: value }, { onError: (error) => toast.error(apiErrorMessage(error) ?? "Не удалось сохранить настройку"), onSettled: () => { updateInFlight.current = false; } });
   }
 
   function handleReportHourChange(hour: number) {
-    updateSettings.mutate({ reportHourUtc: hour }, { onError: (error) => toast.error(apiErrorMessage(error) ?? "Не удалось сохранить время отчёта") });
+    if (updateInFlight.current || updateSettings.isPending || sendTest.isPending || isError) return;
+    updateInFlight.current = true;
+    updateSettings.mutate({ reportHourUtc: hour }, { onError: (error) => toast.error(apiErrorMessage(error) ?? "Не удалось сохранить время отчёта"), onSettled: () => { updateInFlight.current = false; } });
   }
 
   async function handleSaveCredentials(): Promise<boolean> {
+    if (updateInFlight.current || discoveryInFlight.current || updateSettings.isPending || sendTest.isPending || isError) return false;
     const botToken = botTokenRef.current?.value?.trim() || undefined;
     const chatId = chatIdRef.current?.value?.trim() || undefined;
 
@@ -83,6 +93,7 @@ export function NotificationsSettingsTab() {
       return false;
     }
 
+    updateInFlight.current = true;
     try {
       await updateSettings.mutateAsync({ botToken, chatId });
       setDetectedChats(null);
@@ -93,11 +104,13 @@ export function NotificationsSettingsTab() {
     } catch (error) {
       toast.error(apiErrorMessage(error) ?? "Не удалось сохранить реквизиты");
       return false;
-    }
+    } finally { updateInFlight.current = false; }
   }
 
   async function handleClearCredentials(): Promise<boolean> {
+    if (updateInFlight.current || discoveryInFlight.current || updateSettings.isPending || sendTest.isPending || isError) return false;
     if (!window.confirm("Удалить сохранённые токен бота и Chat ID? Параметры из окружения, если они есть, продолжат действовать.")) return false;
+    updateInFlight.current = true;
     try {
       await updateSettings.mutateAsync({ botToken: null, chatId: null });
       toast.success("Сохранённые реквизиты удалены");
@@ -109,15 +122,23 @@ export function NotificationsSettingsTab() {
     } catch {
       toast.error("Не удалось удалить реквизиты");
       return false;
-    }
+    } finally { updateInFlight.current = false; }
   }
 
   // Ask the backend to call getMe + getUpdates so the operator picks their chat
   // from a menu instead of hand-copying it out of a raw getUpdates URL.
   function handleDetectChats() {
+    if (discoveryInFlight.current || updateInFlight.current || updateSettings.isPending || sendTest.isPending) return;
+    discoveryInFlight.current = true;
+    const revision = ++discoveryRevision.current;
+    const tokenInput = botTokenRef.current;
+    const chatInput = chatIdRef.current;
+    const originalChat = chatInput?.value;
     const botToken = botTokenRef.current?.value?.trim() || undefined;
     discoverChats.mutate({ botToken }, {
       onSuccess: (result) => {
+        if (revision !== discoveryRevision.current || tokenInput !== botTokenRef.current || chatInput !== chatIdRef.current
+          || (botTokenRef.current?.value.trim() || undefined) !== botToken || chatIdRef.current?.value !== originalChat) return;
         setBotUsername(result.botUsername);
         if (result.chats.length === 0) {
           setDetectedChats(null);
@@ -134,8 +155,15 @@ export function NotificationsSettingsTab() {
         setDetectedChats(result.chats);
         toast.success(`Найдено чатов: ${result.chats.length}. Выберите получателя.`);
       },
-      onError: (error) => toast.error(apiErrorMessage(error) ?? "Не удалось связаться с Telegram"),
+      onError: (error) => { if (revision === discoveryRevision.current) toast.error(apiErrorMessage(error) ?? "Не удалось связаться с Telegram"); },
+      onSettled: () => { discoveryInFlight.current = false; },
     });
+  }
+
+  function invalidateDiscovery() {
+    discoveryRevision.current += 1;
+    setDetectedChats(null);
+    setBotUsername(null);
   }
 
   function handlePickChat(id: string) {
@@ -144,18 +172,19 @@ export function NotificationsSettingsTab() {
   }
 
   function handleSendTest() {
+    if (updateInFlight.current || updateSettings.isPending || sendTest.isPending || sendTest.deliveryBlocked || isError) return;
+    updateInFlight.current = true;
     setResultNotice("");
     sendTest.mutate(undefined, {
       onSuccess: (result) => {
         if (result.status === "sent") {
-          setResultNotice(`Тестовое сообщение отправлено в чат ${settings.chatId}.`);
           toast.success("Тестовое сообщение отправлено");
         } else {
-          setResultNotice(`Реквизиты сохранены, но тест не доставлен: ${result.error ?? "Telegram не подтвердил отправку"}`);
-          toast.error(result.error ?? "Не удалось отправить тест");
+          toast.error(result.error ?? "Telegram не подтвердил отправку теста");
         }
       },
-      onError: () => { setResultNotice("Реквизиты сохранены. Подтверждение доставки теста не получено."); toast.error("Не удалось получить результат отправки теста"); },
+      onError: () => { toast.error("Не удалось получить результат отправки теста. Сохранённый исход показан на экране."); },
+      onSettled: () => { updateInFlight.current = false; },
     });
   }
 
@@ -163,6 +192,7 @@ export function NotificationsSettingsTab() {
 
   return (
     <div className="space-y-4">
+      {deliveryNotice}
       <QueryNotice error={isError} stale retry={refetch} />
       {resultNotice && <p role="status" className="rounded-lg border border-border bg-hover p-3 text-sm text-text-secondary">{resultNotice}</p>}
       {!settings.configured ? (
@@ -172,11 +202,12 @@ export function NotificationsSettingsTab() {
             Создайте бота через @BotFather и введите его токен. Отправьте боту сообщение в Telegram,
             затем нажмите <span className="font-medium text-text-secondary">Найти чат</span> и выберите получателя.
           </p>
-          <div className="max-w-md space-y-3">
+          <fieldset disabled={savePending || isError} className="max-w-md space-y-3">
             <div>
               <label className="mb-1 block text-[12px] font-medium text-text-secondary">Токен бота</label>
               <input
                 ref={botTokenRef}
+                onChange={invalidateDiscovery}
                 aria-label="Токен Telegram-бота"
                 type="password"
                 placeholder="7123456789:AAH..."
@@ -201,12 +232,12 @@ export function NotificationsSettingsTab() {
             />
             <button
               onClick={handleSaveCredentials}
-              disabled={savePending}
+              disabled={savePending || discoverChats.isPending || isError}
               className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-40"
             >
               {updateSettings.isPending ? "Сохраняем…" : "Сохранить реквизиты"}
             </button>
-          </div>
+          </fieldset>
         </div>
       ) : (
         <div className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-border bg-card p-4">
@@ -254,10 +285,12 @@ export function NotificationsSettingsTab() {
               detectedChats={detectedChats}
               onPick={handlePickChat}
               botUsername={botUsername}
+              onTokenChange={invalidateDiscovery}
+              canClose={() => !updateInFlight.current}
             />
             <button
               onClick={handleSendTest}
-              disabled={savePending || isError}
+              disabled={savePending || sendTest.deliveryBlocked || isError}
               className="rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-white hover:opacity-90 disabled:opacity-40"
             >
               {sendTest.isPending ? "Отправляем…" : "Отправить тест"}
@@ -386,6 +419,8 @@ function CredentialsEdit({
   detectedChats,
   onPick,
   botUsername,
+  onTokenChange,
+  canClose,
 }: {
   chatId: string | null;
   onClear: () => Promise<boolean>;
@@ -398,8 +433,11 @@ function CredentialsEdit({
   detectedChats: DiscoveredChat[] | null;
   onPick: (id: string) => void;
   botUsername: string | null;
+  onTokenChange: () => void;
+  canClose: () => boolean;
 }) {
   const [open, setOpen] = useState(false);
+  function requestClose() { if (!isPending && canClose()) setOpen(false); }
 
   if (!open) {
     return (
@@ -413,12 +451,13 @@ function CredentialsEdit({
   }
 
   return (
-    <ModalShell title="Реквизиты Telegram" closeLabel="Закрыть" onClose={() => { if (!isPending) setOpen(false); }}>
-        <div className="space-y-3">
+    <ModalShell title="Реквизиты Telegram" closeLabel="Закрыть" closeDisabled={isPending} onClose={requestClose}>
+        <fieldset disabled={isPending} className="space-y-3">
           <div>
             <label className="mb-1 block text-[12px] font-medium text-text-secondary">Токен бота</label>
             <input
               ref={botTokenRef}
+              onChange={onTokenChange}
               aria-label="Новый токен Telegram-бота"
               type="password"
               placeholder="Новый токен — пустое поле сохранит текущий"
@@ -436,18 +475,18 @@ function CredentialsEdit({
             detectedChats={detectedChats}
             onPick={onPick}
           />
-        </div>
+        </fieldset>
         <p className="mt-3 text-xs text-text-muted">Сохранение обновит реквизиты. Для проверки доставки отправьте тест отдельной кнопкой после сохранения.</p>
         <div className="mt-4 flex flex-wrap justify-end gap-2">
           <button
             onClick={() => { void onClear().then((cleared) => { if (cleared) setOpen(false); }); }}
-            disabled={isPending}
+            disabled={isPending || isDetecting}
             className="rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-semibold text-text-secondary hover:bg-hover disabled:opacity-40"
           >
             Удалить сохранённые реквизиты
           </button>
           <button
-            onClick={() => setOpen(false)}
+            onClick={requestClose}
             disabled={isPending}
             className="rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-semibold text-text-secondary hover:bg-hover"
           >
@@ -455,7 +494,7 @@ function CredentialsEdit({
           </button>
           <button
             onClick={() => { void onSave().then((saved) => { if (saved) setOpen(false); }); }}
-            disabled={isPending}
+            disabled={isPending || isDetecting}
             className="rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-white hover:opacity-90 disabled:opacity-40"
           >
             Сохранить

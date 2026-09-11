@@ -1,5 +1,5 @@
 import { Link, useLocation, useParams, useSearchParams } from "react-router";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ArrowLeft, ChevronDown, CalendarDays, RefreshCw, Clock } from "lucide-react";
 import {
   usePageFanDetail,
@@ -68,16 +68,21 @@ export function FanProfilePage() {
     });
   }
   const [noteBody, setNoteBody] = useState("");
+  const [noteError, setNoteError] = useState("");
+  const noteInFlight = useRef(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [intelligenceOpen, setIntelligenceOpen] = useState(false);
   const [selectedProfileVersion, setSelectedProfileVersion] = useState<number | null>(null);
   const routeKey = `${pageLabel ?? ""}\0${platform ?? ""}\0${platformUserId ?? ""}`;
+  const currentNote = useRef({ routeKey, noteBody });
+  currentNote.current = { routeKey, noteBody };
   const { period } = useSpenderPeriodStore();
   const selectedPeriod = audiencePeriod(search.get("period"), period);
   const spenderPeriod = selectedPeriod === "all" ? "lifetime" : selectedPeriod;
 
   useEffect(() => {
     setNoteBody("");
+    setNoteError("");
     setHistoryOpen(false);
     setIntelligenceOpen(false);
     setSelectedProfileVersion(null);
@@ -162,14 +167,18 @@ export function FanProfilePage() {
 
   async function handleAddNote() {
     const body = noteBody.trim();
-    if (!body) return;
+    if (!body || noteInFlight.current) return;
+    noteInFlight.current = true;
+    setNoteError("");
+    const origin = { routeKey, noteBody };
     try {
       await createNote.mutateAsync({ body });
-      setNoteBody("");
-      toast.success("Заметка добавлена");
+      if (currentNote.current.routeKey === origin.routeKey && currentNote.current.noteBody === origin.noteBody) setNoteBody("");
+      toast.success(`${pageLabel} · заметка для ${fanLabel} добавлена`);
     } catch {
-      toast.error("Не удалось добавить заметку");
-    }
+      if (currentNote.current.routeKey === origin.routeKey) setNoteError("Не удалось добавить заметку. Текст сохранён — повторите после проверки соединения.");
+      else toast.error(`${pageLabel} · не удалось добавить заметку для ${fanLabel}`);
+    } finally { noteInFlight.current = false; }
   }
 
   const stats = [
@@ -350,6 +359,7 @@ export function FanProfilePage() {
 
       <FanProfileActivityGrid
         notes={page.notes}
+        noteError={noteError}
         noteBody={noteBody}
         onNoteBodyChange={setNoteBody}
         onAddNote={handleAddNote}
@@ -530,6 +540,7 @@ function FanIntelligenceSection({
 
 function FanProfileActivityGrid({
   notes,
+  noteError,
   noteBody,
   onNoteBodyChange,
   onAddNote,
@@ -539,6 +550,7 @@ function FanProfileActivityGrid({
   timelineDotColor,
 }: {
   notes: PageFanDetailResponse["page"]["notes"];
+  noteError: string;
   noteBody: string;
   onNoteBodyChange: (value: string) => void;
   onAddNote: () => void;
@@ -579,8 +591,10 @@ function FanProfileActivityGrid({
           ))}
         </div>
 
+        {noteError && <p role="alert" className="mb-2 text-sm text-danger">{noteError}</p>}
         <textarea
           aria-label="Новая заметка"
+          disabled={isAddingNote}
           value={noteBody}
           onChange={(event) => onNoteBodyChange(event.target.value)}
           placeholder="Текст заметки…"

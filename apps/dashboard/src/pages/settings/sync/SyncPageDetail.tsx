@@ -30,10 +30,12 @@ function BlockDetailCard({
   block,
   pageLabel,
   platform,
+  actionsDisabled,
 }: {
   block: SyncBlockStatus;
   pageLabel: string;
   platform: SyncBlocksPage["platform"];
+  actionsDisabled: boolean;
 }) {
   const label = getBlockLabel(block.block);
   const description = getBlockDescription(block.block);
@@ -290,7 +292,7 @@ function BlockDetailCard({
 
       {/* Actions */}
       <div className="mt-4 flex justify-end">
-        <SyncBlockActions pageLabel={pageLabel} platform={platform} block={block} />
+        <SyncBlockActions pageLabel={pageLabel} platform={platform} block={block} disabled={actionsDisabled} />
       </div>
     </div>
   );
@@ -310,7 +312,7 @@ function PageHeader({
         onClick={onBack}
         className="text-xs text-text-muted hover:text-text-secondary transition-colors mb-3"
       >
-        &larr; Back to overview
+        &larr; Все страницы
       </button>
       <div className="flex items-center gap-2">
         <span className="text-sm font-bold text-text-primary">
@@ -335,7 +337,8 @@ export function SyncPageDetail({
   pageLabel: string;
   onBack: () => void;
 }) {
-  const { data, isLoading, isError, error } = usePageSyncBlocks(pageLabel);
+  const { data, isLoading, isError, error, refetch } = usePageSyncBlocks(pageLabel);
+  const retry = <button type="button" className="text-sm text-accent underline" onClick={() => void refetch()}>Повторить запрос</button>;
 
   if (isLoading && !data) {
     return (
@@ -345,7 +348,7 @@ export function SyncPageDetail({
           onClick={onBack}
           className="text-xs text-text-muted hover:text-text-secondary transition-colors mb-3"
         >
-          &larr; Back to overview
+          &larr; Все страницы
         </button>
         <p className="text-sm text-text-muted">Loading page details...</p>
       </div>
@@ -360,10 +363,11 @@ export function SyncPageDetail({
           onClick={onBack}
           className="text-xs text-text-muted hover:text-text-secondary transition-colors mb-3"
         >
-          &larr; Back to overview
+          &larr; Все страницы
         </button>
         <StatusPanel
           title="Sync page failed to load"
+          action={retry}
           description={error instanceof Error ? error.message : "The page sync details could not be fetched."}
           tone="error"
         />
@@ -379,7 +383,7 @@ export function SyncPageDetail({
           onClick={onBack}
           className="text-xs text-text-muted hover:text-text-secondary transition-colors mb-3"
         >
-          &larr; Back to overview
+          &larr; Все страницы
         </button>
         <p className="text-sm text-text-muted">Page not found.</p>
       </div>
@@ -394,7 +398,7 @@ export function SyncPageDetail({
       <PageHeader page={page} onBack={onBack} />
       <div className="space-y-3">
         {isError && data && (
-          <StaleDataNotice error={error} />
+          <div className="space-y-2"><StaleDataNotice error={error} />{retry}</div>
         )}
         {page.diagnosis && (
           <SyncDiagnosisNotice diagnosis={page.diagnosis} pageLabel={page.pageLabel} />
@@ -405,6 +409,7 @@ export function SyncPageDetail({
             block={page.blocks[key]}
             pageLabel={pageLabel}
             platform={page.platform}
+            actionsDisabled={isError}
           />
         ))}
       </div>

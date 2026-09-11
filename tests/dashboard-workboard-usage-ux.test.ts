@@ -98,8 +98,8 @@ describe("Workboard and Usage query recovery", () => {
   it.each([{ isLoading: true, isError: false }, { isLoading: false, isError: true }])(
     "keeps Usage period controls through initial query state %o", (state) => {
       queries.useAdminChatterUsage.mockReturnValue({ ...state, data: undefined, refetch: vi.fn() });
-      const html = renderToStaticMarkup(createElement(UsagePage));
-      expect(html).toContain(">Usage<");
+      const html = renderToStaticMarkup(createElement(MemoryRouter, null, createElement(UsagePage)));
+      expect(html).toContain(">Использование ИИ<");
       expect(html).toContain(">День<");
       expect(html).toContain(">Неделя<");
       expect(html).toContain(">Месяц<");
@@ -110,7 +110,7 @@ describe("Workboard and Usage query recovery", () => {
 
   it("keeps cached Usage rows visible and marks failed refresh", () => {
     queries.useAdminChatterUsage.mockReturnValue({ data: usage, isLoading: false, isError: true, refetch: vi.fn() });
-    const html = renderToStaticMarkup(createElement(UsagePage));
+    const html = renderToStaticMarkup(createElement(MemoryRouter, null, createElement(UsagePage)));
     expect(html).toContain("anton");
     expect(html).toContain("$1.00");
     expect(html).toContain("ранее полученные данные");

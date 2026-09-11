@@ -1,4 +1,4 @@
-import { creditBreakdownWindow } from "@/lib/creditsNavigation";
+import { creditBreakdownWindow, creditLedgerDateRange } from "@/lib/creditsNavigation";
 import { QueryNotice } from "@/components/shared/QueryNotice";
 import { buildSettingsRoute } from "../lib/navigation.js";
 import { OfapiBannedWords } from "./settings/OfapiBannedWords.js";
@@ -197,22 +197,6 @@ function humanDay(day: string) {
     return day;
   }
   return `${date} ${MONTH_NAMES[month - 1]}`;
-}
-
-function ledgerDateStart(value: string) {
-  return value ? `${value}T00:00:00.000Z` : undefined;
-}
-
-function ledgerDateEndExclusive(value: string) {
-  if (!value) {
-    return undefined;
-  }
-  const [year, month, day] = value.split("-").map((part) => Number(part));
-  if (!year || !month || !day) {
-    return undefined;
-  }
-
-  return new Date(Date.UTC(year, month - 1, day + 1)).toISOString();
 }
 
 type ValueTone = "neutral" | "warning" | "danger";
@@ -933,20 +917,22 @@ export function OfapiCreditsPage() {
 
   const ledgerRef = useRef<HTMLElement | null>(null);
   const [exporting, setExporting] = useState(false);
+  const exportInFlight = useRef(false);
   const [exportError, setExportError] = useState(false);
   const [exportTruncated, setExportTruncated] = useState(false);
 
-  const ledgerFrom = ledgerDateStart(fromFilter);
-  const ledgerTo = ledgerDateEndExclusive(toFilter);
+  const ledgerRange = creditLedgerDateRange(fromFilter, toFilter);
+  const ledgerFrom = ledgerRange.from;
+  const ledgerTo = ledgerRange.to;
   const ledgerQuery = useAdminOfapiCreditsLedger({
     offset: ledgerOffset,
     limit: LEDGER_PAGE_SIZE,
-    source: sourceFilter || undefined,
-    operation: operationFilter.trim() || undefined,
-    pageId: pageFilter ? Number(pageFilter) : undefined,
-    from: ledgerFrom,
-    to: ledgerTo,
-  });
+    ...(sourceFilter ? { source: sourceFilter } : {}),
+    ...(operationFilter.trim() ? { operation: operationFilter.trim() } : {}),
+    ...(pageFilter ? { pageId: Number(pageFilter) } : {}),
+    ...(ledgerFrom ? { from: ledgerFrom } : {}),
+    ...(ledgerTo ? { to: ledgerTo } : {}),
+  }, { enabled: ledgerRange.error === null });
 
   const summary = summaryQuery.data;
   const charts = chartsQuery.data;
@@ -1080,16 +1066,18 @@ export function OfapiCreditsPage() {
   };
 
   const handleExport = async () => {
+    if (exportInFlight.current || ledgerRange.error) return;
+    exportInFlight.current = true;
     setExporting(true);
     setExportError(false);
     setExportTruncated(false);
     try {
       const result = await downloadOfapiCreditsLedgerCsv({
-        source: sourceFilter || undefined,
-        operation: operationFilter.trim() || undefined,
-        pageId: pageFilter ? Number(pageFilter) : undefined,
-        from: ledgerFrom,
-        to: ledgerTo,
+        ...(sourceFilter ? { source: sourceFilter } : {}),
+        ...(operationFilter.trim() ? { operation: operationFilter.trim() } : {}),
+        ...(pageFilter ? { pageId: Number(pageFilter) } : {}),
+        ...(ledgerFrom ? { from: ledgerFrom } : {}),
+        ...(ledgerTo ? { to: ledgerTo } : {}),
       });
       // The server caps a single export; warn so a capped extract is never
       // mistaken for a complete accounting export.
@@ -1097,6 +1085,7 @@ export function OfapiCreditsPage() {
     } catch {
       setExportError(true);
     } finally {
+      exportInFlight.current = false;
       setExporting(false);
     }
   };
@@ -1569,8 +1558,8 @@ export function OfapiCreditsPage() {
                     </thead>
                     <tbody>
                       {(breakdown?.byPage ?? []).map((row) => {
-                        const revenueMills = row.revenueMills ?? 0;
-                        const roi = computeRoi(revenueMills, row.credits, microUsdPerCredit);
+                        const revenueMills = row.revenueMills;
+                        const roi = revenueMills === undefined ? null : computeRoi(revenueMills, row.credits, microUsdPerCredit);
                         return (
                           <tr key={row.pageId} className="border-t border-border-light">
                             <td className={tdClass}>
@@ -1587,7 +1576,7 @@ export function OfapiCreditsPage() {
                             {priceKnown && (
                               <td className={`${tdClass} text-right`}>{usd(row.credits)}</td>
                             )}
-                            <td className={`${tdClass} text-right`}>{formatUsdFromMills(revenueMills)}</td>
+                            <td className={`${tdClass} text-right`}>{revenueMills === undefined ? <span className="text-text-muted">Нет данных</span> : formatUsdFromMills(revenueMills)}</td>
                             {priceKnown && (
                               <td className={`${tdClass} text-right`}>
                                 {roi === null
@@ -1712,7 +1701,7 @@ export function OfapiCreditsPage() {
               <button
                 type="button"
                 onClick={handleExport}
-                disabled={exporting || (ledger?.total ?? 0) === 0}
+                disabled={exporting || ledgerRange.error !== null || (ledger?.total ?? 0) === 0}
                 className="rounded-lg border border-border bg-card px-3 py-1.5 text-[13px] font-medium text-text-secondary hover:bg-hover disabled:cursor-not-allowed disabled:opacity-50"
                 title="Скачать все строки по текущим фильтрам в CSV"
               >
@@ -1729,8 +1718,10 @@ export function OfapiCreditsPage() {
                 </span>
               )}
             </div>
-            <QueryNotice error={ledgerQuery.isError && Boolean(ledger)} stale retry={ledgerQuery.refetch} />
-            {ledgerQuery.isLoading && !ledger ? (
+            <QueryNotice error={ledgerRange.error === null && ledgerQuery.isError && Boolean(ledger)} stale retry={ledgerQuery.refetch} />
+            {ledgerRange.error ? (
+              <p role="alert" className="border-t border-border p-4 text-sm text-danger">{ledgerRange.error} Поля сохранены; журнал и экспорт будут доступны после исправления.</p>
+            ) : ledgerQuery.isLoading && !ledger ? (
               <TableSkeleton rows={8} columns={8} />
             ) : ledgerQuery.isError && !ledger ? (
               <div className="p-4">

@@ -1,3 +1,4 @@
+import { QueryNotice } from "@/components/shared/QueryNotice";
 import { useMemo } from "react";
 import { useSearchParams } from "react-router";
 import { BarChart3 } from "lucide-react";
@@ -132,7 +133,7 @@ export function AnalyticsPage() {
             Analytics
           </h1>
           <p className="text-[13px] text-text-secondary">
-            Traffic, content, tags and money — with what was captured, and what was not.
+            Трафик, контент и доходы Fansly. У каждого раздела указана полнота собранных данных.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
@@ -157,6 +158,7 @@ export function AnalyticsPage() {
               <button
                 key={option}
                 type="button"
+                aria-pressed={range === option}
                 onClick={() => setParam("range", option)}
                 className={`rounded-md px-2.5 py-1 text-[12px] font-medium transition-colors ${
                   range === option
@@ -171,11 +173,13 @@ export function AnalyticsPage() {
         </div>
       </header>
 
-      {pagesQuery.isPending ? (
+      {activeLabel && <p className="mb-4 text-xs text-text-muted">{activeLabel} · {new Date(window.from).toLocaleDateString("ru-RU", { timeZone: "UTC" })} — {new Date(window.to).toLocaleDateString("ru-RU", { timeZone: "UTC" })} · UTC</p>}
+      <QueryNotice error={pagesQuery.isError && Boolean(pagesQuery.data)} stale retry={pagesQuery.refetch} />
+      {pagesQuery.isPending && !pagesQuery.data ? (
         <div className="rounded-xl border border-border bg-card px-4 py-12 text-center text-[13px] text-text-muted">
           Loading pages…
         </div>
-      ) : pagesQuery.isError ? (
+      ) : pagesQuery.isError && !pagesQuery.data ? (
         <div
           role="alert"
           className="rounded-xl border border-warning-dark/60 bg-card px-5 py-8 text-center"

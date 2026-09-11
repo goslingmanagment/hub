@@ -87,6 +87,7 @@ export function RevenueMixPanel({
         title="Revenue mix"
         verdict={verdict}
         cached={cached}
+        limited={data?.nextCursor ? "Разбивка дохода получена частично: показаны записи из ограниченного ответа. Это не полный итог периода." : undefined}
         footnote={
           "Stacked by RAW type code, and the legend shows the code beside the label: one "
           + "label maps to two live codes (legacy and current), and this ledger reaches "
@@ -137,7 +138,7 @@ export function RevenueMixPanel({
           />
         ) : (
           <div className="space-y-3">
-            <div className="overflow-x-auto">
+            <div role="region" aria-label="Таблица аналитики" tabIndex={0} className="max-h-[32rem] overflow-auto">
               <table className="w-full text-[13px]">
                 <thead>
                   <tr className="text-left text-[11px] uppercase tracking-wider text-text-muted">

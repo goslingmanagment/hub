@@ -137,6 +137,7 @@ export function TrafficBySourcePanel({
       subtitle={MEASURE_LABEL[measure]}
       verdict={verdict}
       cached={state.status === "ready" && state.refreshFailed}
+      limited={data?.nextCursor ? "Ответ ограничен: показана часть записей выбранного периода. График и значения относятся к полученной части; сократите период для более точного обзора." : undefined}
       {...(showDenominatorNote ? { footnote: SUGGESTIONS_DENOMINATOR_NOTE } : {})}
       headerExtra={(
         <div className="flex gap-1 rounded-lg border border-border p-0.5">
@@ -238,6 +239,7 @@ export function FypSharePanel({
       title="FYP vs direct media views"
       verdict={verdict}
       cached={state.status === "ready" && state.refreshFailed}
+      limited={data?.nextCursor ? "Ответ ограничен: показана часть записей выбранного периода. График и значения относятся к полученной части; сократите период для более точного обзора." : undefined}
       headerExtra={share === null ? null : (
         <span className="text-[12px] text-text-secondary">
           FYP share{" "}
