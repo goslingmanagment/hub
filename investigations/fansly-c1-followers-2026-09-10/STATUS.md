@@ -129,6 +129,12 @@ without another request. There are now 97 valid decisions and 13 clean-queue
 requests; one failed incremental run has an unknown decision. Lora-1/1250 has
 also retried after a changing provider headline and remains partial.
 
+The owner-approved [17:35 EXPLAIN](HEALTH-PLAN-20260911T173528Z.md) completed.
+The selected plan includes historical attempt and completed-run sorts; estimated
+costs do not establish runtime attribution. The one-use exception is consumed.
+A physical-attempt query candidate is being validated locally in a separate
+health worktree; the C1 follower-policy diff remains unchanged.
+
 Next: follow Lora-1 revision 1250/generation 1206 and subsequent counts. Retain
 the other OR branches as unobserved and diagnose protected health within current
 read-only privileges. No new worker restart was observed at 17:06. A0's new

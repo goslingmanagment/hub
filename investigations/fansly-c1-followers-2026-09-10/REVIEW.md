@@ -166,3 +166,15 @@ The operational-document review found an undated allowlist claim in the A0
 headline. It now dates activation and the last full configuration check, with
 current exact configuration explicitly unverified after the restart.
 The reviewer rechecked those edits and confirmed the finding closed.
+
+
+## Approved plan read — 11 September 17:35 UTC
+
+Both independent reviewers matched SQL/plan SHA256 against the execution receipt.
+The source review also matched all 61 fixed SQL fragments and 125 parameters to
+the unchanged deployed monitor reader. Planned physical-history and completed-run
+work is confirmed; no actual-time RCA, production latency or traffic savings is
+inferred. Active-page substitution, old fixed clock, estimated cardinality and
+session differences remain explicit in the dated HEALTH-PLAN report. The one-use
+privileged exception is consumed. Any candidate query change is validated and
+reviewed in a separate health worktree, outside the C1 code diff.

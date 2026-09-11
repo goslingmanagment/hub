@@ -81,3 +81,9 @@ dashboard checks passed separately. C1's first retained decision is lora-3
 with equal counts and no reconcile request. The six-hour observation now
 retains C1 evidence too, preserving A0's original start and runtime boundaries.
 See [C1 status](fansly-c1-followers-2026-09-10/STATUS.md) for the open gates.
+
+The [11 September 17:35 protected-health plan read](
+fansly-c1-followers-2026-09-10/HEALTH-PLAN-20260911T173528Z.md) completed under
+one explicit owner exception. Estimated historical-work paths justify local
+query validation, not timeout attribution or a passed health gate. The exception
+is consumed. Any resulting health fix has a separate worktree and PR from C1.
