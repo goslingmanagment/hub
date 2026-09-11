@@ -1,5 +1,16 @@
 # C1 timeline independent review
 
+Latest evidence review: `review_pr162` independently checked the 296-row export,
+all 295 finished-run summaries, source attribution and reconcile durations in
+the [11:08 observation](OBSERVATION-20260911T110856Z.md). No cost or suppression
+findings remain. `quality_c1` verified A0 totals and corrected the interpretation
+before publication: the fresh cohort differs from cumulative deltas, the
+non-atomic read includes a completion after the requested end, and generation
+6759 has a flags difference while generation 6753's subtype stays unknown.
+Both reviewers used local evidence only; neither ran tests or accessed production.
+Both final documentation reviews found no actionable issues. Code and tests
+remain unchanged from the verified source; production gates remain open.
+
 Reviewer: existing independent agent `review_pr162` (Boole), 11 September 2026.
 Scope: the current C1 PR, followed by the new restricted timeline, fixtures,
 Decision 291 and runbook. The reviewer read the code without changing it,

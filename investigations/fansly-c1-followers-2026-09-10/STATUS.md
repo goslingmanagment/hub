@@ -115,10 +115,19 @@ A0 coverage remains degraded: 49 of 69 sweeps incomplete and 85,915 unknown
 material observations. The separate planner-only exception is still pending;
 this heartbeat did not execute EXPLAIN or change production.
 
-Next: follow Lora-2's terminal result and next incremental counts, retain the
-other OR branches as unobserved, and continue the protected-health diagnosis
-within current read-only privileges. A narrow policy change needs evidence
-beyond these legitimate-repair-compatible repetitions.
+The [11:08 follow-up](OBSERVATION-20260911T110856Z.md) now contains 61 valid
+decisions: 50 no-request and 11 clean-queue count mismatches. Lora-2's two
+generations completed with zero then one candidate, followed by matching counts
+and no request. Lora-3 has another such pair and a later mismatch while its
+provider headline changes. Lilly-2's new revision 2532 is scheduled work,
+separate from those 11 requests. Suppression remains unjustified.
+
+Next: follow Lora-3 revision 1520/generation 770 and subsequent counts. Retain
+the other OR branches as unobserved and diagnose protected health within current
+read-only privileges. No new restart was observed at 11:08. A0's new 71-sweep
+cohort has only three complete sweeps, all Ari-1; 64 are incomplete and four
+running. Its non-atomic status read includes one completion after the requested
+window end. The seven-day date alone cannot pass acceptance.
 The drift/blast-radius guards and presence consumers remain exit criteria.
 A0 keeps its original seven-day window with this runtime boundary recorded.
 Further production changes, A1, live sockets and C2b enablement remain gated.
