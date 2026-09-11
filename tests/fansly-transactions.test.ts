@@ -6,6 +6,7 @@ import type * as FanHydrationModule from "../apps/runtime/src/services/sync/fan-
 import { PageSyncLeaseLostError } from "@agency_hub_core/db";
 
 const dbMocks = vi.hoisted(() => ({
+  getConfigOverrides: vi.fn(),
   getCheckpoint: vi.fn(),
   getOldestPendingTransactionAt: vi.fn(),
   getPageTransactionsWriterInfo: vi.fn(),
@@ -17,6 +18,7 @@ const dbMocks = vi.hoisted(() => ({
   upsertFanPages: vi.fn(),
   upsertFans: vi.fn(),
   upsertTransaction: vi.fn(),
+  upsertFanslyTransactionWithEarningsDirty: vi.fn(),
 }));
 
 const sharedMocks = vi.hoisted(() => ({
@@ -105,6 +107,7 @@ describe("syncTransactions", () => {
     });
     fanHydrationMocks.upsertHydratedFansForPage.mockResolvedValue(new Map());
     dbMocks.getOldestPendingTransactionAt.mockResolvedValue(null);
+    dbMocks.getConfigOverrides.mockResolvedValue(new Map());
     // Stage 13 single-writer gate: the page under test is Fansly-written.
     dbMocks.getPageTransactionsWriterInfo.mockResolvedValue({
       transactionsWriter: "fansly",
@@ -127,7 +130,7 @@ describe("syncTransactions", () => {
     vi.useRealTimers();
   });
 
-  it("rebuilds incremental Fansly rollups from the oldest changed transaction", async () => {
+  it.each([false, true])("preserves incremental rollups with earnings shadow %s", async (shadow) => {
     dbMocks.getCheckpoint.mockResolvedValue({
       cursorTimestamp: new Date("2026-03-14T00:00:00.000Z"),
       state: {},
@@ -140,6 +143,7 @@ describe("syncTransactions", () => {
       config: {
         transactionLookbackDays: 7,
         transactionRescanCapDays: 30,
+        fanslyFanEarningsShadowPageAllowlist: shadow ? "fansly-page" : "none",
       },
       adapter: {
         getTransactionsPage: vi.fn(async () => ({
@@ -185,7 +189,10 @@ describe("syncTransactions", () => {
       telemetry: createTelemetry() as never,
     });
 
-    expect(dbMocks.upsertTransaction).toHaveBeenCalledWith(
+    const writer = shadow ? dbMocks.upsertFanslyTransactionWithEarningsDirty : dbMocks.upsertTransaction;
+    const unusedWriter = shadow ? dbMocks.upsertTransaction : dbMocks.upsertFanslyTransactionWithEarningsDirty;
+    expect(unusedWriter).not.toHaveBeenCalled();
+    expect(writer).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
         rawType: 20001,

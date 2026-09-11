@@ -112,6 +112,20 @@ export const CONFIG_DESCRIPTORS: readonly ConfigDescriptor[] = [
 
   // ── Fansly ────────────────────────────────────────────────────────────────
   {
+    key: "fanslyFanEarningsShadowPageAllowlist",
+    envName: "FANSLY_FAN_EARNINGS_SHADOW_PAGE_ALLOWLIST",
+    configField: "fanslyFanEarningsShadowPageAllowlist",
+    kind: "string",
+    subsystem: "Fansly",
+    label: "Fansly earnings shadow pages",
+    default: "none",
+    editability: EDITABLE,
+    runtimeApply: "live",
+    comparable: true,
+    note: "Records semantic transaction targets and separate endpoint receipts. " +
+      "Keeps daily rotation and makes no additional provider requests.",
+  },
+  {
     key: "fanslyDmShadowPageAllowlist",
     envName: "FANSLY_DM_SHADOW_PAGE_ALLOWLIST",
     configField: "fanslyDmShadowPageAllowlist",

@@ -101,6 +101,7 @@ const envSchema = z.object({
   FANSLY_DM_MESSAGES_DELAY_MS: z.coerce.number().int().positive().default(5000),
   FANSLY_DM_HEAD_CATCHUP_PAGE_ALLOWLIST: z.string().default("none"),
   FANSLY_DM_SHADOW_PAGE_ALLOWLIST: z.string().default("none"),
+  FANSLY_FAN_EARNINGS_SHADOW_PAGE_ALLOWLIST: z.string().default("none"),
   FANSLY_DM_DEEP_BACKFILL_ENABLED: booleanSchema.default(false),
   FANSLY_DM_DEEP_BACKFILL_MAX_REQUESTS_PER_RUN: z.coerce.number().int().min(0).default(1),
   FANSLY_DM_DEEP_BACKFILL_LIVE_REQUESTS_PER_DEEP: z.coerce.number().int().min(1).default(4),
@@ -412,6 +413,7 @@ export interface AppConfig {
   fanslyDmMessagesDelayMs: number;
   fanslyDmHeadCatchupPageAllowlist?: string;
   fanslyDmShadowPageAllowlist?: string;
+  fanslyFanEarningsShadowPageAllowlist?: string;
   fanslyDmDeepBackfillEnabled?: boolean;
   fanslyDmDeepBackfillMaxRequestsPerRun?: number;
   fanslyDmDeepBackfillLiveRequestsPerDeep?: number;
@@ -738,6 +740,7 @@ export function loadConfig(
     fanslyDmMessagesDelayMs: enforceFanslyDmDelayFloor(parsed.FANSLY_DM_MESSAGES_DELAY_MS),
     fanslyDmHeadCatchupPageAllowlist: parsed.FANSLY_DM_HEAD_CATCHUP_PAGE_ALLOWLIST,
     fanslyDmShadowPageAllowlist: parsed.FANSLY_DM_SHADOW_PAGE_ALLOWLIST,
+    fanslyFanEarningsShadowPageAllowlist: parsed.FANSLY_FAN_EARNINGS_SHADOW_PAGE_ALLOWLIST,
     fanslyDmDeepBackfillEnabled: parsed.FANSLY_DM_DEEP_BACKFILL_ENABLED,
     fanslyDmDeepBackfillMaxRequestsPerRun: parsed.FANSLY_DM_DEEP_BACKFILL_MAX_REQUESTS_PER_RUN,
     fanslyDmDeepBackfillLiveRequestsPerDeep: parsed.FANSLY_DM_DEEP_BACKFILL_LIVE_REQUESTS_PER_DEEP,

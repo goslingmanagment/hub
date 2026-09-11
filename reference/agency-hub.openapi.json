@@ -94882,6 +94882,10 @@
                         "type": "string",
                         "maxLength": 5000
                       },
+                      "fanCustomName": {
+                        "type": "string",
+                        "maxLength": 200
+                      },
                       "pingSegment": {
                         "type": "string",
                         "enum": [

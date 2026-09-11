@@ -5,7 +5,7 @@ Status: implemented and locally verified in branch `codex/overview-ux`, worktree
 was not used for implementation. No deployment, merge or production mutation
 was performed. This record supersedes the earlier UI proposal in
 [the September 10 review](overview-ux-review-2026-09-10.md); that file retains
-the original metric research and dated data evidence. Decision #288 records the
+the original metric research and dated data evidence. Decision #292 records the
 final architecture.
 
 ## Delivered behavior

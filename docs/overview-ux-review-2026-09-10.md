@@ -3,7 +3,7 @@
 **Follow-up, September 11:** the owner selected the familiar compact variant-one
 table and authorized implementation. The final behavior, query architecture and
 current local checks are recorded in [the implementation record](overview-implementation-2026-09-11.md)
-and decision #288. The proposals and validation below describe the earlier
+and decision #292. The proposals and validation below describe the earlier
 September 10 iteration; they are retained as research history.
 
 The first UI proposal preserved ambiguous audience KPIs and was rejected by the
