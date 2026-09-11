@@ -87,3 +87,9 @@ fansly-c1-followers-2026-09-10/HEALTH-PLAN-20260911T173528Z.md) completed under
 one explicit owner exception. Estimated historical-work paths justify local
 query validation, not timeout attribution or a passed health gate. The exception
 is consumed. Any resulting health fix has a separate worktree and PR from C1.
+
+A separate [health prerequisite PR172](https://github.com/goslingmanagment/core/pull/172)
+now narrows completed-run ranking before payload lookup. It has passed local checks
+and independent correctness/quality reviews, with 19.6–23.2% lower local medians
+on four synthetic scenarios. GitHub CI and production acceptance remain pending;
+no Fansly HTTP savings or migration gate is passed by that result.

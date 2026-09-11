@@ -132,8 +132,11 @@ also retried after a changing provider headline and remains partial.
 The owner-approved [17:35 EXPLAIN](HEALTH-PLAN-20260911T173528Z.md) completed.
 The selected plan includes historical attempt and completed-run sorts; estimated
 costs do not establish runtime attribution. The one-use exception is consumed.
-A physical-attempt query candidate is being validated locally in a separate
-health worktree; the C1 follower-policy diff remains unchanged.
+Physical-attempt rewrites were rejected on local failure-heavy regressions.
+The separate [health PR172](https://github.com/goslingmanagment/core/pull/172)
+selects completed IDs before loading payload: local four-scenario medians improve
+19.6–23.2%, with identical output. Both independent reviews and local checks pass;
+GitHub CI is pending. C1 follower policy and the production gate remain unchanged.
 
 Next: follow Lora-1 revision 1250/generation 1206 and subsequent counts. Retain
 the other OR branches as unobserved and diagnose protected health within current
