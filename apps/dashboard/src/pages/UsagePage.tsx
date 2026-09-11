@@ -3,6 +3,7 @@ import type { AdminChatterUsageResponse } from "@agency_hub_core/contracts";
 import { MOSCOW_TIME_ZONE, toBusinessDate } from "@agency_hub_core/shared";
 import { useAdminChatterUsage } from "@/api/queries";
 import { StatusPanel } from "@/components/shared/StatusPanel";
+import { QueryNotice } from "@/components/shared/QueryNotice";
 import { UsageDateNav } from "@/components/shared/UsageDateNav";
 import { type UsagePeriod, usageRange, shiftAnchor, usageDateLabel } from "@/lib/format";
 
@@ -80,7 +81,7 @@ export function UsagePage() {
   const today = todayISO();
   const canGoNext = range.to < today;
 
-  const { data, isLoading, isError } = useAdminChatterUsage(range);
+  const { data, isLoading, isError, refetch } = useAdminChatterUsage(range);
 
   const rows = data?.rows ?? [];
   const activeRows = rows.filter((r) => r.totalGenerations > 0);
@@ -96,25 +97,11 @@ export function UsagePage() {
     });
   }
 
-  if (isLoading) {
-    return <StatusPanel title="Loading usage" description="Fetching chatter AI usage." />;
-  }
-
-  if (isError) {
-    return (
-      <StatusPanel title="Usage failed to load" description="Could not fetch usage report." tone="error" />
-    );
-  }
-
-  if (!data) {
-    return <StatusPanel title="No data" description="The report returned no data." tone="error" />;
-  }
-
   const colCount = visibleFeatures.length + 4;
 
   return (
-    <div>
-      <div className="mb-5 flex items-end justify-between">
+    <div className="p-4 md:p-0">
+      <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-xl font-extrabold text-text-primary">Usage</h1>
           <p className="mt-1 text-sm text-text-muted">{SUBTITLE[mode]}</p>
@@ -138,7 +125,18 @@ export function UsagePage() {
         />
       </div>
 
-      <section className="overflow-hidden rounded-xl border border-border bg-card">
+      <QueryNotice error={isError && Boolean(data)} stale retry={refetch} />
+      {isLoading && !data ? (
+        <StatusPanel title="Loading usage" description="Fetching chatter AI usage for the selected period." />
+      ) : !data ? (
+        <StatusPanel
+          title="Usage failed to load"
+          description="Could not fetch usage for the selected period. Try again or select another period."
+          tone="error"
+          action={<button type="button" className="text-sm font-semibold text-accent underline" onClick={() => void refetch()}>Повторить</button>}
+        />
+      ) : (
+      <section className="overflow-x-auto rounded-xl border border-border bg-card">
         <table className="w-full border-collapse">
           <thead>
             <tr className="bg-hover-alt">
@@ -168,7 +166,7 @@ export function UsagePage() {
             {activeRows.length === 0 && (
               <tr>
                 <td colSpan={colCount} className="px-4 py-8 text-center text-sm text-text-muted">
-                  No activity for this day.
+                  No activity for this period.
                 </td>
               </tr>
             )}
@@ -183,10 +181,18 @@ export function UsagePage() {
                     }`}
                   >
                     <td className="px-4 py-3 text-sm font-medium text-text-primary">
-                      <span className="mr-1.5 inline-block w-3 text-text-muted">
-                        {isExpanded ? "▾" : "▸"}
-                      </span>
-                      {row.username}
+                      <button
+                        type="button"
+                        aria-expanded={isExpanded}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          toggleExpanded(row.userId);
+                        }}
+                        className="flex items-center gap-1.5 text-left font-medium text-text-primary hover:text-accent focus-visible:outline-2 focus-visible:outline-accent"
+                      >
+                        <span aria-hidden="true" className="inline-block w-3 text-text-muted">{isExpanded ? "▾" : "▸"}</span>
+                        {row.username}
+                      </button>
                     </td>
                     {visibleFeatures.map((feature) => {
                       const count = getFeatureCount(row, feature);
@@ -221,7 +227,7 @@ export function UsagePage() {
                       <td colSpan={colCount} className="bg-hover-alt/50 px-4 py-3">
                         <div className="space-y-1 text-[13px] text-text-secondary">
                           {row.featureBreakdown.map((fb, i) => (
-                            <div key={fb.feature} className="flex items-baseline gap-2">
+                            <div key={fb.feature} className="flex flex-wrap items-baseline gap-2">
                               <span className="w-3 text-center text-text-muted">
                                 {i === row.featureBreakdown.length - 1 ? "└" : "├"}
                               </span>
@@ -294,6 +300,7 @@ export function UsagePage() {
           </tbody>
         </table>
       </section>
+      )}
     </div>
   );
 }

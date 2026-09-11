@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { Link, useSearchParams } from "react-router";
 import type { NotificationsIncidentItem } from "@agency_hub_core/contracts";
 import { toast } from "sonner";
 import { useNotificationIncidents, useResolveIncident } from "@/api/queries";
 import { StatusPanel } from "@/components/shared/StatusPanel";
+import { QueryNotice } from "@/components/shared/QueryNotice";
 import { formatRelativeTime } from "@/lib/format";
 
 const LIMIT = 50;
@@ -75,21 +76,39 @@ function deliveryState(item: NotificationsIncidentItem): {
       return {
         label: `Exhausted (${item.outboxAttemptCount ?? 0})`,
         className: "text-danger",
-        title: item.outboxLastError ?? undefined,
+        ...(item.outboxLastError ? { title: item.outboxLastError } : {}),
       };
   }
 }
 
 export function NotificationsIncidentsTab() {
-  const [status, setStatus] = useState<string | undefined>();
-  const [kind, setKind] = useState<string | undefined>();
-  const [pageLabel, setPageLabel] = useState<string | undefined>();
-  const [offset, setOffset] = useState(0);
+  const [search, setSearch] = useSearchParams();
+  const status = ["open", "resolved"].includes(search.get("status") ?? "") ? search.get("status")! : undefined;
+  const kind = Object.hasOwn(INCIDENT_KIND_LABELS, search.get("kind") ?? "") ? search.get("kind")! : undefined;
+  const pageLabel = search.get("page") || undefined;
+  const requestedOffset = Number(search.get("offset") ?? 0);
+  const offset = Number.isSafeInteger(requestedOffset) && requestedOffset >= 0 ? requestedOffset : 0;
+  function setFilter(key: string, value: string, replace = false) {
+    const next = new URLSearchParams(search);
+    if (value) next.set(key, value); else next.delete(key);
+    next.delete("offset");
+    setSearch(next, { replace });
+  }
+  function setOffset(value: number) {
+    const next = new URLSearchParams(search);
+    if (value) next.set("offset", String(value)); else next.delete("offset");
+    setSearch(next);
+  }
+  function clearFilters() {
+    const next = new URLSearchParams(search);
+    for (const key of ["page", "kind", "status", "offset"]) next.delete(key);
+    setSearch(next);
+  }
 
-  const { data, isLoading, isError } = useNotificationIncidents({
-    status,
-    kind,
-    pageLabel,
+  const { data, isLoading, isError, refetch } = useNotificationIncidents({
+    ...(status ? { status } : {}),
+    ...(kind ? { kind } : {}),
+    ...(pageLabel ? { pageLabel } : {}),
     limit: LIMIT,
     offset,
   });
@@ -97,69 +116,74 @@ export function NotificationsIncidentsTab() {
 
   function handleResolve(incidentId: number) {
     resolveIncident.mutate(incidentId, {
-      onSuccess: () => toast.success("Incident resolved"),
-      onError: () => toast.error("Failed to resolve incident"),
+      onSuccess: () => toast.success("Инцидент закрыт"),
+      onError: () => toast.error("Не удалось закрыть инцидент"),
     });
   }
 
   return (
     <div>
-      <div className="mb-4 flex items-center gap-3">
+      <div className="mb-4 flex flex-wrap items-center gap-3">
         <select
           value={status ?? ""}
-          onChange={(event) => { setStatus(event.target.value || undefined); setOffset(0); }}
+          aria-label="Статус инцидента"
+          onChange={(event) => setFilter("status", event.target.value)}
           className="rounded-lg border border-border bg-card px-3 py-1.5 text-sm text-text-primary"
         >
-          <option value="">All Statuses</option>
-          <option value="open">Open</option>
-          <option value="resolved">Resolved</option>
+          <option value="">Все статусы</option>
+          <option value="open">Открытые</option>
+          <option value="resolved">Закрытые</option>
         </select>
 
         <select
           value={kind ?? ""}
-          onChange={(event) => { setKind(event.target.value || undefined); setOffset(0); }}
+          aria-label="Тип инцидента"
+          onChange={(event) => setFilter("kind", event.target.value)}
           className="rounded-lg border border-border bg-card px-3 py-1.5 text-sm text-text-primary"
         >
-          <option value="">All Types</option>
+          <option value="">Все типы</option>
           {(Object.entries(INCIDENT_KIND_LABELS) as Array<[IncidentKind, string]>)
             .map(([value, label]) => <option key={value} value={value}>{label}</option>)}
         </select>
 
         <input
           type="text"
-          placeholder="Filter by page..."
+          placeholder="Название страницы…"
           value={pageLabel ?? ""}
-          onChange={(event) => { setPageLabel(event.target.value || undefined); setOffset(0); }}
+          aria-label="Страница инцидента"
+          onChange={(event) => setFilter("page", event.target.value, true)}
           className="w-48 rounded-lg border border-border bg-card px-3 py-1.5 text-sm text-text-primary placeholder:text-text-muted"
         />
       </div>
 
-      {isLoading ? (
-        <StatusPanel title="Loading incidents" description="Fetching notification incidents." />
-      ) : isError || !data ? (
+      <QueryNotice error={isError} stale={data !== undefined} retry={refetch} />
+      {isLoading && !data ? (
+        <StatusPanel title="Загружаем инциденты…" description="Получаем сохранённые инциденты уведомлений." />
+      ) : !data ? (
         <StatusPanel
-          title="Incidents failed to load"
-          description="The notification incidents feed could not be fetched."
+          title="Не удалось загрузить инциденты"
+          description="Повторите запрос с помощью кнопки выше."
           tone="error"
         />
       ) : data.items.length === 0 ? (
         <StatusPanel
-          title="No incidents recorded"
-          description="Incidents appear when an operational condition opens an alert."
+          title={status || kind || pageLabel || offset > 0 ? "Инцидентов с такими фильтрами нет" : "Инцидентов пока нет"}
+          description="Инциденты появляются при выявлении операционной проблемы."
+          action={status || kind || pageLabel || offset > 0 ? <button type="button" className="text-accent underline" onClick={clearFilters}>Сбросить фильтры</button> : undefined}
         />
       ) : (
         <>
-          <div className="overflow-hidden rounded-xl border border-border bg-card">
+          <div className="overflow-x-auto rounded-xl border border-border bg-card">
             <table className="w-full border-collapse">
               <thead>
                 <tr className="bg-hover-alt">
-                  <th className="px-4 py-2.5 text-left text-[12px] font-semibold uppercase text-text-muted tracking-wider">Status</th>
-                  <th className="px-4 py-2.5 text-left text-[12px] font-semibold uppercase text-text-muted tracking-wider">Page</th>
-                  <th className="px-4 py-2.5 text-left text-[12px] font-semibold uppercase text-text-muted tracking-wider">Type</th>
-                  <th className="px-4 py-2.5 text-left text-[12px] font-semibold uppercase text-text-muted tracking-wider">Stream</th>
-                  <th className="px-4 py-2.5 text-left text-[12px] font-semibold uppercase text-text-muted tracking-wider">Opened</th>
-                  <th className="px-4 py-2.5 text-left text-[12px] font-semibold uppercase text-text-muted tracking-wider">Error</th>
-                  <th className="px-4 py-2.5 text-right text-[12px] font-semibold uppercase text-text-muted tracking-wider">Alerts</th>
+                  <th className="px-4 py-2.5 text-left text-[12px] font-semibold uppercase text-text-muted tracking-wider">Статус</th>
+                  <th className="px-4 py-2.5 text-left text-[12px] font-semibold uppercase text-text-muted tracking-wider">Страница</th>
+                  <th className="px-4 py-2.5 text-left text-[12px] font-semibold uppercase text-text-muted tracking-wider">Тип</th>
+                  <th className="px-4 py-2.5 text-left text-[12px] font-semibold uppercase text-text-muted tracking-wider">Поток</th>
+                  <th className="px-4 py-2.5 text-left text-[12px] font-semibold uppercase text-text-muted tracking-wider">Открыт</th>
+                  <th className="px-4 py-2.5 text-left text-[12px] font-semibold uppercase text-text-muted tracking-wider">Причина</th>
+                  <th className="px-4 py-2.5 text-right text-[12px] font-semibold uppercase text-text-muted tracking-wider">Доставка</th>
                   <th className="px-4 py-2.5 text-[12px] font-semibold uppercase text-text-muted tracking-wider" />
                 </tr>
               </thead>
@@ -171,16 +195,16 @@ export function NotificationsIncidentsTab() {
                         item.status === "open" ? "text-danger" : "text-green"
                       }`}>
                         <div className={`h-2 w-2 rounded-full ${item.status === "open" ? "bg-danger" : "bg-green"}`} />
-                        {item.status === "open" ? "Open" : "Resolved"}
+                        {item.status === "open" ? "Открыт" : "Закрыт"}
                       </div>
                     </td>
-                    <td className="px-4 py-2.5 text-[13px] font-medium text-text-primary">{item.pageLabel ?? "Global"}</td>
+                    <td className="px-4 py-2.5 text-[13px] font-medium text-text-primary">{item.pageLabel ? <Link className="text-accent underline" to={`/pages/${encodeURIComponent(item.pageLabel)}`}>{item.pageLabel}</Link> : "Общий"}</td>
                     <td className="px-4 py-2.5 text-[12px] text-text-secondary">
                       {INCIDENT_KIND_LABELS[item.kind]}
                     </td>
                     <td className="px-4 py-2.5 text-[12px] text-text-muted">{item.stream ?? "—"}</td>
                     <td className="px-4 py-2.5 text-[12px] text-text-muted">{formatRelativeTime(item.openedAt)}</td>
-                    <td className="max-w-[200px] truncate px-4 py-2.5 text-[12px] text-text-muted">{item.errorSummary ?? "—"}</td>
+                    <td className="min-w-48 max-w-xs px-4 py-2.5 text-[12px] text-text-muted">{item.errorSummary ? <details><summary className="cursor-pointer">Показать причину</summary><p className="mt-2 break-words">{item.errorSummary}</p></details> : "—"}</td>
                     <td
                       className={`px-4 py-2.5 text-right text-[12px] tabular-nums ${
                         deliveryState(item).className
@@ -196,7 +220,7 @@ export function NotificationsIncidentsTab() {
                           disabled={resolveIncident.isPending}
                           className="rounded-lg border border-border bg-card px-2.5 py-1 text-[11px] font-semibold text-text-secondary hover:bg-hover disabled:opacity-40"
                         >
-                          Resolve
+                          Закрыть
                         </button>
                       )}
                     </td>
@@ -208,21 +232,21 @@ export function NotificationsIncidentsTab() {
 
           {data.total > LIMIT && (
             <div className="mt-3 flex items-center justify-between text-[12px] text-text-muted">
-              <span>{offset + 1}–{Math.min(offset + LIMIT, data.total)} of {data.total}</span>
+              <span>{offset + 1}–{Math.min(offset + LIMIT, data.total)} из {data.total}</span>
               <div className="flex gap-2">
                 <button
                   onClick={() => setOffset(Math.max(0, offset - LIMIT))}
                   disabled={offset === 0}
                   className="rounded border border-border px-2.5 py-1 disabled:opacity-40"
                 >
-                  Previous
+                  Назад
                 </button>
                 <button
                   onClick={() => setOffset(offset + LIMIT)}
                   disabled={offset + LIMIT >= data.total}
                   className="rounded border border-border px-2.5 py-1 disabled:opacity-40"
                 >
-                  Next
+                  Далее
                 </button>
               </div>
             </div>

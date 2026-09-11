@@ -35,8 +35,18 @@ export function Topbar({ user, onOpenNavigation }: TopbarProps) {
       }
     }
 
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setMenuOpen(false);
+        menuRef.current?.querySelector("button")?.focus();
+      }
+    }
     window.addEventListener("mousedown", handlePointerDown);
-    return () => window.removeEventListener("mousedown", handlePointerDown);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("mousedown", handlePointerDown);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
   }, [menuOpen]);
 
   async function handleLogout() {
@@ -75,7 +85,7 @@ export function Topbar({ user, onOpenNavigation }: TopbarProps) {
           <button
             type="button"
             onClick={() => setMenuOpen((open) => !open)}
-            aria-label="Account menu"
+            aria-label="Меню аккаунта"
             aria-expanded={menuOpen}
             className="flex items-center gap-2 rounded-full border border-border bg-card px-2 py-1 hover:bg-hover-alt"
           >
@@ -97,7 +107,7 @@ export function Topbar({ user, onOpenNavigation }: TopbarProps) {
                 className="mt-2 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-text-secondary hover:bg-hover hover:text-text-primary"
               >
                 <LogOut size={14} />
-                Log out
+                Выйти
               </button>
             </div>
           )}
@@ -130,7 +140,17 @@ function buildBreadcrumbs(
 
   if (parts.length === 0) return [{ label: "Overview" }];
 
-  if (parts[0] === "ofapi-actions") return [{ label: "Управление OnlyFans" }];
+  const standaloneLabels: Record<string, string> = {
+    "ofapi-actions": "Управление OnlyFans",
+    "ofapi-media": "Медиа OnlyFans",
+    "ofapi-exports": "Экспорты OnlyFans",
+    "ofapi-marketing": "Маркетинг OnlyFans",
+    "analytics": "Аналитика",
+    "ai-analytics": "ИИ-аналитика",
+  };
+  if (parts[0] && standaloneLabels[parts[0]]) {
+    return [{ label: "Overview", href: "/" }, { label: standaloneLabels[parts[0]]! }];
+  }
 
   if (parts[0] === "settings") return [{ label: "Overview", href: "/" }, { label: "Settings" }];
 

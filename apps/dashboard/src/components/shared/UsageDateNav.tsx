@@ -2,9 +2,9 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 import type { UsagePeriod } from "@/lib/format";
 
 const modes: { key: UsagePeriod; label: string }[] = [
-  { key: "day", label: "Day" },
-  { key: "week", label: "Week" },
-  { key: "month", label: "Month" },
+  { key: "day", label: "День" },
+  { key: "week", label: "Неделя" },
+  { key: "month", label: "Месяц" },
 ];
 
 interface UsageDateNavProps {
@@ -18,11 +18,12 @@ interface UsageDateNavProps {
 
 export function UsageDateNav({ mode, onModeChange, label, onPrev, onNext, canGoNext }: UsageDateNavProps) {
   return (
-    <div className="flex items-center gap-3">
+    <div className="flex flex-wrap items-center gap-3">
       {/* Arrow navigation */}
       <div className="flex items-center gap-1">
         <button
           type="button"
+          aria-label="Предыдущий период"
           onClick={onPrev}
           className="flex h-8 w-8 items-center justify-center rounded-button border border-border bg-card text-text-secondary transition-colors hover:bg-hover hover:text-text-primary"
         >
@@ -35,6 +36,7 @@ export function UsageDateNav({ mode, onModeChange, label, onPrev, onNext, canGoN
 
         <button
           type="button"
+          aria-label="Следующий период"
           onClick={onNext}
           disabled={!canGoNext}
           className="flex h-8 w-8 items-center justify-center rounded-button border border-border bg-card text-text-secondary transition-colors hover:bg-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-40"
@@ -51,6 +53,7 @@ export function UsageDateNav({ mode, onModeChange, label, onPrev, onNext, canGoN
             <button
               key={m.key}
               type="button"
+              aria-pressed={isActive}
               onClick={() => onModeChange(m.key)}
               className={`rounded-button px-3 py-1.5 text-[13px] font-medium transition-colors ${
                 isActive

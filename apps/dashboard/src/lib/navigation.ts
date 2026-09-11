@@ -163,7 +163,7 @@ export function resolveFanLabelFromState(state: unknown): string | undefined {
 
 export function buildSettingsRoute(tab: SettingsTab, pageLabel?: string) {
   const params = new URLSearchParams({ tab });
-  if (tab === "sync" && pageLabel) {
+  if ((tab === "sync" || tab === "credentials") && pageLabel) {
     params.set("page", pageLabel);
   }
   return `/settings?${params.toString()}`;

@@ -18,7 +18,7 @@ export function StatusPanel({
     : "border-border bg-card";
 
   return (
-    <div className={`rounded-xl border px-5 py-8 text-center ${toneClasses}`}>
+    <div role={tone === "error" ? "alert" : "status"} className={`rounded-xl border px-5 py-8 text-center ${toneClasses}`}>
       <p className="text-sm font-semibold text-text-primary">{title}</p>
       {description && (
         <p className="mx-auto mt-1 max-w-xl text-sm text-text-muted">{description}</p>

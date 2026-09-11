@@ -1,5 +1,6 @@
 import type { SyncDiagnosis } from "@agency_hub_core/contracts";
 import { Link } from "react-router";
+import { buildSettingsRoute } from "@/lib/navigation";
 
 function noticeTone(severity: SyncDiagnosis["severity"]) {
   if (severity === "warning") {
@@ -17,9 +18,12 @@ function noticeTone(severity: SyncDiagnosis["severity"]) {
 
 export function SyncDiagnosisNotice({
   diagnosis,
+  pageLabel,
   className = "",
 }: {
   diagnosis: SyncDiagnosis;
+  /** Omitted only for the aggregate diagnosis above the page list. */
+  pageLabel?: string;
   className?: string;
 }) {
   const tone = noticeTone(diagnosis.severity);
@@ -38,7 +42,7 @@ export function SyncDiagnosisNotice({
         <span className="text-text-secondary">{diagnosis.detail}</span>
         {diagnosis.actionKind === "credentials" && (
           <Link
-            to="/settings?tab=credentials"
+            to={buildSettingsRoute("credentials", pageLabel)}
             className="font-semibold text-accent hover:underline"
           >
             Update credentials

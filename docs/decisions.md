@@ -289,6 +289,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 289 | Fansly C2b earnings shadow | Atomic semantic transaction revisions and independent endpoint receipts measure the existing daily rotation; unchanged and missing results remain explicit debt. |
 | 291 | Overview metric semantics | Revenue-led overview with per-page/model comparison windows, transaction sources and separate page audience counts; no summed subscribers or acquisition claims from mutable subscription records. |
 | 292 | Overview selected layout and exact drilldown | Keep the compact variant-one table, order models by server net income, compare source deltas on the server, use scoped exact-window operations with one response snapshot, and persist navigation context in URLs. Supersedes #291's three-query-only UI plan. |
+| 293 | Dashboard subsystem context and truthful query states | Extend URL-owned navigation, independent loading/error states, exact revenue drilldowns, and preserved operation custody across account/audience, OFAPI, notifications, access and diagnostics. Keep literal colon suffixes in SDK paths. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -12184,3 +12185,48 @@ breakpoints. Native modal navigation supplies keyboard containment, Escape and
 focus return on mobile. See [the implementation record](overview-implementation-2026-09-11.md)
 for verification and restart instructions. This is a local implementation; no
 deployment, production write, capture repair or completeness claim is implied.
+
+## Decision 293: Preserve context and data meaning across dashboard subsystems (2026-09-11)
+
+The owner authorized implementing the remaining UI/UX audit with independent
+subagents for refinement and adversarial review. The selected Overview and
+configuration editor remain the baseline. This extends #292's navigation and
+query-state principles to the existing Hub screens; it does not introduce a new
+application or move the standalone Workboard back into this repository.
+
+Page-detail revenue and its operations share the server report's exact `[from,to)`
+window and `reportableOnly` predicate. A missing or mismatched window cannot
+silently broaden the request. Fan history explicitly remains all-history.
+Monetary labels follow the reporting contract: legacy `totalSpentCents` in the
+audience lists is creator net, and absent batch metrics stay unknown. The browser
+does not derive financial totals from loaded rows or replace negative adjustments.
+
+Each dependent section owns loading, error, retry and confirmed-empty states.
+Previously fetched data remains available with a failed-refresh notice. Route
+loading and errors are bounded inside the authenticated shell. Transient auth
+errors offer retry; an actual login retains only a safe internal return path.
+
+Audience search/filter/offset, effective periods, notification views and OFAPI
+account context belong in URLs. Fan links carry their full source address and
+period. Explicit unavailable account labels fail closed instead of choosing
+another page. Sync/Collection links carry the account being diagnosed.
+
+Media and Exports keep drafts and reviewed previews per account while retaining
+one in-flight guard across same-screen Back/Forward changes. Outcomes name the
+originating account; changing the selected page cannot discard an unresolved
+operation or permit a duplicate. Existing preview, limits, admission, role and
+indeterminate-outcome rules remain authoritative. Saving notification credentials
+does not send a test message; testing is a separate visible action.
+
+The shared SDK runtime substitutes only whole `:parameter` path segments.
+Literal colon suffixes such as `/api/v2/spenders:batch` must reach fetch unchanged.
+This repairs an existing transport defect without changing route definitions,
+generated contract hashes or authorization.
+
+Keyboard actions ignore editable/interactive contexts, modifier/repeat/IME input
+and stale selections. Native links/buttons and accessible selected states are
+used for navigation and disclosure. Responsive controls and local table overflow
+preserve the existing design tokens. See the
+[implementation record](subsystems-ux-implementation-2026-09-11.md) for coverage,
+verification and limitations. No deployment or production mutation is authorized
+by this local implementation record.

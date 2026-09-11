@@ -109,11 +109,11 @@ function makeResponse(items: SpenderListResponse["items"]): SpenderListResponse 
   };
 }
 
-function renderPage() {
+function renderPage(url = "/pages/lana/top-supporters") {
   return renderToStaticMarkup(
     createElement(
       MemoryRouter,
-      { initialEntries: ["/pages/lana/top-supporters"] },
+      { initialEntries: [url] },
       createElement(
         Routes,
         undefined,
@@ -157,17 +157,17 @@ describe("TopSupportersPage", () => {
 
     const html = renderPage();
 
-    expect(html).toContain("All");
-    expect(html).toContain("Active");
-    expect(html).toContain("Cooling");
-    expect(html).toContain("Inactive");
-    expect(html).toContain("Needs reactivation");
-    expect(html).toContain("Reactivate");
-    expect(html).toContain("Sub");
-    expect(html).toContain("Next");
-    expect(html).toContain("Last Chat");
-    expect(html).toContain("Last Spend");
-    expect(html).toContain("Unanswered");
+    expect(html).toContain("Все");
+    expect(html).toContain("Активные");
+    expect(html).toContain("Остывают");
+    expect(html).toContain("Неактивные");
+    expect(html).toContain("Нужен возврат");
+    expect(html).toContain("Вернуть");
+    expect(html).toContain("Подписка");
+    expect(html).toContain("Следующий шаг");
+    expect(html).toContain("Переписка");
+    expect(html).toContain("Последняя покупка");
+    expect(html).toContain("Без ответа");
     expect(html).toContain("Tip");
     expect(html).not.toContain("Last Activity");
     expect(html).not.toContain("Last activity ");
@@ -178,7 +178,7 @@ describe("TopSupportersPage", () => {
 
     const html = renderPage();
 
-    expect(html).toContain("No supporters found for this period.");
+    expect(html).toContain("За выбранный период спендеры не найдены.");
   });
 
   it("falls back to lifetime when period is the persisted \"all\" alias", () => {
@@ -198,4 +198,52 @@ describe("TopSupportersPage", () => {
 
     expect(queryMocks.useSpenders.mock.calls[0]![0].period).toBe("30d");
   });
+
+  it("keeps filters visible and exposes a local retry after the initial list request fails", () => {
+    queryMocks.useSpenders.mockReturnValue({ data: undefined, isLoading: false, isError: true, refetch: vi.fn() });
+    const html = renderPage("/pages/lana/top-supporters?filter=cooling&q=buyer&offset=50");
+    expect(html).toContain("Не удалось загрузить спендеров");
+    expect(html).toContain("Повторить");
+    expect(html).toContain('value="buyer"');
+    expect(html).not.toContain("За выбранный период спендеры не найдены.");
+  });
+
+  it("reads bounded URL state and embeds it in an accessible fan link", () => {
+    queryMocks.useSpenders.mockReturnValue({ data: makeResponse([makeItem()]), isError: false });
+    const url = "/pages/lana/top-supporters?filter=cooling&q=buyer&offset=50&period=30d&sortBy=lastTransactionAt&dir=asc";
+    const html = renderPage(url);
+    expect(queryMocks.useSpenders.mock.calls[0]![0]).toMatchObject({
+      retentionStatus: "cooling", query: "buyer", offset: 50, period: "30d", sortBy: "lastTransactionAt", sortDir: "asc",
+    });
+    expect(html).toContain(`backTo=${encodeURIComponent(url)}`);
+    expect(html).toContain('aria-sort="ascending"');
+    expect(html).toContain('aria-label="Открыть переписку · Buyer One"');
+  });
+
+  it.each(["-1", "NaN", "1.5", "Infinity", "9007199254740992"])("does not send invalid offset %s to the API", (offset) => {
+    queryMocks.useSpenders.mockReturnValue({ data: makeResponse([]), isError: false });
+    renderPage(`/pages/lana/top-supporters?offset=${offset}`);
+    expect(queryMocks.useSpenders.mock.calls[0]![0].offset).toBe(0);
+  });
+
+  it("keeps the ranking after a detail failure without rendering missing subscriptions as absent", () => {
+    queryMocks.useSpenders.mockReturnValue({ data: makeResponse([makeItem()]), isError: true, refetch: vi.fn() });
+    queryMocks.useSpenderBatch.mockReturnValue({ data: undefined, isError: true, refetch: vi.fn() });
+    const html = renderPage();
+    expect(html).toContain("buyer");
+    expect(html).toContain("$250.00");
+    expect(html).toContain("ранее полученные данные");
+    expect(html).toContain("Неизвестно");
+  });
+
+  it("does not total a partial batch breakdown or invent a missing period amount", () => {
+    storeMocks.topSupportersPeriod = "30d";
+    queryMocks.useSpenders.mockReturnValue({ data: makeResponse([makeItem()]), isError: false });
+    queryMocks.useSpenderBatch.mockReturnValue({ data: { items: [] }, isError: false, refetch: vi.fn() });
+    const html = renderPage();
+    expect(html).toContain("Часть сведений о подписках и разбивке дохода недоступна");
+    expect(html).not.toContain("$0.00");
+    expect(html).not.toContain("Чаевые <span");
+  });
+
 });

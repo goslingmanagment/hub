@@ -1,4 +1,4 @@
-import { useLocation, useNavigate, useParams } from "react-router";
+import { Link, useLocation, useParams, useSearchParams } from "react-router";
 import { useEffect, useState } from "react";
 import { ArrowLeft, ChevronDown, CalendarDays, RefreshCw, Clock } from "lucide-react";
 import {
@@ -20,7 +20,9 @@ import { formatDate, formatDateTime, transactionTypeLabel, daysRemaining } from 
 import { useSpenderPeriodStore } from "@/stores/spenderPeriodStore";
 import { toast } from "sonner";
 import { TRANSACTION_STATE_COLORS } from "@/lib/constants";
-import { resolveFanProfileBackTarget } from "@/lib/navigation";
+import { audiencePaginationLabels, audiencePeriod, resolveAudienceBackTarget } from "@/lib/audienceNavigation";
+import { listOffset } from "@/lib/overviewNavigation";
+import { QueryNotice } from "@/components/shared/QueryNotice";
 import type {
   FanProfileDocument,
   FanProfileVersionListResponse,
@@ -37,99 +39,124 @@ type TimelineEvent = {
   type: string;
 };
 
+type FanReadState = {
+  hasData: boolean;
+  error: boolean;
+  retry: () => unknown;
+};
+
+function fanReadState(query: { data?: unknown; isError?: boolean; refetch: () => unknown }): FanReadState {
+  return { hasData: query.data !== undefined, error: Boolean(query.isError), retry: query.refetch };
+}
+
+function FanSectionNotice({ state, loadingLabel }: { state: FanReadState; loadingLabel: string }) {
+  if (state.error) return <QueryNotice error stale={state.hasData} retry={state.retry} />;
+  if (!state.hasData) return <p role="status" className="mb-3 text-sm text-text-muted">{loadingLabel}</p>;
+  return null;
+}
+
 export function FanProfilePage() {
   const { pageLabel, platform, platformUserId } = useParams();
   const location = useLocation();
-  const navigate = useNavigate();
-  const [txOffset, setTxOffset] = useState(0);
+  const [search, setSearch] = useSearchParams();
+  const txOffset = listOffset(search.get("txOffset"));
+  function setTxOffset(offset: number) {
+    setSearch((previous) => {
+      const next = new URLSearchParams(previous);
+      if (offset) next.set("txOffset", String(offset)); else next.delete("txOffset");
+      return next;
+    });
+  }
   const [noteBody, setNoteBody] = useState("");
   const [historyOpen, setHistoryOpen] = useState(false);
   const [intelligenceOpen, setIntelligenceOpen] = useState(false);
   const [selectedProfileVersion, setSelectedProfileVersion] = useState<number | null>(null);
   const routeKey = `${pageLabel ?? ""}\0${platform ?? ""}\0${platformUserId ?? ""}`;
   const { period } = useSpenderPeriodStore();
-  const selectedPeriod = period;
+  const selectedPeriod = audiencePeriod(search.get("period"), period);
   const spenderPeriod = selectedPeriod === "all" ? "lifetime" : selectedPeriod;
 
   useEffect(() => {
-    setTxOffset(0);
     setNoteBody("");
     setHistoryOpen(false);
     setIntelligenceOpen(false);
     setSelectedProfileVersion(null);
   }, [routeKey]);
 
-  const { data, isLoading, isError } = usePageFanDetail(pageLabel!, platformUserId!);
-  const { data: latestProfileData, isLoading: latestProfileLoading } = usePageFanProfile(pageLabel!, platformUserId!);
-  const { data: profileVersionsData, isLoading: profileVersionsLoading } = usePageFanProfileVersions(
+  const { data, isError, refetch } = usePageFanDetail(pageLabel!, platformUserId!);
+  const latestProfileQuery = usePageFanProfile(pageLabel!, platformUserId!);
+  const profileVersionsQuery = usePageFanProfileVersions(
     pageLabel!,
     platformUserId!,
     { enabled: historyOpen },
   );
-  const { data: selectedProfileData, isLoading: selectedProfileLoading } = usePageFanProfileVersion(
+  const selectedProfileQuery = usePageFanProfileVersion(
     pageLabel!,
     platformUserId!,
     selectedProfileVersion,
     { enabled: selectedProfileVersion !== null },
   );
-  const { data: spenderDetail } = useSpenderDetail(platform!, platformUserId!, {
+  const spenderQuery = useSpenderDetail(platform!, platformUserId!, {
     scope: "page",
     pageLabel,
     period: spenderPeriod,
   });
-  const { data: txData } = usePageFanTransactions(pageLabel!, platformUserId!, {
+  const txQuery = usePageFanTransactions(pageLabel!, platformUserId!, {
     limit: PAGE_SIZE,
     offset: txOffset,
   });
-  const { data: timelineTxData } = usePageFanTransactions(pageLabel!, platformUserId!, {
+  const timelineQuery = usePageFanTransactions(pageLabel!, platformUserId!, {
     limit: 10,
     offset: 0,
   });
   const createNote = useCreateFanNote(pageLabel!, platformUserId!);
 
-  if (isLoading || !data) {
-    if (isLoading) {
-      return <FanProfileSkeleton />;
-    }
-    if (isError) {
-      return (
-        <StatusPanel
-          title="Fan profile failed to load"
-          description="The fan details could not be fetched for this page."
-          tone="error"
-        />
-      );
-    }
-    return <FanProfileSkeleton />;
+  const backTo = resolveAudienceBackTarget(location.search, location.state, pageLabel);
+  const backLink = <Link to={backTo} className="mb-4 inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-sm font-medium text-text-secondary transition-colors hover:bg-hover hover:text-text-primary"><ArrowLeft size={14} />Назад к списку</Link>;
+
+  if (!data) {
+    return <div className="p-4 md:p-0">{backLink}{isError ? (
+      <StatusPanel title="Не удалось загрузить карточку фана" description="Повторите запрос или вернитесь к исходному списку." tone="error" action={<button type="button" className="text-accent font-semibold" onClick={() => void refetch()}>Повторить</button>} />
+    ) : <div role="status" aria-label="Загрузка карточки фана"><FanProfileSkeleton /></div>}</div>;
   }
 
   const { fan, page } = data;
   const fanLabel = resolveFanLabelForScope(fan, "page");
-  const backTo = resolveFanProfileBackTarget(location.state, pageLabel);
-
+  const spenderDetail = spenderQuery.data;
+  const txData = txQuery.data;
+  const timelineTxData = timelineQuery.data;
+  const latestProfileData = latestProfileQuery.data;
+  const profileVersionsData = profileVersionsQuery.data;
+  const selectedProfileData = selectedProfileQuery.data;
+  const moneyState = fanReadState(spenderQuery);
+  const latestProfileState = fanReadState(latestProfileQuery);
+  const profileVersionsState = fanReadState(profileVersionsQuery);
+  const txState = fanReadState(txQuery);
+  const timelineState = fanReadState(timelineQuery);
   // Type breakdown from spender detail
-  const typeBreakdown = spenderDetail?.typeBreakdown ?? [];
-  function amountForType(canonicalType: string): number {
+  const typeBreakdown = spenderDetail?.typeBreakdown;
+  function amountForType(canonicalType: string): number | null {
+    if (!typeBreakdown) return null;
     const entry = typeBreakdown.find(
       (t: { canonicalType: string }) => t.canonicalType === canonicalType,
     );
     return entry?.creatorNetAmountMills ?? 0;
   }
   const totalSpent = spenderPeriod === "lifetime"
-    ? (spenderDetail?.metrics.lifetime.scopeCreatorNetAmountMills ?? 0)
-    : (spenderDetail?.metrics.window?.creatorNetAmountMills ?? 0);
+    ? (spenderDetail?.metrics.lifetime.scopeCreatorNetAmountMills ?? null)
+    : (spenderDetail?.metrics.window?.creatorNetAmountMills ?? null);
 
   const txItems = txData?.items ?? [];
-  const txTotal = txData?.total ?? 0;
+  const txTotal = txData?.total;
   const latestProfile = latestProfileData?.profile ?? null;
   const profileVersions = profileVersionsData?.items ?? [];
   const viewingHistoricalVersion = selectedProfileVersion !== null;
   const displayedProfile = viewingHistoricalVersion
     ? selectedProfileData ?? null
     : latestProfile;
-  const profileLoading = viewingHistoricalVersion
-    ? selectedProfileLoading
-    : latestProfileLoading;
+  const profileState = viewingHistoricalVersion
+    ? fanReadState(selectedProfileQuery)
+    : latestProfileState;
   const selectedVersionIsCurrent = selectedProfileVersion !== null
     && latestProfile?.version === selectedProfileVersion;
 
@@ -139,31 +166,31 @@ export function FanProfilePage() {
     try {
       await createNote.mutateAsync({ body });
       setNoteBody("");
-      toast.success("Note added");
+      toast.success("Заметка добавлена");
     } catch {
-      toast.error("Failed to add note");
+      toast.error("Не удалось добавить заметку");
     }
   }
 
   const stats = [
     {
-      label: "Total Spent",
-      value: formatUsdFromMills(totalSpent),
+      label: "Доход автора",
+      value: totalSpent === null ? "—" : formatUsdFromMills(totalSpent),
       accent: true,
     },
     {
-      label: "Subscriptions",
-      value: formatUsdFromMills(amountForType("subscription")),
+      label: "Подписки",
+      value: amountForType("subscription") === null ? "—" : formatUsdFromMills(amountForType("subscription")!),
       accent: false,
     },
     {
-      label: "Tips",
-      value: formatUsdFromMills(amountForType("tip")),
+      label: "Чаевые",
+      value: amountForType("tip") === null ? "—" : formatUsdFromMills(amountForType("tip")!),
       accent: false,
     },
     {
-      label: "Messages",
-      value: formatUsdFromMills(amountForType("message_purchase")),
+      label: "Покупки сообщений",
+      value: amountForType("message_purchase") === null ? "—" : formatUsdFromMills(amountForType("message_purchase")!),
       accent: false,
     },
   ];
@@ -193,44 +220,39 @@ export function FanProfilePage() {
   }
 
   return (
-    <div>
-      {/* Back button */}
-      <button
-        type="button"
-        onClick={() => navigate(backTo)}
-        className="mb-4 flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-sm font-medium text-text-secondary transition-colors hover:bg-hover hover:text-text-primary"
-      >
-        <ArrowLeft size={14} />
-        Back
-      </button>
+    <div className="min-w-0 p-4 md:p-0">
+      {backLink}
+      <QueryNotice error={isError} stale={Boolean(data)} retry={refetch} />
 
       {/* Header */}
-      <div className="mb-6 flex items-center gap-4">
-        <div className="flex h-14 w-14 items-center justify-center rounded-full bg-hover text-2xl font-bold text-text-secondary">
+      <div className="mb-6 flex items-start gap-4">
+        <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-hover text-2xl font-bold text-text-secondary">
           {fanLabel.label[0]?.toUpperCase() ?? "?"}
         </div>
         <div>
-          <h1 className="text-2xl font-extrabold text-text-primary">
+          <h1 className="break-words text-2xl font-extrabold text-text-primary">
             {fanLabel.label}
           </h1>
           {fanLabel.secondaryPlatformHandle && (
             <div className="mt-1 text-sm text-text-muted">@{fanLabel.secondaryPlatformHandle}</div>
           )}
           <div className="mt-1 flex items-center gap-2 flex-wrap">
-            {page?.isSubscriber && <Badge variant="subscriber">Subscriber</Badge>}
-            {page?.isFollower && <Badge variant="follower">Follower</Badge>}
+            {page?.isSubscriber && <Badge variant="subscriber">Подписка</Badge>}
+            {page?.isFollower && <Badge variant="follower">Фолловер</Badge>}
           </div>
           <p className="mt-1 text-xs text-text-muted">
-            Platform ID: {platformUserId}
+            ID платформы: {platformUserId}
             {fan?.createdAtExternal && (
-              <> &middot; Joined: {formatDate(fan.createdAtExternal)}</>
+              <> &middot; Регистрация: {formatDate(fan.createdAtExternal)}</>
             )}
           </p>
         </div>
       </div>
 
       {/* Stats Grid */}
-      <div className="mb-6 grid grid-cols-4 gap-3.5">
+      <p className="mb-3 text-xs text-text-muted">Доход автора после комиссии за выбранный период. История операций ниже охватывает всё время.</p>
+      <FanSectionNotice state={moneyState} loadingLabel="Загружаем суммы…" />
+      <div className="mb-6 grid grid-cols-2 gap-3.5 lg:grid-cols-4">
         {stats.map((stat) => (
           <div
             key={stat.label}
@@ -254,13 +276,13 @@ export function FanProfilePage() {
       {page.isSubscriber && (
         <div className="mb-6 rounded-[10px] border border-border bg-card p-4">
           <div className="text-[11px] font-semibold uppercase tracking-wider text-text-muted mb-3">
-            Subscription Status
+            Состояние подписки
           </div>
           <div className="flex items-center gap-6 flex-wrap">
             <div className="flex items-center gap-2">
               <CalendarDays size={14} className="text-text-muted" />
               <div>
-                <div className="text-xs text-text-muted">Expires</div>
+                <div className="text-xs text-text-muted">Окончание</div>
                 <div className="text-sm font-medium text-text-primary">
                   {page.subscriptionExpiresAt ? formatDate(page.subscriptionExpiresAt) : "—"}
                 </div>
@@ -269,7 +291,7 @@ export function FanProfilePage() {
             <div className="flex items-center gap-2">
               <Clock size={14} className="text-text-muted" />
               <div>
-                <div className="text-xs text-text-muted">Remaining</div>
+                <div className="text-xs text-text-muted">Осталось</div>
                 {subscriptionRemainingDays !== null ? (
                   <div className="w-24"><RemainingBar days={subscriptionRemainingDays} /></div>
                 ) : (
@@ -280,7 +302,7 @@ export function FanProfilePage() {
             <div className="flex items-center gap-2">
               <RefreshCw size={14} className="text-text-muted" />
               <div>
-                <div className="text-xs text-text-muted">Auto-Renew</div>
+                <div className="text-xs text-text-muted">Автопродление</div>
                 <div className={`text-sm font-medium ${
                   page.autoRenew === true
                     ? "text-green"
@@ -288,18 +310,18 @@ export function FanProfilePage() {
                       ? "text-danger"
                       : "text-text-muted"
                 }`}>
-                  {page.autoRenew === true ? "On" : page.autoRenew === false ? "Off" : "Unknown"}
+                  {page.autoRenew === true ? "Включено" : page.autoRenew === false ? "Выключено" : "Неизвестно"}
                 </div>
                 {page.autoRenew === false && page.autoRenewOffDetectedAt && (
                   <div className="text-xs text-warning-dark">
-                    Detected {formatDate(page.autoRenewOffDetectedAt, { includeYear: true })}
+                    Замечено {formatDate(page.autoRenewOffDetectedAt, { includeYear: true })}
                   </div>
                 )}
               </div>
             </div>
             {page.subscriberSince && (
               <div>
-                <div className="text-xs text-text-muted">Since</div>
+                <div className="text-xs text-text-muted">Начало</div>
                 <div className="text-sm font-medium text-text-primary">{formatDate(page.subscriberSince)}</div>
               </div>
             )}
@@ -310,18 +332,18 @@ export function FanProfilePage() {
       <FanIntelligenceSection
         pageLabel={page.pageLabel}
         latestProfile={latestProfile}
-        latestProfileLoading={latestProfileLoading}
+        latestProfileState={latestProfileState}
         intelligenceOpen={intelligenceOpen}
         onOpen={() => setIntelligenceOpen(true)}
         viewingHistoricalVersion={viewingHistoricalVersion}
         selectedProfileVersion={selectedProfileVersion}
         selectedVersionIsCurrent={selectedVersionIsCurrent}
         onBackToLatest={() => setSelectedProfileVersion(null)}
-        profileLoading={profileLoading}
+        profileState={profileState}
         displayedProfile={displayedProfile}
         historyOpen={historyOpen}
         onToggleHistory={() => setHistoryOpen((value) => !value)}
-        profileVersionsLoading={profileVersionsLoading}
+        profileVersionsState={profileVersionsState}
         profileVersions={profileVersions}
         onSelectProfileVersion={handleSelectProfileVersion}
       />
@@ -332,11 +354,13 @@ export function FanProfilePage() {
         onNoteBodyChange={setNoteBody}
         onAddNote={handleAddNote}
         isAddingNote={createNote.isPending}
+        timelineState={timelineState}
         timelineEvents={timelineEvents}
         timelineDotColor={timelineDotColor}
       />
 
       <FanTransactionHistorySection
+        state={txState}
         txItems={txItems}
         txTotal={txTotal}
         txOffset={txOffset}
@@ -349,48 +373,48 @@ export function FanProfilePage() {
 function FanIntelligenceSection({
   pageLabel,
   latestProfile,
-  latestProfileLoading,
+  latestProfileState,
   intelligenceOpen,
   onOpen,
   viewingHistoricalVersion,
   selectedProfileVersion,
   selectedVersionIsCurrent,
   onBackToLatest,
-  profileLoading,
+  profileState,
   displayedProfile,
   historyOpen,
   onToggleHistory,
-  profileVersionsLoading,
+  profileVersionsState,
   profileVersions,
   onSelectProfileVersion,
 }: {
   pageLabel: string;
   latestProfile: FanProfileDocument | null;
-  latestProfileLoading: boolean;
+  latestProfileState: FanReadState;
   intelligenceOpen: boolean;
   onOpen: () => void;
   viewingHistoricalVersion: boolean;
   selectedProfileVersion: number | null;
   selectedVersionIsCurrent: boolean;
   onBackToLatest: () => void;
-  profileLoading: boolean;
+  profileState: FanReadState;
   displayedProfile: FanProfileDocument | null;
   historyOpen: boolean;
   onToggleHistory: () => void;
-  profileVersionsLoading: boolean;
+  profileVersionsState: FanReadState;
   profileVersions: FanProfileVersionListResponse["items"];
   onSelectProfileVersion: (version: number) => void;
 }) {
-  if (!latestProfile && !latestProfileLoading && !intelligenceOpen) {
+  if (!latestProfile && latestProfileState.hasData && !latestProfileState.error && !intelligenceOpen) {
     return (
       <button
         type="button"
         onClick={onOpen}
         className="mb-6 flex w-full items-center justify-between rounded-xl border border-border bg-card px-5 py-4 text-left transition-colors hover:bg-hover-alt"
       >
-        <span className="text-sm font-bold text-text-primary">Fan Intelligence</span>
+        <span className="text-sm font-bold text-text-primary">AI-профиль фана</span>
         <div className="flex items-center gap-2">
-          <span className="text-xs text-text-muted">No profile available</span>
+          <span className="text-xs text-text-muted">Профиль ещё не создан</span>
           <ChevronDown size={16} className="text-text-muted" />
         </div>
       </button>
@@ -401,19 +425,19 @@ function FanIntelligenceSection({
     <section className="mb-6 rounded-xl border border-border bg-card p-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 className="text-sm font-bold text-text-primary">Fan Intelligence</h2>
+          <h2 className="text-sm font-bold text-text-primary">AI-профиль фана</h2>
           <p className="mt-1 text-xs text-text-muted">
-            Latest ChatMuse profile for this fan on {pageLabel}.
+            Последний сохранённый профиль ChatMuse на {pageLabel}.
           </p>
         </div>
         {viewingHistoricalVersion && (
           <div className="flex items-center gap-2">
             <span className="rounded-full border border-border bg-hover px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-text-secondary">
-              Viewing version {selectedProfileVersion}
+              Версия {selectedProfileVersion}
             </span>
             {selectedVersionIsCurrent && (
               <span className="rounded-full border border-border bg-hover-alt px-2 py-1 text-[11px] text-text-muted">
-                Current
+                Текущая
               </span>
             )}
             <button
@@ -421,30 +445,28 @@ function FanIntelligenceSection({
               onClick={onBackToLatest}
               className="text-xs font-medium text-accent transition-colors hover:opacity-80"
             >
-              Back to latest
+              К последней версии
             </button>
           </div>
         )}
       </div>
 
+      {viewingHistoricalVersion && <FanSectionNotice state={latestProfileState} loadingLabel="Проверяем текущую версию…" />}
       <div className="mt-4 rounded-xl border border-border bg-hover-alt/40 p-5">
-        {profileLoading ? (
-          <p className="text-sm text-text-muted">
-            {viewingHistoricalVersion ? "Loading selected version..." : "Loading intelligence profile..."}
-          </p>
-        ) : viewingHistoricalVersion && !displayedProfile ? (
-          <p className="text-sm text-text-muted">Unable to load the selected version.</p>
+        <FanSectionNotice state={profileState} loadingLabel={viewingHistoricalVersion ? "Загружаем выбранную версию…" : "Загружаем AI-профиль…"} />
+        {!profileState.hasData ? null : viewingHistoricalVersion && !displayedProfile ? (
+          <p className="text-sm text-text-muted">Выбранная версия недоступна.</p>
         ) : displayedProfile ? (
           <div>
             <div className="mb-4 flex flex-wrap items-center gap-2 text-[11px] text-text-muted">
-              <span>Version {displayedProfile.version}</span>
+              <span>Версия {displayedProfile.version}</span>
               <span>&middot;</span>
               <span>{formatDateTime(displayedProfile.createdAt)}</span>
             </div>
             <FanIntelligenceMarkdown body={displayedProfile.body} />
           </div>
         ) : (
-          <p className="text-sm text-text-muted">No intelligence profile yet</p>
+          <p className="text-sm text-text-muted">AI-профиль ещё не создан</p>
         )}
       </div>
 
@@ -455,7 +477,7 @@ function FanIntelligenceSection({
           className="flex w-full items-center justify-between rounded-lg border border-border bg-hover-alt/30 px-4 py-2.5 text-left transition-colors hover:bg-hover-alt"
           aria-expanded={historyOpen}
         >
-          <span className="text-[13px] font-medium text-text-secondary">Version History</span>
+          <span className="text-[13px] font-medium text-text-secondary">История версий</span>
           <ChevronDown
             size={16}
             className={`text-text-muted transition-transform ${historyOpen ? "rotate-180" : ""}`}
@@ -464,10 +486,9 @@ function FanIntelligenceSection({
 
         {historyOpen && (
           <div className="mt-2 overflow-hidden rounded-lg border border-border bg-card">
-            {profileVersionsLoading ? (
-              <div className="px-4 py-4 text-sm text-text-muted">Loading versions...</div>
-            ) : profileVersions.length === 0 ? (
-              <div className="px-4 py-4 text-sm text-text-muted">No saved versions yet.</div>
+            <div className="px-4 pt-3"><FanSectionNotice state={profileVersionsState} loadingLabel="Загружаем версии…" /></div>
+            {!profileVersionsState.hasData ? null : profileVersions.length === 0 ? (
+              <div className="px-4 py-4 text-sm text-text-muted">Сохранённых версий пока нет.</div>
             ) : (
               <div>
                 {profileVersions.map((item) => {
@@ -477,17 +498,18 @@ function FanIntelligenceSection({
                       key={item.version}
                       type="button"
                       onClick={() => onSelectProfileVersion(item.version)}
+                      aria-pressed={selected}
                       className={`flex w-full items-center justify-between border-t border-border px-4 py-3 text-left transition-colors first:border-t-0 ${
                         selected ? "bg-hover" : "hover:bg-hover-alt"
                       }`}
                     >
                       <div className="flex items-center gap-2">
                         <span className="text-sm font-medium text-text-primary">
-                          Version {item.version}
+                          Версия {item.version}
                         </span>
                         {item.isCurrent && (
                           <span className="rounded-full border border-border bg-hover px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-text-muted">
-                            Current
+                            Текущая
                           </span>
                         )}
                       </div>
@@ -513,6 +535,7 @@ function FanProfileActivityGrid({
   onAddNote,
   isAddingNote,
   timelineEvents,
+  timelineState,
   timelineDotColor,
 }: {
   notes: PageFanDetailResponse["page"]["notes"];
@@ -521,25 +544,27 @@ function FanProfileActivityGrid({
   onAddNote: () => void;
   isAddingNote: boolean;
   timelineEvents: TimelineEvent[];
+  timelineState: FanReadState;
   timelineDotColor: (type: string) => string;
 }) {
   return (
-    <div className="mb-6 grid grid-cols-2 gap-4">
+    <div className="mb-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
       <div className="rounded-xl border border-border bg-card p-5">
         <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-sm font-bold text-text-primary">Notes</h2>
+          <h2 className="text-sm font-bold text-text-primary">Заметки</h2>
           <button
+            type="button"
             onClick={onAddNote}
             disabled={!noteBody.trim() || isAddingNote}
             className="rounded-lg bg-accent px-3 py-1 text-xs font-semibold text-white transition-colors hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            Add Note
+            Добавить
           </button>
         </div>
 
         <div className="space-y-2 mb-3">
           {notes.length === 0 && (
-            <p className="text-xs text-text-muted">No notes yet.</p>
+            <p className="text-xs text-text-muted">Заметок пока нет.</p>
           )}
           {notes.map((note) => (
             <div
@@ -547,7 +572,7 @@ function FanProfileActivityGrid({
               className="rounded-md border-l-[3px] border-border bg-hover-alt p-2.5"
             >
               <div className="text-[11px] text-text-muted">
-                Note &middot; {formatDateTime(note.createdAt)}
+                Заметка &middot; {formatDateTime(note.createdAt)}
               </div>
               <div className="mt-1 text-sm text-text-primary">{note.body}</div>
             </div>
@@ -555,18 +580,20 @@ function FanProfileActivityGrid({
         </div>
 
         <textarea
+          aria-label="Новая заметка"
           value={noteBody}
           onChange={(event) => onNoteBodyChange(event.target.value)}
-          placeholder="Write a note..."
+          placeholder="Текст заметки…"
           rows={3}
           className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-1 focus:ring-accent resize-none"
         />
       </div>
 
       <div className="rounded-xl border border-border bg-card p-5">
-        <h2 className="mb-3 text-sm font-bold text-text-primary">Timeline</h2>
-        {timelineEvents.length === 0 && (
-          <p className="text-xs text-text-muted">No activity yet.</p>
+        <h2 className="mb-3 text-sm font-bold text-text-primary">Последние операции</h2>
+        <FanSectionNotice state={timelineState} loadingLabel="Загружаем последние операции…" />
+        {timelineState.hasData && timelineEvents.length === 0 && (
+          <p className="text-xs text-text-muted">Операций пока нет.</p>
         )}
         <div className="relative">
           {timelineEvents.length > 0 && (
@@ -599,32 +626,36 @@ function FanProfileActivityGrid({
 }
 
 function FanTransactionHistorySection({
+  state,
   txItems,
   txTotal,
   txOffset,
   onPageChange,
 }: {
+  state: FanReadState;
   txItems: FanTransactionListResponse["items"];
-  txTotal: number;
+  txTotal: number | undefined;
   txOffset: number;
   onPageChange: (offset: number) => void;
 }) {
   return (
-    <section className="overflow-hidden rounded-xl border border-border bg-card">
+    <section className="overflow-x-auto rounded-xl border border-border bg-card">
       <div className="flex items-center justify-between border-b border-border px-4 py-3">
         <h2 className="text-sm font-bold text-text-primary">
-          Transaction History
-          <span className="ml-2 text-xs font-normal text-text-muted">{txTotal} total</span>
+          История операций
+          <span className="ml-2 text-xs font-normal text-text-muted">{txTotal === undefined ? "Число операций неизвестно" : `${txTotal} записей`}</span>
         </h2>
       </div>
-      <table className="w-full border-collapse">
+      <div className="px-4 pt-3"><FanSectionNotice state={state} loadingLabel="Загружаем историю операций…" /></div>
+      {state.hasData && <>
+      <table className="w-full min-w-[540px] border-collapse">
         <thead>
           <tr className="bg-hover-alt">
-            {["Date", "Type", "Status", "Amount"].map((col) => (
+            {["Дата", "Тип", "Статус", "Доход автора"].map((col) => (
               <th
                 key={col}
                 className={`px-4 py-3 text-[12px] font-semibold uppercase tracking-wider text-text-muted ${
-                  col === "Amount" ? "text-right" : "text-left"
+                  col === "Доход автора" ? "text-right" : "text-left"
                 }`}
               >
                 {col}
@@ -636,7 +667,8 @@ function FanTransactionHistorySection({
           {txItems.length === 0 && (
             <tr>
               <td colSpan={4} className="px-4 py-8 text-center text-sm text-text-muted">
-                No transactions found.
+                {txOffset > 0 ? "На этой странице нет операций." : "Операции пока не найдены."}
+                {txOffset > 0 && <button type="button" className="block mx-auto mt-2 text-accent" onClick={() => onPageChange(0)}>К началу истории</button>}
               </td>
             </tr>
           )}
@@ -677,9 +709,11 @@ function FanTransactionHistorySection({
       <Pagination
         offset={txOffset}
         limit={PAGE_SIZE}
-        total={txTotal}
+        total={txTotal!}
         onPageChange={onPageChange}
+        {...audiencePaginationLabels}
       />
+      </>}
     </section>
   );
 }
@@ -694,7 +728,7 @@ function FanProfileSkeleton() {
           <div className="mt-2 h-3 w-24 rounded bg-hover-alt animate-pulse" />
         </div>
       </div>
-      <div className="mb-6 grid grid-cols-4 gap-3.5">
+      <div className="mb-6 grid grid-cols-2 gap-3.5 lg:grid-cols-4">
         {Array.from({ length: 4 }, (_, i) => (
           <div key={i} className="rounded-[10px] border border-border bg-card p-4">
             <div className="h-3 w-16 rounded bg-hover-alt animate-pulse" />

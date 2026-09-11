@@ -1,7 +1,11 @@
 import { useEffect, useRef, useState } from "react";
+import { useSearchParams } from "react-router";
 import type { OfapiAction, OfapiActionIntent } from "@agency_hub_core/contracts";
 import { useAdminOfapiCollection } from "@/api/adminOfapiCollection";
 import { accountActions, useOfapiActions } from "@/api/ofapiActions";
+import { QueryNotice } from "@/components/shared/QueryNotice";
+import { StatusPanel } from "@/components/shared/StatusPanel";
+import { resolveOfapiPage } from "@/lib/ofapiNavigation";
 import { ofapiAccountForms } from "./ofapi-actions/account-forms.ts";
 import { ofapiPublishingForms } from "./ofapi-actions/publishing-forms.ts";
 import { ofapiCollectionForms } from "./ofapi-actions/collection-forms.ts";
@@ -61,8 +65,16 @@ export function OfapiActionCommandReview({ command, fields }: { command: FormVal
 export function OfapiActions() {
   const collection = useAdminOfapiCollection();
   const pages = collection.data?.pages.filter(page => page.accountId) ?? [];
-  const [selectedPage, setSelectedPage] = useState<number | null>(null);
-  const pageId = selectedPage ?? pages[0]?.id ?? null;
+  const [search, setSearch] = useSearchParams();
+  const requestedPage = search.get("page");
+  const selectedPage = resolveOfapiPage(pages, requestedPage);
+  const pageId = selectedPage?.id ?? null;
+  function selectPage(label: string, replace = false) {
+    if (search.get("page") === label) return;
+    const next = new URLSearchParams(search);
+    next.set("page", label);
+    setSearch(next, { replace });
+  }
   const history = useOfapiActions(pageId);
   const [section, setSection] = useState(sections[0]!);
   const [action, setAction] = useState(forms[0]!.action);
@@ -76,6 +88,13 @@ export function OfapiActions() {
   const [pending, setPending] = useState<PendingAction | null>(null);
   const [allowNewAfterUnknown, setAllowNewAfterUnknown] = useState(false);
   const admission = useRef(createActionAdmissionRegistry(() => crypto.randomUUID()));
+  useEffect(() => {
+    if (requestedPage === null && selectedPage) selectPage(selectedPage.label, true);
+  }, [requestedPage, selectedPage?.label]);
+  useEffect(() => {
+    reset(action);
+    // Browser Back/Forward changes the draft target too; pending request custody stays intact.
+  }, [pageId]);
   useEffect(() => {
     setIntent(current => {
       if (!current || !["prepared", "dispatching"].includes(current.state)) return current;
@@ -93,7 +112,10 @@ export function OfapiActions() {
     try {
       const result = await task();
       if (result.pageId !== pageId) reset(action);
-      setIntent(result); setSelectedPage(result.pageId); setAllowNewAfterUnknown(false);
+      setIntent(result);
+      const targetPage = pages.find(page => page.id === result.pageId);
+      if (targetPage) selectPage(targetPage.label, true);
+      setAllowNewAfterUnknown(false);
       setPending(current => current?.id === result.id ? null : current);
       // A list refresh failure must not erase a received operation result.
       void history.refetch().catch(() => undefined);
@@ -124,13 +146,15 @@ export function OfapiActions() {
   const canStartNew = intent !== null && matches && !pending && !["prepared", "dispatching"].includes(intent.state);
   return <div className="mx-auto max-w-6xl space-y-6 p-4 text-text-primary sm:p-6">
     <header><h1 className="text-2xl font-semibold">Управление OnlyFans</h1><p className="mt-1 text-sm text-text-secondary">Действия с аккаунтом, контентом и фанами. История запросов сохраняется здесь.</p></header>
-    {(collection.error || history.error) && <p role="alert" className="text-red-600">Не удалось обновить локальные данные. Попробуйте обновить страницу.</p>}
-    <label className="block max-w-md space-y-2"><span className="text-sm">Аккаунт</span><select className={fieldClass} value={pageId ?? ""} disabled={busy} onChange={event => { setSelectedPage(Number(event.target.value)); reset(action); }}>{pages.map(page => <option key={page.id} value={page.id}>{page.label} · {page.accountId}</option>)}</select></label>
-    {!pages.length && <p>Для работы нужна страница с привязанным аккаунтом OFAPI.</p>}
+    <QueryNotice error={collection.isError} stale={collection.data !== undefined} retry={() => collection.refetch()} />
+    <label className="block max-w-md space-y-2"><span className="text-sm">Аккаунт</span><select className={fieldClass} value={selectedPage?.label ?? ""} disabled={busy || !pages.length} onChange={event => { selectPage(event.target.value); reset(action); }}>{!pageId && <option value="">Выберите доступную страницу</option>}{pages.map(page => <option key={page.id} value={page.label}>{page.label} · {page.accountId}</option>)}</select></label>
+    {collection.isLoading && !collection.data && <StatusPanel title="Загружаем доступные аккаунты…" />}
+    {collection.data && !pageId && <StatusPanel title={requestedPage !== null ? "Аккаунт из ссылки недоступен" : "Нет привязанных аккаунтов OFAPI"} description="Выберите доступную страницу. Для выполнения действий нужна действующая привязка OFAPI." />}
     {pending && <section role="alert" className="space-y-3 rounded-xl border border-amber-500 p-4"><p>Не получен ответ: {pending.label}. Проверьте сохранённое состояние этого запроса перед следующим действием.</p><p className="break-all text-xs text-text-muted">{pending.id}</p><div className="flex flex-wrap gap-2"><button type="button" className={buttonClass} disabled={busy} onClick={() => void run(() => accountActions.get(pending.id))}>Найти сохранённый запрос</button>{pending.operation === "prepare" && <button type="button" className={buttonClass} disabled={busy} onClick={() => void run(() => accountActions.prepare(pending.id, pending.command), pending)}>Повторить сохранение с тем же ID</button>}</div><p className="text-xs text-text-muted">Проверка и сохранение черновика не выполняют действие в OnlyFans.</p></section>}
     <nav className="flex flex-wrap gap-2" aria-label="Разделы управления">{sections.map(item => <button key={item} type="button" disabled={busy} aria-pressed={item === section} className={`${buttonClass} ${item === section ? "bg-accent text-white" : ""}`} onClick={() => { setSection(item); reset(forms.find(entry => entry.section === item)!.action); }}>{item}</button>)}</nav>
     <div className="grid min-w-0 gap-6 lg:grid-cols-2">
       <form className="min-w-0 space-y-4 rounded-xl border border-border bg-card p-5" onSubmit={event => { event.preventDefault(); void prepare(); }}>
+        <h2 className="font-semibold">1. Параметры действия</h2>
         <label className="grid gap-2"><span className="text-sm">Действие</span><select className={fieldClass} value={action} disabled={busy} onChange={event => reset(event.target.value)}>{forms.filter(item => item.section === section).map(item => <option key={item.action} value={item.action}>{item.label}</option>)}</select></label>
         <p className="text-sm text-text-secondary">{form.description}</p>
         <OfapiActionFields fields={mainFields} values={values} disabled={busy} update={next => { setValues(next); setAllowNewAfterUnknown(false); }} />
@@ -138,6 +162,7 @@ export function OfapiActions() {
         <button type="submit" disabled={busy || !pageId || pending !== null} className={`${buttonClass} bg-accent text-white`}>{busy ? "Обрабатываем…" : "Проверить действие"}</button>
       </form>
       <section className="min-w-0 space-y-4 rounded-xl border border-border bg-card p-5" aria-label="Результат действия">
+        <h2 className="font-semibold">2. Проверка и результат</h2>
         {error && <p role="alert" className="rounded-lg border border-red-500 p-3 text-sm">{error}</p>}
         {intent ? <>
           <h2 className="font-semibold">{reviewedForm?.label ?? intent.action}</h2>
@@ -159,6 +184,11 @@ export function OfapiActions() {
         </> : <p className="text-sm text-text-secondary">Заполните поля и проверьте действие. Перед выполнением здесь появятся аккаунт, выбранные параметры и оценка запроса.</p>}
       </section>
     </div>
-    <section className="space-y-3"><h2 className="font-semibold">Последние действия</h2>{history.data?.intents.map(item => <button type="button" key={item.id} disabled={busy} className="flex w-full flex-wrap justify-between gap-2 rounded-lg border border-border bg-card p-3 text-left text-sm" onClick={() => { setAllowNewAfterUnknown(false); void run(() => accountActions.get(item.id)); }}><span>{forms.find(form => form.action === item.action)?.label ?? item.action}</span><span>{stateLabels[item.state]} · {new Date(item.createdAt).toLocaleString()}</span></button>)}</section>
+    <section className="space-y-3"><h2 className="font-semibold">Последние действия</h2>
+      {pageId !== null && <QueryNotice error={history.isError} stale={history.data !== undefined} retry={() => history.refetch()} />}
+      {pageId !== null && history.isLoading && !history.data && <StatusPanel title="Загружаем историю действий…" />}
+      {history.data && !history.isError && !history.data.intents.length && <StatusPanel title="Действий для этого аккаунта пока нет" description="После проверки параметров запрос появится здесь." />}
+      {history.data?.intents.map(item => <button type="button" key={item.id} disabled={busy} className="flex w-full flex-wrap justify-between gap-2 rounded-lg border border-border bg-card p-3 text-left text-sm" onClick={() => { setAllowNewAfterUnknown(false); void run(() => accountActions.get(item.id)); }}><span>{forms.find(form => form.action === item.action)?.label ?? item.action}</span><span>{stateLabels[item.state]} · {new Date(item.createdAt).toLocaleString()}</span></button>)}
+    </section>
   </div>;
 }

@@ -1,5 +1,6 @@
 import type { SyncBlocksPage } from "@agency_hub_core/contracts";
 import { Link } from "react-router";
+import { buildSettingsRoute } from "@/lib/navigation";
 import { useSyncOverview } from "@/api/queries";
 import { PlatformBadge } from "@/components/shared/PlatformBadge";
 import { EmptyState } from "@/components/shared/EmptyState";
@@ -18,7 +19,7 @@ import {
 
 function PageErrorBar({ page }: { page: SyncBlocksPage }) {
   if (page.diagnosis) {
-    return <SyncDiagnosisNotice diagnosis={page.diagnosis} className="mt-3" />;
+    return <SyncDiagnosisNotice diagnosis={page.diagnosis} pageLabel={page.pageLabel} className="mt-3" />;
   }
 
   const blocks = getBlockOrder().map((key) => page.blocks[key]);
@@ -34,7 +35,7 @@ function PageErrorBar({ page }: { page: SyncBlocksPage }) {
             {getReasonSummary(authFailed) ?? "Credentials may have expired"}
           </span>
           <Link
-            to="/settings?tab=credentials"
+            to={buildSettingsRoute("credentials", page.pageLabel)}
             className="font-semibold text-accent hover:underline"
           >
             Update credentials

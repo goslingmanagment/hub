@@ -140,10 +140,10 @@ const WATCHED_MEDIA_TRAFFIC = {
 const FANSLY_PAGE = { id: 1, label: "lora-1", platform: "fansly" };
 const ONLYFANS_PAGE = { id: 2, label: "lora-of", platform: "onlyfans" };
 
-function renderAnalyticsPage() {
+function renderAnalyticsPage(path = "/analytics") {
   return renderToStaticMarkup(createElement(
     MemoryRouter,
-    { initialEntries: ["/analytics"] },
+    { initialEntries: [path] },
     createElement(AnalyticsPage),
   ));
 }
@@ -376,6 +376,77 @@ describe("AnalyticsPage catalog states", () => {
         expect(call[call.length - 1]).toEqual({ enabled: true });
       }
     }
+  });
+
+  it.each(["missing", "", ONLYFANS_PAGE.label])(
+    "does not substitute the first account for an explicit unavailable page=%s",
+    (requestedPage) => {
+      // Ready insight mocks also prove that data already in the cache stays
+      // hidden until the user chooses an available account.
+      withCatalog();
+      pagesMocks.usePages.mockReturnValue({
+        data: [FANSLY_PAGE, ONLYFANS_PAGE],
+        isPending: false,
+        isError: false,
+        refetch: vi.fn(),
+      });
+
+      const html = renderAnalyticsPage(`/analytics?page=${encodeURIComponent(requestedPage)}`);
+
+      expect(html).toContain("Аккаунт недоступен");
+      expect(html).toContain("Выберите доступный аккаунт в списке выше.");
+      expect(html).not.toContain(">Traffic by source<");
+      expect(html).toContain('aria-label="Аккаунт для аналитики"');
+      expect(html).toContain('value="lora-1"');
+      const selected = html.match(/<option\b[^>]*selected=""[^>]*>/)?.[0];
+      expect(selected).toContain('value=""');
+      expect(selected).toContain('disabled=""');
+      for (const mock of Object.values(insightsMocks)) {
+        expect(mock).toHaveBeenCalled();
+        for (const call of mock.mock.calls) {
+          expect(call[0]).toBe("");
+          expect(call[call.length - 1]).toEqual({ enabled: false });
+        }
+      }
+    },
+  );
+
+  it("loads the explicitly selected available account even when it is not first", () => {
+    withCatalog();
+    pagesMocks.usePages.mockReturnValue({
+      data: [FANSLY_PAGE, { ...FANSLY_PAGE, id: 3, label: "lana-2" }],
+      isPending: false,
+      isError: false,
+      refetch: vi.fn(),
+    });
+
+    const html = renderAnalyticsPage("/analytics?page=lana-2");
+
+    expect(html).not.toContain("Аккаунт недоступен");
+    expect(html.match(/<option\b[^>]*selected=""[^>]*>/)?.[0]).toContain('value="lana-2"');
+    for (const mock of Object.values(insightsMocks)) {
+      for (const call of mock.mock.calls) {
+        expect(call[0]).toBe("lana-2");
+        expect(call[call.length - 1]).toEqual({ enabled: true });
+      }
+    }
+  });
+
+  it("keeps an explicit unavailable account distinct from an empty catalog", () => {
+    withCatalog();
+    pagesMocks.usePages.mockReturnValue({
+      data: [ONLYFANS_PAGE],
+      isPending: false,
+      isError: false,
+      refetch: vi.fn(),
+    });
+
+    const html = renderAnalyticsPage("/analytics?page=missing");
+
+    expect(html).toContain("Аккаунт недоступен");
+    expect(html).toContain("Нет доступных аккаунтов Fansly для выбора.");
+    expect(html).not.toContain("No Fansly pages to analyse.");
+    expect(html).not.toContain(">Traffic by source<");
   });
 });
 

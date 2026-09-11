@@ -4,6 +4,7 @@ import {
   KernelApiError,
   SDK_EXCLUDED_OPERATIONS,
   createKernelClient,
+  executeKernelRequest,
   routeSchemas,
 } from "@agency_hub_core/contracts";
 
@@ -52,6 +53,57 @@ describe("kernel SDK runtime", () => {
     await expect(
       client.raw("pageSubscribers", { params: {} }),
     ).rejects.toMatchObject({ category: "contract", code: "missing_path_param" });
+    expect(impl).not.toHaveBeenCalled();
+  });
+
+  it("sends the spender batch POST to its literal colon-suffixed route", async () => {
+    const response = {
+      scope: {
+        kind: "page", platform: "fansly", pageCount: 1, model: null,
+        page: { id: 1, label: "lana", platform: "fansly", modelSlug: "lana", modelName: "Lana" },
+      },
+      period: { timeZone: "UTC", fromBusinessDate: null, toBusinessDateInclusive: null, asOf: null },
+      items: [{
+        requestedFan: { platform: "fansly", platformUserId: "fan-001" },
+        found: false, fan: null, metrics: null, typeBreakdown: null,
+        lifetimeLastTransactionAt: null, subscription: null,
+      }],
+    };
+    const body = {
+      scope: "page" as const, pageLabel: "lana", period: "lifetime" as const,
+      fans: [{ platform: "fansly" as const, platformUserId: "fan-001" }],
+    };
+    const { impl, calls } = fakeFetch([{ status: 200, body: response }]);
+    const client = createKernelClient(kernelOperations, { baseUrl: "http://hub", fetch: impl });
+
+    await expect(client.spenderBatch({ body })).resolves.toEqual(response);
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.url).toBe("http://hub/api/v2/spenders:batch");
+    expect(calls[0]!.init.method).toBe("POST");
+    expect(JSON.parse(String(calls[0]!.init.body))).toEqual(body);
+  });
+
+  it("encodes consecutive page and fan parameters as separate path segments", async () => {
+    const { impl, calls } = fakeFetch([{ status: 200, body: {} }]);
+    const client = createKernelClient(kernelOperations, { baseUrl: "http://hub", fetch: impl });
+
+    await client.raw("pageFanDetail", {
+      params: { pageLabel: "lana b/c", platformUserId: "fan:001/?#" },
+    });
+
+    expect(calls[0]!.url).toBe("http://hub/api/v1/pages/lana%20b%2Fc/fans/fan%3A001%2F%3F%23");
+  });
+
+  it("only substitutes complete parameter segments beside literal colon segments", async () => {
+    const { impl, calls } = fakeFetch([{ status: 200, body: {} }]);
+    await executeKernelRequest({
+      def: { method: "GET", path: "/api/:pageLabel/:platformUserId/spenders:batch/:format.json" },
+      options: { baseUrl: "http://hub", fetch: impl },
+      params: { pageLabel: "lana/1", platformUserId: "fan:001", batch: "unused", format: "unused" },
+    });
+
+    expect(calls[0]!.url).toBe("http://hub/api/lana%2F1/fan%3A001/spenders:batch/:format.json");
   });
 
   it("plumbs bearer auth, cookie mode, extra headers, and JSON bodies", async () => {

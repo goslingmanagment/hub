@@ -79,6 +79,18 @@ describe("OfapiCreditsPage", () => {
     });
   });
 
+  it("keeps cached credit blocks visible when their refresh fails", () => {
+    queryMocks.useAdminOfapiCreditsSummary.mockReturnValue({ data: summaryFixture(), isLoading: false, isError: true, refetch: vi.fn() });
+    queryMocks.useAdminOfapiCreditsDaily.mockReturnValue({ data: emptyDaily, isLoading: false, isError: true, refetch: vi.fn() });
+    queryMocks.useAdminOfapiCreditsLedger.mockReturnValue({ data: { total: 0, pageOptions: [], rows: [] }, isLoading: false, isError: true, refetch: vi.fn() });
+    const html = renderPage();
+    expect(html).toContain(`23${NBSP}950`);
+    expect(html).not.toContain("Не удалось загрузить кредиты OFAPI");
+    expect(html).not.toContain("Не удалось загрузить разбивку");
+    expect(html).not.toContain("Не удалось загрузить журнал");
+    expect(html.match(/Повторить/g)?.length).toBeGreaterThanOrEqual(3);
+  });
+
   it("answers balance, runway, and top-up in the hero card", () => {
     queryMocks.useAdminOfapiCreditsSummary.mockReturnValue({
       data: summaryFixture(),

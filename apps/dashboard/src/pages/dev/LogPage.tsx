@@ -2,7 +2,7 @@ import { Fragment, useState } from "react";
 import { useAdminLogs } from "@/api/queries";
 import { FilterButtons } from "@/components/shared/FilterButtons";
 import { EventDetailPanel, getEventDisplaySeverity, SEVERITY_STYLES } from "@/components/shared/EventDetailPanel";
-import { StatusPanel } from "@/components/shared/StatusPanel";
+import { QuerySection } from "@/components/shared/QuerySection";
 import { formatRelativeTime } from "@/lib/format";
 
 const SEVERITY_FILTERS = [
@@ -17,30 +17,20 @@ export function LogPage() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const params = {
-    severity: severity === "all" ? undefined : severity,
+    ...(severity === "all" ? {} : { severity }),
     limit: 100,
   };
 
-  const { data, isLoading, isError } = useAdminLogs(params);
+  const { data, isError, refetch } = useAdminLogs(params);
 
   function resolveEventCode(details: Record<string, unknown> | null, fallback: string | null) {
     return typeof details?.code === "string" ? details.code : fallback;
   }
 
-  if (isLoading || !data) {
-    return isLoading ? (
-      <StatusPanel title="Loading logs" description="Fetching recent sync run events." />
-    ) : isError ? (
-      <StatusPanel title="Logs failed to load" description="The log stream could not be fetched." tone="error" />
-    ) : (
-      <StatusPanel title="Logs unavailable" description="The log stream did not return data." tone="error" />
-    );
-  }
-
-  const items = data;
+  const items = data ?? [];
 
   return (
-    <div>
+    <div className="p-4 md:p-0">
       <div className="mb-5">
         <h1 className="text-xl font-extrabold text-text-primary">Logs</h1>
         <p className="text-sm text-text-muted mt-1">Recent sync run events</p>
@@ -50,11 +40,12 @@ export function LogPage() {
         <FilterButtons
           filters={SEVERITY_FILTERS}
           active={severity}
-          onChange={setSeverity}
+          onChange={(next) => { setSeverity(next); setExpandedId(null); }}
         />
       </div>
 
-      <section className="overflow-hidden rounded-xl border border-border bg-card">
+      <QuerySection title="Журнал событий" hasData={data !== undefined} isError={isError} retry={refetch}>
+      <section className="overflow-x-auto rounded-xl border border-border bg-card">
         <table className="w-full border-collapse">
           <thead>
             <tr className="bg-hover-alt">
@@ -93,7 +84,16 @@ export function LogPage() {
                     onClick={() => setExpandedId(isExpanded ? null : rowId)}
                   >
                     <td className="px-4 py-3 text-sm text-text-secondary whitespace-nowrap">
-                      {log.emittedAt ? formatRelativeTime(log.emittedAt) : "\u2014"}
+                      <button
+                        type="button"
+                        aria-expanded={isExpanded}
+                        aria-label={`Details for ${log.eventType ?? "event"} on ${log.pageLabel ?? "all pages"}`}
+                        className="text-left hover:text-accent focus-visible:outline-2 focus-visible:outline-accent"
+                        onClick={(event) => { event.stopPropagation(); setExpandedId(isExpanded ? null : rowId); }}
+                      >
+                        <span aria-hidden="true">{isExpanded ? "▾ " : "▸ "}</span>
+                        {log.emittedAt ? formatRelativeTime(log.emittedAt) : "\u2014"}
+                      </button>
                     </td>
                     <td className="px-4 py-3 text-sm text-text-primary font-medium">
                       {log.pageLabel ?? "\u2014"}
@@ -134,6 +134,7 @@ export function LogPage() {
           </tbody>
         </table>
       </section>
+      </QuerySection>
     </div>
   );
 }

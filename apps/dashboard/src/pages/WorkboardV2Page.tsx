@@ -16,6 +16,7 @@ import {
 } from "@/api/queries";
 import { Pagination } from "@/components/shared/Pagination";
 import { StatusPanel } from "@/components/shared/StatusPanel";
+import { QueryNotice } from "@/components/shared/QueryNotice";
 import { CapMeter } from "@/components/page/workboard/v2/CapMeter";
 import { FocusStrip } from "@/components/page/workboard/v2/FocusStrip";
 import { WorkboardV2Row } from "@/components/page/workboard/v2/WorkboardV2Row";
@@ -35,6 +36,25 @@ const LISTS_MODE_STORAGE_KEY = "wb-v2-lists";
 // this window must be reachable through pagination, never silently cut
 // (pre-deploy audit B9).
 const QUEUE_PAGE_SIZE = 100;
+
+type WorkboardShortcut = "next" | "previous" | "handled" | "snooze" | "details";
+
+export function resolveWorkboardShortcut(
+  event: Pick<KeyboardEvent, "key" | "altKey" | "ctrlKey" | "metaKey" | "shiftKey" | "repeat" | "isComposing" | "defaultPrevented">,
+  interactiveTarget: boolean,
+): WorkboardShortcut | null {
+  if (interactiveTarget || event.defaultPrevented || event.isComposing || event.repeat
+    || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return null;
+
+  switch (event.key) {
+    case "j": case "ArrowDown": return "next";
+    case "k": case "ArrowUp": return "previous";
+    case "e": return "handled";
+    case "s": return "snooze";
+    case "Enter": return "details";
+    default: return null;
+  }
+}
 
 // Snooze durations per tab; the first is the smart default (also used by the `s` shortcut).
 const SNOOZE_DAYS: Record<WorkboardV2Tab, number[]> = {
@@ -83,7 +103,7 @@ export function WorkboardV2Page() {
 
   const enabled = Boolean(pageLabel);
   const [offset, setOffset] = useState(0);
-  const { data, isLoading, isError } = useWorkboardV2(
+  const { data, isLoading, isError, refetch } = useWorkboardV2(
     label,
     { tab, limit: QUEUE_PAGE_SIZE, offset },
     { enabled: enabled && !listsMode },
@@ -94,6 +114,7 @@ export function WorkboardV2Page() {
   const snooze = useWorkboardV2Snooze(label);
   const unsnooze = useWorkboardV2Unsnooze(label);
   const undoContact = useWorkboardV2UndoContact(label);
+  const actionInFlight = useRef(false);
 
   const counts = data?.counts ?? [];
   const tabCount = useMemo(() => {
@@ -126,6 +147,7 @@ export function WorkboardV2Page() {
   const activeIsLoading = listsMode ? lists.isLoading : isLoading;
   const activeIsError = listsMode ? lists.isError : isError;
   const activeHasData = listsMode ? Boolean(lists.data) : Boolean(data);
+  const retryActiveQuery = () => listsMode ? lists.refetch() : refetch();
   // Keyboard nav only walks rows that are actually on screen (collapsed bands are skipped).
   const flatItems = useMemo(
     () => activeSections.filter((s) => !listsMode || expandedBands.has(s.key)).flatMap((s) => s.items),
@@ -141,21 +163,27 @@ export function WorkboardV2Page() {
   };
 
   const handleDone = (fanId: number) => {
+    if (actionInFlight.current || contact.isPending || snooze.isPending) return;
+    actionInFlight.current = true;
     contact.mutate(
       { fanId, action: "handled", wasProductive: true },
       {
         onSuccess: () => toast.success("Готово", { action: { label: "Отменить", onClick: () => undoContact.mutate(fanId) } }),
         onError: () => toast.error("Не удалось отметить"),
+        onSettled: () => { actionInFlight.current = false; },
       },
     );
   };
 
   const handleSnooze = (fanId: number, days: number) => {
+    if (actionInFlight.current || contact.isPending || snooze.isPending) return;
+    actionInFlight.current = true;
     snooze.mutate(
       { fanId, days },
       {
         onSuccess: () => toast.success(`Отложено на ${days}д`, { action: { label: "Отменить", onClick: () => unsnooze.mutate(fanId) } }),
         onError: () => toast.error("Не удалось отложить"),
+        onSettled: () => { actionInFlight.current = false; },
       },
     );
   };
@@ -165,26 +193,28 @@ export function WorkboardV2Page() {
   kbd.current = { flatItems, focusedFanId, snoozeDaysActive, handleDone, handleSnooze, setFocusedFanId, setExpandedFanId };
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      const target = event.target as HTMLElement | null;
-      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) {
-        return;
-      }
+      const target = event.target instanceof Element ? event.target : null;
+      const interactiveTarget = Boolean(target?.closest(
+        'input, textarea, select, button, a, summary, [role="button"], [role="link"], [role="tab"], [role="dialog"], [aria-modal="true"], [contenteditable]:not([contenteditable="false"])',
+      ));
+      const shortcut = resolveWorkboardShortcut(event, interactiveTarget);
+      if (!shortcut) return;
       const s = kbd.current;
       if (s.flatItems.length === 0) return;
       const idx = s.flatItems.findIndex((i) => i.fanId === s.focusedFanId);
-      if (event.key === "j" || event.key === "ArrowDown") {
+      if (shortcut === "next") {
         event.preventDefault();
         s.setFocusedFanId(s.flatItems[idx < 0 ? 0 : Math.min(idx + 1, s.flatItems.length - 1)]!.fanId);
-      } else if (event.key === "k" || event.key === "ArrowUp") {
+      } else if (shortcut === "previous") {
         event.preventDefault();
         s.setFocusedFanId(s.flatItems[idx <= 0 ? 0 : idx - 1]!.fanId);
-      } else if (s.focusedFanId != null && event.key === "e") {
+      } else if (idx >= 0 && s.focusedFanId != null && shortcut === "handled") {
         event.preventDefault();
         s.handleDone(s.focusedFanId);
-      } else if (s.focusedFanId != null && event.key === "s") {
+      } else if (idx >= 0 && s.focusedFanId != null && shortcut === "snooze") {
         event.preventDefault();
         s.handleSnooze(s.focusedFanId, s.snoozeDaysActive[0]!);
-      } else if (s.focusedFanId != null && event.key === "Enter") {
+      } else if (idx >= 0 && s.focusedFanId != null && shortcut === "details") {
         event.preventDefault();
         s.setExpandedFanId((prev) => (prev === s.focusedFanId ? null : s.focusedFanId));
       }
@@ -203,7 +233,7 @@ export function WorkboardV2Page() {
     setFocusedFanId(null);
     setExpandedFanId(null);
     setOffset(0);
-  }, [tab, listsMode]);
+  }, [tab, listsMode, pageLabel]);
 
   // If the queue shrinks under the current offset (handled fans, recompute),
   // an out-of-range page would render as a false "all done" empty state.
@@ -219,7 +249,7 @@ export function WorkboardV2Page() {
 
   return (
     <div className="mx-auto max-w-5xl px-4 py-6">
-      <header className="mb-4 flex items-start justify-between gap-3">
+      <header className="mb-4 flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-lg font-semibold text-text-primary">Workboard v2</h1>
           <p className="flex items-center gap-2 text-[13px] text-text-secondary">
@@ -241,6 +271,7 @@ export function WorkboardV2Page() {
                   key={mode}
                   type="button"
                   onClick={() => setListsMode(mode === "lists")}
+                  aria-pressed={active}
                   className={`rounded-[6px] px-2.5 py-1 text-[12px] font-semibold transition-colors ${
                     active ? "bg-hover-alt text-text-primary" : "text-text-muted hover:text-text-secondary"
                   }`}
@@ -292,7 +323,7 @@ export function WorkboardV2Page() {
         </Link>
       )}
 
-      {!listsMode && <FocusStrip counts={counts} activeTab={tab} onOpen={setTab} />}
+      {!listsMode && data && <FocusStrip counts={counts} activeTab={tab} onOpen={setTab} />}
 
       {/* Tab bar with per-tab counters (hidden in lists mode) */}
       {!listsMode && (
@@ -307,6 +338,7 @@ export function WorkboardV2Page() {
                 key={target}
                 type="button"
                 onClick={() => setTab(target)}
+                aria-pressed={active}
                 className={`flex items-center gap-1.5 border-b-2 px-3 py-2 text-[13px] transition-colors ${
                   active
                     ? "border-accent font-semibold text-text-primary"
@@ -326,7 +358,7 @@ export function WorkboardV2Page() {
                     {dueNow}
                   </span>
                 )}
-                <span className="text-[11px] tabular-nums text-text-muted">{total}</span>
+                <span className="text-[11px] tabular-nums text-text-muted">{data ? total : "—"}</span>
               </button>
             );
           })}
@@ -338,10 +370,16 @@ export function WorkboardV2Page() {
       )}
 
       {/* Work list */}
+      <QueryNotice error={activeIsError && activeHasData} stale retry={retryActiveQuery} />
       {activeIsLoading && !activeHasData ? (
         <StatusPanel title="Загрузка" />
       ) : activeIsError && !activeHasData ? (
-        <StatusPanel title="Ошибка загрузки" tone="error" />
+        <StatusPanel
+          title="Не удалось загрузить Workboard"
+          description="Состояние очереди пока неизвестно. Можно повторить запрос или открыть другую вкладку."
+          tone="error"
+          action={<button type="button" className="text-sm font-semibold text-accent underline" onClick={() => void retryActiveQuery()}>Повторить</button>}
+        />
       ) : activeSections.length === 0 ? (
         <div className="flex flex-col items-center justify-center rounded-card border border-border bg-card px-4 py-12 text-center">
           <CheckCircle2 className="mb-2 text-green" size={28} />
@@ -371,6 +409,7 @@ export function WorkboardV2Page() {
                     <button
                       type="button"
                       onClick={() => toggleBand(key)}
+                      aria-expanded={open}
                       className="sticky top-0 z-10 flex w-full items-center gap-2 border-b border-border bg-hover-alt/80 px-3 py-2 text-left backdrop-blur transition-colors hover:bg-hover-alt"
                     >
                       <Chevron size={14} className="text-text-muted" />
@@ -399,7 +438,7 @@ export function WorkboardV2Page() {
                         onToggle={(id) => setExpandedFanId((prev) => (prev === id ? null : id))}
                         onHandled={handleDone}
                         onSnooze={handleSnooze}
-                        isHandling={contact.isPending}
+                        isHandling={contact.isPending || snooze.isPending}
                       />
                     ))}
                 </section>

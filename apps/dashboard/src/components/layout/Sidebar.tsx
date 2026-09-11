@@ -1,10 +1,11 @@
 import { NavLink, useLocation, Link } from "react-router";
-import { BarChart3, Bell, Coins, LineChart, Settings, Users, Heart, Trophy, MessageSquare, Terminal, ListTodo, Database, AlertTriangle, Droplets, Code2, ChevronDown, UserX, Sparkles } from "lucide-react";
+import { BarChart3, Bell, Coins, LineChart, Settings, Users, Heart, Trophy, MessageSquare, Terminal, ListTodo, Database, AlertTriangle, Droplets, Code2, ChevronDown, UserX, Sparkles, Link2, SlidersHorizontal, Download, Image } from "lucide-react";
 import { useState } from "react";
 import { useAdminConnections } from "@/api/queries";
 import { PlatformBadge } from "@/components/shared/PlatformBadge";
 import { isAlertState } from "@/components/shared/syncUxDisplay";
 import { buildAiAnalyticsRoute, buildAnalyticsRoute, buildPageRoute, buildPageSectionRoute, buildWorkboardRoute, decodeRouteSegment } from "@/lib/navigation";
+import { ofapiPageHref } from "@/lib/ofapiNavigation";
 import { useDashboardShell } from "./DashboardShellContext.js";
 
 interface SidebarProps {
@@ -47,32 +48,22 @@ export function Sidebar({ user }: SidebarProps) {
     const parts = location.pathname.split("/").filter(Boolean);
     return parts[0] === "pages" && parts[1] ? decodeRouteSegment(parts[1]) : null;
   })();
-  const currentAiPageLabel = location.pathname === "/ai-analytics"
-    ? new URLSearchParams(location.search).get("page")
-    : null;
-  const activeFanslyPageLabel = pages.some(
-    (page) => page.platform === "fansly" && page.label === activePageLabel,
-  )
-    ? activePageLabel
-    : null;
-  const currentFanslyAiPageLabel = pages.some(
-    (page) => page.platform === "fansly" && page.label === currentAiPageLabel,
-  )
-    ? currentAiPageLabel
-    : null;
-  const aiAnalyticsRoute = buildAiAnalyticsRoute(activeFanslyPageLabel ?? currentFanslyAiPageLabel);
-  // The Analytics link carries the Fansly page already in view, the same way the
-  // AI link does: landing on someone else's page is a worse default than
-  // landing on the first one.
+  const requestedPageLabel = activePageLabel ?? new URLSearchParams(location.search).get("page");
+  const contextPage = pages.find((page) => page.label === requestedPageLabel);
+  const unresolvedPageLabel = requestedPageLabel !== null && !contextPage ? requestedPageLabel : null;
+  const activeFanslyPageLabel = contextPage?.platform === "fansly" ? contextPage.label : unresolvedPageLabel;
+  const activeOnlyFansPageLabel = contextPage?.platform === "onlyfans" ? contextPage.label : unresolvedPageLabel;
+  const aiAnalyticsRoute = buildAiAnalyticsRoute(activeFanslyPageLabel);
   const analyticsRoute = buildAnalyticsRoute(activeFanslyPageLabel);
+  const operationClass = ({ isActive }: { isActive: boolean }) => `flex items-center gap-2.5 px-3.5 py-2.5 rounded-lg text-sm transition-colors ${isActive ? "bg-hover text-text-primary font-semibold" : "text-text-secondary hover:bg-hover"}`;
 
   return (
-    <nav className="w-[248px] bg-card border-r border-border flex flex-col fixed top-0 bottom-0 z-20">
-      <Link to="/" className="block px-[22px] py-[22px] text-[17px] font-bold text-text-primary border-b border-border tracking-[-0.03em]">
+    <nav className="w-[248px] bg-card border-r border-border flex flex-col fixed top-0 bottom-0 z-20 overflow-y-auto">
+      <Link to="/" className="block shrink-0 px-[22px] py-[22px] text-[17px] font-bold text-text-primary border-b border-border tracking-[-0.03em]">
         <span className="text-accent">Agency</span>Hub
       </Link>
 
-      <div className="flex-1 p-3 overflow-y-auto">
+      <div className="flex-1 p-3">
         <NavLink
           to="/"
           end
@@ -86,10 +77,10 @@ export function Sidebar({ user }: SidebarProps) {
           Overview
         </NavLink>
 
-        {user.role === "owner" && <NavLink to="/ofapi-marketing" className="flex items-center gap-2.5 px-3.5 py-2.5 rounded-lg text-sm text-text-secondary hover:bg-hover"><Database size={16} /> Smart Links</NavLink>}
-        {user.role === "owner" && <NavLink to="/ofapi-actions" className="flex items-center gap-2.5 px-3.5 py-2.5 rounded-lg text-sm text-text-secondary hover:bg-hover"><Database size={16} /> Управление OnlyFans</NavLink>}
-        {(user.role === "owner" || user.role === "team_lead") && <NavLink to="/ofapi-exports" className="flex items-center gap-2.5 px-3.5 py-2.5 rounded-lg text-sm text-text-secondary hover:bg-hover"><Database size={16} /> OFAPI exports</NavLink>}
-        {(user.role === "owner" || user.role === "team_lead") && <NavLink to="/ofapi-media" className="flex items-center gap-2.5 px-3.5 py-2.5 rounded-lg text-sm text-text-secondary hover:bg-hover"><Database size={16} /> OnlyFans media</NavLink>}
+        {user.role === "owner" && <NavLink to={ofapiPageHref("/ofapi-marketing", activeOnlyFansPageLabel)} className={operationClass}><Link2 size={16} /> Smart Links</NavLink>}
+        {user.role === "owner" && <NavLink to={ofapiPageHref("/ofapi-actions", activeOnlyFansPageLabel)} className={operationClass}><SlidersHorizontal size={16} /> Управление OnlyFans</NavLink>}
+        {(user.role === "owner" || user.role === "team_lead") && <NavLink to={ofapiPageHref("/ofapi-exports", activeOnlyFansPageLabel)} className={operationClass}><Download size={16} /> Экспорт OnlyFans</NavLink>}
+        {(user.role === "owner" || user.role === "team_lead") && <NavLink to={ofapiPageHref("/ofapi-media", activeOnlyFansPageLabel)} className={operationClass}><Image size={16} /> Медиа OnlyFans</NavLink>}
 
         {modelPages.size > 0 && (
           <div className="mt-4 px-3.5 pb-2 text-[11px] font-semibold text-text-muted uppercase tracking-[0.1em]">
@@ -184,6 +175,8 @@ export function Sidebar({ user }: SidebarProps) {
         <div className="p-3 border-t border-border space-y-0.5">
           <button
             type="button"
+            aria-expanded={devOpen}
+            aria-controls="sidebar-diagnostics"
             onClick={() => setDevOpen((o) => !o)}
             className={`flex w-full items-center gap-2.5 px-3.5 py-2.5 rounded-lg text-sm font-medium transition-colors ${
               location.pathname.startsWith("/dev")
@@ -192,14 +185,14 @@ export function Sidebar({ user }: SidebarProps) {
             }`}
           >
             <Code2 size={16} />
-            Dev
+            Диагностика
             <ChevronDown
               size={14}
               className={`ml-auto text-text-muted transition-transform ${devOpen ? "rotate-180" : ""}`}
             />
           </button>
           {devOpen && (
-            <div className="ml-4 space-y-0.5">
+            <div id="sidebar-diagnostics" className="ml-4 space-y-0.5">
               {devLinks.map(({ to, label, icon: Icon }) => (
                 <NavLink
                   key={to}
@@ -225,7 +218,7 @@ export function Sidebar({ user }: SidebarProps) {
             }
           >
             <BarChart3 size={16} />
-            Usage
+            Использование AI
           </NavLink>
           <NavLink
             to="/ofapi-credits"
@@ -275,7 +268,7 @@ export function Sidebar({ user }: SidebarProps) {
             }
           >
             <Bell size={16} />
-            Notifications
+            Уведомления
           </NavLink>
           <NavLink
             to="/settings"

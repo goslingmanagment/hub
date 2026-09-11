@@ -22,6 +22,8 @@ import { ConfirmModal } from "@/components/shared/ConfirmModal";
 import { Field } from "@/components/shared/Field";
 import { StatusPanel } from "@/components/shared/StatusPanel";
 import { StaleDataNotice } from "@/components/shared/StaleDataNotice";
+import { QueryNotice } from "@/components/shared/QueryNotice";
+import { QuerySection } from "@/components/shared/QuerySection";
 import { formatRelativeTime, formatDateTime } from "@/lib/format";
 import { toast } from "sonner";
 import { PageAssignmentsEditor } from "./PageAssignmentsEditor.js";
@@ -704,7 +706,8 @@ function AddChatterModal({
   onClose: () => void;
 }) {
   const createUser = useAdminCreateUser();
-  const { data: allPages } = useAdminPages();
+  const pagesQuery = useAdminPages();
+  const allPages = pagesQuery.data;
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [selectedPage, setSelectedPage] = useState("");
@@ -790,22 +793,23 @@ function AddChatterModal({
           )}
         </Field>
 
-        {allPages && allPages.length > 0 && (
-          <Field label="Assign a page (optional)">
+        <Field label="Assign a page (optional)">
+          <QuerySection title="Доступные страницы" hasData={allPages !== undefined} isError={pagesQuery.isError} retry={pagesQuery.refetch}>
+            {allPages?.length === 0 && <p className="mb-2 text-sm text-text-muted">В каталоге пока нет доступных страниц.</p>}
             <select
               value={selectedPage}
               onChange={(e) => setSelectedPage(e.target.value)}
               className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm outline-none focus:border-accent"
             >
               <option value="">None</option>
-              {allPages.map((page) => (
+              {allPages?.map((page) => (
                 <option key={page.id} value={page.label}>
                   {page.label} ({page.platform} / {page.modelName})
                 </option>
               ))}
             </select>
-          </Field>
-        )}
+          </QuerySection>
+        </Field>
       </div>
 
       <div className="mt-6 flex items-center justify-end gap-2">
@@ -1055,7 +1059,7 @@ function KeyRevealModal({
 /*  ChatterDetailModal — key history + page management                 */
 /* ------------------------------------------------------------------ */
 
-function ChatterDetailModal({
+export function ChatterDetailModal({
   user,
   onClose,
   onDeactivate,
@@ -1064,10 +1068,10 @@ function ChatterDetailModal({
   onClose: () => void;
   onDeactivate: () => void;
 }) {
-  const { data: apiKeys, isLoading: keysLoading } = useAdminUserApiKeys(
-    user.username,
-  );
-  const { data: allPages } = useAdminPages();
+  const keysQuery = useAdminUserApiKeys(user.username);
+  const apiKeys = keysQuery.data;
+  const pagesQuery = useAdminPages();
+  const allPages = pagesQuery.data;
   const assignPage = useAdminAssignPage(user.username);
   const unassignPage = useAdminUnassignPage(user.username);
   const setUserPassword = useAdminSetPassword(user.username);
@@ -1160,9 +1164,8 @@ function ChatterDetailModal({
           <h3 className="mb-2 text-sm font-semibold text-text-primary">
             Key History
           </h3>
-          {keysLoading ? (
-            <p className="text-sm text-text-muted">Loading...</p>
-          ) : !apiKeys || apiKeys.length === 0 ? (
+          <QuerySection title="История ключей" hasData={apiKeys !== undefined} isError={keysQuery.isError} retry={keysQuery.refetch}>
+          {!apiKeys || apiKeys.length === 0 ? (
             <p className="text-sm text-text-muted">No keys have been issued.</p>
           ) : (
             <div className="space-y-1.5">
@@ -1202,9 +1205,13 @@ function ChatterDetailModal({
               ))}
             </div>
           )}
+          </QuerySection>
         </div>
 
         {/* Page Assignments */}
+        <QueryNotice error={pagesQuery.isError} stale={allPages !== undefined} retry={pagesQuery.refetch} />
+        {!allPages && !pagesQuery.isError && <p role="status" className="text-sm text-text-muted">Загружаем каталог страниц для назначения…</p>}
+        {allPages?.length === 0 && <p className="text-sm text-text-muted">В каталоге пока нет доступных страниц.</p>}
         <PageAssignmentsEditor
           assignedPages={user.assignedPages}
           availablePages={availablePages}
@@ -1212,7 +1219,7 @@ function ChatterDetailModal({
           onSelectedLabelChange={setSelectedLabel}
           onAssign={handleAssign}
           onUnassign={handleUnassign}
-          assignPending={assignPage.isPending}
+          assignPending={assignPage.isPending || allPages === undefined}
           unassignPending={unassignPage.isPending}
         />
 

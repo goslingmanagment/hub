@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type MouseEvent } from "react";
-import { useNavigate, useParams, useSearchParams } from "react-router";
+import { Link, useLocation, useParams, useSearchParams } from "react-router";
 import { toast } from "sonner";
 import { Copy, Check, ArrowUp, ArrowDown } from "lucide-react";
 import {
@@ -10,7 +10,10 @@ import {
 import { useSpenders, useSpenderBatch } from "@/api/queries";
 import { Pagination } from "@/components/shared/Pagination";
 import { SearchInput } from "@/components/shared/SearchInput";
-import { buildFanProfileNavigation, buildPageSectionRoute } from "@/lib/navigation";
+import { audiencePaginationLabels, audiencePeriod, buildAudienceFanNavigation } from "@/lib/audienceNavigation";
+import { listOffset } from "@/lib/overviewNavigation";
+import { QueryNotice } from "@/components/shared/QueryNotice";
+import { StatusPanel } from "@/components/shared/StatusPanel";
 import { useSpenderPeriodStore } from "@/stores/spenderPeriodStore";
 import {
   SPENDER_RETENTION_ACTIVE_DAYS,
@@ -50,18 +53,18 @@ type SpenderConversation = SpenderListItem["conversation"];
 type SpenderLastTransaction = SpenderListItem["lastTransaction"];
 
 const RETENTION_FILTERS: { key: RetentionFilter; label: string }[] = [
-  { key: "all", label: "All" },
-  { key: "active", label: "Active" },
-  { key: "cooling", label: "Cooling" },
-  { key: "inactive", label: "Inactive" },
-  { key: "needs_reactivation", label: "Needs reactivation" },
+  { key: "all", label: "Все" },
+  { key: "active", label: "Активные" },
+  { key: "cooling", label: "Остывают" },
+  { key: "inactive", label: "Неактивные" },
+  { key: "needs_reactivation", label: "Нужен возврат" },
 ];
 
 const STATUS_DOT: Record<Exclude<RetentionFilter, "all">, { color: string; label: string }> = {
-  active: { color: "var(--color-green)", label: "Active" },
-  cooling: { color: "var(--color-warning)", label: "Cooling" },
-  inactive: { color: "var(--color-text-muted)", label: "Inactive" },
-  needs_reactivation: { color: "var(--color-danger)", label: "Needs reactivation" },
+  active: { color: "var(--color-green)", label: "Активные" },
+  cooling: { color: "var(--color-warning)", label: "Остывают" },
+  inactive: { color: "var(--color-text-muted)", label: "Неактивные" },
+  needs_reactivation: { color: "var(--color-danger)", label: "Нужен возврат" },
 };
 
 function sumBreakdownTypes(
@@ -77,20 +80,20 @@ function sumBreakdownTypes(
 function whaleBadge(lifetimeScopeCreatorNetMills: number) {
   if (lifetimeScopeCreatorNetMills >= 500_000)
     return (
-      <Tooltip content="Whale — lifetime spend ≥ $500">
+      <Tooltip content="Whale — доход автора за всё время от $500">
         <span className="ml-1.5 inline-flex items-center rounded-md bg-blue-500/15 px-1.5 py-0.5 text-[10px] font-bold text-blue-400">🐋 Whale</span>
       </Tooltip>
     );
   if (lifetimeScopeCreatorNetMills >= 100_000)
     return (
-      <Tooltip content="VIP — lifetime spend ≥ $100">
+      <Tooltip content="VIP — доход автора за всё время от $100">
         <span className="ml-1.5 inline-flex items-center rounded-md bg-purple-500/15 px-1.5 py-0.5 text-[10px] font-bold text-purple-400">💎 VIP</span>
       </Tooltip>
     );
   if (lifetimeScopeCreatorNetMills >= 50_000)
     return (
-      <Tooltip content="Regular — lifetime spend ≥ $50">
-        <span className="ml-1.5 inline-flex items-center rounded-md bg-yellow-500/15 px-1.5 py-0.5 text-[10px] font-bold text-yellow-400">⭐ Regular</span>
+      <Tooltip content="Постоянный — доход автора за всё время от $50">
+        <span className="ml-1.5 inline-flex items-center rounded-md bg-yellow-500/15 px-1.5 py-0.5 text-[10px] font-bold text-yellow-400">⭐ Постоянный</span>
       </Tooltip>
     );
   return null;
@@ -124,28 +127,28 @@ function StatusDot({ status }: { status: RetentionFilter }) {
 }
 
 function SpentCell({ spent, tips, subs, purchases, ready }: {
-  spent: number;
+  spent: number | null;
   tips: number;
   subs: number;
   purchases: number;
   ready: boolean;
 }) {
-  const formatted = formatUsdFromMills(spent);
+  const formatted = spent === null ? "—" : formatUsdFromMills(spent);
   if (!ready || tips + subs + purchases === 0) {
     return <span>{formatted}</span>;
   }
   const tooltipContent = (
     <div className="space-y-0.5 tabular-nums">
       <div className="flex justify-between gap-4">
-        <span className="text-white/70">Tips</span>
+        <span className="text-white/70">Чаевые</span>
         <span>{formatUsdFromMills(tips)}</span>
       </div>
       <div className="flex justify-between gap-4">
-        <span className="text-white/70">Subs</span>
+        <span className="text-white/70">Подписки</span>
         <span>{formatUsdFromMills(subs)}</span>
       </div>
       <div className="flex justify-between gap-4">
-        <span className="text-white/70">Purchases</span>
+        <span className="text-white/70">Покупки</span>
         <span>{formatUsdFromMills(purchases)}</span>
       </div>
     </div>
@@ -166,7 +169,7 @@ function ChatCell({ conversation }: { conversation: SpenderConversation }) {
     conversation.lastModelMessageAt !== null;
 
   if (!hasConversation && !hasAnyMessage) {
-    return <span className="text-xs text-text-muted">No DM</span>;
+    return <span className="text-xs text-text-muted">Нет переписки</span>;
   }
 
   const unanswered = isUnansweredConversation(conversation);
@@ -175,12 +178,12 @@ function ChatCell({ conversation }: { conversation: SpenderConversation }) {
     <div className="space-y-0.5">
       <div className="flex items-center gap-1.5">
         <span className="text-sm font-medium text-text-primary">
-          {conversation.lastMessageAt ? formatRelativeTime(conversation.lastMessageAt) : "synced"}
+          {conversation.lastMessageAt ? formatRelativeTime(conversation.lastMessageAt) : "загружено"}
         </span>
         {unanswered && (
-          <Tooltip content="Unanswered — fan messaged last">
+          <Tooltip content="Без ответа — фан написал последним">
             <span
-              aria-label="Unanswered"
+              aria-label="Без ответа"
               className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-warning/20 text-[10px] font-bold text-warning-dark"
             >
               ⚠
@@ -188,7 +191,7 @@ function ChatCell({ conversation }: { conversation: SpenderConversation }) {
           </Tooltip>
         )}
         {conversation.unreadCount > 0 && (
-          <Tooltip content={`${conversation.unreadCount} unread message${conversation.unreadCount === 1 ? "" : "s"}`}>
+          <Tooltip content={`Непрочитанных сообщений: ${conversation.unreadCount}`}>
             <span className="inline-flex h-4 min-w-[16px] items-center justify-center rounded-full bg-accent px-1 text-[10px] font-bold text-white tabular-nums">
               {conversation.unreadCount}
             </span>
@@ -196,9 +199,9 @@ function ChatCell({ conversation }: { conversation: SpenderConversation }) {
         )}
       </div>
       <div className="text-[11px] text-text-muted tabular-nums">
-        F {conversation.lastFanMessageAt ? formatRelativeTimeCompact(conversation.lastFanMessageAt) : "—"}
+        Фан {conversation.lastFanMessageAt ? formatRelativeTimeCompact(conversation.lastFanMessageAt) : "—"}
         <span className="mx-1 text-border">·</span>
-        M {conversation.lastModelMessageAt ? formatRelativeTimeCompact(conversation.lastModelMessageAt) : "—"}
+        Модель {conversation.lastModelMessageAt ? formatRelativeTimeCompact(conversation.lastModelMessageAt) : "—"}
       </div>
     </div>
   );
@@ -221,7 +224,7 @@ function LastTransactionCell({ transaction }: { transaction: SpenderLastTransact
         {isPending && (
           <>
             <span className="mx-1 text-border">·</span>
-            <Tooltip content={`Transaction state: ${transaction.transactionState}`}>
+            <Tooltip content={`Состояние операции: ${transaction.transactionState}`}>
               <span className="font-medium text-warning-dark">{transaction.transactionState}</span>
             </Tooltip>
           </>
@@ -231,7 +234,7 @@ function LastTransactionCell({ transaction }: { transaction: SpenderLastTransact
   );
 }
 
-function SubCell({ subscription, ready }: {
+function SubCell({ subscription, ready, loading }: {
   subscription: {
     status: "active" | "expired" | "never";
     expiresAt: string | null;
@@ -239,36 +242,37 @@ function SubCell({ subscription, ready }: {
     autoRenewOffDetectedAt: string | null;
   } | null;
   ready: boolean;
+  loading: boolean;
 }) {
   if (!ready) {
-    return <span className="text-xs text-text-muted">…</span>;
+    return <span className="text-xs text-text-muted">{loading ? "Загрузка…" : "Неизвестно"}</span>;
   }
   if (!subscription || subscription.status === "never") {
     return <span className="text-xs text-text-muted">—</span>;
   }
   if (subscription.status === "expired") {
     return (
-      <Tooltip content="Subscription expired">
+      <Tooltip content="Подписка истекла">
         <span className="inline-flex items-center rounded-md bg-text-muted/15 px-1.5 py-0.5 text-[10px] font-bold uppercase text-text-muted">
-          Expired
+          Истекла
         </span>
       </Tooltip>
     );
   }
   const days = subscription.expiresAt ? daysRemaining(subscription.expiresAt) : null;
   const renewLabel = subscription.autoRenew === true
-    ? "Auto-renew on"
+    ? "Продление включено"
     : subscription.autoRenew === false
-      ? "Auto-renew off"
+      ? "Продление выключено"
       : null;
   const tooltipContent = (
     <div className="space-y-0.5">
-      <div>Active subscriber</div>
-      {days !== null && <div className="text-white/70">Ends in {days}d</div>}
+      <div>Подписка активна</div>
+      {days !== null && <div className="text-white/70">Осталось {days} дн.</div>}
       {renewLabel && <div className="text-white/70">{renewLabel}</div>}
       {subscription.autoRenew === false && subscription.autoRenewOffDetectedAt && (
         <div className="text-white/70">
-          Detected {formatDate(subscription.autoRenewOffDetectedAt, { includeYear: true })}
+          Замечено {formatDate(subscription.autoRenewOffDetectedAt, { includeYear: true })}
         </div>
       )}
     </div>
@@ -276,9 +280,9 @@ function SubCell({ subscription, ready }: {
   return (
     <Tooltip content={tooltipContent}>
       <span className="inline-flex items-center gap-1 rounded-md bg-green/15 px-1.5 py-0.5 text-[10px] font-bold uppercase text-green">
-        Active
+        Активна
         {subscription.autoRenew === false && (
-          <span className="text-warning-dark normal-case font-medium">· no renew</span>
+          <span className="text-warning-dark normal-case font-medium">· без продления</span>
         )}
       </span>
     </Tooltip>
@@ -353,8 +357,8 @@ function computeNextAction(
     const days = daysRemaining(subscription.expiresAt);
     if (days <= 7) {
       return {
-        label: `Sub ${days}d`,
-        description: `Subscription ends in ${days} day${days === 1 ? "" : "s"}${subscription.autoRenew === false ? " · auto-renew off" : ""}`,
+        label: `Подписка ${days} дн.`,
+        description: `До конца подписки ${days} дн.${subscription.autoRenew === false ? " · продление выключено" : ""}`,
         className: "bg-warning/15 text-warning-dark",
       };
     }
@@ -363,8 +367,8 @@ function computeNextAction(
   // 2. High-value gone quiet
   if (item.retentionStatus === "needs_reactivation") {
     return {
-      label: "Reactivate",
-      description: "High-value supporter quiet — reach out",
+      label: "Вернуть",
+      description: "Ценный спендер давно не покупал — свяжитесь с ним",
       className: "bg-danger/15 text-danger",
     };
   }
@@ -372,8 +376,8 @@ function computeNextAction(
   // 3. Unanswered chat (fan messaged last)
   if (isUnansweredConversation(item.conversation)) {
     return {
-      label: "Reply",
-      description: "Fan messaged last — needs a reply",
+      label: "Ответить",
+      description: "Фан написал последним — нужен ответ",
       className: "bg-accent/15 text-accent",
     };
   }
@@ -381,8 +385,8 @@ function computeNextAction(
   // 4. Cooling — check in
   if (item.retentionStatus === "cooling") {
     return {
-      label: "Check in",
-      description: "Cooling — re-engage soon",
+      label: "Напомнить",
+      description: "Покупок давно не было — пора напомнить о себе",
       className: "bg-warning/15 text-warning-dark",
     };
   }
@@ -471,9 +475,10 @@ type TrendPreviewState = {
 
 export function TopSupportersPage() {
   const { pageLabel } = useParams();
-  const navigate = useNavigate();
-  const selectedPeriod = useSpenderPeriodStore((s) => s.topSupportersPeriod);
+  const location = useLocation();
+  const storedPeriod = useSpenderPeriodStore((s) => s.topSupportersPeriod);
   const [searchParams, setSearchParams] = useSearchParams();
+  const selectedPeriod = audiencePeriod(searchParams.get("period"), storedPeriod);
   const [chatPreview, setChatPreview] = useState<ChatPreviewState | null>(null);
   const [txnPreview, setTxnPreview] = useState<TxnPreviewState | null>(null);
   const [trendPreview, setTrendPreview] = useState<TrendPreviewState | null>(null);
@@ -481,7 +486,7 @@ export function TopSupportersPage() {
   const rawFilter = searchParams.get("filter") ?? "all";
   const retentionFilter: RetentionFilter = (VALID_RETENTION.has(rawFilter) ? rawFilter : "all") as RetentionFilter;
   const searchQuery = searchParams.get("q") ?? "";
-  const offset = Math.max(0, Number(searchParams.get("offset") ?? "0") || 0);
+  const offset = listOffset(searchParams.get("offset"));
   const rawSortBy = searchParams.get("sortBy") ?? DEFAULT_SORT_BY;
   const sortBy: SortByValue = (VALID_SORT_BY.has(rawSortBy as SortByValue) ? rawSortBy : DEFAULT_SORT_BY) as SortByValue;
   const sortDir: SortDir = searchParams.get("dir") === "asc" ? "asc" : "desc";
@@ -494,7 +499,7 @@ export function TopSupportersPage() {
         else next.set(k, v);
       }
       return next;
-    }, { replace: true });
+    });
   }, [setSearchParams]);
 
   const setRetentionFilter = useCallback((filter: RetentionFilter) => {
@@ -521,8 +526,9 @@ export function TopSupportersPage() {
   const spenderPeriod = selectedPeriod === "all" ? "lifetime" : selectedPeriod;
 
   useEffect(() => {
-    if (offset !== 0) setOffset(0);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    setChatPreview(null);
+    setTxnPreview(null);
+    setTrendPreview(null);
   }, [pageLabel, spenderPeriod]);
 
   const spenderParams = useMemo(() => ({
@@ -537,7 +543,7 @@ export function TopSupportersPage() {
     retentionStatus: retentionFilter,
   }), [pageLabel, spenderPeriod, offset, sortBy, sortDir, searchQuery, retentionFilter]);
 
-  const { data: spenders, isLoading } = useSpenders(spenderParams);
+  const { data: spenders, isError, refetch } = useSpenders(spenderParams);
 
   const platform = spenders?.scope?.page?.platform;
   const items = spenders?.items ?? [];
@@ -555,7 +561,7 @@ export function TopSupportersPage() {
     };
   }, [platform, pageLabel, items, spenderPeriod]);
 
-  const { data: batchData } = useSpenderBatch(batchBody);
+  const { data: batchData, isError: batchError, isFetching: batchFetching, refetch: refetchBatch } = useSpenderBatch(batchBody);
 
   const batchByPlatformUserId = useMemo(() => {
     const map = new Map<string, {
@@ -583,55 +589,59 @@ export function TopSupportersPage() {
     if (!spenders) return null;
     const isLifetime = spenderPeriod === "lifetime";
     let spent = 0;
+    let hasAmounts = true;
+    let hasBreakdown = true;
     let tips = 0;
     let subs = 0;
     let purchases = 0;
     for (const item of spenders.items) {
       const itemSpent = isLifetime
         ? item.metrics.lifetime.scopeCreatorNetAmountMills
-        : (item.metrics.window?.creatorNetAmountMills ?? 0);
-      spent += itemSpent;
+        : item.metrics.window?.creatorNetAmountMills;
+      if (itemSpent === undefined) hasAmounts = false;
+      else spent += itemSpent;
       const batch = batchByPlatformUserId.get(item.fan.platformUserId);
+      if (!batch?.typeBreakdown) hasBreakdown = false;
       if (batch?.typeBreakdown) {
         tips += sumBreakdownTypes(batch.typeBreakdown, ["tip", "stream_tip"]);
         subs += sumBreakdownTypes(batch.typeBreakdown, ["subscription"]);
         purchases += sumBreakdownTypes(batch.typeBreakdown, ["message_purchase", "post_purchase"]);
       }
     }
-    return { spent, tips, subs, purchases, hasBreakdown: !!batchData };
+    return { spent: hasAmounts ? spent : null, tips, subs, purchases, hasBreakdown };
   }, [spenders, spenderPeriod, batchByPlatformUserId, batchData]);
 
-  if (isLoading || !spenders) {
-    return <TableSkeleton rows={8} columns={spenderPeriod === "lifetime" ? 7 : 8} />;
-  }
-
-  const total = spenders.total;
+  const total = spenders?.total;
   const isLifetime = spenderPeriod === "lifetime";
   const columnCount = isLifetime ? 7 : 8;
   const subtitle = describeRetentionSubtitle(retentionFilter);
+  const hasFilters = retentionFilter !== "all" || searchQuery.length > 0;
+  const incompleteBatch = Boolean(batchData) && items.some((item) => {
+    const batch = batchByPlatformUserId.get(item.fan.platformUserId);
+    return !batch?.typeBreakdown || !batch.subscription;
+  });
 
   return (
-    <div>
+    <div className="min-w-0 p-4 md:p-0">
       <div className="mb-4">
         <h1 className="text-xl font-extrabold text-text-primary">
-          Top Supporters &mdash; {pageLabel}
+          Топ спендеров &mdash; {pageLabel}
         </h1>
         <p className="text-sm text-text-muted mt-1">
-          {total} {retentionFilter === "all" ? "total" : "match"}
+          {total === undefined ? "Число записей пока неизвестно" : `${total} записей в выборке`}
           {subtitle ? ` · ${subtitle}` : ""}
         </p>
       </div>
 
       <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
-        <div role="tablist" aria-label="Retention filter" className="flex flex-wrap items-center gap-1">
+        <div role="group" aria-label="Активность покупок" className="flex flex-wrap items-center gap-1">
           {RETENTION_FILTERS.map((filter) => {
             const isActive = retentionFilter === filter.key;
             return (
               <button
                 key={filter.key}
                 type="button"
-                role="tab"
-                aria-selected={isActive}
+                aria-pressed={isActive}
                 onClick={() => setRetentionFilter(filter.key)}
                 className={`rounded-button px-3 py-1.5 text-[13px] font-medium transition-colors ${
                   isActive
@@ -647,19 +657,34 @@ export function TopSupportersPage() {
         <SearchInput
           value={searchQuery}
           onChange={setSearchQuery}
-          placeholder="Search supporter..."
+          placeholder="Поиск спендера…"
         />
       </div>
 
+      {hasFilters && <button type="button" className="mb-3 text-sm font-medium text-accent" onClick={() => updateParams({ filter: null, q: null, offset: null })}>Сбросить фильтры</button>}
+      <p className="mb-3 text-xs text-text-muted">Рейтинг по доходу автора после комиссии за выбранный период. Категории активности учитывают последнюю покупку. Нажмите на имя, чтобы открыть карточку фана.</p>
+      <QueryNotice error={isError && Boolean(spenders)} stale={Boolean(spenders)} retry={refetch} />
+      {spenders && batchBody && batchError && (
+        <p role="alert" className="mb-3 rounded-lg border border-warning bg-hover-alt px-3 py-2 text-xs text-text-secondary">
+          Не удалось обновить сведения о подписках и разбивку дохода.
+          {batchData ? " Показаны ранее полученные детали." : " Основной рейтинг доступен."}{" "}
+          <button type="button" className="font-semibold text-accent underline" onClick={() => void refetchBatch()}>Повторить</button>
+        </p>
+      )}
+      {spenders && incompleteBatch && !batchError && <p role="status" className="mb-3 text-xs text-warning-dark">Часть сведений о подписках и разбивке дохода недоступна. <button type="button" className="font-semibold text-accent" onClick={() => void refetchBatch()}>Повторить</button></p>}
+      {!spenders ? (
+        isError ? <StatusPanel title="Не удалось загрузить спендеров" description="Повторите запрос. Поиск и фильтры сохранены." tone="error" action={<button type="button" className="text-accent font-semibold" onClick={() => void refetch()}>Повторить</button>} />
+          : <div role="status" aria-label="Загрузка спендеров"><TableSkeleton rows={8} columns={columnCount} /></div>
+      ) : (
       <section className="overflow-x-auto rounded-xl border border-border bg-card">
-        <table className="w-full border-collapse">
+        <table className="w-full min-w-[860px] border-collapse">
           <thead>
             <tr className="bg-hover-alt">
               <th className="w-12 px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wider text-text-muted">#</th>
-              <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wider text-text-muted">Fan</th>
-              <th className="px-3 py-2 text-right">
+              <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wider text-text-muted">Фан</th>
+              <th className="px-3 py-2 text-right" aria-sort={sortBy === "creatorNetAmountMills" ? sortDir === "asc" ? "ascending" : "descending" : "none"}>
                 <SortableHeader
-                  label="Spent"
+                  label="Доход автора"
                   align="right"
                   sortKey="creatorNetAmountMills"
                   currentSort={sortBy}
@@ -667,12 +692,12 @@ export function TopSupportersPage() {
                   onSort={toggleSort}
                 />
               </th>
-              <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wider text-text-muted">Sub</th>
-              <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wider text-text-muted">Next</th>
-              <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wider text-text-muted">Last Chat</th>
-              <th className="px-3 py-2 text-left">
+              <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wider text-text-muted">Подписка</th>
+              <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wider text-text-muted">Следующий шаг</th>
+              <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wider text-text-muted">Переписка</th>
+              <th className="px-3 py-2 text-left" aria-sort={sortBy === "lastTransactionAt" ? sortDir === "asc" ? "ascending" : "descending" : "none"}>
                 <SortableHeader
-                  label="Last Spend"
+                  label="Последняя покупка"
                   sortKey="lastTransactionAt"
                   currentSort={sortBy}
                   currentDir={sortDir}
@@ -680,7 +705,7 @@ export function TopSupportersPage() {
                 />
               </th>
               {!isLifetime && (
-                <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wider text-text-muted">Trend</th>
+                <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wider text-text-muted">Динамика</th>
               )}
             </tr>
           </thead>
@@ -688,7 +713,8 @@ export function TopSupportersPage() {
             {items.length === 0 && (
               <tr>
                 <td colSpan={columnCount} className="px-3 py-8 text-center text-sm text-text-muted">
-                  {emptyStateMessage(retentionFilter)}
+                  {offset > 0 ? "Эта страница больше не содержит записей." : searchQuery ? "По этому запросу спендеры не найдены." : emptyStateMessage(retentionFilter)}
+                  {offset > 0 && <button type="button" className="block mx-auto mt-2 text-accent" onClick={() => setOffset(0)}>К началу списка</button>}
                 </td>
               </tr>
             )}
@@ -699,27 +725,27 @@ export function TopSupportersPage() {
               const comparison = item.metrics.comparison;
               const spent = isLifetime
                 ? lifetimeNet
-                : (windowMetrics?.creatorNetAmountMills ?? 0);
+                : (windowMetrics?.creatorNetAmountMills ?? null);
 
               const batch = batchByPlatformUserId.get(item.fan.platformUserId);
-              const hasBatch = !!batchData;
+              const hasBatch = Boolean(batch?.typeBreakdown);
               const tips = sumBreakdownTypes(batch?.typeBreakdown ?? null, ["tip", "stream_tip"]);
               const subs = sumBreakdownTypes(batch?.typeBreakdown ?? null, ["subscription"]);
               const purchases = sumBreakdownTypes(batch?.typeBreakdown ?? null, ["message_purchase", "post_purchase"]);
 
-              const fanNavigation = buildFanProfileNavigation(
+              const fanNavigation = buildAudienceFanNavigation(
                 pageLabel!,
                 platform!,
                 item.fan.platformUserId,
-                buildPageSectionRoute(pageLabel!, "top-supporters"),
+                location.pathname + location.search,
                 fanLabel.label,
+                selectedPeriod,
               );
 
               return (
                 <tr
                   key={item.fan.platformUserId}
-                  onClick={() => navigate(fanNavigation.to, { state: fanNavigation.state })}
-                  className="cursor-pointer border-t border-border transition-colors hover:bg-hover"
+                  className="border-t border-border transition-colors hover:bg-hover"
                 >
                   <td className="px-3 py-2.5 align-middle">
                     <div className="flex items-center gap-2">
@@ -729,9 +755,9 @@ export function TopSupportersPage() {
                   </td>
                   <td className="px-3 py-2.5 align-middle">
                     <div className="flex items-center">
-                      <span className="text-sm font-semibold text-text-primary">
+                      <Link to={fanNavigation.to} state={fanNavigation.state} className="text-sm font-semibold text-text-primary hover:text-accent">
                         {fanLabel.label}
-                      </span>
+                      </Link>
                       {whaleBadge(lifetimeNet)}
                       {fanLabel.secondaryPlatformHandle && (
                         <span className="ml-2 text-xs text-text-muted">@{fanLabel.secondaryPlatformHandle}</span>
@@ -743,52 +769,30 @@ export function TopSupportersPage() {
                       />
                     </div>
                   </td>
-                  <td
-                    className="px-3 py-2.5 align-middle text-right text-sm font-medium tabular-nums text-text-primary hover:bg-hover-alt"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setTrendPreview({
-                        platformUserId: item.fan.platformUserId,
-                        fanLabel: fanLabel.label,
-                        profileHref: fanNavigation.to,
-                      });
-                    }}
-                  >
-                    <SpentCell spent={spent} tips={tips} subs={subs} purchases={purchases} ready={hasBatch} />
+                  <td className="px-3 py-2.5 align-middle text-right text-sm font-medium tabular-nums text-text-primary">
+                    <button type="button" className="w-full rounded py-1 text-right hover:text-accent focus-visible:outline-2" aria-label={`Динамика дохода · ${fanLabel.label}`} onClick={() => setTrendPreview({ platformUserId: item.fan.platformUserId, fanLabel: fanLabel.label, profileHref: fanNavigation.to })}>
+                      <SpentCell spent={spent} tips={tips} subs={subs} purchases={purchases} ready={hasBatch} />
+                    </button>
                   </td>
                   <td className="px-3 py-2.5 align-middle">
-                    <SubCell subscription={batch?.subscription ?? null} ready={hasBatch} />
+                    <SubCell subscription={batch?.subscription ?? null} ready={Boolean(batch?.subscription)} loading={Boolean(batchFetching)} />
                   </td>
                   <td className="px-3 py-2.5 align-middle">
                     <NextActionCell action={computeNextAction(item, batch?.subscription ?? null)} />
                   </td>
-                  <td
-                    className={`px-3 py-2.5 align-middle ${item.conversation.platformConversationId ? "hover:bg-hover-alt" : ""}`}
-                    onClick={(e) => {
-                      if (!item.conversation.platformConversationId) return;
-                      e.stopPropagation();
-                      setChatPreview({
-                        platformConversationId: item.conversation.platformConversationId,
-                        fanLabel: fanLabel.label,
-                        profileHref: fanNavigation.to,
-                      });
-                    }}
-                  >
-                    <ChatCell conversation={item.conversation} />
+                  <td className="px-3 py-2.5 align-middle">
+                    {item.conversation.platformConversationId ? (
+                      <button type="button" className="w-full rounded py-1 text-left hover:bg-hover-alt focus-visible:outline-2" aria-label={`Открыть переписку · ${fanLabel.label}`} onClick={() => setChatPreview({ platformConversationId: item.conversation.platformConversationId!, fanLabel: fanLabel.label, profileHref: fanNavigation.to })}>
+                        <ChatCell conversation={item.conversation} />
+                      </button>
+                    ) : <ChatCell conversation={item.conversation} />}
                   </td>
-                  <td
-                    className={`px-3 py-2.5 align-middle ${item.lastTransaction ? "hover:bg-hover-alt" : ""}`}
-                    onClick={(e) => {
-                      if (!item.lastTransaction) return;
-                      e.stopPropagation();
-                      setTxnPreview({
-                        platformUserId: item.fan.platformUserId,
-                        fanLabel: fanLabel.label,
-                        profileHref: fanNavigation.to,
-                      });
-                    }}
-                  >
-                    <LastTransactionCell transaction={item.lastTransaction} />
+                  <td className="px-3 py-2.5 align-middle">
+                    {item.lastTransaction ? (
+                      <button type="button" className="w-full rounded py-1 text-left hover:bg-hover-alt focus-visible:outline-2" aria-label={`Открыть операции · ${fanLabel.label}`} onClick={() => setTxnPreview({ platformUserId: item.fan.platformUserId, fanLabel: fanLabel.label, profileHref: fanNavigation.to })}>
+                        <LastTransactionCell transaction={item.lastTransaction} />
+                      </button>
+                    ) : <LastTransactionCell transaction={item.lastTransaction} />}
                   </td>
                   {!isLifetime && (
                     <td className="px-3 py-2.5 align-middle">
@@ -804,15 +808,15 @@ export function TopSupportersPage() {
         {visibleTotals && items.length > 0 && (
           <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 border-t border-border bg-hover-alt px-3 py-2 text-[11px] text-text-muted">
             <div>
-              {items.length} visible of {total} · Spent <span className="font-semibold text-text-primary tabular-nums">{formatUsdFromMills(visibleTotals.spent)}</span>
+              {items.length} из {total} на экране · Доход автора <span className="font-semibold text-text-primary tabular-nums">{visibleTotals.spent === null ? "—" : formatUsdFromMills(visibleTotals.spent)}</span>
             </div>
             {visibleTotals.hasBreakdown && (
               <div className="tabular-nums">
-                Tips <span className="text-text-secondary">{formatUsdFromMills(visibleTotals.tips)}</span>
+                Чаевые <span className="text-text-secondary">{formatUsdFromMills(visibleTotals.tips)}</span>
                 <span className="mx-1.5 text-border">·</span>
-                Subs <span className="text-text-secondary">{formatUsdFromMills(visibleTotals.subs)}</span>
+                Подписки <span className="text-text-secondary">{formatUsdFromMills(visibleTotals.subs)}</span>
                 <span className="mx-1.5 text-border">·</span>
-                Purchases <span className="text-text-secondary">{formatUsdFromMills(visibleTotals.purchases)}</span>
+                Покупки <span className="text-text-secondary">{formatUsdFromMills(visibleTotals.purchases)}</span>
               </div>
             )}
           </div>
@@ -821,14 +825,16 @@ export function TopSupportersPage() {
         <Pagination
           offset={offset}
           limit={LIMIT}
-          total={total}
+          total={spenders.total}
           onPageChange={setOffset}
+          {...audiencePaginationLabels}
         />
       </section>
+      )}
 
       {chatPreview && (
         <ModalShell
-          title={`Chat with ${chatPreview.fanLabel}`}
+          title={`Переписка · ${chatPreview.fanLabel}`}
           onClose={() => setChatPreview(null)}
         >
           <div className="-mx-6 -mb-6 overflow-hidden rounded-b-2xl">
@@ -844,7 +850,7 @@ export function TopSupportersPage() {
 
       {txnPreview && (
         <ModalShell
-          title={`Transactions — ${txnPreview.fanLabel}`}
+          title={`Операции · ${txnPreview.fanLabel}`}
           onClose={() => setTxnPreview(null)}
         >
           <div className="-mx-6 -mb-6 overflow-hidden rounded-b-2xl">
@@ -860,7 +866,7 @@ export function TopSupportersPage() {
 
       {trendPreview && platform && (
         <ModalShell
-          title={`Spend trend — ${trendPreview.fanLabel}`}
+          title={`Динамика дохода · ${trendPreview.fanLabel}`}
           onClose={() => setTrendPreview(null)}
         >
           <div className="-mx-6 -mb-6 overflow-hidden rounded-b-2xl">
@@ -881,20 +887,20 @@ export function TopSupportersPage() {
 function describeRetentionSubtitle(filter: RetentionFilter): string {
   switch (filter) {
     case "active":
-      return `bought within ${SPENDER_RETENTION_ACTIVE_DAYS} days`;
+      return `покупали за последние ${SPENDER_RETENTION_ACTIVE_DAYS} дней`;
     case "cooling":
-      return `quiet ${SPENDER_RETENTION_ACTIVE_DAYS}–${SPENDER_RETENTION_INACTIVE_DAYS} days`;
+      return `без покупок ${SPENDER_RETENTION_ACTIVE_DAYS}–${SPENDER_RETENTION_INACTIVE_DAYS} дней`;
     case "inactive":
-      return `quiet > ${SPENDER_RETENTION_INACTIVE_DAYS} days`;
+      return `без покупок более ${SPENDER_RETENTION_INACTIVE_DAYS} дней`;
     case "needs_reactivation":
-      return `high-value, quiet > ${SPENDER_RETENTION_INACTIVE_DAYS} days`;
+      return `ценные спендеры без покупок более ${SPENDER_RETENTION_INACTIVE_DAYS} дней`;
     default:
       return "";
   }
 }
 
 function emptyStateMessage(filter: RetentionFilter): string {
-  if (filter === "all") return "No supporters found for this period.";
-  if (filter === "needs_reactivation") return "No high-value supporters have gone quiet — nothing to reactivate.";
-  return `No supporters in the "${RETENTION_FILTERS.find((f) => f.key === filter)?.label ?? filter}" segment.`;
+  if (filter === "all") return "За выбранный период спендеры не найдены.";
+  if (filter === "needs_reactivation") return "В этом сегменте нет спендеров, которым нужен возврат.";
+  return `В сегменте «${RETENTION_FILTERS.find((f) => f.key === filter)?.label ?? filter}» спендеров нет.`;
 }

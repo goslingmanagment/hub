@@ -142,16 +142,17 @@ export function PageActivityChart(props: {
 
   return (
     <div className="bg-card border border-border rounded-xl p-5 mb-6">
-      <div className="mb-4 flex items-baseline justify-between">
+      <div className="mb-4 flex flex-wrap items-baseline justify-between gap-2">
         <h2 className="text-[12px] text-text-muted uppercase tracking-wider font-semibold">
           {props.title}
         </h2>
         {props.selectedPeriod === "all" && props.allowMonthly !== false ? (
-          <div className="flex rounded-lg overflow-hidden border border-border">
+          <div className="flex rounded-lg overflow-hidden border border-border" role="group" aria-label="Шаг графика">
             {(["daily", "monthly"] as const).map((g) => (
               <button
                 key={g}
                 type="button"
+                aria-pressed={allTimeGranularity === g}
                 onClick={() => setAllTimeGranularity(g)}
                 className={`px-3 py-1 text-[11px] font-semibold cursor-pointer transition-colors ${
                   allTimeGranularity === g
@@ -159,7 +160,7 @@ export function PageActivityChart(props: {
                     : "bg-card text-text-muted hover:text-text-secondary"
                 }`}
               >
-                {g === "daily" ? "Daily" : "Monthly"}
+                {g === "daily" ? "По дням" : "По месяцам"}
               </button>
             ))}
           </div>

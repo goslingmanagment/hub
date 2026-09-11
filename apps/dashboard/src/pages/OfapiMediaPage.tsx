@@ -1,45 +1,84 @@
-import { useState } from "react";
-import { Link } from "react-router";
+import { useEffect, useRef, useState } from "react";
+import { Link, useSearchParams } from "react-router";
 import { useAuthMe } from "@/api/queries";
 import { useOfapiExportPages } from "@/api/ofapiExports";
 import { ofapiMediaActions, useOfapiMedia } from "@/api/ofapiMedia";
+import { QueryNotice } from "@/components/shared/QueryNotice";
+import { StatusPanel } from "@/components/shared/StatusPanel";
+import { ofapiPageHref, resolveOfapiPage } from "@/lib/ofapiNavigation";
 const field =
-  "rounded border border-border bg-card px-3 py-2 text-sm text-text-primary";
+  "min-w-0 max-w-full rounded border border-border bg-card px-3 py-2 text-sm text-text-primary";
 const button =
   "rounded border border-border px-3 py-2 text-sm text-text-primary hover:bg-hover disabled:opacity-40";
 const ready = (value: boolean | null) =>
-  value === true ? "Ready" : value === false ? "Still processing" : "Unknown";
+  value === true ? "Готово" : value === false ? "Обрабатывается" : "Неизвестно";
 export function OfapiMediaPage() {
+  const pages = useOfapiExportPages();
+  const [search, setSearch] = useSearchParams();
+  const requestedPage = search.get("page");
+  const selected = resolveOfapiPage(pages.data?.pages, requestedPage);
+  function selectPage(label: string, replace = false) {
+    const next = new URLSearchParams(search);
+    next.set("page", label);
+    setSearch(next, { replace });
+  }
+  useEffect(() => {
+    if (requestedPage === null && selected) selectPage(selected.label, true);
+  }, [requestedPage, selected?.label]);
+  return <OfapiMediaContent pages={pages} pageId={selected?.id ?? 0} requestedPage={requestedPage} selectPage={selectPage} />;
+}
+
+function OfapiMediaContent({ pages, pageId, requestedPage, selectPage }: {
+  pages: ReturnType<typeof useOfapiExportPages>;
+  pageId: number;
+  requestedPage: string | null;
+  selectPage: (label: string) => void;
+}) {
   const auth = useAuthMe(),
-    owner = auth.data?.user.role === "owner",
-    pages = useOfapiExportPages();
-  const [selectedPage, setSelectedPage] = useState(0),
-    [offset, setOffset] = useState(0);
-  const pageId = selectedPage || pages.data?.pages[0]?.id || 0;
+    owner = auth.data?.user.role === "owner";
+  const [offsets, setOffsets] = useState<Record<number, number>>({});
+  const offset = offsets[pageId] ?? 0;
+  const setOffset = (value: number) => setOffsets(current => ({ ...current, [pageId]: value }));
   const saved = useOfapiMedia(pageId, offset);
-  const [file, setFile] = useState<File | null>(null),
-    [sourceId, setSourceId] = useState("");
-  const [destination, setDestination] = useState<"vault" | "cdn">("vault"),
-    [maxCredits, setMaxCredits] = useState(3),
-    [busy, setBusy] = useState(false),
+  const [files, setFiles] = useState<Record<number, File | null>>({});
+  const file = files[pageId] ?? null;
+  const setFile = (value: File | null) => setFiles(current => ({ ...current, [pageId]: value }));
+  const [sourceIds, setSourceIds] = useState<Record<number, string>>({});
+  const sourceId = sourceIds[pageId] ?? "";
+  const setSourceId = (value: string) => setSourceIds(current => ({ ...current, [pageId]: value }));
+  const [uploadDrafts, setUploadDrafts] = useState<Record<number, { destination: "vault" | "cdn"; maxCredits: number }>>({});
+  const uploadDraft: { destination: "vault" | "cdn"; maxCredits: number } = uploadDrafts[pageId] ?? { destination: "vault", maxCredits: 3 };
+  const { destination, maxCredits } = uploadDraft;
+  const setDestination = (value: "vault" | "cdn") => setUploadDrafts(current => ({ ...current, [pageId]: { ...(current[pageId] ?? uploadDraft), destination: value } }));
+  const setMaxCredits = (value: number) => setUploadDrafts(current => ({ ...current, [pageId]: { ...(current[pageId] ?? uploadDraft), maxCredits: value } }));
+  const [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
     [notice, setNotice] = useState("");
-  const [preview, setPreview] = useState<{
+  const [previews, setPreviews] = useState<Record<number, {
     body: Parameters<typeof ofapiMediaActions.upload>[0];
     pageLabel: string;
     sourceFilename: string;
     receipt: Awaited<ReturnType<typeof ofapiMediaActions.upload>>;
-  } | null>(null);
-  const [collectionPreview, setCollectionPreview] = useState<{
+  } | null>>({});
+  const preview = previews[pageId] ?? null;
+  const setPreview = (value: (typeof previews)[number]) => setPreviews(current => ({ ...current, [pageId]: value }));
+  const [collectionPreviews, setCollectionPreviews] = useState<Record<number, {
     selection: string[];
     revision: number;
     pageId: number;
     pageLabel: string;
-  } | null>(null);
-  const [handoff, setHandoff] = useState<Awaited<
-    ReturnType<typeof ofapiMediaActions.handoff>
-  > | null>(null);
+  } | null>>({});
+  const collectionPreview = collectionPreviews[pageId] ?? null;
+  const setCollectionPreview = (value: (typeof collectionPreviews)[number]) => setCollectionPreviews(current => ({ ...current, [pageId]: value }));
+  const [handoffs, setHandoffs] = useState<Record<number, Awaited<ReturnType<typeof ofapiMediaActions.handoff>> | null>>({});
+  const handoff = handoffs[pageId] ?? null;
+  const setHandoff = (value: (typeof handoffs)[number]) => setHandoffs(current => ({ ...current, [pageId]: value }));
+  const inFlight = useRef(false);
+  const [operationPage, setOperationPage] = useState("");
   async function run(action: () => Promise<void>) {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setOperationPage(pages.data?.pages.find(page => page.id === pageId)?.label ?? String(pageId));
     setBusy(true);
     setError("");
     setNotice("");
@@ -50,6 +89,7 @@ export function OfapiMediaPage() {
     } catch (error) {
       setError(error instanceof Error ? error.message : String(error));
     } finally {
+      inFlight.current = false;
       setBusy(false);
     }
   }
@@ -62,7 +102,7 @@ export function OfapiMediaPage() {
     if (!file) return;
     await run(async () => {
       if (file.size > 100000000)
-        throw new Error("Choose a file up to 100 decimal MB.");
+        throw new Error("Выберите файл размером до 100 МБ (100 000 000 байт).");
       const bytes = await file.arrayBuffer(),
         hash = await crypto.subtle.digest("SHA-256", bytes),
         expectedSha256 = Array.from(new Uint8Array(hash), (byte) =>
@@ -71,7 +111,7 @@ export function OfapiMediaPage() {
       const fileBase64 = await new Promise<string>((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = () => resolve(String(reader.result).split(",")[1]!);
-        reader.onerror = () => reject(new Error("File could not be read"));
+        reader.onerror = () => reject(new Error("Не удалось прочитать файл"));
         reader.readAsDataURL(file);
       });
       const source = await ofapiMediaActions.source({
@@ -83,7 +123,7 @@ export function OfapiMediaPage() {
       setSourceId(source.id);
       setMaxCredits(Math.max(1, Math.ceil((source.bytes * 3) / 1000000)));
       setNotice(
-        "Source saved and checksum verified. Upload awaits your approval.",
+        "Исходник сохранён, контрольная сумма проверена. Теперь выберите назначение и проверьте загрузку.",
       );
       setPreview(null);
     });
@@ -120,46 +160,47 @@ export function OfapiMediaPage() {
       const result = await ofapiMediaActions.handoff(input);
       setHandoff(result);
       if (navigator.clipboard) {
-        await navigator.clipboard.writeText(result.materialId);
-        setNotice(
-          "Verified media ID copied. Select this material in ChatGoose before sending.",
-        );
+        try {
+          await navigator.clipboard.writeText(result.materialId);
+          setNotice("Проверенный ID скопирован. Выберите этот материал в ChatGoose перед отправкой.");
+        } catch {
+          setNotice("Материал проверен. Скопируйте ID из поля ниже: браузер не разрешил запись в буфер обмена.");
+        }
+      } else {
+        setNotice("Материал проверен. Скопируйте ID из поля ниже.");
       }
     });
   }
   const source = saved.data?.sources.find((value) => value.id === sourceId);
   return (
-    <div className="max-w-7xl space-y-6">
+    <div className="max-w-7xl space-y-6 p-4 md:p-0">
       <div className="flex flex-wrap justify-between gap-3">
         <div>
           <h1 className="text-xl font-extrabold text-text-primary">
-            OnlyFans media
+            Медиа OnlyFans
           </h1>
           <p className="mt-1 text-sm text-text-muted">
-            Owned sources, asynchronous uploads and saved vault metadata.
+            Исходники, состояние загрузок и сохранённые сведения Vault.
           </p>
         </div>
-        <Link className="text-accent text-sm" to="/settings?tab=collection">
-          Collection controls
+        <Link className="text-accent text-sm" to={ofapiPageHref("/settings?tab=collection", requestedPage)}>
+          Управление сбором
         </Link>
       </div>
       <div className="flex flex-wrap gap-3 items-end">
         <label className="grid gap-1 text-sm text-text-muted">
-          Page
+          Страница
           <select
-            disabled={busy}
+            disabled={busy || !pages.data?.pages.length}
             className={field}
-            value={pageId}
+            value={pages.data?.pages.find(page => page.id === pageId)?.label ?? ""}
             onChange={(event) => {
-              setSelectedPage(Number(event.target.value));
-              setSourceId("");
-              setFile(null);
-              setOffset(0);
-              reset();
+              selectPage(event.target.value);
             }}
           >
+            {!pageId && <option value="">Выберите доступную страницу</option>}
             {pages.data?.pages.map((page) => (
-              <option key={page.id} value={page.id}>
+              <option key={page.id} value={page.label}>
                 {page.label}
               </option>
             ))}
@@ -169,20 +210,21 @@ export function OfapiMediaPage() {
           className={button}
           disabled={busy || !pageId}
           onClick={() =>
-            void run(async () => {
-              setNotice("Reloaded saved media.");
-            })
+            void Promise.all([saved.refetch(), pages.refetch()])
           }
         >
-          Reload saved data
+          Обновить экран
         </button>
       </div>
-      {(error || saved.error || pages.error) && (
+      <QueryNotice error={pages.isError} stale={pages.data !== undefined} retry={() => pages.refetch()} />
+      {pages.isLoading && !pages.data && <StatusPanel title="Загружаем список страниц…" />}
+      {pages.data && !pageId && <StatusPanel title={requestedPage !== null ? "Страница из ссылки недоступна" : "Нет доступных OnlyFans-страниц"} description="Для работы выберите доступный аккаунт в списке выше." />}
+      {error && (
         <p
           role="alert"
           className="rounded border border-red-500/40 p-3 text-red-400 text-sm"
         >
-          {error || String(saved.error || pages.error)}
+          {operationPage && <strong>{operationPage}: </strong>}{error}
         </p>
       )}
       {notice && (
@@ -190,30 +232,37 @@ export function OfapiMediaPage() {
           role="status"
           className="rounded bg-hover p-3 text-sm text-text-primary"
         >
-          {notice}
+          {operationPage && <strong>{operationPage}: </strong>}{notice}
+          {operationPage && operationPage !== requestedPage && <Link className="ml-2 text-accent underline" to={ofapiPageHref("/ofapi-media", operationPage)}>Открыть аккаунт</Link>}
         </p>
       )}
       {busy && (
         <p role="status" className="text-sm text-text-muted">
-          Saving the reviewed action…
+          {operationPage}: обрабатываем подтверждённое действие…
         </p>
       )}
-      {owner && (
+      {owner && pageId > 0 && (
         <section className="rounded-xl border border-border bg-card p-5 space-y-4">
           <h2 className="font-semibold text-text-primary">
-            Upload owned media
+            Загрузка медиа
           </h2>
+          <ol className="grid gap-2 text-sm text-text-secondary sm:grid-cols-3">
+            <li className="rounded-lg bg-hover p-3"><strong>1. Сохранить исходник</strong><br />Hub проверит файл и контрольную сумму.</li>
+            <li className="rounded-lg bg-hover p-3"><strong>2. Проверить загрузку</strong><br />Выберите назначение и лимит кредитов.</li>
+            <li className="rounded-lg bg-hover p-3"><strong>3. Подтвердить один раз</strong><br />Следите за обработкой в истории ниже.</li>
+          </ol>
           <p className="text-sm text-text-muted">
-            Files up to 100 MB. Save a source once; reuse it for an explicitly
-            approved upload. The server checks its type, size and checksum.
-            Uploads cost 3 credits per decimal MB, minimum 1.
+            Файлы до 100 МБ. Сохранённый исходник можно повторно выбрать для отдельной
+            подтверждённой загрузки. Сервер проверяет тип, размер и контрольную сумму.
+            Цена загрузки — 3 кредита за МБ (1 000 000 байт), минимум 1 кредит.
           </p>
           <div className="flex flex-wrap items-end gap-3">
             <label className="grid gap-1 text-sm text-text-muted">
-              Owned image, video or audio
+              Фото, видео или аудио
               <input
                 disabled={busy}
                 className={field}
+                key={pageId}
                 type="file"
                 accept="image/jpeg,image/png,image/gif,image/webp,video/mp4,video/webm,audio/mpeg,audio/wav,audio/mp4"
                 onChange={(event) => {
@@ -227,7 +276,7 @@ export function OfapiMediaPage() {
               disabled={busy || !file || !pageId}
               onClick={() => void saveSource()}
             >
-              Save source
+              1. Сохранить исходник
             </button>
             {file && (
               <span className="text-text-muted text-sm">
@@ -237,7 +286,7 @@ export function OfapiMediaPage() {
           </div>
           <div className="flex flex-wrap items-end gap-3">
             <label className="grid gap-1 text-sm text-text-muted">
-              Saved source
+              Сохранённый исходник
               <select
                 disabled={busy}
                 className={field}
@@ -254,7 +303,7 @@ export function OfapiMediaPage() {
                   reset();
                 }}
               >
-                <option value="">Choose a source</option>
+                <option value="">Выберите исходник</option>
                 {saved.data?.sources.map((source) => (
                   <option key={source.id} value={source.id}>
                     {source.filename} · {(source.bytes / 1000000).toFixed(2)} MB
@@ -263,7 +312,7 @@ export function OfapiMediaPage() {
               </select>
             </label>
             <label className="grid gap-1 text-sm text-text-muted">
-              Destination
+              Назначение
               <select
                 disabled={busy}
                 className={field}
@@ -273,12 +322,12 @@ export function OfapiMediaPage() {
                   reset();
                 }}
               >
-                <option value="vault">Reusable vault media</option>
-                <option value="cdn">One-use message attachment</option>
+                <option value="vault">В Vault для повторного использования</option>
+                <option value="cdn">Одноразовое вложение в сообщение</option>
               </select>
             </label>
             <label className="grid gap-1 text-sm text-text-muted">
-              Maximum credits
+              Лимит кредитов
               <input
                 disabled={busy}
                 className={field}
@@ -297,31 +346,26 @@ export function OfapiMediaPage() {
               disabled={busy || !source || !pages.data}
               onClick={() => void previewUpload()}
             >
-              Preview upload
+              2. Проверить загрузку
             </button>
           </div>
-          {source && (
-            <p className="text-xs text-text-muted break-all">
-              Verified {source.mimeType} · SHA256 {source.sha256}
-            </p>
-          )}
+          {source && <details className="text-xs text-text-muted"><summary className="cursor-pointer">Сведения о проверенном исходнике</summary><p className="mt-2 break-all">{source.mimeType} · SHA256 {source.sha256}</p></details>}
           {preview && (
             <div className="rounded border border-border p-3 text-sm text-text-secondary">
               <p className="font-medium">
-                {preview.pageLabel} (page {preview.body.pageId}) ·{" "}
+                {preview.pageLabel} (страница {preview.body.pageId}) ·{" "}
                 {preview.sourceFilename}
               </p>
               <p className="break-all text-xs text-text-muted">
-                Source {preview.body.sourceId} · SHA256 {preview.receipt.sha256}
+                Исходник {preview.body.sourceId} · SHA256 {preview.receipt.sha256}
               </p>
               <p>
                 {preview.receipt.destination === "vault"
-                  ? "Reusable vault"
-                  : "One-use CDN"}{" "}
-                upload · {(preview.receipt.bytes / 1000000).toFixed(2)} MB ·
-                estimate {preview.receipt.estimatedCredits} credits · approved
-                ceiling {preview.receipt.maxCredits}. Status checks are bounded
-                to 99 calls.
+                  ? "Vault для повторного использования"
+                  : "Одноразовый CDN"}{" "}
+                · {(preview.receipt.bytes / 1000000).toFixed(2)} МБ ·
+                оценка {preview.receipt.estimatedCredits} кр. · лимит
+                {preview.receipt.maxCredits} кр. Проверка статуса ограничена 99 запросами.
               </p>
               <button
                 className={`${button} mt-3`}
@@ -333,21 +377,23 @@ export function OfapiMediaPage() {
                       dryRun: false,
                     });
                     setPreview(null);
-                    setNotice("Upload queued. Its progress appears below.");
+                    setNotice("Загрузка поставлена в очередь. Её состояние появится в истории ниже.");
                   })
                 }
               >
-                Approve one upload
+                3. Подтвердить одну загрузку
               </button>
             </div>
           )}
         </section>
       )}
-      <section className="space-y-3">
-        <h2 className="font-semibold text-text-primary">Uploads</h2>
-        {!saved.data?.uploads.length && (
+      {pageId > 0 && <section className="space-y-3">
+        <h2 className="font-semibold text-text-primary">История загрузок</h2>
+        <QueryNotice error={saved.isError} stale={saved.data !== undefined} retry={() => saved.refetch()} />
+        {saved.isLoading && !saved.data && <StatusPanel title="Загружаем историю и каталог…" />}
+        {saved.data && !saved.data.uploads.length && !saved.isError && (
           <p className="text-sm text-text-muted">
-            No upload tasks for this page.
+            Для этой страницы ещё нет заданий загрузки.
           </p>
         )}
         {saved.data?.uploads.map((job) => (
@@ -357,9 +403,9 @@ export function OfapiMediaPage() {
           >
             <div className="flex flex-wrap justify-between">
               <strong className="text-text-primary">
-                {job.destination === "vault" ? "Vault" : "One-use attachment"} ·{" "}
+                {job.destination === "vault" ? "Vault" : "Одноразовое вложение"} ·{" "}
                 {job.reason === "indeterminate"
-                  ? "Outcome unknown · review required"
+                  ? "Результат неизвестен · нужна проверка"
                   : (job.uploadStatus ?? job.state)}
               </strong>
               <span className="text-text-muted">
@@ -367,11 +413,11 @@ export function OfapiMediaPage() {
               </span>
             </div>
             <p className="text-text-secondary">
-              Transcoding: {ready(job.isReady)} · Vendor charge:{" "}
+              Обработка: {ready(job.isReady)} · Расход у провайдера:{" "}
               {job.actualCredits === null
-                ? "not established"
+                ? "пока неизвестен"
                 : `${job.actualCredits} credits`}{" "}
-              · Recorded allowance/spend: {job.spentCredits}
+              · Учтённый лимит / расход: {job.spentCredits}
             </p>
             {job.reason && job.reason !== "upload_processing" && (
               <p className="text-text-muted">
@@ -398,12 +444,12 @@ export function OfapiMediaPage() {
                           "Resume reviewed upload with original allowance",
                       });
                       setNotice(
-                        "Upload resumed with the same source and allowance.",
+                        "Загрузка продолжена с прежним исходником и лимитом.",
                       );
                     })
                   }
                 >
-                  Resume approved upload
+                  Продолжить подтверждённую загрузку
                 </button>
               )}
             {owner && job.state === "complete" && (
@@ -420,7 +466,7 @@ export function OfapiMediaPage() {
                     })
                   }
                 >
-                  Copy verified media ID
+                  Проверить и скопировать ID
                 </button>
                 {job.destination === "vault" && job.mediaRef && (
                   <button
@@ -437,14 +483,14 @@ export function OfapiMediaPage() {
                       })
                     }
                   >
-                    Preview readiness refresh
+                    Проверить параметры обновления готовности
                   </button>
                 )}
               </div>
             )}
           </div>
         ))}
-      </section>
+      </section>}
       {handoff && (
         <section className="rounded border border-border p-4 space-y-2">
           <p className="text-sm text-text-secondary">{handoff.note}</p>
@@ -456,15 +502,14 @@ export function OfapiMediaPage() {
             value={handoff.materialId}
           />
           <button className={button} onClick={() => setHandoff(null)}>
-            Hide ID
+            Скрыть ID
           </button>
         </section>
       )}
-      <section className="space-y-3">
+      {pageId > 0 && <section className="space-y-3">
         <div className="flex flex-wrap justify-between gap-3">
           <h2 className="font-semibold text-text-primary">
-            Saved vault catalog ·{" "}
-            {saved.data?.inventory.state ?? "never collected"}
+            Сохранённый каталог Vault{saved.data ? ` · ${saved.data.inventory.state}` : ""}
           </h2>
           {owner && (
             <button
@@ -486,7 +531,7 @@ export function OfapiMediaPage() {
                 })
               }
             >
-              Preview bounded catalog refresh
+              Проверить параметры сбора каталога
             </button>
           )}
         </div>
@@ -494,13 +539,13 @@ export function OfapiMediaPage() {
         {collectionPreview && (
           <div className="rounded border border-border p-3 text-sm text-text-secondary">
             <p>
-              {collectionPreview.pageLabel} (page {collectionPreview.pageId}) ·
-              Read{" "}
+              {collectionPreview.pageLabel} (страница {collectionPreview.pageId}) ·
+              Получить{" "}
               {collectionPreview.selection.length === 1
-                ? "one selected item"
-                : "vault media, lists, release forms and taggable users"}
-              . Maximum 10 calls, 10 credits and 4 MiB. An interrupted traversal
-              stays partial. Sources and binary media are not downloaded.
+                ? "один выбранный материал"
+                : "каталог Vault, списки, согласия и доступные отметки пользователей"}
+              . Не более 10 запросов, 10 кредитов и 4 МиБ. Прерванный обход
+              останется частичным. Получаем только сведения о материалах, без самих файлов.
             </p>
             <button
               className={`${button} mt-2`}
@@ -520,24 +565,25 @@ export function OfapiMediaPage() {
                   });
                   setCollectionPreview(null);
                   setNotice(
-                    "Bounded metadata collection queued. Large inventories may require a larger reviewed task in Collection controls.",
+                    "Сбор метаданных с лимитами поставлен в очередь. Для большого каталога может потребоваться отдельное задание в управлении сбором.",
                   );
                 })
               }
             >
-              Approve metadata collection
+              Подтвердить сбор метаданных
             </button>
           </div>
         )}
-        <div className="overflow-x-auto rounded border border-border">
+        {saved.data && !saved.data.media.length && !saved.isError && <StatusPanel title={offset > 0 ? "На этой странице каталога нет материалов" : "В сохранённом каталоге нет материалов"} description="Полнота каталога определяется результатом сбора, а не отсутствием строк." action={offset > 0 ? <button type="button" className={button} onClick={() => setOffset(0)}>К началу каталога</button> : undefined} />}
+        {!!saved.data?.media.length && <div className="overflow-x-auto rounded border border-border">
           <table className="min-w-full text-sm text-left">
             <thead className="text-text-muted">
               <tr>
-                <th className="p-3">Media</th>
-                <th className="p-3">Readiness</th>
-                <th className="p-3">Metadata</th>
-                <th className="p-3">Release forms</th>
-                <th className="p-3">Action</th>
+                <th className="p-3">Материал</th>
+                <th className="p-3">Готовность</th>
+                <th className="p-3">Сведения</th>
+                <th className="p-3">Согласия</th>
+                <th className="p-3">Действие</th>
               </tr>
             </thead>
             <tbody>
@@ -548,22 +594,22 @@ export function OfapiMediaPage() {
                 >
                   <td className="p-3">
                     {media.materialKind === "cdn"
-                      ? "One-use attachment"
+                      ? "Одноразовое вложение"
                       : media.mediaRef}
                     <p className="text-xs text-text-muted">
                       {media.filename ??
                         media.providerType ??
-                        "No type observed"}
+                        "Тип неизвестен"}
                     </p>
                   </td>
                   <td className="p-3">
                     {ready(media.isReady)}
-                    {media.hasError && " · provider error"}
+                    {media.hasError && " · ошибка провайдера"}
                   </td>
                   <td className="p-3">
                     {media.width ?? "?"}×{media.height ?? "?"} ·{" "}
                     {media.bytes === null
-                      ? "size unknown"
+                      ? "размер неизвестен"
                       : `${media.bytes} bytes`}
                   </td>
                   <td className="p-3">
@@ -574,7 +620,7 @@ export function OfapiMediaPage() {
                               `${form.name ?? form.id}${form.status ? ` (${form.status})` : ""}`,
                           )
                           .join(", ")
-                      : "None observed"}
+                      : "Нет сохранённых сведений"}
                   </td>
                   <td className="p-3">
                     {owner && media.materialKind === "vault" && (
@@ -595,7 +641,7 @@ export function OfapiMediaPage() {
                           })
                         }
                       >
-                        Copy verified ID
+                        Проверить и скопировать ID
                       </button>
                     )}
                   </td>
@@ -603,28 +649,28 @@ export function OfapiMediaPage() {
               ))}
             </tbody>
           </table>
-        </div>
-        <div className="flex gap-3 text-sm text-text-muted">
+        </div>}
+        {saved.data && saved.data.totalMedia > 0 && <div className="flex flex-wrap items-center gap-3 text-sm text-text-muted">
           <button
             className={button}
             disabled={busy || offset === 0}
             onClick={() => setOffset(Math.max(0, offset - 50))}
           >
-            Previous
+            Назад
           </button>
           <span>
-            {offset + 1}–{Math.min(offset + 50, saved.data?.totalMedia ?? 0)} of{" "}
-            {saved.data?.totalMedia ?? 0}
+            {Math.min(offset + 1, saved.data.totalMedia)}–{Math.min(offset + 50, saved.data.totalMedia)} из{" "}
+            {saved.data.totalMedia}
           </span>
           <button
             className={button}
             disabled={busy || offset + 50 >= (saved.data?.totalMedia ?? 0)}
             onClick={() => setOffset(offset + 50)}
           >
-            Next
+            Далее
           </button>
-        </div>
-      </section>
+        </div>}
+      </section>}
     </div>
   );
 }

@@ -20,16 +20,18 @@ export function Pagination({
   nextLabel = "Next",
   formatRange,
 }: PaginationProps) {
-  const start = total === 0 ? 0 : offset + 1;
+  const start = total === 0 ? 0 : Math.min(offset + 1, total);
   const end = Math.min(offset + limit, total);
   const hasPrev = offset > 0;
   const hasNext = offset + limit < total;
 
   return (
-    <div className="flex items-center justify-between border-t border-border-light px-[22px] py-[14px]">
+    <div aria-label="Страницы списка" role="navigation" className="flex flex-wrap gap-3 items-center justify-between border-t border-border-light px-[22px] py-[14px]">
       <span className="text-[13px] text-text-muted tabular-nums">
         {total === 0
           ? emptyLabel
+          : offset >= total
+            ? `На этой странице нет записей · всего ${total}`
           : formatRange
             ? formatRange(start, end, total)
             : `${start}–${end} of ${total}`}

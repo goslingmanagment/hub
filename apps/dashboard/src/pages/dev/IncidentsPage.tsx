@@ -1,7 +1,7 @@
 import { Fragment, useState } from "react";
 import { useAdminIncidents } from "@/api/queries";
 import { EventDetailPanel, getEventDisplaySeverity, SEVERITY_STYLES } from "@/components/shared/EventDetailPanel";
-import { StatusPanel } from "@/components/shared/StatusPanel";
+import { QuerySection } from "@/components/shared/QuerySection";
 import { formatRelativeTime } from "@/lib/format";
 
 export function IncidentsPage() {
@@ -9,28 +9,18 @@ export function IncidentsPage() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const params = {
-    code: codeFilter,
+    ...(codeFilter === undefined ? {} : { code: codeFilter }),
     limit: 100,
   };
 
-  const { data, isLoading, isError } = useAdminIncidents(params);
+  const { data, isError, refetch } = useAdminIncidents(params);
 
   function resolveEventCode(details: Record<string, unknown> | null, fallback: string | null) {
     return typeof details?.code === "string" ? details.code : fallback;
   }
 
-  if (isLoading || !data) {
-    return isLoading ? (
-      <StatusPanel title="Loading incidents" description="Fetching recent sync anomaly groups." />
-    ) : isError ? (
-      <StatusPanel title="Incidents failed to load" description="The incidents feed could not be fetched." tone="error" />
-    ) : (
-      <StatusPanel title="Incidents unavailable" description="The incidents feed did not return data." tone="error" />
-    );
-  }
-
-  const summary = data.summary ?? [];
-  const items = data.items ?? [];
+  const summary = data?.summary ?? [];
+  const items = data?.items ?? [];
   const displaySummary = summary.reduce<Array<{ code: string | null; severity: string; count: number }>>((acc, item) => {
     const displaySeverity = getEventDisplaySeverity({
       eventCode: item.code,
@@ -51,7 +41,7 @@ export function IncidentsPage() {
   }, []);
 
   return (
-    <div>
+    <div className="p-4 md:p-0">
       <div className="mb-5">
         <h1 className="text-xl font-extrabold text-text-primary">Incidents</h1>
         <p className="text-sm text-text-muted mt-1">Sync anomalies aggregated from events</p>
@@ -67,7 +57,8 @@ export function IncidentsPage() {
               <button
                 key={`${s.code}:${s.severity}`}
                 type="button"
-                onClick={() => setCodeFilter(s.code === null || isActive ? undefined : s.code)}
+                aria-pressed={isActive}
+                onClick={() => { setCodeFilter(s.code === null || isActive ? undefined : s.code); setExpandedId(null); }}
                 className={`rounded-xl border p-4 text-left transition-colors ${
                   isActive
                     ? "border-accent bg-accent/5"
@@ -101,7 +92,7 @@ export function IncidentsPage() {
           </span>
           <button
             type="button"
-            onClick={() => setCodeFilter(undefined)}
+            onClick={() => { setCodeFilter(undefined); setExpandedId(null); }}
             className="text-sm text-accent hover:underline"
           >
             Clear
@@ -110,7 +101,8 @@ export function IncidentsPage() {
       )}
 
       {/* Incidents table */}
-      <section className="overflow-hidden rounded-xl border border-border bg-card">
+      <QuerySection title="Инциденты синхронизации" hasData={data !== undefined} isError={isError} retry={refetch}>
+      <section className="overflow-x-auto rounded-xl border border-border bg-card">
         <table className="w-full border-collapse">
           <thead>
             <tr className="bg-hover-alt">
@@ -149,7 +141,16 @@ export function IncidentsPage() {
                     onClick={() => setExpandedId(isExpanded ? null : rowId)}
                   >
                     <td className="px-4 py-3 text-sm text-text-secondary whitespace-nowrap">
-                      {item.emittedAt ? formatRelativeTime(item.emittedAt) : "\u2014"}
+                      <button
+                        type="button"
+                        aria-expanded={isExpanded}
+                        aria-label={`Details for ${eventCode ?? "incident"} on ${item.pageLabel ?? "all pages"}`}
+                        className="text-left hover:text-accent focus-visible:outline-2 focus-visible:outline-accent"
+                        onClick={(event) => { event.stopPropagation(); setExpandedId(isExpanded ? null : rowId); }}
+                      >
+                        <span aria-hidden="true">{isExpanded ? "▾ " : "▸ "}</span>
+                        {item.emittedAt ? formatRelativeTime(item.emittedAt) : "\u2014"}
+                      </button>
                     </td>
                     <td className="px-4 py-3 text-sm text-text-primary font-medium">
                       {item.pageLabel ?? "\u2014"}
@@ -190,6 +191,7 @@ export function IncidentsPage() {
           </tbody>
         </table>
       </section>
+      </QuerySection>
     </div>
   );
 }

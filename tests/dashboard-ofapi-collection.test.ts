@@ -442,7 +442,7 @@ describe("CategoryEditor (static render)", () => {
     }));
     expect(markup).not.toContain('type="radio"');
     expect(markup).toContain("Загрузка своего файла");
-    expect(markup).toContain('href="/ofapi-media"');
+    expect(markup).toContain('href="/ofapi-media?page=lora-of"');
     expect(markup).not.toContain("Создать задачу…");
     expect(markup).toContain("свой файл и отдельное подтверждение загрузки");
   });

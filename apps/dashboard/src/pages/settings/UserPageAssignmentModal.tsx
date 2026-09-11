@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { AuthUser } from "@agency_hub_core/contracts";
 import { useAdminPages, useAdminAssignPage, useAdminUnassignPage } from "@/api/queries";
 import { ModalShell } from "@/components/shared/ModalShell";
+import { QueryNotice } from "@/components/shared/QueryNotice";
 import { toast } from "sonner";
 import { PageAssignmentsEditor } from "./PageAssignmentsEditor.js";
 
@@ -12,7 +13,8 @@ export function UserPageAssignmentModal({
   user: AuthUser;
   onClose: () => void;
 }) {
-  const { data: allPages } = useAdminPages();
+  const pagesQuery = useAdminPages();
+  const allPages = pagesQuery.data;
   const assignPage = useAdminAssignPage(user.username);
   const unassignPage = useAdminUnassignPage(user.username);
   const [selectedLabel, setSelectedLabel] = useState("");
@@ -43,6 +45,9 @@ export function UserPageAssignmentModal({
   return (
     <ModalShell title={`Manage pages for ${user.username}`} onClose={onClose}>
       <div className="space-y-4">
+        <QueryNotice error={pagesQuery.isError} stale={allPages !== undefined} retry={pagesQuery.refetch} />
+        {!allPages && !pagesQuery.isError && <p role="status" className="text-sm text-text-muted">Загружаем каталог страниц для назначения…</p>}
+        {allPages?.length === 0 && <p className="text-sm text-text-muted">В каталоге пока нет доступных страниц.</p>}
         <PageAssignmentsEditor
           assignedPages={user.assignedPages}
           availablePages={availablePages}
@@ -50,7 +55,7 @@ export function UserPageAssignmentModal({
           onSelectedLabelChange={setSelectedLabel}
           onAssign={handleAssign}
           onUnassign={handleUnassign}
-          assignPending={assignPage.isPending}
+          assignPending={assignPage.isPending || allPages === undefined}
           unassignPending={unassignPage.isPending}
         />
       </div>

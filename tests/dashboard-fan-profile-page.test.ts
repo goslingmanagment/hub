@@ -26,10 +26,10 @@ vi.mock("@/stores/spenderPeriodStore", () => ({
 
 import { FanProfilePage } from "../apps/dashboard/src/pages/FanProfilePage.tsx";
 
-function renderPage() {
+function renderPage(url = "/pages/lana/fans/fansly/fan-001") {
   return renderToStaticMarkup(createElement(
     MemoryRouter,
-    { initialEntries: ["/pages/lana/fans/fansly/fan-001"] },
+    { initialEntries: [url] },
     createElement(
       Routes,
       undefined,
@@ -144,7 +144,7 @@ describe("FanProfilePage", () => {
   it("shows period-scoped total spent for bounded periods", () => {
     const html = renderPage();
 
-    expect(html).toContain("Total Spent");
+    expect(html).toContain("Доход автора");
     expect(html).toContain("$12.34");
     expect(html).not.toContain("$50.00");
   });
@@ -157,7 +157,61 @@ describe("FanProfilePage", () => {
     expect(queryMocks.useSpenderDetail).toHaveBeenCalledWith("fansly", "fan-001", expect.objectContaining({
       period: "lifetime",
     }));
-    expect(html).toContain("Total Spent");
+    expect(html).toContain("Доход автора");
     expect(html).toContain("$50.00");
   });
+
+  it("does not turn failed secondary queries into zero money or empty history", () => {
+    const failed = { data: undefined, isError: true, refetch: vi.fn() };
+    queryMocks.useSpenderDetail.mockReturnValue(failed);
+    queryMocks.usePageFanTransactions.mockReturnValue(failed);
+    queryMocks.usePageFanProfile.mockReturnValue(failed);
+    const html = renderPage();
+    expect(html).toContain("Данные не удалось загрузить");
+    expect(html).toContain("История операций");
+    expect(html).not.toContain("$0.00");
+    expect(html).not.toContain("Операций пока нет");
+    expect(html).not.toContain("Операции пока не найдены");
+    expect(html).not.toContain("Профиль ещё не создан");
+    expect(html).not.toContain("AI-профиль ещё не создан");
+  });
+
+  it("shows independent loading states while keeping the known identity visible", () => {
+    const loading = { data: undefined, isLoading: true, isError: false, refetch: vi.fn() };
+    queryMocks.useSpenderDetail.mockReturnValue(loading);
+    queryMocks.usePageFanTransactions.mockReturnValue(loading);
+    queryMocks.usePageFanProfile.mockReturnValue(loading);
+    const html = renderPage();
+    expect(html).toContain("buyer");
+    expect(html).toContain("Загружаем суммы");
+    expect(html).toContain("Загружаем историю операций");
+    expect(html).toContain("Загружаем AI-профиль");
+    expect(html).not.toContain("$0.00");
+  });
+
+  it("retains secondary data after a refresh failure and labels it as stale", () => {
+    const known = queryMocks.useSpenderDetail.getMockImplementation()!();
+    queryMocks.useSpenderDetail.mockReturnValue({ ...known, isError: true, refetch: vi.fn() });
+    const html = renderPage();
+    expect(html).toContain("$12.34");
+    expect(html).toContain("ранее полученные данные");
+  });
+
+  it("uses the source period and persists the transaction page and return link", () => {
+    const backTo = "/pages/lana/top-supporters?filter=cooling&q=buyer&offset=50&period=all";
+    const html = renderPage(`/pages/lana/fans/fansly/fan-001?period=all&txOffset=50&backTo=${encodeURIComponent(backTo)}`);
+    expect(queryMocks.useSpenderDetail.mock.calls[0]![2].period).toBe("lifetime");
+    expect(queryMocks.usePageFanTransactions.mock.calls[0]![2]).toEqual({ limit: 50, offset: 50 });
+    expect(queryMocks.usePageFanTransactions.mock.calls[1]![2]).toEqual({ limit: 10, offset: 0 });
+    expect(html).toContain('href="/pages/lana/top-supporters?filter=cooling&amp;q=buyer&amp;offset=50&amp;period=all"');
+  });
+
+  it("keeps a safe return link on an initial profile failure", () => {
+    queryMocks.usePageFanDetail.mockReturnValue({ data: undefined, isError: true, refetch: vi.fn() });
+    const html = renderPage("/pages/lana/fans/fansly/fan-001?backTo=https%3A%2F%2Fevil.invalid");
+    expect(html).toContain("Не удалось загрузить карточку фана");
+    expect(html).toContain('href="/pages/lana"');
+    expect(html).not.toContain('href="https://evil.invalid"');
+  });
+
 });

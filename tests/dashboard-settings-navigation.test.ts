@@ -16,6 +16,7 @@ vi.mock("../apps/dashboard/src/pages/settings/AgentKeysTab.tsx", () => ({ AgentK
 vi.mock("../apps/dashboard/src/pages/settings/ConfigurationTab.tsx", () => ({ ConfigurationTab: () => "content:configuration" }));
 
 import { SettingsPage } from "../apps/dashboard/src/pages/SettingsPage.tsx";
+import { buildSettingsRoute } from "../apps/dashboard/src/lib/navigation.ts";
 
 const tabs = ["credentials", "sync", "collection", "models", "personas", "pages", "users", "agentKeys", "configuration"];
 
@@ -28,6 +29,19 @@ function renderSettings(path: string) {
 }
 
 describe("settings section navigation", () => {
+  it.each(["sync", "credentials"] as const)("preserves encoded account scope when building %s recovery links", (tab) => {
+    const target = new URL(buildSettingsRoute(tab, "lana/of + 1"), "https://hub.invalid");
+    expect(target.pathname).toBe("/settings");
+    expect(target.searchParams.get("tab")).toBe(tab);
+    expect(target.searchParams.get("page")).toBe("lana/of + 1");
+  });
+
+  it("does not invent an account for aggregate credentials recovery", () => {
+    const target = new URL(buildSettingsRoute("credentials"), "https://hub.invalid");
+    expect(target.searchParams.get("tab")).toBe("credentials");
+    expect(target.searchParams.has("page")).toBe(false);
+  });
+
   it.each(tabs)("keeps the existing %s deep link and identifies the current section", (tab) => {
     const markup = renderSettings(`/settings?tab=${tab}`);
     expect(markup.match(/content:[a-zA-Z]+/g)).toEqual([`content:${tab}`]);

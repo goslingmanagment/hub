@@ -1,14 +1,13 @@
-import { useEffect, useMemo, useState } from "react";
-import { useNavigate, useParams } from "react-router";
+import { useMemo } from "react";
+import { Link, useLocation, useParams, useSearchParams } from "react-router";
 import { usePageSpenderAutoList } from "@/api/queries";
 import { Pagination } from "@/components/shared/Pagination";
 import { SearchInput } from "@/components/shared/SearchInput";
 import { StatusPanel } from "@/components/shared/StatusPanel";
 import { TableSkeleton } from "@/components/shared/TableSkeleton";
-import {
-  buildFanProfileNavigation,
-  buildPageSpenderAutoListRoute,
-} from "@/lib/navigation";
+import { audiencePaginationLabels, audiencePeriod, buildAudienceFanNavigation, updateAudienceSearch } from "@/lib/audienceNavigation";
+import { listOffset } from "@/lib/overviewNavigation";
+import { QueryNotice } from "@/components/shared/QueryNotice";
 import { formatDate, formatDateTime } from "@/lib/format";
 import { useSpenderPeriodStore } from "@/stores/spenderPeriodStore";
 import { formatUsdFromMills, resolveFanLabelForScope } from "@agency_hub_core/shared";
@@ -32,55 +31,42 @@ function StatusBadge({ tone, children }: { tone: "green" | "danger" | "warning" 
 
 export function SpenderAutoListPage() {
   const { pageLabel, bucketKey } = useParams<{ pageLabel: string; bucketKey: string }>();
-  const navigate = useNavigate();
-  const selectedPeriod = useSpenderPeriodStore((s) => s.period);
+  const location = useLocation();
+  const [search, setSearch] = useSearchParams();
+  const storedPeriod = useSpenderPeriodStore((s) => s.period);
+  const selectedPeriod = audiencePeriod(search.get("period"), storedPeriod);
   const spenderPeriod = selectedPeriod === "all" ? "lifetime" : selectedPeriod;
-  const [searchQuery, setSearchQuery] = useState("");
-  const [excludeNonFollowers, setExcludeNonFollowers] = useState(false);
-  const [offset, setOffset] = useState(0);
-
-  useEffect(() => {
-    setOffset(0);
-  }, [pageLabel, bucketKey, searchQuery, spenderPeriod, excludeNonFollowers]);
+  const searchQuery = search.get("query") ?? "";
+  const excludeNonFollowers = search.get("followersOnly") === "true";
+  const offset = listOffset(search.get("offset"));
+  const hasFilters = searchQuery.length > 0 || excludeNonFollowers;
+  function update(changes: Record<string, string | null>, resetOffset = true) {
+    setSearch((previous) => updateAudienceSearch(previous, changes, resetOffset));
+  }
 
   const params = useMemo(() => ({
     limit: LIMIT,
     offset,
-    query: searchQuery || undefined,
-    excludeNonFollowers: excludeNonFollowers || undefined,
+    ...(searchQuery ? { query: searchQuery } : {}),
+    ...(excludeNonFollowers ? { excludeNonFollowers: true } : {}),
     period: spenderPeriod,
   }), [excludeNonFollowers, offset, searchQuery, spenderPeriod]);
 
-  const { data, isLoading, isError } = usePageSpenderAutoList(
+  const { data, isError, refetch } = usePageSpenderAutoList(
     pageLabel ?? "",
     bucketKey ?? "",
     params,
     { enabled: Boolean(pageLabel && bucketKey) },
   );
 
-  if (isLoading || !data) {
-    if (isError) {
-      return (
-        <StatusPanel
-          title="Auto list failed to load"
-          description="The spender auto-list could not be fetched for this page."
-          tone="error"
-        />
-      );
-    }
-    return <TableSkeleton rows={6} columns={5} />;
-  }
-
-  const pageRoute = buildPageSpenderAutoListRoute(pageLabel!, bucketKey!);
-
   return (
-    <div>
+    <div className="min-w-0 p-4 md:p-0">
       <div className="mb-5">
         <h1 className="text-xl font-extrabold text-text-primary">
-          {data.bucket.label}
+          {data?.bucket.label ?? "Список спендеров"}
         </h1>
         <p className="text-sm text-text-muted mt-1">
-          {data.total} entries on {pageLabel}
+          {data ? `${data.total} записей · ${pageLabel}` : pageLabel}
         </p>
       </div>
 
@@ -89,28 +75,35 @@ export function SpenderAutoListPage() {
           <input
             type="checkbox"
             checked={excludeNonFollowers}
-            onChange={(event) => setExcludeNonFollowers(event.target.checked)}
+            onChange={(event) => update({ followersOnly: event.target.checked ? "true" : null })}
             className="h-4 w-4 accent-accent"
           />
-          Exclude non-followers
+          Только фолловеры
         </label>
         <SearchInput
           value={searchQuery}
-          onChange={setSearchQuery}
-          placeholder="Search fan..."
+          onChange={(query) => update({ query })}
+          placeholder="Поиск фана…"
         />
       </div>
 
-      <section className="overflow-hidden rounded-xl border border-border bg-card">
-        <table className="w-full border-collapse">
+      {hasFilters && <button type="button" className="mb-3 text-sm font-medium text-accent" onClick={() => update({ query: null, followersOnly: null })}>Сбросить фильтры</button>}
+      <p className="mb-3 text-xs text-text-muted">Суммы за выбранный период: расходы фана и доход автора после комиссии показаны отдельно.</p>
+      <QueryNotice error={isError && Boolean(data)} stale={Boolean(data)} retry={refetch} />
+      {!data ? (
+        isError ? <StatusPanel title="Не удалось загрузить список" description="Повторите запрос. Поиск и фильтры сохранены." tone="error" action={<button type="button" className="text-accent font-semibold" onClick={() => void refetch()}>Повторить</button>} />
+          : <div role="status" aria-label="Загрузка списка"><TableSkeleton rows={6} columns={5} /></div>
+      ) : (
+      <section className="overflow-x-auto rounded-xl border border-border bg-card">
+        <table className="w-full min-w-[700px] border-collapse">
           <thead>
             <tr className="bg-hover-alt">
               {[
-                { label: "Fan", align: "text-left" },
-                { label: "Status", align: "text-left" },
-                { label: "Gross Spent", align: "text-right" },
-                { label: "Creator Net", align: "text-right" },
-                { label: "Last Txn", align: "text-left" },
+                { label: "Фан", align: "text-left" },
+                { label: "Статус", align: "text-left" },
+                { label: "Расходы фана", align: "text-right" },
+                { label: "Доход автора", align: "text-right" },
+                { label: "Последняя операция", align: "text-left" },
               ].map((col) => (
                 <th
                   key={col.label}
@@ -125,30 +118,31 @@ export function SpenderAutoListPage() {
             {data.items.length === 0 && (
               <tr>
                 <td colSpan={5} className="px-4 py-8 text-center text-sm text-text-muted">
-                  No fans found in this auto list.
+                  {offset >= data.total && offset > 0 ? "Эта страница больше не содержит записей." : hasFilters ? "По выбранным условиям фаны не найдены." : "В этом списке пока нет фанов."}
+                  {offset > 0 && <button type="button" className="block mx-auto mt-2 text-accent" onClick={() => update({ offset: null }, false)}>К началу списка</button>}
                 </td>
               </tr>
             )}
             {data.items.map((item) => {
               const fanLabel = resolveFanLabelForScope(item.fan, "page");
-              const fanNavigation = buildFanProfileNavigation(
+              const fanNavigation = buildAudienceFanNavigation(
                 pageLabel!,
                 data.page.platform,
                 item.fan.platformUserId,
-                pageRoute,
+                location.pathname + location.search,
                 fanLabel.label,
+                selectedPeriod,
               );
 
               return (
                 <tr
                   key={item.fan.platformUserId}
-                  onClick={() => navigate(fanNavigation.to, { state: fanNavigation.state })}
-                  className="cursor-pointer border-t border-border transition-colors hover:bg-hover"
+                  className="border-t border-border transition-colors hover:bg-hover"
                 >
                   <td className="px-4 py-3">
-                    <div className="text-[15px] font-semibold text-text-primary">
+                    <Link to={fanNavigation.to} state={fanNavigation.state} className="text-[15px] font-semibold text-text-primary hover:text-accent">
                       {fanLabel.label}
-                    </div>
+                    </Link>
                     {fanLabel.secondaryPlatformHandle && (
                       <div className="text-xs text-text-muted">@{fanLabel.secondaryPlatformHandle}</div>
                     )}
@@ -156,28 +150,28 @@ export function SpenderAutoListPage() {
                   <td className="px-4 py-3">
                     <div className="flex flex-wrap gap-1.5">
                       {item.isFollower ? (
-                        <StatusBadge tone="green">Follower</StatusBadge>
+                        <StatusBadge tone="green">Фолловер</StatusBadge>
                       ) : (
-                        <StatusBadge tone="danger">Non-follower</StatusBadge>
+                        <StatusBadge tone="danger">Не следит</StatusBadge>
                       )}
                       {item.subscriptionStatus === "active" && (
-                        <StatusBadge tone="green">Active sub</StatusBadge>
+                        <StatusBadge tone="green">Подписка активна</StatusBadge>
                       )}
                       {item.subscriptionStatus === "expired" && (
-                        <StatusBadge tone="warning">Expired sub</StatusBadge>
+                        <StatusBadge tone="warning">Подписка истекла</StatusBadge>
                       )}
                       {item.subscriptionStatus === "never" && (
-                        <StatusBadge tone="muted">No sub</StatusBadge>
+                        <StatusBadge tone="muted">Без подписки</StatusBadge>
                       )}
                     </div>
                     {item.subscriptionStatus === "expired" && item.lastSubscriptionEndedAt && (
                       <div className="mt-1 text-xs text-text-muted">
-                        Ended {formatDate(item.lastSubscriptionEndedAt, { includeYear: true })}
+                        Окончилась {formatDate(item.lastSubscriptionEndedAt, { includeYear: true })}
                       </div>
                     )}
                     {item.subscriptionStatus === "active" && item.subscriptionExpiresAt && (
                       <div className="mt-1 text-xs text-text-muted">
-                        Expires {formatDate(item.subscriptionExpiresAt, { includeYear: true })}
+                        До {formatDate(item.subscriptionExpiresAt, { includeYear: true })}
                       </div>
                     )}
                   </td>
@@ -200,9 +194,11 @@ export function SpenderAutoListPage() {
           offset={offset}
           limit={LIMIT}
           total={data.total}
-          onPageChange={setOffset}
+          onPageChange={(value) => update({ offset: value ? String(value) : null }, false)}
+          {...audiencePaginationLabels}
         />
       </section>
+      )}
     </div>
   );
 }

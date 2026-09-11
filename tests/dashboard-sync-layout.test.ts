@@ -336,6 +336,11 @@ function renderWithRouter(element: ReturnType<typeof createElement>, initialEntr
   ));
 }
 
+function credentialsRecoveryTargets(html: string) {
+  return [...html.matchAll(/<a\b[^>]*href="([^"]+)"[^>]*>\s*Update credentials\s*<\/a>/g)]
+    .map((match) => new URL(match[1]!.replaceAll("&amp;", "&"), "https://hub.invalid"));
+}
+
 describe("dashboard sync layout", () => {
   beforeEach(() => {
     queryMocks.useAdminConnections.mockReset();
@@ -438,7 +443,7 @@ describe("dashboard sync layout", () => {
 
     expect(html).not.toContain("Sync Monitor");
     expect(html).not.toContain("href=\"/sync\"");
-    expect(html).toContain("Usage");
+    expect(html).toContain("Использование AI");
     expect(html).toContain("href=\"/usage\"");
     expect(html).toContain("Settings");
   });
@@ -792,6 +797,81 @@ describe("dashboard sync layout", () => {
 
     expect(html).toContain("No sync worker is processing jobs");
     expect(html).toContain("Start or restart the worker service.");
+  });
+
+  it("keeps the account on legacy credentials recovery from a sync card", () => {
+    const overview = buildSyncOverview();
+    const page = overview.pages[0]!;
+    page.pageLabel = "lana/one + two";
+    page.blocks.connection = buildSyncBlock("connection", {
+      state: "failed",
+      needsAttention: true,
+      primaryFresh: false,
+      statusReason: {
+        code: "credentials_invalid",
+        summary: "Credentials have expired",
+        waitingFor: null,
+      },
+    });
+    queryMocks.useSyncOverview.mockReturnValue({ data: overview, isLoading: false });
+
+    const targets = credentialsRecoveryTargets(
+      renderWithRouter(createElement(SettingsPage), ["/settings?tab=sync"]),
+    );
+
+    expect(targets).toHaveLength(1);
+    expect(targets[0]!.pathname).toBe("/settings");
+    expect(targets[0]!.searchParams.get("tab")).toBe("credentials");
+    expect(targets[0]!.searchParams.get("page")).toBe(page.pageLabel);
+  });
+
+  it("keeps page diagnosis recovery scoped while the aggregate remains unscoped", () => {
+    const overview = buildSyncOverview();
+    const diagnosis = buildSyncDiagnosis({
+      code: "auth_blocked",
+      headline: "Credentials need attention",
+      actionKind: "credentials",
+    });
+    overview.diagnosis = diagnosis;
+    overview.pages[0]!.pageLabel = "lana/one + two";
+    overview.pages[0]!.diagnosis = diagnosis;
+    overview.pages.push({ ...overview.pages[0]!, pageId: 2, pageLabel: "lora + two" });
+    queryMocks.useSyncOverview.mockReturnValue({ data: overview, isLoading: false });
+
+    const targets = credentialsRecoveryTargets(
+      renderWithRouter(createElement(SettingsPage), ["/settings?tab=sync"]),
+    );
+
+    expect(targets.map((target) => target.searchParams.get("page"))).toEqual([
+      null, "lana/one + two", "lora + two",
+    ]);
+    for (const target of targets) {
+      expect(target.pathname).toBe("/settings");
+      expect(target.searchParams.get("tab")).toBe("credentials");
+    }
+  });
+
+  it("keeps the response account on credentials recovery from sync detail", () => {
+    const page = buildSyncOverview().pages[0]!;
+    page.pageLabel = "lana/one + two";
+    page.diagnosis = buildSyncDiagnosis({
+      code: "auth_blocked",
+      headline: "Credentials need attention",
+      actionKind: "credentials",
+    });
+    queryMocks.usePageSyncBlocks.mockReturnValue({
+      data: { generatedAt: "2026-03-24T12:00:00.000Z", page },
+      isLoading: false,
+    });
+
+    const targets = credentialsRecoveryTargets(renderWithRouter(
+      createElement(SettingsPage),
+      [`/settings?tab=sync&page=${encodeURIComponent(page.pageLabel)}`],
+    ));
+
+    expect(targets).toHaveLength(1);
+    expect(targets[0]!.searchParams.get("tab")).toBe("credentials");
+    expect(targets[0]!.searchParams.get("page")).toBe(page.pageLabel);
   });
 
   it("shows page-level diagnosis in sync detail", () => {

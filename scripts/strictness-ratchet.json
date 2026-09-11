@@ -1,12 +1,10 @@
 {
-  "apps/dashboard/src/api/workboard.ts": 4,
   "apps/dashboard/src/components/layout/Topbar.tsx": 1,
   "apps/dashboard/src/lib/format.ts": 29,
   "apps/dashboard/src/lib/navigation.ts": 1,
   "apps/dashboard/src/lib/parseFanProfile.ts": 3,
   "apps/dashboard/src/pages/FanProfilePage.tsx": 1,
   "apps/dashboard/src/pages/OfapiCreditsPage.tsx": 6,
-  "apps/dashboard/src/pages/PageDetailPage.tsx": 2,
   "apps/dashboard/src/pages/settings/ModelsTab.tsx": 6,
   "apps/dashboard/src/pages/settings/sync/syncBlockDisplay.ts": 5,
   "apps/dashboard/src/pages/TopSupportersPage.tsx": 1,

@@ -14,13 +14,14 @@ interface FilterButtonsProps {
 
 export function FilterButtons({ filters, active, onChange }: FilterButtonsProps) {
   return (
-    <div className="flex items-center gap-1">
+    <div className="flex flex-wrap items-center gap-1" role="group" aria-label="Фильтры">
       {filters.map((f) => {
         const isActive = active === f.key;
         return (
           <button
             key={f.key}
             type="button"
+            aria-pressed={isActive}
             onClick={() => onChange(f.key)}
             className={`flex items-center gap-1.5 rounded-button px-3 py-1.5 text-[13px] font-medium transition-colors ${
               isActive

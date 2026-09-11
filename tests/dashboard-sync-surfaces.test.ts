@@ -20,12 +20,14 @@ const queryMocks = vi.hoisted(() => ({
   usePageSubscribers: vi.fn(),
   usePageSubscribersDaily: vi.fn(),
   usePageTransactions: vi.fn(),
+  useRevenueTransactions: vi.fn(),
   useSpenders: vi.fn(),
 }));
 
 vi.mock("../apps/dashboard/src/api/queries.ts", () => queryMocks);
 vi.mock("../apps/dashboard/src/api/pages.ts", () => queryMocks);
 vi.mock("../apps/dashboard/src/api/overview.ts", () => queryMocks);
+vi.mock("../apps/dashboard/src/api/transactions.ts", () => queryMocks);
 
 import { OverviewPage } from "../apps/dashboard/src/pages/OverviewPage.tsx";
 import {
@@ -167,6 +169,8 @@ function renderWithRouter(
 
 describe("dashboard sync product surfaces", () => {
   beforeEach(() => {
+    queryMocks.useRevenueTransactions.mockReset();
+    queryMocks.useRevenueTransactions.mockReturnValue({ data: undefined, refetch: vi.fn() });
     queryMocks.useAuthMe.mockReset();
     queryMocks.useOverview.mockReset();
     queryMocks.useOverviewGrowth.mockReset();
@@ -202,6 +206,8 @@ describe("dashboard sync product surfaces", () => {
     });
     queryMocks.usePageRevenue.mockReturnValue({
       data: {
+        from: "2026-03-18T00:00:00.000Z",
+        to: "2026-03-25T00:00:00.000Z",
         netEarningsMills: 0,
         comparison: { deltaPct: null },
         breakdown: [],
@@ -382,8 +388,8 @@ describe("dashboard sync product surfaces", () => {
       overview.pages,
     );
 
-    expect(html).toContain("Data may be incomplete");
-    expect(html).toContain("check sync settings");
+    expect(html).toContain("Данные могут быть неполными");
+    expect(html).toContain("Проверить синхронизацию");
     expect(html).toContain("href=\"/settings?tab=sync&amp;page=lana\"");
     expect(html).not.toContain("Sync needs attention");
   });
@@ -411,7 +417,7 @@ describe("dashboard sync product surfaces", () => {
       overview.pages,
     );
 
-    expect(html).toContain("Some data updates are paused \u2014 check sync settings");
+    expect(html).toContain("Some data updates are paused — проверьте синхронизацию");
     expect(html).toContain("href=\"/settings?tab=sync&amp;page=lana\"");
   });
 
@@ -481,7 +487,7 @@ describe("dashboard sync product surfaces", () => {
       buildOverviewPage().pages,
     );
 
-    expect(html).toContain("Page not found");
+    expect(html).toContain("Аккаунт не найден");
     expect(queryMocks.usePageRevenue).toHaveBeenCalledWith("missing", "7d", { enabled: false });
     expect(queryMocks.usePageFollowersDaily).toHaveBeenCalledWith("missing", "7d", { enabled: false });
     expect(queryMocks.usePageSubscribersDaily).toHaveBeenCalledWith("missing", "7d", { enabled: false });
@@ -490,13 +496,7 @@ describe("dashboard sync product surfaces", () => {
     expect(queryMocks.usePageSpenderAutoLists).toHaveBeenCalledWith("missing", {
       period: "7d",
     }, { enabled: false });
-    expect(queryMocks.usePageTransactions).toHaveBeenCalledWith("missing", {
-      limit: 50,
-      offset: 0,
-      type: undefined,
-    }, {
-      enabled: false,
-    });
+    expect(queryMocks.useRevenueTransactions).toHaveBeenCalledWith(undefined);
     expect(queryMocks.useSpenders).toHaveBeenCalledWith({
       scope: "page",
       pageLabel: "missing",
@@ -532,13 +532,9 @@ describe("dashboard sync product surfaces", () => {
     expect(queryMocks.usePageSpenderAutoLists).toHaveBeenCalledWith("lana", {
       period: "7d",
     }, { enabled: true });
-    expect(queryMocks.usePageTransactions).toHaveBeenCalledWith("lana", {
-      limit: 50,
-      offset: 0,
-      type: undefined,
-    }, {
-      enabled: true,
-    });
+    expect(queryMocks.useRevenueTransactions).toHaveBeenCalledWith(expect.objectContaining({
+      pageLabel: "lana", from: "2026-03-18T00:00:00.000Z", to: "2026-03-25T00:00:00.000Z", reportableOnly: true, limit: 50, offset: 0,
+    }));
     expect(queryMocks.useSpenders).toHaveBeenCalledWith({
       scope: "page",
       pageLabel: "lana",
@@ -550,6 +546,26 @@ describe("dashboard sync product surfaces", () => {
     }, {
       enabled: true,
     });
+  });
+
+  it("keeps independent page-detail failures visible without inventing empty lists", () => {
+    const failed = { data: undefined, isError: true, refetch: vi.fn() };
+    queryMocks.usePageSubscribers.mockReturnValue(failed);
+    queryMocks.usePageSpenderAutoLists.mockReturnValue(failed);
+    queryMocks.usePageRevenueDaily.mockReturnValue(failed);
+    queryMocks.usePageFollowersDaily.mockReturnValue(failed);
+    queryMocks.useRevenueTransactions.mockReturnValue(failed);
+    const html = renderWithRouter(createElement(Routes, undefined, createElement(Route, { path: "/pages/:pageLabel", element: createElement(PageDetailPage) })), ["/pages/lana?period=7d"], buildOverviewPage().pages);
+    expect(html.match(/Не удалось загрузить данные/g)).toHaveLength(5);
+    expect(html).not.toContain("Подписчики не найдены");
+    expect(html).not.toContain("Автосписки не найдены");
+    expect(html).not.toContain("0 всего");
+  });
+
+  it("URL period and offset own the exact transaction window", () => {
+    renderWithRouter(createElement(Routes, undefined, createElement(Route, { path: "/pages/:pageLabel", element: createElement(PageDetailPage) })), ["/pages/lana?period=30d&type=tip&txOffset=50"], buildOverviewPage().pages);
+    expect(queryMocks.usePageRevenue).toHaveBeenCalledWith("lana", "30d", { enabled: true });
+    expect(queryMocks.useRevenueTransactions).toHaveBeenCalledWith(expect.objectContaining({ pageLabel: "lana", type: "tip", offset: 50, from: "2026-03-18T00:00:00.000Z", to: "2026-03-25T00:00:00.000Z", reportableOnly: true }));
   });
 
   it("renders all-time page spenders from lifetime metrics instead of zeroing window values", () => {
@@ -675,11 +691,11 @@ describe("dashboard sync product surfaces", () => {
       }),
     ));
 
-    expect(html).toContain("Spender Auto Lists");
+    expect(html).toContain("Автосписки по тратам");
     expect(html).toContain('href="/pages/lana/spender-autolists/0-25"');
     expect(html).toContain("[FB] $0-$25 Spenders");
-    expect(html).toContain("2 Entries");
+    expect(html).toContain("2 фанов");
     expect(html).toContain("[FB] $600+ Spenders");
-    expect(html).toContain("1 Entries");
+    expect(html).toContain("1 фанов");
   });
 });

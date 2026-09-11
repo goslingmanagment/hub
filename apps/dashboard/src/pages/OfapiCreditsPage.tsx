@@ -1,3 +1,5 @@
+import { creditBreakdownWindow } from "@/lib/creditsNavigation";
+import { QueryNotice } from "@/components/shared/QueryNotice";
 import { buildSettingsRoute } from "../lib/navigation.js";
 import { OfapiBannedWords } from "./settings/OfapiBannedWords.js";
 import { OfapiVendorEvidence } from "./settings/OfapiVendorEvidence.js";
@@ -1019,7 +1021,7 @@ export function OfapiCreditsPage() {
   const filterSelectClass =
     "rounded-lg border border-border bg-card px-2.5 py-1.5 text-[13px] text-text-secondary";
 
-  if (summaryQuery.isLoading) {
+  if (summaryQuery.isLoading && !summary) {
     return (
       <div className="mx-auto max-w-6xl px-4 py-6">
         <StatCardSkeleton count={4} />
@@ -1027,7 +1029,7 @@ export function OfapiCreditsPage() {
     );
   }
 
-  if (summaryQuery.isError || !summary) {
+  if (!summary) {
     return (
       <div className="mx-auto max-w-6xl px-4 py-6">
         <StatusPanel
@@ -1053,12 +1055,25 @@ export function OfapiCreditsPage() {
     ledgerRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
   // A breakdown row drills straight into the matching activity-log filter.
+  const selectBreakdownWindow = () => {
+    const window = creditBreakdownWindow(breakdown?.days);
+    if (!window) return false;
+    setFromFilter(window.from);
+    setToFilter(window.to);
+    setSourceFilter("");
+    setPageFilter("");
+    setOperationFilter("");
+    setLedgerOffset(0);
+    return true;
+  };
   const drillByOperation = (operation: string) => {
+    if (!selectBreakdownWindow()) return;
     setOperationFilter(operation);
     setLedgerOffset(0);
     focusLedger();
   };
   const drillByPage = (pageId: number) => {
+    if (!selectBreakdownWindow()) return;
     setPageFilter(String(pageId));
     setLedgerOffset(0);
     focusLedger();
@@ -1132,6 +1147,7 @@ export function OfapiCreditsPage() {
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-6">
+      <QueryNotice error={summaryQuery.isError} stale retry={summaryQuery.refetch} />
       <div className="mb-5">
         <div className="flex items-center justify-between gap-4"><h1 className="text-xl font-extrabold text-text-primary">Кредиты OFAPI</h1><Link className="text-sm text-accent" to={buildSettingsRoute("collection")}>Настройки сбора</Link></div>
         <p className="mt-1 text-sm text-text-secondary">
@@ -1378,12 +1394,13 @@ export function OfapiCreditsPage() {
             </div>
           </section>
 
-          {chartsQuery.isLoading ? (
+          <QueryNotice error={chartsQuery.isError && Boolean(charts)} stale retry={chartsQuery.refetch} />
+          {chartsQuery.isLoading && !charts ? (
             <div className="mt-6 grid gap-4 lg:grid-cols-2">
               <div className="h-[360px] animate-pulse rounded-xl border border-border bg-card" />
               <div className="h-[360px] animate-pulse rounded-xl border border-border bg-card" />
             </div>
-          ) : chartsQuery.isError ? (
+          ) : chartsQuery.isError && !charts ? (
             <div className="mt-6">
               <StatusPanel
                 tone="error"
@@ -1427,6 +1444,7 @@ export function OfapiCreditsPage() {
                   <button
                     key={period}
                     type="button"
+                    aria-pressed={breakdownDays === period}
                     onClick={() => setBreakdownDays(period)}
                     className={`px-3 py-1 text-[11px] font-semibold transition-colors ${
                       breakdownDays === period
@@ -1439,11 +1457,12 @@ export function OfapiCreditsPage() {
                 ))}
               </div>
             </div>
-            {breakdownQuery.isLoading ? (
+            <QueryNotice error={breakdownQuery.isError && Boolean(breakdown)} stale retry={breakdownQuery.refetch} />
+            {breakdownQuery.isLoading && !breakdown ? (
               <div className="border-t border-border-light p-4">
                 <TableSkeleton rows={6} columns={6} />
               </div>
-            ) : breakdownQuery.isError ? (
+            ) : breakdownQuery.isError && !breakdown ? (
               <div className="border-t border-border-light p-4">
                 <StatusPanel
                   tone="error"
@@ -1480,6 +1499,7 @@ export function OfapiCreditsPage() {
                               {row.operation ? (
                                 <button
                                   type="button"
+                                  disabled={!creditBreakdownWindow(breakdown?.days)}
                                   onClick={() => drillByOperation(row.operation as string)}
                                   className={drillCellClass}
                                   title={`Показать в журнале: ${row.operation}`}
@@ -1556,7 +1576,7 @@ export function OfapiCreditsPage() {
                             <td className={tdClass}>
                               <button
                                 type="button"
-                                onClick={() => drillByPage(row.pageId)}
+                                disabled={!creditBreakdownWindow(breakdown?.days)} onClick={() => drillByPage(row.pageId)}
                                 className={drillCellClass}
                                 title={`Показать в журнале: ${row.pageLabel}`}
                               >
@@ -1709,9 +1729,10 @@ export function OfapiCreditsPage() {
                 </span>
               )}
             </div>
-            {ledgerQuery.isLoading ? (
+            <QueryNotice error={ledgerQuery.isError && Boolean(ledger)} stale retry={ledgerQuery.refetch} />
+            {ledgerQuery.isLoading && !ledger ? (
               <TableSkeleton rows={8} columns={8} />
-            ) : ledgerQuery.isError ? (
+            ) : ledgerQuery.isError && !ledger ? (
               <div className="p-4">
                 <StatusPanel
                   tone="error"

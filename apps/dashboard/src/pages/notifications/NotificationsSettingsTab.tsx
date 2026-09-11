@@ -8,6 +8,8 @@ import {
   useUpdateNotificationsSettings,
 } from "@/api/queries";
 import { StatusPanel } from "@/components/shared/StatusPanel";
+import { QueryNotice } from "@/components/shared/QueryNotice";
+import { ModalShell } from "@/components/shared/ModalShell";
 import { formatRelativeTime } from "@/lib/format";
 
 type DiscoveredChat = { id: string; type: string; title: string };
@@ -17,7 +19,7 @@ function apiErrorMessage(error: unknown): string | undefined {
 }
 
 export function NotificationsSettingsTab() {
-  const { data, isLoading, isError } = useNotificationsSettings();
+  const { data, isLoading, isError, refetch } = useNotificationsSettings();
   const updateSettings = useUpdateNotificationsSettings();
   const sendTest = useSendTestMessage();
   const discoverChats = useDiscoverTelegramChats();
@@ -25,21 +27,21 @@ export function NotificationsSettingsTab() {
   const chatIdRef = useRef<HTMLInputElement>(null);
   const [detectedChats, setDetectedChats] = useState<DiscoveredChat[] | null>(null);
   const [botUsername, setBotUsername] = useState<string | null>(null);
+  const [resultNotice, setResultNotice] = useState("");
 
   if (isLoading) {
     return (
       <StatusPanel
-        title="Loading notification settings"
-        description="Fetching the current Telegram notification configuration."
+        title="Загружаем настройки уведомлений…"
       />
     );
   }
 
-  if (isError || !data) {
+  if (!data) {
     return (
       <StatusPanel
-        title="Notification settings failed to load"
-        description="The notification settings could not be fetched."
+        title="Не удалось загрузить настройки уведомлений"
+        action={<button type="button" className="text-accent underline" onClick={() => void refetch()}>Повторить</button>}
         tone="error"
       />
     );
@@ -55,30 +57,14 @@ export function NotificationsSettingsTab() {
       | "aiCriticalAlertsEnabled",
     value: boolean,
   ) {
-    updateSettings.mutate({ [field]: value });
+    updateSettings.mutate({ [field]: value }, { onError: (error) => toast.error(apiErrorMessage(error) ?? "Не удалось сохранить настройку") });
   }
 
   function handleReportHourChange(hour: number) {
-    updateSettings.mutate({ reportHourUtc: hour });
+    updateSettings.mutate({ reportHourUtc: hour }, { onError: (error) => toast.error(apiErrorMessage(error) ?? "Не удалось сохранить время отчёта") });
   }
 
-  // After saving credentials, send a real test so the connection status reflects
-  // an actual delivery rather than "credentials exist". A single toast reports
-  // the connection outcome (and makes clear the creds were saved either way).
-  function verifyAfterSave() {
-    sendTest.mutate(undefined, {
-      onSuccess: (result) => {
-        if (result.status === "sent") {
-          toast.success("Connected — test message sent");
-        } else {
-          toast.error(result.error ?? "Saved, but the test message failed");
-        }
-      },
-      onError: () => toast.error("Saved, but the test message failed"),
-    });
-  }
-
-  function handleSaveCredentials() {
+  async function handleSaveCredentials(): Promise<boolean> {
     const botToken = botTokenRef.current?.value?.trim() || undefined;
     const chatId = chatIdRef.current?.value?.trim() || undefined;
 
@@ -88,39 +74,42 @@ export function NotificationsSettingsTab() {
     const haveToken = settings.botTokenSet || !!botToken;
     const haveChat = !!settings.chatId || !!chatId;
     if (!haveToken || !haveChat) {
-      toast.error("Bot token and Chat ID are both required");
-      return;
+      toast.error("Нужны токен бота и Chat ID получателя");
+      return false;
     }
 
     if (!botToken && !chatId) {
-      toast.error("Nothing to update");
-      return;
+      toast.error("Введите реквизиты для сохранения");
+      return false;
     }
 
-    updateSettings.mutate({ botToken, chatId }, {
-      onSuccess: () => {
-        setDetectedChats(null);
-        if (botTokenRef.current) botTokenRef.current.value = "";
-        verifyAfterSave();
-      },
-      onError: (error) => toast.error(apiErrorMessage(error) ?? "Failed to save credentials"),
-    });
+    try {
+      await updateSettings.mutateAsync({ botToken, chatId });
+      setDetectedChats(null);
+      if (botTokenRef.current) botTokenRef.current.value = "";
+      setResultNotice(`Реквизиты сохранены. Получатель: ${chatId ?? settings.chatId}. Доставку можно проверить отдельной кнопкой «Отправить тест».`);
+      toast.success("Реквизиты сохранены");
+      return true;
+    } catch (error) {
+      toast.error(apiErrorMessage(error) ?? "Не удалось сохранить реквизиты");
+      return false;
+    }
   }
 
-  function handleClearCredentials() {
-    if (!window.confirm("Clear the stored Telegram bot token and chat ID? Notifications will stop until you reconnect.")) {
-      return;
+  async function handleClearCredentials(): Promise<boolean> {
+    if (!window.confirm("Удалить сохранённые токен бота и Chat ID? Параметры из окружения, если они есть, продолжат действовать.")) return false;
+    try {
+      await updateSettings.mutateAsync({ botToken: null, chatId: null });
+      toast.success("Сохранённые реквизиты удалены");
+      setResultNotice("Сохранённые реквизиты удалены. Проверьте текущее подключение ниже.");
+      setDetectedChats(null); setBotUsername(null);
+      if (botTokenRef.current) botTokenRef.current.value = "";
+      if (chatIdRef.current) chatIdRef.current.value = "";
+      return true;
+    } catch {
+      toast.error("Не удалось удалить реквизиты");
+      return false;
     }
-    updateSettings.mutate({ botToken: null, chatId: null }, {
-      onSuccess: () => {
-        toast.success("Stored credentials cleared");
-        setDetectedChats(null);
-        setBotUsername(null);
-        if (botTokenRef.current) botTokenRef.current.value = "";
-        if (chatIdRef.current) chatIdRef.current.value = "";
-      },
-      onError: () => toast.error("Failed to clear credentials"),
-    });
   }
 
   // Ask the backend to call getMe + getUpdates so the operator picks their chat
@@ -132,20 +121,20 @@ export function NotificationsSettingsTab() {
         setBotUsername(result.botUsername);
         if (result.chats.length === 0) {
           setDetectedChats(null);
-          toast.message("No chats yet — open the bot in Telegram, send it any message, then Detect again.");
+          toast.message("Чаты не найдены. Откройте бота в Telegram, отправьте ему сообщение и повторите поиск.");
           return;
         }
         if (result.chats.length === 1) {
           const only = result.chats[0]!;
           if (chatIdRef.current) chatIdRef.current.value = only.id;
           setDetectedChats(null);
-          toast.success(`Found ${only.title}`);
+          toast.success(`Найден чат: ${only.title}`);
           return;
         }
         setDetectedChats(result.chats);
-        toast.success(`Found ${result.chats.length} chats — pick one`);
+        toast.success(`Найдено чатов: ${result.chats.length}. Выберите получателя.`);
       },
-      onError: (error) => toast.error(apiErrorMessage(error) ?? "Could not reach Telegram"),
+      onError: (error) => toast.error(apiErrorMessage(error) ?? "Не удалось связаться с Telegram"),
     });
   }
 
@@ -155,15 +144,18 @@ export function NotificationsSettingsTab() {
   }
 
   function handleSendTest() {
+    setResultNotice("");
     sendTest.mutate(undefined, {
       onSuccess: (result) => {
         if (result.status === "sent") {
-          toast.success("Test message sent");
+          setResultNotice(`Тестовое сообщение отправлено в чат ${settings.chatId}.`);
+          toast.success("Тестовое сообщение отправлено");
         } else {
-          toast.error(result.error ?? "Failed to send test message");
+          setResultNotice(`Реквизиты сохранены, но тест не доставлен: ${result.error ?? "Telegram не подтвердил отправку"}`);
+          toast.error(result.error ?? "Не удалось отправить тест");
         }
       },
-      onError: () => toast.error("Failed to send test message"),
+      onError: () => { setResultNotice("Реквизиты сохранены. Подтверждение доставки теста не получено."); toast.error("Не удалось получить результат отправки теста"); },
     });
   }
 
@@ -171,28 +163,31 @@ export function NotificationsSettingsTab() {
 
   return (
     <div className="space-y-4">
+      <QueryNotice error={isError} stale retry={refetch} />
+      {resultNotice && <p role="status" className="rounded-lg border border-border bg-hover p-3 text-sm text-text-secondary">{resultNotice}</p>}
       {!settings.configured ? (
         <div className="rounded-xl border border-border bg-card p-5">
-          <h3 className="mb-1 text-sm font-semibold text-text-primary">Connect Telegram</h3>
+          <h3 className="mb-1 text-sm font-semibold text-text-primary">Подключение Telegram</h3>
           <p className="mb-4 text-[12px] text-text-muted">
-            Create a bot via @BotFather and paste its token below. Send the bot any message in Telegram,
-            then click <span className="font-medium text-text-secondary">Detect</span> to pick your chat automatically.
+            Создайте бота через @BotFather и введите его токен. Отправьте боту сообщение в Telegram,
+            затем нажмите <span className="font-medium text-text-secondary">Найти чат</span> и выберите получателя.
           </p>
           <div className="max-w-md space-y-3">
             <div>
-              <label className="mb-1 block text-[12px] font-medium text-text-secondary">Bot Token</label>
+              <label className="mb-1 block text-[12px] font-medium text-text-secondary">Токен бота</label>
               <input
                 ref={botTokenRef}
+                aria-label="Токен Telegram-бота"
                 type="password"
                 placeholder="7123456789:AAH..."
                 className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:border-accent focus:outline-none"
               />
               {botUsername && (
-                <p className="mt-1 text-[12px] text-green">Bot verified: @{botUsername}</p>
+                <p className="mt-1 text-[12px] text-green">Бот подтверждён: @{botUsername}</p>
               )}
               {settings.botTokenSet && (
                 <p className="mt-1 text-[12px] text-text-muted">
-                  A bot token is already configured{settings.botTokenSource === "env" ? " via environment" : ""} — leave blank to keep it.
+                  Токен бота уже настроен{settings.botTokenSource === "env" ? " через окружение" : ""} — оставьте поле пустым, чтобы сохранить его.
                 </p>
               )}
             </div>
@@ -209,12 +204,12 @@ export function NotificationsSettingsTab() {
               disabled={savePending}
               className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-40"
             >
-              {updateSettings.isPending ? "Saving..." : sendTest.isPending ? "Connecting..." : "Save & Connect"}
+              {updateSettings.isPending ? "Сохраняем…" : "Сохранить реквизиты"}
             </button>
           </div>
         </div>
       ) : (
-        <div className="flex items-center justify-between rounded-xl border border-border bg-card p-4">
+        <div className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-border bg-card p-4">
           <div className="flex items-center gap-3">
             <div className={`h-2.5 w-2.5 rounded-full ${
               settings.connectionStatus === "connected" ? "bg-green"
@@ -223,14 +218,14 @@ export function NotificationsSettingsTab() {
             }`} />
             <div>
               <span className="text-sm font-medium text-text-primary">
-                {settings.connectionStatus === "connected" ? "Connected"
-                  : settings.connectionStatus === "last_message_failed" ? "Last message failed"
-                  : "Not tested yet"}
+                {settings.connectionStatus === "connected" ? "Доставка подтверждена"
+                  : settings.connectionStatus === "last_message_failed" ? "Ошибка последней отправки"
+                  : "Доставка ещё не проверена"}
               </span>
               {settings.chatId && (
                 <span className="ml-2 text-[12px] text-text-muted">
-                  Chat {settings.chatId}
-                  {settings.chatIdSource === "env" && " (from env)"}
+                  Получатель: чат {settings.chatId}
+                  {settings.chatIdSource === "env" && " (из окружения)"}
                 </span>
               )}
               {settings.lastMessageAt && (
@@ -239,14 +234,14 @@ export function NotificationsSettingsTab() {
                 </span>
               )}
               {settings.connectionStatus === "untested" && (
-                <p className="mt-0.5 text-[12px] text-text-muted">Send a test message to verify delivery.</p>
+                <p className="mt-0.5 text-[12px] text-text-muted">Нажмите «Отправить тест», чтобы проверить доставку этому получателю.</p>
               )}
               {settings.lastMessageError && (
                 <p className="mt-0.5 text-[12px] text-danger">{settings.lastMessageError}</p>
               )}
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <CredentialsEdit
               chatId={settings.chatId}
               onClear={handleClearCredentials}
@@ -262,28 +257,31 @@ export function NotificationsSettingsTab() {
             />
             <button
               onClick={handleSendTest}
-              disabled={sendTest.isPending}
+              disabled={savePending || isError}
               className="rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-white hover:opacity-90 disabled:opacity-40"
             >
-              {sendTest.isPending ? "Sending..." : "Send Test"}
+              {sendTest.isPending ? "Отправляем…" : "Отправить тест"}
             </button>
           </div>
         </div>
       )}
 
       <ToggleRow
-        label="Notifications Enabled"
-        description="When off, blocks automatic incident alerts and scheduled daily reports. Manual actions still work."
+        label="Автоматические уведомления"
+        description="Инциденты и ежедневные отчёты отправляются автоматически. Ручные отправки доступны отдельно."
+        disabled={savePending || isError}
         checked={settings.enabled}
         onChange={(value) => handleToggle("enabled", value)}
       />
 
-      <div className="flex items-center justify-between rounded-xl border border-border bg-card p-4">
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card p-4">
         <div>
-          <div className="text-sm font-medium text-text-primary">Report Hour (UTC)</div>
-          <div className="text-[12px] text-text-muted">Hour when the daily revenue report is sent</div>
+          <div className="text-sm font-medium text-text-primary">Время отчёта (UTC)</div>
+          <div className="text-[12px] text-text-muted">Час отправки ежедневного отчёта</div>
         </div>
         <select
+          aria-label="Час ежедневного отчёта UTC"
+          disabled={savePending || isError}
           value={settings.reportHourUtc}
           onChange={(event) => handleReportHourChange(Number(event.target.value))}
           className="rounded-lg border border-border bg-card px-3 py-1.5 text-sm text-text-primary"
@@ -295,22 +293,25 @@ export function NotificationsSettingsTab() {
       </div>
 
       <ToggleRow
-        label="Daily Revenue Report"
-        description="Send a daily revenue summary via Telegram"
+        label="Ежедневный отчёт"
+        description="Отправлять ежедневную сводку выручки в Telegram"
+        disabled={savePending || isError}
         checked={settings.dailyReportEnabled}
         onChange={(value) => handleToggle("dailyReportEnabled", value)}
       />
 
       <ToggleRow
-        label="Sync Failure Alerts"
-        description="Send alerts when sync incidents open or resolve"
+        label="Ошибки синхронизации"
+        description="Сообщать об открытии и закрытии инцидентов синхронизации"
+        disabled={savePending || isError}
         checked={settings.syncFailureAlertsEnabled}
         onChange={(value) => handleToggle("syncFailureAlertsEnabled", value)}
       />
 
       <ToggleRow
-        label="AI Critical Alerts"
-        description="Page critical AI provider failures separately from sync incidents. Defaults off until Stage 1B activation."
+        label="Критические ошибки AI"
+        description="Отдельно сообщать о критических ошибках AI-провайдера"
+        disabled={savePending || isError}
         checked={settings.aiCriticalAlertsEnabled}
         onChange={(value) => handleToggle("aiCriticalAlertsEnabled", value)}
       />
@@ -339,9 +340,10 @@ function ChatIdField({
       <div className="flex gap-2">
         <input
           ref={chatIdRef}
+          aria-label="Chat ID получателя"
           type="text"
           defaultValue={defaultValue}
-          placeholder="123456789 or -100..."
+          placeholder="123456789 или -100..."
           className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:border-accent focus:outline-none"
         />
         <button
@@ -350,7 +352,7 @@ function ChatIdField({
           disabled={isDetecting}
           className="shrink-0 rounded-lg border border-border bg-card px-3 py-2 text-xs font-semibold text-text-secondary hover:bg-hover disabled:opacity-40"
         >
-          {isDetecting ? "Detecting..." : "Detect"}
+          {isDetecting ? "Ищем…" : "Найти чат"}
         </button>
       </div>
       {detectedChats && detectedChats.length > 0 && (
@@ -386,8 +388,8 @@ function CredentialsEdit({
   botUsername,
 }: {
   chatId: string | null;
-  onClear: () => void;
-  onSave: () => void;
+  onClear: () => Promise<boolean>;
+  onSave: () => Promise<boolean>;
   botTokenRef: RefObject<HTMLInputElement | null>;
   chatIdRef: RefObject<HTMLInputElement | null>;
   isPending: boolean;
@@ -405,26 +407,25 @@ function CredentialsEdit({
         onClick={() => setOpen(true)}
         className="rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-semibold text-text-secondary hover:bg-hover"
       >
-        Edit Credentials
+        Изменить реквизиты
       </button>
     );
   }
 
   return (
-    <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/20" onClick={() => setOpen(false)}>
-      <div className="w-full max-w-md rounded-xl border border-border bg-card p-5 shadow-lg" onClick={(event) => event.stopPropagation()}>
-        <h3 className="mb-3 text-sm font-semibold text-text-primary">Update Telegram Credentials</h3>
+    <ModalShell title="Реквизиты Telegram" closeLabel="Закрыть" onClose={() => { if (!isPending) setOpen(false); }}>
         <div className="space-y-3">
           <div>
-            <label className="mb-1 block text-[12px] font-medium text-text-secondary">Bot Token</label>
+            <label className="mb-1 block text-[12px] font-medium text-text-secondary">Токен бота</label>
             <input
               ref={botTokenRef}
+              aria-label="Новый токен Telegram-бота"
               type="password"
-              placeholder="Paste new token (leave empty to keep current)"
+              placeholder="Новый токен — пустое поле сохранит текущий"
               className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:border-accent focus:outline-none"
             />
             {botUsername && (
-              <p className="mt-1 text-[12px] text-green">Bot verified: @{botUsername}</p>
+              <p className="mt-1 text-[12px] text-green">Бот подтверждён: @{botUsername}</p>
             )}
           </div>
           <ChatIdField
@@ -436,30 +437,31 @@ function CredentialsEdit({
             onPick={onPick}
           />
         </div>
-        <div className="mt-4 flex justify-end gap-2">
+        <p className="mt-3 text-xs text-text-muted">Сохранение обновит реквизиты. Для проверки доставки отправьте тест отдельной кнопкой после сохранения.</p>
+        <div className="mt-4 flex flex-wrap justify-end gap-2">
           <button
-            onClick={() => { onClear(); setOpen(false); }}
+            onClick={() => { void onClear().then((cleared) => { if (cleared) setOpen(false); }); }}
             disabled={isPending}
             className="rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-semibold text-text-secondary hover:bg-hover disabled:opacity-40"
           >
-            Clear Stored Credentials
+            Удалить сохранённые реквизиты
           </button>
           <button
             onClick={() => setOpen(false)}
+            disabled={isPending}
             className="rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-semibold text-text-secondary hover:bg-hover"
           >
-            Cancel
+            Отмена
           </button>
           <button
-            onClick={() => { onSave(); setOpen(false); }}
+            onClick={() => { void onSave().then((saved) => { if (saved) setOpen(false); }); }}
             disabled={isPending}
             className="rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-white hover:opacity-90 disabled:opacity-40"
           >
-            Save
+            Сохранить
           </button>
         </div>
-      </div>
-    </div>
+    </ModalShell>
   );
 }
 
@@ -468,14 +470,16 @@ function ToggleRow({
   description,
   checked,
   onChange,
+  disabled,
 }: {
   label: string;
   description: string;
   checked: boolean;
+  disabled: boolean;
   onChange: (value: boolean) => void;
 }) {
   return (
-    <div className="flex items-center justify-between rounded-xl border border-border bg-card p-4">
+    <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card p-4">
       <div>
         <div className="text-sm font-medium text-text-primary">{label}</div>
         <div className="text-[12px] text-text-muted">{description}</div>
@@ -484,6 +488,8 @@ function ToggleRow({
         type="button"
         role="switch"
         aria-checked={checked}
+        aria-label={label}
+        disabled={disabled}
         onClick={() => onChange(!checked)}
         className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${
           checked ? "bg-accent" : "bg-border"

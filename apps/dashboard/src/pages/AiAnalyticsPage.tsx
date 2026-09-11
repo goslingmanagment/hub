@@ -3,19 +3,18 @@ import { useSearchParams } from "react-router";
 import { Sparkles } from "lucide-react";
 
 import { useWorkboardV2AiRuns } from "@/api/workboard";
-import { useDashboardShell } from "@/components/layout/DashboardShellContext.js";
+import { useDashboardShell } from "@/components/layout/DashboardShellContext";
 import { AiPageDashboard } from "@/components/ai/AiPageDashboard";
 import { AiRunLog } from "@/components/ai/AiRunLog";
+import { StatusPanel } from "@/components/shared/StatusPanel";
+import { resolveOfapiPage } from "@/lib/ofapiNavigation";
 
 export function AiAnalyticsPage() {
-  const { pages } = useDashboardShell();
+  const { pages, pageCatalogState } = useDashboardShell();
   const [searchParams, setSearchParams] = useSearchParams();
   const fanslyPages = useMemo(() => pages.filter((p) => p.platform === "fansly"), [pages]);
-  const requestedPage = searchParams.get("page") ?? "";
-
-  const activeLabel = fanslyPages.some((p) => p.label === requestedPage)
-    ? requestedPage
-    : fanslyPages[0]?.label ?? "";
+  const requestedPage = searchParams.get("page");
+  const activeLabel = resolveOfapiPage(fanslyPages, requestedPage)?.label ?? "";
 
   function handlePageChange(pageLabel: string) {
     const next = new URLSearchParams(searchParams);
@@ -50,6 +49,7 @@ export function AiAnalyticsPage() {
               onChange={(e) => handlePageChange(e.target.value)}
               className="rounded-md border border-border bg-card px-2 py-1.5 text-[13px] font-medium text-text-primary"
             >
+              {!activeLabel && <option value="">Выберите доступную страницу</option>}
               {fanslyPages.map((p) => (
                 <option key={p.id} value={p.label}>
                   {p.label}
@@ -60,20 +60,25 @@ export function AiAnalyticsPage() {
         )}
       </header>
 
-      {activeLabel ? (
+      {pageCatalogState === "loading" && pages.length === 0 ? (
+        <StatusPanel title="Загружаем список страниц…" />
+      ) : pageCatalogState === "error" && pages.length === 0 ? (
+        <StatusPanel title="Не удалось загрузить список страниц" description="Доступность AI-аналитики пока неизвестна. Обновите страницу, чтобы повторить запрос." tone="error" />
+      ) : activeLabel ? (
         <div className="space-y-4">
+          {pageCatalogState === "error" && <p role="alert" className="rounded-lg border border-warning px-3 py-2 text-sm text-text-secondary">Список страниц не обновился. Показан ранее доступный аккаунт.</p>}
           <AiPageDashboard key={activeLabel} pageLabel={activeLabel} running={runningForActive} />
           <AiRunLog
             runs={runs}
             isLoading={runsQuery.isLoading}
             isFetching={runsQuery.isFetching}
+            isError={runsQuery.isError}
+            hasData={runsQuery.data !== undefined}
             onRefresh={() => void runsQuery.refetch()}
           />
         </div>
       ) : (
-        <div className="rounded-card border border-border bg-card px-4 py-12 text-center text-[13px] text-text-muted">
-          Нет Fansly-страниц для анализа.
-        </div>
+        <StatusPanel title={requestedPage !== null ? "Страница из ссылки недоступна для анализа" : "Нет Fansly-страниц для анализа"} description={requestedPage !== null ? "Выберите доступную Fansly-страницу в списке выше." : "AI-аналитика диалогов доступна для Fansly."} />
       )}
     </div>
   );

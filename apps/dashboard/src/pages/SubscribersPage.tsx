@@ -7,7 +7,7 @@ import { Pagination } from "@/components/shared/Pagination";
 import { RemainingBar } from "@/components/shared/RemainingBar";
 import { SearchInput } from "@/components/shared/SearchInput";
 import { StatusPanel } from "@/components/shared/StatusPanel";
-import { buildFanProfileNavigation } from "@/lib/navigation";
+import { audiencePaginationLabels, buildAudienceFanNavigation, updateAudienceSearch } from "@/lib/audienceNavigation";
 import { TableSkeleton } from "@/components/shared/TableSkeleton";
 import { resolveFanLabelForScope } from "@agency_hub_core/shared";
 import { formatDate, formatDateTime, daysRemaining, formatUsdFromCents } from "@/lib/format";
@@ -28,13 +28,12 @@ export function SubscribersPage() {
   const filter = subscriberFilter(search.get("filter"));
   const searchQuery = search.get("query") ?? "";
   const offset = listOffset(search.get("offset"));
+  const hasFilters = filter !== "all" || searchQuery.length > 0;
   function update(key: string, value: string) {
-    setSearch((previous) => {
-      const next = new URLSearchParams(previous);
-      if (value) next.set(key, value); else next.delete(key);
-      if (key !== "offset") next.delete("offset");
-      return next;
-    });
+    setSearch((previous) => updateAudienceSearch(previous, { [key]: value }, key !== "offset"));
+  }
+  function resetFilters() {
+    setSearch((previous) => updateAudienceSearch(previous, { filter: null, query: null }));
   }
 
   const params = useMemo(() => ({
@@ -46,54 +45,39 @@ export function SubscribersPage() {
     autoRenew: filter === "norenew" ? false : undefined,
   }), [filter, offset, searchQuery]);
 
-  const { data, isLoading, isError, refetch } = usePageSubscribers(pageLabel!, params, {
+  const { data, isError, refetch } = usePageSubscribers(pageLabel!, params, {
     suppressGlobalError: true,
   });
 
   // Filter count queries (lightweight, limit: 1). Like the other chips, the
   // "All" count ignores the active filter AND the search box — chips mean
   // "population per category"; search only narrows the table below.
-  const { data: allCount } = usePageSubscribers(pageLabel!, { limit: 1 });
-  const { data: expiringCount } = usePageSubscribers(pageLabel!, { limit: 1, expiringWithinDays: 7 });
-  const { data: newCount } = usePageSubscribers(pageLabel!, { limit: 1, startedWithinHours: 24 });
-  const { data: noRenewCount } = usePageSubscribers(pageLabel!, { limit: 1, autoRenew: false });
+  const allCountQuery = usePageSubscribers(pageLabel!, { limit: 1 }, { suppressGlobalError: true });
+  const expiringCountQuery = usePageSubscribers(pageLabel!, { limit: 1, expiringWithinDays: 7 }, { suppressGlobalError: true });
+  const newCountQuery = usePageSubscribers(pageLabel!, { limit: 1, startedWithinHours: 24 }, { suppressGlobalError: true });
+  const noRenewCountQuery = usePageSubscribers(pageLabel!, { limit: 1, autoRenew: false }, { suppressGlobalError: true });
 
-  if (isLoading || !data) {
-    if (isLoading) {
-      return <TableSkeleton rows={6} columns={7} />;
-    }
-    if (isError) {
-      return (
-        <StatusPanel
-          title="Subscribers failed to load"
-          description="The subscriber list could not be fetched for this page."
-          tone="error"
-          action={<><button onClick={() => void refetch()}>Повторить</button> · <Link to={safeBackTo(search)}>К дашборду</Link></>}
-        />
-      );
-    }
-    return <TableSkeleton rows={6} columns={7} />;
-  }
-
-  const platform = data.page.platform;
-  const items = data.items;
-  const total = data.total;
+  const countQueries = [allCountQuery, expiringCountQuery, newCountQuery, noRenewCountQuery];
+  const countError = countQueries.some((query) => query.isError);
+  const allCount = allCountQuery.data;
+  const platform = data?.page.platform;
+  const items = data?.items ?? [];
   const filters = [
-    { key: "all", label: "All", count: allCount?.total },
-    { key: "expiring7d", label: "Expiring ≤7d", count: expiringCount?.total },
-    { key: "new24h", label: "New 24h", count: newCount?.total },
-    { key: "norenew", label: "Auto-renew Off", count: noRenewCount?.total },
+    { key: "all", label: "Все", count: allCount?.total },
+    { key: "expiring7d", label: "Истекают за 7 дней", count: expiringCountQuery.data?.total },
+    { key: "new24h", label: "Новые за 24 ч", count: newCountQuery.data?.total },
+    { key: "norenew", label: "Продление выключено", count: noRenewCountQuery.data?.total },
   ];
 
   return (
-    <div className="p-4 md:p-0">
+    <div className="min-w-0 p-4 md:p-0">
       {search.has("backTo") && <Link className="text-sm text-accent" to={safeBackTo(search)}>← К дашборду</Link>}
-      <QueryNotice error={isError} stale={Boolean(data)} retry={refetch} />
+      <QueryNotice error={isError && Boolean(data)} stale={Boolean(data)} retry={refetch} />
       <div className="mb-5">
         <h1 className="text-xl font-extrabold text-text-primary">
-          Subscribers &mdash; {pageLabel}
+          Подписчики &mdash; {pageLabel}
         </h1>
-        <p className="text-sm text-text-muted mt-1">{allCount ? `${allCount.total} total` : "Общее число недоступно"}</p>
+        <p className="text-sm text-text-muted mt-1">{allCount ? `${allCount.total} записей о подписке` : allCountQuery.isLoading ? "Загружаем общее число…" : "Общее число недоступно"}</p>
       </div>
 
       <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
@@ -105,16 +89,22 @@ export function SubscribersPage() {
         <SearchInput
           value={searchQuery}
           onChange={(value) => update("query", value)}
-          placeholder="Search subscriber..."
+          placeholder="Поиск подписчика…"
         />
       </div>
 
-      <p className="text-xs text-text-muted mb-3">Текущие записи Hub, независимо от периода дохода. Истекают ≤7d — известная дата окончания; Auto-renew Off — явно выключенное продление.</p>
+      {hasFilters && <button type="button" className="mb-3 text-sm font-medium text-accent" onClick={resetFilters}>Сбросить фильтры</button>}
+      {countError && <p className="mb-3 text-xs text-warning-dark" role="alert">Не удалось обновить часть счётчиков. Доступные числа могут быть устаревшими. <button type="button" className="font-semibold text-accent" onClick={() => countQueries.forEach((query) => { if (query.isError) void query.refetch(); })}>Повторить</button></p>}
+      <p className="text-xs text-text-muted mb-3">Текущие записи о доступе в Hub. Числа в фильтрах не зависят от поиска. «Истекают за 7 дней» — известная дата окончания; «Продление выключено» — подтверждённое состояние. Доход автора — за всё время, после комиссии платформы.</p>
+      {!data ? (
+        isError ? <StatusPanel title="Не удалось загрузить подписчиков" description="Повторите запрос. Поиск и фильтры сохранены." tone="error" action={<button type="button" className="text-accent font-semibold" onClick={() => void refetch()}>Повторить</button>} />
+          : <div role="status" aria-label="Загрузка подписчиков"><TableSkeleton rows={6} columns={7} /></div>
+      ) : (
       <section className="overflow-x-auto rounded-xl border border-border bg-card">
-        <table className="w-full border-collapse">
+        <table className="w-full min-w-[800px] border-collapse">
           <thead>
             <tr className="bg-hover-alt">
-              {["Username", "Since", "Expires", "Remaining", "Renew", "Spent", "Last Txn"].map(
+              {["Подписчик", "Начало", "Окончание", "Осталось", "Продление", "Доход автора", "Последняя операция"].map(
                 (col) => (
                   <th
                     key={col}
@@ -130,7 +120,8 @@ export function SubscribersPage() {
             {items.length === 0 && (
               <tr>
                 <td colSpan={7} className="px-4 py-8 text-center text-sm text-text-muted">
-                  No subscribers match the current filter.
+                  {offset >= data.total && offset > 0 ? "Эта страница больше не содержит записей." : hasFilters ? "По выбранным условиям подписчики не найдены." : "В Hub пока нет записей о подписчиках."}
+                  {offset > 0 && <button type="button" className="block mx-auto mt-2 text-accent" onClick={() => update("offset", "")}>К началу списка</button>}
                 </td>
               </tr>
             )}
@@ -138,9 +129,9 @@ export function SubscribersPage() {
               const days = sub.endsAt ? daysRemaining(sub.endsAt) : null;
               const isNew = isNewWithin24Hours(sub.startedAt);
               const fanLabel = resolveFanLabelForScope(sub, "page");
-              const fanNavigation = buildFanProfileNavigation(
+              const fanNavigation = buildAudienceFanNavigation(
                 pageLabel!,
-                platform,
+                platform!,
                 sub.platformUserId,
                 location.pathname + location.search,
                 fanLabel.label,
@@ -149,7 +140,7 @@ export function SubscribersPage() {
               return (
                 <tr
                   key={sub.platformSubscriptionId}
-                  className="cursor-pointer border-t border-border transition-colors hover:bg-hover"
+                  className="border-t border-border transition-colors hover:bg-hover"
                 >
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-2">
@@ -163,7 +154,7 @@ export function SubscribersPage() {
                       {fanLabel.secondaryPlatformHandle && (
                         <span className="text-xs text-text-muted">@{fanLabel.secondaryPlatformHandle}</span>
                       )}
-                      {isNew && <Badge variant="new">NEW</Badge>}
+                      {isNew && <Badge variant="new">Новая</Badge>}
                     </div>
                   </td>
                   <td className="px-4 py-3 text-sm text-text-secondary">
@@ -181,14 +172,14 @@ export function SubscribersPage() {
                   </td>
                   <td className="px-4 py-3 text-sm text-text-secondary">
                     {sub.autoRenew === true && (
-                      <span className="text-green font-medium">On</span>
+                      <span className="text-green font-medium">Включено</span>
                     )}
                     {sub.autoRenew === false && (
                       <span className="inline-flex flex-col">
-                        <span className="font-medium text-danger">Off</span>
+                        <span className="font-medium text-danger">Выключено</span>
                         {sub.autoRenewOffDetectedAt && (
                           <span className="text-[11px] text-warning-dark">
-                            detected {formatDate(sub.autoRenewOffDetectedAt, { includeYear: true })}
+                            замечено {formatDate(sub.autoRenewOffDetectedAt, { includeYear: true })}
                           </span>
                         )}
                       </span>
@@ -212,10 +203,12 @@ export function SubscribersPage() {
         <Pagination
           offset={offset}
           limit={LIMIT}
-          total={total}
-          onPageChange={(value) => update("offset", String(value))}
+          total={data.total}
+          onPageChange={(value) => update("offset", value ? String(value) : "")}
+          {...audiencePaginationLabels}
         />
       </section>
+      )}
     </div>
   );
 }

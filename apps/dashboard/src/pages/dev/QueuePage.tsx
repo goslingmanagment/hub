@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useAdminQueueJobs } from "@/api/queries";
 import { FilterButtons } from "@/components/shared/FilterButtons";
-import { StatusPanel } from "@/components/shared/StatusPanel";
+import { QuerySection } from "@/components/shared/QuerySection";
 import { formatRelativeTime } from "@/lib/format";
 
 const STATE_FILTERS = [
@@ -24,26 +24,15 @@ export function QueuePage() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const params = {
-    state: stateFilter === "all" ? undefined : stateFilter,
+    ...(stateFilter === "all" ? {} : { state: stateFilter }),
     limit: 100,
   };
 
-  const { data, isLoading, isError } = useAdminQueueJobs(params);
-
-  if (isLoading || !data) {
-    return isLoading ? (
-      <StatusPanel title="Loading queue jobs" description="Fetching recent pg-boss jobs." />
-    ) : isError ? (
-      <StatusPanel title="Queue failed to load" description="The job queue view could not be fetched." tone="error" />
-    ) : (
-      <StatusPanel title="Queue unavailable" description="The job queue did not return data." tone="error" />
-    );
-  }
-
-  const jobs = data;
+  const { data, isError, refetch } = useAdminQueueJobs(params);
+  const jobs = data ?? [];
 
   return (
-    <div>
+    <div className="p-4 md:p-0">
       <div className="mb-5">
         <h1 className="text-xl font-extrabold text-text-primary">Queue</h1>
         <p className="text-sm text-text-muted mt-1">pg-boss job queue</p>
@@ -53,11 +42,12 @@ export function QueuePage() {
         <FilterButtons
           filters={STATE_FILTERS}
           active={stateFilter}
-          onChange={setStateFilter}
+          onChange={(next) => { setStateFilter(next); setExpandedId(null); }}
         />
       </div>
 
-      <section className="overflow-hidden rounded-xl border border-border bg-card">
+      <QuerySection title="Очередь задач" hasData={data !== undefined} isError={isError} retry={refetch}>
+      <section className="overflow-x-auto rounded-xl border border-border bg-card">
         <table className="w-full border-collapse">
           <thead>
             <tr className="bg-hover-alt">
@@ -90,7 +80,16 @@ export function QueuePage() {
                   onClick={() => setExpandedId(isExpanded ? null : rowId)}
                 >
                   <td className="px-4 py-3 text-sm text-text-primary font-medium">
-                    {job.name ?? "\u2014"}
+                    <button
+                      type="button"
+                      aria-expanded={isExpanded}
+                      aria-label={`Details for ${job.name ?? "job"}`}
+                      className="text-left hover:text-accent focus-visible:outline-2 focus-visible:outline-accent"
+                      onClick={(event) => { event.stopPropagation(); setExpandedId(isExpanded ? null : rowId); }}
+                    >
+                      <span aria-hidden="true">{isExpanded ? "▾ " : "▸ "}</span>
+                      {job.name ?? "\u2014"}
+                    </button>
                   </td>
                   <td className="px-4 py-3">
                     <span
@@ -149,6 +148,7 @@ export function QueuePage() {
           );
         })()}
       </section>
+      </QuerySection>
     </div>
   );
 }

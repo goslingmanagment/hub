@@ -1,9 +1,9 @@
 import { useState } from "react";
-import { Link } from "react-router";
+import { Link, useSearchParams } from "react-router";
 import { useAdminConnections } from "@/api/queries";
 import { PlatformBadge } from "@/components/shared/PlatformBadge";
 import { StatusPanel } from "@/components/shared/StatusPanel";
-import { StaleDataNotice } from "@/components/shared/StaleDataNotice";
+import { QueryNotice } from "@/components/shared/QueryNotice";
 import { getSyncUxDisplayMode } from "@/components/shared/syncUxDisplay";
 import { buildSettingsRoute } from "@/lib/navigation";
 import { CredentialsModal, type CredentialsModalConnection } from "./CredentialsModal.js";
@@ -20,7 +20,9 @@ function formatPageMetric(metric: {
 }
 
 export function CredentialsTab() {
-  const { data: connections, isLoading, isError, error } = useAdminConnections();
+  const { data: connections, isLoading, isError, error, refetch } = useAdminConnections();
+  const [search, setSearch] = useSearchParams();
+  const focusedPageLabel = search.get("page");
   const [selectedConnection, setSelectedConnection] = useState<CredentialsModalConnection | null>(null);
 
   if (isLoading && !connections) {
@@ -35,20 +37,22 @@ export function CredentialsTab() {
         title="Connections failed to load"
         description={error instanceof Error ? error.message : "The connections catalog could not be fetched."}
         tone="error"
+        action={<button type="button" onClick={() => void refetch()} className="text-accent underline">Повторить</button>}
       />
     );
   }
 
-  const items = connections ?? [];
+  const items = (connections ?? []).filter((connection) => !focusedPageLabel || connection.label === focusedPageLabel);
 
   return (
     <>
       <div className="space-y-3">
+        {focusedPageLabel && <div className="flex flex-wrap justify-between gap-2 text-sm"><span className="text-text-secondary">Аккаунт: <strong>{focusedPageLabel}</strong></span><button type="button" className="text-accent hover:underline" onClick={() => setSearch((previous) => { const next = new URLSearchParams(previous); next.delete("page"); return next; })}>Все подключения</button></div>}
         {isError && connections && (
-          <StaleDataNotice error={error} />
+          <QueryNotice error stale retry={refetch} />
         )}
         {items.length === 0 && (
-          <p className="text-sm text-text-muted">No connections configured.</p>
+          <p className="text-sm text-text-muted">{focusedPageLabel ? "Подключение этого аккаунта не найдено." : "Подключений пока нет."}</p>
         )}
         {items.map((conn) => {
           const syncMode = getSyncUxDisplayMode(conn.syncUx, "credentials");
@@ -58,13 +62,13 @@ export function CredentialsTab() {
           return (
             <div
               key={conn.id}
-              className={`flex items-start justify-between gap-4 rounded-xl border bg-card p-4 ${
+              className={`flex flex-wrap items-start justify-between gap-4 rounded-xl border bg-card p-4 ${
                 reconnect ? "border-danger/30 bg-danger/[0.03]" : "border-border"
               }`}
             >
               <div className="min-w-0 flex-1">
                 <div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <span className="text-[15px] font-semibold text-text-primary">
                       {conn.label}
                     </span>

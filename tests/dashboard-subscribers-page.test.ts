@@ -63,11 +63,35 @@ describe("SubscribersPage", () => {
     const html = renderPage();
 
     // Header shows the page population, not the current result-set size.
-    expect(html).toContain("500 total");
-    expect(html).not.toContain("12 total");
+    expect(html).toContain("500 записей о подписке");
+    expect(html).not.toContain("12 записей о подписке");
     // All four chips carry their own population counts.
     for (const count of ["500", "12", "3", "7"]) {
       expect(html).toContain(count);
     }
   });
+
+  it("keeps filters available and offers retry when the list fails", () => {
+    const original = queryMocks.usePageSubscribers.getMockImplementation()!;
+    queryMocks.usePageSubscribers.mockImplementation((pageLabel, params) => params.limit === 1
+      ? original(pageLabel, params)
+      : { data: undefined, isError: true, refetch: vi.fn() });
+    const html = renderPage();
+    expect(html).toContain("Не удалось загрузить подписчиков");
+    expect(html).toContain("Повторить");
+    expect(html).toContain("Поиск подписчика");
+    expect(html).not.toContain("В Hub пока нет записей о подписчиках");
+  });
+
+  it("does not substitute zero for failed population counters", () => {
+    const original = queryMocks.usePageSubscribers.getMockImplementation()!;
+    queryMocks.usePageSubscribers.mockImplementation((pageLabel, params) => params.limit === 1
+      ? { data: undefined, isError: true, refetch: vi.fn() }
+      : original(pageLabel, params));
+    const html = renderPage();
+    expect(html).toContain("Общее число недоступно");
+    expect(html).toContain("Не удалось обновить часть счётчиков");
+    expect(html).not.toContain("0 записей о подписке");
+  });
+
 });

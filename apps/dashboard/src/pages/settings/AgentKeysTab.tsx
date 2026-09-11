@@ -12,6 +12,7 @@ import { ConfirmModal } from "@/components/shared/ConfirmModal";
 import { Field } from "@/components/shared/Field";
 import { ModalShell } from "@/components/shared/ModalShell";
 import { StatusPanel } from "@/components/shared/StatusPanel";
+import { QueryNotice } from "@/components/shared/QueryNotice";
 import { formatDateTime, formatRelativeTime } from "@/lib/format";
 
 /**
@@ -34,7 +35,7 @@ const CAPABILITY_HELP: Readonly<Record<AgentCapability, string>> = {
 };
 
 export function AgentKeysTab() {
-  const { data: keys, isLoading, isError, error } = useAgentKeys();
+  const { data: keys, isLoading, isError, error, refetch } = useAgentKeys();
   const [creating, setCreating] = useState(false);
   const [issuedToken, setIssuedToken] = useState<{ token: string; name: string } | null>(null);
   const [revoking, setRevoking] = useState<AgentKeyItem | null>(null);
@@ -57,6 +58,7 @@ export function AgentKeysTab() {
         title="Agent keys failed to load"
         description={error instanceof Error ? error.message : "The agent key list could not be fetched."}
         tone="error"
+        action={<button type="button" className="text-sm font-semibold text-accent underline" onClick={() => void refetch()}>Повторить</button>}
       />
     );
   }
@@ -81,6 +83,7 @@ export function AgentKeysTab() {
 
   return (
     <>
+      <QueryNotice error={isError} stale={keys !== undefined} retry={refetch} />
       <div className="mb-4 flex items-start justify-between gap-4">
         <p className="max-w-2xl text-sm text-text-muted">
           Machine credentials for the agent read plane. A key holds no human role: it reads
@@ -192,7 +195,7 @@ export function AgentKeysTab() {
   );
 }
 
-function CreateAgentKeyModal({
+export function CreateAgentKeyModal({
   create,
   onClose,
   onIssued,
@@ -201,7 +204,8 @@ function CreateAgentKeyModal({
   onClose: () => void;
   onIssued: (token: string, name: string) => void;
 }) {
-  const { data: pages } = useAdminPages();
+  const pagesQuery = useAdminPages();
+  const pages = pagesQuery.data;
   const [name, setName] = useState("");
   const [capabilities, setCapabilities] = useState<AgentCapability[]>([]);
   const [pageLabels, setPageLabels] = useState<string[]>([]);
@@ -280,6 +284,9 @@ function CreateAgentKeyModal({
           <div className="mb-1 text-sm text-text-secondary">
             Pages (explicit; a page created later is NOT granted)
           </div>
+          <QueryNotice error={pagesQuery.isError} stale={pages !== undefined} retry={pagesQuery.refetch} />
+          {!pages && !pagesQuery.isError && <p role="status" className="text-sm text-text-muted">Загружаем доступные страницы…</p>}
+          {pages?.length === 0 && <p className="text-sm text-text-muted">В каталоге нет страниц для выдачи доступа.</p>}
           <div className="max-h-40 space-y-1 overflow-y-auto">
             {(pages ?? []).map((page) => (
               <label key={page.label} className="flex items-center gap-2 text-sm text-text-primary">

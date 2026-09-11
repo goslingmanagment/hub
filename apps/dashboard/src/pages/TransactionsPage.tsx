@@ -35,7 +35,7 @@ export function TransactionsPage() {
   return (
     <div className="p-4 md:p-0">
       <Link className="text-accent text-sm" to={safeBackTo(search)}>
-        ← К дашборду
+        ← Назад
       </Link>
       <h1 className="text-xl font-bold mt-3 mb-1">
         Операции · {params?.pageLabel ?? "Доступные страницы"}

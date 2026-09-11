@@ -2,7 +2,9 @@ import { OfapiContentEvidence } from "../OfapiContentEvidence.js";
 import { OfapiStoredReads } from "../OfapiStoredReads.js";
 import { OfapiWebhookRecovery } from "../OfapiWebhookRecovery.js";
 import { Fragment, useCallback, useEffect, useId, useMemo, useState, type ReactNode } from "react";
-import { Link } from "react-router";
+import { Link, useSearchParams } from "react-router";
+import { ofapiPageHref } from "@/lib/ofapiNavigation";
+import { QueryNotice } from "@/components/shared/QueryNotice";
 import { toast } from "sonner";
 
 import {
@@ -232,19 +234,31 @@ type Modal =
 
 export function CollectionTab() {
   const snapshotQuery = useAdminOfapiCollection();
+  const [search, setSearch] = useSearchParams();
+  const requestedPageLabel = search.get("page");
   const usersQuery = useAdminUsers();
   const preview = useOfapiCollectionPreview();
   const apply = useOfapiCollectionApply();
   const jobCreate = useOfapiCollectionJobCreate();
 
   const [draft, setDraft] = useState<CollectionDraft | null>(readStoredDraft);
-  const [scope, setScope] = useState<CollectionScope>(() => readStoredDraft()?.scope ?? { kind: "all" });
   const [expanded, setExpanded] = useState<OfapiCollectionCategory | null>(null);
   const [modal, setModal] = useState<Modal | null>(null);
   const [applyPhase, setApplyPhase] = useState<ApplyPhase>({ kind: "idle" });
   const [conflictMessage, setConflictMessage] = useState<string | null>(null);
 
   const snapshot = snapshotQuery.data;
+  const requestedPage = snapshot?.pages.find((page) => page.label === requestedPageLabel);
+  const scope: CollectionScope = requestedPage ? { kind: "page", pageId: requestedPage.id } : { kind: "all" };
+  function setScope(nextScope: CollectionScope) {
+    setSearch((previous) => {
+      const next = new URLSearchParams(previous);
+      const selectedPage = nextScope.kind === "page" ? snapshot?.pages.find((page) => page.id === nextScope.pageId) : undefined;
+      if (selectedPage) next.set("page", selectedPage.label);
+      else next.delete("page");
+      return next;
+    });
+  }
   const size = draftSize(draft);
 
   // The draft survives tab switches (SettingsPage unmounts the tab) and a
@@ -404,6 +418,10 @@ export function CollectionTab() {
     );
   }
 
+  if (requestedPageLabel !== null && !requestedPage) {
+    return <StatusPanel title="Аккаунт для сбора не найден" description="Выбранного аккаунта нет в каталоге OnlyFans. Черновик сохранён." tone="error" action={<button type="button" className={buttonClass} onClick={() => setScope({ kind: "all" })}>Все аккаунты</button>} />;
+  }
+
   const pill = describePolicyPill({
     snapshot,
     applyPhase,
@@ -420,6 +438,7 @@ export function CollectionTab() {
 
   return (
     <div className="flex flex-col gap-4 pb-24">
+      <QueryNotice error={snapshotQuery.isError} stale retry={snapshotQuery.refetch} />
       {snapshot.backgroundPaused && (
         <PausedBanner
           snapshot={snapshot}
@@ -620,6 +639,12 @@ export function CollectionTab() {
       )}
     </div>
   );
+}
+
+function collectionMediaHref(pages: OfapiCollectionSnapshot["pages"], pageId: number | null) {
+  if (pageId === null) return ofapiPageHref("/ofapi-media", null);
+  const page = pages.find((candidate) => candidate.id === pageId);
+  return page ? ofapiPageHref("/ofapi-media", page.label) : "/ofapi-media?page=";
 }
 
 function PageHeading() {
@@ -916,7 +941,7 @@ function CategoryRow(props: {
           {view.group === "one_off"
             ? (
               <div>
-                {view.entry.id === "vault_files" ? <Link className={smallButtonClass} to="/ofapi-media" onClick={event => event.stopPropagation()}>Загрузить свой файл…</Link> : <button
+                {view.entry.id === "vault_files" ? <Link className={smallButtonClass} to={collectionMediaHref(props.snapshot.pages, scopePageId(props.scope))} onClick={event => event.stopPropagation()}>Загрузить свой файл…</Link> : <button
                   type="button"
                   className={smallButtonClass}
                   disabled={snapshot.backgroundPaused}
@@ -1071,7 +1096,7 @@ export function CategoryEditor(props: {
             <div>
               <div className="mb-2 text-[12px] font-semibold text-text-primary">Загрузка своего файла</div>
               <p className="text-[12.5px] text-text-secondary">Выберите свой файл, страницу и назначение в отдельном экране. Перед отправкой проверьте источник и потолок кредитов; готовый результат можно передать в чат.</p>
-              <Link className={`${buttonClass} mt-3 inline-block`} to="/ofapi-media">Загрузить свой файл…</Link>
+              <Link className={`${buttonClass} mt-3 inline-block`} to={collectionMediaHref(snapshot.pages, pageId)}>Загрузить свой файл…</Link>
             </div>
           ) : (
             <div>
@@ -1239,7 +1264,7 @@ export function JobsCard(props: { snapshot: OfapiCollectionSnapshot; scope: Coll
                 <td className={tdClass}>
                   <span className="font-medium text-text-primary">{jobStateLabel(job.state)}</span>
                   {job.reason && <div className="mt-0.5 text-[11px] text-text-muted">{job.reason}</div>}
-                  {job.category === "vault_files" ? <Link className={smallButtonClass} to="/ofapi-media">Открыть загрузку</Link> : ["paused", "blocked", "budget_exhausted"].includes(job.state) && <button type="button" className={smallButtonClass} disabled={resume.isPending || props.snapshot.backgroundPaused} onClick={() => resume.mutate({ id: job.id, expectedRevision: props.snapshot.revision })}>Продолжить с чекпоинта</button>}
+                  {job.category === "vault_files" ? <Link className={smallButtonClass} to={collectionMediaHref(props.snapshot.pages, job.pageId)}>Открыть загрузку</Link> : ["paused", "blocked", "budget_exhausted"].includes(job.state) && <button type="button" className={smallButtonClass} disabled={resume.isPending || props.snapshot.backgroundPaused} onClick={() => resume.mutate({ id: job.id, expectedRevision: props.snapshot.revision })}>Продолжить с чекпоинта</button>}
                   {job.canFinishIncomplete && <button type="button" className={smallButtonClass} disabled={resume.isPending || finish.isPending} onClick={() => {
                     finish.reset();
                     setFinishPreview({ job, revision: props.snapshot.revision });
@@ -1768,7 +1793,7 @@ export function JobModal(props: {
   if (props.category === "vault_files" || !entry?.supportsOneOff) return (
     <ModalShell title={categoryLabel(props.category, entry?.label)} onClose={props.onClose}>
       {props.category === "vault_files"
-        ? <Link className={buttonClass} to="/ofapi-media">Загрузить свой файл…</Link>
+        ? <Link className={buttonClass} to={collectionMediaHref(snapshot.pages, pageId)}>Загрузить свой файл…</Link>
         : <p className="text-sm text-text-secondary">Для этой категории настройте действующий сбор. Разовые задачи недоступны.</p>}
     </ModalShell>
   );

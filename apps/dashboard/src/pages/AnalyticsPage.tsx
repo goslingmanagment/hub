@@ -71,10 +71,12 @@ export function AnalyticsPage() {
     [pagesQuery.data],
   );
 
-  const requestedPage = searchParams.get("page") ?? "";
-  const activeLabel = fanslyPages.some((page) => page.label === requestedPage)
-    ? requestedPage
-    : fanslyPages[0]?.label ?? "";
+  const requestedPage = searchParams.get("page");
+  const activePage = requestedPage === null
+    ? fanslyPages[0]
+    : fanslyPages.find((page) => requestedPage.length > 0 && page.label === requestedPage);
+  const activeLabel = activePage?.label ?? "";
+  const requestedPageUnavailable = requestedPage !== null && !activePage;
   const range = resolveAnalyticsRange(searchParams.get("range"));
   const window = useMemo(() => analyticsRange(range), [range]);
 
@@ -136,12 +138,14 @@ export function AnalyticsPage() {
         <div className="flex flex-wrap items-center gap-3">
           {fanslyPages.length > 0 ? (
             <label className="flex items-center gap-2 text-[12px] text-text-secondary">
-              Page
+              Аккаунт
               <select
+                aria-label="Аккаунт для аналитики"
                 value={activeLabel}
                 onChange={(event) => setParam("page", event.target.value)}
                 className="rounded-md border border-border bg-card px-2 py-1.5 text-[13px] font-medium text-text-primary"
               >
+                {!activeLabel && <option value="" disabled>Выберите аккаунт</option>}
                 {fanslyPages.map((page) => (
                   <option key={page.id} value={page.label}>{page.label}</option>
                 ))}
@@ -189,6 +193,21 @@ export function AnalyticsPage() {
           >
             Retry
           </button>
+        </div>
+      ) : requestedPageUnavailable ? (
+        <div
+          role="alert"
+          className="rounded-xl border border-warning-dark/60 bg-card px-5 py-8 text-center"
+        >
+          <p className="text-[13px] font-medium text-text-primary">Аккаунт недоступен</p>
+          <p className="mt-1 text-[12px] text-text-muted">
+            {requestedPage
+              ? `Аккаунт «${requestedPage}» недоступен для аналитики.`
+              : "В ссылке не указан аккаунт."}{" "}
+            {fanslyPages.length > 0
+              ? "Выберите доступный аккаунт в списке выше."
+              : "Нет доступных аккаунтов Fansly для выбора."}
+          </p>
         </div>
       ) : fanslyPages.length === 0 ? (
         <div className="rounded-xl border border-border bg-card px-4 py-12 text-center text-[13px] text-text-muted">

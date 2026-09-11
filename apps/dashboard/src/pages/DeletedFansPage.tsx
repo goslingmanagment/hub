@@ -1,5 +1,7 @@
-import { useEffect, useState } from "react";
-import { useParams } from "react-router";
+import { useParams, useSearchParams } from "react-router";
+import { audiencePaginationLabels, updateAudienceSearch } from "@/lib/audienceNavigation";
+import { listOffset } from "@/lib/overviewNavigation";
+import { QueryNotice } from "@/components/shared/QueryNotice";
 import { usePageDeletedFans } from "@/api/queries";
 import { Pagination } from "@/components/shared/Pagination";
 import { StatusPanel } from "@/components/shared/StatusPanel";
@@ -15,50 +17,43 @@ function joinAliases(values: Array<string | null>) {
 
 export function DeletedFansPage() {
   const { pageLabel } = useParams<{ pageLabel: string }>();
-  const [offset, setOffset] = useState(0);
+  const [search, setSearch] = useSearchParams();
+  const offset = listOffset(search.get("offset"));
+  function setOffset(value: number) {
+    setSearch((previous) => updateAudienceSearch(previous, { offset: value ? String(value) : null }, false));
+  }
 
-  useEffect(() => {
-    setOffset(0);
-  }, [pageLabel]);
-
-  const { data, isLoading, isError } = usePageDeletedFans(
+  const { data, isError, refetch } = usePageDeletedFans(
     pageLabel ?? "",
     { limit: LIMIT, offset },
     { enabled: Boolean(pageLabel) },
   );
 
-  if (isLoading || !data) {
-    if (isError) {
-      return (
-        <StatusPanel
-          title="Deleted fans failed to load"
-          description="The deleted fan audit could not be fetched for this page."
-          tone="error"
-        />
-      );
-    }
-    return <TableSkeleton rows={6} columns={5} />;
-  }
-
   return (
-    <div>
+    <div className="min-w-0 p-4 md:p-0">
       <div className="mb-5">
         <h1 className="text-xl font-extrabold text-text-primary">
-          Deleted Fans &mdash; {pageLabel}
+          Удалённые аккаунты фанов &mdash; {pageLabel}
         </h1>
-        <p className="mt-1 text-sm text-text-muted">{data.total} total</p>
+        <p className="mt-1 text-sm text-text-muted">{data ? `${data.total} записей` : "Число записей пока неизвестно"}</p>
       </div>
 
-      <section className="overflow-hidden rounded-xl border border-border bg-card">
-        <table className="w-full border-collapse">
+      <p className="mb-3 text-xs text-text-muted">История обнаружения удалённых аккаунтов на платформе. Прежние имена и связанные операции сохраняются в Hub.</p>
+      <QueryNotice error={isError && Boolean(data)} stale={Boolean(data)} retry={refetch} />
+      {!data ? (
+        isError ? <StatusPanel title="Не удалось загрузить удалённые аккаунты" description="Повторите запрос, чтобы увидеть историю обнаружения." tone="error" action={<button type="button" className="text-accent font-semibold" onClick={() => void refetch()}>Повторить</button>} />
+          : <div role="status" aria-label="Загрузка удалённых аккаунтов"><TableSkeleton rows={6} columns={5} /></div>
+      ) : (
+      <section className="overflow-x-auto rounded-xl border border-border bg-card">
+        <table className="w-full min-w-[700px] border-collapse">
           <thead>
             <tr className="bg-hover-alt">
               {[
-                "Last Known",
-                "Platform ID",
-                "Aliases",
-                "First Detected",
-                "Last Confirmed",
+                "Последнее имя",
+                "ID платформы",
+                "Прежние имена",
+                "Первое обнаружение",
+                "Последнее подтверждение",
               ].map((col) => (
                 <th
                   key={col}
@@ -73,7 +68,8 @@ export function DeletedFansPage() {
             {data.items.length === 0 && (
               <tr>
                 <td colSpan={5} className="px-4 py-8 text-center text-sm text-text-muted">
-                  No deleted fans recorded.
+                  {offset > 0 ? "Эта страница больше не содержит записей." : "Удалённые аккаунты пока не обнаружены."}
+                  {offset > 0 && <button type="button" className="block mx-auto mt-2 text-accent" onClick={() => setOffset(0)}>К началу списка</button>}
                 </td>
               </tr>
             )}
@@ -119,9 +115,10 @@ export function DeletedFansPage() {
           limit={LIMIT}
           total={data.total}
           onPageChange={setOffset}
-          emptyLabel="0 fans"
+          {...audiencePaginationLabels}
         />
       </section>
+      )}
     </div>
   );
 }

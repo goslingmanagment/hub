@@ -2,7 +2,8 @@ import { useMemo, useState } from "react";
 import type { WorkboardV2AiRun } from "@agency_hub_core/contracts";
 import { AlertTriangle, Loader2, RefreshCw } from "lucide-react";
 
-import { fmtNum, fmtUsd } from "./AiPageDashboard";
+import { fmtNum, fmtUsd } from "./AiPageDashboard.js";
+import { QueryNotice } from "@/components/shared/QueryNotice";
 
 const TRIGGER_META: Record<string, { label: string; className: string }> = {
   cron: { label: "Cron", className: "bg-fansly/15 text-fansly" },
@@ -34,7 +35,7 @@ function RunRow({ run }: { run: WorkboardV2AiRun }) {
   const t = triggerMeta(run.trigger);
   const running = run.status === "running";
   return (
-    <div className={`flex items-start gap-3 border-b border-border px-3 py-2 text-[12px] last:border-b-0 hover:bg-hover/40 ${running ? "bg-accent/[0.04]" : ""}`}>
+    <div className={`flex flex-wrap items-start gap-3 border-b border-border px-3 py-2 text-[12px] last:border-b-0 hover:bg-hover/40 ${running ? "bg-accent/[0.04]" : ""}`}>
       <span className="w-[92px] shrink-0 text-text-muted" title={absTime(run.createdAt)}>
         {timeAgo(run.createdAt)}
       </span>
@@ -42,7 +43,7 @@ function RunRow({ run }: { run: WorkboardV2AiRun }) {
       <span className="w-[120px] shrink-0 truncate font-medium text-text-primary" title={run.pageLabel ?? ""}>
         {run.pageLabel ?? "—"}
       </span>
-      <div className="min-w-0 flex-1 text-text-secondary">
+      <div className="min-w-0 basis-full break-words text-text-secondary sm:flex-1">
         {running ? (
           <span className="inline-flex items-center gap-1.5 font-semibold text-accent">
             <Loader2 size={12} className="animate-spin" />
@@ -73,11 +74,15 @@ export function AiRunLog({
   runs,
   isLoading,
   isFetching,
+  isError = false,
+  hasData = true,
   onRefresh,
 }: {
   runs: WorkboardV2AiRun[];
   isLoading: boolean;
   isFetching: boolean;
+  isError?: boolean;
+  hasData?: boolean;
   onRefresh: () => void;
 }) {
   const [trigger, setTrigger] = useState<TriggerFilter>("all");
@@ -109,7 +114,7 @@ export function AiRunLog({
           Журнал запусков классификатора
         </span>
         <span className="text-[11px] text-text-muted">
-          {filtered.length} записей{liveCount > 0 && ` · ${liveCount} выполняется`}
+          {hasData ? `${filtered.length} записей` : isError ? "Журнал недоступен" : "Состояние загружается"}{liveCount > 0 && ` · ${liveCount} выполняется`}
         </span>
 
         <div className="ml-auto flex flex-wrap items-center gap-2">
@@ -118,6 +123,7 @@ export function AiRunLog({
               <button
                 key={tt.key}
                 type="button"
+                aria-pressed={trigger === tt.key}
                 onClick={() => setTrigger(tt.key)}
                 className={`px-2 py-1 text-[11px] transition-colors ${
                   trigger === tt.key ? "bg-accent/15 font-semibold text-accent" : "bg-card text-text-secondary hover:bg-hover"
@@ -129,6 +135,7 @@ export function AiRunLog({
           </div>
           {pages.length > 1 && (
             <select
+              aria-label="Фильтр журнала по странице"
               value={page}
               onChange={(e) => setPage(e.target.value)}
               className="rounded-md border border-border bg-card px-2 py-1 text-[11px] text-text-secondary"
@@ -143,6 +150,7 @@ export function AiRunLog({
           )}
           <button
             type="button"
+            disabled={isFetching}
             onClick={onRefresh}
             className="inline-flex items-center gap-1 rounded-button border border-border px-2 py-1 text-[11px] text-text-secondary transition-colors hover:bg-hover"
           >
@@ -153,11 +161,13 @@ export function AiRunLog({
       </div>
 
       <div className="max-h-[460px] overflow-y-auto">
+        <div className={isError ? "px-3 pt-3" : ""}><QueryNotice error={isError} stale={hasData} retry={onRefresh} /></div>
         {isLoading ? (
           <div className="py-10 text-center text-[12px] text-text-muted">Загрузка…</div>
-        ) : filtered.length === 0 ? (
+        ) : !hasData ? null : filtered.length === 0 ? (
           <div className="py-10 text-center text-[12px] text-text-muted">
-            Пока нет запусков. Нажмите «Классифицировать сейчас» или дождитесь ночного прогона (03:00 UTC).
+            {runs.length === 0 ? "Пока нет запусков. Нажмите «Классифицировать сейчас» или дождитесь ночного прогона (03:00 UTC)." : "Нет запусков с выбранными фильтрами."}
+            {runs.length > 0 && <button type="button" className="ml-2 text-accent underline" onClick={() => { setTrigger("all"); setPage("all"); }}>Сбросить фильтры</button>}
           </div>
         ) : (
           filtered.map((r) => <RunRow key={r.id} run={r} />)

@@ -397,7 +397,7 @@ export function SyncPageDetail({
           <StaleDataNotice error={error} />
         )}
         {page.diagnosis && (
-          <SyncDiagnosisNotice diagnosis={page.diagnosis} />
+          <SyncDiagnosisNotice diagnosis={page.diagnosis} pageLabel={page.pageLabel} />
         )}
         {blockKeys.map((key) => (
           <BlockDetailCard

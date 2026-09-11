@@ -127,7 +127,8 @@ export interface KernelClientOptions {
 }
 
 function buildPath(template: string, params: Record<string, string | number> | undefined) {
-  return template.replace(/:([A-Za-z0-9_]+)/g, (_match, name: string) => {
+  // Only a whole path segment is a parameter; suffixes such as spenders:batch are literal.
+  return template.replace(/(^|\/):([A-Za-z0-9_]+)(?=\/|$)/g, (_match, prefix: string, name: string) => {
     const value = params?.[name];
     if (value === undefined || value === null) {
       throw new KernelApiError(
@@ -138,7 +139,7 @@ function buildPath(template: string, params: Record<string, string | number> | u
         null,
       );
     }
-    return encodeURIComponent(String(value));
+    return `${prefix}${encodeURIComponent(String(value))}`;
   });
 }
 
