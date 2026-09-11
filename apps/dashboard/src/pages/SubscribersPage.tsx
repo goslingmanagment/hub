@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { Link, useParams } from "react-router";
+import { useMemo } from "react";
+import { Link, useLocation, useParams, useSearchParams } from "react-router";
 import { usePageSubscribers } from "@/api/queries";
 import { Badge } from "@/components/shared/Badge";
 import { FilterButtons } from "@/components/shared/FilterButtons";
@@ -7,12 +7,13 @@ import { Pagination } from "@/components/shared/Pagination";
 import { RemainingBar } from "@/components/shared/RemainingBar";
 import { SearchInput } from "@/components/shared/SearchInput";
 import { StatusPanel } from "@/components/shared/StatusPanel";
-import { buildFanProfileNavigation, buildPageSectionRoute } from "@/lib/navigation";
+import { buildFanProfileNavigation } from "@/lib/navigation";
 import { TableSkeleton } from "@/components/shared/TableSkeleton";
 import { resolveFanLabelForScope } from "@agency_hub_core/shared";
 import { formatDate, formatDateTime, daysRemaining, formatUsdFromCents } from "@/lib/format";
 
-type Filter = "all" | "expiring7d" | "new24h" | "norenew";
+import { listOffset, safeBackTo, subscriberFilter } from "@/lib/overviewNavigation";
+import { QueryNotice } from "@/components/shared/QueryNotice";
 
 const LIMIT = 50;
 
@@ -22,13 +23,19 @@ function isNewWithin24Hours(iso: string | null) {
 
 export function SubscribersPage() {
   const { pageLabel } = useParams();
-  const [filter, setFilter] = useState<Filter>("all");
-  const [searchQuery, setSearchQuery] = useState("");
-  const [offset, setOffset] = useState(0);
-
-  useEffect(() => {
-    setOffset(0);
-  }, [pageLabel, filter, searchQuery]);
+  const location = useLocation();
+  const [search, setSearch] = useSearchParams();
+  const filter = subscriberFilter(search.get("filter"));
+  const searchQuery = search.get("query") ?? "";
+  const offset = listOffset(search.get("offset"));
+  function update(key: string, value: string) {
+    setSearch((previous) => {
+      const next = new URLSearchParams(previous);
+      if (value) next.set(key, value); else next.delete(key);
+      if (key !== "offset") next.delete("offset");
+      return next;
+    });
+  }
 
   const params = useMemo(() => ({
     limit: LIMIT,
@@ -39,7 +46,9 @@ export function SubscribersPage() {
     autoRenew: filter === "norenew" ? false : undefined,
   }), [filter, offset, searchQuery]);
 
-  const { data, isLoading, isError } = usePageSubscribers(pageLabel!, params);
+  const { data, isLoading, isError, refetch } = usePageSubscribers(pageLabel!, params, {
+    suppressGlobalError: true,
+  });
 
   // Filter count queries (lightweight, limit: 1). Like the other chips, the
   // "All" count ignores the active filter AND the search box — chips mean
@@ -59,6 +68,7 @@ export function SubscribersPage() {
           title="Subscribers failed to load"
           description="The subscriber list could not be fetched for this page."
           tone="error"
+          action={<><button onClick={() => void refetch()}>Повторить</button> · <Link to={safeBackTo(search)}>К дашборду</Link></>}
         />
       );
     }
@@ -76,28 +86,31 @@ export function SubscribersPage() {
   ];
 
   return (
-    <div>
+    <div className="p-4 md:p-0">
+      {search.has("backTo") && <Link className="text-sm text-accent" to={safeBackTo(search)}>← К дашборду</Link>}
+      <QueryNotice error={isError} stale={Boolean(data)} retry={refetch} />
       <div className="mb-5">
         <h1 className="text-xl font-extrabold text-text-primary">
           Subscribers &mdash; {pageLabel}
         </h1>
-        <p className="text-sm text-text-muted mt-1">{allCount?.total ?? total} total</p>
+        <p className="text-sm text-text-muted mt-1">{allCount ? `${allCount.total} total` : "Общее число недоступно"}</p>
       </div>
 
       <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
         <FilterButtons
           filters={filters}
           active={filter}
-          onChange={(next) => setFilter(next as Filter)}
+          onChange={(next) => update("filter", next)}
         />
         <SearchInput
           value={searchQuery}
-          onChange={setSearchQuery}
+          onChange={(value) => update("query", value)}
           placeholder="Search subscriber..."
         />
       </div>
 
-      <section className="overflow-hidden rounded-xl border border-border bg-card">
+      <p className="text-xs text-text-muted mb-3">Текущие записи Hub, независимо от периода дохода. Истекают ≤7d — известная дата окончания; Auto-renew Off — явно выключенное продление.</p>
+      <section className="overflow-x-auto rounded-xl border border-border bg-card">
         <table className="w-full border-collapse">
           <thead>
             <tr className="bg-hover-alt">
@@ -129,7 +142,7 @@ export function SubscribersPage() {
                 pageLabel!,
                 platform,
                 sub.platformUserId,
-                buildPageSectionRoute(pageLabel!, "subscribers"),
+                location.pathname + location.search,
                 fanLabel.label,
               );
 
@@ -200,7 +213,7 @@ export function SubscribersPage() {
           offset={offset}
           limit={LIMIT}
           total={total}
-          onPageChange={setOffset}
+          onPageChange={(value) => update("offset", String(value))}
         />
       </section>
     </div>

@@ -2,8 +2,9 @@
 
 [PR166](https://github.com/goslingmanagment/core/pull/166) remains the single C1
 draft. It now includes a bounded run timeline needed to establish the cause
-before a narrow policy fix. Branch `feat/fansly-c1-followers` is based on main
-`32478124`; Decision 291 and migrations 0182–0183 follow its latest numbers.
+before a narrow policy fix. Branch `feat/fansly-c1-followers` now includes main `c0cd21c3` (PR172).
+C1 is Decision 294; the original draft used 291. Applied migrations 0182–0183
+retain their original names and contents.
 No follower predicate, cadence, presence writer or provider request changed.
 
 ## What is ready
@@ -21,10 +22,10 @@ scalars, bounded timestamps and named membership proofs are exported; fan IDs,
 message bodies, headers, arbitrary errors and lease tokens remain private.
 See the [runbook](../../docs/runbooks/fansly-followers-diagnostics.md).
 
-## Validation
+## Historical C1 validation on `13537b6b`
 
 - `pnpm check`: 3,210 tests passed in 292 files, nine existing skips; strictness
-  remains 1,908 known errors in 121 files. Lint and dashboard build passed.
+  was 1,908 known errors in 121 files. Lint and dashboard build passed.
 - Serial real Docker-Postgres: 70 tests in five files, zero skips, 19.77 seconds.
   Suites: followers-timeline, followers-diagnostics, generation-high-water,
   page-sync-lease-fencing and sync (all `.integration.test.ts`).
@@ -136,7 +137,14 @@ Physical-attempt rewrites were rejected on local failure-heavy regressions.
 The separate [health PR172](https://github.com/goslingmanagment/core/pull/172)
 selects completed IDs before loading payload: local four-scenario medians improve
 19.6–23.2%, with identical output. Both independent reviews and local checks pass;
-GitHub CI is pending. C1 follower policy and the production gate remain unchanged.
+PR172 merged as `c0cd21c3` after all five GitHub CI checks passed. The combined C1
+tree passed `pnpm check` (3251 tests, nine existing skips), 81 serial
+Docker-Postgres tests across seven suites, production build and contract
+regeneration without drift. The [release candidate](HEALTH-RELEASE-CANDIDATE.md)
+also includes main's PR171 Overview/API changes. It preserves all 179 deployed
+migration files. Both independent integration reviews passed after the release
+status and historical validation labels were corrected. C1 follower policy and
+the production gate remain unchanged; deployment requires separate approval.
 
 Next: follow Lora-1 revision 1250/generation 1206 and subsequent counts. Retain
 the other OR branches as unobserved and diagnose protected health within current

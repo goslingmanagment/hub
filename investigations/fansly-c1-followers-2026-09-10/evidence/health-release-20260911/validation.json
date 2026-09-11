@@ -1,0 +1,60 @@
+{
+  "main": "c0cd21c3e9c85a795c71e05e4a887aaf252f3270",
+  "c1_parent": "5e92fdd7c7009e49022ad236e299ae049737a6f4",
+  "deployed_source": "d47dc9b09f87988a53bd80435f0d11534beba15c",
+  "merged_health_pr": 172,
+  "decision": 294,
+  "node_version": "v26.7.0",
+  "pnpm_version": "10.33.1",
+  "validation": {
+    "pnpm_check": {
+      "exit_code": 0,
+      "unit_passed": 3251,
+      "existing_skips": 9,
+      "test_files": 296,
+      "strictness_known_errors": 1901,
+      "strictness_files": 121
+    },
+    "docker_postgres": {
+      "version": 16,
+      "passed": 81,
+      "skipped": 0,
+      "files": 7,
+      "duration_seconds": 24.34
+    },
+    "production_build": {
+      "exit_code": 0
+    },
+    "contracts_regeneration_drift": false
+  },
+  "migration_directory": {
+    "files": 179,
+    "matches_deployed_source": true
+  },
+  "deployed_c1_paths": {
+    "apps/runtime/src/services/sync/executor-handlers.ts": "6cc3193b64a5f0d69ed470dd1df7f548c3d28aadc0257a02679423ffda23bbf5",
+    "apps/runtime/src/services/sync/followers-reconcile-decision.ts": "e29e675fd0f764c915f2c0289740b8f276f564e3d8fa78d454233aabe1a1d2f6",
+    "packages/db/migrations/0182_fansly_followers_diagnostics.sql": "c53c458631d6ca037c33f9d1119fe1481f2099c41868cebd448648004ec932d5",
+    "packages/db/migrations/0183_fansly_followers_timeline.sql": "858ccb9beb4af9d6bce6580e3ef976c6807f41aeadd2391e25b025f6bf431c3b",
+    "packages/db/src/repositories/fans.ts": "50cef4c97a233dbb4f82483a66aa8edf8523f544adfb98474d5a33cd8c2b1d69",
+    "packages/db/src/repositories/page-sync.ts": "8b928a114b576017578855d112dd0cdb7a064c215a144be01c87fd472fdb7768"
+  },
+  "incoming_health_paths": {
+    "packages/db/src/repositories/sync.ts": "681aa3c2a22f580aef6ba722268e319cba891fe432f28db83231b29e0105a87d",
+    "tests/sync-monitor.integration.test.ts": "0fa3a1b362fe2b033d81eea507986a4da085425ddc99afd9dadcd41f3bb63108"
+  },
+  "incoming_contract_paths": {
+    "packages/contracts/src/contract-hash.ts": "3e82dbf5dcfc72fa8d641811eaeb10540dda69c15b962e62723fc8e02aa5a0c2",
+    "packages/contracts/src/routes.ts": "89cf781b8169751f93ea0ea74e0a0ab8b1f06b8b6604f1a84f66ce0a9bc32895",
+    "packages/sdk/src/meta.ts": "1e70390ad73e5d040c45d9c43e17cc2054ab52552b0272753f8b34af1f2629d1",
+    "reference/agency-hub.openapi.json": "f3d4c12dadbef703b7c85f289f63d0d1651941e0ea15fbd94685d9448b0e7b79"
+  },
+  "log_sha256": {
+    "check.log": "6094e95efb4d601c97291cc214a987be95d5b8cbb73763d260964bbbc352a8d5",
+    "integration.log": "0842b6fbcb56528d01a64a4fcfdd53331683f00ac3b2a982ea731f5af3cfc7c2",
+    "production-build.log": "d61ffeb7d0175f2cde0d9603d51be6b0b38c4921fb2d3e1b8602e8339fb8c438",
+    "contracts.log": "4a20d7509203261a12b5f1e2e81672cefcb598ab8b36276346dd9dd1afe92bff"
+  },
+  "production_changed": false,
+  "validation_receipt_note": "An initial local receipt assertion searched the whole integration log for skipped and matched fixture outcome text. The corrected assertion reads only the Vitest summary. The tests were green in both cases and were not rerun."
+}

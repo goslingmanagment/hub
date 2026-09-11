@@ -1,5 +1,8 @@
 # C1 timeline independent review
 
+Numbering note: earlier reviews refer to the original C1 Decision 291. It is
+Decision 294 after the 11 September merge of main; applied migrations are unchanged.
+
 For the [17:07 observation](OBSERVATION-20260911T170708Z.md), `review_pr162`
 verified 430 rows, withheld-finalization retries, full-revision versus final-
 generation durations, source-separated costs and all 429 retained summaries.
@@ -178,3 +181,28 @@ inferred. Active-page substitution, old fixed clock, estimated cardinality and
 session differences remain explicit in the dated HEALTH-PLAN report. The one-use
 privileged exception is consumed. Any candidate query change is validated and
 reviewed in a separate health worktree, outside the C1 code diff.
+
+## Combined release after PR172 — 11 September
+
+`review_pr162` and `quality_c1` independently reviewed the integration of main
+`c0cd21c3` into C1 parent `5e92fdd7`. Both verified the 12 source hashes and four
+log hashes in `evidence/health-release-20260911/validation.json`, all 179 migration
+files against deployed `d47dc9b0`, preserved C1 runtime and incoming health/API
+contracts. Neither reviewer executed tests or touched production.
+
+Local results are 3251 passed with nine existing skips across 296 unit files,
+81 passed with zero skips across seven serial Postgres suites (24.34 seconds),
+production build success and no regenerated-contract drift. Local Node 26.7.0
+is recorded separately from CI Node 22. Runtime/test source did not change
+after these checks.
+
+The correctness review found no actionable issue. The quality review found
+stale pending-PR172 wording and an old validation block that looked current.
+The release packet now records the actual merge and Decision 294; the older
+3210/70 results are labelled with their original `13537b6b` source. Both findings
+were fixed and rereviewed; no findings remain.
+
+The candidate explicitly includes PR171's Overview/revenue API in addition to
+PR172. Protected health must actually execute, the CLI must follow the deployed
+contract, and rollback retains the C1 image and schema. The PR remains a C1
+diagnostic draft; no deployment or stage activation was performed.

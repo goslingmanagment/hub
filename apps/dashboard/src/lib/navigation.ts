@@ -175,8 +175,18 @@ export function resolveSettingsTab(value: string | null | undefined): SettingsTa
     : "credentials";
 }
 
-function isSafeInAppPath(value: string) {
-  return value.startsWith("/") && !value.startsWith("//");
+export function isSafeInAppPath(value: string) {
+  if (!value.startsWith("/") || value.startsWith("//") || /[\\\p{Cc}\s]/u.test(value))
+    return false;
+  try {
+    const url = new URL(value, "https://hub.invalid");
+    const decoded = decodeURIComponent(url.pathname);
+    return url.origin === "https://hub.invalid"
+      && !/[\\\p{Cc}]/u.test(decoded)
+      && !decoded.startsWith("//");
+  } catch {
+    return false;
+  }
 }
 
 export function resolveFanProfileBackTarget(
