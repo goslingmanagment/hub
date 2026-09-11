@@ -81,6 +81,9 @@ export interface PromptBuildInput {
   fanSubscriptionData: string;
   fanDisplayName: string;
   fanBio?: string | undefined;
+  /** The chatter's own saved name for the fan (Fansly rename, Decision 290).
+   * Rendered by the {fanCustomNameLine} slot; templates without it ignore it. */
+  fanCustomName?: string | undefined;
   /** Pre-compiled stored fan dossier (see context/fan-profile.ts); templates
    * without a {fanProfileSection} placeholder ignore it. */
   fanProfile?: { body: string; generatedAt: Date } | undefined;
@@ -233,9 +236,9 @@ const SPLIT_REPLY_INSTRUCTIONS = `- Split mode is on for this reply.
 
 const PING_SEGMENT_INSTRUCTIONS: Record<PingSegment, string> = {
   'segment-a':
-    'Segment A. Was active, went silent: This fan has chatted before but has gone quiet. Reference specific past conversation topics, show you remember them, create curiosity, use time-based hooks ("haven\'t talked in a while, was thinking about you").',
+    'Segment A. Was active, went silent: This fan has chatted before but has gone quiet. Reference specific past conversation topics, show you remember them, create curiosity. Noticing the gap is fine in your own words, but a specific reference is what carries the message.',
   'segment-b':
-    'Segment B. Never really chatted: This fan has little or no chat history. Use a warm first impression, low-pressure opener, spark curiosity based on the model\'s personality. Do NOT claim "we\'ve never talked" or make absolute statements about conversation history; use neutral openers that work regardless.',
+    'Segment B. Barely chatted: This fan has little chat history in the loaded messages. Hook onto whatever he did write, his name, or his bio; if none of that gives you anything personal, lean on the model\'s personality for a warm, low-pressure opener. Do NOT claim "we\'ve never talked" or make absolute statements about conversation history; use neutral openers that work regardless.',
   active: 'This fan is still active. This segment should not be used for ping generation.',
 };
 
@@ -335,6 +338,17 @@ function fanBioSection(fanBio: string | undefined): string {
     return '';
   }
   return `Fan bio: ${escapeForPrompt(trimmed)}`;
+}
+
+/** Decision 290: the chatter's saved name for the fan (a Fansly rename). It is
+ * untrusted chatter text and may carry private tags after the name, so the
+ * template tells the model to use only the name part; escaped like the bio. */
+function fanCustomNameLine(fanCustomName: string | undefined): string {
+  const trimmed = fanCustomName?.trim() ?? '';
+  if (!trimmed) {
+    return '';
+  }
+  return `Name the chatter saved for this fan: ${escapeForPrompt(trimmed)}`;
 }
 
 /** The chatter's OWN unsent reply draft, offered to the coach for critique
@@ -750,6 +764,7 @@ function templateValues(input: PromptBuildInput): TemplateValues {
     ),
     fanDisplayName: escapeForPrompt(input.fanDisplayName),
     fanBioSection: fanBioSection(input.fanBio),
+    fanCustomNameLine: fanCustomNameLine(input.fanCustomName),
     fanProfileSection: fanProfileSection(input.fanProfile),
     draftSection: draftSection(policy.requiresDraft ? input.draftText : undefined),
     coachDraftSection: coachDraftSection(policy.optionalDraft ? input.draftText : undefined),

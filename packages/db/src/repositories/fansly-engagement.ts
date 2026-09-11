@@ -232,17 +232,20 @@ export async function upsertPostLike(
 
 // ── subject_refresh_state (capture-plane operational state, §3.4) ────────────
 
-export type SubjectRefreshPlane =
+export type LegacySubjectRefreshPlane =
   | "media_stats"
   | "post_replies"
   | "post_engagement"
   | "of_post_stats";
 
+export type SubjectRefreshPlane = LegacySubjectRefreshPlane
+  | "fan_earnings_lifetime" | "fan_earnings_monthly" | "fan_earnings_attribution";
+
 export type SubjectRefreshClass = "fresh" | "mid" | "long_tail" | "dirty";
 
 export interface MarkSubjectDirtyInput {
   pageId: number;
-  plane: SubjectRefreshPlane;
+  plane: LegacySubjectRefreshPlane;
   subjectRef: string;
   dirtyReason: string;
   /** When the lane should visit it. `now` for a commerce signal. */

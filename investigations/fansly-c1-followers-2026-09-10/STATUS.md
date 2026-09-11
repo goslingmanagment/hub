@@ -1,7 +1,7 @@
 # Fansly C1 — followers reconcile diagnostics
 
 Branch `feat/fansly-c1-followers`, based on main `f0a53aee` (C2a PR165).
-Decision 287, migration 0179. This is the diagnostic portion of the single C1
+Decision 291, migrations 0182–0183. This is the diagnostic portion of the single C1
 [draft PR166](https://github.com/goslingmanagment/core/pull/166), not completed C1.
 The measured cause and narrow fix remain pending.
 No production deployment, new flag, cooldown or cadence change is implied.

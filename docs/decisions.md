@@ -286,7 +286,9 @@ appends a row here in the same change (family law: updated-in-change).
 | 284 | Fansly A0/T0 diagnostics | Default-off virtual-stop measurement preserves the full sweep; bounded read operations expose physical-attempt coverage and retained metadata without base-table grants. |
 | 285 | Fansly C2a earnings identity | Observation-scoped v2 snapshots preserve A-B-A, replay ordering and legacy SSE edges; daily rotation unchanged. |
 | 286 | Settings UX and reviewed writes | Task-based navigation, friendly configuration copy and snapshot-bound editors; drafts survive refresh/filter, write receipts survive read failure, staged prerequisites remain visible. Owner permits merge after independent reviews and required checks; deployment remains separate. |
-| 287 | Fansly C1 diagnostics | Retain all three existing trigger branches and queue semantics; record bounded decision/queue receipts before selecting a follower fix. |
+| 289 | Fansly C2b earnings shadow | Atomic semantic transaction revisions and independent endpoint receipts measure the existing daily rotation; unchanged and missing results remain explicit debt. |
+
+| 291 | Fansly C1 diagnostics | Retain the existing trigger and expose bounded decision, queue and reconcile-run evidence before choosing a follower fix. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -11990,7 +11992,122 @@ No runtime or SDK contract changes are included. See
 [the review record](settings-ux-review-2026-09-10.md) for evidence and known limits;
 local fixture and screenshot artifacts are excluded from the product commit.
 
-## Decision 287: Measure Fansly follower reconcile decisions (2026-09-10)
+## Decision 289: Measure semantic earnings refresh signals (2026-09-10)
+
+**Context.** C2a fixes repeated snapshot identity. C2b must establish whether
+semantic transaction changes predict earnings corrections before C2c can change
+daily rotation. Main's latest decision is 286; open C1 and W0 reserve 287 and
+288 respectively. Recheck these numbers before merge.
+
+**Decision.** The live `fanslyFanEarningsShadowPageAllowlist` defaults to `none`.
+On scoped pages, the existing owned Fansly transaction writer compares persisted
+business fields before/after the upsert and commits dirty intent in the same
+transaction. Receipt timestamps, scan tokens and wallet balance do not retrigger
+it. Old and new native/local fan bindings are retained, including zero/negative
+spend and identities absent from the roster. Missing or inconsistent attribution
+has explicit transaction-scoped debt; identical persisted upserts add no revision.
+
+Extend operational `subject_refresh_state` with separate lifetime and monthly
+planes and requested/applied revisions, token, claim deadline and due/retry time.
+The existing daily spender walk alone selects requests. Each endpoint response
+is captured before parsing, settlement or the next call. A claim for R settles
+at most R; a concurrent R+1 stays pending. Empty, malformed, rejected, missing
+and lost-claim results cannot certify a check. Failure-receipt writes preserve
+the original provider error, including its Retry-After and existing walk policy.
+
+The first valid nonempty bound response establishes a baseline. Later checks
+and content changes have separate times, counters and observation provenance.
+An unchanged or first baseline after a transaction signal remains unconfirmed:
+it does not prove that Fansly recalculated. A changed snapshot can acknowledge
+the claimed revision, without proving every underlying correction is included.
+Stored retry debt has a fifteen-minute floor and honors a longer provider
+deadline; C2b does not use it to fetch extra targets. Legacy refresh planes keep
+their existing behavior. Fan erasure removes new endpoint/debt references with
+page-scoped attribution matching, serialized against their writers.
+
+The restricted metadata report shows endpoint ages, pending revisions, unknown
+attribution, targets outside the daily spender roster, unpaired visits/receipts,
+and changes without a pending signal at claim time. Preserve the previous full
+spender-sweep completion across partial walks. A recent fan is not page-wide
+freshness, an endpoint visit is not a physical HTTP attempt, and an untracked
+fan/window is not covered. This shadow has no request savings or latency claim.
+
+**Operations.** Deploy and enable one page only after explicit approval, with
+the inherited C2a reader-before-worker/reparse and compatible rollback scope.
+Disable only this allowlist to stop diagnostics, preserving operational debt,
+captured facts and daily rotation. Independent daily checks remain required
+until quiet corrections are proven detectable within the previous freshness
+bound, or the owner separately accepts a new max-age. See the
+[C2b runbook](runbooks/fansly-earnings-shadow.md).
+
+## Decision 290: Ping reads the fan's names and stops seeding its own opener (2026-09-11)
+
+A chatter reported that Ping opens nearly every message with "hey stranger"
+instead of the fan's name (2026-09-11, four days after Decision #273 moved the
+reply features to Sonnet 5 at low reasoning). The generations were otherwise
+personal, so the intent of the template held; the opener did not.
+
+Four causes, all in the prompt stack. The ping template quoted "hey stranger"
+twice: once as the Check-in strategy and once in the silence-calibration
+paragraph that Decision #127 attached to the `Fan silence:` line, which is
+present on every segment-A ping, so the rule fired on nearly every call. The
+segment-A instruction, which sits in the uncached task block and is the last
+thing the model reads, quoted a second opener ("haven't talked in a while, was
+thinking about you"), the exact broadcast phrasing the template forbids above
+it. Decision #273 had already established on this model family that naming a
+phrase seeds it and that example shape is copied almost verbatim; low
+reasoning copies more literally. And the ping template had no name at all:
+`fanDisplayName` is computed for every feature but only hi-greeting rendered
+it, the transcript labels speakers `Fan:` / `Model:`, and the Fansly extension
+kept the chatter's saved fan name out of every prompt (ChatGoose E25: a saved
+label like "Max/Canada/45" read back to the fan would be an incident). With no
+name to open with, the quoted phrase filled the address slot.
+
+What changes. Both quoted openers are rephrased as descriptions of the move
+(days or weeks: playful about the silence itself; months: softer, no mention
+of how long; Check-in: notice the silence in your own words, then give him
+something specific to answer), and the What-to-Avoid bullet from Decision
+#273 drops its own quoted tell-phrase ("been thinking about you") for the
+same reason. The segment instructions lose their quoted
+examples; segment B is now "barely chatted" (hook onto what he wrote, his name
+or his bio, persona opener only as the fallback) rather than a cold-opener
+mode, because a fan with no messages is Hi's job, not Ping's. The template
+gains a `## Fan` section in the per-fan dynamic block (after the dossier,
+before the task anchor, so the cached static prefix stays fan-agnostic):
+`Fan username: {fanDisplayName}`, the new `{fanCustomNameLine}` slot, and
+`{fanBioSection}`. The name rule is explicit: address the fan by name only
+when one is actually known, in this order: a name that clearly comes up in the
+chat, then the chatter-saved name (name part only, the rest of the label is
+never repeated), then a clear first name inside the username; otherwise no
+address word, and never an invented nickname. One reread line closes the task
+block ("if it could have gone to any other fan, add the detail that makes it
+his"), the recency device Decision #273 measured on fast-reply. The rest of
+the template is deliberately untouched: the owner's ruling is that the
+personalization design worked before and needs its data and its seeded
+phrases fixed, not a structural rewrite.
+
+Contract. `clientContext.fanCustomName` (optional, max 200) joins the
+feature-lane body; the kernel passes it straight to the builder, where it is
+escaped like the bio. Kernel-context platforms send nothing today. Ping's
+policy turns `includesFanBio` on; the extension gates sending the bio by the
+same flag, so until it ships the section stays empty. The extension's side
+(re-vendored SDK, `fanCustomName` from the account lookup it already makes for
+every generation, the bio for ping, and the E25 boundary superseded with a
+tombstone) is a separate ChatGoose change; this decision deploys nothing on
+the client. The owner's explicit ruling supersedes the E25 boundary: the saved
+name usually is the fan's real name and belongs in the prompt, with the chat
+taking precedence when the two disagree.
+
+Not done, on purpose: no gate on pinging a fan who never wrote (Hi stays the
+tool for that, by chatter judgment), no change to Hi's limits, no model or
+reasoning change for ping. Verification is the builder suite (slot rendering,
+escaping, cache-block placement, no quoted opener in the assembled prompt),
+templates-sync and the manifest pins; the live check is the same chatter's
+next pings after deploy. If the opener still collapses onto one phrase on
+Sonnet 5 low, the next lever is the reasoning level for ping, not the
+template.
+
+## Decision 291: Measure Fansly follower reconcile decisions (2026-09-10)
 
 **Context.** C1 requires a measured RCA of three OR branches before choosing a
 narrow fix. Cooldown does not exist. Current production read_only access does
@@ -12005,7 +12122,7 @@ queue receipt from the already locked requestPageSync row. Ordinary callers
 retain their exact previous result shape and queue behavior. No extra provider
 call, cooldown, cadence, presence or destructive reconciliation change ships.
 
-Migration 0179 adds a fixed, bounded read operation accessible to read_only.
+Migrations 0182–0183 adds a fixed, bounded read operation accessible to read_only.
 It counts missing, malformed, contradictory, duplicate and boundary-crossing
 receipts explicitly; invalid evidence does not enter the valid denominator.
 All OR combinations are retained. Queue counts distinguish known receipts,
