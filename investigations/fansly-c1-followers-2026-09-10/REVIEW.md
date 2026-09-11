@@ -68,3 +68,47 @@ The production-code reviewer also checked the review process and scope record;
 no actionable issues remain. The existing observation follow-up now carries
 the same quality criteria, with its cadence, notification rules and production
 gates preserved.
+
+## First-repeat RCA and grace regression
+
+`review_pr162` independently verified the 02:53:01 UTC production export:
+its hash and 75 rows agree, all 11 incremental decisions are valid, and the two
+Lilly-2 requests arrived at clean queues. The reviewer confirmed that generation
+780's exact count and zero candidates do not make the next traversal redundant:
+the immediately preceding generation and live-touch rules can protect an extra
+active row. The second traversal is still partial in this snapshot. Exact row
+identity and the protection reason remain unknown.
+
+The review found no equivalent test of one absent row surviving G and being
+retired after G+1. The existing generation-high-water case now covers that
+transition, including the intermediate active/generation count mismatch and
+empty candidate set. Final review found no actionable issues or unnecessary
+abstractions. This is a repository regression, not a handler/executor proof.
+The reviewer did not run tests or access production.
+
+The parent ran `pnpm check` (3,210 passed, nine existing skips, 292 files) and
+the same five serial Docker-Postgres suites (70 passed, zero skips, 19.77s).
+Strictness debt, lint and dashboard build remain as reported above.
+
+`quality_c1` separately reviewed the unchanged protected-health path and a
+locally prepared planner-only operation. It identified full-history aggregates
+and window scans as candidates, without claiming a measured cause. The prepared
+SQL uses READ ONLY, 10-second statement and 2-second lock limits, and explicit
+`EXPLAIN (ANALYZE FALSE)`; it has not run. A wording finding about its time bound
+was fixed: recent predicates retain the runtime's lower-bound-only semantics.
+The new one-use role exception still needs explicit owner approval.
+
+The final evidence review independently matched all 75 run summaries to the
+timeline, reconciled 206/88 full-walk attempts and 22 incremental attempts with
+persisted aggregates, and recalculated both elapsed intervals. Report, summary,
+worker-log, test-source and validation-log hashes match the receipt. The actual
+logs confirm the test results above. No actionable findings remain; row identity,
+generation 781 completion, redundancy, savings and health attribution stay open.
+
+The separate PR/operational-report review found two factual wording issues:
+the 500-run response cap applies only to the timeline reader, and the A0 report
+still called the 00:33 runtime read the latest. The PR now distinguishes the
+reader limits, and the operational report names the 00:33 boundary and latest
+02:52 runtime separately. Neither correction changes code or measured results.
+The reviewer rechecked both actual edits and confirmed the findings closed,
+with no new issues in those sections.

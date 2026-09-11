@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
+  countActivePageFollows,
   countPageFollowsByGeneration,
   createFanslyPage,
   createModel,
@@ -68,7 +69,7 @@ describe("projection generation high-water", () => {
     expect(await maxPageDmThreadGeneration(testDb.db, page.id)).toBe(0);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("starts above a lora-shaped follower high-water and retires stale active rows", async (context) => {
+  it("retires stale followers while preserving one-generation grace until the next absent sweep", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -81,6 +82,7 @@ describe("projection generation high-water", () => {
       { platform: "fansly", platformUserId: "stale-b" },
       { platform: "fansly", platformUserId: "junk-one" },
       { platform: "fansly", platformUserId: "junk-two" },
+      { platform: "fansly", platformUserId: "grace" },
     ]);
     const rows = [
       { id: "current", fanId: fans[0]!.id, generation: 861 },
@@ -88,6 +90,7 @@ describe("projection generation high-water", () => {
       { id: "stale-b", fanId: fans[2]!.id, generation: 860 },
       { id: "junk-one", fanId: fans[3]!.id, generation: 1 },
       { id: "junk-two", fanId: fans[4]!.id, generation: 2 },
+      { id: "grace", fanId: fans[5]!.id, generation: 861 },
     ];
     for (const row of rows) {
       await upsertPageFollow(testDb.db, {
@@ -154,11 +157,42 @@ describe("projection generation high-water", () => {
     expect(Object.fromEntries(followRows.map((row) => [row.platform_follow_id, row.is_active])))
       .toEqual({
         current: true,
+        grace: true,
         "junk-one": false,
         "junk-two": false,
         "stale-a": false,
         "stale-b": false,
       });
+
+    // Matching the provider roster does not yet retire a row seen by G-1.
+    // A count mismatch after this repository finalization can still need repair.
+    expect(await countActivePageFollows(testDb.db, page.id)).toBe(2);
+    expect(await listPageFollowDeactivationCandidates(testDb.db, deactivationInput)).toEqual([]);
+
+    const nextGeneration = (await maxPageFollowGeneration(testDb.db, page.id)) + 1;
+    expect(nextGeneration).toBe(863);
+    await upsertPageFollow(testDb.db, {
+      platformAccountId: page.id,
+      fanId: fans[0]!.id,
+      platformFollowId: "current",
+      followedAt: new Date("2026-07-01T00:00:00.000Z"),
+      lastSeenGeneration: nextGeneration,
+    });
+    expect(await countPageFollowsByGeneration(testDb.db, {
+      platformAccountId: page.id,
+      generation: nextGeneration,
+    })).toBe(1);
+    const graceCandidates = await listPageFollowDeactivationCandidates(testDb.db, {
+      ...deactivationInput,
+      generation: nextGeneration,
+    });
+    expect(graceCandidates).toEqual([expect.objectContaining({ lastSeenGeneration: 861 })]);
+    expect(await deactivatePageFollowsByGeneration(testDb.db, {
+      platformAccountId: page.id,
+      generation: nextGeneration,
+      lastSeenBefore: deactivationInput.fullSweepStartedAt,
+    })).toEqual(graceCandidates.map((row) => row.id));
+    expect(await countActivePageFollows(testDb.db, page.id)).toBe(1);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("preserves follower generations across live upserts and spares rows touched during a sweep", async (context) => {

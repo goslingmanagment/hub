@@ -25,7 +25,7 @@ See the [runbook](../../docs/runbooks/fansly-followers-diagnostics.md).
 
 - `pnpm check`: 3,210 tests passed in 292 files, nine existing skips; strictness
   remains 1,908 known errors in 121 files. Lint and dashboard build passed.
-- Serial real Docker-Postgres: 70 tests in five files, zero skips, 21.53 seconds.
+- Serial real Docker-Postgres: 70 tests in five files, zero skips, 19.77 seconds.
   Suites: followers-timeline, followers-diagnostics, generation-high-water,
   page-sync-lease-fencing and sync (all `.integration.test.ts`).
 - The timeline checks real handler receipts; partial, failed, skipped and
@@ -46,6 +46,11 @@ as evidence; they do not establish production latency or query-plan performance.
 The quality follow-up changes tests and review documentation only. Production
 code and applied migrations are unchanged. Its validation receipt is retained
 in [quality evidence](evidence/quality-20260911/validation.json).
+The subsequent [grace regression](evidence/grace-20260911/validation.json)
+confirms that one absent row survives the first repository finalization and
+is retired after the next generation also misses it. Independent review found
+no actionable issues; handler certification and future trigger suppression
+remain separate test obligations.
 
 ## Production evidence and next gate
 
@@ -89,9 +94,18 @@ redundancy. [Per-page/source totals](evidence/t0-followers.json) retain the
 baseline hash. Branch frequencies across the fleet and completed-generation
 consolidation remain unmeasured.
 
-Next: diagnose the protected health summary read-only and retain natural C1
-activity through the existing six-hour observation. Establish the headline,
-deletion or pagination cause, then add the narrow policy fix to this same PR.
+The later [RCA snapshot](RCA-2026-09-11.md), ending 02:53:01 UTC, contains 11
+valid decisions across all six pages: nine no-request and two Lilly-2 count
+mismatches. Both requested a new revision from a clean queue. Revision 2530 /
+generation 780 completed 184 pages in 54m43s using 206 physical attempts;
+2531 / 781 remains partial in that snapshot. The existing absence grace can
+make the second traversal necessary. Suppression is not justified by these
+receipts, and physical savings remain unmeasured.
+
+Next: follow generation 781 and the next incremental decision through their
+counts and terminal proofs. Continue the protected-health diagnosis, then
+establish the headline, deletion or pagination cause before adding the narrow
+policy fix to this same PR.
 The drift/blast-radius guards and presence consumers remain exit criteria.
 A0 keeps its original seven-day window with this runtime boundary recorded.
 Further production changes, A1, live sockets and C2b enablement remain gated.
