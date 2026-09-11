@@ -287,6 +287,8 @@ appends a row here in the same change (family law: updated-in-change).
 | 285 | Fansly C2a earnings identity | Observation-scoped v2 snapshots preserve A-B-A, replay ordering and legacy SSE edges; daily rotation unchanged. |
 | 286 | Settings UX and reviewed writes | Task-based navigation, friendly configuration copy and snapshot-bound editors; drafts survive refresh/filter, write receipts survive read failure, staged prerequisites remain visible. Owner permits merge after independent reviews and required checks; deployment remains separate. |
 | 289 | Fansly C2b earnings shadow | Atomic semantic transaction revisions and independent endpoint receipts measure the existing daily rotation; unchanged and missing results remain explicit debt. |
+| 291 | Overview metric semantics | Revenue-led overview with per-page/model comparison windows, transaction sources and separate page audience counts; no summed subscribers or acquisition claims from mutable subscription records. |
+| 292 | Overview selected layout and exact drilldown | Keep the compact variant-one table, order models by server net income, compare source deltas on the server, use scoped exact-window operations with one response snapshot, and persist navigation context in URLs. Supersedes #291's three-query-only UI plan. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -12105,3 +12107,80 @@ next pings after deploy. If the opener still collapses onto one phrase on
 Sonnet 5 low, the next lever is the reasoning level for ping, not the
 template.
 
+## Overview metric semantics and revenue attribution (2026-09-10)
+
+**Decision #291:** The overview leads with recorded creator net earnings, their
+transaction sources, and changes by model/page. Audience is a separate expandable
+page-level view. It never sums subscriptions across platforms or pages, presents
+subscriptions as paying customers, adds Fansly followers and subscribers, or uses
+the mutable subscription rollup as a new-paying-customer KPI.
+
+The existing overview revenue report adds optional nullable
+`previousNetEarningsMills` per page/model. Each previous total uses the same
+platform-specific comparison resolver, rollup and page scope as the existing
+aggregate; one request clock fixes all boundaries. Retired-page attribution
+remains in both periods. All-time comparisons are null, and missing fields from
+older servers remain unavailable. No new endpoint or capture changes.
+
+The UI shows source amounts including adjustments and unclassified money, states
+that earnings include pending transactions, and discloses the unfinished current
+day plus the established mixed-platform windows (#51). Audience labels describe
+access, not payment. Missing prices can be stored as zero in legacy audience
+mappers, so this pass does not infer free-versus-paid segments from that column.
+The no-agency-total rule also avoids cross-page identity duplication.
+
+Only three overview queries remain: catalog/status, earnings and daily earnings.
+Their failures and stale refreshes stay independent. See
+[the metric audit and review](overview-ux-review-2026-09-10.md).
+
+## Decision 292: Implement the selected compact Overview with verifiable drilldowns (2026-09-11)
+
+The owner selected variant one of the familiar grouped table and authorized the
+four audit proposals, with a separate implementation reviewer. Model groups are
+always sorted by server-calculated creator net earnings descending. Page-level
+change sorting stays inside a model. This supersedes #291's presentation and
+three-query-only plan; its money, audience and historical-attribution semantics
+remain in force.
+
+The reporting service owns current/prior/delta source amounts, using the union
+of reportable canonical types in both windows. It also supplies page/model
+delta mills and percentages. Negative adjustments remain visible, a zero prior
+denominator has no percentage, and older absent additive fields are unavailable.
+No browser aggregation of financial totals is introduced.
+
+All report/daily/model handlers sample their request clock before the first
+await. An optional strict `windowAt` calendar clock is returned and can be reused
+by dependent requests. This fixes midnight drift without changing #51's platform
+windows. It is not a capture watermark or a frozen cross-request DB snapshot.
+Main revenue refresh and UTC date rollover produce the clock for child queries.
+
+The cross-page transaction API adds paired strict `[from,to)` timestamps and an
+optional `reportableOnly` predicate. The generic default remains false. Count,
+full-filter net and the paginated list use the same existing scope predicate in
+one short repeatable-read, read-only transaction. The response echoes the applied
+scope and transaction read time. `/transactions` refuses unsupported or mismatched
+scope responses. Historical/deleted pages use this scoped endpoint without
+opening an active-only page detail. Existing principal/page authorization is
+preserved; empty scope cannot broaden a request. No DB migration is needed.
+
+Overview requests catalog/status, the revenue report, a scoped daily chart and
+one by-model trend response. Only the expanded active page requests its source
+comparison. Query keys include effective period/scope/clock; old-period
+placeholders cannot appear under new labels. Calendar padding preserves sparse
+series spacing; a zero means recorded net zero, not proof of no operations.
+Failure and failed-refresh notices remain independent and include retry.
+
+URL state owns period, expanded row, chart and page sort. Per-tab session storage
+contains only scroll/focus, keyed by the exact URL; restoration waits through
+late layout growth until user interaction. Subscriber filter/search/offset are
+URL-driven and fan navigation retains the full return path. Quicklinks reuse
+current known expiration and explicit auto-renew-off predicates; unknown fields
+do not enter those groups. No paid/free inference or agency audience total is
+added. Shared errors use self-contained styles, and error-toast suppression is
+opt-in where the consumer renders its own failure.
+
+The accepted table remains usable with expanded content at responsive column
+breakpoints. Native modal navigation supplies keyboard containment, Escape and
+focus return on mobile. See [the implementation record](overview-implementation-2026-09-11.md)
+for verification and restart instructions. This is a local implementation; no
+deployment, production write, capture repair or completeness claim is implied.

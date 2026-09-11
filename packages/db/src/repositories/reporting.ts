@@ -1,6 +1,7 @@
 import { and, asc, desc, eq, gte, inArray, lt, or, sql, type SQL } from "drizzle-orm";
 
 import {
+  millsFromInteger,
   getTransactionClassification,
   reportableTransactionTypes,
   resolveBusinessTimeZone,
@@ -1130,6 +1131,8 @@ export async function listTransactionsForScope(
   input: {
     pageIds?: number[];
     pageLabel?: string;
+    period?: PeriodBounds;
+    reportableOnly?: boolean;
     canonicalType?: string;
     transactionState?: string;
     sortBy?: "occurredAt" | "grossAmountMills" | "netAmountMills";
@@ -1142,11 +1145,12 @@ export async function listTransactionsForScope(
     pageIds: input.pageIds,
     canonicalType: input.canonicalType,
     transactionState: input.transactionState,
-    excludeExcludedTypes: false,
+    excludeExcludedTypes: input.reportableOnly ?? false,
+    period: input.period,
   });
 
   if (!clauses) {
-    return { total: 0, items: [] };
+    return { total: 0, netAmountMills: 0n, readAt: new Date(), items: [] };
   }
 
   if (input.pageLabel) {
@@ -1160,42 +1164,48 @@ export async function listTransactionsForScope(
       : transactions.occurredAt;
   const sortFn = input.sortDir === "asc" ? asc : desc;
 
-  const [countRow] = await db.select({
-    total: sql<number>`count(*)::int`,
-  }).from(transactions)
-    .innerJoin(pages, eq(pages.id, transactions.platformAccountId))
-    .where(and(...clauses));
+  return db.transaction(async (tx) => {
+    const [countRow] = await tx.select({
+      total: sql<number>`count(*)::int`,
+      netAmountMills: sql<bigint>`coalesce(sum(${transactions.creatorNetAmountMills}), 0)::bigint`,
+      readAt: sql<Date>`transaction_timestamp()`,
+    }).from(transactions)
+      .innerJoin(pages, eq(pages.id, transactions.platformAccountId))
+      .where(and(...clauses));
 
-  const items = await db.select({
-    transactionId: transactions.transactionId,
-    rawType: transactions.rawType,
-    canonicalType: transactions.canonicalType,
-    transactionState: transactions.transactionState,
-    amountMills: transactions.grossAmountMills,
-    destinationAmountMills: transactions.sourceDestinationAmountMills,
-    netAmountMills: transactions.creatorNetAmountMills,
-    walletId: transactions.walletId,
-    correlationId: transactions.correlationId,
-    correlationAccountId: transactions.correlationAccountId,
-    occurredAt: transactions.occurredAt,
-    sourceUpdatedAt: transactions.sourceUpdatedAt,
-    fanPlatformUserId: sql<string | null>`case when ${fans.deletedDetectedAt} is null then ${fans.platformUserId} else null end`,
-    fanUsername: sql<string | null>`case when ${fans.deletedDetectedAt} is null then ${fans.username} else null end`,
-    fanDisplayName: sql<string | null>`case when ${fans.deletedDetectedAt} is null then ${fans.displayName} else null end`,
-    pageLabel: pages.label,
-    platform: pages.platform,
-  }).from(transactions)
-    .innerJoin(pages, eq(pages.id, transactions.platformAccountId))
-    .leftJoin(fans, eq(fans.id, transactions.fanId))
-    .where(and(...clauses))
-    .orderBy(sortFn(sortColumn), desc(transactions.id))
-    .limit(input.limit)
-    .offset(input.offset);
+    const items = await tx.select({
+      transactionId: transactions.transactionId,
+      rawType: transactions.rawType,
+      canonicalType: transactions.canonicalType,
+      transactionState: transactions.transactionState,
+      amountMills: transactions.grossAmountMills,
+      destinationAmountMills: transactions.sourceDestinationAmountMills,
+      netAmountMills: transactions.creatorNetAmountMills,
+      walletId: transactions.walletId,
+      correlationId: transactions.correlationId,
+      correlationAccountId: transactions.correlationAccountId,
+      occurredAt: transactions.occurredAt,
+      sourceUpdatedAt: transactions.sourceUpdatedAt,
+      fanPlatformUserId: sql<string | null>`case when ${fans.deletedDetectedAt} is null then ${fans.platformUserId} else null end`,
+      fanUsername: sql<string | null>`case when ${fans.deletedDetectedAt} is null then ${fans.username} else null end`,
+      fanDisplayName: sql<string | null>`case when ${fans.deletedDetectedAt} is null then ${fans.displayName} else null end`,
+      pageLabel: pages.label,
+      platform: pages.platform,
+    }).from(transactions)
+      .innerJoin(pages, eq(pages.id, transactions.platformAccountId))
+      .leftJoin(fans, eq(fans.id, transactions.fanId))
+      .where(and(...clauses))
+      .orderBy(sortFn(sortColumn), desc(transactions.id))
+      .limit(input.limit)
+      .offset(input.offset);
 
-  return {
-    total: countRow?.total ?? 0,
-    items,
-  };
+    return {
+      total: countRow?.total ?? 0,
+      netAmountMills: millsFromInteger(countRow?.netAmountMills ?? 0),
+      readAt: new Date(countRow!.readAt),
+      items,
+    };
+  }, { isolationLevel: "repeatable read", accessMode: "read only" });
 }
 
 export async function listFanTransactionsOnPage(

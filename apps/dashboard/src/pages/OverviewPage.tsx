@@ -1,526 +1,518 @@
-import { lazy, Suspense } from "react";
-import { Link, useNavigate } from "react-router";
-import { useAuthMe, useOverview, useOverviewRevenue, useOverviewGrowth, useOverviewRevenueDaily, useOverviewRevenueByModel } from "@/api/queries";
-import { TrendSparkline } from "@/components/shared/TrendSparkline";
-import { DeltaIndicator } from "@/components/shared/DeltaIndicator";
-import { StatusPanel } from "@/components/shared/StatusPanel";
-import { getSyncUxTone } from "@/components/shared/SyncUxBadge";
-import { getSyncUxDisplayMode, getSyncUxExceptionKind } from "@/components/shared/syncUxDisplay";
-import { buildPageRoute, buildSettingsRoute } from "@/lib/navigation";
-import { PLATFORM_COLORS } from "@/lib/constants";
-import { PLATFORM_DISPLAY_NAME } from "@/lib/platformUrls";
-import { formatUsdFromMills } from "@agency_hub_core/shared";
+import { Fragment, useEffect, useLayoutEffect, useRef } from "react";
+import {
+  Link,
+  useLocation,
+  useNavigationType,
+  useSearchParams,
+} from "react-router";
+import { useAuthMe, useOverview, useOverviewRevenue } from "@/api/queries";
 import { usePeriodStore } from "@/stores/periodStore";
-import type { OverviewResponse, PlatformRevenueWindow } from "@agency_hub_core/contracts";
+import { StatusPanel } from "@/components/shared/StatusPanel";
+import { isAlertState } from "@/components/shared/syncUxDisplay";
+import { buildPageRoute } from "@/lib/navigation";
+import { PLATFORM_DISPLAY_NAME } from "@/lib/platformUrls";
+import {
+  buildRevenueTransactionsRoute,
+  overviewSearch,
+  parseOverviewState,
+  PERIOD_LABELS,
+  type OverviewState,
+} from "@/lib/overviewNavigation";
+import {
+  groupRevenue,
+  money,
+  describeWindows,
+  type PageRow,
+} from "./overview/presentation.js";
+import { AudienceLink, PageSources } from "./overview/PageSources.js";
+import { QueryNotice } from "@/components/shared/QueryNotice";
+import { RevenueDelta } from "./overview/RevenueValue.js";
+import { RevenueCharts } from "./overview/RevenueCharts.js";
+import "./overview.css";
 
-const PageActivityChart = lazy(() =>
-  import("@/components/page/PageActivityChart").then((m) => ({ default: m.PageActivityChart })),
-);
+export { describeMixedRevenueWindows } from "./overview/presentation.js";
 
-type OverviewPageItem = OverviewResponse["pages"][number];
-type PageMetric = OverviewPageItem["subscriberCount"];
-
-const PERIOD_LABELS: Record<string, string> = {
-  today: "Today",
-  "7d": "7 Days",
-  "30d": "30 Days",
-  all: "All Time",
-};
-
-interface ModelGroup {
-  modelSlug: string;
-  modelName: string;
-  pages: OverviewPageItem[];
+// Contains only UI position, never API data or account information. Kept per
+// exact URL so Back, reload, and another tab's period cannot overwrite it.
+function positionKey(search: string) {
+  return `hub-overview-position:${search}`;
 }
-
-const GROWTH_PLACEHOLDER = "—";
-
-function groupByModel(pages: OverviewPageItem[]): ModelGroup[] {
-  const map = new Map<string, ModelGroup>();
-  for (const page of pages) {
-    let group = map.get(page.modelSlug);
-    if (!group) {
-      group = { modelSlug: page.modelSlug, modelName: page.modelName, pages: [] };
-      map.set(page.modelSlug, group);
-    }
-    group.pages.push(page);
+function readPosition(search: string): { y: number; focus: string } | null {
+  try {
+    const saved: unknown = JSON.parse(
+      sessionStorage.getItem(positionKey(search)) ?? "null",
+    );
+    if (
+      saved &&
+      typeof saved === "object" &&
+      "y" in saved &&
+      typeof saved.y === "number" &&
+      Number.isFinite(saved.y) &&
+      "focus" in saved &&
+      typeof saved.focus === "string"
+    )
+      return { y: saved.y, focus: saved.focus };
+  } catch {
+    /* Storage can be disabled; navigation still works. */
   }
-  return Array.from(map.values());
-}
-
-function formatGrowthValue(value: number | null) {
-  return value === null ? GROWTH_PLACEHOLDER : `+${value.toLocaleString()}`;
-}
-
-function getPageMetricValue(metric: PageMetric) {
-  return metric.available && typeof metric.value === "number"
-    ? metric.value
-    : null;
-}
-
-function formatPageMetric(metric: PageMetric) {
-  const value = getPageMetricValue(metric);
-  return value === null ? "N/A" : value.toLocaleString();
-}
-
-function sumPageMetrics(metrics: PageMetric[]) {
-  let availableCount = 0;
-  let total = 0;
-
-  for (const metric of metrics) {
-    const value = getPageMetricValue(metric);
-    if (value === null) {
-      continue;
-    }
-
-    availableCount += 1;
-    total += value;
-  }
-
-  return availableCount === 0 ? null : total;
-}
-
-function formatMetricTotal(total: number | null) {
-  return total === null ? "N/A" : total.toLocaleString();
-}
-
-function getOverviewExceptionMessage(
-  summary: OverviewPageItem["syncUx"],
-  kind: NonNullable<ReturnType<typeof getSyncUxExceptionKind>>,
-) {
-  switch (kind) {
-    case "off":
-      return summary.headline;
-    case "attention":
-      return "Data may be incomplete \u2014 updates need attention";
-    default:
-      return null;
-  }
-}
-
-const MS_PER_DAY = 86_400_000;
-
-// Audit B2: OnlyFans trailing windows deliberately cover one more calendar day
-// than other platforms', so a mixed-platform total under one period label sums
-// different window widths. Returns the disclosure line, or null when every
-// platform's window has the same width (single platform, custom range, etc.).
-export function describeMixedRevenueWindows(
-  windows: PlatformRevenueWindow[] | undefined,
-  periodLabel: string,
-): string | null {
-  if (!windows || windows.length < 2) {
-    return null;
-  }
-
-  const spans = windows
-    .filter((window) => window.from && window.to)
-    .map((window) => ({
-      platform: PLATFORM_DISPLAY_NAME[window.platform] ?? window.platform,
-      days: Math.round(
-        (new Date(window.to!).getTime() - new Date(window.from!).getTime()) / MS_PER_DAY,
-      ),
-    }));
-
-  if (spans.length < 2 || new Set(spans.map((span) => span.days)).size < 2) {
-    return null;
-  }
-
-  const parts = spans.map((span) => `${span.days} days on ${span.platform}`);
-  return `“${periodLabel}” spans ${parts.join(", ")} (platform billing offsets); totals and Δ combine these windows.`;
+  return null;
 }
 
 export function OverviewPage() {
-  const navigate = useNavigate();
-  const { data: auth } = useAuthMe();
-  const { period } = usePeriodStore();
-  const selectedPeriod = period;
-
-  const { data, isLoading: isOverviewLoading, isError: isOverviewError } = useOverview();
-  const {
-    data: revenueData,
-    isLoading: isRevenueLoading,
-    isError: isRevenueError,
-  } = useOverviewRevenue(selectedPeriod);
-  const {
-    data: revenueDailyData,
-    isLoading: isRevenueDailyLoading,
-    isError: isRevenueDailyError,
-  } = useOverviewRevenueDaily(selectedPeriod);
-  const { data: revenueByModelData } = useOverviewRevenueByModel(selectedPeriod);
-  const {
-    data: growthData,
-    isLoading: isGrowthLoading,
-    isFetching: isGrowthFetching,
-    isPlaceholderData: isGrowthPlaceholderData,
-  } = useOverviewGrowth(selectedPeriod);
-  const growthState = growthData && !isGrowthPlaceholderData
-    ? "ready"
-    : isGrowthLoading || isGrowthFetching
-      ? "loading"
-      : "idle";
-  const growthReady = growthState === "ready";
-
-  if (isOverviewLoading || !data) {
-    if (isOverviewLoading) {
-      return <OverviewSkeleton />;
-    }
-    if (isOverviewError) {
-      return (
-        <StatusPanel
-          title="Overview failed to load"
-          description="The dashboard summary could not be fetched."
-          tone="error"
-        />
-      );
-    }
-    return <OverviewSkeleton />;
-  }
-
-  const pages = (data.pages ?? []) as OverviewPageItem[];
-  const groups = groupByModel(pages);
-
-  const revenueByPageId = new Map<number, number>();
-  if (revenueData?.pages) {
-    for (const rp of revenueData.pages) {
-      revenueByPageId.set(rp.pageId, rp.netEarningsMills);
-    }
-  }
-
-  const followersByPageId = new Map<number, number>();
-  const subsByPageId = new Map<number, number>();
-  if (growthData?.pages) {
-    for (const gp of growthData.pages) {
-      followersByPageId.set(gp.pageId, gp.newFollowers);
-      subsByPageId.set(gp.pageId, gp.newSubscribers);
-    }
-  }
-
-  const totalRevenue = revenueData?.netEarningsMills ?? 0;
-  const revenueReady = Boolean(revenueData) && !isRevenueLoading && !isRevenueError;
-  const revenueDailyReady = Boolean(revenueDailyData) && !isRevenueDailyLoading && !isRevenueDailyError;
-  const totalSubs = sumPageMetrics(pages.map((page) => page.subscriberCount));
-  const totalNewSubs = growthReady
-    ? pages.reduce((sum, p) => sum + (subsByPageId.get(p.id) ?? 0), 0)
-    : null;
-  const totalNewFollowers = growthReady
-    ? pages.reduce((sum, p) => sum + (followersByPageId.get(p.id) ?? 0), 0)
-    : null;
-  const isOwner = auth?.user.role === "owner";
-
-  const periodLabel = PERIOD_LABELS[selectedPeriod] ?? "30 Days";
-  const mixedWindowsNote = revenueReady
-    ? describeMixedRevenueWindows(revenueData?.platformWindows, periodLabel)
-    : null;
-
-  // W7.2 (A33, decision #131): rollups include tombstoned pages; they carry
-  // no row in the (active-only) navigation table, so annotate the totals.
-  const retiredRevenuePages = revenueReady
-    ? (revenueData?.pages ?? []).filter(
-      (rp) => rp.status === "deleted" && rp.netEarningsMills !== 0,
-    )
+  const [search, setSearch] = useSearchParams();
+  const location = useLocation();
+  const navigationType = useNavigationType();
+  const storedPeriod = usePeriodStore((store) => store.period);
+  const state = parseOverviewState(search, storedPeriod);
+  const catalog = useOverview();
+  const revenue = useOverviewRevenue(state.period);
+  const user = useAuthMe();
+  const report = revenue.isPlaceholderData ? undefined : revenue.data;
+  const groups = report
+    ? groupRevenue(report, catalog.data?.pages ?? [], state.sort)
     : [];
-  const retiredRevenueNote = retiredRevenuePages.length > 0
-    ? `Totals include ${retiredRevenuePages.length} retired ${
-      retiredRevenuePages.length === 1 ? "page" : "pages"
-    } (${retiredRevenuePages.map((rp) => rp.pageLabel).join(", ")}) — history is kept after deletion.`
-    : null;
+  const backTo = `/?${overviewSearch(state)}`;
+  const root = useRef<HTMLDivElement>(null);
+  const lastFocus = useRef("");
+  const restored = useRef<string | null>(null);
+  const entryKey = useRef(location.key);
+  const chartRequested = useRef(false);
+  const ready = Boolean(report);
+  const expandedPageId = report?.pages.find(
+    (page) => page.pageLabel === state.row,
+  )?.pageId;
 
-  return (
-    <div>
-      <table className="w-full border-collapse overflow-hidden rounded-xl border border-border bg-card">
-        <colgroup>
-          <col />
-          <col className="w-[120px]" />
-          <col className="w-[100px]" />
-          <col className="w-[120px]" />
-          <col className="w-[100px]" />
-        </colgroup>
-        <thead>
-          <tr className="bg-hover-alt">
-            <th className="px-4 py-3 text-left text-[12px] font-semibold uppercase tracking-wider text-text-muted">
-              Page
-            </th>
-            <th className="px-4 py-3 text-right text-[12px] font-semibold uppercase tracking-wider text-text-muted">
-              {periodLabel}
-            </th>
-            <th className="px-4 py-3 text-right text-[12px] font-semibold uppercase tracking-wider text-text-muted">
-              Subs
-            </th>
-            <th className="px-4 py-3 text-right text-[12px] font-semibold uppercase tracking-wider text-text-muted">
-              Followers {periodLabel}
-            </th>
-            <th className="px-4 py-3 text-right text-[12px] font-semibold uppercase tracking-wider text-text-muted">
-              Subs {periodLabel}
-            </th>
-          </tr>
-        </thead>
-        <tbody>
-          {groups.map((group) => (
-            <ModelGroupRows
-              key={group.modelSlug}
-              group={group}
-              navigate={navigate}
-              revenueByPageId={revenueByPageId}
-              revenueReady={revenueReady}
-              followersByPageId={followersByPageId}
-              subsByPageId={subsByPageId}
-              growthReady={growthReady}
-              isOwner={isOwner}
-            />
-          ))}
-          <tr className="border-t-2 border-border bg-hover-alt">
-            <td className="px-4 py-3 text-[15px] font-bold text-text-primary">Agency Total</td>
-            <td className="px-4 py-3 text-right tabular-nums text-lg font-bold text-text-primary">
-              <div className="flex items-center justify-end gap-2">
-                {revenueReady ? formatUsdFromMills(totalRevenue) : "—"}
-                {selectedPeriod !== "all" && (
-                  <DeltaIndicator pct={revenueData?.comparison?.deltaPct ?? null} />
-                )}
-              </div>
-            </td>
-            <td className="px-4 py-3 text-right tabular-nums text-[15px] font-bold text-text-primary">
-              {formatMetricTotal(totalSubs)}
-            </td>
-            <td
-              className={`px-4 py-3 text-right tabular-nums text-[15px] font-bold ${
-                totalNewFollowers === null ? "text-text-muted" : "text-green"
-              }`}
-            >
-              {formatGrowthValue(totalNewFollowers)}
-            </td>
-            <td
-              className={`px-4 py-3 text-right tabular-nums text-[15px] font-bold ${
-                totalNewSubs === null ? "text-text-muted" : "text-green"
-              }`}
-            >
-              {formatGrowthValue(totalNewSubs)}
-            </td>
-          </tr>
-        </tbody>
-      </table>
+  useEffect(() => {
+    if (!report?.windowAt || state.period === "all") return;
+    const windowDay = report.windowAt.slice(0, 10);
+    function refreshIfNewDay() {
+      if (
+        document.visibilityState === "visible" &&
+        new Date().toISOString().slice(0, 10) !== windowDay
+      )
+        void revenue.refetch();
+    }
+    const nextDay = new Date();
+    nextDay.setUTCHours(24, 0, 1, 0);
+    const timer = window.setTimeout(
+      refreshIfNewDay,
+      windowDay === new Date().toISOString().slice(0, 10)
+        ? nextDay.getTime() - Date.now()
+        : 0,
+    );
+    document.addEventListener("visibilitychange", refreshIfNewDay);
+    return () => {
+      window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", refreshIfNewDay);
+    };
+  }, [report?.windowAt, state.period, revenue.refetch]);
 
-      {mixedWindowsNote && (
-        <p className="mt-2 px-1 text-xs text-text-muted">{mixedWindowsNote}</p>
-      )}
-      {retiredRevenueNote && (
-        <p className="mt-2 px-1 text-xs text-text-muted">{retiredRevenueNote}</p>
-      )}
+  useEffect(() => {
+    if (!search.has("period"))
+      setSearch(overviewSearch(state), { replace: true });
+  }, [search, state.period, setSearch]);
 
-      <Suspense
-        fallback={
-          <div className="mt-5 rounded-xl border border-border bg-card p-5">
-            <div className="h-[300px] flex items-center justify-center text-sm text-text-muted">
-              Loading chart...
-            </div>
-          </div>
-        }
-      >
-        {revenueDailyReady && (revenueDailyData?.series ?? []).length > 0 && (
-          <div className="mt-5">
-            <PageActivityChart
-              title="AGENCY REVENUE"
-              selectedPeriod={selectedPeriod}
-              selectedPeriodLabel={periodLabel}
-              points={(revenueDailyData?.series ?? []).map((d) => ({
-                businessDate: d.businessDate,
-                value: d.netAmountMills,
-              }))}
-              valueFormatter={(v) => formatUsdFromMills(v)}
-              yAxisWidth={72}
-              color="var(--color-accent)"
-            />
-          </div>
-        )}
-      </Suspense>
-
-      {(revenueByModelData?.models ?? []).length > 0 && (
-        <div className="mt-5 rounded-xl border border-border bg-card">
-          <div className="border-b border-border px-4 py-3 text-[12px] font-semibold uppercase tracking-wider text-text-muted">
-            Earnings by model · {periodLabel}
-          </div>
-          <div>
-            {(revenueByModelData?.models ?? []).map((model) => (
-              <div
-                key={model.modelSlug}
-                className="flex items-center gap-4 border-b border-border px-4 py-3 last:border-b-0"
-              >
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-sm font-medium">{model.modelName}</div>
-                  <div className="text-xs text-text-muted">
-                    {model.pageCount} {model.pageCount === 1 ? "page" : "pages"} · {model.transactionCount} txns
-                  </div>
-                </div>
-                <TrendSparkline
-                  values={model.series.map((point) => point.netAmountMills)}
-                />
-                <div className="w-[110px] text-right text-sm font-semibold tabular-nums">
-                  {formatUsdFromMills(model.totalNetAmountMills)}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function ModelGroupRows({
-  group,
-  navigate,
-  revenueByPageId,
-  revenueReady,
-  followersByPageId,
-  subsByPageId,
-  growthReady,
-  isOwner,
-}: {
-  group: ModelGroup;
-  navigate: ReturnType<typeof useNavigate>;
-  revenueByPageId: Map<number, number>;
-  revenueReady: boolean;
-  followersByPageId: Map<number, number>;
-  subsByPageId: Map<number, number>;
-  growthReady: boolean;
-  isOwner: boolean;
-}) {
-  const modelName = group.modelName;
-  const groupRevenue = revenueReady
-    ? group.pages.reduce((sum, p) => sum + (revenueByPageId.get(p.id) ?? 0), 0)
-    : null;
-  const groupSubs = sumPageMetrics(group.pages.map((page) => page.subscriberCount));
-  const groupNewSubs = growthReady
-    ? group.pages.reduce((sum, p) => sum + (subsByPageId.get(p.id) ?? 0), 0)
-    : null;
-  const groupNewFollowers = growthReady
-    ? group.pages.reduce((sum, p) => sum + (followersByPageId.get(p.id) ?? 0), 0)
-    : null;
-
-  return (
-    <>
-      <tr className="bg-hover-alt/50">
-        <td className="px-4 pt-4 pb-2">
-          <span className="text-accent font-bold">{modelName}</span>
-          <span className="ml-2 text-text-muted text-xs">
-            {group.pages.length} {group.pages.length === 1 ? "page" : "pages"}
-          </span>
-        </td>
-        <td className="px-4 pt-4 pb-2 text-right tabular-nums text-[15px] font-semibold text-accent">
-          {groupRevenue === null ? "—" : formatUsdFromMills(groupRevenue)}
-        </td>
-        <td className="px-4 pt-4 pb-2 text-right tabular-nums font-semibold">
-          {formatMetricTotal(groupSubs)}
-        </td>
-        <td
-          className={`px-4 pt-4 pb-2 text-right tabular-nums font-semibold ${
-            groupNewFollowers === null ? "text-text-muted" : "text-green"
-          }`}
-        >
-          {formatGrowthValue(groupNewFollowers)}
-        </td>
-        <td
-          className={`px-4 pt-4 pb-2 text-right tabular-nums font-semibold ${
-            groupNewSubs === null ? "text-text-muted" : "text-green"
-          }`}
-        >
-          {formatGrowthValue(groupNewSubs)}
-        </td>
-      </tr>
-      {group.pages.map((page) => {
-        const platform = page.platform as keyof typeof PLATFORM_COLORS;
-        const platformCfg = PLATFORM_COLORS[platform];
-        const pageRevenue = revenueReady ? (revenueByPageId.get(page.id) ?? 0) : null;
-        const isFansly = page.platform === "fansly";
-        const pageFollowers = growthReady ? (followersByPageId.get(page.id) ?? 0) : null;
-        const pageSubscribers = growthReady ? (subsByPageId.get(page.id) ?? 0) : null;
-        const syncMode = getSyncUxDisplayMode(page.syncUx, "overview_row");
-        const exceptionKind = getSyncUxExceptionKind(page.syncUx);
-        const tone = getSyncUxTone(page.syncUx.state);
-
-        return (
-          <tr
-            key={page.id}
-            onClick={() => navigate(buildPageRoute(page.label))}
-            className="cursor-pointer border-t border-border transition-colors hover:bg-hover"
-          >
-            <td className="px-4 py-3">
-              <div className="flex items-center gap-2">
-                <span className={`inline-block h-2 w-2 flex-shrink-0 rounded-full ${tone.dot}`} title={page.syncUx.state} />
-                <span className="text-[15px] font-semibold text-text-primary">{page.label}</span>
-                {platformCfg && (
-                  <span
-                    className="inline-block rounded-md px-2 py-0.5 font-semibold"
-                    style={{ fontSize: 11, backgroundColor: platformCfg.bg, color: platformCfg.text }}
-                  >
-                    {platformCfg.label}
-                  </span>
-                )}
-              </div>
-              {syncMode === "exception" && exceptionKind && exceptionKind !== "credentials" && (
-                <div className={`mt-2 flex flex-wrap items-center gap-2 rounded-lg border px-3 py-2 text-[12px] ${tone.panel}`}>
-                  <span className={`font-medium ${tone.text}`}>
-                    {getOverviewExceptionMessage(page.syncUx, exceptionKind)}
-                  </span>
-                  {isOwner && (
-                    <Link
-                      to={buildSettingsRoute("sync", page.label)}
-                      onClick={(event) => event.stopPropagation()}
-                      className="font-semibold text-accent hover:underline"
-                    >
-                      Check sync settings
-                    </Link>
-                  )}
-                </div>
-              )}
-            </td>
-            <td className="px-4 py-3 text-right tabular-nums text-[15px] font-medium text-text-secondary">
-              {pageRevenue === null ? "—" : formatUsdFromMills(pageRevenue)}
-            </td>
-            <td className="px-4 py-3 text-right tabular-nums text-[15px] font-medium text-text-secondary">
-              {formatPageMetric(page.subscriberCount)}
-            </td>
-            <td className="px-4 py-3 text-right tabular-nums text-[14px]">
-              {isFansly ? (
-                <span className={pageFollowers === null ? "text-text-muted" : "font-bold text-green"}>
-                  {formatGrowthValue(pageFollowers)}
-                </span>
-              ) : (
-                <span className="text-text-muted">{GROWTH_PLACEHOLDER}</span>
-              )}
-            </td>
-            <td
-              className={`px-4 py-3 text-right tabular-nums text-[14px] font-bold ${
-                pageSubscribers === null ? "text-text-muted" : "text-green"
-              }`}
-            >
-              {formatGrowthValue(pageSubscribers)}
-            </td>
-          </tr>
+  useLayoutEffect(() => {
+    function save() {
+      try {
+        sessionStorage.setItem(
+          positionKey(location.search),
+          JSON.stringify({ y: window.scrollY, focus: lastFocus.current }),
         );
-      })}
-    </>
-  );
-}
+      } catch {
+        /* Position persistence is optional. */
+      }
+    }
+    window.addEventListener("pagehide", save);
+    return () => {
+      save();
+      window.removeEventListener("pagehide", save);
+    };
+  }, [location.search]);
 
-function OverviewSkeleton() {
+  useEffect(() => {
+    if (!ready || restored.current === location.key) return;
+    restored.current = location.key;
+    if (chartRequested.current) {
+      chartRequested.current = false;
+      document
+        .getElementById("overview-chart")
+        ?.scrollIntoView({ block: "start", behavior: "instant" });
+      document
+        .getElementById("overview-chart-scope")
+        ?.focus({ preventScroll: true });
+      return;
+    }
+    if (navigationType !== "POP" && location.key !== entryKey.current) return;
+    const saved = readPosition(location.search);
+    if (saved) {
+      const restore = () => {
+        window.scrollTo({ top: saved.y, behavior: "instant" });
+        const focus = document.getElementById(saved.focus);
+        if (focus && document.activeElement !== focus)
+          focus.focus({ preventScroll: true });
+      };
+      // The report mounts before lazy charts and source queries settle. Retry
+      // after layout growth so the browser's early height clamp is not final.
+      // A user's first interaction takes control and cancels restoration.
+      restore();
+      const observer = new ResizeObserver(restore);
+      if (root.current) observer.observe(root.current);
+      const events = ["wheel", "touchstart", "pointerdown", "keydown"] as const;
+      const stop = () => {
+        observer.disconnect();
+        for (const event of events) window.removeEventListener(event, stop);
+      };
+      for (const event of events)
+        window.addEventListener(event, stop, { once: true, passive: true });
+      return stop;
+    } else if (expandedPageId != null) {
+      const button = document.getElementById(`expand-${expandedPageId}`);
+      button?.scrollIntoView({ block: "center", behavior: "instant" });
+      button?.focus({ preventScroll: true });
+    }
+  }, [ready, location.key, location.search, navigationType, expandedPageId]);
+
+  function update(patch: Partial<OverviewState>) {
+    setSearch(overviewSearch({ ...state, ...patch }));
+  }
+  function showChart(scope: string, scroll = true) {
+    chartRequested.current = scroll;
+    if (scope === state.chart && scroll) {
+      document
+        .getElementById("overview-chart")
+        ?.scrollIntoView({ block: "start", behavior: "instant" });
+      document
+        .getElementById("overview-chart-scope")
+        ?.focus({ preventScroll: true });
+      chartRequested.current = false;
+    } else update({ chart: scope });
+  }
+  function amount(page: PageRow, previous = false) {
+    const value = previous
+      ? page.previousNetEarningsMills
+      : page.netEarningsMills;
+    const platform = page.platform ?? page.catalog?.platform;
+    const window = report?.platformWindows.find(
+      (item) => item.platform === platform,
+    );
+    if (!window || value == null) return money(value);
+    const to = buildRevenueTransactionsRoute({
+      pageLabel: page.pageLabel,
+      from: previous ? window.comparisonFrom : window.from,
+      to: previous ? window.comparisonTo : window.to,
+      backTo,
+    });
+    return (
+      <Link
+        id={`${previous ? "previous" : "current"}-money-${page.pageId}`}
+        className="v1-audience-link"
+        to={to}
+        title="Операции за это окно и итог по всему списку"
+      >
+        {money(value)}
+      </Link>
+    );
+  }
+
   return (
-    <div>
-      <div className="overflow-hidden rounded-xl border border-border bg-card">
-        <div className="bg-hover-alt px-4 py-3 flex gap-4">
-          {[100, 80, 60, 80, 60].map((w, i) => (
-            <div key={i} className="h-3 rounded bg-border animate-pulse" style={{ width: `${w}px` }} />
-          ))}
-        </div>
-        {Array.from({ length: 4 }, (_, i) => (
-          <div key={i} className="flex gap-4 border-t border-border px-4 py-3.5">
-            <div className="h-4 w-28 rounded bg-hover-alt animate-pulse" style={{ animationDelay: `${i * 80}ms` }} />
-            <div className="h-4 w-16 rounded bg-hover-alt animate-pulse ml-auto" style={{ animationDelay: `${i * 80 + 40}ms` }} />
-            <div className="h-4 w-12 rounded bg-hover-alt animate-pulse" style={{ animationDelay: `${i * 80 + 80}ms` }} />
-            <div className="h-4 w-14 rounded bg-hover-alt animate-pulse" style={{ animationDelay: `${i * 80 + 120}ms` }} />
-            <div className="h-4 w-12 rounded bg-hover-alt animate-pulse" style={{ animationDelay: `${i * 80 + 160}ms` }} />
-          </div>
-        ))}
+    <div
+      ref={root}
+      className="v1-overview"
+      onFocusCapture={(event) => {
+        if (event.target.id) lastFocus.current = event.target.id;
+      }}
+    >
+      <div className="v1-toolbar">
+        <span className="text-text-muted">По сохранённым операциям Hub</span>
+        <button
+          id="overview-refresh"
+          type="button"
+          className="v1-text-button"
+          disabled={revenue.isFetching || catalog.isFetching}
+          onClick={() =>
+            void Promise.all([revenue.refetch(), catalog.refetch()])
+          }
+        >
+          Обновить
+        </button>
       </div>
+      <QueryNotice
+        error={catalog.isError}
+        stale={Boolean(catalog.data)}
+        retry={catalog.refetch}
+      />
+      {catalog.isError && (
+        <p className="v1-zero-note">
+          Метаданные аудитории и сбора недоступны или устарели. Доход
+          загружается отдельно.
+        </p>
+      )}
+      <QueryNotice
+        error={revenue.isError}
+        stale={Boolean(report)}
+        retry={revenue.refetch}
+      />
+      {revenue.isFetching && (
+        <p className="v1-loading-note" role="status">
+          {report ? "Обновляем выбранное окно…" : "Загружаем доход…"}
+        </p>
+      )}
+      {report && report.pages.length === 0 && (
+        <StatusPanel
+          title="Нет страниц в доступной области"
+          description="Добавьте страницу в настройках или проверьте доступ."
+        />
+      )}
+      {report && report.pages.length > 0 && (
+        <>
+          {state.row &&
+            !report.pages.some((page) => page.pageLabel === state.row) && (
+              <p className="v1-query-error" role="status">
+                Страница из ссылки недоступна в текущей области.{" "}
+                <button
+                  className="v1-text-button"
+                  onClick={() => update({ row: null })}
+                >
+                  Закрыть раскрытие
+                </button>
+              </p>
+            )}
+          <div className="v1-table-wrap">
+            <table
+              className="v1-table"
+              aria-label={`Страницы агентства, доход за период ${PERIOD_LABELS[state.period]}`}
+            >
+              <colgroup>
+                <col className="v1-page-col" />
+                <col className="v1-money-col" />
+                <col className="v1-money-col v1-previous-col" />
+                <col className="v1-change-col" />
+                <col className="v1-access-col" />
+              </colgroup>
+              <thead>
+                <tr>
+                  <th scope="col">Страница</th>
+                  <th scope="col">
+                    Доход
+                    <br />
+                    {PERIOD_LABELS[state.period]}
+                  </th>
+                  <th scope="col" className="v1-previous">
+                    Предыдущее
+                    <br />
+                    окно
+                  </th>
+                  <th
+                    scope="col"
+                    aria-sort={
+                      state.sort === "source"
+                        ? "none"
+                        : state.sort === "decline"
+                          ? "ascending"
+                          : "descending"
+                    }
+                  >
+                    <button
+                      id="overview-sort"
+                      type="button"
+                      className="v1-sort-button"
+                      title="Сортировать страницы внутри модели по изменению суммы"
+                      onClick={() =>
+                        update({
+                          sort:
+                            state.sort === "source"
+                              ? "decline"
+                              : state.sort === "decline"
+                                ? "growth"
+                                : "source",
+                        })
+                      }
+                    >
+                      Изменение{" "}
+                      {state.sort === "source"
+                        ? "↕"
+                        : state.sort === "decline"
+                          ? "↑"
+                          : "↓"}
+                    </button>
+                  </th>
+                  <th scope="col" className="v1-access">
+                    Подписчики
+                    <br />
+                    страницы
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {groups.map(({ model, pages }) => (
+                  <Fragment key={model.modelSlug}>
+                    <tr className="v1-group-row">
+                      <td>
+                        <span className="v1-model-name">{model.modelName}</span>
+                        <span className="v1-page-count">
+                          {model.pageCount} стр.
+                          {model.status === "retired" ? " · архив" : ""}
+                        </span>
+                      </td>
+                      <td className="v1-number">
+                        {money(model.netEarningsMills)}
+                      </td>
+                      <td className="v1-number v1-previous">
+                        {money(model.previousNetEarningsMills)}
+                      </td>
+                      <td className="v1-number">
+                        <RevenueDelta {...model} />
+                      </td>
+                      <td className="v1-number v1-access v1-audience-total">
+                        —
+                      </td>
+                    </tr>
+                    {pages.map((page) => {
+                      const expanded = state.row === page.pageLabel;
+                      const platform = page.platform ?? page.catalog?.platform;
+                      const sync = page.catalog?.syncUx;
+                      return (
+                        <Fragment key={page.pageId}>
+                          <tr
+                            className={`v1-page-row${expanded ? " v1-expanded" : ""}`}
+                          >
+                            <td>
+                              <div className="v1-page-cell">
+                                <button
+                                  id={`expand-${page.pageId}`}
+                                  type="button"
+                                  className="v1-expander"
+                                  aria-label={`${expanded ? "Свернуть" : "Раскрыть"} источники дохода ${page.pageLabel}`}
+                                  aria-expanded={expanded}
+                                  aria-controls={
+                                    expanded
+                                      ? `sources-${page.pageId}`
+                                      : undefined
+                                  }
+                                  onClick={() =>
+                                    update({
+                                      row: expanded ? null : page.pageLabel,
+                                    })
+                                  }
+                                >
+                                  <span aria-hidden="true">
+                                    {expanded ? "⌄" : "›"}
+                                  </span>
+                                </button>
+                                <span
+                                  className={`v1-sync-dot ${sync && isAlertState(sync) ? "v1-sync-attention" : sync?.state === "healthy" ? "v1-sync-ok" : "v1-sync-off"}`}
+                                  role="img"
+                                  aria-label={`Сбор: ${sync?.label ?? "неизвестно"}`}
+                                  title={`Сбор: ${sync?.label ?? "неизвестно"}. Не подтверждает полноту дохода.`}
+                                />
+                                <div className="v1-page-identity">
+                                  {page.status === "deleted" ? (
+                                    <span className="v1-page-link">
+                                      {page.pageLabel} · архив
+                                    </span>
+                                  ) : (
+                                    <Link
+                                      className="v1-page-link"
+                                      to={buildPageRoute(page.pageLabel)}
+                                      state={{ backTo }}
+                                    >
+                                      {page.pageLabel}
+                                    </Link>
+                                  )}
+                                  {platform && (
+                                    <span
+                                      className={`v1-platform v1-${platform}`}
+                                    >
+                                      {PLATFORM_DISPLAY_NAME[platform]}
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            </td>
+                            <td className="v1-number v1-money-current">
+                              {amount(page)}
+                            </td>
+                            <td className="v1-number v1-money-previous v1-previous">
+                              {amount(page, true)}
+                            </td>
+                            <td className="v1-number">
+                              <RevenueDelta {...page} />
+                            </td>
+                            <td className="v1-number v1-access">
+                              <AudienceLink page={page} backTo={backTo} />
+                            </td>
+                          </tr>
+                          {expanded && (
+                            <PageSources
+                              page={page}
+                              period={state.period}
+                              windowAt={report.windowAt}
+                              windows={report.platformWindows}
+                              backTo={backTo}
+                              showChart={showChart}
+                              isOwner={user.data?.user.role === "owner"}
+                            />
+                          )}
+                        </Fragment>
+                      );
+                    })}
+                  </Fragment>
+                ))}
+                <tr className="v1-total-row">
+                  <td className="v1-total-label">Всего по агентству</td>
+                  <td className="v1-number">
+                    {money(report.netEarningsMills)}
+                  </td>
+                  <td className="v1-number v1-previous">
+                    {money(report.comparison?.netEarningsMills)}
+                  </td>
+                  <td className="v1-number">
+                    <RevenueDelta
+                      deltaNetMills={report.comparison?.deltaNetMills}
+                      deltaPct={report.comparison?.deltaPct}
+                    />
+                  </td>
+                  <td className="v1-number v1-access v1-audience-total">—</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div className="v1-under-table">
+            <p>
+              <strong>Доход после комиссии платформ</strong>, включая pending,
+              корректировки и неклассифицированные суммы. Не прибыль агентства и
+              не сумма к выплате.
+            </p>
+            <p>
+              {describeWindows(report.platformWindows)}. Даты UTC; текущий день
+              не завершён.
+            </p>
+            <details>
+              <summary>О данных и подписках</summary>
+              <p>
+                Суммы и сравнения — по сохранённым операциям Hub, без гарантии
+                полноты захвата. Прочерк означает недоступное значение.
+                Подписчики — текущий доступ к странице, включая бесплатный и
+                пробный; число не зависит от выбранного периода. Аудитория
+                разных страниц не складывается.
+              </p>
+              <p>
+                У Fansly 7/30 дат, у OnlyFans 8/31; предыдущие окна имеют ту же
+                длину для каждой платформы. Таблица, источники и графики
+                загружаются отдельно и могут обновляться в разное время. Дата
+                окна не является временем последнего сбора.
+              </p>
+            </details>
+          </div>
+          <RevenueCharts
+            report={report}
+            period={state.period}
+            scope={state.chart}
+            selectScope={(scope, scroll = false) => showChart(scope, scroll)}
+          />
+        </>
+      )}
     </div>
   );
 }

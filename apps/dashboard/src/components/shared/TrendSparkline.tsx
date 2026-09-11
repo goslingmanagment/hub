@@ -19,14 +19,27 @@ export function TrendSparkline({
     return <div style={{ width, height }} />;
   }
 
-  const max = Math.max(...values, 1);
-  const stepX = values.length > 1 ? width / (values.length - 1) : width;
+  if (values.length === 1) {
+    return (
+      <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`}
+        role="img" aria-label="One data point; trend unavailable" className="shrink-0">
+        <circle cx={width / 2} cy={height / 2} r={2} fill={color} />
+      </svg>
+    );
+  }
+
+  const min = Math.min(...values, 0);
+  const max = Math.max(...values, 0);
+  const range = max - min || 1;
+  const yFor = (value: number) => height - 2 - ((value - min) / range) * (height - 6);
+  const stepX = width / (values.length - 1);
   const points = values.map((value, index) => {
-    const x = values.length > 1 ? index * stepX : width / 2;
-    const y = height - 2 - (value / max) * (height - 6);
+    const x = index * stepX;
+    const y = yFor(value);
     return `${x.toFixed(1)},${y.toFixed(1)}`;
   });
-  const areaPoints = `0,${height} ${points.join(" ")} ${width},${height}`;
+  const zeroY = yFor(0).toFixed(1);
+  const areaPoints = `0,${zeroY} ${points.join(" ")} ${width},${zeroY}`;
 
   return (
     <svg
