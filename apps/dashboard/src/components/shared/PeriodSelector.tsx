@@ -1,5 +1,7 @@
 import { usePeriodStore, type PeriodOption } from "@/stores/periodStore";
 import { useSpenderPeriodStore, type SpenderPeriodOption } from "@/stores/spenderPeriodStore";
+import { useLocation, useSearchParams } from "react-router";
+import { overviewSearch, parseOverviewState } from "@/lib/overviewNavigation";
 
 const dashboardOptions: { key: PeriodOption; label: string }[] = [
   { key: "today", label: "Today" },
@@ -26,12 +28,16 @@ interface PeriodSelectorProps {
 export function PeriodSelector({ mode = "dashboard" }: PeriodSelectorProps) {
   const dashboardPeriod = usePeriodStore();
   const spenderPeriod = useSpenderPeriodStore();
+  const location = useLocation();
+  const [search, setSearch] = useSearchParams();
+  const isOverview = location.pathname === "/";
+  const overview = parseOverviewState(search, dashboardPeriod.period);
 
   const selectedKey = mode === "topSupporters"
     ? spenderPeriod.topSupportersPeriod
     : mode === "spender"
       ? spenderPeriod.period
-      : dashboardPeriod.period;
+      : isOverview ? overview.period : dashboardPeriod.period;
   const options = mode === "dashboard" ? dashboardOptions : spenderOptions;
 
   function handleSelect(key: PeriodOption | SpenderPeriodOption) {
@@ -44,6 +50,7 @@ export function PeriodSelector({ mode = "dashboard" }: PeriodSelectorProps) {
       return;
     }
     dashboardPeriod.setPeriod(key as PeriodOption);
+    if (isOverview) setSearch(overviewSearch({ ...overview, period: key as PeriodOption }));
   }
 
   return (
@@ -56,7 +63,7 @@ export function PeriodSelector({ mode = "dashboard" }: PeriodSelectorProps) {
             type="button"
             aria-pressed={isActive}
             onClick={() => handleSelect(opt.key)}
-            className={`rounded-button px-3 py-1.5 text-[13px] font-medium transition-colors ${
+            className={`rounded-button px-2 sm:px-3 py-1.5 text-[13px] font-medium transition-colors ${
               isActive
                 ? "bg-accent text-white"
                 : "border border-border bg-card text-text-secondary hover:bg-hover"

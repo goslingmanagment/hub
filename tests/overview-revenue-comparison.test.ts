@@ -169,3 +169,21 @@ describe("overview page and model comparisons", () => {
     expect(parsed.previousNetEarningsMills).toBeUndefined();
   });
 });
+
+describe("overview source comparisons", () => {
+  it("keeps disappeared sources, negative adjustments and a zero baseline", async () => {
+    queries.getRevenueBreakdownForScope.mockImplementation(async (_db, input) => {
+      if (input.platform !== "fansly") return [];
+      return isPrevious(input)
+        ? [{ canonicalType: "tip", bucket: "revenue", netAmountMills: 15000n }, { canonicalType: "refund", bucket: "adjustment", netAmountMills: -4000n }]
+        : [{ canonicalType: "message_purchase", bucket: "revenue", netAmountMills: 20000n }, { canonicalType: "refund", bucket: "adjustment", netAmountMills: -6000n }, { canonicalType: "other", bucket: "unclassified", netAmountMills: 1000n }];
+    });
+    const result = await getOverviewRevenueReport(app, { period: "7d", now });
+    const sources = result.comparison!.sources!;
+    expect(sources.find((source) => source.canonicalType === "tip")).toMatchObject({ currentNetMills: 0, previousNetMills: 15000, deltaNetMills: -15000, deltaPct: -100 });
+    expect(sources.find((source) => source.canonicalType === "refund")).toMatchObject({ currentNetMills: -6000, previousNetMills: -4000, deltaNetMills: -2000, deltaPct: -50 });
+    expect(sources.find((source) => source.canonicalType === "message_purchase")?.deltaPct).toBeNull();
+    expect(sources.reduce((total, source) => total + source.deltaNetMills, 0)).toBe(result.comparison!.deltaNetMills);
+    expect(result.pages.find((page) => page.pageId === 3)?.deltaNetMills).toBe(-50000);
+  });
+});

@@ -102,13 +102,15 @@ export function PageActivityChart(props: {
   height?: number;
   showYAxisLabel?: boolean;
   color?: string;
+  allowMonthly?: boolean;
 }) {
   const gradientId = useId();
   const color = props.color ?? "#4ead6b";
   const [allTimeGranularity, setAllTimeGranularity] = useState<"monthly" | "daily">("monthly");
-  const mode = getChartMode(props.selectedPeriod, allTimeGranularity);
+  const granularity = props.allowMonthly === false ? "daily" : allTimeGranularity;
+  const mode = getChartMode(props.selectedPeriod, granularity);
 
-  const useMonthly = props.selectedPeriod === "all" && allTimeGranularity === "monthly";
+  const useMonthly = props.selectedPeriod === "all" && granularity === "monthly";
   const chartDisplayItems = useMonthly ? aggregateMonthly(props.points) : props.points;
 
   const tickFormatter = (value: string) =>
@@ -144,7 +146,7 @@ export function PageActivityChart(props: {
         <h2 className="text-[12px] text-text-muted uppercase tracking-wider font-semibold">
           {props.title}
         </h2>
-        {props.selectedPeriod === "all" ? (
+        {props.selectedPeriod === "all" && props.allowMonthly !== false ? (
           <div className="flex rounded-lg overflow-hidden border border-border">
             {(["daily", "monthly"] as const).map((g) => (
               <button

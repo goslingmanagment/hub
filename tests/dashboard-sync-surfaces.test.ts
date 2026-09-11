@@ -1,7 +1,7 @@
 import { createElement, type ComponentProps } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OverviewResponse } from "@agency_hub_core/contracts";
+import type { OverviewResponse, OverviewRevenueResponse } from "@agency_hub_core/contracts";
 import { MemoryRouter, Route, Routes } from "../apps/dashboard/node_modules/react-router/dist/development/index.js";
 import { DashboardShellProvider } from "../apps/dashboard/src/components/layout/DashboardShellContext.tsx";
 
@@ -11,6 +11,7 @@ const queryMocks = vi.hoisted(() => ({
   useOverviewGrowth: vi.fn(),
   useOverviewRevenue: vi.fn(),
   useOverviewRevenueDaily: vi.fn(),
+  useRevenueChart: vi.fn(),
   useOverviewRevenueByModel: vi.fn(),
   usePageFollowersDaily: vi.fn(),
   usePageRevenue: vi.fn(),
@@ -23,6 +24,8 @@ const queryMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../apps/dashboard/src/api/queries.ts", () => queryMocks);
+vi.mock("../apps/dashboard/src/api/pages.ts", () => queryMocks);
+vi.mock("../apps/dashboard/src/api/overview.ts", () => queryMocks);
 
 import { OverviewPage } from "../apps/dashboard/src/pages/OverviewPage.tsx";
 import {
@@ -127,6 +130,16 @@ function buildOverviewPage(syncUx = buildSyncUx()): OverviewResponse {
   };
 }
 
+function buildOverviewRevenue(overview = buildOverviewPage(), net = 0): OverviewRevenueResponse {
+  return {
+    period: "7d", windowAt: "2026-09-10T19:45:00Z", from: "2026-09-04T00:00:00Z", to: "2026-09-11T00:00:00Z", currency: "USD",
+    revenueMills: net, adjustmentMills: 0, unclassifiedMills: 0, netEarningsMills: net, totalNetMills: net, breakdown: [], comparison: null,
+    platformWindows: [{ platform: "fansly", from: "2026-09-04T00:00:00Z", to: "2026-09-11T00:00:00Z", comparisonFrom: "2026-08-28T00:00:00Z", comparisonTo: "2026-09-04T00:00:00Z" }],
+    models: [{ modelId: 1, modelSlug: "lana", modelName: "Lana", pageCount: overview.pages.length, netEarningsMills: net, totalNetMills: net }],
+    pages: overview.pages.map((page) => ({ pageId: page.id, pageLabel: page.label, modelSlug: "lana", modelName: "Lana", platform: page.platform, netEarningsMills: net, totalNetMills: net })),
+  };
+}
+
 function renderWithRouter(
   element: ReturnType<typeof createElement>,
   initialEntries = ["/"],
@@ -173,12 +186,10 @@ describe("dashboard sync product surfaces", () => {
       data: { user: { username: "owner", role: "owner" } },
       isLoading: false,
     });
-    queryMocks.useOverviewRevenue.mockReturnValue({
-      data: {
-        netEarningsMills: 0,
-        pages: [{ pageId: 1, netEarningsMills: 0 }],
-      },
-    });
+    queryMocks.useOverview.mockReturnValue({ data: buildOverviewPage() });
+    queryMocks.useOverviewRevenue.mockReturnValue({ data: buildOverviewRevenue() });
+    queryMocks.useRevenueChart.mockReset();
+    queryMocks.useRevenueChart.mockReturnValue({ data: { series: [] } });
     queryMocks.useOverviewRevenueDaily.mockReturnValue({ data: { series: [] } });
     queryMocks.useOverviewRevenueByModel.mockReturnValue({ data: { models: [] } });
     queryMocks.useOverviewGrowth.mockReturnValue({
@@ -244,181 +255,108 @@ describe("dashboard sync product surfaces", () => {
     expect(html).not.toContain("href=\"/settings?tab=credentials\"");
   });
 
-  it("shows overview attention banner with sync settings link", () => {
-    queryMocks.useOverview.mockReturnValue({
-      data: buildOverviewPage(buildSyncUx({
-        state: "attention",
-        label: "Needs attention",
-        headline: "Sync needs attention",
-      })),
-      isLoading: false,
-    });
-
-    const html = renderWithRouter(createElement(OverviewPage));
-
-    expect(html).toContain("Data may be incomplete");
-    expect(html).toContain("Check sync settings");
-    expect(html).toContain("href=\"/settings?tab=sync&amp;page=lana\"");
+  it.each(["attention", "off"] as const)("keeps %s visible and links the expanded row to its sync detail", (state) => {
+    queryMocks.useOverview.mockReturnValue({ data: buildOverviewPage(buildSyncUx({ state, label: "Needs attention", detail: "Worker needs help." })) });
+    const html = renderWithRouter(createElement(OverviewPage), ["/?period=7d&row=lana"]);
+    expect(html).toContain("Worker needs help.");
+    expect(html).toContain('href="/settings?tab=sync&amp;page=lana"');
   });
 
-  it("shows partial pause copy and links straight to that page's sync detail", () => {
-    queryMocks.useOverview.mockReturnValue({
-      data: buildOverviewPage(buildSyncUx({
-        state: "off",
-        label: "Off",
-        headline: "Some data updates are paused",
-        detail: "1 sync is paused on this page.",
-      })),
-      isLoading: false,
-    });
-
-    const html = renderWithRouter(createElement(OverviewPage));
-
-    expect(html).toContain("Some data updates are paused");
-    expect(html).toContain("href=\"/settings?tab=sync&amp;page=lana\"");
-  });
-
-  it("renders an explicit overview error state instead of an endless loader", () => {
-    queryMocks.useOverview.mockReturnValue({
-      data: undefined,
-      isLoading: false,
-      isError: true,
-    });
-
-    const html = renderWithRouter(createElement(OverviewPage));
-
-    expect(html).toContain("Overview failed to load");
-    expect(html).not.toContain("Loading...");
-  });
-
-  it("keeps available agency revenue visible when the page catalog fails", () => {
+  it("keeps revenue available when catalog loading fails, with retry and unknown audience", () => {
     queryMocks.useOverview.mockReturnValue({ isError: true });
-    queryMocks.useOverviewRevenue.mockReturnValue({ data: { netEarningsMills: 123450, pages: [] } });
-
+    queryMocks.useOverviewRevenue.mockReturnValue({ data: buildOverviewRevenue(undefined, 123450) });
     const html = renderWithRouter(createElement(OverviewPage));
-
     expect(html).toContain("$123.45");
-    expect(html).toContain("Overview failed to load");
-    expect(html).toContain("Try again");
+    expect(html).toContain("Данные не удалось загрузить");
+    expect(html).toContain("Повторить");
+    expect(html).toContain("Счётчик недоступен");
   });
 
-  it("does not relabel the previous period's revenue as current", () => {
-    queryMocks.useOverview.mockReturnValue({ data: buildOverviewPage() });
-    queryMocks.useOverviewRevenue.mockReturnValue({
-      data: { netEarningsMills: 999999, pages: [{ pageId: 1, netEarningsMills: 999999 }] },
-      isPlaceholderData: true, isFetching: true,
-    });
-    queryMocks.useOverviewRevenueDaily.mockReturnValue({ isFetching: true, isPlaceholderData: true });
+  it("does not relabel the previous period's placeholder as current", () => {
+    queryMocks.useOverviewRevenue.mockReturnValue({ data: buildOverviewRevenue(undefined, 999999), isPlaceholderData: true, isFetching: true });
     const html = renderWithRouter(createElement(OverviewPage));
     expect(html).not.toContain("$999.99");
-    expect(html).toContain("Loading report");
-    expect(html).toContain("Loading metric");
+    expect(html).toContain("Загружаем доход");
   });
 
-  it("preserves cached values with a visible warning after a failed refresh", () => {
-    queryMocks.useOverview.mockReturnValue({ data: buildOverviewPage() });
-    queryMocks.useOverviewRevenue.mockReturnValue({
-      data: { netEarningsMills: 123450, pages: [{ pageId: 1, netEarningsMills: 123450 }] },
-      isError: true,
-    });
-
+  it("preserves current-window cached values with a warning after failed refresh", () => {
+    queryMocks.useOverviewRevenue.mockReturnValue({ data: buildOverviewRevenue(undefined, 123450), isError: true });
     const html = renderWithRouter(createElement(OverviewPage));
-
     expect(html).toContain("$123.45");
-    expect(html).toContain("Revenue could not refresh. Showing saved data.");
+    expect(html).toContain("Показаны ранее полученные данные");
   });
 
-  it("keeps unknown audience values missing and never invents an agency subscriber total", () => {
+  it("keeps unknown audience missing without inventing an agency subscriber total", () => {
     const overview = buildOverviewPage();
     overview.pages.push(buildOverviewPageItem(buildSyncUx(), { id: 2, label: "lana-2", subscriberCount: buildPageMetric(null) }));
     queryMocks.useOverview.mockReturnValue({ data: overview });
-
+    queryMocks.useOverviewRevenue.mockReturnValue({ data: buildOverviewRevenue(overview) });
     const html = renderWithRouter(createElement(OverviewPage));
-
-    expect(html).not.toContain("Subscribers now");
+    expect(html).toContain("Счётчик недоступен");
+    expect(html).toContain("Аудитория разных страниц не складывается");
     expect(html).not.toContain("New subscribers");
-    expect(html).toContain("Access subscriptions");
-    expect(html).toContain("Free and paid together");
-    expect(html).toContain('aria-label="Not available"');
-  });
-
-  it("keeps zero distinct from missing growth and makes pages keyboard-accessible links", () => {
-    const overview = buildOverviewPage();
-    overview.pages.push(buildOverviewPageItem(buildSyncUx(), { id: 2, label: "lana-2" }));
-    queryMocks.useOverview.mockReturnValue({ data: overview });
-
-    const html = renderWithRouter(createElement(OverviewPage));
-
-    expect(html).toContain('href="/pages/lana"');
     expect(html).toContain('href="/pages/lana-2"');
-    expect(html).toContain('aria-pressed="true"');
-    expect(html).not.toContain("+0");
-    expect(html).toContain('aria-label="Not available"');
+    expect(html).toContain("$0.00");
   });
 
-  it("shows independent report errors with a retry instead of hiding those sections", () => {
-    queryMocks.useOverview.mockReturnValue({ data: buildOverviewPage() });
-    queryMocks.useOverviewRevenueDaily.mockReturnValue({ isError: true });
+  it("shows independent chart errors with retries while keeping the table", () => {
+    queryMocks.useRevenueChart.mockReturnValue({ isError: true });
     queryMocks.useOverviewRevenueByModel.mockReturnValue({ isError: true });
-    queryMocks.useOverviewGrowth.mockReturnValue({ isError: true });
-
     const html = renderWithRouter(createElement(OverviewPage));
-
-    expect(html).toContain("Revenue trend could not be loaded.");
-    expect(queryMocks.useOverviewGrowth).not.toHaveBeenCalled();
-    expect(queryMocks.useOverviewRevenueByModel).not.toHaveBeenCalled();
-    expect(html).toContain("Try again");
-    expect(html).not.toContain("No revenue data for this period.");
+    expect(html.match(/Данные не удалось загрузить/g)).toHaveLength(2);
+    expect(html).toContain("Повторить");
     expect(html).toContain('href="/pages/lana"');
+    expect(queryMocks.useOverviewGrowth).not.toHaveBeenCalled();
   });
 
-  it("keeps refunds and unclassified money visible in the earnings breakdown", () => {
-    queryMocks.useOverview.mockReturnValue({ data: buildOverviewPage() });
-    queryMocks.useOverviewRevenue.mockReturnValue({ data: {
-      netEarningsMills: 185000, revenueMills: 200000, pages: [],
+  it("keeps refunds and unclassified money visible in the expanded source comparison", () => {
+    queryMocks.useOverviewRevenue.mockReturnValue({ data: buildOverviewRevenue(undefined, 185000) });
+    queryMocks.usePageRevenue.mockReturnValue({ data: {
+      netEarningsMills: 185000, adjustmentMills: -20000, unclassifiedMills: 5000,
       breakdown: [
         { canonicalType: "message_purchase", bucket: "revenue", netAmountMills: 200000 },
         { canonicalType: "refund", bucket: "adjustment", netAmountMills: -20000 },
         { canonicalType: "other", bucket: "unclassified", netAmountMills: 5000 },
-      ],
+      ], comparison: null,
     } });
-    const html = renderWithRouter(createElement(OverviewPage));
+    const html = renderWithRouter(createElement(OverviewPage), ["/?period=7d&row=lana"]);
     expect(html).toContain("$185.00");
-    expect(html).toContain("Paid messages");
-    expect(html).toContain("Refunds");
-    expect(html).toContain("−$20.00");
-    expect(html).toContain("Unclassified");
-    expect(html).toContain("+$5.00");
-    expect(html).toContain("includes pending transactions");
+    expect(html).toContain("Платные сообщения");
+    expect(html).toContain("Возвраты");
+    expect(html).toContain("-$20.00");
+    expect(html).toContain("Без классификации");
+    expect(html).toContain("$5.00");
+    expect(html).toContain("включая pending");
+    expect(html).toContain("type=refund");
+    expect(html).toContain("reportableOnly=true");
   });
 
-  it("never adds OnlyFans access subscriptions to Fansly's follower or subscription counts", () => {
+  it("keeps OnlyFans audience separate and never exposes an unavailable follower link", () => {
     const overview = buildOverviewPage();
     overview.pages.push(buildOverviewPageItem(buildSyncUx(), { id: 2, label: "of-page", platform: "onlyfans", subscriberCount: buildPageMetric(4371), followerCount: buildPageMetric(null) }));
     queryMocks.useOverview.mockReturnValue({ data: overview });
-    const html = renderWithRouter(createElement(OverviewPage));
-    expect(html).toContain("4,371");
-    expect(html).not.toContain("4,383");
-    expect(html).not.toContain("New subscribers");
-    expect(html).toContain("Subscribers also count as followers");
-    expect(html).toContain('href="/pages/of-page/subscribers"');
-    expect(html).not.toContain('href="/pages/of-page/followers"');
+    queryMocks.useOverviewRevenue.mockReturnValue({ data: buildOverviewRevenue(overview) });
+    const html = renderWithRouter(createElement(OverviewPage), ["/?period=7d&row=of-page"]);
+    expect(html).toContain((4371).toLocaleString("ru-RU"));
+    expect(html).not.toContain((4383).toLocaleString("ru-RU"));
+    expect(html).toContain("/pages/of-page/subscribers?filter=all");
+    expect(html).not.toContain("/pages/of-page/followers");
+    expect(html).toContain("filter=norenew");
+    expect(html).toContain("filter=expiring7d");
   });
 
-  it("retains a retired page's contribution to a decline and shows no fabricated zero for older servers", () => {
-    queryMocks.useOverview.mockReturnValue({ data: buildOverviewPage() });
-    queryMocks.useOverviewRevenue.mockReturnValue({ data: {
-      netEarningsMills: 10000, pages: [
-        { pageId: 1, pageLabel: "lana", modelSlug: "lana", modelName: "Lana", netEarningsMills: 10000 },
-        { pageId: 2, pageLabel: "retired", modelSlug: "lana", modelName: "Lana", netEarningsMills: 0, previousNetEarningsMills: 200000, status: "deleted" },
-      ],
-    } });
+  it("retains historical earnings without linking to a deleted page or inventing old-server deltas", () => {
+    const report = buildOverviewRevenue(undefined, 10000);
+    report.pages.push({ pageId: 2, pageLabel: "retired", modelSlug: "lana", modelName: "Lana", netEarningsMills: 0, totalNetMills: 0, previousNetEarningsMills: 200000, deltaNetMills: -200000, deltaPct: -100, platform: "fansly", status: "deleted" });
+    queryMocks.useOverviewRevenue.mockReturnValue({ data: report });
     const html = renderWithRouter(createElement(OverviewPage));
-    expect(html).toContain("−$200.00");
-    expect(html).toContain("100.0% ↓");
-    expect(html).toContain("Totals include 1 retired page");
+    expect(html).toContain("-$200.00");
+    expect(html).toContain("-100.0%");
+    expect(html).toContain("retired");
+    expect(html).toContain("архив");
+    expect(html).toContain("pageLabel=retired");
     expect(html).not.toContain('href="/pages/retired"');
-    expect(html).toContain('aria-label="Not available"');
+    expect(html).toContain("нет сравнения");
   });
 
   it("shows page detail attention with incomplete-data copy", () => {

@@ -1,885 +1,518 @@
-import { lazy, Suspense, useState, type ReactNode } from "react";
-import { Link } from "react-router";
-import { ArrowUpRight, RefreshCw, ChevronDown, Info } from "lucide-react";
+import { Fragment, useEffect, useLayoutEffect, useRef } from "react";
 import {
-  useAuthMe,
-  useOverview,
-  useOverviewRevenue,
-  useOverviewRevenueDaily,
-} from "@/api/queries";
-import { PeriodSelector } from "@/components/shared/PeriodSelector";
+  Link,
+  useLocation,
+  useNavigationType,
+  useSearchParams,
+} from "react-router";
+import { useAuthMe, useOverview, useOverviewRevenue } from "@/api/queries";
+import { usePeriodStore } from "@/stores/periodStore";
 import { StatusPanel } from "@/components/shared/StatusPanel";
-import { PlatformBadge } from "@/components/shared/PlatformBadge";
-import { getSyncUxTone } from "@/components/shared/SyncUxBadge";
-import {
-  getSyncUxDisplayMode,
-  getSyncUxExceptionKind,
-} from "@/components/shared/syncUxDisplay";
-import {
-  buildPageRoute,
-  buildPageSectionRoute,
-  buildSettingsRoute,
-} from "@/lib/navigation";
+import { isAlertState } from "@/components/shared/syncUxDisplay";
+import { buildPageRoute } from "@/lib/navigation";
 import { PLATFORM_DISPLAY_NAME } from "@/lib/platformUrls";
 import {
-  formatUsdFromMills,
-  millsFromInteger,
-  millsToNumber,
-} from "@agency_hub_core/shared";
-import { usePeriodStore } from "@/stores/periodStore";
-import type {
-  OverviewResponse,
-  OverviewRevenueResponse,
-  PlatformRevenueWindow,
-} from "@agency_hub_core/contracts";
+  buildRevenueTransactionsRoute,
+  overviewSearch,
+  parseOverviewState,
+  PERIOD_LABELS,
+  type OverviewState,
+} from "@/lib/overviewNavigation";
+import {
+  groupRevenue,
+  money,
+  describeWindows,
+  type PageRow,
+} from "./overview/presentation.js";
+import { AudienceLink, PageSources } from "./overview/PageSources.js";
+import { QueryNotice } from "@/components/shared/QueryNotice";
+import { RevenueDelta } from "./overview/RevenueValue.js";
+import { RevenueCharts } from "./overview/RevenueCharts.js";
+import "./overview.css";
 
-const PageActivityChart = lazy(() =>
-  import("@/components/page/PageActivityChart").then((m) => ({
-    default: m.PageActivityChart,
-  })),
-);
-type Page = OverviewResponse["pages"][number];
-type QueryState = {
-  data?: unknown;
-  isLoading?: boolean;
-  isFetching?: boolean;
-  isError?: boolean;
-  isPlaceholderData?: boolean;
-  refetch?: () => unknown;
-};
-type EarningsRow = {
-  id: number;
-  label: string;
-  modelSlug: string;
-  modelName: string;
-  catalog: Page | undefined;
-  retired: boolean;
-  current: number | null;
-  previous: number | null;
-};
-const PERIOD_LABELS: Record<string, string> = {
-  today: "Today",
-  "7d": "7 Days",
-  "30d": "30 Days",
-  all: "All Time",
-};
-const SOURCE_LABELS: Record<string, string> = {
-  subscription: "Subscription payments",
-  tip: "Tips",
-  message_purchase: "Paid messages",
-  post_purchase: "Paid posts",
-  stream_tip: "Live stream tips",
-  chargeback: "Chargebacks",
-  refund: "Refunds",
-  other: "Unclassified",
-};
-const MS_PER_DAY = 86_400_000;
+export { describeMixedRevenueWindows } from "./overview/presentation.js";
 
-function hasCurrentData(query: QueryState) {
-  return query.data != null && !query.isPlaceholderData;
+// Contains only UI position, never API data or account information. Kept per
+// exact URL so Back, reload, and another tab's period cannot overwrite it.
+function positionKey(search: string) {
+  return `hub-overview-position:${search}`;
 }
-function isWaiting(query: QueryState) {
-  return !hasCurrentData(query) && Boolean(query.isLoading || query.isFetching);
-}
-function metricValue(metric: Page["subscriberCount"]) {
-  return metric.available && typeof metric.value === "number"
-    ? metric.value
-    : null;
-}
-function difference(current: number, previous: number) {
-  return millsToNumber(millsFromInteger(current) - millsFromInteger(previous));
-}
-function signedMoney(value: number) {
-  return `${value > 0 ? "+" : value < 0 ? "−" : ""}${formatUsdFromMills(Math.abs(value))}`;
-}
-function dateLabel(value: string) {
-  return new Date(value).toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    timeZone: "UTC",
-  });
-}
-function windowLabel(from: string | null, to: string | null) {
-  return from && to
-    ? `${dateLabel(from)} – ${dateLabel(new Date(new Date(to).getTime() - 1).toISOString())}`
-    : "All captured history";
-}
-
-export function describeMixedRevenueWindows(
-  windows: PlatformRevenueWindow[] | undefined,
-  periodLabel: string,
-): string | null {
-  if (!windows || windows.length < 2) return null;
-  const spans = windows
-    .filter((window) => window.from && window.to)
-    .map((window) => ({
-      platform: PLATFORM_DISPLAY_NAME[window.platform] ?? window.platform,
-      days: Math.round(
-        (new Date(window.to!).getTime() - new Date(window.from!).getTime()) /
-          MS_PER_DAY,
-      ),
-    }));
-  if (spans.length < 2 || new Set(spans.map((span) => span.days)).size < 2)
-    return null;
-  return `“${periodLabel}” uses ${spans.map((span) => `${span.days} days on ${span.platform}`).join(", ")}. Each page is compared with its own preceding window.`;
-}
-
-function MetricValue({
-  value,
-  loading = false,
-  money = false,
-}: {
-  value: number | null;
-  loading?: boolean;
-  money?: boolean;
-}) {
-  if (loading)
-    return (
-      <span
-        className="overview-value-skeleton"
-        role="status"
-        aria-label="Loading metric"
-      />
+function readPosition(search: string): { y: number; focus: string } | null {
+  try {
+    const saved: unknown = JSON.parse(
+      sessionStorage.getItem(positionKey(search)) ?? "null",
     );
-  if (value === null)
-    return (
-      <span
-        className="text-text-muted"
-        aria-label="Not available"
-        title="Data is not available"
-      >
-        —
-      </span>
-    );
-  return <>{money ? formatUsdFromMills(value) : value.toLocaleString()}</>;
-}
-
-function QueryNotice({ query, label }: { query: QueryState; label: string }) {
-  if (!query.isError) return null;
-  return (
-    <div role="alert" className="overview-query-notice">
-      <span>
-        {hasCurrentData(query)
-          ? `${label} could not refresh. Showing saved data.`
-          : `${label} could not be loaded.`}
-      </span>
-      <button
-        type="button"
-        disabled={query.isFetching}
-        onClick={() => void query.refetch?.()}
-      >
-        {query.isFetching ? "Retrying…" : "Try again"}
-      </button>
-    </div>
-  );
-}
-
-function RevenueChange({
-  current,
-  previous,
-  loading = false,
-}: {
-  current: number | null;
-  previous: number | null;
-  loading?: boolean;
-}) {
-  if (current === null || previous === null)
-    return <MetricValue value={null} loading={loading} />;
-  const delta = difference(current, previous);
-  const pct = previous === 0 ? null : (delta / Math.abs(previous)) * 100;
-  return (
-    <div className="overview-change">
-      <span
-        className={delta < 0 ? "text-danger" : delta > 0 ? "text-green" : ""}
-      >
-        {signedMoney(delta)}
-        {pct !== null && (
-          <span className="overview-change-pct">
-            {Math.abs(pct).toFixed(1)}% {delta < 0 ? "↓" : delta > 0 ? "↑" : ""}
-          </span>
-        )}
-      </span>
-      <small>
-        from {formatUsdFromMills(previous)}
-        {previous === 0 && delta !== 0 ? " · no recorded previous earnings" : ""}
-      </small>
-    </div>
-  );
-}
-
-function PageIdentity({
-  page,
-  label,
-  retired = false,
-  isOwner = false,
-}: {
-  page?: Page | undefined;
-  label: string;
-  retired?: boolean;
-  isOwner?: boolean;
-}) {
-  const tone = page ? getSyncUxTone(page.syncUx.state) : null;
-  const exception = page ? getSyncUxExceptionKind(page.syncUx) : null;
-  const showException =
-    page &&
-    getSyncUxDisplayMode(page.syncUx, "overview_row") === "exception" &&
-    exception &&
-    exception !== "credentials";
-  const content = (
-    <>
-      {page && tone && (
-        <span
-          className={`h-2 w-2 shrink-0 rounded-full ${tone.dot}`}
-          role="img"
-          aria-label={page.syncUx.label}
-          title={page.syncUx.headline}
-        />
-      )}
-      <span className="overview-page-label">{label}</span>
-      {page && <PlatformBadge platform={page.platform} />}
-      {retired ? (
-        <span className="overview-page-count">Retired</span>
-      ) : (
-        <ArrowUpRight
-          size={14}
-          className="overview-page-arrow"
-          aria-hidden="true"
-        />
-      )}
-    </>
-  );
-  return (
-    <>
-      {retired ? (
-        <span className="overview-page-link">{content}</span>
-      ) : (
-        <Link className="overview-page-link" to={buildPageRoute(label)}>
-          {content}
-        </Link>
-      )}
-      {showException && (
-        <div className={`overview-sync-notice ${tone?.panel}`}>
-          <span className={tone?.text}>
-            {exception === "off"
-              ? page.syncUx.headline
-              : "Data may be incomplete — updates need attention"}
-          </span>
-          {isOwner && (
-            <Link to={buildSettingsRoute("sync", label)}>
-              Check sync settings
-            </Link>
-          )}
-        </div>
-      )}
-    </>
-  );
-}
-
-function earningsRows(
-  pages: Page[],
-  report?: OverviewRevenueResponse,
-): EarningsRow[] {
-  const catalog = new Map(pages.map((p) => [p.id, p]));
-  const amounts = new Map((report?.pages ?? []).map((p) => [p.pageId, p]));
-  const ids = new Set([...catalog.keys(), ...amounts.keys()]);
-  return [...ids].map((id) => {
-    const page = catalog.get(id);
-    const amount = amounts.get(id);
-    return {
-      id,
-      label: page?.label ?? amount?.pageLabel ?? String(id),
-      modelSlug: page?.modelSlug ?? amount?.modelSlug ?? "",
-      modelName: page?.modelName ?? amount?.modelName ?? "",
-      catalog: page,
-      retired: amount?.status === "deleted",
-      current: amount?.netEarningsMills ?? null,
-      previous: amount?.previousNetEarningsMills ?? null,
-    };
-  });
-}
-
-function RevenueSources({
-  report,
-  loading,
-}: {
-  report?: OverviewRevenueResponse | undefined;
-  loading: boolean;
-}) {
-  const breakdown = report?.breakdown;
-  const sales = breakdown
-    ?.filter((r) => r.bucket === "revenue")
-    .sort((a, b) => b.netAmountMills - a.netAmountMills);
-  const adjustments = breakdown?.filter(
-    (r) =>
-      (r.bucket === "adjustment" || r.bucket === "unclassified") &&
-      r.netAmountMills !== 0,
-  );
-  return (
-    <section
-      className="overview-sources"
-      aria-labelledby="overview-sources-heading"
-    >
-      <div className="overview-section-heading">
-        <h2 id="overview-sources-heading">What earned money</h2>
-      </div>
-      <p className="overview-source-intro">
-        Net amounts from recorded transactions
-      </p>
-      {loading ? (
-        <ReportPlaceholder loading />
-      ) : !breakdown ? (
-        <p className="overview-empty">Revenue breakdown unavailable.</p>
-      ) : (
-        <>
-          {(sales?.length ?? 0) === 0 && (
-            <p className="overview-empty">No sales recorded for this period.</p>
-          )}
-          <div className="overview-source-list">
-            {sales?.map((source) => {
-              const share =
-                report.revenueMills > 0 && source.netAmountMills >= 0
-                  ? Math.min(
-                      100,
-                      (source.netAmountMills / report.revenueMills) * 100,
-                    )
-                  : null;
-              return (
-                <div key={source.canonicalType} className="overview-source">
-                  <div>
-                    <span>
-                      {SOURCE_LABELS[source.canonicalType] ??
-                        source.canonicalType}
-                    </span>
-                    <strong>{formatUsdFromMills(source.netAmountMills)}</strong>
-                  </div>
-                  {share !== null && (
-                    <div className="overview-source-bar" aria-hidden="true">
-                      <span style={{ width: `${share}%` }} />
-                    </div>
-                  )}
-                  {share !== null && (
-                    <small>{share.toFixed(1)}% of sales</small>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-          {(adjustments?.length ?? 0) > 0 && (
-            <div className="overview-adjustments">
-              {adjustments?.map((item) => (
-                <div key={item.canonicalType}>
-                  <span>
-                    {SOURCE_LABELS[item.canonicalType] ?? item.canonicalType}
-                  </span>
-                  <strong>{signedMoney(item.netAmountMills)}</strong>
-                </div>
-              ))}
-            </div>
-          )}
-        </>
-      )}
-      <p className="overview-source-note">
-        Subscription revenue comes from purchases and renewals. Free access does
-        not generate subscription revenue.
-      </p>
-    </section>
-  );
-}
-
-function AudienceSection({
-  pages,
-  isOwner,
-}: {
-  pages: Page[];
-  isOwner: boolean;
-}) {
-  if (!pages.length) return null;
-  return (
-    <details className="overview-audience">
-      <summary>
-        <span>
-          <strong>Audience by page</strong>
-          <small>Followers & access subscriptions · latest stored counts</small>
-        </span>
-        <ChevronDown size={18} aria-hidden="true" />
-      </summary>
-      <div className="overview-audience-content">
-        <p className="overview-audience-explanation">
-          Subscriptions measure access to a page, including free access and
-          trials. They do not tell you how many fans paid. Counts below are
-          independent of the selected revenue period.
-        </p>
-        <div className="overview-table-frame">
-          <table className="overview-table">
-            <caption className="sr-only">
-              Audience counts by page, without an agency total
-            </caption>
-            <thead>
-              <tr>
-                <th scope="col">Page</th>
-                <th scope="col">
-                  Followers<span>Fansly only</span>
-                </th>
-                <th scope="col">
-                  Access subscriptions<span>Free and paid together</span>
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {pages.map((page) => (
-                <tr key={page.id} className="overview-page-row">
-                  <th scope="row">
-                    <PageIdentity
-                      page={page}
-                      label={page.label}
-                      isOwner={isOwner}
-                    />
-                  </th>
-                  <td data-label="Followers">
-                    {page.platform === "fansly" ? (
-                      <Link to={buildPageSectionRoute(page.label, "followers")}>
-                        <MetricValue value={metricValue(page.followerCount)} />
-                      </Link>
-                    ) : (
-                      <span
-                        aria-label="Followers are not reported for OnlyFans"
-                        className="text-text-muted"
-                      >
-                        —
-                      </span>
-                    )}
-                  </td>
-                  <td data-label="Access subscriptions">
-                    <Link to={buildPageSectionRoute(page.label, "subscribers")}>
-                      <MetricValue value={metricValue(page.subscriberCount)} />
-                    </Link>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        <dl className="overview-definitions">
-          <div>
-            <dt>Followers</dt>
-            <dd>
-              Fansly accounts following the page. Subscribers also count as
-              followers, so the two numbers overlap.
-            </dd>
-          </div>
-          <div>
-            <dt>Access subscriptions</dt>
-            <dd>
-              Fansly’s reported subscription count; on OnlyFans, subscription
-              records currently marked active in Hub. Neither is a count of
-              paying customers.
-            </dd>
-          </div>
-          <div>
-            <dt>Why there is no total or conversion rate</dt>
-            <dd>
-              The same fan can appear on several pages. Paid, free and
-              unknown-price subscriptions are not reliably separated. These
-              counts cannot establish agency-wide unique fans or a sales
-              conversion rate.
-            </dd>
-          </div>
-        </dl>
-      </div>
-    </details>
-  );
+    if (
+      saved &&
+      typeof saved === "object" &&
+      "y" in saved &&
+      typeof saved.y === "number" &&
+      Number.isFinite(saved.y) &&
+      "focus" in saved &&
+      typeof saved.focus === "string"
+    )
+      return { y: saved.y, focus: saved.focus };
+  } catch {
+    /* Storage can be disabled; navigation still works. */
+  }
+  return null;
 }
 
 export function OverviewPage() {
-  const { data: auth } = useAuthMe();
-  const { period } = usePeriodStore();
-  const overview = useOverview();
-  const revenue = useOverviewRevenue(period);
-  const daily = useOverviewRevenueDaily(period);
-  const [sort, setSort] = useState("earnings");
-  const isOwner = auth?.user.role === "owner";
-  const periodLabel = PERIOD_LABELS[period] ?? "30 Days";
-  const overviewReady = hasCurrentData(overview);
-  const revenueReady = hasCurrentData(revenue);
-  const dailyReady = hasCurrentData(daily);
-  const pages = overviewReady ? (overview.data?.pages ?? []) : [];
-  const report = revenueReady ? revenue.data : undefined;
-  const rows = earningsRows(pages, report);
-  const hasComparisons =
-    period !== "all" &&
-    rows.some((row) => row.current !== null && row.previous !== null);
-  const activeSort = hasComparisons ? sort : "earnings";
-  const modelTotals = new Map(
-    (report?.models ?? []).map((model) => [model.modelSlug, model]),
-  );
-  const groups = [...new Set(rows.map((row) => row.modelSlug))].map((slug) => ({
-    slug,
-    name: rows.find((row) => row.modelSlug === slug)?.modelName ?? slug,
-    pages: rows.filter((row) => row.modelSlug === slug),
-    totals: modelTotals.get(slug),
-  }));
-  const order = (
-    a: { current: number | null; previous: number | null },
-    b: { current: number | null; previous: number | null },
-  ) =>
-    activeSort === "decrease"
-      ? (a.current !== null && a.previous !== null
-          ? difference(a.current, a.previous)
-          : Infinity) -
-        (b.current !== null && b.previous !== null
-          ? difference(b.current, b.previous)
-          : Infinity)
-      : (b.current ?? -Infinity) - (a.current ?? -Infinity);
-  groups.sort((a, b) =>
-    order(
-      {
-        current: a.totals?.netEarningsMills ?? null,
-        previous: a.totals?.previousNetEarningsMills ?? null,
-      },
-      {
-        current: b.totals?.netEarningsMills ?? null,
-        previous: b.totals?.previousNetEarningsMills ?? null,
-      },
-    ),
-  );
-  groups.forEach((group) => group.pages.sort(order));
-  const largestDecrease = rows
-    .filter(
-      (r) =>
-        r.current !== null && r.previous !== null && r.current < r.previous,
-    )
-    .sort(
-      (a, b) =>
-        difference(a.current!, a.previous!) -
-        difference(b.current!, b.previous!),
-    )[0];
-  const queries = [overview, revenue, daily];
-  const refreshing = queries.some((q) => q.isFetching);
-  const mixedNote = describeMixedRevenueWindows(
-    report?.platformWindows,
-    periodLabel,
-  );
-  const retired = rows.filter(
-    (row) => row.retired && (row.current !== 0 || row.previous !== 0),
-  );
-  return (
-    <div className="overview-page">
-      <header className="overview-header">
-        <div>
-          <h1>Agency overview</h1>
-          <p>Earnings, changes and the pages behind them</p>
-        </div>
-        <div className="overview-controls">
-          <PeriodSelector />
-          <button
-            type="button"
-            className="overview-refresh"
-            disabled={refreshing}
-            onClick={() =>
-              void Promise.all(queries.map((query) => query.refetch()))
-            }
-            aria-label="Refresh overview"
-          >
-            <RefreshCw
-              size={15}
-              className={refreshing ? "animate-spin" : ""}
-              aria-hidden="true"
-            />
-            <span>{refreshing ? "Updating…" : "Refresh"}</span>
-          </button>
-        </div>
-      </header>
-      <QueryNotice query={revenue} label="Revenue" />
-      <section className="overview-earnings" aria-label="Agency earnings">
-        <div className="overview-earnings-main">
-          <div className="overview-earnings-head">
-            <div>
-              <p className="overview-eyebrow">Net earnings · {periodLabel}</p>
-              <div className="overview-net-value">
-                <MetricValue
-                  value={report?.netEarningsMills ?? null}
-                  loading={isWaiting(revenue)}
-                  money
-                />
-              </div>
-              <p className="overview-net-caption">
-                After platform fees · includes pending transactions
-              </p>
-            </div>
-            {period !== "all" && (
-              <div className="overview-period-change">
-                <span>vs previous period</span>
-                <RevenueChange
-                  current={report?.netEarningsMills ?? null}
-                  previous={report?.comparison?.netEarningsMills ?? null}
-                  loading={isWaiting(revenue)}
-                />
-              </div>
-            )}
-          </div>
-          <div className="overview-trend">
-            <QueryNotice query={daily} label="Revenue trend" />
-            {dailyReady && (daily.data?.series.length ?? 0) > 0 ? (
-              <Suspense
-                fallback={<ReportPlaceholder title="Revenue trend" loading />}
-              >
-                <PageActivityChart
-                  title="Daily net earnings"
-                  selectedPeriod={period}
-                  selectedPeriodLabel={periodLabel}
-                  points={(daily.data?.series ?? []).map((point) => ({
-                    businessDate: point.businessDate,
-                    value: point.netAmountMills,
-                  }))}
-                  valueFormatter={formatUsdFromMills}
-                  yAxisWidth={66}
-                  height={220}
-                  showYAxisLabel={false}
-                  color="var(--color-accent)"
-                />
-              </Suspense>
-            ) : (
-              <ReportPlaceholder
-                title="Revenue trend"
-                loading={isWaiting(daily)}
-                error={daily.isError}
-              />
-            )}
-          </div>
-        </div>
-        <RevenueSources report={report} loading={isWaiting(revenue)} />
-      </section>
-      <div className="overview-period-context">
-        {mixedNote && <p>{mixedNote}</p>}
-        {period !== "all" && (
-          <p>
-            Today is still in progress; the previous period includes full days.
-            Dates are UTC.
-          </p>
-        )}
-        <details>
-          <summary>
-            <Info size={13} aria-hidden="true" /> Dates and calculation
-          </summary>
-          <div className="overview-period-details">
-            {report?.platformWindows?.map((window) => (
-              <p key={window.platform}>
-                <strong>{PLATFORM_DISPLAY_NAME[window.platform]}</strong>{" "}
-                {windowLabel(window.from, window.to)}
-                {window.comparisonFrom && (
-                  <>
-                    {" "}
-                    · previous{" "}
-                    {windowLabel(window.comparisonFrom, window.comparisonTo)}
-                  </>
-                )}
-              </p>
-            ))}
-            <p>
-              Recorded sales, refunds, chargebacks and unclassified amounts
-              after platform fees. Payout reversals are excluded. This is not
-              the payout balance or agency profit.
-            </p>
-          </div>
-        </details>
-      </div>
-      <section
-        className="overview-pages"
-        aria-labelledby="overview-pages-heading"
+  const [search, setSearch] = useSearchParams();
+  const location = useLocation();
+  const navigationType = useNavigationType();
+  const storedPeriod = usePeriodStore((store) => store.period);
+  const state = parseOverviewState(search, storedPeriod);
+  const catalog = useOverview();
+  const revenue = useOverviewRevenue(state.period);
+  const user = useAuthMe();
+  const report = revenue.isPlaceholderData ? undefined : revenue.data;
+  const groups = report
+    ? groupRevenue(report, catalog.data?.pages ?? [], state.sort)
+    : [];
+  const backTo = `/?${overviewSearch(state)}`;
+  const root = useRef<HTMLDivElement>(null);
+  const lastFocus = useRef("");
+  const restored = useRef<string | null>(null);
+  const entryKey = useRef(location.key);
+  const chartRequested = useRef(false);
+  const ready = Boolean(report);
+  const expandedPageId = report?.pages.find(
+    (page) => page.pageLabel === state.row,
+  )?.pageId;
+
+  useEffect(() => {
+    if (!report?.windowAt || state.period === "all") return;
+    const windowDay = report.windowAt.slice(0, 10);
+    function refreshIfNewDay() {
+      if (
+        document.visibilityState === "visible" &&
+        new Date().toISOString().slice(0, 10) !== windowDay
+      )
+        void revenue.refetch();
+    }
+    const nextDay = new Date();
+    nextDay.setUTCHours(24, 0, 1, 0);
+    const timer = window.setTimeout(
+      refreshIfNewDay,
+      windowDay === new Date().toISOString().slice(0, 10)
+        ? nextDay.getTime() - Date.now()
+        : 0,
+    );
+    document.addEventListener("visibilitychange", refreshIfNewDay);
+    return () => {
+      window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", refreshIfNewDay);
+    };
+  }, [report?.windowAt, state.period, revenue.refetch]);
+
+  useEffect(() => {
+    if (!search.has("period"))
+      setSearch(overviewSearch(state), { replace: true });
+  }, [search, state.period, setSearch]);
+
+  useLayoutEffect(() => {
+    function save() {
+      try {
+        sessionStorage.setItem(
+          positionKey(location.search),
+          JSON.stringify({ y: window.scrollY, focus: lastFocus.current }),
+        );
+      } catch {
+        /* Position persistence is optional. */
+      }
+    }
+    window.addEventListener("pagehide", save);
+    return () => {
+      save();
+      window.removeEventListener("pagehide", save);
+    };
+  }, [location.search]);
+
+  useEffect(() => {
+    if (!ready || restored.current === location.key) return;
+    restored.current = location.key;
+    if (chartRequested.current) {
+      chartRequested.current = false;
+      document
+        .getElementById("overview-chart")
+        ?.scrollIntoView({ block: "start", behavior: "instant" });
+      document
+        .getElementById("overview-chart-scope")
+        ?.focus({ preventScroll: true });
+      return;
+    }
+    if (navigationType !== "POP" && location.key !== entryKey.current) return;
+    const saved = readPosition(location.search);
+    if (saved) {
+      const restore = () => {
+        window.scrollTo({ top: saved.y, behavior: "instant" });
+        const focus = document.getElementById(saved.focus);
+        if (focus && document.activeElement !== focus)
+          focus.focus({ preventScroll: true });
+      };
+      // The report mounts before lazy charts and source queries settle. Retry
+      // after layout growth so the browser's early height clamp is not final.
+      // A user's first interaction takes control and cancels restoration.
+      restore();
+      const observer = new ResizeObserver(restore);
+      if (root.current) observer.observe(root.current);
+      const events = ["wheel", "touchstart", "pointerdown", "keydown"] as const;
+      const stop = () => {
+        observer.disconnect();
+        for (const event of events) window.removeEventListener(event, stop);
+      };
+      for (const event of events)
+        window.addEventListener(event, stop, { once: true, passive: true });
+      return stop;
+    } else if (expandedPageId != null) {
+      const button = document.getElementById(`expand-${expandedPageId}`);
+      button?.scrollIntoView({ block: "center", behavior: "instant" });
+      button?.focus({ preventScroll: true });
+    }
+  }, [ready, location.key, location.search, navigationType, expandedPageId]);
+
+  function update(patch: Partial<OverviewState>) {
+    setSearch(overviewSearch({ ...state, ...patch }));
+  }
+  function showChart(scope: string, scroll = true) {
+    chartRequested.current = scroll;
+    if (scope === state.chart && scroll) {
+      document
+        .getElementById("overview-chart")
+        ?.scrollIntoView({ block: "start", behavior: "instant" });
+      document
+        .getElementById("overview-chart-scope")
+        ?.focus({ preventScroll: true });
+      chartRequested.current = false;
+    } else update({ chart: scope });
+  }
+  function amount(page: PageRow, previous = false) {
+    const value = previous
+      ? page.previousNetEarningsMills
+      : page.netEarningsMills;
+    const platform = page.platform ?? page.catalog?.platform;
+    const window = report?.platformWindows.find(
+      (item) => item.platform === platform,
+    );
+    if (!window || value == null) return money(value);
+    const to = buildRevenueTransactionsRoute({
+      pageLabel: page.pageLabel,
+      from: previous ? window.comparisonFrom : window.from,
+      to: previous ? window.comparisonTo : window.to,
+      backTo,
+    });
+    return (
+      <Link
+        id={`${previous ? "previous" : "current"}-money-${page.pageId}`}
+        className="v1-audience-link"
+        to={to}
+        title="Операции за это окно и итог по всему списку"
       >
-        <div className="overview-section-heading">
-          <div>
-            <h2 id="overview-pages-heading">Where earnings changed</h2>
-            <p>Models and pages · {periodLabel}</p>
-          </div>
-          <label className="overview-sort">
-            Sort{" "}
-            <select
-              value={activeSort}
-              onChange={(e) => setSort(e.target.value)}
-            >
-              <option value="earnings">Highest earnings</option>
-              <option value="decrease" disabled={!hasComparisons}>
-                Biggest decrease
-              </option>
-            </select>
-          </label>
-        </div>
-        {largestDecrease && (
-          <div className="overview-insight">
-            <span>Largest decrease</span>
-            {largestDecrease.retired ? (
-              <strong>{largestDecrease.label} · retired</strong>
-            ) : (
-              <Link to={buildPageRoute(largestDecrease.label)}>
-                {largestDecrease.label}
-                <ArrowUpRight size={13} aria-hidden="true" />
-              </Link>
-            )}
-            <strong>
-              {signedMoney(
-                difference(largestDecrease.current!, largestDecrease.previous!),
-              )}
-            </strong>
-            <span>vs its previous period</span>
-          </div>
-        )}
-        <QueryNotice query={overview} label="Page details" />
-        {!overviewReady && !isWaiting(overview) && (
-          <StatusPanel
-            title="Overview failed to load"
-            description="Page details could not be fetched. Available revenue reports are shown separately."
-            tone="error"
-            action={
-              <button
-                type="button"
-                className="overview-text-button"
-                onClick={() => void overview.refetch()}
-              >
-                Try again
-              </button>
-            }
-          />
-        )}
-        {isWaiting(overview) && !rows.length ? (
-          <ReportPlaceholder title="Loading pages" loading />
-        ) : !rows.length && overviewReady ? (
-          <StatusPanel
-            title="No pages yet"
-            description={
-              isOwner
-                ? "Connect your first page to start tracking earnings."
-                : "Your assigned pages will appear here."
-            }
-            action={
-              isOwner ? (
-                <Link
-                  className="overview-text-button"
-                  to={buildSettingsRoute("pages")}
+        {money(value)}
+      </Link>
+    );
+  }
+
+  return (
+    <div
+      ref={root}
+      className="v1-overview"
+      onFocusCapture={(event) => {
+        if (event.target.id) lastFocus.current = event.target.id;
+      }}
+    >
+      <div className="v1-toolbar">
+        <span className="text-text-muted">По сохранённым операциям Hub</span>
+        <button
+          id="overview-refresh"
+          type="button"
+          className="v1-text-button"
+          disabled={revenue.isFetching || catalog.isFetching}
+          onClick={() =>
+            void Promise.all([revenue.refetch(), catalog.refetch()])
+          }
+        >
+          Обновить
+        </button>
+      </div>
+      <QueryNotice
+        error={catalog.isError}
+        stale={Boolean(catalog.data)}
+        retry={catalog.refetch}
+      />
+      {catalog.isError && (
+        <p className="v1-zero-note">
+          Метаданные аудитории и сбора недоступны или устарели. Доход
+          загружается отдельно.
+        </p>
+      )}
+      <QueryNotice
+        error={revenue.isError}
+        stale={Boolean(report)}
+        retry={revenue.refetch}
+      />
+      {revenue.isFetching && (
+        <p className="v1-loading-note" role="status">
+          {report ? "Обновляем выбранное окно…" : "Загружаем доход…"}
+        </p>
+      )}
+      {report && report.pages.length === 0 && (
+        <StatusPanel
+          title="Нет страниц в доступной области"
+          description="Добавьте страницу в настройках или проверьте доступ."
+        />
+      )}
+      {report && report.pages.length > 0 && (
+        <>
+          {state.row &&
+            !report.pages.some((page) => page.pageLabel === state.row) && (
+              <p className="v1-query-error" role="status">
+                Страница из ссылки недоступна в текущей области.{" "}
+                <button
+                  className="v1-text-button"
+                  onClick={() => update({ row: null })}
                 >
-                  Manage pages
-                </Link>
-              ) : undefined
-            }
-          />
-        ) : (
-          rows.length > 0 && (
-            <div className="overview-table-frame">
-              <table className="overview-table">
-                <caption className="sr-only">
-                  Net earnings by model and page, compared with each platform’s
-                  preceding period
-                </caption>
-                <thead>
-                  <tr>
-                    <th scope="col">Model / page</th>
-                    <th scope="col">
-                      Net earnings<span>{periodLabel}</span>
-                    </th>
-                    <th scope="col">
-                      Change<span>vs previous period</span>
-                    </th>
-                  </tr>
-                </thead>
-                {groups.map((group) => (
-                  <tbody key={group.slug}>
-                    <tr className="overview-model-row">
-                      <th scope="row">
-                        <span className="overview-model-name">
-                          {group.name}
+                  Закрыть раскрытие
+                </button>
+              </p>
+            )}
+          <div className="v1-table-wrap">
+            <table
+              className="v1-table"
+              aria-label={`Страницы агентства, доход за период ${PERIOD_LABELS[state.period]}`}
+            >
+              <colgroup>
+                <col className="v1-page-col" />
+                <col className="v1-money-col" />
+                <col className="v1-money-col v1-previous-col" />
+                <col className="v1-change-col" />
+                <col className="v1-access-col" />
+              </colgroup>
+              <thead>
+                <tr>
+                  <th scope="col">Страница</th>
+                  <th scope="col">
+                    Доход
+                    <br />
+                    {PERIOD_LABELS[state.period]}
+                  </th>
+                  <th scope="col" className="v1-previous">
+                    Предыдущее
+                    <br />
+                    окно
+                  </th>
+                  <th
+                    scope="col"
+                    aria-sort={
+                      state.sort === "source"
+                        ? "none"
+                        : state.sort === "decline"
+                          ? "ascending"
+                          : "descending"
+                    }
+                  >
+                    <button
+                      id="overview-sort"
+                      type="button"
+                      className="v1-sort-button"
+                      title="Сортировать страницы внутри модели по изменению суммы"
+                      onClick={() =>
+                        update({
+                          sort:
+                            state.sort === "source"
+                              ? "decline"
+                              : state.sort === "decline"
+                                ? "growth"
+                                : "source",
+                        })
+                      }
+                    >
+                      Изменение{" "}
+                      {state.sort === "source"
+                        ? "↕"
+                        : state.sort === "decline"
+                          ? "↑"
+                          : "↓"}
+                    </button>
+                  </th>
+                  <th scope="col" className="v1-access">
+                    Подписчики
+                    <br />
+                    страницы
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {groups.map(({ model, pages }) => (
+                  <Fragment key={model.modelSlug}>
+                    <tr className="v1-group-row">
+                      <td>
+                        <span className="v1-model-name">{model.modelName}</span>
+                        <span className="v1-page-count">
+                          {model.pageCount} стр.
+                          {model.status === "retired" ? " · архив" : ""}
                         </span>
-                        <span className="overview-page-count">
-                          {group.pages.length}{" "}
-                          {group.pages.length === 1 ? "page" : "pages"}
-                        </span>
-                      </th>
-                      <td data-label="Net earnings">
-                        <MetricValue
-                          value={group.totals?.netEarningsMills ?? null}
-                          loading={isWaiting(revenue)}
-                          money
-                        />
                       </td>
-                      <td data-label="Change">
-                        <RevenueChange
-                          current={group.totals?.netEarningsMills ?? null}
-                          previous={
-                            group.totals?.previousNetEarningsMills ?? null
-                          }
-                          loading={isWaiting(revenue)}
-                        />
+                      <td className="v1-number">
+                        {money(model.netEarningsMills)}
+                      </td>
+                      <td className="v1-number v1-previous">
+                        {money(model.previousNetEarningsMills)}
+                      </td>
+                      <td className="v1-number">
+                        <RevenueDelta {...model} />
+                      </td>
+                      <td className="v1-number v1-access v1-audience-total">
+                        —
                       </td>
                     </tr>
-                    {group.pages.map((row) => (
-                      <tr key={row.id} className="overview-page-row">
-                        <th scope="row">
-                          <PageIdentity
-                            page={row.catalog}
-                            label={row.label}
-                            retired={row.retired}
-                            isOwner={isOwner}
-                          />
-                        </th>
-                        <td data-label="Net earnings">
-                          <MetricValue
-                            value={row.current}
-                            loading={isWaiting(revenue)}
-                            money
-                          />
-                        </td>
-                        <td data-label="Change">
-                          <RevenueChange
-                            current={row.current}
-                            previous={row.previous}
-                            loading={isWaiting(revenue)}
-                          />
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
+                    {pages.map((page) => {
+                      const expanded = state.row === page.pageLabel;
+                      const platform = page.platform ?? page.catalog?.platform;
+                      const sync = page.catalog?.syncUx;
+                      return (
+                        <Fragment key={page.pageId}>
+                          <tr
+                            className={`v1-page-row${expanded ? " v1-expanded" : ""}`}
+                          >
+                            <td>
+                              <div className="v1-page-cell">
+                                <button
+                                  id={`expand-${page.pageId}`}
+                                  type="button"
+                                  className="v1-expander"
+                                  aria-label={`${expanded ? "Свернуть" : "Раскрыть"} источники дохода ${page.pageLabel}`}
+                                  aria-expanded={expanded}
+                                  aria-controls={
+                                    expanded
+                                      ? `sources-${page.pageId}`
+                                      : undefined
+                                  }
+                                  onClick={() =>
+                                    update({
+                                      row: expanded ? null : page.pageLabel,
+                                    })
+                                  }
+                                >
+                                  <span aria-hidden="true">
+                                    {expanded ? "⌄" : "›"}
+                                  </span>
+                                </button>
+                                <span
+                                  className={`v1-sync-dot ${sync && isAlertState(sync) ? "v1-sync-attention" : sync?.state === "healthy" ? "v1-sync-ok" : "v1-sync-off"}`}
+                                  role="img"
+                                  aria-label={`Сбор: ${sync?.label ?? "неизвестно"}`}
+                                  title={`Сбор: ${sync?.label ?? "неизвестно"}. Не подтверждает полноту дохода.`}
+                                />
+                                <div className="v1-page-identity">
+                                  {page.status === "deleted" ? (
+                                    <span className="v1-page-link">
+                                      {page.pageLabel} · архив
+                                    </span>
+                                  ) : (
+                                    <Link
+                                      className="v1-page-link"
+                                      to={buildPageRoute(page.pageLabel)}
+                                      state={{ backTo }}
+                                    >
+                                      {page.pageLabel}
+                                    </Link>
+                                  )}
+                                  {platform && (
+                                    <span
+                                      className={`v1-platform v1-${platform}`}
+                                    >
+                                      {PLATFORM_DISPLAY_NAME[platform]}
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            </td>
+                            <td className="v1-number v1-money-current">
+                              {amount(page)}
+                            </td>
+                            <td className="v1-number v1-money-previous v1-previous">
+                              {amount(page, true)}
+                            </td>
+                            <td className="v1-number">
+                              <RevenueDelta {...page} />
+                            </td>
+                            <td className="v1-number v1-access">
+                              <AudienceLink page={page} backTo={backTo} />
+                            </td>
+                          </tr>
+                          {expanded && (
+                            <PageSources
+                              page={page}
+                              period={state.period}
+                              windowAt={report.windowAt}
+                              windows={report.platformWindows}
+                              backTo={backTo}
+                              showChart={showChart}
+                              isOwner={user.data?.user.role === "owner"}
+                            />
+                          )}
+                        </Fragment>
+                      );
+                    })}
+                  </Fragment>
                 ))}
-              </table>
-            </div>
-          )
-        )}
-        {retired.length > 0 && (
-          <p className="overview-footnote">
-            Totals include {retired.length} retired{" "}
-            {retired.length === 1 ? "page" : "pages"} (
-            {retired.map((r) => r.label).join(", ")}). History is kept after
-            deletion.
-          </p>
-        )}
-      </section>
-      <AudienceSection pages={pages} isOwner={isOwner} />
-    </div>
-  );
-}
-
-function ReportPlaceholder({
-  title,
-  loading = false,
-  error = false,
-}: {
-  title?: string;
-  loading?: boolean;
-  error?: boolean;
-}) {
-  return (
-    <div className="overview-report-placeholder" role="status">
-      {title && <h2>{title}</h2>}
-      <div>
-        {loading ? (
-          <>
-            <span className="overview-value-skeleton" />
-            <span className="sr-only">Loading report</span>
-          </>
-        ) : error ? (
-          "Report unavailable. Try again above."
-        ) : (
-          "No revenue data for this period."
-        )}
-      </div>
+                <tr className="v1-total-row">
+                  <td className="v1-total-label">Всего по агентству</td>
+                  <td className="v1-number">
+                    {money(report.netEarningsMills)}
+                  </td>
+                  <td className="v1-number v1-previous">
+                    {money(report.comparison?.netEarningsMills)}
+                  </td>
+                  <td className="v1-number">
+                    <RevenueDelta
+                      deltaNetMills={report.comparison?.deltaNetMills}
+                      deltaPct={report.comparison?.deltaPct}
+                    />
+                  </td>
+                  <td className="v1-number v1-access v1-audience-total">—</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div className="v1-under-table">
+            <p>
+              <strong>Доход после комиссии платформ</strong>, включая pending,
+              корректировки и неклассифицированные суммы. Не прибыль агентства и
+              не сумма к выплате.
+            </p>
+            <p>
+              {describeWindows(report.platformWindows)}. Даты UTC; текущий день
+              не завершён.
+            </p>
+            <details>
+              <summary>О данных и подписках</summary>
+              <p>
+                Суммы и сравнения — по сохранённым операциям Hub, без гарантии
+                полноты захвата. Прочерк означает недоступное значение.
+                Подписчики — текущий доступ к странице, включая бесплатный и
+                пробный; число не зависит от выбранного периода. Аудитория
+                разных страниц не складывается.
+              </p>
+              <p>
+                У Fansly 7/30 дат, у OnlyFans 8/31; предыдущие окна имеют ту же
+                длину для каждой платформы. Таблица, источники и графики
+                загружаются отдельно и могут обновляться в разное время. Дата
+                окна не является временем последнего сбора.
+              </p>
+            </details>
+          </div>
+          <RevenueCharts
+            report={report}
+            period={state.period}
+            scope={state.chart}
+            selectScope={(scope, scroll = false) => showChart(scope, scroll)}
+          />
+        </>
+      )}
     </div>
   );
 }
