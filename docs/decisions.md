@@ -291,6 +291,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 292 | Overview selected layout and exact drilldown | Keep the compact variant-one table, order models by server net income, compare source deltas on the server, use scoped exact-window operations with one response snapshot, and persist navigation context in URLs. Supersedes #291's three-query-only UI plan. |
 | 293 | Select completed run IDs before monitor payload | Rank narrow historical completion keys, then load the selected run by primary key; preserve health fields, scope, ordering and historical physical-attempt debt. |
 | 294 | Fansly C1 diagnostics | Retain the existing trigger and expose bounded decision, queue and reconcile-run evidence before choosing a follower fix. |
+| 295 | OnlyFans manual Ping | The chatter decides when to write: active conversations accept Ping with truthful prompt context. Fansly keeps its existing active gate and assembled prompt. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -12256,3 +12257,62 @@ See the [diagnostic runbook](runbooks/fansly-followers-diagnostics.md).
 
 Numbered 294 when synchronized with main `c0cd21c3` on 11 September; the
 original C1 draft used 291. Applied migrations 0182/0183 are unchanged.
+
+## Decision 295: OnlyFans manual Ping preserves the chatter's timing decision (2026-09-11)
+
+The owner approved a manual Ping action in the desktop Spenders workflow and
+explicitly rejected choosing when the chatter should write from elapsed time.
+The inherited five-day `active` gate prevented that action in both the desktop
+and the kernel. Removing only the desktop gate would still return
+`gate_ping_active`; removing only the kernel gate would describe a recently
+active fan to the model as someone who had gone quiet.
+
+For **OnlyFans**, the existing `POST /api/v1/ai/features/ping` request now accepts
+every observed segment, including `active`. The kernel still derives the real
+segment and `fanSilenceDays` from the same clock sample and its transcript;
+`active` is never relabeled as `segment-a`. The prompt frames Ping as personal
+outreach the chatter has chosen to start now, keeps recent conversation context,
+acknowledges a pending fan question, and forbids inventing an absence or advising
+the chatter to wait. Recency remains factual input, not permission or a writing
+schedule. Generation still returns a draft for manual review; this introduces
+no sending, ranking, recommendations, prefetch, or automatic dispatch.
+
+For **Fansly**, `active` still returns HTTP 400 `gate_ping_active`. The existing
+client-context requirement and segment derivation are unchanged. Its complete
+assembled Ping payload, including system/user text and cache boundaries, is
+pinned against the pre-change `c0cd21c3` output for all three segments. Historical
+decisions #107/#120/#127 describe the earlier shared gate; this decision
+supersedes their active restriction only on the OnlyFans lane.
+
+The implementation reuses the validated request's existing `isFanslyRequest`
+gate and the prompt builder's `platform` input. A static platform instruction
+table fills five slots in the single Ping template. Other prompt content remains
+shared, and fan-derived text is never rewritten. Static instructions stay in
+the one-hour prefix; the actual segment and elapsed-time facts remain in the
+uncached task. The three edited prompt files update their current manifest
+hashes and notes while preserving historical source hashes. No additional
+platform comparison site, branch-budget increase, route, field, migration, or
+SDK regeneration is needed.
+
+Rollout requires this kernel behavior and the companion desktop change removing
+its local active gate. Ship the kernel support before or together with the
+desktop release; a new desktop against the old kernel still receives the stable
+gate error. A kernel rollback restores that behavior without a schema change.
+This worktree is a local implementation only, with no commit, push, deployment,
+flag change, or production verification implied. Any deployment remains a
+separate owner-approved operation and must preserve the existing production
+code/schema state described in #293.
+
+Validation covers an active OnlyFans request reaching the captured provider with
+honest recent-message context, the unchanged Fansly HTTP gate, byte-identical
+Fansly prompts, static-prefix independence from fan recency, template byte-sync,
+and the prompt manifest drift pin. No live model generation is used by these
+checks; prompt/output quality still needs the ordinary human review of drafts.
+
+Release preparation (2026-09-12): the owner authorized deployment. The manual
+Ping delta is rebased onto the observed production revision `2c6b42b71aaf`,
+preserving C1 diagnostics, migrations 0182/0183, and the deployed ledger-scan
+performance fixes. This release adds no migration or contract operation.
+Decision 294 was already assigned to C1 on the production branch, so the Ping
+decision is 295 here. The source check passes 3,258 tests with nine existing
+skips; provider-stub integration checks verify the request and prompt behavior.
