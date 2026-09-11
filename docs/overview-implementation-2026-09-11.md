@@ -2,8 +2,9 @@
 
 Status: implemented and locally verified in branch `codex/overview-ux`, worktree
 `/Users/dmitriy/.codex/worktrees/hub-overview-ux-20260910/hub`. The main checkout
-was not used for implementation. No deployment, merge or production mutation
-was performed. This record supersedes the earlier UI proposal in
+was not used for implementation. The owner authorized merge on September 11;
+the exact merge receipt is recorded in Git/PR history. Deployment and production
+mutation remain separate. This record supersedes the earlier UI proposal in
 [the September 10 review](overview-ux-review-2026-09-10.md); that file retains
 the original metric research and dated data evidence. Decision #292 records the
 final architecture.
@@ -107,3 +108,16 @@ The temporary 5194 QA proxy and its tab are closed at task completion; the
 normal 5190 preview remains. `windowAt` aligns calendar bounds only. Different
 HTTP requests can observe new ingest; transaction count/net/items are atomic
 within their own response. Production rollout remains a separate owner action.
+
+## Integration with current main
+
+Before opening the merge PR, integrate `origin/main` at `32478124`, preserving
+the C2b earnings shadow and Ping name-context changes. The financial source
+changes remain intact; the independent optional `fanCustomName` field is kept.
+Resolve generated hash/metadata by running `pnpm contracts:generate` over the
+combined contract, not by choosing a previous generated artifact. Both decision
+histories are retained. The unpublished Overview decisions are renumbered from
+287/288 to 291/292 because the earlier numbers are reserved by the open C1/W0
+changes. Recheck the integrated source with the independent reviewer and local
+`pnpm check` (`artifacts/overview-ux/merge-check.log`), then require the repository's
+GitHub `Quality Gate` before squash merge. This integration does not deploy.
