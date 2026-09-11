@@ -30,10 +30,13 @@ accounts and pagination still need a measured RCA.
 
 ## Read and retain
 
-Deploy only an explicitly approved reviewed revision. This branch follows C2a;
-starting its worker also activates earnings v7 replay. A proposal must include
-that scope and compatible readers. PR164's earlier merge is the A0-only target.
-Merging or preparing this draft does not authorize production activation.
+Deploy only an explicitly approved reviewed revision. Verify the running source
+before choosing its rollback. At 11 September 00:33 UTC, all three production
+roles already ran main `32478124`, which includes C2a/C2b and the v2 readers.
+The C1 delta adds diagnostics only; it does not bump the earnings parser again.
+This observation does not establish that C2a replay or projection repair finished.
+A deployment from an older pre-C2a base must still follow the reader-before-worker
+and compatible rollback procedure in the C2a runbook.
 
 After the read operation is deployed, use psql as read_only inside READ ONLY.
 Choose an actual bounded interval (at most eight days) and retain the output:
@@ -55,6 +58,43 @@ A missing or empty report is not evidence of zero triggers. T0 counts physical
 attempts separately; diagnostic notes are neither provider attempts nor full
 reconcile completions. Keep manifests and raw report files outside telemetry
 retention, with exact intervals, revision and capture time.
+
+## Reconcile timeline
+
+The companion read operation exposes bounded existing run/decision scalars:
+
+```sql
+SELECT fansly_followers_diagnostic_timeline(
+  :'window_start', :'window_end', 0, NULL, 500
+);
+```
+
+Keep `throughRunId` from the first response and pass `nextRunId` as the next
+`after_run_id`; stop when `nextRunId` is null. The upper ID fixes new run
+inserts only. Outcomes and stats can still change. Use one REPEATABLE READ,
+READ ONLY transaction for an atomic export, or retain each page's `asOf` and
+repeat unfinished runs. Exhausted pagination does not prove complete telemetry.
+
+The timeline contains both followers streams and every outcome. Its
+`decision_valid` checks the schema and OR combination; `queue_valid` separately
+checks integral, ordered request/applied sequences. Do not attribute malformed,
+missing or duplicate receipts. `counts` and checkpoint scalars are contextual
+observations, not independently certified provider totals. Free text, bodies,
+fan IDs and lease tokens are excluded.
+
+`request_seq` and `leased_seq` both describe the claimed revision, not separate
+queue snapshots. A `succeeded` run follows successful completion CAS and is
+positive evidence of closing that revision; the exact historical post-CAS
+`applied_seq` is not stored. Membership `generation` is different: restarts can
+produce several generations under one revision. `nonDestructiveClose` closes
+work without certified membership; preserve `finalizationWithheld`, terminal
+proof and skip/quality-hold markers in every comparison.
+
+Pair each known incremental request with a later confirmed completion and its
+membership result. Unknown requests, window boundaries, expired telemetry and
+crashes between completion CAS and the run receipt remain uncovered. Sequence
+differences and pending-at-request counts alone do not prove consolidation or
+HTTP savings. Initial seed, manual, scheduled and anomaly sources remain distinct.
 
 ## Finish C1 and rollback
 

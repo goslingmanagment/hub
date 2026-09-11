@@ -10,10 +10,10 @@ and evidence now live in `investigations/`.
 |---|---|---|
 | Pre-A0: stale follow-up + lilly-2 debt | PR157 deployed; Lilly-2 one-hour canary completed and rolled back | Frozen Lilly-2 5615/5615 raw; canary had 0 eligible targets / 0 recovery attempts, 104 excluded debts unchanged; 8/8 selected material passed after rollback. Separate old Lilly-1/Lora-1/Ari discrepancies remain explicit. |
 | Pre-A0: reply links / honest sweep | PR158–162 deployed; original bounded corpus accepted | 994/994 reply IDs, 2893 observations, 27 attached messages across separately timestamped reads; not an atomic census or fresh-event latency claim. |
-| A0 + T0 | [PR164](https://github.com/goslingmanagment/core/pull/164) merged; Decision 284, not deployed | Narrow read operations precede the retained September 1–6 export; runtime shadow >=7 full days on all six pages is not started. Physical-attempt savings unmeasured. |
-| C1 | [PR166](https://github.com/goslingmanagment/core/pull/166) draft, Decision 291 | Three-branch diagnostic code tested/reviewed; production timeline and narrow policy fix pending in this PR. |
-| C2a | [PR165](https://github.com/goslingmanagment/core/pull/165) merged, Decision 285; not deployed | A-B-A/replay/stale-ordering tests pass; production replay/repair remains separately gated. |
-| C2b | [PR169](https://github.com/goslingmanagment/core/pull/169) open; tested and independently reviewed, Decision 289 | Atomic semantic dirty, independent endpoint receipts and restricted report; daily rotation unchanged. Production deployment/enablement and measurements pending. |
+| A0 + T0 | PR164 deployed; shadow active since 10 September 22:58:33 UTC | T0 and historical comparison retained. Earliest seven-day point: 17 September 22:58:33 UTC. Unknown material checks and incomplete comparisons remain outside acceptance; savings unmeasured. |
+| C1 | [PR166](https://github.com/goslingmanagment/core/pull/166) draft, Decision 291 | Diagnostic timeline added; 3205 unit / 70 real-Postgres tests pass. Deployment, production cause measurement and narrow fix pending in this PR. |
+| C2a | PR165 code observed in production main 32478124 on 11 September | Replay completion and projection repair have not been verified here; no additional replay authorized. |
+| C2b | PR169 merged; code observed in production main 32478124 | Enablement and measurements not verified; daily rotation remains the required policy. |
 | C2c | Gated | Coverage, costs and per-fan max-age proof before selection/rotation changes. |
 | W0 | [PR167](https://github.com/goslingmanagment/core/pull/167) draft, Decision 288 | Offline diagnostics tested/reviewed; live Management Session binding, fan-out, presence and six-hour continuity still gated. |
 | B0 | Gated by W0 | Capture-only receiver, >=7 days with sufficient event variety. |
@@ -39,12 +39,13 @@ Provider deletion head repair is outside A0; A0 counts discrepancies. Old
 edits/deletions, mutable-offset omissions, quiet-state freshness, outage gaps,
 archive/serving completeness and Management Session WebSocket scope remain
 unproven. A1, live socket probes and B2 retain their separate owner/evidence
-gates. No A0/T0 production clock has started. This record grants no production
-action.
+gates. A0 observation is in progress; elapsed time alone does not pass its
+acceptance gate. This record grants no production action.
 
-C2b is prepared in [its stage record](fansly-c2b-earnings-shadow-2026-09-10/STATUS.md)
-and [runbook](../docs/runbooks/fansly-earnings-shadow.md): 3190 passing unit tests
-and 57 real Docker-Postgres checks, no production measurement. Main PR168 took
-Decision 286; C1/W0 drafts were synchronized and renumbered 287/288. Their
-previous heads had green CI; CI reruns on the synchronized heads. These code
-milestones do not pass the calendar, activity, freshness or live socket gates.
+The source observed on production at 11 September 00:33 UTC was `32478124`,
+not the original A0 image. The intervening deployment was not performed in this
+turn. Code presence does not certify replay, dirty-shadow enablement or stage
+acceptance. C1 was synchronized with that main and numbered Decision 291;
+W0 remains a separate draft. The current production preflight is retained in
+C1's evidence directory. The A0 operational report records the intervening
+release, 500ms material-check timeouts and the incomplete Lilly-2 comparison.

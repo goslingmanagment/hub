@@ -12122,17 +12122,23 @@ queue receipt from the already locked requestPageSync row. Ordinary callers
 retain their exact previous result shape and queue behavior. No extra provider
 call, cooldown, cadence, presence or destructive reconciliation change ships.
 
-Migrations 0182–0183 adds a fixed, bounded read operation accessible to read_only.
+Migrations 0182–0183 add fixed, bounded read operations accessible to read_only.
 It counts missing, malformed, contradictory, duplicate and boundary-crossing
 receipts explicitly; invalid evidence does not enter the valid denominator.
 All OR combinations are retained. Queue counts distinguish known receipts,
 unknown receipts and requests arriving with unapplied work. The last count is
 a coalescing opportunity, not a claim that completed generations were combined.
-The report exposes aggregates only, with no underlying table grants.
+The aggregate report and paginated timeline expose selected diagnostic scalars,
+with no underlying table grants or private follower material. The timeline
+separates valid decisions from valid queue receipts, claimed revisions from
+membership generations, and successful non-destructive close from certified
+membership. A pinned upper run ID does not freeze later outcomes. Unknown
+receipts and completion gaps do not become consolidation or HTTP savings.
 
 **C1 gate.** This remains the diagnostic portion of one draft PR. Production
-activation requires an approved revision; its branch includes the preceding
-C2a changes and cannot be treated as an inert whole-worker deployment. Retain
+activation requires an approved revision. The observed production source
+`32478124` already includes C2a/C2b; this delta does not bump their parsers or
+change selection. A rollback must retain the inherited v2 readers and schema. Retain
 read reports outside telemetry retention, establish branch frequencies and
 actual reconcile-generation consolidation, investigate headline/active,
 deleted-account and pagination semantics, then add the proven narrow fix in

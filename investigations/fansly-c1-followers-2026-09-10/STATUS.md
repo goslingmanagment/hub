@@ -1,52 +1,64 @@
-# Fansly C1 — followers reconcile diagnostics
+# Fansly C1 — follower reconciliation diagnostics
 
-Branch `feat/fansly-c1-followers`, based on main `f0a53aee` (C2a PR165).
-Decision 291, migrations 0182–0183. This is the diagnostic portion of the single C1
-[draft PR166](https://github.com/goslingmanagment/core/pull/166), not completed C1.
-The measured cause and narrow fix remain pending.
-No production deployment, new flag, cooldown or cadence change is implied.
+[PR166](https://github.com/goslingmanagment/core/pull/166) remains the single C1
+draft. It now includes a bounded run timeline needed to establish the cause
+before a narrow policy fix. Branch `feat/fansly-c1-followers` is based on main
+`32478124`; Decision 291 and migrations 0182–0183 follow its latest numbers.
+No follower predicate, cadence, presence writer or provider request changed.
 
-Each incremental decision records the three existing OR predicates, including
-the no-request combination. Queue requests optionally return the previous
-request/applied sequences from the same locked row. Ordinary callers keep their
-old return shape and no extra query is introduced. The diagnostic report exposes
-bounded aggregates through a restricted read operation; missing, malformed,
-duplicate and boundary receipts remain explicit unknowns. Pending work at request
-time is not proof of how many completed generations absorbed those requests.
+## What is ready
 
-Final validation:
+The original report counts all three OR predicates, including no request, and
+atomically captured prior queue sequences. The new timeline exposes the
+individual receipts and both follower streams, with all run outcomes. It keeps
+claimed revisions separate from membership generations and successful
+non-destructive close separate from membership certification. Decision and
+queue validity are independent; malformed or missing evidence stays unknown.
 
-- `pnpm check`: 3148 passed in 286 unit files, 9 existing skips. Strictness
-  remains 1908 known errors in 121 files; lint and dashboard build pass.
-- Serial real Docker-Postgres: 50 tests in four files, zero skips, 25.12 seconds.
-  Suites: `followers-diagnostics`, `generation-high-water`,
-  `page-sync-lease-fencing` and `sync` (all `.integration.test.ts`).
-- Fixtures exercise the real handler, telemetry, queue and presence writes with
-  a stubbed provider: each OR branch and no request, concurrent queue receipts,
-  unchanged default callers, missing telemetry after an injected DB failure,
-  malformed/duplicate receipts, exclusive window boundaries, and actual
-  restricted-role access. Existing generation and lease guards still pass.
+The reader accepts at most eight days and 500 runs per page. A pinned upper ID
+excludes later inserts, but does not freeze mutable run outcomes. Only selected
+scalars, bounded timestamps and named membership proofs are exported; fan IDs,
+message bodies, headers, arbitrary errors and lease tokens remain private.
+See the [runbook](../../docs/runbooks/fansly-followers-diagnostics.md).
 
-Independent static review found no actionable issues after the atomic queue
-receipt and unknown coverage were added. Final re-review also checked the typed
-count result and malformed queue fixtures; the reviewer did not run tests.
-`git diff --check` passes.
+## Validation
 
-The only production read for this stage inspected role capabilities. The
-retained [SQL](evidence/read-privileges.sql) and [output](evidence/read-privileges.txt)
-confirm `read_only` in a READ ONLY transaction, with no selectable sync/follower
-tables or applicable public report operation. The catalog's pg-boss function
-entry was not invoked. No provider request, deployment, replay or flag flip was
-performed. Production branch frequencies, eventual generation consolidation,
-request savings and latency are not measured.
+- `pnpm check`: 3,205 tests passed in 292 files, nine existing skips; strictness
+  remains 1,908 known errors in 121 files. Lint and dashboard build passed.
+- Serial real Docker-Postgres: 70 tests in five files, zero skips, 27.03 seconds.
+  Suites: followers-timeline, followers-diagnostics, generation-high-water,
+  page-sync-lease-fencing and sync (all `.integration.test.ts`).
+- The timeline checks real handler receipts; partial, failed, skipped and
+  non-destructive completion; pinned pagination; exclusive boundaries; late,
+  duplicate and malformed receipts; restricted-role permissions; private-data
+  exclusion and invalid query bounds. Existing queue, lease, generation and
+  presence tests passed.
+- Independent review identified an absent queue-validity marker. It was added
+  with seven malformed-queue fixtures. Final review is recorded in REVIEW.md.
 
-Next: an explicitly approved diagnostic deployment, retained bounded reports
-and a completed-run timeline; then explain headline/active semantics, deletions
-and pagination before adding the narrow fix to this same PR. Initial seeding is
-a separate path. Follow the [runbook](../../docs/runbooks/fansly-followers-diagnostics.md).
-This branch includes C2a, whose worker starts earnings v7 reparse; any deployment
-approval must cover that scope and compatible readers. PR164 remains the earlier
-A0-only target. Nothing here starts A0's seven-day clock or authorizes A1.
+The SQL reader is 126 lines and its integration suite is 143 lines. No new
+runtime module or flag is needed for this addition. Local test logs are retained
+as evidence; they do not establish production latency or query-plan performance.
 
-Main PR168 took Decision 286. The branch now merges main `940ec69f`; only
-the C1 decision/runbook numbering changed. C1 remains one draft PR.
+## Production evidence and next gate
+
+The 11 September 00:24 UTC catalog read again confirmed read_only / READ ONLY
+and no deployed follower diagnostic reader. At 00:33 UTC, all three roles were
+healthy with zero restarts and 25 GiB free on image `f742e86eca4c...`, source
+`32478124`. That release was already present; this turn did not deploy it.
+It includes C2a/C2b code. Replay completion, projection repair and C2b enablement
+were not checked. The C1 delta does not bump their parser or select extra work.
+
+The verified T0 export for 1–6 September contains 20,881 follower-reconcile
+physical attempts: 19,420 anomaly-source and 1,461 scheduled-source. Ordinary
+followers added 3,079 attempts. These retained counts include retries and are
+not complete telemetry; neither the anomaly label nor its frequency establishes
+redundancy. [Per-page/source totals](evidence/t0-followers.json) retain the
+baseline hash. Branch frequencies and completed-generation consolidation remain
+unmeasured because their reader is not deployed.
+
+Next: explicitly approve the reviewed C1 diagnostic revision, deploy against
+the current compatible main, and retain bounded reports. Then establish the
+headline/deletion/pagination cause and add the narrow policy fix to this same
+PR. The existing drift/blast-radius guards and presence consumers remain exit
+criteria. A0 continues separately; A1, live sockets and C2b enablement are gated.
