@@ -291,6 +291,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 292 | Overview selected layout and exact drilldown | Keep the compact variant-one table, order models by server net income, compare source deltas on the server, use scoped exact-window operations with one response snapshot, and persist navigation context in URLs. Supersedes #291's three-query-only UI plan. |
 | 293 | Select completed run IDs before monitor payload | Rank narrow historical completion keys, then load the selected run by primary key; preserve health fields, scope, ordering and historical physical-attempt debt. |
 | 294 | Feature recommendations and focused configuration | Explain 32 feature groups using live configuration readiness, dated research and existing editors; preserve applied/desired truth, staged dependencies, draft versions and the different page-scope meanings. No automatic disabling or production changes. |
+| 295 | Dashboard page-by-page usability review | Review all 38 screens, decouple page identity from overview, preserve daily navigation and reviewed drafts, disclose stale/missing reads and uncertain writes, and retain specialized recovery tools without automatically enabling or disabling capture. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -12255,3 +12256,57 @@ and 9 skipped under the existing strictness ratchet; browser checks cover scoped
 navigation, a one-key page-list write, draft preservation on version change and
 refresh failure with retained data. Deployment remains a separate owner action
 and must preserve the production state recorded in Decision 293.
+
+## Decision 295: Preserve context and evidence across dashboard pages (2026-09-12)
+
+The owner requested agents to work through every page after the feature-controls
+pass. Three bounded reviews cover daily operations, analytics/provider operations,
+and settings/diagnostics; the coordinator owns login, shared navigation and the
+feature/configuration entry points. The inventory is 38 screens: 27 route
+components, expanding Settings into ten sections and Notifications into three.
+Five embedded OFAPI evidence/recovery controls and two legacy Workboard redirects
+are tracked separately. Findings and remaining limits live in
+`investigations/feature-controls-2026-09-11/PAGES-REVIEW.md` and its linked reports.
+
+Use the existing `pages` SDK operation for shell identity and navigation instead
+of waiting for the unrelated overview aggregates. Keep synchronization evidence
+as a separate PageDetail read. An unavailable secondary report must not become
+zero revenue, no fans, no profile or no history. Keep the last successful data
+visible with a failed-refresh notice; primary failures provide an explicit read
+retry. Page identity alone never implies healthy collection or complete capture.
+
+For daily reports, valid URL periods take precedence over the appropriate
+historical store fallback. Preserve filters, offsets and return navigation when
+opening fans or changing the period. Reset only period-dependent offsets on an
+explicit period change; retain all-history transaction offsets and router state.
+Authentication recovery preserves safe same-origin path/query/hash, while 401 and
+an unavailable session check remain different states. Do not request the shell
+catalog before authentication succeeds.
+
+Preserve reviewed versions and drafts rather than rebinding them during a
+refresh. Hydration decisions freeze the version, coverage, ceilings, expiry,
+mark-read consent and request key; an explicit recovery reuses the same body.
+Webhook selection retains its reviewed version and returned policy receipt;
+unknown application requires a readback, and the same pending/applying version
+does not prove that the original action was refused. A typed export quote has no
+idempotency key: block a blind repeat, expose its original scope and history, and
+require a separate new intent before another preview. These controls are local
+screen state, not durable cross-session recovery or new server guarantees.
+
+Keep specialized operations and historical tools available without inferring
+business value from their presence or rarity. Usage counts requests, including
+non-successful outcomes; summarize extra feature kinds without hiding them from
+the total. Revenue divided by estimated OFAPI credit cost is a descriptive ratio,
+not measured ROI or incremental revenue. Capture and money arithmetic remain
+unchanged. Feature recommendations continue to use dated research from #294.
+
+No backend contracts, migrations, permission changes, automatic retries,
+production writes or deployment are introduced. Existing limitations (including
+server CAS for AI settings, limited lists, incomplete URL coverage and browser
+interaction verification) remain explicit in the review. `pnpm check` passes:
+301 test files, 3339 tests and 9 skipped, lint and dashboard build. A separate
+ESLint pass covers all 67 changed frontend files. The strictness snapshot drops
+from 1901 to 1897 by fixing four pre-existing Workboard query-option errors; no
+per-file budget increases. Browser and PostgreSQL integration verification are
+not claimed. A future deployment still requires the concrete owner gate and
+preservation of #293's production state.

@@ -58,13 +58,13 @@ export function CredentialsTab() {
           return (
             <div
               key={conn.id}
-              className={`flex items-start justify-between gap-4 rounded-xl border bg-card p-4 ${
+              className={`flex flex-wrap items-start justify-between gap-4 rounded-xl border bg-card p-4 ${
                 reconnect ? "border-danger/30 bg-danger/[0.03]" : "border-border"
               }`}
             >
               <div className="min-w-0 flex-1">
                 <div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <span className="text-[15px] font-semibold text-text-primary">
                       {conn.label}
                     </span>

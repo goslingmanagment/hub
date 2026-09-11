@@ -14,6 +14,8 @@ import {
   useWorkboardV2UndoContact,
   type WorkboardV2Tab,
 } from "@/api/queries";
+import { resolveWorkboardShortcut } from "./daily/workboardKeyboard.js";
+import { QueryNotice } from "@/components/shared/QueryNotice";
 import { Pagination } from "@/components/shared/Pagination";
 import { StatusPanel } from "@/components/shared/StatusPanel";
 import { CapMeter } from "@/components/page/workboard/v2/CapMeter";
@@ -25,7 +27,7 @@ import {
   TAB_LABELS,
   type SecondaryStatus,
 } from "@/components/page/workboard/v2/tone";
-import { buildAiAnalyticsRoute } from "@/lib/navigation";
+import { buildAiAnalyticsRoute, buildWorkboardRoute } from "@/lib/navigation";
 
 const TABS: WorkboardV2Tab[] = ["subscribers", "spenders", "fresh_mass", "old_mass", "service"];
 
@@ -56,17 +58,25 @@ interface BoardSection {
   items: WorkboardV2Item[];
 }
 
+interface UndoReceipt {
+  readonly pageLabel: string;
+  readonly fanId: number;
+  readonly kind: "contact" | "snooze";
+}
+
 export function WorkboardV2Page() {
   const { pageLabel } = useParams<{ pageLabel: string }>();
   const label = pageLabel ?? "";
   const [tab, setTab] = useState<WorkboardV2Tab>("subscribers");
   const [expandedFanId, setExpandedFanId] = useState<number | null>(null);
   const [focusedFanId, setFocusedFanId] = useState<number | null>(null);
-  const [listsMode, setListsMode] = useState<boolean>(() =>
-    typeof window !== "undefined" && window.localStorage.getItem(LISTS_MODE_STORAGE_KEY) === "1",
-  );
+  const [listsMode, setListsMode] = useState<boolean>(() => {
+    try { return typeof window !== "undefined" && window.localStorage.getItem(LISTS_MODE_STORAGE_KEY) === "1"; }
+    catch { return false; }
+  });
   useEffect(() => {
-    window.localStorage.setItem(LISTS_MODE_STORAGE_KEY, listsMode ? "1" : "0");
+    try { window.localStorage.setItem(LISTS_MODE_STORAGE_KEY, listsMode ? "1" : "0"); }
+    catch { /* The board remains usable when browser storage is unavailable. */ }
   }, [listsMode]);
   // Spend bands are collapsed by default; this tracks the ones the user opened.
   const [expandedBands, setExpandedBands] = useState<Set<string>>(new Set());
@@ -83,7 +93,7 @@ export function WorkboardV2Page() {
 
   const enabled = Boolean(pageLabel);
   const [offset, setOffset] = useState(0);
-  const { data, isLoading, isError } = useWorkboardV2(
+  const { data, isLoading, isError, isFetching, refetch } = useWorkboardV2(
     label,
     { tab, limit: QUEUE_PAGE_SIZE, offset },
     { enabled: enabled && !listsMode },
@@ -126,6 +136,22 @@ export function WorkboardV2Page() {
   const activeIsLoading = listsMode ? lists.isLoading : isLoading;
   const activeIsError = listsMode ? lists.isError : isError;
   const activeHasData = listsMode ? Boolean(lists.data) : Boolean(data);
+  const activeIsFetching = listsMode ? lists.isFetching : isFetching;
+  const retryRead = listsMode ? lists.refetch : refetch;
+  const mutationInFlight = useRef(false);
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
+  const [unconfirmedAction, setUnconfirmedAction] = useState<{ pageLabel: string; message: string } | null>(null);
+  const refreshQueue = async () => {
+    const result = await retryRead();
+    if (!result.isError) setUnconfirmedAction(current => current?.pageLabel === label ? null : current);
+  };
+  const actionsAllowed = !unconfirmedAction && activeHasData && !activeIsError && !activeIsFetching && !contact.isPending && !snooze.isPending && !recompute.isPending && !undoContact.isPending && !unsnooze.isPending;
+  const undoContext = useRef({ label, actionsAllowed, undoContact, unsnooze });
+  undoContext.current = { label, actionsAllowed, undoContact, unsnooze };
   // Keyboard nav only walks rows that are actually on screen (collapsed bands are skipped).
   const flatItems = useMemo(
     () => activeSections.filter((s) => !listsMode || expandedBands.has(s.key)).flatMap((s) => s.items),
@@ -140,54 +166,101 @@ export function WorkboardV2Page() {
     });
   };
 
+  const performUndo = async (receipt: UndoReceipt): Promise<boolean> => {
+    // Toasts outlive route changes; never call an observer rebound to another page.
+    const current = undoContext.current;
+    if (!mounted.current || current.label !== receipt.pageLabel) {
+      toast.error(`Отмена относится к ${receipt.pageLabel}, фан #${receipt.fanId}. Откройте исходную очередь и проверьте отметку.`);
+      return false;
+    }
+    if (mutationInFlight.current || !current.actionsAllowed) {
+      toast.error(`Отмена для ${receipt.pageLabel}, фан #${receipt.fanId}, пока недоступна. Дождитесь завершения действия и обновления очереди; неподтверждённый результат сначала проверьте.`);
+      return false;
+    }
+    // The fan may correctly disappear after handling/snoozing, so this confirmed
+    // receipt does not require the original row to remain in the visible list.
+    mutationInFlight.current = true;
+    try {
+      await (receipt.kind === "contact" ? current.undoContact : current.unsnooze).mutateAsync(receipt.fanId);
+      toast.success(`Отмена подтверждена · ${receipt.pageLabel} · #${receipt.fanId}`);
+      return true;
+    } catch {
+      const message = `Отмена для фана #${receipt.fanId} на ${receipt.pageLabel} не подтверждена. Она могла сохраниться. Обновите и проверьте исходную очередь перед повтором.`;
+      if (mounted.current) setUnconfirmedAction({ pageLabel: receipt.pageLabel, message });
+      toast.error(message, { duration: Infinity });
+      return false;
+    } finally {
+      mutationInFlight.current = false;
+    }
+  };
+
+  const showUndoToast = (kind: UndoReceipt["kind"], fanId: number, title: string) => {
+    const receipt: UndoReceipt = { pageLabel: label, fanId, kind };
+    const toastId = toast.success(title, {
+      description: `${receipt.pageLabel} · фан #${receipt.fanId}`,
+      action: {
+        label: "Отменить",
+        onClick: (event) => {
+          // Sonner otherwise dismisses even a refused or unconfirmed action.
+          event.preventDefault();
+          void performUndo(receipt).then((confirmed) => { if (confirmed) toast.dismiss(toastId); });
+        },
+      },
+    });
+  };
+
   const handleDone = (fanId: number) => {
+    if (!actionsAllowed || mutationInFlight.current || !flatItems.some((item) => item.fanId === fanId)) return;
+    mutationInFlight.current = true;
     contact.mutate(
       { fanId, action: "handled", wasProductive: true },
       {
-        onSuccess: () => toast.success("Готово", { action: { label: "Отменить", onClick: () => undoContact.mutate(fanId) } }),
-        onError: () => toast.error("Не удалось отметить"),
+        onSuccess: () => showUndoToast("contact", fanId, "Готово"),
+        onError: () => {
+          setUnconfirmedAction({ pageLabel: label, message: `Отметка «Готово» для фана #${fanId} на ${label} не подтверждена. Она могла сохраниться. Обновите и проверьте очередь перед повтором.` });
+        },
+        onSettled: () => { mutationInFlight.current = false; },
       },
     );
   };
 
   const handleSnooze = (fanId: number, days: number) => {
+    if (!actionsAllowed || mutationInFlight.current || !flatItems.some((item) => item.fanId === fanId)) return;
+    mutationInFlight.current = true;
     snooze.mutate(
       { fanId, days },
       {
-        onSuccess: () => toast.success(`Отложено на ${days}д`, { action: { label: "Отменить", onClick: () => unsnooze.mutate(fanId) } }),
-        onError: () => toast.error("Не удалось отложить"),
+        onSuccess: () => showUndoToast("snooze", fanId, `Отложено на ${days}д`),
+        onError: () => {
+          setUnconfirmedAction({ pageLabel: label, message: `Откладывание фана #${fanId} на ${label} не подтверждено. Оно могло сохраниться. Обновите и проверьте очередь перед повтором.` });
+        },
+        onSettled: () => { mutationInFlight.current = false; },
       },
     );
   };
 
   // Keyboard triage (bind once; read latest via ref).
-  const kbd = useRef({ flatItems, focusedFanId, snoozeDaysActive, handleDone, handleSnooze, setFocusedFanId, setExpandedFanId });
-  kbd.current = { flatItems, focusedFanId, snoozeDaysActive, handleDone, handleSnooze, setFocusedFanId, setExpandedFanId };
+  const kbd = useRef({ flatItems, focusedFanId, snoozeDaysActive, handleDone, handleSnooze, setFocusedFanId, setExpandedFanId, actionsAllowed });
+  kbd.current = { flatItems, focusedFanId, snoozeDaysActive, handleDone, handleSnooze, setFocusedFanId, setExpandedFanId, actionsAllowed };
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
-      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) {
-        return;
-      }
-      const s = kbd.current;
-      if (s.flatItems.length === 0) return;
-      const idx = s.flatItems.findIndex((i) => i.fanId === s.focusedFanId);
-      if (event.key === "j" || event.key === "ArrowDown") {
-        event.preventDefault();
-        s.setFocusedFanId(s.flatItems[idx < 0 ? 0 : Math.min(idx + 1, s.flatItems.length - 1)]!.fanId);
-      } else if (event.key === "k" || event.key === "ArrowUp") {
-        event.preventDefault();
-        s.setFocusedFanId(s.flatItems[idx <= 0 ? 0 : idx - 1]!.fanId);
-      } else if (s.focusedFanId != null && event.key === "e") {
-        event.preventDefault();
-        s.handleDone(s.focusedFanId);
-      } else if (s.focusedFanId != null && event.key === "s") {
-        event.preventDefault();
-        s.handleSnooze(s.focusedFanId, s.snoozeDaysActive[0]!);
-      } else if (s.focusedFanId != null && event.key === "Enter") {
-        event.preventDefault();
-        s.setExpandedFanId((prev) => (prev === s.focusedFanId ? null : s.focusedFanId));
-      }
+      const state = kbd.current;
+      const action = resolveWorkboardShortcut({
+        key: event.key,
+        modified: event.altKey || event.ctrlKey || event.metaKey,
+        repeated: event.repeat,
+        interactive: Boolean(target?.closest?.("input, textarea, select, button, a, [role='button'], [contenteditable='true'], [role='dialog']")) || Boolean(target?.isContentEditable),
+        visibleFanIds: state.flatItems.map((item) => item.fanId),
+        focusedFanId: state.focusedFanId,
+        actionsAllowed: state.actionsAllowed,
+      });
+      if (!action) return;
+      event.preventDefault();
+      if (action.kind === "focus") state.setFocusedFanId(action.fanId);
+      else if (action.kind === "handled") state.handleDone(action.fanId);
+      else if (action.kind === "snooze") state.handleSnooze(action.fanId, state.snoozeDaysActive[0]!);
+      else state.setExpandedFanId((previous) => previous === action.fanId ? null : action.fanId);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -203,7 +276,7 @@ export function WorkboardV2Page() {
     setFocusedFanId(null);
     setExpandedFanId(null);
     setOffset(0);
-  }, [tab, listsMode]);
+  }, [tab, listsMode, pageLabel]);
 
   // If the queue shrinks under the current offset (handled fans, recompute),
   // an out-of-range page would render as a false "all done" empty state.
@@ -219,7 +292,7 @@ export function WorkboardV2Page() {
 
   return (
     <div className="mx-auto max-w-5xl px-4 py-6">
-      <header className="mb-4 flex items-start justify-between gap-3">
+      <header className="mb-4 flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-lg font-semibold text-text-primary">Workboard v2</h1>
           <p className="flex items-center gap-2 text-[13px] text-text-secondary">
@@ -337,17 +410,26 @@ export function WorkboardV2Page() {
         <CapMeter used={data.oldMassBudget.used} total={data.oldMassBudget.total} resetsAt={data.oldMassBudget.resetsAt} />
       )}
 
+      <QueryNotice error={activeIsError} stale={activeHasData} retry={refreshQueue} />
+      {unconfirmedAction && (
+        <p className="mb-3 rounded-lg border border-warning bg-hover-alt px-3 py-2 text-sm" role="alert">
+          {unconfirmedAction.message} {unconfirmedAction.pageLabel === label
+            ? <button type="button" className="font-semibold text-accent" disabled={activeIsFetching} onClick={() => void refreshQueue()}>Обновить очередь</button>
+            : <Link className="font-semibold text-accent" to={buildWorkboardRoute(unconfirmedAction.pageLabel)}>Открыть исходную очередь</Link>}
+        </p>
+      )}
+      {activeIsFetching && activeHasData && <p className="mb-3 text-xs text-text-muted" role="status">Обновляем очередь. Отметки будут доступны после чтения.</p>}
       {/* Work list */}
       {activeIsLoading && !activeHasData ? (
         <StatusPanel title="Загрузка" />
       ) : activeIsError && !activeHasData ? (
-        <StatusPanel title="Ошибка загрузки" tone="error" />
+        <StatusPanel title="Ошибка загрузки" description="Очередь не прочитана; это не означает, что задачи закончились." tone="error" />
       ) : activeSections.length === 0 ? (
         <div className="flex flex-col items-center justify-center rounded-card border border-border bg-card px-4 py-12 text-center">
           <CheckCircle2 className="mb-2 text-green" size={28} />
           <p className="text-sm font-semibold text-text-primary">{listsMode ? "Нет спендеров" : "На сегодня всё"}</p>
           <p className="text-[13px] text-text-secondary">
-            {listsMode ? "На этой странице ещё нет платящих фанов." : "В этой вкладке нет задач."}
+            {listsMode ? "В сохранённых данных этого списка нет платящих фанов." : "В этой вкладке нет записанных задач."}
           </p>
           <button
             type="button"
@@ -371,6 +453,7 @@ export function WorkboardV2Page() {
                     <button
                       type="button"
                       onClick={() => toggleBand(key)}
+                      aria-expanded={open}
                       className="sticky top-0 z-10 flex w-full items-center gap-2 border-b border-border bg-hover-alt/80 px-3 py-2 text-left backdrop-blur transition-colors hover:bg-hover-alt"
                     >
                       <Chevron size={14} className="text-text-muted" />
@@ -399,7 +482,7 @@ export function WorkboardV2Page() {
                         onToggle={(id) => setExpandedFanId((prev) => (prev === id ? null : id))}
                         onHandled={handleDone}
                         onSnooze={handleSnooze}
-                        isHandling={contact.isPending}
+                        isHandling={!actionsAllowed}
                       />
                     ))}
                 </section>

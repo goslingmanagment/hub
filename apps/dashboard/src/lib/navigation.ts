@@ -1,4 +1,14 @@
 import { pathSegment } from "./path.js";
+import type { PeriodOption } from "../stores/periodStore.js";
+import type { SpenderPeriodOption } from "../stores/spenderPeriodStore.js";
+
+export function resolveDashboardPeriod(value: string | null, fallback: PeriodOption): PeriodOption {
+  return value !== null && ["today", "7d", "30d", "all"].includes(value) ? value as PeriodOption : fallback;
+}
+
+export function resolveSpenderPeriod(value: string | null, fallback: SpenderPeriodOption): SpenderPeriodOption {
+  return value !== null && ["today", "7d", "30d", "90d", "180d", "all"].includes(value) ? value as SpenderPeriodOption : fallback;
+}
 
 export interface FanProfileNavigationState {
   backTo: string;
@@ -189,6 +199,17 @@ export function isSafeInAppPath(value: string) {
   } catch {
     return false;
   }
+}
+
+export function resolveLoginReturnPath(value: string | null | undefined): string {
+  if (!value || !isSafeInAppPath(value)) return "/";
+  const path = decodeURIComponent(new URL(value, "https://hub.invalid").pathname).replace(/\/+$/, "");
+  return path.toLowerCase() === "/login" ? "/" : value;
+}
+
+export function buildLoginRoute(returnTo: string): string {
+  const target = resolveLoginReturnPath(returnTo);
+  return target === "/" ? "/login" : `/login?${new URLSearchParams({ next: target }).toString()}`;
 }
 
 export function resolveFanProfileBackTarget(

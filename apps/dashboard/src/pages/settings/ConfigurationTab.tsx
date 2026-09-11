@@ -10,7 +10,7 @@ import {
 import { KernelApiError } from "@/api/sdk";
 import { ModalShell } from "@/components/shared/ModalShell";
 import { CONFIG_COPY_RU, SUBSYSTEM_COPY_RU } from "@/pages/settings/configCopyRu";
-import { findHubFeature, type HubFeature } from "./featureCatalog.js";
+import { findHubFeature, featureReturnHref, type HubFeature } from "./featureCatalog.js";
 import { humanConfigValue } from "./configurationChoices.js";
 
 import { ConfigEditor, BooleanConfigEditor, liveEditorKind } from "./ConfigurationEditors.js";
@@ -637,11 +637,12 @@ export function ConfigurationTab() {
 
 function RoutedConfiguration() {
   const { hash, search } = useLocation();
-  const feature = findHubFeature(new URLSearchParams(search).get("feature")) ?? null;
-  return <ConfigurationView key={feature?.id ?? "all"} hash={hash} feature={feature} />;
+  const params = new URLSearchParams(search);
+  const feature = findHubFeature(params.get("feature")) ?? null;
+  return <ConfigurationView key={feature?.id ?? "all"} hash={hash} feature={feature} {...(feature ? { featureBackTo: featureReturnHref(feature, params) } : {})} />;
 }
 
-function ConfigurationView({ hash, feature = null }: { hash: string; feature?: HubFeature | null }) {
+function ConfigurationView({ hash, feature = null, featureBackTo }: { hash: string; feature?: HubFeature | null; featureBackTo?: string }) {
   const { data, isLoading, isError, isFetching, refetch } = useAdminConfig();
   const searchRef = useRef<HTMLInputElement>(null);
   const featureBackRef = useRef<HTMLAnchorElement>(null);
@@ -692,7 +693,7 @@ function ConfigurationView({ hash, feature = null }: { hash: string; feature?: H
   return (
     <div className="space-y-5">
       {feature && <div className="rounded-xl border border-border bg-card p-5">
-        <Link ref={featureBackRef} className="text-sm text-accent underline underline-offset-4" to={`/settings?tab=features&view=all&feature=${feature.id}`}>← К возможностям</Link>
+        <Link ref={featureBackRef} className="text-sm text-accent underline underline-offset-4" to={featureBackTo ?? `/settings?tab=features&view=all&feature=${feature.id}`}>← К возможностям</Link>
         <h3 className="mt-3 text-xl font-semibold text-text-primary">{feature.title}</h3>
         <p className="mt-2 text-base leading-relaxed text-text-secondary"><strong>Если отключить:</strong> {feature.consequence}</p>
         <p className="mt-2 text-sm text-text-secondary">{scopeExpanded ? "Показаны также связанные настройки, необходимые для проверки зависимостей." : "Здесь собраны только настройки этой возможности. Сохраняйте изменения по одному."}</p>

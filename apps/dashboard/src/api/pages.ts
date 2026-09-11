@@ -36,8 +36,8 @@ export const pagesQueryOptions = queryOptions({
   meta: { suppressGlobalError: true },
 });
 
-export function usePages() {
-  return useQuery(pagesQueryOptions);
+export function usePages(options: { enabled?: boolean } = {}) {
+  return useQuery({ ...pagesQueryOptions, ...options });
 }
 
 /**

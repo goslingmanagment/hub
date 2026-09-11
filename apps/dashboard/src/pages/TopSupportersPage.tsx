@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type MouseEvent } from "react";
-import { useNavigate, useParams, useSearchParams } from "react-router";
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router";
 import { toast } from "sonner";
 import { Copy, Check, ArrowUp, ArrowDown } from "lucide-react";
 import {
@@ -10,7 +10,10 @@ import {
 import { useSpenders, useSpenderBatch } from "@/api/queries";
 import { Pagination } from "@/components/shared/Pagination";
 import { SearchInput } from "@/components/shared/SearchInput";
-import { buildFanProfileNavigation, buildPageSectionRoute } from "@/lib/navigation";
+import { buildFanProfileNavigation, resolveSpenderPeriod } from "@/lib/navigation";
+import { listOffset } from "@/lib/overviewNavigation";
+import { QueryNotice } from "@/components/shared/QueryNotice";
+import { StatusPanel } from "@/components/shared/StatusPanel";
 import { useSpenderPeriodStore } from "@/stores/spenderPeriodStore";
 import {
   SPENDER_RETENTION_ACTIVE_DAYS,
@@ -124,14 +127,14 @@ function StatusDot({ status }: { status: RetentionFilter }) {
 }
 
 function SpentCell({ spent, tips, subs, purchases, ready }: {
-  spent: number;
+  spent: number | null;
   tips: number;
   subs: number;
   purchases: number;
   ready: boolean;
 }) {
-  const formatted = formatUsdFromMills(spent);
-  if (!ready || tips + subs + purchases === 0) {
+  const formatted = spent === null ? "—" : formatUsdFromMills(spent);
+  if (spent === null || !ready || tips + subs + purchases === 0) {
     return <span>{formatted}</span>;
   }
   const tooltipContent = (
@@ -472,8 +475,10 @@ type TrendPreviewState = {
 export function TopSupportersPage() {
   const { pageLabel } = useParams();
   const navigate = useNavigate();
-  const selectedPeriod = useSpenderPeriodStore((s) => s.topSupportersPeriod);
+  const location = useLocation();
+  const storedPeriod = useSpenderPeriodStore((s) => s.topSupportersPeriod);
   const [searchParams, setSearchParams] = useSearchParams();
+  const selectedPeriod = resolveSpenderPeriod(searchParams.get("period"), storedPeriod);
   const [chatPreview, setChatPreview] = useState<ChatPreviewState | null>(null);
   const [txnPreview, setTxnPreview] = useState<TxnPreviewState | null>(null);
   const [trendPreview, setTrendPreview] = useState<TrendPreviewState | null>(null);
@@ -481,7 +486,7 @@ export function TopSupportersPage() {
   const rawFilter = searchParams.get("filter") ?? "all";
   const retentionFilter: RetentionFilter = (VALID_RETENTION.has(rawFilter) ? rawFilter : "all") as RetentionFilter;
   const searchQuery = searchParams.get("q") ?? "";
-  const offset = Math.max(0, Number(searchParams.get("offset") ?? "0") || 0);
+  const offset = listOffset(searchParams.get("offset"));
   const rawSortBy = searchParams.get("sortBy") ?? DEFAULT_SORT_BY;
   const sortBy: SortByValue = (VALID_SORT_BY.has(rawSortBy as SortByValue) ? rawSortBy : DEFAULT_SORT_BY) as SortByValue;
   const sortDir: SortDir = searchParams.get("dir") === "asc" ? "asc" : "desc";
@@ -521,9 +526,10 @@ export function TopSupportersPage() {
   const spenderPeriod = selectedPeriod === "all" ? "lifetime" : selectedPeriod;
 
   useEffect(() => {
-    if (offset !== 0) setOffset(0);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pageLabel, spenderPeriod]);
+    setChatPreview(null);
+    setTxnPreview(null);
+    setTrendPreview(null);
+  }, [pageLabel]);
 
   const spenderParams = useMemo(() => ({
     scope: "page" as const,
@@ -537,7 +543,7 @@ export function TopSupportersPage() {
     retentionStatus: retentionFilter,
   }), [pageLabel, spenderPeriod, offset, sortBy, sortDir, searchQuery, retentionFilter]);
 
-  const { data: spenders, isLoading } = useSpenders(spenderParams);
+  const { data: spenders, isLoading, isError, refetch } = useSpenders(spenderParams);
 
   const platform = spenders?.scope?.page?.platform;
   const items = spenders?.items ?? [];
@@ -555,7 +561,7 @@ export function TopSupportersPage() {
     };
   }, [platform, pageLabel, items, spenderPeriod]);
 
-  const { data: batchData } = useSpenderBatch(batchBody);
+  const { data: batchData, isError: batchError, isFetching: batchFetching, refetch: retryBatch } = useSpenderBatch(batchBody);
 
   const batchByPlatformUserId = useMemo(() => {
     const map = new Map<string, {
@@ -583,14 +589,16 @@ export function TopSupportersPage() {
     if (!spenders) return null;
     const isLifetime = spenderPeriod === "lifetime";
     let spent = 0;
+    let spentComplete = true;
     let tips = 0;
     let subs = 0;
     let purchases = 0;
     for (const item of spenders.items) {
       const itemSpent = isLifetime
         ? item.metrics.lifetime.scopeCreatorNetAmountMills
-        : (item.metrics.window?.creatorNetAmountMills ?? 0);
-      spent += itemSpent;
+        : (item.metrics.window?.creatorNetAmountMills ?? null);
+      if (itemSpent === null) spentComplete = false;
+      else spent += itemSpent;
       const batch = batchByPlatformUserId.get(item.fan.platformUserId);
       if (batch?.typeBreakdown) {
         tips += sumBreakdownTypes(batch.typeBreakdown, ["tip", "stream_tip"]);
@@ -598,9 +606,12 @@ export function TopSupportersPage() {
         purchases += sumBreakdownTypes(batch.typeBreakdown, ["message_purchase", "post_purchase"]);
       }
     }
-    return { spent, tips, subs, purchases, hasBreakdown: !!batchData };
+    return { spent: spentComplete ? spent : null, tips, subs, purchases, hasBreakdown: spenders.items.every((item) => batchByPlatformUserId.get(item.fan.platformUserId)?.typeBreakdown != null) };
   }, [spenders, spenderPeriod, batchByPlatformUserId, batchData]);
 
+  if (isError && !spenders) {
+    return <StatusPanel title="Top Supporters: не удалось загрузить" description="Список недоступен; это не означает, что спендеров нет." tone="error" action={<button type="button" onClick={() => void refetch()}>Повторить</button>} />;
+  }
   if (isLoading || !spenders) {
     return <TableSkeleton rows={8} columns={spenderPeriod === "lifetime" ? 7 : 8} />;
   }
@@ -612,12 +623,14 @@ export function TopSupportersPage() {
 
   return (
     <div>
+      <QueryNotice error={isError} stale={Boolean(spenders)} retry={refetch} />
+      {batchError && <div className="mb-3"><p className="text-xs text-text-muted">Детали подписок и разбивка расходов:</p><QueryNotice error stale={Boolean(batchData)} retry={retryBatch} /></div>}
       <div className="mb-4">
         <h1 className="text-xl font-extrabold text-text-primary">
           Top Supporters &mdash; {pageLabel}
         </h1>
         <p className="text-sm text-text-muted mt-1">
-          {total} {retentionFilter === "all" ? "total" : "match"}
+          {offset > 0 && items.length === 0 ? "Число записей в фильтре пока недоступно" : `${total} ${retentionFilter === "all" ? "total" : "match"}`}
           {subtitle ? ` · ${subtitle}` : ""}
         </p>
       </div>
@@ -651,6 +664,7 @@ export function TopSupportersPage() {
         />
       </div>
 
+      <p className="mb-3 text-xs text-text-muted">Spent — доход от фана после комиссии платформы в выбранном окне. Next — подсказка по сохранённым сигналам, а не подтверждение того, что фан ждёт сообщения.</p>
       <section className="overflow-x-auto rounded-xl border border-border bg-card">
         <table className="w-full border-collapse">
           <thead>
@@ -688,7 +702,8 @@ export function TopSupportersPage() {
             {items.length === 0 && (
               <tr>
                 <td colSpan={columnCount} className="px-3 py-8 text-center text-sm text-text-muted">
-                  {emptyStateMessage(retentionFilter)}
+                  {offset > 0 ? "На этой странице списка записей нет." : emptyStateMessage(retentionFilter)}
+                  {offset > 0 && <button type="button" className="ml-2 text-accent" onClick={() => setOffset(0)}>К началу списка</button>}
                 </td>
               </tr>
             )}
@@ -699,10 +714,10 @@ export function TopSupportersPage() {
               const comparison = item.metrics.comparison;
               const spent = isLifetime
                 ? lifetimeNet
-                : (windowMetrics?.creatorNetAmountMills ?? 0);
+                : (windowMetrics?.creatorNetAmountMills ?? null);
 
               const batch = batchByPlatformUserId.get(item.fan.platformUserId);
-              const hasBatch = !!batchData;
+              const hasBatch = batch != null;
               const tips = sumBreakdownTypes(batch?.typeBreakdown ?? null, ["tip", "stream_tip"]);
               const subs = sumBreakdownTypes(batch?.typeBreakdown ?? null, ["subscription"]);
               const purchases = sumBreakdownTypes(batch?.typeBreakdown ?? null, ["message_purchase", "post_purchase"]);
@@ -711,10 +726,11 @@ export function TopSupportersPage() {
                 pageLabel!,
                 platform!,
                 item.fan.platformUserId,
-                buildPageSectionRoute(pageLabel!, "top-supporters"),
+                `${location.pathname}?${new URLSearchParams({ ...Object.fromEntries(searchParams), period: selectedPeriod })}`,
                 fanLabel.label,
               );
 
+              fanNavigation.to += `?${new URLSearchParams({ period: selectedPeriod })}`;
               return (
                 <tr
                   key={item.fan.platformUserId}
@@ -729,9 +745,9 @@ export function TopSupportersPage() {
                   </td>
                   <td className="px-3 py-2.5 align-middle">
                     <div className="flex items-center">
-                      <span className="text-sm font-semibold text-text-primary">
+                      <Link to={fanNavigation.to} state={fanNavigation.state} onClick={(event) => event.stopPropagation()} className="text-sm font-semibold text-text-primary hover:text-accent">
                         {fanLabel.label}
-                      </span>
+                      </Link>
                       {whaleBadge(lifetimeNet)}
                       {fanLabel.secondaryPlatformHandle && (
                         <span className="ml-2 text-xs text-text-muted">@{fanLabel.secondaryPlatformHandle}</span>
@@ -757,7 +773,7 @@ export function TopSupportersPage() {
                     <SpentCell spent={spent} tips={tips} subs={subs} purchases={purchases} ready={hasBatch} />
                   </td>
                   <td className="px-3 py-2.5 align-middle">
-                    <SubCell subscription={batch?.subscription ?? null} ready={hasBatch} />
+                    {!hasBatch && !batchFetching && (batchError || batchData) ? <span className="text-xs text-text-muted">Недоступно</span> : <SubCell subscription={batch?.subscription ?? null} ready={hasBatch} />}
                   </td>
                   <td className="px-3 py-2.5 align-middle">
                     <NextActionCell action={computeNextAction(item, batch?.subscription ?? null)} />
@@ -804,7 +820,7 @@ export function TopSupportersPage() {
         {visibleTotals && items.length > 0 && (
           <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 border-t border-border bg-hover-alt px-3 py-2 text-[11px] text-text-muted">
             <div>
-              {items.length} visible of {total} · Spent <span className="font-semibold text-text-primary tabular-nums">{formatUsdFromMills(visibleTotals.spent)}</span>
+              {items.length} visible of {total} · Spent <span className="font-semibold text-text-primary tabular-nums">{visibleTotals.spent === null ? "—" : formatUsdFromMills(visibleTotals.spent)}</span>
             </div>
             {visibleTotals.hasBreakdown && (
               <div className="tabular-nums">

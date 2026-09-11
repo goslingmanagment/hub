@@ -16,6 +16,7 @@ const filters = [
   { id: "review", label: "С чего начать" },
   { id: "all", label: "Все возможности" },
   { id: "keep", label: "Что оставить" },
+  { id: "attention", label: "Нужно проверить" },
 ] as const;
 
 export function FeaturesTab() {
@@ -26,13 +27,17 @@ export function FeaturesTab() {
   const expanded = params.get("feature");
   const rows = useMemo(() => query.data ? HUB_FEATURES.map((feature) => ({ feature, state: featureState(feature, query.data!) })) : [], [query.data]);
   const needsDecision = rows.filter(({ feature, state }) => feature.advice !== "keep" && state.kind !== "off" && state.kind !== "unavailable");
+  const needsAttention = rows.filter(({ state }) => state.kind === "pending" || state.kind === "unknown");
   const visible = rows.filter(({ feature, state }) => {
-    const matches = `${feature.title} ${feature.summary} ${feature.group}`.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase());
-    return matches && (search || filter === "all" || (filter === "keep" ? feature.advice === "keep" : feature.advice !== "keep" && state.kind !== "off" && state.kind !== "unavailable"));
+    const matches = `${feature.title} ${feature.summary} ${feature.group} ${feature.reason} ${feature.check} ${feature.limitation ?? ""} ${feature.keys.join(" ")}`.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase());
+    return matches && (search.trim() || filter === "all" || (filter === "attention" ? state.kind === "pending" || state.kind === "unknown" : filter === "keep" ? feature.advice === "keep" : feature.advice !== "keep" && state.kind !== "off" && state.kind !== "unavailable"));
   });
   function change(values: Record<string, string | null>, replace = false) {
     const next = new URLSearchParams(params);
-    for (const [key, value] of Object.entries(values)) value ? next.set(key, value) : next.delete(key);
+    for (const [key, value] of Object.entries(values)) {
+      if (value) next.set(key, value);
+      else next.delete(key);
+    }
     setParams(next, { replace });
   }
   if (!query.data) return <div className="feature-empty" role={query.isError ? "alert" : "status"}>
@@ -51,12 +56,13 @@ export function FeaturesTab() {
     </div>
 
     {query.isError && <div className="feature-alert" role="alert">Обновление не удалось. Показан сохранённый срез от {observedAt} МСК; текущее состояние может отличаться.</div>}
+    {!query.isError && needsAttention.length > 0 && <div className="feature-alert" role="status">Ожидают применения или проверки: {needsAttention.length}. <button type="button" className="font-semibold underline" onClick={() => change({ view: "attention", q: null, feature: null })}>Показать</button></div>}
 
     <p className="feature-basis">Рекомендации по назначению и связям функций; бизнес-эффект ещё не измерен. «Включено» означает разрешение в настройках.</p>
 
     <div className="feature-toolbar">
       <div className="feature-filters" role="group" aria-label="Показать возможности">
-        {filters.map((entry) => <button key={entry.id} type="button" aria-pressed={filter === entry.id && !search} onClick={() => change({ view: entry.id, q: null, feature: null })}>{entry.label}<span className="ml-2 tabular-nums opacity-65">{entry.id === "review" ? needsDecision.length : entry.id === "keep" ? rows.filter(({ feature }) => feature.advice === "keep").length : rows.length}</span></button>)}
+        {filters.filter((entry) => entry.id !== "attention" || needsAttention.length > 0 || filter === "attention").map((entry) => <button key={entry.id} type="button" aria-pressed={filter === entry.id && !search.trim()} onClick={() => change({ view: entry.id, q: null, feature: null })}>{entry.label}<span className="ml-2 tabular-nums opacity-65">{entry.id === "review" ? needsDecision.length : entry.id === "keep" ? rows.filter(({ feature }) => feature.advice === "keep").length : entry.id === "attention" ? needsAttention.length : rows.length}</span></button>)}
       </div>
       <label className="feature-search"><Search size={16} aria-hidden="true" /><input type="search" aria-label="Поиск возможностей" placeholder="Найти возможность" value={search} onChange={(event) => change({ q: event.target.value, feature: null }, true)} /></label>
     </div>
@@ -79,7 +85,7 @@ export function FeaturesTab() {
             <div className="feature-current"><strong>{state.label}</strong><span>{state.detail}</span></div>
             {feature.limitation && <p className="mb-4 text-sm">{feature.limitation}</p>}
             <div className="feature-actions">
-              <Link className="settings-button settings-button-primary" to={featureSettingsHref(feature)}>Настроить<ArrowUpRight size={16} aria-hidden="true" /></Link>
+              <Link className="settings-button settings-button-primary" to={featureSettingsHref(feature, params)}>Настроить<ArrowUpRight size={16} aria-hidden="true" /></Link>
               <Link className="feature-evidence-link" to={feature.evidenceHref}>{feature.evidenceLabel}<ArrowUpRight size={14} aria-hidden="true" /></Link>
             </div>
           </div>}

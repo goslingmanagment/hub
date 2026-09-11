@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { useNavigate, useParams } from "react-router";
+import { useMemo } from "react";
+import { Link, useLocation, useParams, useSearchParams } from "react-router";
 import { usePageSpenderAutoList } from "@/api/queries";
 import { Pagination } from "@/components/shared/Pagination";
 import { SearchInput } from "@/components/shared/SearchInput";
@@ -7,8 +7,10 @@ import { StatusPanel } from "@/components/shared/StatusPanel";
 import { TableSkeleton } from "@/components/shared/TableSkeleton";
 import {
   buildFanProfileNavigation,
-  buildPageSpenderAutoListRoute,
+  resolveSpenderPeriod,
 } from "@/lib/navigation";
+import { listOffset } from "@/lib/overviewNavigation";
+import { QueryNotice } from "@/components/shared/QueryNotice";
 import { formatDate, formatDateTime } from "@/lib/format";
 import { useSpenderPeriodStore } from "@/stores/spenderPeriodStore";
 import { formatUsdFromMills, resolveFanLabelForScope } from "@agency_hub_core/shared";
@@ -32,26 +34,31 @@ function StatusBadge({ tone, children }: { tone: "green" | "danger" | "warning" 
 
 export function SpenderAutoListPage() {
   const { pageLabel, bucketKey } = useParams<{ pageLabel: string; bucketKey: string }>();
-  const navigate = useNavigate();
-  const selectedPeriod = useSpenderPeriodStore((s) => s.period);
+  const location = useLocation();
+  const [search, setSearch] = useSearchParams();
+  const storedPeriod = useSpenderPeriodStore((s) => s.period);
+  const selectedPeriod = resolveSpenderPeriod(search.get("period"), storedPeriod);
   const spenderPeriod = selectedPeriod === "all" ? "lifetime" : selectedPeriod;
-  const [searchQuery, setSearchQuery] = useState("");
-  const [excludeNonFollowers, setExcludeNonFollowers] = useState(false);
-  const [offset, setOffset] = useState(0);
-
-  useEffect(() => {
-    setOffset(0);
-  }, [pageLabel, bucketKey, searchQuery, spenderPeriod, excludeNonFollowers]);
-
+  const searchQuery = search.get("query") ?? "";
+  const excludeNonFollowers = search.get("followersOnly") === "true";
+  const offset = listOffset(search.get("offset"));
+  function update(key: string, value: string) {
+    setSearch((previous) => {
+      const next = new URLSearchParams(previous);
+      if (value) next.set(key, value); else next.delete(key);
+      if (key !== "offset") next.delete("offset");
+      return next;
+    });
+  }
   const params = useMemo(() => ({
     limit: LIMIT,
     offset,
-    query: searchQuery || undefined,
-    excludeNonFollowers: excludeNonFollowers || undefined,
+    ...(searchQuery ? { query: searchQuery } : {}),
+    ...(excludeNonFollowers ? { excludeNonFollowers: true } : {}),
     period: spenderPeriod,
   }), [excludeNonFollowers, offset, searchQuery, spenderPeriod]);
 
-  const { data, isLoading, isError } = usePageSpenderAutoList(
+  const { data, isLoading, isError, refetch } = usePageSpenderAutoList(
     pageLabel ?? "",
     bucketKey ?? "",
     params,
@@ -65,22 +72,24 @@ export function SpenderAutoListPage() {
           title="Auto list failed to load"
           description="The spender auto-list could not be fetched for this page."
           tone="error"
+          action={<button type="button" onClick={() => void refetch()}>Повторить</button>}
         />
       );
     }
     return <TableSkeleton rows={6} columns={5} />;
   }
 
-  const pageRoute = buildPageSpenderAutoListRoute(pageLabel!, bucketKey!);
+  const pageRoute = `${location.pathname}?${new URLSearchParams({ ...Object.fromEntries(search), period: selectedPeriod })}`;
 
   return (
     <div>
+      <QueryNotice error={isError} stale={Boolean(data)} retry={refetch} />
       <div className="mb-5">
         <h1 className="text-xl font-extrabold text-text-primary">
           {data.bucket.label}
         </h1>
         <p className="text-sm text-text-muted mt-1">
-          {data.total} entries on {pageLabel}
+          {offset > 0 && data.items.length === 0 ? "Число записей в фильтре пока недоступно" : `${data.total} entries`} on {pageLabel}
         </p>
       </div>
 
@@ -89,20 +98,20 @@ export function SpenderAutoListPage() {
           <input
             type="checkbox"
             checked={excludeNonFollowers}
-            onChange={(event) => setExcludeNonFollowers(event.target.checked)}
+            onChange={(event) => update("followersOnly", event.target.checked ? "true" : "")}
             className="h-4 w-4 accent-accent"
           />
           Exclude non-followers
         </label>
         <SearchInput
           value={searchQuery}
-          onChange={setSearchQuery}
+          onChange={(value) => update("query", value)}
           placeholder="Search fan..."
         />
       </div>
 
-      <section className="overflow-hidden rounded-xl border border-border bg-card">
-        <table className="w-full border-collapse">
+      <section className="overflow-x-auto rounded-xl border border-border bg-card">
+        <table className="w-full min-w-[680px] border-collapse">
           <thead>
             <tr className="bg-hover-alt">
               {[
@@ -125,7 +134,8 @@ export function SpenderAutoListPage() {
             {data.items.length === 0 && (
               <tr>
                 <td colSpan={5} className="px-4 py-8 text-center text-sm text-text-muted">
-                  No fans found in this auto list.
+                  {offset > 0 ? "На этой странице списка записей нет." : "No fans found in this auto list."}
+                  {offset > 0 && <button type="button" className="ml-2 text-accent" onClick={() => update("offset", "")}>К началу списка</button>}
                 </td>
               </tr>
             )}
@@ -142,13 +152,12 @@ export function SpenderAutoListPage() {
               return (
                 <tr
                   key={item.fan.platformUserId}
-                  onClick={() => navigate(fanNavigation.to, { state: fanNavigation.state })}
                   className="cursor-pointer border-t border-border transition-colors hover:bg-hover"
                 >
                   <td className="px-4 py-3">
-                    <div className="text-[15px] font-semibold text-text-primary">
+                    <Link to={`${fanNavigation.to}?${new URLSearchParams({ period: selectedPeriod })}`} state={fanNavigation.state} className="text-[15px] font-semibold text-text-primary hover:text-accent">
                       {fanLabel.label}
-                    </div>
+                    </Link>
                     {fanLabel.secondaryPlatformHandle && (
                       <div className="text-xs text-text-muted">@{fanLabel.secondaryPlatformHandle}</div>
                     )}
@@ -200,7 +209,7 @@ export function SpenderAutoListPage() {
           offset={offset}
           limit={LIMIT}
           total={data.total}
-          onPageChange={setOffset}
+          onPageChange={(value) => update("offset", String(value))}
         />
       </section>
     </div>

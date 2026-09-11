@@ -13,7 +13,7 @@ export interface ConfigChoiceProps {
 
 export function ConfigChoiceField(props: ConfigChoiceProps) {
   const choices = CONFIG_MODE_CHOICES[props.configKey];
-  if (choices) return <select className="settings-input min-w-0 w-full" aria-label={`${props.label} value`} value={props.value} disabled={props.disabled} onChange={(event) => props.onChange(event.target.value)}>
+  if (choices) return <select className="settings-input min-w-0 w-full" aria-label={`${props.label} value`} aria-invalid={props.invalid} value={props.value} disabled={props.disabled} onChange={(event) => props.onChange(event.target.value)}>
     {!choices.some((entry) => entry.value === props.value) && <option value={props.value}>Текущее: {props.value}</option>}
     {choices.map((entry) => <option value={entry.value} key={entry.value}>{entry.label}</option>)}
   </select>;

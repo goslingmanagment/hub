@@ -59,11 +59,13 @@ export function OfapiStoredReads({
             aria-label="Страница сохранённых данных"
             className="rounded border border-border bg-card p-2"
             value={pageId ?? ""}
+            disabled={pages.length === 0}
             onChange={(event) => {
               setSelectedPage(Number(event.target.value));
               setSnapshotId(null);
             }}
           >
+            {pages.length === 0 && <option value="">Нет страниц OnlyFans</option>}
             {pages.map((page) => (
               <option key={page.id} value={page.id}>
                 {page.label}
@@ -95,8 +97,9 @@ export function OfapiStoredReads({
             Обновить из Hub
           </button>
         </div>
+        {pages.length === 0 && <p>Добавьте страницу OnlyFans, чтобы просматривать её сохранённые ответы.</p>}
         {query.isError && (
-          <p role="alert">Не удалось прочитать данные. Повторите чтение.</p>
+          <p role="alert">Не удалось обновить данные. Повторите чтение; ниже остаётся предыдущий срез, если он был загружен.</p>
         )}
         {query.isLoading && <p>Чтение сохранённых данных…</p>}
         {query.data && !query.data.snapshots.length && (

@@ -1027,7 +1027,7 @@ export function OfapiCreditsPage() {
     );
   }
 
-  if (summaryQuery.isError || !summary) {
+  if (!summary) {
     return (
       <div className="mx-auto max-w-6xl px-4 py-6">
         <StatusPanel
@@ -1135,10 +1135,12 @@ export function OfapiCreditsPage() {
       <div className="mb-5">
         <div className="flex items-center justify-between gap-4"><h1 className="text-xl font-extrabold text-text-primary">Кредиты OFAPI</h1><Link className="text-sm text-accent" to={buildSettingsRoute("collection")}>Настройки сбора</Link></div>
         <p className="mt-1 text-sm text-text-secondary">
-          Предоплаченные кредиты списываются за каждый запрос этого приложения к API OnlyFans —
-          синк чатов, отправку сообщений, проверку фанатов. Всё время на странице — UTC.
+          Кредиты расходуются на платные запросы к API OnlyFans и учитываемые события.
+          Журнал отделяет запросы приложения, вебхуки и сверку баланса. Всё время на странице — UTC.
         </p>
       </div>
+
+      {summaryQuery.isError && <div role="alert" className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-warning-dark/60 bg-card px-4 py-3 text-sm text-text-secondary"><p>Сводку не удалось обновить. Баланс, прогноз и ограничения ниже относятся к предыдущему ответу.</p><RetryButton onClick={() => summaryQuery.refetch()} /></div>}
 
       <details className="mb-5"><summary className="cursor-pointer py-2 text-sm font-medium text-text-primary">События OFAPI и история доставок</summary><OfapiWebhookRecovery /></details>
 
@@ -1371,7 +1373,7 @@ export function OfapiCreditsPage() {
                       остановятся, если баланс упадёт ниже.
                     </span>
                   )
-                : <span>Порог автостопа не задан — траты никогда не останавливаются автоматически.</span>}
+                : <span>Автостоп по остатку не задан. Остальные ограничения расхода продолжают действовать.</span>}
               <ConfigLink configKey="ofapiCreditFloor">
                 {summary.floor.value > 0 ? "Изменить" : "Задать"}
               </ConfigLink>
@@ -1541,16 +1543,16 @@ export function OfapiCreditsPage() {
                           Выручка
                         </th>
                         {priceKnown && (
-                          <th className={`${thClass} text-right`} title="Выручка ÷ оценка стоимости кредитов">
-                            ROI
+                          <th className={`${thClass} text-right`} title="Вся выручка страницы ÷ оценка стоимости кредитов. Не доказывает влияние запросов на выручку.">
+                            Выручка / стоимость
                           </th>
                         )}
                       </tr>
                     </thead>
                     <tbody>
                       {(breakdown?.byPage ?? []).map((row) => {
-                        const revenueMills = row.revenueMills ?? 0;
-                        const roi = computeRoi(revenueMills, row.credits, microUsdPerCredit);
+                        const revenueMills = row.revenueMills;
+                        const roi = revenueMills == null ? null : computeRoi(revenueMills, row.credits, microUsdPerCredit);
                         return (
                           <tr key={row.pageId} className="border-t border-border-light">
                             <td className={tdClass}>
@@ -1567,13 +1569,13 @@ export function OfapiCreditsPage() {
                             {priceKnown && (
                               <td className={`${tdClass} text-right`}>{usd(row.credits)}</td>
                             )}
-                            <td className={`${tdClass} text-right`}>{formatUsdFromMills(revenueMills)}</td>
+                            <td className={`${tdClass} text-right`}>{revenueMills == null ? "Нет данных" : formatUsdFromMills(revenueMills)}</td>
                             {priceKnown && (
                               <td className={`${tdClass} text-right`}>
                                 {roi === null
                                   ? "—"
                                   : (
-                                    <span className={roi >= 1 ? "text-green" : "text-red-700 font-medium"}>
+                                    <span>
                                       {roi.toFixed(1)}×
                                     </span>
                                   )}
@@ -1594,9 +1596,10 @@ export function OfapiCreditsPage() {
                   {!priceKnown && (
                     <p className="border-t border-border-light px-4 py-3 text-[12px] text-text-secondary">
                       Задайте <ConfigLink configKey="ofapiCreditMicroUsdPrice">цену кредита</ConfigLink>,
-                      чтобы видеть стоимость в $ и ROI по страницам.
+                      чтобы видеть стоимость в $ и отношение выручки к стоимости кредитов по страницам.
                     </p>
                   )}
+                  {priceKnown && <p className="border-t border-border-light px-4 py-3 text-[12px] text-text-secondary">Отношение включает всю выручку страницы за период. Оно не показывает, сколько выручки принесли запросы OFAPI, и не учитывает остальные расходы.</p>}
                 </div>
               </div>
             )}

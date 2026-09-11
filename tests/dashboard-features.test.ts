@@ -5,7 +5,7 @@ import type { ConfigItem, ConfigViewResponse } from "@agency_hub_core/contracts"
 import { MemoryRouter } from "../apps/dashboard/node_modules/react-router/dist/development/index.js";
 import { CONFIG_DESCRIPTORS } from "../packages/shared/src/config-registry.ts";
 import { validateConfigOverride } from "../packages/shared/src/config-settings.ts";
-import { HUB_FEATURES, findHubFeature } from "../apps/dashboard/src/pages/settings/featureCatalog.ts";
+import { HUB_FEATURES, findHubFeature, featureSettingsHref, featureReturnHref } from "../apps/dashboard/src/pages/settings/featureCatalog.ts";
 import { featureState } from "../apps/dashboard/src/pages/settings/featuresView.ts";
 import { CONFIG_MODE_CHOICES, selectedConfigPages, serializeConfigPages, humanConfigValue } from "../apps/dashboard/src/pages/settings/configurationChoices.ts";
 
@@ -62,6 +62,11 @@ describe("feature configuration truth", () => {
     data.subsystems[0]!.items[0]!.pendingApply = true;
     expect(state("prompt-debug", data).kind).toBe("pending");
   });
+  it("includes pending limits in the feature's application state", () => {
+    const data = view({ voiceNotesEnabled: true, voiceNotesPageAllowlist: "lora-1", voiceNotesDailyCharBudget: 2000 });
+    data.subsystems[0]!.items.find((item) => item.key === "voiceNotesDailyCharBudget")!.pendingApply = true;
+    expect(state("voice", data).kind).toBe("pending");
+  });
   it("honors the server's staged state even if a visible instance reports true", () => {
     const data = view({ chatMuseAiGatewayEnabled: true });
     data.subsystems[0]!.items[0]!.runningState = "off";
@@ -108,6 +113,28 @@ describe("page and mode choices", () => {
 });
 
 describe("features surface", () => {
+  it("keeps search and filter when visiting a feature's settings and returning", () => {
+    const feature = findHubFeature("voice")!;
+    const source = new URLSearchParams({ view: "all", q: "голос & текст" });
+    const settings = new URL(featureSettingsHref(feature, source), "https://hub.invalid");
+    const returned = new URL(featureReturnHref(feature, settings.searchParams), "https://hub.invalid");
+    expect(returned.searchParams.get("tab")).toBe("features");
+    expect(returned.searchParams.get("feature")).toBe("voice");
+    expect(returned.searchParams.get("view")).toBe("all");
+    expect(returned.searchParams.get("q")).toBe("голос & текст");
+  });
+  it("finds the common feature name even when the card groups several AI tools", () => {
+    mocks.useAdminConfig.mockReturnValue({ data: view({ chatMuseAiGatewayEnabled: true }), isError: false });
+    expect(render(FeaturesTab, "/settings?tab=features&q=Fast+Reply")).toContain("AI для сотрудников");
+  });
+  it("shows pending core functions in the attention view", () => {
+    const data = view({ chatMuseAiGatewayEnabled: true });
+    data.subsystems[0]!.items[0]!.pendingApply = true;
+    mocks.useAdminConfig.mockReturnValue({ data, isError: false });
+    const html = render(FeaturesTab, "/settings?tab=features&view=attention");
+    expect(html).toContain("AI для сотрудников");
+    expect(html).toContain("Ждёт применения");
+  });
   it("explains the recommendation without claiming measured savings", () => {
     mocks.useAdminConfig.mockReturnValue({ data: view({ chatMuseAiPromptDebugEchoEnabled: true }), isError: false });
     const html = render(FeaturesTab, "/settings?tab=features&feature=prompt-debug");

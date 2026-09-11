@@ -73,7 +73,7 @@ export function SettingsPage() {
     if (activeTab === "features" || searchParams.has("feature")) {
       next.delete("feature");
       next.delete("view");
-      if (activeTab === "features") next.delete("q");
+      next.delete("q");
     }
     return `/settings?${next.toString()}`;
   }

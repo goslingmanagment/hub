@@ -3,6 +3,7 @@ import type { NotificationsIncidentItem } from "@agency_hub_core/contracts";
 import { toast } from "sonner";
 import { useNotificationIncidents, useResolveIncident } from "@/api/queries";
 import { StatusPanel } from "@/components/shared/StatusPanel";
+import { StaleDataNotice } from "@/components/shared/StaleDataNotice";
 import { formatRelativeTime } from "@/lib/format";
 
 const LIMIT = 50;
@@ -75,7 +76,7 @@ function deliveryState(item: NotificationsIncidentItem): {
       return {
         label: `Exhausted (${item.outboxAttemptCount ?? 0})`,
         className: "text-danger",
-        title: item.outboxLastError ?? undefined,
+        ...(item.outboxLastError == null ? {} : { title: item.outboxLastError }),
       };
   }
 }
@@ -86,10 +87,10 @@ export function NotificationsIncidentsTab() {
   const [pageLabel, setPageLabel] = useState<string | undefined>();
   const [offset, setOffset] = useState(0);
 
-  const { data, isLoading, isError } = useNotificationIncidents({
-    status,
-    kind,
-    pageLabel,
+  const { data, isLoading, isError, error } = useNotificationIncidents({
+    ...(status === undefined ? {} : { status }),
+    ...(kind === undefined ? {} : { kind }),
+    ...(pageLabel === undefined ? {} : { pageLabel }),
     limit: LIMIT,
     offset,
   });
@@ -104,8 +105,9 @@ export function NotificationsIncidentsTab() {
 
   return (
     <div>
-      <div className="mb-4 flex items-center gap-3">
+      <div className="mb-4 flex flex-wrap items-center gap-3">
         <select
+          aria-label="Incident status"
           value={status ?? ""}
           onChange={(event) => { setStatus(event.target.value || undefined); setOffset(0); }}
           className="rounded-lg border border-border bg-card px-3 py-1.5 text-sm text-text-primary"
@@ -116,6 +118,7 @@ export function NotificationsIncidentsTab() {
         </select>
 
         <select
+          aria-label="Incident type"
           value={kind ?? ""}
           onChange={(event) => { setKind(event.target.value || undefined); setOffset(0); }}
           className="rounded-lg border border-border bg-card px-3 py-1.5 text-sm text-text-primary"
@@ -126,6 +129,7 @@ export function NotificationsIncidentsTab() {
         </select>
 
         <input
+          aria-label="Incident page"
           type="text"
           placeholder="Filter by page..."
           value={pageLabel ?? ""}
@@ -134,9 +138,10 @@ export function NotificationsIncidentsTab() {
         />
       </div>
 
-      {isLoading ? (
+      {isError && data && <StaleDataNotice error={error} className="mb-3" />}
+      {isLoading && !data ? (
         <StatusPanel title="Loading incidents" description="Fetching notification incidents." />
-      ) : isError || !data ? (
+      ) : !data ? (
         <StatusPanel
           title="Incidents failed to load"
           description="The notification incidents feed could not be fetched."
@@ -144,12 +149,13 @@ export function NotificationsIncidentsTab() {
         />
       ) : data.items.length === 0 ? (
         <StatusPanel
-          title="No incidents recorded"
-          description="Incidents appear when an operational condition opens an alert."
+          title="No incidents match this view"
+          description="Try another status, type or page. An empty filtered list does not describe the whole system."
+          action={offset > 0 ? <button type="button" onClick={() => setOffset(0)} className="text-sm text-accent underline">Back to first page</button> : undefined}
         />
       ) : (
         <>
-          <div className="overflow-hidden rounded-xl border border-border bg-card">
+          <div className="overflow-x-auto rounded-xl border border-border bg-card">
             <table className="w-full border-collapse">
               <thead>
                 <tr className="bg-hover-alt">
@@ -180,7 +186,7 @@ export function NotificationsIncidentsTab() {
                     </td>
                     <td className="px-4 py-2.5 text-[12px] text-text-muted">{item.stream ?? "—"}</td>
                     <td className="px-4 py-2.5 text-[12px] text-text-muted">{formatRelativeTime(item.openedAt)}</td>
-                    <td className="max-w-[200px] truncate px-4 py-2.5 text-[12px] text-text-muted">{item.errorSummary ?? "—"}</td>
+                    <td title={item.errorSummary ?? undefined} className="max-w-[200px] truncate px-4 py-2.5 text-[12px] text-text-muted">{item.errorSummary ?? "—"}</td>
                     <td
                       className={`px-4 py-2.5 text-right text-[12px] tabular-nums ${
                         deliveryState(item).className
@@ -193,7 +199,7 @@ export function NotificationsIncidentsTab() {
                       {item.status === "open" && (
                         <button
                           onClick={() => handleResolve(item.id)}
-                          disabled={resolveIncident.isPending}
+                          disabled={resolveIncident.isPending || isError}
                           className="rounded-lg border border-border bg-card px-2.5 py-1 text-[11px] font-semibold text-text-secondary hover:bg-hover disabled:opacity-40"
                         >
                           Resolve

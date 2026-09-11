@@ -124,7 +124,7 @@ export function useWorkboardV2Ai(
     queryKey: ["workboard-v2-ai", pageLabel],
     queryFn: () => kernel.workboardV2Ai({ params: { pageLabel } }),
     enabled: options.enabled ?? true,
-    refetchInterval: options.refetchInterval,
+    ...(options.refetchInterval === undefined ? {} : { refetchInterval: options.refetchInterval }),
   });
 }
 
@@ -161,10 +161,10 @@ export function useWorkboardV2AiRuns(
   } = {},
 ) {
   const ri = options.refetchInterval;
-  return useQuery({
+  return useQuery<WorkboardV2AiRunsResponse>({
     queryKey: ["workboard-v2-ai-runs"],
     queryFn: () => kernel.workboardV2AiRuns(),
     enabled: options.enabled ?? true,
-    refetchInterval: typeof ri === "function" ? (query) => ri(query.state.data) : ri,
+    ...(ri === undefined ? {} : { refetchInterval: typeof ri === "function" ? (query) => ri(query.state.data) : ri }),
   });
 }

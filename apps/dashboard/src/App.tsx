@@ -34,7 +34,7 @@ const IncidentsPage = lazy(() => import("./pages/dev/IncidentsPage.js").then((m)
 const SyncStatusPage = lazy(() => import("./pages/dev/SyncStatusPage.js").then((m) => ({ default: m.SyncStatusPage })));
 
 function LazyFallback() {
-  return <div className="flex items-center justify-center h-full py-20 text-zinc-500">Loading…</div>;
+  return <div role="status" className="flex items-center justify-center h-full py-20 text-text-muted">Загружаем страницу…</div>;
 }
 
 function LegacyWorkboardRedirect() {

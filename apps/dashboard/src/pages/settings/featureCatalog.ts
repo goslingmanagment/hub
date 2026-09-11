@@ -293,6 +293,17 @@ export function findHubFeature(id: string | null | undefined): HubFeature | unde
   return HUB_FEATURES.find((feature) => feature.id === id);
 }
 
-export function featureSettingsHref(feature: HubFeature): string {
-  return `/settings?tab=configuration&feature=${encodeURIComponent(feature.id)}`;
+export function featureSettingsHref(feature: HubFeature, source?: URLSearchParams): string {
+  const next = new URLSearchParams({ tab: "configuration", feature: feature.id });
+  if (source) {
+    next.set("view", source.get("view") ?? "review");
+    if (source.get("q")) next.set("q", source.get("q")!);
+  }
+  return `/settings?${next.toString()}`;
+}
+
+export function featureReturnHref(feature: HubFeature, source: URLSearchParams): string {
+  const next = new URLSearchParams({ tab: "features", view: source.get("view") ?? "all", feature: feature.id });
+  if (source.get("q")) next.set("q", source.get("q")!);
+  return `/settings?${next.toString()}`;
 }
