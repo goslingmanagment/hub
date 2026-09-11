@@ -107,3 +107,56 @@ describe("sync monitor running activity", () => {
     });
   });
 });
+
+
+describe("sync monitor completed runs", () => {
+  it("selects by finish time and ID across old history before reading the payload", async () => {
+    const pageId = await seedPage("completed-order");
+    const otherPage = await seedPage("completed-other");
+    await run(pageId, "2026-09-01T00:00:00Z", "dm_messages", "2026-09-02T10:00:00Z");
+    const selected = await run(pageId, "2026-09-01T00:00:00Z", "dm_messages", "2026-09-02T10:00:00Z");
+    await run(pageId, "2026-09-02T09:00:00Z", "dm_messages", "2026-09-02T09:05:00Z");
+    await run(pageId, "2026-09-08T10:00:00Z", "light", "2026-09-08T11:00:00Z");
+    await run(otherPage, "2026-09-08T10:00:00Z", "dm_messages", "2026-09-08T11:00:00Z");
+    const running = await run(pageId, "2026-09-08T11:00:00Z");
+    const unfinished = await run(pageId, "2026-09-08T11:01:00Z");
+    await testDb.pool.query(`
+      update sync_runs set source = 'anomaly', stats = '{"completed":true}',
+        error_summary = 'selected payload' where id = $1
+    `, [selected]);
+    await testDb.pool.query("update sync_runs set finished_at = $2 where id = $1", [running, now]);
+    await testDb.pool.query("update sync_runs set outcome = 'failed' where id = $1", [unfinished]);
+    const [row] = await rows(pageId);
+    expect(row).toMatchObject({
+      lastCompletedRunId: selected,
+      lastCompletedTrigger: "anomaly",
+      lastCompletedStatus: "success",
+      lastCompletedStartedAt: new Date("2026-09-01T00:00:00Z"),
+      lastCompletedFinishedAt: new Date("2026-09-02T10:00:00Z"),
+      lastCompletedDurationMs: 122_400_000,
+      lastCompletedStats: { completed: true },
+      lastCompletedErrorSummary: "selected payload",
+    });
+    expect(await listSyncMonitorStreamRows(testDb.db, {
+      pageLabel: "completed-order", streams: ["dm_messages"], now, windowStart,
+    })).toEqual([row]);
+  });
+
+  it.each(["succeeded", "partial", "failed", "skipped"] as const)(
+    "includes a finished %s run without changing its result fields",
+    async (outcome) => {
+      const pageId = await seedPage(`completed-${outcome}`);
+      const completed = await run(pageId, "2026-09-08T10:00:00Z", "dm_messages", "2026-09-08T10:00:01Z");
+      await testDb.pool.query("update sync_runs set outcome = $2, source = null where id = $1", [completed, outcome]);
+      const [row] = await rows(pageId);
+      expect(row).toMatchObject({
+        lastCompletedRunId: completed,
+        lastCompletedTrigger: "scheduled",
+        lastCompletedStatus: outcome === "succeeded" ? "success" : outcome,
+        lastCompletedDurationMs: 1000,
+        lastCompletedStats: {},
+        lastCompletedErrorSummary: null,
+      });
+    },
+  );
+});

@@ -2247,24 +2247,24 @@ export async function listSyncMonitorStreamRows(
       where ranked."rank" = 1
     ),
     completed_runs as (
-      select ranked.*
+      select sr.page_id as "pageId",
+             sr.stream as "stream",
+             sr.id as "lastCompletedRunId",
+             coalesce(sr.source::text, 'scheduled') as "lastCompletedTrigger",
+             case
+               when sr.outcome = 'succeeded' then 'success'
+               else sr.outcome::text
+             end as "lastCompletedStatus",
+             sr.started_at as "lastCompletedStartedAt",
+             sr.finished_at as "lastCompletedFinishedAt",
+             greatest(
+               0,
+               floor(extract(epoch from (sr.finished_at - sr.started_at)) * 1000)
+             )::int as "lastCompletedDurationMs",
+             sr.stats as "lastCompletedStats",
+             sr.error_summary as "lastCompletedErrorSummary"
       from (
-        select sr.page_id as "pageId",
-               sr.stream as "stream",
-               sr.id as "lastCompletedRunId",
-               coalesce(sr.source::text, 'scheduled') as "lastCompletedTrigger",
-               case
-                 when sr.outcome = 'succeeded' then 'success'
-                 else sr.outcome::text
-               end as "lastCompletedStatus",
-               sr.started_at as "lastCompletedStartedAt",
-               sr.finished_at as "lastCompletedFinishedAt",
-               greatest(
-                 0,
-                 floor(extract(epoch from (sr.finished_at - sr.started_at)) * 1000)
-               )::int as "lastCompletedDurationMs",
-               sr.stats as "lastCompletedStats",
-               sr.error_summary as "lastCompletedErrorSummary",
+        select sr.id as "runId",
                row_number() over (
                  partition by sr.page_id, sr.stream
                  order by sr.finished_at desc, sr.id desc
@@ -2275,6 +2275,8 @@ export async function listSyncMonitorStreamRows(
           and sr.finished_at is not null
           and sr.stream = any(${requestedStreamsSql})
       ) ranked
+      -- Load payload only after selecting one completion per page/stream.
+      inner join ${syncRuns} sr on sr.id = ranked."runId"
       where ranked."rank" = 1
     ),
     deep_backfill_runs as (
