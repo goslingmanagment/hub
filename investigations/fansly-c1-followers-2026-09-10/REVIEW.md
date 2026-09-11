@@ -1,6 +1,17 @@
 # C1 timeline independent review
 
-Latest evidence review: `review_pr162` independently checked the 296-row export,
+For the [17:07 observation](OBSERVATION-20260911T170708Z.md), `review_pr162`
+verified 430 rows, withheld-finalization retries, full-revision versus final-
+generation durations, source-separated costs and all 429 retained summaries.
+`quality_c1` checked A0's fresh cohort, late updates, new Lora-1 discrepancy,
+lost receipts and warning categories. Both used local evidence only.
+The reports preserve unknown failed decisions, late boundary rows and incomplete
+log reads; low line counts do not prove complete exports. No runtime or test
+change was made. The final C1 review found one P3 in the PR body: warning counts
+lacked an explicit interval and could be read as including earlier log segments.
+The body now scopes them to 11:08:56–17:07:08 UTC. Final re-review confirmed the correction; no actionable findings remain.
+
+Earlier evidence review: `review_pr162` independently checked the 296-row export,
 all 295 finished-run summaries, source attribution and reconcile durations in
 the [11:08 observation](OBSERVATION-20260911T110856Z.md). No cost or suppression
 findings remain. `quality_c1` verified A0 totals and corrected the interpretation

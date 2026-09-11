@@ -122,12 +122,18 @@ and no request. Lora-3 has another such pair and a later mismatch while its
 provider headline changes. Lilly-2's new revision 2532 is scheduled work,
 separate from those 11 requests. Suppression remains unjustified.
 
-Next: follow Lora-3 revision 1520/generation 770 and subsequent counts. Retain
+The [17:07 follow-up](OBSERVATION-20260911T170708Z.md) records Lora-3/1520's
+completion in generation 771 after generation 770 failed membership proof.
+The whole revision used 156 attempts in 50m27.337s, then six decisions matched
+without another request. There are now 97 valid decisions and 13 clean-queue
+requests; one failed incremental run has an unknown decision. Lora-1/1250 has
+also retried after a changing provider headline and remains partial.
+
+Next: follow Lora-1 revision 1250/generation 1206 and subsequent counts. Retain
 the other OR branches as unobserved and diagnose protected health within current
-read-only privileges. No new restart was observed at 11:08. A0's new 71-sweep
-cohort has only three complete sweeps, all Ari-1; 64 are incomplete and four
-running. Its non-atomic status read includes one completion after the requested
-window end. The seven-day date alone cannot pass acceptance.
+read-only privileges. No new worker restart was observed at 17:06. A0's new
+66-sweep cohort has zero complete sweeps, 63 incomplete and three running.
+The seven-day date alone cannot pass acceptance.
 The drift/blast-radius guards and presence consumers remain exit criteria.
 A0 keeps its original seven-day window with this runtime boundary recorded.
 Further production changes, A1, live sockets and C2b enablement remain gated.

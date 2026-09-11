@@ -1,0 +1,158 @@
+{
+  "recordedAt": "2026-09-11T17:18:43.048670+00:00",
+  "scope": "Read-only observation and documentation; runtime, migrations and tests unchanged.",
+  "productionSource": "d47dc9b09f87988a53bd80435f0d11534beba15c",
+  "testSource": "13537b6b69a20ed9680458de30fa47f104da520c",
+  "validation": "Tests not rerun for this documentation-only observation. Existing pnpm check:3210 passed/9 skips; serial Docker-Postgres:70 passed/0 skips,19.77s. See ../grace-20260911/validation.json.",
+  "windowEnd": "2026-09-11T17:07:08Z",
+  "c1Manifest": {
+    "operation": "report",
+    "from": "2026-09-11T01:05:57.089215+00:00",
+    "to": "2026-09-11T17:07:08+00:00",
+    "startedAt": "2026-09-11T17:07:21.651864+00:00",
+    "completedAt": "2026-09-11T17:07:31.026049+00:00",
+    "records": 430,
+    "sha256": "c028ae92301c178d12bbfd9343684c02bc1a2e57ca22b4262774e810837288d1",
+    "role": "read_only",
+    "transaction": "on",
+    "atomicSnapshot": true,
+    "afterRunId": 0,
+    "throughRunId": 726857,
+    "nextRunId": null,
+    "timelineExhausted": true
+  },
+  "c1AsOf": "2026-09-11T17:07:25.799142+00:00",
+  "a0Manifest": {
+    "operation": "report",
+    "from": "2026-09-10T22:58:33.610000+00:00",
+    "to": "2026-09-11T17:07:08+00:00",
+    "startedAt": "2026-09-11T17:07:08.420474+00:00",
+    "completedAt": "2026-09-11T17:07:21.591272+00:00",
+    "records": 206,
+    "sha256": "ca169224427208b871b95e79b2ccf7f58b67f3ad2ce81ea6c713b5f89a778c41",
+    "role": "read_only",
+    "transaction": "on",
+    "atomicSnapshot": false
+  },
+  "boundaryNotes": [
+    "A0 is non-atomic; two running rows updated after the requested end.",
+    "C1 row726856 finished after windowEnd but before asOf. Last completed checkpoint before cutoff is2500rows, not the later3000."
+  ],
+  "files": {
+    "c1Report": {
+      "localPath": "/Users/dmitriy/code/goose/hub/investigations/fansly-c1-deploy-2026-09-11/followup-20260911T170629Z/snapshot-20260911T170708Z/report.json",
+      "sha256": "c028ae92301c178d12bbfd9343684c02bc1a2e57ca22b4262774e810837288d1"
+    },
+    "c1Summary": {
+      "localPath": "/Users/dmitriy/code/goose/hub/investigations/fansly-c1-deploy-2026-09-11/followup-20260911T170629Z/snapshot-20260911T170708Z/summary.json",
+      "sha256": "1986035617a7022d01e6352bc3240bad1374b0972d0ddaa230cb9488e11d62a7"
+    },
+    "a0Report": {
+      "localPath": "/Users/dmitriy/code/goose/hub/investigations/fansly-a0-deploy-2026-09-11/activation/20260910T225618Z/snapshot-20260911T170708Z/report.json",
+      "sha256": "ca169224427208b871b95e79b2ccf7f58b67f3ad2ce81ea6c713b5f89a778c41"
+    },
+    "a0Summary": {
+      "localPath": "/Users/dmitriy/code/goose/hub/investigations/fansly-a0-deploy-2026-09-11/activation/20260910T225618Z/snapshot-20260911T170708Z/summary.json",
+      "sha256": "53ba4d9f32663444993fc4879bb9fd72a765190d93c34d47fb58720bc49f3f78"
+    },
+    "runtime": {
+      "localPath": "/Users/dmitriy/code/goose/hub/investigations/fansly-c1-deploy-2026-09-11/followup-20260911T170629Z/runtime.json",
+      "sha256": "684ab53d3068bd662e0e9a1927fe18d3ebb567a13e713b782a059599dfb7bc87"
+    },
+    "workerLogSummary": {
+      "localPath": "/Users/dmitriy/code/goose/hub/investigations/fansly-c1-deploy-2026-09-11/followup-20260911T170629Z/worker-log-summary.json",
+      "sha256": "e4c0b002db4c63663407afb967656887e3aa782377eb0ba1ea268ea91653517b"
+    },
+    "logTailReceipts": {
+      "localPath": "/Users/dmitriy/code/goose/hub/investigations/fansly-c1-deploy-2026-09-11/followup-20260911T170629Z/log-receipts.json",
+      "sha256": "6283d6d5389069fbedee7035f2d4b24f631008ce44b95f43b52a7051931ef473"
+    },
+    "logTimeOnlyReceipts": {
+      "localPath": "/Users/dmitriy/code/goose/hub/investigations/fansly-c1-deploy-2026-09-11/followup-20260911T170629Z/log-receipts-time-only.json",
+      "sha256": "c9aba8cbe5da69137e3c1a1fa13000c299b52d2cb6cc4559027dcfdfd84c5171"
+    }
+  },
+  "selectedLogSegments": [
+    {
+      "path": "/Users/dmitriy/code/goose/hub/investigations/fansly-c1-deploy-2026-09-11/followup-20260911T050632Z/worker.log",
+      "sha256": "89b32392441899ac2cf5505881b465059452340da1cc36c824597367400ca5cf",
+      "lines": 3842,
+      "nonJsonLines": 1
+    },
+    {
+      "path": "/Users/dmitriy/code/goose/hub/investigations/fansly-c1-deploy-2026-09-11/followup-20260911T110759Z/worker-part-1.log",
+      "sha256": "5b25b6d9c5ce2531aea9fca156e8acfac495b050366e420a71e7497dcc2bb80a",
+      "lines": 2682,
+      "nonJsonLines": 0
+    },
+    {
+      "path": "/Users/dmitriy/code/goose/hub/investigations/fansly-c1-deploy-2026-09-11/followup-20260911T110759Z/worker-part-2.log",
+      "sha256": "63af34723ad08c98bc2bde31d3a7e3d76993929cad4668451a07231938c26345",
+      "lines": 2168,
+      "nonJsonLines": 2
+    },
+    {
+      "path": "/Users/dmitriy/code/goose/hub/investigations/fansly-c1-deploy-2026-09-11/followup-20260911T170629Z/worker-time-only-1.log",
+      "sha256": "3bbb59f9a1835cd14b66973feb23772e4ea81c977a7adf1aa6b16adf1a8e7e46",
+      "lines": 555,
+      "nonJsonLines": 1
+    },
+    {
+      "path": "/Users/dmitriy/code/goose/hub/investigations/fansly-c1-deploy-2026-09-11/followup-20260911T170629Z/worker-time-only-2.log",
+      "sha256": "7841c7cef57d62599085a032b9d3ecdc8d3342eb8ca1639638645b7c3da6520e",
+      "lines": 644,
+      "nonJsonLines": 0
+    },
+    {
+      "path": "/Users/dmitriy/code/goose/hub/investigations/fansly-c1-deploy-2026-09-11/followup-20260911T170629Z/worker-hour-3.log",
+      "sha256": "82819d7f0b9c97dd727c6e15b894470adf5718418ac9973524082e68bf5faaf1",
+      "lines": 630,
+      "nonJsonLines": 1
+    },
+    {
+      "path": "/Users/dmitriy/code/goose/hub/investigations/fansly-c1-deploy-2026-09-11/followup-20260911T170629Z/worker-hour-4.log",
+      "sha256": "c1921605604364d7352acebadde929da32db65a3dc9de360fcafafe6a0efe9ad",
+      "lines": 653,
+      "nonJsonLines": 1
+    },
+    {
+      "path": "/Users/dmitriy/code/goose/hub/investigations/fansly-c1-deploy-2026-09-11/followup-20260911T170629Z/worker-hour-5.log",
+      "sha256": "c724a709be92fa9384f4a61a5bf1421069d06dcd40ce8c3059eb25fa36e05478",
+      "lines": 767,
+      "nonJsonLines": 0
+    },
+    {
+      "path": "/Users/dmitriy/code/goose/hub/investigations/fansly-c1-deploy-2026-09-11/followup-20260911T170629Z/worker-hour-6.log",
+      "sha256": "3f019a50d64f221ad21babe3146f605f213a25d27bfb3a1f1f9b13f315cee401",
+      "lines": 576,
+      "nonJsonLines": 3
+    },
+    {
+      "path": "/Users/dmitriy/code/goose/hub/investigations/fansly-c1-deploy-2026-09-11/followup-20260911T170629Z/worker-hour-7.log",
+      "sha256": "e636d52390d0c39b1dfc329077a3cb781d861bd66afc1a46901d27a933397de8",
+      "lines": 96,
+      "nonJsonLines": 0
+    }
+  ],
+  "logCoverage": "Selected retained logs only; first timeout and early truncated tail reads are excluded. Low output line counts do not certify log completeness.",
+  "review": {
+    "c1Reviewer": "review_pr162",
+    "a0AndRuntimeReviewer": "quality_c1",
+    "productionAccessByReviewers": false,
+    "testsRunByReviewers": false,
+    "evidenceReview": "Both independent evidence and final documentation reviews passed. The P3 warning-window ambiguity was fixed and independently re-reviewed.",
+    "findingsIncorporated": [
+      "Whole-revision elapsed includes both snapshot generations.",
+      "Failed incremental receipt stays unknown.",
+      "Late checkpoint is excluded from state at the requested end.",
+      "Fresh A0 cohort is not a cumulative difference.",
+      "P3: PR warning counts explicitly refer to new logs for 11:08:56\u201317:07:08 UTC, not all selected segments."
+    ],
+    "finalDocumentationFindingsRemaining": 0
+  },
+  "unexecutedPlanOnlyException": {
+    "ownerApprovalPending": true,
+    "executed": false,
+    "sha256": "fd55d8c8861c85dfac8addc22d9372cbb468624401ff55af036acc9fc5702b70"
+  }
+}
