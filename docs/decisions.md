@@ -289,6 +289,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 289 | Fansly C2b earnings shadow | Atomic semantic transaction revisions and independent endpoint receipts measure the existing daily rotation; unchanged and missing results remain explicit debt. |
 | 291 | Overview metric semantics | Revenue-led overview with per-page/model comparison windows, transaction sources and separate page audience counts; no summed subscribers or acquisition claims from mutable subscription records. |
 | 292 | Overview selected layout and exact drilldown | Keep the compact variant-one table, order models by server net income, compare source deltas on the server, use scoped exact-window operations with one response snapshot, and persist navigation context in URLs. Supersedes #291's three-query-only UI plan. |
+| 293 | Select completed run IDs before monitor payload | Rank narrow historical completion keys, then load the selected run by primary key; preserve health fields, scope, ordering and historical physical-attempt debt. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -12184,3 +12185,31 @@ breakpoints. Native modal navigation supplies keyboard containment, Escape and
 focus return on mobile. See [the implementation record](overview-implementation-2026-09-11.md)
 for verification and restart instructions. This is a local implementation; no
 deployment, production write, capture repair or completeness claim is implied.
+
+
+## Decision 293: Select completed run IDs before loading monitor payload (2026-09-11)
+
+The protected sync-health deployment gate timed out in production. An explicitly
+approved EXPLAIN-only read selected a historical completed-run window carrying
+wide stats/error payload. Estimated plans do not establish the actual cause of
+that timeout, and the other readers in protected health remain unmeasured.
+
+Keep all existing completion filters and the `finished_at DESC, id DESC` order.
+Rank only the run ID and required ordering keys, then fetch the winner's fields
+through its primary key inside the same SQL statement. Page/stream scope,
+old-history selection, outcome mapping, trigger fallback, duration and payload
+remain identical. Running-run activity and physical-attempt health do not change.
+
+On one local Postgres 16 scale fixture, paired calls in four attempt-state
+scenarios return identical rows and are 19.6–23.2% faster by three-sample medians.
+The estimated completed-window row width falls from 1674 to 36 bytes; temporary blocks written
+for the full query increase. This is neither a general I/O reduction nor a
+production latency/HTTP-savings claim. See
+`investigations/sync-monitor-completed-history-2026-09-11/REPORT.md` for evidence.
+
+No flag, migration, retention change or timeout increase is introduced. Rollback
+is the prior query with the same schema and data. Deployment requires explicit
+owner approval of a concrete revision and the ordinary health gate remains
+mandatory. Production currently includes unmerged C1 diagnostics and applied
+0182/0183; a future deployment must preserve that code/schema state rather than
+replace it with this main-based worktree alone.
