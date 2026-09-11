@@ -11,7 +11,7 @@ and evidence now live in `investigations/`.
 | Pre-A0: stale follow-up + lilly-2 debt | PR157 deployed; Lilly-2 one-hour canary completed and rolled back | Frozen Lilly-2 5615/5615 raw; canary had 0 eligible targets / 0 recovery attempts, 104 excluded debts unchanged; 8/8 selected material passed after rollback. Separate old Lilly-1/Lora-1/Ari discrepancies remain explicit. |
 | Pre-A0: reply links / honest sweep | PR158–162 deployed; original bounded corpus accepted | 994/994 reply IDs, 2893 observations, 27 attached messages across separately timestamped reads; not an atomic census or fresh-event latency claim. |
 | A0 + T0 | PR164 deployed; shadow active since 10 September 22:58:33 UTC | T0 and historical comparison retained. Earliest seven-day point: 17 September 22:58:33 UTC. Unknown material checks and incomplete comparisons remain outside acceptance; savings unmeasured. |
-| C1 | [PR166](https://github.com/goslingmanagment/core/pull/166) draft, Decision 291 | Diagnostic timeline added; 3205 unit / 70 real-Postgres tests pass. Deployment, production cause measurement and narrow fix pending in this PR. |
+| C1 | [PR166](https://github.com/goslingmanagment/core/pull/166) draft, diagnostics running | 3205 unit / 70 Postgres tests pass. One valid no-request receipt; protected deploy gate failed. RCA and narrow fix remain open. |
 | C2a | PR165 code observed in production main 32478124 on 11 September | Replay completion and projection repair have not been verified here; no additional replay authorized. |
 | C2b | PR169 merged; code observed in production main 32478124 | Enablement and measurements not verified; daily rotation remains the required policy. |
 | C2c | Gated | Coverage, costs and per-fan max-age proof before selection/rotation changes. |
@@ -49,3 +49,12 @@ acceptance. C1 was synchronized with that main and numbered Decision 291;
 W0 remains a separate draft. The current production preflight is retained in
 C1's evidence directory. The A0 operational report records the intervening
 release, 500ms material-check timeouts and the incomplete Lilly-2 comparison.
+
+The owner-approved C1 source `d47dc9b09f87` replaced that runtime at
+11 September 01:05 UTC. Its standard deploy exited 1 on protected sync-health;
+automatic rollback was skipped after migrations 0182–0183 applied. The three
+roles remained healthy with zero restarts at 01:34–01:35 UTC, and the CLI and
+dashboard checks passed separately. C1's first retained decision is lora-3
+with equal counts and no reconcile request. The six-hour observation now
+retains C1 evidence too, preserving A0's original start and runtime boundaries.
+See [C1 status](fansly-c1-followers-2026-09-10/STATUS.md) for the open gates.

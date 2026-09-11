@@ -38,6 +38,13 @@ This observation does not establish that C2a replay or projection repair finishe
 A deployment from an older pre-C2a base must still follow the reader-before-worker
 and compatible rollback procedure in the C2a runbook.
 
+The owner-approved diagnostic source `d47dc9b09f87` began running on
+11 September at 01:05 UTC. Its protected sync-health deploy gate failed;
+the image remained running and the schema guard skipped automatic rollback.
+See the [current C1 record](../../investigations/fansly-c1-followers-2026-09-10/STATUS.md).
+Migrations 0182–0183 are applied: do not edit or renumber them when main moves.
+Use a new forward migration for any later SQL change.
+
 After the read operation is deployed, use psql as read_only inside READ ONLY.
 Choose an actual bounded interval (at most eight days) and retain the output:
 
