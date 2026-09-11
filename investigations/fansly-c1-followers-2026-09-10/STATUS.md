@@ -23,9 +23,9 @@ See the [runbook](../../docs/runbooks/fansly-followers-diagnostics.md).
 
 ## Validation
 
-- `pnpm check`: 3,205 tests passed in 292 files, nine existing skips; strictness
+- `pnpm check`: 3,210 tests passed in 292 files, nine existing skips; strictness
   remains 1,908 known errors in 121 files. Lint and dashboard build passed.
-- Serial real Docker-Postgres: 70 tests in five files, zero skips, 27.03 seconds.
+- Serial real Docker-Postgres: 70 tests in five files, zero skips, 21.53 seconds.
   Suites: followers-timeline, followers-diagnostics, generation-high-water,
   page-sync-lease-fencing and sync (all `.integration.test.ts`).
 - The timeline checks real handler receipts; partial, failed, skipped and
@@ -35,10 +35,17 @@ See the [runbook](../../docs/runbooks/fansly-followers-diagnostics.md).
   presence tests passed.
 - Independent review identified an absent queue-validity marker. It was added
   with seven malformed-queue fixtures. Final review is recorded in REVIEW.md.
+- A separate code-quality review found two test defects: dependent guard
+  combinations and a calendar-sensitive window. Both are fixed, along with
+  typed fixture inputs and explicit handler/reader coverage boundaries. The
+  final re-review has no actionable findings. The five added cases independently
+  protect the original predicates; all eight OR combinations remain covered.
 
-The SQL reader is 126 lines and its integration suite is 143 lines. No new
-runtime module or flag is needed for this addition. Local test logs are retained
+No new runtime module or flag is needed for this addition. Local test logs are retained
 as evidence; they do not establish production latency or query-plan performance.
+The quality follow-up changes tests and review documentation only. Production
+code and applied migrations are unchanged. Its validation receipt is retained
+in [quality evidence](evidence/quality-20260911/validation.json).
 
 ## Production evidence and next gate
 

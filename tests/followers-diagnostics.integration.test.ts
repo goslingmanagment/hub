@@ -5,12 +5,19 @@ import { followersDiagnosticFixture } from "./helpers/followers-diagnostic-fixtu
 
 const FROM = new Date(Date.now() - 3_600_000).toISOString();
 const TO = new Date(Date.now() + 3_600_000).toISOString();
+const TOO_LONG_END = new Date(Date.parse(FROM) + 8 * 86_400_000 + 1).toISOString();
 
 describe("C1 followers decision receipts", () => {
   let db: Awaited<ReturnType<typeof startTestDatabase>>;
-  beforeAll(async () => { db = await startTestDatabase(); }, 120_000);
-  afterAll(async () => { await db?.stop(); });
-  beforeEach(async () => { await resetIntegrationDatabase(db.pool); });
+  beforeAll(async () => {
+    db = await startTestDatabase();
+  }, 120_000);
+  afterAll(async () => {
+    await db?.stop();
+  });
+  beforeEach(async () => {
+    await resetIntegrationDatabase(db.pool);
+  });
   const report = async () => (await db.pool.query(
     "select fansly_followers_diagnostic_report($1, $2) as report", [FROM, TO],
   )).rows[0].report;
@@ -19,7 +26,7 @@ describe("C1 followers decision receipts", () => {
     "records %s while preserving requests, presence and the real queue decision", async mode => {
       const fixture = await followersDiagnosticFixture(db, mode);
       const before = Number(await fixture.queue());
-      expect((await fixture.runChunk()).satisfied).toBe(true);
+      expect((await fixture.runHandlerAndFinishTelemetry()).satisfied).toBe(true);
       expect(Number(await fixture.queue()) - before).toBe(mode === "none" ? 0 : 1);
       expect(fixture.getFollowersPage).toHaveBeenCalledTimes(1);
       const output = await report();
@@ -47,7 +54,7 @@ describe("C1 followers decision receipts", () => {
   it("distinguishes a clean queue from pending work using the locked request receipt", async () => {
     const fixture = await followersDiagnosticFixture(db, "count");
     await db.pool.query("update page_sync_states set applied_seq = request_seq where page_id = $1", [fixture.page.id]);
-    await fixture.runChunk();
+    await fixture.runHandlerAndFinishTelemetry();
     expect((await report()).queue).toEqual([expect.objectContaining({
       requested: 1, known_queue_receipts: 1, unknown_queue_receipts: 0, requests_with_pending_work: 0,
     })]);
@@ -75,7 +82,7 @@ describe("C1 followers decision receipts", () => {
       for each row execute function reject_followers_note()`);
     try {
       const before = Number(await fixture.queue());
-      expect((await fixture.runChunk()).satisfied).toBe(true);
+      expect((await fixture.runHandlerAndFinishTelemetry()).satisfied).toBe(true);
       expect(Number(await fixture.queue()) - before).toBe(1);
       const result = await report();
       expect(result.decisions).toEqual([]);
@@ -87,16 +94,34 @@ describe("C1 followers decision receipts", () => {
 
   it("reports duplicate receipts outside the valid decision denominator", async () => {
     const fixture = await followersDiagnosticFixture(db);
-    await fixture.runChunk();
+    await fixture.runHandlerAndFinishTelemetry();
     await fixture.telemetry.addNote("duplicate", { followersReconcile: { schemaVersion: 1 } });
     expect((await report()).coverage).toEqual([expect.objectContaining({ decisions: 0, duplicate_decisions: 1 })]);
   });
 
   it.each([
-    { schemaVersion: 1 },
-    { schemaVersion: 1, countMismatch: "true", exhaustedWithoutKnown: false, unchangedHeadWithRows: false, requested: true },
-    { schemaVersion: 1, countMismatch: true, exhaustedWithoutKnown: false, unchangedHeadWithRows: false, requested: false },
-  ])("keeps one malformed or contradictory receipt unknown", async diagnostic => {
+    { name: "missing decision fields", diagnostic: { schemaVersion: 1 } },
+    {
+      name: "a string instead of a boolean",
+      diagnostic: {
+        schemaVersion: 1,
+        countMismatch: "true",
+        exhaustedWithoutKnown: false,
+        unchangedHeadWithRows: false,
+        requested: true,
+      },
+    },
+    {
+      name: "a request contradicting the OR branches",
+      diagnostic: {
+        schemaVersion: 1,
+        countMismatch: true,
+        exhaustedWithoutKnown: false,
+        unchangedHeadWithRows: false,
+        requested: false,
+      },
+    },
+  ])("keeps $name unknown", async ({ diagnostic }) => {
     const fixture = await followersDiagnosticFixture(db);
     await fixture.telemetry.addNote("malformed", { followersReconcile: diagnostic });
     const output = await report();
@@ -105,15 +130,22 @@ describe("C1 followers decision receipts", () => {
   });
 
   it.each([
-    null,
-    { requestedSeq: "broken", appliedSeq: 0 },
-    { requestedSeq: 1.5, appliedSeq: 0 },
-  ])("keeps malformed queue context outside the coalescing denominator", async queueBefore => {
+    { name: "missing queue", queueBefore: null },
+    { name: "nonnumeric request sequence", queueBefore: { requestedSeq: "broken", appliedSeq: 0 } },
+    { name: "fractional request sequence", queueBefore: { requestedSeq: 1.5, appliedSeq: 0 } },
+  ])("excludes $name from the coalescing denominator", async ({ queueBefore }) => {
     const fixture = await followersDiagnosticFixture(db);
-    await fixture.telemetry.addNote("queue shape", { followersReconcile: {
-      schemaVersion: 1, countMismatch: true, exhaustedWithoutKnown: false,
-      unchangedHeadWithRows: false, requested: true, requestedSeq: 2, queueBefore,
-    } });
+    await fixture.telemetry.addNote("queue shape", {
+      followersReconcile: {
+        schemaVersion: 1,
+        countMismatch: true,
+        exhaustedWithoutKnown: false,
+        unchangedHeadWithRows: false,
+        requested: true,
+        requestedSeq: 2,
+        queueBefore,
+      },
+    });
     expect((await report()).queue).toEqual([expect.objectContaining({
       requested: 1, known_queue_receipts: 0, unknown_queue_receipts: 1, requests_with_pending_work: 0,
     })]);
@@ -121,7 +153,7 @@ describe("C1 followers decision receipts", () => {
 
   it("does not pull a later decision into the report window", async () => {
     const fixture = await followersDiagnosticFixture(db);
-    await fixture.runChunk();
+    await fixture.runHandlerAndFinishTelemetry();
     await db.pool.query(
       "update sync_run_events set emitted_at = $1 where details ? 'followersReconcile'", [TO],
     );
@@ -143,11 +175,18 @@ describe("C1 followers decision receipts", () => {
       expect((await client.query("select fansly_followers_diagnostic_report($1, $2) as r", [FROM, TO])).rows[0].r.coverage)
         .toEqual([]);
       await expect(client.query("select * from sync_runs limit 1")).rejects.toThrow("permission denied");
-    } finally { await client.query("rollback"); client.release(); }
+    } finally {
+      await client.query("rollback");
+      client.release();
+    }
   });
 
-  it.each([[TO, FROM], [null, TO], [FROM, "2027-01-01T00:00:00Z"]])(
-    "refuses an unbounded or reversed window", async (from, to) => {
+  it.each([
+    { name: "a reversed window", from: TO, to: FROM },
+    { name: "an unbounded window", from: null, to: TO },
+    { name: "a window longer than eight days", from: FROM, to: TOO_LONG_END },
+  ])(
+    "refuses $name", async ({ from, to }) => {
       await expect(db.pool.query("select fansly_followers_diagnostic_report($1, $2)", [from, to]))
         .rejects.toThrow("ordered report window");
     },

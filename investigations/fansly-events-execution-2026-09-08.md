@@ -6,12 +6,35 @@ Owner calls from the implementation chat are incorporated into the plan.
 The original ignored research files are preserved locally; the versioned copies
 and evidence now live in `investigations/`.
 
+## Independent review before merge
+
+Each stage PR requires an independent review of correctness and code quality,
+as requested by the owner on 11 September. The reviewer reads the changed code
+in context and checks:
+
+- Design fits existing repository boundaries and patterns; the change is the
+  simplest one that meets the stage requirement.
+- Names and control flow explain the behavior; functions, files and formatting
+  remain readable. Comments explain constraints or reasoning.
+- No unnecessary abstraction, duplicated policy, speculative fallback or type
+  assertion hides a contract error.
+- Tests exercise behavior, independent guards and failure boundaries. Fixtures
+  and failure names are readable, deterministic and honest about what they prove.
+
+Findings name the file, impact and smallest useful fix. Reviewers distinguish
+actionable issues from taste; they do not require unrelated rewrites or generic
+pattern checklists. Fix actionable findings and obtain a re-review of the final diff before
+merge. Retain the findings, fixes, review scope and actual test results in the
+stage evidence and PR. This review does not replace stage or production gates.
+
+## Stage state
+
 | Stage | State | Measurement / next gate |
 |---|---|---|
 | Pre-A0: stale follow-up + lilly-2 debt | PR157 deployed; Lilly-2 one-hour canary completed and rolled back | Frozen Lilly-2 5615/5615 raw; canary had 0 eligible targets / 0 recovery attempts, 104 excluded debts unchanged; 8/8 selected material passed after rollback. Separate old Lilly-1/Lora-1/Ari discrepancies remain explicit. |
 | Pre-A0: reply links / honest sweep | PR158–162 deployed; original bounded corpus accepted | 994/994 reply IDs, 2893 observations, 27 attached messages across separately timestamped reads; not an atomic census or fresh-event latency claim. |
 | A0 + T0 | PR164 deployed; shadow active since 10 September 22:58:33 UTC | T0 and historical comparison retained. Earliest seven-day point: 17 September 22:58:33 UTC. Unknown material checks and incomplete comparisons remain outside acceptance; savings unmeasured. |
-| C1 | [PR166](https://github.com/goslingmanagment/core/pull/166) draft, diagnostics running | 3205 unit / 70 Postgres tests pass. One valid no-request receipt; protected deploy gate failed. RCA and narrow fix remain open. |
+| C1 | [PR166](https://github.com/goslingmanagment/core/pull/166) draft, diagnostics running | 3210 unit / 70 Postgres tests pass; independent code-quality review complete. One valid no-request receipt; protected deploy gate failed. RCA and narrow fix remain open. |
 | C2a | PR165 code observed in production main 32478124 on 11 September | Replay completion and projection repair have not been verified here; no additional replay authorized. |
 | C2b | PR169 merged; code observed in production main 32478124 | Enablement and measurements not verified; daily rotation remains the required policy. |
 | C2c | Gated | Coverage, costs and per-fan max-age proof before selection/rotation changes. |

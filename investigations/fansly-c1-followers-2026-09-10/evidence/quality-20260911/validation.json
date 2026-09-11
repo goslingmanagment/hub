@@ -1,0 +1,51 @@
+{
+  "recorded_at": "2026-09-11T01:54:46.200779+00:00",
+  "base_commit": "a0d9274dc23b87ff978759b3909c2315e8d5a42c",
+  "scope": "C1 test quality and review process only; production sources and applied migrations unchanged",
+  "check": {
+    "command": "pnpm check",
+    "exit_code": 0,
+    "passed_tests": 3210,
+    "skipped_tests": 9,
+    "test_files": 292,
+    "unit_duration_seconds": 22.49,
+    "existing_type_errors": 1908,
+    "files_with_existing_type_errors": 121,
+    "lint": "passed",
+    "dashboard_build": "passed",
+    "log": "check-final.log",
+    "log_sha256": "ff4c5fc6e2270b42852cc0c64b5b3228f6bf9c0865fdb02addf2ab807f65837c"
+  },
+  "postgres": {
+    "command": "pnpm exec vitest run --no-file-parallelism tests/followers-timeline.integration.test.ts tests/followers-diagnostics.integration.test.ts tests/generation-high-water.integration.test.ts tests/page-sync-lease-fencing.integration.test.ts tests/sync.integration.test.ts",
+    "backend": "real Docker-Postgres via repository Testcontainers setup",
+    "exit_code": 0,
+    "passed_tests": 70,
+    "skipped_tests": 0,
+    "test_files": 5,
+    "duration_seconds": 21.53,
+    "log": "integration.log",
+    "log_sha256": "2cfc5f1ea642cbe60a5ff88e74057d641906d02a056e60a4c265a1f8af9b2ec6"
+  },
+  "initial_check": {
+    "exit_code": 1,
+    "phase": "typecheck",
+    "finding": "Typed queue rows[0] could be undefined; fixed with an explicit seed invariant before final rerun",
+    "log": "check.log",
+    "log_sha256": "64c2963b1a41ea98bf0a040a3e0bc446004e8d1d1655bbfa93d734a2e59e5ed9"
+  },
+  "review": {
+    "production_source_reviewer": "quality_c1",
+    "test_reviewer": "review_pr162",
+    "final_actionable_findings": 0,
+    "reviewers_ran_tests": false,
+    "reviewers_accessed_production": false,
+    "record": "../../REVIEW.md"
+  },
+  "test_source_sha256": {
+    "tests/followers-timeline.integration.test.ts": "6c592c4228ba59e8210e7b42d458fec35bcd8effaca25a9764f66644ca4aba8e",
+    "tests/followers-diagnostics.integration.test.ts": "a2569fa38b9e0a0c4090d3ce8aa6e7d40710914665b86269049c4a1eb830176a",
+    "tests/followers-reconcile-decision.test.ts": "2c7a0cc9925acd17fdc8c9019ccea5872868fe739931ecb522fa43b27fa50b97",
+    "tests/helpers/followers-diagnostic-fixture.ts": "fe56a37eb9b561f4100f206b460359a882661ae5cf57558e5ff4837a19262c4e"
+  }
+}
