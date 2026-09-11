@@ -5,7 +5,6 @@
   "apps/dashboard/src/lib/parseFanProfile.ts": 3,
   "apps/dashboard/src/pages/FanProfilePage.tsx": 1,
   "apps/dashboard/src/pages/OfapiCreditsPage.tsx": 6,
-  "apps/dashboard/src/pages/settings/ModelsTab.tsx": 6,
   "apps/dashboard/src/pages/settings/sync/syncBlockDisplay.ts": 5,
   "apps/dashboard/src/pages/TopSupportersPage.tsx": 1,
   "apps/runtime/src/bootstrap.ts": 1,

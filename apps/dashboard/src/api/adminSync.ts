@@ -6,9 +6,10 @@ import type {
 
 import { kernel } from "./sdk.js";
 
-export function useAdminConnections(options: { enabled?: boolean } = {}) {
+export function useAdminConnections(options: { enabled?: boolean; suppressGlobalError?: boolean } = {}) {
   return useQuery({
     queryKey: ["admin", "connections"],
+    meta: { suppressGlobalError: options.suppressGlobalError ?? false },
     queryFn: () => kernel.adminConnections(),
     enabled: options.enabled ?? true,
   });

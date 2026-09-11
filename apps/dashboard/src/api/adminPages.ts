@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
+import { useIsMutating, useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import type {
   CreateModelBody,
   CreatePageBody,
@@ -23,9 +23,10 @@ function invalidateAdminCatalog(qc: QueryClient) {
   qc.invalidateQueries({ queryKey: ["overview"] });
 }
 
-export function useAdminModels() {
+export function useAdminModels(options: { suppressGlobalError?: boolean } = {}) {
   return useQuery({
     queryKey: ["admin", "models"],
+    meta: { suppressGlobalError: options.suppressGlobalError ?? false },
     queryFn: () => kernel.adminModels(),
   });
 }
@@ -54,15 +55,21 @@ export function useAdminReorderModels() {
   const qc = useQueryClient();
   return useMutation({
     meta: { suppressGlobalError: true },
-    mutationFn: (updates: { slug: string; sortOrder: number }[]) =>
-      Promise.all(
+    mutationFn: async (updates: { slug: string; sortOrder: number }[]) => {
+      const results = await Promise.allSettled(
         updates.map((update) =>
           kernel.adminUpdateModel({
             params: { modelSlug: update.slug },
             body: { sortOrder: update.sortOrder },
           }),
         ),
-      ),
+      );
+      // A failed swap can still have a successful second write. Wait for both
+      // before the caller refreshes the catalog to show the resulting order.
+      const failure = results.find((result) => result.status === "rejected");
+      if (failure) throw failure.reason;
+      return results.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
+    },
     onSuccess: () => invalidateAdminCatalog(qc),
   });
 }
@@ -77,9 +84,10 @@ export function useAdminDeleteModel(modelSlug: string) {
   });
 }
 
-export function useAdminPages() {
+export function useAdminPages(options: { suppressGlobalError?: boolean } = {}) {
   return useQuery({
     queryKey: ["admin", "pages"],
+    meta: { suppressGlobalError: options.suppressGlobalError ?? false },
     queryFn: () => kernel.adminPages(),
   });
 }
@@ -130,12 +138,18 @@ export function useAdminTestProxy() {
   });
 }
 
-export function useAdminVerifyPage(pageLabel: string) {
+export function useAdminVerifyPage(pageLabel: string, pageId: number) {
   const qc = useQueryClient();
-  return useMutation({
+  const mutationKey = ["admin", "verifyPage", pageId];
+  // The request outlives filtered rows and settings-tab navigation. A new
+  // observer must still show its pending state for this same page.
+  const pendingCount = useIsMutating({ mutationKey });
+  const mutation = useMutation({
+    mutationKey,
     meta: { suppressGlobalError: true },
     mutationFn: () =>
       kernel.adminVerifyPage({ params: { pageLabel } }),
     onSuccess: () => invalidateAdminCatalog(qc),
   });
+  return { ...mutation, isPending: mutation.isPending || pendingCount > 0 };
 }

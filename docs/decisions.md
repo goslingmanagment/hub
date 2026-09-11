@@ -290,6 +290,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 291 | Overview metric semantics | Revenue-led overview with per-page/model comparison windows, transaction sources and separate page audience counts; no summed subscribers or acquisition claims from mutable subscription records. |
 | 292 | Overview selected layout and exact drilldown | Keep the compact variant-one table, order models by server net income, compare source deltas on the server, use scoped exact-window operations with one response snapshot, and persist navigation context in URLs. Supersedes #291's three-query-only UI plan. |
 | 293 | Dashboard subsystem context and truthful query states | Extend URL-owned navigation, independent loading/error states, exact revenue drilldowns, and preserved operation custody across account/audience, OFAPI, notifications, access and diagnostics. Keep literal colon suffixes in SDK paths. |
+| 294 | Dashboard catalog and owner-review continuity | URL-owned catalogs, role-gated shell, per-page verification flights, frozen hydration decisions with owner-bound per-tab recovery, and truthful database/run diagnostics. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -12230,3 +12231,44 @@ preserve the existing design tokens. See the
 [implementation record](subsystems-ux-implementation-2026-09-11.md) for coverage,
 verification and limitations. No deployment or production mutation is authorized
 by this local implementation record.
+
+
+## Decision 294: Keep catalog work and owner reviews continuous across navigation (2026-09-11)
+
+The authorized continuation of #293 covers Models/Pages, AI personas, the owner
+hydration queue, database statistics and sync-run details. It preserves the
+selected Overview and configuration editor and changes no backend authorization,
+provider admission rules or generated contracts.
+
+Catalog search and filters live in URLs; model/page links are real internal
+links. Forms retain their original editing target and input on errors. AI persona
+CRUD remains disabled while full saved text is inspectable. Page verification
+uses a page-ID mutation key and shared pending state so row filtering and tab
+remount cannot reopen the same in-flight action. Reordering waits for both
+existing writes to settle before showing/refetching a partial result; this does
+not make the two writes atomic.
+
+Opening a hydration review freezes the request version and coverage fingerprint.
+The owner reviews exact caps, absolute expiry and explicit mark-read consent
+before dispatch. Per-tab sessionStorage, namespaced by owner user ID, preserves
+the validated snapshot and exact decision body/idempotency key. Interrupted
+sending restores an uncertain outcome, never an automatic POST. Explicit replay
+uses the same body and existing server idempotency; late replies cannot replace
+a different review or downgrade a confirmed result. Storage must accept the
+pending decision before dispatch; unavailable/corrupt storage leaves queue
+reading available and blocks a new decision rather than discarding custody.
+The list reflects only the existing state/limit contract and its capped delivery;
+no offset/cursor or completeness claim is introduced.
+
+The shell mounts dashboard data only after auth allows owner/team_lead, matching
+requireDashboardUser. Unsupported roles receive recovery and account switching.
+Failed logout stays visible and does not claim success. Authenticated Analytics
+prefetch retains the existing catalog key, after the role gate.
+
+Database row counts are estimates; total relation bytes already include indexes.
+Migration dates include year and UTC, newest first. An empty migration response
+is only an absent history, because the current backend can return an empty list
+when reading that history fails. Sync-run refresh errors keep known data and
+account-scoped return links. Query consumers with inline recovery opt out of
+duplicate global error toasts. See the implementation record for synthetic
+browser evidence and checks; no production action is part of this change.

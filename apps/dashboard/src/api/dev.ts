@@ -15,6 +15,7 @@ export function useAdminLogs(params: { severity?: string; limit?: number } = {})
 export function useAdminSyncRunDetail(runId: number) {
   return useQuery({
     queryKey: ["admin", "syncRunDetail", runId],
+    meta: { suppressGlobalError: true },
     queryFn: () => kernel.adminSyncRunDetail({ params: { runId } }),
     enabled: runId > 0,
   });
@@ -33,6 +34,7 @@ export function useAdminQueueJobs(params: { state?: string; limit?: number } = {
 export function useAdminDbStats() {
   return useQuery({
     queryKey: ["admin", "db", "stats"],
+    meta: { suppressGlobalError: true },
     queryFn: () => kernel.adminDbStats(),
   });
 }

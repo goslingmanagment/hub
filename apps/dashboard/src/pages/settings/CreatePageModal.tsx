@@ -15,9 +15,11 @@ type VerifyState = "idle" | "verifying" | "verified" | "verify-failed";
 
 export function CreatePageModal({
   models,
+  initialModelSlug,
   onClose,
 }: {
   models: ModelListItem[];
+  initialModelSlug?: string;
   onClose: () => void;
 }) {
   const createPage = useAdminCreatePage();
@@ -25,7 +27,7 @@ export function CreatePageModal({
 
   // Common fields
   const [platform, setPlatform] = useState<Platform>("fansly");
-  const [modelSlug, setModelSlug] = useState(models[0]?.slug ?? "");
+  const [modelSlug, setModelSlug] = useState(initialModelSlug ?? models[0]?.slug ?? "");
   const [label, setLabel] = useState("");
   const [credentials, setCredentials] = useState<PlatformCredentialsValues>({
     authorization: "",
@@ -42,6 +44,11 @@ export function CreatePageModal({
   const [verifyResult, setVerifyResult] = useState<VerifyCredentialsResponse | null>(null);
   const [verifyError, setVerifyError] = useState("");
   const verificationRevision = useRef(0);
+  const verificationInFlight = useRef<number | null>(null);
+  const [submitError, setSubmitError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const createInFlight = useRef(false);
+  const pending = submitting || createPage.isPending;
 
   useEffect(() => () => { verificationRevision.current += 1; }, []);
 
@@ -58,12 +65,15 @@ export function CreatePageModal({
     field: K,
     value: PlatformCredentialsValues[K],
   ) {
+    if (createInFlight.current) return;
     setCredentials((current) => ({ ...current, [field]: value }));
     resetVerify();
   }
 
   async function handleVerify() {
+    if (createInFlight.current || !canVerify || verificationInFlight.current === verificationRevision.current) return;
     const revision = ++verificationRevision.current;
+    verificationInFlight.current = revision;
     setVerifyState("verifying");
     setVerifyError("");
     try {
@@ -76,12 +86,22 @@ export function CreatePageModal({
       setVerifyState("verified");
     } catch (error) {
       if (revision !== verificationRevision.current) return;
-      setVerifyError(error instanceof Error ? error.message : "Verification failed");
+      setVerifyError(error instanceof Error ? error.message : "Не удалось проверить доступ");
       setVerifyState("verify-failed");
+    } finally {
+      if (verificationInFlight.current === revision) verificationInFlight.current = null;
     }
   }
 
+  function requestClose() {
+    if (!createInFlight.current) onClose();
+  }
+
   async function handleCreate() {
+    if (createInFlight.current || !canCreate) return;
+    createInFlight.current = true;
+    setSubmitting(true);
+    setSubmitError("");
     try {
       const credBody = buildCredentialsBody({
         platform,
@@ -94,13 +114,16 @@ export function CreatePageModal({
       } as CreatePageBody;
       const result = await createPage.mutateAsync(body);
       if (result.syncQueued) {
-        toast.success("Page created — initial sync queued");
+        toast.success("Страница создана. Начальная синхронизация поставлена в очередь");
       } else {
-        toast.warning(result.syncWarning?.message ?? "Page created, but initial sync was not queued");
+        toast.warning(result.syncWarning?.message ?? "Страница создана, но начальная синхронизация не поставлена в очередь");
       }
       onClose();
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to create page");
+      setSubmitError(error instanceof Error ? error.message : "Не удалось создать страницу");
+    } finally {
+      createInFlight.current = false;
+      setSubmitting(false);
     }
   }
 
@@ -114,13 +137,15 @@ export function CreatePageModal({
   const canCreate = verifyState === "verified" &&
     !proxyError &&
     label.trim().length > 0 &&
-    modelSlug.length > 0;
+    models.some((model) => model.slug === modelSlug);
 
   return (
-    <ModalShell title="Create Page" onClose={onClose}>
-      <div className="space-y-4">
-        <Field label="Platform">
-          <div className="flex items-center gap-4">
+    <ModalShell title="Добавить страницу" onClose={requestClose} closeLabel="Закрыть">
+      <form aria-busy={pending} onSubmit={(event) => { event.preventDefault(); return handleCreate(); }}>
+      <fieldset disabled={pending} className="space-y-4">
+        <fieldset>
+          <legend className="mb-1.5 text-xs font-semibold text-text-secondary">Платформа</legend>
+          <div className="flex flex-wrap items-center gap-4">
             {(["fansly", "onlyfans"] as const).map((p) => (
               <label key={p} className="flex items-center gap-1.5 text-sm text-text-primary">
                 <input
@@ -137,16 +162,18 @@ export function CreatePageModal({
               </label>
             ))}
           </div>
-        </Field>
+        </fieldset>
 
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="Model">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <Field label="Модель">
             <select
               value={modelSlug}
+              required
               onChange={(event) => setModelSlug(event.target.value)}
               className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm outline-none focus:border-accent"
             >
-              <option value="">Select model...</option>
+              <option value="">Выберите модель…</option>
+              {modelSlug && !models.some((model) => model.slug === modelSlug) && <option value={modelSlug}>{modelSlug} · нет в текущем каталоге</option>}
               {models.map((m) => (
                 <option key={m.slug} value={m.slug}>
                   {m.name} ({m.slug})
@@ -154,15 +181,17 @@ export function CreatePageModal({
               ))}
             </select>
           </Field>
-          <Field label="Label">
+          <Field label="Название страницы">
             <input
               value={label}
+              required
               onChange={(event) => setLabel(event.target.value)}
-              placeholder="e.g. alice-fansly"
+              placeholder="Например, alice-fansly"
               className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm outline-none focus:border-accent"
             />
           </Field>
         </div>
+        {!models.some((model) => model.slug === modelSlug) && <p className="text-xs text-text-muted">Для создания страницы выберите модель из доступного каталога. Введённые данные сохранены.</p>}
 
         <PlatformCredentialsFields
           platform={platform}
@@ -172,43 +201,46 @@ export function CreatePageModal({
 
         {/* Verify result / error */}
         {verifyState === "verified" && verifyResult && (
-          <div className="rounded-lg border border-green/30 bg-green/5 px-3 py-2 text-sm text-green">
-            Verified: @{verifyResult.username ?? "unknown"}
-            {verifyResult.displayName && ` (${verifyResult.displayName})`}
+          <div role="status" className="break-words rounded-lg border border-green/30 bg-green/5 px-3 py-2 text-sm text-green">
+            Доступ проверен{verifyResult.username ? `: @${verifyResult.username}` : verifyResult.displayName ? `: ${verifyResult.displayName}` : ""}
+            {verifyResult.username && verifyResult.displayName && ` (${verifyResult.displayName})`}
           </div>
         )}
         {verifyState === "verify-failed" && verifyError && (
-          <div className="rounded-lg border border-danger/30 bg-danger/5 px-3 py-2 text-sm text-danger">
+          <div role="alert" className="break-words rounded-lg border border-danger/30 bg-danger/5 px-3 py-2 text-sm text-danger">
             {verifyError}
           </div>
         )}
-      </div>
+      </fieldset>
+      <p className="mt-4 text-xs text-text-muted">После проверки доступа можно создать страницу и запустить начальную синхронизацию.</p>
+      {submitError && <p role="alert" className="mt-4 break-words rounded-lg border border-danger/30 bg-danger/5 px-3 py-2 text-sm text-danger">{submitError}</p>}
 
-      <div className="mt-6 flex items-center justify-end gap-2">
+      <div className="mt-6 flex flex-wrap items-center justify-end gap-2">
         <button
           type="button"
-          onClick={onClose}
-          className="rounded-lg border border-border bg-card px-3 py-2 text-sm text-text-secondary hover:bg-hover"
+          onClick={requestClose}
+          disabled={pending}
+          className="rounded-lg border border-border bg-card px-3 py-2 text-sm text-text-secondary hover:bg-hover disabled:opacity-50"
         >
-          Cancel
+          Отмена
         </button>
         <button
           type="button"
-          disabled={!canVerify || verifyState === "verifying" || verifyState === "verified"}
+          disabled={pending || !canVerify || verifyState === "verifying" || verifyState === "verified"}
           onClick={handleVerify}
           className="rounded-lg border border-border bg-card px-3 py-2 text-sm font-medium text-text-secondary hover:bg-hover disabled:opacity-50"
         >
-          {verifyState === "verifying" ? "Verifying..." : "Verify Credentials"}
+          {verifyState === "verifying" ? "Проверяем…" : "Проверить доступ"}
         </button>
         <button
-          type="button"
-          disabled={!canCreate || createPage.isPending}
-          onClick={handleCreate}
+          type="submit"
+          disabled={!canCreate || pending}
           className="rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50"
         >
-          Create Page
+          {pending ? "Создаём…" : "Создать страницу"}
         </button>
       </div>
+      </form>
     </ModalShell>
   );
 }

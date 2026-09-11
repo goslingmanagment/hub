@@ -45,7 +45,7 @@ export function usePages() {
  *
  * The Analytics route is lazily chunked and fires nothing until it knows which
  * page is active, so the catalog request could not start until the chunk had
- * downloaded, mounted and rendered. Starting it at boot (or on hover) buys
+ * downloaded, mounted and rendered. Starting it in the authorized shell (or on hover) buys
  * that whole gap. `prefetchQuery` never rejects — a failed warm-up is recorded
  * as a cache error and refetched when `usePages()` mounts (`retryOnMount`
  * defaults true), so the page still reports the failure itself.

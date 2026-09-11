@@ -7,7 +7,7 @@ import { verifyCredentialsBodySchema } from "@agency_hub_core/contracts";
 // Hook slots and mutation promises are controlled; this does not exercise React
 // effects, batching or unmount. Real interactions are checked in the browser.
 const hooks = vi.hoisted(() => ({ values: [] as unknown[], cursor: 0 }));
-const queries = vi.hoisted(() => ({ verify: vi.fn(), create: vi.fn() }));
+const queries = vi.hoisted(() => ({ verify: vi.fn(), create: vi.fn(), close: vi.fn() }));
 vi.mock("react", async (importOriginal) => ({
   ...await importOriginal<typeof ReactModule>(),
   useState(initial: unknown) {
@@ -54,7 +54,7 @@ function renderForm() {
   hooks.cursor = 0;
   return CreatePageModal({
     models: [{ id: 1, slug: "model", name: "Model", pageCount: 0 }],
-    onClose: vi.fn(),
+    onClose: queries.close,
   });
 }
 
@@ -74,7 +74,7 @@ function selectOnlyFans() {
 }
 
 function verify() {
-  return (button("Verify Credentials").onClick as () => Promise<void>)();
+  return (button("Проверить доступ").onClick as () => Promise<void>)();
 }
 
 function deferred() {
@@ -92,7 +92,8 @@ describe("page onboarding credentials", () => {
     hooks.cursor = 0;
     queries.verify.mockReset();
     queries.create.mockReset();
-    const label = find(renderForm(), element => element.type === "input" && element.props.placeholder === "e.g. alice-fansly");
+    queries.close.mockReset();
+    const label = find(renderForm(), element => element.type === "input" && element.props.placeholder === "Например, alice-fansly");
     (label.props.onChange as (event: { target: { value: string } }) => void)({ target: { value: "alice-page" } });
     changeCredential("authorization", "token-a");
     changeCredential("proxyRaw", "socks5://proxy.example:1080");
@@ -101,11 +102,11 @@ describe("page onboarding credentials", () => {
   it("verifies an OFAPI account by username, with no token or hidden Fansly proxy", async () => {
     changeCredential("proxyRaw", "invalid-hidden-proxy");
     selectOnlyFans();
-    expect(button("Verify Credentials").disabled).toBe(false);
+    expect(button("Проверить доступ").disabled).toBe(false);
     queries.verify.mockResolvedValue({ ...verified, platform: "onlyfans" });
     await verify();
     expect(queries.verify).toHaveBeenCalledWith({ platform: "onlyfans", username: "alice" });
-    expect(button("Create Page").disabled).toBe(false);
+    expect(button("Создать страницу").disabled).toBe(false);
   });
 
   it.each(["credentials", "platform"])("discards a pending verification after changing %s", async (change) => {
@@ -116,10 +117,10 @@ describe("page onboarding credentials", () => {
     else changeCredential("authorization", "token-b");
     first.resolve(verified);
     await pending;
-    expect(button("Create Page").disabled).toBe(true);
+    expect(button("Создать страницу").disabled).toBe(true);
     queries.verify.mockResolvedValue({ ...verified, platform: change === "platform" ? "onlyfans" : "fansly" });
     await verify();
-    expect(button("Create Page").disabled).toBe(false);
+    expect(button("Создать страницу").disabled).toBe(false);
   });
 
   it("does not replace a newer successful verification with an older failure", async () => {
@@ -131,7 +132,7 @@ describe("page onboarding credentials", () => {
     await verify();
     first.reject(new Error("Old credential rejected"));
     await pending;
-    expect(button("Create Page").disabled).toBe(false);
+    expect(button("Создать страницу").disabled).toBe(false);
   });
 
   it("uses the existing OnlyFans contract without forwarding obsolete secrets", () => {
@@ -141,5 +142,28 @@ describe("page onboarding credentials", () => {
     } });
     expect(body).toEqual({ platform: "onlyfans", username: "alice" });
     expect(verifyCredentialsBodySchema.parse(body)).toEqual(body);
+  });
+
+  it("blocks duplicate creates and modal close while pending, then retains a rejected draft", async () => {
+    queries.verify.mockResolvedValue(verified);
+    await verify();
+    const request = deferred();
+    queries.create.mockReturnValue(request.promise);
+    const tree = renderForm();
+    const submit = find(tree, element => element.type === "form").props.onSubmit as (event: { preventDefault: () => void }) => Promise<void>;
+    const pending = submit({ preventDefault: vi.fn() });
+    await submit({ preventDefault: vi.fn() });
+    (tree.props.onClose as () => void)();
+    expect(queries.create).toHaveBeenCalledTimes(1);
+    expect(queries.close).not.toHaveBeenCalled();
+    expect(find(renderForm(), element => element.type === "fieldset").props.disabled).toBe(true);
+    request.reject(new Error("Synthetic create rejected"));
+    await pending;
+    expect(find(renderForm(), element => element.props.role === "alert").props.children).toBe("Synthetic create rejected");
+    expect(find(renderForm(), element => element.type === "input" && element.props.placeholder === "Например, alice-fansly").props.value).toBe("alice-page");
+    const fields = find(renderForm(), element => element.type === PlatformCredentialsFields).props.values as PlatformCredentialsValues;
+    expect(fields.authorization).toBe("token-a");
+    expect(fields.proxyRaw).toBe("socks5://proxy.example:1080");
+    expect(button("Создать страницу").disabled).toBe(false);
   });
 });

@@ -17,6 +17,8 @@ export function Topbar({ user, onOpenNavigation }: TopbarProps) {
   const logout = useLogout();
   const { pages } = useDashboardShell();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [logoutError, setLogoutError] = useState(false);
+  const logoutInFlight = useRef(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
 
   const backTo = new URLSearchParams(location.search).get("backTo") ?? resolveFanProfileBackTarget(location.state, undefined);
@@ -50,11 +52,17 @@ export function Topbar({ user, onOpenNavigation }: TopbarProps) {
   }, [menuOpen]);
 
   async function handleLogout() {
+    if (logoutInFlight.current) return;
+    logoutInFlight.current = true;
+    setLogoutError(false);
     try {
       await logout.mutateAsync();
-    } finally {
       clearDashboardSession();
       window.location.assign("/login");
+    } catch {
+      setLogoutError(true);
+    } finally {
+      logoutInFlight.current = false;
     }
   }
 
@@ -104,11 +112,13 @@ export function Topbar({ user, onOpenNavigation }: TopbarProps) {
               <button
                 type="button"
                 onClick={handleLogout}
+                disabled={logout.isPending}
                 className="mt-2 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-text-secondary hover:bg-hover hover:text-text-primary"
               >
                 <LogOut size={14} />
-                Выйти
+                {logout.isPending ? "Выходим…" : "Выйти"}
               </button>
+              {logoutError && <p role="alert" className="px-3 py-2 text-xs text-danger">Не удалось выйти. Сессия может быть активна. Повторите выход.</p>}
             </div>
           )}
         </div>
@@ -162,20 +172,20 @@ function buildBreadcrumbs(
   if (parts[0] === "notifications") return [{ label: "Overview", href: "/" }, { label: "Notifications" }];
 
   if (parts[0] === "agent-hydration") {
-    return [{ label: "Overview", href: "/" }, { label: "Hydration requests" }];
+    return [{ label: "Overview", href: "/" }, { label: "Диагностика", href: "/dev/log" }, { label: "Запросы дозагрузки" }];
   }
 
   if (parts[0] === "dev") {
     const devLabels: Record<string, string> = {
-      log: "Log",
-      "sync-status": "Sync Status",
-      queue: "Queue",
-      "db-stats": "DB Stats",
-      incidents: "Incidents",
+      log: "Журнал событий",
+      "sync-status": "Запуск синхронизации",
+      queue: "Очередь заданий",
+      "db-stats": "База данных",
+      incidents: "Инциденты",
     };
     const crumbs: { label: string; href?: string }[] = [
       { label: "Overview", href: "/" },
-      parts[1] ? { label: "Dev", href: "/dev/log" } : { label: "Dev" },
+      parts[1] ? { label: "Диагностика", href: "/dev/log" } : { label: "Диагностика" },
     ];
     if (parts[1] && devLabels[parts[1]]) {
       crumbs.push({ label: devLabels[parts[1]] });

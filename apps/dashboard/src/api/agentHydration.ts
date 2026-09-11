@@ -12,6 +12,7 @@ import { kernel } from "./sdk.js";
 export function useAgentHydrationRequests(params: { state?: string; limit?: number } = {}) {
   return useQuery({
     queryKey: ["agent", "hydration", params],
+    meta: { suppressGlobalError: true },
     queryFn: () => kernel.agentHydrationRequestList({
       query: params as Parameters<typeof kernel.agentHydrationRequestList>[0]["query"],
     }),

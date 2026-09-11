@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { CreateModelBody } from "@agency_hub_core/contracts";
 import { useAdminCreateModel } from "@/api/queries";
 import { ModalShell } from "@/components/shared/ModalShell";
@@ -9,8 +9,20 @@ export function CreateModelModal({ onClose }: { onClose: () => void }) {
   const createModel = useAdminCreateModel();
   const [slug, setSlug] = useState("");
   const [name, setName] = useState("");
+  const [submitError, setSubmitError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const inFlight = useRef(false);
+  const pending = submitting || createModel.isPending;
+
+  function requestClose() {
+    if (!inFlight.current) onClose();
+  }
 
   async function handleSubmit() {
+    if (inFlight.current || !slug.trim() || !name.trim()) return;
+    inFlight.current = true;
+    setSubmitting(true);
+    setSubmitError("");
     const body: CreateModelBody = {
       slug: slug.trim(),
       name: name.trim(),
@@ -18,51 +30,61 @@ export function CreateModelModal({ onClose }: { onClose: () => void }) {
 
     try {
       await createModel.mutateAsync(body);
-      toast.success("Model created");
+      toast.success("Модель создана");
       onClose();
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to create model");
+      setSubmitError(error instanceof Error ? error.message : "Не удалось создать модель");
+    } finally {
+      inFlight.current = false;
+      setSubmitting(false);
     }
   }
 
   return (
-    <ModalShell title="Create Model" onClose={onClose}>
-      <div className="space-y-4">
-        <Field label="Slug">
+    <ModalShell title="Добавить модель" onClose={requestClose} closeLabel="Закрыть">
+      <form aria-busy={pending} onSubmit={(event) => { event.preventDefault(); return handleSubmit(); }}>
+      <fieldset disabled={pending} className="space-y-4">
+        <Field label="Код модели">
           <input
             value={slug}
+            required
+            maxLength={100}
             onChange={(event) => setSlug(event.target.value)}
-            placeholder="e.g. alice"
+            placeholder="Например, alice"
             className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm outline-none focus:border-accent"
           />
         </Field>
-        <Field label="Name">
+        <Field label="Имя модели">
           <input
             value={name}
+            required
+            maxLength={200}
             onChange={(event) => setName(event.target.value)}
-            placeholder="e.g. Alice Johnson"
+            placeholder="Например, Alice"
             className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm outline-none focus:border-accent"
           />
         </Field>
-      </div>
+      </fieldset>
+      {submitError && <p role="alert" className="mt-4 break-words rounded-lg border border-danger/30 bg-danger/5 px-3 py-2 text-sm text-danger">{submitError}</p>}
 
-      <div className="mt-6 flex items-center justify-end gap-2">
+      <div className="mt-6 flex flex-wrap items-center justify-end gap-2">
         <button
           type="button"
-          onClick={onClose}
-          className="rounded-lg border border-border bg-card px-3 py-2 text-sm text-text-secondary hover:bg-hover"
+          onClick={requestClose}
+          disabled={pending}
+          className="rounded-lg border border-border bg-card px-3 py-2 text-sm text-text-secondary hover:bg-hover disabled:opacity-50"
         >
-          Cancel
+          Отмена
         </button>
         <button
-          type="button"
-          disabled={createModel.isPending || !slug.trim() || !name.trim()}
-          onClick={handleSubmit}
+          type="submit"
+          disabled={pending || !slug.trim() || !name.trim()}
           className="rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50"
         >
-          Create
+          {pending ? "Создаём…" : "Создать модель"}
         </button>
       </div>
+      </form>
     </ModalShell>
   );
 }

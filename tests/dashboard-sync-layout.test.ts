@@ -503,9 +503,9 @@ describe("dashboard sync layout", () => {
 
     const html = renderWithRouter(createElement(SettingsPage), ["/settings?tab=models"]);
 
-    expect(html).toContain("Models failed to load");
+    expect(html).toContain("Не удалось загрузить модели");
     expect(html).toContain("Models API unavailable");
-    expect(html).not.toContain("No models configured");
+    expect(html).not.toContain("Моделей пока нет");
   });
 
   it("shows a stale-data warning when models refresh fails with cached data", () => {
@@ -520,10 +520,10 @@ describe("dashboard sync layout", () => {
 
     expect(html).toContain("role=\"status\"");
     expect(html).toContain("aria-live=\"polite\"");
-    expect(html).toContain("Showing cached data");
+    expect(html).toContain("Показан последний загруженный список моделей");
     expect(html).toContain("Models API timeout");
     expect(html).toContain("Lana");
-    expect(html).not.toContain("Models failed to load");
+    expect(html).not.toContain("Не удалось загрузить модели");
   });
 
   it("shows pages catalog load errors", () => {
@@ -536,9 +536,9 @@ describe("dashboard sync layout", () => {
 
     const html = renderWithRouter(createElement(SettingsPage), ["/settings?tab=pages"]);
 
-    expect(html).toContain("Pages failed to load");
+    expect(html).toContain("Не удалось загрузить страницы");
     expect(html).toContain("Pages API unavailable");
-    expect(html).not.toContain("No pages configured");
+    expect(html).not.toContain("Страниц пока нет");
   });
 
   it("keeps the pages table visible when models fail to load", () => {
@@ -574,7 +574,7 @@ describe("dashboard sync layout", () => {
 
     expect(html).toContain("Models API unavailable");
     expect(html).toContain("lana");
-    expect(html).not.toContain("Models failed to load");
+    expect(html).not.toContain("Не удалось загрузить модели");
   });
 
   it("keeps the pages table visible when connections fail to load", () => {
@@ -643,9 +643,9 @@ describe("dashboard sync layout", () => {
 
     const html = renderWithRouter(createElement(SettingsPage), ["/settings?tab=pages"]);
 
-    expect(html).toContain("Loading models catalog");
+    expect(html).toContain("Загружаем модели");
     expect(html).toContain("lana");
-    expect(html).not.toContain("Models catalog is unavailable");
+    expect(html).not.toContain("Каталог моделей недоступен");
   });
 
   it("supports settings tab deep links for the sync workspace", () => {
@@ -1073,8 +1073,22 @@ describe("dashboard sync layout", () => {
       ["/dev/sync-status?runId=42"],
     );
 
-    expect(html).toContain(">Dev<");
-    expect(html).toContain(">Sync Status<");
+    expect(html).toContain(">Диагностика<");
+    expect(html).toContain(">Запуск синхронизации<");
+  });
+
+  it("opens diagnostics on a hydration deep link and keeps owner tools out of the lead menu", () => {
+    const path = ["/agent-hydration?state=all&limit=200"];
+    const owner = renderWithRouter(createElement(Sidebar, { user: { username: "Owner", role: "owner" } }), path);
+    expect(owner).toContain('aria-expanded="true"');
+    expect(owner).toContain('href="/agent-hydration"');
+    expect(owner).toContain("Запросы дозагрузки");
+    const lead = renderWithRouter(createElement(Sidebar, { user: { username: "Lead", role: "team_lead" } }), path);
+    expect(lead).not.toContain('href="/agent-hydration"');
+    expect(lead).not.toContain("Диагностика");
+    const topbar = renderWithRouter(createElement(Topbar, { user: { username: "Owner", role: "owner" } }), path);
+    expect(topbar).toContain(">Диагностика<");
+    expect(topbar).toContain(">Запросы дозагрузки<");
   });
 
   it("shows usage breadcrumbs in the owner workspace", () => {

@@ -18,9 +18,10 @@ function refreshOnConflict(qc: QueryClient, error: unknown) {
   }
 }
 
-export function useAdminAiPersonas() {
+export function useAdminAiPersonas(options: { suppressGlobalError?: boolean } = {}) {
   return useQuery({
     queryKey: PERSONAS_QUERY_KEY,
+    meta: { suppressGlobalError: options.suppressGlobalError ?? false },
     queryFn: () => kernel.adminAiPersonasList(),
   });
 }

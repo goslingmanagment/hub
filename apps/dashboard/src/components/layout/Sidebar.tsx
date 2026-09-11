@@ -1,6 +1,6 @@
 import { NavLink, useLocation, Link } from "react-router";
 import { BarChart3, Bell, Coins, LineChart, Settings, Users, Heart, Trophy, MessageSquare, Terminal, ListTodo, Database, AlertTriangle, Droplets, Code2, ChevronDown, UserX, Sparkles, Link2, SlidersHorizontal, Download, Image } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useAdminConnections } from "@/api/queries";
 import { PlatformBadge } from "@/components/shared/PlatformBadge";
 import { isAlertState } from "@/components/shared/syncUxDisplay";
@@ -13,13 +13,13 @@ interface SidebarProps {
 }
 
 const devLinks = [
-  { to: "/dev/log", label: "Log", icon: Terminal },
-  { to: "/dev/queue", label: "Queue", icon: ListTodo },
-  { to: "/dev/db-stats", label: "DB Stats", icon: Database },
-  { to: "/dev/incidents", label: "Incidents", icon: AlertTriangle },
+  { to: "/dev/log", label: "Журнал событий", icon: Terminal },
+  { to: "/dev/queue", label: "Очередь заданий", icon: ListTodo },
+  { to: "/dev/db-stats", label: "База данных", icon: Database },
+  { to: "/dev/incidents", label: "Инциденты", icon: AlertTriangle },
   // Slice C: the owner approval queue. It lives under Dev because it is an
   // operator surface, not a daily one — an empty queue is the normal state.
-  { to: "/agent-hydration", label: "Hydration", icon: Droplets },
+  { to: "/agent-hydration", label: "Запросы дозагрузки", icon: Droplets },
 ] as const;
 
 function prefetchAnalyticsCatalog() {
@@ -29,7 +29,11 @@ function prefetchAnalyticsCatalog() {
 export function Sidebar({ user }: SidebarProps) {
   const { pages } = useDashboardShell();
   const location = useLocation();
-  const [devOpen, setDevOpen] = useState(() => location.pathname.startsWith("/dev"));
+  const isDiagnosticRoute = location.pathname.startsWith("/dev") || location.pathname === "/agent-hydration";
+  const [devOpen, setDevOpen] = useState(isDiagnosticRoute);
+  useEffect(() => {
+    if (isDiagnosticRoute) setDevOpen(true);
+  }, [location.pathname, isDiagnosticRoute]);
   const { data: connections } = useAdminConnections({ enabled: user.role === "owner" });
   const hasSyncWarning = user.role === "owner" && (connections?.some((c) => isAlertState(c.syncUx)) ?? false);
 
@@ -179,7 +183,7 @@ export function Sidebar({ user }: SidebarProps) {
             aria-controls="sidebar-diagnostics"
             onClick={() => setDevOpen((o) => !o)}
             className={`flex w-full items-center gap-2.5 px-3.5 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-              location.pathname.startsWith("/dev")
+              isDiagnosticRoute
                 ? "bg-hover text-text-primary font-semibold"
                 : "text-text-secondary hover:bg-hover hover:text-text-primary"
             }`}
