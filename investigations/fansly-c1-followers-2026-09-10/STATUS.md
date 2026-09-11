@@ -102,10 +102,23 @@ generation 780 completed 184 pages in 54m43s using 206 physical attempts;
 make the second traversal necessary. Suppression is not justified by these
 receipts, and physical savings remain unmeasured.
 
-Next: follow generation 781 and the next incremental decision through their
-counts and terminal proofs. Continue the protected-health diagnosis, then
-establish the headline, deletion or pagination cause before adding the narrow
-policy fix to this same PR.
+The follow-up through 05:07:39 UTC records generation 781's completion with
+one deactivation candidate and two later 18,324/18,324 no-request decisions.
+The second walk used 193 attempts in 35m41.620s; its actual retired row is not
+exported. Across six pages there are now 25 valid decisions, five count-mismatch
+requests and four completed generations. None establishes redundant work.
+Lora-2 revision 1614/generation 1576 remains partial in this snapshot.
+
+The same worker restarted once at 03:08 after a pg-boss pool checkout timeout;
+the underlying reason is unknown. At 05:06 it was healthy on the same image.
+A0 coverage remains degraded: 49 of 69 sweeps incomplete and 85,915 unknown
+material observations. The separate planner-only exception is still pending;
+this heartbeat did not execute EXPLAIN or change production.
+
+Next: follow Lora-2's terminal result and next incremental counts, retain the
+other OR branches as unobserved, and continue the protected-health diagnosis
+within current read-only privileges. A narrow policy change needs evidence
+beyond these legitimate-repair-compatible repetitions.
 The drift/blast-radius guards and presence consumers remain exit criteria.
 A0 keeps its original seven-day window with this runtime boundary recorded.
 Further production changes, A1, live sockets and C2b enablement remain gated.

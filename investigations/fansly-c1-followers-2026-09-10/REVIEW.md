@@ -112,3 +112,35 @@ reader limits, and the operational report names the 00:33 boundary and latest
 02:52 runtime separately. Neither correction changes code or measured results.
 The reviewer rechecked both actual edits and confirmed the findings closed,
 with no new issues in those sections.
+
+## Observation follow-up through 05:07 UTC
+
+`review_pr162` independently verified the new report hash, 136 unique ordered
+run IDs, exhausted pagination and unchanged 75-row prior cohort. Lilly-2's
+second generation completed, followed by two matching no-request decisions;
+Ari-1 has a similar candidate transition but a later changed headline. Lora-2
+is still partial. No redundant traversal or justified suppression fix is
+established. Candidate count remains pre-UPDATE evidence, not retired-row
+identity. The review preserves the running run's unknown loss counters.
+
+`quality_c1` traced the restart event through the deployed worker and pinned
+pg-boss/pg-pool code. The internal heartbeat's pool checkout timeout emitted
+an error; the existing handler exited the process. The preceding sync-job
+heartbeat warning was a separate caller. The reviewer rejected attribution
+to TCP failure, a statement timeout or protected sync-health without evidence.
+It also identified why startup orphan-cleanup count zero does not prove no
+interrupted runs: valid matching leases are excluded. Successful post-restart
+work is visible, while the protected deploy gate remains failed.
+
+Both reviews used local evidence only. This follow-up changes documentation
+and evidence receipts, with no production source, migration or test change.
+The tests verified on `13537b6b` remain the applicable validation; they were
+not rerun for this documentation-only observation.
+
+Final evidence review matched all eight receipt hashes and independently
+recalculated the 485/487 reconcile-cost difference, 52 incremental attempts,
+generation 781's 193 attempts and elapsed time, and A0's 18/49/2 sweep counts.
+The operational-document review found an undated allowlist claim in the A0
+headline. It now dates activation and the last full configuration check, with
+current exact configuration explicitly unverified after the restart.
+The reviewer rechecked those edits and confirmed the finding closed.
