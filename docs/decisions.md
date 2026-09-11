@@ -290,6 +290,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 291 | Overview metric semantics | Revenue-led overview with per-page/model comparison windows, transaction sources and separate page audience counts; no summed subscribers or acquisition claims from mutable subscription records. |
 | 292 | Overview selected layout and exact drilldown | Keep the compact variant-one table, order models by server net income, compare source deltas on the server, use scoped exact-window operations with one response snapshot, and persist navigation context in URLs. Supersedes #291's three-query-only UI plan. |
 | 293 | Select completed run IDs before monitor payload | Rank narrow historical completion keys, then load the selected run by primary key; preserve health fields, scope, ordering and historical physical-attempt debt. |
+| 294 | Feature recommendations and focused configuration | Explain 32 feature groups using live configuration readiness, dated research and existing editors; preserve applied/desired truth, staged dependencies, draft versions and the different page-scope meanings. No automatic disabling or production changes. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -12213,3 +12214,44 @@ owner approval of a concrete revision and the ordinary health gate remains
 mandatory. Production currently includes unmerged C1 diagnostics and applied
 0182/0183; a future deployment must preserve that code/schema state rather than
 replace it with this main-based worktree alone.
+
+## Decision 294: Explain features before configuring them (2026-09-11)
+
+The owner wants to decide which additions justify their complexity and configure
+them without navigating 164 low-level parameters. Add an owner settings section
+with 32 feature groups, their purpose, recommendation, disablement consequences,
+evidence link and focused configuration route. Keep existing settings deep links
+and the full technical view. Dated usage and production observations belong in
+`investigations/feature-controls-2026-09-11/REPORT.md`; do not freeze those numbers
+into product copy or turn lack of usage evidence into a measured savings claim.
+
+Feature state comes from the current admin configuration response, with saved
+intent, pending application, reported values, missing capabilities, drift and
+unknown/stale roles kept distinct. A green state means permission by the relevant
+configuration, not successful execution, archive completeness or business value.
+Preserve the server's boolean running state and its expected api/worker roles,
+plus every additional observed role. A failed refresh retains the prior dated
+snapshot with an explicit error.
+
+Reuse the SDK and snapshot-bound editors from Decision 286. The focused view
+retains the full item map and staged dependency closure, reveals dependencies
+outside the selected group, preserves drafts across refresh, and changes one
+parameter at a time. Enumerated modes use validator-compatible choices. Fansly
+page lists use the existing cheap page catalog and preserve unknown labels.
+That selector deliberately displays only Fansly pages because these are Fansly
+consumer scopes; it adds no backend platform branch or budget exception.
+
+The shared earnings/purchases empty list means all pages, while other capture
+and voice empty lists mean none. Empty string overrides remain forbidden by the
+existing server validator. Diagnostics serialize no selection as `none`; ordinary
+functions use their main switch for disabling. CAS uses numeric IDs and `*`, so
+its expert editor remains. Reset still means returning to server environment,
+not a registry default. Per-AI-button disabling is not supported by the existing
+configuration; the interface explicitly discloses that limitation.
+
+No backend contract, collector, policy, default, migration or production setting
+changes. Local preview writes are simulated. `pnpm check` passes with 3252 tests
+and 9 skipped under the existing strictness ratchet; browser checks cover scoped
+navigation, a one-key page-list write, draft preservation on version change and
+refresh failure with retained data. Deployment remains a separate owner action
+and must preserve the production state recorded in Decision 293.
