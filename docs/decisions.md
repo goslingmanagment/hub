@@ -289,6 +289,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 289 | Fansly C2b earnings shadow | Atomic semantic transaction revisions and independent endpoint receipts measure the existing daily rotation; unchanged and missing results remain explicit debt. |
 | 291 | Overview metric semantics | Revenue-led overview with per-page/model comparison windows, transaction sources and separate page audience counts; no summed subscribers or acquisition claims from mutable subscription records. |
 | 292 | Overview selected layout and exact drilldown | Keep the compact variant-one table, order models by server net income, compare source deltas on the server, use scoped exact-window operations with one response snapshot, and persist navigation context in URLs. Supersedes #291's three-query-only UI plan. |
+| 293 | Production load | Hot statements read only what their result needs (counter head, per-watermark index probe, per-running-run activity, per-page recency probe); Postgres on the VPS runs sized, not stock (`shared_buffers` 2 GB, `work_mem` 16 MB, 30-min checkpoints, lz4 WAL, jit off, no parallel gather, slow-query log); every load claim rests on a measurement |
 | 293 | Select completed run IDs before monitor payload | Rank narrow historical completion keys, then load the selected run by primary key; preserve health fields, scope, ordering and historical physical-attempt debt. |
 | 294 | Fansly C1 diagnostics | Retain the existing trigger and expose bounded decision, queue and reconcile-run evidence before choosing a follower fix. |
 | 295 | OnlyFans manual Ping | The chatter decides when to write: active conversations accept Ping with truthful prompt context. Fansly keeps its existing active gate and assembled prompt. |
@@ -12316,3 +12317,51 @@ performance fixes. This release adds no migration or contract operation.
 Decision 294 was already assigned to C1 on the production branch, so the Ping
 decision is 295 here. The source check passes 3,258 tests with nine existing
 skips; provider-stub integration checks verify the request and prompt behavior.
+
+## 293. Production load: statements read only what their result needs; Postgres is sized
+
+2026-09-11/12. The shared VPS `agency` (2 vCPU, 8 GB) ran at load 10–11 all day
+with Postgres at one full CPU (a third of it system time) and the worker at
+0.35; an arena diagnosis (`docs/diag/2026-09-11-agency-hub-load/verdict-ru.md`)
+attributed it to four statements reading far more than their results needed,
+stock Postgres settings for a 33 GB database, and sync write churn.
+
+Decisions applied (revisions `2c6b42b7`, `424f2a42`, `02ff7e34`, migration 0184):
+- The live domain-event hub drain reads the account head from the gapless
+  counter (`getAccountHighWater`); `listDomainEventAccountBounds` stays with the
+  SSE route's gap rule, which needs the retention floor. Never compute a value a
+  caller discards on a per-notification path.
+- The golden-signal projection backlog takes the oldest unconsumed event per
+  watermark through the `(account_id, account_seq)` index; it does not scan
+  the ledger. Capture and canonicalize quantiles are unchanged.
+- `closeInactiveSyncRuns` and `listRunningSyncRuns` derive activity per running
+  run through `sync_http_attempts_run_started_idx` and
+  `sync_run_events_run_emitted_idx`; a partial index `sync_runs_running_idx`
+  serves the running set. Per-page webhook recency probes
+  `ofapi_webhook_events_page_received_idx` once per page.
+- The DM shadow material check keeps a 5 s statement timeout (500 ms cancelled
+  it ~200 times an hour under load and forced the full sweep); the diagnostic
+  report writer keeps 500 ms.
+- Postgres runtime settings live in the volume's `postgresql.auto.conf` via
+  `ALTER SYSTEM`: `shared_buffers=2GB`, `effective_cache_size=5GB`,
+  `work_mem=16MB`, `checkpoint_timeout=30min`, `wal_compression=lz4`,
+  `jit=off`, `max_parallel_workers_per_gather=0`,
+  `log_min_duration_statement=2000`, `log_lock_waits=on`. They survive
+  container recreation; a later compose-level `command` may restate them.
+- `ofapi_webhook_events` is analyzed; its stale statistics (reltuples 672k vs
+  n_live_tup 14k since the 09-07 stats reset) had hidden its real size from
+  autovacuum and the planner. It is not bloated.
+
+Result after the three deploys (10-minute windows, cgroup `cpu.stat`):
+Postgres 0.32 CPU (system 0.03), worker 0.14, host idle ~89 %, load average
+1–2; canonicalize sweep 29 s avg (648), projection tick 10 s (198), metric
+sample 5 s (240), planner 2 s (61); TaskIndex sign-in on the same host
+124–130 ms server-side (748–1441).
+
+Open, owner-gated: canonicalization/projection budgets (custody semantics),
+sync upsert churn (no-op upserts, sorted batch inserts), `pg_stat_statements`
+(needs `shared_preload_libraries` and a restart), a health-floor index on the
+partitioned `observations`, and the hypervisor's CPU delivery (the guest
+accounted 43–46 % of occupied vCPU time under saturation, ~100 % when calm).
+Live `docker update --cpu-shares` (worker 512, taskindex 2048) is a transient
+tweak reset by container recreation, not a decision.
