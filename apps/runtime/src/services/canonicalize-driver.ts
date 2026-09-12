@@ -515,10 +515,18 @@ async function runFamily(
         // must not be stamped consumed. Stamping it would delete it from
         // every future replay just as surely as a DROP would — the exact
         // failure the parse_version contract exists to prevent.
-        if (family.canParse !== undefined && !family.canParse(observation)) {
+        // Some shape gates already perform the full parse. Keep that one
+        // result local to this observation so accepted drafts and rejection
+        // diagnostics do not repeat aggregation, sorting and fingerprints.
+        const parsed = family.parse?.(observation);
+        const rejection = parsed !== undefined
+          ? parsed.rejection
+          : family.canParse !== undefined && !family.canParse(observation)
+            ? family.parseRejection?.(observation) ?? { code: "unclassified" }
+            : null;
+        if (rejection !== null) {
           totals.skippedUnparseable += 1;
-          const rejection = family.parseRejection?.(observation) ?? null;
-          const reasonCode = rejection?.code ?? "unclassified";
+          const reasonCode = rejection.code ?? "unclassified";
           // The worker logs the whole run result. Bound this list so a broad
           // version bump over a poison corpus cannot turn diagnostics into its
           // own log-volume incident.
@@ -547,9 +555,9 @@ async function runFamily(
           }
           acceptedPostRefs = new Set(await listObservedPostRefsForCapture(app.db, row.accountId, row.id));
         }
-        const drafts = family.canonicalize(observation, {
+        const drafts = (parsed?.events ?? family.canonicalize(observation, {
           ...runContext, ...(acceptedPostRefs === undefined ? {} : { acceptedPostRefs }),
-        })
+        }))
           .map((draft) => clampDraftOccurredAt(draft, row.receivedAt, now));
         // Capture-first rows (webhook) carry only the vendor account ref;
         // resolve it against the page map before the unmapped check.

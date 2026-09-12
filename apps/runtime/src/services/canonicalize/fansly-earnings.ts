@@ -6,6 +6,7 @@ import {
   isRecord,
   type CanonicalEventDraft,
   type CanonicalizableObservation,
+  type CanonicalParseResult,
 } from "./types.ts";
 
 // These kinds previously belonged to sync-pull v6. Only their parse debt rises.
@@ -25,7 +26,7 @@ interface EarningsAggregate {
  *  for the stats snapshot, 'YYYY-MM' for monthly rows. Amounts are MILLS. */
 export function parseFanslyEarningsObservation(
   observation: CanonicalizableObservation,
-): { events: CanonicalEventDraft[]; rejection: { code: string } | null } {
+): CanonicalParseResult {
   if (observation.platform !== "fansly" || !FANSLY_EARNINGS_KINDS.has(observation.kind)) {
     return { events: [], rejection: { code: "unsupported_earnings_shape" } };
   }

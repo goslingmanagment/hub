@@ -305,6 +305,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 304 | Sync seeding counts | Count active followers only when initial Fansly reconcile recovery can use it; keep every existing-state maintenance path. |
 | 305 | Sync finalizer authority | Cleanup rechecks the current target outcome after a lock wait and preserves committed worker results. |
 | 306 | HTTP admission after lease loss | Stop new observed read attempts per chunk while preserving in-flight response capture and existing write fencing. |
+| 307 | Single earnings parse | Validate, diagnose and build earnings drafts from one observation-local parse result, preserving whole-observation refusal and replay. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -12752,3 +12753,26 @@ cases, preserving all real transport, capture and pacing assertions. Scope
 isolation, cancellation during admission/retry, false/error heartbeats and
 responses arriving after loss are covered. This does not promise cancellation
 before the next heartbeat observes ownership loss.
+
+
+## Decision 307: Reuse the earnings parse result within one observation (2026-09-12)
+
+Context-free canonicalizer families may provide one pure `{ events, rejection }`
+result for shape acceptance, diagnostics and drafts. Earnings is the sole adopted
+family. A non-null rejection refuses the whole observation, including any partial
+drafts, and keeps its parse debt. The registry type prevents combining this
+strategy with separate shape gates or an acceptance-ledger replay context.
+Standalone canonicalizer helpers remain available to existing direct callers.
+
+The earnings parser algorithm, amount validation, fingerprints, event keys,
+checkpoints and version are unchanged. A result lives only during its current
+visit; body or binding repair is still parsed afresh. Other families retain their
+existing gate/context/canonicalizer order.
+
+Independent review approved the change. Sixty-three targeted unit/integration
+tests pass, including dedup and projections. Restoring the complete deployed
+driver and registry produces six expected repeated-work failures while eleven
+new behavioral cases still pass. A valid aggregate now hashes once; two monthly
+aggregates hash twice. Malformed/partial money, empty versus explicit zero,
+unmapped repair, diagnostics and dry-run remain covered. These work counts do
+not establish the lane's production CPU share or an absolute latency gain.
