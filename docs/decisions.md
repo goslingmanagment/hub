@@ -309,6 +309,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 308 | Preview monitor scope | Read only DM monitor streams for conversation preview while preserving shared queue context and historical physical debt. |
 | 309 | DM shadow timeout rationale | Correct the diagnostic-only timeout explanation; provider traversal and runtime behavior stay unchanged. |
 | 310 | Unmapped webhook body batches | Fresh bounded catalog batches only for proven binding waits; mapped/export bodies keep their original read boundary. |
+| 311 | Disjoint replay with shared allowance | Keep reserved capture/replay turns and reuse unused allowance once without restarting an exhausted cursor. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -12843,3 +12844,30 @@ review approves the restricted candidate, with 69 targeted tests passing. A
 and cursor while reducing catalog queries from 4,000 to 500, about 1,379 ms to
 467/414 ms locally. First/deep plans use keyed probes; inline reads add no SQL.
 These fixtures do not establish production-wide CPU savings.
+
+
+## Decision 311: Keep capture and replay disjoint while sharing their allowance (2026-09-12)
+
+The prioritized capture pass owns versions below one; its replay pass owns
+versions at least one, respecting stronger family floors. An unstamped zero-row
+refusal cannot consume both reserved turns. Ordinary CLI, exact, dry-run and
+non-prioritized replay retain their previous eligibility and repair behavior.
+
+Private pass results track nonempty pages consumed and whether EOF was observed.
+After both reserved turns, the driver may continue the first pass once using
+unused pages and the original deadline, resuming the same forward cursor. It
+never reenters a wrapped pass. The opposite turn is persisted before borrowed
+work, and the original deadline is rechecked after that write, preserving
+overshoot/restart and family fairness. There is no public option, cursor-schema
+change, extra allowance or mid-row interruption.
+
+Independent review rejected the first predicate-only version because useful
+capture capacity fell from four rows to two when positive replay was empty.
+The final allocation restores all four while keeping refusal/positive visits
+disjoint. Fifty-two targeted tests pass, covering repair, fresh-only/small-replay
+capacity, partial/full EOF, odd page caps, borrowed time, overshoot and restart.
+An actual-driver controlled experiment independently confirms four useful
+capture/positive stamps and no duplicate poison visits. Final independent
+review approves the implementation and test-only typing correction. Parser
+versions, event identities, source facts and forward-only stamps are unchanged;
+these fixtures do not establish a production-wide latency or CPU gain.

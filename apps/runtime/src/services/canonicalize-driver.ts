@@ -405,6 +405,14 @@ function createPartitionGate(
   };
 }
 
+interface FamilyRunResult {
+  budgetExhausted: boolean;
+  /** Nonempty pages, charged to the same allowance across both passes. */
+  pagesUsed: number;
+  /** An empty/partial page proved the end and wrapped this pass's cursor. */
+  reachedEnd: boolean;
+}
+
 async function runFamily(
   app: Pick<AppContext, "db" | "logger">,
   family: CanonicalizerFamily,
@@ -419,14 +427,14 @@ async function runFamily(
   /** Epoch ms after which this family must take no NEW page; null = no budget. */
   deadlineAt: number | null,
   pass: "unparsed" | "replay" | null = null,
-): Promise<boolean> {
+): Promise<FamilyRunResult> {
   const kinds = options.kinds !== undefined
     ? (family.kinds === null
       ? options.kinds
       : options.kinds.filter((kind) => family.kinds!.includes(kind)))
     : family.kinds ?? undefined;
   if (options.kinds !== undefined && kinds !== undefined && kinds.length === 0) {
-    return false;
+    return { budgetExhausted: false, pagesUsed: 0, reachedEnd: true };
   }
   const belowParseVersion = options.belowParseVersion ?? family.version;
   const now = options.now ?? new Date();
@@ -449,25 +457,59 @@ async function runFamily(
     const passes: Array<"unparsed" | "replay"> = turn.afterId === 1
       ? ["replay", "unparsed"] : ["unparsed", "replay"];
     let remainingPages = maxPages;
+    const results: FamilyRunResult[] = [];
     for (const [index, nextPass] of passes.entries()) {
       turn = await advanceCanonicalizeSweepCursor(app.db, turn, nextPass === "unparsed" ? 1 : null);
       const passDeadlineAt = index === 0 && deadlineAt !== null
         ? Date.now() + Math.max(0, Math.floor((deadlineAt - Date.now()) / 2)) : deadlineAt;
-      const scannedBefore = totals.scanned;
-      await runFamily(app, family, {
+      const result = await runFamily(app, family, {
         ...options, maxPagesPerFamily: index === 0 ? Math.floor(maxPages / 2) : remainingPages,
       }, totals, runContext, partitionGate, passDeadlineAt, nextPass);
-      remainingPages -= Math.ceil((totals.scanned - scannedBefore) / pageSize);
-      if (deadlineAt !== null && Date.now() >= deadlineAt) return true;
+      results.push(result);
+      remainingPages -= result.pagesUsed;
+      if (deadlineAt !== null && Date.now() >= deadlineAt) {
+        return { budgetExhausted: true, pagesUsed: maxPages - remainingPages, reachedEnd: false };
+      }
+    }
+    // Both reserved turns take precedence. If the first stopped at its page
+    // or half-time allowance, give it ONE continuation using what the second
+    // left unused. Its forward cursor still names the next page. Never resume
+    // a pass that reached the end: its cursor has wrapped, so that would read
+    // the same unstampable prefix again in this run.
+    if (remainingPages > 0 && !results[0]!.reachedEnd) {
+      // The deadline was checked after the second pass, before this callee's
+      // guaranteed first page. Preserve crash/overshoot fairness before work.
+      turn = await advanceCanonicalizeSweepCursor(app.db, turn, passes[0] === "unparsed" ? 1 : null);
+      if (deadlineAt !== null && Date.now() >= deadlineAt) {
+        return { budgetExhausted: true, pagesUsed: maxPages - remainingPages, reachedEnd: false };
+      }
+      results[0] = await runFamily(app, family, {
+        ...options, maxPagesPerFamily: remainingPages,
+      }, totals, runContext, partitionGate, deadlineAt, passes[0]);
+      remainingPages -= results[0].pagesUsed;
+      if (deadlineAt !== null && Date.now() >= deadlineAt) {
+        return { budgetExhausted: true, pagesUsed: maxPages - remainingPages, reachedEnd: false };
+      }
     }
     // Both passes got their turn; return to ordinary capture-first order.
     if (turn.afterId !== null) await advanceCanonicalizeSweepCursor(app.db, turn, null);
-    return false;
+    return {
+      budgetExhausted: false, pagesUsed: maxPages - remainingPages,
+      reachedEnd: results.every(result => result.reachedEnd),
+    };
   }
   const cursorKey = `${pass === "unparsed" ? "unparsed:" : ""}${sweepCursorKey(family, options)}`;
+  // Only the split replay pass excludes version zero: those pending captures
+  // have their own pass, including bodies that cannot yet parse or map.
+  // Ordinary replay/CLI keeps its original floor and can still repair them.
+  const atLeastParseVersion = pass === "replay"
+    ? Math.max(1, family.minimumParseVersion ?? 0)
+    : family.minimumParseVersion;
   let cursor = useCursor ? await getCanonicalizeSweepCursor(app.db, cursorKey) : null;
   let afterId: number | null = cursor ? cursor.afterId : options.afterId ?? null;
   let budgetExhausted = false;
+  let pagesUsed = 0;
+  let reachedEnd = false;
   const checkedAcceptedLedgers = new Set<number>();
   for (let pageIndex = 0; pageIndex < maxPages; pageIndex += 1) {
     // The budget, checked between PAGES only (never mid-row). `pageIndex > 0`
@@ -484,7 +526,7 @@ async function runFamily(
       // CLI's belowParseVersion override keeps its original stamp semantics.
       belowParseVersion: pass === "unparsed" ? 1 : belowParseVersion,
       ...(options.observationId !== undefined ? { observationId: options.observationId } : {}),
-      ...(family.minimumParseVersion === undefined ? {} : { atLeastParseVersion: family.minimumParseVersion }),
+      ...(atLeastParseVersion === undefined ? {} : { atLeastParseVersion }),
       source: family.source,
       ...(kinds !== undefined ? { kinds } : {}),
       accountId: options.accountId ?? null,
@@ -495,11 +537,13 @@ async function runFamily(
       limit: pageSize,
     });
     if (rows.length === 0) {
+      reachedEnd = true;
       if (cursor && cursor.afterId !== null) {
         await advanceCanonicalizeSweepCursor(app.db, cursor, null);
       }
       break;
     }
+    pagesUsed += 1;
     afterId = rows[rows.length - 1]!.id;
     // Prefetch only facts that cannot append under this run's binding map.
     // Mapped bodies must be read at their own turn: retaining one across an
@@ -706,11 +750,11 @@ async function runFamily(
       }
     }
 
-    const reachedEnd = rows.length < pageSize;
+    reachedEnd = rows.length < pageSize;
     if (cursor) cursor = await advanceCanonicalizeSweepCursor(app.db, cursor, reachedEnd ? null : afterId);
     if (reachedEnd) break;
   }
-  return budgetExhausted;
+  return { budgetExhausted, pagesUsed, reachedEnd };
 }
 
 /** One global latch; CLI/test stubs without config only log. Never called in dry-run. */
@@ -818,7 +862,7 @@ export async function runCanonicalization(
     // Family isolation: a structural failure in one family (e.g. its list
     // query dying on a transient error) must not stall the other sources.
     try {
-      const budgetExhausted = await runFamily(
+      const { budgetExhausted } = await runFamily(
         app,
         family,
         options,

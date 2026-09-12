@@ -13,6 +13,7 @@
 // not cut, and which family the next run starts at — rather than any timing.
 
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
+import type { listObservationsForReplay } from "@agency_hub_core/db";
 
 const dbMocks = vi.hoisted(() => ({
   getCanonicalizeSweepCursor: vi.fn(),
@@ -53,6 +54,7 @@ const {
 } = await import("../apps/runtime/src/services/canonicalize/fansly-stats.ts");
 
 const START = new Date("2026-08-22T12:00:00.000Z");
+type ReplayQuery = Parameters<typeof listObservationsForReplay>[1];
 
 function appStub() {
   return {
@@ -108,14 +110,40 @@ function endlessFamily(lane: string, costMsPerRow = 0) {
 function serveEndlessPages(costMsPerPage: number) {
   let nextId = 1;
   dbMocks.listObservationsForReplay.mockImplementation(
-    async (_db: unknown, query: { kinds?: readonly string[]; limit: number }) => {
+    async (_db: unknown, query: ReplayQuery) => {
       if (costMsPerPage > 0) {
         spend(costMsPerPage);
       }
       const kind = query.kinds?.[0] ?? "kind_unknown";
-      return Array.from({ length: query.limit }, () => row(nextId++, kind));
+      return Array.from({ length: query.limit ?? 200 }, () => ({
+        ...row(nextId++, kind), parseVersion: query.atLeastParseVersion ?? 0,
+      }));
     },
   );
+}
+
+/** Stateful selection follows BOTH version bounds and the real keyset order. */
+function serveCorpus(
+  pending: Array<ReturnType<typeof row>>,
+  cost: (query: ReplayQuery, selected: Array<ReturnType<typeof row>>) => void = () => {},
+) {
+  const reads: Array<{ below: number; atLeast: number | undefined; ids: number[] }> = [];
+  dbMocks.listObservationsForReplay.mockImplementation(async (_db, query: ReplayQuery) => {
+    const selected = pending.filter(item => item.source === query.source
+      && (query.kinds === undefined || query.kinds.includes(item.kind))
+      && item.parseVersion < query.belowParseVersion
+      && item.parseVersion >= (query.atLeastParseVersion ?? 0)
+      && item.id > (query.afterId ?? 0))
+      .sort((left, right) => left.id - right.id).slice(0, query.limit ?? 200);
+    reads.push({ below: query.belowParseVersion, atLeast: query.atLeastParseVersion, ids: selected.map(item => item.id) });
+    cost(query, selected);
+    return selected;
+  });
+  dbMocks.markObservationParsed.mockImplementation(async (_db, input) => {
+    const item = pending.find(candidate => candidate.id === input.observationId)!;
+    item.parseVersion = Math.max(item.parseVersion, input.parseVersion);
+  });
+  return reads;
 }
 
 /** The kind each `listObservationsForReplay` call asked for, in call order. */
@@ -161,7 +189,8 @@ describe("canonicalization sweep wall-clock budget", () => {
       row(3, "kind_a"),
     ];
     dbMocks.listObservationsForReplay.mockImplementation(async (_db, query) => pending
-      .filter(item => item.parseVersion < query.belowParseVersion && item.id > (query.afterId ?? 0))
+      .filter(item => item.parseVersion < query.belowParseVersion
+        && item.parseVersion >= (query.atLeastParseVersion ?? 0) && item.id > (query.afterId ?? 0))
       .slice(0, query.limit));
     dbMocks.markObservationParsed.mockImplementation(async (_db, input) => {
       pending.find(item => item.id === input.observationId)!.parseVersion = input.parseVersion;
@@ -180,12 +209,95 @@ describe("canonicalization sweep wall-clock budget", () => {
   it("gives replay the whole page allowance when no new capture is pending", async () => {
     let id = 0;
     dbMocks.listObservationsForReplay.mockImplementation(async (_db, query) => query.belowParseVersion === 1
-      ? [] : Array.from({ length: query.limit }, () => row(++id, "kind_a")));
+      ? [] : Array.from({ length: query.limit }, () => ({
+        ...row(++id, "kind_a"), parseVersion: query.atLeastParseVersion ?? 0,
+      })));
     expect(await runCanonicalization(appStub(), {
       useSweepCursor: true, pageSize: 2, maxPagesPerFamily: 2,
       families: [{ ...endlessFamily("a"), version: 6, prioritizeUnparsed: true }],
     })).toMatchObject({ scanned: 4, stamped: 4 });
     expect(dbMocks.listObservationsForReplay.mock.calls.map(call => call[1].belowParseVersion)).toEqual([1, 6, 6]);
+  });
+
+  it("resumes capture after its half-time allowance using only the original deadline", async () => {
+    const pending = Array.from({ length: 6 }, (_, index) => row(index + 1, "kind_a"));
+    const reads = serveCorpus(pending, (_query, selected) => { if (selected.length > 0) spend(30); });
+    expect(await runCanonicalization(appStub(), {
+      families: [{ ...endlessFamily("a"), version: 6, prioritizeUnparsed: true }],
+      useSweepCursor: true, pageSize: 1, maxPagesPerFamily: 6, maxDurationMs: 100,
+    })).toMatchObject({ scanned: 4, stamped: 4, truncatedByBudget: true, errored: 0 });
+    // Two capture pages hit the 50ms reserved deadline; empty replay gives
+    // its unused pages back. The fourth row overshoots the ORIGINAL 100ms.
+    expect(reads.map(read => read.ids)).toEqual([[1], [2], [], [3], [4]]);
+    expect(pending.map(item => item.parseVersion)).toEqual([6, 6, 6, 6, 0, 0]);
+  });
+
+  it("returns unused capture pages to replay when restart owes replay the first turn", async () => {
+    const pending: Array<ReturnType<typeof row>> = [];
+    const reads = serveCorpus(pending);
+    const options = {
+      families: [{ ...endlessFamily("a"), version: 6, prioritizeUnparsed: true }],
+      useSweepCursor: true, pageSize: 1, maxPagesPerFamily: 4,
+    };
+    await runCanonicalization(appStub(), options);
+    const key = dbMocks.getCanonicalizeSweepCursor.mock.calls.find(call => call[1].startsWith("next-pass:"))![1];
+    const cursor = await dbMocks.getCanonicalizeSweepCursor({}, key);
+    await dbMocks.advanceCanonicalizeSweepCursor({}, cursor, 1);
+    pending.push(...Array.from({ length: 5 }, (_, index) => ({ ...row(index + 1, "kind_a"), parseVersion: 5 })));
+    reads.length = 0;
+    resetCanonicalizeSweepRuntime();
+
+    expect(await runCanonicalization(appStub(), options)).toMatchObject({ scanned: 4, stamped: 4, errored: 0 });
+    expect(reads).toEqual([
+      { below: 6, atLeast: 1, ids: [1] }, { below: 6, atLeast: 1, ids: [2] },
+      { below: 1, atLeast: undefined, ids: [] },
+      { below: 6, atLeast: 1, ids: [3] }, { below: 6, atLeast: 1, ids: [4] },
+    ]);
+    expect(pending.map(item => item.parseVersion)).toEqual([6, 6, 6, 6, 5]);
+  });
+
+  it.each([false, true])("preserves borrowed-page overshoot fairness (process restart: %s)", async restart => {
+    const pending = [1, 2, 3, 4].map(id => row(id, "kind_a"));
+    pending.push(row(5, "kind_b"));
+    const reads = serveCorpus(pending, (_query, selected) => { if (selected.some(item => item.id === 3)) spend(120); });
+    const options = {
+      families: [{ ...endlessFamily("a"), version: 6, prioritizeUnparsed: true }, endlessFamily("b")],
+      useSweepCursor: true, pageSize: 1, maxPagesPerFamily: 4, maxDurationMs: 100,
+    };
+    expect(await runCanonicalization(appStub(), options)).toMatchObject({
+      scanned: 3, stamped: 3, errored: 0, truncatedByBudget: true, skippedFamilies: ["pull:b"],
+    });
+    expect(reads.map(read => read.ids)).toEqual([[1], [2], [], [3]]);
+    const key = dbMocks.getCanonicalizeSweepCursor.mock.calls.find(call => call[1].startsWith("next-pass:"))![1];
+    expect(await dbMocks.getCanonicalizeSweepCursor({}, key)).toMatchObject({ afterId: 1 });
+
+    dbMocks.listObservationsForReplay.mockClear();
+    reads.length = 0;
+    if (restart) resetCanonicalizeSweepRuntime();
+    expect(await runCanonicalization(appStub(), options)).toMatchObject({ scanned: 2, stamped: 2, errored: 0 });
+    // Rotation survives between live calls; after restart only the durable
+    // per-family owed turn survives, as before this change.
+    expect(scannedKinds()[0]).toBe(restart ? "kind_a" : "kind_b");
+    const firstAQuery = dbMocks.listObservationsForReplay.mock.calls.find(call => call[1].kinds[0] === "kind_a")![1];
+    expect(firstAQuery).toMatchObject({ belowParseVersion: 6, atLeastParseVersion: 1 });
+    expect(pending.map(item => item.parseVersion)).toEqual([6, 6, 6, 6, 1]);
+  });
+
+  it("does not start the borrowed forced first page after its turn-marker write consumes the deadline", async () => {
+    const pending = Array.from({ length: 4 }, (_, index) => row(index + 1, "kind_a"));
+    const reads = serveCorpus(pending);
+    const advance = dbMocks.advanceCanonicalizeSweepCursor.getMockImplementation()!;
+    let turnWrites = 0;
+    dbMocks.advanceCanonicalizeSweepCursor.mockImplementation(async (...args) => {
+      if (args[1].key.startsWith("next-pass:") && ++turnWrites === 3) spend(100);
+      return advance(...args);
+    });
+    expect(await runCanonicalization(appStub(), {
+      families: [{ ...endlessFamily("a"), version: 6, prioritizeUnparsed: true }],
+      useSweepCursor: true, pageSize: 1, maxPagesPerFamily: 4, maxDurationMs: 100,
+    })).toMatchObject({ scanned: 2, stamped: 2, truncatedByBudget: true, errored: 0 });
+    expect(reads.map(read => read.ids)).toEqual([[1], [2], []]);
+    expect(pending.map(item => item.parseVersion)).toEqual([6, 6, 0, 0]);
   });
 
   it("shares the wall-clock budget across capture and replay and keeps family rotation", async () => {
