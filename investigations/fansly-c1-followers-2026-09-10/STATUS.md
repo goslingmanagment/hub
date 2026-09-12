@@ -1,6 +1,15 @@
 # Fansly C1 — follower reconciliation diagnostics
 
-Latest: [captured pagination overlap](OBSERVATION-20260912T165024Z.md).
+Latest: [natural completion through 18:37 UTC](OBSERVATION-20260912T183741Z.md).
+Lilly-2 request 2541 finishes in generation 792 with two actual retirements;
+the next two comparisons match and request no work. All 49 requested decisions
+in the cumulative window have an exact-generation terminal. Redundancy remains
+unproven. The [presence read-surface check](PRESENCE-MEASUREMENT-20260912.md)
+confirms that Agent timeline activity time cannot certify Workboard observation
+freshness. The 20:00 UTC runtime read still finds all three roles healthy on
+`31b73a96`. This follow-up changes only documentation and evidence.
+
+Earlier: [captured pagination overlap](OBSERVATION-20260912T165024Z.md).
 Lora-1's following comparison is 9,474/9,474 and requests no work. Lilly-2's
 generation 791 observes a duplicated relation across two adjacent pages and
 a changed terminal headline; the guard withholds deactivation and restarts.

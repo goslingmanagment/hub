@@ -284,3 +284,22 @@ between later matching counts and immediate active-after, separate snapshots,
 captured overlap and complete membership. Neither reviewer ran tests or accessed
 production. This follow-up adds diagnostic SQL and evidence documentation only;
 application source and the successful `6d3dd3f1` validation remain unchanged.
+# Presence read surfaces and natural completion — 12 September
+
+Independent reviewer `review_head_debt` found no actionable issues in the
+documentation/evidence follow-up from `46adf234`, including its prepared PR
+description. All fifteen inspected source hashes match deployed `31b73a96`;
+the four new read receipts and four historical evidence hashes were verified.
+
+The review confirms that Agent timeline activity time omits local observation
+age, membership bookkeeping is a different field, and the Followers API
+requires a human principal with page access. Independently advancing maxima
+do not attribute presence refreshes to a run. No snapshot, missing field or
+access limit is presented as suppression or completeness proof.
+
+The copied 18:37 observation agrees with the previously reviewed source report:
+250 decisions, 49 exact-generation terminals, 76 Lilly-2 chunks across the
+restart, two actual retirements, and 5,969 attempts with 25 retry ordinals.
+It does not claim that every requested walk was necessary. Local test totals
+and CI results retain their original tree/commit attribution. No application
+code, tests, production state or provider calls changed for this follow-up.

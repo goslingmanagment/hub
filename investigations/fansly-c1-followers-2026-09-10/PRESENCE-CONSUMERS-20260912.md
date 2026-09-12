@@ -6,6 +6,9 @@ Retiring zero rows therefore does not prove that a full walk had no useful
 effect. This inventory identifies the code dependency; it does not measure
 production presence coverage or authorize a slower refresh policy.
 
+The later [read-surface check](PRESENCE-MEASUREMENT-20260912.md) distinguishes
+Agent timeline activity time from the observation age required by Workboard.
+
 The inspected source is deployed release `31b73a96`. Its presence producer,
 repository and server consumers match the restored `64149b95` source. The
 dashboard has newer navigation and reporting copy; its presence filter and
