@@ -295,7 +295,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 295 | OnlyFans manual Ping | The chatter decides when to write: active conversations accept Ping with truthful prompt context. Fansly keeps its existing active gate and assembled prompt. |
 | 313 | Fansly A0 reason coverage | Retain six additional bounded pre-apply reason counters; legacy and unavailable offline categories remain null, without changing sweep policy or completion semantics. |
 | 314 | Fansly C2a projection audit | Compare retained earnings snapshots with full projection rows in one bounded read-only snapshot; unavailable bodies, detached data and projection lag prevent acceptance. |
-| 315 | Deployment delivery | Keep Chromium cache independent of revision; preserve unchanged Postgres on app releases; publish the tested main image after Quality Gate and deploy by GHCR digest with source/checksum/platform verification before quiesce. Full/auto/dist-only and rollback semantics remain available. |
+| 316 | Deployment delivery | Keep Chromium cache independent of revision; preserve unchanged Postgres on app releases; publish the tested main image after Quality Gate and deploy by GHCR digest with source/checksum/platform verification before quiesce. Full/auto/dist-only and rollback semantics remain available. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -12469,7 +12469,7 @@ The still-unpublished C2a audit is therefore Decision 314. Migrations 0187–018
 and all implementation/test bodies are unchanged; the new main contributes
 the independently verified A0 reason counters. Combined validation follows
 this synchronization before opening the audit PR.
-## Decision 315: Reuse the browser layer and deploy the image that CI tested
+## Decision 316: Reuse the browser layer and deploy the image that CI tested
 
 2026-09-13. Deployment logs showed 392–400 seconds repeatedly installing browser
 system packages, while JS/CSS built in roughly 32 seconds in parallel; a changing
