@@ -4,11 +4,13 @@ import { resolve } from "node:path";
 import { z } from "zod";
 
 import { EarningsAudit } from "./earnings-audit.ts";
-import { earningsAuditPageSchema, earningsAuditScopeSchema } from "./earnings-audit-types.ts";
+import { earningsAuditScopeSchema } from "./earnings-audit-types.ts";
+import { earningsAuditPages } from "./earnings-audit-pages.ts";
 import { auditSqlLiteral as literal } from "./earnings-audit-reader.ts";
 
 export interface EarningsAuditTransport {
   read(sql: string): Promise<unknown>;
+  readMany(sql: string, count: number): Promise<unknown[]>;
   close(): Promise<{ stderr: string; error: string | null }>;
 }
 
@@ -60,21 +62,10 @@ export async function exportEarningsAudit(
     if (scope.asOf !== identity.asOf) throw new Error("Audit identity and scope timestamps differ");
     await retain({ operation: "scope", scope });
     const audit = new EarningsAudit(scope);
-    const scopeSql = literal(JSON.stringify(scope)) + "::jsonb";
     for (const operation of ["observations", "projection"] as const) {
-      let after = operation === "observations" ? "NULL, 0" : "0, ''";
-      for (let batch = 0; ; batch += 1) {
-        if (batch === 10_000) throw new Error("Earnings audit page limit exceeded");
-        const response = earningsAuditPageSchema.parse(await reader.read(
-          `SELECT public.fansly_earnings_audit_${operation}(${scopeSql}, ${after}, 100);`,
-        ));
+      for await (const response of earningsAuditPages(reader, scope, operation)) {
         audit.accept(response);
         await retain(response);
-        if (response.exhausted) break;
-        if (response.next === null) throw new Error("Missing earnings audit continuation");
-        after = response.operation === "observations"
-          ? `${literal(response.next.receivedAt)}, ${literal(response.next.id)}`
-          : `${literal(response.next.fanId)}, ${literal(response.next.window)}`;
       }
     }
     report = audit.report();
