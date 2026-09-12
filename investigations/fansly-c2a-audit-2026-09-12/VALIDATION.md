@@ -1,4 +1,7 @@
-# C2a audit validation — 12 September 2026
+# C2a audit validation — original 12 September candidate
+
+Historical results on `9ddf153c`, before the later main synchronization and
+renumbering. See [MAIN-SYNC-20260912.md](MAIN-SYNC-20260912.md) for current checks.
 
 All tests ran locally and serially. No production call, deployment, flag change,
 provider request, replay or rebuild was part of this validation.

@@ -1,0 +1,93 @@
+{
+  "recordedAt": "2026-09-12T19:46:09.510229+00:00",
+  "testedTree": "c997d087c00f0c11b1b43d778e98f31dfbfe6e17",
+  "parents": [
+    "9ddf153cf8d69c5ced6d905bdd55c245e02d3bb6",
+    "c76c6db06ce1c25e469ca07ec62762e248870f44"
+  ],
+  "checks": [
+    {
+      "command": [
+        "pnpm",
+        "check"
+      ],
+      "startedAt": "2026-09-12T19:37:01.548884+00:00",
+      "completedAt": "2026-09-12T19:37:59.415892+00:00",
+      "exitCode": 0,
+      "result": {
+        "unitFilesPassed": 297,
+        "unitTestsPassed": 3262,
+        "existingTestsSkipped": 9,
+        "strictnessKnownErrors": 1901,
+        "strictnessDebtFiles": 121,
+        "lint": "passed",
+        "build": "passed"
+      },
+      "localLog": "check.log",
+      "logSha256": "9e3cf712923df2e3877298edcd02bed7af664fda10bae24704c647464eb58163"
+    },
+    {
+      "command": [
+        "pnpm",
+        "exec",
+        "vitest",
+        "run",
+        "--no-file-parallelism",
+        "tests/fan-earnings-audit-export.integration.test.ts",
+        "tests/fan-earnings-audit-reconciliation.integration.test.ts",
+        "tests/fan-earnings-audit-scale.integration.test.ts",
+        "tests/fan-earnings-audit.integration.test.ts",
+        "tests/fan-earnings-identity.integration.test.ts",
+        "tests/fan-earnings-projection.integration.test.ts",
+        "tests/capture-payloads.repository.integration.test.ts",
+        "tests/erasure-page-owned-tables.integration.test.ts"
+      ],
+      "startedAt": "2026-09-12T19:39:25.168579+00:00",
+      "completedAt": "2026-09-12T19:40:02.291203+00:00",
+      "exitCode": 0,
+      "result": {
+        "filesPassed": 8,
+        "testsPassed": 44,
+        "testsSkipped": 0,
+        "vitestDurationSeconds": 35.83,
+        "database": "real Docker PostgreSQL"
+      },
+      "localLog": "postgres.log",
+      "logSha256": "b30b53ab835cba4c3ae527142136f2cdddcc84be3af85ebebbea809ce9bb3925"
+    }
+  ],
+  "sourceAfterTests": "three SQL bodies and twelve TypeScript source/test files unchanged",
+  "mainMigrationFilesUnchanged": 180,
+  "laterChanges": "documentation and evidence only",
+  "whitespace": {
+    "sourceAndDocs": "passed",
+    "rawHistoricalLogs": "three existing warnings retained without modifying original log bytes"
+  },
+  "numbering": {
+    "decision": 312,
+    "migrations": [
+      "0187",
+      "0188",
+      "0189"
+    ],
+    "otherRelease": "b204454f814e7346d91e6747ff28e8308ef6ead8",
+    "reservedPredecessor": "0186_ops_metrics_recent_series.sql",
+    "beforeDeployment": "include and apply 0186 before 0187, or resolve its reservation before audit deployment"
+  },
+  "production": {
+    "catalogReadAt": "2026-09-12T19:30:27.165128+00:00",
+    "migrationReadAt": "2026-09-12T19:32:00.393328+00:00",
+    "role": "read_only",
+    "transaction": "REPEATABLE READ READ ONLY",
+    "statementTimeoutSeconds": 10,
+    "auditReadersInstalled": false,
+    "lastAppliedMigration": "0185_fansly_followers_membership_read.sql",
+    "runtimeSource": "31b73a9691f3",
+    "rolesHealthy": 3,
+    "restarts": 0,
+    "mutations": 0,
+    "projectionParity": "unmeasured"
+  },
+  "releaseCandidate": false,
+  "historicalManifest": "Original evidence/manifest.json is preserved for commit 9ddf153c; current sources and filenames are in candidate.json."
+}

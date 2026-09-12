@@ -81,10 +81,14 @@ Do not repair money by direct SQL writes. Production diagnostics use read_only
 inside READ ONLY transactions; privileged replay/rebuild commands require their
 own explicit approval. C2b/C2c, A1 and live WebSocket work retain their gates.
 
-## Retained snapshot audit (Decision 296)
+## Retained snapshot audit (Decision 312)
 
-Deploy the additive readers 0186–0188 through the normal reviewed release,
+Deploy the additive readers 0187–0189 through the normal reviewed release,
 preserving all currently deployed source and migrations. No new flag is needed.
+The reserved `0186_ops_metrics_recent_series.sql` must be included and applied
+before 0187, or its reservation must be resolved before the audit release.
+Do not apply 0187 and add an unapplied 0186 later: the migration runner requires
+an applied prefix of the sorted files and rejects that ordering.
 The local exporter uses SSH only to run psql as read_only in the existing
 `agency-hub-postgres-1` container. It does not call Fansly or change stored data.
 

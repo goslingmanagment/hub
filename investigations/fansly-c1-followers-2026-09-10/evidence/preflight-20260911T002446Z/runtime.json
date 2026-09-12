@@ -1,0 +1,50 @@
+[
+  {
+    "command": [
+      "date",
+      "-u",
+      "+%Y-%m-%dT%H:%M:%SZ"
+    ],
+    "exitCode": 0,
+    "stdout": "2026-09-11T00:33:18Z\n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "docker",
+      "inspect",
+      "agency-hub-api-1",
+      "agency-hub-worker-1",
+      "agency-hub-scheduler-1",
+      "--format",
+      "{{.Name}} image={{.Image}} status={{.State.Status}} health={{.State.Health.Status}} restarts={{.RestartCount}}"
+    ],
+    "exitCode": 0,
+    "stdout": "/agency-hub-api-1 image=sha256:f742e86eca4ca0c37aa8e406ccc86ff021fc277697756c75f5422a7568b0e66f status=running health=healthy restarts=0\n/agency-hub-worker-1 image=sha256:f742e86eca4ca0c37aa8e406ccc86ff021fc277697756c75f5422a7568b0e66f status=running health=healthy restarts=0\n/agency-hub-scheduler-1 image=sha256:f742e86eca4ca0c37aa8e406ccc86ff021fc277697756c75f5422a7568b0e66f status=running health=healthy restarts=0\n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "df",
+      "-h",
+      "/"
+    ],
+    "exitCode": 0,
+    "stdout": "Filesystem      Size  Used Avail Use% Mounted on\n/dev/sda1        79G   53G   25G  68% /\n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "curl",
+      "--fail",
+      "--silent",
+      "--show-error",
+      "--max-time",
+      "10",
+      "http://127.0.0.1:3000/api/v1/health"
+    ],
+    "exitCode": 0,
+    "stdout": "{\"status\":\"ok\",\"timestamp\":\"2026-09-11T00:33:25.661Z\",\"contractHash\":\"af58db69b579ce1d6939c6000032b91d4088bb3d218e9872c3cf5373992bc19a\",\"capabilities\":[\"desktop-lifecycle-v2\"],\"checks\":{\"api\":{\"status\":\"ok\"},\"database\":{\"status\":\"ok\",\"latencyMs\":18,\"error\":null}}}",
+    "stderr": ""
+  }
+]

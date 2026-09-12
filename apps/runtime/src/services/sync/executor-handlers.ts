@@ -1,3 +1,4 @@
+import { followersReconcileDecision } from "./followers-reconcile-decision.ts";
 import {
   aggregateTransactionTopSpenders,
   assertOwnedPageSyncLease,
@@ -320,12 +321,14 @@ async function triggerFollowersReconcileAnomaly(
   app: AppContext,
   platformAccountId: number,
 ) {
-  await requestPageSync(app.db, {
+  const receipts = await requestPageSync(app.db, {
     pageId: platformAccountId,
     streams: ["followers_reconcile"],
     source: "anomaly",
+    includeQueueState: true,
     ...pageSyncDependencyInput(app),
   });
+  return receipts?.find(row => row.stream === "followers_reconcile") ?? null;
 }
 
 type FollowerMappingStream = "followers" | "followers_reconcile";
@@ -1917,13 +1920,25 @@ export async function executeFollowersChunk(
       await input.telemetry.recordCheckpointAdvanced("followers", summarizeCheckpoint(pageWrite.checkpoint));
 
       const activeFollowerCount = await countActivePageFollows(app.db, input.pageContext.page.id);
-      if (
-        activeFollowerCount !== state.sourceFollowerCount ||
-        (!!state.knownFollowId && page.done && !sawKnownCheckpoint) ||
-        (!!state.knownFollowId && newestFollowId === state.knownFollowId && processedThisChunk > 0)
-      ) {
-        await triggerFollowersReconcileAnomaly(app, input.pageContext.page.id);
-      }
+      const decision = followersReconcileDecision({
+        activeFollowerCount, sourceFollowerCount: state.sourceFollowerCount,
+        knownFollowId: state.knownFollowId, newestFollowId,
+        pageDone: page.done, sawKnownCheckpoint, processedThisChunk,
+      });
+      const receipt = decision.requested
+        ? await triggerFollowersReconcileAnomaly(app, input.pageContext.page.id)
+        : null;
+      // This receipt describes a settled decision, including the no-request case.
+      // Telemetry persistence is fail-open; it cannot change the follower walk.
+      await input.telemetry.addNote("Fansly followers reconcile decision", {
+        followersReconcile: {
+          schemaVersion: 1, ...decision,
+          counts: { activeFollowerCount, sourceFollowerCount: state.sourceFollowerCount,
+            pageCount: state.pageCount, processedThisChunk },
+          knownCheckpoint: Boolean(state.knownFollowId), pageDone: page.done,
+          requestedSeq: receipt?.requestedSeq ?? null, queueBefore: receipt?.queueBefore ?? null,
+        },
+      });
 
       return {
         satisfied: true,

@@ -410,18 +410,28 @@ export async function closeInactiveSyncRuns(
     errorSummary: string;
   },
 ): Promise<CloseInactiveSyncRunsResult> {
+  // Activity is derived per RUNNING run through the (sync_run_id, …) indexes;
+  // aggregating the whole attempts/events tables every planner cycle was the
+  // third-largest consumer on the VPS (docs/diag/2026-09-11-agency-hub-load).
   const result = await db.execute<{ outcome: "failed" | "partial" }>(sql`
-    with request_activity as (
-      select a.sync_run_id as "runId",
-             max(coalesce(a.finished_at, a.started_at)) as "lastAttemptAt"
-      from ${syncHttpAttempts} a
-      group by a.sync_run_id
+    with running_runs as (
+      select sr.id
+      from ${syncRuns} sr
+      where sr.outcome = 'running'
+    ),
+    request_activity as (
+      select r.id as "runId",
+             (select max(coalesce(a.finished_at, a.started_at))
+                from ${syncHttpAttempts} a
+               where a.sync_run_id = r.id) as "lastAttemptAt"
+      from running_runs r
     ),
     event_activity as (
-      select e.sync_run_id as "runId",
-             max(e.emitted_at) as "lastEventAt"
-      from ${syncRunEvents} e
-      group by e.sync_run_id
+      select r.id as "runId",
+             (select max(e.emitted_at)
+                from ${syncRunEvents} e
+               where e.sync_run_id = r.id) as "lastEventAt"
+      from running_runs r
     ),
     inactive_runs as (
       select sr.id,
@@ -1655,18 +1665,26 @@ export async function listRunningSyncRuns(
     clauses.push(sql`sr.page_id = ${input.platformAccountId}`);
   }
 
+  // Same per-running-run activity derivation as closeInactiveSyncRuns.
   const result = await db.execute<SyncRunRow & { lastActivityAt: TimestampValue }>(sql`
-    with request_activity as (
-      select sync_run_id,
-             max(coalesce(finished_at, started_at)) as last_attempt_at
-      from ${syncHttpAttempts}
-      group by sync_run_id
+    with running_runs as (
+      select sr.id
+      from ${syncRuns} sr
+      where sr.outcome = 'running'
+    ),
+    request_activity as (
+      select r.id as sync_run_id,
+             (select max(coalesce(a.finished_at, a.started_at))
+                from ${syncHttpAttempts} a
+               where a.sync_run_id = r.id) as last_attempt_at
+      from running_runs r
     ),
     event_activity as (
-      select sync_run_id,
-             max(emitted_at) as last_event_at
-      from ${syncRunEvents}
-      group by sync_run_id
+      select r.id as sync_run_id,
+             (select max(e.emitted_at)
+                from ${syncRunEvents} e
+               where e.sync_run_id = r.id) as last_event_at
+      from running_runs r
     )
     select sr.id as "runId",
            sr.page_id as "platformAccountId",

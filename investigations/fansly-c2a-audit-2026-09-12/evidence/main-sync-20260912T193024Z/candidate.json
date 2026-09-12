@@ -1,0 +1,62 @@
+{
+  "tree": "c997d087c00f0c11b1b43d778e98f31dfbfe6e17",
+  "parents": [
+    "9ddf153cf8d69c5ced6d905bdd55c245e02d3bb6",
+    "c76c6db06ce1c25e469ca07ec62762e248870f44"
+  ],
+  "renames": {
+    "packages/db/migrations/0186_fansly_earnings_audit_scope.sql": "packages/db/migrations/0187_fansly_earnings_audit_scope.sql",
+    "packages/db/migrations/0187_fansly_earnings_audit_observations.sql": "packages/db/migrations/0188_fansly_earnings_audit_observations.sql",
+    "packages/db/migrations/0188_fansly_earnings_audit_projection.sql": "packages/db/migrations/0189_fansly_earnings_audit_projection.sql"
+  },
+  "sourceSha256": {
+    "packages/db/migrations/0187_fansly_earnings_audit_scope.sql": "11c75284711e91b979f8daeb4401f9235989fd317a2c7095aacbdc366e779fae",
+    "packages/db/migrations/0188_fansly_earnings_audit_observations.sql": "133bc6e4eec9a7862d0baf0af4d1dc0d581100c5b13028ec9b2ef6893cd66008",
+    "packages/db/migrations/0189_fansly_earnings_audit_projection.sql": "00c67048a568e43370b7b8edf17b169ff47da3973d9bb9f1bc0f149fae1a742a",
+    "scripts/fansly-events/earnings-audit-compare.ts": "f81754d7d84010a079f293eb3370a34d143bef335a055857b9928a3728d0ff0a",
+    "scripts/fansly-events/earnings-audit-export.ts": "4c529e642d039263539e4e03b9d0288f76c81580a9f791c34dc369ab8a1d7471",
+    "scripts/fansly-events/earnings-audit-reader.ts": "5af3a77d74807264791fc459e60fce87eefa8bc1b3454664ea0df3defb3a4bff",
+    "scripts/fansly-events/earnings-audit-types.ts": "cf465eda7c60796cee425cdb26c36d7f14e72262ecae310a7bab3e53ede5f0fc",
+    "scripts/fansly-events/earnings-audit.ts": "2703528bc2625cd5da66d9b79b691ea2f5529cad07150e3254a53a4609f12f7d",
+    "scripts/fansly-events/export-earnings-audit.ts": "5038618fed5f9c7e32ae3e12cfdc3cf1c52adfa3d7063f3dbd66fb7f4d9499b2",
+    "tests/earnings-audit-reader.test.ts": "dc4b0fc2b44c5fcc7181ee64c57f2ab935aa1238743dac261e26a6fc3cc5c271",
+    "tests/fan-earnings-audit-export.integration.test.ts": "0e8c0d87dc35d1f98842c82a943219aeb4cf7b26e5bf51a376b15b609714f475",
+    "tests/fan-earnings-audit-reconciliation.integration.test.ts": "3564b2f63d77dba2c179ddf97c602dee4404bbcb55f0cca94d359c20cc09f31e",
+    "tests/fan-earnings-audit-scale.integration.test.ts": "4f23345a448baa4250dca62d1af76a7c1d48c8ec4be1469d15dee53c03f88e21",
+    "tests/fan-earnings-audit.integration.test.ts": "d4c92f9bc82b70a9f3ebf28f04257e079df495c243df8aefa8ede9029243faee",
+    "tests/helpers/earnings-audit-fixture.ts": "c2e39bb81fe377c225520304be79b2696f1b54d32fcd428411092bd9f5ad191f"
+  },
+  "mainMigrationFilesUnchanged": 180,
+  "postMergeStageFiles": [
+    "docs/decisions.md",
+    "docs/runbooks/fansly-earnings-correctness.md",
+    "investigations/fansly-c2a-audit-2026-09-12/MAIN-SYNC-20260912.md",
+    "investigations/fansly-c2a-audit-2026-09-12/PR.md",
+    "investigations/fansly-c2a-audit-2026-09-12/REVIEW.md",
+    "investigations/fansly-c2a-audit-2026-09-12/STATUS.md",
+    "investigations/fansly-c2a-audit-2026-09-12/VALIDATION.md",
+    "investigations/fansly-c2a-audit-2026-09-12/evidence/check.log",
+    "investigations/fansly-c2a-audit-2026-09-12/evidence/corpus.json",
+    "investigations/fansly-c2a-audit-2026-09-12/evidence/integration.log",
+    "investigations/fansly-c2a-audit-2026-09-12/evidence/manifest.json",
+    "investigations/fansly-c2a-audit-2026-09-12/evidence/projection.json",
+    "investigations/fansly-c2a-audit-2026-09-12/evidence/scale.log",
+    "investigations/fansly-c2a-earnings-2026-09-10/STATUS.md",
+    "investigations/fansly-events-execution-2026-09-08.md",
+    "packages/db/migrations/0187_fansly_earnings_audit_scope.sql",
+    "packages/db/migrations/0188_fansly_earnings_audit_observations.sql",
+    "packages/db/migrations/0189_fansly_earnings_audit_projection.sql",
+    "scripts/fansly-events/earnings-audit-compare.ts",
+    "scripts/fansly-events/earnings-audit-export.ts",
+    "scripts/fansly-events/earnings-audit-reader.ts",
+    "scripts/fansly-events/earnings-audit-types.ts",
+    "scripts/fansly-events/earnings-audit.ts",
+    "scripts/fansly-events/export-earnings-audit.ts",
+    "tests/earnings-audit-reader.test.ts",
+    "tests/fan-earnings-audit-export.integration.test.ts",
+    "tests/fan-earnings-audit-reconciliation.integration.test.ts",
+    "tests/fan-earnings-audit-scale.integration.test.ts",
+    "tests/fan-earnings-audit.integration.test.ts",
+    "tests/helpers/earnings-audit-fixture.ts"
+  ]
+}

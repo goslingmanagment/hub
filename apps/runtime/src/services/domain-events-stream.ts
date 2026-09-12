@@ -1,7 +1,7 @@
 import {
   DOMAIN_EVENTS_APPENDED_CHANNEL,
+  getAccountHighWater,
   isProjectionOnlyDomainEventType,
-  listDomainEventAccountBounds,
   listDomainEventHighWaters,
   listEventsSince,
   type DomainEventRow,
@@ -212,8 +212,12 @@ export function createDomainEventHub(app: AppContext): DomainEventHub {
       const watermark = delivered.get(accountId) ?? 0;
       let throughSeq: number;
       try {
-        throughSeq = (await listDomainEventAccountBounds(app.db, [accountId]))
-          .get(accountId)!.currentSeq;
+        // Only the counter head is needed here. The retention-bounds query
+        // (min(account_seq) over the whole ledger) walked ~1.2M index entries
+        // per busy account on every notification and its result was discarded
+        // (docs/diag/2026-09-11-agency-hub-load). Bounds stay with the SSE
+        // route's gap rule, which really needs them.
+        throughSeq = await getAccountHighWater(app.db, accountId);
       } catch (error) {
         dirtyAccounts.add(accountId);
         app.logger.warn({ err: error, accountId }, "domain-event head read failed; retrying");

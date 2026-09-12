@@ -5,6 +5,13 @@ worktree. It is not deployed, and no production projection parity or repair is
 claimed. PR165 already merged; a follow-up PR would be an exception to the
 owner's one-stage/one-PR instruction and has not been opened.
 
+Main synchronization on 12 September integrates `c76c6db0`. The unpublished
+audit now reserves Decision 312 and migrations 0187–0189, avoiding occupied
+release-branch numbers. All three SQL bodies and twelve TypeScript source/test
+files are unchanged. Combined checks pass: 3262 unit tests, nine existing skips,
+and 44 serial Docker-Postgres tests with no skips. Current evidence is
+recorded in [MAIN-SYNC-20260912.md](MAIN-SYNC-20260912.md).
+
 ## Scope
 
 Three additive SQL readers freeze one page's retained observation cohort and
@@ -16,12 +23,13 @@ There is no flag or change to a provider request, writer, scheduler or rotation.
 
 The largest implementation module has 176 lines. Each migration is under 150
 lines. Independent correctness and code-quality reviews are recorded in REVIEW.md.
-Final validation results are recorded separately in VALIDATION.md.
+The original validation is retained in VALIDATION.md; the main-sync record
+contains the current combined-tree checks.
 
 ## Production evidence and limits
 
-This implementation turn made no production calls or mutations. Its starting
-evidence is the retained 12 September preflight in the main checkout:
+The original implementation turn made no production calls or mutations. Its
+starting evidence is the retained 12 September preflight in the main checkout:
 `investigations/fansly-c2a-c2b-preflight-20260912T122314Z/REPORT.md`.
 At that cutoff, all 281,525 retained earnings observations were stamped v7;
 the projection and actual watermark were inaccessible to read_only. C2b's
@@ -32,10 +40,17 @@ remain unverified; a matched subset cannot compensate for those exclusions.
 The local scale checks do not measure SSH overhead, production query latency,
 provider freshness or HTTP savings. No explicit replay or rebuild ran.
 
+Read-only catalog checks at 19:30–19:32 UTC confirm that the three audit readers
+are absent and none of its migrations is applied. All three runtime roles remain
+healthy on `31b73a96`, with zero restarts. These reads do not inspect projection
+parity or run the audit. No production state changed.
+
 ## Next action
 
 After the additional PR is permitted, publish the prepared change with its
 validation and independent review results. Before deployment, assemble a release
 that preserves current production ancestry and applied 0182–0185. Then run the
 bounded report on production, retain every result and resolve its actual gaps.
+Resolve the reserved 0186 before applying 0187; the release cannot insert that
+unapplied predecessor after the audit's higher migrations have run.
 C2b activation still requires a separate flag decision after C2a verification.

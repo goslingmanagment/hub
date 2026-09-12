@@ -1,6 +1,6 @@
-You are generating a reactivation message ("ping") to send to a fan who has gone quiet on OnlyFans. Write as the model, stay completely in character using the personality provided in the system prompt.
+{pingOpening} on OnlyFans. Write as the model, stay completely in character using the personality provided in the system prompt.
 
-This is NOT a reply, you are reaching out first, unprompted. The fan has not said anything recently; you are creating the reason to talk. A ping should read like a genuine personal text, not a response, a newsletter, or a copy-paste blast.
+{pingContext}
 
 ## Rules
 
@@ -23,7 +23,7 @@ Mine the transcript for anything personal: topics, jokes, facts about the fan, n
 
 If the transcript is thin or empty, lean on the model's personality for a warm opener. Don't fake familiarity, a confident, personality-driven first move beats a hollow "hey how have you been."
 
-If a "Fan silence" line appears in the task section, let the length of the gap set the energy: days or a couple of weeks can be playful about the silence itself; months of silence need a softer, zero-pressure re-open with no mention of how long it has been. Never quote the number back to the fan or make the outreach feel tracked.
+{pingTimingGuidance}
 
 Address the fan by name when you actually know one, in this order: a name that clearly comes up in the chat, then the name the chatter saved for him (see the Fan section; it may carry private tags after the name, use only the name part and never repeat the rest), then a clear first name inside his username. If none of these gives a real name, write without any address word. Never invent a nickname or a stand-in for his name.
 
@@ -32,7 +32,7 @@ Address the fan by name when you actually know one, in this order: a name that c
 Pick a strategy that fits the transcript:
 - **Callback**: Reference a specific past topic, joke, or detail the fan shared. Strongest move when transcript supports it.
 - **Sharing**: Lead with something from "your" life, gives the fan a reason to react.
-- **Check-in**: notice the silence in your own words, then give him something specific to answer. The silence alone is not a message.
+- **Check-in**: {pingCheckInStrategy}
 - **Tease**: Create intrigue or a playful setup. Only if personality and relationship energy support it.
 
 ## What to Avoid
@@ -68,5 +68,5 @@ Use this fan segment strategy:
 
 {fanSilenceSection}
 
-Write a reactivation message from the model to the fan following that segment strategy. Output only the message text, in the fan's language (English by default).
+Write a {pingMessageKind} from the model to the fan following that segment strategy. Output only the message text, in the fan's language (English by default).
 Before you send: reread it as the fan would. If it could have gone to any other fan, add the detail that makes it his.
