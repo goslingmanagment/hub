@@ -1,0 +1,109 @@
+
+> agency_hub_core@ check /Users/dmitriy/.codex/worktrees/hub-fansly-c2a-earnings
+> pnpm typecheck && pnpm lint && pnpm test:unit && pnpm --dir apps/dashboard build
+
+
+> agency_hub_core@ typecheck /Users/dmitriy/.codex/worktrees/hub-fansly-c2a-earnings
+> node scripts/check-strictness-ratchet.mjs
+
+strictness-ratchet: OK — 1901 known error(s) within budget (121 file(s) with debt).
+
+> agency_hub_core@ lint /Users/dmitriy/.codex/worktrees/hub-fansly-c2a-earnings
+> eslint .
+
+
+> agency_hub_core@ test:unit /Users/dmitriy/.codex/worktrees/hub-fansly-c2a-earnings
+> NODE_OPTIONS=--max-old-space-size=8192 vitest run --exclude tests/**/*.integration.test.ts --exclude tests/schema-guard.test.ts --exclude tests/http-client.test.ts --exclude tests/network.test.ts
+
+
+ RUN  v4.1.10 /Users/dmitriy/.codex/worktrees/hub-fansly-c2a-earnings
+
+(node:96521) [DEP0205] DeprecationWarning: `module.register()` is deprecated. Use `module.registerHooks()` instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+
+ Test Files  296 passed (296)
+      Tests  3241 passed | 9 skipped (3250)
+   Start at  17:16:23
+   Duration  18.98s (transform 12.31s, setup 0ms, import 139.78s, tests 44.21s, environment 14ms)
+
+
+> @agency_hub_core/dashboard@ build /Users/dmitriy/.codex/worktrees/hub-fansly-c2a-earnings/apps/dashboard
+> tsc -b && vite build
+
+vite v6.4.1 building for production...
+(node:97254) [DEP0205] DeprecationWarning: `module.register()` is deprecated. Use `module.registerHooks()` instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+transforming...
+✓ 2786 modules transformed.
+rendering chunks...
+[plugin vite:reporter] 
+(!) /Users/dmitriy/.codex/worktrees/hub-fansly-c2a-earnings/apps/dashboard/src/api/pages.ts is dynamically imported by /Users/dmitriy/.codex/worktrees/hub-fansly-c2a-earnings/apps/dashboard/src/components/layout/Sidebar.tsx but also statically imported by /Users/dmitriy/.codex/worktrees/hub-fansly-c2a-earnings/apps/dashboard/src/api/queries.ts, /Users/dmitriy/.codex/worktrees/hub-fansly-c2a-earnings/apps/dashboard/src/main.tsx, /Users/dmitriy/.codex/worktrees/hub-fansly-c2a-earnings/apps/dashboard/src/pages/AnalyticsPage.tsx, /Users/dmitriy/.codex/worktrees/hub-fansly-c2a-earnings/apps/dashboard/src/pages/overview/PageSources.tsx, dynamic import will not move module into another chunk.
+
+computing gzip size...
+dist/index.html                                 0.82 kB │ gzip:   0.48 kB
+dist/assets/OverviewPage-D5q3O6e0.css          11.62 kB │ gzip:   2.61 kB
+dist/assets/index-gnwqxOna.css                 75.35 kB │ gzip:  13.93 kB
+dist/assets/money-DA_Rw9Lq.js                   0.28 kB │ gzip:   0.21 kB
+dist/assets/chevron-right-CkOjvhok.js           0.30 kB │ gzip:   0.25 kB
+dist/assets/clock-Bi9kCMBA.js                   0.36 kB │ gzip:   0.28 kB
+dist/assets/Badge-Dri4NkpC.js                   0.36 kB │ gzip:   0.26 kB
+dist/assets/StatusPanel-CVW9YnRu.js             0.49 kB │ gzip:   0.32 kB
+dist/assets/revenueDisplay-D2Mjubz7.js          0.49 kB │ gzip:   0.39 kB
+dist/assets/refresh-cw-DGXPILiB.js              0.49 kB │ gzip:   0.33 kB
+dist/assets/check-CVpgOB-v.js                   0.50 kB │ gzip:   0.36 kB
+dist/assets/SearchInput-BekkUdqn.js             0.54 kB │ gzip:   0.37 kB
+dist/assets/FilterButtons-BxFYEqox.js           0.58 kB │ gzip:   0.39 kB
+dist/assets/QueryNotice-Cw4fqsx6.js             0.59 kB │ gzip:   0.44 kB
+dist/assets/dev-CNZzpzNj.js                     0.66 kB │ gzip:   0.29 kB
+dist/assets/platformUrls-D52JfUZQ.js            0.68 kB │ gzip:   0.33 kB
+dist/assets/RemainingBar-JyMBMPhN.js            0.75 kB │ gzip:   0.48 kB
+dist/assets/Tooltip-gFTwYDcI.js                 0.95 kB │ gzip:   0.63 kB
+dist/assets/fans-BFbJvMPc.js                    0.96 kB │ gzip:   0.35 kB
+dist/assets/Pagination-DRbvk0Z1.js              1.10 kB │ gzip:   0.54 kB
+dist/assets/ofapiExports-CqYbU6zn.js            1.14 kB │ gzip:   0.45 kB
+dist/assets/TableSkeleton-Bd6-dXZC.js           1.15 kB │ gzip:   0.49 kB
+dist/assets/TrendSparkline-2bxkQu87.js          1.16 kB │ gzip:   0.62 kB
+dist/assets/adminOfapiCollection-fzE_rZ2_.js    1.35 kB │ gzip:   0.46 kB
+dist/assets/ModalShell-B-tPv6mD.js              1.96 kB │ gzip:   0.93 kB
+dist/assets/LoginPage-Cvd9HEZc.js               1.99 kB │ gzip:   0.81 kB
+dist/assets/EventDetailPanel-DOGnNJq_.js        2.35 kB │ gzip:   1.16 kB
+dist/assets/workboard-DCCNukba.js               2.37 kB │ gzip:   0.64 kB
+dist/assets/DeletedFansPage-Bi0Ut5Mb.js         2.59 kB │ gzip:   1.10 kB
+dist/assets/LogPage-RM3sPQH7.js                 3.07 kB │ gzip:   1.27 kB
+dist/assets/format-B29hnKnm.js                  3.43 kB │ gzip:   1.31 kB
+dist/assets/DbStatsPage-Ba3qeCOv.js             3.52 kB │ gzip:   1.09 kB
+dist/assets/PageActivityChart-Cv_uFhYZ.js       3.65 kB │ gzip:   1.61 kB
+dist/assets/QueuePage-bY5_2yaN.js               3.77 kB │ gzip:   1.41 kB
+dist/assets/IncidentsPage-CP76mwjm.js           4.28 kB │ gzip:   1.59 kB
+dist/assets/SpenderAutoListPage-Dw4IOLRi.js     4.59 kB │ gzip:   1.81 kB
+dist/assets/SyncStatusPage-DDria4gO.js          4.68 kB │ gzip:   1.48 kB
+dist/assets/SubscribersPage-Dd3ALklZ.js         5.53 kB │ gzip:   2.40 kB
+dist/assets/TransactionsPage-C2y7gPR-.js        5.59 kB │ gzip:   2.39 kB
+dist/assets/FollowersPage-CYEKW5_D.js           6.19 kB │ gzip:   2.21 kB
+dist/assets/AgentHydrationPage-8c3fq5fI.js      8.19 kB │ gzip:   2.57 kB
+dist/assets/UsagePage-CsFw1Mga.js               8.24 kB │ gzip:   2.75 kB
+dist/assets/StackedBarChart-BFCM5lwi.js         8.94 kB │ gzip:   3.13 kB
+dist/assets/EmptyState-DYwfW7IR.js             12.08 kB │ gzip:   4.14 kB
+dist/assets/OfapiMediaPage-BTJc-WzN.js         13.48 kB │ gzip:   4.46 kB
+dist/assets/OfapiExportsPage-DSmXfl8J.js       15.52 kB │ gzip:   4.73 kB
+dist/assets/PageDetailPage-BvEh8PMk.js         17.50 kB │ gzip:   4.84 kB
+dist/assets/AiAnalyticsPage-Bba0cDNr.js        18.81 kB │ gzip:   5.68 kB
+dist/assets/NotificationsPage-CD8PQqgC.js      23.35 kB │ gzip:   5.74 kB
+dist/assets/OverviewPage-Cq0M1sHu.js           24.69 kB │ gzip:   8.30 kB
+dist/assets/BarChart-D_Yg3fQ6.js               28.26 kB │ gzip:   8.67 kB
+dist/assets/TopSupportersPage-4_P20zUT.js      31.14 kB │ gzip:   8.77 kB
+dist/assets/WorkboardV2Page-CGZKAsEs.js        36.14 kB │ gzip:  11.17 kB
+dist/assets/AnalyticsPage-Dz9R_X8l.js          38.09 kB │ gzip:  10.06 kB
+dist/assets/OfapiMarketing-s32W3LlI.js         42.86 kB │ gzip:  11.21 kB
+dist/assets/OfapiActions-SdV1ANbh.js           58.34 kB │ gzip:  15.77 kB
+dist/assets/OfapiCreditsPage-Dq4sb7X5.js       61.26 kB │ gzip:  17.78 kB
+dist/assets/FanProfilePage-ChoiM1jC.js        135.43 kB │ gzip:  41.10 kB
+dist/assets/SettingsPage-DlJF5_0Z.js          319.70 kB │ gzip:  76.86 kB
+dist/assets/AreaChart-Bsq3oaxX.js             348.99 kB │ gzip: 104.99 kB
+dist/assets/index-DjgpvNIQ.js                 698.83 kB │ gzip: 193.83 kB
+
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+✓ built in 2.06s
