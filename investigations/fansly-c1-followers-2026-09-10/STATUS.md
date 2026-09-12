@@ -1,12 +1,14 @@
 # Fansly C1 — follower reconciliation diagnostics
 
 Latest: [12 September membership refinement](MEMBERSHIP-DIAGNOSTICS-20260912.md).
-The new diagnostics passed `pnpm check` (3251 tests, nine existing skips),
-84 serial Docker-Postgres tests and both independent reviews. All 41 observed
-requests from clean queues completed; redundant work remains unproven.
-The owner has resumed implementation and authorized deployments. Release
-assembly must preserve the current 02ff runtime fixes. The older observations
-and deployment approvals below are historical, with their original cutoffs.
+The reviewed change is deployed in release `7aaa3185`, preserving production
+`02ff` and all 180 old migrations. The release passed 3258 unit tests (nine
+existing skips), 176 serial Docker-Postgres tests and both independent reviews.
+The standard deployment exited 0 with an executed protected-health HTTP 200;
+all three roles, compiled hashes, restricted reader and pinned CLI were verified.
+The first post-start report through 12:14 UTC has no follower runs yet.
+All 41 requests in the earlier cumulative window completed; redundancy remains
+unproven. The older observations below retain their original cutoffs and gates.
 
 [PR166](https://github.com/goslingmanagment/core/pull/166) remains the single C1
 draft. It now includes a bounded run timeline needed to establish the cause

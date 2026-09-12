@@ -46,9 +46,25 @@ All failed and successful logs are retained. See
 
 ## Release and remaining gate
 
-The owner resumed implementation and authorized deployments. The current runtime
-is 02ff7e34239e; deploying the older C1 base would lose unrelated production fixes.
-The release must preserve that exact source plus the reviewed C1 delta and pass
-combined-source checks before the standard deployment. PR166 remains the only C1
-draft. This refinement is ready locally; it is not yet deployed or an accepted
-C1 policy fix. Physical savings and fresh-event latency remain unmeasured.
+The owner authorized deployments. Release `7aaa3185757e6a89d1b7427b0d54aa8720c74da4`
+combines the exact reviewed C1 change `97fcbd03` with the observed production
+`02ff` base, preserving all unrelated paths and 180 applied migrations. The
+release tag retains both parents without expanding PR166's scope.
+
+The combined tree passed `pnpm check` (3258 tests, nine existing skips), 176
+serial real Postgres tests in 11 suites, production build and both independent
+release reviews. C1 source commit 97fcbd03 separately passed all five GitHub CI
+jobs. See [release validation](evidence/membership-20260912/release-validation.json).
+
+The standard deployment exited 0 at 12:11:44 UTC. Its protected sync-health
+request returned 200 in 4714.768 ms. All three roles were healthy with zero
+restarts; six compiled hashes, migration 0185, the restricted reader and pinned
+CLI source/capabilities were verified. This single request does not measure
+fresh-event latency or attribute a speedup to C1. No flag, replay, recovery,
+socket or image GC operation ran. The previous image and applied SQL remain.
+
+The first repeatable READ ONLY window, 12:11:06.271182593–12:14:16.851636 UTC,
+contains zero follower runs and no new membership receipt. The next gate is a
+natural full-walk completion and its following incremental comparison. PR166
+remains a diagnostic draft, with no justified policy fix, measured physical
+savings or fresh-event latency. A0's original clock and evidence gates remain.
