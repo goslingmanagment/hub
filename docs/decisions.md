@@ -294,6 +294,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 294 | Fansly C1 diagnostics | Retain the existing trigger and expose bounded decision, queue and reconcile-run evidence before choosing a follower fix. |
 | 295 | OnlyFans manual Ping | The chatter decides when to write: active conversations accept Ping with truthful prompt context. Fansly keeps its existing active gate and assembled prompt. |
 | 313 | Fansly A0 reason coverage | Retain six additional bounded pre-apply reason counters; legacy and unavailable offline categories remain null, without changing sweep policy or completion semantics. |
+| 314 | Fansly C2a projection audit | Compare retained earnings snapshots with full projection rows in one bounded read-only snapshot; unavailable bodies, detached data and projection lag prevent acceptance. |
 | 314 | Deployment delivery | Keep Chromium cache independent of revision; preserve unchanged Postgres on app releases; publish the tested main image after Quality Gate and deploy by GHCR digest with source/checksum/platform verification before quiesce. Full/auto/dist-only and rollback semantics remain available. |
 
 ## Consensus Decisions
@@ -12410,6 +12411,64 @@ C2a audit 312. This follow-up reuses the A0 branch and worktree. On 12 September
 the owner approved an additional PR after PR164's merge and its deployment
 ("да все разрешаю"); A0/A1 evidence and calendar gates remain unchanged.
 
+## Decision 314: Verify retained Fansly earnings against the projection (2026-09-12)
+
+C2a's identity fix is deployed, and the 12 September retained census found
+281,525 earnings observations at parser v7. Parser stamps do not prove that
+the final monetary rows and their source receipts agree. The existing
+read_only grants cannot read those rows or the actual sequence watermark.
+
+Add three narrowly scoped SQL readers and a local operator exporter. They
+require a single repeatable READ ONLY transaction, one Fansly page and a bounded
+received-at range. Freeze upper IDs, counts, the event bound and actual projector
+watermark; inventory attached and conventionally named detached observation/event
+partitions. Count scoped detached data rather than treating absent partitions as
+empty. Stable pagination and count reconciliation must complete before acceptance.
+
+Authorize the observation envelope before resolving a CAS reference. Retain only
+the six inputs used by the existing v7 parser, preserving its events and rejection
+semantics. Account/access-class/codec mismatches, missing or disagreeing copies,
+compressed or oversized bodies remain explicit incomplete evidence. No general
+payload API or base-table grant is added. Full projection reads include zero and
+negative values, source event/observation identities and legacy source-ID fallback.
+
+The local comparison uses the production parser and its timestamp/observation-ID
+ordering. Missing/extra rows, stale values, unresolved sources, out-of-range
+sources and projector lag remain distinct. Empty arrays never establish a fan
+check, and an empty-only cohort cannot pass. Private output retains an exact hash
+of normalized JSON records and an incomplete manifest on interrupted collection.
+The exporter bounds statement time, total transaction time, batch size and cleanup.
+
+No flag, producer, projector, cadence, replay or repair changes. This is the
+missing C2a acceptance read; it does not establish production parity or authorize
+C2b activation. See the [C2a runbook](runbooks/fansly-earnings-correctness.md).
+
+Numbering rechecked on 12 September against main `c76c6db0` and the active
+release branches. Main ends at 295; deployed `31b73a96` uses 296–300, and
+performance branch `b204454f` reserves 301–311 and migration 0186. This unpublished
+audit therefore moves from 296 to 312 and from 0186–0188 to 0187–0189. Its three
+SQL bodies are unchanged. Production's read-only catalog at 19:32 UTC lists
+0180–0185 and no audit migration; the three audit readers are absent.
+
+Recheck numbering and production ancestry before opening the follow-up PR and
+assembling a release. Applied 0182–0185 stay immutable. This main-based branch
+alone does not contain all currently deployed C1 and interface changes.
+The reserved 0186 must be included and applied before 0187, or its reservation
+must be resolved before this audit ships. Adding an unapplied 0186 afterward
+violates the migration runner's contiguous-prefix requirement.
+
+At 20:45:46 UTC, a read_only READ ONLY query confirmed 182 applied migrations
+through 0186 on production 96a86c1fcdde. The predecessor-order gate is resolved;
+the audit release must preserve this production tree and its migration bytes.
+The owner approved the additional PR and deployments on 12 September
+("да все разрешаю"). This approval does not establish projection parity or
+replace C2a/C2b verification requirements.
+
+Before publication, PR176 merged as c1ca5e37 and main now ends at Decision 313.
+The still-unpublished C2a audit is therefore Decision 314. Migrations 0187–0189
+and all implementation/test bodies are unchanged; the new main contributes
+the independently verified A0 reason counters. Combined validation follows
+this synchronization before opening the audit PR.
 ## Decision 314: Reuse the browser layer and deploy the image that CI tested
 
 2026-09-13. Deployment logs showed 392–400 seconds repeatedly installing browser

@@ -80,3 +80,58 @@ changed it. Pending receipts/revisions from later stages must not be deleted.
 Do not repair money by direct SQL writes. Production diagnostics use read_only
 inside READ ONLY transactions; privileged replay/rebuild commands require their
 own explicit approval. C2b/C2c, A1 and live WebSocket work retain their gates.
+
+## Retained snapshot audit (Decision 314)
+
+Deploy the additive readers 0187–0189 through the normal reviewed release,
+preserving all currently deployed source and migrations. No new flag is needed.
+The reserved `0186_ops_metrics_recent_series.sql` must be included and applied
+before 0187, or its reservation must be resolved before the audit release.
+Do not apply 0187 and add an unapplied 0186 later: the migration runner requires
+an applied prefix of the sorted files and rejects that ordering.
+The local exporter uses SSH only to run psql as read_only in the existing
+`agency-hub-postgres-1` container. It does not call Fansly or change stored data.
+
+Run once per page, with an explicit range covering its retained captures and an
+end timestamp already in the past. The output directory must not exist:
+
+```sh
+pnpm exec tsx scripts/fansly-events/export-earnings-audit.ts \
+  "$FANSLY_AUDIT_SSH_HOST" "$FANSLY_AUDIT_PAGE" \
+  "$FANSLY_AUDIT_FROM" "$FANSLY_AUDIT_TO" "$FANSLY_AUDIT_OUTPUT"
+```
+
+Use the same received-at range when comparing a bounded recheck. Each page's
+export has its own database snapshot; successive exports are not additive or
+one atomic agency-wide census. The transcript starts with the actual role,
+READ ONLY/isolation receipt and transaction time. Subsequent batches bind both
+the database snapshot and transaction time, and preserve microsecond cursors.
+
+Each call returns at most 100 observations or projection rows. Captures are
+limited to 64 KiB and 512 array elements; compressed bodies remain unavailable
+because the reader cannot certify their decoded size from compressed storage.
+CAS catalog size is checked before body lookup. Up to 200,000 fan/window keys
+and 10,000 batches per plane are allowed. Statements stop after 15 seconds,
+lock waits after one second, and the SSH transaction after 120 seconds.
+
+Check `manifest.json` before using `report.json`: `completed` must be true, and
+SHA-256 of `snapshot.jsonl` must equal its `sha256`. A completed export is not
+necessarily a successful audit. `verified` also requires at least one matched
+fan/window, current parser stamps, projector catch-up, no scoped detached rows,
+no unavailable/rejected captures and no nonmatching projection outcomes.
+
+Amounts are provider mills. The report retains original/projected observation
+and event IDs, exact differences, counts and up to 100 nonmatching samples.
+The complete normalized source records remain in `snapshot.jsonl`; all output
+files are private. No provider response is reconstructed from transactions.
+
+Interpret `projection_pending` with the actual sequence watermark, then recheck
+after normal processing catches up. `outside_cohort` means a projected source
+falls outside the selected range. `compressed_body`, storage/size failures,
+unresolved receipts and detached rows prevent verification; do not replace them
+with zero, an empty payload or a successful check. Empty arrays identify no fan
+and establish no freshness. Explicit replay/rebuild remains a separate gate.
+
+Rollback can stop using these readers while preserving their additive migrations.
+This audit does not change the C2b/C2c, A1 or WebSocket gates and cannot establish
+physical HTTP savings, quiet-correction coverage or fresh-event latency.
