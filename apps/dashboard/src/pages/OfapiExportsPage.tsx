@@ -1,8 +1,9 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router";
 import { OFAPI_TYPED_EXPORT_PROFILES, type OfapiTypedExportProfile } from "@agency_hub_core/shared";
 import { useAuthMe } from "@/api/queries";
-import { ofapiExportActions, useOfapiExportPages, useOfapiExportInventory, useOfapiExportRows, useOfapiExports, useOfapiVisitors } from "@/api/ofapiExports";
+import { ofapiExportActions, ofapiExportJobsQueryOptions, readOfapiExportJobsForRecovery, useOfapiExportPages, useOfapiExportInventory, useOfapiExportRows, useOfapiExports, useOfapiVisitors } from "@/api/ofapiExports";
 import { isUncertainActionFailure } from "./ofapi-actions/form-values.ts";
 const labels: Record<OfapiTypedExportProfile, string> = { profile_visitors: "Profile visitors", fans: "Fans", tracking_links: "Tracking links", trial_links: "Trial links", smart_links: "Smart links" };
 const field = "rounded border border-border bg-card px-3 py-2 text-sm text-text-primary";
@@ -17,21 +18,61 @@ export function exportWindowError(from: string, to: string, today = daysAgo(0)):
   return null;
 }
 type ExportQuoteBody = Parameters<typeof ofapiExportActions.create>[0];
-export function UnconfirmedExportQuoteNotice({ quote, onShowJobs, onStartNew, canStartNew, busy = false }: {
-  quote: { body: ExportQuoteBody; pageLabel: string }; onShowJobs: () => void; onStartNew: () => void; canStartNew: boolean; busy?: boolean;
+type UnconfirmedExportQuote = { body: ExportQuoteBody; pageLabel: string };
+interface ExportJobsReadback { pageId: number; dataUpdatedAt: number }
+
+export function exportQuoteReviewSnapshot(
+  readback: ExportJobsReadback | null,
+  current: ExportJobsReadback & { hasData: boolean; isError: boolean; isFetching: boolean },
+  selectedPageId: number,
+): string | null {
+  if (
+    !readback || current.pageId !== readback.pageId || selectedPageId !== readback.pageId
+    || !current.hasData || current.isError || current.isFetching
+    || current.dataUpdatedAt < readback.dataUpdatedAt
+  ) return null;
+  return `${current.pageId}:${current.dataUpdatedAt}`;
+}
+
+export function UnconfirmedExportQuoteNotice({ quote, onReadJobs, onStartNew, reviewSnapshot, busy = false }: {
+  quote: UnconfirmedExportQuote;
+  onReadJobs: () => void;
+  onStartNew: () => void;
+  reviewSnapshot: string | null;
+  busy?: boolean;
 }) {
-  const [reviewed, setReviewed] = useState(false);
+  const [acknowledgedSnapshot, setAcknowledgedSnapshot] = useState<string | null>(null);
+  useEffect(() => { setAcknowledgedSnapshot(null); }, [quote, reviewSnapshot]);
+  const reviewed = reviewSnapshot !== null && acknowledgedSnapshot === reviewSnapshot;
   return <section role="alert" className="space-y-3 rounded-xl border border-warning-dark/60 bg-card p-4 text-sm text-text-secondary">
     <h2 className="font-semibold text-text-primary">Quote creation outcome is unknown</h2>
     <p>{quote.pageLabel} (#{quote.body.pageId}) · {labels[quote.body.profile]} · {quote.body.startDate.slice(0, 10)} — {quote.body.endDate.slice(0, 10)} · ceiling {quote.body.maxCredits ?? 10} credits.</p>
     <p>The server may already have created this quote job. A repeat creates a separate task. Reload and inspect the jobs before preparing another quote.</p>
-    <button type="button" className={button} disabled={busy} onClick={onShowJobs}>Show jobs for this page</button>
-    <label className="flex items-start gap-2"><input type="checkbox" disabled={busy} checked={reviewed} onChange={event => setReviewed(event.target.checked)} />I reviewed the jobs. I understand an earlier quote may exist and want to prepare a separate new quote.</label>
-    <button type="button" className={button} disabled={!reviewed || !canStartNew} onClick={onStartNew}>Prepare a separate new quote</button>
+    <button type="button" className={button} disabled={busy} onClick={() => {
+      setAcknowledgedSnapshot(null);
+      onReadJobs();
+    }}>Read and show jobs for this page</button>
+    {reviewSnapshot === null && <p className="text-xs text-text-muted">
+      Read the original page's jobs successfully, then review the current list below.
+      A previous list or an unfinished refresh cannot confirm this review.
+    </p>}
+    <label className="flex items-start gap-2">
+      <input
+        type="checkbox"
+        disabled={busy || reviewSnapshot === null}
+        checked={reviewed}
+        onChange={event => setAcknowledgedSnapshot(event.target.checked ? reviewSnapshot : null)}
+      />
+      I reviewed the jobs. I understand an earlier quote may exist and want to prepare a separate new quote.
+    </label>
+    <button type="button" className={button} disabled={busy || !reviewed} onClick={() => {
+      if (!busy && reviewed) onStartNew();
+    }}>Prepare a separate new quote</button>
     <p className="text-xs text-text-muted">This button returns to the preview form. A quote does not approve export collection.</p>
   </section>;
 }
 export function OfapiExportsPage() {
+  const queryClient = useQueryClient();
   const auth = useAuthMe(); const owner = auth.data?.user.role === "owner";
   const pages = useOfapiExportPages(); const [selectedPage, setSelectedPage] = useState(0);
   const pageId = selectedPage || pages.data?.pages[0]?.id || 0;
@@ -46,13 +87,45 @@ export function OfapiExportsPage() {
   const inventory = useOfapiExportInventory(owner);
   const [busy, setBusy] = useState(false); const [notice, setNotice] = useState(""); const [error, setError] = useState("");
   const [selectedJob, setSelectedJob] = useState("");
-  const [unconfirmedQuote, setUnconfirmedQuote] = useState<{ body: ExportQuoteBody; pageLabel: string } | null>(null);
+  const [unconfirmedQuote, setUnconfirmedQuote] = useState<UnconfirmedExportQuote | null>(null);
+  const [quoteReadback, setQuoteReadback] = useState<ExportJobsReadback | null>(null);
+  // A disabled observer keeps recovery pinned to the original page without adding
+  // another polling timer. Its explicit refetch shares the ordinary jobs cache.
+  const recoveryPageId = unconfirmedQuote?.body.pageId ?? 0;
+  const recoveryJobs = useQuery({ ...ofapiExportJobsQueryOptions(recoveryPageId), enabled: false });
+  const reviewSnapshot = exportQuoteReviewSnapshot(quoteReadback, {
+    pageId: recoveryPageId,
+    dataUpdatedAt: recoveryJobs.dataUpdatedAt,
+    hasData: recoveryJobs.data !== undefined,
+    isError: recoveryJobs.isError,
+    isFetching: recoveryJobs.isFetching,
+  }, pageId);
   const windowError = exportWindowError(from, to);
   const validMaxCredits = Number.isInteger(maxCredits) && maxCredits >= 2 && maxCredits <= 50;
   const validStartCredits = Number.isInteger(startCredits) && startCredits >= 1 && startCredits <= 50;
   const jobs = useOfapiExports(pageId); const visitors = useOfapiVisitors({ pageId: windowError ? 0 : pageId, from, to, source }); const rows = useOfapiExportRows(selectedJob);
   const clearPreview = () => { setPreview(null); setApprovedPreview(null); setControlPreview(null); };
   const inFlight = useRef(false);
+  async function readQuoteJobs() {
+    if (inFlight.current || !unconfirmedQuote) return;
+    inFlight.current = true;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    setQuoteReadback(null);
+    setSelectedPage(unconfirmedQuote.body.pageId);
+    setSelectedJob("");
+    clearPreview();
+    try {
+      const readback = await readOfapiExportJobsForRecovery(queryClient, unconfirmedQuote.body.pageId);
+      setQuoteReadback(readback);
+    } catch {
+      setError("The original page's jobs could not be read. The quote outcome remains unknown; try reading again before preparing another quote.");
+    } finally {
+      inFlight.current = false;
+      setBusy(false);
+    }
+  }
   async function run(action: () => Promise<void>, refreshedNotice?: string, onActionError?: (error: unknown) => void) {
     if (inFlight.current) return;
     inFlight.current = true;
@@ -77,7 +150,11 @@ export function OfapiExportsPage() {
       const result = await ofapiExportActions.create({ ...body, dryRun });
       if (dryRun) setPreview({ receipt: result, body, pageLabel }); else { setPreview(null); setNotice("Quote queued. Export collection starts only after a separate approval below."); }
     }, undefined, error => {
-      if (quote && isUncertainActionFailure(error)) { setUnconfirmedQuote(quote); setPreview(null); }
+      if (quote && isUncertainActionFailure(error)) {
+        setUnconfirmedQuote(quote);
+        setQuoteReadback(null);
+        setPreview(null);
+      }
     });
   }
   return <div className="space-y-6 max-w-7xl">
@@ -95,10 +172,25 @@ export function OfapiExportsPage() {
     {pages.isPending && <p role="status" className="text-sm text-text-muted">Loading pages…</p>}
     {pages.data && !pages.isError && pages.data.pages.length === 0 && <p className="text-sm text-text-muted">No OnlyFans pages are available. Add or bind a page in Collection controls.</p>}
     {windowError && <p role="alert" className="text-sm text-red-400">{windowError}</p>}
-    {unconfirmedQuote && <UnconfirmedExportQuoteNotice quote={unconfirmedQuote} busy={busy}
-      onShowJobs={() => { setSelectedPage(unconfirmedQuote.body.pageId); setSelectedJob(""); clearPreview(); }}
-      canStartNew={!busy && pageId === unconfirmedQuote.body.pageId && Boolean(jobs.data) && !jobs.isError}
-      onStartNew={() => { setSelectedPage(unconfirmedQuote.body.pageId); setProfile(unconfirmedQuote.body.profile); setFrom(unconfirmedQuote.body.startDate.slice(0, 10)); setTo(unconfirmedQuote.body.endDate.slice(0, 10)); setMaxCredits(unconfirmedQuote.body.maxCredits ?? 10); setFanType(unconfirmedQuote.body.fanType ?? "all"); clearPreview(); setUnconfirmedQuote(null); setError(""); }} />}
+    {unconfirmedQuote && <UnconfirmedExportQuoteNotice
+      quote={unconfirmedQuote}
+      busy={busy}
+      onReadJobs={() => void readQuoteJobs()}
+      reviewSnapshot={reviewSnapshot}
+      onStartNew={() => {
+        if (inFlight.current || reviewSnapshot === null) return;
+        setSelectedPage(unconfirmedQuote.body.pageId);
+        setProfile(unconfirmedQuote.body.profile);
+        setFrom(unconfirmedQuote.body.startDate.slice(0, 10));
+        setTo(unconfirmedQuote.body.endDate.slice(0, 10));
+        setMaxCredits(unconfirmedQuote.body.maxCredits ?? 10);
+        setFanType(unconfirmedQuote.body.fanType ?? "all");
+        clearPreview();
+        setUnconfirmedQuote(null);
+        setQuoteReadback(null);
+        setError("");
+      }}
+    />}
     {owner && <section className="rounded-xl border border-border bg-card p-5 space-y-4"><h2 className="font-semibold text-text-primary">New bounded export</h2><p className="text-sm text-text-muted">Preview is local. Creating a quote requests vendor pricing with auto-start disabled. This task allows at most 1,000 rows, 100 requests and 4 MiB. Fans describe the selected audience at export time.</p>
       <div className="flex flex-wrap gap-3 items-end">
         <label className="grid gap-1 text-sm text-text-muted">Export<select disabled={busy} className={field} value={profile} onChange={e => { setProfile(e.target.value as OfapiTypedExportProfile); clearPreview(); }}>{OFAPI_TYPED_EXPORT_PROFILES.map(value => <option value={value} key={value}>{labels[value]}</option>)}</select></label>

@@ -27,11 +27,12 @@ export function featureState(feature: HubFeature, data: ConfigViewResponse): Fea
   if (feature.scope) {
     const scope = feature.scope;
     const raw = String(valueOf(items.get(scope.key)!)).trim();
-    if ((raw === "" && scope.empty === "none") || (scope.none !== undefined && raw === scope.none)) {
+    const entries = raw.split(",").map((part) => part.trim()).filter(Boolean);
+    if ((entries.length === 0 && scope.empty === "none") || (scope.none !== undefined && raw === scope.none)) {
       return { kind: "off", label: "Нет выбранных страниц", detail: "Настройки не разрешают ни одной страницы." };
     }
-    if ((raw === "" && scope.empty === "all") || (scope.all !== undefined && raw === scope.all)) scopeDetail = "Все страницы в охвате этой функции.";
-    else scopeDetail = `Выбрано: ${raw.split(",").map((part) => part.trim()).filter(Boolean).join(", ")}.`;
+    if ((entries.length === 0 && scope.empty === "all") || (scope.all !== undefined && raw === scope.all)) scopeDetail = "Все страницы в охвате этой функции.";
+    else scopeDetail = `Выбрано: ${entries.join(", ")}.`;
   }
   const modes = feature.gates.map((entry) => valueOf(items.get(entry.key)!));
   if (modes.includes("shadow")) return { kind: "limited", label: "Режим проверки", detail: "Вычисляет результат для проверки; применение зависит от выбранного режима." };

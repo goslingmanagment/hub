@@ -25,6 +25,8 @@ function ConfigPageChoices(props: ConfigChoiceProps) {
   const scope = configPageScope(props.configKey)!;
   const labels = (query.data ?? []).filter((page) => page.platform === "fansly").map((page) => page.label).sort();
   const selected = selectedConfigPages(props.value, props.configKey, labels, props.isDraft);
+  const includesFuturePages = scope.empty === "all" && !(props.isDraft && props.value === "")
+    && props.value.split(",").every((entry) => entry.trim() === "");
   // Unknown/retired labels are retained until the owner deliberately removes them.
   const choices = [...new Set([...labels, ...selected])];
   const unavailable = !query.data || query.isError;
@@ -40,7 +42,11 @@ function ConfigPageChoices(props: ConfigChoiceProps) {
     {query.isError && <p role="alert" className="text-sm text-danger">Не удалось обновить каталог. Ваш выбор не потерян.</p>}
     {!unavailable && choices.length === 0 && <p className="text-sm text-text-secondary">В каталоге нет страниц Fansly.</p>}
     {!unavailable && !selected.length && <p className="mt-2 text-sm text-text-secondary">{scope.none ? "Ни одной страницы: сохранение выключит эту проверку." : "Чтобы отключить функцию, используйте её переключатель. Для сохранения списка выберите хотя бы одну страницу."}</p>}
-    {scope.empty === "all" && props.value === "" && !props.isDraft && <p className="mt-2 text-sm text-text-secondary">Сейчас разрешены все страницы, включая будущие. После выбора сохранится только конкретный список.</p>}
+    {includesFuturePages && (
+      <p className="mt-2 text-sm text-text-secondary">
+        {props.isDraft ? "Этот список разрешает" : "Сейчас разрешены"} все страницы, включая будущие. После выбора сохранится только конкретный список.
+      </p>
+    )}
   </fieldset>
     {query.isError && <button type="button" className="mt-2 min-h-9 text-sm text-accent underline" disabled={props.disabled || query.isFetching} onClick={() => void query.refetch()}>Обновить каталог страниц</button>}
   </div>;

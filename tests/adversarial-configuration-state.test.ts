@@ -2,13 +2,13 @@ import { Children, isValidElement, type ReactElement, type ReactNode } from "rea
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type * as ReactRouter from "../apps/dashboard/node_modules/react-router/dist/development/index.js";
 
-const route = vi.hoisted(() => ({ url: "/settings?tab=configuration" }));
+const route = vi.hoisted(() => ({ url: "/settings?tab=configuration", state: null as unknown }));
 vi.mock("react-router", async (original) => ({
   ...await original<typeof ReactRouter>(),
   useInRouterContext: () => true,
   useLocation: () => {
     const url = new URL(route.url, "https://hub.invalid");
-    return { pathname: url.pathname, search: url.search, hash: url.hash };
+    return { pathname: url.pathname, search: url.search, hash: url.hash, state: route.state };
   },
   useSearchParams: () => [new URL(route.url, "https://hub.invalid").searchParams, vi.fn()],
   useNavigate: () => vi.fn(),
@@ -54,7 +54,10 @@ function descendants(node: ReactNode): Element[] {
   });
 }
 
-beforeEach(() => { route.url = "/settings?tab=configuration"; });
+beforeEach(() => {
+  route.url = "/settings?tab=configuration";
+  route.state = null;
+});
 
 describe("configuration form lifetime across scope navigation", () => {
   // Editor tests separately cover frozen versions and returned write receipts.
@@ -85,6 +88,20 @@ describe("configuration form lifetime across scope navigation", () => {
     const full = configurationForm(String(activeLink?.props.to));
     expect(full.type).toBe(focused.type);
     expect(full.key).toBe(focused.key);
+  });
+
+  it("opens all settings directly from a focused form with its remaining navigation context", () => {
+    const context = { backTo: "/usage?period=30d" };
+    route.state = context;
+    const focused = configurationForm("/settings?tab=configuration&feature=voice&view=all&q=voice&page=lora-1");
+    expect(focused.props.allSettingsHref).toBe("/settings?tab=configuration&page=lora-1");
+    expect(focused.props.navigationState).toBe(context);
+
+    const full = configurationForm(String(focused.props.allSettingsHref));
+    expect(full.type).toBe(focused.type);
+    expect(full.key).toBe(focused.key);
+    expect(full.props.feature).toBeNull();
+    expect(full.props.navigationState).toBe(context);
   });
 
   it("keeps the form identity while updating return context and revealing a prerequisite", () => {

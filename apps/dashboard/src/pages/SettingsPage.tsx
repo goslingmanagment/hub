@@ -1,5 +1,5 @@
 import { Link, useNavigate, useSearchParams } from "react-router";
-import { resolveSettingsTab, type SettingsTab } from "@/lib/navigation";
+import { buildSettingsSectionRoute, resolveSettingsTab, type SettingsTab } from "@/lib/navigation";
 import { CredentialsTab } from "./settings/CredentialsTab.js";
 import { SyncTab } from "./settings/SyncTab.js";
 import { CollectionTab } from "./settings/CollectionTab.js";
@@ -67,15 +67,7 @@ export function SettingsPage() {
   const activeSection = sections[activeTab];
 
   function sectionHref(tab: SettingsTab) {
-    const next = new URLSearchParams(searchParams);
-    next.set("tab", tab);
-    // Feature selection belongs to its own links, not the section navigation.
-    if (activeTab === "features" || searchParams.has("feature")) {
-      next.delete("feature");
-      next.delete("view");
-      next.delete("q");
-    }
-    return `/settings?${next.toString()}`;
+    return buildSettingsSectionRoute(searchParams, tab);
   }
 
   return (

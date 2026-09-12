@@ -12,7 +12,16 @@ vi.mock("../apps/dashboard/src/api/queries.ts", () => ({ useAdminChatterUsage: m
 vi.mock("../apps/dashboard/src/api/pages.ts", () => ({ usePages: mocks.pages }));
 vi.mock("../apps/dashboard/src/api/adminOfapiCollection.ts", () => ({ useAdminOfapiCollection: mocks.collection }));
 vi.mock("../apps/dashboard/src/api/ofapiMedia.ts", () => ({ useOfapiMedia: mocks.media, ofapiMediaActions: {} }));
-vi.mock("../apps/dashboard/src/api/ofapiExports.ts", () => ({ useOfapiExportPages: mocks.collection, useOfapiExports: mocks.exports, useOfapiExportRows: mocks.rows, useOfapiVisitors: mocks.visitors, useOfapiExportInventory: mocks.inventory, ofapiExportActions: {} }));
+vi.mock("../apps/dashboard/src/api/ofapiExports.ts", () => ({
+  useOfapiExportPages: mocks.collection,
+  useOfapiExports: mocks.exports,
+  useOfapiExportRows: mocks.rows,
+  useOfapiVisitors: mocks.visitors,
+  useOfapiExportInventory: mocks.inventory,
+  ofapiExportJobsQueryOptions: (pageId: number) => ({ queryKey: ["ofapi", "exports", pageId], queryFn: async () => ({ jobs: [] }) }),
+  readOfapiExportJobsForRecovery: vi.fn(),
+  ofapiExportActions: {},
+}));
 vi.mock("../apps/dashboard/src/api/ofapiMarketing.ts", () => ({ useOfapiMarketing: mocks.marketing, marketingActions: {} }));
 vi.mock("../apps/dashboard/src/api/ofapiActions.ts", () => ({ useOfapiActions: mocks.actions, accountActions: {} }));
 vi.mock("../apps/dashboard/src/api/workboard.ts", () => ({ useWorkboardV2Ai: mocks.ai, useWorkboardV2AiRuns: mocks.aiRuns, useWorkboardV2AiSettings: mocks.aiSettings, useWorkboardV2AiClassify: mocks.aiClassify }));
@@ -25,7 +34,7 @@ import { AiAnalyticsPage } from "../apps/dashboard/src/pages/AiAnalyticsPage.tsx
 import { AiPageDashboard, parseAiDailyCap, retainAiSettingsReceipt } from "../apps/dashboard/src/components/ai/AiPageDashboard.tsx";
 import { AiRunLog } from "../apps/dashboard/src/components/ai/AiRunLog.tsx";
 import { OfapiMediaPage } from "../apps/dashboard/src/pages/OfapiMediaPage.tsx";
-import { OfapiExportsPage, exportWindowError, UnconfirmedExportQuoteNotice } from "../apps/dashboard/src/pages/OfapiExportsPage.tsx";
+import { OfapiExportsPage, exportWindowError, exportQuoteReviewSnapshot, UnconfirmedExportQuoteNotice } from "../apps/dashboard/src/pages/OfapiExportsPage.tsx";
 import { OfapiMarketing } from "../apps/dashboard/src/pages/OfapiMarketing.tsx";
 import { OfapiActions } from "../apps/dashboard/src/pages/OfapiActions.tsx";
 import { OfapiCreditsPage } from "../apps/dashboard/src/pages/OfapiCreditsPage.tsx";
@@ -34,7 +43,7 @@ function query(data?: unknown, error = false) {
   return { data, error: error ? new Error("Read failed") : null, isError: error, isLoading: data === undefined && !error, isPending: data === undefined && !error, isFetching: false, isLoadingError: data === undefined && error, isRefetchError: data !== undefined && error, refetch: vi.fn().mockResolvedValue({ isError: false }) };
 }
 function render(Page: ComponentType) {
-  return renderToStaticMarkup(createElement(MemoryRouter, null, createElement(Page)));
+  return renderToStaticMarkup(createElement(QueryClientProvider, { client: new QueryClient() }, createElement(MemoryRouter, null, createElement(Page))));
 }
 const page = { id: 1, label: "lora-of", accountId: "account-1" };
 const tokens = { input: 0, output: 0, cacheWrite: 0, cacheRead: 0, cacheTotal: 0 };
@@ -141,14 +150,38 @@ describe("analytics and operations page review", () => {
   });
   it("requires a new explicit intention after an unconfirmed quote, showing the frozen scope", () => {
     const quote = { pageLabel: "Reviewed page", body: { pageId: 1, profile: "fans" as const, startDate: "2026-09-01T00:00:00Z", endDate: "2026-09-10T23:59:59Z", maxCredits: 10, maxRows: 1000, maxBytes: 4194304, fanType: "all" as const, expectedPolicyRevision: 1, dryRun: true } };
-    const html = renderToStaticMarkup(createElement(UnconfirmedExportQuoteNotice, { quote, canStartNew: true, onShowJobs: vi.fn(), onStartNew: vi.fn() }));
+    const html = renderToStaticMarkup(createElement(UnconfirmedExportQuoteNotice, { quote, reviewSnapshot: "1:200", onReadJobs: vi.fn(), onStartNew: vi.fn() }));
     expect(html).toContain("Quote creation outcome is unknown");
     expect(html).toContain("Reviewed page");
     expect(html).toContain("2026-09-01");
     expect(html).toContain("may already have created");
     expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Prepare a separate new quote<\/button>/);
-    expect(html).toContain("Show jobs for this page");
+    expect(html).toContain("Read and show jobs for this page");
     expect(html).not.toContain("Create quote</button>");
+  });
+  it("requires a successful original-page read after an unknown quote, even when jobs are cached", () => {
+    const cached = { pageId: 1, dataUpdatedAt: 100, hasData: true, isError: false, isFetching: false };
+    expect(exportQuoteReviewSnapshot(null, cached, 1)).toBeNull();
+
+    const readback = { pageId: 1, dataUpdatedAt: 200 };
+    expect(exportQuoteReviewSnapshot(readback, cached, 1)).toBeNull();
+    const refreshed = { ...cached, dataUpdatedAt: 200 };
+    expect(exportQuoteReviewSnapshot(readback, { ...refreshed, hasData: false }, 1)).toBeNull();
+    expect(exportQuoteReviewSnapshot(readback, { ...refreshed, isError: true }, 1)).toBeNull();
+    expect(exportQuoteReviewSnapshot(readback, { ...refreshed, isFetching: true }, 1)).toBeNull();
+    expect(exportQuoteReviewSnapshot(readback, refreshed, 1)).toBe("1:200");
+  });
+  it("binds recovery review to its page and current jobs snapshot", () => {
+    const readback = { pageId: 1, dataUpdatedAt: 200 };
+    const current = { ...readback, hasData: true, isError: false, isFetching: false };
+    expect(exportQuoteReviewSnapshot(readback, current, 2)).toBeNull();
+    expect(exportQuoteReviewSnapshot(readback, { ...current, pageId: 2 }, 2)).toBeNull();
+    const acknowledged = exportQuoteReviewSnapshot(readback, current, 1);
+    const later = exportQuoteReviewSnapshot(readback, { ...current, dataUpdatedAt: 300 }, 1);
+    expect(later).not.toBe(acknowledged);
+    expect(later).toBe("1:300");
+    // A separate unknown quote must first obtain its own explicit successful read.
+    expect(exportQuoteReviewSnapshot(null, current, 1)).toBeNull();
   });
   it("keeps unknown revenue unknown and stops claiming causal ROI", () => {
     mocks.daily.mockReturnValue(query({ ...emptyDaily, byPage: [{ pageId: 1, pageLabel: "Unknown revenue", credits: 100 }] }));

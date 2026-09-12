@@ -181,6 +181,18 @@ export function buildSettingsRoute(tab: SettingsTab, pageLabel?: string) {
   return `/settings?${params.toString()}`;
 }
 
+export function buildSettingsSectionRoute(source: URLSearchParams, tab: SettingsTab): string {
+  const next = new URLSearchParams(source);
+  next.set("tab", tab);
+  // Feature selection belongs to its own links, not the section navigation.
+  if (source.get("tab") === "features" || source.has("feature")) {
+    next.delete("feature");
+    next.delete("view");
+    next.delete("q");
+  }
+  return `/settings?${next.toString()}`;
+}
+
 export function resolveSettingsTab(value: string | null | undefined): SettingsTab {
   return typeof value === "string" && SETTINGS_TABS.has(value as SettingsTab)
     ? value as SettingsTab

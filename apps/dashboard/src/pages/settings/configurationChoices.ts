@@ -19,9 +19,14 @@ export function configPageScope(key: string) {
 export function selectedConfigPages(value: string, key: string, labels: readonly string[], isDraft: boolean): string[] {
   const scope = configPageScope(key);
   if (!scope) return [];
-  if (value.trim() === "" && scope.empty === "all" && !isDraft) return [...labels];
+  // Runtime gates ignore empty CSV entries, including a stored comma-only list.
+  const entries = value.split(",").map((label) => label.trim()).filter(Boolean);
+  // Clearing the checkboxes produces exactly "". Other raw-editor drafts keep
+  // the runtime CSV meaning; scalar validation still rejects blank overrides.
+  const emptySelectionDraft = isDraft && value === "";
+  if (entries.length === 0 && scope.empty === "all" && !emptySelectionDraft) return [...labels];
   if (value.trim() === scope.none) return [];
-  return [...new Set(value.split(",").map((label) => label.trim()).filter(Boolean))];
+  return [...new Set(entries)];
 }
 
 export function serializeConfigPages(key: string, labels: readonly string[]): string {
@@ -35,9 +40,10 @@ export function humanConfigValue(key: string, value: string | number | boolean |
   if (mode) return mode.label;
   const scope = configPageScope(key);
   if (scope) {
-    if (value === "") return scope.empty === "all" ? "Все страницы Fansly" : "Ни одной страницы";
-    if (value === scope.none) return "Ни одной страницы";
-    return String(value).split(",").map((part) => part.trim()).join(", ");
+    const entries = String(value).split(",").map((part) => part.trim()).filter(Boolean);
+    if (entries.length === 0) return scope.empty === "all" ? "Все страницы Fansly" : "Ни одной страницы";
+    if (String(value).trim() === scope.none) return "Ни одной страницы";
+    return entries.join(", ");
   }
   if (typeof value === "boolean") return value ? "Включено" : "Выключено";
   return value === "" ? "Пустая строка" : String(value);

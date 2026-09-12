@@ -294,6 +294,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 295 | Dashboard page-by-page usability review | Review all 38 screens, decouple page identity from overview, preserve daily navigation and reviewed drafts, disclose stale/missing reads and uncertain writes, and retain specialized recovery tools without automatically enabling or disabling capture. |
 | 296 | Adversarial dashboard state and intent review | Preserve configuration and fan drafts across scope changes, bind queued mutations to their reviewed target, consume Undo once, and recover an unknown webhook apply only through explicit separate intent preparation. |
 | 297 | Preserve every settings path and explicit webhook reconciliation | Retain all registry entries and existing settings controls; permit explicit reconciliation of previously applied webhook policy while keeping lost same-state replies unknown and requiring separate intent recovery. |
+| 298 | Dashboard quality review and fresh export recovery | Preserve direct mobile access to the mounted full configuration form, match runtime CSV scope semantics, and require an explicit fresh original-page jobs read before preparing another export quote after an unknown outcome. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -12394,3 +12395,34 @@ complete 164/164 settings filter. `pnpm check` passes with 305 files, 3378 tests
 in 120 files. This does not establish production-value preservation, PostgreSQL
 integration acceptance or durable recovery after reload. Deployment remains a
 separate owner gate and must preserve Decision 293.
+
+## Decision 298: Dashboard quality review and fresh export recovery (2026-09-12)
+
+A further independent review found three bounded issues. A focused configuration
+form needs a direct full-editor link on mobile without switching Settings tabs
+and unmounting drafts. Its route shares the existing section navigation helper,
+preserves remaining parameters and router state, and keeps the same form key.
+
+Configuration presentation must match the runtime's empty-CSV semantics: ignored
+blank tokens make comma-only legacy earnings/purchases scopes include every page,
+while fail-closed scopes select none. Display normalization never rewrites raw
+values or changes the validator. An exact empty checkbox draft remains distinct
+from raw comma-only input; blank overrides remain invalid and numeric storage
+scopes keep their expert editor.
+
+An unknown export quote outcome requires an explicit successful new GET of the
+original page's jobs before another quote can be prepared. Cancel the prior query
+exactly, including initial requests without cache, then fetch fresh data through
+the shared typed query options. A disabled observer follows that page's cache
+without a second polling timer. Bind acknowledgement to the current page and
+snapshot, resetting it for a new read, error, fetching state or context change.
+Preparing the form does not create a quote or approve collection. Existing server
+active-slot/CAS boundaries are unchanged.
+
+The review and limitations are recorded in
+`investigations/feature-controls-2026-09-11/CODE-QUALITY-REVIEW.md`. Acceptance:
+`pnpm check` (306 files, 3397 passed, 9 skipped), explicit lint of all 73 changed
+dashboard TS/TSX files, and synthetic mounted-browser recovery/draft scenarios.
+All 164 settings and registry/contracts/defaults remain intact. Root strictness
+still has its existing 1897-error budget; production, PostgreSQL integration and
+durable recovery after reload are not established by this local acceptance.

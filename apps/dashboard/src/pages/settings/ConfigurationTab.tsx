@@ -9,6 +9,7 @@ import {
 } from "@/api/adminConfig";
 import { KernelApiError } from "@/api/sdk";
 import { ModalShell } from "@/components/shared/ModalShell";
+import { buildSettingsSectionRoute } from "@/lib/navigation";
 import { CONFIG_COPY_RU, SUBSYSTEM_COPY_RU } from "@/pages/settings/configCopyRu";
 import { findHubFeature, featureReturnHref, type HubFeature } from "./featureCatalog.js";
 import { humanConfigValue } from "./configurationChoices.js";
@@ -636,15 +637,29 @@ export function ConfigurationTab() {
 }
 
 function RoutedConfiguration() {
-  const { hash, search } = useLocation();
+  const { hash, search, state } = useLocation();
   const params = new URLSearchParams(search);
   const feature = findHubFeature(params.get("feature")) ?? null;
   // Scope is a filter on this form. Remounting it would discard reviewed drafts
   // and the write receipts that its editors retain until a successful readback.
-  return <ConfigurationView hash={hash} feature={feature} {...(feature ? { featureBackTo: featureReturnHref(feature, params) } : {})} />;
+  return (
+    <ConfigurationView
+      hash={hash}
+      feature={feature}
+      navigationState={state}
+      allSettingsHref={buildSettingsSectionRoute(params, "configuration")}
+      {...(feature ? { featureBackTo: featureReturnHref(feature, params) } : {})}
+    />
+  );
 }
 
-function ConfigurationView({ hash, feature = null, featureBackTo }: { hash: string; feature?: HubFeature | null; featureBackTo?: string }) {
+function ConfigurationView({ hash, feature = null, featureBackTo, allSettingsHref, navigationState }: {
+  hash: string;
+  feature?: HubFeature | null;
+  featureBackTo?: string;
+  allSettingsHref?: string;
+  navigationState?: unknown;
+}) {
   const { data, isLoading, isError, isFetching, refetch } = useAdminConfig();
   const searchRef = useRef<HTMLInputElement>(null);
   const featureBackRef = useRef<HTMLAnchorElement>(null);
@@ -706,12 +721,35 @@ function ConfigurationView({ hash, feature = null, featureBackTo }: { hash: stri
 
   return (
     <div className="space-y-5">
-      {feature && <div className="rounded-xl border border-border bg-card p-5">
-        <Link ref={featureBackRef} className="text-sm text-accent underline underline-offset-4" to={featureBackTo ?? `/settings?tab=features&view=all&feature=${feature.id}`}>← К возможностям</Link>
-        <h3 className="mt-3 text-xl font-semibold text-text-primary">{feature.title}</h3>
-        <p className="mt-2 text-base leading-relaxed text-text-secondary"><strong>Если отключить:</strong> {feature.consequence}</p>
-        <p className="mt-2 text-sm text-text-secondary">{scopeExpanded ? "Показаны также связанные настройки, необходимые для проверки зависимостей." : "Здесь собраны только настройки этой возможности. Сохраняйте изменения по одному."}</p>
-      </div>}
+      {feature && (
+        <div className="rounded-xl border border-border bg-card p-5">
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+            <Link
+              ref={featureBackRef}
+              className="text-sm text-accent underline underline-offset-4"
+              to={featureBackTo ?? `/settings?tab=features&view=all&feature=${feature.id}`}
+            >
+              ← К возможностям
+            </Link>
+            <Link
+              className="text-sm text-accent underline underline-offset-4"
+              to={allSettingsHref ?? "/settings?tab=configuration"}
+              state={navigationState}
+            >
+              Все настройки
+            </Link>
+          </div>
+          <h3 className="mt-3 text-xl font-semibold text-text-primary">{feature.title}</h3>
+          <p className="mt-2 text-base leading-relaxed text-text-secondary">
+            <strong>Если отключить:</strong> {feature.consequence}
+          </p>
+          <p className="mt-2 text-sm text-text-secondary">
+            {scopeExpanded
+              ? "Показаны также связанные настройки, необходимые для проверки зависимостей."
+              : "Здесь собраны только настройки этой возможности. Сохраняйте изменения по одному."}
+          </p>
+        </div>
+      )}
       {isError && <div role="alert" className="rounded-lg border border-danger/30 bg-danger/5 px-4 py-3 text-sm text-danger">Не удалось обновить настройки. Показаны последние полученные значения — {formatSeen(data.generatedAt)}. <button type="button" className="underline" disabled={isFetching} onClick={() => void refetch()}>Повторить</button></div>}
 
       {data.roleStatuses.some((role) => role.status !== "active") && (

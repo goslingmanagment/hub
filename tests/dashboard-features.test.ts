@@ -5,6 +5,7 @@ import type { ConfigItem, ConfigViewResponse } from "@agency_hub_core/contracts"
 import { MemoryRouter } from "../apps/dashboard/node_modules/react-router/dist/development/index.js";
 import { CONFIG_DESCRIPTORS } from "../packages/shared/src/config-registry.ts";
 import { validateConfigOverride } from "../packages/shared/src/config-settings.ts";
+import { fanslyNewStreamAllowed, isPageAllowlisted } from "../apps/runtime/src/services/sync/fansly-stream-gate.ts";
 import { HUB_FEATURES, findHubFeature, featureSettingsHref, featureReturnHref } from "../apps/dashboard/src/pages/settings/featureCatalog.ts";
 import { featureState } from "../apps/dashboard/src/pages/settings/featuresView.ts";
 import { CONFIG_MODE_CHOICES, selectedConfigPages, serializeConfigPages, humanConfigValue } from "../apps/dashboard/src/pages/settings/configurationChoices.ts";
@@ -55,6 +56,13 @@ describe("feature configuration truth", () => {
     expect(state("earnings", view({ fanslyFanEarningsSyncEnabled: true, fanslyNewStreamPageAllowlist: "" })).detail).toContain("Все страницы");
     expect(state("dm-shadow", view({ fanslyDmShadowPageAllowlist: "none" })).kind).toBe("off");
   });
+  it.each(["", "   ", ",", " , , "])("matches the runtime's opposite empty-CSV gates for %j", (value) => {
+    expect(fanslyNewStreamAllowed(value, "future-page")).toBe(true);
+    expect(isPageAllowlisted(value, "future-page")).toBe(false);
+    expect(state("earnings", view({ fanslyFanEarningsSyncEnabled: true, fanslyNewStreamPageAllowlist: value })).detail).toContain("Все страницы");
+    expect(state("voice", view({ voiceNotesEnabled: true, voiceNotesPageAllowlist: value })).kind).toBe("off");
+    expect(state("dm-shadow", view({ fanslyDmShadowPageAllowlist: value })).kind).toBe("off");
+  });
   it("never promotes saved intent to applied state", () => {
     const data = view({ chatMuseAiPromptDebugEchoEnabled: false });
     Object.assign(data.subsystems[0]!.items[0]!, { desired: true, source: "override", overrideVersion: 1 });
@@ -98,11 +106,25 @@ describe("feature configuration truth", () => {
 });
 
 describe("page and mode choices", () => {
-  it("keeps the opposite empty-list meanings, including an unsaved empty selection", () => {
-    expect(selectedConfigPages("", "fanslyNewStreamPageAllowlist", ["lora-1"], false)).toEqual(["lora-1"]);
-    expect(selectedConfigPages("", "fanslyNewStreamPageAllowlist", ["lora-1"], true)).toEqual([]);
-    expect(selectedConfigPages("", "voiceNotesPageAllowlist", ["lora-1"], false)).toEqual([]);
-    expect(humanConfigValue("voiceNotesPageAllowlist", "")).toBe("Ни одной страницы");
+  it.each([
+    { value: "", draftPages: [] },
+    { value: "   ", draftPages: ["lora-1"] },
+    { value: ",", draftPages: ["lora-1"] },
+    { value: " , , ", draftPages: ["lora-1"] },
+  ])("keeps saved and draft empty-list meanings for $value", ({ value, draftPages }) => {
+    expect(selectedConfigPages(value, "fanslyNewStreamPageAllowlist", ["lora-1"], false)).toEqual(["lora-1"]);
+    expect(selectedConfigPages(value, "fanslyNewStreamPageAllowlist", ["lora-1"], true)).toEqual(draftPages);
+    expect(selectedConfigPages(value, "voiceNotesPageAllowlist", ["lora-1"], false)).toEqual([]);
+    expect(humanConfigValue("fanslyNewStreamPageAllowlist", value)).toBe("Все страницы Fansly");
+    expect(humanConfigValue("voiceNotesPageAllowlist", value)).toBe("Ни одной страницы");
+  });
+  it.each([",", " , , "])("recognizes separator-only CSV as a server-valid override: %j", (value) => {
+    expect(validateConfigOverride("fanslyNewStreamPageAllowlist", value)).toEqual({ ok: true, value: value.trim() });
+    expect(validateConfigOverride("voiceNotesPageAllowlist", value)).toEqual({ ok: true, value: value.trim() });
+  });
+  it.each(["", "   "])("keeps blank raw drafts invalid for saving despite their runtime CSV meaning: %j", (value) => {
+    expect(validateConfigOverride("fanslyNewStreamPageAllowlist", value).ok).toBe(false);
+    expect(validateConfigOverride("voiceNotesPageAllowlist", value).ok).toBe(false);
   });
   it("retains unknown labels and disables diagnostics with the supported sentinel", () => {
     expect(selectedConfigPages("old-page,lora-1", "voiceNotesPageAllowlist", ["lora-1"], true)).toEqual(["old-page", "lora-1"]);
@@ -164,5 +186,32 @@ describe("features surface", () => {
     expect(html).toContain("lora-1");
     expect(html).not.toContain("lora-of");
     expect(html).toContain("Сохранить");
+  });
+  it("explains that a separator-only saved legacy scope includes future pages", () => {
+    mocks.useAdminConfig.mockReturnValue({ data: view({ fanslyFanEarningsSyncEnabled: true, fanslyNewStreamPageAllowlist: ", ," }), isError: false });
+    const html = render(ConfigurationTab, "/settings?tab=configuration&feature=earnings");
+    expect(html).toContain("Все страницы Fansly");
+    expect(html).toContain("включая будущие");
+    expect(html).toContain('checked=""');
+  });
+  it("keeps numeric storage scopes in the raw editor", () => {
+    mocks.useAdminConfig.mockReturnValue({ data: view({ captureCasDualWritePages: "12, 34" }), isError: false });
+    const html = render(ConfigurationTab, "/settings?tab=configuration&feature=storage");
+    expect(html).toContain('type="text"');
+    expect(html).toContain('value="12, 34"');
+    expect(html).not.toContain('type="checkbox"');
+  });
+  it("provides a direct full-editor link for custom CSV without switching settings sections", () => {
+    mocks.useAdminConfig.mockReturnValue({ data: view({ voiceNotesEnabled: true, voiceNotesPageAllowlist: "old-page,lora-1" }), isError: false });
+    const focused = render(ConfigurationTab, "/settings?tab=configuration&feature=voice&view=all&q=voice&page=lora-1");
+    const link = focused.match(/<a[^>]+href="([^"]+)"[^>]*>Все настройки<\/a>/);
+    expect(link).not.toBeNull();
+    const href = link![1]!.replaceAll("&amp;", "&");
+    expect(href).toBe("/settings?tab=configuration&page=lora-1");
+
+    const full = render(ConfigurationTab, href);
+    expect(full).toContain('type="text"');
+    expect(full).toContain('value="old-page,lora-1"');
+    expect(full).not.toContain('type="checkbox"');
   });
 });
