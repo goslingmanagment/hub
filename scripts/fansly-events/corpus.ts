@@ -99,9 +99,15 @@ export class DmShadowCorpusAnalyzer {
       this.finish(label, "incomplete", "restart_before_completion");
       this.active.set(label, {
         firstId: page.id, expectedOffset: 0, total: page.total, heads: new Map(),
-        state: createDmShadowState({ startedAtMs: Date.parse(page.capturedAt),
-          boundaryMs: this.previous.get(label)?.boundaryMs ?? null,
-          completeCoverage: true, policy: this.policy }),
+        state: {
+          ...createDmShadowState({ startedAtMs: Date.parse(page.capturedAt),
+            boundaryMs: this.previous.get(label)?.boundaryMs ?? null,
+            completeCoverage: true, policy: this.policy }),
+          // These fields require the pre-apply runtime row, absent from this corpus.
+          visibilityChangesBelowStop: null,
+          unresolvedIdentityChangesBelowStop: null,
+          exclusionReasonChangesBelowStop: null,
+        },
       });
     }
     const sweep = this.active.get(label);

@@ -310,6 +310,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 309 | DM shadow timeout rationale | Correct the diagnostic-only timeout explanation; provider traversal and runtime behavior stay unchanged. |
 | 310 | Unmapped webhook body batches | Fresh bounded catalog batches only for proven binding waits; mapped/export bodies keep their original read boundary. |
 | 311 | Disjoint replay with shared allowance | Keep reserved capture/replay turns and reuse unused allowance once without restarting an exhausted cursor. |
+| 313 | Fansly A0 reason coverage | Retain six additional bounded pre-apply reason counters; legacy and unavailable offline categories remain null, without changing sweep policy or completion semantics. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -12871,3 +12872,31 @@ capture/positive stamps and no duplicate poison visits. Final independent
 review approves the implementation and test-only typing correction. Parser
 versions, event identities, source facts and forward-only stamps are unchanged;
 these fixtures do not establish a production-wide latency or CPU gain.
+
+## 313. Fansly A0: retain reason coverage without inventing historical counts
+
+2026-09-12. Six pre-apply head-diff categories previously survived only in
+`stateChangesBelowStop`. Add one bounded scalar counter per category to the
+existing diagnostic cursor/report. Measurement from the start of a runtime
+sweep initializes them to zero; starting midway through a sweep leaves them null.
+Legacy checkpoints default missing fields to null and preserve that unknown
+value for the remaining generation. A completed sweep can have incomplete
+reason coverage. Existing report rows are not rewritten.
+
+An exhaustive typed map covers all eleven reason types. Deduplicating counter
+names preserves the existing single unread increment when both unread reasons
+occur. The generic conversation count, rollback/material predicates, virtual
+stop and business sweep remain unchanged. No IDs, arrays, new flag, migration,
+provider call or polling change are introduced.
+
+The offline analyzer cannot observe runtime visibility, identity resolution or
+exclusion reason and marks those counters null. Its tier/time/sender counters
+compare retained metadata; runtime effective time/sender include repair and
+fallback. The new detail neither explains old generic observations nor clears
+A0/A1 gates. Rollback may strip the added cursor fields; re-upgrade then treats
+them as unknown instead of reconstructing zero history.
+
+Numbering follows main 295, deployed 296–300, performance 301–311 and reserved
+C2a audit 312. This follow-up reuses the A0 branch and worktree. On 12 September
+the owner approved an additional PR after PR164's merge and its deployment
+("да все разрешаю"); A0/A1 evidence and calendar gates remain unchanged.
