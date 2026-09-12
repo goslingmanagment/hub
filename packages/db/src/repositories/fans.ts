@@ -622,6 +622,13 @@ export interface PageFollowReconcileActivity {
   activeFollowerCount: number;
   /** Rows the guarded destructive statement could currently retire. */
   deactivationCandidateCount: number;
+  activeInGenerationCount: number;
+  /** Active rows not observed in this generation, partitioned below. */
+  activeOutsideGenerationCount: number;
+  generationGraceOnlyCount: number;
+  touchedSinceStartOnlyCount: number;
+  generationGraceAndTouchCount: number;
+  futureGenerationCount: number;
 }
 
 export interface PageFollowDeactivationCandidate {
@@ -684,7 +691,32 @@ export async function readPageFollowReconcileActivity(
       count(*) filter (where is_active = true)::int as active_follower_count,
       count(*) filter (
         where ${pageFollowDeactivationCandidatePredicate(input)}
-      )::int as deactivation_candidate_count
+      )::int as deactivation_candidate_count,
+      count(*) filter (
+        where is_active = true and last_seen_generation = ${input.generation}
+      )::int as active_in_generation_count,
+      count(*) filter (
+        where is_active = true
+          and last_seen_generation is distinct from ${input.generation}
+      )::int as active_outside_generation_count,
+      count(*) filter (
+        where is_active = true
+          and last_seen_generation = ${input.generation - 1}
+          and last_seen_at < ${input.fullSweepStartedAt}
+      )::int as generation_grace_only_count,
+      count(*) filter (
+        where is_active = true
+          and (last_seen_generation is null or last_seen_generation < ${input.generation - 1})
+          and last_seen_at >= ${input.fullSweepStartedAt}
+      )::int as touched_since_start_only_count,
+      count(*) filter (
+        where is_active = true
+          and last_seen_generation = ${input.generation - 1}
+          and last_seen_at >= ${input.fullSweepStartedAt}
+      )::int as generation_grace_and_touch_count,
+      count(*) filter (
+        where is_active = true and last_seen_generation > ${input.generation}
+      )::int as future_generation_count
     from page_follows
     where platform_account_id = ${input.platformAccountId}
   `);
@@ -695,6 +727,12 @@ export async function readPageFollowReconcileActivity(
     ),
     activeFollowerCount: Number(row?.active_follower_count ?? 0),
     deactivationCandidateCount: Number(row?.deactivation_candidate_count ?? 0),
+    activeInGenerationCount: Number(row?.active_in_generation_count ?? 0),
+    activeOutsideGenerationCount: Number(row?.active_outside_generation_count ?? 0),
+    generationGraceOnlyCount: Number(row?.generation_grace_only_count ?? 0),
+    touchedSinceStartOnlyCount: Number(row?.touched_since_start_only_count ?? 0),
+    generationGraceAndTouchCount: Number(row?.generation_grace_and_touch_count ?? 0),
+    futureGenerationCount: Number(row?.future_generation_count ?? 0),
   };
 }
 
