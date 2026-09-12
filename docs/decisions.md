@@ -285,6 +285,11 @@ appends a row here in the same change (family law: updated-in-change).
 | 282 | Agent transcript tombstone lookup | Resolve the current OFAPI binding once and use the platform/account/message key for chatless tombstones; avoid scanning unrelated cold history before checking an absent binding. |
 | 284 | Fansly A0/T0 diagnostics | Default-off virtual-stop measurement preserves the full sweep; bounded read operations expose physical-attempt coverage and retained metadata without base-table grants. |
 | 285 | Fansly C2a earnings identity | Observation-scoped v2 snapshots preserve A-B-A, replay ordering and legacy SSE edges; daily rotation unchanged. |
+| 286 | Settings UX and reviewed writes | Task-based navigation, friendly configuration copy and snapshot-bound editors; drafts survive refresh/filter, write receipts survive read failure, staged prerequisites remain visible. Owner permits merge after independent reviews and required checks; deployment remains separate. |
+| 289 | Fansly C2b earnings shadow | Atomic semantic transaction revisions and independent endpoint receipts measure the existing daily rotation; unchanged and missing results remain explicit debt. |
+| 291 | Overview metric semantics | Revenue-led overview with per-page/model comparison windows, transaction sources and separate page audience counts; no summed subscribers or acquisition claims from mutable subscription records. |
+| 292 | Overview selected layout and exact drilldown | Keep the compact variant-one table, order models by server net income, compare source deltas on the server, use scoped exact-window operations with one response snapshot, and persist navigation context in URLs. Supersedes #291's three-query-only UI plan. |
+| 293 | Select completed run IDs before monitor payload | Rank narrow historical completion keys, then load the selected run by primary key; preserve health fields, scope, ordering and historical physical-attempt debt. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -11960,3 +11965,251 @@ Retained earnings observations must all be replayed and checked; any remaining
 projection mismatch requires a separately approved page-scoped rebuild. These
 are explicit production gates, not implied by merging this change. See the
 [repair runbook](runbooks/fansly-earnings-correctness.md).
+
+## Decision 286: Simplify settings while preserving reviewed writes (2026-09-10)
+
+The owner requested simpler, friendlier configuration and settings, with a visible
+before/after comparison before application. The local comparison includes the
+original interface, first proposal and polished version. After adversarial fixes,
+the owner authorized merge if independent engineering, quality and performance
+reviews approve and required checks pass. Deployment remains a separate action.
+
+Settings are grouped by task and retain existing tab URLs and owner access. Live
+configuration comes first; search covers metadata only. Friendly descriptions and
+units accompany controls; technical details remain expandable. Boot flags keep
+one canonical row, server-derived runtime/desired state, dependency order,
+acknowledgement and atomic dependent disable. Operational prerequisites appear
+before acknowledgement, and filtering cannot hide an open confirmation.
+
+Scalar/boolean drafts capture the reviewed version and survive polling/filtering.
+Conflicts require review. Empty string overrides and invalid numbers match server
+validation; reset inherits environment rather than promising code defaults. Write
+receipts retain the server-returned value/version when refresh fails and prevent
+another write until reconciliation; later changes invalidate stale success.
+
+The same pass corrects stale onboarding verification, unsupported OnlyFans
+credential controls, false-empty team errors, deactivation copy and table overflow.
+No runtime or SDK contract changes are included. See
+[the review record](settings-ux-review-2026-09-10.md) for evidence and known limits;
+local fixture and screenshot artifacts are excluded from the product commit.
+
+## Decision 289: Measure semantic earnings refresh signals (2026-09-10)
+
+**Context.** C2a fixes repeated snapshot identity. C2b must establish whether
+semantic transaction changes predict earnings corrections before C2c can change
+daily rotation. Main's latest decision is 286; open C1 and W0 reserve 287 and
+288 respectively. Recheck these numbers before merge.
+
+**Decision.** The live `fanslyFanEarningsShadowPageAllowlist` defaults to `none`.
+On scoped pages, the existing owned Fansly transaction writer compares persisted
+business fields before/after the upsert and commits dirty intent in the same
+transaction. Receipt timestamps, scan tokens and wallet balance do not retrigger
+it. Old and new native/local fan bindings are retained, including zero/negative
+spend and identities absent from the roster. Missing or inconsistent attribution
+has explicit transaction-scoped debt; identical persisted upserts add no revision.
+
+Extend operational `subject_refresh_state` with separate lifetime and monthly
+planes and requested/applied revisions, token, claim deadline and due/retry time.
+The existing daily spender walk alone selects requests. Each endpoint response
+is captured before parsing, settlement or the next call. A claim for R settles
+at most R; a concurrent R+1 stays pending. Empty, malformed, rejected, missing
+and lost-claim results cannot certify a check. Failure-receipt writes preserve
+the original provider error, including its Retry-After and existing walk policy.
+
+The first valid nonempty bound response establishes a baseline. Later checks
+and content changes have separate times, counters and observation provenance.
+An unchanged or first baseline after a transaction signal remains unconfirmed:
+it does not prove that Fansly recalculated. A changed snapshot can acknowledge
+the claimed revision, without proving every underlying correction is included.
+Stored retry debt has a fifteen-minute floor and honors a longer provider
+deadline; C2b does not use it to fetch extra targets. Legacy refresh planes keep
+their existing behavior. Fan erasure removes new endpoint/debt references with
+page-scoped attribution matching, serialized against their writers.
+
+The restricted metadata report shows endpoint ages, pending revisions, unknown
+attribution, targets outside the daily spender roster, unpaired visits/receipts,
+and changes without a pending signal at claim time. Preserve the previous full
+spender-sweep completion across partial walks. A recent fan is not page-wide
+freshness, an endpoint visit is not a physical HTTP attempt, and an untracked
+fan/window is not covered. This shadow has no request savings or latency claim.
+
+**Operations.** Deploy and enable one page only after explicit approval, with
+the inherited C2a reader-before-worker/reparse and compatible rollback scope.
+Disable only this allowlist to stop diagnostics, preserving operational debt,
+captured facts and daily rotation. Independent daily checks remain required
+until quiet corrections are proven detectable within the previous freshness
+bound, or the owner separately accepts a new max-age. See the
+[C2b runbook](runbooks/fansly-earnings-shadow.md).
+
+## Decision 290: Ping reads the fan's names and stops seeding its own opener (2026-09-11)
+
+A chatter reported that Ping opens nearly every message with "hey stranger"
+instead of the fan's name (2026-09-11, four days after Decision #273 moved the
+reply features to Sonnet 5 at low reasoning). The generations were otherwise
+personal, so the intent of the template held; the opener did not.
+
+Four causes, all in the prompt stack. The ping template quoted "hey stranger"
+twice: once as the Check-in strategy and once in the silence-calibration
+paragraph that Decision #127 attached to the `Fan silence:` line, which is
+present on every segment-A ping, so the rule fired on nearly every call. The
+segment-A instruction, which sits in the uncached task block and is the last
+thing the model reads, quoted a second opener ("haven't talked in a while, was
+thinking about you"), the exact broadcast phrasing the template forbids above
+it. Decision #273 had already established on this model family that naming a
+phrase seeds it and that example shape is copied almost verbatim; low
+reasoning copies more literally. And the ping template had no name at all:
+`fanDisplayName` is computed for every feature but only hi-greeting rendered
+it, the transcript labels speakers `Fan:` / `Model:`, and the Fansly extension
+kept the chatter's saved fan name out of every prompt (ChatGoose E25: a saved
+label like "Max/Canada/45" read back to the fan would be an incident). With no
+name to open with, the quoted phrase filled the address slot.
+
+What changes. Both quoted openers are rephrased as descriptions of the move
+(days or weeks: playful about the silence itself; months: softer, no mention
+of how long; Check-in: notice the silence in your own words, then give him
+something specific to answer), and the What-to-Avoid bullet from Decision
+#273 drops its own quoted tell-phrase ("been thinking about you") for the
+same reason. The segment instructions lose their quoted
+examples; segment B is now "barely chatted" (hook onto what he wrote, his name
+or his bio, persona opener only as the fallback) rather than a cold-opener
+mode, because a fan with no messages is Hi's job, not Ping's. The template
+gains a `## Fan` section in the per-fan dynamic block (after the dossier,
+before the task anchor, so the cached static prefix stays fan-agnostic):
+`Fan username: {fanDisplayName}`, the new `{fanCustomNameLine}` slot, and
+`{fanBioSection}`. The name rule is explicit: address the fan by name only
+when one is actually known, in this order: a name that clearly comes up in the
+chat, then the chatter-saved name (name part only, the rest of the label is
+never repeated), then a clear first name inside the username; otherwise no
+address word, and never an invented nickname. One reread line closes the task
+block ("if it could have gone to any other fan, add the detail that makes it
+his"), the recency device Decision #273 measured on fast-reply. The rest of
+the template is deliberately untouched: the owner's ruling is that the
+personalization design worked before and needs its data and its seeded
+phrases fixed, not a structural rewrite.
+
+Contract. `clientContext.fanCustomName` (optional, max 200) joins the
+feature-lane body; the kernel passes it straight to the builder, where it is
+escaped like the bio. Kernel-context platforms send nothing today. Ping's
+policy turns `includesFanBio` on; the extension gates sending the bio by the
+same flag, so until it ships the section stays empty. The extension's side
+(re-vendored SDK, `fanCustomName` from the account lookup it already makes for
+every generation, the bio for ping, and the E25 boundary superseded with a
+tombstone) is a separate ChatGoose change; this decision deploys nothing on
+the client. The owner's explicit ruling supersedes the E25 boundary: the saved
+name usually is the fan's real name and belongs in the prompt, with the chat
+taking precedence when the two disagree.
+
+Not done, on purpose: no gate on pinging a fan who never wrote (Hi stays the
+tool for that, by chatter judgment), no change to Hi's limits, no model or
+reasoning change for ping. Verification is the builder suite (slot rendering,
+escaping, cache-block placement, no quoted opener in the assembled prompt),
+templates-sync and the manifest pins; the live check is the same chatter's
+next pings after deploy. If the opener still collapses onto one phrase on
+Sonnet 5 low, the next lever is the reasoning level for ping, not the
+template.
+
+## Overview metric semantics and revenue attribution (2026-09-10)
+
+**Decision #291:** The overview leads with recorded creator net earnings, their
+transaction sources, and changes by model/page. Audience is a separate expandable
+page-level view. It never sums subscriptions across platforms or pages, presents
+subscriptions as paying customers, adds Fansly followers and subscribers, or uses
+the mutable subscription rollup as a new-paying-customer KPI.
+
+The existing overview revenue report adds optional nullable
+`previousNetEarningsMills` per page/model. Each previous total uses the same
+platform-specific comparison resolver, rollup and page scope as the existing
+aggregate; one request clock fixes all boundaries. Retired-page attribution
+remains in both periods. All-time comparisons are null, and missing fields from
+older servers remain unavailable. No new endpoint or capture changes.
+
+The UI shows source amounts including adjustments and unclassified money, states
+that earnings include pending transactions, and discloses the unfinished current
+day plus the established mixed-platform windows (#51). Audience labels describe
+access, not payment. Missing prices can be stored as zero in legacy audience
+mappers, so this pass does not infer free-versus-paid segments from that column.
+The no-agency-total rule also avoids cross-page identity duplication.
+
+Only three overview queries remain: catalog/status, earnings and daily earnings.
+Their failures and stale refreshes stay independent. See
+[the metric audit and review](overview-ux-review-2026-09-10.md).
+
+## Decision 292: Implement the selected compact Overview with verifiable drilldowns (2026-09-11)
+
+The owner selected variant one of the familiar grouped table and authorized the
+four audit proposals, with a separate implementation reviewer. Model groups are
+always sorted by server-calculated creator net earnings descending. Page-level
+change sorting stays inside a model. This supersedes #291's presentation and
+three-query-only plan; its money, audience and historical-attribution semantics
+remain in force.
+
+The reporting service owns current/prior/delta source amounts, using the union
+of reportable canonical types in both windows. It also supplies page/model
+delta mills and percentages. Negative adjustments remain visible, a zero prior
+denominator has no percentage, and older absent additive fields are unavailable.
+No browser aggregation of financial totals is introduced.
+
+All report/daily/model handlers sample their request clock before the first
+await. An optional strict `windowAt` calendar clock is returned and can be reused
+by dependent requests. This fixes midnight drift without changing #51's platform
+windows. It is not a capture watermark or a frozen cross-request DB snapshot.
+Main revenue refresh and UTC date rollover produce the clock for child queries.
+
+The cross-page transaction API adds paired strict `[from,to)` timestamps and an
+optional `reportableOnly` predicate. The generic default remains false. Count,
+full-filter net and the paginated list use the same existing scope predicate in
+one short repeatable-read, read-only transaction. The response echoes the applied
+scope and transaction read time. `/transactions` refuses unsupported or mismatched
+scope responses. Historical/deleted pages use this scoped endpoint without
+opening an active-only page detail. Existing principal/page authorization is
+preserved; empty scope cannot broaden a request. No DB migration is needed.
+
+Overview requests catalog/status, the revenue report, a scoped daily chart and
+one by-model trend response. Only the expanded active page requests its source
+comparison. Query keys include effective period/scope/clock; old-period
+placeholders cannot appear under new labels. Calendar padding preserves sparse
+series spacing; a zero means recorded net zero, not proof of no operations.
+Failure and failed-refresh notices remain independent and include retry.
+
+URL state owns period, expanded row, chart and page sort. Per-tab session storage
+contains only scroll/focus, keyed by the exact URL; restoration waits through
+late layout growth until user interaction. Subscriber filter/search/offset are
+URL-driven and fan navigation retains the full return path. Quicklinks reuse
+current known expiration and explicit auto-renew-off predicates; unknown fields
+do not enter those groups. No paid/free inference or agency audience total is
+added. Shared errors use self-contained styles, and error-toast suppression is
+opt-in where the consumer renders its own failure.
+
+The accepted table remains usable with expanded content at responsive column
+breakpoints. Native modal navigation supplies keyboard containment, Escape and
+focus return on mobile. See [the implementation record](overview-implementation-2026-09-11.md)
+for verification and restart instructions. This is a local implementation; no
+deployment, production write, capture repair or completeness claim is implied.
+
+
+## Decision 293: Select completed run IDs before loading monitor payload (2026-09-11)
+
+The protected sync-health deployment gate timed out in production. An explicitly
+approved EXPLAIN-only read selected a historical completed-run window carrying
+wide stats/error payload. Estimated plans do not establish the actual cause of
+that timeout, and the other readers in protected health remain unmeasured.
+
+Keep all existing completion filters and the `finished_at DESC, id DESC` order.
+Rank only the run ID and required ordering keys, then fetch the winner's fields
+through its primary key inside the same SQL statement. Page/stream scope,
+old-history selection, outcome mapping, trigger fallback, duration and payload
+remain identical. Running-run activity and physical-attempt health do not change.
+
+On one local Postgres 16 scale fixture, paired calls in four attempt-state
+scenarios return identical rows and are 19.6–23.2% faster by three-sample medians.
+The estimated completed-window row width falls from 1674 to 36 bytes; temporary blocks written
+for the full query increase. This is neither a general I/O reduction nor a
+production latency/HTTP-savings claim. See
+`investigations/sync-monitor-completed-history-2026-09-11/REPORT.md` for evidence.
+
+No flag, migration, retention change or timeout increase is introduced. Rollback
+is the prior query with the same schema and data. Deployment requires explicit
+owner approval of a concrete revision and the ordinary health gate remains
+mandatory. Production currently includes unmerged C1 diagnostics and applied
+0182/0183; a future deployment must preserve that code/schema state rather than
+replace it with this main-based worktree alone.

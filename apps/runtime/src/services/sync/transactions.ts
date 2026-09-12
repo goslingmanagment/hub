@@ -9,6 +9,7 @@ import {
   upsertCheckpoint,
   upsertCheckpointProgress,
   upsertTransaction,
+  upsertFanslyTransactionWithEarningsDirty,
   withOwnedPageSyncTransaction,
 } from "@agency_hub_core/db";
 import {
@@ -25,6 +26,8 @@ import { lookupHydratedFans, upsertHydratedFansForPage } from "./fan-hydration.t
 import { summarizeCheckpoint, type SyncRunTelemetry } from "./observability.ts";
 import { assertPageTransactionsWriter } from "../transactions-writer-gate.ts";
 import { DAY_MS, persistRawPayload, retentionDate } from "./shared.ts";
+import { loadEffectiveConfig } from "../effective-config.ts";
+import { isPageAllowlisted } from "./fansly-stream-gate.ts";
 import {
   buildBackfillProgressMessage,
   isoDateOrNull,
@@ -377,6 +380,10 @@ async function persistFanslyTransactionsPage(
   processedTransactionsThisRun: number,
   seenUnknownRawTypes: Set<number>,
 ) {
+  const effective = await loadEffectiveConfig(app.db, app.config);
+  const earningsShadow = isPageAllowlisted(
+    effective.fanslyFanEarningsShadowPageAllowlist, input.pageLabel,
+  );
   for (const item of items) {
     await recordUnknownFanslyTransactionType(app, input, item.type, seenUnknownRawTypes);
   }
@@ -412,7 +419,8 @@ async function persistFanslyTransactionsPage(
         ? calculateGrossMillsFromNet(creatorNetAmountMills, commissionRate)
         : sourceAmountMills;
 
-      await upsertTransaction(dbTx, {
+      const writeTransaction = earningsShadow ? upsertFanslyTransactionWithEarningsDirty : upsertTransaction;
+      await writeTransaction(dbTx, {
         platformAccountId: input.platformAccountId,
         source: "fansly:rest",
         fanId,

@@ -1,9 +1,11 @@
 import { useState } from "react";
+import { Link } from "react-router";
 import { useAdminConnections } from "@/api/queries";
 import { PlatformBadge } from "@/components/shared/PlatformBadge";
 import { StatusPanel } from "@/components/shared/StatusPanel";
 import { StaleDataNotice } from "@/components/shared/StaleDataNotice";
 import { getSyncUxDisplayMode } from "@/components/shared/syncUxDisplay";
+import { buildSettingsRoute } from "@/lib/navigation";
 import { CredentialsModal, type CredentialsModalConnection } from "./CredentialsModal.js";
 
 function formatPageMetric(metric: {
@@ -51,6 +53,7 @@ export function CredentialsTab() {
         {items.map((conn) => {
           const syncMode = getSyncUxDisplayMode(conn.syncUx, "credentials");
           const reconnect = conn.syncUx.requiresAction;
+          const usesOfapi = conn.platform === "onlyfans";
 
           return (
             <div
@@ -90,26 +93,41 @@ export function CredentialsTab() {
                   </div>
                   {syncMode === "exception" && (
                     <div className="mt-2 text-xs text-danger">
-                      Credentials may need updating
+                      {usesOfapi ? "OFAPI connection needs attention" : "Credentials may need updating"}
                     </div>
+                  )}
+                  {usesOfapi && (
+                    <p className="mt-2 max-w-xl text-xs text-text-muted">
+                      Access is managed in OFAPI. Reconnect the account there if access expired.
+                      Hub account mapping repairs require owner review; Sync shows the current blocks.
+                    </p>
                   )}
                 </div>
               </div>
-              <button
-                type="button"
-                onClick={() =>
-                  setSelectedConnection({
-                    label: conn.label,
-                    platform: conn.platform,
-                    proxyUrl: conn.proxyUrl,
-                    proxyHasAuth: conn.proxyHasAuth,
-                  })}
-                className={reconnect
-                  ? "rounded-lg border border-danger/25 bg-danger/5 px-3 py-1.5 text-xs font-medium text-danger transition-colors hover:bg-danger/10"
-                  : "rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-medium text-text-secondary transition-colors hover:bg-hover"}
-              >
-                {reconnect ? "Reconnect" : "Update Credentials"}
-              </button>
+              {usesOfapi ? (
+                <Link
+                  to={buildSettingsRoute("sync", conn.label)}
+                  className="shrink-0 rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-medium text-text-secondary transition-colors hover:bg-hover"
+                >
+                  Connection diagnostics
+                </Link>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() =>
+                    setSelectedConnection({
+                      label: conn.label,
+                      platform: conn.platform,
+                      proxyUrl: conn.proxyUrl,
+                      proxyHasAuth: conn.proxyHasAuth,
+                    })}
+                  className={reconnect
+                    ? "rounded-lg border border-danger/25 bg-danger/5 px-3 py-1.5 text-xs font-medium text-danger transition-colors hover:bg-danger/10"
+                    : "rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-medium text-text-secondary transition-colors hover:bg-hover"}
+                >
+                  {reconnect ? "Reconnect" : "Update Credentials"}
+                </button>
+              )}
             </div>
           );
         })}

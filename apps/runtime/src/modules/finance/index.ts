@@ -75,10 +75,12 @@ export function registerFinanceRoutes(server: ApiServer, ctx: ApiModuleContext) 
   server.get("/api/v1/overview/revenue", {
     schema: routeSchemas.overviewRevenue,
   }, async (request) => {
+    const now = request.query.windowAt ? new Date(request.query.windowAt) : new Date();
     const principal = await requirePrincipal(request);
     requireDashboardUser(principal);
     const query = request.query;
     return getOverviewRevenueReport(appContext, {
+      now,
       period: query.period,
       custom: query.period === "custom" ? { from: query.from, to: query.to } : undefined,
       pageIds: pageScopeFor(principal),
@@ -88,10 +90,12 @@ export function registerFinanceRoutes(server: ApiServer, ctx: ApiModuleContext) 
   server.get("/api/v1/models/:modelSlug/revenue", {
     schema: routeSchemas.modelRevenue,
   }, async (request) => {
+    const now = request.query.windowAt ? new Date(request.query.windowAt) : new Date();
     const principal = await requirePrincipal(request);
     requireDashboardUser(principal);
     const query = request.query;
     return getModelRevenueReport(appContext, request.params.modelSlug, {
+      now,
       period: query.period,
       custom: query.period === "custom" ? { from: query.from, to: query.to } : undefined,
       pageIds: pageScopeFor(principal),
@@ -101,6 +105,7 @@ export function registerFinanceRoutes(server: ApiServer, ctx: ApiModuleContext) 
   server.get("/api/v1/pages/:pageLabel/revenue", {
     schema: routeSchemas.pageRevenue,
   }, async (request) => {
+    const now = request.query.windowAt ? new Date(request.query.windowAt) : new Date();
     const principal = await requirePrincipal(request);
     const query = request.query;
     const page = await getPageSummary(appContext, request.params.pageLabel);
@@ -109,6 +114,7 @@ export function registerFinanceRoutes(server: ApiServer, ctx: ApiModuleContext) 
     }
     enforceRevenueRouteRoleScope(appContext, principal, "/api/v1/pages/:pageLabel/revenue");
     return getPageRevenueReport(appContext, request.params.pageLabel, {
+      now,
       period: query.period,
       custom: query.period === "custom" ? { from: query.from, to: query.to } : undefined,
     });
@@ -377,16 +383,16 @@ export function registerFinanceRoutes(server: ApiServer, ctx: ApiModuleContext) 
 
   // Revenue daily endpoints
   async function getRevenueDailySeries(
-    pageIds: number[],
-    pages: Array<{ platform: Platform }>,
-    query: { period: string; from?: string; to?: string; groupByType: boolean },
+    pages: Array<{ id: number; platform: Platform }>,
+    query: { period: string; from?: string | undefined; to?: string | undefined; groupByType: boolean },
+    now: Date,
   ) {
     type RevenueDailyCanonicalType = RevenueDailyTypedItem["canonicalType"];
     const groupedPageIds = new Map<Platform, number[]>();
-    for (let i = 0; i < pages.length; i++) {
-      const ids = groupedPageIds.get(pages[i].platform) ?? [];
-      ids.push(pageIds[i]);
-      groupedPageIds.set(pages[i].platform, ids);
+    for (const page of pages) {
+      const ids = groupedPageIds.get(page.platform) ?? [];
+      ids.push(page.id);
+      groupedPageIds.set(page.platform, ids);
     }
 
     const mergedResults = new Map<string, {
@@ -400,7 +406,7 @@ export function registerFinanceRoutes(server: ApiServer, ctx: ApiModuleContext) 
       const range = resolveRevenueBusinessDateRangeForPlatform(
         platform,
         query.period as Period,
-        new Date(),
+        now,
         query.period === "custom" && query.from && query.to
           ? { from: query.from, to: query.to }
           : undefined,
@@ -485,31 +491,34 @@ export function registerFinanceRoutes(server: ApiServer, ctx: ApiModuleContext) 
   server.get("/api/v1/overview/revenue/daily", {
     schema: routeSchemas.overviewRevenueDaily,
   }, async (request) => {
+    const now = request.query.windowAt ? new Date(request.query.windowAt) : new Date();
     const principal = await requirePrincipal(request);
     requireDashboardUser(principal);
     const pages = await listRevenuePages(appContext.db, pageScopeFor(principal));
     return getRevenueDailySeries(
-      pages.map((p) => p.id),
       pages,
       request.query,
+      now,
     );
   });
 
   server.get("/api/v1/pages/:pageLabel/revenue/daily", {
     schema: routeSchemas.pageRevenueDaily,
   }, async (request) => {
+    const now = request.query.windowAt ? new Date(request.query.windowAt) : new Date();
     const principal = await requirePrincipal(request);
     const page = await getPageSummary(appContext, request.params.pageLabel);
     if (!canAccessPage(principal, page.id)) {
       throw new ForbiddenError("Page access denied");
     }
     enforceRevenueRouteRoleScope(appContext, principal, "/api/v1/pages/:pageLabel/revenue/daily");
-    return getRevenueDailySeries([page.id], [page], request.query);
+    return getRevenueDailySeries([page], request.query, now);
   });
 
   server.get("/api/v1/overview/revenue/by-model", {
     schema: routeSchemas.overviewRevenueByModel,
   }, async (request) => {
+    const now = request.query.windowAt ? new Date(request.query.windowAt) : new Date();
     const principal = await requirePrincipal(request);
     requireDashboardUser(principal);
     const pages = await listRevenuePages(appContext.db, pageScopeFor(principal));
@@ -527,9 +536,9 @@ export function registerFinanceRoutes(server: ApiServer, ctx: ApiModuleContext) 
     const models = [];
     for (const [modelSlug, group] of byModel) {
       const { series } = await getRevenueDailySeries(
-        group.pages.map((p) => p.id),
         group.pages,
         { ...request.query, groupByType: false },
+        now,
       );
       let totalNetAmountMills = 0n;
       let transactionCount = 0;
@@ -558,6 +567,7 @@ export function registerFinanceRoutes(server: ApiServer, ctx: ApiModuleContext) 
   server.get("/api/v1/models/:modelSlug/revenue/daily", {
     schema: routeSchemas.modelRevenueDaily,
   }, async (request) => {
+    const now = request.query.windowAt ? new Date(request.query.windowAt) : new Date();
     const principal = await requirePrincipal(request);
     requireDashboardUser(principal);
     const pages = (await listRevenuePages(appContext.db, pageScopeFor(principal)))
@@ -565,7 +575,7 @@ export function registerFinanceRoutes(server: ApiServer, ctx: ApiModuleContext) 
     if (pages.length === 0) {
       throw new NotFoundError(`Model "${request.params.modelSlug}" not found`);
     }
-    return getRevenueDailySeries(pages.map((p) => p.id), pages, request.query);
+    return getRevenueDailySeries(pages, request.query, now);
   });
 
   // Cross-page transactions
@@ -582,6 +592,8 @@ export function registerFinanceRoutes(server: ApiServer, ctx: ApiModuleContext) 
     const result = await listTransactionsForScope(appContext.db, {
       pageIds,
       pageLabel: query.pageLabel,
+      period: { from: query.from ? new Date(query.from) : null, to: query.to ? new Date(query.to) : null },
+      reportableOnly: query.reportableOnly,
       canonicalType: query.type,
       transactionState: query.state,
       sortBy: query.sortBy,
@@ -612,6 +624,15 @@ export function registerFinanceRoutes(server: ApiServer, ctx: ApiModuleContext) 
       limit: query.limit,
       offset: query.offset,
       total: result.total,
+      summary: { netAmountMills: millsToNumber(result.netAmountMills), currency: "USD" as const, readAt: result.readAt.toISOString() },
+      scope: {
+        pageLabel: query.pageLabel ?? null,
+        from: query.from ? new Date(query.from).toISOString() : null,
+        to: query.to ? new Date(query.to).toISOString() : null,
+        type: query.type ?? null,
+        state: query.state ?? null,
+        reportableOnly: query.reportableOnly,
+      },
     };
   });
 

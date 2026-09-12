@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { describeMixedRevenueWindows } from "../apps/dashboard/src/pages/OverviewPage.tsx";
+import { calendarSeries, describeMixedRevenueWindows } from "../apps/dashboard/src/pages/overview/presentation.ts";
 
 // Audit B2: the Overview footnote must appear exactly when a displayed total
 // combines per-platform windows of different widths.
@@ -47,5 +47,33 @@ describe("describeMixedRevenueWindows", () => {
   it("stays silent for unbounded windows (period=all)", () => {
     const unbounded = { ...onlyFansWindow, from: null, to: null };
     expect(describeMixedRevenueWindows([fanslyWindow, unbounded], "All Time")).toBeNull();
+  });
+});
+
+describe("calendarSeries", () => {
+  it("keeps missing dates and platform-specific edges instead of compressing gaps", () => {
+    const result = calendarSeries([
+      { businessDate: "2026-03-28", netAmountMills: 1000 },
+      { businessDate: "2026-04-02", netAmountMills: -500 },
+    ], [fanslyWindow, onlyFansWindow]);
+
+    expect(result.map((point) => point.businessDate)).toEqual([
+      "2026-03-27", "2026-03-28", "2026-03-29", "2026-03-30",
+      "2026-03-31", "2026-04-01", "2026-04-02", "2026-04-03",
+    ]);
+    expect(result.map((point) => point.value)).toEqual([0, 1000, 0, 0, 0, 0, -500, 0]);
+    expect(calendarSeries([], [fanslyWindow])).toHaveLength(7);
+  });
+
+  it("limits all-time padding to observed history, including a single negative point", () => {
+    const unbounded = { ...fanslyWindow, from: null, to: null };
+    expect(calendarSeries([], [unbounded])).toEqual([]);
+    expect(calendarSeries([
+      { businessDate: "2026-03-28", netAmountMills: -500 },
+    ], [unbounded])).toEqual([{ businessDate: "2026-03-28", value: -500 }]);
+    expect(calendarSeries([
+      { businessDate: "2026-03-28", netAmountMills: 1000 },
+      { businessDate: "2026-03-30", netAmountMills: 2000 },
+    ], [unbounded]).map((point) => point.value)).toEqual([1000, 0, 2000]);
   });
 });

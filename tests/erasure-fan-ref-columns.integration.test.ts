@@ -111,7 +111,7 @@ describe("erasure column-shape ratchet (§9.3)", () => {
       `select table_name, column_name
          from information_schema.columns
         where table_schema = 'public'
-          and (${
+          and ((table_name = 'subject_refresh_state' and column_name = 'subject_ref') or ${
         FAN_REF_COLUMN_PATTERNS.map((_, index) => `column_name like $${index + 1}`).join(" or ")
       })
         order by table_name, column_name`,

@@ -1,4 +1,6 @@
 @import "tailwindcss";
+@import "./pages/overview.css";
+@import "./pages/settings/settings-ui.css";
 
 @theme {
   --color-bg: #f9f8f6;

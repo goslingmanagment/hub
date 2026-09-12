@@ -23,7 +23,7 @@ interface EarningsAggregate {
 
 /** Both earnings kinds: rows aggregate per (fan, window); window = 'lifetime'
  *  for the stats snapshot, 'YYYY-MM' for monthly rows. Amounts are MILLS. */
-function parseFanslyEarningsObservation(
+export function parseFanslyEarningsObservation(
   observation: CanonicalizableObservation,
 ): { events: CanonicalEventDraft[]; rejection: { code: string } | null } {
   if (observation.platform !== "fansly" || !FANSLY_EARNINGS_KINDS.has(observation.kind)) {
