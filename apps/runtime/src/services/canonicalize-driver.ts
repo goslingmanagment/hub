@@ -31,7 +31,7 @@ import {
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
-import { isCapturePayloadUnavailable, resolveCapturePayloadRow } from "./payload-reader.ts";
+import { createCapturePayloadRowResolver, isCapturePayloadUnavailable, resolveCapturePayloadRow } from "./payload-reader.ts";
 import {
   CANONICALIZER_FAMILIES,
   type CanonicalizerFamily,
@@ -290,6 +290,15 @@ function sweepCursorKey(family: CanonicalizerFamily, options: CanonicalizationRu
   return `${family.source}:${family.lane}:v${family.version}:${createHash("sha256").update(scope).digest("hex")}`;
 }
 
+function resolveObservationAccountId(
+  row: ReplayObservationRow,
+  accountIdByNativeRef: ReadonlyMap<string, number>,
+): number | null {
+  return row.accountId ?? (row.nativeAccountRef
+    ? accountIdByNativeRef.get(`${row.platform}:${row.nativeAccountRef}`) ?? null
+    : null);
+}
+
 /**
  * Where the NEXT budgeted sweep starts its family rotation — the `source:lane`
  * of a family, or null for "the registry head" (defect 2026-08-22).
@@ -492,6 +501,19 @@ async function runFamily(
       break;
     }
     afterId = rows[rows.length - 1]!.id;
+    // Prefetch only facts that cannot append under this run's binding map.
+    // Mapped bodies must be read at their own turn: retaining one across an
+    // earlier row's processing would widen the read-to-erasure race. Exports
+    // resolve their target accounts from the body, so they are never eligible.
+    const bindingWaitRows = family.source === "webhook" ? rows.filter(row =>
+      row.accountId === null && row.platform !== null && row.platform.length > 0
+      && row.nativeAccountRef !== null && row.nativeAccountRef.length > 0
+      && !totals.bindingConflicts.includes(row.nativeAccountRef)
+      && !row.kind.startsWith("data_exports.")
+      && resolveObservationAccountId(row, runContext.accountIdByNativeRef) === null) : [];
+    const resolvePayload = family.source === "webhook"
+      ? createCapturePayloadRowResolver(app, "observation", bindingWaitRows)
+      : (row: ReplayObservationRow) => resolveCapturePayloadRow(app, "observation", row.id, row);
 
     for (const row of rows) {
       totals.scanned += 1;
@@ -510,7 +532,7 @@ async function runFamily(
         // G5 slice 2: resolve the body through the read seam BEFORE the shape
         // gate, so the family sees exactly the bytes the mode says are
         // canonical. `inline` returns the same row object untouched.
-        const observation = await resolveCapturePayloadRow(app, "observation", row.id, row);
+        const observation = await resolvePayload(row);
         // Shape gate BEFORE anything else: a payload the family cannot read
         // must not be stamped consumed. Stamping it would delete it from
         // every future replay just as surely as a DROP would — the exact
@@ -561,10 +583,7 @@ async function runFamily(
           .map((draft) => clampDraftOccurredAt(draft, row.receivedAt, now));
         // Capture-first rows (webhook) carry only the vendor account ref;
         // resolve it against the page map before the unmapped check.
-        const accountId = row.accountId
-          ?? (row.nativeAccountRef
-            ? runContext.accountIdByNativeRef.get(`${row.platform}:${row.nativeAccountRef}`) ?? null
-            : null);
+        const accountId = resolveObservationAccountId(row, runContext.accountIdByNativeRef);
 
         // Export webhooks are team-level, with an explicit account_ids list.
         // Attribute the same source fact only to those named accounts; an

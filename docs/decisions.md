@@ -308,6 +308,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 307 | Single earnings parse | Validate, diagnose and build earnings drafts from one observation-local parse result, preserving whole-observation refusal and replay. |
 | 308 | Preview monitor scope | Read only DM monitor streams for conversation preview while preserving shared queue context and historical physical debt. |
 | 309 | DM shadow timeout rationale | Correct the diagnostic-only timeout explanation; provider traversal and runtime behavior stay unchanged. |
+| 310 | Unmapped webhook body batches | Fresh bounded catalog batches only for proven binding waits; mapped/export bodies keep their original read boundary. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -12814,3 +12815,31 @@ comment now states this causal boundary. The 5 s material-read timeout, 500 ms
 report-write timeout, SQL and runtime behavior are unchanged. Independent review
 traced the full caller path and verified byte-identical executable content.
 No extra runtime tests are needed for this wording-only correction.
+
+
+## Decision 310: Batch only webhook bodies held back by missing bindings (2026-09-12)
+
+The canonical webhook driver groups fresh catalog reads for at most eight
+pointer-only rows that cannot append under its current binding map. The entire
+candidate set excludes mapped rows, missing/ambiguous scope, binding conflicts
+and team exports, whose target accounts live in the body. Eligibility and later
+attribution use the same platform-scoped resolver. Mapped/export rows retain
+their individual read boundary. Parsing, diagnostics, zero-draft stamps and
+repair/replay behavior remain unchanged. A later run builds a fresh binding map.
+
+The envelope-authorized catalog seam preserves position, representation and
+availability checks. Individual failures retain existing per-row handling;
+batch errors fall back to individual reads. Bodies over 512 KiB logical JSON
+are deferred, bounding each batch to eight small bodies plus decoded overhead.
+No positive/negative state persists across pages or runs, and no migration or
+terminal binding-wait stamp is added.
+
+Independent review rejected both an earlier persistent hint cache (deep-prefix
+rescans and unproven applicability) and broad webhook prefetch (a wider erasure
+race). A real governed-erasure control makes the broad version append a removed
+fact; the original individual reader and final restricted scope pass. The final
+review approves the restricted candidate, with 69 targeted tests passing. A
+4,000-row synthetic unmapped pointer corpus preserves every parser call, outcome
+and cursor while reducing catalog queries from 4,000 to 500, about 1,379 ms to
+467/414 ms locally. First/deep plans use keyed probes; inline reads add no SQL.
+These fixtures do not establish production-wide CPU savings.
