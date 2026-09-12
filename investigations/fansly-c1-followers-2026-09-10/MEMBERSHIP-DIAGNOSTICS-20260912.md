@@ -64,7 +64,8 @@ fresh-event latency or attribute a speedup to C1. No flag, replay, recovery,
 socket or image GC operation ran. The previous image and applied SQL remain.
 
 The first repeatable READ ONLY window, 12:11:06.271182593–12:14:16.851636 UTC,
-contains zero follower runs and no new membership receipt. The next gate is a
-natural full-walk completion and its following incremental comparison. PR166
+contains zero follower runs and no new membership receipt. The later window
+through 12:30 UTC records [one actual retirement on Lilly-1](NATURAL-MEMBERSHIP-20260912.md).
+The next gate is that completion's following incremental comparison. PR166
 remains a diagnostic draft, with no justified policy fix, measured physical
 savings or fresh-event latency. A0's original clock and evidence gates remain.

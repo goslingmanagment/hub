@@ -1,12 +1,15 @@
 # Fansly C1 — follower reconciliation diagnostics
 
-Latest: [12 September membership refinement](MEMBERSHIP-DIAGNOSTICS-20260912.md).
+Latest: [first natural membership receipt](NATURAL-MEMBERSHIP-20260912.md),
+following the [membership refinement](MEMBERSHIP-DIAGNOSTICS-20260912.md).
 The reviewed change is deployed in release `7aaa3185`, preserving production
 `02ff` and all 180 old migrations. The release passed 3258 unit tests (nine
 existing skips), 176 serial Docker-Postgres tests and both independent reviews.
 The standard deployment exited 0 with an executed protected-health HTTP 200;
 all three roles, compiled hashes, restricted reader and pinned CLI were verified.
-The first post-start report through 12:14 UTC has no follower runs yet.
+The later post-start report through 12:30 UTC has nine follower runs and one
+valid Lilly-1 receipt: one candidate and one actual retirement in generation
+687. The next incremental comparison is pending; active-after was not measured.
 All 41 requests in the earlier cumulative window completed; redundancy remains
 unproven. The older observations below retain their original cutoffs and gates.
 
