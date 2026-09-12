@@ -27,5 +27,5 @@ enablement, unchanged calls/business state and unavailable offline categories.
 Execution receipts and source/log hashes are in `evidence/validation.json`.
 
 Later changes record validation, review and PR text only. Deployment, historical
-reason attribution and A0/A1 acceptance are not claimed. Publication awaits
-the required exception for an additional A0 PR after PR164's merge.
+reason attribution and A0/A1 acceptance are not claimed. The owner approved
+the additional A0 PR and deployment on 12 September after PR164's merge.

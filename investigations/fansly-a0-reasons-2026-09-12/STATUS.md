@@ -43,9 +43,10 @@ tree `0763c732`:
 The three changed implementation/tool modules are 114, 130 and 165 lines.
 After this tested tree, only documentation and evidence are updated.
 
-This is a local candidate. PR164 is already merged; publication as another
-A0 PR requires an exception to the owner's one-stage/one-PR instruction.
-No new PR or deployment has run. A future release must preserve the current
+On 12 September the owner explicitly approved the additional A0 PR and
+deployment ("да все разрешаю"). PR164 is already merged; this approval
+permits the follow-up on the same A0 branch and worktree.
+No new PR or deployment has run yet. A future release must preserve the current
 production ancestry and all applied migrations. It must not deploy this
 main-based branch as a replacement for unrelated production changes.
 

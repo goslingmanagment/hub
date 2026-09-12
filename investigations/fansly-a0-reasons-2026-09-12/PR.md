@@ -39,6 +39,6 @@ It does not clear historical gaps, prove a safe A1 stop, measure physical saving
 or establish fresh-event latency. A release must preserve current production
 ancestry; this main-based branch is not a standalone replacement for it.
 
-Publication gate: PR164 already merged. An additional A0 PR requires an explicit
-exception to the owner's one-stage/one-PR instruction. This draft is prepared
-locally until that exception is granted.
+PR164 already merged. On 12 September the owner explicitly approved this
+additional A0 PR and its deployment ("да все разрешаю"). The same A0 branch
+and worktree are retained. A0/A1 evidence and calendar gates remain unchanged.

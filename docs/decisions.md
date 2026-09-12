@@ -12405,5 +12405,6 @@ A0/A1 gates. Rollback may strip the added cursor fields; re-upgrade then treats
 them as unknown instead of reconstructing zero history.
 
 Numbering follows main 295, deployed 296–300, performance 301–311 and reserved
-C2a audit 312. This local follow-up reuses the A0 branch; a new PR requires an
-exception to the owner's one-stage/one-PR rule because PR164 already merged.
+C2a audit 312. This follow-up reuses the A0 branch and worktree. On 12 September
+the owner approved an additional PR after PR164's merge and its deployment
+("да все разрешаю"); A0/A1 evidence and calendar gates remain unchanged.
