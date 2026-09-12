@@ -2,8 +2,9 @@
 
 The missing read-only comparison is prepared on the original C2a branch and
 worktree. It is not deployed, and no production projection parity or repair is
-claimed. PR165 already merged; a follow-up PR would be an exception to the
-owner's one-stage/one-PR instruction and has not been opened.
+claimed. PR165 already merged. On 12 September the owner approved the additional
+PR and deployments ("да все разрешаю"); the original stage branch and worktree
+are retained.
 
 Main synchronization on 12 September integrates `c76c6db0`. The unpublished
 audit now reserves Decision 312 and migrations 0187–0189, avoiding occupied
@@ -47,10 +48,11 @@ parity or run the audit. No production state changed.
 
 ## Next action
 
-After the additional PR is permitted, publish the prepared change with its
-validation and independent review results. Before deployment, assemble a release
-that preserves current production ancestry and applied 0182–0185. Then run the
+Publish the prepared change with its validation and independent review results.
+Before deployment, assemble a release that preserves current production ancestry
+and every applied migration. Then run the
 bounded report on production, retain every result and resolve its actual gaps.
-Resolve the reserved 0186 before applying 0187; the release cannot insert that
-unapplied predecessor after the audit's higher migrations have run.
-C2b activation still requires a separate flag decision after C2a verification.
+At 20:45:46 UTC a read_only READ ONLY query confirmed 182 applied migrations,
+including 0186. Current production is 96a86c1fcdde; its code and migration bytes
+must be retained in the audit release. The earlier predecessor-order gate is
+resolved. C2b activation still depends on C2a verification and its staged checks.

@@ -12426,3 +12426,10 @@ alone does not contain all currently deployed C1 and interface changes.
 The reserved 0186 must be included and applied before 0187, or its reservation
 must be resolved before this audit ships. Adding an unapplied 0186 afterward
 violates the migration runner's contiguous-prefix requirement.
+
+At 20:45:46 UTC, a read_only READ ONLY query confirmed 182 applied migrations
+through 0186 on production 96a86c1fcdde. The predecessor-order gate is resolved;
+the audit release must preserve this production tree and its migration bytes.
+The owner approved the additional PR and deployments on 12 September
+("да все разрешаю"). This approval does not establish projection parity or
+replace C2a/C2b verification requirements.

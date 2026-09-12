@@ -1,7 +1,8 @@
 # Verify retained Fansly earnings against their projection
 
-Draft for review; not published. The original C2a PR165 is merged, so publishing
-this follow-up requires an exception to the owner's one-stage/one-PR instruction.
+The original C2a PR165 is merged. On 12 September the owner approved this
+additional PR and deployments ("да все разрешаю"). The same stage branch and
+worktree are retained.
 
 The retained earnings census proves parser versions but does not compare the
 projected amounts and their exact source receipts. Add three restricted readers
@@ -37,14 +38,15 @@ Validation on tree `c997d087c00f0c11b1b43d778e98f31dfbfe6e17`:
   raw logs retain three warnings and their original hashes. Detailed receipts
   and current log hashes are in `MAIN-SYNC-20260912.md` and its validation file.
 
-Read-only production catalog checks at 19:30–19:32 UTC confirm absent audit
-readers and applied migrations only through 0185. All three roles are healthy
-on `31b73a96`, with zero restarts. This does not measure projection parity.
+Earlier read-only catalog checks confirm absent audit readers. A fresh read_only
+READ ONLY query at 20:45:46 UTC confirms 182 applied migrations through 0186.
+All three roles are healthy on `96a86c1fcdde`, with zero restarts. This verifies
+the required predecessor; it does not measure projection parity.
 
 Compressed captures remain unavailable and prevent acceptance. Production
 parity, HTTP savings and fresh-event latency are unmeasured. Before deployment,
 assemble a release preserving current production ancestry and applied migrations.
-It must include and apply reserved 0186 before 0187, or resolve that reservation
-first; the migration runner rejects adding an unapplied lower predecessor later.
-This branch is not that combined release. Replay, rebuild and C2b activation
-retain their separate gates.
+It must preserve applied 0186 before adding 0187–0189; the migration runner
+rejects inserting an unapplied lower predecessor later. This branch is not that
+combined release. Replay, rebuild and C2b activation depend on the actual audit
+results and their staged verification requirements.
