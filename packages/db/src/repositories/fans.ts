@@ -210,6 +210,11 @@ export async function upsertFans(db: Database, items: UpsertFanInput[]) {
         : []
     ));
     if (aliasValues.length > 0) {
+      // RETURNING followed by the untouched read-back has no stable order.
+      // Concurrent autocommit callers have already released their fan locks;
+      // acquire alias conflicts in the same order even when UPDATE is skipped.
+      aliasValues.sort((left, right) => left.fanId - right.fanId
+        || (left.username < right.username ? -1 : left.username > right.username ? 1 : 0));
       await db.insert(fanUsernameAliases).values(aliasValues).onConflictDoUpdate({
         target: [fanUsernameAliases.fanId, fanUsernameAliases.username],
         set: {

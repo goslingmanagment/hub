@@ -300,6 +300,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 299 | Preserve every settings path and explicit webhook reconciliation | Retain all registry entries and existing settings controls; permit explicit reconciliation of previously applied webhook policy while keeping lost same-state replies unknown and requiring separate intent recovery. |
 | 300 | Dashboard quality review and fresh export recovery | Preserve direct mobile access to the mounted full configuration form, match runtime CSV scope semantics, and require an explicit fresh original-page jobs read before preparing another export quote after an unknown outcome. |
 | 301 | PostgreSQL bind logging | Pin both parameter log limits to zero at server startup; retain SQL templates, duration and all other production tuning. |
+| 302 | Alias lock order | Sort username-history writes by fan ID and username, preserving conditional updates and caller result order. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -12640,3 +12641,21 @@ further restart. Production catalog and all three runtime DSNs contain no
 matching overrides. Apply through the normal deployment and verify effective
 settings afterward; restoring the previous Compose during rollback reopens the
 old bind-logging behavior and requires explicit verification.
+
+
+## Decision 302: Stable alias lock order after conditional fan writes (2026-09-12)
+
+`upsertFans` orders each username-history batch by `(fan_id, username)` before
+its INSERT. Conditional fan RETURNING plus untouched-row read-back must not
+determine alias lock order: concurrent autocommit callers have already released
+their fan locks. One caller changing A and another changing B otherwise acquire
+alias locks in reciprocal order even when their input order is identical.
+
+The writer keeps field-presence groups, caller result order, last-seen write
+suppression and history timestamps, with no extra retry, query or transaction.
+Independent review approved the change. A real PostgreSQL overlap test passes
+for identical and reversed caller order; the same fixture against the deployed
+writer fails both cases with `40P01`. No-op `xmin` and rename-history assertions
+and existing fan-churn, identity and top-spender suites pass. This fixes this
+alias statement ordering; it does not claim arbitrary outer transactions can
+never deadlock.
