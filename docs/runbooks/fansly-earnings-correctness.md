@@ -107,12 +107,25 @@ one atomic agency-wide census. The transcript starts with the actual role,
 READ ONLY/isolation receipt and transaction time. Subsequent batches bind both
 the database snapshot and transaction time, and preserve microsecond cursors.
 
-Each call returns at most 100 observations or projection rows. Captures are
-limited to 64 KiB and 512 array elements; compressed bodies remain unavailable
-because the reader cannot certify their decoded size from compressed storage.
-CAS catalog size is checked before body lookup. Up to 200,000 fan/window keys
-and 10,000 batches per plane are allowed. Statements stop after 15 seconds,
-lock waits after one second, and the SSH transaction after 120 seconds.
+After forward migrations 0190–0191 (Decision 317), PostgreSQL 16 compressed
+inline and CAS bodies can be read. A private raw-length helper bounds each copy
+to 64 KiB before decompression, equality or parsing. CAS catalog size and access
+are checked before body lookup. An unvalidated PostgreSQL major version fails
+closed at installation and on every observation-reader call.
+
+The sanitized parser input is also limited to 64 KiB, 512 array elements and
+256-byte identity strings. Numerics outside absolute value 1e100 or scale 100
+remain `shape_limit`: compact binary numerics must not expand into unbounded
+text. Unused fields are withheld before serialization. These are audit limits,
+not changes to the production parser.
+
+Each statement returns at most 100 rows. Up to eight statements travel in one
+network exchange, with at most 8 MiB per JSON line including its newline and
+64 MiB per group before parsing. Up to 200,000 fan/window keys and 10,000 pages
+per plane are allowed. Each statement stops after 15 seconds, lock waits after
+one second, and the local SSH session and remote psql each have a 120-second
+limit. Remote timeout escalates to a kill after one second. Incomplete response
+groups retain only the previously written prefix and never produce a report.
 
 Check `manifest.json` before using `report.json`: `completed` must be true, and
 SHA-256 of `snapshot.jsonl` must equal its `sha256`. A completed export is not
@@ -127,7 +140,7 @@ files are private. No provider response is reconstructed from transactions.
 
 Interpret `projection_pending` with the actual sequence watermark, then recheck
 after normal processing catches up. `outside_cohort` means a projected source
-falls outside the selected range. `compressed_body`, storage/size failures,
+falls outside the selected range. Historical `compressed_body`, current storage/size failures,
 unresolved receipts and detached rows prevent verification; do not replace them
 with zero, an empty payload or a successful check. Empty arrays identify no fan
 and establish no freshness. Explicit replay/rebuild remains a separate gate.
@@ -135,3 +148,11 @@ and establish no freshness. Explicit replay/rebuild remains a separate gate.
 Rollback can stop using these readers while preserving their additive migrations.
 This audit does not change the C2b/C2c, A1 or WebSocket gates and cannot establish
 physical HTTP savings, quiet-correction coverage or fresh-event latency.
+
+
+If the read_only role is at its connection limit, record the incomplete manifest
+and wait for the other bounded diagnostics to finish before retrying. Do not
+raise the role limit. Run pages serially with a fresh output directory and
+cutoff, and retain the earlier attempt as separate evidence. First deployment
+readback: three exports completed, only Ari-1 verified; three attempts were
+incomplete. This is not C2a acceptance for the whole agency.

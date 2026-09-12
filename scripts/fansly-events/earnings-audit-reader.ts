@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
 
+export const MAX_AUDIT_RESPONSES = 8;
 const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
 
 /** A single psql session keeps every batch in the same read-only snapshot. */
@@ -11,7 +12,10 @@ export class EarningsAuditReader {
   private closed = false;
   private buffer = Buffer.alloc(0);
   private failure: Error | null = null;
-  private pending: { resolve: (value: unknown) => void; reject: (error: Error) => void } | null = null;
+  private pending: {
+    count: number; values: unknown[]; bytes: number;
+    resolve: (values: unknown[]) => void; reject: (error: Error) => void;
+  } | null = null;
   private stderr = "";
 
   constructor(sshHost: string) {
@@ -20,7 +24,8 @@ export class EarningsAuditReader {
     }
     this.child = spawn("ssh", [
       "-C", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "--", sshHost,
-      "docker", "exec", "-i", "agency-hub-postgres-1", "psql", "-XqAt",
+      "docker", "exec", "-i", "agency-hub-postgres-1",
+      "timeout", "--kill-after=1s", "120s", "psql", "-XqAt",
       "-v", "ON_ERROR_STOP=1", "-U", "read_only", "-d", "agency_hub_core",
     ], { stdio: ["pipe", "pipe", "pipe"] });
     this.finished = new Promise(resolve => {
@@ -41,25 +46,39 @@ export class EarningsAuditReader {
   }
 
   private receive(chunk: Buffer) {
-    if (this.buffer.length + chunk.length > MAX_RESPONSE_BYTES) {
-      this.fail("Earnings audit response exceeded its byte limit");
-      return;
-    }
+    if (this.failure) return;
     this.buffer = Buffer.concat([this.buffer, chunk]);
-    const newline = this.buffer.indexOf(10);
-    if (newline === -1) return;
-    const line = this.buffer.subarray(0, newline).toString("utf8");
-    this.buffer = this.buffer.subarray(newline + 1);
-    if (!this.pending || this.buffer.length > 0) {
-      this.fail("Unexpected earnings audit database output");
-      return;
+    let newline: number;
+    while ((newline = this.buffer.indexOf(10)) !== -1) {
+      const pending = this.pending;
+      if (!pending || pending.values.length === pending.count) {
+        this.fail("Unexpected earnings audit database output");
+        return;
+      }
+      pending.bytes += newline + 1;
+      if (newline + 1 > MAX_RESPONSE_BYTES || pending.bytes > MAX_RESPONSE_BYTES * pending.count) {
+        this.fail("Earnings audit response exceeded its byte limit");
+        return;
+      }
+      try {
+        const value: unknown = JSON.parse(this.buffer.subarray(0, newline).toString("utf8"));
+        pending.values.push(value);
+      } catch {
+        this.fail("Invalid earnings audit database response");
+        return;
+      }
+      this.buffer = this.buffer.subarray(newline + 1);
     }
-    try {
-      const value: unknown = JSON.parse(line);
-      this.pending.resolve(value);
+    if (this.buffer.length >= MAX_RESPONSE_BYTES) {
+      this.fail("Earnings audit response exceeded its byte limit");
+    } else if (this.pending && this.pending.values.length === this.pending.count) {
+      if (this.buffer.length > 0) {
+        this.fail("Unexpected earnings audit database output");
+        return;
+      }
+      const pending = this.pending;
       this.pending = null;
-    } catch {
-      this.fail("Invalid earnings audit database response");
+      pending.resolve(pending.values);
     }
   }
 
@@ -71,10 +90,19 @@ export class EarningsAuditReader {
   }
 
   async read(sql: string): Promise<unknown> {
+    const values = await this.readMany(sql, 1);
+    return values[0];
+  }
+
+  async readMany(sql: string, count: number): Promise<unknown[]> {
     if (this.failure) throw this.failure;
+    if (this.closed) throw new Error("Earnings audit reader is closed");
     if (this.pending) throw new Error("Concurrent earnings audit reads are forbidden");
+    if (!Number.isInteger(count) || count < 1 || count > MAX_AUDIT_RESPONSES) {
+      throw new Error("Invalid earnings audit response count");
+    }
     return new Promise((resolve, reject) => {
-      this.pending = { resolve, reject };
+      this.pending = { count, values: [], bytes: 0, resolve, reject };
       this.child.stdin.write(sql + "\n");
     });
   }
