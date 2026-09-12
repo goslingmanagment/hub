@@ -12365,3 +12365,17 @@ partitioned `observations`, and the hypervisor's CPU delivery (the guest
 accounted 43–46 % of occupied vCPU time under saturation, ~100 % when calm).
 Live `docker update --cpu-shares` (worker 512, taskindex 2048) is a transient
 tweak reset by container recreation, not a decision.
+
+### Decision #293 follow-up: fan writers skip unchanged rows
+
+2026-09-12. `upsertFans`, `upsertFanPages`, `refreshFanPageFollowerState` and
+`refreshFanPageSubscriberState` write a row only when a written column is
+distinct from the incoming value or `last_seen_at` is older than 60 s
+(`ON CONFLICT … DO UPDATE … WHERE`, the same predicate on the page-wide
+UPDATEs; skipped rows are read back so callers still receive every fan row).
+`last_seen_at` on `fans` and `page_fans` now means "last change, or refreshed
+within the last minute" rather than "last sync pass"; its only reader outside
+the writers is the agent read plane's membership dataset. `page_dm_threads`
+keeps per-pass writes because `last_seen_generation` feeds retirement. Measured
+before the change: page_fans ~10k updates/min on ~350 rows, autovacuum every
+minute, 12 GB WAL/day after lz4. Witness: `tests/fan-churn.integration.test.ts`.
