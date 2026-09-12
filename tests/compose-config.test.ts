@@ -102,6 +102,12 @@ describe("compose config", () => {
     );
     expect(fullBuild).toContain("DOCKER_BUILDKIT=1 docker build");
     expect(sourceCopyIndex).toBeGreaterThan(installIndex);
+    const runtime = dockerfile.slice(dockerfile.indexOf(" AS runtime"));
+    const browserInstall = runtime.indexOf("RUN node apps/runtime/node_modules/playwright/cli.js");
+    expect(browserInstall).toBeGreaterThan(-1);
+    expect(runtime.indexOf("ARG APP_SOURCE_REVISION=")).toBeGreaterThan(browserInstall);
+    expect(runtime.indexOf("ARG APP_DEPENDENCY_CHECKSUM=")).toBeGreaterThan(browserInstall);
+
   });
 
   it("docker-compose.production.yml keeps the API behind loopback and uses worker readiness health", async () => {
@@ -182,13 +188,31 @@ describe("compose config", () => {
     expect(text).toContain('read_remote_env_value "HEALTH_SYNC_MONITORING_TOKEN"');
   });
 
+  it("checks pull and app-only prerequisites before stopping services and preserves stack rollback", async () => {
+    const text = await readComposeFile("scripts/deploy-production.sh");
+    const main = text.slice(text.indexOf('ROLLBACK_RELEASE_ARCHIVE="${TEMP_DIR}/rollback-release-files.tar"'));
+    const candidate = main.indexOf("build_candidate_image\n");
+    const infrastructure = main.indexOf("verify_remote_infrastructure_unchanged || fail");
+    const quiesce = main.indexOf("quiesce_remote_legacy_sync_services");
+    expect(main.indexOf("validate_pull_checkout")).toBeGreaterThan(-1);
+    expect(infrastructure).toBeGreaterThan(candidate);
+    expect(quiesce).toBeGreaterThan(infrastructure);
+    expect(main).toContain('RECREATE_SERVICES="api worker scheduler"');
+    expect(main).toContain('--no-build ${RECREATE_SERVICES}');
+    const rollback = getShellFunction(text, "rollback_remote_stack");
+    expect(rollback).toContain('${REMOTE_COMPOSE} up -d --remove-orphans --force-recreate --no-build');
+    expect(rollback).not.toContain("RECREATE_SERVICES");
+    expect(main.lastIndexOf("verify_remote_infrastructure_unchanged")).toBeLessThan(main.indexOf("STACK_RECREATED=1"));
+    expect(main.indexOf("Production verified;")).toBeLessThan(main.indexOf("rebuild_local_hub_cli || log"));
+  });
+
   it("deploy-production.sh defaults to full builds without dist-only fallback", async () => {
     const text = await readComposeFile("scripts/deploy-production.sh");
     const buildCandidate = getShellFunction(text, "build_candidate_image");
     const fullBranch = buildCandidate?.match(/full\)([\s\S]*?);;\n {4}dist-only\)/)?.[1] ?? "";
 
     expect(text).toContain('BUILD_MODE="${DEPLOY_BUILD_MODE:-full}"');
-    expect(text).toContain("--mode <mode>          Build mode: full, dist-only, or auto. Default: full");
+    expect(text).toContain("--mode <mode>          Build mode: full, dist-only, auto, or pull. Default: full");
     expect(text).not.toContain('BUILD_MODE="${DEPLOY_BUILD_MODE:-auto}"');
     expect(fullBranch).toContain("build_full_candidate_image");
     expect(fullBranch).toContain("load_candidate_image");
@@ -652,7 +676,7 @@ describe("compose config", () => {
     const buildCandidate = getShellFunction(text, "build_candidate_image");
     const dashboardIndex = text.indexOf('grep -q \'id="root"\' "$DASHBOARD_FILE"');
     const publishIndex = text.lastIndexOf("publish_remote_clean_full_base_image");
-    const successIndex = text.indexOf('log "Deployment verified successfully"');
+    const successIndex = text.indexOf('log "Deployment verified successfully;');
 
     expect(buildCandidate).toContain("CANDIDATE_IS_FULL_BUILD=1");
     expect(buildCandidate).toContain("CANDIDATE_IS_FULL_BUILD=0");
