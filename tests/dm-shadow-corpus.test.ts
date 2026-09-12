@@ -2,10 +2,10 @@ import { describe, expect, it } from "vitest";
 import { DmShadowCorpusAnalyzer } from "../scripts/fansly-events/corpus.ts";
 
 const START = Date.UTC(2026, 8, 1, 12);
-function head(n: number) {
+function head(n: number, subscriptionTierId: string | null = null) {
   return { groupId: `g${n}`, lastMessageId: `m${n}`, embeddedId: `m${n}`, embeddedMatches: 1,
     timestamp: START - 3_600_000, senderId: "fan", unreadCount: 0, flags: 0,
-    lastUnreadMessageId: null, subscriptionTierId: null };
+    lastUnreadMessageId: null, subscriptionTierId };
 }
 function page(id: number, offset: number, heads: ReturnType<typeof head>[], certified = false) {
   return { id, pageLabel: "lilly-2", capturedAt: new Date(START + id * 1000).toISOString(),
@@ -36,6 +36,20 @@ describe("retained DM corpus comparison", () => {
     const analyzer = primed();
     analyzer.accept({ ...page(3, 0, [head(0)], true), runOutcome });
     expect(analyzer.report().sweeps[1]).toMatchObject({ status: "incomplete", reason: "run_unverified" });
+  });
+
+  it("counts retained metadata changes while leaving runtime-only categories unknown", () => {
+    const analyzer = primed();
+    analyzer.accept(page(3, 0, Array.from({ length: 100 }, (_, n) => head(n))));
+    analyzer.accept(page(4, 100, [head(100), {
+      ...head(101, "new-tier"), senderId: "new-sender", timestamp: START - 1_800_000,
+    }], true));
+    expect(analyzer.report().sweeps[1]).toMatchObject({ status: "complete", diagnostics: {
+      stateChangesBelowStop: 1, subscriptionTierChangesBelowStop: 1,
+      headTimestampChangesBelowStop: 1, headSenderChangesBelowStop: 1,
+      visibilityChangesBelowStop: null, unresolvedIdentityChangesBelowStop: null,
+      exclusionReasonChangesBelowStop: null,
+    } });
   });
 
   it("keeps truncated, restarted and duplicate sweeps out of the success denominator", () => {
