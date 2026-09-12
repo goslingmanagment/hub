@@ -1,6 +1,17 @@
 # Fansly C1 — follower reconciliation diagnostics
 
-Latest: [first natural membership receipt](NATURAL-MEMBERSHIP-20260912.md),
+Latest: [membership diagnostics restored](RESTORED-MEMBERSHIP-20260912.md).
+Release `64149b95` is verified in production after `1f89bcc2` displaced the
+membership refinement. It preserves both deployed histories and all 181
+migrations. Independent reviews, 3,258 unit tests, 86 serial Docker-Postgres
+tests, production build and the deployment gates passed. The first natural
+full-walk receipt after restoration is still pending; the actual retirement
+counts missing from three earlier terminal runs remain unknown.
+The [14:25 observation](OBSERVATION-20260912T142555Z.md) records two later
+Lilly-1 comparisons with matching counts and no request. Lilly-2 also matched
+at 14:33, before restoration. No trigger suppression is justified yet.
+
+Historical 12:30 state: [first natural membership receipt](NATURAL-MEMBERSHIP-20260912.md),
 following the [membership refinement](MEMBERSHIP-DIAGNOSTICS-20260912.md).
 The reviewed change is deployed in release `7aaa3185`, preserving production
 `02ff` and all 180 old migrations. The release passed 3258 unit tests (nine

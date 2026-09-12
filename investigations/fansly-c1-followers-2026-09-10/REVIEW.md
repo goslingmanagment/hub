@@ -221,3 +221,29 @@ Docker-Postgres tests with zero skips. The exact source and log hashes are in
 [evidence/membership-20260912/validation.json](evidence/membership-20260912/validation.json).
 Reviewers did not run tests. The diagnostics preserve existing policy and do
 not establish redundant generations, actual row identity or measured savings.
+
+## Membership restoration — 12 September
+
+`review_pr162` independently checked the 97-run production report, its hash,
+ordering, completion pairing and source/compiled evidence of the missing
+membership writer. `quality_c1` checked the observation text against those
+receipts: candidates, actual retirements and later active counts remain distinct;
+missing receipts stay unknown. Neither found an actionable issue.
+
+Both reviewers then examined exact release `64149b95`, including its parents,
+tree and migration preservation. The correctness review verified all 1,881
+exported files. The quality review confirmed that the restored membership code
+matches `7aaa3185`, while conditional writes and skipped-row readback retain
+the current `1f89bcc2` implementation. Both reviews found no actionable issues.
+Neither reviewer ran tests or accessed production.
+
+The parent validated the exact release with 3,258 passing unit tests, nine
+existing skips, 86 passing serial Postgres tests and a successful production
+build. The owner-authorized standard deployment then passed its protected
+health gate; source, compiled hashes and CLI pinning were checked separately.
+The [restoration report](RESTORED-MEMBERSHIP-20260912.md) records these results
+and the remaining requirement for a new natural membership receipt.
+
+The final documentation and PR-body review by `quality_c1` found no actionable
+issues after comparison with the local validation, deployment and observation
+receipts. The runtime and tests were unchanged during this documentation follow-up.
