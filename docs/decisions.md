@@ -299,6 +299,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 298 | Adversarial dashboard state and intent review | Preserve configuration and fan drafts across scope changes, bind queued mutations to their reviewed target, consume Undo once, and recover an unknown webhook apply only through explicit separate intent preparation. |
 | 299 | Preserve every settings path and explicit webhook reconciliation | Retain all registry entries and existing settings controls; permit explicit reconciliation of previously applied webhook policy while keeping lost same-state replies unknown and requiring separate intent recovery. |
 | 300 | Dashboard quality review and fresh export recovery | Preserve direct mobile access to the mounted full configuration form, match runtime CSV scope semantics, and require an explicit fresh original-page jobs read before preparing another export quote after an unknown outcome. |
+| 301 | PostgreSQL bind logging | Pin both parameter log limits to zero at server startup; retain SQL templates, duration and all other production tuning. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -12618,3 +12619,24 @@ passes 3418 tests with nine existing skips and its production build. The release
 preflight is recorded in
 `investigations/feature-controls-2026-09-11/RELEASE-20260912.md`; production
 acceptance remains a separate result of the standard deployment gates.
+
+
+## Decision 301: PostgreSQL bind values stay outside server logs (2026-09-12)
+
+Production Compose pins `log_parameter_max_length=0` and
+`log_parameter_max_length_on_error=0` at PostgreSQL startup. A positive truncation
+length still exposes part of a raw value. These settings override volume-level
+`postgresql.auto.conf`; the existing slow-query threshold and other production
+tuning remain there. SQL templates, durations and lock-wait diagnostics remain.
+This boundary does not sanitize literal SQL or arbitrary PostgreSQL error text,
+and historical logs are retained. Role/database/session overrides must be checked
+separately.
+
+Independent review approved the narrow Compose change. The 39 Compose unit tests
+pass. A disposable PostgreSQL 16 control first reproduced both successful-query
+and error bind logging, then confirmed suppression with the new command against
+the same volume, preserving unrelated settings and SQL diagnostics through a
+further restart. Production catalog and all three runtime DSNs contain no
+matching overrides. Apply through the normal deployment and verify effective
+settings afterward; restoring the previous Compose during rollback reopens the
+old bind-logging behavior and requires explicit verification.

@@ -137,6 +137,21 @@ describe("compose config", () => {
     }
   });
 
+  it("production Postgres suppresses raw bind values without replacing VPS tuning", async () => {
+    const text = await readComposeFile("docker-compose.production.yml");
+    const postgres = getServiceBlock(text, "postgres");
+    const command = postgres?.match(/^ {4}command: (\[[^\n]+\])$/m)?.[1];
+
+    // These are separate PostgreSQL log paths. A positive byte limit still
+    // leaks raw values; zero disables bind logging. Keep unrelated tuning in
+    // the existing volume's auto.conf, including the slow-query threshold.
+    expect(JSON.parse(command ?? "null")).toEqual([
+      "postgres",
+      "-c", "log_parameter_max_length=0",
+      "-c", "log_parameter_max_length_on_error=0",
+    ]);
+  });
+
   it("requires one explicit host directory for read-only OFAPI export artifacts", async () => {
     const compose = await readComposeFile("docker-compose.production.yml");
     const productionEnv = await readComposeFile(".env.production.example");
