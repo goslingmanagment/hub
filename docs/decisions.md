@@ -310,6 +310,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 309 | DM shadow timeout rationale | Correct the diagnostic-only timeout explanation; provider traversal and runtime behavior stay unchanged. |
 | 310 | Unmapped webhook body batches | Fresh bounded catalog batches only for proven binding waits; mapped/export bodies keep their original read boundary. |
 | 311 | Disjoint replay with shared allowance | Keep reserved capture/replay turns and reuse unused allowance once without restarting an exhausted cursor. |
+| 312 | Empty observation replay heads | Probe actual version/source/kind index prefixes before an unrestricted scan head; keep ordered pages and scoped replay unchanged. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -12871,3 +12872,36 @@ capture/positive stamps and no duplicate poison visits. Final independent
 review approves the implementation and test-only typing correction. Parser
 versions, event identities, source facts and forward-only stamps are unchanged;
 these fixtures do not establish a production-wide latency or CPU gain.
+
+
+## Decision 312: Avoid full journal walks for caught-up replay families (2026-09-12)
+
+The ordinary replay selector asks for the first pending observations in numeric
+id order. Production plans for three caught-up families returned zero rows after
+walking about 2.39 million heap rows and 999,000 buffers each, taking 1.21–1.51 s.
+The same selector serves a populated webhook head in about 1 ms, so replacing
+every ordered page with a full pending-set sort would regress useful work.
+
+Unrestricted first pages with a declared source now first probe whether any
+eligible row exists using the existing 0144 health-floor index. A recursive
+index walk discovers actual parse versions under the caller's original bounds;
+each source/kind/version prefix is then checked by equality and a one-row limit.
+Unrestricted kinds use the same source/version prefix in kind/time order. Strict
+next-version comparison preserves negative and sparse versions without generating
+a range proportional to the caller's numeric floor. Repeated kinds have set
+semantics. The existence guard and original id-ordered page share one SQL
+statement and snapshot; there is no cached negative result or new round trip.
+
+Exact ids, continuation cursors, account scopes, time scopes and source-free
+calls keep their original SQL. The optimization changes no eligibility, parser,
+payload reader, stamp, cursor identity, page allowance or wrap behavior, and adds
+no index or migration. In particular, catalog bodies are still read at the
+existing per-observation boundary.
+
+A simpler range/IN guard was rejected by production plans: it made a populated
+webhook head take 1.61 s. The equality-prefix candidate reduced the same empty
+family probes to 2.34–12.78 ms; its populated webhook head took 3.49 ms. These
+are bounded read-only query probes, not a production-wide CPU claim. A local
+240,000-row correlated fixture compares the actual generated SQL with the old
+selector and checks empty and populated heap work, alongside exact result and
+scope parity. Independent review and release verification remain required.
