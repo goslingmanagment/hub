@@ -1,15 +1,17 @@
 # Fansly C1 — follower reconciliation diagnostics
 
-Latest: [membership diagnostics restored](RESTORED-MEMBERSHIP-20260912.md).
-Release `64149b95` is verified in production after `1f89bcc2` displaced the
-membership refinement. It preserves both deployed histories and all 181
-migrations. Independent reviews, 3,258 unit tests, 86 serial Docker-Postgres
-tests, production build and the deployment gates passed. The first natural
-full-walk receipt after restoration is still pending; the actual retirement
-counts missing from three earlier terminal runs remain unknown.
-The [14:25 observation](OBSERVATION-20260912T142555Z.md) records two later
-Lilly-1 comparisons with matching counts and no request. Lilly-2 also matched
-at 14:33, before restoration. No trigger suppression is justified yet.
+Latest: [first full receipts after restoration](OBSERVATION-20260912T155000Z.md).
+Lora-1 actually retired one row; Lilly-2 protected two absent rows under
+generation grace and retired none. The 65-run report pairs both clean-queue
+requests with exact-generation completion; 299 physical attempts all succeeded.
+Trigger suppression and savings remain unproven. The
+[presence inventory](PRESENCE-CONSUMERS-20260912.md) identifies Workboard urgency
+and other consumers that a policy change must preserve.
+
+At 15:52 UTC all three roles were healthy on `31b73a96`, which preserves the
+[restored diagnostics](RESTORED-MEMBERSHIP-20260912.md) from `64149b95`.
+The new worker started after the measured cutoff. The three earlier terminal
+runs without actual-retirement receipts remain unknown. No C1 policy changed.
 
 Historical 12:30 state: [first natural membership receipt](NATURAL-MEMBERSHIP-20260912.md),
 following the [membership refinement](MEMBERSHIP-DIAGNOSTICS-20260912.md).

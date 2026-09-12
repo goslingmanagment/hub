@@ -3,6 +3,17 @@
 Numbering note: earlier reviews refer to the original C1 Decision 291. It is
 Decision 294 after the 11 September merge of main; applied migrations are unchanged.
 
+For the [first full receipts after restoration](OBSERVATION-20260912T155000Z.md),
+`review_pr162` independently verified the atomic 65-row report, both clean-queue
+request/completion chains, 20/38-chunk continuity, one actual Lora-1 retirement,
+two grace-protected Lilly-2 rows and 299 successful physical attempts. There
+were no actionable findings. The source/runtime comparison preserves the
+post-cutoff worker boundary and the earlier missing actual counts. The separate
+quality review verified all 14 source entries and found one wording defect:
+35/20 is a presence-driver value, not a direct addition to final urgency. The
+inventory now preserves the existing aggregation. Final re-review closed that
+finding and found no new issues in the documentation or prepared PR body.
+
 For the [17:07 observation](OBSERVATION-20260911T170708Z.md), `review_pr162`
 verified 430 rows, withheld-finalization retries, full-revision versus final-
 generation durations, source-separated costs and all 429 retained summaries.
