@@ -290,6 +290,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 291 | Overview metric semantics | Revenue-led overview with per-page/model comparison windows, transaction sources and separate page audience counts; no summed subscribers or acquisition claims from mutable subscription records. |
 | 292 | Overview selected layout and exact drilldown | Keep the compact variant-one table, order models by server net income, compare source deltas on the server, use scoped exact-window operations with one response snapshot, and persist navigation context in URLs. Supersedes #291's three-query-only UI plan. |
 | 293 | Select completed run IDs before monitor payload | Rank narrow historical completion keys, then load the selected run by primary key; preserve health fields, scope, ordering and historical physical-attempt debt. |
+| 296 | Fansly C2a projection audit | Compare retained earnings snapshots with full projection rows in one bounded read-only snapshot; unavailable bodies, detached data and projection lag prevent acceptance. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -12213,3 +12214,41 @@ owner approval of a concrete revision and the ordinary health gate remains
 mandatory. Production currently includes unmerged C1 diagnostics and applied
 0182/0183; a future deployment must preserve that code/schema state rather than
 replace it with this main-based worktree alone.
+
+## Decision 296: Verify retained Fansly earnings against the projection (2026-09-12)
+
+C2a's identity fix is deployed, and the 12 September retained census found
+281,525 earnings observations at parser v7. Parser stamps do not prove that
+the final monetary rows and their source receipts agree. The existing
+read_only grants cannot read those rows or the actual sequence watermark.
+
+Add three narrowly scoped SQL readers and a local operator exporter. They
+require a single repeatable READ ONLY transaction, one Fansly page and a bounded
+received-at range. Freeze upper IDs, counts, the event bound and actual projector
+watermark; inventory attached and conventionally named detached observation/event
+partitions. Count scoped detached data rather than treating absent partitions as
+empty. Stable pagination and count reconciliation must complete before acceptance.
+
+Authorize the observation envelope before resolving a CAS reference. Retain only
+the six inputs used by the existing v7 parser, preserving its events and rejection
+semantics. Account/access-class/codec mismatches, missing or disagreeing copies,
+compressed or oversized bodies remain explicit incomplete evidence. No general
+payload API or base-table grant is added. Full projection reads include zero and
+negative values, source event/observation identities and legacy source-ID fallback.
+
+The local comparison uses the production parser and its timestamp/observation-ID
+ordering. Missing/extra rows, stale values, unresolved sources, out-of-range
+sources and projector lag remain distinct. Empty arrays never establish a fan
+check, and an empty-only cohort cannot pass. Private output retains an exact hash
+of normalized JSON records and an incomplete manifest on interrupted collection.
+The exporter bounds statement time, total transaction time, batch size and cleanup.
+
+No flag, producer, projector, cadence, replay or repair changes. This is the
+missing C2a acceptance read; it does not establish production parity or authorize
+C2b activation. See the [C2a runbook](runbooks/fansly-earnings-correctness.md).
+
+Numbering checked against main `c0cd21c3` (latest 293). Existing release work
+reserves 294 for C1 and 295 for manual Ping; preserve those entries and applied
+migrations 0182–0185. This additive reader uses 0186–0188. Recheck the current
+production ancestry before assembling a release; this main-based branch alone
+does not contain the already deployed C1 and manual-Ping work.
