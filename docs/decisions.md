@@ -307,6 +307,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 306 | HTTP admission after lease loss | Stop new observed read attempts per chunk while preserving in-flight response capture and existing write fencing. |
 | 307 | Single earnings parse | Validate, diagnose and build earnings drafts from one observation-local parse result, preserving whole-observation refusal and replay. |
 | 308 | Preview monitor scope | Read only DM monitor streams for conversation preview while preserving shared queue context and historical physical debt. |
+| 309 | DM shadow timeout rationale | Correct the diagnostic-only timeout explanation; provider traversal and runtime behavior stay unchanged. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -12796,3 +12797,20 @@ old physical debt and cross-page siblings. The SQL builder confirms two stream
 names in all five filtered inputs. Page totals still execute through the shared
 snapshot; no specific preview latency improvement is claimed. There is no new
 cache, schema, contract, provider traffic or stored-state change.
+
+
+## Decision 309: Correct Decision 293's DM shadow timeout rationale (2026-09-12)
+
+Decision 293 incorrectly attributed full provider sweeps to 500 ms material-check
+cancellations. This check supplies diagnostic evidence for the virtual early-stop
+report; a read failure records unknown material and prevents report certification.
+Under Decision 284, the real provider sweep already continues beyond that virtual
+stop, following its existing pagination, chunk budgets and membership rules.
+
+The 5 s statement timeout gives the same diagnostic SQL more time under load,
+possibly increasing per-page wait. It does not establish fewer provider requests,
+narrower SQL scans or a five-second deadline for the whole operation. The source
+comment now states this causal boundary. The 5 s material-read timeout, 500 ms
+report-write timeout, SQL and runtime behavior are unchanged. Independent review
+traced the full caller path and verified byte-identical executable content.
+No extra runtime tests are needed for this wording-only correction.
