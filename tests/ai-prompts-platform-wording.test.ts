@@ -119,6 +119,8 @@ describe('manual OnlyFans ping (Decision #295)', () => {
 
   // Recorded from buildPrompt at c0cd21c3 before #295. Pin the entire Fansly
   // payload, including cache boundaries, independently of the new wording table.
+  // Decision 319 changed only the context block's cache hint from 5m to none;
+  // restoring that one hint must reproduce the recorded bytes exactly.
   it.each([
     ['active', 'c6a25b2c72857f566d722c1d1bde65ef0bfad42e64348ff28f9fe0486e7ea2fe'],
     ['segment-a', '99c6afebf2645548d2e15003f43b48c1c8c9fb28ed3342026313e25e3534983b'],
@@ -130,7 +132,12 @@ describe('manual OnlyFans ping (Decision #295)', () => {
       pingSegment,
       fanSilenceDays: pingSegment === 'active' ? 0 : 12,
     });
-    expect(createHash('sha256').update(JSON.stringify(prompt)).digest('hex')).toBe(expectedHash);
+    expect(prompt.userBlocks[1]?.cache).toBe('none');
+    const recordedShape = {
+      ...prompt,
+      userBlocks: prompt.userBlocks.map((block, index) => (index === 1 ? { ...block, cache: '5m' } : block)),
+    };
+    expect(createHash('sha256').update(JSON.stringify(recordedShape)).digest('hex')).toBe(expectedHash);
   });
 
   it.each(['onlyfans', undefined] as const)(
@@ -150,7 +157,7 @@ describe('manual OnlyFans ping (Decision #295)', () => {
       expect(prompt.user).not.toContain('This segment should not be used for ping generation');
       expect(prompt.user).not.toContain('notice the silence in your own words');
       expect(prompt.user).not.toMatch(/\{ping\w+\}/);
-      expect(prompt.userBlocks.map((block) => block.cache)).toEqual(['1h', '5m', 'none']);
+      expect(prompt.userBlocks.map((block) => block.cache)).toEqual(['1h', 'none', 'none']);
       expect(prompt.userBlocks[0]?.text).not.toContain('Active conversation:');
       expect(prompt.userBlocks[2]?.text).toContain('Active conversation:');
     },

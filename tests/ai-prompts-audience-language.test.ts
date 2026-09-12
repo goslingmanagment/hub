@@ -38,7 +38,7 @@ describe("proposed fan messages follow the fan's own language, English by defaul
         const transcript = `Fan: ${fanMessage}`;
         const built = buildPrompt({ ...base, feature, transcript });
         const staticBlock = built.userBlocks.find(block => block.cache === "1h")!.text;
-        const dynamicText = built.userBlocks.filter(block => block.cache === "5m").map(block => block.text).join("\n");
+        const dynamicText = built.userBlocks.slice(1, -1).map(block => block.text).join("\n");
         const finalTask = built.userBlocks.at(-1)!;
 
         // Actual assembled prompt, not just the .md: a future split/reducer

@@ -298,6 +298,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 317 | Fansly C2a compressed snapshots and pagination | Bound decoded JSONB and numeric expansion before export; group eight psql statements per network exchange while retaining snapshot, completeness and timeout checks. |
 | 316 | Deployment delivery | Keep Chromium cache independent of revision; preserve unchanged Postgres on app releases; publish the tested main image after Quality Gate and deploy by GHCR digest with source/checksum/platform verification before quiesce. Full/auto/dist-only and rollback semantics remain available. |
 | 318 | Fansly C2a audit query plans | Use and retain a custom plan setting within the read-only export transaction so later keyset pages do not repeatedly scan exported prefixes. |
+| 319 | Prompt-cache spend | Cache only the fan-agnostic persona and template prefix (1h); send the per-fan context uncached except in coach-chat; send recaps fully uncached. Prompt text unchanged; only cache hints move. Amends #136, where the dossier "rides the dynamic 5m block". |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -12587,3 +12588,63 @@ No new flag, provider call, migration, repair, polling change or C2b activation.
 Numbered from main `605b931f`, whose highest decision number is 317. The merged
 deployment decision 316 and deployed decision 315 remain untouched. This owner-approved follow-up reuses the C2a branch/worktree.
 See the [runbook](runbooks/fansly-earnings-correctness.md).
+
+## Decision 319: Cache only what is read back (2026-09-13)
+
+Anthropic Console, 30 days to 2026-09-12: $139.36 billed, of which 5m cache
+writes were $95.27 and cache reads $7.52. On the Sonnet 5 days (09-08 to 09-12)
+5m writes were 79% of spend and each written token was read back 1.12 times.
+Owner-session read-only measurement of the gateway ledger and restricted
+generations explains why. The per-fan context block (transcript, spending,
+subscription, dossier, split instructions) was marked 5m, but in 1,375
+same-conversation pairs it was byte-identical to its predecessor only for
+duplicates and tail-only changes. The transcript is a fixed-count window that
+slides on every new message (67% of fast-reply pairs); even append-only pairs
+miss because fan data follows the transcript in the same block; and 60% of
+follow-ups arrive 5-60 minutes later. A one-day simulation matched the ledger:
+284 of 293 fast-reply 5m writes and 110 of 110 improve-draft writes were never
+read. The 1h persona and template prefix was read on almost every request, and
+it stays a breakpoint of its own, so dropping the later 5m breakpoint loses none
+of those reads.
+
+A never-read 5m write costs 1.25x the uncached price. `PromptFeaturePolicy`
+therefore gains `promptCache`:
+
+- `static` (default): the persona and template prefix keep their 1h
+  breakpoints; the context block is sent uncached. This amends #136: the
+  dossier no longer rides a 5m block.
+- `full` (coach-chat only): transcript and coach dialog keep their 5m blocks
+  as designed in #273. The ledger shows no measurable 5m reads there either
+  (9 requests in 30 days), so this is kept for turn-by-turn coaching, not
+  for money.
+- `none` (fan-summary, full and short): every block uncached. Recaps are
+  one-shot and the ledger shows 1.83M written and zero read tokens in 30
+  days. The policy is per feature: if Recap ever leaves Opus 4.6 (4,096-token
+  minimum) for a model with a lower minimum, revisit it. The owner keeps
+  Recap on Opus 4.6.
+
+No text the model sees changes: block text and boundaries are byte-identical
+for every feature, verified by building every feature with both builders; only
+cache hints move.
+
+Expected effect at the Sonnet 5 volume, out of roughly $120 a month: about
+$11-15 from the context block and about $2 from recaps. Verify on the Console
+cache page after deploy: 5m writes fall to coach-only volume, uncached input
+rises by about the former write volume, and 1h reads stay flat.
+
+Considered and dropped by the owner: moving improve-draft's fan-agnostic
+`## Rules`, `## Sounding human` and examples (4,835 characters) before
+`## Current Draft` so they would ride the 1h prefix. It is worth about
+$1.5-3.5 a month, and #273 judged improve-draft in its current order; the
+reorder would need a blind quality comparison first.
+
+Considered and not done: a byte-stable transcript (anchored window, several
+transcript blocks, 1h TTL). Against this change's uncached baseline it models
+at about $8-12 a month for a stateful per-conversation anchor, loses money for
+stateless hash anchors, and needs an extension release, extra Fansly paging
+and a quality re-check; revisit if fast-reply volume doubles or the cold-request
+share falls to about 0.25. Moving the dossier before the transcript as its own
+1h block is a separable hub-only option worth about $6 a month, pending a
+quality check. Rejected by the owner: moving Recap to Sonnet 5 and
+deduplicating double-fired requests. Rollback is reverting this change; there
+are no data, contract or migration changes. Numbered after Decision 318 (#181).

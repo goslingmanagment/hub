@@ -143,6 +143,15 @@ interface PromptFeaturePolicy {
   supportsReplyMode: boolean;
   supportsReplyTone: boolean;
   usesPingSegment: boolean;
+  /** Decision 319: which blocks carry cache hints. 'static' caches only the
+   * fan-agnostic persona and template prefix (1h); the per-fan context block
+   * changes on almost every request (sliding transcript window), so a 5m
+   * write there is a 25% surcharge that is never read back. 'full' also
+   * caches the context and coach dialog (5m) for turn-by-turn coaching.
+   * 'none' sends every block uncached: recap requests are one-shot and read
+   * nothing back; revisit if Recap leaves Opus 4.6 for a model with a lower
+   * cache minimum. */
+  promptCache: 'full' | 'static' | 'none';
 }
 
 const REPLY_POLICY: PromptFeaturePolicy = {
@@ -152,6 +161,7 @@ const REPLY_POLICY: PromptFeaturePolicy = {
   supportsReplyMode: false,
   supportsReplyTone: false,
   usesPingSegment: false,
+  promptCache: 'static',
 };
 
 const ANALYSIS_POLICY: PromptFeaturePolicy = {
@@ -163,11 +173,11 @@ const PROMPT_POLICIES: Record<PromptFeature, PromptFeaturePolicy> = {
   'fast-reply': { ...REPLY_POLICY, supportsReplyMode: true, supportsReplyTone: true },
   'improve-draft': { ...REPLY_POLICY, requiresDraft: true },
   'help-me': ANALYSIS_POLICY,
-  'fan-summary': ANALYSIS_POLICY,
+  'fan-summary': { ...ANALYSIS_POLICY, promptCache: 'none' },
   'chat-review': ANALYSIS_POLICY,
   ping: { ...REPLY_POLICY, usesPingSegment: true },
   'hi-greeting': REPLY_POLICY,
-  'coach-chat': { ...ANALYSIS_POLICY, optionalDraft: true },
+  'coach-chat': { ...ANALYSIS_POLICY, optionalDraft: true, promptCache: 'full' },
   'voice-script': { ...REPLY_POLICY, requiresDraft: true, supportsReplyTone: true },
 };
 
@@ -848,11 +858,13 @@ function buildUserBlocks(
     );
     return [{ text: fillTemplate(template, values), cache: 'none' }];
   }
+  const contextCache: PromptCacheTtl =
+    PROMPT_POLICIES[feature].promptCache === 'full' ? '5m' : 'none';
   return [
     { text: fillTemplate(split.staticPart, values), cache: '1h' },
-    { text: fillTemplate(split.dynamicPart, values), cache: '5m' },
+    { text: fillTemplate(split.dynamicPart, values), cache: contextCache },
     ...(split.historyPart
-      ? [{ text: fillTemplate(split.historyPart, values), cache: '5m' as const }]
+      ? [{ text: fillTemplate(split.historyPart, values), cache: contextCache }]
       : []),
     { text: fillTemplate(split.taskPart, values), cache: 'none' },
   ];
@@ -1193,14 +1205,15 @@ export function buildPrompt(
     input.feature === 'coach-chat'
       ? budgetCoachTemplateValues(input, template, systemBlocks, initialValues)
       : initialValues;
-  const userBlocks = buildUserBlocks(input.feature, template, values);
+  const segmentedUserBlocks = buildUserBlocks(input.feature, template, values);
+  const cacheOff = PROMPT_POLICIES[input.feature].promptCache === 'none';
   const system = flattenPromptBlocks(systemBlocks);
-  const user = flattenPromptBlocks(userBlocks);
+  const user = flattenPromptBlocks(segmentedUserBlocks);
   return {
     system,
     user,
-    systemBlocks,
-    userBlocks,
+    systemBlocks: cacheOff ? stripPromptCache(systemBlocks) : systemBlocks,
+    userBlocks: cacheOff ? stripPromptCache(segmentedUserBlocks) : segmentedUserBlocks,
     ...(input.feature === 'coach-chat'
       ? {
           // Fan-derived '<'/'>' are escaped before rendering, so only the
