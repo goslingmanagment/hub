@@ -83,10 +83,10 @@ const TEMPLATES: Record<PromptFeature, string> = {
 };
 const PING_SEGMENT_INSTRUCTIONS = {
   'segment-a':
-    'Segment A. Was active, went silent: This fan has chatted before but has gone quiet. Reference specific past conversation topics, show you remember them, create curiosity. Noticing the gap is fine in your own words, but a specific reference is what carries the message.',
+    'Segment A. Earlier conversation: Reference specific past conversation topics, show you remember them, and create curiosity. Use the visible relationship context without making the time since the last message the reason to write.',
   'segment-b':
     'Segment B. Barely chatted: This fan has little chat history in the loaded messages. Hook onto whatever he did write, his name, or his bio; if none of that gives you anything personal, lean on the model\'s personality for a warm, low-pressure opener. Do NOT claim "we\'ve never talked" or make absolute statements about conversation history; use neutral openers that work regardless.',
-  active: 'This fan is still active. This segment should not be used for ping generation.',
+  active: 'Active conversation: the fan wrote recently. The chatter chose this manual outreach. Continue naturally from the visible conversation or introduce a specific personal hook; do not claim there has been a gap or that the fan has gone quiet.',
 } as const;
 
 function buildTestInput(overrides: Partial<PromptBuildInput> = {}): PromptBuildInput {
@@ -248,6 +248,11 @@ function buildExpectedFlatUser(input: PromptBuildInput): string {
     draftSection: buildDraftSection(input.draftText),
     splitReplyInstructions: buildSplitReplyInstructions(input.feature, input.replyMode),
     toneInstructions: buildToneInstructions(input.feature, input.replyTone),
+    pingOpening: 'You are generating a personal outreach message ("ping") requested by the chatter to send to a fan',
+    pingContext: 'The chatter chose to reach out now. The fan may have written recently; do not assume they went silent. Create a natural reason to continue the conversation, grounded in what is visible. If the latest fan message asks a question, acknowledge it instead of ignoring it for an opener. A ping should read like a genuine personal text, not a newsletter or a copy-paste blast.',
+    pingTimingGuidance: 'Any "Fan silence" line in the task section is factual context, not a recommendation about when to write. The chatter has already chosen to write now. Do not invent an absence, say the fan disappeared, or suggest waiting. Never quote the elapsed time back to the fan or make the outreach feel tracked.',
+    pingCheckInStrategy: 'Ask about a specific interest, plan, or detail the fan shared, giving him something natural to answer without assuming an absence.',
+    pingMessageKind: 'personal outreach message',
     segmentInstructions:
       input.feature === 'ping' && input.pingSegment
         ? PING_SEGMENT_INSTRUCTIONS[input.pingSegment]
@@ -771,7 +776,7 @@ describe('ping segment substitution', () => {
       }),
     );
     expect(result.user).toContain('Segment A');
-    expect(result.user).toContain('Was active, went silent');
+    expect(result.user).toContain('Earlier conversation');
   });
 
   it('includes segment-b description for segment-b', () => {

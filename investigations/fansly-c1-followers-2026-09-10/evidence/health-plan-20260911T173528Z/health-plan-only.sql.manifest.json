@@ -1,0 +1,33 @@
+{
+  "source": "d47dc9b09f87988a53bd80435f0d11534beba15c",
+  "generatedFrom": "packages/db/src/repositories/sync.ts:listSyncMonitorStreamRows",
+  "now": "2026-09-11T02:53:01.000Z",
+  "pageScope": "active pages, using the listVisiblePages predicate instead of its resolved ID list",
+  "streams": [
+    "light",
+    "transactions",
+    "top_spenders",
+    "subscribers",
+    "followers",
+    "followers_reconcile",
+    "dm_conversations",
+    "dm_messages",
+    "fan_earnings",
+    "purchase_history",
+    "posts",
+    "stats_snapshot",
+    "notifications",
+    "catalog",
+    "post_replies",
+    "payouts",
+    "media_stats"
+  ],
+  "parameters": 125,
+  "sqlSha256": "fd55d8c8861c85dfac8addc22d9372cbb468624401ff55af036acc9fc5702b70",
+  "productionExecuted": false,
+  "analyze": false,
+  "readOnly": true,
+  "statementTimeoutSeconds": 10,
+  "lockTimeoutSeconds": 2,
+  "planningCaveat": "This preserves active-page semantics but may yield a different estimate from a literal ID list; no execution-time attribution is claimed."
+}

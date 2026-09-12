@@ -1129,21 +1129,27 @@ describe("AI feature registry gates (Stage 30 Task 4)", () => {
     const review = await call("chat-review");
     expect(review.statusCode).toBe(400);
 
-    // ping derives its segment kernel-side; an ACTIVE conversation is
-    // blocked — desktop CG-FLOW-05 parity. The seed's fixed 2026-07-06
-    // timestamps age out of the 5-day active window by calendar, so pin
-    // recency explicitly to keep the gate deterministic.
+    // Decision #295: OnlyFans manual ping accepts an ACTIVE conversation,
+    // keeping the kernel-derived segment truthful. Pin recency explicitly
+    // because the seed's fixed timestamps age out of the active window.
     await testDb.pool.query(
       `update message_archive set occurred_at = now()
        where account_id = $1 and is_sent_by_me = false`,
       [pageId],
     );
     const pingActive = await call("ping");
-    expect(pingActive.statusCode, pingActive.body).toBe(400);
-    expect(pingActive.json().message).toContain("active");
-    expect(pingActive.json().error).toBe("gate_ping_active");
+    expect(pingActive.statusCode, pingActive.body).toBe(200);
+    expect(capture.input!.body.feature).toBe("ping");
+    const activePingText = capture.input!.body.prompt.userBlocks.map((block) => block.text).join("\n");
+    expect(activePingText).toContain("Active conversation: the fan wrote recently.");
+    expect(activePingText).toContain("Fan silence: the fan's last message was 0 days ago.");
+    expect(activePingText).toContain("The chatter chose to reach out now.");
+    expect(activePingText).not.toContain("Segment A");
+    expect(activePingText).not.toContain("to send to a fan who has gone quiet");
+    expect(activePingText).not.toContain("The fan has not said anything recently");
+    expect(activePingText).not.toContain("This segment should not be used for ping generation");
 
-    // Age the fan's messages past the 5-day window: ping unblocks. The extra
+    // Older conversations still accept ping. The extra
     // hour keeps the whole-days floor at 10 under small DB/Node clock drift.
     await testDb.pool.query(
       `update message_archive set occurred_at = now() - interval '10 days 1 hour'
@@ -1421,6 +1427,7 @@ describe("client-context path (Stage 32)", () => {
     const pingActive = await call("ping", { ...baseContext, pingSegment: "active" });
     expect(pingActive.statusCode, pingActive.body).toBe(400);
     expect(pingActive.json().message).toContain("active");
+    expect(pingActive.json().error).toBe("gate_ping_active");
     const ping = await call("ping", { ...baseContext, pingSegment: "segment-a" });
     expect(ping.statusCode, ping.body).toBe(200);
     const pingWithoutSilence = capture.input!.body.prompt.userBlocks

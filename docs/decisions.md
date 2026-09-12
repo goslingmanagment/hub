@@ -289,7 +289,10 @@ appends a row here in the same change (family law: updated-in-change).
 | 289 | Fansly C2b earnings shadow | Atomic semantic transaction revisions and independent endpoint receipts measure the existing daily rotation; unchanged and missing results remain explicit debt. |
 | 291 | Overview metric semantics | Revenue-led overview with per-page/model comparison windows, transaction sources and separate page audience counts; no summed subscribers or acquisition claims from mutable subscription records. |
 | 292 | Overview selected layout and exact drilldown | Keep the compact variant-one table, order models by server net income, compare source deltas on the server, use scoped exact-window operations with one response snapshot, and persist navigation context in URLs. Supersedes #291's three-query-only UI plan. |
+| 293 | Production load | Hot statements read only what their result needs (counter head, per-watermark index probe, per-running-run activity, per-page recency probe); Postgres on the VPS runs sized, not stock (`shared_buffers` 2 GB, `work_mem` 16 MB, 30-min checkpoints, lz4 WAL, jit off, no parallel gather, slow-query log); every load claim rests on a measurement |
 | 293 | Select completed run IDs before monitor payload | Rank narrow historical completion keys, then load the selected run by primary key; preserve health fields, scope, ordering and historical physical-attempt debt. |
+| 294 | Fansly C1 diagnostics | Retain the existing trigger and expose bounded decision, queue and reconcile-run evidence before choosing a follower fix. |
+| 295 | OnlyFans manual Ping | The chatter decides when to write: active conversations accept Ping with truthful prompt context. Fansly keeps its existing active gate and assembled prompt. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -12213,3 +12216,166 @@ owner approval of a concrete revision and the ordinary health gate remains
 mandatory. Production currently includes unmerged C1 diagnostics and applied
 0182/0183; a future deployment must preserve that code/schema state rather than
 replace it with this main-based worktree alone.
+
+## Decision 294: Measure Fansly follower reconcile decisions (2026-09-10)
+
+**Context.** C1 requires a measured RCA of three OR branches before choosing a
+narrow fix. Cooldown does not exist. Current production read_only access does
+not expose sync-run telemetry, and the existing trigger does not journal which
+branches fired. Neither headline/active mismatch nor a 48-hour policy proves
+that a reconcile request was redundant.
+
+**Decision.** Name the existing three predicates without changing them. After
+the current queue call settles, retain one diagnostic note for both requested
+and no-request decisions. Preserve counts, boundary context and an opt-in
+queue receipt from the already locked requestPageSync row. Ordinary callers
+retain their exact previous result shape and queue behavior. No extra provider
+call, cooldown, cadence, presence or destructive reconciliation change ships.
+
+Migrations 0182–0183 add fixed, bounded read operations accessible to read_only.
+It counts missing, malformed, contradictory, duplicate and boundary-crossing
+receipts explicitly; invalid evidence does not enter the valid denominator.
+All OR combinations are retained. Queue counts distinguish known receipts,
+unknown receipts and requests arriving with unapplied work. The last count is
+a coalescing opportunity, not a claim that completed generations were combined.
+The aggregate report and paginated timeline expose selected diagnostic scalars,
+with no underlying table grants or private follower material. The timeline
+separates valid decisions from valid queue receipts, claimed revisions from
+membership generations, and successful non-destructive close from certified
+membership. A pinned upper run ID does not freeze later outcomes. Unknown
+receipts and completion gaps do not become consolidation or HTTP savings.
+
+**C1 gate.** This remains the diagnostic portion of one draft PR. Production
+activation requires an approved revision. The observed production source
+`32478124` already includes C2a/C2b; this delta does not bump their parsers or
+change selection. A rollback must retain the inherited v2 readers and schema. Retain
+read reports outside telemetry retention, establish branch frequencies and
+actual reconcile-generation consolidation, investigate headline/active,
+deleted-account and pagination semantics, then add the proven narrow fix in
+this same PR. Snapshot-drift/blast-radius guards and presence consumers remain
+exit criteria. No production counters, savings or completed C1 are claimed.
+See the [diagnostic runbook](runbooks/fansly-followers-diagnostics.md).
+
+Numbered 294 when synchronized with main `c0cd21c3` on 11 September; the
+original C1 draft used 291. Applied migrations 0182/0183 are unchanged.
+
+## Decision 295: OnlyFans manual Ping preserves the chatter's timing decision (2026-09-11)
+
+The owner approved a manual Ping action in the desktop Spenders workflow and
+explicitly rejected choosing when the chatter should write from elapsed time.
+The inherited five-day `active` gate prevented that action in both the desktop
+and the kernel. Removing only the desktop gate would still return
+`gate_ping_active`; removing only the kernel gate would describe a recently
+active fan to the model as someone who had gone quiet.
+
+For **OnlyFans**, the existing `POST /api/v1/ai/features/ping` request now accepts
+every observed segment, including `active`. The kernel still derives the real
+segment and `fanSilenceDays` from the same clock sample and its transcript;
+`active` is never relabeled as `segment-a`. The prompt frames Ping as personal
+outreach the chatter has chosen to start now, keeps recent conversation context,
+acknowledges a pending fan question, and forbids inventing an absence or advising
+the chatter to wait. Recency remains factual input, not permission or a writing
+schedule. Generation still returns a draft for manual review; this introduces
+no sending, ranking, recommendations, prefetch, or automatic dispatch.
+
+For **Fansly**, `active` still returns HTTP 400 `gate_ping_active`. The existing
+client-context requirement and segment derivation are unchanged. Its complete
+assembled Ping payload, including system/user text and cache boundaries, is
+pinned against the pre-change `c0cd21c3` output for all three segments. Historical
+decisions #107/#120/#127 describe the earlier shared gate; this decision
+supersedes their active restriction only on the OnlyFans lane.
+
+The implementation reuses the validated request's existing `isFanslyRequest`
+gate and the prompt builder's `platform` input. A static platform instruction
+table fills five slots in the single Ping template. Other prompt content remains
+shared, and fan-derived text is never rewritten. Static instructions stay in
+the one-hour prefix; the actual segment and elapsed-time facts remain in the
+uncached task. The three edited prompt files update their current manifest
+hashes and notes while preserving historical source hashes. No additional
+platform comparison site, branch-budget increase, route, field, migration, or
+SDK regeneration is needed.
+
+Rollout requires this kernel behavior and the companion desktop change removing
+its local active gate. Ship the kernel support before or together with the
+desktop release; a new desktop against the old kernel still receives the stable
+gate error. A kernel rollback restores that behavior without a schema change.
+This worktree is a local implementation only, with no commit, push, deployment,
+flag change, or production verification implied. Any deployment remains a
+separate owner-approved operation and must preserve the existing production
+code/schema state described in #293.
+
+Validation covers an active OnlyFans request reaching the captured provider with
+honest recent-message context, the unchanged Fansly HTTP gate, byte-identical
+Fansly prompts, static-prefix independence from fan recency, template byte-sync,
+and the prompt manifest drift pin. No live model generation is used by these
+checks; prompt/output quality still needs the ordinary human review of drafts.
+
+Release preparation (2026-09-12): the owner authorized deployment. The manual
+Ping delta is rebased onto the observed production revision `2c6b42b71aaf`,
+preserving C1 diagnostics, migrations 0182/0183, and the deployed ledger-scan
+performance fixes. This release adds no migration or contract operation.
+Decision 294 was already assigned to C1 on the production branch, so the Ping
+decision is 295 here. The source check passes 3,258 tests with nine existing
+skips; provider-stub integration checks verify the request and prompt behavior.
+
+## 293. Production load: statements read only what their result needs; Postgres is sized
+
+2026-09-11/12. The shared VPS `agency` (2 vCPU, 8 GB) ran at load 10–11 all day
+with Postgres at one full CPU (a third of it system time) and the worker at
+0.35; an arena diagnosis (`docs/diag/2026-09-11-agency-hub-load/verdict-ru.md`)
+attributed it to four statements reading far more than their results needed,
+stock Postgres settings for a 33 GB database, and sync write churn.
+
+Decisions applied (revisions `2c6b42b7`, `424f2a42`, `02ff7e34`, migration 0184):
+- The live domain-event hub drain reads the account head from the gapless
+  counter (`getAccountHighWater`); `listDomainEventAccountBounds` stays with the
+  SSE route's gap rule, which needs the retention floor. Never compute a value a
+  caller discards on a per-notification path.
+- The golden-signal projection backlog takes the oldest unconsumed event per
+  watermark through the `(account_id, account_seq)` index; it does not scan
+  the ledger. Capture and canonicalize quantiles are unchanged.
+- `closeInactiveSyncRuns` and `listRunningSyncRuns` derive activity per running
+  run through `sync_http_attempts_run_started_idx` and
+  `sync_run_events_run_emitted_idx`; a partial index `sync_runs_running_idx`
+  serves the running set. Per-page webhook recency probes
+  `ofapi_webhook_events_page_received_idx` once per page.
+- The DM shadow material check keeps a 5 s statement timeout (500 ms cancelled
+  it ~200 times an hour under load and forced the full sweep); the diagnostic
+  report writer keeps 500 ms.
+- Postgres runtime settings live in the volume's `postgresql.auto.conf` via
+  `ALTER SYSTEM`: `shared_buffers=2GB`, `effective_cache_size=5GB`,
+  `work_mem=16MB`, `checkpoint_timeout=30min`, `wal_compression=lz4`,
+  `jit=off`, `max_parallel_workers_per_gather=0`,
+  `log_min_duration_statement=2000`, `log_lock_waits=on`. They survive
+  container recreation; a later compose-level `command` may restate them.
+- `ofapi_webhook_events` is analyzed; its stale statistics (reltuples 672k vs
+  n_live_tup 14k since the 09-07 stats reset) had hidden its real size from
+  autovacuum and the planner. It is not bloated.
+
+Result after the three deploys (10-minute windows, cgroup `cpu.stat`):
+Postgres 0.32 CPU (system 0.03), worker 0.14, host idle ~89 %, load average
+1–2; canonicalize sweep 29 s avg (648), projection tick 10 s (198), metric
+sample 5 s (240), planner 2 s (61); TaskIndex sign-in on the same host
+124–130 ms server-side (748–1441).
+
+Open, owner-gated: canonicalization/projection budgets (custody semantics),
+sync upsert churn (no-op upserts, sorted batch inserts), `pg_stat_statements`
+(needs `shared_preload_libraries` and a restart), a health-floor index on the
+partitioned `observations`, and the hypervisor's CPU delivery (the guest
+accounted 43–46 % of occupied vCPU time under saturation, ~100 % when calm).
+Live `docker update --cpu-shares` (worker 512, taskindex 2048) is a transient
+tweak reset by container recreation, not a decision.
+
+### Decision #293 follow-up: fan writers skip unchanged rows
+
+2026-09-12. `upsertFans`, `upsertFanPages`, `refreshFanPageFollowerState` and
+`refreshFanPageSubscriberState` write a row only when a written column is
+distinct from the incoming value or `last_seen_at` is older than 60 s
+(`ON CONFLICT … DO UPDATE … WHERE`, the same predicate on the page-wide
+UPDATEs; skipped rows are read back so callers still receive every fan row).
+`last_seen_at` on `fans` and `page_fans` now means "last change, or refreshed
+within the last minute" rather than "last sync pass"; its only reader outside
+the writers is the agent read plane's membership dataset. `page_dm_threads`
+keeps per-pass writes because `last_seen_generation` feeds retirement. Measured
+before the change: page_fans ~10k updates/min on ~350 rows, autovacuum every
+minute, 12 GB WAL/day after lz4. Witness: `tests/fan-churn.integration.test.ts`.

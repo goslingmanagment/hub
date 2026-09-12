@@ -1,4 +1,4 @@
-import { and, eq, notInArray, sql } from "drizzle-orm";
+import { and, eq, notInArray, or, sql } from "drizzle-orm";
 
 import {
   FANSLY_EXTERNAL_PRESENCE_SOURCE_FOLLOWERS_LAST_SEEN,
@@ -66,6 +66,19 @@ function mergeUpsertFanInput(current: UpsertFanInput, next: UpsertFanInput): Ups
   };
 }
 
+/**
+ * Write only when something changed, or when `last_seen_at` is older than this
+ * window. Every sync pass used to rewrite every row of a page with
+ * `last_seen_at = now()` (page_fans: ~10k updates/min on ~350 rows, autovacuum
+ * every minute, 20+ GB WAL/day — docs/diag/2026-09-11-agency-hub-load).
+ * `last_seen_at` therefore means "last change, or refreshed within a minute".
+ */
+const LAST_SEEN_REFRESH_WINDOW = sql`interval '60 seconds'`;
+
+function lastSeenIsStale(column: unknown) {
+  return sql`${column} < now() - ${LAST_SEEN_REFRESH_WINDOW}`;
+}
+
 function fanUpsertPresenceKey(item: UpsertFanInput) {
   return [
     item.username !== undefined ? "username" : "",
@@ -113,8 +126,21 @@ export async function upsertFans(db: Database, items: UpsertFanInput[]) {
     if (template.metadata !== undefined) {
       updateSet.metadata = sql`excluded.metadata`;
     }
+    const changed: ReturnType<typeof sql>[] = [lastSeenIsStale(fans.lastSeenAt)];
+    if (template.username !== undefined) {
+      changed.push(sql`${fans.username} is distinct from excluded.username`);
+    }
+    if (template.displayName !== undefined) {
+      changed.push(sql`${fans.displayName} is distinct from excluded.display_name`);
+    }
+    if (template.createdAtExternal !== undefined) {
+      changed.push(sql`${fans.createdAtExternal} is distinct from excluded.created_at_external`);
+    }
+    if (template.metadata !== undefined) {
+      changed.push(sql`${fans.metadata} is distinct from excluded.metadata`);
+    }
     if (template.deletedDetectedAt !== undefined || hasPresentIdentity(template)) {
-      updateSet.deletedDetectedAt = sql`
+      const nextDeletedDetectedAt = sql`
         case
           when nullif(btrim(coalesce(excluded.username, '')), '') is not null
             or nullif(btrim(coalesce(excluded.display_name, '')), '') is not null
@@ -124,7 +150,7 @@ export async function upsertFans(db: Database, items: UpsertFanInput[]) {
           else ${fans.deletedDetectedAt}
         end
       `;
-      updateSet.deletedLastDetectedAt = sql`
+      const nextDeletedLastDetectedAt = sql`
         case
           when nullif(btrim(coalesce(excluded.username, '')), '') is not null
             or nullif(btrim(coalesce(excluded.display_name, '')), '') is not null
@@ -134,6 +160,10 @@ export async function upsertFans(db: Database, items: UpsertFanInput[]) {
           else ${fans.deletedLastDetectedAt}
         end
       `;
+      updateSet.deletedDetectedAt = nextDeletedDetectedAt;
+      updateSet.deletedLastDetectedAt = nextDeletedLastDetectedAt;
+      changed.push(sql`(${nextDeletedDetectedAt}) is distinct from ${fans.deletedDetectedAt}`);
+      changed.push(sql`(${nextDeletedLastDetectedAt}) is distinct from ${fans.deletedLastDetectedAt}`);
     }
 
     const rows = await db
@@ -151,8 +181,23 @@ export async function upsertFans(db: Database, items: UpsertFanInput[]) {
       .onConflictDoUpdate({
         target: [fans.platform, fans.platformUserId],
         set: updateSet,
+        setWhere: sql.join(changed, sql` or `),
       })
       .returning();
+    // Rows the conditional update skipped are not RETURNED; callers still
+    // need every fan row, so read the untouched ones back.
+    const returnedKeys = new Set(rows.map((row) => `${row.platform}:${row.platformUserId}`));
+    const untouched = group.filter((item) => !returnedKeys.has(`${item.platform}:${item.platformUserId}`));
+    if (untouched.length > 0) {
+      const existing = await db
+        .select()
+        .from(fans)
+        .where(or(...untouched.map((item) => and(
+          eq(fans.platform, item.platform),
+          eq(fans.platformUserId, item.platformUserId),
+        ))));
+      rows.push(...existing);
+    }
 
     const aliasValues = rows.flatMap((fan) => (
       fan.username && fan.username.trim().length > 0
@@ -171,6 +216,8 @@ export async function upsertFans(db: Database, items: UpsertFanInput[]) {
           firstSeenAt: sql`least(${fanUsernameAliases.firstSeenAt}, excluded.first_seen_at)`,
           lastSeenAt: sql`greatest(${fanUsernameAliases.lastSeenAt}, excluded.last_seen_at)`,
         },
+        setWhere: sql`excluded.first_seen_at < ${fanUsernameAliases.firstSeenAt}
+          or excluded.last_seen_at > ${fanUsernameAliases.lastSeenAt}`,
       });
     }
 
@@ -290,8 +337,20 @@ export async function upsertFanPages(db: Database, inputs: UpsertFanPageInput[])
     if (template.autoRenew !== undefined) {
       updateSet.autoRenew = sql`excluded.auto_renew`;
     }
+    const changed: ReturnType<typeof sql>[] = [lastSeenIsStale(fanPages.lastSeenAt)];
+    const compare = (column: unknown, excludedColumn: string) => {
+      changed.push(sql`${column} is distinct from ${sql.raw(`excluded.${excludedColumn}`)}`);
+    };
+    if (template.isFollower !== undefined) compare(fanPages.isFollower, "is_follower");
+    if (template.followerSince !== undefined) compare(fanPages.followerSince, "follower_since");
+    if (template.isSubscriber !== undefined) compare(fanPages.isSubscriber, "is_subscriber");
+    if (template.subscriberSince !== undefined) compare(fanPages.subscriberSince, "subscriber_since");
+    if (template.subscriptionExpiresAt !== undefined) {
+      compare(fanPages.subscriptionExpiresAt, "subscription_expires_at");
+    }
+    if (template.autoRenew !== undefined) compare(fanPages.autoRenew, "auto_renew");
     if (template.autoRenew !== undefined || template.autoRenewOffDetectedAt !== undefined) {
-      updateSet.autoRenewOffDetectedAt = sql`
+      const nextAutoRenewOffDetectedAt = sql`
         case
           when excluded.auto_renew is false then
             case
@@ -303,18 +362,24 @@ export async function upsertFanPages(db: Database, inputs: UpsertFanPageInput[])
           else ${fanPages.autoRenewOffDetectedAt}
         end
       `;
+      updateSet.autoRenewOffDetectedAt = nextAutoRenewOffDetectedAt;
+      changed.push(sql`(${nextAutoRenewOffDetectedAt}) is distinct from ${fanPages.autoRenewOffDetectedAt}`);
     }
     if (template.pageAlias !== undefined) {
       updateSet.pageAlias = sql`excluded.page_alias`;
+      compare(fanPages.pageAlias, "page_alias");
     }
     if (template.pageAliasSource !== undefined) {
       updateSet.pageAliasSource = sql`excluded.page_alias_source`;
+      compare(fanPages.pageAliasSource, "page_alias_source");
     }
     if (template.pageAliasSourceNoteId !== undefined) {
       updateSet.pageAliasSourceNoteId = sql`excluded.page_alias_source_note_id`;
+      compare(fanPages.pageAliasSourceNoteId, "page_alias_source_note_id");
     }
     if (template.pageAliasSyncedAt !== undefined) {
       updateSet.pageAliasSyncedAt = sql`excluded.page_alias_synced_at`;
+      compare(fanPages.pageAliasSyncedAt, "page_alias_synced_at");
     }
 
     await db
@@ -340,6 +405,7 @@ export async function upsertFanPages(db: Database, inputs: UpsertFanPageInput[])
       .onConflictDoUpdate({
         target: [fanPages.fanId, fanPages.platformAccountId],
         set: updateSet,
+        setWhere: sql.join(changed, sql` or `),
       });
   }
 }
@@ -571,7 +637,7 @@ export async function upsertPageFollow(
 }
 
 export async function countActivePageFollows(db: Database, platformAccountId: number) {
-  const result = await db.execute(sql`
+  const result = await db.execute<{ count: number }>(sql`
     select count(*)::int as count
     from page_follows
     where platform_account_id = ${platformAccountId}
@@ -801,6 +867,11 @@ export async function refreshFanPageFollowerState(db: Database, platformAccountI
         last_seen_at = now()
     from resolved
     where fp.id = resolved.id
+      and (
+        fp.is_follower is distinct from (resolved.active_followed_at is not null)
+        or fp.follower_since is distinct from resolved.active_followed_at
+        or ${lastSeenIsStale(sql`fp.last_seen_at`)}
+      )
   `);
 }
 
@@ -1133,6 +1204,14 @@ export async function refreshFanPageSubscriberState(db: Database, platformAccoun
     ) active
     where fp.platform_account_id = ${platformAccountId}
       and fp.fan_id = active.fan_id
+      and (
+        fp.is_subscriber is distinct from (active.active_subscriber_since is not null)
+        or fp.subscriber_since is distinct from active.active_subscriber_since
+        or fp.subscription_expires_at is distinct from active.active_subscription_expires_at
+        or fp.auto_renew is distinct from active.active_auto_renew
+        or fp.auto_renew_off_detected_at is distinct from active.active_auto_renew_off_detected_at
+        or ${lastSeenIsStale(sql`fp.last_seen_at`)}
+      )
   `);
   await db.execute(sql`
     update page_fans
@@ -1148,6 +1227,14 @@ export async function refreshFanPageSubscriberState(db: Database, platformAccoun
         from page_subscriptions
         where platform_account_id = ${platformAccountId}
           and is_current = true
+      )
+      and (
+        is_subscriber
+        or subscriber_since is not null
+        or subscription_expires_at is not null
+        or auto_renew is not null
+        or auto_renew_off_detected_at is not null
+        or ${lastSeenIsStale(sql`last_seen_at`)}
       )
   `);
 }

@@ -461,8 +461,9 @@ export async function prepareAiFeatureStream(
       "gate_hi_greeting_limit",
     );
   }
-  // Desktop parity (CG-FLOW-05): pings are blocked while the fan is active.
-  if (policy.usesPingSegment && contextValues.pingSegment === "active") {
+  // Decision #295: OnlyFans Ping is manual outreach at the chatter's discretion.
+  // Keep the existing Fansly reactivation gate and the real segment on both lanes.
+  if (isFanslyRequest && policy.usesPingSegment && contextValues.pingSegment === "active") {
     throw new ProductGateError("ping is blocked while the conversation is active", "gate_ping_active");
   }
 
