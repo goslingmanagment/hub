@@ -1,5 +1,12 @@
 # A0/T0 implementation and evidence
 
+Current follow-up: [reason coverage](../fansly-a0-reasons-2026-09-12/STATUS.md)
+is being prepared locally. A0 is deployed and observing; the original record
+below retains its pre-deployment cutoff. Historical gaps and unexplained
+discrepancies remain open. The follow-up changes measurement detail only.
+
+## Original implementation record (historical)
+
 Authority: the migration plan and reviews dated 7 September, and the cross-check
 DECISION. Implementation branch: `feat/fansly-a0-shadow`, based on main
 `ce2485ae` / Decision 283. [PR164](https://github.com/goslingmanagment/core/pull/164) merged as `a3caa0e9`

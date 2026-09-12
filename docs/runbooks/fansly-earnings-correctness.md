@@ -81,7 +81,7 @@ Do not repair money by direct SQL writes. Production diagnostics use read_only
 inside READ ONLY transactions; privileged replay/rebuild commands require their
 own explicit approval. C2b/C2c, A1 and live WebSocket work retain their gates.
 
-## Retained snapshot audit (Decision 312)
+## Retained snapshot audit (Decision 314)
 
 Deploy the additive readers 0187–0189 through the normal reviewed release,
 preserving all currently deployed source and migrations. No new flag is needed.

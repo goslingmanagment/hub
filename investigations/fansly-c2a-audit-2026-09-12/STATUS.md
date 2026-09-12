@@ -6,12 +6,12 @@ claimed. PR165 already merged. On 12 September the owner approved the additional
 PR and deployments ("да все разрешаю"); the original stage branch and worktree
 are retained.
 
-Main synchronization on 12 September integrates `c76c6db0`. The unpublished
-audit now reserves Decision 312 and migrations 0187–0189, avoiding occupied
-release-branch numbers. All three SQL bodies and twelve TypeScript source/test
-files are unchanged. Combined checks pass: 3262 unit tests, nine existing skips,
-and 44 serial Docker-Postgres tests with no skips. Current evidence is
-recorded in [MAIN-SYNC-20260912.md](MAIN-SYNC-20260912.md).
+The latest synchronization integrates `c1ca5e37`, including merged A0 PR176.
+The unpublished audit is now Decision 314, after main's 313; migrations remain
+0187–0189. All three SQL bodies and twelve TypeScript source/test files are
+unchanged. Combined checks pass: 3265 unit tests, nine existing skips, and
+44 serial Docker-Postgres tests with no skips. Current evidence is recorded
+in [MAIN-SYNC-20260912T205944Z.md](MAIN-SYNC-20260912T205944Z.md).
 
 ## Scope
 
@@ -53,6 +53,7 @@ Before deployment, assemble a release that preserves current production ancestry
 and every applied migration. Then run the
 bounded report on production, retain every result and resolve its actual gaps.
 At 20:45:46 UTC a read_only READ ONLY query confirmed 182 applied migrations,
-including 0186. Current production is 96a86c1fcdde; its code and migration bytes
-must be retained in the audit release. The earlier predecessor-order gate is
-resolved. C2b activation still depends on C2a verification and its staged checks.
+including 0186. A0 subsequently deployed as 4310680dc2f9, preserving that set.
+The audit release must retain its code and migration bytes. The earlier
+predecessor-order gate is resolved. C2b activation still depends on C2a
+verification and its staged checks.

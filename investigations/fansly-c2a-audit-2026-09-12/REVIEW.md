@@ -75,3 +75,17 @@ reviewers checked current totals, log hashes, source preservation and release
 ordering. No reviewer ran tests or production operations. The implementation
 agent ran 3262 passing unit tests and 44 serial Docker-Postgres tests; no
 production parity is claimed.
+
+## Synchronization after A0 PR176
+
+The next candidate integrates main `c1ca5e37`; its tested tree is
+`b0c307f39c0d4eb20cae0bc69fd9ada25f4444c0`. The audit's fifteen SQL/TypeScript
+files remain unchanged, all main migration files are preserved, and the
+unpublished decision is now 314. The quality review confirms the merge scope
+and finds one P3 in the execution table: its row still named Decision 312 and
+pending approvals. The row is corrected alongside STATUS and PR text.
+
+Current coordinator checks pass 3265 unit tests and 44 serial Docker-Postgres
+tests. The new main-sync record distinguishes these results from older runs.
+No production parity is claimed by this synchronization or the earlier A0
+deployment. Final packet review includes the updated status and evidence.

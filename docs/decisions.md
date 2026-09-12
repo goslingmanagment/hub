@@ -293,7 +293,8 @@ appends a row here in the same change (family law: updated-in-change).
 | 293 | Select completed run IDs before monitor payload | Rank narrow historical completion keys, then load the selected run by primary key; preserve health fields, scope, ordering and historical physical-attempt debt. |
 | 294 | Fansly C1 diagnostics | Retain the existing trigger and expose bounded decision, queue and reconcile-run evidence before choosing a follower fix. |
 | 295 | OnlyFans manual Ping | The chatter decides when to write: active conversations accept Ping with truthful prompt context. Fansly keeps its existing active gate and assembled prompt. |
-| 312 | Fansly C2a projection audit | Compare retained earnings snapshots with full projection rows in one bounded read-only snapshot; unavailable bodies, detached data and projection lag prevent acceptance. |
+| 313 | Fansly A0 reason coverage | Retain six additional bounded pre-apply reason counters; legacy and unavailable offline categories remain null, without changing sweep policy or completion semantics. |
+| 314 | Fansly C2a projection audit | Compare retained earnings snapshots with full projection rows in one bounded read-only snapshot; unavailable bodies, detached data and projection lag prevent acceptance. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -12381,7 +12382,35 @@ keeps per-pass writes because `last_seen_generation` feeds retirement. Measured
 before the change: page_fans ~10k updates/min on ~350 rows, autovacuum every
 minute, 12 GB WAL/day after lz4. Witness: `tests/fan-churn.integration.test.ts`.
 
-## Decision 312: Verify retained Fansly earnings against the projection (2026-09-12)
+## 313. Fansly A0: retain reason coverage without inventing historical counts
+
+2026-09-12. Six pre-apply head-diff categories previously survived only in
+`stateChangesBelowStop`. Add one bounded scalar counter per category to the
+existing diagnostic cursor/report. Measurement from the start of a runtime
+sweep initializes them to zero; starting midway through a sweep leaves them null.
+Legacy checkpoints default missing fields to null and preserve that unknown
+value for the remaining generation. A completed sweep can have incomplete
+reason coverage. Existing report rows are not rewritten.
+
+An exhaustive typed map covers all eleven reason types. Deduplicating counter
+names preserves the existing single unread increment when both unread reasons
+occur. The generic conversation count, rollback/material predicates, virtual
+stop and business sweep remain unchanged. No IDs, arrays, new flag, migration,
+provider call or polling change are introduced.
+
+The offline analyzer cannot observe runtime visibility, identity resolution or
+exclusion reason and marks those counters null. Its tier/time/sender counters
+compare retained metadata; runtime effective time/sender include repair and
+fallback. The new detail neither explains old generic observations nor clears
+A0/A1 gates. Rollback may strip the added cursor fields; re-upgrade then treats
+them as unknown instead of reconstructing zero history.
+
+Numbering follows main 295, deployed 296–300, performance 301–311 and reserved
+C2a audit 312. This follow-up reuses the A0 branch and worktree. On 12 September
+the owner approved an additional PR after PR164's merge and its deployment
+("да все разрешаю"); A0/A1 evidence and calendar gates remain unchanged.
+
+## Decision 314: Verify retained Fansly earnings against the projection (2026-09-12)
 
 C2a's identity fix is deployed, and the 12 September retained census found
 281,525 earnings observations at parser v7. Parser stamps do not prove that
@@ -12433,3 +12462,9 @@ the audit release must preserve this production tree and its migration bytes.
 The owner approved the additional PR and deployments on 12 September
 ("да все разрешаю"). This approval does not establish projection parity or
 replace C2a/C2b verification requirements.
+
+Before publication, PR176 merged as c1ca5e37 and main now ends at Decision 313.
+The still-unpublished C2a audit is therefore Decision 314. Migrations 0187–0189
+and all implementation/test bodies are unchanged; the new main contributes
+the independently verified A0 reason counters. Combined validation follows
+this synchronization before opening the audit PR.
