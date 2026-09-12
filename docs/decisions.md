@@ -12430,7 +12430,9 @@ again before promotion they verify an existing healthy PostgreSQL instance,
 its Compose service hash and resolved image identity, and unchanged resolved
 project/Postgres/shared resource definitions. Infrastructure changes require
 explicit `--recreate-scope stack`. Existing Compose dependency health ordering
-and the whole-stack emergency rollback remain; this does not promise that
+and the whole-stack emergency rollback remain. Aborting before recreation resumes
+existing stopped sync containers with `compose start`, avoiding dependency
+reconciliation after infrastructure drift was refused. This does not promise that
 removing a PostgreSQL restart alone eliminates every sync-health delay.
 
 The existing CI builds and smoke-tests an amd64 image with checkout revision and

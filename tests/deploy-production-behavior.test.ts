@@ -68,7 +68,7 @@ run_remote() {
   printf '%s\n' "$1" >> "$TEST_COMMAND_LOG"
   if [[ -n "$TEST_REMOTE_FAILURE_PATTERN" && "$1" == *"$TEST_REMOTE_FAILURE_PATTERN"* ]]; then return 23; fi
   case "$1" in
-    *"docker pull "*) return 0 ;;
+    *"docker pull "*|*"start scheduler worker"*) return 0 ;;
     *"agency-hub.source-revision"*) printf '%s\n' "$TEST_IMAGE_METADATA" ;;
     *"docker tag "*) return 0 ;;
     *"--current config --format json"*) if [[ -n "$TEST_CURRENT_COMPOSE_JSON" ]]; then printf '%s\n' "$TEST_CURRENT_COMPOSE_JSON"; else printf '%s\n' "$TEST_COMPOSE_JSON"; fi ;;
@@ -285,6 +285,25 @@ describe("production deploy behavior without production access", () => {
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("shared Compose configuration differs");
     expect(commands().at(-1)).toContain("--current config --format json");
+  });
+
+  it("restores existing sync containers without converging dependencies when the final guard rejects image drift", () => {
+    const result = runFunctions([
+      "verify_remote_infrastructure_unchanged", "restore_quiesced_sync_services", "fail", "fail_after_release_sync",
+    ], String.raw`
+      restore_remote_release_files() { printf 'restore release files\n' >> "$TEST_COMMAND_LOG"; }
+      STACK_RECREATED=0
+      LEGACY_SYNC_QUIESCED=1
+      verify_remote_infrastructure_unchanged
+      TEST_EXPECTED_IMAGE="$TEST_DRIFT_IMAGE"
+      verify_remote_infrastructure_unchanged "$REMOTE_COMPOSE" || fail_after_release_sync "refused drift"
+    `, { TEST_DRIFT_IMAGE: `sha256:${"f".repeat(64)}` });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("refused drift");
+    const calls = commands();
+    expect(calls.at(-2)).toBe("restore release files");
+    expect(calls.at(-1)).toContain("--current start scheduler worker");
+    expect(calls.join("\n")).not.toMatch(/ up |docker tag|force-recreate/);
   });
 
   it.each([

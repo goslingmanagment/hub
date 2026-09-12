@@ -405,7 +405,8 @@ describe("compose config", () => {
     expect(quiesce).toContain("LEGACY_SYNC_QUIESCED=1");
     expect(quiesce.indexOf("LEGACY_SYNC_QUIESCED=1"))
       .toBeLessThan(quiesce.indexOf("stop -t 75 scheduler worker"));
-    expect(restore).toContain("up -d scheduler worker");
+    expect(restore).toContain("start scheduler worker");
+    expect(restore).not.toContain("up -d");
     expect(text).toContain('LEGACY_SYNC_QUIESCED:-0');
     expect(text).toContain("restore_quiesced_sync_services");
     expect(migrate).toContain("--through 0097_retire_onlyfans_legacy_dm_messages.sql");

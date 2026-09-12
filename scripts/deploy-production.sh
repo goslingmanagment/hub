@@ -752,7 +752,9 @@ quiesce_remote_legacy_sync_services() {
 restore_quiesced_sync_services() {
   [[ "${LEGACY_SYNC_QUIESCED:-0}" == "1" ]] || return 0
   log "Restarting the quiesced scheduler and worker behind the permanent DB fence"
-  run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}; ${REMOTE_COMPOSE} up -d scheduler worker" \
+  # Resume the existing containers only. Converging dependencies with `up` here
+  # could recreate PostgreSQL after the infrastructure guard just rejected drift.
+  run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}; ${REMOTE_COMPOSE} start scheduler worker" \
     || return 1
   LEGACY_SYNC_QUIESCED=0
 }
