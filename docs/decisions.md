@@ -303,6 +303,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 302 | Alias lock order | Sort username-history writes by fan ID and username, preserving conditional updates and caller result order. |
 | 303 | Recent metrics reads | Enumerate stored index prefixes and bound each full-key range before filtering its exact series; retain sparse series and one snapshot. |
 | 304 | Sync seeding counts | Count active followers only when initial Fansly reconcile recovery can use it; keep every existing-state maintenance path. |
+| 305 | Sync finalizer authority | Cleanup rechecks the current target outcome after a lock wait and preserves committed worker results. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -12705,3 +12706,22 @@ maintenance. Replacing only the writer with the deployed version makes five
 no-read plan checks fail while the five initial-recovery cases continue to
 pass. This preserves the existing multi-statement seeder's concurrency scope;
 it does not introduce stronger atomicity against explicit page erasure.
+
+
+## Decision 305: Sync cleanup preserves a concurrent worker result (2026-09-12)
+
+Inactivity and orphan cleanup may infer a failed/partial outcome only while the
+UPDATE target still has `outcome = running`. Both outer UPDATE predicates repeat
+that condition: candidate discovery can precede a worker finalizer whose row
+lock cleanup then waits on. PostgreSQL rechecks the current target and preserves
+the worker's committed terminal outcome, statistics, summary and completion time.
+The worker finalizer remains able to replace an earlier heuristic cleanup result;
+making every finalizer running-only would give the timeout estimate priority.
+
+The change adds no lock, retry, schema or scheduling policy. Independent review
+approved both guards. Twelve real PostgreSQL concurrency cases cover both lock
+orders, every terminal outcome and finalizer rollback; existing cleanup and
+lease suites also pass. The deployed writer fails the eight finalizer-first
+commit cases while four rollback/cleanup-first cases still pass. This closes the
+same-row terminal overwrite, without changing policy for activity that appears
+in another table after the cleanup statement's snapshot.
