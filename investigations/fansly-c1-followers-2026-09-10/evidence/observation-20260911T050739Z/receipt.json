@@ -1,0 +1,85 @@
+{
+  "recordedAt": "2026-09-11T05:15:56.643619+00:00",
+  "scope": "Read-only observation and documentation; no runtime, migration or test changes.",
+  "productionSource": "d47dc9b09f87988a53bd80435f0d11534beba15c",
+  "testSource": "13537b6b69a20ed9680458de30fa47f104da520c",
+  "validation": "Tests were not rerun for this documentation-only observation. Existing pnpm check:3210 passed/9 skips; serial Docker-Postgres:70 passed/0 skips,19.77s. See ../grace-20260911/validation.json.",
+  "windowEnd": "2026-09-11T05:07:39Z",
+  "c1Manifest": {
+    "operation": "report",
+    "from": "2026-09-11T01:05:57.089215+00:00",
+    "to": "2026-09-11T05:07:39+00:00",
+    "startedAt": "2026-09-11T05:07:49.150606+00:00",
+    "completedAt": "2026-09-11T05:07:54.846973+00:00",
+    "records": 136,
+    "sha256": "7e9606f43c8943543c080c9eabcd368cf9331f01817b435f0b38002ae766e011",
+    "role": "read_only",
+    "transaction": "on",
+    "atomicSnapshot": true,
+    "afterRunId": 0,
+    "throughRunId": 723455,
+    "nextRunId": null,
+    "timelineExhausted": true
+  },
+  "a0Manifest": {
+    "operation": "report",
+    "from": "2026-09-10T22:58:33.610000+00:00",
+    "to": "2026-09-11T05:07:39+00:00",
+    "startedAt": "2026-09-11T05:07:39.093018+00:00",
+    "completedAt": "2026-09-11T05:07:49.091911+00:00",
+    "records": 69,
+    "sha256": "747f27b29397f9fdf2a60d83dfeb35c42f4c6886255ad37154b8442204c7b024",
+    "role": "read_only",
+    "transaction": "on",
+    "atomicSnapshot": false
+  },
+  "files": {
+    "c1Report": {
+      "localPath": "/Users/dmitriy/code/goose/hub/investigations/fansly-c1-deploy-2026-09-11/followup-20260911T050632Z/snapshot-20260911T050739Z/report.json",
+      "sha256": "7e9606f43c8943543c080c9eabcd368cf9331f01817b435f0b38002ae766e011"
+    },
+    "c1Summary": {
+      "localPath": "/Users/dmitriy/code/goose/hub/investigations/fansly-c1-deploy-2026-09-11/followup-20260911T050632Z/snapshot-20260911T050739Z/summary.json",
+      "sha256": "b4d3e6043b20e4f3ff3c718246518e8ed7ec3b02c24c561a18d49bb2adf515d4"
+    },
+    "a0Report": {
+      "localPath": "/Users/dmitriy/code/goose/hub/investigations/fansly-a0-deploy-2026-09-11/activation/20260910T225618Z/snapshot-20260911T050739Z/report.json",
+      "sha256": "747f27b29397f9fdf2a60d83dfeb35c42f4c6886255ad37154b8442204c7b024"
+    },
+    "a0Summary": {
+      "localPath": "/Users/dmitriy/code/goose/hub/investigations/fansly-a0-deploy-2026-09-11/activation/20260910T225618Z/snapshot-20260911T050739Z/summary.json",
+      "sha256": "8e5c9b746cc7350a0d3198467b7de3537a2270040444d6fbf79e7004ebeed337"
+    },
+    "runtime": {
+      "localPath": "/Users/dmitriy/code/goose/hub/investigations/fansly-c1-deploy-2026-09-11/followup-20260911T050632Z/runtime.json",
+      "sha256": "7339d1b14733cef557abb509601ecc02ede2ac0d1b08d86404f3eae5b790d155"
+    },
+    "workerLog": {
+      "localPath": "/Users/dmitriy/code/goose/hub/investigations/fansly-c1-deploy-2026-09-11/followup-20260911T050632Z/worker.log",
+      "sha256": "89b32392441899ac2cf5505881b465059452340da1cc36c824597367400ca5cf"
+    },
+    "workerLogSummary": {
+      "localPath": "/Users/dmitriy/code/goose/hub/investigations/fansly-c1-deploy-2026-09-11/followup-20260911T050632Z/worker-log-summary.json",
+      "sha256": "674ca0cddf54f26375931cf8b87e933a8416818f525d735cf05d8fcd1bc36ca9"
+    },
+    "workerState": {
+      "localPath": "/Users/dmitriy/code/goose/hub/investigations/fansly-c1-deploy-2026-09-11/followup-20260911T050632Z/worker-state.json",
+      "sha256": "c2019f9795d5e14f0d68f816de4fa0e98ffa780d52c0809f05ec302c0b60aa90"
+    }
+  },
+  "review": {
+    "c1Reviewer": "review_pr162",
+    "runtimeReviewer": "quality_c1",
+    "productionAccessByReviewers": false,
+    "testsRunByReviewers": false,
+    "c1Finding": "No demonstrated redundancy or justified suppression fix. Actual row identity and protection reason remain unknown.",
+    "runtimeFinding": "Immediate exit follows pg-boss pool checkout timeout; the cause of the unavailable connection and relation to protected health are unproven.",
+    "finalDocumentationFindingsRemaining": 0,
+    "allowlistWordingFinding": "Fixed and independently re-reviewed: activation and last exact configuration check are dated; current allowlist after restart is unverified."
+  },
+  "unexecutedPlanOnlyException": {
+    "ownerApprovalPending": true,
+    "executed": false,
+    "sha256": "fd55d8c8861c85dfac8addc22d9372cbb468624401ff55af036acc9fc5702b70"
+  }
+}

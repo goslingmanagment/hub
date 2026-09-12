@@ -1,0 +1,63 @@
+{
+  "recordedAt": "2026-09-12T19:18:24.472679+00:00",
+  "testedTree": "e5c713d33c6fb485bed81036237c383e71b0f7fe",
+  "parents": [
+    "d80c91d2288d6df5f837798135864f5067ae0fda",
+    "c76c6db06ce1c25e469ca07ec62762e248870f44"
+  ],
+  "checks": [
+    {
+      "command": [
+        "pnpm",
+        "check"
+      ],
+      "startedAt": "2026-09-12T19:07:43.530027+00:00",
+      "completedAt": "2026-09-12T19:08:37.425967+00:00",
+      "exitCode": 0,
+      "result": {
+        "unitFilesPassed": 298,
+        "unitTestsPassed": 3291,
+        "existingTestsSkipped": 9,
+        "strictnessKnownErrors": 1901,
+        "strictnessDebtFiles": 121,
+        "lint": "passed",
+        "build": "passed"
+      },
+      "localLog": "check.log",
+      "logSha256": "85cf22758cea0d75d792c272c501b024e1e39a4ee733670b090c280bf00d21da"
+    },
+    {
+      "command": [
+        "pnpm",
+        "exec",
+        "vitest",
+        "run",
+        "--no-file-parallelism",
+        "tests/observations.repository.integration.test.ts",
+        "tests/erasure-page-owned-tables.integration.test.ts"
+      ],
+      "startedAt": "2026-09-12T19:13:40.589010+00:00",
+      "completedAt": "2026-09-12T19:13:46.554026+00:00",
+      "exitCode": 0,
+      "result": {
+        "filesPassed": 2,
+        "testsPassed": 10,
+        "testsSkipped": 0,
+        "vitestDurationSeconds": 5.03,
+        "database": "real Docker PostgreSQL"
+      },
+      "localLog": "postgres.log",
+      "logSha256": "32484797832ab54bcaab946067a343594fcf307e1d3039fe9f4f487bf09a9dfc"
+    }
+  ],
+  "diffCheckAgainstMain": "passed",
+  "inheritedWhitespace": "main C1 health-plan-only.sql:464; unchanged by W0",
+  "sourceAfterTests": "all six W0 source/test hashes match candidate.json",
+  "laterChanges": "documentation and evidence only",
+  "production": {
+    "operationsForW0": 0,
+    "liveEvidence": "unmeasured",
+    "releaseCandidate": false
+  },
+  "logs": "Retained locally; only this summary and the candidate receipt are committed."
+}

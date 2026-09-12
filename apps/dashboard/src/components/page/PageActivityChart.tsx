@@ -99,14 +99,18 @@ export function PageActivityChart(props: {
   points: Array<{ businessDate: string; value: number }>;
   valueFormatter?: (value: number) => string;
   yAxisWidth?: number;
+  height?: number;
+  showYAxisLabel?: boolean;
   color?: string;
+  allowMonthly?: boolean;
 }) {
   const gradientId = useId();
   const color = props.color ?? "#4ead6b";
   const [allTimeGranularity, setAllTimeGranularity] = useState<"monthly" | "daily">("monthly");
-  const mode = getChartMode(props.selectedPeriod, allTimeGranularity);
+  const granularity = props.allowMonthly === false ? "daily" : allTimeGranularity;
+  const mode = getChartMode(props.selectedPeriod, granularity);
 
-  const useMonthly = props.selectedPeriod === "all" && allTimeGranularity === "monthly";
+  const useMonthly = props.selectedPeriod === "all" && granularity === "monthly";
   const chartDisplayItems = useMonthly ? aggregateMonthly(props.points) : props.points;
 
   const tickFormatter = (value: string) =>
@@ -142,7 +146,7 @@ export function PageActivityChart(props: {
         <h2 className="text-[12px] text-text-muted uppercase tracking-wider font-semibold">
           {props.title}
         </h2>
-        {props.selectedPeriod === "all" ? (
+        {props.selectedPeriod === "all" && props.allowMonthly !== false ? (
           <div className="flex rounded-lg overflow-hidden border border-border">
             {(["daily", "monthly"] as const).map((g) => (
               <button
@@ -163,7 +167,7 @@ export function PageActivityChart(props: {
           <span className="text-[12px] text-text-muted">{props.selectedPeriodLabel}</span>
         )}
       </div>
-      <ResponsiveContainer width="100%" height={300}>
+      <ResponsiveContainer width="100%" height={props.height ?? 300}>
         {isArea ? (
           <AreaChart data={chartDisplayItems} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
             <AreaGradientDef id={gradientId} color={color} />
@@ -172,7 +176,7 @@ export function PageActivityChart(props: {
             <YAxis
               {...yAxisProps}
               {...yAxisOverrides}
-              label={{
+              label={props.showYAxisLabel === false ? false : {
                 value: props.title,
                 angle: -90,
                 position: "insideLeft",
@@ -199,7 +203,7 @@ export function PageActivityChart(props: {
             <YAxis
               {...yAxisProps}
               {...yAxisOverrides}
-              label={{
+              label={props.showYAxisLabel === false ? false : {
                 value: props.title,
                 angle: -90,
                 position: "insideLeft",

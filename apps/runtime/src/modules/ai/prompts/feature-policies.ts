@@ -218,7 +218,7 @@ export const FEATURE_POLICIES = {
     requiresDraft: false,
     usesPingSegment: true,
     usesFanProfile: true,
-    includesFanBio: false,
+    includesFanBio: true,
   },
   'hi-greeting': {
     surface: 'ai-dock',

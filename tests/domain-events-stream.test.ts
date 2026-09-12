@@ -5,6 +5,7 @@ import type * as DbModule from "@agency_hub_core/db";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const dbMocks = vi.hoisted(() => ({
+  getAccountHighWater: vi.fn(),
   getMaxOfapiFanoutSeq: vi.fn(),
   getOfapiSyncReplayFloor: vi.fn(),
   getDomainEventErasureEpoch: vi.fn(),
@@ -179,6 +180,10 @@ async function runV2Stream(input: {
     // while that query is gated — may observe the newer racing head.
     currentSeq: replayQuerySeen ? (input.liveHead ?? input.head) : input.head,
   }]]));
+  // The live hub drain reads the counter head only (never the bounds).
+  dbMocks.getAccountHighWater.mockImplementation(async () => (
+    replayQuerySeen ? (input.liveHead ?? input.head) : input.head
+  ));
   dbMocks.listDomainEventContiguousReplayEnds.mockResolvedValue(new Map([[7, input.head]]));
   dbMocks.listDomainEventRecoveryRetainedCounts.mockResolvedValue(
     new Map([[7, input.rows.length]]),
@@ -309,6 +314,7 @@ async function makeLiveHarness(
     release: vi.fn(),
   });
   dbMocks.listDomainEventHighWaters.mockResolvedValue(new Map([[7, 0]]));
+  dbMocks.getAccountHighWater.mockResolvedValue(head);
   dbMocks.listDomainEventAccountBounds.mockResolvedValue(new Map([[7, {
     accountId: 7,
     oldestRetainedSeq: rows[0] ?? null,
@@ -357,6 +363,14 @@ describe("domain event hub live continuity", () => {
     hub = harness.created;
     await vi.waitFor(() => expect(harness.delivered).toEqual([1, 3, 4]));
     expect(harness.continuityLosses).toEqual([]);
+  });
+
+  it("reads the live head from the counter only, never the retention bounds (diag 2026-09-11)", async () => {
+    const h = await makeLiveHarness([1, 2], 2);
+    hub = h.created;
+    await vi.waitFor(() => expect(h.delivered).toEqual([1, 2]));
+    expect(dbMocks.getAccountHighWater).toHaveBeenCalledWith({}, 7);
+    expect(dbMocks.listDomainEventAccountBounds).not.toHaveBeenCalled();
   });
 
   it("detects an internal retained-ledger hole before broadcasting a later row", async () => {

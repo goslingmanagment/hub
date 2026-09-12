@@ -1116,6 +1116,7 @@ describe("sync executor handlers", () => {
         pageId: 12,
         streams: ["followers_reconcile"],
         source: "anomaly",
+        includeQueueState: true,
       });
     } finally {
       vi.useRealTimers();

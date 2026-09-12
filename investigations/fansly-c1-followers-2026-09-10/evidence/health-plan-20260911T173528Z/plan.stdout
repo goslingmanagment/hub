@@ -1,0 +1,1821 @@
+[
+  {
+    "Plan": {
+      "Node Type": "Sort",
+      "Parallel Aware": false,
+      "Async Capable": false,
+      "Startup Cost": 910162.03,
+      "Total Cost": 910173.03,
+      "Plan Rows": 4400,
+      "Plan Width": 3635,
+      "Sort Key": ["vp.\"pageLabel\"", "(CASE s.stream WHEN 'light'::sync_stream THEN 1 WHEN 'transactions'::sync_stream THEN 2 WHEN 'fan_identities'::sync_stream THEN 3 WHEN 'top_spenders'::sync_stream THEN 4 WHEN 'subscribers'::sync_stream THEN 5 WHEN 'followers'::sync_stream THEN 6 WHEN 'followers_reconcile'::sync_stream THEN 7 WHEN 'dm_conversations'::sync_stream THEN 8 WHEN 'dm_messages'::sync_stream THEN 9 WHEN 'fan_earnings'::sync_stream THEN 10 WHEN 'purchase_history'::sync_stream THEN 11 WHEN 'posts'::sync_stream THEN 12 WHEN 'stats_snapshot'::sync_stream THEN 13 WHEN 'notifications'::sync_stream THEN 14 WHEN 'catalog'::sync_stream THEN 15 WHEN 'post_replies'::sync_stream THEN 16 WHEN 'payouts'::sync_stream THEN 17 WHEN 'media_stats'::sync_stream THEN 18 ELSE 999 END)"],
+      "Plans": [
+        {
+          "Node Type": "Hash Join",
+          "Parent Relationship": "InitPlan",
+          "Subplan Name": "CTE visible_pages",
+          "Parallel Aware": false,
+          "Async Capable": false,
+          "Join Type": "Right",
+          "Startup Cost": 55.50,
+          "Total Cost": 181.63,
+          "Plan Rows": 440,
+          "Plan Width": 136,
+          "Inner Unique": false,
+          "Hash Cond": "(egress_endpoints.platform_account_id = pages.id)",
+          "Plans": [
+            {
+              "Node Type": "Seq Scan",
+              "Parent Relationship": "Outer",
+              "Parallel Aware": false,
+              "Async Capable": false,
+              "Relation Name": "egress_endpoints",
+              "Alias": "egress_endpoints",
+              "Startup Cost": 0.00,
+              "Total Cost": 14.40,
+              "Plan Rows": 440,
+              "Plan Width": 72
+            },
+            {
+              "Node Type": "Hash",
+              "Parent Relationship": "Inner",
+              "Parallel Aware": false,
+              "Async Capable": false,
+              "Startup Cost": 55.40,
+              "Total Cost": 55.40,
+              "Plan Rows": 8,
+              "Plan Width": 104,
+              "Plans": [
+                {
+                  "Node Type": "Nested Loop",
+                  "Parent Relationship": "Outer",
+                  "Parallel Aware": false,
+                  "Async Capable": false,
+                  "Join Type": "Inner",
+                  "Startup Cost": 0.16,
+                  "Total Cost": 55.40,
+                  "Plan Rows": 8,
+                  "Plan Width": 104,
+                  "Inner Unique": true,
+                  "Plans": [
+                    {
+                      "Node Type": "Seq Scan",
+                      "Parent Relationship": "Outer",
+                      "Parallel Aware": false,
+                      "Async Capable": false,
+                      "Relation Name": "pages",
+                      "Alias": "pages",
+                      "Startup Cost": 0.00,
+                      "Total Cost": 40.10,
+                      "Plan Rows": 8,
+                      "Plan Width": 48,
+                      "Filter": "(status = 'active'::text)"
+                    },
+                    {
+                      "Node Type": "Memoize",
+                      "Parent Relationship": "Inner",
+                      "Parallel Aware": false,
+                      "Async Capable": false,
+                      "Startup Cost": 0.16,
+                      "Total Cost": 4.18,
+                      "Plan Rows": 1,
+                      "Plan Width": 72,
+                      "Cache Key": "pages.model_id",
+                      "Cache Mode": "logical",
+                      "Plans": [
+                        {
+                          "Node Type": "Index Scan",
+                          "Parent Relationship": "Outer",
+                          "Parallel Aware": false,
+                          "Async Capable": false,
+                          "Scan Direction": "Forward",
+                          "Index Name": "models_pkey",
+                          "Relation Name": "models",
+                          "Alias": "models",
+                          "Startup Cost": 0.15,
+                          "Total Cost": 4.17,
+                          "Plan Rows": 1,
+                          "Plan Width": 72,
+                          "Index Cond": "(id = pages.model_id)"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "Node Type": "Hash Join",
+          "Parent Relationship": "Outer",
+          "Parallel Aware": false,
+          "Async Capable": false,
+          "Join Type": "Left",
+          "Startup Cost": 362102.27,
+          "Total Cost": 902826.12,
+          "Plan Rows": 4400,
+          "Plan Width": 3635,
+          "Inner Unique": true,
+          "Hash Cond": "(vp.\"pageId\" = dmc.\"pageId\")",
+          "Plans": [
+            {
+              "Node Type": "Merge Join",
+              "Parent Relationship": "Outer",
+              "Parallel Aware": false,
+              "Async Capable": false,
+              "Join Type": "Left",
+              "Startup Cost": 283518.79,
+              "Total Cost": 823977.84,
+              "Plan Rows": 4400,
+              "Plan Width": 3631,
+              "Inner Unique": true,
+              "Merge Cond": "(vp.\"pageId\" = sr_3.page_id)",
+              "Plans": [
+                {
+                  "Node Type": "Merge Join",
+                  "Parent Relationship": "Outer",
+                  "Parallel Aware": false,
+                  "Async Capable": false,
+                  "Join Type": "Left",
+                  "Startup Cost": 283342.39,
+                  "Total Cost": 823789.86,
+                  "Plan Rows": 4400,
+                  "Plan Width": 3619,
+                  "Inner Unique": true,
+                  "Merge Cond": "(vp.\"pageId\" = c_1.platform_account_id)",
+                  "Plans": [
+                    {
+                      "Node Type": "Merge Join",
+                      "Parent Relationship": "Outer",
+                      "Parallel Aware": false,
+                      "Async Capable": false,
+                      "Join Type": "Left",
+                      "Startup Cost": 280625.85,
+                      "Total Cost": 821061.90,
+                      "Plan Rows": 4400,
+                      "Plan Width": 3595,
+                      "Inner Unique": true,
+                      "Merge Cond": "(vp.\"pageId\" = dcc.\"pageId\")",
+                      "Plans": [
+                        {
+                          "Node Type": "Merge Join",
+                          "Parent Relationship": "Outer",
+                          "Parallel Aware": false,
+                          "Async Capable": false,
+                          "Join Type": "Left",
+                          "Startup Cost": 267608.05,
+                          "Total Cost": 808031.30,
+                          "Plan Rows": 4400,
+                          "Plan Width": 3579,
+                          "Inner Unique": true,
+                          "Merge Cond": "(vp.\"pageId\" = t.platform_account_id)",
+                          "Plans": [
+                            {
+                              "Node Type": "Merge Join",
+                              "Parent Relationship": "Outer",
+                              "Parallel Aware": false,
+                              "Async Capable": false,
+                              "Join Type": "Left",
+                              "Startup Cost": 267579.64,
+                              "Total Cost": 805451.58,
+                              "Plan Rows": 4400,
+                              "Plan Width": 3575,
+                              "Inner Unique": true,
+                              "Merge Cond": "(vp.\"pageId\" = ps.platform_account_id)",
+                              "Plans": [
+                                {
+                                  "Node Type": "Merge Join",
+                                  "Parent Relationship": "Outer",
+                                  "Parallel Aware": false,
+                                  "Async Capable": false,
+                                  "Join Type": "Left",
+                                  "Startup Cost": 267551.24,
+                                  "Total Cost": 803897.00,
+                                  "Plan Rows": 4400,
+                                  "Plan Width": 3571,
+                                  "Inner Unique": true,
+                                  "Merge Cond": "(vp.\"pageId\" = pf.platform_account_id)",
+                                  "Plans": [
+                                    {
+                                      "Node Type": "Nested Loop",
+                                      "Parent Relationship": "Outer",
+                                      "Parallel Aware": false,
+                                      "Async Capable": false,
+                                      "Join Type": "Left",
+                                      "Startup Cost": 267522.70,
+                                      "Total Cost": 797223.72,
+                                      "Plan Rows": 4400,
+                                      "Plan Width": 3567,
+                                      "Inner Unique": true,
+                                      "Join Filter": "((prl.platform = vp.platform) AND (prl.\"egressKey\" = vp.\"egressKey\"))",
+                                      "Plans": [
+                                        {
+                                          "Node Type": "Merge Join",
+                                          "Parent Relationship": "Outer",
+                                          "Parallel Aware": false,
+                                          "Async Capable": false,
+                                          "Join Type": "Left",
+                                          "Startup Cost": 267282.76,
+                                          "Total Cost": 795510.32,
+                                          "Plan Rows": 4400,
+                                          "Plan Width": 3587,
+                                          "Inner Unique": true,
+                                          "Merge Cond": "((vp.\"pageId\" = a_2.page_id) AND (s.stream = a_2.stream))",
+                                          "Plans": [
+                                            {
+                                              "Node Type": "Merge Join",
+                                              "Parent Relationship": "Outer",
+                                              "Parallel Aware": false,
+                                              "Async Capable": false,
+                                              "Join Type": "Left",
+                                              "Startup Cost": 96236.55,
+                                              "Total Cost": 320632.61,
+                                              "Plan Rows": 4400,
+                                              "Plan Width": 3563,
+                                              "Inner Unique": true,
+                                              "Merge Cond": "(vp.\"pageId\" = fp.platform_account_id)",
+                                              "Plans": [
+                                                {
+                                                  "Node Type": "Merge Join",
+                                                  "Parent Relationship": "Outer",
+                                                  "Parallel Aware": false,
+                                                  "Async Capable": false,
+                                                  "Join Type": "Left",
+                                                  "Startup Cost": 82438.86,
+                                                  "Total Cost": 288245.33,
+                                                  "Plan Rows": 4400,
+                                                  "Plan Width": 3559,
+                                                  "Inner Unique": true,
+                                                  "Merge Cond": "((vp.\"pageId\" = rac.\"pageId\") AND (s.stream = rac.stream))",
+                                                  "Plans": [
+                                                    {
+                                                      "Node Type": "Merge Join",
+                                                      "Parent Relationship": "Outer",
+                                                      "Parallel Aware": false,
+                                                      "Async Capable": false,
+                                                      "Join Type": "Left",
+                                                      "Startup Cost": 44803.86,
+                                                      "Total Cost": 250587.03,
+                                                      "Plan Rows": 4400,
+                                                      "Plan Width": 3527,
+                                                      "Inner Unique": true,
+                                                      "Merge Cond": "((vp.\"pageId\" = rrc.\"pageId\") AND (s.stream = rrc.stream))",
+                                                      "Plans": [
+                                                        {
+                                                          "Node Type": "Merge Join",
+                                                          "Parent Relationship": "Outer",
+                                                          "Parallel Aware": false,
+                                                          "Async Capable": false,
+                                                          "Join Type": "Left",
+                                                          "Startup Cost": 40608.26,
+                                                          "Total Cost": 246368.12,
+                                                          "Plan Rows": 4400,
+                                                          "Plan Width": 3507,
+                                                          "Inner Unique": false,
+                                                          "Merge Cond": "((vp.\"pageId\" = ranked_1.\"pageId\") AND (s.stream = ranked_1.stream))",
+                                                          "Plans": [
+                                                            {
+                                                              "Node Type": "Merge Join",
+                                                              "Parent Relationship": "Outer",
+                                                              "Parallel Aware": false,
+                                                              "Async Capable": false,
+                                                              "Join Type": "Left",
+                                                              "Startup Cost": 40531.23,
+                                                              "Total Cost": 41068.07,
+                                                              "Plan Rows": 4400,
+                                                              "Plan Width": 2133,
+                                                              "Inner Unique": false,
+                                                              "Merge Cond": "(vp.\"pageId\" = cp.page_id)",
+                                                              "Join Filter": "((cp.stream)::text = (s.stream)::text)",
+                                                              "Plans": [
+                                                                {
+                                                                  "Node Type": "Merge Join",
+                                                                  "Parent Relationship": "Outer",
+                                                                  "Parallel Aware": false,
+                                                                  "Async Capable": false,
+                                                                  "Join Type": "Left",
+                                                                  "Startup Cost": 40530.96,
+                                                                  "Total Cost": 40564.11,
+                                                                  "Plan Rows": 4400,
+                                                                  "Plan Width": 1731,
+                                                                  "Inner Unique": false,
+                                                                  "Merge Cond": "((vp.\"pageId\" = ranked.\"pageId\") AND (s.stream = ranked.stream))",
+                                                                  "Plans": [
+                                                                    {
+                                                                      "Node Type": "Sort",
+                                                                      "Parent Relationship": "Outer",
+                                                                      "Parallel Aware": false,
+                                                                      "Async Capable": false,
+                                                                      "Startup Cost": 607.25,
+                                                                      "Total Cost": 618.25,
+                                                                      "Plan Rows": 4400,
+                                                                      "Plan Width": 393,
+                                                                      "Sort Key": ["vp.\"pageId\"", "s.stream"],
+                                                                      "Plans": [
+                                                                        {
+                                                                          "Node Type": "Hash Join",
+                                                                          "Parent Relationship": "Outer",
+                                                                          "Parallel Aware": false,
+                                                                          "Async Capable": false,
+                                                                          "Join Type": "Left",
+                                                                          "Startup Cost": 188.96,
+                                                                          "Total Cost": 340.98,
+                                                                          "Plan Rows": 4400,
+                                                                          "Plan Width": 393,
+                                                                          "Inner Unique": false,
+                                                                          "Hash Cond": "((vp.\"pageId\" = st.page_id) AND ((s.stream)::text = (st.stream)::text))",
+                                                                          "Plans": [
+                                                                            {
+                                                                              "Node Type": "Nested Loop",
+                                                                              "Parent Relationship": "Outer",
+                                                                              "Parallel Aware": false,
+                                                                              "Async Capable": false,
+                                                                              "Join Type": "Inner",
+                                                                              "Startup Cost": 0.01,
+                                                                              "Total Cost": 96.81,
+                                                                              "Plan Rows": 4400,
+                                                                              "Plan Width": 236,
+                                                                              "Inner Unique": false,
+                                                                              "Plans": [
+                                                                                {
+                                                                                  "Node Type": "CTE Scan",
+                                                                                  "Parent Relationship": "Outer",
+                                                                                  "Parallel Aware": false,
+                                                                                  "Async Capable": false,
+                                                                                  "CTE Name": "visible_pages",
+                                                                                  "Alias": "vp",
+                                                                                  "Startup Cost": 0.00,
+                                                                                  "Total Cost": 8.80,
+                                                                                  "Plan Rows": 440,
+                                                                                  "Plan Width": 232
+                                                                                },
+                                                                                {
+                                                                                  "Node Type": "Function Scan",
+                                                                                  "Parent Relationship": "Inner",
+                                                                                  "Parallel Aware": false,
+                                                                                  "Async Capable": false,
+                                                                                  "Function Name": "unnest",
+                                                                                  "Alias": "s",
+                                                                                  "Startup Cost": 0.01,
+                                                                                  "Total Cost": 0.11,
+                                                                                  "Plan Rows": 10,
+                                                                                  "Plan Width": 4
+                                                                                }
+                                                                              ]
+                                                                            },
+                                                                            {
+                                                                              "Node Type": "Hash",
+                                                                              "Parent Relationship": "Inner",
+                                                                              "Parallel Aware": false,
+                                                                              "Async Capable": false,
+                                                                              "Startup Cost": 187.18,
+                                                                              "Total Cost": 187.18,
+                                                                              "Plan Rows": 118,
+                                                                              "Plan Width": 169,
+                                                                              "Plans": [
+                                                                                {
+                                                                                  "Node Type": "Seq Scan",
+                                                                                  "Parent Relationship": "Outer",
+                                                                                  "Parallel Aware": false,
+                                                                                  "Async Capable": false,
+                                                                                  "Relation Name": "page_sync_states",
+                                                                                  "Alias": "st",
+                                                                                  "Startup Cost": 0.00,
+                                                                                  "Total Cost": 187.18,
+                                                                                  "Plan Rows": 118,
+                                                                                  "Plan Width": 169
+                                                                                }
+                                                                              ]
+                                                                            }
+                                                                          ]
+                                                                        }
+                                                                      ]
+                                                                    },
+                                                                    {
+                                                                      "Node Type": "Materialize",
+                                                                      "Parent Relationship": "Inner",
+                                                                      "Parallel Aware": false,
+                                                                      "Async Capable": false,
+                                                                      "Startup Cost": 39923.72,
+                                                                      "Total Cost": 39923.85,
+                                                                      "Plan Rows": 1,
+                                                                      "Plan Width": 1350,
+                                                                      "Plans": [
+                                                                        {
+                                                                          "Node Type": "Nested Loop",
+                                                                          "Parent Relationship": "Outer",
+                                                                          "Parallel Aware": false,
+                                                                          "Async Capable": false,
+                                                                          "Join Type": "Left",
+                                                                          "Startup Cost": 39923.72,
+                                                                          "Total Cost": 39923.84,
+                                                                          "Plan Rows": 1,
+                                                                          "Plan Width": 1350,
+                                                                          "Inner Unique": false,
+                                                                          "Plans": [
+                                                                            {
+                                                                              "Node Type": "Nested Loop",
+                                                                              "Parent Relationship": "Outer",
+                                                                              "Parallel Aware": false,
+                                                                              "Async Capable": false,
+                                                                              "Join Type": "Left",
+                                                                              "Startup Cost": 39922.70,
+                                                                              "Total Cost": 39922.80,
+                                                                              "Plan Rows": 1,
+                                                                              "Plan Width": 1350,
+                                                                              "Inner Unique": false,
+                                                                              "Plans": [
+                                                                                {
+                                                                                  "Node Type": "Subquery Scan",
+                                                                                  "Parent Relationship": "Outer",
+                                                                                  "Parallel Aware": false,
+                                                                                  "Async Capable": false,
+                                                                                  "Alias": "ranked",
+                                                                                  "Startup Cost": 39901.72,
+                                                                                  "Total Cost": 39901.81,
+                                                                                  "Plan Rows": 1,
+                                                                                  "Plan Width": 1342,
+                                                                                  "Filter": "(ranked.rank = 1)",
+                                                                                  "Plans": [
+                                                                                    {
+                                                                                      "Node Type": "WindowAgg",
+                                                                                      "Parent Relationship": "Subquery",
+                                                                                      "Parallel Aware": false,
+                                                                                      "Async Capable": false,
+                                                                                      "Startup Cost": 39901.72,
+                                                                                      "Total Cost": 39901.78,
+                                                                                      "Plan Rows": 2,
+                                                                                      "Plan Width": 1350,
+                                                                                      "Run Condition": "(row_number() OVER (?) <= 1)",
+                                                                                      "Plans": [
+                                                                                        {
+                                                                                          "Node Type": "Sort",
+                                                                                          "Parent Relationship": "Outer",
+                                                                                          "Parallel Aware": false,
+                                                                                          "Async Capable": false,
+                                                                                          "Startup Cost": 39901.72,
+                                                                                          "Total Cost": 39901.73,
+                                                                                          "Plan Rows": 2,
+                                                                                          "Plan Width": 1314,
+                                                                                          "Sort Key": ["sr.page_id", "sr.stream", "sr.started_at DESC", "sr.id DESC"],
+                                                                                          "Plans": [
+                                                                                            {
+                                                                                              "Node Type": "Nested Loop",
+                                                                                              "Parent Relationship": "Outer",
+                                                                                              "Parallel Aware": false,
+                                                                                              "Async Capable": false,
+                                                                                              "Join Type": "Inner",
+                                                                                              "Startup Cost": 0.04,
+                                                                                              "Total Cost": 39901.71,
+                                                                                              "Plan Rows": 2,
+                                                                                              "Plan Width": 1314,
+                                                                                              "Inner Unique": false,
+                                                                                              "Join Filter": "(sr.page_id = vp_1.\"pageId\")",
+                                                                                              "Plans": [
+                                                                                                {
+                                                                                                  "Node Type": "Seq Scan",
+                                                                                                  "Parent Relationship": "Outer",
+                                                                                                  "Parallel Aware": false,
+                                                                                                  "Async Capable": false,
+                                                                                                  "Relation Name": "sync_runs",
+                                                                                                  "Alias": "sr",
+                                                                                                  "Startup Cost": 0.04,
+                                                                                                  "Total Cost": 39887.41,
+                                                                                                  "Plan Rows": 1,
+                                                                                                  "Plan Width": 1314,
+                                                                                                  "Filter": "((outcome = 'running'::sync_run_outcome) AND (stream = ANY ('{light,transactions,top_spenders,subscribers,followers,followers_reconcile,dm_conversations,dm_messages,fan_earnings,purchase_history,posts,stats_snapshot,notifications,catalog,post_replies,payouts,media_stats}'::sync_stream[])))"
+                                                                                                },
+                                                                                                {
+                                                                                                  "Node Type": "CTE Scan",
+                                                                                                  "Parent Relationship": "Inner",
+                                                                                                  "Parallel Aware": false,
+                                                                                                  "Async Capable": false,
+                                                                                                  "CTE Name": "visible_pages",
+                                                                                                  "Alias": "vp_1",
+                                                                                                  "Startup Cost": 0.00,
+                                                                                                  "Total Cost": 8.80,
+                                                                                                  "Plan Rows": 440,
+                                                                                                  "Plan Width": 8
+                                                                                                }
+                                                                                              ]
+                                                                                            }
+                                                                                          ]
+                                                                                        }
+                                                                                      ]
+                                                                                    }
+                                                                                  ]
+                                                                                },
+                                                                                {
+                                                                                  "Node Type": "Aggregate",
+                                                                                  "Strategy": "Plain",
+                                                                                  "Partial Mode": "Simple",
+                                                                                  "Parent Relationship": "Inner",
+                                                                                  "Parallel Aware": false,
+                                                                                  "Async Capable": false,
+                                                                                  "Startup Cost": 20.98,
+                                                                                  "Total Cost": 20.99,
+                                                                                  "Plan Rows": 1,
+                                                                                  "Plan Width": 8,
+                                                                                  "Plans": [
+                                                                                    {
+                                                                                      "Node Type": "Index Scan",
+                                                                                      "Parent Relationship": "Outer",
+                                                                                      "Parallel Aware": false,
+                                                                                      "Async Capable": false,
+                                                                                      "Scan Direction": "Forward",
+                                                                                      "Index Name": "sync_http_attempts_logical_idx",
+                                                                                      "Relation Name": "sync_http_attempts",
+                                                                                      "Alias": "a",
+                                                                                      "Startup Cost": 0.42,
+                                                                                      "Total Cost": 20.96,
+                                                                                      "Plan Rows": 6,
+                                                                                      "Plan Width": 16,
+                                                                                      "Index Cond": "(sync_run_id = ranked.\"runningRunId\")"
+                                                                                    }
+                                                                                  ]
+                                                                                }
+                                                                              ]
+                                                                            },
+                                                                            {
+                                                                              "Node Type": "Result",
+                                                                              "Parent Relationship": "Inner",
+                                                                              "Parallel Aware": false,
+                                                                              "Async Capable": false,
+                                                                              "Startup Cost": 1.02,
+                                                                              "Total Cost": 1.03,
+                                                                              "Plan Rows": 1,
+                                                                              "Plan Width": 8,
+                                                                              "Plans": [
+                                                                                {
+                                                                                  "Node Type": "Limit",
+                                                                                  "Parent Relationship": "InitPlan",
+                                                                                  "Subplan Name": "InitPlan 2 (returns $4)",
+                                                                                  "Parallel Aware": false,
+                                                                                  "Async Capable": false,
+                                                                                  "Startup Cost": 0.43,
+                                                                                  "Total Cost": 1.02,
+                                                                                  "Plan Rows": 1,
+                                                                                  "Plan Width": 8,
+                                                                                  "Plans": [
+                                                                                    {
+                                                                                      "Node Type": "Index Only Scan",
+                                                                                      "Parent Relationship": "Outer",
+                                                                                      "Parallel Aware": false,
+                                                                                      "Async Capable": false,
+                                                                                      "Scan Direction": "Backward",
+                                                                                      "Index Name": "sync_run_events_run_emitted_idx",
+                                                                                      "Relation Name": "sync_run_events",
+                                                                                      "Alias": "e",
+                                                                                      "Startup Cost": 0.43,
+                                                                                      "Total Cost": 8.71,
+                                                                                      "Plan Rows": 14,
+                                                                                      "Plan Width": 8,
+                                                                                      "Index Cond": "((sync_run_id = ranked.\"runningRunId\") AND (emitted_at IS NOT NULL))"
+                                                                                    }
+                                                                                  ]
+                                                                                }
+                                                                              ]
+                                                                            }
+                                                                          ]
+                                                                        }
+                                                                      ]
+                                                                    }
+                                                                  ]
+                                                                },
+                                                                {
+                                                                  "Node Type": "Materialize",
+                                                                  "Parent Relationship": "Inner",
+                                                                  "Parallel Aware": false,
+                                                                  "Async Capable": false,
+                                                                  "Startup Cost": 0.27,
+                                                                  "Total Cost": 427.89,
+                                                                  "Plan Rows": 108,
+                                                                  "Plan Width": 414,
+                                                                  "Plans": [
+                                                                    {
+                                                                      "Node Type": "Index Scan",
+                                                                      "Parent Relationship": "Outer",
+                                                                      "Parallel Aware": false,
+                                                                      "Async Capable": false,
+                                                                      "Scan Direction": "Forward",
+                                                                      "Index Name": "page_sync_cursors_pkey",
+                                                                      "Relation Name": "page_sync_cursors",
+                                                                      "Alias": "cp",
+                                                                      "Startup Cost": 0.27,
+                                                                      "Total Cost": 427.62,
+                                                                      "Plan Rows": 108,
+                                                                      "Plan Width": 414
+                                                                    }
+                                                                  ]
+                                                                }
+                                                              ]
+                                                            },
+                                                            {
+                                                              "Node Type": "Materialize",
+                                                              "Parent Relationship": "Inner",
+                                                              "Parallel Aware": false,
+                                                              "Async Capable": false,
+                                                              "Startup Cost": 77.02,
+                                                              "Total Cost": 205239.36,
+                                                              "Plan Rows": 2049,
+                                                              "Plan Width": 1386,
+                                                              "Plans": [
+                                                                {
+                                                                  "Node Type": "Subquery Scan",
+                                                                  "Parent Relationship": "Outer",
+                                                                  "Parallel Aware": false,
+                                                                  "Async Capable": false,
+                                                                  "Alias": "ranked_1",
+                                                                  "Startup Cost": 77.02,
+                                                                  "Total Cost": 205234.23,
+                                                                  "Plan Rows": 2049,
+                                                                  "Plan Width": 1386,
+                                                                  "Filter": "(ranked_1.rank = 1)",
+                                                                  "Plans": [
+                                                                    {
+                                                                      "Node Type": "WindowAgg",
+                                                                      "Parent Relationship": "Subquery",
+                                                                      "Parallel Aware": false,
+                                                                      "Async Capable": false,
+                                                                      "Startup Cost": 77.02,
+                                                                      "Total Cost": 200111.40,
+                                                                      "Plan Rows": 409827,
+                                                                      "Plan Width": 1394,
+                                                                      "Run Condition": "(row_number() OVER (?) <= 1)",
+                                                                      "Plans": [
+                                                                        {
+                                                                          "Node Type": "Incremental Sort",
+                                                                          "Parent Relationship": "Outer",
+                                                                          "Parallel Aware": false,
+                                                                          "Async Capable": false,
+                                                                          "Startup Cost": 77.02,
+                                                                          "Total Cost": 179620.05,
+                                                                          "Plan Rows": 409827,
+                                                                          "Plan Width": 1326,
+                                                                          "Sort Key": ["sr_1.page_id", "sr_1.stream", "sr_1.finished_at DESC", "sr_1.id DESC"],
+                                                                          "Presorted Key": ["sr_1.page_id", "sr_1.stream"],
+                                                                          "Plans": [
+                                                                            {
+                                                                              "Node Type": "Merge Join",
+                                                                              "Parent Relationship": "Outer",
+                                                                              "Parallel Aware": false,
+                                                                              "Async Capable": false,
+                                                                              "Join Type": "Inner",
+                                                                              "Startup Cost": 28.58,
+                                                                              "Total Cost": 160427.82,
+                                                                              "Plan Rows": 409827,
+                                                                              "Plan Width": 1326,
+                                                                              "Inner Unique": false,
+                                                                              "Merge Cond": "(sr_1.page_id = vp_2.\"pageId\")",
+                                                                              "Plans": [
+                                                                                {
+                                                                                  "Node Type": "Index Scan",
+                                                                                  "Parent Relationship": "Outer",
+                                                                                  "Parallel Aware": false,
+                                                                                  "Async Capable": false,
+                                                                                  "Scan Direction": "Forward",
+                                                                                  "Index Name": "sync_runs_page_stream_idx",
+                                                                                  "Relation Name": "sync_runs",
+                                                                                  "Alias": "sr_1",
+                                                                                  "Startup Cost": 0.46,
+                                                                                  "Total Cost": 153786.59,
+                                                                                  "Plan Rows": 186285,
+                                                                                  "Plan Width": 1326,
+                                                                                  "Filter": "((finished_at IS NOT NULL) AND (outcome <> 'running'::sync_run_outcome) AND (stream = ANY ('{light,transactions,top_spenders,subscribers,followers,followers_reconcile,dm_conversations,dm_messages,fan_earnings,purchase_history,posts,stats_snapshot,notifications,catalog,post_replies,payouts,media_stats}'::sync_stream[])))"
+                                                                                },
+                                                                                {
+                                                                                  "Node Type": "Sort",
+                                                                                  "Parent Relationship": "Inner",
+                                                                                  "Parallel Aware": false,
+                                                                                  "Async Capable": false,
+                                                                                  "Startup Cost": 28.12,
+                                                                                  "Total Cost": 29.22,
+                                                                                  "Plan Rows": 440,
+                                                                                  "Plan Width": 8,
+                                                                                  "Sort Key": ["vp_2.\"pageId\""],
+                                                                                  "Plans": [
+                                                                                    {
+                                                                                      "Node Type": "CTE Scan",
+                                                                                      "Parent Relationship": "Outer",
+                                                                                      "Parallel Aware": false,
+                                                                                      "Async Capable": false,
+                                                                                      "CTE Name": "visible_pages",
+                                                                                      "Alias": "vp_2",
+                                                                                      "Startup Cost": 0.00,
+                                                                                      "Total Cost": 8.80,
+                                                                                      "Plan Rows": 440,
+                                                                                      "Plan Width": 8
+                                                                                    }
+                                                                                  ]
+                                                                                }
+                                                                              ]
+                                                                            }
+                                                                          ]
+                                                                        }
+                                                                      ]
+                                                                    }
+                                                                  ]
+                                                                }
+                                                              ]
+                                                            }
+                                                          ]
+                                                        },
+                                                        {
+                                                          "Node Type": "Sort",
+                                                          "Parent Relationship": "Inner",
+                                                          "Parallel Aware": false,
+                                                          "Async Capable": false,
+                                                          "Startup Cost": 4195.60,
+                                                          "Total Cost": 4195.96,
+                                                          "Plan Rows": 144,
+                                                          "Plan Width": 32,
+                                                          "Sort Key": ["rrc.\"pageId\"", "rrc.stream"],
+                                                          "Plans": [
+                                                            {
+                                                              "Node Type": "Subquery Scan",
+                                                              "Parent Relationship": "Outer",
+                                                              "Parallel Aware": false,
+                                                              "Async Capable": false,
+                                                              "Alias": "rrc",
+                                                              "Startup Cost": 4185.76,
+                                                              "Total Cost": 4190.44,
+                                                              "Plan Rows": 144,
+                                                              "Plan Width": 32,
+                                                              "Plans": [
+                                                                {
+                                                                  "Node Type": "Aggregate",
+                                                                  "Strategy": "Hashed",
+                                                                  "Partial Mode": "Simple",
+                                                                  "Parent Relationship": "Subquery",
+                                                                  "Parallel Aware": false,
+                                                                  "Async Capable": false,
+                                                                  "Startup Cost": 4185.76,
+                                                                  "Total Cost": 4189.00,
+                                                                  "Plan Rows": 144,
+                                                                  "Plan Width": 32,
+                                                                  "Group Key": ["sr_2.page_id", "sr_2.stream"],
+                                                                  "Planned Partitions": 0,
+                                                                  "Plans": [
+                                                                    {
+                                                                      "Node Type": "Hash Join",
+                                                                      "Parent Relationship": "Outer",
+                                                                      "Parallel Aware": false,
+                                                                      "Async Capable": false,
+                                                                      "Join Type": "Inner",
+                                                                      "Startup Cost": 14.76,
+                                                                      "Total Cost": 3956.53,
+                                                                      "Plan Rows": 7641,
+                                                                      "Plan Width": 16,
+                                                                      "Inner Unique": false,
+                                                                      "Hash Cond": "(sr_2.page_id = vp_3.\"pageId\")",
+                                                                      "Plans": [
+                                                                        {
+                                                                          "Node Type": "Index Scan",
+                                                                          "Parent Relationship": "Outer",
+                                                                          "Parallel Aware": false,
+                                                                          "Async Capable": false,
+                                                                          "Scan Direction": "Forward",
+                                                                          "Index Name": "sync_runs_started_idx",
+                                                                          "Relation Name": "sync_runs",
+                                                                          "Alias": "sr_2",
+                                                                          "Startup Cost": 0.46,
+                                                                          "Total Cost": 3666.12,
+                                                                          "Plan Rows": 3473,
+                                                                          "Plan Width": 16,
+                                                                          "Index Cond": "(started_at >= '2026-09-10 02:53:01+00'::timestamp with time zone)",
+                                                                          "Filter": "(stream = ANY ('{light,transactions,top_spenders,subscribers,followers,followers_reconcile,dm_conversations,dm_messages,fan_earnings,purchase_history,posts,stats_snapshot,notifications,catalog,post_replies,payouts,media_stats}'::sync_stream[]))"
+                                                                        },
+                                                                        {
+                                                                          "Node Type": "Hash",
+                                                                          "Parent Relationship": "Inner",
+                                                                          "Parallel Aware": false,
+                                                                          "Async Capable": false,
+                                                                          "Startup Cost": 8.80,
+                                                                          "Total Cost": 8.80,
+                                                                          "Plan Rows": 440,
+                                                                          "Plan Width": 8,
+                                                                          "Plans": [
+                                                                            {
+                                                                              "Node Type": "CTE Scan",
+                                                                              "Parent Relationship": "Outer",
+                                                                              "Parallel Aware": false,
+                                                                              "Async Capable": false,
+                                                                              "CTE Name": "visible_pages",
+                                                                              "Alias": "vp_3",
+                                                                              "Startup Cost": 0.00,
+                                                                              "Total Cost": 8.80,
+                                                                              "Plan Rows": 440,
+                                                                              "Plan Width": 8
+                                                                            }
+                                                                          ]
+                                                                        }
+                                                                      ]
+                                                                    }
+                                                                  ]
+                                                                }
+                                                              ]
+                                                            }
+                                                          ]
+                                                        }
+                                                      ]
+                                                    },
+                                                    {
+                                                      "Node Type": "Sort",
+                                                      "Parent Relationship": "Inner",
+                                                      "Parallel Aware": false,
+                                                      "Async Capable": false,
+                                                      "Startup Cost": 37635.00,
+                                                      "Total Cost": 37635.36,
+                                                      "Plan Rows": 144,
+                                                      "Plan Width": 44,
+                                                      "Sort Key": ["rac.\"pageId\"", "rac.stream"],
+                                                      "Plans": [
+                                                        {
+                                                          "Node Type": "Subquery Scan",
+                                                          "Parent Relationship": "Outer",
+                                                          "Parallel Aware": false,
+                                                          "Async Capable": false,
+                                                          "Alias": "rac",
+                                                          "Startup Cost": 37625.52,
+                                                          "Total Cost": 37629.84,
+                                                          "Plan Rows": 144,
+                                                          "Plan Width": 44,
+                                                          "Plans": [
+                                                            {
+                                                              "Node Type": "Aggregate",
+                                                              "Strategy": "Hashed",
+                                                              "Partial Mode": "Simple",
+                                                              "Parent Relationship": "Subquery",
+                                                              "Parallel Aware": false,
+                                                              "Async Capable": false,
+                                                              "Startup Cost": 37625.52,
+                                                              "Total Cost": 37628.40,
+                                                              "Plan Rows": 144,
+                                                              "Plan Width": 44,
+                                                              "Group Key": ["a_1.page_id", "a_1.stream"],
+                                                              "Planned Partitions": 0,
+                                                              "Plans": [
+                                                                {
+                                                                  "Node Type": "Hash Join",
+                                                                  "Parent Relationship": "Outer",
+                                                                  "Parallel Aware": false,
+                                                                  "Async Capable": false,
+                                                                  "Join Type": "Inner",
+                                                                  "Startup Cost": 14.77,
+                                                                  "Total Cost": 35165.84,
+                                                                  "Plan Rows": 61492,
+                                                                  "Plan Width": 28,
+                                                                  "Inner Unique": false,
+                                                                  "Hash Cond": "(a_1.page_id = vp_4.\"pageId\")",
+                                                                  "Plans": [
+                                                                    {
+                                                                      "Node Type": "Index Scan",
+                                                                      "Parent Relationship": "Outer",
+                                                                      "Parallel Aware": false,
+                                                                      "Async Capable": false,
+                                                                      "Scan Direction": "Forward",
+                                                                      "Index Name": "sync_http_attempts_retention_idx",
+                                                                      "Relation Name": "sync_http_attempts",
+                                                                      "Alias": "a_1",
+                                                                      "Startup Cost": 0.47,
+                                                                      "Total Cost": 32929.44,
+                                                                      "Plan Rows": 27951,
+                                                                      "Plan Width": 28,
+                                                                      "Index Cond": "(started_at >= '2026-09-10 02:53:01+00'::timestamp with time zone)",
+                                                                      "Filter": "(stream = ANY ('{light,transactions,top_spenders,subscribers,followers,followers_reconcile,dm_conversations,dm_messages,fan_earnings,purchase_history,posts,stats_snapshot,notifications,catalog,post_replies,payouts,media_stats}'::sync_stream[]))"
+                                                                    },
+                                                                    {
+                                                                      "Node Type": "Hash",
+                                                                      "Parent Relationship": "Inner",
+                                                                      "Parallel Aware": false,
+                                                                      "Async Capable": false,
+                                                                      "Startup Cost": 8.80,
+                                                                      "Total Cost": 8.80,
+                                                                      "Plan Rows": 440,
+                                                                      "Plan Width": 8,
+                                                                      "Plans": [
+                                                                        {
+                                                                          "Node Type": "CTE Scan",
+                                                                          "Parent Relationship": "Outer",
+                                                                          "Parallel Aware": false,
+                                                                          "Async Capable": false,
+                                                                          "CTE Name": "visible_pages",
+                                                                          "Alias": "vp_4",
+                                                                          "Startup Cost": 0.00,
+                                                                          "Total Cost": 8.80,
+                                                                          "Plan Rows": 440,
+                                                                          "Plan Width": 8
+                                                                        }
+                                                                      ]
+                                                                    }
+                                                                  ]
+                                                                }
+                                                              ]
+                                                            }
+                                                          ]
+                                                        }
+                                                      ]
+                                                    }
+                                                  ]
+                                                },
+                                                {
+                                                  "Node Type": "Aggregate",
+                                                  "Strategy": "Sorted",
+                                                  "Partial Mode": "Simple",
+                                                  "Parent Relationship": "Inner",
+                                                  "Parallel Aware": false,
+                                                  "Async Capable": false,
+                                                  "Startup Cost": 13797.68,
+                                                  "Total Cost": 32374.42,
+                                                  "Plan Rows": 8,
+                                                  "Plan Width": 12,
+                                                  "Group Key": ["fp.platform_account_id"],
+                                                  "Plans": [
+                                                    {
+                                                      "Node Type": "Incremental Sort",
+                                                      "Parent Relationship": "Outer",
+                                                      "Parallel Aware": false,
+                                                      "Async Capable": false,
+                                                      "Startup Cost": 13797.68,
+                                                      "Total Cost": 31253.25,
+                                                      "Plan Rows": 224213,
+                                                      "Plan Width": 16,
+                                                      "Sort Key": ["fp.platform_account_id", "fp.fan_id"],
+                                                      "Presorted Key": ["fp.platform_account_id"],
+                                                      "Plans": [
+                                                        {
+                                                          "Node Type": "Merge Join",
+                                                          "Parent Relationship": "Outer",
+                                                          "Parallel Aware": false,
+                                                          "Async Capable": false,
+                                                          "Join Type": "Inner",
+                                                          "Startup Cost": 13724.07,
+                                                          "Total Cost": 17089.47,
+                                                          "Plan Rows": 224213,
+                                                          "Plan Width": 16,
+                                                          "Inner Unique": false,
+                                                          "Merge Cond": "(vp_5.\"pageId\" = fp.platform_account_id)",
+                                                          "Plans": [
+                                                            {
+                                                              "Node Type": "Sort",
+                                                              "Parent Relationship": "Outer",
+                                                              "Parallel Aware": false,
+                                                              "Async Capable": false,
+                                                              "Startup Cost": 28.12,
+                                                              "Total Cost": 29.22,
+                                                              "Plan Rows": 440,
+                                                              "Plan Width": 8,
+                                                              "Sort Key": ["vp_5.\"pageId\""],
+                                                              "Plans": [
+                                                                {
+                                                                  "Node Type": "CTE Scan",
+                                                                  "Parent Relationship": "Outer",
+                                                                  "Parallel Aware": false,
+                                                                  "Async Capable": false,
+                                                                  "CTE Name": "visible_pages",
+                                                                  "Alias": "vp_5",
+                                                                  "Startup Cost": 0.00,
+                                                                  "Total Cost": 8.80,
+                                                                  "Plan Rows": 440,
+                                                                  "Plan Width": 8
+                                                                }
+                                                              ]
+                                                            },
+                                                            {
+                                                              "Node Type": "Sort",
+                                                              "Parent Relationship": "Inner",
+                                                              "Parallel Aware": false,
+                                                              "Async Capable": false,
+                                                              "Startup Cost": 13695.95,
+                                                              "Total Cost": 13950.74,
+                                                              "Plan Rows": 101915,
+                                                              "Plan Width": 16,
+                                                              "Sort Key": ["fp.platform_account_id"],
+                                                              "Plans": [
+                                                                {
+                                                                  "Node Type": "Seq Scan",
+                                                                  "Parent Relationship": "Outer",
+                                                                  "Parallel Aware": false,
+                                                                  "Async Capable": false,
+                                                                  "Relation Name": "page_fans",
+                                                                  "Alias": "fp",
+                                                                  "Startup Cost": 0.00,
+                                                                  "Total Cost": 5218.15,
+                                                                  "Plan Rows": 101915,
+                                                                  "Plan Width": 16
+                                                                }
+                                                              ]
+                                                            }
+                                                          ]
+                                                        }
+                                                      ]
+                                                    }
+                                                  ]
+                                                }
+                                              ]
+                                            },
+                                            {
+                                              "Node Type": "Aggregate",
+                                              "Strategy": "Sorted",
+                                              "Partial Mode": "Simple",
+                                              "Parent Relationship": "Inner",
+                                              "Parallel Aware": false,
+                                              "Async Capable": false,
+                                              "Startup Cost": 171046.21,
+                                              "Total Cost": 474853.34,
+                                              "Plan Rows": 144,
+                                              "Plan Width": 36,
+                                              "Group Key": ["a_2.page_id", "a_2.stream"],
+                                              "Plans": [
+                                                {
+                                                  "Node Type": "WindowAgg",
+                                                  "Parent Relationship": "Outer",
+                                                  "Parallel Aware": false,
+                                                  "Async Capable": false,
+                                                  "Startup Cost": 171046.21,
+                                                  "Total Cost": 368460.37,
+                                                  "Plan Rows": 1736981,
+                                                  "Plan Width": 32,
+                                                  "Plans": [
+                                                    {
+                                                      "Node Type": "Incremental Sort",
+                                                      "Parent Relationship": "Outer",
+                                                      "Parallel Aware": false,
+                                                      "Async Capable": false,
+                                                      "Startup Cost": 171046.21,
+                                                      "Total Cost": 333720.75,
+                                                      "Plan Rows": 1736981,
+                                                      "Plan Width": 24,
+                                                      "Sort Key": ["a_2.page_id", "a_2.stream"],
+                                                      "Presorted Key": ["a_2.page_id"],
+                                                      "Plans": [
+                                                        {
+                                                          "Node Type": "Merge Join",
+                                                          "Parent Relationship": "Outer",
+                                                          "Parallel Aware": false,
+                                                          "Async Capable": false,
+                                                          "Join Type": "Inner",
+                                                          "Startup Cost": 170337.88,
+                                                          "Total Cost": 198368.63,
+                                                          "Plan Rows": 1736981,
+                                                          "Plan Width": 24,
+                                                          "Inner Unique": false,
+                                                          "Merge Cond": "(vp_6.\"pageId\" = a_2.page_id)",
+                                                          "Plans": [
+                                                            {
+                                                              "Node Type": "Sort",
+                                                              "Parent Relationship": "Outer",
+                                                              "Parallel Aware": false,
+                                                              "Async Capable": false,
+                                                              "Startup Cost": 28.12,
+                                                              "Total Cost": 29.22,
+                                                              "Plan Rows": 440,
+                                                              "Plan Width": 8,
+                                                              "Sort Key": ["vp_6.\"pageId\""],
+                                                              "Plans": [
+                                                                {
+                                                                  "Node Type": "CTE Scan",
+                                                                  "Parent Relationship": "Outer",
+                                                                  "Parallel Aware": false,
+                                                                  "Async Capable": false,
+                                                                  "CTE Name": "visible_pages",
+                                                                  "Alias": "vp_6",
+                                                                  "Startup Cost": 0.00,
+                                                                  "Total Cost": 8.80,
+                                                                  "Plan Rows": 440,
+                                                                  "Plan Width": 8
+                                                                }
+                                                              ]
+                                                            },
+                                                            {
+                                                              "Node Type": "Materialize",
+                                                              "Parent Relationship": "Inner",
+                                                              "Parallel Aware": false,
+                                                              "Async Capable": false,
+                                                              "Startup Cost": 170309.76,
+                                                              "Total Cost": 174257.44,
+                                                              "Plan Rows": 789537,
+                                                              "Plan Width": 24,
+                                                              "Plans": [
+                                                                {
+                                                                  "Node Type": "Sort",
+                                                                  "Parent Relationship": "Outer",
+                                                                  "Parallel Aware": false,
+                                                                  "Async Capable": false,
+                                                                  "Startup Cost": 170309.76,
+                                                                  "Total Cost": 172283.60,
+                                                                  "Plan Rows": 789537,
+                                                                  "Plan Width": 24,
+                                                                  "Sort Key": ["a_2.page_id"],
+                                                                  "Plans": [
+                                                                    {
+                                                                      "Node Type": "Seq Scan",
+                                                                      "Parent Relationship": "Outer",
+                                                                      "Parallel Aware": false,
+                                                                      "Async Capable": false,
+                                                                      "Relation Name": "sync_http_attempts",
+                                                                      "Alias": "a_2",
+                                                                      "Startup Cost": 0.04,
+                                                                      "Total Cost": 76777.55,
+                                                                      "Plan Rows": 789537,
+                                                                      "Plan Width": 24,
+                                                                      "Filter": "(stream = ANY ('{light,transactions,top_spenders,subscribers,followers,followers_reconcile,dm_conversations,dm_messages,fan_earnings,purchase_history,posts,stats_snapshot,notifications,catalog,post_replies,payouts,media_stats}'::sync_stream[]))"
+                                                                    }
+                                                                  ]
+                                                                }
+                                                              ]
+                                                            }
+                                                          ]
+                                                        }
+                                                      ]
+                                                    }
+                                                  ]
+                                                }
+                                              ]
+                                            }
+                                          ]
+                                        },
+                                        {
+                                          "Node Type": "Materialize",
+                                          "Parent Relationship": "Inner",
+                                          "Parallel Aware": false,
+                                          "Async Capable": false,
+                                          "Startup Cost": 239.95,
+                                          "Total Cost": 481.44,
+                                          "Plan Rows": 16,
+                                          "Plan Width": 45,
+                                          "Plans": [
+                                            {
+                                              "Node Type": "Subquery Scan",
+                                              "Parent Relationship": "Outer",
+                                              "Parallel Aware": false,
+                                              "Async Capable": false,
+                                              "Alias": "prl",
+                                              "Startup Cost": 239.95,
+                                              "Total Cost": 481.36,
+                                              "Plan Rows": 16,
+                                              "Plan Width": 45,
+                                              "Plans": [
+                                                {
+                                                  "Node Type": "Aggregate",
+                                                  "Strategy": "Sorted",
+                                                  "Partial Mode": "Simple",
+                                                  "Parent Relationship": "Subquery",
+                                                  "Parallel Aware": false,
+                                                  "Async Capable": false,
+                                                  "Startup Cost": 239.95,
+                                                  "Total Cost": 481.20,
+                                                  "Plan Rows": 16,
+                                                  "Plan Width": 45,
+                                                  "Group Key": ["rl.provider", "rl.egress_key"],
+                                                  "Plans": [
+                                                    {
+                                                      "Node Type": "Incremental Sort",
+                                                      "Parent Relationship": "Outer",
+                                                      "Parallel Aware": false,
+                                                      "Async Capable": false,
+                                                      "Startup Cost": 239.95,
+                                                      "Total Cost": 480.43,
+                                                      "Plan Rows": 61,
+                                                      "Plan Width": 45,
+                                                      "Sort Key": ["rl.provider", "rl.egress_key"],
+                                                      "Presorted Key": ["rl.provider"],
+                                                      "Plans": [
+                                                        {
+                                                          "Node Type": "Index Scan",
+                                                          "Parent Relationship": "Outer",
+                                                          "Parallel Aware": false,
+                                                          "Async Capable": false,
+                                                          "Scan Direction": "Forward",
+                                                          "Index Name": "sync_rate_limits_pkey",
+                                                          "Relation Name": "sync_rate_limits",
+                                                          "Alias": "rl",
+                                                          "Startup Cost": 0.27,
+                                                          "Total Cost": 478.13,
+                                                          "Plan Rows": 61,
+                                                          "Plan Width": 45
+                                                        }
+                                                      ]
+                                                    }
+                                                  ]
+                                                }
+                                              ]
+                                            }
+                                          ]
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "Node Type": "Aggregate",
+                                      "Strategy": "Sorted",
+                                      "Partial Mode": "Simple",
+                                      "Parent Relationship": "Inner",
+                                      "Parallel Aware": false,
+                                      "Async Capable": false,
+                                      "Startup Cost": 28.53,
+                                      "Total Cost": 6660.88,
+                                      "Plan Rows": 6,
+                                      "Plan Width": 12,
+                                      "Group Key": ["pf.platform_account_id"],
+                                      "Plans": [
+                                        {
+                                          "Node Type": "Merge Join",
+                                          "Parent Relationship": "Outer",
+                                          "Parallel Aware": false,
+                                          "Async Capable": false,
+                                          "Join Type": "Inner",
+                                          "Startup Cost": 28.53,
+                                          "Total Cost": 6092.65,
+                                          "Plan Rows": 113630,
+                                          "Plan Width": 9,
+                                          "Inner Unique": false,
+                                          "Merge Cond": "(pf.platform_account_id = vp_7.\"pageId\")",
+                                          "Plans": [
+                                            {
+                                              "Node Type": "Index Only Scan",
+                                              "Parent Relationship": "Outer",
+                                              "Parallel Aware": false,
+                                              "Async Capable": false,
+                                              "Scan Direction": "Forward",
+                                              "Index Name": "page_follows_active_followed_idx",
+                                              "Relation Name": "page_follows",
+                                              "Alias": "pf",
+                                              "Startup Cost": 0.41,
+                                              "Total Cost": 4230.96,
+                                              "Plan Rows": 51650,
+                                              "Plan Width": 9
+                                            },
+                                            {
+                                              "Node Type": "Sort",
+                                              "Parent Relationship": "Inner",
+                                              "Parallel Aware": false,
+                                              "Async Capable": false,
+                                              "Startup Cost": 28.12,
+                                              "Total Cost": 29.22,
+                                              "Plan Rows": 440,
+                                              "Plan Width": 8,
+                                              "Sort Key": ["vp_7.\"pageId\""],
+                                              "Plans": [
+                                                {
+                                                  "Node Type": "CTE Scan",
+                                                  "Parent Relationship": "Outer",
+                                                  "Parallel Aware": false,
+                                                  "Async Capable": false,
+                                                  "CTE Name": "visible_pages",
+                                                  "Alias": "vp_7",
+                                                  "Startup Cost": 0.00,
+                                                  "Total Cost": 8.80,
+                                                  "Plan Rows": 440,
+                                                  "Plan Width": 8
+                                                }
+                                              ]
+                                            }
+                                          ]
+                                        }
+                                      ]
+                                    }
+                                  ]
+                                },
+                                {
+                                  "Node Type": "Aggregate",
+                                  "Strategy": "Sorted",
+                                  "Partial Mode": "Simple",
+                                  "Parent Relationship": "Inner",
+                                  "Parallel Aware": false,
+                                  "Async Capable": false,
+                                  "Startup Cost": 28.40,
+                                  "Total Cost": 1541.72,
+                                  "Plan Rows": 8,
+                                  "Plan Width": 12,
+                                  "Group Key": ["ps.platform_account_id"],
+                                  "Plans": [
+                                    {
+                                      "Node Type": "Merge Join",
+                                      "Parent Relationship": "Outer",
+                                      "Parallel Aware": false,
+                                      "Async Capable": false,
+                                      "Join Type": "Inner",
+                                      "Startup Cost": 28.40,
+                                      "Total Cost": 1409.05,
+                                      "Plan Rows": 26514,
+                                      "Plan Width": 9,
+                                      "Inner Unique": false,
+                                      "Merge Cond": "(ps.platform_account_id = vp_8.\"pageId\")",
+                                      "Plans": [
+                                        {
+                                          "Node Type": "Index Only Scan",
+                                          "Parent Relationship": "Outer",
+                                          "Parallel Aware": false,
+                                          "Async Capable": false,
+                                          "Scan Direction": "Forward",
+                                          "Index Name": "page_subscriptions_current_idx",
+                                          "Relation Name": "page_subscriptions",
+                                          "Alias": "ps",
+                                          "Startup Cost": 0.29,
+                                          "Total Cost": 953.10,
+                                          "Plan Rows": 12052,
+                                          "Plan Width": 9
+                                        },
+                                        {
+                                          "Node Type": "Sort",
+                                          "Parent Relationship": "Inner",
+                                          "Parallel Aware": false,
+                                          "Async Capable": false,
+                                          "Startup Cost": 28.12,
+                                          "Total Cost": 29.22,
+                                          "Plan Rows": 440,
+                                          "Plan Width": 8,
+                                          "Sort Key": ["vp_8.\"pageId\""],
+                                          "Plans": [
+                                            {
+                                              "Node Type": "CTE Scan",
+                                              "Parent Relationship": "Outer",
+                                              "Parallel Aware": false,
+                                              "Async Capable": false,
+                                              "CTE Name": "visible_pages",
+                                              "Alias": "vp_8",
+                                              "Startup Cost": 0.00,
+                                              "Total Cost": 8.80,
+                                              "Plan Rows": 440,
+                                              "Plan Width": 8
+                                            }
+                                          ]
+                                        }
+                                      ]
+                                    }
+                                  ]
+                                }
+                              ]
+                            },
+                            {
+                              "Node Type": "Aggregate",
+                              "Strategy": "Sorted",
+                              "Partial Mode": "Simple",
+                              "Parent Relationship": "Inner",
+                              "Parallel Aware": false,
+                              "Async Capable": false,
+                              "Startup Cost": 28.41,
+                              "Total Cost": 2566.86,
+                              "Plan Rows": 8,
+                              "Plan Width": 12,
+                              "Group Key": ["t.platform_account_id"],
+                              "Plans": [
+                                {
+                                  "Node Type": "Merge Join",
+                                  "Parent Relationship": "Outer",
+                                  "Parallel Aware": false,
+                                  "Async Capable": false,
+                                  "Join Type": "Inner",
+                                  "Startup Cost": 28.41,
+                                  "Total Cost": 2377.39,
+                                  "Plan Rows": 37873,
+                                  "Plan Width": 8,
+                                  "Inner Unique": false,
+                                  "Merge Cond": "(vp_9.\"pageId\" = t.platform_account_id)",
+                                  "Plans": [
+                                    {
+                                      "Node Type": "Sort",
+                                      "Parent Relationship": "Outer",
+                                      "Parallel Aware": false,
+                                      "Async Capable": false,
+                                      "Startup Cost": 28.12,
+                                      "Total Cost": 29.22,
+                                      "Plan Rows": 440,
+                                      "Plan Width": 8,
+                                      "Sort Key": ["vp_9.\"pageId\""],
+                                      "Plans": [
+                                        {
+                                          "Node Type": "CTE Scan",
+                                          "Parent Relationship": "Outer",
+                                          "Parallel Aware": false,
+                                          "Async Capable": false,
+                                          "CTE Name": "visible_pages",
+                                          "Alias": "vp_9",
+                                          "Startup Cost": 0.00,
+                                          "Total Cost": 8.80,
+                                          "Plan Rows": 440,
+                                          "Plan Width": 8
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "Node Type": "Materialize",
+                                      "Parent Relationship": "Inner",
+                                      "Parallel Aware": false,
+                                      "Async Capable": false,
+                                      "Startup Cost": 0.29,
+                                      "Total Cost": 1822.02,
+                                      "Plan Rows": 17215,
+                                      "Plan Width": 8,
+                                      "Plans": [
+                                        {
+                                          "Node Type": "Index Only Scan",
+                                          "Parent Relationship": "Outer",
+                                          "Parallel Aware": false,
+                                          "Async Capable": false,
+                                          "Scan Direction": "Forward",
+                                          "Index Name": "transactions_account_occurred_idx",
+                                          "Relation Name": "transactions",
+                                          "Alias": "t",
+                                          "Startup Cost": 0.29,
+                                          "Total Cost": 1778.98,
+                                          "Plan Rows": 17215,
+                                          "Plan Width": 8
+                                        }
+                                      ]
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "Node Type": "Sort",
+                          "Parent Relationship": "Inner",
+                          "Parallel Aware": false,
+                          "Async Capable": false,
+                          "Startup Cost": 13017.80,
+                          "Total Cost": 13017.82,
+                          "Plan Rows": 8,
+                          "Plan Width": 24,
+                          "Sort Key": ["dcc.\"pageId\""],
+                          "Plans": [
+                            {
+                              "Node Type": "Subquery Scan",
+                              "Parent Relationship": "Outer",
+                              "Parallel Aware": false,
+                              "Async Capable": false,
+                              "Alias": "dcc",
+                              "Startup Cost": 13017.44,
+                              "Total Cost": 13017.68,
+                              "Plan Rows": 8,
+                              "Plan Width": 24,
+                              "Plans": [
+                                {
+                                  "Node Type": "Aggregate",
+                                  "Strategy": "Hashed",
+                                  "Partial Mode": "Simple",
+                                  "Parent Relationship": "Subquery",
+                                  "Parallel Aware": false,
+                                  "Async Capable": false,
+                                  "Startup Cost": 13017.44,
+                                  "Total Cost": 13017.60,
+                                  "Plan Rows": 8,
+                                  "Plan Width": 24,
+                                  "Group Key": ["c.platform_account_id"],
+                                  "Planned Partitions": 0,
+                                  "Plans": [
+                                    {
+                                      "Node Type": "Hash Join",
+                                      "Parent Relationship": "Outer",
+                                      "Parallel Aware": false,
+                                      "Async Capable": false,
+                                      "Join Type": "Inner",
+                                      "Startup Cost": 14.30,
+                                      "Total Cost": 9314.44,
+                                      "Plan Rows": 105800,
+                                      "Plan Width": 86,
+                                      "Inner Unique": false,
+                                      "Hash Cond": "(c.platform_account_id = vp_10.\"pageId\")",
+                                      "Plans": [
+                                        {
+                                          "Node Type": "Seq Scan",
+                                          "Parent Relationship": "Outer",
+                                          "Parallel Aware": false,
+                                          "Async Capable": false,
+                                          "Relation Name": "page_dm_threads",
+                                          "Alias": "c",
+                                          "Startup Cost": 0.00,
+                                          "Total Cost": 5476.91,
+                                          "Plan Rows": 48091,
+                                          "Plan Width": 86
+                                        },
+                                        {
+                                          "Node Type": "Hash",
+                                          "Parent Relationship": "Inner",
+                                          "Parallel Aware": false,
+                                          "Async Capable": false,
+                                          "Startup Cost": 8.80,
+                                          "Total Cost": 8.80,
+                                          "Plan Rows": 440,
+                                          "Plan Width": 8,
+                                          "Plans": [
+                                            {
+                                              "Node Type": "CTE Scan",
+                                              "Parent Relationship": "Outer",
+                                              "Parallel Aware": false,
+                                              "Async Capable": false,
+                                              "CTE Name": "visible_pages",
+                                              "Alias": "vp_10",
+                                              "Startup Cost": 0.00,
+                                              "Total Cost": 8.80,
+                                              "Plan Rows": 440,
+                                              "Plan Width": 8
+                                            }
+                                          ]
+                                        }
+                                      ]
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "Node Type": "Aggregate",
+                      "Strategy": "Sorted",
+                      "Partial Mode": "Simple",
+                      "Parent Relationship": "Inner",
+                      "Parallel Aware": false,
+                      "Async Capable": false,
+                      "Startup Cost": 2716.54,
+                      "Total Cost": 2716.73,
+                      "Plan Rows": 1,
+                      "Plan Width": 32,
+                      "Group Key": ["c_1.platform_account_id"],
+                      "Plans": [
+                        {
+                          "Node Type": "Sort",
+                          "Parent Relationship": "Outer",
+                          "Parallel Aware": false,
+                          "Async Capable": false,
+                          "Startup Cost": 2716.54,
+                          "Total Cost": 2716.55,
+                          "Plan Rows": 1,
+                          "Plan Width": 20,
+                          "Sort Key": ["c_1.platform_account_id"],
+                          "Plans": [
+                            {
+                              "Node Type": "Nested Loop",
+                              "Parent Relationship": "Outer",
+                              "Parallel Aware": false,
+                              "Async Capable": false,
+                              "Join Type": "Left",
+                              "Startup Cost": 30.37,
+                              "Total Cost": 2716.53,
+                              "Plan Rows": 1,
+                              "Plan Width": 20,
+                              "Inner Unique": true,
+                              "Plans": [
+                                {
+                                  "Node Type": "Nested Loop",
+                                  "Parent Relationship": "Outer",
+                                  "Parallel Aware": false,
+                                  "Async Capable": false,
+                                  "Join Type": "Inner",
+                                  "Startup Cost": 30.09,
+                                  "Total Cost": 2708.23,
+                                  "Plan Rows": 1,
+                                  "Plan Width": 20,
+                                  "Inner Unique": false,
+                                  "Plans": [
+                                    {
+                                      "Node Type": "CTE Scan",
+                                      "Parent Relationship": "Outer",
+                                      "Parallel Aware": false,
+                                      "Async Capable": false,
+                                      "CTE Name": "visible_pages",
+                                      "Alias": "vp_11",
+                                      "Startup Cost": 0.00,
+                                      "Total Cost": 9.90,
+                                      "Plan Rows": 2,
+                                      "Plan Width": 8,
+                                      "Filter": "(platform = 'fansly'::text)"
+                                    },
+                                    {
+                                      "Node Type": "Bitmap Heap Scan",
+                                      "Parent Relationship": "Inner",
+                                      "Parallel Aware": false,
+                                      "Async Capable": false,
+                                      "Relation Name": "page_dm_threads",
+                                      "Alias": "c_1",
+                                      "Startup Cost": 30.09,
+                                      "Total Cost": 1349.15,
+                                      "Plan Rows": 1,
+                                      "Plan Width": 20,
+                                      "Recheck Cond": "((platform_account_id = vp_11.\"pageId\") AND is_visible AND (message_coverage_status = 'partial_window'::dm_message_coverage_status))",
+                                      "Filter": "((fan_id IS NOT NULL) AND (stored_message_count > 0) AND ((NOT (last_message_id IS DISTINCT FROM newest_stored_message_id)) OR ((last_message_sync_at IS NOT NULL) AND ((last_message_at IS NULL) OR (last_message_sync_at >= last_message_at)))) AND (COALESCE((metadata ->> 'messageSyncExcludedReason'::text), ''::text) = ''::text))",
+                                      "Plans": [
+                                        {
+                                          "Node Type": "Bitmap Index Scan",
+                                          "Parent Relationship": "Outer",
+                                          "Parallel Aware": false,
+                                          "Async Capable": false,
+                                          "Index Name": "page_dm_threads_backfill_idx",
+                                          "Startup Cost": 0.00,
+                                          "Total Cost": 30.09,
+                                          "Plan Rows": 454,
+                                          "Plan Width": 0,
+                                          "Index Cond": "((platform_account_id = vp_11.\"pageId\") AND (is_visible = true) AND (message_coverage_status = 'partial_window'::dm_message_coverage_status))"
+                                        }
+                                      ]
+                                    }
+                                  ]
+                                },
+                                {
+                                  "Node Type": "Index Scan",
+                                  "Parent Relationship": "Inner",
+                                  "Parallel Aware": false,
+                                  "Async Capable": false,
+                                  "Scan Direction": "Forward",
+                                  "Index Name": "fan_spend_lifetime_fan_account_idx",
+                                  "Relation Name": "fan_spend_lifetime",
+                                  "Alias": "slp",
+                                  "Startup Cost": 0.28,
+                                  "Total Cost": 8.30,
+                                  "Plan Rows": 1,
+                                  "Plan Width": 24,
+                                  "Index Cond": "((fan_id = c_1.fan_id) AND (platform_account_id = c_1.platform_account_id))"
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "Node Type": "Aggregate",
+                  "Strategy": "Sorted",
+                  "Partial Mode": "Simple",
+                  "Parent Relationship": "Inner",
+                  "Parallel Aware": false,
+                  "Async Capable": false,
+                  "Startup Cost": 176.40,
+                  "Total Cost": 176.52,
+                  "Plan Rows": 2,
+                  "Plan Width": 20,
+                  "Group Key": ["sr_3.page_id"],
+                  "Plans": [
+                    {
+                      "Node Type": "Sort",
+                      "Parent Relationship": "Outer",
+                      "Parallel Aware": false,
+                      "Async Capable": false,
+                      "Startup Cost": 176.40,
+                      "Total Cost": 176.40,
+                      "Plan Rows": 2,
+                      "Plan Width": 1227,
+                      "Sort Key": ["sr_3.page_id"],
+                      "Plans": [
+                        {
+                          "Node Type": "Nested Loop",
+                          "Parent Relationship": "Outer",
+                          "Parallel Aware": false,
+                          "Async Capable": false,
+                          "Join Type": "Inner",
+                          "Startup Cost": 0.42,
+                          "Total Cost": 176.39,
+                          "Plan Rows": 2,
+                          "Plan Width": 1227,
+                          "Inner Unique": false,
+                          "Plans": [
+                            {
+                              "Node Type": "CTE Scan",
+                              "Parent Relationship": "Outer",
+                              "Parallel Aware": false,
+                              "Async Capable": false,
+                              "CTE Name": "visible_pages",
+                              "Alias": "vp_12",
+                              "Startup Cost": 0.00,
+                              "Total Cost": 9.90,
+                              "Plan Rows": 2,
+                              "Plan Width": 8,
+                              "Filter": "(platform = 'fansly'::text)"
+                            },
+                            {
+                              "Node Type": "Index Scan",
+                              "Parent Relationship": "Inner",
+                              "Parallel Aware": false,
+                              "Async Capable": false,
+                              "Scan Direction": "Forward",
+                              "Index Name": "sync_runs_page_stream_idx",
+                              "Relation Name": "sync_runs",
+                              "Alias": "sr_3",
+                              "Startup Cost": 0.42,
+                              "Total Cost": 83.04,
+                              "Plan Rows": 20,
+                              "Plan Width": 1227,
+                              "Index Cond": "((page_id = vp_12.\"pageId\") AND (stream = 'dm_messages'::sync_stream) AND (started_at >= '2026-09-10 02:53:01+00'::timestamp with time zone))"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "Node Type": "Hash",
+              "Parent Relationship": "Inner",
+              "Parallel Aware": false,
+              "Async Capable": false,
+              "Startup Cost": 78583.38,
+              "Total Cost": 78583.38,
+              "Plan Rows": 8,
+              "Plan Width": 12,
+              "Plans": [
+                {
+                  "Node Type": "Subquery Scan",
+                  "Parent Relationship": "Outer",
+                  "Parallel Aware": false,
+                  "Async Capable": false,
+                  "Alias": "dmc",
+                  "Startup Cost": 78583.20,
+                  "Total Cost": 78583.38,
+                  "Plan Rows": 8,
+                  "Plan Width": 12,
+                  "Plans": [
+                    {
+                      "Node Type": "Aggregate",
+                      "Strategy": "Hashed",
+                      "Partial Mode": "Simple",
+                      "Parent Relationship": "Subquery",
+                      "Parallel Aware": false,
+                      "Async Capable": false,
+                      "Startup Cost": 78583.20,
+                      "Total Cost": 78583.30,
+                      "Plan Rows": 8,
+                      "Plan Width": 12,
+                      "Group Key": ["m.platform_account_id"],
+                      "Planned Partitions": 0,
+                      "Plans": [
+                        {
+                          "Node Type": "Hash Join",
+                          "Parent Relationship": "Outer",
+                          "Parallel Aware": false,
+                          "Async Capable": false,
+                          "Join Type": "Inner",
+                          "Startup Cost": 14.30,
+                          "Total Cost": 72128.35,
+                          "Plan Rows": 1290971,
+                          "Plan Width": 8,
+                          "Inner Unique": false,
+                          "Hash Cond": "(m.platform_account_id = vp_13.\"pageId\")",
+                          "Plans": [
+                            {
+                              "Node Type": "Seq Scan",
+                              "Parent Relationship": "Outer",
+                              "Parallel Aware": false,
+                              "Async Capable": false,
+                              "Relation Name": "page_dm_messages",
+                              "Alias": "m",
+                              "Startup Cost": 0.00,
+                              "Total Cost": 25463.05,
+                              "Plan Rows": 586805,
+                              "Plan Width": 8
+                            },
+                            {
+                              "Node Type": "Hash",
+                              "Parent Relationship": "Inner",
+                              "Parallel Aware": false,
+                              "Async Capable": false,
+                              "Startup Cost": 8.80,
+                              "Total Cost": 8.80,
+                              "Plan Rows": 440,
+                              "Plan Width": 8,
+                              "Plans": [
+                                {
+                                  "Node Type": "CTE Scan",
+                                  "Parent Relationship": "Outer",
+                                  "Parallel Aware": false,
+                                  "Async Capable": false,
+                                  "CTE Name": "visible_pages",
+                                  "Alias": "vp_13",
+                                  "Startup Cost": 0.00,
+                                  "Total Cost": 8.80,
+                                  "Plan Rows": 440,
+                                  "Plan Width": 8
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "JIT": {
+      "Functions": 318,
+      "Options": {
+        "Inlining": true,
+        "Optimization": true,
+        "Expressions": true,
+        "Deforming": true
+      }
+    }
+  }
+]

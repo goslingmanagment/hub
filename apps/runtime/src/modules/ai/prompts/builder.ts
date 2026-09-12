@@ -81,6 +81,9 @@ export interface PromptBuildInput {
   fanSubscriptionData: string;
   fanDisplayName: string;
   fanBio?: string | undefined;
+  /** The chatter's own saved name for the fan (Fansly rename, Decision 290).
+   * Rendered by the {fanCustomNameLine} slot; templates without it ignore it. */
+  fanCustomName?: string | undefined;
   /** Pre-compiled stored fan dossier (see context/fan-profile.ts); templates
    * without a {fanProfileSection} placeholder ignore it. */
   fanProfile?: { body: string; generatedAt: Date } | undefined;
@@ -233,10 +236,43 @@ const SPLIT_REPLY_INSTRUCTIONS = `- Split mode is on for this reply.
 
 const PING_SEGMENT_INSTRUCTIONS: Record<PingSegment, string> = {
   'segment-a':
-    'Segment A. Was active, went silent: This fan has chatted before but has gone quiet. Reference specific past conversation topics, show you remember them, create curiosity, use time-based hooks ("haven\'t talked in a while, was thinking about you").',
+    'Segment A. Was active, went silent: This fan has chatted before but has gone quiet. Reference specific past conversation topics, show you remember them, create curiosity. Noticing the gap is fine in your own words, but a specific reference is what carries the message.',
   'segment-b':
-    'Segment B. Never really chatted: This fan has little or no chat history. Use a warm first impression, low-pressure opener, spark curiosity based on the model\'s personality. Do NOT claim "we\'ve never talked" or make absolute statements about conversation history; use neutral openers that work regardless.',
+    'Segment B. Barely chatted: This fan has little chat history in the loaded messages. Hook onto whatever he did write, his name, or his bio; if none of that gives you anything personal, lean on the model\'s personality for a warm, low-pressure opener. Do NOT claim "we\'ve never talked" or make absolute statements about conversation history; use neutral openers that work regardless.',
   active: 'This fan is still active. This segment should not be used for ping generation.',
+};
+
+// Decision #295: OnlyFans Ping is manually chosen outreach; Fansly keeps its
+// reactivation wording. These are static, platform-owned instructions. Selecting
+// them never changes the observed segment or rewrites fan-derived content.
+const PING_PLATFORM_INSTRUCTIONS: Record<PromptPlatform, {
+  opening: string;
+  context: string;
+  timingGuidance: string;
+  checkInStrategy: string;
+  messageKind: string;
+  segments: Record<PingSegment, string>;
+}> = {
+  onlyfans: {
+    opening: 'You are generating a personal outreach message ("ping") requested by the chatter to send to a fan',
+    context: 'The chatter chose to reach out now. The fan may have written recently; do not assume they went silent. Create a natural reason to continue the conversation, grounded in what is visible. If the latest fan message asks a question, acknowledge it instead of ignoring it for an opener. A ping should read like a genuine personal text, not a newsletter or a copy-paste blast.',
+    timingGuidance: 'Any "Fan silence" line in the task section is factual context, not a recommendation about when to write. The chatter has already chosen to write now. Do not invent an absence, say the fan disappeared, or suggest waiting. Never quote the elapsed time back to the fan or make the outreach feel tracked.',
+    checkInStrategy: 'Ask about a specific interest, plan, or detail the fan shared, giving him something natural to answer without assuming an absence.',
+    messageKind: 'personal outreach message',
+    segments: {
+      ...PING_SEGMENT_INSTRUCTIONS,
+      'segment-a': 'Segment A. Earlier conversation: Reference specific past conversation topics, show you remember them, and create curiosity. Use the visible relationship context without making the time since the last message the reason to write.',
+      active: 'Active conversation: the fan wrote recently. The chatter chose this manual outreach. Continue naturally from the visible conversation or introduce a specific personal hook; do not claim there has been a gap or that the fan has gone quiet.',
+    },
+  },
+  fansly: {
+    opening: 'You are generating a reactivation message ("ping") to send to a fan who has gone quiet',
+    context: 'This is NOT a reply, you are reaching out first, unprompted. The fan has not said anything recently; you are creating the reason to talk. A ping should read like a genuine personal text, not a response, a newsletter, or a copy-paste blast.',
+    timingGuidance: 'If a "Fan silence" line appears in the task section, let the length of the gap set the energy: days or a couple of weeks can be playful about the silence itself; months of silence need a softer, zero-pressure re-open with no mention of how long it has been. Never quote the number back to the fan or make the outreach feel tracked.',
+    checkInStrategy: 'notice the silence in your own words, then give him something specific to answer. The silence alone is not a message.',
+    messageKind: 'reactivation message',
+    segments: PING_SEGMENT_INSTRUCTIONS,
+  },
 };
 
 const PRESET_INSTRUCTIONS_BLOCK = `
@@ -335,6 +371,17 @@ function fanBioSection(fanBio: string | undefined): string {
     return '';
   }
   return `Fan bio: ${escapeForPrompt(trimmed)}`;
+}
+
+/** Decision 290: the chatter's saved name for the fan (a Fansly rename). It is
+ * untrusted chatter text and may carry private tags after the name, so the
+ * template tells the model to use only the name part; escaped like the bio. */
+function fanCustomNameLine(fanCustomName: string | undefined): string {
+  const trimmed = fanCustomName?.trim() ?? '';
+  if (!trimmed) {
+    return '';
+  }
+  return `Name the chatter saved for this fan: ${escapeForPrompt(trimmed)}`;
 }
 
 /** The chatter's OWN unsent reply draft, offered to the coach for critique
@@ -697,11 +744,12 @@ function splitReplyInstructions(
 function segmentInstructions(
   policy: PromptFeaturePolicy,
   pingSegment: PingSegment | undefined,
+  instructions: Record<PingSegment, string>,
 ): string {
   if (!policy.usesPingSegment || !pingSegment) {
     return '';
   }
-  return PING_SEGMENT_INSTRUCTIONS[pingSegment];
+  return instructions[pingSegment];
 }
 
 function fanSilenceSection(
@@ -735,6 +783,7 @@ function fanSilenceSection(
  */
 function templateValues(input: PromptBuildInput): TemplateValues {
   const policy = PROMPT_POLICIES[input.feature];
+  const pingInstructions = PING_PLATFORM_INSTRUCTIONS[input.platform ?? 'onlyfans'];
   return {
     personality: input.personality.content,
     transcript: escapeForPrompt(input.transcript),
@@ -750,6 +799,7 @@ function templateValues(input: PromptBuildInput): TemplateValues {
     ),
     fanDisplayName: escapeForPrompt(input.fanDisplayName),
     fanBioSection: fanBioSection(input.fanBio),
+    fanCustomNameLine: fanCustomNameLine(input.fanCustomName),
     fanProfileSection: fanProfileSection(input.fanProfile),
     draftSection: draftSection(policy.requiresDraft ? input.draftText : undefined),
     coachDraftSection: coachDraftSection(policy.optionalDraft ? input.draftText : undefined),
@@ -757,7 +807,12 @@ function templateValues(input: PromptBuildInput): TemplateValues {
       input.preset === 'situation' ? PRESET_INSTRUCTIONS_BLOCK : '',
     splitReplyInstructions: splitReplyInstructions(policy, input.replyMode),
     toneInstructions: toneInstructions(policy, input.replyTone),
-    segmentInstructions: segmentInstructions(policy, input.pingSegment),
+    pingOpening: pingInstructions.opening,
+    pingContext: pingInstructions.context,
+    pingTimingGuidance: pingInstructions.timingGuidance,
+    pingCheckInStrategy: pingInstructions.checkInStrategy,
+    pingMessageKind: pingInstructions.messageKind,
+    segmentInstructions: segmentInstructions(policy, input.pingSegment, pingInstructions.segments),
     fanSilenceSection: fanSilenceSection(policy, input.fanSilenceDays),
     coachHistorySection: coachHistorySection(input.coachHistory),
     chatterQuestion: escapeForPrompt(input.chatterQuestion ?? ''),
