@@ -206,3 +206,18 @@ The candidate explicitly includes PR171's Overview/revenue API in addition to
 PR172. Protected health must actually execute, the CLI must follow the deployed
 contract, and rollback retains the C1 image and schema. The PR remains a C1
 diagnostic draft; no deployment or stage activation was performed.
+
+## Membership refinement — 12 September
+
+Both reviewers examined the final runtime, repository, migration, fixtures and
+runbook. `review_pr162` required the receipt's own sweep-start timestamp and a
+regression where UPDATE changes fewer rows than the candidate count. Both were
+implemented and rereviewed. `quality_c1` requested the unambiguous
+`membership_receipt_valid` name and a correctly placed count comment; both are
+fixed. Neither reviewer reports remaining actionable findings.
+
+The final source passed 3251 unit tests with nine existing skips and 84 serial
+Docker-Postgres tests with zero skips. The exact source and log hashes are in
+[evidence/membership-20260912/validation.json](evidence/membership-20260912/validation.json).
+Reviewers did not run tests. The diagnostics preserve existing policy and do
+not establish redundant generations, actual row identity or measured savings.

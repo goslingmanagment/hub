@@ -12258,6 +12258,21 @@ See the [diagnostic runbook](runbooks/fansly-followers-diagnostics.md).
 Numbered 294 when synchronized with main `c0cd21c3` on 11 September; the
 original C1 draft used 291. Applied migrations 0182/0183 are unchanged.
 
+**12 September diagnostic refinement.** Natural observations through 11:21 UTC
+contain 41 clean-queue requests with later exact-generation completion, but do
+not establish redundant work. The existing terminal activity SELECT now counts
+active rows in/outside the generation and disjoint absence-protection groups:
+retirement candidates, generation grace, timestamp protection, both, and future
+generations. A separate note preserves the generation's own start timestamp and
+the actual row count returned by the guarded UPDATE; withheld finalization has
+no retirement count. Migration 0185 extends the bounded timeline and validates
+the diagnostic receipt separately from membership certification. Applied 0182
+and 0183 retain their bytes; 0184 belongs to the separately deployed load fix.
+The follower predicates, HTTP calls, cadence, presence and destructive guards
+are unchanged. Counts are not row identity or a safe cooldown proof. Owner
+resumed implementation and authorized deployments; calendar, freshness and
+separate live socket/flag gates remain part of the stage plan.
+
 ## Decision 295: OnlyFans manual Ping preserves the chatter's timing decision (2026-09-11)
 
 The owner approved a manual Ping action in the desktop Spenders workflow and
