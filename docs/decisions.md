@@ -302,6 +302,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 301 | PostgreSQL bind logging | Pin both parameter log limits to zero at server startup; retain SQL templates, duration and all other production tuning. |
 | 302 | Alias lock order | Sort username-history writes by fan ID and username, preserving conditional updates and caller result order. |
 | 303 | Recent metrics reads | Enumerate stored index prefixes and bound each full-key range before filtering its exact series; retain sparse series and one snapshot. |
+| 304 | Sync seeding counts | Count active followers only when initial Fansly reconcile recovery can use it; keep every existing-state maintenance path. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -12686,3 +12687,21 @@ exactly; three warm runs visit approximately 620 tuples instead of the entire
 history (0.48-0.61 ms versus 89-96 ms locally). A populated-table migration and
 rerun keep the index valid. These synthetic results do not establish production
 latency or total CPU savings; verify the production plan after deployment.
+
+
+## Decision 304: Skip follower aggregates unused by sync-state maintenance (2026-09-12)
+
+The page metadata SELECT counts active followers only while initially creating
+a missing Fansly `followers_reconcile` state outside onboarding. A CASE guarded
+by the existing state primary key preserves one metadata/count snapshot. Fully
+seeded planner/executor preflights still repair legacy states and maintain
+cadence, while PostgreSQL does not execute the `page_follows` aggregate. Paused
+existing states remain authoritative. Standalone schedule and feature-gate
+contracts are unchanged; the cheap repeated ensure remains valid.
+
+Independent review approved the change. Twenty-eight targeted tests pass,
+including complete/partial states, initial recovery, active-only counts and
+maintenance. Replacing only the writer with the deployed version makes five
+no-read plan checks fail while the five initial-recovery cases continue to
+pass. This preserves the existing multi-statement seeder's concurrency scope;
+it does not introduce stronger atomicity against explicit page erasure.
