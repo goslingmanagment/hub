@@ -25,6 +25,7 @@ vi.mock("@agency_hub_core/db", async () => {
 });
 
 import { createSyncRateLimitWaiter } from "../apps/runtime/src/services/sync/rate-limiter.ts";
+import { runWithHttpRequestSignal } from "@agency_hub_core/shared";
 
 describe("sync rate limiter", () => {
   beforeEach(() => {
@@ -98,5 +99,23 @@ describe("sync rate limiter", () => {
         { provider: "fansly", scope: "dm_messages", egressKey: "socks5://proxy.example:1080" },
       ],
     });
+  });
+
+  it("does not reserve a slot if lease loss occurs while ensuring the profile", async () => {
+    const controller = new AbortController();
+    const reason = new Error("synthetic lease loss");
+    dbMocks.ensureSyncProviderRateLimitProfile.mockImplementationOnce(async () => {
+      controller.abort(reason);
+    });
+    const waiter = createSyncRateLimitWaiter({
+      db: {} as never,
+      config: { syncSharedRateLimitEnabled: true } as never,
+    }, { egressKey: "synthetic-proxy" });
+
+    await expect(runWithHttpRequestSignal(controller.signal, () => waiter!([
+      { provider: "fansly", scope: "global" },
+    ]))).rejects.toBe(reason);
+    expect(dbMocks.reserveSyncProviderRateLimit).not.toHaveBeenCalled();
+    expect(timerMocks.delay).not.toHaveBeenCalled();
   });
 });

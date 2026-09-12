@@ -12,6 +12,7 @@ export * from "./fansly-revenue-types.ts";
 export * from "./fansly-stat-types.ts";
 export * from "./http-client.ts";
 export * from "./http-request.ts";
+export * from "./http-request-scope.ts";
 export * from "./logger.ts";
 export * from "./money.ts";
 export * from "./proxy.ts";

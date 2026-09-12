@@ -304,6 +304,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 303 | Recent metrics reads | Enumerate stored index prefixes and bound each full-key range before filtering its exact series; retain sparse series and one snapshot. |
 | 304 | Sync seeding counts | Count active followers only when initial Fansly reconcile recovery can use it; keep every existing-state maintenance path. |
 | 305 | Sync finalizer authority | Cleanup rechecks the current target outcome after a lock wait and preserves committed worker results. |
+| 306 | HTTP admission after lease loss | Stop new observed read attempts per chunk while preserving in-flight response capture and existing write fencing. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -12725,3 +12726,29 @@ lease suites also pass. The deployed writer fails the eight finalizer-first
 commit cases while four rollback/cleanup-first cases still pass. This closes the
 same-row terminal overwrite, without changing policy for activity that appears
 in another table after the cleanup statement's snapshot.
+
+
+## Decision 306: Observed lease loss stops new physical read attempts (2026-09-12)
+
+A false or failed page-sync heartbeat aborts a per-chunk async-local HTTP scope
+with `PageSyncLeaseLostError`. Rate admission, retry delay and dispatch boundaries
+honor that scope, including after asynchronous telemetry and OFAPI admission
+hooks. The shared layer does not classify this control outcome as a transport
+retry. The existing heartbeat interval and durable ownership predicates remain.
+
+The scope never aborts in-flight transport reception: the response and capture
+path may finish before existing lease fencing rejects business completion.
+Nested lane/hydration contexts inherit the scope; unrelated pages and unscoped
+callers remain independent. Governed one-attempt and outbox policy are unchanged.
+Cancelled pacing reservations are not reused, and cancelled queue nodes keep
+their predecessor dependency. A known unused OFAPI collection admission is
+released only through its existing exact-attempt cancellation hook.
+
+Independent review approved runtime behavior, the revised error canon and the
+final fixtures. The combined sync/lease/retry/collection/outbox gate passes
+172 tests. A full-file test run exposed external undici spy identity surviving
+module resets; the final fixture keeps one spy and resets behavior between
+cases, preserving all real transport, capture and pacing assertions. Scope
+isolation, cancellation during admission/retry, false/error heartbeats and
+responses arriving after loss are covered. This does not promise cancellation
+before the next heartbeat observes ownership loss.
