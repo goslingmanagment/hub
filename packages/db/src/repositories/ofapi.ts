@@ -375,6 +375,35 @@ export async function listOfapiWebhookEventsForDmColdArchive(
 }
 
 /**
+ * Latest settled received_at per page through one bounded backward index probe
+ * per page (ofapi_webhook_events_page_received_idx, migration 0184). `extra`
+ * narrows the probe (e.g. an event_type list); it must start with `and`.
+ */
+async function latestReceivedAtPerPage(
+  db: Database,
+  pageIds: readonly number[],
+  extra: ReturnType<typeof sql>,
+): Promise<Array<{ platformAccountId: number | null; lastReceivedAt: Date | string | null }>> {
+  const result = await db.execute<{ platformAccountId: number | string | null; lastReceivedAt: Date | string | null }>(sql`
+    select p.id as "platformAccountId", e.received_at as "lastReceivedAt"
+    from (values ${sql.join(pageIds.map((id) => sql`(${id}::bigint)`), sql`, `)}) as p(id)
+    left join lateral (
+      select w.received_at
+      from ${ofapiWebhookEvents} w
+      where w.platform_account_id = p.id
+        and w.status <> 'pending'
+        ${extra}
+      order by w.received_at desc
+      limit 1
+    ) e on true
+  `);
+  return result.rows.map((row) => ({
+    platformAccountId: row.platformAccountId === null ? null : Number(row.platformAccountId),
+    lastReceivedAt: row.lastReceivedAt,
+  }));
+}
+
+/**
  * Per-page age of the OFAPI DM webhook feed: latest received_at among settled
  * message events. Backs the messages_live sync block for OFAPI-fed OnlyFans
  * pages (webhook ingest freshness instead of executor stream freshness).
@@ -390,18 +419,13 @@ export async function getLatestSettledOfapiDmEventTimes(
     return new Map();
   }
 
-  const rows = await db
-    .select({
-      platformAccountId: ofapiWebhookEvents.platformAccountId,
-      lastReceivedAt: sql<Date | string | null>`max(${ofapiWebhookEvents.receivedAt})`,
-    })
-    .from(ofapiWebhookEvents)
-    .where(and(
-      inArray(ofapiWebhookEvents.platformAccountId, input.pageIds),
-      inArray(ofapiWebhookEvents.eventType, [...input.eventTypes]),
-      sql`${ofapiWebhookEvents.status} <> 'pending'`,
-    ))
-    .groupBy(ofapiWebhookEvents.platformAccountId);
+  // One backward probe per page on ofapi_webhook_events_page_received_idx
+  // (0184) instead of max() over every row of the page: the settled OFAPI
+  // pages own the whole 690k-row journal, so a grouped max() was a full scan
+  // (docs/diag/2026-09-11-agency-hub-load).
+  const rows = await latestReceivedAtPerPage(db, input.pageIds, sql`
+    and w.event_type in (${sql.join(input.eventTypes.map((type) => sql`${type}`), sql`, `)})
+  `);
 
   const result = new Map<number, Date>();
   for (const row of rows) {
@@ -2947,17 +2971,8 @@ export async function getLatestOfapiEventTimesForPages(
     return new Map();
   }
 
-  const rows = await db
-    .select({
-      platformAccountId: ofapiWebhookEvents.platformAccountId,
-      lastReceivedAt: sql<Date | string | null>`max(${ofapiWebhookEvents.receivedAt})`,
-    })
-    .from(ofapiWebhookEvents)
-    .where(and(
-      inArray(ofapiWebhookEvents.platformAccountId, pageIds),
-      sql`${ofapiWebhookEvents.status} <> 'pending'`,
-    ))
-    .groupBy(ofapiWebhookEvents.platformAccountId);
+  // Same per-page index probe as getLatestSettledOfapiDmEventTimes (0184).
+  const rows = await latestReceivedAtPerPage(db, pageIds, sql``);
 
   const result = new Map<number, Date>();
   for (const row of rows) {

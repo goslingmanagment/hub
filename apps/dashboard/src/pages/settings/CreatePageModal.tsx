@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type {
   CreatePageBody,
   ModelListItem,
@@ -41,8 +41,12 @@ export function CreatePageModal({
   const [verifyState, setVerifyState] = useState<VerifyState>("idle");
   const [verifyResult, setVerifyResult] = useState<VerifyCredentialsResponse | null>(null);
   const [verifyError, setVerifyError] = useState("");
+  const verificationRevision = useRef(0);
+
+  useEffect(() => () => { verificationRevision.current += 1; }, []);
 
   function resetVerify() {
+    verificationRevision.current += 1;
     if (verifyState !== "idle") {
       setVerifyState("idle");
       setVerifyResult(null);
@@ -59,6 +63,7 @@ export function CreatePageModal({
   }
 
   async function handleVerify() {
+    const revision = ++verificationRevision.current;
     setVerifyState("verifying");
     setVerifyError("");
     try {
@@ -66,9 +71,11 @@ export function CreatePageModal({
         platform,
         values: credentials,
       }));
+      if (revision !== verificationRevision.current) return;
       setVerifyResult(result);
       setVerifyState("verified");
     } catch (error) {
+      if (revision !== verificationRevision.current) return;
       setVerifyError(error instanceof Error ? error.message : "Verification failed");
       setVerifyState("verify-failed");
     }
@@ -97,10 +104,10 @@ export function CreatePageModal({
     }
   }
 
-  const proxyError = getProxyStringError(credentials.proxyRaw);
+  const proxyError = platform === "fansly" ? getProxyStringError(credentials.proxyRaw) : null;
   const hasRequiredCredentials = platform === "fansly"
       ? credentials.authorization.trim().length > 0
-      : credentials.onlyFansToken.trim().length > 0 && credentials.onlyFansUsername.trim().length > 0;
+      : credentials.onlyFansUsername.trim().length > 0;
   const hasRequiredProxy = platform !== "fansly" || credentials.proxyRaw.trim().length > 0;
   const canVerify = !proxyError && hasRequiredCredentials && hasRequiredProxy;
 

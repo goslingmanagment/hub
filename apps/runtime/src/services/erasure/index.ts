@@ -795,6 +795,8 @@ export interface FanRefErasureColumn {
  * a target the plan actually emits) or in that test's justified-exception list.
  */
 export const FAN_REF_ERASURE_COLUMNS: readonly FanRefErasureColumn[] = [
+  // Only the two earnings endpoint planes use subject_ref as a fan reference.
+  { column: "subject_refresh_state.subject_ref", target: "subject_refresh_state", reach: "predicate" },
   // dmArchivePred: `fan_platform_user_id = ref or platform_conversation_id = ref
   // or sender_platform_user_id = ref`.
   { column: "dm_message_archive.fan_platform_user_id", target: "dm_message_archive", reach: "predicate" },
@@ -958,6 +960,21 @@ async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLine
   });
 
   // fan_earnings_stats FKs fans with RESTRICT — must clear before the fans row.
+  const earningsRefreshPred = sql`page_id in ${scope.pageIds} and (
+    (plane in ('fan_earnings_lifetime', 'fan_earnings_monthly') and subject_ref = ${ref})
+    or (plane = 'fan_earnings_attribution' and exists (
+      select 1 from transactions t
+      where t.platform_account_id = subject_refresh_state.page_id
+        and t.transaction_id = subject_refresh_state.subject_ref
+        and (t.fan_id = ${fanId} or t.correlation_account_id = ${ref}
+          or t.sender_id = ${ref} or t.receiver_id = ${ref})
+    ))
+  )`;
+  targets.push({
+    plane: "hot", target: "subject_refresh_state", action: "delete",
+    rows: await countOf(app, sql`select count(*)::text as n from subject_refresh_state where ${earningsRefreshPred}`),
+    run: (tx) => execCount(tx, sql`delete from subject_refresh_state where ${earningsRefreshPred}`),
+  });
   targets.push({
     plane: "hot",
     target: "fan_earnings_stats",

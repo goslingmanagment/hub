@@ -15,6 +15,7 @@ export function createTestAppContext(
     fanslyDmConversationsDelayMs?: number;
     fanslyDmMessagesDelayMs?: number;
     fanslyFanEarningsSyncEnabled?: boolean;
+    fanslyFanEarningsShadowPageAllowlist?: string;
     fanslyPurchaseHistorySyncEnabled?: boolean;
     fanslyNewStreamPageAllowlist?: string;
     followerPageDelayMs?: number;
@@ -105,6 +106,7 @@ export function createTestAppContext(
       fanslyDmConversationsDelayMs: overrides?.fanslyDmConversationsDelayMs ?? 5000,
       fanslyDmMessagesDelayMs: overrides?.fanslyDmMessagesDelayMs ?? 5000,
       fanslyFanEarningsSyncEnabled: overrides?.fanslyFanEarningsSyncEnabled ?? false,
+      fanslyFanEarningsShadowPageAllowlist: overrides?.fanslyFanEarningsShadowPageAllowlist ?? "none",
       fanslyPurchaseHistorySyncEnabled: overrides?.fanslyPurchaseHistorySyncEnabled ?? false,
       fanslyNewStreamPageAllowlist: overrides?.fanslyNewStreamPageAllowlist ?? "",
       followerPageDelayMs: overrides?.followerPageDelayMs ?? 0,

@@ -542,6 +542,10 @@ export const syncRuns = pgTable(
   },
   (table) => ({
     finishedIdx: index("sync_runs_finished_idx").on(table.finishedAt),
+    // 0184: the planner and monitor read the few running runs out of ~190k.
+    runningIdx: index("sync_runs_running_idx")
+      .on(table.id)
+      .where(sql`${table.outcome} = 'running'`),
     idPageStreamUniq: unique("sync_runs_id_page_stream_uniq").on(
       table.id,
       table.pageId,
@@ -3241,6 +3245,9 @@ export const ofapiWebhookEvents = pgTable(
   (table) => ({
     idempotencyUniq: unique("ofapi_webhook_events_idempotency_uniq").on(table.idempotencyKey),
     receivedIdx: index("ofapi_webhook_events_received_idx").on(table.receivedAt),
+    // 0184: max(received_at) per page (admin status, event-type freshness).
+    pageReceivedIdx: index("ofapi_webhook_events_page_received_idx")
+      .on(table.platformAccountId, table.receivedAt),
     statusIdx: index("ofapi_webhook_events_status_idx").on(table.status, table.id),
     projectionIdx: index("ofapi_webhook_events_projection_idx")
       .on(table.projectionStatus, table.id)
@@ -5580,6 +5587,7 @@ export const fanEarningsStats = pgTable(
     currency: char("currency", { length: 3 }).default("USD").notNull(),
     observedAt: timestamp("observed_at", { withTimezone: true }).notNull(),
     sourceEventId: bigint("source_event_id", { mode: "number" }).notNull(),
+    sourceObservationId: bigint("source_observation_id", { mode: "number" }).default(0).notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => ({
@@ -5733,6 +5741,24 @@ export const subjectRefreshState = pgTable(
     knownCount: integer("known_count"),
     backfillCursor: jsonbSafe("backfill_cursor").$type<Record<string, unknown>>().default({})
       .notNull(),
+    /** C2b: only earnings planes use claims and revision settlement. */
+    requestedRevision: bigint("requested_revision", { mode: "number" }).default(0).notNull(),
+    appliedRevision: bigint("applied_revision", { mode: "number" }).default(0).notNull(),
+    claimedRevision: bigint("claimed_revision", { mode: "number" }),
+    claimToken: uuid("claim_token"),
+    claimExpiresAt: timestamp("claim_expires_at", { withTimezone: true }),
+    retryAfterAt: timestamp("retry_after_at", { withTimezone: true }),
+    lastCheckedAt: timestamp("last_checked_at", { withTimezone: true }),
+    lastChangedAt: timestamp("last_changed_at", { withTimezone: true }),
+    lastReceiptObservationId: bigint("last_receipt_observation_id", { mode: "number" }),
+    lastCheckedObservationId: bigint("last_checked_observation_id", { mode: "number" }),
+    lastContentFingerprint: text("last_content_fingerprint"),
+    lastRefreshOutcome: text("last_refresh_outcome"),
+    refreshVisits: bigint("refresh_visits", { mode: "number" }).default(0).notNull(),
+    refreshReceipts: bigint("refresh_receipts", { mode: "number" }).default(0).notNull(),
+    refreshChecks: bigint("refresh_checks", { mode: "number" }).default(0).notNull(),
+    refreshChanges: bigint("refresh_changes", { mode: "number" }).default(0).notNull(),
+    unsignaledChanges: bigint("unsignaled_changes", { mode: "number" }).default(0).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },

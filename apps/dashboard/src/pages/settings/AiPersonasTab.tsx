@@ -77,7 +77,7 @@ export function AiPersonasTab() {
         {personas.length === 0 ? (
           <p className="text-sm text-text-muted">No personas configured.</p>
         ) : (
-          <section className="overflow-hidden rounded-xl border border-border bg-card">
+          <section className="overflow-x-auto rounded-xl border border-border bg-card">
             <table className="w-full border-collapse">
               <thead>
                 <tr className="bg-hover-alt">

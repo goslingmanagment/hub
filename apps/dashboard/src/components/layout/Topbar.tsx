@@ -4,7 +4,7 @@ import { LogOut, ChevronDown, Menu } from "lucide-react";
 import { useLogout } from "@/api/queries";
 import { PeriodSelector } from "@/components/shared/PeriodSelector";
 import { clearDashboardSession } from "@/lib/queryClient";
-import { buildPageRoute, decodeRouteSegment, resolveFanLabelFromState } from "@/lib/navigation";
+import { buildPageRoute, decodeRouteSegment, isSafeInAppPath, resolveFanLabelFromState, resolveFanProfileBackTarget } from "@/lib/navigation";
 import { useDashboardShell } from "./DashboardShellContext.js";
 
 interface TopbarProps {
@@ -19,7 +19,9 @@ export function Topbar({ user, onOpenNavigation }: TopbarProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
 
-  const breadcrumbs = buildBreadcrumbs(location.pathname, pages, location.state);
+  const backTo = new URLSearchParams(location.search).get("backTo") ?? resolveFanProfileBackTarget(location.state, undefined);
+  const overviewBack = backTo && isSafeInAppPath(backTo) && (backTo === "/" || backTo.startsWith("/?")) ? backTo : "/";
+  const breadcrumbs = buildBreadcrumbs(location.pathname, pages, location.state).map((crumb) => crumb.href === "/" ? { ...crumb, href: overviewBack } : crumb);
   const periodSelectorMode = getPeriodSelectorMode(location.pathname);
 
   useEffect(() => {
@@ -48,17 +50,17 @@ export function Topbar({ user, onOpenNavigation }: TopbarProps) {
 
   return (
     <div className="h-[56px] bg-card border-b border-border flex items-center justify-between px-3 md:px-7 fixed top-0 left-0 md:left-[248px] right-0 z-10">
-      <div className="flex min-w-0 items-center gap-2">
+      <div className="flex min-w-0 items-center gap-2 overflow-hidden">
         <button type="button" className="shrink-0 rounded p-1 md:hidden" aria-label="Открыть навигацию" onClick={onOpenNavigation}><Menu size={20} /></button>
         {breadcrumbs.map((crumb, i) => (
-          <span key={i} className="flex items-center gap-2">
+          <span key={i} className="flex min-w-0 items-center gap-2">
             {i > 0 && <span className="text-text-muted/60 text-sm">›</span>}
             {crumb.href ? (
-              <Link to={crumb.href} className="text-sm text-text-muted hover:text-text-secondary cursor-pointer">
+              <Link to={crumb.href} className="truncate text-sm text-text-muted hover:text-text-secondary cursor-pointer">
                 {crumb.label}
               </Link>
             ) : (
-              <span className="text-base font-semibold text-text-primary tracking-[-0.02em]">
+              <span className="truncate text-base font-semibold text-text-primary tracking-[-0.02em]">
                 {crumb.label}
               </span>
             )}
@@ -66,19 +68,21 @@ export function Topbar({ user, onOpenNavigation }: TopbarProps) {
         ))}
       </div>
 
-      <div className="flex items-center gap-2">
+      <div className="flex shrink-0 items-center gap-2">
         {periodSelectorMode && <PeriodSelector mode={periodSelectorMode} />}
 
-        <div className="relative ml-2.5" ref={menuRef}>
+        <div className="relative ml-1 sm:ml-2.5" ref={menuRef}>
           <button
             type="button"
             onClick={() => setMenuOpen((open) => !open)}
+            aria-label="Account menu"
+            aria-expanded={menuOpen}
             className="flex items-center gap-2 rounded-full border border-border bg-card px-2 py-1 hover:bg-hover-alt"
           >
-            <div className="w-8 h-8 rounded-full bg-hover flex items-center justify-center text-[13px] text-text-secondary font-semibold">
+            <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-hover flex items-center justify-center text-[13px] text-text-secondary font-semibold">
               {user.username.charAt(0).toUpperCase()}
             </div>
-            <ChevronDown size={14} className="text-text-muted" />
+            <ChevronDown size={14} className="hidden sm:block text-text-muted" />
           </button>
 
           {menuOpen && (
@@ -105,7 +109,7 @@ export function Topbar({ user, onOpenNavigation }: TopbarProps) {
 
 function getPeriodSelectorMode(pathname: string): "dashboard" | "spender" | "topSupporters" | null {
   const parts = pathname.split("/").filter(Boolean);
-  if (parts.length === 0) return "dashboard"; // Overview
+  if (parts.length === 0) return "dashboard";
   if (parts[0] === "pages" && parts[1]) {
     if (!parts[2]) return "dashboard"; // PageDetail
     if (parts[2] === "top-supporters") return "topSupporters";
@@ -131,6 +135,7 @@ function buildBreadcrumbs(
   if (parts[0] === "settings") return [{ label: "Overview", href: "/" }, { label: "Settings" }];
 
   if (parts[0] === "usage") return [{ label: "Overview", href: "/" }, { label: "Usage" }];
+  if (parts[0] === "transactions") return [{ label: "Overview", href: "/" }, { label: "Операции" }];
 
   if (parts[0] === "ofapi-credits") return [{ label: "Overview", href: "/" }, { label: "OFAPI Credits" }];
 

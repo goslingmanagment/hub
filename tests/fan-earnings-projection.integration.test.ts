@@ -1,6 +1,6 @@
 // Stage 16 v3 (parse side): earnings observation → fan.earnings_observed
-// events → fan_earnings_stats rows; an UNCHANGED snapshot re-fetch dedupes
-// to zero new events (content-hashed key); rebuild reproduces the rows.
+// events → fan_earnings_stats rows; each observation has stable identity.
+// Re-fetches remain projection-only; rebuild reproduces the rows.
 
 import { createHash } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -70,7 +70,7 @@ async function seedStatsObservation(page: { id: number }, key: string) {
 }
 
 describe("fan earnings parse side (Stage 16 v3)", () => {
-  it("observation → events → projection rows; snapshot re-fetch dedupes; rebuild reproduces", async (context) => {
+  it("observation → projection-only events → rows; re-fetch and rebuild preserve amounts", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -80,7 +80,7 @@ describe("fan earnings parse side (Stage 16 v3)", () => {
 
     await seedStatsObservation(page, "run-1");
     const first = await runCanonicalization(appStub());
-    expect(first.appended).toBe(2); // one per fan (lifetime window)
+    expect(first.appended).toBe(3); // two fans and their atomic checkpoint
 
     const projected = await runFanEarningsProjection(appStub());
     expect(projected.upserted).toBe(2);
@@ -98,11 +98,11 @@ describe("fan earnings parse side (Stage 16 v3)", () => {
       { window: "lifetime", gross_mills: "2000", net_mills: "1600", fan_user: "fan-e-2" },
     ]);
 
-    // The SAME snapshot fetched again → new observation, ZERO new events.
+    // The same snapshot is a new receipt; it must not suppress a later A → B → A.
     await seedStatsObservation(page, "run-2");
     const second = await runCanonicalization(appStub());
-    expect(second.appended).toBe(0);
-    expect(second.deduped).toBe(2);
+    expect(second.appended).toBe(3);
+    expect(second.deduped).toBe(0);
 
     // PPV order-history: composite-key events (rows carry no order id).
     await insertObservation(testDb.db, {
@@ -140,14 +140,14 @@ describe("fan earnings parse side (Stage 16 v3)", () => {
     // …and the checkpoint covers exactly the hidden row, so v2 replay sees a
     // one-seq gap it can account for.
     const checkpoint = await testDb.pool.query<{ data: { hiddenCount: number } }>(
-      "select data from domain_events where type = 'stream.projection_checkpoint'",
+      "select data from domain_events where type = 'stream.projection_checkpoint' order by account_seq desc limit 1",
     );
     expect(checkpoint.rows).toHaveLength(1);
     expect(checkpoint.rows[0]!.data.hiddenCount).toBe(1);
 
     // Rebuild reproduces identical projection rows.
     const rebuilt = await rebuildFanEarningsProjection(appStub(), { accountId: page.id });
-    expect(rebuilt.upserted).toBe(2);
+    expect(rebuilt.upserted).toBe(4);
     const after = await testDb.pool.query<{ n: string }>(
       "select count(*)::text as n from fan_earnings_stats where account_id = $1",
       [page.id],

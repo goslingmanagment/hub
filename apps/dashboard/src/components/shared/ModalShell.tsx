@@ -1,13 +1,17 @@
-import { useEffect, useId, useRef, type ReactNode } from "react";
+import { useEffect, useId, useRef, type ReactNode, type RefObject } from "react";
 
 export function ModalShell({
   children,
   title,
   onClose,
+  closeLabel = "Close",
+  restoreFocusRef,
 }: {
   children: ReactNode;
   title: string;
   onClose: () => void;
+  closeLabel?: string;
+  restoreFocusRef?: RefObject<HTMLElement | null>;
 }) {
   const titleId = useId();
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -35,12 +39,19 @@ export function ModalShell({
       'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
     );
     focusable?.focus();
-    return () => previouslyFocused?.focus?.();
-  }, []);
+    return () => {
+      const target = previouslyFocused?.isConnected && previouslyFocused.getClientRects().length > 0
+        ? previouslyFocused
+        : restoreFocusRef?.current;
+      target?.focus();
+    };
+  }, [restoreFocusRef]);
 
   return (
     <div
       className="fixed inset-0 z-30 flex items-center justify-center bg-black/20 p-6"
+      // Parent space-y utilities must not leave an uncovered strip behind the dialog.
+      style={{ margin: 0 }}
       onClick={onClose}
     >
       <div
@@ -52,16 +63,16 @@ export function ModalShell({
         className="max-h-[calc(100dvh-3rem)] w-full max-w-2xl overflow-y-auto rounded-2xl border border-border bg-card p-6 shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="mb-4 flex items-center justify-between">
+        <div className="mb-4 flex items-start justify-between gap-4">
           <h2 id={titleId} className="text-lg font-bold text-text-primary">
             {title}
           </h2>
           <button
             type="button"
             onClick={onClose}
-            className="text-sm text-text-muted hover:text-text-primary"
+            className="min-h-8 shrink-0 text-sm text-text-muted hover:text-text-primary"
           >
-            Close
+            {closeLabel}
           </button>
         </div>
         {children}

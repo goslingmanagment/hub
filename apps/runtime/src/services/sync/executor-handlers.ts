@@ -1,3 +1,4 @@
+import { followersReconcileDecision } from "./followers-reconcile-decision.ts";
 import {
   aggregateTransactionTopSpenders,
   assertOwnedPageSyncLease,
@@ -33,7 +34,6 @@ import {
   updatePageSyncTimestampCache,
   upsertArchivedPageSubscriptions,
   upsertPageTopSpenders,
-  listPageFanNativeIds,
   upsertCheckpoint,
   upsertCheckpointProgress,
   upsertPageDmConversation,
@@ -321,12 +321,14 @@ async function triggerFollowersReconcileAnomaly(
   app: AppContext,
   platformAccountId: number,
 ) {
-  await requestPageSync(app.db, {
+  const receipts = await requestPageSync(app.db, {
     pageId: platformAccountId,
     streams: ["followers_reconcile"],
     source: "anomaly",
+    includeQueueState: true,
     ...pageSyncDependencyInput(app),
   });
+  return receipts?.find(row => row.stream === "followers_reconcile") ?? null;
 }
 
 type FollowerMappingStream = "followers" | "followers_reconcile";
@@ -1918,13 +1920,25 @@ export async function executeFollowersChunk(
       await input.telemetry.recordCheckpointAdvanced("followers", summarizeCheckpoint(pageWrite.checkpoint));
 
       const activeFollowerCount = await countActivePageFollows(app.db, input.pageContext.page.id);
-      if (
-        activeFollowerCount !== state.sourceFollowerCount ||
-        (!!state.knownFollowId && page.done && !sawKnownCheckpoint) ||
-        (!!state.knownFollowId && newestFollowId === state.knownFollowId && processedThisChunk > 0)
-      ) {
-        await triggerFollowersReconcileAnomaly(app, input.pageContext.page.id);
-      }
+      const decision = followersReconcileDecision({
+        activeFollowerCount, sourceFollowerCount: state.sourceFollowerCount,
+        knownFollowId: state.knownFollowId, newestFollowId,
+        pageDone: page.done, sawKnownCheckpoint, processedThisChunk,
+      });
+      const receipt = decision.requested
+        ? await triggerFollowersReconcileAnomaly(app, input.pageContext.page.id)
+        : null;
+      // This receipt describes a settled decision, including the no-request case.
+      // Telemetry persistence is fail-open; it cannot change the follower walk.
+      await input.telemetry.addNote("Fansly followers reconcile decision", {
+        followersReconcile: {
+          schemaVersion: 1, ...decision,
+          counts: { activeFollowerCount, sourceFollowerCount: state.sourceFollowerCount,
+            pageCount: state.pageCount, processedThisChunk },
+          knownCheckpoint: Boolean(state.knownFollowId), pageDone: page.done,
+          requestedSeq: receipt?.requestedSeq ?? null, queueBefore: receipt?.queueBefore ?? null,
+        },
+      });
 
       return {
         satisfied: true,
@@ -3328,194 +3342,7 @@ function fanslyNewStreamSkip(reason: string): StreamChunkResult {
   };
 }
 
-export async function executeFanEarningsChunk(
-  app: AppContext,
-  input: ExecutorRequestContext & { syncRunId: number },
-): Promise<StreamChunkResult> {
-  if (input.pageContext.platform !== "fansly") {
-    return fanslyNewStreamSkip("not_fansly");
-  }
-  await input.telemetry.recordPhaseStarted("fan_earnings");
-  const effective = await loadEffectiveConfig(app.db, app.config);
-  if (effective.fanslyFanEarningsSyncEnabled !== true) {
-    return fanslyNewStreamSkip("flag_off");
-  }
-  if (!fanslyNewStreamAllowed(effective.fanslyNewStreamPageAllowlist, input.pageContext.page.label)) {
-    return fanslyNewStreamSkip("not_allowlisted");
-  }
-
-  const requestContext = {
-    session: input.pageContext.session,
-    proxy: input.pageContext.proxy,
-    egressKey: input.pageContext.egressKey,
-    requestObserver: composeRequestObservers(input.telemetry.getRequestObserver(), input.budget),
-    rateLimitWaiter: createPageRateLimitWaiter(app, input.pageContext),
-  };
-
-  // The earnings endpoints answer PER FAN: a windowed call without
-  // correlationAccountId returns [] (ramp-caught 2026-07-06; probe-confirmed
-  // with a fan id → 21 rows). So the capture is a checkpointed keyset walk —
-  // SPENDER-scoped (fans with page_fans net > 0; zero-spend fans have no
-  // earnings rows), two calls per fan (lifetime stats + monthly). Each
-  // successful response is journaled independently before any later request
-  // or parsing so a partial per-fan failure cannot discard captured bytes.
-  const window = { after: new Date(0), before: new Date() };
-  const checkpoint = await getCheckpoint(app.db, input.pageContext.page.id, "fan_earnings");
-  const state = checkpoint?.state as { cursorFanId?: number } | null;
-  let cursorFanId = typeof state?.cursorFanId === "number" ? state.cursorFanId : 0;
-  // A43 (W8.2): the PERSISTED cursor advances only through one contiguous
-  // prefix of successful fans. A fan-scoped rejection stops the walk; it may
-  // never be crossed by a later success in the same keyset generation.
-  let persistableCursorFanId = cursorFanId;
-  let fansFetched = 0;
-  let fansSkipped = 0;
-  let walkCompleted = false;
-  let rejectedFanError: FanslyApiError | null = null;
-
-  const journalFanResponse = async (
-    endpoint: "fan_earnings_stats" | "fan_earnings_monthly",
-    fan: { fanId: number; platformUserId: string },
-    response: { items: unknown; raw?: unknown },
-  ) => {
-    await persistRawPayload(app.db, {
-      platformAccountId: input.pageContext.page.id,
-      syncRunId: input.syncRunId,
-      endpoint,
-      requestParams: {
-        after: window.after.toISOString(),
-        before: window.before.toISOString(),
-        fanId: fan.fanId,
-        correlationAccountId: fan.platformUserId,
-        spendersOnly: true,
-      },
-      // Real adapters return raw. The fallback keeps older test doubles and
-      // replay tooling source-compatible without weakening production capture.
-      responsePayload: response.raw ?? response.items,
-      mapperVersion: FANSLY_MAPPER_VERSION,
-      payloadKind: "mapping_critical",
-      retainUntil: retentionDate(),
-    }, { action: `inserting ${endpoint} raw payload`, platform: "fansly" });
-  };
-
-  // Each fan costs TWO provider calls (lifetime + monthly stats) — reserve
-  // both up front so the chunk never overshoots its request budget by one.
-  while (input.budget.hasRequestCapacity(2) && input.budget.hasWallClockCapacity()) {
-    await assertOwnedPageSyncLease(app.db);
-    const fans = await listPageFanNativeIds(app.db, {
-      platformAccountId: input.pageContext.page.id,
-      afterFanId: cursorFanId,
-      limit: 1,
-      spendersOnly: true,
-    });
-    const fan = fans[0];
-    if (!fan) {
-      walkCompleted = true;
-      break;
-    }
-
-    try {
-      const stats = await app.adapter.getEarningsStatsAccountsPage(requestContext, {
-        correlationAccountId: fan.platformUserId,
-        ...window,
-      });
-      // Capture each successful provider response before lease checks, parsing,
-      // or the second call. A monthly rejection must never erase stats bytes.
-      await journalFanResponse("fan_earnings_stats", fan, stats);
-      if (!Array.isArray(stats.items)) {
-        throw new Error("Fansly fan earnings stats response was not an array");
-      }
-      await assertOwnedPageSyncLease(app.db);
-      const monthly = await app.adapter.getEarningsMonthlyStatsAccountsPage(requestContext, {
-        correlationAccountId: fan.platformUserId,
-        ...window,
-      });
-      await journalFanResponse("fan_earnings_monthly", fan, monthly);
-      if (!Array.isArray(monthly.items)) {
-        throw new Error("Fansly monthly fan earnings response was not an array");
-      }
-    } catch (error) {
-      // A fan-scoped rejection cannot be skipped inside a keyset walk: doing
-      // so and later persisting a successful fan would jump the durable cursor
-      // over the rejected fan. Stop at the first rejection and persist only
-      // the contiguous successful prefix before surfacing the provider error.
-      const fanScoped = error instanceof FanslyApiError &&
-        typeof error.status === "number" &&
-        [400, 404, 410].includes(error.status);
-      if (!fanScoped) {
-        throw error;
-      }
-      await input.telemetry.addAnomaly({
-        code: "fan_earnings_fan_rejected",
-        severity: "warn",
-        message: `Stopped fan-earnings walk after HTTP ${error.status} for one fan`,
-        details: {
-          fanId: fan.fanId,
-          platformUserId: fan.platformUserId,
-          status: error.status,
-          fanslyCode: error.code ?? null,
-        },
-      });
-      fansSkipped += 1;
-      rejectedFanError = error;
-      break;
-    }
-
-    cursorFanId = fan.fanId;
-    persistableCursorFanId = fan.fanId;
-    fansFetched += 1;
-  }
-
-  // Persist only completion or the contiguous successful prefix. If the first
-  // fan rejects, leave the checkpoint untouched so retry targets that fan.
-  if (walkCompleted) {
-    await upsertCheckpoint(app.db, {
-      platformAccountId: input.pageContext.page.id,
-      stream: "fan_earnings",
-      cursorTimestamp: new Date(),
-      // A completed walk resets the cursor so the next cadence refreshes.
-      state: { cursorFanId: 0, completedAt: new Date().toISOString() },
-      lastSuccessfulRunId: input.syncRunId,
-    });
-  } else if (fansFetched > 0) {
-    const progressState = { cursorFanId: persistableCursorFanId };
-    if (rejectedFanError) {
-      // The prefix is durable progress, but this run is about to fail. Do not
-      // stamp it as the stream's last successful run/freshness marker.
-      await upsertCheckpointProgress(app.db, {
-        platformAccountId: input.pageContext.page.id,
-        stream: "fan_earnings",
-        state: progressState,
-      });
-    } else {
-      await upsertCheckpoint(app.db, {
-        platformAccountId: input.pageContext.page.id,
-        stream: "fan_earnings",
-        cursorTimestamp: new Date(),
-        state: progressState,
-        lastSuccessfulRunId: input.syncRunId,
-      });
-    }
-  }
-
-  if (rejectedFanError) {
-    throw rejectedFanError;
-  }
-
-  if (walkCompleted) {
-    return {
-      satisfied: true,
-      yieldReason: null,
-      stats: { fansFetched, fansSkipped, walkCompleted: true },
-    };
-  }
-  return {
-    satisfied: false,
-    // The walk exits on hasRequestCapacity(2) — resolve the reason against
-    // the same two-call unit cost or every non-final chunk yields reasonless.
-    yieldReason: input.budget.resolveYieldReason(2),
-    stats: { fansFetched, fansSkipped, cursorFanId },
-  };
-}
+export { executeFanEarningsChunk } from "./fan-earnings.ts";
 
 export async function executePurchaseHistoryChunk(
   app: AppContext,

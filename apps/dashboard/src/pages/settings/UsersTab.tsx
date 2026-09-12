@@ -20,6 +20,8 @@ import {
 import { ModalShell } from "@/components/shared/ModalShell";
 import { ConfirmModal } from "@/components/shared/ConfirmModal";
 import { Field } from "@/components/shared/Field";
+import { StatusPanel } from "@/components/shared/StatusPanel";
+import { StaleDataNotice } from "@/components/shared/StaleDataNotice";
 import { formatRelativeTime, formatDateTime } from "@/lib/format";
 import { toast } from "sonner";
 import { PageAssignmentsEditor } from "./PageAssignmentsEditor.js";
@@ -130,12 +132,34 @@ function PageChips({ pages }: { pages: AdminUser["assignedPages"] }) {
 /* ------------------------------------------------------------------ */
 
 export function UsersTab() {
-  const { data: users, isLoading } = useAdminUsers();
+  const { data: users, isLoading, isError, error, isFetching, refetch } = useAdminUsers();
   const [modal, setModal] = useState<ModalState>(null);
 
-  if (isLoading) {
+  if (isLoading && !users) {
     return (
       <div className="py-12 text-center text-sm text-text-muted">Loading users...</div>
+    );
+  }
+
+  if (isError && !users) {
+    return (
+      <div role="alert">
+        <StatusPanel
+          title="Не удалось загрузить команду"
+          description={error instanceof Error ? error.message : "Список участников недоступен. Попробуйте загрузить его снова."}
+          tone="error"
+          action={(
+            <button
+              type="button"
+              onClick={() => void refetch()}
+              disabled={isFetching}
+              className="rounded-lg border border-border bg-card px-3 py-2 text-sm text-text-secondary hover:bg-hover disabled:opacity-50"
+            >
+              {isFetching ? "Обновляем…" : "Повторить"}
+            </button>
+          )}
+        />
+      </div>
     );
   }
 
@@ -151,6 +175,19 @@ export function UsersTab() {
 
   return (
     <>
+      {isError && users && (
+        <div className="mb-4 flex flex-wrap items-center gap-2">
+          <StaleDataNotice title="Показан последний загруженный список" error={error} className="flex-1" />
+          <button
+            type="button"
+            onClick={() => void refetch()}
+            disabled={isFetching}
+            className="rounded-lg border border-border bg-card px-3 py-2 text-sm text-text-secondary hover:bg-hover disabled:opacity-50"
+          >
+            {isFetching ? "Обновляем…" : "Повторить"}
+          </button>
+        </div>
+      )}
       <div className="space-y-8">
         {/* ---- Chatters ---- */}
         <div>
@@ -185,7 +222,7 @@ export function UsersTab() {
           {chatters.length === 0 ? (
             <p className="text-sm text-text-muted">No chatters yet. Add one to get started.</p>
           ) : (
-            <section className="overflow-hidden rounded-xl border border-border bg-card">
+            <section className="overflow-x-auto rounded-xl border border-border bg-card">
               <table className="w-full border-collapse">
                 <thead>
                   <tr className="bg-hover-alt">
@@ -328,7 +365,7 @@ export function UsersTab() {
           {staff.length === 0 ? (
             <p className="text-sm text-text-muted">No staff users.</p>
           ) : (
-            <section className="overflow-hidden rounded-xl border border-border bg-card">
+            <section className="overflow-x-auto rounded-xl border border-border bg-card">
               <table className="w-full border-collapse">
                 <thead>
                   <tr className="bg-hover-alt">
@@ -474,7 +511,7 @@ function DeactivatedSection({
       </button>
 
       {open && (
-        <section className="overflow-hidden rounded-xl border border-border bg-card">
+        <section className="overflow-x-auto rounded-xl border border-border bg-card">
           <table className="w-full border-collapse">
             <thead>
               <tr className="bg-hover-alt">

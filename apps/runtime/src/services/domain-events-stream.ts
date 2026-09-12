@@ -1,7 +1,7 @@
 import {
   DOMAIN_EVENTS_APPENDED_CHANNEL,
+  getAccountHighWater,
   isProjectionOnlyDomainEventType,
-  listDomainEventAccountBounds,
   listDomainEventHighWaters,
   listEventsSince,
   type DomainEventRow,
@@ -119,7 +119,7 @@ export function createDomainEventHub(app: AppContext): DomainEventHub {
   let drainRetryDelayMs = DRAIN_RETRY_MIN_MS;
 
   function broadcast(event: DomainEventRow) {
-    if (isProjectionOnlyDomainEventType(event.type)) {
+    if (isProjectionOnlyDomainEventType(event.type, event.schemaVersion)) {
       // Projection-only rows advance the shared durable drain, but never enter
       // per-client buffers. Their atomic checkpoint carries the cursor jump.
       return;
@@ -212,8 +212,12 @@ export function createDomainEventHub(app: AppContext): DomainEventHub {
       const watermark = delivered.get(accountId) ?? 0;
       let throughSeq: number;
       try {
-        throughSeq = (await listDomainEventAccountBounds(app.db, [accountId]))
-          .get(accountId)!.currentSeq;
+        // Only the counter head is needed here. The retention-bounds query
+        // (min(account_seq) over the whole ledger) walked ~1.2M index entries
+        // per busy account on every notification and its result was discarded
+        // (docs/diag/2026-09-11-agency-hub-load). Bounds stay with the SSE
+        // route's gap rule, which really needs them.
+        throughSeq = await getAccountHighWater(app.db, accountId);
       } catch (error) {
         dirtyAccounts.add(accountId);
         app.logger.warn({ err: error, accountId }, "domain-event head read failed; retrying");

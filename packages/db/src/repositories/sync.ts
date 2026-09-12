@@ -410,18 +410,28 @@ export async function closeInactiveSyncRuns(
     errorSummary: string;
   },
 ): Promise<CloseInactiveSyncRunsResult> {
+  // Activity is derived per RUNNING run through the (sync_run_id, …) indexes;
+  // aggregating the whole attempts/events tables every planner cycle was the
+  // third-largest consumer on the VPS (docs/diag/2026-09-11-agency-hub-load).
   const result = await db.execute<{ outcome: "failed" | "partial" }>(sql`
-    with request_activity as (
-      select a.sync_run_id as "runId",
-             max(coalesce(a.finished_at, a.started_at)) as "lastAttemptAt"
-      from ${syncHttpAttempts} a
-      group by a.sync_run_id
+    with running_runs as (
+      select sr.id
+      from ${syncRuns} sr
+      where sr.outcome = 'running'
+    ),
+    request_activity as (
+      select r.id as "runId",
+             (select max(coalesce(a.finished_at, a.started_at))
+                from ${syncHttpAttempts} a
+               where a.sync_run_id = r.id) as "lastAttemptAt"
+      from running_runs r
     ),
     event_activity as (
-      select e.sync_run_id as "runId",
-             max(e.emitted_at) as "lastEventAt"
-      from ${syncRunEvents} e
-      group by e.sync_run_id
+      select r.id as "runId",
+             (select max(e.emitted_at)
+                from ${syncRunEvents} e
+               where e.sync_run_id = r.id) as "lastEventAt"
+      from running_runs r
     ),
     inactive_runs as (
       select sr.id,
@@ -1655,18 +1665,26 @@ export async function listRunningSyncRuns(
     clauses.push(sql`sr.page_id = ${input.platformAccountId}`);
   }
 
+  // Same per-running-run activity derivation as closeInactiveSyncRuns.
   const result = await db.execute<SyncRunRow & { lastActivityAt: TimestampValue }>(sql`
-    with request_activity as (
-      select sync_run_id,
-             max(coalesce(finished_at, started_at)) as last_attempt_at
-      from ${syncHttpAttempts}
-      group by sync_run_id
+    with running_runs as (
+      select sr.id
+      from ${syncRuns} sr
+      where sr.outcome = 'running'
+    ),
+    request_activity as (
+      select r.id as sync_run_id,
+             (select max(coalesce(a.finished_at, a.started_at))
+                from ${syncHttpAttempts} a
+               where a.sync_run_id = r.id) as last_attempt_at
+      from running_runs r
     ),
     event_activity as (
-      select sync_run_id,
-             max(emitted_at) as last_event_at
-      from ${syncRunEvents}
-      group by sync_run_id
+      select r.id as sync_run_id,
+             (select max(e.emitted_at)
+                from ${syncRunEvents} e
+               where e.sync_run_id = r.id) as last_event_at
+      from running_runs r
     )
     select sr.id as "runId",
            sr.page_id as "platformAccountId",
@@ -2247,24 +2265,24 @@ export async function listSyncMonitorStreamRows(
       where ranked."rank" = 1
     ),
     completed_runs as (
-      select ranked.*
+      select sr.page_id as "pageId",
+             sr.stream as "stream",
+             sr.id as "lastCompletedRunId",
+             coalesce(sr.source::text, 'scheduled') as "lastCompletedTrigger",
+             case
+               when sr.outcome = 'succeeded' then 'success'
+               else sr.outcome::text
+             end as "lastCompletedStatus",
+             sr.started_at as "lastCompletedStartedAt",
+             sr.finished_at as "lastCompletedFinishedAt",
+             greatest(
+               0,
+               floor(extract(epoch from (sr.finished_at - sr.started_at)) * 1000)
+             )::int as "lastCompletedDurationMs",
+             sr.stats as "lastCompletedStats",
+             sr.error_summary as "lastCompletedErrorSummary"
       from (
-        select sr.page_id as "pageId",
-               sr.stream as "stream",
-               sr.id as "lastCompletedRunId",
-               coalesce(sr.source::text, 'scheduled') as "lastCompletedTrigger",
-               case
-                 when sr.outcome = 'succeeded' then 'success'
-                 else sr.outcome::text
-               end as "lastCompletedStatus",
-               sr.started_at as "lastCompletedStartedAt",
-               sr.finished_at as "lastCompletedFinishedAt",
-               greatest(
-                 0,
-                 floor(extract(epoch from (sr.finished_at - sr.started_at)) * 1000)
-               )::int as "lastCompletedDurationMs",
-               sr.stats as "lastCompletedStats",
-               sr.error_summary as "lastCompletedErrorSummary",
+        select sr.id as "runId",
                row_number() over (
                  partition by sr.page_id, sr.stream
                  order by sr.finished_at desc, sr.id desc
@@ -2275,6 +2293,8 @@ export async function listSyncMonitorStreamRows(
           and sr.finished_at is not null
           and sr.stream = any(${requestedStreamsSql})
       ) ranked
+      -- Load payload only after selecting one completion per page/stream.
+      inner join ${syncRuns} sr on sr.id = ranked."runId"
       where ranked."rank" = 1
     ),
     deep_backfill_runs as (

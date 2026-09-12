@@ -11,7 +11,7 @@ import { queryClient } from "@/lib/queryClient";
 
 import { kernel } from "./sdk.js";
 
-type QueryOptions = { enabled?: boolean };
+type QueryOptions = { enabled?: boolean; windowAt?: string };
 
 /**
  * The page catalog, straight from `GET /api/v1/pages`.
@@ -56,10 +56,11 @@ export function prefetchPages(): void {
 
 export function usePageRevenue(pageLabel: string, period: string, options: QueryOptions = {}) {
   return useQuery({
-    queryKey: ["pageRevenue", pageLabel, period],
+    queryKey: ["pageRevenue", pageLabel, period, options.windowAt],
     queryFn: () =>
-      kernel.pageRevenue({ params: { pageLabel }, query: { period } as RevenueQuery }),
+      kernel.pageRevenue({ params: { pageLabel }, query: { period, windowAt: options.windowAt } as RevenueQuery }),
     enabled: options.enabled ?? true,
+    meta: { suppressGlobalError: Boolean(options.windowAt) },
   });
 }
 
@@ -84,13 +85,14 @@ export function usePageSubscribers(
     startedWithinHours?: number | undefined;
     autoRenew?: boolean | undefined;
   } = {},
-  options: QueryOptions = {},
+  options: QueryOptions & { suppressGlobalError?: boolean } = {},
 ) {
   return useQuery({
     queryKey: ["pageSubscribers", pageLabel, params],
     queryFn: () =>
       kernel.pageSubscribers({ params: { pageLabel }, query: params }),
     enabled: options.enabled ?? true,
+    meta: { suppressGlobalError: options.suppressGlobalError ?? false },
   });
 }
 

@@ -1628,22 +1628,32 @@ export async function upsertFanEarningsStat(
     netMills: number | null;
     observedAt: Date;
     sourceEventId: number;
+    sourceObservationId?: number | null;
   },
 ): Promise<void> {
   await db.execute(sql`
     insert into fan_earnings_stats (
-      account_id, fan_id, "window", gross_mills, net_mills, observed_at, source_event_id
+      account_id, fan_id, "window", gross_mills, net_mills,
+      observed_at, source_event_id, source_observation_id
     ) values (
       ${input.accountId}, ${input.fanId}, ${input.window}, ${input.grossMills},
-      ${input.netMills}, ${input.observedAt}, ${input.sourceEventId}
+      ${input.netMills}, ${input.observedAt}, ${input.sourceEventId}, ${input.sourceObservationId ?? 0}
     )
     on conflict (account_id, fan_id, "window") do update set
       gross_mills = excluded.gross_mills,
       net_mills = excluded.net_mills,
       observed_at = excluded.observed_at,
       source_event_id = excluded.source_event_id,
+      source_observation_id = excluded.source_observation_id,
       updated_at = now()
-    where excluded.observed_at >= fan_earnings_stats.observed_at
+    where excluded.observed_at > fan_earnings_stats.observed_at
+       or (excluded.observed_at = fan_earnings_stats.observed_at
+         and excluded.source_observation_id >= coalesce(
+           nullif(fan_earnings_stats.source_observation_id, 0),
+           (select event.observation_id from domain_events event
+            where event.id = fan_earnings_stats.source_event_id
+              and event.occurred_at = fan_earnings_stats.observed_at)
+         ))
   `);
 }
 

@@ -94882,6 +94882,10 @@
                         "type": "string",
                         "maxLength": 5000
                       },
+                      "fanCustomName": {
+                        "type": "string",
+                        "maxLength": 200
+                      },
                       "pingSegment": {
                         "type": "string",
                         "enum": [
@@ -101781,6 +101785,16 @@
           {
             "schema": {
               "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+            },
+            "in": "query",
+            "name": "windowAt",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
               "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
             },
             "in": "query",
@@ -101853,6 +101867,10 @@
                         "all",
                         "custom"
                       ]
+                    },
+                    "windowAt": {
+                      "description": "Clock used to resolve calendar windows, not a capture watermark or database snapshot.",
+                      "type": "string"
                     },
                     "from": {
                       "anyOf": [
@@ -101961,6 +101979,72 @@
                                   "type": "null"
                                 }
                               ]
+                            },
+                            "sources": {
+                              "description": "Union of reportable sources in both windows; monetary deltas are server-computed.",
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "canonicalType": {
+                                    "type": "string",
+                                    "enum": [
+                                      "subscription",
+                                      "tip",
+                                      "message_purchase",
+                                      "post_purchase",
+                                      "stream_tip",
+                                      "chargeback",
+                                      "refund",
+                                      "payout_reversal",
+                                      "other"
+                                    ]
+                                  },
+                                  "bucket": {
+                                    "type": "string",
+                                    "enum": [
+                                      "revenue",
+                                      "adjustment",
+                                      "unclassified",
+                                      "excluded"
+                                    ]
+                                  },
+                                  "currentNetMills": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "previousNetMills": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "deltaNetMills": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "deltaPct": {
+                                    "anyOf": [
+                                      {
+                                        "type": "number"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "canonicalType",
+                                  "bucket",
+                                  "currentNetMills",
+                                  "previousNetMills",
+                                  "deltaNetMills",
+                                  "deltaPct"
+                                ],
+                                "additionalProperties": false
+                              }
                             }
                           },
                           "required": [
@@ -102098,6 +102182,48 @@
                             "type": "integer",
                             "minimum": -9007199254740991,
                             "maximum": 9007199254740991
+                          },
+                          "previousNetEarningsMills": {
+                            "description": "Overview only: earnings for this page's platform-specific comparison window. Null for all time; absent on older servers. Includes retired pages and the same reporting buckets as netEarningsMills.",
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "deltaNetMills": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "deltaPct": {
+                            "anyOf": [
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "platform": {
+                            "type": "string",
+                            "enum": [
+                              "fansly",
+                              "onlyfans"
+                            ]
                           },
                           "status": {
                             "type": "string",
@@ -102237,6 +102363,16 @@
           "dashboard"
         ],
         "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+            },
+            "in": "query",
+            "name": "windowAt",
+            "required": false
+          },
           {
             "schema": {
               "default": "30d",
@@ -106315,6 +106451,16 @@
           {
             "schema": {
               "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+            },
+            "in": "query",
+            "name": "windowAt",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
               "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
             },
             "in": "query",
@@ -106464,6 +106610,16 @@
           {
             "schema": {
               "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+            },
+            "in": "query",
+            "name": "windowAt",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
               "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
             },
             "in": "query",
@@ -106527,6 +106683,10 @@
                         "all",
                         "custom"
                       ]
+                    },
+                    "windowAt": {
+                      "description": "Clock used to resolve calendar windows, not a capture watermark or database snapshot.",
+                      "type": "string"
                     },
                     "from": {
                       "anyOf": [
@@ -106635,6 +106795,72 @@
                                   "type": "null"
                                 }
                               ]
+                            },
+                            "sources": {
+                              "description": "Union of reportable sources in both windows; monetary deltas are server-computed.",
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "canonicalType": {
+                                    "type": "string",
+                                    "enum": [
+                                      "subscription",
+                                      "tip",
+                                      "message_purchase",
+                                      "post_purchase",
+                                      "stream_tip",
+                                      "chargeback",
+                                      "refund",
+                                      "payout_reversal",
+                                      "other"
+                                    ]
+                                  },
+                                  "bucket": {
+                                    "type": "string",
+                                    "enum": [
+                                      "revenue",
+                                      "adjustment",
+                                      "unclassified",
+                                      "excluded"
+                                    ]
+                                  },
+                                  "currentNetMills": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "previousNetMills": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "deltaNetMills": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "deltaPct": {
+                                    "anyOf": [
+                                      {
+                                        "type": "number"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "canonicalType",
+                                  "bucket",
+                                  "currentNetMills",
+                                  "previousNetMills",
+                                  "deltaNetMills",
+                                  "deltaPct"
+                                ],
+                                "additionalProperties": false
+                              }
                             }
                           },
                           "required": [
@@ -106747,6 +106973,40 @@
                             "minimum": -9007199254740991,
                             "maximum": 9007199254740991
                           },
+                          "previousNetEarningsMills": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "deltaNetMills": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "deltaPct": {
+                            "anyOf": [
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
                           "status": {
                             "type": "string",
                             "enum": [
@@ -106794,6 +107054,48 @@
                             "type": "integer",
                             "minimum": -9007199254740991,
                             "maximum": 9007199254740991
+                          },
+                          "previousNetEarningsMills": {
+                            "description": "Overview only: earnings for this page's platform-specific comparison window. Null for all time; absent on older servers. Includes retired pages and the same reporting buckets as netEarningsMills.",
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "deltaNetMills": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "deltaPct": {
+                            "anyOf": [
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "platform": {
+                            "type": "string",
+                            "enum": [
+                              "fansly",
+                              "onlyfans"
+                            ]
                           },
                           "status": {
                             "type": "string",
@@ -106918,6 +107220,16 @@
             },
             "in": "query",
             "name": "period",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+            },
+            "in": "query",
+            "name": "windowAt",
             "required": false
           },
           {
@@ -107095,6 +107407,16 @@
           "dashboard"
         ],
         "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+            },
+            "in": "query",
+            "name": "windowAt",
+            "required": false
+          },
           {
             "schema": {
               "default": "30d",
@@ -113704,6 +114026,16 @@
           {
             "schema": {
               "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+            },
+            "in": "query",
+            "name": "windowAt",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
               "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
             },
             "in": "query",
@@ -115098,6 +115430,16 @@
           {
             "schema": {
               "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+            },
+            "in": "query",
+            "name": "windowAt",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
               "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
             },
             "in": "query",
@@ -115170,6 +115512,10 @@
                         "all",
                         "custom"
                       ]
+                    },
+                    "windowAt": {
+                      "description": "Clock used to resolve calendar windows, not a capture watermark or database snapshot.",
+                      "type": "string"
                     },
                     "from": {
                       "anyOf": [
@@ -115278,6 +115624,72 @@
                                   "type": "null"
                                 }
                               ]
+                            },
+                            "sources": {
+                              "description": "Union of reportable sources in both windows; monetary deltas are server-computed.",
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "canonicalType": {
+                                    "type": "string",
+                                    "enum": [
+                                      "subscription",
+                                      "tip",
+                                      "message_purchase",
+                                      "post_purchase",
+                                      "stream_tip",
+                                      "chargeback",
+                                      "refund",
+                                      "payout_reversal",
+                                      "other"
+                                    ]
+                                  },
+                                  "bucket": {
+                                    "type": "string",
+                                    "enum": [
+                                      "revenue",
+                                      "adjustment",
+                                      "unclassified",
+                                      "excluded"
+                                    ]
+                                  },
+                                  "currentNetMills": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "previousNetMills": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "deltaNetMills": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "deltaPct": {
+                                    "anyOf": [
+                                      {
+                                        "type": "number"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "canonicalType",
+                                  "bucket",
+                                  "currentNetMills",
+                                  "previousNetMills",
+                                  "deltaNetMills",
+                                  "deltaPct"
+                                ],
+                                "additionalProperties": false
+                              }
                             }
                           },
                           "required": [
@@ -115619,6 +116031,16 @@
           "dashboard"
         ],
         "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+            },
+            "in": "query",
+            "name": "windowAt",
+            "required": false
+          },
           {
             "schema": {
               "default": "30d",
@@ -120113,6 +120535,16 @@
             "in": "query",
             "name": "period",
             "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+            },
+            "in": "query",
+            "name": "windowAt",
+            "required": false
           },
           {
             "schema": {
@@ -134921,6 +135353,34 @@
             "in": "query",
             "name": "sortDir",
             "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+            },
+            "in": "query",
+            "name": "from",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+            },
+            "in": "query",
+            "name": "to",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "boolean"
+            },
+            "in": "query",
+            "name": "reportableOnly",
+            "required": false
           }
         ],
         "security": [
@@ -135089,6 +135549,115 @@
                       "type": "integer",
                       "minimum": -9007199254740991,
                       "maximum": 9007199254740991
+                    },
+                    "summary": {
+                      "type": "object",
+                      "properties": {
+                        "netAmountMills": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "currency": {
+                          "type": "string",
+                          "enum": [
+                            "USD"
+                          ]
+                        },
+                        "readAt": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "netAmountMills",
+                        "currency",
+                        "readAt"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "scope": {
+                      "description": "Echo of the applied filter; old servers without exact drilldown support omit this.",
+                      "type": "object",
+                      "properties": {
+                        "pageLabel": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "from": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "to": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "type": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "subscription",
+                                "tip",
+                                "message_purchase",
+                                "post_purchase",
+                                "stream_tip",
+                                "chargeback",
+                                "refund",
+                                "payout_reversal",
+                                "other"
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "state": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "pending",
+                                "posted",
+                                "unknown"
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "reportableOnly": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "pageLabel",
+                        "from",
+                        "to",
+                        "type",
+                        "state",
+                        "reportableOnly"
+                      ],
+                      "additionalProperties": false
                     }
                   },
                   "required": [

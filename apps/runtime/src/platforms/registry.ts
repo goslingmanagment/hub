@@ -10,7 +10,6 @@ import type { PageSyncLease } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
 import {
-  executeFanEarningsChunk,
   executeFanIdentitiesChunk,
   executeFollowersChunk,
   executeFollowersReconcileChunk,
@@ -28,6 +27,7 @@ import {
   type ExecutorRequestContext,
   type StreamChunkResult,
 } from "../services/sync/executor-handlers.ts";
+import { executeFanEarningsChunk } from "../services/sync/fan-earnings.ts";
 import { fanslyDmConversationsChunk } from "../services/sync/fansly-dm-conversations.ts";
 import {
   fanslyPostsChunk,
