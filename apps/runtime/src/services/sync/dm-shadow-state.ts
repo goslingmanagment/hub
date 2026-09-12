@@ -30,6 +30,14 @@ export const dmShadowStateSchema = z.object({
   stateChangesBelowStop: count,
   unreadChangesBelowStop: count,
   flagsChangesBelowStop: count,
+  // A resumed legacy sweep has no earlier counts for these categories.
+  // Only measurement from the sweep's start gets zero; null remains unknown on resume.
+  visibilityChangesBelowStop: count.nullable().default(null),
+  unresolvedIdentityChangesBelowStop: count.nullable().default(null),
+  exclusionReasonChangesBelowStop: count.nullable().default(null),
+  subscriptionTierChangesBelowStop: count.nullable().default(null),
+  headTimestampChangesBelowStop: count.nullable().default(null),
+  headSenderChangesBelowStop: count.nullable().default(null),
   headRollbacksBelowStop: count,
   missingHotHeadsBelowStop: count,
   materialLagSamples: count,
@@ -62,6 +70,7 @@ export function createDmShadowState(input: {
   policy?: DmShadowPolicy;
 }): DmShadowState {
   const policy = dmShadowPolicySchema.parse(input.policy ?? DEFAULT_DM_SHADOW_POLICY);
+  const reasonCount = input.completeCoverage ? 0 : null;
   return {
     version: 1,
     ...policy,
@@ -79,6 +88,12 @@ export function createDmShadowState(input: {
     stateChangesBelowStop: 0,
     unreadChangesBelowStop: 0,
     flagsChangesBelowStop: 0,
+    visibilityChangesBelowStop: reasonCount,
+    unresolvedIdentityChangesBelowStop: reasonCount,
+    exclusionReasonChangesBelowStop: reasonCount,
+    subscriptionTierChangesBelowStop: reasonCount,
+    headTimestampChangesBelowStop: reasonCount,
+    headSenderChangesBelowStop: reasonCount,
     headRollbacksBelowStop: 0,
     missingHotHeadsBelowStop: 0,
     materialLagSamples: 0,

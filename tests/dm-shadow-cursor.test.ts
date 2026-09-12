@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { parseDmConversationSweepState, serializeDmConversationSweepState }
   from "../apps/runtime/src/services/sync/cursor-state.ts";
 import { createDmShadowState } from "../apps/runtime/src/services/sync/dm-shadow-state.ts";
+import { advanceDmShadow } from "../apps/runtime/src/services/sync/dm-shadow.ts";
 
 const cursor = { version: 2, mode: "full_scan", generation: 1, offset: 100,
   observedCount: 100, pageCount: 1, providerTotalMode: "present", providerReportedTotal: 101,
@@ -19,5 +20,35 @@ describe("optional DM shadow cursor", () => {
   it("discards malformed diagnostics while retaining the original resumable business cursor", () => {
     expect(parseDmConversationSweepState({ ...cursor, diagnostics: { version: 99, pageCount: [] } }))
       .toEqual(parseDmConversationSweepState(cursor));
+  });
+
+  it("keeps missing legacy reason counts unknown through resume and serialization", () => {
+    const { visibilityChangesBelowStop: _visibility, unresolvedIdentityChangesBelowStop: _identity,
+      exclusionReasonChangesBelowStop: _exclusion, subscriptionTierChangesBelowStop: _tier,
+      headTimestampChangesBelowStop: _timestamp, headSenderChangesBelowStop: _sender,
+      ...legacy } = createDmShadowState({
+      startedAtMs: Date.UTC(2026, 8, 10, 12), boundaryMs: null, completeCoverage: true,
+    });
+    const parsed = parseDmConversationSweepState({
+      ...cursor, diagnostics: { ...legacy, pageCount: 1, stopPage: 1, stateChangesBelowStop: 4 },
+    })!;
+    parsed.diagnostics = advanceDmShadow(parsed.diagnostics!, {
+      observedAtMs: Date.UTC(2026, 8, 10, 13), responseBytes: 100,
+      conversations: [{
+        reasons: ["visibility", "unresolved_identity", "message_sync_excluded_reason",
+          "subscription_tier_id", "last_message_at", "last_message_sender_id"],
+        listMessageId: "head", embeddedMessageId: "head", previousMessageId: "head",
+        timestampMs: 1, previousTimestampMs: 1, materialConfirmed: true,
+        discoveryToCaptureMs: null, historyPending: false, lastHistorySyncAtMs: null,
+      }],
+    });
+    const serialized = serializeDmConversationSweepState(parsed);
+    expect(serialized.diagnostics).toMatchObject({
+      stateChangesBelowStop: 5, visibilityChangesBelowStop: null,
+      unresolvedIdentityChangesBelowStop: null, exclusionReasonChangesBelowStop: null,
+      subscriptionTierChangesBelowStop: null, headTimestampChangesBelowStop: null,
+      headSenderChangesBelowStop: null,
+    });
+    expect({ ...serialized, diagnostics: undefined }).toEqual({ ...cursor, diagnostics: undefined });
   });
 });
