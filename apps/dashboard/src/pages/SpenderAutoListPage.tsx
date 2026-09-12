@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { Link, useLocation, useParams, useSearchParams } from "react-router";
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router";
 import { usePageSpenderAutoList } from "@/api/queries";
 import { Pagination } from "@/components/shared/Pagination";
 import { SearchInput } from "@/components/shared/SearchInput";
@@ -35,6 +35,7 @@ function StatusBadge({ tone, children }: { tone: "green" | "danger" | "warning" 
 export function SpenderAutoListPage() {
   const { pageLabel, bucketKey } = useParams<{ pageLabel: string; bucketKey: string }>();
   const location = useLocation();
+  const navigate = useNavigate();
   const [search, setSearch] = useSearchParams();
   const storedPeriod = useSpenderPeriodStore((s) => s.period);
   const selectedPeriod = resolveSpenderPeriod(search.get("period"), storedPeriod);
@@ -48,7 +49,7 @@ export function SpenderAutoListPage() {
       if (value) next.set(key, value); else next.delete(key);
       if (key !== "offset") next.delete("offset");
       return next;
-    });
+    }, { state: location.state });
   }
   const params = useMemo(() => ({
     limit: LIMIT,
@@ -148,14 +149,20 @@ export function SpenderAutoListPage() {
                 pageRoute,
                 fanLabel.label,
               );
+              const fanRoute = `${fanNavigation.to}?${new URLSearchParams({ period: selectedPeriod })}`;
 
               return (
                 <tr
                   key={item.fan.platformUserId}
+                  onClick={(event) => {
+                    if (event.defaultPrevented || event.button !== 0 || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+                    if ((event.target as Element | null)?.closest?.("a, button, input, select, textarea, [role='button'], [contenteditable]:not([contenteditable='false'])")) return;
+                    navigate(fanRoute, { state: fanNavigation.state });
+                  }}
                   className="cursor-pointer border-t border-border transition-colors hover:bg-hover"
                 >
                   <td className="px-4 py-3">
-                    <Link to={`${fanNavigation.to}?${new URLSearchParams({ period: selectedPeriod })}`} state={fanNavigation.state} className="text-[15px] font-semibold text-text-primary hover:text-accent">
+                    <Link to={fanRoute} state={fanNavigation.state} className="text-[15px] font-semibold text-text-primary hover:text-accent">
                       {fanLabel.label}
                     </Link>
                     {fanLabel.secondaryPlatformHandle && (

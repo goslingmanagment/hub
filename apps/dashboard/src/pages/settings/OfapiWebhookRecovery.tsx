@@ -35,6 +35,19 @@ export function webhookReadbackResolvesAction(applyBaseline: { version: number; 
   return policy.version > applyBaseline.version || (policy.version === applyBaseline.version && (policy.applyState === "applied" || (policy.applyState === "failed" && applyBaseline.applyState !== "failed")));
 }
 
+export function webhookCanPrepareNewAction(
+  reviewed: { version: number; applyState: string } | null,
+  current: { version: number; applyState: string },
+  acknowledged: boolean,
+  unavailable: boolean,
+): boolean {
+  // A same-version failed apply cannot identify which attempt failed. Reading it
+  // permits an explicit new intent, never a claim that the old request failed.
+  return !unavailable && acknowledged && reviewed !== null
+    && current.applyState !== "applying"
+    && JSON.stringify(reviewed) === JSON.stringify(current);
+}
+
 /** Owner-only consumer mounted by the OFAPI collection/settings page. Reads are
  * DB-only. Vendor history capture, remote replay and registration are explicit. */
 export function OfapiWebhookRecovery() {
@@ -45,12 +58,15 @@ export function OfapiWebhookRecovery() {
   const [preview, setPreview] = useState<{ id: string; attemptId: number } | null>(null);
   const [receipt, setReceipt] = useState<WebhookPolicy | null>(null);
   const [readbackRequired, setReadbackRequired] = useState<{ label: string; applyBaseline?: { version: number; applyState: string } } | null>(null);
+  const [reviewedReadback, setReviewedReadback] = useState<WebhookPolicy | null>(null);
+  const [newActionAcknowledged, setNewActionAcknowledged] = useState(false);
   const busyRef = useRef(false);
 
   async function run(action: () => Promise<string>, label = "Операция с вебхуком", applyBaseline?: { version: number; applyState: string }) {
     if (busyRef.current || readbackRequired) return;
     busyRef.current = true;
     setBusy(true); setMessage(null);
+    setReviewedReadback(null); setNewActionAcknowledged(false);
     try {
       const result = await action();
       const refreshed = await query.refetch();
@@ -68,6 +84,7 @@ export function OfapiWebhookRecovery() {
   async function readBack() {
     if (busyRef.current) return;
     busyRef.current = true; setBusy(true);
+    setReviewedReadback(null); setNewActionAcknowledged(false);
     try {
       const result = await query.refetch();
       const policy = result.data?.policy;
@@ -75,7 +92,10 @@ export function OfapiWebhookRecovery() {
         setReceipt(current => current && policy.version >= current.version ? null : current);
         const resolved = webhookReadbackResolvesAction(readbackRequired?.applyBaseline, policy);
         if (resolved) setReadbackRequired(null);
-        setMessage(`Прочитан срез v${policy.version}; состояние применения: ${policy.applyState}. ${resolved ? "Проверьте его перед новым действием." : "Исход прежнего применения ещё не подтверждён; повтор остаётся заблокирован."}`);
+        else setReviewedReadback(policy);
+        setMessage(`Прочитан срез v${policy.version}; состояние применения: ${policy.applyState}. ${resolved ? "Проверьте его перед новым действием." : "По этому срезу нельзя установить исход прежнего применения. Автоматического повтора не будет."}`);
+      } else {
+        setMessage("Повторное чтение не удалось; результат остаётся неизвестным.");
       }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Повторное чтение не удалось; результат остаётся неизвестным.");
@@ -90,12 +110,28 @@ export function OfapiWebhookRecovery() {
   const draftChanged = draft !== null && draft.version !== saved.version;
   const dirty = draft !== null;
   const unavailable = busy || query.isError || readbackRequired !== null;
+  const canPrepareNew = webhookCanPrepareNewAction(reviewedReadback, query.data.policy, newActionAcknowledged, busy || query.isError || query.isFetching);
   const applied = new Set(saved.appliedGroups);
   return <section className="space-y-4 rounded-xl border border-border bg-card p-5">
     {query.isError && <StaleDataNotice title="Показан предыдущий срез вебхуков" error={query.error} />}
     {readbackRequired && <div role="alert" className="rounded-lg border border-warning/40 bg-warning/10 p-3 text-sm text-text-primary">
-      {readbackRequired.label}: перед следующим действием нужно прочитать результат. Выбор и подтверждённая квитанция сохранены.
+      {readbackRequired.label}: перед следующим действием нужно прочитать результат. Выбор сохранён на экране.{receipt ? " Подтверждённая квитанция также сохранена." : ""}
       <button type="button" className={`${button} mt-2 block`} disabled={busy} onClick={() => void readBack()}>Сверить состояние после запроса</button>
+      {reviewedReadback && <div className="mt-3 space-y-2 border-t border-border pt-3">
+        <p>Исход применения не установлен. Даже состояние «failed» может относиться к прежней попытке. Новый запрос может повторить уже выполненное платное действие.</p>
+        <label className="flex items-start gap-2">
+          <input type="checkbox" checked={newActionAcknowledged} disabled={busy || query.isError || query.isFetching} onChange={event => setNewActionAcknowledged(event.target.checked)} />
+          <span>Я проверил текущий срез и хочу подготовить отдельное новое действие, принимая неизвестный исход предыдущего.</span>
+        </label>
+        <button type="button" className={button} disabled={!canPrepareNew} onClick={() => {
+          if (!canPrepareNew || busyRef.current) return;
+          const previous = readbackRequired.label;
+          setReadbackRequired(null); setReviewedReadback(null); setNewActionAcknowledged(false);
+          setPreview(null);
+          setMessage(`${previous}: исход остался неизвестным. Подготовка нового действия разрешена; запрос ещё не отправлен. Выберите и подтвердите его отдельно.`);
+        }}>Подготовить новое действие</button>
+        <p className="text-xs text-text-secondary">Эта кнопка не отправляет запрос. Для применения событий или платного повтора потребуется отдельное нажатие.</p>
+      </div>}
     </div>}
     {receipt && <p role="status" className="text-sm text-text-secondary">Сервер вернул политику v{receipt.version}. Ниже показана эта квитанция; независимое чтение ещё не подтверждено.</p>}
     <div><h2 className="text-base font-semibold text-text-primary">События и восстановление</h2>

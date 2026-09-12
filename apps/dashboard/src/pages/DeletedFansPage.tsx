@@ -1,4 +1,4 @@
-import { useParams, useSearchParams } from "react-router";
+import { useLocation, useParams, useSearchParams } from "react-router";
 import { listOffset } from "@/lib/overviewNavigation";
 import { QueryNotice } from "@/components/shared/QueryNotice";
 import { usePageDeletedFans } from "@/api/queries";
@@ -16,6 +16,7 @@ function joinAliases(values: Array<string | null>) {
 
 export function DeletedFansPage() {
   const { pageLabel } = useParams<{ pageLabel: string }>();
+  const location = useLocation();
   const [search, setSearch] = useSearchParams();
   const offset = listOffset(search.get("offset"));
   function setOffset(value: number) {
@@ -23,7 +24,7 @@ export function DeletedFansPage() {
       const next = new URLSearchParams(previous);
       if (value) next.set("offset", String(value)); else next.delete("offset");
       return next;
-    });
+    }, { state: location.state });
   }
 
   const { data, isLoading, isError, refetch } = usePageDeletedFans(

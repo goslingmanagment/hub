@@ -15,6 +15,7 @@ import {
   type WorkboardV2Tab,
 } from "@/api/queries";
 import { resolveWorkboardShortcut } from "./daily/workboardKeyboard.js";
+import { createWorkboardUndoReceipt } from "./daily/workboardUndo.js";
 import { QueryNotice } from "@/components/shared/QueryNotice";
 import { Pagination } from "@/components/shared/Pagination";
 import { StatusPanel } from "@/components/shared/StatusPanel";
@@ -58,11 +59,7 @@ interface BoardSection {
   items: WorkboardV2Item[];
 }
 
-interface UndoReceipt {
-  readonly pageLabel: string;
-  readonly fanId: number;
-  readonly kind: "contact" | "snooze";
-}
+type UndoReceipt = ReturnType<typeof createWorkboardUndoReceipt>;
 
 export function WorkboardV2Page() {
   const { pageLabel } = useParams<{ pageLabel: string }>();
@@ -99,11 +96,11 @@ export function WorkboardV2Page() {
     { enabled: enabled && !listsMode },
   );
   const lists = useWorkboardV2Lists(label, { enabled: enabled && listsMode });
-  const contact = useWorkboardV2Contact(label);
-  const recompute = useWorkboardV2Recompute(label);
-  const snooze = useWorkboardV2Snooze(label);
-  const unsnooze = useWorkboardV2Unsnooze(label);
-  const undoContact = useWorkboardV2UndoContact(label);
+  const contact = useWorkboardV2Contact();
+  const recompute = useWorkboardV2Recompute();
+  const snooze = useWorkboardV2Snooze();
+  const unsnooze = useWorkboardV2Unsnooze();
+  const undoContact = useWorkboardV2UndoContact();
 
   const counts = data?.counts ?? [];
   const tabCount = useMemo(() => {
@@ -160,13 +157,17 @@ export function WorkboardV2Page() {
   const snoozeDaysActive = listsMode ? SNOOZE_DAYS.spenders : SNOOZE_DAYS[tab];
 
   const onRecompute = () => {
-    recompute.mutate(undefined, {
+    recompute.mutate({ pageLabel: label }, {
       onSuccess: (r) => toast.success(`Очередь обновлена · ${r.evaluated} фанов`),
       onError: () => toast.error("Не удалось пересчитать очередь"),
     });
   };
 
   const performUndo = async (receipt: UndoReceipt): Promise<boolean> => {
+    if (receipt.attempted) {
+      toast.error(`Отмена для ${receipt.pageLabel}, фан #${receipt.fanId}, уже была отправлена. Проверьте состояние; повтор из этой квитанции недоступен.`);
+      return false;
+    }
     // Toasts outlive route changes; never call an observer rebound to another page.
     const current = undoContext.current;
     if (!mounted.current || current.label !== receipt.pageLabel) {
@@ -181,11 +182,11 @@ export function WorkboardV2Page() {
     // receipt does not require the original row to remain in the visible list.
     mutationInFlight.current = true;
     try {
-      await (receipt.kind === "contact" ? current.undoContact : current.unsnooze).mutateAsync(receipt.fanId);
+      await receipt.run(target => (receipt.kind === "contact" ? current.undoContact : current.unsnooze).mutateAsync(target));
       toast.success(`Отмена подтверждена · ${receipt.pageLabel} · #${receipt.fanId}`);
       return true;
     } catch {
-      const message = `Отмена для фана #${receipt.fanId} на ${receipt.pageLabel} не подтверждена. Она могла сохраниться. Обновите и проверьте исходную очередь перед повтором.`;
+      const message = `Отмена для фана #${receipt.fanId} на ${receipt.pageLabel} не подтверждена. Она могла сохраниться. Повтор из этой квитанции недоступен: он может отменить другую отметку. Обновите и проверьте исходную очередь.`;
       if (mounted.current) setUnconfirmedAction({ pageLabel: receipt.pageLabel, message });
       toast.error(message, { duration: Infinity });
       return false;
@@ -195,15 +196,16 @@ export function WorkboardV2Page() {
   };
 
   const showUndoToast = (kind: UndoReceipt["kind"], fanId: number, title: string) => {
-    const receipt: UndoReceipt = { pageLabel: label, fanId, kind };
+    const receipt = createWorkboardUndoReceipt(label, fanId, kind);
     const toastId = toast.success(title, {
       description: `${receipt.pageLabel} · фан #${receipt.fanId}`,
       action: {
         label: "Отменить",
         onClick: (event) => {
-          // Sonner otherwise dismisses even a refused or unconfirmed action.
+          // Keep a refused click available; consume every admitted attempt,
+          // including a lost reply. A later list read cannot reactivate Undo.
           event.preventDefault();
-          void performUndo(receipt).then((confirmed) => { if (confirmed) toast.dismiss(toastId); });
+          void performUndo(receipt).then(() => { if (receipt.attempted) toast.dismiss(toastId); });
         },
       },
     });
@@ -213,7 +215,7 @@ export function WorkboardV2Page() {
     if (!actionsAllowed || mutationInFlight.current || !flatItems.some((item) => item.fanId === fanId)) return;
     mutationInFlight.current = true;
     contact.mutate(
-      { fanId, action: "handled", wasProductive: true },
+      { pageLabel: label, fanId, action: "handled", wasProductive: true },
       {
         onSuccess: () => showUndoToast("contact", fanId, "Готово"),
         onError: () => {
@@ -228,7 +230,7 @@ export function WorkboardV2Page() {
     if (!actionsAllowed || mutationInFlight.current || !flatItems.some((item) => item.fanId === fanId)) return;
     mutationInFlight.current = true;
     snooze.mutate(
-      { fanId, days },
+      { pageLabel: label, fanId, days },
       {
         onSuccess: () => showUndoToast("snooze", fanId, `Отложено на ${days}д`),
         onError: () => {

@@ -639,13 +639,16 @@ function RoutedConfiguration() {
   const { hash, search } = useLocation();
   const params = new URLSearchParams(search);
   const feature = findHubFeature(params.get("feature")) ?? null;
-  return <ConfigurationView key={feature?.id ?? "all"} hash={hash} feature={feature} {...(feature ? { featureBackTo: featureReturnHref(feature, params) } : {})} />;
+  // Scope is a filter on this form. Remounting it would discard reviewed drafts
+  // and the write receipts that its editors retain until a successful readback.
+  return <ConfigurationView hash={hash} feature={feature} {...(feature ? { featureBackTo: featureReturnHref(feature, params) } : {})} />;
 }
 
 function ConfigurationView({ hash, feature = null, featureBackTo }: { hash: string; feature?: HubFeature | null; featureBackTo?: string }) {
   const { data, isLoading, isError, isFetching, refetch } = useAdminConfig();
   const searchRef = useRef<HTMLInputElement>(null);
   const featureBackRef = useRef<HTMLAnchorElement>(null);
+  const modalRestoreFocusRef = useRef<HTMLElement>(null);
   const [query, setQuery] = useState("");
   const [subsystem, setSubsystem] = useState("");
   const [filter, setFilter] = useState<ConfigFilter>(feature ? "all" : "live");
@@ -666,6 +669,17 @@ function ConfigurationView({ hash, feature = null, featureBackTo }: { hash: stri
     setQuery(""); setSubsystem(""); setFilter("all"); setPendingAnchor(key);
     if (feature && !feature.keys.includes(key)) setScopeExpanded(true);
   }
+
+  useEffect(() => {
+    setQuery(""); setSubsystem(""); setFilter(feature ? "all" : "live");
+    setScopeExpanded(false); setPendingAnchor(null);
+  }, [feature]);
+
+  // Keep the modal's ref identity stable while its fallback follows the visible
+  // view. Changing the ref prop would rerun ModalShell's open/restore effect.
+  useEffect(() => {
+    modalRestoreFocusRef.current = feature ? featureBackRef.current : searchRef.current;
+  });
 
   useEffect(() => {
     if (!hash.startsWith("#config-")) return;
@@ -814,7 +828,7 @@ function ConfigurationView({ hash, feature = null, featureBackTo }: { hash: stri
           keys={stagedModal.keys}
           items={itemMap}
           onClose={() => setStagedModal(null)}
-          restoreFocusRef={feature ? featureBackRef : searchRef}
+          restoreFocusRef={modalRestoreFocusRef}
         />
       )}
       <details className="config-status-strip">

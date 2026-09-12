@@ -43,7 +43,7 @@ export function FollowersPage() {
       if (value) next.set(key, value); else next.delete(key);
       if (key !== "offset") next.delete("offset");
       return next;
-    });
+    }, { state: location.state });
   }
 
   const params = useMemo(() => ({

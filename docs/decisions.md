@@ -292,6 +292,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 293 | Select completed run IDs before monitor payload | Rank narrow historical completion keys, then load the selected run by primary key; preserve health fields, scope, ordering and historical physical-attempt debt. |
 | 294 | Feature recommendations and focused configuration | Explain 32 feature groups using live configuration readiness, dated research and existing editors; preserve applied/desired truth, staged dependencies, draft versions and the different page-scope meanings. No automatic disabling or production changes. |
 | 295 | Dashboard page-by-page usability review | Review all 38 screens, decouple page identity from overview, preserve daily navigation and reviewed drafts, disclose stale/missing reads and uncertain writes, and retain specialized recovery tools without automatically enabling or disabling capture. |
+| 296 | Adversarial dashboard state and intent review | Preserve configuration and fan drafts across scope changes, bind queued mutations to their reviewed target, consume Undo once, and recover an unknown webhook apply only through explicit separate intent preparation. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -12310,3 +12311,52 @@ from 1901 to 1897 by fixing four pre-existing Workboard query-option errors; no
 per-file budget increases. Browser and PostgreSQL integration verification are
 not claimed. A future deployment still requires the concrete owner gate and
 preservation of #293's production state.
+
+## Decision 296: Adversarial dashboard state and intent review (2026-09-12)
+
+The owner requested a fresh adversarial agent review of the complete UI change
+from `c0cd21c3` through `d08d969c`. Three independent reviewers traced navigation,
+configuration and writes through the SDK/contracts to persistence. They found
+six new regressions and one material pre-existing queued-mutation defect. The
+coordinator confirmed the mechanisms, fixed the webhook recovery gap, verified
+selected mounted-browser flows and obtained independent review of the fixes.
+Findings, evidence and unresolved contract limits are recorded in
+`investigations/feature-controls-2026-09-11/ADVERSARIAL-REVIEW.md`.
+
+Configuration scope is a filter on the same mounted form. Changing feature/all
+must not discard reviewed versions, drafts, pending writes or returned receipts;
+reset filters separately and keep the modal focus ref stable. Daily URL writers
+preserve router state. AutoList retains its whole-row shortcut without consuming
+normal link/modifier/interactive-child behavior.
+
+Mutation routing belongs to the submitted variables, not a hook's current
+render. A TanStack first attempt paused offline can receive new observer options
+after navigation; note/contact/snooze/undo/recompute and their success invalidation
+must still use the reviewed page/fan. Fan note drafts remain keyed by route while
+the component is mounted, isolated by current principal, and a late success can
+clear only the matching submitted text. No browser-storage persistence is added.
+
+Workboard Undo consumes its local receipt synchronously on the first admitted
+attempt, including an unknown result. A list GET never renews it. Preflight refusal
+on another route or while busy does not consume an attempt. This is client
+containment: the server still retracts the latest contact for page/fan rather than
+a named contact under CAS, so another actor's intervening contact remains a risk.
+
+Webhook policy has no public apply-attempt identity. A same-version failed state
+after another failed apply cannot prove which request failed. Preserve that
+uncertainty. After an explicit successful read, an unchanged non-applying policy
+and acknowledgement may unlock preparation of a separate intent. Preparation
+does not send a request, clear selection drafts or erase a returned receipt; a
+paid action still requires its separate control. An error, in-flight read or
+changed snapshot blocks preparation. No automatic POST retry is introduced.
+
+No backend contract, database, collector, default, retention, permission or
+production change is made. Server idempotency for notes/contact/classification,
+AI-settings CAS and durable recovery across full unmount/reload remain separate
+work. Unit/build acceptance is not a no-loss guarantee or deployment approval.
+`pnpm check` passes: 305 files, 3375 tests, 9 skipped, lint and dashboard build;
+the strictness ratchet remains 1897 known errors in 120 files. Targeted browser
+fixtures confirm scope/receipt retention, one Undo after a committed response
+loss, explicit webhook recovery, and separate fan drafts/late responses. Full
+38-screen browser coverage and PostgreSQL integration suites are not claimed.
+Deployment remains separately owner-gated and must preserve Decision 293.

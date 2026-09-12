@@ -1,7 +1,8 @@
 import { useLocation, useNavigate, useParams, useSearchParams } from "react-router";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useReducer, useState } from "react";
 import { ArrowLeft, ChevronDown, CalendarDays, RefreshCw, Clock } from "lucide-react";
 import {
+  useAuthMe,
   usePageFanDetail,
   usePageFanProfile,
   usePageFanProfileVersion,
@@ -11,6 +12,7 @@ import {
   useSpenderDetail,
 } from "@/api/queries";
 import { ReadSection, type SectionQuery } from "./daily/ReadSection.js";
+import { fanNoteDraftsReducer } from "./daily/fanNoteDrafts.js";
 import { QueryNotice } from "@/components/shared/QueryNotice";
 import { Badge } from "@/components/shared/Badge";
 import { Pagination } from "@/components/shared/Pagination";
@@ -45,20 +47,22 @@ export function FanProfilePage() {
   const navigate = useNavigate();
   const [search] = useSearchParams();
   const [txOffset, setTxOffset] = useState(0);
-  const [noteBody, setNoteBody] = useState("");
   const [historyOpen, setHistoryOpen] = useState(false);
   const [intelligenceOpen, setIntelligenceOpen] = useState(false);
   const [selectedProfileVersion, setSelectedProfileVersion] = useState<number | null>(null);
   const routeKey = `${pageLabel ?? ""}\0${platform ?? ""}\0${platformUserId ?? ""}`;
-  const currentRoute = useRef(routeKey);
-  currentRoute.current = routeKey;
+  const auth = useAuthMe();
+  const principalId = auth.data?.user.id ?? null;
+  const [noteDrafts, dispatchNoteDraft] = useReducer(fanNoteDraftsReducer, { principalId, drafts: {} });
+  const noteBody = noteDrafts.principalId === principalId ? noteDrafts.drafts[routeKey] ?? "" : "";
+  const setNoteBody = (text: string) => dispatchNoteDraft({ type: "edit", principalId, routeKey, text });
+  useEffect(() => { dispatchNoteDraft({ type: "principal", principalId }); }, [principalId]);
   const { period } = useSpenderPeriodStore();
   const selectedPeriod = resolveSpenderPeriod(search.get("period"), period);
   const spenderPeriod = selectedPeriod === "all" ? "lifetime" : selectedPeriod;
 
   useEffect(() => {
     setTxOffset(0);
-    setNoteBody("");
     setHistoryOpen(false);
     setIntelligenceOpen(false);
     setSelectedProfileVersion(null);
@@ -90,7 +94,7 @@ export function FanProfilePage() {
     limit: 10,
     offset: 0,
   });
-  const createNote = useCreateFanNote(pageLabel!, platformUserId!);
+  const createNote = useCreateFanNote();
   const backTo = resolveFanProfileBackTarget(location.state, pageLabel);
 
   if (isLoading || !data) {
@@ -148,11 +152,11 @@ export function FanProfilePage() {
     const body = noteBody.trim();
     if (!body || createNote.isPending) return;
     const submittedRoute = routeKey;
+    const submittedText = noteBody;
+    const submittedPrincipalId = principalId;
     try {
-      await createNote.mutateAsync({ body });
-      if (currentRoute.current === submittedRoute) {
-        setNoteBody((current) => current.trim() === body ? "" : current);
-      }
+      await createNote.mutateAsync({ pageLabel: pageLabel!, platformUserId: platformUserId!, body });
+      dispatchNoteDraft({ type: "saved", principalId: submittedPrincipalId, routeKey: submittedRoute, submittedText });
       toast.success("Note added");
     } catch {
       toast.error("Failed to add note");

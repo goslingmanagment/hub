@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { queryOptions, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { mutationOptions, queryOptions, useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import type {
   RevenueDailyQuery,
   RevenueQuery,
@@ -303,16 +303,19 @@ export function usePageFanProfileVersion(
   });
 }
 
-export function useCreateFanNote(pageLabel: string, platformUserId: string) {
-  const qc = useQueryClient();
-  return useMutation({
+export function createFanNoteMutationOptions(qc: QueryClient) {
+  return mutationOptions({
     meta: { suppressGlobalError: true },
-    mutationFn: (body: { body: string }) =>
+    mutationFn: ({ pageLabel, platformUserId, ...body }: { readonly pageLabel: string; readonly platformUserId: string; readonly body: string }) =>
       kernel.createFanNote({ params: { pageLabel, platformUserId }, body }),
-    onSuccess: () => {
+    onSuccess: (_result, { pageLabel, platformUserId }) => {
       qc.invalidateQueries({ queryKey: ["pageFanDetail", pageLabel, platformUserId] });
     },
   });
+}
+
+export function useCreateFanNote() {
+  return useMutation(createFanNoteMutationOptions(useQueryClient()));
 }
 
 export function useSpenders(params: {

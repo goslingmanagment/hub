@@ -133,7 +133,7 @@ export function PageDetailPage() {
       if (value) next.set(key, value); else next.delete(key);
       if (key === "type") next.delete("txOffset");
       return next;
-    });
+    }, { state: location.state });
   }
 
   const transactionsQuery = usePageTransactions(resolvedPageLabel, {
