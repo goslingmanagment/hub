@@ -42,6 +42,8 @@ export async function earningsAuditFixture(db: StartedTestDatabase) {
     return insertObservation(db.db, {
       source: "pull", producer: "test:earnings", platform: "fansly", accountId: pageId,
       kind: "fan_earnings_stats", payload, idempotencyKey: randomUUID(),
+      // Predate the audit's exclusive cutoff without depending on Mac/VM clock agreement.
+      receivedAt: new Date(Date.now() - 3600_000),
       payloadHash: createHash("sha256").update(JSON.stringify(payload)).digest(), ...overrides,
     });
   }
