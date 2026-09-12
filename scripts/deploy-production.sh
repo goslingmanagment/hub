@@ -489,7 +489,8 @@ acquire_local_deploy_lock() {
 
 release_remote_deploy_lock() {
   [[ "${REMOTE_DEPLOY_LOCK_ACQUIRED:-0}" == "1" ]] || return 0
-  run_remote "set -euo pipefail; if [[ -d ${REMOTE_DEPLOY_LOCK_DIR_ESCAPED} ]]; then if [[ -f ${REMOTE_DEPLOY_LOCK_DIR_ESCAPED}/owner ]] && [[ \"\$(cat ${REMOTE_DEPLOY_LOCK_DIR_ESCAPED}/owner)\" == $(printf '%q' "$DEPLOY_RUN_ID") ]]; then rm -rf ${REMOTE_DEPLOY_LOCK_DIR_ESCAPED}; else printf '[deploy] remote lock owner changed; leaving %s in place\n' $(printf '%q' "$REMOTE_DEPLOY_LOCK_DIR") >&2; exit 1; fi; fi"
+  run_remote "set -euo pipefail; if [[ -d ${REMOTE_DEPLOY_LOCK_DIR_ESCAPED} ]]; then if [[ -f ${REMOTE_DEPLOY_LOCK_DIR_ESCAPED}/owner ]] && [[ \"\$(cat ${REMOTE_DEPLOY_LOCK_DIR_ESCAPED}/owner)\" == $(printf '%q' "$DEPLOY_RUN_ID") ]]; then rm -rf ${REMOTE_DEPLOY_LOCK_DIR_ESCAPED}; else printf '[deploy] remote lock owner changed; leaving %s in place\n' $(printf '%q' "$REMOTE_DEPLOY_LOCK_DIR") >&2; exit 1; fi; fi" \
+    || return 1
   REMOTE_DEPLOY_LOCK_ACQUIRED=0
 }
 
@@ -1292,8 +1293,8 @@ copy_dist_overlay_path() {
   local target_path="${DIST_CONTEXT_DIR}/${relative_path}"
 
   [[ -e "$source_path" ]] || fail "Dist-only deploy output is missing: ${relative_path}"
-  mkdir -p "$(dirname "$target_path")"
-  cp -R "$source_path" "$target_path"
+  mkdir -p "$(dirname "$target_path")" || return 1
+  cp -R "$source_path" "$target_path" || return 1
 }
 
 prune_macos_metadata_files() {
@@ -1303,9 +1304,9 @@ prune_macos_metadata_files() {
 
 create_dist_overlay_context() {
   DIST_CONTEXT_DIR="${TEMP_DIR}/dist-overlay-context"
-  mkdir -p "$DIST_CONTEXT_DIR"
+  mkdir -p "$DIST_CONTEXT_DIR" || return 1
 
-  cat >"${DIST_CONTEXT_DIR}/Dockerfile" <<EOF
+  cat >"${DIST_CONTEXT_DIR}/Dockerfile" <<EOF || return 1
 FROM ${CLEAN_FULL_BASE_TAG}
 
 ARG APP_DEPENDENCY_CHECKSUM=unknown
@@ -1322,7 +1323,7 @@ EOF
 
   local path
   for path in "${DIST_OVERLAY_PATHS[@]}"; do
-    copy_dist_overlay_path "$path"
+    copy_dist_overlay_path "$path" || return 1
   done
   prune_macos_metadata_files "$DIST_CONTEXT_DIR"
 }

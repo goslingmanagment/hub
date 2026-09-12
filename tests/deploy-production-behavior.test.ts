@@ -352,6 +352,42 @@ describe("production deploy behavior without production access", () => {
     expect(commands()).toHaveLength(1);
   });
 
+  it.each(["mkdir", "dockerfile", "copy"])("rejects a dist context after %s failure even in a conditional caller", (failure) => {
+    const paths = ["apps/dashboard/dist", "apps/runtime/dist", "packages/db/dist", "packages/db/migrations"];
+    for (const entry of paths) {
+      mkdirSync(path.join(fixtureRoot, entry), { recursive: true });
+      writeFileSync(path.join(fixtureRoot, entry, "fixture.txt"), "fixture");
+    }
+    const result = runFunctions(["copy_dist_overlay_path", "prune_macos_metadata_files", "create_dist_overlay_context"], String.raw`
+      TEMP_DIR="$ROOT_DIR"
+      CLEAN_FULL_BASE_TAG="fixture:base"
+      DIST_OVERLAY_PATHS=(apps/dashboard/dist apps/runtime/dist packages/db/dist packages/db/migrations)
+      mkdir() { [[ "$TEST_CONTEXT_FAILURE" != mkdir ]] || return 23; command mkdir "$@"; }
+      cat() { [[ "$TEST_CONTEXT_FAILURE" != dockerfile ]] || return 23; command cat "$@"; }
+      cp() {
+        printf 'copy\n' >> "$TEST_COMMAND_LOG"
+        command cp "$@"
+        [[ "$TEST_CONTEXT_FAILURE" != copy ]] || return 23
+      }
+      if create_dist_overlay_context; then exit 0; else exit 51; fi
+    `, { TEST_CONTEXT_FAILURE: failure });
+    expect(result.status, result.stderr).toBe(51);
+    expect(commands()).toHaveLength(failure === "copy" ? 1 : 0);
+  });
+
+  it("preserves lock ownership state and reports release failure to its conditional caller", () => {
+    const result = runFunctions(["release_remote_deploy_lock"], String.raw`
+      REMOTE_DEPLOY_LOCK_ACQUIRED=1
+      REMOTE_DEPLOY_LOCK_DIR_ESCAPED=/opt/agency-hub/.deploy.lock
+      REMOTE_DEPLOY_LOCK_DIR=/opt/agency-hub/.deploy.lock
+      release_remote_deploy_lock || log "lock release failed"
+      [[ "$REMOTE_DEPLOY_LOCK_ACQUIRED" == 1 ]]
+    `, { TEST_REMOTE_FAILURE_PATTERN: "remote lock owner changed" });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr).toContain("lock release failed");
+    expect(commands()).toHaveLength(1);
+  });
+
   it("leaves explicitly requested stack scope outside the app-only infrastructure guard", () => {
     const result = runFunctions(["prepare_remote_infrastructure_check", "verify_remote_infrastructure_unchanged"],
       "prepare_remote_infrastructure_check; verify_remote_infrastructure_unchanged", { RECREATE_SCOPE: "stack" });
