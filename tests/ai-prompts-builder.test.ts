@@ -336,8 +336,8 @@ describe('prompt caching blocks', () => {
     }
   });
 
-  it('marks only the final block of each cacheable prefix segment (1h system, 1h static, 5m dynamic)', () => {
-    for (const feature of FEATURES) {
+  it('caches only the fan-agnostic prefix (1h system, 1h static) and sends the per-fan context uncached (Decision 319)', () => {
+    for (const feature of FEATURES.filter((candidate) => candidate !== 'fan-summary')) {
       const result = buildPrompt(
         buildTestInput({
           feature,
@@ -355,17 +355,30 @@ describe('prompt caching blocks', () => {
 
       expect(result.userBlocks).toHaveLength(3);
       expect(result.userBlocks[0]?.cache).toBe('1h');
-      expect(result.userBlocks[1]?.cache).toBe('5m');
+      expect(result.userBlocks[1]?.cache, feature).toBe('none');
       expect(result.userBlocks[2]?.cache).toBe('none');
 
       const breakpoints = [...result.systemBlocks, ...result.userBlocks].filter(
         (block) => block.cache !== 'none',
       );
-      expect(breakpoints).toHaveLength(3);
+      expect(breakpoints).toHaveLength(2);
     }
   });
 
-  it('keeps the improve-draft draft and transcript context in the middle ephemeral block', () => {
+  it('sends every fan-summary block uncached, full and short, with the text unchanged (Decision 319)', () => {
+    for (const summaryMode of [undefined, 'short'] as const) {
+      const input = buildTestInput({ feature: 'fan-summary', summaryMode });
+      const result = buildPrompt(input);
+
+      expect(result.systemBlocks).toHaveLength(2);
+      expect(result.userBlocks).toHaveLength(3);
+      expect([...result.systemBlocks, ...result.userBlocks].every((block) => block.cache === 'none')).toBe(true);
+      expect(flattenPromptBlocks(result.systemBlocks)).toBe(result.system);
+      expect(flattenPromptBlocks(result.userBlocks)).toBe(result.user);
+    }
+  });
+
+  it('keeps the improve-draft draft and transcript context in the middle block', () => {
     const result = buildPrompt(
       buildTestInput({
         feature: 'improve-draft',
@@ -380,7 +393,7 @@ describe('prompt caching blocks', () => {
     expect(result.userBlocks[1]?.text).toContain('<current_draft>');
     expect(result.userBlocks[1]?.text).toContain('hey babe how was your day');
     expect(result.userBlocks[1]?.text).toContain('## Conversation Transcript');
-    expect(result.userBlocks[1]?.cache).toBe('5m');
+    expect(result.userBlocks[1]?.cache).toBe('none');
     expect(result.userBlocks[2]?.text).toContain('## Your Task');
     expect(result.userBlocks[2]?.text).not.toContain('## Current Draft');
   });
@@ -402,7 +415,7 @@ describe('prompt caching blocks', () => {
     expect(result.userBlocks[0]?.cache).toBe('1h');
     expect(result.userBlocks[0]?.text).not.toContain(fanToken);
     expect(result.userBlocks[0]?.text).not.toContain('## Fan Profile');
-    // The fan profile rides in the ephemeral middle block with the transcript.
+    // The fan profile rides in the uncached middle block with the transcript.
     expect(result.userBlocks[1]?.text).toContain('## Fan Profile');
     expect(result.userBlocks[1]?.text).toContain(fanToken);
   });
@@ -625,7 +638,7 @@ describe('fan dossier section', () => {
     expect(result.user).not.toContain('<script>alert');
   });
 
-  it('rides the ephemeral dynamic block, never the 1h static prefix or the task block', () => {
+  it('rides the per-fan dynamic block, never the 1h static prefix or the task block', () => {
     for (const feature of ['fast-reply', 'improve-draft', 'help-me', 'ping'] as const) {
       const result = buildPrompt(
         buildTestInput({
@@ -637,7 +650,7 @@ describe('fan dossier section', () => {
       expect(result.userBlocks).toHaveLength(3);
       expect(result.userBlocks[0]?.cache).toBe('1h');
       expect(result.userBlocks[0]?.text, feature).not.toContain('## Fan Dossier');
-      expect(result.userBlocks[1]?.cache).toBe('5m');
+      expect(result.userBlocks[1]?.cache).toBe('none');
       expect(result.userBlocks[1]?.text, feature).toContain('## Fan Dossier');
       expect(result.userBlocks[2]?.text, feature).not.toContain('## Fan Dossier');
     }
@@ -813,7 +826,7 @@ describe('ping segment substitution', () => {
     expect(result.userBlocks[1]?.text).toContain('## Conversation Transcript');
     expect(result.userBlocks[1]?.text).toContain('<transcript>');
     expect(result.userBlocks[1]?.text).not.toContain('Segment A');
-    expect(result.userBlocks[1]?.cache).toBe('5m');
+    expect(result.userBlocks[1]?.cache).toBe('none');
 
     expect(result.userBlocks[2]?.text).toContain('Use this fan segment strategy');
     expect(result.userBlocks[2]?.text).toContain('Segment A');
@@ -1020,8 +1033,8 @@ describe('voice-script prompt', () => {
     expect(result.userBlocks[0]?.cache).toBe('1h');
     expect(result.userBlocks[0]?.text).toContain('AT MOST 1-2 audio tags');
     expect(result.userBlocks[0]?.text).not.toContain('## Current Draft');
-    // The draft + transcript ride the ephemeral middle block.
-    expect(result.userBlocks[1]?.cache).toBe('5m');
+    // The draft + transcript ride the uncached middle block (Decision 319).
+    expect(result.userBlocks[1]?.cache).toBe('none');
     expect(result.userBlocks[1]?.text).toContain('## Current Draft');
     expect(result.userBlocks[1]?.text).toContain('come see my new set babe');
     expect(result.userBlocks[2]?.cache).toBe('none');
