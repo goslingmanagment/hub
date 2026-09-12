@@ -301,6 +301,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 300 | Dashboard quality review and fresh export recovery | Preserve direct mobile access to the mounted full configuration form, match runtime CSV scope semantics, and require an explicit fresh original-page jobs read before preparing another export quote after an unknown outcome. |
 | 301 | PostgreSQL bind logging | Pin both parameter log limits to zero at server startup; retain SQL templates, duration and all other production tuning. |
 | 302 | Alias lock order | Sort username-history writes by fan ID and username, preserving conditional updates and caller result order. |
+| 303 | Recent metrics reads | Enumerate stored index prefixes and bound each full-key range before filtering its exact series; retain sparse series and one snapshot. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -12659,3 +12660,29 @@ writer fails both cases with `40P01`. No-op `xmin` and rename-history assertions
 and existing fan-churn, identity and top-spender suites pass. This fixes this
 alias statement ordering; it does not claim arbitrary outer transactions can
 never deadlock.
+
+
+## Decision 303: Bound recent metric reads by series and requested rows (2026-09-12)
+
+Recent metric reports enumerate actual `(metric, quantile)` index prefixes with
+a recursive loose-index scan, then read at most N rows starting at each prefix.
+The full `(metric, quantile, sampled_at DESC)` order and LIMIT remain inside
+each range; exact-series equality stays outside LIMIT. The target prefix sorts
+first, so this returns its newest min(N, count) rows and discards only following
+prefixes when a sparse series contains fewer than N points. Moving equality
+inside would allow PostgreSQL to drop prefix ordering and choose the global
+time index, repeatedly filtering unrelated rows.
+
+All phases share one statement snapshot. Arbitrary, sparse and discontinued
+series remain visible without a registry or time cutoff. Equal timestamp ties
+retain the previous unspecified ordering. Migration 0186 adds a concurrent
+covering index, retaining the other access paths and the existing invalid-index
+retry protocol. It is explicitly additive and rollback compatible.
+
+Independent review approved the final query after a fresh-heap plan test
+rejected the initial equality variant. The final targeted suites pass 59 tests.
+On a disposable PostgreSQL 16 fixture with 1,000,002 samples, results match
+exactly; three warm runs visit approximately 620 tuples instead of the entire
+history (0.48-0.61 ms versus 89-96 ms locally). A populated-table migration and
+rerun keep the index valid. These synthetic results do not establish production
+latency or total CPU savings; verify the production plan after deployment.

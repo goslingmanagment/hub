@@ -95,19 +95,55 @@ export async function listOpsMetricSamplesSince(
   }));
 }
 
-/** Latest N samples per (metric, quantile), newest first. */
+/** Latest N samples per (metric, quantile), newest first.
+ *
+ * Enumerate the stored series by jumping to the next index prefix, then read
+ * only N rows per series. DISTINCT/window ranking would still visit the entire
+ * retained history. The recursive scan needs migration 0186's series/time
+ * index; unlike a registry or a time cutoff it also finds old/unknown series.
+ * Both phases share one statement snapshot, including concurrent prune/insert.
+ * Equal timestamps retain the previous query's unspecified tie order. */
 export async function listRecentOpsMetricSamples(
   db: Database,
   input: { perSeries: number },
 ): Promise<OpsMetricSampleRow[]> {
+  if (input.perSeries <= 0) {
+    return [];
+  }
   const result = await db.execute<{ metric: string; quantile: string; value_ms: string; sampled_at: Date }>(sql`
-    select metric, quantile, value_ms::text, sampled_at
-    from (
-      select *, row_number() over (partition by metric, quantile order by sampled_at desc) as rn
-      from ops_metric_samples
-    ) ranked
-    where rn <= ${input.perSeries}
-    order by metric asc, quantile asc, sampled_at desc
+    with recursive series (metric, quantile) as (
+      (
+        select s.metric, s.quantile
+        from ops_metric_samples s
+        order by s.metric asc, s.quantile asc
+        limit 1
+      )
+      union all
+      select next_series.metric, next_series.quantile
+      from series previous
+      cross join lateral (
+        select s.metric, s.quantile
+        from ops_metric_samples s
+        where (s.metric, s.quantile) > (previous.metric, previous.quantile)
+        order by s.metric asc, s.quantile asc
+        limit 1
+      ) next_series
+    )
+    select series.metric, series.quantile, sample.value_ms::text, sample.sampled_at
+    from series
+    cross join lateral (
+      -- Keep the full index order meaningful: equality inside this subquery
+      -- lets PostgreSQL choose the global time index and filter other series.
+      -- The requested prefix comes first; LIMIT bounds the read even when it
+      -- has fewer than N rows. Filter spillover only OUTSIDE this limit.
+      select s.metric, s.quantile, s.value_ms, s.sampled_at
+      from ops_metric_samples s
+      where (s.metric, s.quantile) >= (series.metric, series.quantile)
+      order by s.metric asc, s.quantile asc, s.sampled_at desc
+      limit ${input.perSeries}
+    ) sample
+    where sample.metric = series.metric and sample.quantile = series.quantile
+    order by series.metric asc, series.quantile asc, sample.sampled_at desc
   `);
   return result.rows.map((row) => ({
     metric: row.metric,

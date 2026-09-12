@@ -675,7 +675,7 @@ describe("compose config", () => {
     expect(successIndex).toBeGreaterThan(publishIndex);
   });
 
-  it("deploy-production.sh allows rollback across known data-only migrations", async () => {
+  it("deploy-production.sh allows rollback across known compatible migrations", async () => {
     const text = await readComposeFile("scripts/deploy-production.sh");
     const rollback = getShellFunction(text, "rollback_remote_stack");
 
@@ -686,6 +686,8 @@ describe("compose config", () => {
     expect(text).toContain("0016_canonical_proxy_egress_key_function.sql");
     expect(text).toContain("0017_reapply_egress_rate_limit_scope_key_repair.sql");
     expect(text).toContain("0018_notification_incident_recovery_watermarks.sql");
+    expect(text.match(/ROLLBACK_COMPATIBLE_MIGRATIONS=\([\s\S]*?\n\)/)?.[0])
+      .toContain('"0186_ops_metrics_recent_series.sql"');
     expect(text).toContain("schema_migration_delta_allows_rollback");
     expect(rollback).toContain("Schema migrations changed only by rollback-compatible data migrations");
     expect(rollback).toContain("Rollback skipped; schema_migrations changed during this deploy");
