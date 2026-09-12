@@ -1,6 +1,12 @@
 # Fansly C1 — follower reconciliation diagnostics
 
-Latest: [first full receipts after restoration](OBSERVATION-20260912T155000Z.md).
+Latest: [captured pagination overlap](OBSERVATION-20260912T165024Z.md).
+Lora-1's following comparison is 9,474/9,474 and requests no work. Lilly-2's
+generation 791 observes a duplicated relation across two adjacent pages and
+a changed terminal headline; the guard withholds deactivation and restarts.
+Its request remains incomplete in the 44-run report. All 200 attempts succeeded.
+
+Earlier: [first full receipts after restoration](OBSERVATION-20260912T155000Z.md).
 Lora-1 actually retired one row; Lilly-2 protected two absent rows under
 generation grace and retired none. The 65-run report pairs both clean-queue
 requests with exact-generation completion; 299 physical attempts all succeeded.
@@ -8,9 +14,9 @@ Trigger suppression and savings remain unproven. The
 [presence inventory](PRESENCE-CONSUMERS-20260912.md) identifies Workboard urgency
 and other consumers that a policy change must preserve.
 
-At 15:52 UTC all three roles were healthy on `31b73a96`, which preserves the
+At 16:49 UTC all three roles were healthy on `31b73a96`, which preserves the
 [restored diagnostics](RESTORED-MEMBERSHIP-20260912.md) from `64149b95`.
-The new worker started after the measured cutoff. The three earlier terminal
+The latest selected runs start after that worker's start. The three earlier terminal
 runs without actual-retirement receipts remain unknown. No C1 policy changed.
 
 Historical 12:30 state: [first natural membership receipt](NATURAL-MEMBERSHIP-20260912.md),

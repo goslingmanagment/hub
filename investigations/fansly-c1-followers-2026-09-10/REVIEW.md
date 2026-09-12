@@ -266,3 +266,21 @@ and the remaining requirement for a new natural membership receipt.
 The final documentation and PR-body review by `quality_c1` found no actionable
 issues after comparison with the local validation, deployment and observation
 receipts. The runtime and tests were unchanged during this documentation follow-up.
+
+## Captured pagination overlap — 12 September 16:50 UTC
+
+`review_pr162` independently verified the 44-run cohort, six valid decisions,
+38 generation-791 chunks, guarded restart and null actual-deactivation count.
+The reviewer matched all 184 captures to those runs, checked per-run counts
+against chunk statistics and reproduced the repeated relation at page 51/52.
+All four evidence/source hashes and the 200-attempt accounting agree. No
+correctness finding remains; the underlying provider action, omitted follower
+identity and safe suppression remain unproven.
+
+`quality_c1` reviewed the observation, presence inventory and PR body. One
+wording finding was fixed: a processed relation is not evidence of an insertion.
+The re-review confirms no open findings. Both reviews preserve the distinction
+between later matching counts and immediate active-after, separate snapshots,
+captured overlap and complete membership. Neither reviewer ran tests or accessed
+production. This follow-up adds diagnostic SQL and evidence documentation only;
+application source and the successful `6d3dd3f1` validation remain unchanged.

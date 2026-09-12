@@ -52,6 +52,19 @@ No new presence source or cadence was added by C1 diagnostics.
 The shared field does not make these product thresholds interchangeable.
 This is a Hub source inventory, not a complete audit of external clients.
 
+## Historical measurement limit
+
+Decision 224 / A20 explicitly excludes volatile `lastSeenAt` from captured
+follower relations and aggregated accounts. `trimFanslyFollowerPayload` in
+`apps/runtime/src/services/sync/shared.ts` preserves that decision. The live
+presence writer consumes the untrimmed parsed response; trimming the stored copy
+does not alter that input. Retained follower captures cannot reconstruct its
+historical presence inputs.
+The 12 September 16:45 read_only catalog also confirms no SELECT on `page_fans`
+or `page_follows`. Existing per-fan timeline data is only the latest stored
+presence value. These limits neither establish zero presence nor justify
+changing A20 or suppressing full walks.
+
 ## What C1 still has to prove
 
 The existing handler unit fixture checks a follower-derived presence write;
