@@ -8,6 +8,7 @@
 // skipped when absent — the extension deletes its prompt library at its own
 // Task 3 cutover, same lifecycle as the desktop parity harness).
 
+import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -23,7 +24,7 @@ import {
   applyPlatformWording,
   buildPrompt,
 } from '../apps/runtime/src/modules/ai/index.ts';
-import type { Personality } from '../apps/runtime/src/modules/ai/index.ts';
+import type { Personality, PromptBuildInput } from '../apps/runtime/src/modules/ai/index.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const EXTENSION_ROOT = join(HERE, '..', '..', 'fansly-ext');
@@ -103,5 +104,64 @@ describe('buildPrompt platform wording', () => {
       fanDisplayName: 'Fan',
     });
     expect(prompt.system).toContain('You are roleplaying as a specific model on OnlyFans.');
+  });
+});
+
+describe('manual OnlyFans ping (Decision #295)', () => {
+  const pingInput: PromptBuildInput = {
+    feature: 'ping',
+    personality: PERSONALITY,
+    transcript: 'Fan: I also follow you on OnlyFans!',
+    fanSpendingData: '',
+    fanSubscriptionData: '',
+    fanDisplayName: 'Charles',
+  };
+
+  // Recorded from buildPrompt at c0cd21c3 before #295. Pin the entire Fansly
+  // payload, including cache boundaries, independently of the new wording table.
+  it.each([
+    ['active', 'c6a25b2c72857f566d722c1d1bde65ef0bfad42e64348ff28f9fe0486e7ea2fe'],
+    ['segment-a', '99c6afebf2645548d2e15003f43b48c1c8c9fb28ed3342026313e25e3534983b'],
+    ['segment-b', '507f3cc82cf93675b92b982d40a5c9b4b380740f7f3945b70a16297a4eaa70e5'],
+  ] as const)('keeps the Fansly %s prompt byte-for-byte', (pingSegment, expectedHash) => {
+    const prompt = buildPrompt({
+      ...pingInput,
+      platform: 'fansly',
+      pingSegment,
+      fanSilenceDays: pingSegment === 'active' ? 0 : 12,
+    });
+    expect(createHash('sha256').update(JSON.stringify(prompt)).digest('hex')).toBe(expectedHash);
+  });
+
+  it.each(['onlyfans', undefined] as const)(
+    'uses truthful active context with platform %s and leaves the writing decision to the chatter',
+    (platform) => {
+      const prompt = buildPrompt({ ...pingInput, platform, pingSegment: 'active', fanSilenceDays: 0 });
+      expect(prompt.user).toContain('The chatter chose to reach out now.');
+      expect(prompt.user).toContain('Active conversation: the fan wrote recently.');
+      expect(prompt.user).toContain('not a recommendation about when to write');
+      expect(prompt.user).toContain('If the latest fan message asks a question, acknowledge it');
+      expect(prompt.user).toContain("Fan silence: the fan's last message was 0 days ago.");
+      expect(prompt.user).toContain('Fan: I also follow you on OnlyFans!');
+      expect(prompt.user).toContain('Output ONLY the message text.');
+      expect(prompt.user).not.toContain('Segment A');
+      expect(prompt.user).not.toContain('to send to a fan who has gone quiet');
+      expect(prompt.user).not.toContain('The fan has not said anything recently');
+      expect(prompt.user).not.toContain('This segment should not be used for ping generation');
+      expect(prompt.user).not.toContain('notice the silence in your own words');
+      expect(prompt.user).not.toMatch(/\{ping\w+\}/);
+      expect(prompt.userBlocks.map((block) => block.cache)).toEqual(['1h', '5m', 'none']);
+      expect(prompt.userBlocks[0]?.text).not.toContain('Active conversation:');
+      expect(prompt.userBlocks[2]?.text).toContain('Active conversation:');
+    },
+  );
+
+  it('keeps the OnlyFans static prefix independent of segment and recency', () => {
+    const active = buildPrompt({ ...pingInput, pingSegment: 'active', fanSilenceDays: 0 });
+    for (const pingSegment of ['segment-a', 'segment-b'] as const) {
+      const older = buildPrompt({ ...pingInput, pingSegment, fanSilenceDays: 45 });
+      expect(older.userBlocks[0]).toEqual(active.userBlocks[0]);
+      expect(older.user).not.toContain('Was active, went silent');
+    }
   });
 });

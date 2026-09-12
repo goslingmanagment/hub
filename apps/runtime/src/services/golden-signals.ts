@@ -144,16 +144,23 @@ export async function computeGoldenSignals(
 
   // 3. Projection: backlog age per (projection, account) — the age of the
   // oldest event a projection has not consumed yet (0 when fully caught up).
+  // One index probe per watermark (lowest account_seq above high_seq): the
+  // previous hash join scanned every domain_events partition per sample
+  // (docs/diag/2026-09-11-agency-hub-load).
   const projection = await quantiles(app, sql`
     with backlog as (
       select
         w.projection,
         w.account_id,
-        coalesce(extract(epoch from (now() - min(de.created_at))) * 1000, 0) as lag_ms
+        coalesce(extract(epoch from (now() - oldest.created_at)) * 1000, 0) as lag_ms
       from projection_seq_watermarks w
-      left join domain_events de
-        on de.account_id = w.account_id and de.account_seq > w.high_seq
-      group by w.projection, w.account_id
+      left join lateral (
+        select de.created_at
+        from domain_events de
+        where de.account_id = w.account_id and de.account_seq > w.high_seq
+        order by de.account_seq asc
+        limit 1
+      ) oldest on true
     )
     select
       percentile_cont(0.5) within group (order by lag_ms) as p50,

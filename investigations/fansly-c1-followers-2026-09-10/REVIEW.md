@@ -3,6 +3,14 @@
 Numbering note: earlier reviews refer to the original C1 Decision 291. It is
 Decision 294 after the 11 September merge of main; applied migrations are unchanged.
 
+For the [12 September main integration](MAIN-SYNC-20260912.md), `review_pr162`
+reviewed exact tree `af6102b5`, including the five documentation conflicts and
+preservation of 181 production-reference and 180 main migrations. `quality_c1`
+verified the final documentation and PR body against all three log hashes,
+3,258/9 unit and 86/0 Postgres results, and all 39 restored diagnostic files.
+Both reviews closed without actionable findings; neither reviewer ran tests
+or accessed production. Changes after the tested tree only record these results.
+
 For the [first full receipts after restoration](OBSERVATION-20260912T155000Z.md),
 `review_pr162` independently verified the atomic 65-row report, both clean-queue
 request/completion chains, 20/38-chunk continuity, one actual Lora-1 retirement,

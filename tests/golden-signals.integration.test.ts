@@ -90,6 +90,49 @@ describe("golden signals (Stage 25)", () => {
     expect(incidents.rows[0].open).toBe(0);
   });
 
+  it("measures projection backlog from the oldest unconsumed event (diag 2026-09-11)", async () => {
+    const { appendDomainEvents } = await import("@agency_hub_core/db");
+    const accountId = 9001;
+    await appendDomainEvents(harness.db, accountId, [1, 2, 3].map((n) => ({
+      type: "message.created",
+      occurredAt: new Date(),
+      data: { n },
+      schemaVersion: 1,
+      observationId: 0,
+      dedupKey: `gs-projection:${n}`,
+    })));
+    // Events 2 and 3 are unconsumed; the oldest of them was created 90 s ago.
+    await harness.pool.query(
+      "update domain_events set created_at = now() - interval '90 seconds' where account_id = $1 and account_seq = 2",
+      [accountId],
+    );
+    await harness.pool.query(`
+      insert into projection_seq_watermarks (projection, account_id, high_seq, updated_at)
+      values ('gs_probe', $1, 1, now())
+      on conflict (projection, account_id) do update set high_seq = excluded.high_seq
+    `, [accountId]);
+
+    const behind = await computeGoldenSignals(appStub());
+    const behindP95 = behind.samples.find((s) => s.metric === "projection" && s.quantile === "p95");
+    expect(behindP95).toBeDefined();
+    expect(behindP95!.valueMs).toBeGreaterThanOrEqual(60_000);
+    expect(behindP95!.valueMs).toBeLessThan(180_000);
+
+    // Caught up → zero lag for that watermark.
+    await harness.pool.query(
+      "update projection_seq_watermarks set high_seq = 3 where projection = 'gs_probe' and account_id = $1",
+      [accountId],
+    );
+    const caughtUp = await computeGoldenSignals(appStub());
+    const caughtUpP95 = caughtUp.samples.find((s) => s.metric === "projection" && s.quantile === "p95");
+    expect(caughtUpP95).toBeDefined();
+    expect(caughtUpP95!.valueMs).toBe(0);
+    await harness.pool.query(
+      "delete from projection_seq_watermarks where projection = 'gs_probe' and account_id = $1",
+      [accountId],
+    );
+  });
+
   it("measures real observation backlog through the health-floor gauge (PR3)", async () => {
     // One webhook observation stuck below the family floor for 20 minutes.
     const { HEALTH_FLOOR_REGISTRY } = await import("../apps/runtime/src/services/health-floors.ts");

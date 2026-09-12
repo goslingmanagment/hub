@@ -28,7 +28,9 @@ unproven. The older observations below retain their original cutoffs and gates.
 
 [PR166](https://github.com/goslingmanagment/core/pull/166) remains the single C1
 draft. It now includes a bounded run timeline needed to establish the cause
-before a narrow policy fix. Branch `feat/fansly-c1-followers` now includes main `c0cd21c3` (PR172).
+before a narrow policy fix. Branch `feat/fansly-c1-followers` incorporates main
+`c76c6db0` (PR175); the [main synchronization check](MAIN-SYNC-20260912.md)
+records 3,258 passing unit tests and 86 passing serial Postgres tests.
 C1 is Decision 294; the original draft used 291. Applied migrations 0182–0183
 retain their original names and contents.
 No follower predicate, cadence, presence writer or provider request changed.

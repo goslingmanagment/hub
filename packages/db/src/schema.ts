@@ -542,6 +542,10 @@ export const syncRuns = pgTable(
   },
   (table) => ({
     finishedIdx: index("sync_runs_finished_idx").on(table.finishedAt),
+    // 0184: the planner and monitor read the few running runs out of ~190k.
+    runningIdx: index("sync_runs_running_idx")
+      .on(table.id)
+      .where(sql`${table.outcome} = 'running'`),
     idPageStreamUniq: unique("sync_runs_id_page_stream_uniq").on(
       table.id,
       table.pageId,
@@ -3241,6 +3245,9 @@ export const ofapiWebhookEvents = pgTable(
   (table) => ({
     idempotencyUniq: unique("ofapi_webhook_events_idempotency_uniq").on(table.idempotencyKey),
     receivedIdx: index("ofapi_webhook_events_received_idx").on(table.receivedAt),
+    // 0184: max(received_at) per page (admin status, event-type freshness).
+    pageReceivedIdx: index("ofapi_webhook_events_page_received_idx")
+      .on(table.platformAccountId, table.receivedAt),
     statusIdx: index("ofapi_webhook_events_status_idx").on(table.status, table.id),
     projectionIdx: index("ofapi_webhook_events_projection_idx")
       .on(table.projectionStatus, table.id)
