@@ -296,6 +296,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 313 | Fansly A0 reason coverage | Retain six additional bounded pre-apply reason counters; legacy and unavailable offline categories remain null, without changing sweep policy or completion semantics. |
 | 314 | Fansly C2a projection audit | Compare retained earnings snapshots with full projection rows in one bounded read-only snapshot; unavailable bodies, detached data and projection lag prevent acceptance. |
 | 317 | Fansly C2a compressed snapshots and pagination | Bound decoded JSONB and numeric expansion before export; group eight psql statements per network exchange while retaining snapshot, completeness and timeout checks. |
+| 316 | Deployment delivery | Keep Chromium cache independent of revision; preserve unchanged Postgres on app releases; publish the tested main image after Quality Gate and deploy by GHCR digest with source/checksum/platform verification before quiesce. Full/auto/dist-only and rollback semantics remain available. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -12510,3 +12511,46 @@ using the audit; retained evidence and financial data are unchanged.
 Numbered from main e222b2df (Decision 314), with 315 reserved for the deployed
 replay selector and 316 for deployment optimization by agreement with their
 owners. See the [runbook](runbooks/fansly-earnings-correctness.md).
+
+## Decision 316: Reuse the browser layer and deploy the image that CI tested
+
+2026-09-13. Deployment logs showed 392–400 seconds repeatedly installing browser
+system packages, while JS/CSS built in roughly 32 seconds in parallel; a changing
+runtime ARG was implicitly part of the expensive RUN cache key. Full image
+transfers also resent all existing layers through a slow workstation network.
+The owner accepted A then B, explicitly retaining full-first `auto` and keeping
+CI test-speed optimization separate.
+
+Runtime revision/checksum ARGs and labels now follow browser installation.
+Changing either label alone cannot rerun that installation. The dependency
+checksum protocol is shared by CI and deploy and remains byte-compatible with
+existing pinned full bases. A Dockerfile edit still needs one new full base for
+subsequent dist-only deployments.
+
+Ordinary deploys recreate only API, worker and scheduler. Before quiesce and
+again before promotion they verify an existing healthy PostgreSQL instance,
+its Compose service hash and resolved image identity, and unchanged resolved
+project/Postgres/shared resource definitions. Infrastructure changes require
+explicit `--recreate-scope stack`. Existing Compose dependency health ordering
+and the whole-stack emergency rollback remain. Aborting before recreation resumes
+existing stopped sync containers with `compose start`, avoiding dependency
+reconciliation after infrastructure drift was refused. This does not promise that
+removing a PostgreSQL restart alone eliminates every sync-health delay.
+
+The existing CI builds and smoke-tests an amd64 image with checkout revision and
+dependency labels. Only a push to main may hand that same image across jobs and
+publish to GHCR after the successful Quality Gate. The publisher validates
+artifact integrity, image ID, labels and platform; it has package write permission
+but executes no application/build/test code. PR/manual runs do not publish.
+The published digest is the deployment input, not a mutable commit tag.
+
+`--mode pull --pull-image ghcr.io/...@sha256:...` requires a clean matching
+checkout, refuses untracked release inputs, pulls/verifies the immutable candidate
+before stopping old services and leaves the existing migration/capability/health
+and rollback path in control. Release files and local CLI still use the same
+checkout. It needs no local Docker build; old full/dist-only/auto modes remain.
+No production access or deployment is granted by CI publication.
+
+Phase timestamps distinguish candidate preparation, migrations, recreation,
+service/sync/dashboard checks and the local CLI tail. Local CLI install optimization,
+legacy quiesce removal, and CI throughput changes are outside this change.

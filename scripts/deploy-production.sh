@@ -14,7 +14,11 @@ Usage:
 Options:
   --app-dir <path>       Remote release directory. Default: /opt/agency-hub
   --image <tag>          Docker image tag. Default: agency_hub_core/runtime:production
-  --mode <mode>          Build mode: full, dist-only, or auto. Default: full
+  --mode <mode>          Build mode: full, dist-only, auto, or pull. Default: full
+  --pull-image <digest> GHCR image@sha256 digest required by --mode pull.
+  --recreate-scope <scope>
+                        apps (default) preserves unchanged Postgres; stack
+                        explicitly includes PostgreSQL/infrastructure changes.
   --node-base-image <tag>
                         Canonical Node base image used for full builds.
                         Default: node:22-bookworm-slim
@@ -51,6 +55,8 @@ Environment variable equivalents:
   DEPLOY_APP_DIR
   DEPLOY_IMAGE_TAG
   DEPLOY_BUILD_MODE
+  DEPLOY_PULL_IMAGE
+  DEPLOY_RECREATE_SCOPE
   DEPLOY_NODE_BASE_IMAGE
   DEPLOY_NODE_BASE_CACHE_IMAGE (deprecated; accepted but ignored)
   DEPLOY_ALLOW_UNLABELED_DIST_BASE
@@ -68,7 +74,16 @@ EOF
 }
 
 log() {
-  printf '[deploy] %s\n' "$*" >&2
+  printf '[deploy] %s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >&2
+}
+
+start_phase() {
+  PHASE_STARTED_SECONDS=$SECONDS
+  log "Phase $1 started"
+}
+
+finish_phase() {
+  log "Phase $1 completed; duration_seconds=$((SECONDS - PHASE_STARTED_SECONDS))"
 }
 
 fail() {
@@ -107,6 +122,8 @@ REMOTE="${DEPLOY_REMOTE:-}"
 APP_DIR="${DEPLOY_APP_DIR:-/opt/agency-hub}"
 IMAGE_TAG="${DEPLOY_IMAGE_TAG:-agency_hub_core/runtime:production}"
 BUILD_MODE="${DEPLOY_BUILD_MODE:-full}"
+PULL_IMAGE="${DEPLOY_PULL_IMAGE:-}"
+RECREATE_SCOPE="${DEPLOY_RECREATE_SCOPE:-apps}"
 NODE_BASE_IMAGE="${DEPLOY_NODE_BASE_IMAGE:-node:22-bookworm-slim}"
 DEPRECATED_NODE_BASE_CACHE_WARNING_EMITTED=0
 if [[ -n "${DEPLOY_NODE_BASE_CACHE_IMAGE+x}" ]]; then
@@ -174,6 +191,16 @@ while [[ $# -gt 0 ]]; do
     --mode)
       [[ $# -ge 2 ]] || fail "Missing value for $1"
       BUILD_MODE="$2"
+      shift 2
+      ;;
+    --pull-image)
+      [[ $# -ge 2 ]] || fail "Missing value for $1"
+      PULL_IMAGE="$2"
+      shift 2
+      ;;
+    --recreate-scope)
+      [[ $# -ge 2 ]] || fail "Missing value for $1"
+      RECREATE_SCOPE="$2"
       shift 2
       ;;
     --node-base-image)
@@ -267,12 +294,23 @@ fi
 [[ -n "$REMOTE" ]] || fail "Missing remote target. Pass <user@host> or set DEPLOY_REMOTE."
 
 case "$BUILD_MODE" in
-  auto|full|dist-only)
+  auto|full|dist-only|pull)
     ;;
   *)
-    fail "Invalid build mode: ${BUILD_MODE}. Expected auto, full, or dist-only."
+    fail "Invalid build mode: ${BUILD_MODE}. Expected auto, full, dist-only, or pull."
     ;;
 esac
+
+case "$RECREATE_SCOPE" in
+  apps|stack) ;;
+  *) fail "Invalid recreate scope: ${RECREATE_SCOPE}. Expected apps or stack." ;;
+esac
+if [[ "$BUILD_MODE" == "pull" ]]; then
+  [[ "$PULL_IMAGE" =~ ^ghcr\.io/([a-z0-9._-]+/)+[a-z0-9._-]+@sha256:[a-f0-9]{64}$ ]] \
+    || fail "Pull mode requires --pull-image ghcr.io/owner/image@sha256:<64 lowercase hex characters>"
+elif [[ -n "$PULL_IMAGE" ]]; then
+  fail "--pull-image requires --mode pull"
+fi
 
 case "$ALLOW_UNLABELED_DIST_BASE" in
   0|1|true|false|yes|no)
@@ -293,6 +331,9 @@ esac
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 BUILD_PLATFORM="linux/amd64"
+# One checksum definition for local builds, dist overlays and CI publication.
+# shellcheck source=./scripts/deploy-metadata.sh
+source "${SCRIPT_DIR}/deploy-metadata.sh"
 
 VERIFY_VIA_SSH=0
 if [[ -z "$VERIFY_URL" ]]; then
@@ -317,6 +358,12 @@ ROLLBACK_IMAGE_TAG=""
 IMAGE_CANDIDATE_TAG=""
 CLEAN_FULL_BASE_TAG=""
 REMOTE_DIST_CONTEXT_DIR=""
+REMOTE_INFRA_CONTEXT_DIR=""
+REMOTE_CANDIDATE_COMPOSE=""
+INFRASTRUCTURE_BASELINE=""
+POSTGRES_BASELINE=""
+PHASE_STARTED_SECONDS=0
+DEPLOY_STARTED_SECONDS=$SECONDS
 CANDIDATE_IS_FULL_BUILD=0
 ROLLBACK_IMAGE_AVAILABLE=0
 ROLLBACK_RELEASE_FILES_CAPTURED=0
@@ -360,26 +407,14 @@ for file in \
   README.md \
   docker-compose.production.yml \
   scripts/deploy-production.sh \
+  scripts/deploy-metadata.sh \
+  scripts/deploy-infrastructure.mjs \
   scripts/verify-desktop-lifecycle-v2-evidence.mjs
 do
   if [[ -e "${ROOT_DIR}/${file}" ]]; then
     REMOTE_RELEASE_FILES+=("$file")
   fi
 done
-
-DEPENDENCY_MANIFEST_FILES=(
-  Dockerfile
-  package.json
-  pnpm-lock.yaml
-  pnpm-workspace.yaml
-  apps/dashboard/package.json
-  apps/runtime/package.json
-  packages/contracts/package.json
-  packages/db/package.json
-  packages/fansly/package.json
-  packages/platform-core/package.json
-  packages/shared/package.json
-)
 
 DIST_OVERLAY_PATHS=(
   apps/dashboard/dist
@@ -454,7 +489,8 @@ acquire_local_deploy_lock() {
 
 release_remote_deploy_lock() {
   [[ "${REMOTE_DEPLOY_LOCK_ACQUIRED:-0}" == "1" ]] || return 0
-  run_remote "set -euo pipefail; if [[ -d ${REMOTE_DEPLOY_LOCK_DIR_ESCAPED} ]]; then if [[ -f ${REMOTE_DEPLOY_LOCK_DIR_ESCAPED}/owner ]] && [[ \"\$(cat ${REMOTE_DEPLOY_LOCK_DIR_ESCAPED}/owner)\" == $(printf '%q' "$DEPLOY_RUN_ID") ]]; then rm -rf ${REMOTE_DEPLOY_LOCK_DIR_ESCAPED}; else printf '[deploy] remote lock owner changed; leaving %s in place\n' $(printf '%q' "$REMOTE_DEPLOY_LOCK_DIR") >&2; exit 1; fi; fi"
+  run_remote "set -euo pipefail; if [[ -d ${REMOTE_DEPLOY_LOCK_DIR_ESCAPED} ]]; then if [[ -f ${REMOTE_DEPLOY_LOCK_DIR_ESCAPED}/owner ]] && [[ \"\$(cat ${REMOTE_DEPLOY_LOCK_DIR_ESCAPED}/owner)\" == $(printf '%q' "$DEPLOY_RUN_ID") ]]; then rm -rf ${REMOTE_DEPLOY_LOCK_DIR_ESCAPED}; else printf '[deploy] remote lock owner changed; leaving %s in place\n' $(printf '%q' "$REMOTE_DEPLOY_LOCK_DIR") >&2; exit 1; fi; fi" \
+    || return 1
   REMOTE_DEPLOY_LOCK_ACQUIRED=0
 }
 
@@ -468,6 +504,11 @@ cleanup_deploy() {
 
   if [[ -n "${REMOTE_DIST_CONTEXT_DIR:-}" ]]; then
     remove_remote_dist_context || log "Unable to remove remote dist context ${REMOTE_DIST_CONTEXT_DIR}"
+  fi
+
+  if [[ -n "${REMOTE_INFRA_CONTEXT_DIR:-}" ]]; then
+    run_remote "rm -rf $(printf '%q' "$REMOTE_INFRA_CONTEXT_DIR")" \
+      || log "Unable to remove deploy infrastructure context"
   fi
 
   if [[ "${REMOTE_DEPLOY_LOCK_ACQUIRED:-0}" == "1" ]]; then
@@ -712,7 +753,9 @@ quiesce_remote_legacy_sync_services() {
 restore_quiesced_sync_services() {
   [[ "${LEGACY_SYNC_QUIESCED:-0}" == "1" ]] || return 0
   log "Restarting the quiesced scheduler and worker behind the permanent DB fence"
-  run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}; ${REMOTE_COMPOSE} up -d scheduler worker" \
+  # Resume the existing containers only. Converging dependencies with `up` here
+  # could recreate PostgreSQL after the infrastructure guard just rejected drift.
+  run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}; ${REMOTE_COMPOSE} start scheduler worker" \
     || return 1
   LEGACY_SYNC_QUIESCED=0
 }
@@ -1074,30 +1117,7 @@ verify_post_deploy_image_labels() {
   log "Verifying running image labels"
   verify_service_image_labels api
   verify_service_image_labels worker
-}
-
-calculate_dependency_checksum() {
-  (
-    cd "$ROOT_DIR"
-    local file
-    for file in "${DEPENDENCY_MANIFEST_FILES[@]}"; do
-      [[ -f "$file" ]] || fail "Dependency checksum file is missing: $file"
-      printf 'file:%s\n' "$file"
-      shasum -a 256 "$file"
-    done
-  ) | shasum -a 256 | awk '{print $1}'
-}
-
-calculate_source_revision() {
-  local revision
-  if revision="$(git -C "$ROOT_DIR" rev-parse --short=12 HEAD 2>/dev/null)"; then
-    if [[ -n "$(git -C "$ROOT_DIR" status --porcelain --untracked-files=no 2>/dev/null)" ]]; then
-      revision="${revision}-dirty"
-    fi
-    printf '%s' "$revision"
-  else
-    printf 'unknown'
-  fi
+  verify_service_image_labels scheduler
 }
 
 ensure_node_base_image() {
@@ -1156,6 +1176,81 @@ load_candidate_image() {
   docker save "$IMAGE_CANDIDATE_TAG" | ssh "${SSH_ARGS[@]}" "$REMOTE" docker load >/dev/null
 }
 
+validate_pull_checkout() {
+  [[ "$BUILD_MODE" == "pull" ]] || return 0
+  local revision untracked
+  revision="$(calculate_source_revision)" || { log "Unable to identify pull checkout"; return 1; }
+  [[ "$revision" =~ ^[a-f0-9]{12}$ && "$revision" == "$APP_SOURCE_REVISION" ]] \
+    || { log "Pull deploy requires the unchanged, clean checkout of the image revision"; return 1; }
+  [[ "$(calculate_dependency_checksum)" == "$APP_DEPENDENCY_CHECKSUM" ]] \
+    || { log "Dependency manifests changed during pull deploy"; return 1; }
+  # git status --untracked-files=no alone misses SQL that the release preflight
+  # sees on disk but the CI image could not contain. Generated dist is ignored.
+  untracked="$(git -C "$ROOT_DIR" ls-files --others --exclude-standard -- apps packages scripts \
+    Dockerfile .dockerignore docker-compose.production.yml .env.production.example README.md)" \
+    || { log "Unable to check untracked release inputs"; return 1; }
+  [[ -z "$untracked" ]] || { log "Pull checkout contains untracked release inputs; commit or move them first"; return 1; }
+}
+
+pull_candidate_image() {
+  local metadata
+  log "Pulling immutable candidate ${PULL_IMAGE} on ${REMOTE}"
+  run_remote "set -euo pipefail; docker pull --platform=$(printf '%q' "$BUILD_PLATFORM") $(printf '%q' "$PULL_IMAGE")" \
+    || return 1
+  metadata="$(run_remote "docker image inspect --format '{{.Os}}/{{.Architecture}}|{{index .Config.Labels \"agency-hub.source-revision\"}}|{{index .Config.Labels \"agency-hub.dependency-checksum\"}}' $(printf '%q' "$PULL_IMAGE")")" \
+    || return 1
+  [[ "$metadata" == "${BUILD_PLATFORM}|${APP_SOURCE_REVISION}|${APP_DEPENDENCY_CHECKSUM}" ]] \
+    || { log "Pulled candidate platform/revision/checksum does not match this checkout"; return 1; }
+  # Retag only the digest we inspected. No lookup by mutable release tag.
+  run_remote "set -euo pipefail; docker tag $(printf '%q' "$PULL_IMAGE") $(printf '%q' "$IMAGE_CANDIDATE_TAG")" \
+    || return 1
+  log "Pulled candidate identity verified before service changes"
+}
+
+prepare_remote_infrastructure_check() {
+  [[ "$RECREATE_SCOPE" == "apps" ]] || return 0
+  REMOTE_INFRA_CONTEXT_DIR="/tmp/agency-hub-infra-${DEPLOY_RUN_ID}"
+  local context project
+  context="$(printf '%q' "$REMOTE_INFRA_CONTEXT_DIR")"
+  project="$(run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}; id=\$(${REMOTE_COMPOSE} ps -q postgres); [[ -n \"\$id\" ]]; docker inspect --format '{{index .Config.Labels \"com.docker.compose.project\"}}' \"\$id\"")" \
+    || fail "App release requires an existing PostgreSQL container"
+  [[ "$project" =~ ^[a-z0-9][a-z0-9_-]*$ ]] || fail "Cannot identify existing Compose project"
+  # Match production's project directory so relative bind/env paths and default
+  # network/volume names do not depend on this temporary YAML file's location.
+  REMOTE_CANDIDATE_COMPOSE="${REMOTE_RUNTIME_IMAGE_ENV} docker compose --project-name $(printf '%q' "$project") --project-directory ${REMOTE_APP_DIR_ESCAPED} --env-file ${REMOTE_APP_DIR_ESCAPED}/.env.production -f ${context}/docker-compose.production.yml"
+  ssh "${SSH_ARGS[@]}" "$REMOTE" \
+    "mkdir -p ${context} && cat > ${context}/docker-compose.production.yml" \
+    <"${ROOT_DIR}/docker-compose.production.yml" || fail "Unable to stage Compose preflight"
+  INFRASTRUCTURE_BASELINE="$(run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}; ${REMOTE_COMPOSE} config --format json" \
+    | node "${SCRIPT_DIR}/deploy-infrastructure.mjs")" || fail "Unable to read current infrastructure configuration"
+}
+
+verify_remote_infrastructure_unchanged() {
+  [[ "$RECREATE_SCOPE" == "apps" ]] || return 0
+  local compose="${1:-$REMOTE_CANDIDATE_COMPOSE}"
+  local fingerprint current expected_hash expected_image current_id config_hash image_id state health project
+  fingerprint="$(run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}; ${compose} config --format json" \
+    | node "${SCRIPT_DIR}/deploy-infrastructure.mjs")" || return 1
+  [[ -n "$INFRASTRUCTURE_BASELINE" && "$fingerprint" == "$INFRASTRUCTURE_BASELINE" ]] \
+    || { log "PostgreSQL or shared Compose configuration differs"; return 1; }
+  expected_hash="$(run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}; ${compose} config --hash postgres")" || return 1
+  expected_hash="${expected_hash#postgres }"
+  [[ "$expected_hash" =~ ^[a-f0-9]{64}$ ]] || { log "Invalid PostgreSQL config hash"; return 1; }
+  expected_image="$(run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}; image=\$(${compose} config --images postgres); [[ -n \"\$image\" ]]; docker image inspect --format '{{.Id}}' \"\$image\"")" || return 1
+  current="$(run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}; id=\$(${REMOTE_COMPOSE} ps -q postgres); [[ -n \"\$id\" ]]; docker inspect --format '{{.Id}}|{{index .Config.Labels \"com.docker.compose.config-hash\"}}|{{.Image}}|{{.State.Status}}|{{if .State.Health}}{{.State.Health.Status}}{{end}}|{{index .Config.Labels \"com.docker.compose.project\"}}' \"\$id\"")" || return 1
+  IFS='|' read -r current_id config_hash image_id state health project <<<"$current"
+  [[ "$current_id" =~ ^[a-f0-9]{64}$ && "$expected_image" =~ ^sha256:[a-f0-9]{64}$ \
+    && "$config_hash" == "$expected_hash" && "$image_id" == "$expected_image" \
+    && "$state" == "running" && "$health" == "healthy" && -n "$project" ]] \
+    || { log "PostgreSQL is unavailable, unhealthy, or differs from the planned app release"; return 1; }
+  if [[ -n "$POSTGRES_BASELINE" && "$current" != "$POSTGRES_BASELINE" ]]; then
+    log "PostgreSQL container changed during deployment"
+    return 1
+  fi
+  POSTGRES_BASELINE="$current"
+  log "App release preserves existing healthy PostgreSQL and shared infrastructure"
+}
+
 read_remote_clean_full_base_dependency_checksum() {
   local template
   template='{{ index .Config.Labels "agency-hub.dependency-checksum" }}'
@@ -1198,8 +1293,8 @@ copy_dist_overlay_path() {
   local target_path="${DIST_CONTEXT_DIR}/${relative_path}"
 
   [[ -e "$source_path" ]] || fail "Dist-only deploy output is missing: ${relative_path}"
-  mkdir -p "$(dirname "$target_path")"
-  cp -R "$source_path" "$target_path"
+  mkdir -p "$(dirname "$target_path")" || return 1
+  cp -R "$source_path" "$target_path" || return 1
 }
 
 prune_macos_metadata_files() {
@@ -1209,9 +1304,9 @@ prune_macos_metadata_files() {
 
 create_dist_overlay_context() {
   DIST_CONTEXT_DIR="${TEMP_DIR}/dist-overlay-context"
-  mkdir -p "$DIST_CONTEXT_DIR"
+  mkdir -p "$DIST_CONTEXT_DIR" || return 1
 
-  cat >"${DIST_CONTEXT_DIR}/Dockerfile" <<EOF
+  cat >"${DIST_CONTEXT_DIR}/Dockerfile" <<EOF || return 1
 FROM ${CLEAN_FULL_BASE_TAG}
 
 ARG APP_DEPENDENCY_CHECKSUM=unknown
@@ -1228,7 +1323,7 @@ EOF
 
   local path
   for path in "${DIST_OVERLAY_PATHS[@]}"; do
-    copy_dist_overlay_path "$path"
+    copy_dist_overlay_path "$path" || return 1
   done
   prune_macos_metadata_files "$DIST_CONTEXT_DIR"
 }
@@ -1378,6 +1473,10 @@ build_candidate_image() {
       CANDIDATE_IS_FULL_BUILD=0
       build_dist_only_candidate_image || fail "Dist-only candidate image build failed"
       ;;
+    pull)
+      CANDIDATE_IS_FULL_BUILD=0
+      pull_candidate_image || fail "Unable to pull and verify candidate image"
+      ;;
     auto)
       if build_full_candidate_image; then
         load_candidate_image || fail "Unable to load candidate image on remote"
@@ -1523,7 +1622,9 @@ run_pre_recreate_safe_migrations() {
     || fail "Pre-recreate migration through 0097 failed; current API was left running"
 }
 
-require_command docker
+if [[ "$BUILD_MODE" != "pull" ]]; then
+  require_command docker
+fi
 require_command ssh
 require_command tar
 require_command curl
@@ -1551,6 +1652,8 @@ LIFECYCLE_EVIDENCE_FILE="${TEMP_DIR}/desktop-lifecycle-v2-evidence.json"
 LIFECYCLE_ARTIFACT_DIR="${TEMP_DIR}/desktop-lifecycle-v2-artifacts"
 
 initialize_deploy_metadata_and_tags
+validate_pull_checkout || fail "Pull checkout validation failed"
+start_phase preflight
 acquire_local_deploy_lock
 preflight_migration_files
 acquire_remote_deploy_lock
@@ -1562,8 +1665,17 @@ verify_remote_no_capture_rewrite_in_flight \
 capture_remote_rollback_image
 capture_remote_release_files
 
+finish_phase preflight
+start_phase candidate
 build_candidate_image
+finish_phase candidate
+start_phase candidate-verification
+validate_pull_checkout || fail "Pull checkout changed during candidate preparation"
 verify_candidate_lifecycle_capability
+prepare_remote_infrastructure_check
+verify_remote_infrastructure_unchanged || fail "App release would change PostgreSQL/infrastructure; review an explicit --recreate-scope stack deployment"
+finish_phase candidate-verification
+start_phase migrations
 capture_remote_schema_migrations "$SCHEMA_BEFORE_FILE" \
   || fail "Unable to capture remote schema migration state before pre-recreate migration"
 SCHEMA_BASELINE_CAPTURED=1
@@ -1575,6 +1687,8 @@ run_pre_recreate_safe_migrations
 verify_remote_legacy_onlyfans_dm_messages_retired \
   || fail "Legacy OnlyFans dm_messages retirement proof failed"
 
+finish_phase migrations
+start_phase release-sync
 log "Syncing release files to ${REMOTE}:${APP_DIR}"
 tar -C "$ROOT_DIR" -cf - "${REMOTE_RELEASE_FILES[@]}" | ssh "${SSH_ARGS[@]}" "$REMOTE" \
   "mkdir -p ${REMOTE_APP_DIR_ESCAPED} && tar -xf - -C ${REMOTE_APP_DIR_ESCAPED}" \
@@ -1586,6 +1700,8 @@ run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED} && test -f .env.prod
 SYNC_MONITORING_TOKEN="$(read_remote_env_value "HEALTH_SYNC_MONITORING_TOKEN")" \
   || fail_after_release_sync "Unable to read monitoring token after syncing release files"
 
+finish_phase release-sync
+start_phase recreate
 log "Recreating the remote production stack"
 if [[ "$LIFECYCLE_FIRST_ENABLE" == "1" ]]; then
   # The owner binding can be revoked or transferred while a long candidate
@@ -1602,14 +1718,22 @@ fi
 # must not be blocked by a rewrite it is arguably rescuing.
 verify_remote_no_capture_rewrite_in_flight \
   || fail_after_release_sync "A capture rewrite run started during the build on ${REMOTE}; recreating the containers now would kill it mid-walk"
+validate_pull_checkout || fail_after_release_sync "Pull checkout changed before promotion"
+verify_remote_infrastructure_unchanged "$REMOTE_COMPOSE" || fail_after_release_sync "PostgreSQL/infrastructure changed during deploy; refusing app-only promotion"
 run_remote "set -euo pipefail; docker tag $(printf '%q' "$IMAGE_CANDIDATE_TAG") $(printf '%q' "$IMAGE_TAG")" \
   || fail_after_release_sync "Unable to promote candidate image tag after validation"
+RECREATE_SERVICES=""
+if [[ "$RECREATE_SCOPE" == "apps" ]]; then
+  RECREATE_SERVICES="api worker scheduler"
+fi
 STACK_RECREATED=1
-if ! run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED} && ${REMOTE_COMPOSE} up -d --remove-orphans --force-recreate --no-build"; then
+if ! run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED} && ${REMOTE_COMPOSE} up -d --remove-orphans --force-recreate --no-build ${RECREATE_SERVICES}"; then
   ROLLBACK_COMPOSE_RECREATE_FAILED=1
   fail "docker compose failed while recreating the production stack"
 fi
 LEGACY_SYNC_QUIESCED=0
+finish_phase recreate
+start_phase service-health
 
 log "Waiting for ${VERIFY_URL%/}/api/v1/health"
 wait_for_api_health "$HEALTH_FILE" || fail "API health never reached 200 at ${VERIFY_URL%/}/api/v1/health"
@@ -1623,6 +1747,8 @@ log "Waiting for the scheduler container healthcheck"
 wait_for_scheduler_health || fail "Scheduler container never reached a healthy state"
 
 verify_post_deploy_image_labels
+finish_phase service-health
+start_phase sync-health
 
 if [[ -n "$SYNC_MONITORING_TOKEN" ]]; then
   log "Verifying sync health endpoint"
@@ -1632,12 +1758,17 @@ else
   log "Skipping protected sync health verification because HEALTH_SYNC_MONITORING_TOKEN is not set"
 fi
 
+finish_phase sync-health
+start_phase dashboard
 log "Verifying same-origin dashboard delivery"
 DASHBOARD_STATUS_CODE="$(curl_status "$DASHBOARD_FILE" "${VERIFY_URL%/}/login" || true)"
 [[ "$DASHBOARD_STATUS_CODE" == "200" ]] || fail "Unexpected /login status: ${DASHBOARD_STATUS_CODE}"
 grep -qi '<!doctype html>' "$DASHBOARD_FILE" || fail "Dashboard route did not return HTML"
 grep -q 'id="root"' "$DASHBOARD_FILE" || fail "Dashboard HTML is missing the root mount"
 
+finish_phase dashboard
+log "Production verified; elapsed_seconds=$((SECONDS - DEPLOY_STARTED_SECONDS))"
+start_phase release-finalization
 publish_remote_clean_full_base_image \
   || fail "Deployment is healthy but the pinned clean full image tag could not be published"
 
@@ -1645,8 +1776,11 @@ publish_remote_clean_full_base_image \
 # deploy is never failed by cleanup.
 gc_remote_deploy_images || log "Image GC step failed; continuing"
 
+finish_phase release-finalization
+start_phase local-cli
 rebuild_local_hub_cli || log "WARNING: the local hub CLI rebuild failed; run scripts/rebuild-hub-cli-prod.sh ${APP_SOURCE_REVISION} by hand before any agent read"
 
-log "Deployment verified successfully"
+finish_phase local-cli
+log "Deployment verified successfully; elapsed_seconds=$((SECONDS - DEPLOY_STARTED_SECONDS))"
 log "API health: ${VERIFY_URL%/}/api/v1/health"
 log "Sync health: ${VERIFY_URL%/}/api/v1/health/sync (status ${SYNC_STATUS_CODE})"
