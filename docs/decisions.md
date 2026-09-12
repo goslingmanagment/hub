@@ -313,6 +313,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 313 | Fansly A0 reason coverage | Retain six additional bounded pre-apply reason counters; legacy and unavailable offline categories remain null, without changing sweep policy or completion semantics. |
 | 314 | Fansly C2a projection audit | Compare retained earnings snapshots with full projection rows in one bounded read-only snapshot; unavailable bodies, detached data and projection lag prevent acceptance. |
 | 315 | Empty observation replay heads | Probe actual version/source/kind index prefixes before an unrestricted scan head; keep ordered pages and scoped replay unchanged. |
+| 317 | Fansly C2a compressed snapshots and pagination | Bound decoded JSONB and numeric expansion before export; group eight psql statements per network exchange while retaining snapshot, completeness and timeout checks. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -12994,3 +12995,43 @@ are bounded read-only query probes, not a production-wide CPU claim. A local
 240,000-row correlated fixture compares the actual generated SQL with the old
 selector and checks empty and populated heap work, alongside exact result and
 scope parity. Independent review and release verification remain required.
+
+## Decision 317: Complete bounded C2a reads of compressed snapshots (2026-09-13)
+
+The first deployed Decision 314 audit verified Ari-1. Lilly-1 and Lora-3 completed
+with 171 and 1,658 PostgreSQL-compressed bodies unavailable; two larger pages
+hit the local 120-second limit. Lora-1 separately failed the read_only connection
+limit before exporting data. None of these failures justifies a monetary repair.
+
+Forward migrations 0190–0191 retain the existing restricted readers and grants.
+A private PostgreSQL 16 internal alias reads the raw varlena length before
+TOAST decompression. Both inline and CAS copies must fit 64 KiB before equality
+or parsing; CAS account, access, codec and catalog-size checks still precede
+body lookup. Installation and each reader call reject an unvalidated PostgreSQL
+major version, including after pg_upgrade.
+
+Binary JSONB size does not bound decimal text expansion. Export only the six
+parser inputs, at most 512 rows, strings up to 256 bytes, and numerics with
+absolute value at most 1e100 and scale at most 100. Unsupported shapes remain
+unavailable. The sanitized JSON must also fit 64 KiB. This changes audit access,
+not the production parser or financial semantics.
+
+The exporter groups at most eight independent psql statements per network
+exchange. Each page function executes once in a materialized expression;
+psql keeps and quotes the continuation locally. Frozen counts determine the
+exact number of pages, including empty cohorts and exact multiples of 100.
+Validate every response's scope, order, cursor and exhaustion before continuing.
+The transport bounds each JSON line and the response group, refuses unexpected
+output, and withholds a report after any incomplete group or failed cleanup.
+Statements retain their 15-second limit. The local session and remote psql both
+have 120-second limits; remote cleanup escalates after one second.
+
+No flag, provider call, repair, selection or cadence changes. Re-run each page's
+read-only audit after deployment. A completed export with unavailable bodies or
+nonmatching outcomes is still unverified. Applied migrations remain immutable.
+Rollback may restore the previous reader through a forward migration or stop
+using the audit; retained evidence and financial data are unchanged.
+
+Numbered from main e222b2df (Decision 314), with 315 reserved for the deployed
+replay selector and 316 for deployment optimization by agreement with their
+owners. See the [runbook](runbooks/fansly-earnings-correctness.md).

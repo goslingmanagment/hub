@@ -4,59 +4,54 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { exportEarningsAudit } from "../scripts/fansly-events/earnings-audit-export.ts";
+import { earningsAuditPsql } from "./helpers/earnings-audit-psql.ts";
 import { auditRow, earningsAuditFixture } from "./helpers/earnings-audit-fixture.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 
 let db: StartedTestDatabase;
 let f: Awaited<ReturnType<typeof earningsAuditFixture>>;
 let directory: string;
+let psql: Awaited<ReturnType<typeof earningsAuditPsql>>;
 beforeAll(async () => {
   const started = await startIntegrationTestDatabase();
   if (!started) throw new Error("Docker Postgres is required");
   db = started;
+  psql = await earningsAuditPsql(db);
   directory = await mkdtemp(join(tmpdir(), "hub-earnings-export-"));
 }, 120_000);
-afterAll(async () => { await db?.stop(); await rm(directory, { recursive: true, force: true }); });
+afterAll(async () => { await psql?.close(); await db?.stop(); await rm(directory, { recursive: true, force: true }); });
 beforeEach(async () => {
   await resetIntegrationDatabase(db.pool);
   f = await earningsAuditFixture(db);
-  await db.pool.query(`
-    DO $$ BEGIN
-      IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'read_only') THEN CREATE ROLE read_only; END IF;
-    END $$;
-    GRANT EXECUTE ON FUNCTION fansly_earnings_audit_scope(text,timestamptz,timestamptz) TO read_only;
-    GRANT EXECUTE ON FUNCTION fansly_earnings_audit_observations(jsonb,timestamptz,bigint,integer) TO read_only;
-    GRANT EXECUTE ON FUNCTION fansly_earnings_audit_projection(jsonb,bigint,text,integer) TO read_only;
-  `);
 });
 
 async function collect(name: string, options: { wrongRole?: boolean; failRead?: boolean; failCleanup?: boolean } = {}) {
-  const client = await db.pool.connect();
   const outputDirectory = join(directory, name);
-  try {
-    if (!options.wrongRole) await client.query("set role read_only");
-    const result = await exportEarningsAudit({
-      page: f.page.label, from: new Date(Date.now() - 86400_000).toISOString(),
-      to: new Date().toISOString(), outputDirectory,
-    }, () => ({
+  const result = await exportEarningsAudit({
+    page: f.page.label, from: new Date(Date.now() - 86400_000).toISOString(),
+    to: new Date().toISOString(), outputDirectory,
+  }, () => {
+    const reader = psql.reader();
+    return {
       async read(sql) {
-        if (options.failRead && sql.includes("fansly_earnings_audit_observations")) {
-          throw new Error("Test connection interruption");
+        const value = await reader.read(sql);
+        if (options.wrongRole && sql.includes("BEGIN")) {
+          if (typeof value !== "object" || value === null) throw new Error("Missing test identity");
+          return { ...value, role: "postgres" };
         }
-        const results = await client.query(sql);
-        const last = Array.isArray(results) ? results.findLast(result => result.rows.length > 0) : results;
-        if (!last?.rows[0]) throw new Error("Missing database JSON result");
-        return Object.values(last.rows[0])[0];
+        return value;
+      },
+      async readMany(sql, count) {
+        if (options.failRead) throw new Error("Test connection interruption");
+        return reader.readMany(sql, count);
       },
       async close() {
-        await client.query("rollback");
-        return { stderr: "", error: options.failCleanup ? "Test cleanup failure" : null };
+        const cleanup = await reader.close();
+        return { ...cleanup, error: options.failCleanup ? "Test cleanup failure" : cleanup.error };
       },
-    }));
-    return { result, outputDirectory };
-  } finally {
-    await client.query("rollback"); await client.query("reset role"); client.release();
-  }
+    };
+  });
+  return { result, outputDirectory };
 }
 
 async function seed() {

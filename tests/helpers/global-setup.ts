@@ -20,6 +20,8 @@ declare module "vitest" {
   interface ProvidedContext {
     /** Null when Docker was unavailable and no cluster could be started. */
     testDbAdminUrl: string | null;
+    /** Existing Postgres 16 container, for tests exercising its real psql client. */
+    testDbContainerId: string | null;
   }
 }
 
@@ -54,6 +56,7 @@ export default async function setup({ provide }: {
   provide: (key: string, value: unknown) => void;
 }) {
   let container: StartedTestContainer | null = null;
+  provide("testDbContainerId", null);
 
   try {
     container = await new GenericContainer("postgres:16")
@@ -90,6 +93,7 @@ export default async function setup({ provide }: {
     return async () => undefined;
   }
 
+  provide("testDbContainerId", container.getId());
   const base = `postgres://postgres:postgres@${container.getHost()}:${container.getMappedPort(5432)}`;
   const adminUrl = `${base}/postgres`;
   const adminPool = createPool(adminUrl);

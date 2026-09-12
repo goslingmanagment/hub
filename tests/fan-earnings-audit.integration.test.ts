@@ -116,7 +116,7 @@ describe("C2a bounded earnings audit readers", () => {
     expect(compression.rows[0].compression).not.toBeNull();
     const rows = await observations();
     expect(rows.map(row => row.status)).toEqual([
-      "compressed_body", "body_limit", "compressed_body", "shape_limit",
+      "body_limit", "body_limit", "shape_limit", "shape_limit",
     ]);
     expect(rows.every(row => row.payload === null)).toBe(true);
     const shape = await db.pool.query("select fansly_earnings_audit_payload($1) as payload", [JSON.stringify(Array(513).fill(null))]);
