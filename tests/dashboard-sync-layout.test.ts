@@ -37,7 +37,7 @@ import {
 } from "../apps/dashboard/src/pages/settings/sync/SyncBlockActions.tsx";
 
 type DashboardShellValue = ComponentProps<typeof DashboardShellProvider>["value"];
-type DashboardPage = DashboardShellValue["pages"][number];
+type DashboardPage = OverviewResponse["pages"][number];
 
 function buildPageMetric(value: number | null) {
   return {

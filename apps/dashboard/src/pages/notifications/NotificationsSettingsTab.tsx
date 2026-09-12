@@ -8,6 +8,8 @@ import {
   useUpdateNotificationsSettings,
 } from "@/api/queries";
 import { StatusPanel } from "@/components/shared/StatusPanel";
+import { StaleDataNotice } from "@/components/shared/StaleDataNotice";
+import { ModalShell } from "@/components/shared/ModalShell";
 import { formatRelativeTime } from "@/lib/format";
 
 type DiscoveredChat = { id: string; type: string; title: string };
@@ -17,7 +19,7 @@ function apiErrorMessage(error: unknown): string | undefined {
 }
 
 export function NotificationsSettingsTab() {
-  const { data, isLoading, isError } = useNotificationsSettings();
+  const { data, isLoading, isError, error, refetch, isFetching } = useNotificationsSettings();
   const updateSettings = useUpdateNotificationsSettings();
   const sendTest = useSendTestMessage();
   const discoverChats = useDiscoverTelegramChats();
@@ -26,7 +28,7 @@ export function NotificationsSettingsTab() {
   const [detectedChats, setDetectedChats] = useState<DiscoveredChat[] | null>(null);
   const [botUsername, setBotUsername] = useState<string | null>(null);
 
-  if (isLoading) {
+  if (isLoading && !data) {
     return (
       <StatusPanel
         title="Loading notification settings"
@@ -35,12 +37,13 @@ export function NotificationsSettingsTab() {
     );
   }
 
-  if (isError || !data) {
+  if (!data) {
     return (
       <StatusPanel
         title="Notification settings failed to load"
         description="The notification settings could not be fetched."
         tone="error"
+        action={<button type="button" disabled={isFetching} onClick={() => void refetch()} className="text-sm text-accent underline">Retry</button>}
       />
     );
   }
@@ -55,11 +58,13 @@ export function NotificationsSettingsTab() {
       | "aiCriticalAlertsEnabled",
     value: boolean,
   ) {
-    updateSettings.mutate({ [field]: value });
+    if (updateSettings.isPending || isError) return;
+    updateSettings.mutate({ [field]: value }, { onError: (mutationError) => toast.error(apiErrorMessage(mutationError) ?? "The setting was not saved") });
   }
 
   function handleReportHourChange(hour: number) {
-    updateSettings.mutate({ reportHourUtc: hour });
+    if (updateSettings.isPending || isError) return;
+    updateSettings.mutate({ reportHourUtc: hour }, { onError: (mutationError) => toast.error(apiErrorMessage(mutationError) ?? "The report hour was not saved") });
   }
 
   // After saving credentials, send a real test so the connection status reflects
@@ -78,7 +83,8 @@ export function NotificationsSettingsTab() {
     });
   }
 
-  function handleSaveCredentials() {
+  async function handleSaveCredentials(): Promise<boolean> {
+    if (updateSettings.isPending || sendTest.isPending || isError) return false;
     const botToken = botTokenRef.current?.value?.trim() || undefined;
     const chatId = chatIdRef.current?.value?.trim() || undefined;
 
@@ -89,38 +95,43 @@ export function NotificationsSettingsTab() {
     const haveChat = !!settings.chatId || !!chatId;
     if (!haveToken || !haveChat) {
       toast.error("Bot token and Chat ID are both required");
-      return;
+      return false;
     }
 
     if (!botToken && !chatId) {
       toast.error("Nothing to update");
-      return;
+      return false;
     }
 
-    updateSettings.mutate({ botToken, chatId }, {
-      onSuccess: () => {
-        setDetectedChats(null);
-        if (botTokenRef.current) botTokenRef.current.value = "";
-        verifyAfterSave();
-      },
-      onError: (error) => toast.error(apiErrorMessage(error) ?? "Failed to save credentials"),
-    });
+    try {
+      await updateSettings.mutateAsync({ botToken, chatId });
+      setDetectedChats(null);
+      if (botTokenRef.current) botTokenRef.current.value = "";
+      verifyAfterSave();
+      return true;
+    } catch (mutationError) {
+      toast.error(apiErrorMessage(mutationError) ?? "Failed to save credentials");
+      return false;
+    }
   }
 
-  function handleClearCredentials() {
-    if (!window.confirm("Clear the stored Telegram bot token and chat ID? Notifications will stop until you reconnect.")) {
-      return;
+  async function handleClearCredentials(): Promise<boolean> {
+    if (updateSettings.isPending || sendTest.isPending || isError) return false;
+    if (!window.confirm("Clear the stored Telegram bot token and chat ID? Environment credentials may become active again. To stop automatic notifications, turn Notifications Enabled off.")) {
+      return false;
     }
-    updateSettings.mutate({ botToken: null, chatId: null }, {
-      onSuccess: () => {
-        toast.success("Stored credentials cleared");
-        setDetectedChats(null);
-        setBotUsername(null);
-        if (botTokenRef.current) botTokenRef.current.value = "";
-        if (chatIdRef.current) chatIdRef.current.value = "";
-      },
-      onError: () => toast.error("Failed to clear credentials"),
-    });
+    try {
+      await updateSettings.mutateAsync({ botToken: null, chatId: null });
+      toast.success("Stored credentials cleared");
+      setDetectedChats(null);
+      setBotUsername(null);
+      if (botTokenRef.current) botTokenRef.current.value = "";
+      if (chatIdRef.current) chatIdRef.current.value = "";
+      return true;
+    } catch {
+      toast.error("Failed to clear credentials");
+      return false;
+    }
   }
 
   // Ask the backend to call getMe + getUpdates so the operator picks their chat
@@ -168,9 +179,11 @@ export function NotificationsSettingsTab() {
   }
 
   const savePending = updateSettings.isPending || sendTest.isPending;
+  const writesUnavailable = savePending || isError;
 
   return (
     <div className="space-y-4">
+      {isError && <div className="flex flex-wrap items-center gap-2"><StaleDataNotice title="Settings refresh failed; your input is kept" error={error} className="flex-1" /><button type="button" disabled={isFetching} onClick={() => void refetch()} className="text-sm text-accent underline">Retry</button></div>}
       {!settings.configured ? (
         <div className="rounded-xl border border-border bg-card p-5">
           <h3 className="mb-1 text-sm font-semibold text-text-primary">Connect Telegram</h3>
@@ -183,6 +196,7 @@ export function NotificationsSettingsTab() {
               <label className="mb-1 block text-[12px] font-medium text-text-secondary">Bot Token</label>
               <input
                 ref={botTokenRef}
+                aria-label="Bot Token"
                 type="password"
                 placeholder="7123456789:AAH..."
                 className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:border-accent focus:outline-none"
@@ -206,15 +220,15 @@ export function NotificationsSettingsTab() {
             />
             <button
               onClick={handleSaveCredentials}
-              disabled={savePending}
+              disabled={writesUnavailable}
               className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-40"
             >
-              {updateSettings.isPending ? "Saving..." : sendTest.isPending ? "Connecting..." : "Save & Connect"}
+              {updateSettings.isPending ? "Saving..." : sendTest.isPending ? "Connecting..." : "Save & Send Test"}
             </button>
           </div>
         </div>
       ) : (
-        <div className="flex items-center justify-between rounded-xl border border-border bg-card p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card p-4">
           <div className="flex items-center gap-3">
             <div className={`h-2.5 w-2.5 rounded-full ${
               settings.connectionStatus === "connected" ? "bg-green"
@@ -254,6 +268,7 @@ export function NotificationsSettingsTab() {
               botTokenRef={botTokenRef}
               chatIdRef={chatIdRef}
               isPending={savePending}
+              writesUnavailable={isError}
               onDetect={handleDetectChats}
               isDetecting={discoverChats.isPending}
               detectedChats={detectedChats}
@@ -262,7 +277,7 @@ export function NotificationsSettingsTab() {
             />
             <button
               onClick={handleSendTest}
-              disabled={sendTest.isPending}
+              disabled={writesUnavailable}
               className="rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-white hover:opacity-90 disabled:opacity-40"
             >
               {sendTest.isPending ? "Sending..." : "Send Test"}
@@ -272,6 +287,7 @@ export function NotificationsSettingsTab() {
       )}
 
       <ToggleRow
+        disabled={writesUnavailable}
         label="Notifications Enabled"
         description="When off, blocks automatic incident alerts and scheduled daily reports. Manual actions still work."
         checked={settings.enabled}
@@ -284,6 +300,8 @@ export function NotificationsSettingsTab() {
           <div className="text-[12px] text-text-muted">Hour when the daily revenue report is sent</div>
         </div>
         <select
+          aria-label="Daily report hour in UTC"
+          disabled={writesUnavailable}
           value={settings.reportHourUtc}
           onChange={(event) => handleReportHourChange(Number(event.target.value))}
           className="rounded-lg border border-border bg-card px-3 py-1.5 text-sm text-text-primary"
@@ -295,6 +313,7 @@ export function NotificationsSettingsTab() {
       </div>
 
       <ToggleRow
+        disabled={writesUnavailable}
         label="Daily Revenue Report"
         description="Send a daily revenue summary via Telegram"
         checked={settings.dailyReportEnabled}
@@ -302,6 +321,7 @@ export function NotificationsSettingsTab() {
       />
 
       <ToggleRow
+        disabled={writesUnavailable}
         label="Sync Failure Alerts"
         description="Send alerts when sync incidents open or resolve"
         checked={settings.syncFailureAlertsEnabled}
@@ -309,8 +329,9 @@ export function NotificationsSettingsTab() {
       />
 
       <ToggleRow
+        disabled={writesUnavailable}
         label="AI Critical Alerts"
-        description="Page critical AI provider failures separately from sync incidents. Defaults off until Stage 1B activation."
+        description="Send critical AI provider alerts separately from sync incident alerts."
         checked={settings.aiCriticalAlertsEnabled}
         onChange={(value) => handleToggle("aiCriticalAlertsEnabled", value)}
       />
@@ -339,6 +360,7 @@ function ChatIdField({
       <div className="flex gap-2">
         <input
           ref={chatIdRef}
+          aria-label="Chat ID"
           type="text"
           defaultValue={defaultValue}
           placeholder="123456789 or -100..."
@@ -379,6 +401,7 @@ function CredentialsEdit({
   botTokenRef,
   chatIdRef,
   isPending,
+  writesUnavailable,
   onDetect,
   isDetecting,
   detectedChats,
@@ -386,11 +409,12 @@ function CredentialsEdit({
   botUsername,
 }: {
   chatId: string | null;
-  onClear: () => void;
-  onSave: () => void;
+  onClear: () => Promise<boolean>;
+  onSave: () => Promise<boolean>;
   botTokenRef: RefObject<HTMLInputElement | null>;
   chatIdRef: RefObject<HTMLInputElement | null>;
   isPending: boolean;
+  writesUnavailable: boolean;
   onDetect: () => void;
   isDetecting: boolean;
   detectedChats: DiscoveredChat[] | null;
@@ -411,14 +435,13 @@ function CredentialsEdit({
   }
 
   return (
-    <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/20" onClick={() => setOpen(false)}>
-      <div className="w-full max-w-md rounded-xl border border-border bg-card p-5 shadow-lg" onClick={(event) => event.stopPropagation()}>
-        <h3 className="mb-3 text-sm font-semibold text-text-primary">Update Telegram Credentials</h3>
+    <ModalShell title="Update Telegram Credentials" onClose={() => { if (!isPending) setOpen(false); }}>
         <div className="space-y-3">
           <div>
             <label className="mb-1 block text-[12px] font-medium text-text-secondary">Bot Token</label>
             <input
               ref={botTokenRef}
+              aria-label="Bot Token"
               type="password"
               placeholder="Paste new token (leave empty to keep current)"
               className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:border-accent focus:outline-none"
@@ -436,30 +459,30 @@ function CredentialsEdit({
             onPick={onPick}
           />
         </div>
-        <div className="mt-4 flex justify-end gap-2">
+        <div className="mt-4 flex flex-wrap justify-end gap-2">
           <button
-            onClick={() => { onClear(); setOpen(false); }}
-            disabled={isPending}
+            onClick={() => void onClear().then((cleared) => { if (cleared) setOpen(false); })}
+            disabled={isPending || writesUnavailable}
             className="rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-semibold text-text-secondary hover:bg-hover disabled:opacity-40"
           >
             Clear Stored Credentials
           </button>
           <button
             onClick={() => setOpen(false)}
+            disabled={isPending}
             className="rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-semibold text-text-secondary hover:bg-hover"
           >
             Cancel
           </button>
           <button
-            onClick={() => { onSave(); setOpen(false); }}
-            disabled={isPending}
+            onClick={() => void onSave().then((saved) => { if (saved) setOpen(false); })}
+            disabled={isPending || writesUnavailable}
             className="rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-white hover:opacity-90 disabled:opacity-40"
           >
-            Save
+            Save & Send Test
           </button>
         </div>
-      </div>
-    </div>
+    </ModalShell>
   );
 }
 
@@ -468,11 +491,13 @@ function ToggleRow({
   description,
   checked,
   onChange,
+  disabled,
 }: {
   label: string;
   description: string;
   checked: boolean;
   onChange: (value: boolean) => void;
+  disabled: boolean;
 }) {
   return (
     <div className="flex items-center justify-between rounded-xl border border-border bg-card p-4">
@@ -483,6 +508,8 @@ function ToggleRow({
       <button
         type="button"
         role="switch"
+        aria-label={label}
+        disabled={disabled}
         aria-checked={checked}
         onClick={() => onChange(!checked)}
         className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${

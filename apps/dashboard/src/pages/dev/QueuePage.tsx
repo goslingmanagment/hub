@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useAdminQueueJobs } from "@/api/queries";
 import { FilterButtons } from "@/components/shared/FilterButtons";
 import { StatusPanel } from "@/components/shared/StatusPanel";
+import { StaleDataNotice } from "@/components/shared/StaleDataNotice";
 import { formatRelativeTime } from "@/lib/format";
 
 const STATE_FILTERS = [
@@ -24,11 +25,11 @@ export function QueuePage() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const params = {
-    state: stateFilter === "all" ? undefined : stateFilter,
+    ...(stateFilter === "all" ? {} : { state: stateFilter }),
     limit: 100,
   };
 
-  const { data, isLoading, isError } = useAdminQueueJobs(params);
+  const { data, isLoading, isError, error } = useAdminQueueJobs(params);
 
   if (isLoading || !data) {
     return isLoading ? (
@@ -44,6 +45,7 @@ export function QueuePage() {
 
   return (
     <div>
+      {isError && <StaleDataNotice error={error} className="mb-4" />}
       <div className="mb-5">
         <h1 className="text-xl font-extrabold text-text-primary">Queue</h1>
         <p className="text-sm text-text-muted mt-1">pg-boss job queue</p>
@@ -57,7 +59,8 @@ export function QueuePage() {
         />
       </div>
 
-      <section className="overflow-hidden rounded-xl border border-border bg-card">
+      <p className="mb-2 text-xs text-text-muted">Up to 100 recent matching records. This is a bounded view, not the full history.</p>
+      <section className="overflow-x-auto rounded-xl border border-border bg-card">
         <table className="w-full border-collapse">
           <thead>
             <tr className="bg-hover-alt">
@@ -88,6 +91,14 @@ export function QueuePage() {
                   key={rowId}
                   className="cursor-pointer border-t border-border transition-colors hover:bg-hover"
                   onClick={() => setExpandedId(isExpanded ? null : rowId)}
+                  tabIndex={0}
+                  aria-expanded={isExpanded}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      setExpandedId(isExpanded ? null : rowId);
+                    }
+                  }}
                 >
                   <td className="px-4 py-3 text-sm text-text-primary font-medium">
                     {job.name ?? "\u2014"}

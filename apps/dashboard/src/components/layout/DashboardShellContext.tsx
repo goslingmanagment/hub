@@ -1,7 +1,8 @@
 import { createContext, useContext, type ReactNode } from "react";
-import type { OverviewResponse } from "@agency_hub_core/contracts";
+import type { AssignedPage } from "@agency_hub_core/contracts";
 
-type PageItem = OverviewResponse["pages"][number];
+// Navigation needs identity, not revenue or a successfully loaded overview.
+type PageItem = Pick<AssignedPage, "id" | "label" | "platform" | "modelSlug" | "modelName" | "username">;
 type PageCatalogState = "loading" | "ready" | "error";
 
 interface DashboardShellValue {
@@ -34,4 +35,3 @@ export function useDashboardShell() {
   }
   return value;
 }
-

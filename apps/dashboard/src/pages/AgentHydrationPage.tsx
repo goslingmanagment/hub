@@ -1,6 +1,9 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
+import type { AgentHydrationRequestDecideBody } from "@agency_hub_core/contracts";
 import { useAgentHydrationRequests, useDecideAgentHydrationRequest } from "@/api/queries";
+import { KernelApiError } from "@/api/sdk";
 import { StatusPanel } from "@/components/shared/StatusPanel";
+import { StaleDataNotice } from "@/components/shared/StaleDataNotice";
 import { formatRelativeTime } from "@/lib/format";
 
 /**
@@ -48,6 +51,82 @@ interface DecisionDraft {
   reason: string;
 }
 
+interface ReviewedRequest {
+  requestRef: string;
+  rowVersion: number;
+  coverageFingerprint: string;
+}
+
+export interface ReviewedHydrationDraft extends DecisionDraft {
+  expectedVersion: number;
+  coverageFingerprint: string;
+}
+
+export function createHydrationDraft(request: ReviewedRequest): ReviewedHydrationDraft {
+  return { ...EMPTY_DRAFT, expectedVersion: request.rowVersion, coverageFingerprint: request.coverageFingerprint };
+}
+
+export function hydrationDraftMatches(draft: ReviewedHydrationDraft, request: ReviewedRequest): boolean {
+  return draft.expectedVersion === request.rowVersion && draft.coverageFingerprint === request.coverageFingerprint;
+}
+
+export function reviewHydrationDraft(draft: ReviewedHydrationDraft, request: ReviewedRequest): ReviewedHydrationDraft {
+  return { ...draft, expectedVersion: request.rowVersion, coverageFingerprint: request.coverageFingerprint, allowMarkRead: false };
+}
+
+export function hydrationApprovalError(draft: DecisionDraft): string | null {
+  if (!Number.isInteger(draft.maxCalls) || draft.maxCalls < 1 || draft.maxCalls > 500) return "Max calls must be a whole number from 1 to 500.";
+  if (!Number.isInteger(draft.maxPages) || draft.maxPages < 1 || draft.maxPages > 500) return "Max pages must be a whole number from 1 to 500.";
+  if (!Number.isInteger(draft.maxCredits) || draft.maxCredits < 0 || draft.maxCredits > 100_000) return "Max credits must be a whole number from 0 to 100,000.";
+  if (!Number.isFinite(draft.expiresInHours) || draft.expiresInHours <= 0 || !Number.isFinite(new Date(Date.now() + draft.expiresInHours * 3_600_000).getTime())) return "Enter a valid positive approval lifetime.";
+  return null;
+}
+
+export function prepareHydrationDecision(
+  request: ReviewedRequest,
+  draft: ReviewedHydrationDraft,
+  decision: "approve" | "reject",
+): { error: string } | { body: AgentHydrationRequestDecideBody } {
+  const error = !hydrationDraftMatches(draft, request)
+    ? "This request changed. Review the current version before deciding."
+    : decision === "approve" ? hydrationApprovalError(draft)
+      : !draft.reason.trim() ? "Enter a reason before rejecting this request." : null;
+  if (error) return { error };
+  return { body: {
+    decision,
+    expectedVersion: draft.expectedVersion,
+    coverageFingerprint: draft.coverageFingerprint,
+    idempotencyKey: crypto.randomUUID(),
+    ...(decision === "approve" ? {
+      maxCalls: draft.maxCalls,
+      maxPages: draft.maxPages,
+      maxCredits: draft.maxCredits,
+      expiresAt: new Date(Date.now() + draft.expiresInHours * 3_600_000).toISOString(),
+      allowMarkReadSideEffect: draft.allowMarkRead,
+    } : { reason: draft.reason.trim() }),
+  } };
+}
+
+export function hydrationDecisionAttempt(
+  previous: AgentHydrationRequestDecideBody | undefined,
+  request: ReviewedRequest,
+  draft: ReviewedHydrationDraft,
+  decision: "approve" | "reject",
+): { error: string } | { body: AgentHydrationRequestDecideBody } {
+  // A manual recovery repeats the exact idempotent request, including expiry.
+  return previous ? { body: previous } : prepareHydrationDecision(request, draft, decision);
+}
+
+export function hydrationDecisionStatusIsDefiniteRefusal(status: number | null): boolean {
+  return status !== null && [400, 401, 403, 404, 409, 422].includes(status);
+}
+
+export function frozenHydrationDecisionSummary(body: AgentHydrationRequestDecideBody): string {
+  return body.decision === "approve"
+    ? `Frozen approval · v${body.expectedVersion} · calls ${body.maxCalls} · pages ${body.maxPages} · credits ${body.maxCredits} · expires ${body.expiresAt} · mark-read ${body.allowMarkReadSideEffect ? "allowed" : "refused"}`
+    : `Frozen rejection · v${body.expectedVersion} · reason: ${body.reason}`;
+}
+
 /**
  * All THREE ceilings, always. The OnlyFans capture lane refuses a job missing any
  * of them and dies on its first lease; one approval buys one attempt, so a form
@@ -65,56 +144,60 @@ const EMPTY_DRAFT: DecisionDraft = {
 
 export function AgentHydrationPage() {
   const [stateFilter, setStateFilter] = useState<string | undefined>("requested");
-  const [drafts, setDrafts] = useState<Record<string, DecisionDraft>>({});
+  const [drafts, setDrafts] = useState<Record<string, ReviewedHydrationDraft>>({});
   const [errors, setErrors] = useState<Record<string, string>>({});
-  const { data, isLoading, isError } = useAgentHydrationRequests({
+  const [attempts, setAttempts] = useState<Record<string, { body: AgentHydrationRequestDecideBody; confirmed: boolean }>>({});
+  const submitting = useRef(false);
+  const { data, isLoading, isError, error: queryError, isFetching, refetch } = useAgentHydrationRequests({
     ...(stateFilter === undefined ? {} : { state: stateFilter }),
     limit: 50,
   });
   const decide = useDecideAgentHydrationRequest();
 
-  const draftFor = (requestRef: string) => drafts[requestRef] ?? EMPTY_DRAFT;
-  const setDraft = (requestRef: string, patch: Partial<DecisionDraft>) => {
+  const draftFor = (request: ReviewedRequest) => drafts[request.requestRef] ?? createHydrationDraft(request);
+  const setDraft = (request: ReviewedRequest, patch: Partial<DecisionDraft>) => {
     setDrafts((current) => ({
       ...current,
-      [requestRef]: { ...(current[requestRef] ?? EMPTY_DRAFT), ...patch },
+      [request.requestRef]: { ...(current[request.requestRef] ?? createHydrationDraft(request)), ...patch },
     }));
   };
 
   async function submit(
-    request: { requestRef: string; rowVersion: number; coverageFingerprint: string },
+    request: ReviewedRequest,
     decision: "approve" | "reject",
   ) {
-    const draft = draftFor(request.requestRef);
+    if (submitting.current || decide.isPending || isError) return;
+    const draft = draftFor(request);
+    if (attempts[request.requestRef]?.confirmed) return;
+    const prepared = hydrationDecisionAttempt(attempts[request.requestRef]?.body, request, draft, decision);
+    if ("error" in prepared) {
+      setErrors((current) => ({ ...current, [request.requestRef]: prepared.error }));
+      return;
+    }
+    // Keep the reviewed version even when the owner submitted untouched defaults.
+    setDrafts((current) => ({ ...current, [request.requestRef]: draft }));
+    submitting.current = true;
+    setAttempts((current) => ({ ...current, [request.requestRef]: { body: prepared.body, confirmed: false } }));
     setErrors((current) => ({ ...current, [request.requestRef]: "" }));
     try {
       await decide.mutateAsync({
         requestRef: request.requestRef,
-        body: {
-          decision,
-          // Both travel back exactly as shown: a decision is bound to the state
-          // it was formed against.
-          expectedVersion: request.rowVersion,
-          coverageFingerprint: request.coverageFingerprint,
-          idempotencyKey: crypto.randomUUID(),
-          ...(decision === "approve"
-            ? {
-              maxCalls: draft.maxCalls,
-              maxPages: draft.maxPages,
-              maxCredits: draft.maxCredits,
-              expiresAt: new Date(
-                Date.now() + draft.expiresInHours * 60 * 60 * 1000,
-              ).toISOString(),
-              allowMarkReadSideEffect: draft.allowMarkRead,
-            }
-            : { reason: draft.reason.trim() || "declined by owner" }),
-        },
+        body: prepared.body,
       });
+      setAttempts((current) => ({ ...current, [request.requestRef]: { body: prepared.body, confirmed: true } }));
     } catch (error) {
+      const definiteRefusal = error instanceof KernelApiError && hydrationDecisionStatusIsDefiniteRefusal(error.status);
+      if (definiteRefusal) setAttempts((current) => {
+        const next = { ...current };
+        delete next[request.requestRef];
+        return next;
+      });
       setErrors((current) => ({
         ...current,
-        [request.requestRef]: error instanceof Error ? error.message : String(error),
+        [request.requestRef]: `${error instanceof Error ? error.message : String(error)}${definiteRefusal ? "" : " The outcome is unknown. Refresh first; any manual retry will reuse the same decision and request key."}`,
       }));
+    } finally {
+      submitting.current = false;
     }
   }
 
@@ -141,15 +224,21 @@ export function AgentHydrationPage() {
       <div className="mb-5">
         <h1 className="text-xl font-extrabold text-text-primary">Hydration requests</h1>
         <p className="mt-1 text-sm text-text-muted">
-          Agents ask for a thread to be deepened. Only a decision here spends anything.
+          Agents ask for a thread to be deepened. Approval permits work within the caps below; rejected requests do not run.
         </p>
       </div>
+
+      {isError && <StaleDataNotice title="Queue refresh failed; decisions are paused" error={queryError} className="mb-4" />}
+      <button type="button" disabled={isFetching} onClick={() => void refetch()} className="mb-4 rounded-lg border border-border px-3 py-1.5 text-sm text-text-secondary disabled:opacity-50">
+        {isFetching ? "Refreshing…" : "Refresh requests"}
+      </button>
 
       <div className="mb-5 flex flex-wrap gap-2">
         {["requested", "approved", "dispatching", "completed", "failed", undefined].map((state) => (
           <button
             key={state ?? "all"}
             type="button"
+            aria-pressed={stateFilter === state}
             onClick={() => setStateFilter(state)}
             className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
               stateFilter === state
@@ -171,9 +260,12 @@ export function AgentHydrationPage() {
 
       <div className="space-y-4">
         {items.map((request) => {
-          const draft = draftFor(request.requestRef);
+          const draft = draftFor(request);
           const error = errors[request.requestRef];
           const decidable = request.state === "requested";
+          const changed = !hydrationDraftMatches(draft, request);
+          const approvalError = hydrationApprovalError(draft);
+          const attempt = attempts[request.requestRef];
           return (
             <div key={request.requestRef} className="rounded-xl border border-border bg-card p-4">
               <div className="flex flex-wrap items-center gap-2">
@@ -247,6 +339,16 @@ export function AgentHydrationPage() {
 
               {decidable && (
                 <div className="mt-4 border-t border-border pt-3">
+                  {changed && (
+                    <div role="alert" className="mb-3 rounded-lg border border-warning/40 bg-warning/10 p-3 text-sm text-text-primary">
+                      Request or coverage changed since your draft (v{draft.expectedVersion} → v{request.rowVersion}). Your limits are preserved; review the current coverage and limits before deciding.
+                      <button type="button" disabled={decide.isPending || isError || Boolean(attempt)} className="mt-2 block rounded-lg border border-border px-3 py-1.5 disabled:opacity-50" onClick={() => {
+                        setDrafts((current) => ({ ...current, [request.requestRef]: reviewHydrationDraft(draft, request) }));
+                        setErrors((current) => ({ ...current, [request.requestRef]: "" }));
+                      }}>I reviewed v{request.rowVersion}; keep limits and reconsider mark-read</button>
+                    </div>
+                  )}
+                  <fieldset disabled={decide.isPending || Boolean(attempt)} className="min-w-0">
                   <div className="flex flex-wrap items-end gap-3">
                     <label className="text-xs text-text-muted">
                       <span className="block font-medium text-text-primary">Max calls</span>
@@ -256,8 +358,8 @@ export function AgentHydrationPage() {
                         max={500}
                         value={draft.maxCalls}
                         onChange={(event) =>
-                          setDraft(request.requestRef, {
-                            maxCalls: Number(event.target.value) || 1,
+                          setDraft(request, {
+                            maxCalls: Number(event.target.value),
                           })}
                         className="mt-1 w-24 rounded-lg border border-border bg-card px-2 py-1 text-sm text-text-primary"
                       />
@@ -270,8 +372,8 @@ export function AgentHydrationPage() {
                         max={500}
                         value={draft.maxPages}
                         onChange={(event) =>
-                          setDraft(request.requestRef, {
-                            maxPages: Number(event.target.value) || 1,
+                          setDraft(request, {
+                            maxPages: Number(event.target.value),
                           })}
                         className="mt-1 w-24 rounded-lg border border-border bg-card px-2 py-1 text-sm text-text-primary"
                       />
@@ -280,12 +382,12 @@ export function AgentHydrationPage() {
                       <span className="block font-medium text-text-primary">Max credits</span>
                       <input
                         type="number"
-                        min={1}
+                        min={0}
                         max={100000}
                         value={draft.maxCredits}
                         onChange={(event) =>
-                          setDraft(request.requestRef, {
-                            maxCredits: Number(event.target.value) || 1,
+                          setDraft(request, {
+                            maxCredits: Number(event.target.value),
                           })}
                         className="mt-1 w-24 rounded-lg border border-border bg-card px-2 py-1 text-sm text-text-primary"
                       />
@@ -297,8 +399,8 @@ export function AgentHydrationPage() {
                         min={1}
                         value={draft.expiresInHours}
                         onChange={(event) =>
-                          setDraft(request.requestRef, {
-                            expiresInHours: Number(event.target.value) || 1,
+                          setDraft(request, {
+                            expiresInHours: Number(event.target.value),
                           })}
                         className="mt-1 w-24 rounded-lg border border-border bg-card px-2 py-1 text-sm text-text-primary"
                       />
@@ -308,7 +410,7 @@ export function AgentHydrationPage() {
                         type="checkbox"
                         checked={draft.allowMarkRead}
                         onChange={(event) =>
-                          setDraft(request.requestRef, { allowMarkRead: event.target.checked })}
+                          setDraft(request, { allowMarkRead: event.target.checked })}
                       />
                       <span>
                         Allow the vendor read to mark this chat READ on the platform (#158)
@@ -325,15 +427,16 @@ export function AgentHydrationPage() {
                       value={draft.reason}
                       maxLength={1000}
                       onChange={(event) =>
-                        setDraft(request.requestRef, { reason: event.target.value })}
+                        setDraft(request, { reason: event.target.value })}
                       className="mt-1 w-full rounded-lg border border-border bg-card px-2 py-1 text-sm text-text-primary"
                     />
                   </label>
+                  </fieldset>
 
                   <div className="mt-3 flex gap-2">
                     <button
                       type="button"
-                      disabled={decide.isPending}
+                      disabled={decide.isPending || isError || changed || approvalError !== null || Boolean(attempt)}
                       onClick={() => void submit(request, "approve")}
                       className="rounded-lg bg-accent px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-50"
                     >
@@ -341,7 +444,7 @@ export function AgentHydrationPage() {
                     </button>
                     <button
                       type="button"
-                      disabled={decide.isPending}
+                      disabled={decide.isPending || isError || changed || !draft.reason.trim() || Boolean(attempt)}
                       onClick={() => void submit(request, "reject")}
                       className="rounded-lg border border-border px-3 py-1.5 text-sm font-semibold text-text-primary disabled:opacity-50"
                     >
@@ -349,15 +452,23 @@ export function AgentHydrationPage() {
                     </button>
                   </div>
 
+                  {approvalError && <p className="mt-2 text-xs text-danger">{approvalError}</p>}
+
                   {error && (
-                    <p className="mt-2 text-xs text-danger">{error}</p>
+                    <p role="alert" className="mt-2 text-xs text-danger">{error}</p>
                   )}
+                  {attempt && <div className="mt-2 text-xs text-text-secondary" role="status">
+                    {attempt.confirmed ? "Decision accepted by the server. Refresh to see its current state." : `Recorded ${attempt.body.decision} request; its limits and expiry are frozen until the outcome is known.`}
+                    <p className="mt-1 break-words">{frozenHydrationDecisionSummary(attempt.body)}</p>
+                    {!attempt.confirmed && error && <button type="button" disabled={decide.isPending || isError} className="mt-2 block rounded-lg border border-border px-3 py-1.5 disabled:opacity-50" onClick={() => void submit(request, attempt.body.decision)}>Retry the same {attempt.body.decision === "approve" ? "approval" : "rejection"}</button>}
+                  </div>}
                 </div>
               )}
             </div>
           );
         })}
       </div>
+      {items.length === 50 && <p className="mt-4 text-xs text-text-muted">Showing the first 50 matching requests. Narrow the status filter to inspect this queue; this view has no older-page control.</p>}
     </div>
   );
 }

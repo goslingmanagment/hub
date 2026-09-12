@@ -3,6 +3,7 @@ import { useSearchParams } from "react-router";
 import { useAdminSyncRunDetail } from "@/api/queries";
 import { getEventDisplaySeverity } from "@/components/shared/EventDetailPanel";
 import { StatusPanel } from "@/components/shared/StatusPanel";
+import { StaleDataNotice } from "@/components/shared/StaleDataNotice";
 import { formatDateTime, formatRelativeTime } from "@/lib/format";
 import type { SyncRunDetailResponse } from "@agency_hub_core/contracts";
 
@@ -20,7 +21,7 @@ export function SyncStatusPage() {
   const [searchParams] = useSearchParams();
   const runId = Number(searchParams.get("runId") ?? "0");
   const isValidRunId = Number.isInteger(runId) && runId > 0;
-  const { data, isLoading, isError } = useAdminSyncRunDetail(isValidRunId ? runId : 0);
+  const { data, isLoading, isError, error } = useAdminSyncRunDetail(isValidRunId ? runId : 0);
 
   const attemptsByStream = useMemo<Map<string, SyncRunDetailResponse["attempts"]>>(() => {
     const grouped = new Map<string, SyncRunDetailResponse["attempts"]>();
@@ -48,7 +49,7 @@ export function SyncStatusPage() {
     );
   }
 
-  if (isLoading) {
+  if (isLoading && !data) {
     return (
       <StatusPanel
         title="Loading sync run"
@@ -57,7 +58,7 @@ export function SyncStatusPage() {
     );
   }
 
-  if (isError || !data) {
+  if (!data) {
     return (
       <StatusPanel
         title="Sync run failed to load"
@@ -69,6 +70,7 @@ export function SyncStatusPage() {
 
   return (
     <div className="space-y-6">
+      {isError && <StaleDataNotice error={error} />}
       <div>
         <h1 className="text-xl font-extrabold text-text-primary">Sync Run #{data.run.runId}</h1>
         <div className="mt-1 flex flex-wrap items-center gap-3 text-sm text-text-muted">
@@ -80,7 +82,7 @@ export function SyncStatusPage() {
         </div>
       </div>
 
-      <section className="overflow-hidden rounded-xl border border-border bg-card">
+      <section className="overflow-x-auto rounded-xl border border-border bg-card">
         <div className="border-b border-border px-4 py-3">
           <h2 className="text-sm font-semibold text-text-primary">Events</h2>
         </div>
@@ -131,7 +133,7 @@ export function SyncStatusPage() {
         )}
       </section>
 
-      <section className="overflow-hidden rounded-xl border border-border bg-card">
+      <section className="overflow-x-auto rounded-xl border border-border bg-card">
         <div className="border-b border-border px-4 py-3">
           <h2 className="text-sm font-semibold text-text-primary">Attempts</h2>
         </div>
@@ -169,7 +171,7 @@ export function SyncStatusPage() {
                         <td className="px-4 py-2 text-sm text-text-secondary">{attempt.state}</td>
                         <td className="px-4 py-2 text-sm text-text-secondary">{attempt.httpStatus ?? "—"}</td>
                         <td className="px-4 py-2 text-sm text-text-muted">{formatDateTime(attempt.startedAt)}</td>
-                        <td className="px-4 py-2 text-sm text-text-muted">{attempt.durationMs ? `${attempt.durationMs}ms` : "—"}</td>
+                        <td className="px-4 py-2 text-sm text-text-muted">{attempt.durationMs != null ? `${attempt.durationMs}ms` : "—"}</td>
                         <td className="px-4 py-2 text-sm text-text-secondary">{attempt.errorMessage ?? "—"}</td>
                       </tr>
                     ))}

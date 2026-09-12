@@ -229,7 +229,7 @@ function BlockDetailCard({
           <p className="text-[11px] font-semibold uppercase tracking-wider text-text-muted mb-1.5">
             Substreams
           </p>
-          <div className="rounded-lg border border-border overflow-hidden">
+          <div className="rounded-lg border border-border overflow-x-auto">
             <table className="w-full text-xs">
               <thead>
                 <tr className="bg-hover-alt">

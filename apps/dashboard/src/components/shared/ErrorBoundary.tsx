@@ -27,17 +27,17 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
     if (this.state.hasError) {
       return (
         <div className="flex min-h-screen items-center justify-center p-6">
-          <div className="max-w-sm rounded-xl border border-border bg-card p-6 text-center">
-            <h1 className="text-lg font-bold text-text-primary">Something went wrong</h1>
+          <div role="alert" className="max-w-sm rounded-xl border border-border bg-card p-6 text-center">
+            <h1 className="text-lg font-bold text-text-primary">Не удалось открыть страницу</h1>
             <p className="mt-2 text-sm text-text-muted">
-              An unexpected error occurred. Try reloading the page.
+              Произошла ошибка интерфейса. Попробуйте загрузить страницу заново.
             </p>
             <button
               type="button"
               onClick={this.handleReload}
               className="mt-4 rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white transition-colors hover:opacity-90"
             >
-              Reload
+              Перезагрузить
             </button>
           </div>
         </div>
