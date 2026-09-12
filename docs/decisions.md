@@ -293,6 +293,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 294 | Feature recommendations and focused configuration | Explain 32 feature groups using live configuration readiness, dated research and existing editors; preserve applied/desired truth, staged dependencies, draft versions and the different page-scope meanings. No automatic disabling or production changes. |
 | 295 | Dashboard page-by-page usability review | Review all 38 screens, decouple page identity from overview, preserve daily navigation and reviewed drafts, disclose stale/missing reads and uncertain writes, and retain specialized recovery tools without automatically enabling or disabling capture. |
 | 296 | Adversarial dashboard state and intent review | Preserve configuration and fan drafts across scope changes, bind queued mutations to their reviewed target, consume Undo once, and recover an unknown webhook apply only through explicit separate intent preparation. |
+| 297 | Preserve every settings path and explicit webhook reconciliation | Retain all registry entries and existing settings controls; permit explicit reconciliation of previously applied webhook policy while keeping lost same-state replies unknown and requiring separate intent recovery. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -12360,3 +12361,36 @@ fixtures confirm scope/receipt retention, one Undo after a committed response
 loss, explicit webhook recovery, and separate fan drafts/late responses. Full
 38-screen browser coverage and PostgreSQL integration suites are not claimed.
 Deployment remains separately owner-gated and must preserve Decision 293.
+
+## Decision 297: Preserve every settings path and explicit webhook reconciliation (2026-09-12)
+
+The owner asked whether simplifying the UI removed any settings. A dedicated
+before/after audit confirms all 164 registry entries, all nine existing Settings
+tabs, old deep links and their role boundaries. The 32 feature groups cover 90
+keys; the other 74 remain available in the complete configuration list. Friendly
+presets preserve unfamiliar current values, and the full editor retains arbitrary
+server-valid CSV input. The audit and complete key matrix are recorded in
+`investigations/feature-controls-2026-09-11/SETTINGS-PRESERVATION.md`.
+
+The audit found a new restriction introduced by the page review: disabling Apply
+for an already applied webhook policy removed the existing remote drift repair
+path. Restore an explicit, cost-labelled check-and-reconcile action using the
+saved expectedVersion and existing endpoint. Viewing an applied policy sends no
+provider request. Unsaved changes, stale/in-flight reads, a busy/applying state
+and unknown outcomes block ordinary application.
+
+A lost reply from an applied baseline followed by the same-version applied state
+cannot identify the new attempt, just as failed-to-failed cannot. Keep the guard
+until a distinguishable non-applying read or the existing explicit unknown-result
+recovery flow. Preparation itself sends no POST. A newer applying policy does
+not unlock the surface. No backend, policy default, migration or production
+setting changes are included.
+
+Independent review accepted the fix. Synthetic mounted-browser checks confirm
+one POST per explicit application, unchanged version/selection, retained unknown
+state after same-version readback, no POST from new-intent preparation and the
+complete 164/164 settings filter. `pnpm check` passes with 305 files, 3378 tests,
+9 skipped, lint and dashboard build; root strictness remains 1897 known errors
+in 120 files. This does not establish production-value preservation, PostgreSQL
+integration acceptance or durable recovery after reload. Deployment remains a
+separate owner gate and must preserve Decision 293.

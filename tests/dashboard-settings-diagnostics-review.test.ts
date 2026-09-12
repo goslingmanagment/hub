@@ -21,7 +21,7 @@ import {
   prepareHydrationDecision, reviewHydrationDraft, hydrationDecisionAttempt,
   hydrationDecisionStatusIsDefiniteRefusal, frozenHydrationDecisionSummary,
 } from "../apps/dashboard/src/pages/AgentHydrationPage.tsx";
-import { editWebhookSelection, OfapiWebhookRecovery, webhookApplyIsSettledOrRunning, webhookReadbackResolvesAction } from "../apps/dashboard/src/pages/settings/OfapiWebhookRecovery.tsx";
+import { editWebhookSelection, OfapiWebhookRecovery, webhookApplyIsRunning, webhookReadbackResolvesAction } from "../apps/dashboard/src/pages/settings/OfapiWebhookRecovery.tsx";
 import { AgentKeysTab } from "../apps/dashboard/src/pages/settings/AgentKeysTab.tsx";
 import { PageAssignmentsEditor } from "../apps/dashboard/src/pages/settings/PageAssignmentsEditor.tsx";
 import { DbStatsPage } from "../apps/dashboard/src/pages/dev/DbStatsPage.tsx";
@@ -150,11 +150,11 @@ describe("webhook selection review", () => {
     expect(webhookReadbackResolvesAction(baseline, { version: 8, applyState: "pending" })).toBe(true);
     expect(webhookReadbackResolvesAction({ version: 7, applyState: "failed" }, { version: 7, applyState: "failed" })).toBe(false);
   });
-  it("does not offer repeated provider apply for already applied or active policy", () => {
-    expect(webhookApplyIsSettledOrRunning("applied")).toBe(true);
-    expect(webhookApplyIsSettledOrRunning("applying")).toBe(true);
-    expect(webhookApplyIsSettledOrRunning("pending")).toBe(false);
-    expect(webhookApplyIsSettledOrRunning("failed")).toBe(false);
+  it("blocks an active apply while preserving reconciliation of previously applied policy", () => {
+    expect(webhookApplyIsRunning("applied")).toBe(false);
+    expect(webhookApplyIsRunning("applying")).toBe(true);
+    expect(webhookApplyIsRunning("pending")).toBe(false);
+    expect(webhookApplyIsRunning("failed")).toBe(false);
   });
   it("preserves edited groups and their version across polling and another field edit", () => {
     const policy = { version: 7, desiredGroups: ["engagement"], historyEnabled: false };
@@ -174,7 +174,19 @@ describe("webhook selection review", () => {
     const html = render(OfapiWebhookRecovery);
     expect(html).toContain("Показан предыдущий срез вебхуков");
     expect(html).toContain("Состояние: applied");
-    expect(html).toMatch(/disabled=""[^>]*>Применить события/);
+    expect(html).toMatch(/disabled=""[^>]*>Проверить и восстановить события/);
+  });
+
+  it("offers explicit provider reconciliation after a successful read of applied policy", () => {
+    webhook.useOfapiWebhookRecovery.mockReturnValue(query({
+      policy: { version: 7, desiredGroups: [], appliedGroups: [], historyEnabled: false, groups: [], applyState: "applied", errorCode: null },
+      catalog: null, history: { webhookId: null, latestScan: null, attempts: [] },
+    }));
+    const html = render(OfapiWebhookRecovery);
+    const applyButton = html.match(/<button\b[^>]*>Проверить и восстановить события[^<]*<\/button>/)?.[0];
+    expect(applyButton).toBeDefined();
+    expect(applyButton).not.toMatch(/\sdisabled(?:=|\s|>)/);
+    expect(html).toContain("при расхождении она восстановит сохранённый состав событий");
   });
 });
 

@@ -26,13 +26,18 @@ const scanLabels: Record<string, string> = {
 const button = "rounded-lg border border-border px-3 py-2 text-xs font-medium text-text-primary hover:bg-hover disabled:opacity-50";
 type WebhookPolicy = NonNullable<ReturnType<typeof useOfapiWebhookRecovery>["data"]>["policy"];
 
-export function webhookApplyIsSettledOrRunning(state: string): boolean {
-  return state === "applied" || state === "applying";
+export function webhookApplyIsRunning(state: string): boolean {
+  return state === "applying";
 }
 
 export function webhookReadbackResolvesAction(applyBaseline: { version: number; applyState: string } | undefined, policy: { version: number; applyState: string }): boolean {
-  if (applyBaseline === undefined) return policy.applyState !== "applying";
-  return policy.version > applyBaseline.version || (policy.version === applyBaseline.version && (policy.applyState === "applied" || (policy.applyState === "failed" && applyBaseline.applyState !== "failed")));
+  if (policy.applyState === "applying") return false;
+  if (applyBaseline === undefined) return true;
+  // A terminal state already present before the request is not evidence that a
+  // new reconciliation attempt completed. This applies to both failed and applied.
+  return policy.version > applyBaseline.version || (policy.version === applyBaseline.version
+    && (policy.applyState === "applied" || policy.applyState === "failed")
+    && policy.applyState !== applyBaseline.applyState);
 }
 
 export function webhookCanPrepareNewAction(
@@ -118,7 +123,7 @@ export function OfapiWebhookRecovery() {
       {readbackRequired.label}: перед следующим действием нужно прочитать результат. Выбор сохранён на экране.{receipt ? " Подтверждённая квитанция также сохранена." : ""}
       <button type="button" className={`${button} mt-2 block`} disabled={busy} onClick={() => void readBack()}>Сверить состояние после запроса</button>
       {reviewedReadback && <div className="mt-3 space-y-2 border-t border-border pt-3">
-        <p>Исход применения не установлен. Даже состояние «failed» может относиться к прежней попытке. Новый запрос может повторить уже выполненное платное действие.</p>
+        <p>Исход применения не установлен. Даже состояние «applied» или «failed» может относиться к прежней попытке. Новый запрос может повторить уже выполненное платное действие.</p>
         <label className="flex items-start gap-2">
           <input type="checkbox" checked={newActionAcknowledged} disabled={busy || query.isError || query.isFetching} onChange={event => setNewActionAcknowledged(event.target.checked)} />
           <span>Я проверил текущий срез и хочу подготовить отдельное новое действие, принимая неизвестный исход предыдущего.</span>
@@ -163,13 +168,14 @@ export function OfapiWebhookRecovery() {
         setDraft(null);
         return "Выбор сохранён. Примените дополнительные события у провайдера отдельным действием.";
       })}>Сохранить выбор</button>
-      <button type="button" className={button} disabled={unavailable || dirty || webhookApplyIsSettledOrRunning(saved.applyState)} onClick={() => void run(async () => {
+      <button type="button" className={button} disabled={unavailable || query.isFetching || dirty || webhookApplyIsRunning(saved.applyState)} onClick={() => void run(async () => {
         const result = await ofapiWebhookRecoveryActions.apply({ body: { expectedVersion: saved.version } });
         setReceipt(result);
         return result.applyState === "applied" ? "Состав событий подтверждён повторным чтением у провайдера." : `Применение не подтверждено: ${result.errorCode ?? result.applyState}`;
-      }, `Применение событий v${saved.version}`, { version: saved.version, applyState: saved.applyState })}>Применить события · платный поток</button>
+      }, `Применение событий v${saved.version}`, { version: saved.version, applyState: saved.applyState })}>{saved.applyState === "applied" ? "Проверить и восстановить события · платный поток" : "Применить события · платный поток"}</button>
       <span className="text-xs text-text-secondary">Состояние: {saved.applyState}{saved.errorCode ? ` · ${saved.errorCode}` : ""}</span>
     </div>
+    {saved.applyState === "applied" && <p className="text-xs text-text-secondary">Hub хранит результат прежнего применения. Проверка у провайдера — отдельный запрос; при расхождении она восстановит сохранённый состав событий.</p>}
     <div className="border-t border-border pt-4">
       <div className="flex flex-wrap items-center justify-between gap-2"><h3 className="text-sm font-semibold text-text-primary">Попытки доставки</h3>
         <button type="button" className={button} disabled={unavailable || !history.webhookId} onClick={() => void run(async () => {
