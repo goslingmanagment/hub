@@ -306,6 +306,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 305 | Sync finalizer authority | Cleanup rechecks the current target outcome after a lock wait and preserves committed worker results. |
 | 306 | HTTP admission after lease loss | Stop new observed read attempts per chunk while preserving in-flight response capture and existing write fencing. |
 | 307 | Single earnings parse | Validate, diagnose and build earnings drafts from one observation-local parse result, preserving whole-observation refusal and replay. |
+| 308 | Preview monitor scope | Read only DM monitor streams for conversation preview while preserving shared queue context and historical physical debt. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -12776,3 +12777,22 @@ new behavioral cases still pass. A valid aggregate now hashes once; two monthly
 aggregates hash twice. Malformed/partial money, empty versus explicit zero,
 unmapped repair, diagnostics and dry-run remain covered. These work counts do
 not establish the lane's production CPU share or an absolute latency gain.
+
+
+## Decision 308: Conversation preview reads only its DM monitor streams (2026-09-12)
+
+Conversation preview's sync UX consumes only `messages_live` and
+`messages_history`. The existing `monitorStreams` selector now requests their
+two primary streams, `dm_conversations` and `dm_messages`, instead of the
+17-stream default. Keep the shared derivation and global task rows: active
+siblings on another page can still explain a healthy queue wait. Preserve DM
+coverage, deep-backfill progress and all historical unresolved physical attempt
+debt; the 24-hour counter window is not a debt cutoff. OnlyFans' existing stream
+intersection and ingest overlay remain unchanged.
+
+Independent review approved the change. Thirty-eight unit/integration tests pass,
+including exact full/scoped DM block and UX parity, real monitor-row equality,
+old physical debt and cross-page siblings. The SQL builder confirms two stream
+names in all five filtered inputs. Page totals still execute through the shared
+snapshot; no specific preview latency improvement is claimed. There is no new
+cache, schema, contract, provider traffic or stored-state change.

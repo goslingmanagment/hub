@@ -71,6 +71,9 @@ async function resolveConversationHistorySyncUx(
 ) {
   const snapshot = await getSyncStatusSnapshot(app, {
     pageIds: [pageId],
+    // Preview UX consumes only these domains; retain the shared snapshot's
+    // global task context for queue siblings and historical DM attempt debt.
+    monitorStreams: ["dm_conversations", "dm_messages"],
   });
   const page = snapshot.pages[0];
   const conversationSyncUx = page ? mapDomainBlockToSyncUx(page.blocks.messages_live) : null;

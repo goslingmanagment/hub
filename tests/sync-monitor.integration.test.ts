@@ -106,6 +106,30 @@ describe("sync monitor running activity", () => {
       lastPhysicalSuccessAt: new Date("2026-09-01T00:00:00Z"),
     });
   });
+
+  it("returns identical DM rows when unrelated streams are excluded, retaining old unresolved debt", async () => {
+    const pageId = await seedPage("preview-scope");
+    const dmStreams: SyncStream[] = ["dm_conversations", "dm_messages"];
+    for (const stream of dmStreams) {
+      const completed = await run(pageId, "2026-09-01T00:00:00Z", stream, "2026-09-01T01:00:00Z");
+      await attempt(completed, "2026-09-01T00:00:00Z");
+      await attempt(completed, "2026-09-01T00:01:00Z", null, "failed");
+      await attempt(completed, "2026-09-01T00:02:00Z", null, "started");
+    }
+    const unrelated = await run(pageId, "2026-09-08T10:00:00Z", "transactions", "2026-09-08T11:00:00Z");
+    await attempt(unrelated, "2026-09-08T10:01:00Z", null, "failed");
+    const all = await listSyncMonitorStreamRows(testDb.db, { pageIds: [pageId], now, windowStart });
+    const scoped = await rows(pageId, dmStreams);
+    expect(scoped).toHaveLength(2);
+    expect(scoped).toEqual(all.filter((row) => dmStreams.includes(row.stream)));
+    for (const row of scoped) {
+      expect(row).toMatchObject({
+        recentPhysicalAttemptCount: 0, recentPhysicalSuccessCount: 0,
+        stalePhysicalAttemptCount: 1, physicalAttemptsSinceLastSuccess: 2,
+        lastPhysicalSuccessAt: new Date("2026-09-01T00:00:00Z"),
+      });
+    }
+  });
 });
 
 
