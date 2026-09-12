@@ -25,8 +25,16 @@ beforeEach(async () => {
   f = await earningsAuditFixture(db);
 });
 
-async function collect(name: string, options: { wrongRole?: boolean; failRead?: boolean; failCleanup?: boolean } = {}) {
+type CollectOptions = {
+  identityOverride?: Record<string, unknown>;
+  inheritedGenericPlan?: boolean;
+  failRead?: boolean;
+  failCleanup?: boolean;
+};
+
+async function collect(name: string, options: CollectOptions = {}) {
   const outputDirectory = join(directory, name);
+  const inheritedModes: unknown[] = [];
   const result = await exportEarningsAudit({
     page: f.page.label, from: new Date(Date.now() - 86400_000).toISOString(),
     to: new Date().toISOString(), outputDirectory,
@@ -34,10 +42,20 @@ async function collect(name: string, options: { wrongRole?: boolean; failRead?: 
     const reader = psql.reader();
     return {
       async read(sql) {
+        if (options.inheritedGenericPlan && sql.includes("BEGIN")) {
+          inheritedModes.push(await reader.read(`SET plan_cache_mode = force_generic_plan;
+            SELECT jsonb_build_object('mode', current_setting('plan_cache_mode'));`));
+        }
         const value = await reader.read(sql);
-        if (options.wrongRole && sql.includes("BEGIN")) {
+        if (options.inheritedGenericPlan && sql.includes("ROLLBACK;")) {
+          // Same psql connection: a fresh connection would not prove SET LOCAL reset.
+          inheritedModes.push(await reader.read(
+            "SELECT jsonb_build_object('mode', current_setting('plan_cache_mode'));",
+          ));
+        }
+        if (options.identityOverride && sql.includes("BEGIN")) {
           if (typeof value !== "object" || value === null) throw new Error("Missing test identity");
-          return { ...value, role: "postgres" };
+          return { ...value, ...options.identityOverride };
         }
         return value;
       },
@@ -51,7 +69,7 @@ async function collect(name: string, options: { wrongRole?: boolean; failRead?: 
       },
     };
   });
-  return { result, outputDirectory };
+  return { result, outputDirectory, inheritedModes };
 }
 
 async function seed() {
@@ -68,7 +86,9 @@ describe("C2a snapshot exporter against Docker Postgres", () => {
     const manifest = JSON.parse(await readFile(join(outputDirectory, "manifest.json"), "utf8"));
     expect(manifest).toMatchObject({ completed: true, records: 4, sha256: createHash("sha256").update(raw).digest("hex") });
     const lines = raw.toString().trim().split("\n").map(line => JSON.parse(line));
-    expect(lines[0].identity).toMatchObject({ role: "read_only", readOnly: "on", isolation: "repeatable read" });
+    expect(lines[0].identity).toMatchObject({
+      role: "read_only", readOnly: "on", isolation: "repeatable read", planCacheMode: "force_custom_plan",
+    });
     expect(lines[1].scope.asOf).toBe(lines[0].identity.asOf);
     expect(lines[2].scope).toEqual(lines[1].scope);
     expect(lines[3].scope).toEqual(lines[1].scope);
@@ -79,8 +99,17 @@ describe("C2a snapshot exporter against Docker Postgres", () => {
     await expect(collect("complete")).rejects.toThrow(/EEXIST/);
   });
 
+  it("uses custom plans within the audit and restores an inherited generic plan after rollback", async () => {
+    await seed();
+    const { result, inheritedModes } = await collect("inherited-plan", { inheritedGenericPlan: true });
+    expect(result).toMatchObject({ completed: true, verified: true, failure: null });
+    expect(inheritedModes).toEqual([{ mode: "force_generic_plan" }, { mode: "force_generic_plan" }]);
+  });
+
   it.each([
-    ["wrong-role", { wrongRole: true }],
+    ["wrong-role", { identityOverride: { role: "postgres" } }],
+    ["wrong-plan", { identityOverride: { planCacheMode: "auto" } }],
+    ["missing-plan", { identityOverride: { planCacheMode: undefined } }],
     ["interrupted", { failRead: true }],
     ["cleanup-failed", { failCleanup: true }],
   ] as const)("preserves an incomplete manifest for %s without a success report", async (name, options) => {

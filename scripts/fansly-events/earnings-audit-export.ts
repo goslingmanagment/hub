@@ -45,13 +45,17 @@ export async function exportEarningsAudit(
     const identity = z.object({
       role: z.literal("read_only"), readOnly: z.literal("on"),
       isolation: z.literal("repeatable read"), asOf: z.iso.datetime({ offset: true }),
+      planCacheMode: z.literal("force_custom_plan"),
     }).parse(await reader.read(`
       BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;
       SET LOCAL standard_conforming_strings = on;
+      -- A generic plan can scan the window prefix again for each keyset page.
+      SET LOCAL plan_cache_mode = force_custom_plan;
       SET LOCAL statement_timeout = '15s';
       SET LOCAL lock_timeout = '1s';
       SET LOCAL idle_in_transaction_session_timeout = '30s';
       SELECT jsonb_build_object('role', current_user,
+        'planCacheMode', current_setting('plan_cache_mode'),
         'readOnly', current_setting('transaction_read_only'),
         'isolation', current_setting('transaction_isolation'), 'asOf', transaction_timestamp());
     `));

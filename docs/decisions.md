@@ -297,6 +297,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 314 | Fansly C2a projection audit | Compare retained earnings snapshots with full projection rows in one bounded read-only snapshot; unavailable bodies, detached data and projection lag prevent acceptance. |
 | 317 | Fansly C2a compressed snapshots and pagination | Bound decoded JSONB and numeric expansion before export; group eight psql statements per network exchange while retaining snapshot, completeness and timeout checks. |
 | 316 | Deployment delivery | Keep Chromium cache independent of revision; preserve unchanged Postgres on app releases; publish the tested main image after Quality Gate and deploy by GHCR digest with source/checksum/platform verification before quiesce. Full/auto/dist-only and rollback semantics remain available. |
+| 318 | Fansly C2a audit query plans | Use and retain a custom plan setting within the read-only export transaction so later keyset pages do not repeatedly scan exported prefixes. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -12554,3 +12555,35 @@ No production access or deployment is granted by CI publication.
 Phase timestamps distinguish candidate preparation, migrations, recreation,
 service/sync/dashboard checks and the local CLI tail. Local CLI install optimization,
 legacy quiesce removal, and CI throughput changes are outside this change.
+
+## Decision 318: Plan each bounded earnings audit page for its cursor (2026-09-13)
+
+Decision 317 made compressed sources readable. Four production pages passed
+full projection comparison; Lora-1 and Lilly-2 still exceeded the 120-second
+export limit. PostgreSQL generic plans can retain the nullable cursor predicate
+as a filter and scan the already exported prefix. A local 120,000-row fixture
+compares the same keyset predicates, order and limit with a reduced projection
+of ID and timestamp. Early/late results match under generic and custom planning;
+the retained plans expose the different index bounds.
+
+Set `plan_cache_mode = force_custom_plan` with SET LOCAL in the existing
+repeatable-read / READ ONLY exporter transaction, before reading its scope.
+Validate and retain the actual setting with the role/isolation identity. This
+changes only the audit session. Keep all readers, applied migrations, parser
+semantics, frozen counts, cursor checks and resource limits unchanged.
+
+A production diagnostic using the unchanged deployed readers and this session
+setting exported all 107,196 Lilly-2 captures and 2,462 projection rows in
+46.817 seconds. Its snapshot had 22 unparsed captures and 46 pending projection
+rows, so it correctly remained unverified. Separate snapshots and transport
+timing do not prove a production internal query plan or projection parity.
+
+Docker Postgres coverage must verify the retained setting and failure when it
+is absent or wrong, plus restoration of an inherited generic-plan setting in
+the same psql session after rollback. Rollback uses the preceding exporter;
+large scopes may time out again and must retain incomplete manifests.
+
+No new flag, provider call, migration, repair, polling change or C2b activation.
+Numbered from main `605b931f`, whose highest decision number is 317. The merged
+deployment decision 316 and deployed decision 315 remain untouched. This owner-approved follow-up reuses the C2a branch/worktree.
+See the [runbook](runbooks/fansly-earnings-correctness.md).

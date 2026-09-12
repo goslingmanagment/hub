@@ -107,6 +107,14 @@ one atomic agency-wide census. The transcript starts with the actual role,
 READ ONLY/isolation receipt and transaction time. Subsequent batches bind both
 the database snapshot and transaction time, and preserve microsecond cursors.
 
+The exporter sets `plan_cache_mode = force_custom_plan` locally within this
+transaction (Decision 318) and validates and retains the actual setting in the
+identity receipt. Cached generic plans can scan already exported prefixes when
+the nullable continuation remains a filter. Planning for the actual cursor keeps
+the bounded reads practical. The setting ends at rollback and changes no role,
+database or application configuration. A missing or different setting makes the
+export incomplete. The statement, session and response limits remain unchanged.
+
 After forward migrations 0190–0191 (Decision 317), PostgreSQL 16 compressed
 inline and CAS bodies can be read. A private raw-length helper bounds each copy
 to 64 KiB before decompression, equality or parsing. CAS catalog size and access
@@ -146,6 +154,8 @@ with zero, an empty payload or a successful check. Empty arrays identify no fan
 and establish no freshness. Explicit replay/rebuild remains a separate gate.
 
 Rollback can stop using these readers while preserving their additive migrations.
+The session-plan change can be rolled back by using the preceding exporter;
+large scopes may then time out again. Preserve those incomplete manifests.
 This audit does not change the C2b/C2c, A1 or WebSocket gates and cannot establish
 physical HTTP savings, quiet-correction coverage or fresh-event latency.
 
