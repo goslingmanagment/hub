@@ -12759,6 +12759,14 @@ credentials or REST policy need to be reversed. Neither the implementation nor
 its local tests establish a live connection or passed stage gate. Local validation
 and independent review are recorded in the W0 status; no new runtime flag exists.
 
+Paired W0 diagnostics may use one private random correlation key for the browser
+export and server probe. A key fingerprint prevents comparing unrelated keys;
+a bounded offline report compares entity references only in declared overlapping
+windows. Repeated references, lost/unknown frames and interrupted probes remain
+explicit. No matched entity, shared key or successful command is a fan-out,
+account-binding or reader-latency pass. The optional key-file argument does not
+change the 120-second limit, credential choice or remaining live gates.
+
 Numbered from main `0a08365fbefa545397f4e91a2eae3fca7c36c444`, whose latest
 decision is 320. See [the owner-choice record](../investigations/fansly-w0-protocol-2026-09-10/OWNER-CHOICE-20260913.md)
 and [W0 runbook](runbooks/fansly-ws-protocol-check.md).

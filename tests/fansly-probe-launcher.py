@@ -27,8 +27,15 @@ class LauncherTest(unittest.TestCase):
         self.args = argparse.Namespace(
             bundle=str(self.root / "bundle"), environment=str(self.root / "environment"),
             image="sha256:" + "a" * 64, network="fixture-network", page="lilly-1",
-            seconds=120, output=str(self.root / "new-report"),
+            seconds=120, output=str(self.root / "new-report"), correlation_key_file=None,
         )
+
+    def correlation_key(self):
+        path = self.root / "experiment.key"
+        path.write_bytes(b"0123456789abcdef0123456789abcdef")
+        path.chmod(0o600)
+        self.args.correlation_key_file = str(path)
+        return path
 
     def test_resource_limits_and_no_secret_arguments(self):
         command = launcher.container_command(self.args, "owned-fixture")
@@ -62,6 +69,7 @@ class LauncherTest(unittest.TestCase):
         start.assert_not_called()
 
     def test_cancellation_runs_owned_container_cleanup(self):
+        key = self.correlation_key()
         process = MagicMock(returncode=-9)
         process.communicate.side_effect = KeyboardInterrupt
         process.poll.return_value = None
@@ -72,8 +80,66 @@ class LauncherTest(unittest.TestCase):
         process.kill.assert_called_once()
         self.assertEqual(cleanup.call_args.args[0][:3], ["docker", "rm", "--force"])
         self.assertRegex(cleanup.call_args.args[0][3], r"^hub-fansly-w0-[a-f0-9]{32}$")
+        self.assertTrue(key.exists())
+        self.assertFalse((Path(self.args.output) / "correlation.key").exists())
         with self.assertRaises(KeyboardInterrupt):
             launcher.cancel(None, None)
+
+    def test_key_mount_uses_a_private_stable_copy_and_removes_only_the_copy(self):
+        key = self.correlation_key()
+        original = key.read_bytes()
+        owned_copy = Path(self.args.output) / "correlation.key"
+        process = MagicMock(returncode=0)
+        process.poll.return_value = 0
+
+        def start(command, **_kwargs):
+            mount = command[command.index("--mount") + 1]
+            self.assertEqual(mount, launcher.correlation_key_mount(owned_copy))
+            self.assertTrue(mount.endswith(",readonly"))
+            self.assertEqual(command[-2:], ["--correlation-key-file", launcher.CORRELATION_KEY_TARGET])
+            self.assertEqual(owned_copy.stat().st_mode & 0o777, 0o600)
+            self.assertNotIn(original.decode(), " ".join(command))
+            key.write_bytes(b"changed after validation")
+            self.assertEqual(owned_copy.read_bytes(), original)
+            return process
+
+        with patch.object(launcher.subprocess, "Popen", side_effect=start):
+            with patch.object(launcher.subprocess, "run", return_value=MagicMock(returncode=0)):
+                result = launcher.run(self.args)
+        self.assertTrue(result["cleanupConfirmed"])
+        self.assertFalse(owned_copy.exists())
+        self.assertEqual(key.read_bytes(), b"changed after validation")
+
+    def test_invalid_key_length_never_starts_docker(self):
+        key = self.correlation_key()
+        for length in (0, 31, 33):
+            with self.subTest(length=length):
+                key.write_bytes(b"x" * length)
+                self.args.output = str(self.root / f"invalid-{length}")
+                with patch.object(launcher.subprocess, "Popen") as start:
+                    with self.assertRaises(ValueError):
+                        launcher.run(self.args)
+                start.assert_not_called()
+
+    def test_mount_syntax_in_output_path_never_starts_docker(self):
+        self.correlation_key()
+        for name in ("bad,readonly=false", 'bad"quote'):
+            with self.subTest(name=name):
+                self.args.output = str(self.root / name)
+                with patch.object(launcher.subprocess, "Popen") as start:
+                    with self.assertRaisesRegex(ValueError, "invalid_correlation_key_mount"):
+                        launcher.run(self.args)
+                start.assert_not_called()
+                self.assertFalse((Path(self.args.output) / "correlation.key").exists())
+
+    def test_key_copy_never_replaces_or_removes_an_existing_file(self):
+        key = self.correlation_key()
+        target = self.root / "correlation.key"
+        target.write_bytes(b"retain this file")
+        with self.assertRaises(FileExistsError):
+            with launcher.private_correlation_key(str(key), self.root):
+                self.fail("Existing evidence must not be replaced")
+        self.assertEqual(target.read_bytes(), b"retain this file")
 
     def test_attach_wait_failure_cannot_skip_container_removal(self):
         process = MagicMock(returncode=None)

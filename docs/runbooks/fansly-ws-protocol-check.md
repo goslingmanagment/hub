@@ -69,9 +69,9 @@ The separate probe now reuses the encrypted REST session. It opens one fixed
 `wsv3` connection for 5–120 seconds, with no reconnect, REST request, pacing
 write, business writer or credential change. It records received metadata only.
 A type-1 frame remains distinct from account binding; the report always leaves
-binding, completeness, reader latency and stage readiness unverified. Its private
-correlation key is ephemeral, so this short report cannot pair an independent
-browser capture. Use the separate offline exporter for an approved paired corpus.
+binding, completeness, reader latency and stage readiness unverified. The correlation key is ephemeral by default. For an approved paired corpus,
+supply the same private experiment key to the offline exporter and probe as
+described below. The first live receipt predates that option and cannot be paired.
 
 Build a new private bundle with `node scripts/fansly-ws/build-probe.mjs <new.mjs>`.
 The bundle resolves runtime dependencies from `/app/apps/runtime`; source files
@@ -104,9 +104,64 @@ matching before/after credential-route generations. This means a completed short
 observation only: it proves no account identity, continuous unchanged generation,
 fan-out, presence, six-hour continuity, savings or reader latency.
 
+## Paired reference comparison
+
+Create a fresh random 32-byte experiment key using the private-key command above.
+It is a diagnostic correlation key, not a Fansly credential. Use it for the native
+browser Received-frame export and pass its private file to the isolated launcher
+with `--correlation-key-file <private-key-path>`. Existing 120-second and page
+limits remain. Without this option, the probe still creates an ephemeral key.
+
+Both reports contain `correlationKeyFingerprint`, derived from the actual key.
+The launcher validates the supplied file, makes a private mode-0600 copy in its
+new output directory, and mounts only that copy read-only into the container.
+It removes its copy after execution, including cancellation and failed startup.
+Retrieve report/execution artifacts after cleanup; do not archive a running
+output directory containing the temporary key. Preserve the original experiment
+key privately for the paired browser export, outside shared evidence.
+
+Record the actual observation intervals in a private windows JSON file. These
+are operator-supplied intervals, not proof of uninterrupted capture. For example,
+this **synthetic** file describes two overlapping two-minute observations:
+
+```json
+{
+  "left": { "from": "2026-09-14T10:00:00.000Z", "to": "2026-09-14T10:02:00.000Z" },
+  "right": { "from": "2026-09-14T10:00:10.000Z", "to": "2026-09-14T10:02:10.000Z" }
+}
+```
+
+Run the local comparison on the two sanitized reports:
+
+```sh
+node --import tsx/esm scripts/fansly-ws/compare-cli.ts \
+  browser-report.json receiver-report.json windows.json new-comparison.json
+```
+
+Each report is limited to 32 MiB, 10,000 records and 20,000 reference occurrences;
+frames retain the existing 256-node limit. Inputs must be private regular files,
+and the output is new and mode 0600. Missing/different key fingerprints,
+non-overlapping intervals and inconsistent probe counts refuse comparison.
+A declared live interval cannot extend beyond that probe's actual observation.
+The first live report has no key fingerprint, so it cannot be retroactively used.
+
+The report compares references inside the half-open overlap. It includes the
+service, event type and whitelisted entity reference in each comparison key;
+group IDs alone never match events. Repeated references remain ambiguous.
+Matching entity IDs do not prove identical payloads, event versions, independent
+receivers or a shared provider session. Unknown/excluded/truncated frames,
+missing probe receipts and abnormal termination remain explicit. Records outside
+the overlap are counted separately and are not declared missing deliveries.
+
+An empty or unmatchable corpus is inconclusive. Candidate correspondences are
+only inputs to the manual W0 review: `fanOut`, binding, capture completeness and
+reader latency remain unverified. Verify page/session provenance and agreed
+business objects independently before accepting the live gate. The comparator
+has no provider, database, browser-control or business-write path.
+
 ## Live gates — each needs explicit approval
 
-Before the limited `lilly-1` probe, record its exact page/account binding,
+Before each newly approved limited probe, record its exact page/account binding,
 existing credential and route generations, page proxy, agreed interval,
 expected events, observers and stop deadline. Confirm binding through the
 authorized REST path for that credential generation. Use the existing encrypted

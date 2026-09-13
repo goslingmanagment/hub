@@ -5,12 +5,13 @@ import { createDb } from "@agency_hub_core/db";
 import { loadConfig } from "@agency_hub_core/shared";
 import { readProbeSnapshot, type resolveFanslyProbeContext } from "../../apps/runtime/src/services/egress/fansly-probe-context.ts";
 import { openFanslyProbeSocket } from "../../apps/runtime/src/services/egress/fansly-probe-socket.ts";
+import { correlationKeyFingerprint, readCorrelationKey } from "./correlation-key.ts";
 import { observeFanslyProbe, MAX_PROBE_DURATION_MS } from "./probe-observer.ts";
 
 export { readProbeSnapshot } from "../../apps/runtime/src/services/egress/fansly-probe-context.ts";
 
 export function parseProbeArgs(args: string[]) {
-  if (args.length !== 4 || args[0] !== "--page" || args[2] !== "--seconds"
+  if (![4, 6].includes(args.length) || args[0] !== "--page" || args[2] !== "--seconds"
     || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(args[1] ?? "")
     || !/^\d{1,3}$/.test(args[3] ?? "")) {
     throw new Error("invalid_probe_arguments");
@@ -18,6 +19,14 @@ export function parseProbeArgs(args: string[]) {
   const durationMs = Number(args[3]) * 1_000;
   if (durationMs < 5_000 || durationMs > MAX_PROBE_DURATION_MS) {
     throw new Error("invalid_probe_duration");
+  }
+  if (args.length === 6) {
+    const keyPath = args[5];
+    if (args[4] !== "--correlation-key-file" || !keyPath
+      || keyPath.startsWith("-") || /[\r\n\0]/.test(keyPath)) {
+      throw new Error("invalid_probe_arguments");
+    }
+    return { pageLabel: args[1]!, durationMs, correlationKeyFile: keyPath };
   }
   return { pageLabel: args[1]!, durationMs };
 }
@@ -28,7 +37,10 @@ export async function runStoredFanslyProbe(input: {
   pageLabel: string;
   durationMs: number;
   controller: AbortController;
+  correlationKeyFile?: string;
 }) {
+  const key = input.correlationKeyFile === undefined
+    ? randomBytes(32) : await readCorrelationKey(input.correlationKeyFile);
   const config = loadConfig(process.env, { loadDotEnv: false });
   const pool = new Pool({
     connectionString: config.databaseUrl,
@@ -58,7 +70,7 @@ export async function runStoredFanslyProbe(input: {
         return openFanslyProbeSocket(before.egress);
       },
       token: before.token,
-      key: randomBytes(32),
+      key,
       durationMs: input.durationMs,
       signal: input.controller.signal,
     });
@@ -72,6 +84,7 @@ export async function runStoredFanslyProbe(input: {
     return {
       schemaVersion: 1,
       evidenceKind: "live_socket_probe",
+      correlationKeyFingerprint: correlationKeyFingerprint(key),
       pageLabel: input.pageLabel,
       credentialSource: "existing_rest_session",
       credentialRouteGeneration: before.generation,

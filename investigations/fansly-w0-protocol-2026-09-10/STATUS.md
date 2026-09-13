@@ -1,5 +1,19 @@
 # Fansly W0 — existing-session probe preparation
 
+Latest preparation, 14 September: paired-reference diagnostics are ready in
+this same W0 PR. The browser exporter and optional probe key-file input share a
+private correlation key; the local comparison keeps unmatched/repeated references,
+unknown or lost frames and observation-window limits explicit. It never declares
+automatic fan-out or binding success.
+
+Validation: **3462 checks, 37 serial Docker-Postgres tests and 10 mocked launcher
+tests passed**. The independent P2 finding about dropped live frames was fixed
+and re-reviewed. See [paired validation](evidence/paired-20260913T224848Z/validation.json),
+[review](evidence/paired-20260913T224848Z/REVIEW-PAIRED.md) and the
+[synthetic example](evidence/paired-20260913T224848Z/synthetic-comparison.json).
+No live paired observation was performed. The first short connection below
+remains evidence of that earlier executable, not validation of the new option.
+
 Current update, 13 September: Decision 321 records the owner's choice to reuse
 Hub's existing encrypted Fansly REST session, with `lilly-1` as the first limited
 probe candidate. It replaces the Management-only choice; historical Decision
@@ -19,9 +33,9 @@ W0 gate is claimed. This remains
 |---|---|
 | Safe offline capture diagnostics | Synthetic double-JSON auth, mixed/nested batch and unknown/malformed fixtures; bounded metadata-only exporter. Final validation and independent review below. |
 | Existing REST session and page binding | Lilly-1: one 120-second connection with the existing REST session, type-1 received and generation unchanged. Account binding remains unverified; type-1 alone is not binding. |
-| Fan-out | Unmeasured; no paired browser/receiver event corpus. |
+| Fan-out | Shared-key comparison prepared and tested; no live paired browser/receiver corpus yet. |
 | Presence | Unmeasured; no independent observer experiment. |
-| Six-hour continuity and gaps | Not started; no live receiver or REST recovery receipts. |
+| Six-hour continuity and gaps | Not started; no sustained receiver observation or REST recovery receipts. |
 | B0 readiness | Blocked by the preceding live gates. |
 
 Only selected pseudonymized numeric business references appear in the report.
@@ -36,7 +50,7 @@ compatibility and live coverage are not established by this W0 preparation.
 The [runbook](../../docs/runbooks/fansly-ws-protocol-check.md) prepares local export
 and the bounded, separately approved live evidence ladder.
 
-## Validation completed 14 September, Moscow
+## Validation of the first short probe, 14 September, Moscow
 
 - `pnpm check` passed: 3429 tests in 305 files, 9 existing skips; lint and build
   passed. Strictness remains at the inherited 1901 errors in 121 files, within

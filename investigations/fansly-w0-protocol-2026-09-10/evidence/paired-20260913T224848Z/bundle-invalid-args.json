@@ -1,0 +1,6 @@
+{
+  "bundleSha256": "5ba36e3d7a32c1bd6f39bea59cda2ad8c799d2ea632bb3e6d481c9279836cfd9",
+  "exitCode": 1,
+  "stdout": "",
+  "stderr": "Fansly probe failed; no credential or provider error text was exported.\n"
+}

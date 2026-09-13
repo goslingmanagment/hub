@@ -1,34 +1,14 @@
 import { open } from "node:fs/promises";
-import { constants } from "node:fs";
 import { pathToFileURL } from "node:url";
+import { correlationKeyFingerprint, readCorrelationKey } from "./correlation-key.ts";
 import { diagnoseReceivedRecord } from "./diagnostic.ts";
+import { readPrivateFile } from "./private-file.ts";
 
 const MAX_INPUT_BYTES = 32 * 1024 * 1024;
 const MAX_LINES = 10000;
 
-async function readPrivateFile(path: string, maxBytes: number) {
-  const file = await open(path, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW);
-  try {
-    const stat = await file.stat();
-    if (!stat.isFile() || (stat.mode & 0o077) !== 0 || stat.size > maxBytes) {
-      throw new Error("invalid_private_input");
-    }
-    // Bound the read even if the file grows after stat.
-    const buffer = Buffer.alloc(maxBytes + 1);
-    let offset = 0;
-    while (offset < buffer.length) {
-      const { bytesRead } = await file.read(buffer, offset, buffer.length - offset, null);
-      if (bytesRead === 0) break;
-      offset += bytesRead;
-    }
-    if (offset > maxBytes) throw new Error("input_too_large");
-    return buffer.subarray(0, offset);
-  } finally { await file.close(); }
-}
-
 export async function writeDiagnosticReport(inputPath: string, keyPath: string, outputPath: string) {
-  const key = await readPrivateFile(keyPath, 32);
-  if (key.length !== 32) throw new Error("invalid_key");
+  const key = await readCorrelationKey(keyPath);
   const input = await readPrivateFile(inputPath, MAX_INPUT_BYTES);
   const text = input.toString("utf8");
   const header = {
@@ -37,6 +17,7 @@ export async function writeDiagnosticReport(inputPath: string, keyPath: string, 
     generatedAt: new Date().toISOString(),
     scope: "received_frame_metadata_only",
     accountBinding: "unverified",
+    correlationKeyFingerprint: correlationKeyFingerprint(key),
   };
   const prefix = `${JSON.stringify(header, null, 2).slice(0, -2)},\n  "records": [\n`;
   const suffix = "\n  ]\n}\n";

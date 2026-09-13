@@ -6,6 +6,7 @@ DATABASE_URL. Database access stays in READ ONLY transactions. It must never con
 """
 
 import argparse
+from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
@@ -14,6 +15,8 @@ import signal
 import stat
 import subprocess
 import uuid
+
+CORRELATION_KEY_TARGET = "/run/fansly-w0-correlation.key"
 
 
 def cancel(_signum, _frame):
@@ -35,29 +38,70 @@ def private_input(path: str, limit: int) -> bytes:
         os.close(descriptor)
 
 
-def container_command(args, name: str) -> list[str]:
-    return [
+def correlation_key_mount(path: Path) -> str:
+    source = str(path)
+    # Docker parses --mount as CSV; do not let a filename add mount options.
+    if not path.is_absolute() or any(char in source for char in ',"\r\n\0'):
+        raise ValueError("invalid_correlation_key_mount")
+    return f"type=bind,source={source},target={CORRELATION_KEY_TARGET},readonly"
+
+
+@contextmanager
+def private_correlation_key(path: str | None, directory: Path):
+    if path is None:
+        yield None
+        return
+    key = private_input(path, 32)
+    if len(key) != 32:
+        raise ValueError("invalid_correlation_key")
+    owned_copy = (directory / "correlation.key").absolute()
+    correlation_key_mount(owned_copy)
+    descriptor = os.open(owned_copy, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(descriptor, "wb") as output:
+            output.write(key)
+        # Bind the validated copy, so later source-file changes cannot substitute
+        # another key between validation and the container's file read.
+        yield owned_copy
+    finally:
+        owned_copy.unlink(missing_ok=True)
+
+
+def container_command(args, name: str, key_path: Path | None = None) -> list[str]:
+    command = [
         "docker", "run", "--rm", "--name", name,
         "--memory=256m", "--memory-swap=256m", "--cpus=0.25",
         "--pids-limit=64", "--read-only", "--cap-drop=ALL",
         "--security-opt=no-new-privileges", "--network", args.network,
         "--env-file", args.environment, "--workdir=/app/apps/runtime",
+    ]
+    if key_path is not None:
+        command.extend(["--mount", correlation_key_mount(key_path)])
+    command.extend([
         "--interactive", "--entrypoint=node", args.image,
         "--max-old-space-size=128", "--input-type=module", "-",
         "--page", args.page, "--seconds", str(args.seconds),
-    ]
+    ])
+    if key_path is not None:
+        command.extend(["--correlation-key-file", CORRELATION_KEY_TARGET])
+    return command
 
 
 def run(args) -> dict:
     bundle = private_input(args.bundle, 16 * 1024 * 1024)
     # Check access/mode without parsing or printing configuration secrets.
     private_input(args.environment, 1024 * 1024)
-    name = "hub-fansly-w0-" + uuid.uuid4().hex
-    command = container_command(args, name)
-    result = {"container": name, "exitCode": None, "timedOut": False}
     # An exclusive, private output directory prevents accidental overwrite.
     output = Path(args.output)
     output.mkdir(mode=0o700)
+    with private_correlation_key(getattr(args, "correlation_key_file", None), output) as key_path:
+        return run_container(args, bundle, output, key_path)
+
+
+def run_container(args, bundle: bytes, output: Path, key_path: Path | None) -> dict:
+    name = "hub-fansly-w0-" + uuid.uuid4().hex
+    command = container_command(args, name, key_path)
+    result = {"container": name, "exitCode": None, "timedOut": False}
     process = None
     try:
         with (output / "report.json").open("xb") as report:
@@ -100,6 +144,7 @@ def main() -> int:
     for option in ("bundle", "environment", "image", "network", "page", "output"):
         parser.add_argument("--" + option, required=True)
     parser.add_argument("--seconds", type=int, default=120)
+    parser.add_argument("--correlation-key-file")
     args = parser.parse_args()
     if not re.fullmatch(r"sha256:[a-f0-9]{64}", args.image):
         parser.error("Use the verified runtime image ID, not a mutable tag")
