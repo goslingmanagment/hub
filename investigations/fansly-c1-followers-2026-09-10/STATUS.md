@@ -6,7 +6,8 @@ unproven; no safe trigger suppression or equivalent presence coverage is claimed
 The [updated candidate validation](evidence/audit-followup-validation-20260914/VALIDATION.md)
 and [independent review](REVIEW-AUDIT-FOLLOWUP.md) passed: 3,366 unit tests
 (nine existing skips) and 102 tests in eight serial Docker-Postgres suites.
-PR166 remains a draft while the policy/presence gate is open.
+The diagnostic implementation is ready for review; the policy/presence
+acceptance gate remains separate.
 
 The [Lora-3 generation 775/776 evidence](evidence/lora3-followup-20260913T000235Z/README.md)
 is now retained in this branch: original report/review, compressed

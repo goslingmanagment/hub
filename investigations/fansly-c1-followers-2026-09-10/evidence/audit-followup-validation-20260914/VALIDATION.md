@@ -20,4 +20,5 @@ exclusion or application code was changed. The initial failure remains in
 their own execution receipts and losslessly compressed logs.
 
 The reviewed candidate inventory was unchanged through validation. The merge is
-not a deployment; PR166 remains a draft while the policy/presence gate is open.
+not a deployment. Readiness for diagnostic code review does not clear the
+policy/presence acceptance gate.

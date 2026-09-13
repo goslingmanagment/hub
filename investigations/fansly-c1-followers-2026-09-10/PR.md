@@ -38,8 +38,9 @@ No tracked lint exclusion or application code was changed. The initial failure,
 successful commands, compressed logs and restoration receipt are retained in the
 [validation package](https://github.com/goslingmanagment/core/blob/feat/fansly-c1-followers/investigations/fansly-c1-followers-2026-09-10/evidence/audit-followup-validation-20260914/VALIDATION.md).
 The [independent review](https://github.com/goslingmanagment/core/blob/feat/fansly-c1-followers/investigations/fansly-c1-followers-2026-09-10/REVIEW-AUDIT-FOLLOWUP.md)
-records the inspected content fingerprint. PR166 remains a draft because the
-policy/presence gate is open.
+records the inspected content fingerprint. The diagnostic implementation is
+ready for review. The policy/presence gate remains open; suppressing redundant
+walks requires separate evidence.
 
 Historical validation on the prior `3a6eace1` candidate: 3,365 passing unit tests,
 nine existing skips, 300 unit files; 86 passing serial Postgres tests in seven
