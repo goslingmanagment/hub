@@ -299,6 +299,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 316 | Deployment delivery | Keep Chromium cache independent of revision; preserve unchanged Postgres on app releases; publish the tested main image after Quality Gate and deploy by GHCR digest with source/checksum/platform verification before quiesce. Full/auto/dist-only and rollback semantics remain available. |
 | 318 | Fansly C2a audit query plans | Use and retain a custom plan setting within the read-only export transaction so later keyset pages do not repeatedly scan exported prefixes. |
 | 319 | Prompt-cache spend | Cache only the fan-agnostic persona and template prefix (1h); send the per-fan context uncached except in coach-chat; send recaps fully uncached. Prompt text unchanged; only cache hints move. Amends #136, where the dossier "rides the dynamic 5m block". |
+| 320 | Fansly A0 head regressions | Exercise old incoming/outgoing heads and non-null timestamp rollback through the real sweep; retain a synthetic three-sweep dangling-pointer clearing without claiming message deletion or safe early stop. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -12663,3 +12664,34 @@ share falls to about 0.25. Moving the dossier before the transcript as its own
 quality check. Rejected by the owner: moving Recap to Sonnet 5 and
 deduplicating double-fired requests. Rollback is reverting this change; there
 are no data, contract or migration changes. Numbered after Decision 318 (#181).
+
+## Decision 320: Exercise A0 head discrepancies through the real sweep (2026-09-13)
+
+The accepted A0 gate includes old incoming/outgoing messages and head deletion
+fixtures. The existing scalar test supplied reason labels directly, so it did
+not exercise their derivation from provider responses and stored rows. The
+positive rollback branch for a non-null head with an older timestamp also
+lacked an assertion. A retained Lora-1 observation adds a concrete shape:
+previously dangling list pointers became absent/null while their embedded
+head metadata was already unavailable.
+
+Add three cases to the existing Postgres shadow suite. After the virtual stop,
+the real handler applies an incoming head, an outgoing head, or an older
+non-null head, preserving the corresponding pre-apply diagnostics through a
+chunk resume and durable report read. The timestamps of all three remain
+older than the certified boundary; the first two advance from the stored head,
+while the third rolls back. Assert stored head fields and exact provider calls.
+
+Add one synthetic corpus fixture with three certified sweeps: a dangling
+list pointer, its clearing, then its continued absence. An unchanged null
+pointer is a control. Count the transition once while keeping material checks
+unknown and unchanged missing metadata separate. Use invented identifiers and
+timestamps, without copying private production captures into tests.
+
+This is a test and evidence follow-up only. The stop policy, full sweep,
+writer, head repair, flags and A0 observation clock remain unchanged. A
+passing fixture does not establish provider deletion, archive loss, safe A1
+acceptance, physical savings or reader latency. Rollback removes the added
+tests and documentation; it has no runtime effect. Numbered from main
+`e913b7a6056d991d5cd657789a834b435d86aeaa`, whose last decision is 319.
+See [validation status](../investigations/fansly-a0-head-regressions-2026-09-13/STATUS.md).

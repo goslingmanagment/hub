@@ -1,6 +1,32 @@
 # Fansly C1 — follower reconciliation diagnostics
 
-Latest branch validation: [13 September main sync](MAIN-SYNC-20260913.md).
+The diagnostic implementation is complete: decision, queue, timeline and guarded
+membership receipts are implemented. The broader C1 policy/presence gate remains
+unproven; no safe trigger suppression or equivalent presence coverage is claimed.
+The [updated candidate validation](evidence/audit-followup-validation-20260914/VALIDATION.md)
+and [independent review](REVIEW-AUDIT-FOLLOWUP.md) passed: 3,366 unit tests
+(nine existing skips) and 102 tests in eight serial Docker-Postgres suites.
+PR166 remains a draft while the policy/presence gate is open.
+
+The [Lora-3 generation 775/776 evidence](evidence/lora3-followup-20260913T000235Z/README.md)
+is now retained in this branch: original report/review, compressed
+full source receipt, exact nine-record subset and provenance hashes. It records
+grace protection, then one actual retirement and five matching no-request
+comparisons. That natural follow-up is closed. Aggregate receipts do not identify
+the relation or prove atomic active-after state, presence equivalence or savings.
+Packaging these existing receipts performed no new production query.
+
+This branch update includes main `0a08365f` with no merge conflict. Initial
+lint validation failed on two pre-existing untracked diagnostic probes; both
+were temporarily moved for the successful run, then restored with their original
+hashes. The initial failure and restoration receipts are retained. Applied migration
+`0185_fansly_followers_membership_read.sql` remains byte-identical, SHA-256
+`bd9c2ee7987815ef6fd0f517a0783ead45954a2eb6ad7b5553c0075859940cb0`.
+The [PR description](PR.md) separates implementation completion from
+the outstanding policy gate. This work is not a production release composition;
+applied production migration 0186 must also be preserved before a future deploy.
+
+Previous branch validation (historical): [13 September main sync](MAIN-SYNC-20260913.md).
 The existing C1 draft now includes main `e913b7a6`; its 3,365 unit tests and
 86 Docker-Postgres tests pass. Independent review found no merge defects.
 This branch update introduces no policy change and is not a deployment.

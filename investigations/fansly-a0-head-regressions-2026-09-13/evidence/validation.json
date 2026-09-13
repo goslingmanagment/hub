@@ -1,0 +1,36 @@
+{
+  "base": "e913b7a6056d991d5cd657789a834b435d86aeaa",
+  "check": {
+    "exitCode": 0,
+    "passed": 3366,
+    "skipped": 9,
+    "files": 300
+  },
+  "dockerPostgres": {
+    "exitCode": 0,
+    "passed": 26,
+    "skipped": 0,
+    "suites": 2,
+    "durationSeconds": 9.7
+  },
+  "sourceSha256": {
+    "tests/dm-shadow-corpus.test.ts": "08d37d0864860c5b70f00920a0f439c8262cc82025c602d1b11660d013892fb6",
+    "tests/dm-shadow.test.ts": "ac3033d8b3bdd2ff3c352125c982579014f1a1c17c5b7a7e5cd0a9a98b990c81",
+    "tests/fansly-dm-shadow.integration.test.ts": "8008413d2ea78c42649c7fad2e9e28261cbcc1b2b49866580b559233afc2a4a4",
+    "tests/helpers/fansly-dm-sweep.ts": "f71a09a1d2833106c18f626b591d6703b36078ba216eae8cf1cf318178d4441c"
+  },
+  "logSha256": {
+    "check.log": "6a949c95ad520dc7f2740d9b622bdf8fdc8ca72211075777903df45845b9ccfe",
+    "integration.log": "0a8e56c03b66ba9a918f8ee9893b12016f37237783545326905fc1b04aea4819"
+  },
+  "reviews": {
+    "quality_c1": "no actionable correctness or readability findings",
+    "review_pr162": "no actionable test validity or correctness findings"
+  },
+  "runtimeChanged": false,
+  "productionMutation": false,
+  "newFlag": false,
+  "savingsMeasured": false,
+  "latencyMeasured": false,
+  "a0GateAccepted": false
+}
