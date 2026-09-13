@@ -26,7 +26,7 @@ Backups are intentionally deferred in this release hardening pass. Do not assume
 
 - `.env.production.example`: canonical production environment template
 - `docker-compose.production.yml`: production stack with `postgres`, `api`, `scheduler`, and `worker`
-- `scripts/deploy-production.sh`: local build + remote ship + remote verify helper
+- `scripts/deploy-production.sh`: local build or verified registry pull + remote verification
 
 ## First Production Deploy
 
@@ -211,13 +211,57 @@ Use the default `--mode full` when runtime dependencies, Dockerfile structure, P
 
 What the script does:
 
-- builds a per-run candidate image tag locally, or as a verified dist-only overlay on the remote host
+- obtains a per-run candidate by local full build, verified dist-only overlay, or immutable GHCR digest pull
 - builds each dist-only image as the clean full image plus one four-layer dashboard/runtime/database/migrations artifact overlay
 - streams a locally built image to the remote host with `docker load`
 - syncs release files into `/opt/agency-hub` by default
-- runs `docker compose --env-file .env.production -f docker-compose.production.yml up -d --remove-orphans --force-recreate --no-build`
+- by default verifies that PostgreSQL and shared Compose infrastructure are unchanged, then recreates only `api worker scheduler`; `--recreate-scope stack` explicitly restores whole-stack recreation for infrastructure updates
 - verifies `/api/v1/health`, worker health, running image labels, `/api/v1/health/sync`, and same-origin dashboard delivery at `/login`
 - if verification fails after the stack is recreated, rolls back to the previous remote image when one was captured and `schema_migrations` did not change during the failed deploy, then prints `docker compose ps` plus recent `postgres`, `api`, `scheduler`, and `worker` logs automatically
+
+### Deploy a checked CI image
+
+Every successful **push to main** CI run saves the exact image tested by the
+Chromium and startup smoke checks, then publishes it to
+`ghcr.io/goslingmanagment/core/runtime:<full-commit-sha>` after Quality Gate.
+The publish job summary contains its immutable `@sha256:…` reference. PR and
+manual CI runs verify code but do not publish. A failed gate never publishes.
+
+Check out that exact commit in a clean working copy (including no untracked
+release inputs), authenticate the VPS to GHCR with package-read access once,
+and use the digest from that successful run:
+
+```bash
+scripts/deploy-production.sh --mode pull \
+  --pull-image ghcr.io/goslingmanagment/core/runtime@sha256:<64-hex-digest> \
+  user@server --verify-url https://YOUR_DOMAIN
+```
+
+Replace the digest placeholder; a mutable tag is refused. Pull mode does not
+need a local Docker daemon or build. Before any service is stopped, it verifies
+Linux/amd64, source revision and the shared dependency checksum against the
+local checkout. Release files and the production-pinned CLI come from that
+same checkout. A pulled image does not need or publish a dist-only clean base.
+The existing migration, lifecycle, rollback and health gates still apply;
+publishing an image does not authorize a production deployment.
+
+`--recreate-scope apps` is the default for **all** build modes. It refuses an
+absent/unhealthy PostgreSQL container, a changed PostgreSQL service/image or
+changed project/network/volume/config/secret definitions. This check happens
+before quiesce and again before promotion. Ordinary app releases preserve the
+PostgreSQL container and Compose's existing health dependencies. For a reviewed
+infrastructure update, explicitly use `--recreate-scope stack`. Rollback retains
+its existing whole-stack recovery semantics.
+
+Log entries include UTC timestamps and phase durations. `Production verified`
+appears after the server checks, before local CLI installation; a CLI failure
+still cannot roll back a healthy production deployment.
+
+The Dockerfile keeps changing revision/checksum ARGs after Chromium installation,
+so a new source revision can reuse that expensive layer. This Dockerfile change
+requires one new full build for the old dist-only path; use the already measured
+winpc SSH route for that transitional upload. `auto` keeps its previous full-first
+behavior; explicitly select `dist-only` when using a compatible retained base.
 
 The script assumes the remote server already has `/opt/agency-hub/.env.production` populated.
 

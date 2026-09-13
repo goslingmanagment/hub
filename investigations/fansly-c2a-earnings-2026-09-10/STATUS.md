@@ -1,5 +1,10 @@
 # Fansly C2a — earnings correctness
 
+Historical preparation record for the original PR165. Its statements below
+refer to that original preparation, including the then-pending deployments.
+For the current retained projection audit, see the
+[12 September status](../fansly-c2a-audit-2026-09-12/STATUS.md).
+
 Branch `fix/fansly-c2a-earnings`, based on main `a3caa0e9` (A0 PR164).
 [PR165](https://github.com/goslingmanagment/core/pull/165) merged as `f0a53aee`
 after all five CI checks passed. Decision 285; no production deployment, replay,

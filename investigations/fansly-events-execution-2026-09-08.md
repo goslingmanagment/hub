@@ -29,13 +29,17 @@ stage evidence and PR. This review does not replace stage or production gates.
 
 ## Stage state
 
+This table combines the dated C1 branch observations with main's C2a audit
+record. These are historical snapshots, not a fresh production verification.
+Consult each stage's latest dated evidence for its current production state.
+
 | Stage | State | Measurement / next gate |
 |---|---|---|
 | Pre-A0: stale follow-up + lilly-2 debt | PR157 deployed; Lilly-2 one-hour canary completed and rolled back | Frozen Lilly-2 5615/5615 raw; canary had 0 eligible targets / 0 recovery attempts, 104 excluded debts unchanged; 8/8 selected material passed after rollback. Separate old Lilly-1/Lora-1/Ari discrepancies remain explicit. |
 | Pre-A0: reply links / honest sweep | PR158–162 deployed; original bounded corpus accepted | 994/994 reply IDs, 2893 observations, 27 attached messages across separately timestamped reads; not an atomic census or fresh-event latency claim. |
 | A0 + T0 | PR164 deployed; shadow since 10 September 22:58:33 UTC | 12 September 11:21 export: 188 complete, 236 incomplete, one running; two new completed Lilly-1 discrepancies. Earliest seven-day point: 18 September 01:58:33 Moscow. Acceptance and savings unproven. |
 | C1 | [PR166](https://github.com/goslingmanagment/core/pull/166) draft; diagnostics retained in 31b73a96 | Through 12 September 18:37 UTC: 49 requested decisions have exact-generation completion; Lilly-2 G792 actually retires two rows after its guarded restart. Presence equivalence and safe suppression remain unproven. |
-| C2a | PR165 code observed in production main 32478124 on 11 September | Replay completion and projection repair have not been verified here; no additional replay authorized. |
+| C2a | PR165 deployed; retained projection audit prepared for the approved follow-up PR, Decision 314 | Audit synchronized with main c1ca5e37; 3265 unit and 44 Docker-Postgres tests pass. The additional PR is approved and predecessor 0186 is applied. The audit release must preserve production 4310680dc2f9; projection parity, repair and C2b activation remain unverified. |
 | C2b | PR169 code deployed | Read-only Lilly-1 report at 12 September 11:37: empty tracked endpoints, scope incomplete. Effective flag value unverified; exact-config preflight and shadow observations remain. Daily rotation unchanged. |
 | C2c | Gated | Coverage, costs and per-fan max-age proof before selection/rotation changes. |
 | W0 | [PR167](https://github.com/goslingmanagment/core/pull/167) draft, Decision 288 | Offline diagnostics tested/reviewed; live Management Session binding, fan-out, presence and six-hour continuity still gated. |

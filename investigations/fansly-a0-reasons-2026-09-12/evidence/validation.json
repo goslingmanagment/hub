@@ -1,0 +1,109 @@
+{
+  "base": "52c910ea80998ddb01790e6dbb89492eeb3cebbe",
+  "testedTree": "0763c732ea49d22c3f4e4c78776b4f431be61388",
+  "localChecks": {
+    "unitTestsPassed": 3261,
+    "unitFilesPassed": 296,
+    "existingSkips": 9,
+    "strictnessKnownErrors": 1901,
+    "strictnessFilesWithDebt": 121,
+    "lint": "passed",
+    "build": "passed",
+    "postgresTestsPassed": 34,
+    "postgresFilesPassed": 4,
+    "postgresSkipped": 0,
+    "postgresDurationSeconds": 10.56
+  },
+  "executions": {
+    "check": {
+      "startedAt": "2026-09-12T20:26:10.446895+00:00",
+      "completedAt": "2026-09-12T20:26:54.284782+00:00",
+      "command": [
+        "pnpm",
+        "check"
+      ],
+      "exitCode": 0,
+      "testedTree": "0763c732ea49d22c3f4e4c78776b4f431be61388",
+      "logSha256": "d9d9ba273a075013e6e93cf399ff047825df09e62dee4cde75848a90808ce903"
+    },
+    "integration": {
+      "startedAt": "2026-09-12T20:25:03.471085+00:00",
+      "completedAt": "2026-09-12T20:25:14.934043+00:00",
+      "command": [
+        "pnpm",
+        "exec",
+        "vitest",
+        "run",
+        "--no-file-parallelism",
+        "tests/fansly-dm-shadow.integration.test.ts",
+        "tests/fansly-dm-conversations-sweep.integration.test.ts",
+        "tests/fansly-events-measurement.integration.test.ts",
+        "tests/erasure-page-owned-tables.integration.test.ts"
+      ],
+      "exitCode": 0,
+      "testedTree": "0763c732ea49d22c3f4e4c78776b4f431be61388",
+      "logSha256": "690bb58109be40568d04a8e5dfc8ae565dcb17cfe5cdc5f4a60eccfcf598c6c9"
+    }
+  },
+  "sourceFiles": [
+    {
+      "path": "apps/runtime/src/services/sync/dm-shadow-state.ts",
+      "sha256": "4d78680d805aa674128933cfd433864dce53f4758473a6c4520a39d98819837d"
+    },
+    {
+      "path": "apps/runtime/src/services/sync/dm-shadow.ts",
+      "sha256": "eb5237f778963b15f73de1f47a2540c0ad978ff9e8008182803a3b75129c39fb"
+    },
+    {
+      "path": "scripts/fansly-events/corpus.ts",
+      "sha256": "b02e79615915bbe7fef09803a2400c49dc7eb436999917dc518d832dd3ae8198"
+    },
+    {
+      "path": "tests/dm-shadow.test.ts",
+      "sha256": "004bacf0409057617a3291ed8a1caa79729a0b8098a86d1030592410231f318e"
+    },
+    {
+      "path": "tests/dm-shadow-cursor.test.ts",
+      "sha256": "e214b7546134fe5ba5c61288ff4655937e0ff331800abc8bd7cff271c2df4cb3"
+    },
+    {
+      "path": "tests/dm-shadow-corpus.test.ts",
+      "sha256": "63f1feb60ca91dbdd1d52a632fa0b1fdcacad9ec5a9bc7f20b48cf1bc985df33"
+    },
+    {
+      "path": "tests/fansly-dm-shadow.integration.test.ts",
+      "sha256": "9e72cf1b0a86f6019c2adb34690b8fd41063484145da8608fcabc4e8be126ae7"
+    }
+  ],
+  "sourceSizes": [
+    {
+      "path": "apps/runtime/src/services/sync/dm-shadow-state.ts",
+      "lines": 114,
+      "maxLineLength": 87
+    },
+    {
+      "path": "apps/runtime/src/services/sync/dm-shadow.ts",
+      "lines": 130,
+      "maxLineLength": 103
+    },
+    {
+      "path": "scripts/fansly-events/corpus.ts",
+      "lines": 165,
+      "maxLineLength": 135
+    }
+  ],
+  "migrationsChanged": false,
+  "providerRequestsAdded": false,
+  "flagsChanged": false,
+  "reviews": {
+    "correctness": "review_pr162 closed incomplete-prefix P2 on tested tree; no remaining findings",
+    "quality": "quality_c1 closed metadata fixture P2 on tested tree; no remaining findings"
+  },
+  "initialCandidate": {
+    "tree": "98af02f794b05f7268d739caf7a39204969a9faf",
+    "check": "3261 unit passed with 9 existing skips",
+    "postgres": "32 passed / 1 failed on nonexistent fixture columns; retained logs and execution receipts are historical"
+  },
+  "productionValidation": "No deployment of this patch; historical source evidence only. A future release must preserve production ancestry.",
+  "publication": "Prepared locally; exception to one-stage/one-PR required because PR164 already merged."
+}

@@ -80,3 +80,89 @@ changed it. Pending receipts/revisions from later stages must not be deleted.
 Do not repair money by direct SQL writes. Production diagnostics use read_only
 inside READ ONLY transactions; privileged replay/rebuild commands require their
 own explicit approval. C2b/C2c, A1 and live WebSocket work retain their gates.
+
+## Retained snapshot audit (Decision 314)
+
+Deploy the additive readers 0187–0189 through the normal reviewed release,
+preserving all currently deployed source and migrations. No new flag is needed.
+The reserved `0186_ops_metrics_recent_series.sql` must be included and applied
+before 0187, or its reservation must be resolved before the audit release.
+Do not apply 0187 and add an unapplied 0186 later: the migration runner requires
+an applied prefix of the sorted files and rejects that ordering.
+The local exporter uses SSH only to run psql as read_only in the existing
+`agency-hub-postgres-1` container. It does not call Fansly or change stored data.
+
+Run once per page, with an explicit range covering its retained captures and an
+end timestamp already in the past. The output directory must not exist:
+
+```sh
+pnpm exec tsx scripts/fansly-events/export-earnings-audit.ts \
+  "$FANSLY_AUDIT_SSH_HOST" "$FANSLY_AUDIT_PAGE" \
+  "$FANSLY_AUDIT_FROM" "$FANSLY_AUDIT_TO" "$FANSLY_AUDIT_OUTPUT"
+```
+
+Use the same received-at range when comparing a bounded recheck. Each page's
+export has its own database snapshot; successive exports are not additive or
+one atomic agency-wide census. The transcript starts with the actual role,
+READ ONLY/isolation receipt and transaction time. Subsequent batches bind both
+the database snapshot and transaction time, and preserve microsecond cursors.
+
+The exporter sets `plan_cache_mode = force_custom_plan` locally within this
+transaction (Decision 318) and validates and retains the actual setting in the
+identity receipt. Cached generic plans can scan already exported prefixes when
+the nullable continuation remains a filter. Planning for the actual cursor keeps
+the bounded reads practical. The setting ends at rollback and changes no role,
+database or application configuration. A missing or different setting makes the
+export incomplete. The statement, session and response limits remain unchanged.
+
+After forward migrations 0190–0191 (Decision 317), PostgreSQL 16 compressed
+inline and CAS bodies can be read. A private raw-length helper bounds each copy
+to 64 KiB before decompression, equality or parsing. CAS catalog size and access
+are checked before body lookup. An unvalidated PostgreSQL major version fails
+closed at installation and on every observation-reader call.
+
+The sanitized parser input is also limited to 64 KiB, 512 array elements and
+256-byte identity strings. Numerics outside absolute value 1e100 or scale 100
+remain `shape_limit`: compact binary numerics must not expand into unbounded
+text. Unused fields are withheld before serialization. These are audit limits,
+not changes to the production parser.
+
+Each statement returns at most 100 rows. Up to eight statements travel in one
+network exchange, with at most 8 MiB per JSON line including its newline and
+64 MiB per group before parsing. Up to 200,000 fan/window keys and 10,000 pages
+per plane are allowed. Each statement stops after 15 seconds, lock waits after
+one second, and the local SSH session and remote psql each have a 120-second
+limit. Remote timeout escalates to a kill after one second. Incomplete response
+groups retain only the previously written prefix and never produce a report.
+
+Check `manifest.json` before using `report.json`: `completed` must be true, and
+SHA-256 of `snapshot.jsonl` must equal its `sha256`. A completed export is not
+necessarily a successful audit. `verified` also requires at least one matched
+fan/window, current parser stamps, projector catch-up, no scoped detached rows,
+no unavailable/rejected captures and no nonmatching projection outcomes.
+
+Amounts are provider mills. The report retains original/projected observation
+and event IDs, exact differences, counts and up to 100 nonmatching samples.
+The complete normalized source records remain in `snapshot.jsonl`; all output
+files are private. No provider response is reconstructed from transactions.
+
+Interpret `projection_pending` with the actual sequence watermark, then recheck
+after normal processing catches up. `outside_cohort` means a projected source
+falls outside the selected range. Historical `compressed_body`, current storage/size failures,
+unresolved receipts and detached rows prevent verification; do not replace them
+with zero, an empty payload or a successful check. Empty arrays identify no fan
+and establish no freshness. Explicit replay/rebuild remains a separate gate.
+
+Rollback can stop using these readers while preserving their additive migrations.
+The session-plan change can be rolled back by using the preceding exporter;
+large scopes may then time out again. Preserve those incomplete manifests.
+This audit does not change the C2b/C2c, A1 or WebSocket gates and cannot establish
+physical HTTP savings, quiet-correction coverage or fresh-event latency.
+
+
+If the read_only role is at its connection limit, record the incomplete manifest
+and wait for the other bounded diagnostics to finish before retrying. Do not
+raise the role limit. Run pages serially with a fresh output directory and
+cutoff, and retain the earlier attempt as separate evidence. First deployment
+readback: three exports completed, only Ari-1 verified; three attempts were
+incomplete. This is not C2a acceptance for the whole agency.

@@ -70,12 +70,6 @@ RUN --mount=type=cache,id=agency-hub-corepack-build-${BUILDARCH},target=/corepac
 
 FROM ${NODE_BASE_IMAGE} AS runtime
 
-ARG APP_DEPENDENCY_CHECKSUM=unknown
-ARG APP_SOURCE_REVISION=unknown
-
-LABEL agency-hub.dependency-checksum="${APP_DEPENDENCY_CHECKSUM}"
-LABEL agency-hub.source-revision="${APP_SOURCE_REVISION}"
-
 ENV NODE_ENV=production
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
@@ -101,5 +95,13 @@ COPY --from=build /app/apps/dashboard/dist ./apps/dashboard/dist
 COPY --from=build /app/apps/runtime/dist ./apps/runtime/dist
 COPY --from=build /app/packages/db/dist ./packages/db/dist
 COPY --from=build /app/packages/db/migrations ./packages/db/migrations
+
+# RUN implicitly receives every ARG declared in its stage. Keep release
+# metadata after the browser install so a new revision reuses that layer.
+ARG APP_DEPENDENCY_CHECKSUM=unknown
+ARG APP_SOURCE_REVISION=unknown
+
+LABEL agency-hub.dependency-checksum="${APP_DEPENDENCY_CHECKSUM}"
+LABEL agency-hub.source-revision="${APP_SOURCE_REVISION}"
 
 CMD ["node", "apps/runtime/dist/startup.js", "worker"]

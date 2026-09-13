@@ -827,7 +827,7 @@ describe("fan-summary short variant", () => {
     expect(JSON.stringify(built.userBlocks)).toContain("detailed fan profile review");
   });
 
-  it("short template carries the cache anchors (fan-agnostic static prefix)", () => {
+  it("short template keeps its anchor layout (fan-agnostic static prefix) and sends it uncached (Decision 319)", () => {
     const built = buildPrompt({
       ...fanSummaryBase,
       summaryMode: "short",
@@ -837,11 +837,11 @@ describe("fan-summary short variant", () => {
     });
     expect(built.userBlocks).toHaveLength(3);
     const [staticBlock, dynamicBlock, taskBlock] = built.userBlocks;
-    expect(staticBlock?.cache).toBe("1h");
+    expect(staticBlock?.cache).toBe("none");
     expect(staticBlock?.text).toContain("COMPACT RECAP");
     expect(staticBlock?.text).not.toContain("TRANSCRIPTBODY");
     expect(staticBlock?.text).not.toContain("SPENDBODY");
-    expect(dynamicBlock?.cache).toBe("5m");
+    expect(dynamicBlock?.cache).toBe("none");
     expect(dynamicBlock?.text).toContain("TRANSCRIPTBODY");
     expect(dynamicBlock?.text).toContain("SPENDBODY");
     expect(dynamicBlock?.text).toContain("most recent window only");

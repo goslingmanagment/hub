@@ -293,6 +293,12 @@ appends a row here in the same change (family law: updated-in-change).
 | 293 | Select completed run IDs before monitor payload | Rank narrow historical completion keys, then load the selected run by primary key; preserve health fields, scope, ordering and historical physical-attempt debt. |
 | 294 | Fansly C1 diagnostics | Retain the existing trigger and expose bounded decision, queue and reconcile-run evidence before choosing a follower fix. |
 | 295 | OnlyFans manual Ping | The chatter decides when to write: active conversations accept Ping with truthful prompt context. Fansly keeps its existing active gate and assembled prompt. |
+| 313 | Fansly A0 reason coverage | Retain six additional bounded pre-apply reason counters; legacy and unavailable offline categories remain null, without changing sweep policy or completion semantics. |
+| 314 | Fansly C2a projection audit | Compare retained earnings snapshots with full projection rows in one bounded read-only snapshot; unavailable bodies, detached data and projection lag prevent acceptance. |
+| 317 | Fansly C2a compressed snapshots and pagination | Bound decoded JSONB and numeric expansion before export; group eight psql statements per network exchange while retaining snapshot, completeness and timeout checks. |
+| 316 | Deployment delivery | Keep Chromium cache independent of revision; preserve unchanged Postgres on app releases; publish the tested main image after Quality Gate and deploy by GHCR digest with source/checksum/platform verification before quiesce. Full/auto/dist-only and rollback semantics remain available. |
+| 318 | Fansly C2a audit query plans | Use and retain a custom plan setting within the read-only export transaction so later keyset pages do not repeatedly scan exported prefixes. |
+| 319 | Prompt-cache spend | Cache only the fan-agnostic persona and template prefix (1h); send the per-fan context uncached except in coach-chat; send recaps fully uncached. Prompt text unchanged; only cache hints move. Amends #136, where the dossier "rides the dynamic 5m block". |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -12394,3 +12400,266 @@ the writers is the agent read plane's membership dataset. `page_dm_threads`
 keeps per-pass writes because `last_seen_generation` feeds retirement. Measured
 before the change: page_fans ~10k updates/min on ~350 rows, autovacuum every
 minute, 12 GB WAL/day after lz4. Witness: `tests/fan-churn.integration.test.ts`.
+
+## 313. Fansly A0: retain reason coverage without inventing historical counts
+
+2026-09-12. Six pre-apply head-diff categories previously survived only in
+`stateChangesBelowStop`. Add one bounded scalar counter per category to the
+existing diagnostic cursor/report. Measurement from the start of a runtime
+sweep initializes them to zero; starting midway through a sweep leaves them null.
+Legacy checkpoints default missing fields to null and preserve that unknown
+value for the remaining generation. A completed sweep can have incomplete
+reason coverage. Existing report rows are not rewritten.
+
+An exhaustive typed map covers all eleven reason types. Deduplicating counter
+names preserves the existing single unread increment when both unread reasons
+occur. The generic conversation count, rollback/material predicates, virtual
+stop and business sweep remain unchanged. No IDs, arrays, new flag, migration,
+provider call or polling change are introduced.
+
+The offline analyzer cannot observe runtime visibility, identity resolution or
+exclusion reason and marks those counters null. Its tier/time/sender counters
+compare retained metadata; runtime effective time/sender include repair and
+fallback. The new detail neither explains old generic observations nor clears
+A0/A1 gates. Rollback may strip the added cursor fields; re-upgrade then treats
+them as unknown instead of reconstructing zero history.
+
+Numbering follows main 295, deployed 296–300, performance 301–311 and reserved
+C2a audit 312. This follow-up reuses the A0 branch and worktree. On 12 September
+the owner approved an additional PR after PR164's merge and its deployment
+("да все разрешаю"); A0/A1 evidence and calendar gates remain unchanged.
+
+## Decision 314: Verify retained Fansly earnings against the projection (2026-09-12)
+
+C2a's identity fix is deployed, and the 12 September retained census found
+281,525 earnings observations at parser v7. Parser stamps do not prove that
+the final monetary rows and their source receipts agree. The existing
+read_only grants cannot read those rows or the actual sequence watermark.
+
+Add three narrowly scoped SQL readers and a local operator exporter. They
+require a single repeatable READ ONLY transaction, one Fansly page and a bounded
+received-at range. Freeze upper IDs, counts, the event bound and actual projector
+watermark; inventory attached and conventionally named detached observation/event
+partitions. Count scoped detached data rather than treating absent partitions as
+empty. Stable pagination and count reconciliation must complete before acceptance.
+
+Authorize the observation envelope before resolving a CAS reference. Retain only
+the six inputs used by the existing v7 parser, preserving its events and rejection
+semantics. Account/access-class/codec mismatches, missing or disagreeing copies,
+compressed or oversized bodies remain explicit incomplete evidence. No general
+payload API or base-table grant is added. Full projection reads include zero and
+negative values, source event/observation identities and legacy source-ID fallback.
+
+The local comparison uses the production parser and its timestamp/observation-ID
+ordering. Missing/extra rows, stale values, unresolved sources, out-of-range
+sources and projector lag remain distinct. Empty arrays never establish a fan
+check, and an empty-only cohort cannot pass. Private output retains an exact hash
+of normalized JSON records and an incomplete manifest on interrupted collection.
+The exporter bounds statement time, total transaction time, batch size and cleanup.
+
+No flag, producer, projector, cadence, replay or repair changes. This is the
+missing C2a acceptance read; it does not establish production parity or authorize
+C2b activation. See the [C2a runbook](runbooks/fansly-earnings-correctness.md).
+
+Numbering rechecked on 12 September against main `c76c6db0` and the active
+release branches. Main ends at 295; deployed `31b73a96` uses 296–300, and
+performance branch `b204454f` reserves 301–311 and migration 0186. This unpublished
+audit therefore moves from 296 to 312 and from 0186–0188 to 0187–0189. Its three
+SQL bodies are unchanged. Production's read-only catalog at 19:32 UTC lists
+0180–0185 and no audit migration; the three audit readers are absent.
+
+Recheck numbering and production ancestry before opening the follow-up PR and
+assembling a release. Applied 0182–0185 stay immutable. This main-based branch
+alone does not contain all currently deployed C1 and interface changes.
+The reserved 0186 must be included and applied before 0187, or its reservation
+must be resolved before this audit ships. Adding an unapplied 0186 afterward
+violates the migration runner's contiguous-prefix requirement.
+
+At 20:45:46 UTC, a read_only READ ONLY query confirmed 182 applied migrations
+through 0186 on production 96a86c1fcdde. The predecessor-order gate is resolved;
+the audit release must preserve this production tree and its migration bytes.
+The owner approved the additional PR and deployments on 12 September
+("да все разрешаю"). This approval does not establish projection parity or
+replace C2a/C2b verification requirements.
+
+Before publication, PR176 merged as c1ca5e37 and main now ends at Decision 313.
+The still-unpublished C2a audit is therefore Decision 314. Migrations 0187–0189
+and all implementation/test bodies are unchanged; the new main contributes
+the independently verified A0 reason counters. Combined validation follows
+this synchronization before opening the audit PR.
+
+
+## Decision 317: Complete bounded C2a reads of compressed snapshots (2026-09-13)
+
+The first deployed Decision 314 audit verified Ari-1. Lilly-1 and Lora-3 completed
+with 171 and 1,658 PostgreSQL-compressed bodies unavailable; two larger pages
+hit the local 120-second limit. Lora-1 separately failed the read_only connection
+limit before exporting data. None of these failures justifies a monetary repair.
+
+Forward migrations 0190–0191 retain the existing restricted readers and grants.
+A private PostgreSQL 16 internal alias reads the raw varlena length before
+TOAST decompression. Both inline and CAS copies must fit 64 KiB before equality
+or parsing; CAS account, access, codec and catalog-size checks still precede
+body lookup. Installation and each reader call reject an unvalidated PostgreSQL
+major version, including after pg_upgrade.
+
+Binary JSONB size does not bound decimal text expansion. Export only the six
+parser inputs, at most 512 rows, strings up to 256 bytes, and numerics with
+absolute value at most 1e100 and scale at most 100. Unsupported shapes remain
+unavailable. The sanitized JSON must also fit 64 KiB. This changes audit access,
+not the production parser or financial semantics.
+
+The exporter groups at most eight independent psql statements per network
+exchange. Each page function executes once in a materialized expression;
+psql keeps and quotes the continuation locally. Frozen counts determine the
+exact number of pages, including empty cohorts and exact multiples of 100.
+Validate every response's scope, order, cursor and exhaustion before continuing.
+The transport bounds each JSON line and the response group, refuses unexpected
+output, and withholds a report after any incomplete group or failed cleanup.
+Statements retain their 15-second limit. The local session and remote psql both
+have 120-second limits; remote cleanup escalates after one second.
+
+No flag, provider call, repair, selection or cadence changes. Re-run each page's
+read-only audit after deployment. A completed export with unavailable bodies or
+nonmatching outcomes is still unverified. Applied migrations remain immutable.
+Rollback may restore the previous reader through a forward migration or stop
+using the audit; retained evidence and financial data are unchanged.
+
+Numbered from main e222b2df (Decision 314), with 315 reserved for the deployed
+replay selector and 316 for deployment optimization by agreement with their
+owners. See the [runbook](runbooks/fansly-earnings-correctness.md).
+
+## Decision 316: Reuse the browser layer and deploy the image that CI tested
+
+2026-09-13. Deployment logs showed 392–400 seconds repeatedly installing browser
+system packages, while JS/CSS built in roughly 32 seconds in parallel; a changing
+runtime ARG was implicitly part of the expensive RUN cache key. Full image
+transfers also resent all existing layers through a slow workstation network.
+The owner accepted A then B, explicitly retaining full-first `auto` and keeping
+CI test-speed optimization separate.
+
+Runtime revision/checksum ARGs and labels now follow browser installation.
+Changing either label alone cannot rerun that installation. The dependency
+checksum protocol is shared by CI and deploy and remains byte-compatible with
+existing pinned full bases. A Dockerfile edit still needs one new full base for
+subsequent dist-only deployments.
+
+Ordinary deploys recreate only API, worker and scheduler. Before quiesce and
+again before promotion they verify an existing healthy PostgreSQL instance,
+its Compose service hash and resolved image identity, and unchanged resolved
+project/Postgres/shared resource definitions. Infrastructure changes require
+explicit `--recreate-scope stack`. Existing Compose dependency health ordering
+and the whole-stack emergency rollback remain. Aborting before recreation resumes
+existing stopped sync containers with `compose start`, avoiding dependency
+reconciliation after infrastructure drift was refused. This does not promise that
+removing a PostgreSQL restart alone eliminates every sync-health delay.
+
+The existing CI builds and smoke-tests an amd64 image with checkout revision and
+dependency labels. Only a push to main may hand that same image across jobs and
+publish to GHCR after the successful Quality Gate. The publisher validates
+artifact integrity, image ID, labels and platform; it has package write permission
+but executes no application/build/test code. PR/manual runs do not publish.
+The published digest is the deployment input, not a mutable commit tag.
+
+`--mode pull --pull-image ghcr.io/...@sha256:...` requires a clean matching
+checkout, refuses untracked release inputs, pulls/verifies the immutable candidate
+before stopping old services and leaves the existing migration/capability/health
+and rollback path in control. Release files and local CLI still use the same
+checkout. It needs no local Docker build; old full/dist-only/auto modes remain.
+No production access or deployment is granted by CI publication.
+
+Phase timestamps distinguish candidate preparation, migrations, recreation,
+service/sync/dashboard checks and the local CLI tail. Local CLI install optimization,
+legacy quiesce removal, and CI throughput changes are outside this change.
+
+## Decision 318: Plan each bounded earnings audit page for its cursor (2026-09-13)
+
+Decision 317 made compressed sources readable. Four production pages passed
+full projection comparison; Lora-1 and Lilly-2 still exceeded the 120-second
+export limit. PostgreSQL generic plans can retain the nullable cursor predicate
+as a filter and scan the already exported prefix. A local 120,000-row fixture
+compares the same keyset predicates, order and limit with a reduced projection
+of ID and timestamp. Early/late results match under generic and custom planning;
+the retained plans expose the different index bounds.
+
+Set `plan_cache_mode = force_custom_plan` with SET LOCAL in the existing
+repeatable-read / READ ONLY exporter transaction, before reading its scope.
+Validate and retain the actual setting with the role/isolation identity. This
+changes only the audit session. Keep all readers, applied migrations, parser
+semantics, frozen counts, cursor checks and resource limits unchanged.
+
+A production diagnostic using the unchanged deployed readers and this session
+setting exported all 107,196 Lilly-2 captures and 2,462 projection rows in
+46.817 seconds. Its snapshot had 22 unparsed captures and 46 pending projection
+rows, so it correctly remained unverified. Separate snapshots and transport
+timing do not prove a production internal query plan or projection parity.
+
+Docker Postgres coverage must verify the retained setting and failure when it
+is absent or wrong, plus restoration of an inherited generic-plan setting in
+the same psql session after rollback. Rollback uses the preceding exporter;
+large scopes may time out again and must retain incomplete manifests.
+
+No new flag, provider call, migration, repair, polling change or C2b activation.
+Numbered from main `605b931f`, whose highest decision number is 317. The merged
+deployment decision 316 and deployed decision 315 remain untouched. This owner-approved follow-up reuses the C2a branch/worktree.
+See the [runbook](runbooks/fansly-earnings-correctness.md).
+
+## Decision 319: Cache only what is read back (2026-09-13)
+
+Anthropic Console, 30 days to 2026-09-12: $139.36 billed, of which 5m cache
+writes were $95.27 and cache reads $7.52. On the Sonnet 5 days (09-08 to 09-12)
+5m writes were 79% of spend and each written token was read back 1.12 times.
+Owner-session read-only measurement of the gateway ledger and restricted
+generations explains why. The per-fan context block (transcript, spending,
+subscription, dossier, split instructions) was marked 5m, but in 1,375
+same-conversation pairs it was byte-identical to its predecessor only for
+duplicates and tail-only changes. The transcript is a fixed-count window that
+slides on every new message (67% of fast-reply pairs); even append-only pairs
+miss because fan data follows the transcript in the same block; and 60% of
+follow-ups arrive 5-60 minutes later. A one-day simulation matched the ledger:
+284 of 293 fast-reply 5m writes and 110 of 110 improve-draft writes were never
+read. The 1h persona and template prefix was read on almost every request, and
+it stays a breakpoint of its own, so dropping the later 5m breakpoint loses none
+of those reads.
+
+A never-read 5m write costs 1.25x the uncached price. `PromptFeaturePolicy`
+therefore gains `promptCache`:
+
+- `static` (default): the persona and template prefix keep their 1h
+  breakpoints; the context block is sent uncached. This amends #136: the
+  dossier no longer rides a 5m block.
+- `full` (coach-chat only): transcript and coach dialog keep their 5m blocks
+  as designed in #273. The ledger shows no measurable 5m reads there either
+  (9 requests in 30 days), so this is kept for turn-by-turn coaching, not
+  for money.
+- `none` (fan-summary, full and short): every block uncached. Recaps are
+  one-shot and the ledger shows 1.83M written and zero read tokens in 30
+  days. The policy is per feature: if Recap ever leaves Opus 4.6 (4,096-token
+  minimum) for a model with a lower minimum, revisit it. The owner keeps
+  Recap on Opus 4.6.
+
+No text the model sees changes: block text and boundaries are byte-identical
+for every feature, verified by building every feature with both builders; only
+cache hints move.
+
+Expected effect at the Sonnet 5 volume, out of roughly $120 a month: about
+$11-15 from the context block and about $2 from recaps. Verify on the Console
+cache page after deploy: 5m writes fall to coach-only volume, uncached input
+rises by about the former write volume, and 1h reads stay flat.
+
+Considered and dropped by the owner: moving improve-draft's fan-agnostic
+`## Rules`, `## Sounding human` and examples (4,835 characters) before
+`## Current Draft` so they would ride the 1h prefix. It is worth about
+$1.5-3.5 a month, and #273 judged improve-draft in its current order; the
+reorder would need a blind quality comparison first.
+
+Considered and not done: a byte-stable transcript (anchored window, several
+transcript blocks, 1h TTL). Against this change's uncached baseline it models
+at about $8-12 a month for a stateful per-conversation anchor, loses money for
+stateless hash anchors, and needs an extension release, extra Fansly paging
+and a quality re-check; revisit if fast-reply volume doubles or the cold-request
+share falls to about 0.25. Moving the dossier before the transcript as its own
+1h block is a separable hub-only option worth about $6 a month, pending a
+quality check. Rejected by the owner: moving Recap to Sonnet 5 and
+deduplicating double-fired requests. Rollback is reverting this change; there
+are no data, contract or migration changes. Numbered after Decision 318 (#181).

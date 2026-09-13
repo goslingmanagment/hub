@@ -1,0 +1,59 @@
+{
+  "base": "605b931fb6ce767d3d3e6ea9559f30e59bb756a6",
+  "worktree": "fix/fansly-c2a-earnings",
+  "runs": [
+    {
+      "name": "check",
+      "command": [
+        "pnpm",
+        "check"
+      ],
+      "startedAt": "2026-09-12T23:18:59.111171+00:00",
+      "completedAt": "2026-09-12T23:19:54.119303+00:00",
+      "exitCode": 0,
+      "sha256": "cb1cc24aae14affd20c2eeab4e5310911ef5c29e2ef849896ecec89d76ec19fd"
+    },
+    {
+      "name": "postgres",
+      "command": [
+        "pnpm",
+        "exec",
+        "vitest",
+        "run",
+        "--no-file-parallelism",
+        "tests/fan-earnings-audit-export.integration.test.ts",
+        "tests/fan-earnings-audit-reconciliation.integration.test.ts",
+        "tests/fan-earnings-audit-scale.integration.test.ts",
+        "tests/fan-earnings-audit.integration.test.ts",
+        "tests/fan-earnings-audit-toast.integration.test.ts",
+        "tests/fan-earnings-audit-paging.integration.test.ts",
+        "tests/fan-earnings-identity.integration.test.ts",
+        "tests/fan-earnings-projection.integration.test.ts",
+        "tests/capture-payloads.repository.integration.test.ts",
+        "tests/erasure-page-owned-tables.integration.test.ts"
+      ],
+      "startedAt": "2026-09-12T23:19:54.120113+00:00",
+      "completedAt": "2026-09-12T23:20:49.538595+00:00",
+      "exitCode": 0,
+      "sha256": "778a6dff95c5ffa60dbddcf2961e220fb4547455cd5dac56d60ff563b695cfd1"
+    }
+  ],
+  "results": {
+    "check": {
+      "testsPassed": 3364,
+      "filesPassed": 300,
+      "existingSkipped": 9
+    },
+    "postgres": {
+      "testsPassed": 61,
+      "filesPassed": 10,
+      "skipped": 0,
+      "durationSeconds": 54.3
+    }
+  },
+  "sourceFiles": {
+    "scripts/fansly-events/earnings-audit-export.ts": "52c3be594d76839f3d5f8a3ab79db20b34016c8f923606d5e920f3157124e3df",
+    "tests/fan-earnings-audit-export.integration.test.ts": "3293549dbbfe97245afc1c9a57dd5ace5b8312973766713af93e88e2aaffc838"
+  },
+  "testedHead": "a41f7844"
+}

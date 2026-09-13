@@ -1,6 +1,12 @@
 # Fansly C1 — follower reconciliation diagnostics
 
-Latest: [natural completion through 18:37 UTC](OBSERVATION-20260912T183741Z.md).
+Latest branch validation: [13 September main sync](MAIN-SYNC-20260913.md).
+The existing C1 draft now includes main `e913b7a6`; its 3,365 unit tests and
+86 Docker-Postgres tests pass. Independent review found no merge defects.
+This branch update introduces no policy change and is not a deployment.
+Safe suppression and equivalent presence coverage remain unproven.
+
+Historical observation: [natural completion through 18:37 UTC](OBSERVATION-20260912T183741Z.md).
 Lilly-2 request 2541 finishes in generation 792 with two actual retirements;
 the next two comparisons match and request no work. All 49 requested decisions
 in the cumulative window have an exact-generation terminal. Redundancy remains
