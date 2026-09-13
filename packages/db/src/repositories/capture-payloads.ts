@@ -795,6 +795,59 @@ export async function readEnvelopeCapturePayload(
   return { status: "loaded", json: row.json_body };
 }
 
+export type EnvelopeCapturePayloadBatchRead = EnvelopeCapturePayloadRead
+  /** A large body uses the ordinary single-envelope read, limiting the
+   * amount retained by a batch without treating it as missing or unreadable. */
+  | { status: "deferred" };
+
+/** The same envelope/representation boundary as the single reader, for at
+ * most eight references read off an authorized page. Each result corresponds
+ * to its input position (including duplicate refs). Large bodies are deferred
+ * to the single reader: at most eight 512 KiB logical JSON bodies are returned
+ * together. This is a fresh lookup, not a cache or a liveness promise. */
+export async function readEnvelopeCapturePayloadBatch(
+  db: Database,
+  input: { envelope: CapturePayloadEnvelopeKind; refs: readonly CapturePayloadRef[] },
+): Promise<EnvelopeCapturePayloadBatchRead[]> {
+  if (input.refs.length === 0) return [];
+  if (input.refs.length > 8) throw new RangeError("Capture payload batches contain at most eight envelopes");
+  const values = sql.join(input.refs.map((ref, position) => sql`(
+    ${position}::integer, ${ref.bucketMonth}::date, ${ref.objectId}::bigint
+  )`), sql`, `);
+  const result = await db.execute<{
+    representation: string | null;
+    has_json: boolean;
+    json_body: unknown;
+    deferred: boolean;
+  }>(sql`
+    select body.representation, body.has_json, body.json_body, body.deferred
+    from (values ${values}) requested(position, bucket_month, object_id)
+    left join lateral (
+      select o.representation, (jb.object_id is not null) as has_json,
+             case when o.logical_bytes <= 524288 then jb.body else null end as json_body,
+             (o.logical_bytes > 524288) as deferred
+      from capture_payload_objects o
+      left join capture_json_hot_bodies jb
+        on jb.bucket_month = o.bucket_month and jb.object_id = o.object_id
+      where o.bucket_month = requested.bucket_month and o.object_id = requested.object_id
+      limit 1
+    ) body on true
+    order by requested.position
+  `);
+  if (result.rows.length !== input.refs.length) throw new Error("Capture payload batch lost an envelope result");
+  return result.rows.map(row => {
+    if (row.representation === null) return { status: "object_missing" };
+    const representation = row.representation as CapturePayloadRepresentation;
+    if (representation !== ENVELOPE_REPRESENTATION[input.envelope]) {
+      return { status: "representation_mismatch", representation };
+    }
+    // Presence is the joined key, not JSON null or the deferred projection.
+    if (!row.has_json) return { status: "body_missing" };
+    if (row.deferred) return { status: "deferred" };
+    return { status: "loaded", json: row.json_body };
+  });
+}
+
 async function loadBodyRow(
   db: Database,
   representation: CapturePayloadRepresentation,

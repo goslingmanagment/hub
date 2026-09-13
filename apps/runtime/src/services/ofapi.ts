@@ -13,6 +13,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 
 import {
+  assertHttpRequestActive,
   classifyTransportFailure,
   executeObservedRequest,
   iterateErrorChain,
@@ -1021,6 +1022,7 @@ export function createOfapiClient(input: {
       retries: options.retries ?? OFAPI_OBSERVED_RETRIES,
       waitForRateLimit: async () => {
         const waited = await waitForRequestSlot("bulk");
+        assertHttpRequestActive();
         // Admission is outside the transport retry catch, but is evaluated
         // before every physical attempt, including a permitted HTTP retry.
         await authorizeOperation(options.operation, "GET", options.pathname);
@@ -1028,8 +1030,17 @@ export function createOfapiClient(input: {
       },
       execute: async () => {
         await input.beforeAccountRequest?.(options.context.pageId, accountId, generation);
+        assertHttpRequestActive();
         collectionAttempt += 1;
         await input.beforeCollectionRequest?.({ operation: options.operation, method: "GET", accountId, pageId: options.context.pageId, requestId: `${requestId}:${collectionAttempt}`, context: options.context.collectionContext });
+        try {
+          assertHttpRequestActive();
+        } catch (error) {
+          // Admission finished, but no HTTP was dispatched. Release only
+          // this unused collection reservation, as the governed lane does.
+          await input.onCollectionCancelled?.(`${requestId}:${collectionAttempt}`);
+          throw error;
+        }
         const response = await fetch(url, {
           method: "GET",
           headers: {

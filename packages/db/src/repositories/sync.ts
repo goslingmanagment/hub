@@ -356,6 +356,8 @@ export async function closeOrphanedSyncRuns(
     errorSummary: string;
   },
 ): Promise<CloseOrphanedSyncRunsResult> {
+  // Recheck the UPDATE target after a row-lock wait: a finalizer may have
+  // completed a run that the candidate snapshot still sees as running.
   const result = await db.execute<{ outcome: "failed" | "partial" }>(sql`
     with orphaned_runs as (
       select sr.id,
@@ -389,6 +391,7 @@ export async function closeOrphanedSyncRuns(
         finished_at = ${input.finishedAt}
     from orphaned_runs
     where sr.id = orphaned_runs.id
+      and sr.outcome = 'running'
     returning sr.outcome as "outcome"
   `);
 
@@ -413,6 +416,8 @@ export async function closeInactiveSyncRuns(
   // Activity is derived per RUNNING run through the (sync_run_id, …) indexes;
   // aggregating the whole attempts/events tables every planner cycle was the
   // third-largest consumer on the VPS (docs/diag/2026-09-11-agency-hub-load).
+  // The UPDATE target repeats the running guard so a finalizer that commits
+  // while this statement waits on its row lock keeps its terminal result.
   const result = await db.execute<{ outcome: "failed" | "partial" }>(sql`
     with running_runs as (
       select sr.id
@@ -461,6 +466,7 @@ export async function closeInactiveSyncRuns(
         finished_at = ${input.finishedAt}
     from inactive_runs
     where sr.id = inactive_runs.id
+      and sr.outcome = 'running'
     returning sr.outcome as "outcome"
   `);
 
