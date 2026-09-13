@@ -1,0 +1,199 @@
+{
+  "report": {
+    "schemaVersion": 1,
+    "evidenceKind": "live_socket_probe",
+    "pageLabel": "lilly-1",
+    "credentialSource": "existing_rest_session",
+    "credentialRouteGeneration": "c7a7ea0c8cf2fce9c2f3e697482e8abce3ae9767869991c6a44a9dfddf7226da",
+    "generationUnchanged": true,
+    "accountBinding": "unverified",
+    "completeness": "unverified",
+    "readerLatencyMeasured": false,
+    "restRequests": 0,
+    "connectionAttempts": 1,
+    "observation": {
+      "startedAt": "2026-09-13T22:28:13.308Z",
+      "finishedAt": "2026-09-13T22:30:13.373Z",
+      "stopReason": "deadline",
+      "sessionFrameSeen": true,
+      "closeCode": null,
+      "framesReceived": 9,
+      "framesRetained": 9,
+      "records": [
+        {
+          "receivedAt": "2026-09-13T22:28:13.912Z",
+          "diagnostic": {
+            "bytes": 427,
+            "nodes": [
+              {
+                "path": [],
+                "kind": "session_verified_frame",
+                "transportType": 1
+              }
+            ],
+            "truncated": false,
+            "rejected": null
+          }
+        },
+        {
+          "receivedAt": "2026-09-13T22:28:33.809Z",
+          "diagnostic": {
+            "bytes": 42,
+            "nodes": [
+              {
+                "path": [],
+                "kind": "pong",
+                "transportType": 2
+              }
+            ],
+            "truncated": false,
+            "rejected": null
+          }
+        },
+        {
+          "receivedAt": "2026-09-13T22:28:53.560Z",
+          "diagnostic": {
+            "bytes": 447,
+            "nodes": [
+              {
+                "path": [],
+                "kind": "service",
+                "transportType": 10000,
+                "serviceId": 4,
+                "eventType": 2,
+                "event": {
+                  "fields": [
+                    "type"
+                  ],
+                  "unknownFieldCount": 1,
+                  "references": []
+                }
+              }
+            ],
+            "truncated": false,
+            "rejected": null
+          }
+        },
+        {
+          "receivedAt": "2026-09-13T22:28:53.787Z",
+          "diagnostic": {
+            "bytes": 42,
+            "nodes": [
+              {
+                "path": [],
+                "kind": "pong",
+                "transportType": 2
+              }
+            ],
+            "truncated": false,
+            "rejected": null
+          }
+        },
+        {
+          "receivedAt": "2026-09-13T22:29:13.801Z",
+          "diagnostic": {
+            "bytes": 42,
+            "nodes": [
+              {
+                "path": [],
+                "kind": "pong",
+                "transportType": 2
+              }
+            ],
+            "truncated": false,
+            "rejected": null
+          }
+        },
+        {
+          "receivedAt": "2026-09-13T22:29:18.244Z",
+          "diagnostic": {
+            "bytes": 447,
+            "nodes": [
+              {
+                "path": [],
+                "kind": "service",
+                "transportType": 10000,
+                "serviceId": 4,
+                "eventType": 2,
+                "event": {
+                  "fields": [
+                    "type"
+                  ],
+                  "unknownFieldCount": 1,
+                  "references": []
+                }
+              }
+            ],
+            "truncated": false,
+            "rejected": null
+          }
+        },
+        {
+          "receivedAt": "2026-09-13T22:29:33.806Z",
+          "diagnostic": {
+            "bytes": 42,
+            "nodes": [
+              {
+                "path": [],
+                "kind": "pong",
+                "transportType": 2
+              }
+            ],
+            "truncated": false,
+            "rejected": null
+          }
+        },
+        {
+          "receivedAt": "2026-09-13T22:29:38.237Z",
+          "diagnostic": {
+            "bytes": 447,
+            "nodes": [
+              {
+                "path": [],
+                "kind": "service",
+                "transportType": 10000,
+                "serviceId": 4,
+                "eventType": 2,
+                "event": {
+                  "fields": [
+                    "type"
+                  ],
+                  "unknownFieldCount": 1,
+                  "references": []
+                }
+              }
+            ],
+            "truncated": false,
+            "rejected": null
+          }
+        },
+        {
+          "receivedAt": "2026-09-13T22:29:54.174Z",
+          "diagnostic": {
+            "bytes": 42,
+            "nodes": [
+              {
+                "path": [],
+                "kind": "pong",
+                "transportType": 2
+              }
+            ],
+            "truncated": false,
+            "rejected": null
+          }
+        }
+      ]
+    }
+  },
+  "execution": {
+    "container": "hub-fansly-w0-75a2dffb80e34c64bbb938261ec3b405",
+    "exitCode": 0,
+    "timedOut": false,
+    "attachStopConfirmed": true,
+    "cleanupExitCode": 0,
+    "cleanupConfirmed": true
+  },
+  "stderr": "",
+  "environmentRemoved": true,
+  "ownedContainerAbsent": true
+}

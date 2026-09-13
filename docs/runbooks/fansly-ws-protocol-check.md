@@ -1,8 +1,17 @@
 # Fansly W0 protocol check
 
-Authority: the accepted events plan §7 and cross-check DECISION §7; Decision 288.
+Authority: the accepted events plan §7 and cross-check DECISION §7; historical
+Decision 288 and the owner session-choice amendment in Decision 321.
 One W0 draft PR holds offline preparation and later approved evidence. An offline
 fixture pass does not establish the live protocol or authorize a new connection.
+
+On 13 September the owner chose reuse of the existing encrypted Fansly REST
+session stored by Hub. This replaces the Management-only restriction, including
+the previous owner-token prohibition for this selected existing session. It is
+the provider credential used by Hub, not an administrative Hub API access token.
+The first limited probe on `lilly-1` completed on 13 September; its sanitized
+receipt and still-unverified gates are recorded in the stage STATUS.
+See [the exact owner choice](../../investigations/fansly-w0-protocol-2026-09-10/OWNER-CHOICE-20260913.md).
 
 ## Offline diagnostic export
 
@@ -54,36 +63,91 @@ claimed direction. `candidate_inner_service` is an alternate shape for research,
 not a confirmed account-socket wire form. No receipt here certifies business
 materialization, presence, fan-out, completeness or event-to-reader latency.
 
+## Bounded existing-session probe
+
+The separate probe now reuses the encrypted REST session. It opens one fixed
+`wsv3` connection for 5–120 seconds, with no reconnect, REST request, pacing
+write, business writer or credential change. It records received metadata only.
+A type-1 frame remains distinct from account binding; the report always leaves
+binding, completeness, reader latency and stage readiness unverified. Its private
+correlation key is ephemeral, so this short report cannot pair an independent
+browser capture. Use the separate offline exporter for an approved paired corpus.
+
+Build a new private bundle with `node scripts/fansly-ws/build-probe.mjs <new.mjs>`.
+The bundle resolves runtime dependencies from `/app/apps/runtime`; source files
+or tsx need not exist in the production image. This is an operator artifact,
+not an API/worker/scheduler deployment or a new runtime flag.
+
+`scripts/fansly-ws/run-probe.py` requires `--bundle`, `--environment`, `--image`,
+`--network`, `--page` and a new `--output` directory; `--seconds` defaults to 120.
+Before invoking it, verify the immutable image ID and the existing Docker network.
+The private environment file supplies the existing runtime encryption keys and
+the existing runtime DATABASE_URL, retained within the trusted production host.
+The pool defaults to read-only transactions; every short REPEATABLE READ,
+READ ONLY snapshot verifies its mode before reading credentials. No privilege
+grant, role fallback or provider-token export is part of execution. Ordinary
+psql diagnostics still use read_only.
+
+The launcher uses a disposable container with 256 MiB memory, no swap, 0.25 CPU,
+64 PIDs, a read-only filesystem and dropped capabilities. A host-side 150-second
+deadline kills attach and force-removes only this run's UUID-named container.
+SIGTERM and failed attach shutdown also pass through container cleanup. Inspect
+`execution.json` for confirmed cleanup; a failed removal is unresolved. Do not
+run the entrypoint inside a production role's container: V8 heap limits alone
+cannot bound undici's fragmented-message buffers, and destroying its dispatcher
+does not forcibly close an upgraded socket.
+
+Reports stop at 1,000 frames or 8 MiB of metadata; incoming-message size is checked
+after transport delivery. Output and errors stay in the private report directory.
+Exit zero requires reaching the deadline, a valid top-level type-1 frame, and
+matching before/after credential-route generations. This means a completed short
+observation only: it proves no account identity, continuous unchanged generation,
+fan-out, presence, six-hour continuity, savings or reader latency.
+
 ## Live gates — each needs explicit approval
 
-Before any probe, record the exact test account/page, dedicated Management
-Session, credential/route generation, its page proxy, agreed interval, expected
-events, observers and stop deadline. Confirm page/account through the authorized
-REST path; do not substitute an owner token or migrate all REST streams to the
-Management Session. Credential creation/revocation and sending test events are
-separate actions. No such action is implemented by this reader.
+Before the limited `lilly-1` probe, record its exact page/account binding,
+existing credential and route generations, page proxy, agreed interval,
+expected events, observers and stop deadline. Confirm binding through the
+authorized REST path for that credential generation. Use the existing encrypted
+credential path inside the trusted process; never expose raw auth in CLI
+arguments, environment exports, stdout, logs, exceptions, clipboard, chat or
+diagnostic files. Do not invent a token-reading command or copy a browser token.
+
+The bounded executable uses the existing trusted runtime credential path.
+The retained permission read shows why the separate diagnostic read_only role
+cannot perform that lookup; no grants to it are proposed.
+The public server contract remains unproven. Owner approval of reuse does not
+prove compatibility or expand this first probe to other pages. New credentials,
+test messages and disruptive experiments require their own agreed scope.
+REST polling and its working credential remain unchanged.
 
 1. Observe selected Received frames with the native Firefox Network Monitor.
    Do not patch `window.WebSocket`, copy auth to the clipboard or use global
    Work Offline. An absent socket may require a separately approved test-profile
    navigation or waiting for a normal reconnect.
 2. Verify a real type-1 response and page/actor binding with REST evidence for the
-   same credential generation. Record Management Session capability by scope.
+   same credential generation. Record the selected session's capability by scope.
    A pong, HTTP 101 or historical bundle alone does not pass this gate.
 3. Use browser plus one receiver and independent evidence for the same agreed
-   events. Distinguish same-token fan-out from separate browser/management
+   events. Distinguish same-token fan-out from separate browser/receiver
    sessions. An independent observer measures presence with browser off and WS
    off/on. No events means this test is inconclusive.
-4. On the dedicated test account, retain at least six hours of continuity, a
+4. On the agreed test account, retain at least six hours of continuity, a
    short and a greater-than-three-minute receiver-only gap, and REST catch-up
    receipts to the prior confirmed boundary. Separate recovered state from
    transient facts that cannot be recovered. Do not assert provider replay.
 
+The first limited probe does not pass the fan-out, presence or continuity gates.
+Wider or sustained use remains gated by their evidence and agreed scope.
+
 Stop the test receiver on auth conflict, lost browser delivery, unexpected 4xxx,
 transport failure or REST restrictions and investigate before resuming. Do not
 call logout, revoke a working session or park healthy REST solely on WS 401.
+Keep WS auth failure separate from REST auth failure; do not rotate the stored
+credential automatically or retry a failed WS generation indefinitely.
 Preserve the timeline, failed cases, unknown scope and recovery receipts.
 
 B0 remains blocked until those gates pass. Its capture ownership, proxy transport,
 durability, erasure, generation fences and seven-day shadow are separate work.
-This offline PR contains no deployable receiver and needs no production flag.
+This W0 PR contains no durable receiver and needs no production flag.

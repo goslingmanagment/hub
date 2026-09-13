@@ -1,6 +1,6 @@
 {
   "comment": "Kernel Stage 18 ratchet: strict platform comparison sites (`platform` + optional whitespace + `===` or `!==`) outside the adapter packages. Count may only decrease (target ~0 as handlers move behind the registry); decreases update this file.",
-  "budget": 155,
+  "budget": 156,
   "note": " 2026-07-06: +1 for the Stage 32 named platform substitution (applyPlatformWording in ai/prompts/builder.ts) — a deliberate wording branch, not platform logic drift. 2026-07-10: +1 for the fast-reply freshness union-read gate in ai/features/index.ts — the union reads dm_message_archive (the OFAPI post-settle store); Fansly has no webhook lane, so the mode read is OnlyFans-only by design. 2026-07-18: +1 for the P1-2 fan-erasure reachability fix (isFanslyRequest in ai/features/index.ts) — Fansly's conversationRef is the canonical groupId not the fan, so the coach-chat / short-fan-summary fanRef gate is Fansly-specific by design. 2026-07-18 (round-3 P1-3): +1 for the ai:feature-smoke --fan CLI guard (cli.ts) — the smoke requires --fan only on Fansly (conversationRef is the groupId there); on OnlyFans the conversation IS the fan id, so the guard mirrors the server's Fansly-only fanRef contract by design. 2026-07-18 (round-4 P1-3): the persisted fan_ref fallback that once shared the isFanslyRequest branch was REMOVED (it poisoned canonical rows by stamping a groupId into fan_ref; legacy rows are already erasure-reachable via the conversation_ref arm). The gate keeps the branch, so the count is unchanged at 52. 2026-07-22: +1 for the link-stats reconcile page filter (ofapi-link-stats-sync.ts) — mirrors the chargebacks reconcile's onlyfans-only fleet selection by design. 2026-09-07 (review #144, fix 3): re-based 53 → 155 because the ratchet regex was tightened from the literal `platform ===` to `platform[[:space:]]*(===|!==)`: a branch written `platform!==\"onlyfans\"` (no spaces, negated) in projections/fansly-engagement.ts had slipped past the count unseen. That site was REMOVED (the ofapi.post_like_observed event is OnlyFans by construction — minted only by the webhook family from OFAPI-journaled observations), the 53 `===` sites are unchanged, and the remaining 102 are PRE-EXISTING `!==` comparisons the old regex never saw, listed as of this commit in `not_equal_sites_2026-09-07` (file:line). None is new platform-logic drift; each is to be retired the same way as the `===` sites. The printed label stays \"platform === branch sites\" because tests/platform-registry.test.ts pins it.",
   "not_equal_sites_2026-09-07": [
     "apps/runtime/src/modules/catalog/index.ts:510",
@@ -105,5 +105,10 @@
     "packages/db/src/repositories/agent-read.ts:1718",
     "packages/db/src/repositories/agent-read.ts:2084",
     "packages/db/src/repositories/catalog.ts:788"
-  ]
+  ],
+  "w0_2026_09_13": {
+    "decision": 321,
+    "added_sites": 1,
+    "reason": "Refuse non-Fansly pages before loading the existing session for the bounded W0 probe."
+  }
 }

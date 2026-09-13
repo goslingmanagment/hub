@@ -301,6 +301,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 318 | Fansly C2a audit query plans | Use and retain a custom plan setting within the read-only export transaction so later keyset pages do not repeatedly scan exported prefixes. |
 | 319 | Prompt-cache spend | Cache only the fan-agnostic persona and template prefix (1h); send the per-fan context uncached except in coach-chat; send recaps fully uncached. Prompt text unchanged; only cache hints move. Amends #136, where the dossier "rides the dynamic 5m block". |
 | 320 | Fansly A0 head regressions | Exercise old incoming/outgoing heads and non-null timestamp rollback through the real sweep; retain a synthetic three-sweep dangling-pointer clearing without claiming message deletion or safe early stop. |
+| 321 | Fansly W0 session choice | Reuse the existing encrypted page REST session for the first limited lilly-1 socket probe; replace Management-only, preserve credential secrecy, healthy REST and every remaining live gate. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -12718,3 +12719,46 @@ acceptance, physical savings or reader latency. Rollback removes the added
 tests and documentation; it has no runtime effect. Numbered from main
 `e913b7a6056d991d5cd657789a834b435d86aeaa`, whose last decision is 319.
 See [validation status](../investigations/fansly-a0-head-regressions-2026-09-13/STATUS.md).
+
+## Decision 321: Reuse the existing Fansly REST session for W0 (2026-09-13)
+
+The owner answered «да давай использовать его же» after the proposal to reuse
+the Fansly session token already used by Hub's REST integration. This explicitly
+replaces the 8 September Management-only restriction and its owner-token
+prohibition for the selected existing credential. Historical Decision 288
+remains unchanged; this entry amends its session-choice gate.
+
+Use the existing encrypted page credential through Hub's trusted credential
+path. The first limited probe candidate is `lilly-1`. No raw auth is exposed
+through CLI arguments, environment exports, logs, exceptions, clipboard, chat
+or diagnostic artifacts. This means the Fansly provider session, not a Hub
+administrative API token. Do not create, rotate or revoke a working credential
+as part of this choice, and do not migrate or suppress REST polling.
+
+The bounded probe is an operator-only entrypoint with a fixed endpoint and a
+dedicated page dispatcher. It reuses the trusted runtime database configuration
+with short REPEATABLE READ, READ ONLY snapshots. This does not change the
+read_only-only rule for ordinary psql diagnostics or grant new DB privileges.
+A separate container and external deadline
+bound undici transport memory and lifetime. It exports only received metadata,
+makes no REST requests and performs no database writes. Its one additional
+platform guard rejects non-Fansly pages before decrypting the session; the platform
+branch budget increases from 155 to 156 for this explicit boundary.
+
+The public stable server contract remains unproven. Binding, type-1 verification
+distinct from pong, fan-out,
+presence and six-hour continuity/gap evidence remain W0 requirements. A short
+probe does not pass them, extend to other pages or authorize B0/B1. Record exact
+page/account, credential and route generations, proxy, interval and stop
+deadline before the probe. Preserve failed and unknown evidence.
+
+On auth conflict or WS capability failure, stop the test receiver and preserve
+healthy REST. No logout, working-session revocation, automatic token rotation
+or indefinite WS retry. Ending the probe is its rollback; no business data,
+credentials or REST policy need to be reversed. Neither the implementation nor
+its local tests establish a live connection or passed stage gate. Local validation
+and independent review are recorded in the W0 status; no new runtime flag exists.
+
+Numbered from main `0a08365fbefa545397f4e91a2eae3fca7c36c444`, whose latest
+decision is 320. See [the owner-choice record](../investigations/fansly-w0-protocol-2026-09-10/OWNER-CHOICE-20260913.md)
+and [W0 runbook](runbooks/fansly-ws-protocol-check.md).
