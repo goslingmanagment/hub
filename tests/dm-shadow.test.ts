@@ -90,7 +90,22 @@ describe("DM virtual-stop diagnostics", () => {
     expect(advanceDmShadow(state, page(head())).stopPage).toBe(4);
   });
 
-  it("counts old incoming/outgoing changes and head deletion as discrepancies", () => {
+  it("counts both unread reasons once per conversation and ignores changes before the stop", () => {
+    const change = head({ reasons: ["unread_count", "last_unread_message_id", "visibility"] });
+    const beforeStop = advanceDmShadow(initial(), page(change));
+    expect(beforeStop).toMatchObject({
+      stopPage: null, stateChangesBelowStop: 0,
+      unreadChangesBelowStop: 0, visibilityChangesBelowStop: 0,
+    });
+    const stopped = advanceDmShadow(beforeStop, page(head()));
+    const result = advanceDmShadow(stopped, page(change));
+    expect(result).toMatchObject({
+      stateChangesBelowStop: 1, unreadChangesBelowStop: 1, visibilityChangesBelowStop: 1,
+    });
+    expect(stopped.unreadChangesBelowStop).toBe(0);
+  });
+
+  it("counts new rows, sender changes and null head IDs below the stop", () => {
     const stopped = advanceDmShadow(initial(), page(head()));
     const result = advanceDmShadow(stopped, page(
       head({ reasons: ["missing_row"], previousMessageId: null }),

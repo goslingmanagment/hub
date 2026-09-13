@@ -111,6 +111,39 @@ every discrepancy; retain K=1/3/5 × overlap=0/60s/300s sensitivity. A quiet wee
 is not coverage. No-op chunks and healthy processes do not prove freshness.
 Keep the original polling freshness until a separate stop contract is accepted.
 
+### Reason coverage in the A0 follow-up (Decision 313)
+
+New runtime sweeps count all eleven pre-apply head-diff reason types. The two
+unread reasons share one counter per conversation. `stateChangesBelowStop`
+counts changed conversations, so it is not the sum of individual categories.
+Rollback and material counters remain separate predicates.
+
+Six added counters expose visibility, unresolved identity, exclusion reason,
+subscription tier, effective head timestamp and effective sender differences.
+Only measurement from the start of a runtime sweep initializes them to zero.
+Starting diagnostics midway through a sweep leaves them null. A legacy
+checkpoint missing one of these fields loads it as `null`; resume preserves that unknown value
+through terminal persistence. A completed legacy sweep may therefore have
+`status=complete` and null reason counters. Completion does not certify full
+reason coverage, and old report rows missing those fields are also unknown.
+
+The existing JSON report/export carries these scalars without a migration or
+new flag. Group measurements by field availability and sweep start; never
+coalesce absent/null counters to zero. This does not explain historical generic
+counts retroactively or restart the original shadow clock. A1's completeness
+and discrepancy gates still apply to the chosen measurement window.
+
+Offline corpus comparison remains raw-to-raw. It cannot observe runtime
+visibility, identity resolution or exclusion reason, so those three counters
+are null. Its tier/time/sender counts describe retained metadata differences;
+runtime time/sender comparisons use effective values after repair/fallback.
+Neither comparison alone establishes a provider action or message loss.
+
+Rolling back to the earlier parser drops the new fields from resumed cursors.
+If the newer code resumes that generation again, the fields remain unknown;
+it must not reconstruct their earlier history as zero. Saved terminal reports
+and business cursor semantics remain unchanged.
+
 ## Rollback
 
 Through the normal owner-approved Configuration save, set this allowlist to

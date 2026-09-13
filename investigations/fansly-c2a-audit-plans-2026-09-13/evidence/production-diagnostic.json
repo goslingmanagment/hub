@@ -1,0 +1,57 @@
+{
+  "diagnosticVariant": "session-only force_custom_plan; deployed SQL and exporter unchanged",
+  "source": "74aac5093cfc665853cc8e5b6cc661de7119b917",
+  "startedAt": "2026-09-12T23:07:24.697Z",
+  "completedAt": "2026-09-12T23:08:11.514Z",
+  "elapsedMs": 46817.324333,
+  "identity": {
+    "asOf": "2026-09-12T23:07:26.468826+00:00",
+    "role": "read_only",
+    "readOnly": "on",
+    "isolation": "repeatable read",
+    "planCacheMode": "force_custom_plan"
+  },
+  "result": {
+    "completed": true,
+    "verified": false,
+    "failure": null
+  },
+  "report": {
+    "observationCount": 107196,
+    "projectionCount": 2462,
+    "observations": {
+      "valid": 107196
+    },
+    "parseDebt": 22,
+    "legacySources": 0,
+    "projectorCaughtUp": false,
+    "outcomes": {
+      "matched": 2416,
+      "projection_pending": 46
+    },
+    "verified": false
+  },
+  "manifest": {
+    "operation": "earnings_audit",
+    "source": "normalized_json_from_read_only_psql",
+    "startedAt": "2026-09-12T23:07:24.700Z",
+    "completedAt": "2026-09-12T23:08:11.514Z",
+    "completed": true,
+    "records": 1099,
+    "sha256": "8bb07001a4dcff9413527e2ca844e57b2d7f6e5faf2d2709cec3b80b87f08a97",
+    "failure": null,
+    "page": "lilly-2",
+    "from": "2026-01-01T00:00:00Z",
+    "to": "2026-09-12T23:07:24.697Z"
+  },
+  "diagnosticScriptSha256": "fc296f2217ad8f02dbc55f9d1e36b7db0979396b044b135ee18d3c02f1c3748c",
+  "scope": {
+    "page": "lilly-2",
+    "from": "2026-01-01T00:00:00+00:00",
+    "to": "2026-09-12T23:07:24.697+00:00",
+    "asOf": "2026-09-12T23:07:26.468826+00:00",
+    "eventHighSeq": "1018676",
+    "projectionHighSeq": "1018632"
+  },
+  "interpretation": "Diagnostic variant; not a production inner-plan capture. No projection parity or HTTP/latency claim."
+}

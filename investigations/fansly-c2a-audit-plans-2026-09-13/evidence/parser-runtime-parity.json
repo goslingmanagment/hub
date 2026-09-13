@@ -1,0 +1,5 @@
+{
+  "method": "esbuild removes types; emitted parser bodies match",
+  "production": "78e3407671cb6bc2b622d0746e5cb1c3434fc734e5e6f1a44593e53f6babca37",
+  "main": "78e3407671cb6bc2b622d0746e5cb1c3434fc734e5e6f1a44593e53f6babca37"
+}

@@ -7,6 +7,9 @@ on:
       - main
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 # Superseded PR heads stop burning runners; main always runs to completion so
 # every main commit keeps a finished gate record.
 concurrency:
@@ -18,6 +21,11 @@ jobs:
     name: Static checks
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    outputs:
+      source_revision: ${{ steps.metadata.outputs.source_revision }}
+      dependency_checksum: ${{ steps.metadata.outputs.dependency_checksum }}
+      image_id: ${{ steps.build-image.outputs.image_id }}
+      artifact_id: ${{ steps.upload-image.outputs.artifact-id }}
 
     steps:
       - name: Checkout
@@ -54,17 +62,67 @@ jobs:
       - name: Production build
         run: pnpm build:production
 
+      - name: Exact checkout image metadata
+        id: metadata
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain --untracked-files=no)"
+          bash scripts/deploy-metadata.sh >> "$GITHUB_OUTPUT"
+
       - name: Production Docker image build
-        run: docker build --target runtime -t agency_hub_core/runtime:ci .
+        id: build-image
+        env:
+          SOURCE_REVISION: ${{ steps.metadata.outputs.source_revision }}
+          DEPENDENCY_CHECKSUM: ${{ steps.metadata.outputs.dependency_checksum }}
+        run: |
+          docker build --platform linux/amd64 --target runtime \
+            --build-arg "APP_SOURCE_REVISION=$SOURCE_REVISION" \
+            --build-arg "APP_DEPENDENCY_CHECKSUM=$DEPENDENCY_CHECKSUM" \
+            -t agency_hub_core/runtime:ci .
+          docker image inspect --format 'image_id={{.Id}}' agency_hub_core/runtime:ci >> "$GITHUB_OUTPUT"
 
       - name: Chromium Headless Shell runtime smoke
         run: docker run --rm --entrypoint node agency_hub_core/runtime:ci scripts/smoke-playwright-runtime.mjs
+
+      - name: Startup capability manifest smoke
+        run: |
+          capabilities="$(docker run --rm --entrypoint node agency_hub_core/runtime:ci apps/runtime/dist/startup.js print-public-capabilities)"
+          node -e '
+            const capabilities = JSON.parse(process.argv[1]);
+            if (!Array.isArray(capabilities) || !capabilities.every(value => typeof value === "string")) {
+              throw new Error("Public capability manifest must be an array of strings");
+            }
+            process.stdout.write(JSON.stringify(capabilities) + "\n");
+          ' "$capabilities"
 
       # NOTE: this step still starts Postgres containers — tests/voice-profiles
       # and tests/voice-notes-sweep are DB-backed despite not being named
       # *.integration.test.ts, so they are not in the --exclude list.
       - name: Reliable unit tests
         run: pnpm test:unit
+
+      # Only a trusted main push hands an image to the publishing job. The
+      # artifact comes from this exact run, after both final-image smoke tests;
+      # publishing still waits for every existing Quality Gate dependency.
+      - name: Save checked production image
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          EXPECTED_IMAGE_ID: ${{ steps.build-image.outputs.image_id }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/checked-runtime"
+          test "$(docker image inspect --format '{{.Id}}' agency_hub_core/runtime:ci)" = "$EXPECTED_IMAGE_ID"
+          docker save --output "$RUNNER_TEMP/checked-runtime/runtime-image.tar" agency_hub_core/runtime:ci
+
+      - name: Upload checked production image
+        id: upload-image
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v7
+        with:
+          name: checked-runtime-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/checked-runtime/runtime-image.tar
+          if-no-files-found: error
+          compression-level: 1
+          retention-days: 1
 
   # The sync-critical suite is ~120 database acquisitions over ~104 files and is
   # the whole reason a PR used to wait ~18 minutes. Splitting it across runners
@@ -132,3 +190,60 @@ jobs:
           echo "static=${{ needs.static.result }} integration=${{ needs.integration.result }}"
           [ "${{ needs.static.result }}" = "success" ] || exit 1
           [ "${{ needs.integration.result }}" = "success" ] || exit 1
+
+  publish:
+    name: Publish checked production image
+    runs-on: ubuntu-latest
+    needs: [static, quality]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.quality.result == 'success'
+    timeout-minutes: 15
+    # The only write token in this workflow. PRs and manual dispatches cannot
+    # enter this job; no checkout/build/test code runs with package permission.
+    permissions:
+      packages: write
+    outputs:
+      image: ${{ steps.publish.outputs.image }}
+      digest: ${{ steps.publish.outputs.digest }}
+
+    steps:
+      - name: Download this run's checked image
+        uses: actions/download-artifact@v8
+        with:
+          artifact-ids: ${{ needs.static.outputs.artifact_id }}
+          path: ${{ runner.temp }}/checked-runtime
+          merge-multiple: true
+          digest-mismatch: error
+
+      - name: Verify checked image identity and labels
+        env:
+          EXPECTED_IMAGE_ID: ${{ needs.static.outputs.image_id }}
+          EXPECTED_SOURCE_REVISION: ${{ needs.static.outputs.source_revision }}
+          EXPECTED_DEPENDENCY_CHECKSUM: ${{ needs.static.outputs.dependency_checksum }}
+        run: |
+          docker load --input "$RUNNER_TEMP/checked-runtime/runtime-image.tar"
+          test "$(docker image inspect --format '{{.Id}}' agency_hub_core/runtime:ci)" = "$EXPECTED_IMAGE_ID"
+          test "$(docker image inspect --format '{{index .Config.Labels "agency-hub.source-revision"}}' agency_hub_core/runtime:ci)" = "$EXPECTED_SOURCE_REVISION"
+          test "$(docker image inspect --format '{{index .Config.Labels "agency-hub.dependency-checksum"}}' agency_hub_core/runtime:ci)" = "$EXPECTED_DEPENDENCY_CHECKSUM"
+          test "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' agency_hub_core/runtime:ci)" = 'linux/amd64'
+
+      - name: Sign in to GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+
+      - name: Publish exact commit and record immutable digest
+        id: publish
+        run: |
+          registry_image="ghcr.io/${GITHUB_REPOSITORY,,}/runtime"
+          commit_image="${registry_image}:${GITHUB_SHA}"
+          docker tag agency_hub_core/runtime:ci "$commit_image"
+          docker push "$commit_image"
+          image_ref="$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$commit_image" | awk -v prefix="${registry_image}@" 'index($0, prefix) == 1 { print; exit }')"
+          digest="${image_ref##*@}"
+          [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]
+          printf 'image=%s\ndigest=%s\n' "$image_ref" "$digest" >> "$GITHUB_OUTPUT"
+          printf 'Checked production image for %s: %s\n' "$GITHUB_SHA" "$image_ref" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Sign out of GHCR
+        if: always()
+        run: docker logout ghcr.io

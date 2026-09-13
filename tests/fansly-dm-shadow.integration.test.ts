@@ -120,6 +120,41 @@ describe("A0 shadow against the real sweep", () => {
     expect((await source.checkpoint())?.state).toMatchObject({ membershipCertified: true });
   });
 
+  it("retains pre-apply reason categories after the real writer repairs the stored head", async () => {
+    const pages = [0, 1, 2, 3].map((n) => groupsPage({
+      conversations: [{
+        groupId: `g${n}`, subscriptionTierId: n === 3 ? "new-tier" : null,
+        headCreatedAt: HEAD_CREATED_AT_MS + (n === 3 ? 60_000 : 0),
+      }], total: 4, offset: n * 100, done: n === 3,
+    }));
+    const source = await fixture(true, pages);
+    await db.pool.query(`update page_dm_threads set is_visible = false,
+      metadata = coalesce(metadata, '{}'::jsonb) ||
+        '{"unresolvedIdentity":true,"messageSyncExcludedReason":"partner_missing_from_aggregation_accounts"}'::jsonb,
+      last_message_sender_id = 'previous-sender'
+      where platform_conversation_id = 'g3'`);
+    await source.chunk(3);
+    expect((await source.checkpoint())?.state).toMatchObject({ diagnostics: { stopPage: 3 } });
+    expect((await source.chunk(1)).satisfied).toBe(true);
+    const measured = (await report()).sweeps[0];
+    expect(measured).toMatchObject({ status: "complete", diagnostics: {
+      stateChangesBelowStop: 1, visibilityChangesBelowStop: 1,
+      unresolvedIdentityChangesBelowStop: 1, exclusionReasonChangesBelowStop: 1,
+      subscriptionTierChangesBelowStop: 1, headTimestampChangesBelowStop: 1,
+      headSenderChangesBelowStop: 1, changedHeadsBelowStop: 0,
+      unreadChangesBelowStop: 0, flagsChangesBelowStop: 0, headRollbacksBelowStop: 0,
+    } });
+    const repaired = await db.pool.query(`select is_visible, metadata,
+      subscription_tier_id, last_message_sender_id,
+      last_message_at from page_dm_threads where platform_conversation_id = 'g3'`);
+    expect(repaired.rows[0]).toEqual({
+      is_visible: true, metadata: {},
+      subscription_tier_id: "new-tier", last_message_sender_id: "fan-g3",
+      last_message_at: new Date(HEAD_CREATED_AT_MS + 60_000),
+    });
+    expect(source.calls).toHaveLength(4);
+  });
+
   it("keeps a missing material read unknown without rolling back the sweep", async () => {
     const source = await fixture(true);
     vi.spyOn(dbRepo, "readFanslyDmShadowMaterial").mockRejectedValue(new Error("read unavailable"));
@@ -129,6 +164,46 @@ describe("A0 shadow against the real sweep", () => {
     } });
   });
 
+  it.each([
+    { name: "old incoming head", senderId: "fan-g3", senderRole: "fan",
+      headCreatedAt: HEAD_CREATED_AT_MS + 60_000, senderChanges: 0, rollbacks: 0 },
+    { name: "old outgoing head", senderId: PAGE_ACCOUNT_ID, senderRole: "model",
+      headCreatedAt: HEAD_CREATED_AT_MS + 60_000, senderChanges: 1, rollbacks: 0 },
+    { name: "rollback to an older non-null head", senderId: "fan-g3", senderRole: "fan",
+      headCreatedAt: HEAD_CREATED_AT_MS - 60_000, senderChanges: 0, rollbacks: 1 },
+  ])("retains $name below the virtual stop after applying it", async (scenario) => {
+    // All provider timestamps are older than the certified boundary. The two
+    // new heads still move forward from the stored head; only the third rolls back.
+    const pages = [0, 1, 2, 3].map((n) => groupsPage({
+      conversations: [{ groupId: `g${n}`, ...(n === 3 ? {
+        lastMessageId: "replacement-g3", headCreatedAt: scenario.headCreatedAt,
+        headSenderId: scenario.senderId,
+      } : {}) }], total: 4, offset: n * 100, done: n === 3,
+    }));
+    const source = await fixture(true, pages);
+    await source.chunk(3);
+    expect((await source.checkpoint())?.state).toMatchObject({ diagnostics: { stopPage: 3 } });
+    expect((await source.chunk(1)).satisfied).toBe(true);
+
+    expect((await report()).sweeps[0]).toMatchObject({ status: "complete", diagnostics: {
+      pageCount: 4, stopPage: 3, pagesBelowStop: 1, resumes: 1,
+      stateChangesBelowStop: 1, changedHeadsBelowStop: 1, newHeadsBelowStop: 0,
+      headTimestampChangesBelowStop: 1, headSenderChangesBelowStop: scenario.senderChanges,
+      headRollbacksBelowStop: scenario.rollbacks, invalidMarkersBelowStop: 0,
+      missingHotHeadsBelowStop: 1,
+    } });
+    const applied = await db.pool.query(`select last_message_id, last_message_at,
+      last_message_sender_id, last_message_sender_role
+      from page_dm_threads where platform_conversation_id = 'g3'`);
+    expect(applied.rows).toEqual([{
+      last_message_id: "replacement-g3", last_message_at: new Date(scenario.headCreatedAt),
+      last_message_sender_id: scenario.senderId, last_message_sender_role: scenario.senderRole,
+    }]);
+    expect(source.calls).toEqual([0, 100, 200, 300].map((offset) => ({
+      method: "messaging_groups", offset, limit: 100, sortOrder: 1, flags: 0,
+    })));
+  });
+
   it("marks a disabled continuation incomplete and preserves the full sweep", async () => {
     const source = await fixture(true);
     await source.chunk(2);
@@ -136,6 +211,42 @@ describe("A0 shadow against the real sweep", () => {
     expect((await source.chunk(2)).satisfied).toBe(true);
     expect((await source.checkpoint())?.state).not.toHaveProperty("diagnostics");
     expect((await report()).sweeps[0]).toMatchObject({ status: "incomplete", reason: "disabled_during_sweep" });
+  });
+
+  it("completes a legacy sweep without inventing its missing reason counts", async () => {
+    const source = await fixture(true);
+    await source.chunk(3);
+    await db.pool.query(`update page_sync_cursors set state = jsonb_set(
+      state, '{diagnostics}', (state -> 'diagnostics') - array[
+        'visibilityChangesBelowStop', 'unresolvedIdentityChangesBelowStop',
+        'exclusionReasonChangesBelowStop', 'subscriptionTierChangesBelowStop',
+        'headTimestampChangesBelowStop', 'headSenderChangesBelowStop'
+      ]) where stream = 'dm_conversations'`);
+    expect((await source.chunk(1)).satisfied).toBe(true);
+    expect((await report()).sweeps[0]).toMatchObject({ status: "complete", diagnostics: {
+      stateChangesBelowStop: 1, flagsChangesBelowStop: 1,
+      visibilityChangesBelowStop: null, unresolvedIdentityChangesBelowStop: null,
+      exclusionReasonChangesBelowStop: null, subscriptionTierChangesBelowStop: null,
+      headTimestampChangesBelowStop: null, headSenderChangesBelowStop: null,
+    } });
+    expect((await source.checkpoint())?.state).toMatchObject({ membershipCertified: true });
+    expect(source.calls).toHaveLength(4);
+  });
+
+  it("keeps the unobserved prefix unknown when shadow starts during a running sweep", async () => {
+    const source = await fixture(false);
+    await source.chunk(3);
+    expect((await source.checkpoint())?.state).not.toHaveProperty("diagnostics");
+    source.app.config.fanslyDmShadowPageAllowlist = "shadow";
+    expect((await source.chunk(1)).satisfied).toBe(true);
+    expect((await report()).sweeps[0]).toMatchObject({ status: "incomplete", diagnostics: {
+      completeCoverage: false, visibilityChangesBelowStop: null,
+      unresolvedIdentityChangesBelowStop: null, exclusionReasonChangesBelowStop: null,
+      subscriptionTierChangesBelowStop: null, headTimestampChangesBelowStop: null,
+      headSenderChangesBelowStop: null,
+    } });
+    expect((await source.checkpoint())?.state).toMatchObject({ membershipCertified: true });
+    expect(source.calls).toHaveLength(4);
   });
 
   it("distinguishes exact live hot receipts from deleted rows and measures known debt latency", async () => {

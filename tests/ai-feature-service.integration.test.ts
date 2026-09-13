@@ -2641,8 +2641,9 @@ describe("fan-dossier context (Decision #136)", () => {
     expect(text).toContain("the transcript is authoritative");
     // The financial section never rides along — fresh spend data has its own block.
     expect(text).not.toContain("типсует");
-    // The dossier lives in the ephemeral dynamic block, not the 1h static prefix.
-    const dynamicBlock = capture.input!.body.prompt.userBlocks.find((block) => block.cache === "5m");
+    // The dossier lives in the per-fan dynamic block, not the 1h static prefix.
+    const dynamicBlock = capture.input!.body.prompt.userBlocks[1];
+    expect(dynamicBlock?.cache).toBe("none");
     expect(dynamicBlock?.text).toContain("## Fan Dossier");
     const staticBlock = capture.input!.body.prompt.userBlocks.find((block) => block.cache === "1h");
     expect(staticBlock?.text).not.toContain("## Fan Dossier");

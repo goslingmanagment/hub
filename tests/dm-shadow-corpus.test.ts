@@ -2,10 +2,10 @@ import { describe, expect, it } from "vitest";
 import { DmShadowCorpusAnalyzer } from "../scripts/fansly-events/corpus.ts";
 
 const START = Date.UTC(2026, 8, 1, 12);
-function head(n: number) {
+function head(n: number, subscriptionTierId: string | null = null) {
   return { groupId: `g${n}`, lastMessageId: `m${n}`, embeddedId: `m${n}`, embeddedMatches: 1,
     timestamp: START - 3_600_000, senderId: "fan", unreadCount: 0, flags: 0,
-    lastUnreadMessageId: null, subscriptionTierId: null };
+    lastUnreadMessageId: null, subscriptionTierId };
 }
 function page(id: number, offset: number, heads: ReturnType<typeof head>[], certified = false) {
   return { id, pageLabel: "lilly-2", capturedAt: new Date(START + id * 1000).toISOString(),
@@ -36,6 +36,50 @@ describe("retained DM corpus comparison", () => {
     const analyzer = primed();
     analyzer.accept({ ...page(3, 0, [head(0)], true), runOutcome });
     expect(analyzer.report().sweeps[1]).toMatchObject({ status: "incomplete", reason: "run_unverified" });
+  });
+
+  it("counts retained metadata changes while leaving runtime-only categories unknown", () => {
+    const analyzer = primed();
+    analyzer.accept(page(3, 0, Array.from({ length: 100 }, (_, n) => head(n))));
+    analyzer.accept(page(4, 100, [head(100), {
+      ...head(101, "new-tier"), senderId: "new-sender", timestamp: START - 1_800_000,
+    }], true));
+    expect(analyzer.report().sweeps[1]).toMatchObject({ status: "complete", diagnostics: {
+      stateChangesBelowStop: 1, subscriptionTierChangesBelowStop: 1,
+      headTimestampChangesBelowStop: 1, headSenderChangesBelowStop: 1,
+      visibilityChangesBelowStop: null, unresolvedIdentityChangesBelowStop: null,
+      exclusionReasonChangesBelowStop: null,
+    } });
+  });
+
+  it("counts a dangling list pointer clearing once across three certified sweeps", () => {
+    // Sanitized Lora-1 shape: the embedded head was already unavailable before
+    // the list pointer became null. A second null group is an unchanged control.
+    const analyzer = new DmShadowCorpusAnalyzer({ depth: 1, overlapMs: 0 });
+    const dangling = { ...head(101), embeddedId: null, timestamp: null, senderId: null };
+    const cleared = { ...dangling, lastMessageId: null };
+    const empty = { ...head(100), lastMessageId: null, embeddedId: null,
+      timestamp: null, senderId: null };
+    [dangling, cleared, cleared].forEach((target, index) => {
+      const id = index * 2 + 1;
+      analyzer.accept(page(id, 0, Array.from({ length: 100 }, (_, n) => head(n))));
+      analyzer.accept({ ...page(id + 1, 100, [], true), heads: [empty, target] });
+    });
+
+    const result = analyzer.report();
+    expect(result.invalidRecords).toBe(0);
+    expect(result.sweeps.map((sweep) => sweep.status)).toEqual(["priming", "complete", "complete"]);
+    expect(result.sweeps[1]?.diagnostics).toMatchObject({
+      stopPage: 1, pagesBelowStop: 1, conversationsBelowStop: 2,
+      stateChangesBelowStop: 1, changedHeadsBelowStop: 1, headRollbacksBelowStop: 1,
+      headTimestampChangesBelowStop: 0, headSenderChangesBelowStop: 0,
+      invalidMarkersBelowStop: 2, missingHotHeadsBelowStop: 0, unknownMaterialChecks: 102,
+    });
+    expect(result.sweeps[2]?.diagnostics).toMatchObject({
+      stopPage: 1, stateChangesBelowStop: 0, changedHeadsBelowStop: 0,
+      headRollbacksBelowStop: 0, invalidMarkersBelowStop: 2,
+      missingHotHeadsBelowStop: 0, unknownMaterialChecks: 102,
+    });
   });
 
   it("keeps truncated, restarted and duplicate sweeps out of the success denominator", () => {

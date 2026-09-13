@@ -25,15 +25,28 @@ function hasValidMarker(conversation: DmShadowConversation) {
     validTimestamp(conversation.timestampMs);
 }
 
+const REASON_COUNTERS = {
+  missing_row: "newHeadsBelowStop",
+  last_message_id: "changedHeadsBelowStop",
+  unread_count: "unreadChangesBelowStop",
+  last_unread_message_id: "unreadChangesBelowStop",
+  conversation_flags: "flagsChangesBelowStop",
+  visibility: "visibilityChangesBelowStop",
+  unresolved_identity: "unresolvedIdentityChangesBelowStop",
+  message_sync_excluded_reason: "exclusionReasonChangesBelowStop",
+  subscription_tier_id: "subscriptionTierChangesBelowStop",
+  last_message_at: "headTimestampChangesBelowStop",
+  last_message_sender_id: "headSenderChangesBelowStop",
+} as const satisfies Record<ConversationHeadDiffReason, keyof DmShadowState>;
+
 function countDiscrepancies(state: DmShadowState, item: DmShadowConversation) {
-  const reasons = new Set(item.reasons);
-  if (reasons.has("missing_row")) state.newHeadsBelowStop += 1;
-  if (reasons.has("last_message_id")) state.changedHeadsBelowStop += 1;
-  if (item.reasons.length > 0) state.stateChangesBelowStop += 1;
-  if (reasons.has("unread_count") || reasons.has("last_unread_message_id")) {
-    state.unreadChangesBelowStop += 1;
+  // Two unread reasons still count one changed conversation in that category.
+  const counters = new Set(item.reasons.map((reason) => REASON_COUNTERS[reason]));
+  for (const counter of counters) {
+    const value = state[counter];
+    if (value !== null) state[counter] = value + 1;
   }
-  if (reasons.has("conversation_flags")) state.flagsChangesBelowStop += 1;
+  if (item.reasons.length > 0) state.stateChangesBelowStop += 1;
   if (item.previousMessageId !== null && (
     item.listMessageId === null ||
     (validTimestamp(item.timestampMs) && validTimestamp(item.previousTimestampMs) &&
