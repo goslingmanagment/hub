@@ -33,6 +33,7 @@ type ConversationSpec = {
   subscriptionTierId?: string | null;
   lastUnreadMessageId?: string | null;
   headCreatedAt?: number;
+  headSenderId?: string;
   headContent?: string;
   /** The aggregation block carries no `lastMessage` for this group. */
   headMissing?: boolean;
@@ -81,7 +82,7 @@ export function groupsPage(input: {
       : {
         lastMessage: {
           id: headIdOf(spec),
-          senderId: `fan-${spec.groupId}`,
+          senderId: spec.headSenderId ?? `fan-${spec.groupId}`,
           content: spec.headContent ?? `hello from ${spec.groupId}`,
           createdAt: spec.headCreatedAt ?? HEAD_CREATED_AT_MS,
         },
