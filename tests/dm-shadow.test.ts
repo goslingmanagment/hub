@@ -105,7 +105,7 @@ describe("DM virtual-stop diagnostics", () => {
     expect(stopped.unreadChangesBelowStop).toBe(0);
   });
 
-  it("counts old incoming/outgoing changes and head deletion as discrepancies", () => {
+  it("counts new rows, sender changes and null head IDs below the stop", () => {
     const stopped = advanceDmShadow(initial(), page(head()));
     const result = advanceDmShadow(stopped, page(
       head({ reasons: ["missing_row"], previousMessageId: null }),

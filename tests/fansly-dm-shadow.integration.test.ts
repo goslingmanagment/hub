@@ -164,6 +164,46 @@ describe("A0 shadow against the real sweep", () => {
     } });
   });
 
+  it.each([
+    { name: "old incoming head", senderId: "fan-g3", senderRole: "fan",
+      headCreatedAt: HEAD_CREATED_AT_MS + 60_000, senderChanges: 0, rollbacks: 0 },
+    { name: "old outgoing head", senderId: PAGE_ACCOUNT_ID, senderRole: "model",
+      headCreatedAt: HEAD_CREATED_AT_MS + 60_000, senderChanges: 1, rollbacks: 0 },
+    { name: "rollback to an older non-null head", senderId: "fan-g3", senderRole: "fan",
+      headCreatedAt: HEAD_CREATED_AT_MS - 60_000, senderChanges: 0, rollbacks: 1 },
+  ])("retains $name below the virtual stop after applying it", async (scenario) => {
+    // All provider timestamps are older than the certified boundary. The two
+    // new heads still move forward from the stored head; only the third rolls back.
+    const pages = [0, 1, 2, 3].map((n) => groupsPage({
+      conversations: [{ groupId: `g${n}`, ...(n === 3 ? {
+        lastMessageId: "replacement-g3", headCreatedAt: scenario.headCreatedAt,
+        headSenderId: scenario.senderId,
+      } : {}) }], total: 4, offset: n * 100, done: n === 3,
+    }));
+    const source = await fixture(true, pages);
+    await source.chunk(3);
+    expect((await source.checkpoint())?.state).toMatchObject({ diagnostics: { stopPage: 3 } });
+    expect((await source.chunk(1)).satisfied).toBe(true);
+
+    expect((await report()).sweeps[0]).toMatchObject({ status: "complete", diagnostics: {
+      pageCount: 4, stopPage: 3, pagesBelowStop: 1, resumes: 1,
+      stateChangesBelowStop: 1, changedHeadsBelowStop: 1, newHeadsBelowStop: 0,
+      headTimestampChangesBelowStop: 1, headSenderChangesBelowStop: scenario.senderChanges,
+      headRollbacksBelowStop: scenario.rollbacks, invalidMarkersBelowStop: 0,
+      missingHotHeadsBelowStop: 1,
+    } });
+    const applied = await db.pool.query(`select last_message_id, last_message_at,
+      last_message_sender_id, last_message_sender_role
+      from page_dm_threads where platform_conversation_id = 'g3'`);
+    expect(applied.rows).toEqual([{
+      last_message_id: "replacement-g3", last_message_at: new Date(scenario.headCreatedAt),
+      last_message_sender_id: scenario.senderId, last_message_sender_role: scenario.senderRole,
+    }]);
+    expect(source.calls).toEqual([0, 100, 200, 300].map((offset) => ({
+      method: "messaging_groups", offset, limit: 100, sortOrder: 1, flags: 0,
+    })));
+  });
+
   it("marks a disabled continuation incomplete and preserves the full sweep", async () => {
     const source = await fixture(true);
     await source.chunk(2);
