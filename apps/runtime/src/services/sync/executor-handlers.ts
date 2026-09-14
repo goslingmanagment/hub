@@ -36,7 +36,7 @@ import {
   upsertPageTopSpenders,
   upsertCheckpoint,
   upsertCheckpointProgress,
-  upsertPageDmConversation,
+  excludePageDmConversationMessageSync,
   upsertPageDmMessages,
   upsertFanPages,
   upsertFanPageExternalPresences,
@@ -61,7 +61,6 @@ import {
 } from "@agency_hub_core/fansly";
 import {
   fanslyFollowIdToDate,
-  FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY,
   isFanslyDmMessageSyncExcluded,
   millsFromInteger,
   FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP,
@@ -2953,38 +2952,15 @@ export async function fanslyDmMessagesChunk(
           }
 
           const progressCheckpoint = await withOwnedPageSyncTransaction(app.db, async (dbTx) => {
-            await upsertPageDmConversation(dbTx, {
-              platformAccountId: currentConversation.platformAccountId,
-              fanId: currentConversation.fanId,
-              platformConversationId: currentConversation.platformConversationId,
+            const excluded = await excludePageDmConversationMessageSync(dbTx, {
+              conversationId: currentConversation.id,
+              platformAccountId: input.pageContext.page.id,
               partnerPlatformUserId: currentConversation.partnerPlatformUserId,
-              partnerUsername: currentConversation.partnerUsername,
-              partnerDisplayName: currentConversation.partnerDisplayName,
-              conversationFlags: currentConversation.conversationFlags,
-              unreadCount: currentConversation.unreadCount,
-              subscriptionTierId: currentConversation.subscriptionTierId,
-              lastMessageId: currentConversation.lastMessageId,
-              lastUnreadMessageId: currentConversation.lastUnreadMessageId,
-              lastMessageAt: currentConversation.lastMessageAt,
-              lastMessageSenderId: currentConversation.lastMessageSenderId,
-              lastMessageSenderRole: currentConversation.lastMessageSenderRole,
-              lastMessagePreview: currentConversation.lastMessagePreview,
-              lastFanMessageAt: currentConversation.lastFanMessageAt,
-              lastModelMessageAt: currentConversation.lastModelMessageAt,
-              storedMessageCount: currentConversation.storedMessageCount,
-              newestStoredMessageId: currentConversation.newestStoredMessageId,
-              oldestStoredMessageId: currentConversation.oldestStoredMessageId,
-              messageCoverageStatus: currentConversation.messageCoverageStatus,
-              messageBackfillComplete: currentConversation.messageBackfillComplete,
-              lastMessageSyncAt: currentConversation.lastMessageSyncAt,
-              isVisible: currentConversation.isVisible,
-              lastSeenGeneration: currentConversation.lastSeenGeneration,
-              metadata: {
-                ...currentConversation.metadata,
-                [FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY]:
-                  FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP,
-              },
+              reason: FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP,
             });
+            // The lookup concerned the old binding. A changed or removed row
+            // must not inherit that exclusion or advance this checkpoint.
+            if (!excluded) throw error;
             return upsertCheckpointProgress(dbTx, {
               platformAccountId: input.pageContext.page.id,
               stream: "dm_messages",

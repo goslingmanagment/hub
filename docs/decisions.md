@@ -314,6 +314,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 311 | Disjoint replay with shared allowance | Keep reserved capture/replay turns and reuse unused allowance once without restarting an exhausted cursor. |
 | 315 | Empty observation replay heads | Probe actual version/source/kind index prefixes before an unrestricted scan head; keep ordered pages and scoped replay unchanged. |
 | 321 | Production performance parity | Restore deployed runtime fixes and exact applied migration identities on current main; preserve newer main changes and keep C1 membership and dashboard reconciliation visible as separate prerequisites. |
+| 327 | Fansly DM exclusion write | Merge only the verified partner's exclusion metadata under the current lease; preserve newer thread material and refuse stale-binding checkpoint advance. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -12985,3 +12986,19 @@ membership writers/protection receipts remain in PR166; dashboard feature-contro
 changes remain in their own branch. Those outstanding differences must be
 reconciled before claiming that main preserves the whole production release.
 No deployment approval or A0/C1/W0 acceptance follows from merging these files.
+
+## Decision 327: Exclude an unresolvable DM partner without rewriting its thread (2026-09-14)
+
+After repeated terminal message 5xx failures and a journaled unresolved partner
+lookup, the DM handler wrote its previously loaded conversation back in full.
+A concurrent conversation/message writer could have advanced the head, stored
+cursors, coverage or metadata during that lookup; the stale upsert overwrote it.
+
+Merge only `messageSyncExcludedReason` into the current metadata, matching the
+conversation ID, page and partner verified by that lookup. Keep this update and
+the checkpoint reset in the existing lease-owned transaction. If the row was
+removed or rebound, rethrow the original provider error and leave the checkpoint
+unchanged; never recreate the row from the stale snapshot. Existing failure
+thresholds, account resolution and polling policy remain unchanged. No migration
+or runtime flag is added. The focused PostgreSQL suite interleaves a second writer
+inside the mocked lookup while exercising the real handler, journal and queries.
