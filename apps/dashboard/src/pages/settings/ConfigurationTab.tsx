@@ -9,7 +9,10 @@ import {
 } from "@/api/adminConfig";
 import { KernelApiError } from "@/api/sdk";
 import { ModalShell } from "@/components/shared/ModalShell";
+import { buildSettingsSectionRoute } from "@/lib/navigation";
 import { CONFIG_COPY_RU, SUBSYSTEM_COPY_RU } from "@/pages/settings/configCopyRu";
+import { findHubFeature, featureReturnHref, type HubFeature } from "./featureCatalog.js";
+import { humanConfigValue } from "./configurationChoices.js";
 
 import { ConfigEditor, BooleanConfigEditor, liveEditorKind } from "./ConfigurationEditors.js";
 import { CONFIG_FILTERS, CONFIG_SUBSYSTEM_LABELS, configSubsystemOrder, matchesConfigFilter, matchesConfigSearch, runningDiffersFromDefault, type ConfigFilter } from "./configurationView.js";
@@ -104,7 +107,7 @@ function rowRank(item: ConfigItem): number {
   return 2;
 }
 
-function RunningCell({ item }: { item: ConfigItem }) {
+function RunningCell({ item, friendly = false }: { item: ConfigItem; friendly?: boolean }) {
   if (item.running.length === 0) {
     return <span className="text-text-muted">Нет сигнала от процессов</span>;
   }
@@ -151,7 +154,7 @@ function RunningCell({ item }: { item: ConfigItem }) {
     );
   }
 
-  return <span className="font-mono text-text-primary">{formatScalar(item.running[0]!.value)}</span>;
+  return <span className={`${friendly ? "" : "font-mono "}text-text-primary`}>{friendly ? humanConfigValue(item.key, item.running[0]!.value) : formatScalar(item.running[0]!.value)}</span>;
 }
 
 function errorMessage(err: unknown): string {
@@ -201,7 +204,7 @@ function SettingLabel({ item }: { item: ConfigItem }) {
   );
 }
 
-function SettingRow({ item }: { item: ConfigItem }) {
+function SettingRow({ item, friendly = false }: { item: ConfigItem; friendly?: boolean }) {
   // Number/string live keys get the scalar editor; boolean live keys get the
   // on/off switch. Other kinds stay read-only — see liveEditorKind.
   const editorKind = liveEditorKind(item);
@@ -217,15 +220,15 @@ function SettingRow({ item }: { item: ConfigItem }) {
       </div>
       <div className="config-setting-control">
         <div className="config-setting-current">
-          <span>Сейчас:</span><RunningCell item={item} />
+          <span>Сейчас:</span><RunningCell item={item} friendly={friendly} />
           {CONFIG_COPY_RU[item.key]?.unit && <span>{CONFIG_COPY_RU[item.key]?.unit}</span>}
         </div>
 
         {editorKind === "number" && (
-          <ConfigEditor item={item} />
+          <ConfigEditor item={item} friendly={friendly} />
         )}
         {editorKind === "string" && (
-          <ConfigEditor item={item} />
+          <ConfigEditor item={item} friendly={friendly} />
         )}
         {editorKind === "boolean" && (
           <BooleanConfigEditor item={item} />
@@ -634,16 +637,37 @@ export function ConfigurationTab() {
 }
 
 function RoutedConfiguration() {
-  const { hash } = useLocation();
-  return <ConfigurationView hash={hash} />;
+  const { hash, search, state } = useLocation();
+  const params = new URLSearchParams(search);
+  const feature = findHubFeature(params.get("feature")) ?? null;
+  // Scope is a filter on this form. Remounting it would discard reviewed drafts
+  // and the write receipts that its editors retain until a successful readback.
+  return (
+    <ConfigurationView
+      hash={hash}
+      feature={feature}
+      navigationState={state}
+      allSettingsHref={buildSettingsSectionRoute(params, "configuration")}
+      {...(feature ? { featureBackTo: featureReturnHref(feature, params) } : {})}
+    />
+  );
 }
 
-function ConfigurationView({ hash }: { hash: string }) {
+function ConfigurationView({ hash, feature = null, featureBackTo, allSettingsHref, navigationState }: {
+  hash: string;
+  feature?: HubFeature | null;
+  featureBackTo?: string;
+  allSettingsHref?: string;
+  navigationState?: unknown;
+}) {
   const { data, isLoading, isError, isFetching, refetch } = useAdminConfig();
   const searchRef = useRef<HTMLInputElement>(null);
+  const featureBackRef = useRef<HTMLAnchorElement>(null);
+  const modalRestoreFocusRef = useRef<HTMLElement>(null);
   const [query, setQuery] = useState("");
   const [subsystem, setSubsystem] = useState("");
-  const [filter, setFilter] = useState<ConfigFilter>("live");
+  const [filter, setFilter] = useState<ConfigFilter>(feature ? "all" : "live");
+  const [scopeExpanded, setScopeExpanded] = useState(false);
   const [pendingAnchor, setPendingAnchor] = useState<string | null>(null);
   const [stagedModal, setStagedModal] = useState<StagedModalRequest | null>(null);
   const groups = useMemo(() => [...(data?.subsystems ?? [])].sort((a, b) => configSubsystemOrder(a.subsystem) - configSubsystemOrder(b.subsystem)), [data]);
@@ -651,17 +675,33 @@ function ConfigurationView({ hash }: { hash: string }) {
   const itemMap = useMemo<ItemMap>(() => new Map(allItems.map((item) => [item.key, item])), [allItems]);
   const bootFlags = useMemo(() => allItems.filter((item) => item.runtimeApply === "boot"), [allItems]);
   const searchMatches = useMemo(() => allItems.filter((item) =>
-    (!subsystem || item.subsystem === subsystem) && matchesConfigSearch(item, query)), [allItems, query, subsystem]);
+    (!feature || scopeExpanded || feature.keys.includes(item.key))
+    && (!subsystem || item.subsystem === subsystem) && matchesConfigSearch(item, query)), [allItems, query, subsystem, feature, scopeExpanded]);
   const visibleKeys = useMemo(() => new Set(searchMatches.filter((item) => matchesConfigFilter(item, filter)).map((item) => item.key)), [searchMatches, filter]);
 
-  function resetFilters() { setQuery(""); setSubsystem(""); setFilter("live"); }
-  function reveal(key: string) { setQuery(""); setSubsystem(""); setFilter("all"); setPendingAnchor(key); }
+  function resetFilters() { setQuery(""); setSubsystem(""); setFilter(feature ? "all" : "live"); setScopeExpanded(false); }
+  function reveal(key: string) {
+    setQuery(""); setSubsystem(""); setFilter("all"); setPendingAnchor(key);
+    if (feature && !feature.keys.includes(key)) setScopeExpanded(true);
+  }
+
+  useEffect(() => {
+    setQuery(""); setSubsystem(""); setFilter(feature ? "all" : "live");
+    setScopeExpanded(false); setPendingAnchor(null);
+  }, [feature]);
+
+  // Keep the modal's ref identity stable while its fallback follows the visible
+  // view. Changing the ref prop would rerun ModalShell's open/restore effect.
+  useEffect(() => {
+    modalRestoreFocusRef.current = feature ? featureBackRef.current : searchRef.current;
+  });
 
   useEffect(() => {
     if (!hash.startsWith("#config-")) return;
     setQuery(""); setSubsystem(""); setFilter("all");
     setPendingAnchor(hash.slice("#config-".length));
-  }, [hash]);
+    if (feature && !feature.keys.includes(hash.slice("#config-".length))) setScopeExpanded(true);
+  }, [hash, feature]);
 
   useEffect(() => {
     if (!pendingAnchor || !visibleKeys.has(pendingAnchor)) return;
@@ -681,7 +721,36 @@ function ConfigurationView({ hash }: { hash: string }) {
 
   return (
     <div className="space-y-5">
-      {isError && <div role="alert" className="rounded-lg border border-danger/30 bg-danger/5 px-4 py-3 text-sm text-danger">Не удалось обновить настройки. Показаны последние полученные значения — {formatSeen(data.generatedAt)}. Попробуйте «Обновить».</div>}
+      {feature && (
+        <div className="rounded-xl border border-border bg-card p-5">
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+            <Link
+              ref={featureBackRef}
+              className="text-sm text-accent underline underline-offset-4"
+              to={featureBackTo ?? `/settings?tab=features&view=all&feature=${feature.id}`}
+            >
+              ← К возможностям
+            </Link>
+            <Link
+              className="text-sm text-accent underline underline-offset-4"
+              to={allSettingsHref ?? "/settings?tab=configuration"}
+              state={navigationState}
+            >
+              Все настройки
+            </Link>
+          </div>
+          <h3 className="mt-3 text-xl font-semibold text-text-primary">{feature.title}</h3>
+          <p className="mt-2 text-base leading-relaxed text-text-secondary">
+            <strong>Если отключить:</strong> {feature.consequence}
+          </p>
+          <p className="mt-2 text-sm text-text-secondary">
+            {scopeExpanded
+              ? "Показаны также связанные настройки, необходимые для проверки зависимостей."
+              : "Здесь собраны только настройки этой возможности. Сохраняйте изменения по одному."}
+          </p>
+        </div>
+      )}
+      {isError && <div role="alert" className="rounded-lg border border-danger/30 bg-danger/5 px-4 py-3 text-sm text-danger">Не удалось обновить настройки. Показаны последние полученные значения — {formatSeen(data.generatedAt)}. <button type="button" className="underline" disabled={isFetching} onClick={() => void refetch()}>Повторить</button></div>}
 
       {data.roleStatuses.some((role) => role.status !== "active") && (
         <div role="status" className="rounded-lg border border-warning/40 bg-warning/10 px-4 py-3 text-sm text-warning-dark">
@@ -689,7 +758,7 @@ function ConfigurationView({ hash }: { hash: string }) {
           {". Часть Hub давно не выходила на связь. Её значения пока нельзя подтвердить."}
         </div>
       )}
-      <div className="space-y-3">
+      <div className="space-y-3" hidden={feature !== null && !scopeExpanded}>
         <div className="config-searchbar">
           <label className="config-search-field relative min-w-0">
             <span className="sr-only">Поиск настроек</span>
@@ -767,7 +836,9 @@ function ConfigurationView({ hash }: { hash: string }) {
             </div>
             <div className="config-group-items">
               {[...group.items]
-                .sort((a, b) => rowRank(a) - rowRank(b) || (a.stagedOrder ?? 0) - (b.stagedOrder ?? 0))
+                .sort((a, b) => feature && !scopeExpanded
+                  ? (feature.keys.indexOf(a.key) < 0 ? 1000 : feature.keys.indexOf(a.key)) - (feature.keys.indexOf(b.key) < 0 ? 1000 : feature.keys.indexOf(b.key))
+                  : rowRank(a) - rowRank(b) || (a.stagedOrder ?? 0) - (b.stagedOrder ?? 0))
                 .map((item) => (
                   <div key={item.key} hidden={!visibleKeys.has(item.key)}>
                     {item.runtimeApply === "boot" ? (
@@ -778,7 +849,7 @@ function ConfigurationView({ hash }: { hash: string }) {
                         onReveal={reveal}
                         onOpen={setStagedModal}
                       />
-                    ) : <SettingRow item={item} />}
+                    ) : <SettingRow item={item} friendly={feature !== null && feature.keys.includes(item.key)} />}
                   </div>
                 ))}
             </div>
@@ -795,7 +866,7 @@ function ConfigurationView({ hash }: { hash: string }) {
           keys={stagedModal.keys}
           items={itemMap}
           onClose={() => setStagedModal(null)}
-          restoreFocusRef={searchRef}
+          restoreFocusRef={modalRestoreFocusRef}
         />
       )}
       <details className="config-status-strip">

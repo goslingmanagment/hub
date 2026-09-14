@@ -1,4 +1,14 @@
 import { pathSegment } from "./path.js";
+import type { PeriodOption } from "../stores/periodStore.js";
+import type { SpenderPeriodOption } from "../stores/spenderPeriodStore.js";
+
+export function resolveDashboardPeriod(value: string | null, fallback: PeriodOption): PeriodOption {
+  return value !== null && ["today", "7d", "30d", "all"].includes(value) ? value as PeriodOption : fallback;
+}
+
+export function resolveSpenderPeriod(value: string | null, fallback: SpenderPeriodOption): SpenderPeriodOption {
+  return value !== null && ["today", "7d", "30d", "90d", "180d", "all"].includes(value) ? value as SpenderPeriodOption : fallback;
+}
 
 export interface FanProfileNavigationState {
   backTo: string;
@@ -6,6 +16,7 @@ export interface FanProfileNavigationState {
 }
 
 export type SettingsTab =
+  | "features"
   | "credentials"
   | "sync"
   | "collection"
@@ -17,6 +28,7 @@ export type SettingsTab =
   | "configuration";
 
 const SETTINGS_TABS = new Set<SettingsTab>([
+  "features",
   "credentials",
   "sync",
   "collection",
@@ -169,6 +181,18 @@ export function buildSettingsRoute(tab: SettingsTab, pageLabel?: string) {
   return `/settings?${params.toString()}`;
 }
 
+export function buildSettingsSectionRoute(source: URLSearchParams, tab: SettingsTab): string {
+  const next = new URLSearchParams(source);
+  next.set("tab", tab);
+  // Feature selection belongs to its own links, not the section navigation.
+  if (source.get("tab") === "features" || source.has("feature")) {
+    next.delete("feature");
+    next.delete("view");
+    next.delete("q");
+  }
+  return `/settings?${next.toString()}`;
+}
+
 export function resolveSettingsTab(value: string | null | undefined): SettingsTab {
   return typeof value === "string" && SETTINGS_TABS.has(value as SettingsTab)
     ? value as SettingsTab
@@ -187,6 +211,17 @@ export function isSafeInAppPath(value: string) {
   } catch {
     return false;
   }
+}
+
+export function resolveLoginReturnPath(value: string | null | undefined): string {
+  if (!value || !isSafeInAppPath(value)) return "/";
+  const path = decodeURIComponent(new URL(value, "https://hub.invalid").pathname).replace(/\/+$/, "");
+  return path.toLowerCase() === "/login" ? "/" : value;
+}
+
+export function buildLoginRoute(returnTo: string): string {
+  const target = resolveLoginReturnPath(returnTo);
+  return target === "/" ? "/login" : `/login?${new URLSearchParams({ next: target }).toString()}`;
 }
 
 export function resolveFanProfileBackTarget(

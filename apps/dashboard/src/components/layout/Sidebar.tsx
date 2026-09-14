@@ -26,7 +26,7 @@ function prefetchAnalyticsCatalog() {
 }
 
 export function Sidebar({ user }: SidebarProps) {
-  const { pages } = useDashboardShell();
+  const { pages, pageCatalogState } = useDashboardShell();
   const location = useLocation();
   const [devOpen, setDevOpen] = useState(() => location.pathname.startsWith("/dev"));
   const { data: connections } = useAdminConnections({ enabled: user.role === "owner" });
@@ -91,6 +91,9 @@ export function Sidebar({ user }: SidebarProps) {
         {(user.role === "owner" || user.role === "team_lead") && <NavLink to="/ofapi-exports" className="flex items-center gap-2.5 px-3.5 py-2.5 rounded-lg text-sm text-text-secondary hover:bg-hover"><Database size={16} /> OFAPI exports</NavLink>}
         {(user.role === "owner" || user.role === "team_lead") && <NavLink to="/ofapi-media" className="flex items-center gap-2.5 px-3.5 py-2.5 rounded-lg text-sm text-text-secondary hover:bg-hover"><Database size={16} /> OnlyFans media</NavLink>}
 
+        {pageCatalogState === "loading" && <p role="status" className="px-3.5 py-4 text-sm text-text-muted">Загружаем страницы…</p>}
+        {pageCatalogState === "error" && <p className="px-3.5 py-4 text-sm text-text-muted">Список страниц недоступен.</p>}
+        {pageCatalogState === "ready" && pages.length === 0 && <p className="px-3.5 py-4 text-sm text-text-muted">Нет доступных страниц.{user.role === "owner" && <> <Link className="text-accent underline" to="/settings?tab=pages">Подключить страницу</Link></>}</p>}
         {modelPages.size > 0 && (
           <div className="mt-4 px-3.5 pb-2 text-[11px] font-semibold text-text-muted uppercase tracking-[0.1em]">
             Models
@@ -185,6 +188,7 @@ export function Sidebar({ user }: SidebarProps) {
           <button
             type="button"
             onClick={() => setDevOpen((o) => !o)}
+            aria-expanded={devOpen}
             className={`flex w-full items-center gap-2.5 px-3.5 py-2.5 rounded-lg text-sm font-medium transition-colors ${
               location.pathname.startsWith("/dev")
                 ? "bg-hover text-text-primary font-semibold"

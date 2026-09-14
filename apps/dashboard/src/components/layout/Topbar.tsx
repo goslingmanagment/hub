@@ -18,6 +18,7 @@ export function Topbar({ user, onOpenNavigation }: TopbarProps) {
   const { pages } = useDashboardShell();
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
+  const menuButtonRef = useRef<HTMLButtonElement | null>(null);
 
   const backTo = new URLSearchParams(location.search).get("backTo") ?? resolveFanProfileBackTarget(location.state, undefined);
   const overviewBack = backTo && isSafeInAppPath(backTo) && (backTo === "/" || backTo.startsWith("/?")) ? backTo : "/";
@@ -34,18 +35,25 @@ export function Topbar({ user, onOpenNavigation }: TopbarProps) {
         setMenuOpen(false);
       }
     }
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") { setMenuOpen(false); menuButtonRef.current?.focus(); }
+    }
 
     window.addEventListener("mousedown", handlePointerDown);
-    return () => window.removeEventListener("mousedown", handlePointerDown);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("mousedown", handlePointerDown);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
   }, [menuOpen]);
 
   async function handleLogout() {
+    if (logout.isPending) return;
     try {
       await logout.mutateAsync();
-    } finally {
       clearDashboardSession();
       window.location.assign("/login");
-    }
+    } catch { /* The mutation retains the failure; do not report an unconfirmed logout. */ }
   }
 
   return (
@@ -73,9 +81,10 @@ export function Topbar({ user, onOpenNavigation }: TopbarProps) {
 
         <div className="relative ml-1 sm:ml-2.5" ref={menuRef}>
           <button
+            ref={menuButtonRef}
             type="button"
             onClick={() => setMenuOpen((open) => !open)}
-            aria-label="Account menu"
+            aria-label="Меню аккаунта"
             aria-expanded={menuOpen}
             className="flex items-center gap-2 rounded-full border border-border bg-card px-2 py-1 hover:bg-hover-alt"
           >
@@ -94,11 +103,13 @@ export function Topbar({ user, onOpenNavigation }: TopbarProps) {
               <button
                 type="button"
                 onClick={handleLogout}
-                className="mt-2 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-text-secondary hover:bg-hover hover:text-text-primary"
+                disabled={logout.isPending}
+                className="mt-2 flex min-h-11 w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-text-secondary hover:bg-hover hover:text-text-primary disabled:opacity-50"
               >
                 <LogOut size={14} />
-                Log out
+                {logout.isPending ? "Выходим…" : "Выйти"}
               </button>
+              {logout.isError && <p role="alert" className="px-3 py-2 text-sm text-danger">Выход не подтверждён. Повторите попытку.</p>}
             </div>
           )}
         </div>

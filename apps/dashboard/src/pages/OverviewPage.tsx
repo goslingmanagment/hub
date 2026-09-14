@@ -414,7 +414,7 @@ export function OverviewPage() {
                                   ) : (
                                     <Link
                                       className="v1-page-link"
-                                      to={buildPageRoute(page.pageLabel)}
+                                      to={`${buildPageRoute(page.pageLabel)}?${new URLSearchParams({ period: state.period })}`}
                                       state={{ backTo }}
                                     >
                                       {page.pageLabel}

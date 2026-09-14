@@ -1,0 +1,33 @@
+{
+  "command": [
+    "pnpm",
+    "exec",
+    "vitest",
+    "run",
+    "--no-file-parallelism",
+    "tests/admin-config-api.integration.test.ts",
+    "tests/admin-config-update-api.integration.test.ts",
+    "tests/admin-config-staged-api.integration.test.ts",
+    "tests/config-settings.integration.test.ts",
+    "tests/config-gate-wakeup.integration.test.ts",
+    "tests/workboard-v2.integration.test.ts",
+    "tests/workboard-stage23.integration.test.ts",
+    "tests/notifications-dashboard.integration.test.ts",
+    "tests/notification-incidents.integration.test.ts",
+    "tests/ofapi-webhook-recovery.integration.test.ts",
+    "tests/ofapi-webhook-lifecycle.integration.test.ts",
+    "tests/ofapi-typed-exports.integration.test.ts"
+  ],
+  "cwd": "/Users/dmitriy/.codex/worktrees/hub-dashboard-production-parity-20260914",
+  "environmentOverrides": {
+    "ALLOW_MISSING_TEST_PREREQUISITES": "0",
+    "NODE_OPTIONS": "--max-old-space-size=8192"
+  },
+  "head": "83471e2cd15486803abac2fbf65c873ee2730255",
+  "startedAt": "2026-09-14T00:38:29.778917+00:00",
+  "finishedAt": "2026-09-14T00:39:12.363172+00:00",
+  "durationSeconds": 42.585,
+  "exitCode": 0,
+  "rawSha256": "4956210291c10cdbf96eda2c0135442929e3a7a9512df96585b43bc9d402431e",
+  "sourceUnchanged": true
+}

@@ -1,0 +1,26 @@
+{
+  "mainBase": "b78752d0d1144a8457638ffb3ae0bda33455fde1",
+  "compositionCommit": "33b4e9091962edfc1e45c003ebb30ba0a9794b2b",
+  "result": "passed",
+  "check": {
+    "receipt": "evidence/check-final.json",
+    "passed": 3420,
+    "existingSkipped": 9,
+    "files": 304
+  },
+  "postgres": {
+    "receipt": "evidence/postgres.json",
+    "passed": 48,
+    "skipped": 0,
+    "files": 4
+  },
+  "negativeControl": "evidence/original-handler-negative-control.json",
+  "restoreReceipt": "evidence/negative-control-restore.json",
+  "sources": {
+    "apps/runtime/src/services/sync/executor-handlers.ts": "18d6882d4c9e04843fd77fe75790113b74984032041956a70126676719e88f9c",
+    "packages/db/src/repositories/page-dm.ts": "482fedf8bdeb55db3df2b24b5f7392db3e3fbc6fb91a94dae0728e09548b63ec",
+    "tests/sync-handlers.test.ts": "3422a1b1fcee1ba7a816d931ea4b958bde6d654d04800cd1aad66c3313e7404f",
+    "tests/fansly-dm-exclusion.integration.test.ts": "b73c0e58ef2fadbfea591444441f38ebe53017350ec5c9a39e09031638affc76"
+  },
+  "reviewSha256": "7f9e75039da9d59748822da35ff56b97891cacc1a0f1c757d86e976d464cbdd4"
+}
