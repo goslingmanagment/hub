@@ -1,0 +1,18 @@
+{
+  "command": [
+    "pnpm",
+    "check"
+  ],
+  "cwd": "/Users/dmitriy/.codex/worktrees/hub-ofapi-credit-fixture-clock",
+  "environmentOverrides": {
+    "ALLOW_MISSING_TEST_PREREQUISITES": "0",
+    "NODE_OPTIONS": "--max-old-space-size=8192"
+  },
+  "head": "4c1ac492827c5584eed4a6355eedaed7193f3812",
+  "startedAt": "2026-09-14T00:39:31.929380+00:00",
+  "finishedAt": "2026-09-14T00:40:17.397490+00:00",
+  "durationSeconds": 45.468,
+  "exitCode": 0,
+  "rawSha256": "5915c559ed2450d9ad983ec1e19c24e125971293b5ee76bc0fc89383258a29e2",
+  "sourceUnchanged": true
+}
