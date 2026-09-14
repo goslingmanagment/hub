@@ -1,0 +1,13 @@
+{
+  "command": [
+    "pnpm",
+    "check"
+  ],
+  "head": "d09920e77773e164ab7402120b61382f08f34376",
+  "startedAt": "2026-09-14T16:09:07.056778+00:00",
+  "finishedAt": "2026-09-14T16:09:54.034687+00:00",
+  "durationSeconds": 46.978075749997515,
+  "exitCode": 0,
+  "rawSha256": "895decb01e43ee8521169aa6409b66ff2be97aa5a2bd0d589fedeafa0f86db01",
+  "compressedSha256": "5a9a700269f07897fae2989ca45fdfffc01d46e6edbf9c25587657e63c8c0528"
+}

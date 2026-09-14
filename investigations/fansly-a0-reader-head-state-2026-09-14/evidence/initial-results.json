@@ -1,0 +1,21 @@
+{
+  "base": "e73513737e19b01bd74a4bfbfc6eeed1ffe56d69",
+  "scope": "Exploratory runs before review/main composition; not final candidate validation",
+  "runs": [
+    {
+      "log": "check-initial.log.gz",
+      "exitCode": 1,
+      "rawSha256": "bf63c7d57892e154f5da0da2fd103ddd8f3483a5e18dece056d49233b17eefdf",
+      "compressedSha256": "634ccca8497affef942e23e79ec9ff8f3f1088ce87181e693bcc2db13c2102e8",
+      "detail": "Typecheck and lint passed; 3755 unit tests passed, 9 skipped, one scalar-cursor invariant failed. Restored flat nullable counters, retaining the original pin."
+    },
+    {
+      "log": "postgres-initial.log.gz",
+      "exitCode": 1,
+      "rawSha256": "3a17c4a00d30ec166506edec408f02d0c4c41c6a18002aee0e1f1e172b153422",
+      "compressedSha256": "254d2ce566e3048b4d518fb8439b0fc6d69cce04c3590ed74848dc8263bd0c09",
+      "detail": "78 passed, 6 failed across 8 files. Four new handler tests incorrectly expected hot body insertion from a metadata sweep; two cold fixtures used an unsupported event type. Corrected tests only; SQL/probe and snapshot-budget assertions passed."
+    }
+  ],
+  "earlierTypecheck": "Before these logs, initial typecheck found three undefined item references in the handler loop. Corrected to its actual conversation binding; full check then passed typecheck."
+}

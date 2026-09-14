@@ -26,6 +26,13 @@ describe("optional DM shadow cursor", () => {
     const { visibilityChangesBelowStop: _visibility, unresolvedIdentityChangesBelowStop: _identity,
       exclusionReasonChangesBelowStop: _exclusion, subscriptionTierChangesBelowStop: _tier,
       headTimestampChangesBelowStop: _timestamp, headSenderChangesBelowStop: _sender,
+      readerHeadsChecked: _readerHeadsChecked,
+      unknownReaderHeadChecks: _unknownReaderHeadChecks,
+      readerMaterializedHeadsBelowStop: _readerMaterializedHeadsBelowStop,
+      readerMissingHeadsBelowStop: _readerMissingHeadsBelowStop,
+      readerDeletedHeadsBelowStop: _readerDeletedHeadsBelowStop,
+      readerPendingHeadsBelowStop: _readerPendingHeadsBelowStop,
+      readerArchiveOnlyHeadsBelowStop: _readerArchiveOnlyHeadsBelowStop,
       ...legacy } = createDmShadowState({
       startedAtMs: Date.UTC(2026, 8, 10, 12), boundaryMs: null, completeCoverage: true,
     });
@@ -48,6 +55,13 @@ describe("optional DM shadow cursor", () => {
       unresolvedIdentityChangesBelowStop: null, exclusionReasonChangesBelowStop: null,
       subscriptionTierChangesBelowStop: null, headTimestampChangesBelowStop: null,
       headSenderChangesBelowStop: null,
+      readerHeadsChecked: null,
+      unknownReaderHeadChecks: null,
+      readerMaterializedHeadsBelowStop: null,
+      readerMissingHeadsBelowStop: null,
+      readerDeletedHeadsBelowStop: null,
+      readerPendingHeadsBelowStop: null,
+      readerArchiveOnlyHeadsBelowStop: null,
     });
     expect({ ...serialized, diagnostics: undefined }).toEqual({ ...cursor, diagnostics: undefined });
   });

@@ -21,6 +21,7 @@
 // executor-handlers.ts, so the handler module is a leaf.
 
 import {
+  fanslyDmReaderHeadKey,
   assertOwnedPageSyncLease,
   countPageDmThreadsByGeneration,
   countPageDmVisibleThreadsBelowGeneration,
@@ -571,14 +572,15 @@ export async function fanslyDmConversationsChunk(
         conversation,
       ]),
     );
-    const shadowMaterial = shadow === undefined ? null : await readDmShadowMaterial(app,
-      page.items.flatMap((item) => {
-        const existing = existingByGroupId.get(item.groupId);
-        return existing && item.lastMessageId
-          ? [{ conversationId: existing.id, messageId: item.lastMessageId }]
-          : [];
-      }),
-    );
+    const shadowMaterial = shadow === undefined ? null : await readDmShadowMaterial(app, {
+      pageId: input.pageContext.page.id,
+      maxDurationMs: input.budget.maxWallClockMs - input.budget.elapsedMs,
+      heads: page.items.flatMap(item => item.lastMessageId ? [{
+        conversationRef: item.groupId,
+        conversationId: existingByGroupId.get(item.groupId)?.id ?? null,
+        messageId: item.lastMessageId,
+      }] : []),
+    });
     let unchangedPage = true;
     const shadowConversations: DmShadowConversation[] = [];
     const hydratedAccountsById = new Map<string, FanslyAccount>();
@@ -871,10 +873,13 @@ export async function fanslyDmConversationsChunk(
             : null,
           previousTimestampMs: existing?.lastMessageAt?.getTime() ?? null,
           previousMessageId: existing?.lastMessageId ?? null,
+          readerHead: conversation.lastMessageId ? shadowMaterial?.reader.get(fanslyDmReaderHeadKey({
+            conversationRef: conversation.groupId, messageId: conversation.lastMessageId,
+          })) ?? null : null,
           materialConfirmed: shadowMaterial === null ? null
-            : existing !== null && shadowMaterial.get(existing.id)?.present === true,
+            : existing !== null && shadowMaterial.hot.get(existing.id)?.present === true,
           discoveryToCaptureMs: existing === null ? null
-            : shadowMaterial?.get(existing.id)?.discoveryToCaptureMs ?? null,
+            : shadowMaterial?.hot.get(existing.id)?.discoveryToCaptureMs ?? null,
           historyPending: existing?.messageBackfillComplete !== true,
           lastHistorySyncAtMs: existing?.lastMessageSyncAt?.getTime() ?? null,
         });
@@ -1219,7 +1224,8 @@ export async function fanslyDmConversationsChunk(
       shadow = nextShadow;
       const complete = pageWrite.kind === "complete";
       const certified = complete && pageWrite.membershipCertified && shadow.completeCoverage &&
-        shadow.boundaryMs !== null && shadow.unknownMaterialChecks === 0;
+        shadow.boundaryMs !== null && shadow.unknownMaterialChecks === 0 &&
+        shadow.readerHeadsChecked !== null && shadow.unknownReaderHeadChecks === 0;
       await persistDmShadowReport(app, {
         telemetry: input.telemetry,
         pageId: input.pageContext.page.id,

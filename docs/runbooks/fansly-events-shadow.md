@@ -191,6 +191,66 @@ If the newer code resumes that generation again, the fields remain unknown;
 it must not reconstruct their earlier history as zero. Saved terminal reports
 and business cursor semantics remain unchanged.
 
+## Advertised-head reader state (Decision 335)
+
+New runtime observations retain the original hot counter and additionally count
+Agent operation 6's exact advertised-head state before applying the provider
+list page. The reader prefers `dm_message_archive`, then `message_archive`, then
+hot; a scoped tombstone in any candidate source dominates. Pending content uses
+the winning source's rule, not empty text. `captured_at` debt receipts do not
+establish current reader presence.
+
+- `readerHeadsChecked` and `unknownReaderHeadChecks` cover advertised IDs on all
+  observed pages. Failed reads remain unknown; absence of an advertised ID is
+  instead part of the existing invalid-marker accounting.
+- `readerMaterializedHeadsBelowStop`, `readerMissingHeadsBelowStop`,
+  `readerDeletedHeadsBelowStop` and `readerPendingHeadsBelowStop` classify exact
+  IDs below the candidate stop. They are separate from head-metadata differences.
+- `readerArchiveOnlyHeadsBelowStop` counts materialized IDs without a live hot
+  copy. It does not prove pruning caused that state.
+
+Absent/null fields on saved reports and resumed legacy cursors mean unknown,
+never zero. Mid-sweep activation also leaves the new counters null. Current code
+marks a finished observation incomplete when reader coverage is unknown. Group
+reports by field availability and sweep start; preserve historical rows and the
+original A0 clock without crediting earlier days to the new reader scope.
+A complete row still requires explanation of every discrepancy before any gate
+can pass. Missing, pending and deleted are observations, not automatic proof of
+provider loss or a request to repair a head.
+
+Flag `none` adds no queries. Enabled reads share one read-only repeatable-read
+snapshot and a decreasing query allowance of at most five seconds or the dispatch
+allowance left. Timeout/failure keeps the full business sweep running. Pool
+checkout is not cancellable by this helper; its elapsed time consumes the query
+allowance once acquired. Do not report this as an end-to-end five-second bound.
+
+After normal deployment of 0194, measure its separate fixed SQL through the
+existing `read_only` connection, with caller deadlines installed before SELECT:
+
+```sql
+BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;
+SET LOCAL statement_timeout = '5s';
+SET LOCAL lock_timeout = '100ms';
+SELECT public.fansly_dm_shadow_reader_probe('lilly-1', 100);
+ROLLBACK;
+```
+
+Use the same once-only six-page order and external total deadline as the hot
+probe above. Retain identity, transaction settings, exact command, raw result,
+hashes and resource/timeout receipts; stop on the first failure and leave the
+remainder unmeasured. No privileged fallback or automatic retry. `no_sample` and
+a null plan are unmeasured. EXPLAIN samples current stored heads, which may warm
+buffers and omit archive-only conversations with no stored thread. It is not the
+original provider-list population. Keep 0192's hot-query measurements separate;
+measure the new query after deployment before claiming its production cost.
+
+These exact-ID counters do not measure a whole transcript, field parity or
+provider-event-to-reader latency. They do not close A0's seven-day/churn/outage
+scope requirements, move to A1, or establish realized HTTP savings. Rollback
+keeps the existing allowlist procedure; old parsers drop new optional fields,
+which remain unknown if newer code later resumes the same generation. The
+additive unused probe may remain installed.
+
 ## Rollback
 
 Through the normal owner-approved Configuration save, set this allowlist to

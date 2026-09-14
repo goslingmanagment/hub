@@ -59,25 +59,34 @@ export async function readFanslyDmShadowMaterial(
     // continues. The query scope and real sweep stop conditions stay unchanged;
     // the report writer above retains its separate 500 ms timeout.
     await tx.execute(sql`set local statement_timeout = '5s'`);
-    const values = sql.join(heads.map((head) => sql`(
-      ${head.conversationId}::bigint, ${head.messageId}::text
-    )`), sql`, `);
-    const result = await tx.execute<{
-      conversation_id: string; present: boolean; lag_ms: string | null;
-    }>(sql`
-      select h.conversation_id, exists (
-        select 1 from page_dm_messages m
-        where m.conversation_id = h.conversation_id
-          and m.platform_message_id = h.message_id and m.deleted_at is null
-      ) as present,
-      extract(epoch from d.captured_at - d.first_observed_at) * 1000 as lag_ms
-      from (values ${values}) h(conversation_id, message_id)
-      left join fansly_dm_head_debt d
-        on d.conversation_id = h.conversation_id and d.message_id = h.message_id
-    `);
-    return new Map(result.rows.map((row) => [Number(row.conversation_id), {
-      present: row.present,
-      discoveryToCaptureMs: row.lag_ms === null ? null : Math.ceil(Number(row.lag_ms)),
-    }]));
+    return queryFanslyDmShadowMaterial(tx, heads);
   });
+}
+
+/** Shared with the reader-state snapshot; caller owns the transaction budget. */
+export async function queryFanslyDmShadowMaterial(
+  db: Pick<Database, "execute">,
+  heads: ReadonlyArray<{ conversationId: number; messageId: string }>,
+): Promise<Map<number, DmShadowMaterialReceipt>> {
+  if (heads.length === 0) return new Map();
+  const values = sql.join(heads.map((head) => sql`(
+    ${head.conversationId}::bigint, ${head.messageId}::text
+  )`), sql`, `);
+  const result = await db.execute<{
+    conversation_id: string; present: boolean; lag_ms: string | null;
+  }>(sql`
+    select h.conversation_id, exists (
+      select 1 from page_dm_messages m
+      where m.conversation_id = h.conversation_id
+        and m.platform_message_id = h.message_id and m.deleted_at is null
+    ) as present,
+    extract(epoch from d.captured_at - d.first_observed_at) * 1000 as lag_ms
+    from (values ${values}) h(conversation_id, message_id)
+    left join fansly_dm_head_debt d
+      on d.conversation_id = h.conversation_id and d.message_id = h.message_id
+  `);
+  return new Map(result.rows.map((row) => [Number(row.conversation_id), {
+    present: row.present,
+    discoveryToCaptureMs: row.lag_ms === null ? null : Math.ceil(Number(row.lag_ms)),
+  }]));
 }
