@@ -1,0 +1,70 @@
+{
+  "preparedAt": "2026-09-13T23:34:53.988176+00:00",
+  "sourceDirectory": "/Users/dmitriy/code/goose/hub/investigations/fansly-c1-deploy-2026-09-11/lora3-followup-20260913T000235Z",
+  "sourceRawSha256": "a612e75f8b4242abe0d1427258f8254a0808ab11b1f82cc8374029441ca6c57a",
+  "sourceRawBytes": 426785,
+  "sourceReportRecords": 334,
+  "sourceLora3Records": 39,
+  "sourceManifestSha256": "239ed637c3c4ba62b1b8fddfe192e15e4d1ae34e232d346a04fae2a8aa275b4c",
+  "originalReviewedArtifacts": {
+    "summary.json": "a630d2f9edc89f5da2110ca4444317f35bf782edbffd3f74cb4fefd9e0bad523",
+    "runtime.json": "2f5c693b1300b1d2b2c61cb3220563b8092c5899130f2acae474895a28344b1a",
+    "read.sql": "3c4f04d12ddbb48a6f27d1ed09ea36fb880f5494dd8b8d9b735078902f9b98b1",
+    "REPORT.md": "b0829088ad2de5c269fbee6d9c4e6faf2898e8c786753861d48a3676748bf3db",
+    "read.raw.json": "a612e75f8b4242abe0d1427258f8254a0808ab11b1f82cc8374029441ca6c57a",
+    "lora3-selected.json": "3a87981363ee30f91f9e0b055e5407464a7c0446947ca97d5cd8b4cbfe1192bb",
+    "execution.json": "5f364414b9dccca0731d42d8a3be37aec3bef498cca182092ba14b4c1c6541bd"
+  },
+  "sourceReviewSha256": "1afe59ba1a5ea6763316c927b8535cb089b790439dceb17a9be5c68ba58be174",
+  "copiedVerbatim": [
+    "REVIEW.md",
+    "read.sql",
+    "execution.json",
+    "runtime.json"
+  ],
+  "rawEncoding": "gzip of byte-exact original read.raw.json; gzip mtime=0",
+  "subsetFile": "timeline-subset.json",
+  "subsetRunIds": [
+    734952,
+    735021,
+    735379,
+    735448,
+    736007,
+    736470,
+    736918,
+    737405,
+    737798
+  ],
+  "subsetExactObjectParityVerified": true,
+  "sourceIdentityVerified": {
+    "asOf": "2026-09-13T00:02:38.83706+00:00",
+    "role": "read_only",
+    "readOnly": "on",
+    "isolation": "repeatable read"
+  },
+  "sourceTimeline": {
+    "asOf": "2026-09-13T00:02:38.83706+00:00",
+    "scope": "Runs started in the window; late finishes can change later reads. Missing evidence is unknown.",
+    "nextRunId": null,
+    "windowEnd": "2026-09-13T00:02:35.324525+00:00",
+    "windowStart": "2026-09-12T18:00:00+00:00",
+    "throughRunId": 737812
+  },
+  "retainedFiles": {
+    "README.md": "5357706d629b2fa9b22b60d7a7de17966a44eb5d576f564be56dea3fa3bee313",
+    "REPORT.md": "4d708b2631fdc40a8ac505f7ef802ba45d95254e5c1cc281c63b3f3c9d2c7a94",
+    "REVIEW.md": "1afe59ba1a5ea6763316c927b8535cb089b790439dceb17a9be5c68ba58be174",
+    "execution.json": "5f364414b9dccca0731d42d8a3be37aec3bef498cca182092ba14b4c1c6541bd",
+    "read.raw.json.gz": "7731063b17a8d24378511612bbb185b0fd2c786bcf2a840e6bcff9007c71acb8",
+    "read.sql": "3c4f04d12ddbb48a6f27d1ed09ea36fb880f5494dd8b8d9b735078902f9b98b1",
+    "runtime.json": "2f5c693b1300b1d2b2c61cb3220563b8092c5899130f2acae474895a28344b1a",
+    "timeline-subset.json": "fe457ad9c90209acdaf4f6caebd34219a0e1faad8471d9d2af2011a83d486f83"
+  },
+  "productionReadPerformedForPackaging": false,
+  "runtimePolicyChanged": false,
+  "testExecutionForPackaging": false,
+  "scope": "Retrospective packaging of the independently reviewed 13 September observation; not a new production observation, current runtime verification, presence or suppression acceptance.",
+  "normalizedTextCopies": {
+    "REPORT.md": "Only trailing blank lines removed; one final newline retained. Original hash remains in originalReviewedArtifacts."
+  }
+}

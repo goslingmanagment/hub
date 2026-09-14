@@ -3,6 +3,25 @@
 Numbering note: earlier reviews refer to the original C1 Decision 291. It is
 Decision 294 after the 11 September merge of main; applied migrations are unchanged.
 
+For the [12 September main integration](MAIN-SYNC-20260912.md), `review_pr162`
+reviewed exact tree `af6102b5`, including the five documentation conflicts and
+preservation of 181 production-reference and 180 main migrations. `quality_c1`
+verified the final documentation and PR body against all three log hashes,
+3,258/9 unit and 86/0 Postgres results, and all 39 restored diagnostic files.
+Both reviews closed without actionable findings; neither reviewer ran tests
+or accessed production. Changes after the tested tree only record these results.
+
+For the [first full receipts after restoration](OBSERVATION-20260912T155000Z.md),
+`review_pr162` independently verified the atomic 65-row report, both clean-queue
+request/completion chains, 20/38-chunk continuity, one actual Lora-1 retirement,
+two grace-protected Lilly-2 rows and 299 successful physical attempts. There
+were no actionable findings. The source/runtime comparison preserves the
+post-cutoff worker boundary and the earlier missing actual counts. The separate
+quality review verified all 14 source entries and found one wording defect:
+35/20 is a presence-driver value, not a direct addition to final urgency. The
+inventory now preserves the existing aggregation. Final re-review closed that
+finding and found no new issues in the documentation or prepared PR body.
+
 For the [17:07 observation](OBSERVATION-20260911T170708Z.md), `review_pr162`
 verified 430 rows, withheld-finalization retries, full-revision versus final-
 generation durations, source-separated costs and all 429 retained summaries.
@@ -206,3 +225,81 @@ The candidate explicitly includes PR171's Overview/revenue API in addition to
 PR172. Protected health must actually execute, the CLI must follow the deployed
 contract, and rollback retains the C1 image and schema. The PR remains a C1
 diagnostic draft; no deployment or stage activation was performed.
+
+## Membership refinement — 12 September
+
+Both reviewers examined the final runtime, repository, migration, fixtures and
+runbook. `review_pr162` required the receipt's own sweep-start timestamp and a
+regression where UPDATE changes fewer rows than the candidate count. Both were
+implemented and rereviewed. `quality_c1` requested the unambiguous
+`membership_receipt_valid` name and a correctly placed count comment; both are
+fixed. Neither reviewer reports remaining actionable findings.
+
+The final source passed 3251 unit tests with nine existing skips and 84 serial
+Docker-Postgres tests with zero skips. The exact source and log hashes are in
+[evidence/membership-20260912/validation.json](evidence/membership-20260912/validation.json).
+Reviewers did not run tests. The diagnostics preserve existing policy and do
+not establish redundant generations, actual row identity or measured savings.
+
+## Membership restoration — 12 September
+
+`review_pr162` independently checked the 97-run production report, its hash,
+ordering, completion pairing and source/compiled evidence of the missing
+membership writer. `quality_c1` checked the observation text against those
+receipts: candidates, actual retirements and later active counts remain distinct;
+missing receipts stay unknown. Neither found an actionable issue.
+
+Both reviewers then examined exact release `64149b95`, including its parents,
+tree and migration preservation. The correctness review verified all 1,881
+exported files. The quality review confirmed that the restored membership code
+matches `7aaa3185`, while conditional writes and skipped-row readback retain
+the current `1f89bcc2` implementation. Both reviews found no actionable issues.
+Neither reviewer ran tests or accessed production.
+
+The parent validated the exact release with 3,258 passing unit tests, nine
+existing skips, 86 passing serial Postgres tests and a successful production
+build. The owner-authorized standard deployment then passed its protected
+health gate; source, compiled hashes and CLI pinning were checked separately.
+The [restoration report](RESTORED-MEMBERSHIP-20260912.md) records these results
+and the remaining requirement for a new natural membership receipt.
+
+The final documentation and PR-body review by `quality_c1` found no actionable
+issues after comparison with the local validation, deployment and observation
+receipts. The runtime and tests were unchanged during this documentation follow-up.
+
+## Captured pagination overlap — 12 September 16:50 UTC
+
+`review_pr162` independently verified the 44-run cohort, six valid decisions,
+38 generation-791 chunks, guarded restart and null actual-deactivation count.
+The reviewer matched all 184 captures to those runs, checked per-run counts
+against chunk statistics and reproduced the repeated relation at page 51/52.
+All four evidence/source hashes and the 200-attempt accounting agree. No
+correctness finding remains; the underlying provider action, omitted follower
+identity and safe suppression remain unproven.
+
+`quality_c1` reviewed the observation, presence inventory and PR body. One
+wording finding was fixed: a processed relation is not evidence of an insertion.
+The re-review confirms no open findings. Both reviews preserve the distinction
+between later matching counts and immediate active-after, separate snapshots,
+captured overlap and complete membership. Neither reviewer ran tests or accessed
+production. This follow-up adds diagnostic SQL and evidence documentation only;
+application source and the successful `6d3dd3f1` validation remain unchanged.
+# Presence read surfaces and natural completion — 12 September
+
+Independent reviewer `review_head_debt` found no actionable issues in the
+documentation/evidence follow-up from `46adf234`, including its prepared PR
+description. All fifteen inspected source hashes match deployed `31b73a96`;
+the four new read receipts and four historical evidence hashes were verified.
+
+The review confirms that Agent timeline activity time omits local observation
+age, membership bookkeeping is a different field, and the Followers API
+requires a human principal with page access. Independently advancing maxima
+do not attribute presence refreshes to a run. No snapshot, missing field or
+access limit is presented as suppression or completeness proof.
+
+The copied 18:37 observation agrees with the previously reviewed source report:
+250 decisions, 49 exact-generation terminals, 76 Lilly-2 chunks across the
+restart, two actual retirements, and 5,969 attempts with 25 retry ordinals.
+It does not claim that every requested walk was necessary. Local test totals
+and CI results retain their original tree/commit attribution. No application
+code, tests, production state or provider calls changed for this follow-up.

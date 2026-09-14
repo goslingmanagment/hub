@@ -143,6 +143,21 @@ describe("compose config", () => {
     }
   });
 
+  it("production Postgres suppresses raw bind values without replacing VPS tuning", async () => {
+    const text = await readComposeFile("docker-compose.production.yml");
+    const postgres = getServiceBlock(text, "postgres");
+    const command = postgres?.match(/^ {4}command: (\[[^\n]+\])$/m)?.[1];
+
+    // These are separate PostgreSQL log paths. A positive byte limit still
+    // leaks raw values; zero disables bind logging. Keep unrelated tuning in
+    // the existing volume's auto.conf, including the slow-query threshold.
+    expect(JSON.parse(command ?? "null")).toEqual([
+      "postgres",
+      "-c", "log_parameter_max_length=0",
+      "-c", "log_parameter_max_length_on_error=0",
+    ]);
+  });
+
   it("requires one explicit host directory for read-only OFAPI export artifacts", async () => {
     const compose = await readComposeFile("docker-compose.production.yml");
     const productionEnv = await readComposeFile(".env.production.example");
@@ -685,7 +700,7 @@ describe("compose config", () => {
     expect(successIndex).toBeGreaterThan(publishIndex);
   });
 
-  it("deploy-production.sh allows rollback across known data-only migrations", async () => {
+  it("deploy-production.sh allows rollback across known compatible migrations", async () => {
     const text = await readComposeFile("scripts/deploy-production.sh");
     const rollback = getShellFunction(text, "rollback_remote_stack");
 
@@ -696,6 +711,8 @@ describe("compose config", () => {
     expect(text).toContain("0016_canonical_proxy_egress_key_function.sql");
     expect(text).toContain("0017_reapply_egress_rate_limit_scope_key_repair.sql");
     expect(text).toContain("0018_notification_incident_recovery_watermarks.sql");
+    expect(text.match(/ROLLBACK_COMPATIBLE_MIGRATIONS=\([\s\S]*?\n\)/)?.[0])
+      .toContain('"0186_ops_metrics_recent_series.sql"');
     expect(text).toContain("schema_migration_delta_allows_rollback");
     expect(rollback).toContain("Schema migrations changed only by rollback-compatible data migrations");
     expect(rollback).toContain("Rollback skipped; schema_migrations changed during this deploy");

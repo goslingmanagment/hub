@@ -1,0 +1,18 @@
+{
+  "startedAt": "2026-09-13T00:02:37.115698+00:00",
+  "completedAt": "2026-09-13T00:02:39.508472+00:00",
+  "command": [
+    "ssh",
+    "-C",
+    "-T",
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "ConnectTimeout=10",
+    "root@45.8.230.111",
+    "docker exec -i agency-hub-postgres-1 timeout --kill-after=1s 30s psql -XqAt -v ON_ERROR_STOP=1 -U read_only -d agency_hub_core"
+  ],
+  "exitCode": 0,
+  "stderr": "",
+  "sha256": "a612e75f8b4242abe0d1427258f8254a0808ab11b1f82cc8374029441ca6c57a"
+}
