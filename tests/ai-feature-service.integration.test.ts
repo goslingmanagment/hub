@@ -513,6 +513,62 @@ describe("AI feature service pilot (Stage 30)", () => {
     expect(capture.calls).toBeUndefined();
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
+  it("seeds Lora Soft separately and uses it only when explicitly selected", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const [lora, soft] = createBundledPersonalities();
+    expect(soft!.id).toBe("builtin:lora-soft");
+    expect(await findAiPersonaByKey(appContext.db, soft!.id)).toBeUndefined();
+    const original = await findAiPersonaByKey(appContext.db, lora!.id);
+    for (const persona of [lora!, soft!]) {
+      const result = await seedBundledAiPersona(appContext.db, {
+        key: persona.id,
+        displayName: persona.name,
+        systemBlock: persona.content,
+        bundledVersion: persona.builtinVersion!,
+      });
+      expect(result.action).toBe(persona.id === soft!.id ? "created" : "preserved");
+    }
+    expect(await findAiPersonaByKey(appContext.db, lora!.id)).toEqual(original);
+
+    const catalog = await apiServer!.inject({
+      method: "GET",
+      url: "/api/v1/ai/persona-catalog",
+      headers: { authorization: `Bearer ${chatterKey}` },
+    });
+    expect(catalog.statusCode, catalog.body).toBe(200);
+    expect(catalog.json().personas).toContainEqual(expect.objectContaining({
+      key: soft!.id, displayName: "Lora Soft", version: 1, status: "active",
+    }));
+
+    await seedConversation();
+    for (const personaKey of [undefined, soft!.id]) {
+      const capture: { input?: AiGatewayProviderInput } = {};
+      appContext.aiGatewayProvider = capturingProvider(capture);
+      const response = await apiServer!.inject({
+        method: "POST",
+        url: "/api/v1/ai/features/fast-reply",
+        headers: { authorization: `Bearer ${chatterKey}` },
+        payload: {
+          clientRequestId: randomUUID(),
+          pageLabel: "svc-of",
+          platform: "onlyfans",
+          conversationRef: FAN,
+          ...(personaKey === undefined ? {} : { personaKey }),
+        },
+      });
+      expect(response.statusCode, response.body).toBe(200);
+      expect(capture.input!.body.prompt.systemBlocks[1]).toMatchObject({
+        text: personaKey === undefined ? lora!.content : soft!.content,
+        cache: "1h",
+      });
+      expect(capture.input!.body.model).toBe("anthropic:claude-sonnet-5");
+      expect(capture.input!.body.reasoningEffort).toBe("low");
+    }
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
   it("uses a stored persona when personaKey is given and 404s unknown features", async (context) => {
     if (!testDb) {
       context.skip();

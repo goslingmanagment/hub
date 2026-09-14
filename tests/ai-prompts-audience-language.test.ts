@@ -22,6 +22,8 @@ const base = {
 
 const FAN_LANGUAGE_RULE =
   "Write every proposed fan message in the fan's language. The fan's language is English unless the fan writes in another language: judge it only from the lines marked Fan: in the transcript, weighting the most recent ones; if those lines are in English or too short to tell, it is English. The chatter's draft, question, coach history, recaps, fan dossier, and persona notes are never a language signal: a Russian draft for an English-speaking fan becomes English.";
+const FAST_REPLY_FAN_LANGUAGE_RULE =
+  "Write in the language of the latest substantive Fan: message. If it is too short to identify a language, use the recent Fan: messages; default to English only if those are also indeterminate. Instructions, examples, Model: messages, chatter drafts and persona notes do not determine the fan's language.";
 
 const features = ["coach-chat", "help-me", "chat-review", "fast-reply", "improve-draft", "hi-greeting", "ping", "voice-script"] as const;
 const fanMessages = [
@@ -43,10 +45,12 @@ describe("proposed fan messages follow the fan's own language, English by defaul
 
         // Actual assembled prompt, not just the .md: a future split/reducer
         // change must not strand the rule outside what the provider receives.
-        expect(staticBlock).toContain(FAN_LANGUAGE_RULE);
+        expect(staticBlock).toContain(feature === "fast-reply" ? FAST_REPLY_FAN_LANGUAGE_RULE : FAN_LANGUAGE_RULE);
         expect(dynamicText).toContain(transcript);
         expect(finalTask.cache).toBe("none");
-        expect(finalTask.text).toContain("in the fan's language (English by default)");
+        expect(finalTask.text).toContain(feature === "fast-reply"
+          ? "Write her next message in the fan's language."
+          : "in the fan's language (English by default)");
         // The pre-#283 blanket rule and the pre-#201-amendment free inference
         // are both gone: the fan's OWN lines decide, nothing else.
         expect(built.user).not.toContain("regardless of the language of the fan");

@@ -85,7 +85,7 @@ describe('buildPrompt platform wording', () => {
     expect(prompt.system).toContain("You're on Fansly because honestly?");
     expect(prompt.system).not.toContain('OnlyFans');
     expect(prompt.user.startsWith(
-      'You are generating a reply to send to a fan in a Fansly DM conversation.',
+      "You are writing the model's next message in a personal DM conversation on Fansly.",
     )).toBe(true);
   });
 

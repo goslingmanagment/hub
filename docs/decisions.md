@@ -338,6 +338,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 338 | W0 transport failure receipts | Retain observed open/failure boundaries and bounded dispatcher error code/HTTP status before Undici loses them; preserve one-attempt transport, secrecy and cleanup. |
 | 339 | OnlyFans follower greetings | Desktop reuses kernel context for one-message Hi, reads the current welcome template through capture-first, and opts into atomic page/fan custody inside the existing OFAPI command outbox. |
 | 340 | W0 single binding authority | Use the original receipt for every phase; remove duplicate generation arguments and avoid constructing a second dispatcher for the short post-read. |
+| 341 | Prepared Fast Reply voice and optional Lora Soft | Global Fast Reply voice candidate plus a separate create-only bundled persona; mixed completed evaluation demonstrates no reduction in unwanted elaboration, and production deployment, seed and selection remain unperformed. |
 
 
 ## Consensus Decisions
@@ -13858,3 +13859,67 @@ the session and constructing an unused second dispatcher for the post-read.
 A failed post-read remains unknown; a changed generation remains false. Provider
 requests, resource bounds, ownership, cleanup and live acceptance gates are unchanged.
 See [the continuity runbook](runbooks/fansly-ws-continuity.md).
+
+## Decision 341: Prepare the owner-selected Fast Reply voice and optional Lora Soft (2026-09-15)
+
+Status: draft implementation for owner review; not deployed. Quality evaluation
+completed with mixed results and no demonstrated reduction in unwanted validation
+or elaboration. This entry does not claim that the model consistently reproduces
+the approved examples or that the candidate has won the comparison.
+
+The evaluation completed 72 Sonnet 5 low generations, all with `end_turn`, at a
+recorded gateway cost of $0.170686. In 12 fresh comparisons, the combined new
+template/persona (C) beat the original template/persona (A) 5 times, lost 3 and
+tied 4. Unwanted validation/elaboration appeared in 3/12 C replies versus 0/12 A
+replies. Only 1/4 C replies on the training examples was judged sendable, and C
+made one unknown-pricing-rule control error. The approved examples are taste
+references, not evidence that this implementation reliably transfers that voice.
+
+The owner wants a lively, sweet and interesting conversational voice, with warmth,
+reciprocity and questions when they fit. Two manually written examples were
+approved as voice references: a gentle imagined tease about interfering with his
+shared-keyboard game, and a curious question about showing Saturn to a visitor.
+They are now training examples, not independent holdout evidence. The preferred
+emoji palette is tender and bashful (🥹, 👉👈, 😳), without requiring an emoji or
+playful turn in every reply. Small fictional details and ordinary encouragement
+are allowed; real prices, pricing rules, purchases and arrangements stay grounded.
+
+The Fast Reply template changes globally, including when an existing or custom
+persona is selected. Its mirrored TypeScript constant stays byte-identical.
+The template uses varied examples and contextual response choices rather than
+mandatory reaction openers and follow-up questions. Media markers, purchase
+state, fan-language selection, split mode and message-only output remain explicit.
+No model or effort default changes: Sonnet 5 low is already the reply default.
+
+A separate bundled persona, `builtin:lora-soft` / `Lora Soft`, version 1, carries
+the revised Lora voice. It is stored with canonical OnlyFans wording and uses
+the existing static platform adaptation. `builtin:lora` keeps its exact content,
+version 2, first position and default role. Existing saved/database personas are
+not rewritten. The current `ai:personas-seed` path creates only missing keys and
+preserves existing content, metadata, revisions and archived state; its logic and
+owner-administration gates are unchanged. No startup seed, migration, API or flag
+is added.
+
+Deploying the template does not create the database persona or select it for a
+client/page. Production deployment, running the existing create-only seed and
+selecting/mapping the new persona have not been performed and remain separately
+reviewed actions. Historical desktop source hashes stay unchanged; the manifest
+records only the updated core hashes and this provenance.
+
+Validation ran on the implementation over verified live base
+`6e07620ab5b98c20367c46483c07ff2b0ca47a00`: `pnpm check` passed, including 3,843
+unit tests with 9 legacy parity skips, repository-wide lint and dashboard build;
+the strictness ratchet accepted 1,897 known errors within its existing budget.
+All 65 tests in `tests/ai-feature-service.integration.test.ts` passed, including
+create-only seed preservation and omitted/default versus explicit Soft selection.
+`pnpm build:production` and the built startup capability smoke also passed.
+These local checks used Node 26.7.0, not the Node 22 CI image. No model/provider
+calls were made by the integration tests.
+
+The unpublished decision was renumbered from 340 to 341 when main took 340 for
+its unrelated W0 change. The integration base is
+`78aa7d48a1071939cdd24c1037c5f5f98f8ecc91`. Its changes concern W0 scripts, tests
+and documentation; the prompt/persona implementation and its test diffs remain
+identical across the rebase. Only the decision record and manifest decision
+references changed after the full checks. Full checks were not repeated on the
+new base; source-diff and decision-reference verification cover the integration.

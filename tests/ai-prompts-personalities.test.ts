@@ -1,10 +1,13 @@
 // MIGRATED VERBATIM (Stage 30) from chatgoose_desktop_fable
 // packages/shared/tests/personalities.test.ts @ 1db76a4ae13d (2026-07-06);
 // adapted ONLY in imports (+ template paths where noted).
+import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import {
   BUNDLED_LORA_PERSONALITY_ID,
   BUNDLED_LORA_PERSONALITY_VERSION,
+  BUNDLED_LORA_SOFT_PERSONALITY_ID,
+  BUNDLED_LORA_SOFT_PERSONALITY_VERSION,
   createBundledPersonalities,
   normalizeSavedPersonality,
   reconcileBundledPersonalities,
@@ -28,6 +31,26 @@ describe('createBundledPersonalities', () => {
     expect(lora.builtin).toBe(true);
     expect(lora.builtinVersion).toBe(BUNDLED_LORA_PERSONALITY_VERSION);
     expect(lora.builtinVersion).toBe(2);
+    expect(createHash('sha256').update(lora.content).digest('hex')).toBe(
+      'bd6b370745dff38f54091bc05a6b4b832855e6c462c3694891f974ace0a0e4d6',
+    );
+  });
+
+  it('adds Lora Soft as a separate canonical persona after the original default', () => {
+    const personas = createBundledPersonalities(42);
+    expect(personas.map(persona => persona.id)).toEqual(['builtin:lora', 'builtin:lora-soft']);
+    const soft = personas[1]!;
+    expect(soft).toMatchObject({
+      id: BUNDLED_LORA_SOFT_PERSONALITY_ID,
+      name: 'Lora Soft',
+      updatedAt: 42,
+      builtin: true,
+      builtinVersion: BUNDLED_LORA_SOFT_PERSONALITY_VERSION,
+    });
+    expect(soft.builtinVersion).toBe(1);
+    expect(soft.content).not.toBe(personas[0]!.content);
+    expect(soft.content).not.toMatch(/fansly/i);
+    expect(soft.content).toContain("You're on OnlyFans because honestly?");
   });
 
   it('defaults updatedAt to 0 and honors the provided build timestamp', () => {
@@ -62,16 +85,16 @@ describe('createBundledPersonalities', () => {
 });
 
 describe('reconcileBundledPersonalities', () => {
-  it('seeds bundled Lora when the list is empty', () => {
+  it('seeds both bundled personas when the list is empty', () => {
     const result = reconcileBundledPersonalities([]);
     expect(result.changed).toBe(true);
-    expect(result.personalities).toEqual([bundledLora()]);
+    expect(result.personalities).toEqual(createBundledPersonalities());
   });
 
   it('preserves modified bundled personalities until the bundled version changes', () => {
-    const saved: Personality[] = [
-      { ...bundledLora(), content: 'customized by user', updatedAt: 123 },
-    ];
+    const saved = createBundledPersonalities().map(personality => ({
+      ...personality, content: 'customized by user', updatedAt: 123,
+    }));
     const result = reconcileBundledPersonalities(saved);
 
     expect(result.changed).toBe(false);
@@ -90,7 +113,7 @@ describe('reconcileBundledPersonalities', () => {
     const result = reconcileBundledPersonalities(saved);
 
     expect(result.changed).toBe(true);
-    expect(result.personalities).toEqual([custom, bundledLora()]);
+    expect(result.personalities).toEqual([custom, ...createBundledPersonalities()]);
     // The input array is not mutated.
     expect(saved).toEqual([custom]);
   });
@@ -108,7 +131,7 @@ describe('reconcileBundledPersonalities', () => {
     ]);
 
     expect(result.changed).toBe(true);
-    expect(result.personalities).toEqual([lora]);
+    expect(result.personalities).toEqual(createBundledPersonalities());
   });
 
   it('overwrites saved copies missing the builtin flag', () => {
@@ -121,7 +144,7 @@ describe('reconcileBundledPersonalities', () => {
     };
     const result = reconcileBundledPersonalities([stale]);
     expect(result.changed).toBe(true);
-    expect(result.personalities).toEqual([lora]);
+    expect(result.personalities).toEqual(createBundledPersonalities());
   });
 
   it('stamps re-seeded bundled entries with the provided build timestamp', () => {
