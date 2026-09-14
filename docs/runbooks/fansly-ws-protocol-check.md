@@ -122,6 +122,29 @@ identity and generation comparison described below. Neither result proves
 continuous unchanged generation, socket actor scope, fan-out, presence,
 six-hour continuity, savings or reader latency.
 
+## Transport failure receipts
+
+Short reports and continuity terminal observations retain `openedAt` and three
+bounded diagnostic fields. `failurePhase` is `connect` for a synchronous socket
+construction exception, `pre_open` for an error before the open event, `socket`
+for an error after open, or `auth_send`/`ping` for that send's exception. Other
+stop reasons have null phase. `pre_open` does not identify DNS, TLS, proxy or
+provider failure; `openedAt` plus `sessionFrameSeen` separates open from type-1.
+
+`transportErrorCode` comes from a fixed allowlist at the explicit page dispatcher,
+before Undici can discard the request cause. `httpStatus` is the first exposed
+101 or 200–599 outer HTTP status; interim 1xx is ignored. HTTP 101 alone does not
+prove open, authentication or actor binding. Internal CONNECT rejection status
+may be unavailable: leave it null. `UND_ERR_ABORTED` alone does not prove proxy
+refusal or an intentional operator abort. Unknown or already-discarded codes
+remain null; no error message, response headers/body or secret is exported.
+
+The first error and terminal snapshot survive cleanup unchanged. `closeCode`
+stays null when only a later close follows the terminal error. These fields do
+not recover missing information in older reports. Preserve the original failed
+attempt and inspect the new receipt only during a separately scoped live action;
+the diagnostics add no retry or automatic recovery.
+
 ## REST identity preflight
 
 For the accepted binding workflow, obtain a new preflight receipt within the

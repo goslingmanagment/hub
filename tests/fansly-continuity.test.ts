@@ -120,6 +120,18 @@ describe("W0 continuity collection", () => {
       observation: { stopReason: "output_error", framesReceived: 999, framesRetained: 998 } });
   });
 
+  it.each([false, true])("retains the shared transport boundary in its terminal receipt: open=%s", async (opened) => {
+    const run = start();
+    if (opened) run.socket.open();
+    run.socket.dispatchEvent(new Event("error"));
+    expect(await run.result).toBe(false);
+    expect(run.records().at(-1)).toMatchObject({ kind: "finished", collectionCompleted: false,
+      observation: { stopReason: "transport_error", failurePhase: opened ? "socket" : "pre_open",
+        openedAt: opened ? expect.any(String) : null, sessionFrameSeen: false,
+        transportErrorCode: null, httpStatus: null, closeCode: null } });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("the long CLI accepts only Lilly-1 and fixed named phases, requiring the previous generation after gaps", () => {
     const legacy = ["--page", "lilly-1", "--phase", "continuous", "--correlation-key-file", "key"];
     expect(() => parseContinuityArgs(legacy)).toThrow();

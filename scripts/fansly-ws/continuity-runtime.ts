@@ -4,6 +4,7 @@ import { createDb } from "@agency_hub_core/db";
 import { loadConfig } from "@agency_hub_core/shared";
 import { readProbeGeneration, readProbeSnapshot } from "../../apps/runtime/src/services/egress/fansly-probe-context.ts";
 import { openFanslyProbeSocket } from "../../apps/runtime/src/services/egress/fansly-probe-socket.ts";
+import { createProbeTransportDiagnostics } from "../../apps/runtime/src/services/egress/fansly-probe-diagnostics.ts";
 import { readCorrelationKey } from "./correlation-key.ts";
 import { observeFanslyContinuity, type parseContinuityArgs } from "./continuity.ts";
 import { BindingRefusal, readBindingReceipt, verifyBindingBeforeConnect } from "./binding-receipt.ts";
@@ -34,10 +35,12 @@ export async function runStoredFanslyContinuity(
       throw new BindingRefusal("binding_snapshot_mismatch", binding.sha256);
     }
     const ownedContext = context;
+    const transportDiagnostics = createProbeTransportDiagnostics();
     return await observeFanslyContinuity({
       ...args, token: context.token, generation: context.generation, key, controller, writeLine,
       expectedGeneration: binding.receipt.credentialRouteGeneration, bindingPreflight,
-      connect: () => openFanslyProbeSocket(ownedContext.egress),
+      connect: () => openFanslyProbeSocket(ownedContext.egress, transportDiagnostics),
+      transportDiagnostics,
       readGeneration: () => readProbeGeneration(db, args.pageLabel),
     });
   } finally {

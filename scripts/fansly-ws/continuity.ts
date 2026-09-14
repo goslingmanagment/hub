@@ -39,6 +39,7 @@ export async function observeFanslyContinuity(input: {
   token: string;
   key: Buffer;
   connect: () => ProbeSocket;
+  transportDiagnostics?: NonNullable<Parameters<typeof observeFanslyConnection>[0]["transportDiagnostics"]>;
   readGeneration: () => Promise<string>;
   controller: AbortController;
   writeLine: (line: string) => void;

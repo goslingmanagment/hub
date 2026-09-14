@@ -11,6 +11,7 @@ export function observeFanslyProbe(input: {
   key: Buffer;
   durationMs: number;
   signal: AbortSignal;
+  transportDiagnostics?: NonNullable<Parameters<typeof observeFanslyConnection>[0]["transportDiagnostics"]>;
 }) {
   if (!Number.isInteger(input.durationMs) || input.durationMs < 1
     || input.durationMs > MAX_PROBE_DURATION_MS || input.key.length !== 32
@@ -23,8 +24,8 @@ export function observeFanslyProbe(input: {
     maxReportBytes: 8 * 1024 * 1024, retain: (receipt) => records.push(receipt),
   }).then((result) => {
     const { startedAt, finishedAt, stopReason, sessionFrameSeen, closeCode,
-      framesReceived, framesRetained } = result;
+      framesReceived, framesRetained, openedAt, failurePhase, transportErrorCode, httpStatus } = result;
     return { startedAt, finishedAt, stopReason, sessionFrameSeen, closeCode,
-      framesReceived, framesRetained, records };
+      framesReceived, framesRetained, openedAt, failurePhase, transportErrorCode, httpStatus, records };
   });
 }

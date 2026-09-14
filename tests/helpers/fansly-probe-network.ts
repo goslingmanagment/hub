@@ -13,7 +13,7 @@ const proxyAuth = `Basic ${Buffer.from(`${username}:${password}`).toString("base
  * TLS still verifies wsv3.fansly.com against the child's test-only trust root. */
 export async function startFanslyProbeNetwork(protocol: "http" | "socks5", refuse = false, rest?: {
   status: number; body?: string; location?: string; hang?: boolean;
-}) {
+}, upgradeStatus = 101) {
   const destination = rest ? "apiv3.fansly.com:443" : "wsv3.fansly.com:443";
   const sockets = new Set<Socket>();
   const destinations: string[] = [];
@@ -43,6 +43,11 @@ export async function startFanslyProbeNetwork(protocol: "http" | "socks5", refus
   target.on("tlsClientError", () => {}); // The untrusted-CA case deliberately fails.
   target.on("upgrade", (request, socket) => {
     upgrades.push({ url: request.url, headers: request.headers });
+    if (upgradeStatus !== 101) {
+      socket.end(`HTTP/1.1 ${upgradeStatus} Rejected\r\nContent-Length: 0\r\n`
+        + "X-Private-Fixture: fixture-provider-secret\r\n\r\n");
+      return;
+    }
     const accept = createHash("sha1")
       .update(`${request.headers["sec-websocket-key"]}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`)
       .digest("base64");
