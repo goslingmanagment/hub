@@ -339,6 +339,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 339 | OnlyFans follower greetings | Desktop reuses kernel context for one-message Hi, reads the current welcome template through capture-first, and opts into atomic page/fan custody inside the existing OFAPI command outbox. |
 | 340 | W0 single binding authority | Use the original receipt for every phase; remove duplicate generation arguments and avoid constructing a second dispatcher for the short post-read. |
 | 341 | Isolate captured C2b receipt failures | After durable capture, retain missing receipt debt and continue the daily walk only after an independent page-lease check; ownership or persistent database failure still stops execution. |
+| 342 | New follower roster correction | Date-bounded fans_latest is core audience; explicit old collection jobs retain their category and limits |
 
 
 ## Consensus Decisions
@@ -13883,3 +13884,32 @@ owned generation completes, retains all observations and missing receipt debt,
 and reuses its completed checkpoint without further provider reads. Existing
 lost-lease, claim-expiry and receipt suites remain green. See the
 [earnings shadow runbook](runbooks/fansly-earnings-shadow.md).
+
+## Decision 342: Date-bounded new follower roster (2026-09-15)
+
+Desktop's 0.1.53 roster used `/fans/all` and assumed descending subscription dates.
+An incident export returned old dates in mixed order and then completed empty;
+its missing pagination metadata prevents proving the exact stop branch. Desktop
+now uses `/fans/latest?type=new` and explicit validated continuation, with exact
+local time-window checks. No full unbounded roster fallback is introduced.
+
+Only `fans_latest` moves from `profile_notifications` to `core_audience` in the
+read catalog and operation classifier. The endpoint remains capture-first through
+the catalog gateway, assigned-page auth, normal egress and credit admission;
+explicit audience off and configured daily limits still apply. `defaultCollect`
+stays false and core audience is outside generic scheduled collectors. No other
+profile/notification endpoint is enabled. Fan identity normalization names this
+resource explicitly, preserving IDs after the category change.
+
+Explicit profile_notifications collection jobs may still select fans_latest,
+including checkpointed plans: planner and transport allow only this historical
+pair with an existing job ID and one_off/background purpose. The physical
+reservation still verifies the actual DB job page/category/state and allowance.
+One-off jobs retain their existing owner-approved off-policy exception; background
+jobs continue to respect profile off. Ordinary interactive gateway reads do not
+receive this compatibility exception. No stored job, policy or observation is
+rewritten or deleted, and no production policy is changed by this preparation.
+
+The existing operation/query contract and SDK pin are unchanged. Deploy this
+support before the desktop fix (desktop D34); fixtures/DB checks do not establish
+live provider semantics or completion of a release.

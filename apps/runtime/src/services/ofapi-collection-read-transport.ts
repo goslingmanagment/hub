@@ -23,6 +23,7 @@ import {
   OFAPI_MIRROR_BUDGET_DEFAULTS,
   resolveOfapiCatalogPath,
   type OfapiCollectionContext,
+  type OfapiReadDefinition,
 } from "@agency_hub_core/shared";
 import type { AppContext } from "../bootstrap.ts";
 import { resolveCapturePayloadRow } from "./payload-reader.ts";
@@ -32,6 +33,18 @@ import {
 } from "./ofapi-capture-contract.ts";
 import { resolveOfapiEgressContext } from "./ofapi-egress.ts";
 import { OfapiGovernedRequestError } from "./ofapi.ts";
+
+/** Preserve explicitly selected jobs created under the old catalog category.
+ * This does not change interactive gateway admission or the DB job's limits. */
+export function matchesOfapiCollectionJobCategory(
+  def: OfapiReadDefinition,
+  context: OfapiCollectionContext,
+): boolean {
+  return def.category === context.category || (
+    def.id === "fans_latest" && context.category === "profile_notifications" &&
+    Boolean(context.jobId) && ["one_off", "background"].includes(context.purpose)
+  );
+}
 
 export interface OfapiCollectionReadStep {
   operation: string;
@@ -115,7 +128,7 @@ export async function captureOfapiCollectionRead(
     !input.context.jobId ||
     resolved.definition.operation !== input.step.operation ||
     resolved.accountId !== input.accountId ||
-    resolved.definition.category !== input.context.category
+    !matchesOfapiCollectionJobCategory(resolved.definition, input.context)
   )
     throw new Error("Unregistered collection read");
   const reservedCredits = resolved.definition.reservedCredits ?? 1;
