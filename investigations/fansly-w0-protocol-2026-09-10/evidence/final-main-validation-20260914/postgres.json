@@ -1,0 +1,26 @@
+{
+  "command": [
+    "pnpm",
+    "exec",
+    "vitest",
+    "run",
+    "--no-file-parallelism",
+    "tests/fansly-probe-context.integration.test.ts",
+    "tests/fansly-proxy-missing.integration.test.ts",
+    "tests/egress-resolver.integration.test.ts",
+    "tests/observations.repository.integration.test.ts",
+    "tests/erasure-page-owned-tables.integration.test.ts"
+  ],
+  "cwd": "/Users/dmitriy/.codex/worktrees/hub-fansly-w0-protocol",
+  "environmentOverrides": {
+    "ALLOW_MISSING_TEST_PREREQUISITES": "0",
+    "NODE_OPTIONS": "--max-old-space-size=8192"
+  },
+  "head": "1aa0d862b3b90057b15a60787ca7e1f17b44fb11",
+  "startedAt": "2026-09-14T00:42:18.233478+00:00",
+  "finishedAt": "2026-09-14T00:42:32.917711+00:00",
+  "durationSeconds": 14.684,
+  "exitCode": 0,
+  "rawSha256": "508b43abec41a9af2f5869062afba50495c66ac21809dec2cecd6c6ef033bfd1",
+  "sourceUnchanged": true
+}

@@ -53,7 +53,7 @@ const PLATFORM_VENDORS = {
 } as const;
 
 export async function resolveEgress(
-  app: AppContext,
+  app: Pick<AppContext, "db" | "config">,
   scope: EgressScope,
 ): Promise<AppEgressContext> {
   if (scope.kind === "vendor") {
@@ -120,7 +120,9 @@ export async function resolveEgress(
   };
 }
 
-async function resolveLegacyTelegramEgress(app: AppContext): Promise<AppEgressContext> {
+async function resolveLegacyTelegramEgress(
+  app: Pick<AppContext, "db" | "config">,
+): Promise<AppEgressContext> {
   const pageLabel = app.config.telegramProxyPageLabel;
   if (!pageLabel) {
     throw new ServiceEgressProxyConfigError(

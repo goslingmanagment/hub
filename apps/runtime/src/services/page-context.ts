@@ -93,6 +93,34 @@ function isStoredPlatformCredentialBundle(value: unknown): value is StoredPlatfo
   return value.platform === "fansly" || value.platform === "onlyfans";
 }
 
+/** Decode existing modern or legacy storage without page lookup or side effects. */
+export function decodeStoredFanslySession(
+  app: Pick<AppContext, "config">,
+  encryptedSession: string,
+  label: string,
+): FanslySessionBundle {
+  try {
+    const decrypted = decryptStoredJson<StoredPlatformCredentialBundle | Record<string, unknown>>(
+      app,
+      encryptedSession,
+    );
+    if (isStoredPlatformCredentialBundle(decrypted)) {
+      if (decrypted.platform === "fansly") return decrypted.session;
+      throw new BadRequestError(
+        `Page "${label}" has OnlyFans credentials stored for a Fansly page`,
+      );
+    }
+    return normalizeSessionBundle(asRecord(decrypted));
+  } catch (error) {
+    if (error instanceof BadRequestError) throw error;
+    throw new BadRequestError(
+      `Page "${label}" has invalid stored platform credentials: ${
+        error instanceof Error ? error.message : "Unknown error"
+      }`,
+    );
+  }
+}
+
 export async function loadFanslySessionBundleFromFile(filePath: string) {
   const raw = JSON.parse(await readFile(filePath, "utf8")) as Record<string, unknown>;
   return normalizeSessionBundle(raw);
@@ -235,46 +263,12 @@ async function resolveStoredPageContext(
     throw new BadRequestError(`Page "${label}" has no stored platform credentials`);
   }
 
-  let decrypted: StoredPlatformCredentialBundle | Record<string, unknown>;
-  try {
-    decrypted = decryptStoredJson<StoredPlatformCredentialBundle | Record<string, unknown>>(
-      app,
-      stored.credentials.encryptedSession,
-    );
-  } catch (error) {
-    throw new BadRequestError(
-      `Page "${label}" has invalid stored platform credentials: ${
-        error instanceof Error ? error.message : "Unknown error"
-      }`,
-    );
-  }
+  const session = decodeStoredFanslySession(app, stored.credentials.encryptedSession, label);
 
   const proxy = resolveStoredProxyConfig(app, stored.proxy);
   const egressKey = resolveStoredProxyEgressKey(stored.proxy);
 
   if (stored.page.platform === "fansly") {
-    let session: FanslySessionBundle;
-    try {
-      session = isStoredPlatformCredentialBundle(decrypted)
-        ? decrypted.platform === "fansly"
-          ? decrypted.session
-          : (() => {
-            throw new BadRequestError(
-              `Page "${label}" has OnlyFans credentials stored for a Fansly page`,
-            );
-          })()
-        : normalizeSessionBundle(asRecord(decrypted));
-    } catch (error) {
-      if (error instanceof BadRequestError) {
-        throw error;
-      }
-      throw new BadRequestError(
-        `Page "${label}" has invalid stored platform credentials: ${
-          error instanceof Error ? error.message : "Unknown error"
-        }`,
-      );
-    }
-
     if (!proxy && !options?.allowMissingProxy) {
       // W3.1 (decision #124): Fansly egress fails CLOSED. Every real request
       // path resolves through this context; without the page's proxy the

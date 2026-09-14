@@ -1,0 +1,19 @@
+{
+  "command": [
+    "pnpm",
+    "exec",
+    "vitest",
+    "run",
+    "--no-file-parallelism",
+    "tests/websocket-egress-boundary.test.ts"
+  ],
+  "cwd": "/Users/dmitriy/.codex/worktrees/hub-fansly-w0-protocol",
+  "startedAt": "2026-09-14T00:25:20.821496+00:00",
+  "finishedAt": "2026-09-14T00:25:24.609773+00:00",
+  "durationSeconds": 3.788,
+  "exitCode": 0,
+  "sources": {
+    "eslint.config.mjs": "bdbf7669f551fa84ab1d2fb17d052937db96ee0a1dc7904b335e5396de99d09a",
+    "tests/websocket-egress-boundary.test.ts": "59128b58c4ca37247748eb6d7f6adb530c2044ec5d7aae2583d1b02d84fb5989"
+  }
+}

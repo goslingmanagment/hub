@@ -1,0 +1,6 @@
+{
+  "readAt": "2026-09-13T22:08:30.816908+00:00",
+  "exitCode": 0,
+  "stdout": "{\"asOf\": \"2026-09-13T22:08:30.323893+00:00\", \"role\": \"read_only\", \"pages\": true, \"proxies\": false, \"readOnly\": \"on\", \"credentials\": false}\n",
+  "stderr": ""
+}

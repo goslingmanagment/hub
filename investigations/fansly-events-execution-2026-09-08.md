@@ -29,8 +29,8 @@ stage evidence and PR. This review does not replace stage or production gates.
 
 ## Stage state
 
-This table combines the dated C1 branch observations with main's C2a audit
-record. These are historical snapshots, not a fresh production verification.
+This table combines dated stage snapshots with the 13 September W0 session
+choice. It is not a fresh production verification.
 Consult each stage's latest dated evidence for its current production state.
 
 | Stage | State | Measurement / next gate |
@@ -42,7 +42,7 @@ Consult each stage's latest dated evidence for its current production state.
 | C2a | PR165 deployed; retained projection audit prepared for the approved follow-up PR, Decision 314 | Audit synchronized with main c1ca5e37; 3265 unit and 44 Docker-Postgres tests pass. The additional PR is approved and predecessor 0186 is applied. The audit release must preserve production 4310680dc2f9; projection parity, repair and C2b activation remain unverified. |
 | C2b | PR169 code deployed | Read-only Lilly-1 report at 12 September 11:37: empty tracked endpoints, scope incomplete. Effective flag value unverified; exact-config preflight and shadow observations remain. Daily rotation unchanged. |
 | C2c | Gated | Coverage, costs and per-fan max-age proof before selection/rotation changes. |
-| W0 | [PR167](https://github.com/goslingmanagment/core/pull/167) draft, Decision 288 | Offline diagnostics tested/reviewed; live Management Session binding, fan-out, presence and six-hour continuity still gated. |
+| W0 | [PR167](https://github.com/goslingmanagment/core/pull/167) draft; Decision 325 amends session choice, Decision 288 retains offline scope | Main 0a08365f integrated at e250ebc8. Bounded existing-session probe prepared for lilly-1; Paired-reference comparison also prepared; 3462 checks, 37 serial Docker-Postgres cases and 10 mocked launcher cases pass; independent review has no unresolved code findings. Lilly-1 live probe completed on 13 September 22:28–22:30 UTC: one connection, type-1 received, nine frames, unchanged credential/route generation, zero REST requests and confirmed cleanup. The probe uses trusted runtime credentials in READ ONLY snapshots; the diagnostic role remains unchanged. Binding, fan-out, presence and six-hour continuity remain unverified; see W0 STATUS. |
 | B0 | Gated by W0 | Capture-only receiver, >=7 days with sufficient event variety. |
 | B1 | Gated by B0 and T0 | Measured delivery lag, added attempts and history fairness. |
 | A1 | Owner/calendar/evidence gated | Separate yes after A0/T0 scope and freshness gate. |
@@ -62,9 +62,14 @@ recovery activation is implied. See the [A0 implementation/evidence record](
 fansly-a0-shadow-2026-09-10/STATUS.md) and [shadow runbook](
 ../docs/runbooks/fansly-events-shadow.md).
 
+Current W0 choice: [owner approval and limits](fansly-w0-protocol-2026-09-10/OWNER-CHOICE-20260913.md).
+The session choice replaces Management-only, not the remaining protocol or
+stage gates. No raw token leaves the existing credential path, and the working
+REST session is neither revoked nor migrated. This update records no live probe.
+
 Provider deletion head repair is outside A0; A0 counts discrepancies. Old
 edits/deletions, mutable-offset omissions, quiet-state freshness, outage gaps,
-archive/serving completeness and Management Session WebSocket scope remain
+archive/serving completeness and the selected session's WebSocket scope remain
 unproven. A1, live socket probes and B2 retain their separate owner/evidence
 gates. A0 observation is in progress; elapsed time alone does not pass its
 acceptance gate. This record grants no production action.

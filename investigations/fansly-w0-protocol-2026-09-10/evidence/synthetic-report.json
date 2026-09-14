@@ -1,0 +1,99 @@
+{
+  "schemaVersion": 1,
+  "evidenceKind": "offline_diagnostic",
+  "generatedAt": "2026-09-10T18:32:10.688Z",
+  "scope": "received_frame_metadata_only",
+  "accountBinding": "unverified",
+  "records": [
+    {
+      "excluded": "not_received"
+    },
+    {
+      "receivedAt": "2026-09-10T18:00:00.000Z",
+      "diagnostic": {
+        "bytes": 58,
+        "nodes": [
+          {
+            "path": [],
+            "kind": "session_verified_frame",
+            "transportType": 1
+          }
+        ],
+        "truncated": false,
+        "rejected": null
+      }
+    },
+    {
+      "receivedAt": "2026-09-10T18:00:00.000Z",
+      "diagnostic": {
+        "bytes": 16,
+        "nodes": [
+          {
+            "path": [],
+            "kind": "pong",
+            "transportType": 2
+          }
+        ],
+        "truncated": false,
+        "rejected": null
+      }
+    },
+    {
+      "receivedAt": "2026-09-10T18:00:00.000Z",
+      "diagnostic": {
+        "bytes": 685,
+        "nodes": [
+          {
+            "path": [],
+            "kind": "batch",
+            "transportType": 10001
+          },
+          {
+            "path": [
+              0
+            ],
+            "kind": "service",
+            "transportType": 10000,
+            "serviceId": 5,
+            "eventType": 1,
+            "event": {
+              "fields": [
+                "type",
+                "message"
+              ],
+              "unknownFieldCount": 2,
+              "references": [
+                {
+                  "field": "message.id",
+                  "pseudonym": "365422033422c1dbf552543ec3bafdb3d445787a4a1ded7002b2dfdc83afea67"
+                },
+                {
+                  "field": "message.groupId",
+                  "pseudonym": "e613d2615157c07b4d0bd606db4e4d07fd852c62a221b2428570823f6d90a055"
+                }
+              ]
+            }
+          },
+          {
+            "path": [
+              1
+            ],
+            "kind": "unknown",
+            "transportType": 777,
+            "reason": "unknown_transport"
+          },
+          {
+            "path": [
+              2
+            ],
+            "kind": "unknown",
+            "transportType": null,
+            "reason": "invalid_wrapper"
+          }
+        ],
+        "truncated": false,
+        "rejected": null
+      }
+    }
+  ]
+}

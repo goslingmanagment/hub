@@ -1,0 +1,9 @@
+{
+  "command": [
+    "python3",
+    "tests/fansly-probe-launcher.py"
+  ],
+  "startedAt": "2026-09-13T22:53:28.315293+00:00",
+  "exitCode": 0,
+  "elapsedSeconds": 0.13369412499923783
+}

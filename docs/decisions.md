@@ -322,6 +322,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 322 | Durable provider cooldown | Retain future provider retry deadlines across queued revisions; report long Fansly cooldowns immediately without retrying early. |
 | 323 | Dashboard production parity | Restore the five deployed dashboard feature-control and daily-workflow patches on current main; preserve backend behavior and verify the single formatting-only exception against emitted JavaScript. |
 | 324 | OFAPI fixture UTC clock | Cap ordinary ledger fixture timestamps at their captured instant; prove report boundaries with explicit observations while preserving future-fact exclusion. |
+| 325 | Fansly W0 session choice | Reuse the existing encrypted page REST session for the first limited lilly-1 socket probe; replace Management-only, preserve credential secrecy, healthy REST and every remaining live gate. |
 | 326 | Exhausted DM head debt and history | Retain exhausted missing-head discrepancies while allowing ordinary pending history; only unexhausted debt retains head-search priority and backoff. |
 | 327 | Fansly DM exclusion write | Merge only the verified partner's exclusion metadata under the current lease; preserve newer thread material and refuse stale-binding checkpoint advance. |
 | 328 | C2b receipt claim renewal | Renew the unchanged pre-fetch claim inside its owned settlement transaction so a slow response retains its receipt; replacement tokens and later revisions remain fenced. |
@@ -13317,6 +13318,59 @@ Add five PostgreSQL cases with explicit report observations at day/month boundar
 and around the failed 00:02:30 case. Keep the intentional future-entry test and
 production queries unchanged. An original-helper negative control reproduces
 132 versus 92; the corrected suite passes all 26 cases. No runtime flag is added.
+
+## Decision 325: Reuse the existing Fansly REST session for W0 (2026-09-13)
+
+The owner answered «да давай использовать его же» after the proposal to reuse
+the Fansly session token already used by Hub's REST integration. This explicitly
+replaces the 8 September Management-only restriction and its owner-token
+prohibition for the selected existing credential. Historical Decision 288
+remains unchanged; this entry amends its session-choice gate.
+
+Use the existing encrypted page credential through Hub's trusted credential
+path. The first limited probe candidate is `lilly-1`. No raw auth is exposed
+through CLI arguments, environment exports, logs, exceptions, clipboard, chat
+or diagnostic artifacts. This means the Fansly provider session, not a Hub
+administrative API token. Do not create, rotate or revoke a working credential
+as part of this choice, and do not migrate or suppress REST polling.
+
+The bounded probe is an operator-only entrypoint with a fixed endpoint and a
+dedicated page dispatcher. It reuses the trusted runtime database configuration
+with short REPEATABLE READ, READ ONLY snapshots. This does not change the
+read_only-only rule for ordinary psql diagnostics or grant new DB privileges.
+A separate container and external deadline
+bound undici transport memory and lifetime. It exports only received metadata,
+makes no REST requests and performs no database writes. Its one additional
+platform guard rejects non-Fansly pages before decrypting the session; the platform
+branch budget increases from current main's 157 to 158 for this explicit boundary
+(the original W0-only increment was 155 to 156 before the performance import).
+
+The public stable server contract remains unproven. Binding, type-1 verification
+distinct from pong, fan-out,
+presence and six-hour continuity/gap evidence remain W0 requirements. A short
+probe does not pass them, extend to other pages or authorize B0/B1. Record exact
+page/account, credential and route generations, proxy, interval and stop
+deadline before the probe. Preserve failed and unknown evidence.
+
+On auth conflict or WS capability failure, stop the test receiver and preserve
+healthy REST. No logout, working-session revocation, automatic token rotation
+or indefinite WS retry. Ending the probe is its rollback; no business data,
+credentials or REST policy need to be reversed. Neither the implementation nor
+its local tests establish a live connection or passed stage gate. Local validation
+and independent review are recorded in the W0 status; no new runtime flag exists.
+
+Paired W0 diagnostics may use one private random correlation key for the browser
+export and server probe. A key fingerprint prevents comparing unrelated keys;
+a bounded offline report compares entity references only in declared overlapping
+windows. Repeated references, lost/unknown frames and interrupted probes remain
+explicit. No matched entity, shared key or successful command is a fan-out,
+account-binding or reader-latency pass. The optional key-file argument does not
+change the 120-second limit, credential choice or remaining live gates.
+
+Initially drafted as D321 from main `0a08365f` (latest D320), then renumbered
+to D325 during reconciliation with main `b41ebbd2` (latest D321); D322–324
+are reserved for the separately reviewed cooldown, dashboard and CI-fixture PRs. See [the owner-choice record](../investigations/fansly-w0-protocol-2026-09-10/OWNER-CHOICE-20260913.md)
+and [W0 runbook](runbooks/fansly-ws-protocol-check.md).
 
 ## Decision 326: Exhausted head debt does not block ordinary history (2026-09-14)
 

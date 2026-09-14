@@ -1,0 +1,14 @@
+{
+  "priorHead": "4967bedd03e195f12cc771251b0430c18c446950",
+  "main": "a9794e600dfbb10918800ab5b49241e33d7357a3",
+  "manualResolutions": [
+    "docs/decisions.md"
+  ],
+  "priorSourceDifferences": [
+    "tests/ofapi-credits-api.integration.test.ts"
+  ],
+  "incomingFixtureExactMain": true,
+  "allOtherTrackedSourceTestsUnchanged": true,
+  "localTestsRepeated": false,
+  "reason": "The topic source/test fingerprints remain unchanged from passed check and PostgreSQL receipts; the only incoming test is exact verified main. Fresh PR CI validates the complete merge."
+}

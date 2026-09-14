@@ -1,0 +1,18 @@
+{
+  "command": [
+    "pnpm",
+    "check"
+  ],
+  "cwd": "/Users/dmitriy/.codex/worktrees/hub-fansly-w0-protocol",
+  "environmentOverrides": {
+    "ALLOW_MISSING_TEST_PREREQUISITES": "0",
+    "NODE_OPTIONS": "--max-old-space-size=8192"
+  },
+  "head": "1aa0d862b3b90057b15a60787ca7e1f17b44fb11",
+  "startedAt": "2026-09-14T00:41:31.706424+00:00",
+  "finishedAt": "2026-09-14T00:42:18.166091+00:00",
+  "durationSeconds": 46.46,
+  "exitCode": 0,
+  "rawSha256": "4d735e9fbcbf2edc98e23a913ef17bbeced185dc685b367b197f8f54024e92d1",
+  "sourceUnchanged": true
+}
