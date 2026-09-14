@@ -1,0 +1,19 @@
+{
+  "command": [
+    "pnpm",
+    "check"
+  ],
+  "cwd": "/Users/dmitriy/.codex/worktrees/hub-fansly-a0-material-cost-read",
+  "startedAt": "2026-09-14T15:04:29.927614+00:00",
+  "completedAt": "2026-09-14T15:05:36.535681+00:00",
+  "exitCode": 0,
+  "environment": {
+    "NODE_OPTIONS": "--max-old-space-size=4096",
+    "ALLOW_MISSING_TEST_PREREQUISITES": "0"
+  },
+  "head": "4e18d130ea6ca4b834141789265cce8442f8fcae",
+  "logSha256": "1b004f50333e098581c186dd52a50efefafa47e040e68f3fc4547f530bba650d",
+  "compressedLogPath": "evidence/check-initial.log.gz",
+  "compressedLogSha256": "4e9c540d3cea789fe278baec1f04cc133e93e0e6630ae5617ef9513b8f0ec10e",
+  "validatedSourceManifestSha256": "16ec48b2f7f6720fb84704fbaff54c2576fd6a3763c111b4b3d2ff2d1ff05870"
+}
