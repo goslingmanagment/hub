@@ -94,8 +94,8 @@ export async function getFanslyDmHeadTarget(
   } : null;
 }
 
-/** The SQL selector is also used by list wakeups: pending history without a
- * missing head remains eligible, while unresolved head backoff cannot leak. */
+/** Any uncaptured identity remains unresolved, including exhausted debt.
+ * Queue admission separately checks whether its bounded retries remain. */
 export async function hasUnresolvedFanslyDmHead(db: Database, conversationId: number): Promise<boolean> {
   const result = await db.execute<{ present: boolean }>(sql`
     select exists (select 1 from fansly_dm_head_debt d

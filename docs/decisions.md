@@ -322,6 +322,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 322 | Durable provider cooldown | Retain future provider retry deadlines across queued revisions; report long Fansly cooldowns immediately without retrying early. |
 | 323 | Dashboard production parity | Restore the five deployed dashboard feature-control and daily-workflow patches on current main; preserve backend behavior and verify the single formatting-only exception against emitted JavaScript. |
 | 324 | OFAPI fixture UTC clock | Cap ordinary ledger fixture timestamps at their captured instant; prove report boundaries with explicit observations while preserving future-fact exclusion. |
+| 326 | Exhausted DM head debt and history | Retain exhausted missing-head discrepancies while allowing ordinary pending history; only unexhausted debt retains head-search priority and backoff. |
 | 327 | Fansly DM exclusion write | Merge only the verified partner's exclusion metadata under the current lease; preserve newer thread material and refuse stale-binding checkpoint advance. |
 
 ## Consensus Decisions
@@ -13314,6 +13315,41 @@ Add five PostgreSQL cases with explicit report observations at day/month boundar
 and around the failed 00:02:30 case. Keep the intentional future-entry test and
 production queries unchanged. An original-helper negative control reproduces
 132 versus 92; the corrected suite passes all 26 cases. No runtime flag is added.
+
+## Decision 326: Exhausted head debt does not block ordinary history (2026-09-14)
+
+An allowlisted Fansly conversation could remain in `pending_backfill` forever
+after its known missing head exhausted all five recovery attempts. The selector
+correctly stopped head searches, but still excluded ordinary pending history
+whenever any uncaptured head debt existed. The list writer used that same broad
+unresolved test to suppress the sibling message-stream wakeup.
+
+Ordinary pending history is now blocked only by uncaptured debt with fewer than
+five attempts. Due head debt retains its existing priority, and unexhausted debt
+in backoff still cannot enter through the history path. The list writer reuses
+its existing bounded-retry deadline result to make the same distinction; no
+additional query or retry loop is introduced.
+
+A freshly selected pending-history conversation without an active head target
+uses ordinary backfill from its oldest stored cursor. Its still-missing head
+must not force an incremental read that overlaps without advancing history.
+Due head targets and existing pinned work keep their current mode and cursor.
+
+Exhausted rows remain uncaptured and visible as `exhausted` in the reporting
+view. `hasUnresolvedFanslyDmHead` keeps its diagnostic meaning, including those
+rows. No ID is acknowledged, erased, declared provider-deleted or repaired by
+this selection change. A later exact stored receipt can still resolve the debt.
+
+The existing allowlist, five-attempt cap, page budgets, history policy, stream
+and transport gates remain in force. No flag, migration, recovery activation or
+production action is introduced. Postgres regressions cover exhausted history
+selection without debt mutation, unexhausted head priority/backoff, actual
+allowlisted sweep wakeups, and a message chunk that captures older history once
+without retrying or acknowledging the exhausted head. Rollback preserves the debt but
+can block ordinary pending history behind exhausted debt again.
+
+Decision 326 is a coordinator reservation after separately prepared Decisions
+322–325. Its number must be checked against current main before publication.
 
 ## Decision 327: Exclude an unresolvable DM partner without rewriting its thread (2026-09-14)
 
