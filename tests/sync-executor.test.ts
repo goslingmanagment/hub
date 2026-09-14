@@ -1575,6 +1575,40 @@ describe("sync executor", () => {
     expect(dbMocks.blockPageSync).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { status: 429, retryKind: "rate_limit", delayMs: 30 * 60_000, forceOpen: false },
+    { status: 429, retryKind: "rate_limit", delayMs: 30 * 60_000 + 1, forceOpen: true },
+    { status: 429, retryKind: "rate_limit", delayMs: 86_400_000, forceOpen: true },
+    { status: 503, retryKind: "provider_5xx", delayMs: 30 * 60_000, forceOpen: false },
+    { status: 503, retryKind: "provider_5xx", delayMs: 30 * 60_000 + 1, forceOpen: true },
+    { status: 503, retryKind: "provider_5xx", delayMs: 86_400_000, forceOpen: true },
+  ])("reports a long provider cooldown without shortening it ($status, $delayMs ms)", async ({
+    status, retryKind, delayMs, forceOpen,
+  }) => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const now = new Date("2026-03-14T12:00:00.000Z");
+    vi.setSystemTime(now);
+    const app = {
+      db: {},
+      logger: { warn: vi.fn(), error: vi.fn() },
+    } as never;
+    const retryAt = new Date(now.getTime() + delayMs);
+    dbMocks.acquirePageSyncLease.mockResolvedValueOnce(taskLease);
+    handlerMocks.executeStreamChunk.mockRejectedValue(
+      new FanslyApiError("provider unavailable", status, undefined, undefined, retryAt),
+    );
+
+    await executeNextSyncPageChunk(app, 55);
+
+    expect(dbMocks.retryPageSync).toHaveBeenCalledWith({}, expect.objectContaining({ retryKind, retryAt }));
+    expect(dbMocks.blockPageSync).not.toHaveBeenCalled();
+    expect(notificationMocks.notifySyncChunkFailureIncident).toHaveBeenCalledWith(app, expect.objectContaining({
+      previousConsecutiveFailures: 0,
+      forceOpen,
+      ...(forceOpen ? { errorSummary: expect.stringContaining(retryAt.toISOString()) } : {}),
+    }));
+  });
+
   it("keeps the durable ladder when it outlasts the provider's deadline", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-03-14T12:00:00.000Z"));
