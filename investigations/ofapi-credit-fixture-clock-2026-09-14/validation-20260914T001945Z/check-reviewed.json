@@ -1,0 +1,11 @@
+{
+  "command": [
+    "pnpm",
+    "check"
+  ],
+  "cwd": "/Users/dmitriy/.codex/worktrees/hub-ofapi-credit-fixture-clock",
+  "startedAt": "2026-09-14T00:23:42.252542+00:00",
+  "finishedAt": "2026-09-14T00:24:27.277806+00:00",
+  "durationSeconds": 45.025,
+  "exitCode": 0
+}

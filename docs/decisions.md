@@ -321,6 +321,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 321 | Production performance parity | Restore deployed runtime fixes and exact applied migration identities on current main; preserve newer main changes and keep C1 membership and dashboard reconciliation visible as separate prerequisites. |
 | 322 | Durable provider cooldown | Retain future provider retry deadlines across queued revisions; report long Fansly cooldowns immediately without retrying early. |
 | 323 | Dashboard production parity | Restore the five deployed dashboard feature-control and daily-workflow patches on current main; preserve backend behavior and verify the single formatting-only exception against emitted JavaScript. |
+| 324 | OFAPI fixture UTC clock | Cap ordinary ledger fixture timestamps at their captured instant; prove report boundaries with explicit observations while preserving future-fact exclusion. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -13299,3 +13300,16 @@ The strictness ratchet and its per-file debt budget are unchanged; unit scripts
 retain their own memory settings. This workflow environment does not enter the
 production image, running services, database or integration jobs. Retain the
 failed job log and validate the full static command with the declared budget.
+
+## Decision 324: Keep ordinary OFAPI fixture facts before their report (2026-09-14)
+
+The credits integration fixture used fixed 00:01–00:06 UTC timestamps. During
+C1 CI at 00:02, the forecast correctly excluded a future 40-credit webhook fact,
+returning 92 instead of the fixture's expected 132. This is a test clock defect;
+the production report must continue to exclude facts after its observation.
+
+Capture one fixture instant and cap the existing UTC-day offsets at that instant.
+Add five PostgreSQL cases with explicit report observations at day/month boundaries
+and around the failed 00:02:30 case. Keep the intentional future-entry test and
+production queries unchanged. An original-helper negative control reproduces
+132 versus 92; the corrected suite passes all 26 cases. No runtime flag is added.

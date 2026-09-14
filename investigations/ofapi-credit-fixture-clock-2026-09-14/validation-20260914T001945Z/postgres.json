@@ -1,0 +1,17 @@
+{
+  "command": [
+    "env",
+    "ALLOW_MISSING_TEST_PREREQUISITES=0",
+    "pnpm",
+    "exec",
+    "vitest",
+    "run",
+    "--no-file-parallelism",
+    "tests/ofapi-credits-api.integration.test.ts"
+  ],
+  "cwd": "/Users/dmitriy/.codex/worktrees/hub-ofapi-credit-fixture-clock",
+  "startedAt": "2026-09-14T00:23:16.239371+00:00",
+  "finishedAt": "2026-09-14T00:23:27.310188+00:00",
+  "durationSeconds": 11.071,
+  "exitCode": 0
+}
