@@ -78,3 +78,9 @@ No commit, push, PR, deployment, flag change or production read/write has
 been performed for this candidate. Existing history/request budgets and
 stream/provider gates continue to apply. Returning to the previous image can
 reintroduce the history blockage but does not discard the retained discrepancy.
+
+Final main composition `7bb73162` incorporates C1 and cooldown from main
+`b78752d0`; the only manual merge resolution retained both decision entries.
+Full check passed 3,420 unit tests (nine existing skips, 304 files); the same
+five serial Docker-Postgres suites passed all 41 tests. Source hashes were
+unchanged; exact receipts and compressed logs are in `final-main-validation/`.
