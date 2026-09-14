@@ -4,7 +4,30 @@ The candidate adds exact pre-apply Agent reader-state observations to A0 while
 preserving its hot-table measurement, polling, business writes and candidate
 stop. It does not complete the A0 gate or implement A1.
 
-## Candidate and validation
+## Current composition and validation
+
+Merged main `3baee9db69a479e470b9ed6da7af079b456af6c3` adds the reviewed W0
+continuity topic. Rebased implementation `d09920e77773e164ab7402120b61382f08f34376`
+retains all 17 non-decision topic files byte-for-byte. The sole overlap was the
+append-only decision file: exact main D333/D334 plus unchanged D335. Of 2423
+existing main paths, 2410 Git entries remain byte-identical; the other 13 are
+listed intended topic changes. See `evidence/composition-main-3ba.json`.
+
+The required combined rerun passed:
+
+- `pnpm check`: exit 0; 3779 unit tests, 9 existing skips, 329 files; typecheck,
+  lint and dashboard build passed. Completed 2026-09-14T16:09:54.034687Z,
+  46.978 s. Existing strictness debt is unchanged.
+- Same eight serial Docker-Postgres suites: exit 0, 84/84, no skips.
+  Completed 2026-09-14T16:10:35.148432Z, 20.021 s.
+- Independent composition review verifies all 18 source/test/doc hashes, exact
+  decisions, clarified path counts and refreshed raw/compressed log receipts.
+
+`evidence/check-main-3ba.json` and `evidence/postgres-main-3ba.json` retain exact
+commands, environment, timings and hashes. The publication commit adds evidence
+only; fresh PR CI will validate the published head.
+
+## Earlier validated composition
 
 Base: `4d9cac4acffbbf1cbb17b74cac0b4d76f01ce65d` (includes PR194).
 Tested commit: `5f247b4312ea60ab2b81625a4ca49bd8046fb3cf`.

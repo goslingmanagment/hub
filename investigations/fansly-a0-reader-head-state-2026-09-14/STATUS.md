@@ -1,8 +1,8 @@
 # A0 advertised-head reader state
 
 Implementation, independent review and local validation are complete. The tested
-source is 5f247b43 over main 4d9cac4a; the publication commit adds evidence only.
-Full check passed 3762 tests with 9 existing skips; all 84 serial Docker-Postgres
+source is d09920e7 over main 3baee9db; the publication commit adds evidence only.
+Full check passed 3779 tests with 9 existing skips; all 84 serial Docker-Postgres
 cases passed. REVIEW.md verifies source, composition and exact log hashes.
 
 The counters describe exact advertised IDs under Agent transcript semantics,

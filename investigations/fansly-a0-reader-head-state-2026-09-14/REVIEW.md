@@ -113,3 +113,35 @@ receipt times. They retain initial failures, distinguish the existing typecheck
 ratchet debt from a debt-free tree, and keep the new production cost, future
 reader observations and original stage gates unmeasured/unaccepted. Their
 pre-publication pending-review markers may now point to this clean review.
+
+## Main 3baee9db composition follow-up
+
+Reviewed rebased head `d09920e77773e164ab7402120b61382f08f34376` against main
+`3baee9db69a479e470b9ed6da7af079b456af6c3` and prior reviewed publication
+`5995f52c1c4fe8e041c0017deac38fe192bfa5e5`. All 17 non-decision topic
+source/test/runbook paths remain byte-identical; all 18 current source pins verify.
+The source/test patch is identical (SHA-256 `2e43ac13de92403e446c7846586e332944b0f13a3e0bddfe32e5258a54b536d7`).
+
+All 2,410 main paths outside the intended source/doc modifications retain
+their exact Git entries. The manual decision resolution preserves every main
+byte, including D333 and D334, and appends the unchanged D335 row/section plus
+one blank separator. Incoming W0 egress/observer/launcher modules are separate
+from the A0 sweep/reader modules; no code conflict or new behavior was introduced
+by this composition. No findings. Refreshed composition validation is pending
+and will be reviewed separately; this check did not run tests or production calls.
+
+## Main 3baee9db validation receipt follow-up
+
+Verified both refreshed original/compressed log hashes, exit codes and exact
+tested head `d09920e77773e164ab7402120b61382f08f34376`. Full `pnpm check`
+passed 3,779 tests with nine existing skips in 329 files; all eight serial
+PostgreSQL suites passed 84/84. All 18 source pins remain unchanged.
+
+The composition receipt now explicitly distinguishes 2,423 total main paths,
+2,410 unchanged Git entries and 13 existing paths changed by the intended topic;
+these counts independently match the Git trees. This resolves the ambiguous
+previous `mainPathsRetained` label without altering any source or test.
+
+No findings remain. The composed candidate and retained validation are ready
+for coordinator-authorized publication and fresh CI. No tests, branch mutations
+or production actions were performed by this review.
