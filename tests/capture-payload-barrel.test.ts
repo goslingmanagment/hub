@@ -66,6 +66,7 @@ describe("capture payloads: the body reader stays off the package barrel", () =>
   // representation the reference may resolve to, and refuses the others).
   it("exports the envelope-authorized reader, and it demands the envelope", () => {
     expect(Object.keys(db)).toContain("readEnvelopeCapturePayload");
+    expect(Object.keys(db)).toContain("readEnvelopeCapturePayloadBatch");
     expect(Object.keys(db)).toContain("CAPTURE_PAYLOAD_ENVELOPE_KINDS");
     expect(db.CAPTURE_PAYLOAD_ENVELOPE_KINDS).toEqual(["observation", "raw_payload"]);
     // The source line is pinned too: dropping `envelope` from the input would
@@ -76,6 +77,9 @@ describe("capture payloads: the body reader stays off the package barrel", () =>
     );
     expect(repository).toContain(
       "input: { envelope: CapturePayloadEnvelopeKind; ref: CapturePayloadRef },",
+    );
+    expect(repository).toContain(
+      "input: { envelope: CapturePayloadEnvelopeKind; refs: readonly CapturePayloadRef[] },",
     );
   });
 

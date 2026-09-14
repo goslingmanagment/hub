@@ -1063,7 +1063,53 @@ export async function listObservationsForReplay(
     conditions.push(sql`o.id > ${input.afterId}`);
   }
 
+  // A caught-up family can make LIMIT choose an id-ordered walk of every
+  // monthly heap. Prove whether any work exists through 0144's covering
+  // (parse_version, source, kind, received_at) index first, in this same
+  // statement snapshot. Enumerate actual versions: negative/sparse versions
+  // remain eligible, and a large caller floor cannot create a huge series.
+  // Deep/exact/account scopes need columns outside that index; time scopes
+  // can span kind prefixes. Keep their original lookup. Populated heads retain
+  // the original id-ordered page.
+  const probePendingHead = input.source !== undefined && input.afterId == null
+    && input.observationId === undefined && input.accountId == null && input.accountIds === undefined
+    && input.from == null && input.to == null;
+  const versionBounds = sql`o.parse_version < ${input.belowParseVersion}
+    ${input.atLeastParseVersion === undefined ? sql`` : sql`and o.parse_version >= ${input.atLeastParseVersion}`}`;
+  const probeKinds = [...new Set(input.kinds ?? [])];
+  const pendingHead = probePendingHead ? sql`
+    with recursive replay_versions(parse_version) as (
+      (
+        select o.parse_version from observations o
+        where ${versionBounds}
+        order by o.parse_version
+        limit 1
+      )
+      union all
+      select next_version.parse_version
+      from replay_versions previous_version
+      cross join lateral (
+        select o.parse_version from observations o
+        where ${versionBounds} and o.parse_version > previous_version.parse_version
+        order by o.parse_version
+        limit 1
+      ) next_version
+    ), replay_pending as materialized (
+      select 1
+      from replay_versions pending_version
+      ${probeKinds.length === 0 ? sql`` : sql`cross join unnest(array[${sql.join(probeKinds.map(kind => sql`${kind}`), sql`, `)}]::text[]) as replay_kinds(kind)`}
+      cross join lateral (
+        select 1 from observations o
+        where o.parse_version = pending_version.parse_version and o.source = ${input.source}
+          ${probeKinds.length === 0 ? sql`` : sql`and o.kind = replay_kinds.kind`}
+        order by ${probeKinds.length === 0 ? sql`o.kind, ` : sql``}o.received_at
+        limit 1
+      ) pending_prefix
+      limit 1
+    )
+  ` : sql``;
   const result = await db.execute<Record<string, unknown>>(sql`
+    ${pendingHead}
     select o.id::text as id, o.source, o.producer, o.platform, o.account_id,
            o.native_account_ref, o.kind, o.payload, o.observed_at,
            o.received_at, o.parse_version,
@@ -1071,6 +1117,7 @@ export async function listObservationsForReplay(
            o.payload_object_id::text as payload_object_id
     from observations o
     where ${sql.join(conditions, sql` and `)}
+      ${probePendingHead ? sql`and exists (select 1 from replay_pending)` : sql``}
     order by o.id asc
     limit ${limit}
   `);

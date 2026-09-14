@@ -54,10 +54,10 @@ export async function readFanslyDmShadowMaterial(
   if (heads.length === 0) return new Map();
   if (heads.length > 100) throw new Error("DM shadow material check exceeds one list page");
   return db.transaction(async (tx) => {
-    // 5 s, not 500 ms: on the loaded VPS the shorter deadline cancelled this
-    // indexed check ~200 times an hour and forced the full sweep each time
-    // (docs/diag/2026-09-11-agency-hub-load). The report writer above keeps
-    // its fail-fast 500 ms: a diagnostic write must never hold up the sync.
+    // The 5 s timeout allows this diagnostic read more time under load.
+    // A timeout leaves material evidence unknown while normal pagination
+    // continues. The query scope and real sweep stop conditions stay unchanged;
+    // the report writer above retains its separate 500 ms timeout.
     await tx.execute(sql`set local statement_timeout = '5s'`);
     const values = sql.join(heads.map((head) => sql`(
       ${head.conversationId}::bigint, ${head.messageId}::text

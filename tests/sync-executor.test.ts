@@ -6,6 +6,7 @@ import type * as SyncSharedModule from "../apps/runtime/src/services/sync/shared
 
 import { OfapiCollectionPolicyError, PageSyncLeaseLostError } from "@agency_hub_core/db";
 import { FanslyApiError } from "@agency_hub_core/fansly";
+import { executeObservedRequest, waitForHttpRequestDelay } from "@agency_hub_core/shared";
 
 import { ProxyMissingError } from "../apps/runtime/src/services/errors.ts";
 import { OfapiApiError } from "../apps/runtime/src/services/ofapi.ts";
@@ -1763,6 +1764,90 @@ describe("sync executor", () => {
       }),
       "Failed to heartbeat page sync lease",
     );
+  });
+
+  it.each([
+    { waiting: "rate", heartbeat: "lost" },
+    { waiting: "retry", heartbeat: "lost" },
+    { waiting: "rate", heartbeat: "error" },
+    { waiting: "retry", heartbeat: "error" },
+  ])("stops physical attempts during $waiting wait after heartbeat $heartbeat", async ({ waiting, heartbeat }) => {
+    vi.useFakeTimers();
+    const app = { db: {}, logger: { warn: vi.fn(), error: vi.fn() } } as never;
+    dbMocks.acquirePageSyncLease.mockResolvedValueOnce(taskLease);
+    if (heartbeat === "lost") dbMocks.heartbeatPageSyncLease.mockResolvedValueOnce(false);
+    else dbMocks.heartbeatPageSyncLease.mockRejectedValueOnce(new Error("db unavailable"));
+    let entered!: () => void;
+    const waitingStarted = new Promise<void>((resolve) => { entered = resolve; });
+    const physicalRequest = vi.fn(async () => "synthetic retryable response");
+    handlerMocks.executeStreamChunk.mockImplementation(async () => {
+      await executeObservedRequest({
+        requestId: "lease-cancel",
+        operation: "followers",
+        endpointTemplate: "/synthetic",
+        method: "GET",
+        async waitForRateLimit() {
+          if (waiting === "rate") {
+            entered();
+            await waitForHttpRequestDelay(60_000);
+          }
+          return 0;
+        },
+        observer: {
+          async onRequestEvent(event) { if (event.state === "retry") entered(); },
+        },
+        execute: physicalRequest,
+        onResponse: () => ({ kind: "retry", httpStatus: 503, retryDelayMs: 60_000 }),
+        onTransportError: (error) => ({ kind: "failed", error }),
+      });
+      return { satisfied: true, stats: {} };
+    });
+    const running = executeNextSyncPageChunk(app, 55);
+    await waitingStarted;
+    await vi.advanceTimersByTimeAsync(30_001);
+
+    await expect(running).resolves.toMatchObject({ kind: "idle", needsContinuation: false });
+    expect(physicalRequest).toHaveBeenCalledTimes(waiting === "rate" ? 0 : 1);
+    expect(telemetryMocks.instances[0]?.recordSkipped).toHaveBeenCalledWith("Page sync lease lost");
+    expect(dbMocks.retryPageSync).not.toHaveBeenCalled();
+    expect(dbMocks.completePageSync).not.toHaveBeenCalled();
+    expect(sharedMocks.persistFailedSyncPayload).not.toHaveBeenCalled();
+  });
+
+  it("preserves returned response capture after heartbeat loss while fencing business completion", async () => {
+    vi.useFakeTimers();
+    const app = { db: {}, logger: { warn: vi.fn(), error: vi.fn() } } as never;
+    dbMocks.acquirePageSyncLease.mockResolvedValueOnce(taskLease);
+    dbMocks.heartbeatPageSyncLease.mockResolvedValueOnce(false);
+    let entered!: () => void;
+    const requestStarted = new Promise<void>((resolve) => { entered = resolve; });
+    let receive!: (body: string) => void;
+    const inFlight = new Promise<string>((resolve) => { receive = resolve; });
+    const capture = vi.fn();
+    handlerMocks.executeStreamChunk.mockImplementation(async () => {
+      const response = await executeObservedRequest({
+        requestId: "lease-cancel-inflight",
+        operation: "followers",
+        endpointTemplate: "/synthetic",
+        method: "GET",
+        execute: () => { entered(); return inFlight; },
+        onResponse: (value) => ({ kind: "success", value, httpStatus: 200 }),
+        onTransportError: (error) => ({ kind: "failed", error }),
+      });
+      // The handler's capture-first step still receives the complete body.
+      capture(response);
+      return { satisfied: true, stats: { processedThisChunk: 1 } };
+    });
+    const running = executeNextSyncPageChunk(app, 55);
+    await requestStarted;
+    await vi.advanceTimersByTimeAsync(30_001);
+    receive("verbatim response received after lease loss");
+
+    await expect(running).resolves.toMatchObject({ kind: "idle", needsContinuation: false });
+    expect(capture).toHaveBeenCalledWith("verbatim response received after lease loss");
+    expect(dbMocks.completePageSync).not.toHaveBeenCalled();
+    expect(dbMocks.yieldPageSync).not.toHaveBeenCalled();
+    expect(dbMocks.retryPageSync).not.toHaveBeenCalled();
   });
 
   it("treats chunk errors as skipped when the lease was fenced before the error surfaced", async () => {

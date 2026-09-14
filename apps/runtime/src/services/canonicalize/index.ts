@@ -7,7 +7,12 @@ import { canonicalizeOfapiReadObservation, canParseOfapiReadObservation } from "
 // parse_version stamped after consumption. Bumping a family's version makes
 // the sweep revisit its kinds — replay is the steady-state mechanism.
 
-import type { CanonicalizableObservation, Canonicalizer } from "./types.ts";
+import type {
+  CanonicalizableObservation,
+  Canonicalizer,
+  CanonicalParser,
+  CanonicalParseRejection,
+} from "./types.ts";
 import { canonicalizeOnlyFansPostsObservation, canParseOnlyFansPostsObservation } from "./onlyfans-post-media.ts";
 import {
   canonicalizeClientCaptureObservation,
@@ -21,8 +26,7 @@ import {
 } from "./ofapi-webhook.ts";
 import {
   canonicalizeFanslyEarningsObservation,
-  canParseFanslyEarningsObservation,
-  diagnoseFanslyEarningsRejection,
+  parseFanslyEarningsObservation,
   FANSLY_EARNINGS_CANONICALIZER_VERSION,
   FANSLY_EARNINGS_KINDS,
 } from "./fansly-earnings.ts";
@@ -74,12 +78,10 @@ import {
   FANSLY_PAYOUTS_CANONICALIZER_VERSION,
 } from "./fansly-payouts.ts";
 
-export interface CanonicalizerFamily {
+interface CanonicalizerFamilyBase {
   source: "webhook" | "pull" | "command_result" | "client_capture" | "ofapi_capture";
   /** Only replay settled material; lower versions remain owned by capture jobs. */
   minimumParseVersion?: number;
-  /** Load the original post acceptance boundary from the attached ledger. */
-  replayContext?: "accepted_posts";
   /**
    * Stable per-family lane id, unique across the registry and INDEPENDENT of
    * the version. It disambiguates families that share a `source`: the
@@ -96,19 +98,6 @@ export interface CanonicalizerFamily {
   /** Share the existing sweep budget between never-parsed capture and replay. */
   prioritizeUnparsed?: boolean;
   canonicalize: Canonicalizer;
-  /**
-   * Shape gate. `false` = the payload matches NO shape this family knows, so
-   * the row is left UNSTAMPED for a future parser instead of being consumed
-   * with zero events. Without it a drifted payload is indistinguishable from a
-   * legitimately EMPTY snapshot, and "capture now, parse later" quietly
-   * becomes "capture now, never parse". Families without drift risk omit it.
-   */
-  canParse?: (observation: CanonicalizableObservation) => boolean;
-  /** Optional fixed-code detail for a shape-gate refusal. Called only after
-   * `canParse` returns false; values must never contain provider content. */
-  parseRejection?: (
-    observation: CanonicalizableObservation,
-  ) => { code: string; itemIndex?: number } | null;
   /**
    * The family's events are projection material, not client-deliverable news
    * (every type it emits must be in PROJECTION_ONLY_DOMAIN_EVENT_TYPES). The
@@ -127,6 +116,37 @@ export interface CanonicalizerFamily {
    */
   mixed?: boolean;
 }
+
+export type CanonicalizerFamily = CanonicalizerFamilyBase & (
+  | {
+    /**
+     * Context-free families may validate and build drafts in ONE pass. The
+     * driver uses this result for acceptance, diagnostics and append; it does
+     * not invoke `canonicalize` again. The standalone canonicalizer remains
+     * available to direct callers. A refusal discards all returned drafts.
+     */
+    parse: CanonicalParser;
+    canParse?: never;
+    parseRejection?: never;
+    replayContext?: never;
+  }
+  | {
+    parse?: never;
+    /** Load the original post acceptance boundary from the attached ledger. */
+    replayContext?: "accepted_posts";
+    /**
+     * Shape gate. `false` leaves the row UNSTAMPED for a future parser instead
+     * of consuming it with zero events. Without it a drifted payload is
+     * indistinguishable from a legitimately EMPTY snapshot. Families without
+     * drift risk omit it.
+     */
+    canParse?: (observation: CanonicalizableObservation) => boolean;
+    /** Optional fixed-code detail, called only after `canParse` returns false. */
+    parseRejection?: (
+      observation: CanonicalizableObservation,
+    ) => CanonicalParseRejection | null;
+  }
+);
 
 export const CANONICALIZER_FAMILIES: readonly CanonicalizerFamily[] = [
   { source:"ofapi_capture", lane:"read_collections", kinds:["ofapi.collection_read_response.v1"], version:1, canonicalize:canonicalizeOfapiReadObservation, canParse:canParseOfapiReadObservation, projectionOnly:true },
@@ -165,8 +185,7 @@ export const CANONICALIZER_FAMILIES: readonly CanonicalizerFamily[] = [
     version: FANSLY_EARNINGS_CANONICALIZER_VERSION,
     prioritizeUnparsed: true,
     canonicalize: canonicalizeFanslyEarningsObservation,
-    canParse: canParseFanslyEarningsObservation,
-    parseRejection: diagnoseFanslyEarningsRejection,
+    parse: parseFanslyEarningsObservation,
     projectionOnly: true,
   },
   {

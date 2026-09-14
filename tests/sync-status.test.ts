@@ -22,7 +22,8 @@ vi.mock("@agency_hub_core/db", async () => {
   };
 });
 
-import { getSyncStatusSnapshot } from "../apps/runtime/src/services/sync-status.ts";
+import { getSyncStatusSnapshot, mapDomainBlockToSyncUx } from "../apps/runtime/src/services/sync-status.ts";
+import { buildConversationHistorySyncUx } from "../apps/runtime/src/services/sync-ux.ts";
 
 function buildTaskRow(overrides: Record<string, unknown> = {}) {
   const now = new Date("2026-03-24T12:00:00.000Z");
@@ -183,6 +184,96 @@ describe("sync status service", () => {
   afterEach(() => {
     vi.clearAllMocks();
   });
+
+  it.each(["ready", "coverage", "physical debt", "active sibling"] as const)(
+    "preserves preview DM blocks and UX with a scoped monitor read: %s",
+    async (scenario) => {
+      const now = new Date("2026-03-24T12:00:00.000Z");
+      const dmStreams: DbModule.SyncStream[] = ["dm_conversations", "dm_messages"];
+      dbMocks.listVisiblePages.mockResolvedValue([
+        buildVisiblePage(),
+        buildVisiblePage({ id: 8, label: "lana-alt" }),
+      ]);
+      dbMocks.listPageSyncStates.mockResolvedValue([
+        buildTaskRow({
+          stream: "dm_conversations",
+          ...(scenario === "active sibling" ? {
+            status: "queued", requestSeq: 2, appliedSeq: 1,
+            requestedAt: new Date("2026-03-24T11:20:00.000Z"),
+          } : {}),
+        }),
+        buildTaskRow({ stream: "dm_messages", workClass: "history" }),
+        // A different page and non-DM stream still owns the same runtime group.
+        buildTaskRow({
+          pageId: 8, stream: "transactions", status: "running", requestSeq: 2,
+          appliedSeq: 1, startedAt: now, progressedAt: now,
+        }),
+      ]);
+      const monitorRows = [
+        buildMonitorRow({ stream: "dm_conversations" }),
+        buildMonitorRow({
+          stream: "dm_messages",
+          ...(scenario === "coverage" ? {
+            dmBackfillCompleteConversationCount: 4,
+            dmLaggingConversationCount: 1,
+            dmDeepBackfillPendingConversationCount: 1,
+            dmDeepBackfillPendingPageEstimate: 3,
+          } : {}),
+          ...(scenario === "physical debt" ? {
+            stalePhysicalAttemptCount: 1, physicalAttemptsSinceLastSuccess: 2,
+            recentPhysicalAttemptCount: 0, recentPhysicalSuccessCount: 0,
+            lastPhysicalSuccessAt: new Date("2026-03-20T00:00:00.000Z"),
+          } : {}),
+        }),
+        buildMonitorRow({
+          stream: "transactions", stalePhysicalAttemptCount: 99,
+          physicalAttemptsSinceLastSuccess: 999, transactionCount: 100_000,
+        }),
+      ];
+      dbMocks.listSyncMonitorStreamRows.mockImplementation(
+        async (_db: unknown, input: Parameters<typeof DbModule.listSyncMonitorStreamRows>[1]) => {
+          const requested = new Set<string>(input?.streams);
+          return monitorRows.filter((row) => requested.has(row.stream));
+        },
+      );
+      const app = { db: {} };
+      const full = await getSyncStatusSnapshot(app as never, { pageIds: [7], now });
+      const scoped = await getSyncStatusSnapshot(app as never, { pageIds: [7], now, monitorStreams: dmStreams });
+      const fullPage = full.pages[0]!;
+      const scopedPage = scoped.pages[0]!;
+      for (const block of ["messages_live", "messages_history"] as const) {
+        expect(scopedPage.blocks[block]).toEqual(fullPage.blocks[block]);
+      }
+      const previewUx = (page: typeof fullPage) => buildConversationHistorySyncUx({
+        conversationSyncUx: mapDomainBlockToSyncUx(page.blocks.messages_live),
+        messageSyncUx: mapDomainBlockToSyncUx(page.blocks.messages_history),
+        pendingMessageBackfillCount: scenario === "coverage" ? 2 : 0,
+        previewReadyConversationCount: 4,
+      });
+      expect(previewUx(scopedPage)).toEqual(previewUx(fullPage));
+      expect(dbMocks.listSyncMonitorStreamRows).toHaveBeenLastCalledWith(app.db, {
+        pageIds: [7], now, streams: dmStreams,
+        windowStart: new Date("2026-03-23T12:00:00.000Z"),
+      });
+      expect(dbMocks.listPageSyncStates).toHaveBeenLastCalledWith(app.db);
+      if (scenario === "coverage") {
+        expect(scopedPage.blocks.messages_history).toMatchObject({
+          state: "delayed", statusReason: { code: "history_incomplete" },
+          progress: { label: "4 / 6 conversations ready, 1 lagging, 3 deep pages" },
+        });
+      } else if (scenario === "physical debt") {
+        expect(previewUx(scopedPage).state).toBe("attention");
+        expect(scopedPage.blocks.messages_history.statusReason?.code).toBe("physical_attempt_stuck");
+      } else if (scenario === "active sibling") {
+        expect(scopedPage.blocks.messages_live).toMatchObject({
+          state: "scheduled", statusReason: { code: "queue_waiting", waitingFor: ["transactions"] },
+        });
+        expect(previewUx(scopedPage).state).toBe("healthy");
+      } else {
+        expect(previewUx(scopedPage).state).toBe("healthy");
+      }
+    },
+  );
 
   it("aggregates recent monitor counters for health reporting", async () => {
     dbMocks.listVisiblePages.mockResolvedValue([buildVisiblePage()]);

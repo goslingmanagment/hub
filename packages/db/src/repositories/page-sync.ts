@@ -1539,12 +1539,22 @@ export async function ensurePageSyncStates(
            p.last_light_sync_at as "lastLightSyncAt",
            p.last_follower_sync_at as "lastFollowerSyncAt",
            p.follower_count as "followerCount",
-           coalesce((
+           -- Only a new followers_reconcile state can consume this count.
+           -- Keep the page metadata and count in one snapshot, but avoid
+           -- reading followers during ordinary planner/executor preflights.
+           case when ${input?.onboarding ?? false} = false
+             and p.platform = 'fansly'
+             and not exists (
+               select 1 from ${pageSyncStates} st
+               where st.page_id = p.id
+                 and st.stream = 'followers_reconcile'
+             )
+           then (
              select count(*)::int
              from ${pageFollows} pf
              where pf.platform_account_id = p.id
                and pf.is_active = true
-           ), 0)::int as "activeFollowerCount"
+           ) else 0 end as "activeFollowerCount"
     from ${pages} p
     where ${and(...clauses)}
     order by p.id asc

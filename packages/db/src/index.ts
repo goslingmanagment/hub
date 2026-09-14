@@ -38,6 +38,7 @@ export {
   getPayloadObject,
   putPayloadObject,
   readEnvelopeCapturePayload,
+  readEnvelopeCapturePayloadBatch,
 } from "./repositories/capture-payloads.ts";
 export type {
   CapturePayloadAccessClass,
@@ -50,6 +51,7 @@ export type {
   CapturePayloadScope,
   CapturePayloadStorageTier,
   EnvelopeCapturePayloadRead,
+  EnvelopeCapturePayloadBatchRead,
   PutPayloadObjectContent,
   PutPayloadObjectInput,
   PutPayloadObjectResult,

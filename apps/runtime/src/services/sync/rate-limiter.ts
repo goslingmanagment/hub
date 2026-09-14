@@ -1,9 +1,8 @@
-import { setTimeout as delay } from "node:timers/promises";
-
 import {
   ensureSyncProviderRateLimitProfile,
   reserveSyncProviderRateLimit,
 } from "@agency_hub_core/db";
+import { assertHttpRequestActive, waitForHttpRequestDelay } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
 import type { ResolvedPageContext } from "../page-context.ts";
@@ -24,6 +23,7 @@ export function createSyncRateLimitWaiter(
   const ensuredProviders = new Map<"fansly" | "onlyfans", Promise<void>>();
 
   return async (scopes: SyncRateLimitScope[]) => {
+    assertHttpRequestActive();
     if (scopes.length === 0) {
       return 0;
     }
@@ -46,6 +46,7 @@ export function createSyncRateLimitWaiter(
       await ensurePromise;
     }));
 
+    assertHttpRequestActive();
     const scheduledAt = await reserveSyncProviderRateLimit(app.db, {
       scopes: scopes.map((scope) => ({
         ...scope,
@@ -53,8 +54,9 @@ export function createSyncRateLimitWaiter(
       })),
     });
     const waitMs = Math.max(0, scheduledAt.getTime() - Date.now());
+    assertHttpRequestActive();
     if (waitMs > 0) {
-      await delay(waitMs);
+      await waitForHttpRequestDelay(waitMs);
     }
 
     return waitMs;

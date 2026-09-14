@@ -28,7 +28,7 @@ import {
   OfapiCollectionPolicyError,
 } from "@agency_hub_core/db";
 import { FanslyApiError, FanslyProxyMissingError } from "@agency_hub_core/fansly";
-import { ofapiCollectionRefusalDisposition } from "@agency_hub_core/shared";
+import { ofapiCollectionRefusalDisposition, runWithHttpRequestSignal } from "@agency_hub_core/shared";
 import type { Db as PgBossDb, JobWithMetadata, PgBoss } from "pg-boss";
 
 import type { AppContext } from "../../bootstrap.ts";
@@ -630,6 +630,11 @@ export async function executeNextSyncPageChunk(
   const { run, telemetry } = await createChunkTelemetry(app, taskLease, storedPage);
   const budget = new SyncChunkBudget();
   let leaseFenced = false;
+  const requestController = new AbortController();
+  const fenceLease = () => {
+    leaseFenced = true;
+    requestController.abort(new PageSyncLeaseLostError());
+  };
   const runHeartbeat = setInterval(() => {
     void telemetry.recordWorkerHeartbeat().catch((error) => {
       app.logger.warn(
@@ -646,10 +651,10 @@ export async function executeNextSyncPageChunk(
       leaseTtlMs: SYNC_TASK_LEASE_TTL_MS,
     }).then((owned) => {
       if (!owned) {
-        leaseFenced = true;
+        fenceLease();
       }
     }).catch((error) => {
-      leaseFenced = true;
+      fenceLease();
       app.logger.warn(
         { err: error, platformAccountId, stream: taskLease.stream },
         "Failed to heartbeat page sync lease",
@@ -664,13 +669,13 @@ export async function executeNextSyncPageChunk(
       stream: taskLease.stream,
       requestSeq: taskLease.leasedSeq ?? taskLease.requestSeq,
       leaseToken: taskLease.leaseToken ?? "",
-    }, async () => executeStreamChunk(app, {
+    }, () => runWithHttpRequestSignal(requestController.signal, () => executeStreamChunk(app, {
       pageContext,
       streamState: taskLease,
       syncRunId: run.id,
       telemetry,
       budget,
-    }));
+    })));
 
     if (leaseFenced) {
       return buildLeaseLostResult(telemetry, platformAccountId, run.id);

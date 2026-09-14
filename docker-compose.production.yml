@@ -8,6 +8,9 @@ services:
   postgres:
     image: postgres:16
     logging: *production-logging
+    # Keep slow-query SQL/durations, but never log bind values (error canon).
+    # Command-line settings override auto.conf; all other VPS tuning stays there.
+    command: ["postgres", "-c", "log_parameter_max_length=0", "-c", "log_parameter_max_length_on_error=0"]
     # Give Postgres time for a fast shutdown at recreate; Docker's default 10s
     # can SIGKILL a checkpointing 55 GB cluster into crash recovery.
     stop_grace_period: 60s
