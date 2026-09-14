@@ -1,0 +1,57 @@
+{
+  "validatedAt": "2026-09-12T12:06:34.734773+00:00",
+  "commit": "7aaa3185757e6a89d1b7427b0d54aa8720c74da4",
+  "tree": "3ceb96733305593668c7c3f88bfba32a09b71884",
+  "check": {
+    "command": "pnpm check",
+    "exitCode": 0,
+    "unitPassed": 3258,
+    "unitSkippedExisting": 9,
+    "files": 296,
+    "unitSeconds": 21.22,
+    "strictnessKnownErrors": 1901,
+    "strictnessFiles": 121,
+    "lint": "passed",
+    "dashboardBuild": "passed"
+  },
+  "integration": {
+    "passed": 176,
+    "skipped": 0,
+    "suites": 11,
+    "runs": [
+      {
+        "suites": 10,
+        "passed": 166,
+        "seconds": 39.29,
+        "log": "integration-release.log"
+      },
+      {
+        "suites": 1,
+        "passed": 10,
+        "seconds": 5.57,
+        "log": "integration-release-shadow.log"
+      }
+    ],
+    "scope": "Six C1 suites plus sync-monitor, ai-feature-service, golden-signals, ofapi-webhook-recency and fansly-dm-shadow, serial real Docker-Postgres16."
+  },
+  "productionBuild": {
+    "command": "pnpm build:production",
+    "exitCode": 0
+  },
+  "logs": {
+    "check-release.log": "6015361504ec279df610d005f3dd36b930bc7c968c4f4707304e152bc9030fe6",
+    "integration-release.log": "5c6eaec579d0047753d0ffda56ce530466c9bf588ee18c1a742487af563cc083",
+    "integration-release-shadow.log": "e8d2fba3b5b3b5182eaffade3be37f00cc426383a0f0913ef1de3ad7841ed159",
+    "build-release.log": "6e67c3f653b6c509fc7477278594bca5b16e98fea9f42e3bc6ccc2ebbd457b7b"
+  },
+  "compiledArtifacts": {
+    "apps/runtime/dist/api.js": "e4298db3082818b1ec35d14c1b4f29225fe1202e7245d580a21cf2254b5c7e04",
+    "apps/runtime/dist/worker.js": "8b88f9f8d47c6d9ba6a865e344affee1608b897b1df336b3c5a120d4c9a0094e",
+    "apps/runtime/dist/cli.js": "d704be00f737102f51dade56a402e79b17a901c61bf727ba99a3783d7570614c",
+    "apps/runtime/dist/startup.js": "0b8d636d1429823e98e406990d6d71562f95a364fdd01bb43e89acebb5009a56",
+    "packages/db/dist/index.js": "9226f8c773b101c3e5bfe819e67134b5d8a1b2542a20919699871740eed9c128",
+    "packages/db/dist/migrate.js": "0b647d320382e99133ddedd25f7284ae32539875b77e14881030d6bc22b3c650"
+  },
+  "preservedMigrationFiles": 180,
+  "newMigration": "0185_fansly_followers_membership_read.sql"
+}

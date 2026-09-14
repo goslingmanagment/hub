@@ -319,6 +319,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 311 | Disjoint replay with shared allowance | Keep reserved capture/replay turns and reuse unused allowance once without restarting an exhausted cursor. |
 | 315 | Empty observation replay heads | Probe actual version/source/kind index prefixes before an unrestricted scan head; keep ordered pages and scoped replay unchanged. |
 | 321 | Production performance parity | Restore deployed runtime fixes and exact applied migration identities on current main; preserve newer main changes and keep C1 membership and dashboard reconciliation visible as separate prerequisites. |
+| 322 | Durable provider cooldown | Retain future provider retry deadlines across queued revisions; report long Fansly cooldowns immediately without retrying early. |
 | 323 | Dashboard production parity | Restore the five deployed dashboard feature-control and daily-workflow patches on current main; preserve backend behavior and verify the single formatting-only exception against emitted JavaScript. |
 
 ## Consensus Decisions
@@ -12286,6 +12287,21 @@ See the [diagnostic runbook](runbooks/fansly-followers-diagnostics.md).
 Numbered 294 when synchronized with main `c0cd21c3` on 11 September; the
 original C1 draft used 291. Applied migrations 0182/0183 are unchanged.
 
+**12 September diagnostic refinement.** Natural observations through 11:21 UTC
+contain 41 clean-queue requests with later exact-generation completion, but do
+not establish redundant work. The existing terminal activity SELECT now counts
+active rows in/outside the generation and disjoint absence-protection groups:
+retirement candidates, generation grace, timestamp protection, both, and future
+generations. A separate note preserves the generation's own start timestamp and
+the actual row count returned by the guarded UPDATE; withheld finalization has
+no retirement count. Migration 0185 extends the bounded timeline and validates
+the diagnostic receipt separately from membership certification. Applied 0182
+and 0183 retain their bytes; 0184 belongs to the separately deployed load fix.
+The follower predicates, HTTP calls, cadence, presence and destructive guards
+are unchanged. Counts are not row identity or a safe cooldown proof. Owner
+resumed implementation and authorized deployments; calendar, freshness and
+separate live socket/flag gates remain part of the stage plan.
+
 ## Decision 295: OnlyFans manual Ping preserves the chatter's timing decision (2026-09-11)
 
 The owner approved a manual Ping action in the desktop Spenders workflow and
@@ -13209,6 +13225,39 @@ membership writers/protection receipts remain in PR166; dashboard feature-contro
 changes remain in their own branch. Those outstanding differences must be
 reconciled before claiming that main preserves the whole production release.
 No deployment approval or A0/C1/W0 acceptance follows from merging these files.
+
+## Decision 322: Preserve provider cooldown across queued requests (2026-09-14)
+
+The 14 September audit found that a DM follow-up could clear a future durable
+retry deadline. The opposite ordering also lost the deadline: new work arrived
+during a leased request, then that request received a provider failure.
+
+New requests still increment `request_seq` and retain their source and payload.
+A future `rate_limit` or `provider_5xx` retry remains `retrying` in both orderings.
+Ordinary and targeted dispatch may acquire the latest revision when its existing
+deadline expires. Manual work may still supersede ordinary transport/yield
+backoff or an expired provider retry. The stored schema does not distinguish
+header-derived provider cooldown from that provider class's local ladder, so
+both are retained. The shared queue guard also protects these existing retry
+classes on OFAPI streams; transport, configuration and policy retries keep their
+prior behavior. No new schema or provenance flag is introduced.
+
+Decision 275 remains in force: durable retry is the later of the provider's
+absolute deadline and the local backoff. A 24-hour Retry-After must not become a
+30-minute retry. For Fansly 429/5xx with an explicit deadline more than 30 minutes
+away, the first failure opens the existing deduplicated stream incident and
+includes the retry time. Its title no longer falsely claims three failures for
+a forced first-failure incident. Ordinary threshold and recovery behavior remain.
+
+Validation includes both queue/retry orderings, manual and scheduled requests,
+source/payload/revision retention, no early ordinary or targeted dispatch,
+resumption at the deadline and the actual DM sweep follow-up. Executor tests
+cover 429/503, the strict 30-minute boundary and 24-hour deadlines. Notification
+integration covers the existing forced incident delivery and recovery path.
+
+No flag, migration, provider request or production action is added by this
+change. A rollback restores the old queue behavior; it does not delete durable
+state or authorize an early request. This decision is numbered from main `478fca42` (last decision 321).
 
 ## Decision 323: Restore deployed dashboard controls on current main (2026-09-14)
 

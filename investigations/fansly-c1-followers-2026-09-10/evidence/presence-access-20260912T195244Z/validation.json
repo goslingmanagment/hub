@@ -1,0 +1,220 @@
+{
+  "sourceRevision": "31b73a9691f32f8c33c3fe479bca68533c7048d6",
+  "c1HeadBeforeDocumentation": "46adf2342517a2ea3347c6b13874fb76cde0762e",
+  "capabilities": {
+    "execution": {
+      "startedAt": "2026-09-12T19:52:44.638905+00:00",
+      "completedAt": "2026-09-12T19:52:46.447557+00:00",
+      "exitCode": 0,
+      "stderr": "(node:69035) [DEP0205] DeprecationWarning: `module.register()` is deprecated. Use `module.registerHooks()` instead.\n(Use `node --trace-deprecation ...` to show where the warning was created)\n"
+    },
+    "contractHash": "f3d4c12dadbef703b7c85f289f63d0d1651941e0ea15fbd94685d9448b0e7b79",
+    "blockers": [
+      "claim_not_declared",
+      "capture_floor_unknown"
+    ],
+    "grantPageCount": 8,
+    "hasPresenceClaim": true,
+    "hasPresenceDatasetOrDatasetField": false,
+    "relevantDatasets": [
+      {
+        "dataset": "fan_memberships",
+        "fields": [
+          "platform",
+          "platformUserId",
+          "username",
+          "displayName",
+          "membershipState",
+          "firstSeenAt",
+          "lastSeenAt",
+          "lifetimeSpendMills"
+        ]
+      },
+      {
+        "dataset": "follows",
+        "fields": [
+          "platform",
+          "platformUserId",
+          "followed",
+          "followedAt",
+          "unfollowedAt"
+        ]
+      }
+    ]
+  },
+  "catalog": {
+    "asOf": "2026-09-12T20:00:24.425779+00:00",
+    "role": "read_only",
+    "readOnly": "on",
+    "functions": [
+      {
+        "name": "fansly_followers_diagnostic_report",
+        "schema": "public",
+        "arguments": "window_start timestamp with time zone, window_end timestamp with time zone",
+        "canExecute": true
+      },
+      {
+        "name": "fansly_followers_diagnostic_timeline",
+        "schema": "public",
+        "arguments": "window_start timestamp with time zone, window_end timestamp with time zone, after_run_id bigint, through_run_id bigint, row_limit integer",
+        "canExecute": true
+      }
+    ],
+    "selectPageFans": false,
+    "selectPageFollows": false
+  },
+  "runtime": {
+    "startedAt": "2026-09-12T20:00:24.390016+00:00",
+    "completedAt": "2026-09-12T20:00:26.306309+00:00",
+    "exitCode": 0,
+    "stdout": "/agency-hub-api-1 sha256:9919567ca576d89caf1c54fde756db115518b85bbe9f0b2d5b83e785b9987b33 healthy 0 2026-09-12T15:50:40.387781713Z 31b73a9691f3\n/agency-hub-worker-1 sha256:9919567ca576d89caf1c54fde756db115518b85bbe9f0b2d5b83e785b9987b33 healthy 0 2026-09-12T15:50:46.228186025Z 31b73a9691f3\n/agency-hub-scheduler-1 sha256:9919567ca576d89caf1c54fde756db115518b85bbe9f0b2d5b83e785b9987b33 healthy 0 2026-09-12T15:50:40.369458197Z 31b73a9691f3\n",
+    "stderr": ""
+  },
+  "rawEvidence": [
+    {
+      "name": "capabilities.json",
+      "sha256": "9bdcbc67601048584980526065a6f8829dc67cfb1ee38b17303a596b76073368"
+    },
+    {
+      "name": "capabilities-execution.json",
+      "sha256": "d918fa37d1cc386468065adc338996dc729f59856481bd40aa798a64a47475c2"
+    },
+    {
+      "name": "presence-catalog.json",
+      "sha256": "7896c99d06b7f811dd31d5c920b9cee8acc7de7aac3ed4396e3d6f47f7e1f891"
+    },
+    {
+      "name": "runtime.json",
+      "sha256": "1bef301f8a29f9a87f91228ecbdb5222341cfc03f7f8f60279794501b84e4581"
+    }
+  ],
+  "sourceFiles": [
+    {
+      "path": "packages/contracts/src/routes.ts",
+      "sha256": "89cf781b8169751f93ea0ea74e0a0ab8b1f06b8b6604f1a84f66ce0a9bc32895",
+      "matchesPinnedArchive": true,
+      "matchesC1Worktree": true
+    },
+    {
+      "path": "packages/contracts/src/routes-agent.ts",
+      "sha256": "1488d83e64cb57881e1bada529351c4b9f1b3c85ca916828a21c7ba5251e36ca",
+      "matchesPinnedArchive": true,
+      "matchesC1Worktree": true
+    },
+    {
+      "path": "packages/db/src/repositories/agent-read.ts",
+      "sha256": "a85e0d5e09cdc18afd14ceab57a3212e88d2b460bd6003aa5fb6ae8950da3431",
+      "matchesPinnedArchive": true,
+      "matchesC1Worktree": true
+    },
+    {
+      "path": "packages/db/src/repositories/agent-dataset-map.ts",
+      "sha256": "7860c54702576bf57f07a34f7fb2131642d964588918f416dc2f4f8adf888ac4",
+      "matchesPinnedArchive": true,
+      "matchesC1Worktree": true
+    },
+    {
+      "path": "packages/db/src/repositories/reporting.ts",
+      "sha256": "bd256d430944b69af19f8202605b3126b8718d4ba8bf57773aa373f5106acfcd",
+      "matchesPinnedArchive": true,
+      "matchesC1Worktree": true
+    },
+    {
+      "path": "packages/db/src/repositories/fans.ts",
+      "sha256": "771877d7bf6cd15588b6eb7ab4418c9372f70160ee28c788d0e0d5b4c6874950",
+      "matchesPinnedArchive": true,
+      "matchesC1Worktree": true
+    },
+    {
+      "path": "apps/runtime/src/api/auth-policy.ts",
+      "sha256": "afc793ac135fac1787adfb12bbef0504aec906cac8eb4ad3e0668c2a2e10e9eb",
+      "matchesPinnedArchive": true,
+      "matchesC1Worktree": true
+    },
+    {
+      "path": "apps/runtime/src/api/request-auth.ts",
+      "sha256": "4d0f919fb182259004f8d9e0b4b714a3e17e9b0e3780d6761579b75ddbd345f1",
+      "matchesPinnedArchive": true,
+      "matchesC1Worktree": true
+    },
+    {
+      "path": "apps/runtime/src/modules/audience/index.ts",
+      "sha256": "2e680d87ee136c0429b4da2ecf9f28a12b31a72131ff609e19f8a66ba130b4c8",
+      "matchesPinnedArchive": true,
+      "matchesC1Worktree": true
+    },
+    {
+      "path": "apps/runtime/src/modules/agent-read/handlers-threads.ts",
+      "sha256": "1c64d95eb43b3de101c72e043f79353f5479d7574479ab049169a2725436b78e",
+      "matchesPinnedArchive": true,
+      "matchesC1Worktree": true
+    },
+    {
+      "path": "apps/runtime/src/modules/workboard/engine.ts",
+      "sha256": "e9b2b0e9fab93640445d385020a90df3917cf3ab744bad1dca6f084c763a791d",
+      "matchesPinnedArchive": true,
+      "matchesC1Worktree": true
+    },
+    {
+      "path": "apps/runtime/src/services/reporting.ts",
+      "sha256": "639734f03f256292c063ce1f7d37f82dea78354dd53d691fc5d49c25efb3d0f5",
+      "matchesPinnedArchive": true,
+      "matchesC1Worktree": true
+    },
+    {
+      "path": "apps/runtime/src/services/fansly-presence.ts",
+      "sha256": "5b476915e3c5e25a448d26063fddcf60d71458b9484fd42ad25b30cc7f7791dc",
+      "matchesPinnedArchive": true,
+      "matchesC1Worktree": true
+    },
+    {
+      "path": "apps/runtime/src/services/sync/shared.ts",
+      "sha256": "00b005a7c860e6c83af1e3a60b2320305f109418edc8da469512588c06e3a4da",
+      "matchesPinnedArchive": true,
+      "matchesC1Worktree": true
+    },
+    {
+      "path": "packages/db/migrations/0185_fansly_followers_membership_read.sql",
+      "sha256": "bd9c2ee7987815ef6fd0f517a0783ead45954a2eb6ad7b5553c0075859940cb0",
+      "matchesPinnedArchive": true,
+      "matchesC1Worktree": true
+    }
+  ],
+  "validation": {
+    "productionPresenceRowsRead": 0,
+    "applicationSourceChanged": false,
+    "migrationsChanged": false,
+    "testsRerun": false,
+    "reason": "Source and read-surface diagnosis only; existing test results do not measure production presence coverage."
+  },
+  "priorC1Observation": {
+    "directory": "investigations/fansly-c1-deploy-2026-09-11/followup-20260912T183741Z/",
+    "independentReviews": {
+      "correctness": "review_pr162: no actionable findings",
+      "quality": "quality_c1: no actionable findings"
+    },
+    "files": [
+      {
+        "name": "REPORT.md",
+        "sha256": "5db28aead4be37baff0c9602ec478799ae8073ab44f882d23b5e0e7eb9e6c4d7"
+      },
+      {
+        "name": "REVIEW.md",
+        "sha256": "97c91615c5538e3edda784d6a42edf5d6325fd9f04f898f34ad4c41005a914d9"
+      },
+      {
+        "name": "summary.json",
+        "sha256": "de0bf6467f31939f557bbe0f182b51cc9b34e477ad9e5d6146dc63f43f1eea1c"
+      },
+      {
+        "name": "validation.json",
+        "sha256": "bbd5483b4fdf04d4eace2bf12190c4d453205a634602a0be6494460890c7b990"
+      }
+    ]
+  },
+  "independentReview": {
+    "reviewer": "review_head_debt",
+    "result": "No actionable findings",
+    "scope": "Documentation/evidence changes and prepared PR body; source and retained receipt hashes; no tests or production calls by reviewer."
+  }
+}

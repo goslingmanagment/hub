@@ -1,0 +1,22 @@
+[
+  {
+    "file": "check-initial.log.gz",
+    "uncompressedSha256": "4b0a0126c0c2ea0153ad0e0801fd9358d65b3859a5f612017977fd7effaa8272",
+    "sha256": "28c5525700bd5c1a82adf0ef31e209f583a4d086711e955e627d036b081114ac"
+  },
+  {
+    "file": "check.log.gz",
+    "uncompressedSha256": "1d6f45f2ae38d2e49ddd74b0d9a9034fbe63b09564fce5969145a90f0b73488f",
+    "sha256": "e7efca1ea22083e66c4821cf7332886f66bc7bbdeec9eef0ea206dd17319abe9"
+  },
+  {
+    "file": "install.log.gz",
+    "uncompressedSha256": "2072c024d0dc3ded4efcbedcca8c4b4d4c215b51798aacfcb7160a9fc1fb0beb",
+    "sha256": "0c5a7f38158dcc4fe26cec75eec2fed252873b050cef079d1d48fa5384d528c7"
+  },
+  {
+    "file": "postgres.log.gz",
+    "uncompressedSha256": "b3b96821431912e0f15431f4a13f2a4ed630c2cd5fe98d3d5b6cde7ec939757c",
+    "sha256": "a4885c4c418093f1cb66605c6e5e684164ff759aa66ae1fca57989e7b5ccc016"
+  }
+]

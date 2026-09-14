@@ -1,0 +1,31 @@
+{
+  "reviewedAt": "2026-09-14T00:02:45.778995+00:00",
+  "base": "0a08365fbefa545397f4e91a2eae3fca7c36c444",
+  "scope": "Independent static review of six source/test files including untracked PG suite; no tests or production actions",
+  "files": [
+    {
+      "path": "packages/db/src/repositories/page-sync.ts",
+      "sha256": "5528582e74e2e31df6b301a399d88e7de69335ae5c64bfdc2317a2001d54651f"
+    },
+    {
+      "path": "apps/runtime/src/services/sync/executor.ts",
+      "sha256": "89033f7d07e4fa32046a22585c620c57c3d5e454b478f5101991c18ac3c62a47"
+    },
+    {
+      "path": "apps/runtime/src/services/notification-incidents.ts",
+      "sha256": "73a433e4ff9179067db8fdc09ce78ac39ac09873bdaef2d4ebff8162a025447e"
+    },
+    {
+      "path": "tests/page-sync-provider-cooldown.integration.test.ts",
+      "sha256": "e670a0111fc65b205e2e21b9e5c8d0bfce67c71eb80daea6b3d21d0470902dab"
+    },
+    {
+      "path": "tests/sync-executor.test.ts",
+      "sha256": "9b2cb6a0d65ff7b29cd68a94606207feaf941f21b3e8eee4cacac085cf159810"
+    },
+    {
+      "path": "tests/notification-incidents.integration.test.ts",
+      "sha256": "f4f97eba1242bb5a81cd62ba5f0d719a1370401aa82461ecd7297550df073c31"
+    }
+  ]
+}

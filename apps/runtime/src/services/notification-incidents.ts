@@ -84,7 +84,7 @@ function openTitleForIncident(
     case "proxy_missing":
       return "🚨 Fansly proxy missing — sync refused (fail-closed)";
     case "stream_failed_threshold":
-      return "🚨 Stream failed 3x in a row";
+      return "🚨 Stream sync failed";
     case "ofapi_auth":
       return "🚨 OFAPI account auth needs attention";
     case "ofapi_low_credit":
