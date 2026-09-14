@@ -139,7 +139,7 @@ export function CreatePageModal({
           </div>
         </Field>
 
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid gap-3 sm:grid-cols-2">
           <Field label="Model">
             <select
               value={modelSlug}
@@ -184,7 +184,7 @@ export function CreatePageModal({
         )}
       </div>
 
-      <div className="mt-6 flex items-center justify-end gap-2">
+      <div className="mt-6 flex flex-wrap items-center justify-end gap-2">
         <button
           type="button"
           onClick={onClose}

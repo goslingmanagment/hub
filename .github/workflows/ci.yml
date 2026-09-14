@@ -21,6 +21,10 @@ jobs:
     name: Static checks
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    # The full workspace type graph exceeds Node 22's default 2 GiB heap.
+    # Keep compilation bounded; test scripts retain their own explicit limits.
+    env:
+      NODE_OPTIONS: --max-old-space-size=4096
     outputs:
       source_revision: ${{ steps.metadata.outputs.source_revision }}
       dependency_checksum: ${{ steps.metadata.outputs.dependency_checksum }}

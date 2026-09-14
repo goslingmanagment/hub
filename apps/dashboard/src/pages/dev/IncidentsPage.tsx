@@ -2,6 +2,7 @@ import { Fragment, useState } from "react";
 import { useAdminIncidents } from "@/api/queries";
 import { EventDetailPanel, getEventDisplaySeverity, SEVERITY_STYLES } from "@/components/shared/EventDetailPanel";
 import { StatusPanel } from "@/components/shared/StatusPanel";
+import { StaleDataNotice } from "@/components/shared/StaleDataNotice";
 import { formatRelativeTime } from "@/lib/format";
 
 export function IncidentsPage() {
@@ -9,11 +10,11 @@ export function IncidentsPage() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const params = {
-    code: codeFilter,
+    ...(codeFilter === undefined ? {} : { code: codeFilter }),
     limit: 100,
   };
 
-  const { data, isLoading, isError } = useAdminIncidents(params);
+  const { data, isLoading, isError, error } = useAdminIncidents(params);
 
   function resolveEventCode(details: Record<string, unknown> | null, fallback: string | null) {
     return typeof details?.code === "string" ? details.code : fallback;
@@ -52,6 +53,7 @@ export function IncidentsPage() {
 
   return (
     <div>
+      {isError && <StaleDataNotice error={error} className="mb-4" />}
       <div className="mb-5">
         <h1 className="text-xl font-extrabold text-text-primary">Incidents</h1>
         <p className="text-sm text-text-muted mt-1">Sync anomalies aggregated from events</p>
@@ -110,7 +112,8 @@ export function IncidentsPage() {
       )}
 
       {/* Incidents table */}
-      <section className="overflow-hidden rounded-xl border border-border bg-card">
+      <p className="mb-2 text-xs text-text-muted">Up to 100 recent matching records. This is a bounded view, not the full history.</p>
+      <section className="overflow-x-auto rounded-xl border border-border bg-card">
         <table className="w-full border-collapse">
           <thead>
             <tr className="bg-hover-alt">
@@ -147,6 +150,14 @@ export function IncidentsPage() {
                   <tr
                     className="cursor-pointer border-t border-border transition-colors hover:bg-hover"
                     onClick={() => setExpandedId(isExpanded ? null : rowId)}
+                    tabIndex={0}
+                    aria-expanded={isExpanded}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        setExpandedId(isExpanded ? null : rowId);
+                      }
+                    }}
                   >
                     <td className="px-4 py-3 text-sm text-text-secondary whitespace-nowrap">
                       {item.emittedAt ? formatRelativeTime(item.emittedAt) : "\u2014"}
