@@ -1,0 +1,8 @@
+{
+  "run": 34794319085,
+  "head": "a9794e600dfbb10918800ab5b49241e33d7357a3",
+  "source": "/Users/dmitriy/code/goose/hub/investigations/fansly-migration-audit-2026-09-14/followup/ci-reconciliation/main-a979-failed.log",
+  "rawSha256": "b3d96383fd9b325e4fb9fa0d7ffd1b486c2e0850ac0557fabfa51838c1397441",
+  "retainedBytes": 183255,
+  "failure": "40P01 in next test beforeEach reset; preceding positive admission leaves detached settlement"
+}

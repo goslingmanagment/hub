@@ -1,0 +1,11 @@
+{
+  "command": [
+    "pnpm",
+    "check"
+  ],
+  "startedAt": "2026-09-14T00:33:59.975154+00:00",
+  "finishedAt": "2026-09-14T00:34:50.483639+00:00",
+  "elapsedSeconds": 50.523,
+  "exitCode": 0,
+  "logSha256": "cabbea70b681ad125271cee32081abae0ce5ace81d526e47828a8b1ef5d58342"
+}

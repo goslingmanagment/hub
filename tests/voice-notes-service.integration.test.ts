@@ -540,6 +540,9 @@ describe("voice-notes service: admission gates", () => {
     const okStop = await provision({ provider, sourceStopReason: "end_turn" });
     const view = await createVoiceNote(appContext, okStop.principal, okStop.page.label, okStop.body());
     expect(view.state).toBe("dispatched");
+    // Finish the settlement transaction before the next test resets its tables.
+    await waitFor(async () =>
+      (await getVoiceNoteById(testDb!.db, view.voiceNoteId))?.state === "completed");
   });
 
   it("rejects pre-erasure Fansly source material before row, budget, or provider side effects", async (ctx) => {
