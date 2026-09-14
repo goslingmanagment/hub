@@ -1,142 +1,24 @@
 #!/usr/bin/env python3
-"""Run an approved W0 probe in a disposable, resource-limited container.
-
-The private environment file must contain the existing runtime keys and
-DATABASE_URL. Database access stays in READ ONLY transactions. It must never contain an exported provider token.
-"""
+"""Run one approved 5-120 second W0 probe; never a continuity experiment."""
 
 import argparse
-from contextlib import contextmanager
-import json
 import os
 from pathlib import Path
 import re
 import signal
-import stat
-import subprocess
-import uuid
 
-CORRELATION_KEY_TARGET = "/run/fansly-w0-correlation.key"
-
-
-def cancel(_signum, _frame):
-    raise KeyboardInterrupt
-
-
-def private_input(path: str, limit: int) -> bytes:
-    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-    try:
-        info = os.fstat(descriptor)
-        if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o077 or info.st_size > limit:
-            raise ValueError("invalid_private_input")
-        with os.fdopen(descriptor, "rb", closefd=False) as source:
-            content = source.read(limit + 1)
-        if len(content) > limit:
-            raise ValueError("invalid_private_input")
-        return content
-    finally:
-        os.close(descriptor)
-
-
-def correlation_key_mount(path: Path) -> str:
-    source = str(path)
-    # Docker parses --mount as CSV; do not let a filename add mount options.
-    if not path.is_absolute() or any(char in source for char in ',"\r\n\0'):
-        raise ValueError("invalid_correlation_key_mount")
-    return f"type=bind,source={source},target={CORRELATION_KEY_TARGET},readonly"
-
-
-@contextmanager
-def private_correlation_key(path: str | None, directory: Path):
-    if path is None:
-        yield None
-        return
-    key = private_input(path, 32)
-    if len(key) != 32:
-        raise ValueError("invalid_correlation_key")
-    owned_copy = (directory / "correlation.key").absolute()
-    correlation_key_mount(owned_copy)
-    descriptor = os.open(owned_copy, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    try:
-        with os.fdopen(descriptor, "wb") as output:
-            output.write(key)
-        # Bind the validated copy, so later source-file changes cannot substitute
-        # another key between validation and the container's file read.
-        yield owned_copy
-    finally:
-        owned_copy.unlink(missing_ok=True)
-
-
-def container_command(args, name: str, key_path: Path | None = None) -> list[str]:
-    command = [
-        "docker", "run", "--rm", "--name", name,
-        "--memory=256m", "--memory-swap=256m", "--cpus=0.25",
-        "--pids-limit=64", "--read-only", "--cap-drop=ALL",
-        "--security-opt=no-new-privileges", "--network", args.network,
-        "--env-file", args.environment, "--workdir=/app/apps/runtime",
-    ]
-    if key_path is not None:
-        command.extend(["--mount", correlation_key_mount(key_path)])
-    command.extend([
-        "--interactive", "--entrypoint=node", args.image,
-        "--max-old-space-size=128", "--input-type=module", "-",
-        "--page", args.page, "--seconds", str(args.seconds),
-    ])
-    if key_path is not None:
-        command.extend(["--correlation-key-file", CORRELATION_KEY_TARGET])
-    return command
+from launcher_inputs import cancel, private_input, private_correlation_key
+from launcher_container import page_admission, run_container
 
 
 def run(args) -> dict:
     bundle = private_input(args.bundle, 16 * 1024 * 1024)
-    # Check access/mode without parsing or printing configuration secrets.
     private_input(args.environment, 1024 * 1024)
-    # An exclusive, private output directory prevents accidental overwrite.
     output = Path(args.output)
     output.mkdir(mode=0o700)
-    with private_correlation_key(getattr(args, "correlation_key_file", None), output) as key_path:
-        return run_container(args, bundle, output, key_path)
-
-
-def run_container(args, bundle: bytes, output: Path, key_path: Path | None) -> dict:
-    name = "hub-fansly-w0-" + uuid.uuid4().hex
-    command = container_command(args, name, key_path)
-    result = {"container": name, "exitCode": None, "timedOut": False}
-    process = None
-    try:
-        with (output / "report.json").open("xb") as report:
-            with (output / "stderr.log").open("xb") as errors:
-                process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=report, stderr=errors)
-                try:
-                    process.communicate(input=bundle, timeout=150)
-                except subprocess.TimeoutExpired:
-                    result["timedOut"] = True
-                result["exitCode"] = process.returncode
-    finally:
-        try:
-            if process is not None and process.poll() is None:
-                process.kill()
-                process.wait(timeout=5)
-            result["attachStopConfirmed"] = True
-        except (OSError, subprocess.TimeoutExpired):
-            result["attachStopConfirmed"] = False
-        if process is not None:
-            result["exitCode"] = process.returncode
-        # Killing docker attach alone does not kill the container. Remove only
-        # this invocation's UUID-named container, including on keyboard interrupt.
-        try:
-            cleanup = subprocess.run(
-                ["docker", "rm", "--force", name], capture_output=True, timeout=10,
-            )
-            result["cleanupExitCode"] = cleanup.returncode
-            result["cleanupConfirmed"] = cleanup.returncode == 0 or (
-                b"No such container: " + name.encode() in cleanup.stderr
-            )
-        except subprocess.TimeoutExpired:
-            result["cleanupExitCode"] = None
-            result["cleanupConfirmed"] = False
-        (output / "execution.json").write_text(json.dumps(result, indent=2) + "\n")
-    return result
+    with page_admission(args.page):
+        with private_correlation_key(args.correlation_key_file, output) as key_path:
+            return run_container(args, bundle, output, key_path, 150, "report.json")
 
 
 def main() -> int:
@@ -160,7 +42,8 @@ def main() -> int:
         print("Probe launch failed; no environment or provider error text was exported.")
         return 1
     print("Probe finished; inspect the private report and execution receipt.")
-    return 0 if result["exitCode"] == 0 and not result["timedOut"] and result["cleanupConfirmed"] else 1
+    return 0 if (result["exitCode"] == 0 and not result["timedOut"]
+                 and result["cleanupConfirmed"] and result["outputSyncConfirmed"]) else 1
 
 
 if __name__ == "__main__":

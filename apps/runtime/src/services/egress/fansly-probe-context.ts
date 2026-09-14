@@ -19,7 +19,20 @@ export async function resolveFanslyProbeContext(
   app: Pick<AppContext, "db" | "config">,
   pageLabel: string,
 ): Promise<{ token: string; pageId: number; generation: string; egress: AppEgressContext }> {
-  const stored = await findPageByLabel(app.db, pageLabel);
+  const stored = await readStoredProbePage(app.db, pageLabel);
+  const session = decodeStoredFanslySession(app, stored.credentials.encryptedSession, pageLabel);
+  if (typeof session?.authorization !== "string" || session.authorization.trim().length === 0) {
+    throw new BadRequestError(`Page "${pageLabel}" has no nonempty stored Fansly token`);
+  }
+  // Validate before obtaining a dispatcher; this path never opens an incident.
+  resolveStoredProxyConfig(app, stored.proxy);
+  const generation = probeGeneration(stored);
+  const egress = await resolveEgress(app, { kind: "page", pageId: stored.page.id });
+  return { token: session.authorization, pageId: stored.page.id, generation, egress };
+}
+
+async function readStoredProbePage(db: Database, pageLabel: string) {
+  const stored = await findPageByLabel(db, pageLabel);
   // Catalog lookup excludes deleted pages.
   if (!stored) throw new NotFoundError(`Page "${pageLabel}" not found`);
   if (stored.page.platform !== "fansly") {
@@ -28,17 +41,14 @@ export async function resolveFanslyProbeContext(
   if (!stored.credentials) {
     throw new BadRequestError(`Page "${pageLabel}" has no stored platform credentials`);
   }
-  const session = decodeStoredFanslySession(app, stored.credentials.encryptedSession, pageLabel);
-  if (typeof session?.authorization !== "string" || session.authorization.trim().length === 0) {
-    throw new BadRequestError(`Page "${pageLabel}" has no nonempty stored Fansly token`);
-  }
   if (!stored.proxy) {
     throw new ProxyMissingError(`Page "${pageLabel}" has no assigned proxy; Fansly probe refused`);
   }
-  // Validate before obtaining a dispatcher; unlike resolvePageContext this path
-  // never opens an incident. The caller reports a fixed, sanitized error code.
-  resolveStoredProxyConfig(app, stored.proxy);
-  const generation = createHash("sha256").update(JSON.stringify({
+  return { page: stored.page, credentials: stored.credentials, proxy: stored.proxy };
+}
+
+function probeGeneration(stored: Awaited<ReturnType<typeof readStoredProbePage>>) {
+  return createHash("sha256").update(JSON.stringify({
     pageId: stored.page.id,
     platform: stored.page.platform,
     nativeAccountId: stored.page.platformAccountId,
@@ -54,8 +64,6 @@ export async function resolveFanslyProbeContext(
       rateLimitScopeKey: stored.proxy.rateLimitScopeKey,
     },
   })).digest("hex");
-  const egress = await resolveEgress(app, { kind: "page", pageId: stored.page.id });
-  return { token: session.authorization, pageId: stored.page.id, generation, egress };
 }
 
 export async function readProbeSnapshot(
@@ -63,6 +71,15 @@ export async function readProbeSnapshot(
   config: AppContext["config"],
   pageLabel: string,
 ) {
+  return withProbeSnapshot(db, (snapshot) => resolveFanslyProbeContext({ db: snapshot, config }, pageLabel));
+}
+
+/** Periodic observation must not decrypt another token or allocate dispatchers. */
+export function readProbeGeneration(db: Database, pageLabel: string) {
+  return withProbeSnapshot(db, async (snapshot) => probeGeneration(await readStoredProbePage(snapshot, pageLabel)));
+}
+
+function withProbeSnapshot<T>(db: Database, read: (snapshot: Database) => Promise<T>) {
   return db.transaction(async (tx) => {
     const result = await tx.execute(sql`select
       current_setting('transaction_read_only') as read_only,
@@ -71,6 +88,6 @@ export async function readProbeSnapshot(
     if (identity?.read_only !== "on" || identity.isolation !== "repeatable read") {
       throw new Error("probe_read_only_snapshot_required");
     }
-    return resolveFanslyProbeContext({ config, db: tx as unknown as Database }, pageLabel);
+    return read(tx as unknown as Database);
   }, { isolationLevel: "repeatable read", accessMode: "read only" });
 }

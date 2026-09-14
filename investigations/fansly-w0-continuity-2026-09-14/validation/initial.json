@@ -1,0 +1,42 @@
+[
+  {
+    "command": [
+      "pnpm",
+      "exec",
+      "vitest",
+      "run",
+      "--no-file-parallelism",
+      "tests/fansly-probe-observer.test.ts",
+      "tests/fansly-continuity.test.ts",
+      "tests/fansly-continuity-receipts.test.ts",
+      "tests/fansly-probe-args.test.ts"
+    ],
+    "startedAt": "2026-09-14T15:15:35.651872+00:00",
+    "finishedAt": "2026-09-14T15:15:41.401605+00:00",
+    "exitCode": 0,
+    "log": "initial-1.log",
+    "logArchive": "initial-1.log.gz"
+  },
+  {
+    "command": [
+      "python3",
+      "tests/fansly-probe-launcher.py"
+    ],
+    "startedAt": "2026-09-14T15:15:41.401866+00:00",
+    "finishedAt": "2026-09-14T15:15:41.500342+00:00",
+    "exitCode": 1,
+    "log": "initial-2.log",
+    "logArchive": "initial-2.log.gz"
+  },
+  {
+    "command": [
+      "python3",
+      "tests/fansly-continuity-launcher.py"
+    ],
+    "startedAt": "2026-09-14T15:15:41.500536+00:00",
+    "finishedAt": "2026-09-14T15:15:41.569273+00:00",
+    "exitCode": 0,
+    "log": "initial-3.log",
+    "logArchive": "initial-3.log.gz"
+  }
+]

@@ -3,8 +3,9 @@ import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 
 const output = process.argv[2];
-if (!output || process.argv.length !== 3) {
-  throw new Error("Usage: build-probe.mjs <new-private-output.mjs>");
+const continuity = process.argv[3] === "--continuity";
+if (!output || process.argv.length !== (continuity ? 4 : 3)) {
+  throw new Error("Usage: build-probe.mjs <new-private-output.mjs> [--continuity]");
 }
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const alias = Object.fromEntries([
@@ -15,7 +16,7 @@ const alias = Object.fromEntries([
 // production image. No environment values or credentials enter the bundle.
 const result = await build({
   absWorkingDir: root,
-  entryPoints: ["scripts/fansly-ws/probe-cli.ts"],
+  entryPoints: [continuity ? "scripts/fansly-ws/continuity-cli.ts" : "scripts/fansly-ws/probe-cli.ts"],
   alias,
   bundle: true,
   packages: "external",
