@@ -29,6 +29,7 @@ const INTERACTIVE_LIST_ENVELOPES = new Map<string, "array" | "list" | "either">(
 ]);
 
 const INTERACTIVE_SINGLE_ITEM_OPERATIONS = new Set([
+  "ofapi_gateway_welcome_message",
   "ofapi_gateway_chat_message",
   "ofapi_gateway_user",
   "ofapi_gateway_vault_media_item",

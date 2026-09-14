@@ -1370,6 +1370,52 @@ describe("voice-script feature (voice notes lane)", () => {
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });
 
+describe("OnlyFans new-follower generation", () => {
+  it("uses the server transcript and profile with one draft, preserving all identity gates", async (context) => {
+    if (!testDb) { context.skip(); return; }
+    await seedConversation();
+    await testDb.pool.query(`update fans set metadata = '{"about":"I love hiking"}' where platform='onlyfans' and platform_user_id=$1`, [FAN]);
+    await testDb.pool.query(
+      `insert into message_archive (account_id, platform, conversation_ref, message_ref, fan_native_id, is_sent_by_me, occurred_at, text_plain)
+       select $1, 'onlyfans', $2, ('8000'::int + n)::text, $2, false, now() - interval '1 hour', 'earlier automatic context'
+       from generate_series(1, 12) n`, [pageId, FAN],
+    );
+    const capture: { input?: AiGatewayProviderInput; calls?: number } = {};
+    appContext.aiGatewayProvider = capturingProvider(capture);
+    const definitionId = await defaultPersonaDefinitionId();
+    const body = { clientRequestId: randomUUID(), pageLabel: "svc-of", platform: "onlyfans", conversationRef: FAN, fanRef: FAN, greetingMode: "new-follower", expectedPersonaDefinitionId: definitionId };
+    const call = (extra: Record<string, unknown> = {}, feature = "hi-greeting") => apiServer!.inject({
+      method: "POST", url: `/api/v1/ai/features/${feature}`, headers: { authorization: `Bearer ${chatterKey}` },
+      payload: { ...body, clientRequestId: randomUUID(), ...extra },
+    });
+    const response = await call();
+    expect(response.statusCode, response.body).toBe(200);
+    const prompt = capture.input!.body.prompt.userBlocks.map(block => block.text).join("\n");
+    expect(prompt).toContain("exactly ONE");
+    expect(prompt).toContain("Big Spender");
+    expect(prompt).toContain("I love hiking");
+    expect(prompt).toContain("hey babe");
+    expect(capture.calls).toBe(1);
+    const rejected = [
+      [{ greetingMode: undefined }, "hi-greeting", 400],
+      [{ fanRef: "123" }, "hi-greeting", 400],
+      [{ fanRef: null }, "hi-greeting", 400],
+      [{ fanRef: "name", conversationRef: "name" }, "hi-greeting", 400],
+      [{ fanRef: "000777", conversationRef: "000777" }, "hi-greeting", 400],
+      [{ clientContext: { transcript: "fabricated", messageCount: 0, fanDisplayName: "fake" } }, "hi-greeting", 400],
+      [{ expectedPersonaDefinitionId: "wrong-definition-id" }, "hi-greeting", 409],
+      [{ platform: "fansly" }, "hi-greeting", 404],
+      [{ pageLabel: "missing-of" }, "hi-greeting", 404],
+      [{}, "fast-reply", 400],
+    ] as const;
+    for (const [extra, feature, status] of rejected) {
+      const denied = await call(extra, feature);
+      expect(denied.statusCode, denied.body).toBe(status);
+    }
+    expect(capture.calls).toBe(1);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+});
+
 describe("client-context path (Stage 32)", () => {
   it("fences follower send custody by human authentication, assigned page and platform", async (context) => {
     if (!testDb) { context.skip(); return; }

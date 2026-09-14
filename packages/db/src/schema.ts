@@ -1483,6 +1483,7 @@ export const ofapiCommands = pgTable(
     bindingGeneration: integer("binding_generation").notNull().default(1),
     ofapiAccountId: text("ofapi_account_id").notNull(),
     conversationId: text("conversation_id").notNull(),
+    outreachPurpose: text("outreach_purpose").$type<"new-follower">(),
     kind: text("kind").$type<OfapiCommandKind>().notNull(),
     payload: jsonbSafe("payload").$type<OfapiCommandPayload>().notNull(),
     payloadHash: text("payload_hash").notNull(),
@@ -1511,6 +1512,19 @@ export const ofapiCommands = pgTable(
   (table) => ({
     pageChatterClientUniq: uniqueIndex("ofapi_commands_page_chatter_client_uniq")
       .on(table.pageId, table.chatterUserId, table.clientCommandId),
+    followerOutreachUniq: uniqueIndex("ofapi_commands_follower_outreach_uniq")
+      .on(table.pageId, table.conversationId)
+      .where(sql`${table.outreachPurpose} = 'new-follower' and case
+        when ${table.state} = 'cancelled' and ${table.attemptCount} = 0 then false
+        when ${table.state} in ('failed_retryable', 'failed_terminal')
+          and coalesce(${table.verifierResult}->>'source', '') in ('local_precondition', 'auth_gate') then false
+        else true end`),
+    outreachPurposeCheck: check("ofapi_commands_outreach_purpose_check", sql`
+      ${table.outreachPurpose} is null or (
+        ${table.outreachPurpose} = 'new-follower'
+        and ${table.conversationId} ~ '^[1-9][0-9]{0,29}$'
+        and ${table.kind} in ('send_text_message_v1', 'send_message_v2')
+      )`),
     oneInFlightLaneUniq: uniqueIndex("ofapi_commands_one_in_flight_lane_uniq")
       .on(table.pageId, table.conversationId)
       .where(sql`${table.state} = 'in_flight'`),

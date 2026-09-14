@@ -195,6 +195,89 @@ function expectResponseOmits(response: { body: string }, text: string) {
 }
 
 describe("OFAPI command outbox intake", () => {
+  it.each(["0", "000123456789"])("rejects noncanonical follower identity %s without allocating custody", async (conversationId) => {
+    const denied = await createCommand(commandBody({ outreachPurpose: "new-follower", conversationId }));
+    expect(denied.statusCode, denied.body).toBe(400);
+    expect((await testDb!.pool.query("select id from ofapi_commands")).rows).toHaveLength(0);
+  });
+
+  it("atomically admits one follower greeting across chatters while preserving owned idempotency", async () => {
+    const bodies = Array.from({ length: 8 }, () => commandBody({ outreachPurpose: "new-follower" }));
+    const responses = await Promise.all(bodies.map((body, i) => createCommand(body, i % 2 ? otherChatterKey : chatterKey)));
+    expect(responses.filter(response => response.statusCode === 202)).toHaveLength(1);
+    for (const response of responses.filter(response => response.statusCode !== 202)) {
+      expect(response.statusCode, response.body).toBe(409);
+      expect(response.json()).toMatchObject({ error: "follower_outreach_conflict" });
+      expect(response.body).not.toContain("commandId");
+    }
+    const winner = responses.findIndex(response => response.statusCode === 202);
+    const replay = await createCommand(bodies[winner]!, winner % 2 ? otherChatterKey : chatterKey);
+    expect(replay.statusCode, replay.body).toBe(200);
+    expect(replay.json()).toMatchObject({ commandId: responses[winner]!.json().commandId, deduplicated: true, outreachPurpose: "new-follower" });
+    // Ordinary sends and another fan stay on their existing independent path.
+    expect((await createCommand(commandBody())).statusCode).toBe(202);
+    expect((await createCommand(commandBody({ outreachPurpose: "new-follower", conversationId: "98765" }))).statusCode).toBe(202);
+  });
+
+  it.each([
+    ["queued", 0, null], ["in_flight", 1, null], ["confirmed", 1, { source: "ofapi_response" }],
+    ["indeterminate", 1, { source: "stale_recovery" }],
+    ["failed_retryable", 1, { source: "ofapi_response", httpStatus: 429 }],
+    ["failed_terminal", 1, { source: "ofapi_response", httpStatus: 400 }],
+    ["failed_terminal", 1, null], ["failed_retryable", 1, {}], ["cancelled", 1, null],
+  ])("holds follower custody in %s with %i attempts and ambiguous evidence %j", async (state, attempts, verifier) => {
+    const created = await createCommand(commandBody({ outreachPurpose: "new-follower" }));
+    const commandId = created.json().commandId;
+    await testDb!.pool.query(`update ofapi_commands set state=$2, attempt_count=$3, verifier_result=$4 where id=$1`, [commandId, state, attempts, verifier]);
+    const denied = await createCommand(commandBody({ outreachPurpose: "new-follower" }), otherChatterKey);
+    expect(denied.statusCode, denied.body).toBe(409);
+    expect(denied.json().error).toBe("follower_outreach_conflict");
+  });
+
+  it.each([
+    ["cancelled", 0, null],
+    ["failed_retryable", 1, { source: "local_precondition", reason: "key_scope_unavailable" }],
+    ["failed_terminal", 1, { source: "local_precondition", reason: "binding_replaced" }],
+    ["failed_terminal", 1, { source: "auth_gate" }],
+  ])("releases only proven undispatched follower custody: %s %i %j", async (state, attempts, verifier) => {
+    const body = commandBody({ outreachPurpose: "new-follower" });
+    const created = await createCommand(body);
+    const commandId = created.json().commandId;
+    await testDb!.pool.query(`update ofapi_commands set state=$2, attempt_count=$3, verifier_result=$4 where id=$1`, [commandId, state, attempts, verifier]);
+    expect((await createCommand(commandBody({ retryOfCommandId: commandId }))).statusCode).toBe(409);
+    const retry = await createCommand(commandBody({ outreachPurpose: "new-follower", retryOfCommandId: commandId }));
+    expect(retry.statusCode, retry.body).toBe(202);
+    const originalReplay = await createCommand(body);
+    expect(originalReplay.statusCode, originalReplay.body).toBe(200);
+    expect(originalReplay.json().commandId).toBe(commandId);
+    expect((await createCommand(commandBody({ outreachPurpose: "new-follower" }), otherChatterKey)).statusCode).toBe(409);
+  });
+
+  it("retains one confirmed follower send and releases an actual executor local refusal", async () => {
+    appContext.config.ofapiDesktopCommandExecutionEnabled = true;
+    const sendTextMessage = vi.fn().mockResolvedValue({ messageId: "987654321" });
+    appContext.ofapi = { sendTextMessage } as unknown as AppContext["ofapi"];
+    const first = await createCommand(commandBody({ outreachPurpose: "new-follower" }));
+    const firstId = first.json().commandId;
+    await testDb!.pool.query("update pages set ofapi_binding_generation=ofapi_binding_generation+1 where ofapi_account_id=$1", [ACCOUNT_ONE]);
+    expect(await executeOfapiCommand(appContext, firstId)).toMatchObject({ status: "failed_terminal" });
+    expect(sendTextMessage).not.toHaveBeenCalled();
+    const second = await createCommand(commandBody({ outreachPurpose: "new-follower" }), otherChatterKey);
+    expect(second.statusCode, second.body).toBe(202);
+    const secondId = second.json().commandId;
+    expect(await executeOfapiCommand(appContext, secondId)).toMatchObject({ status: "confirmed" });
+    await executeOfapiCommand(appContext, secondId);
+    expect(sendTextMessage).toHaveBeenCalledTimes(1);
+    expect((await createCommand(commandBody({ outreachPurpose: "new-follower" }))).json()).toMatchObject({ error: "follower_outreach_conflict" });
+  });
+
+  it("cancels a queued follower command through the existing API and then admits a new chatter", async () => {
+    const first = await createCommand(commandBody({ outreachPurpose: "new-follower" }));
+    const cancelled = await cancelCommand(first.json().commandId);
+    expect(cancelled.statusCode, cancelled.body).toBe(200);
+    expect((await createCommand(commandBody({ outreachPurpose: "new-follower" }), otherChatterKey)).statusCode).toBe(202);
+  });
+
   it("fails closed while the staged flag is disabled", async () => {
     appContext.config.ofapiDesktopCommandOutboxEnabled = false;
     const response = await createCommand(commandBody());

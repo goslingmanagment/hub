@@ -324,8 +324,18 @@ export async function prepareAiFeatureStream(
     throw new PersonaDefinitionChangedError();
   }
 
-  if (body.greetingMode !== undefined && (feature !== "hi-greeting" || !isFanslyRequest || !body.clientContext || !body.fanRef)) {
-    throw new BadRequestError("new-follower mode requires Fansly hi-greeting, fanRef and clientContext");
+  if (body.greetingMode !== undefined) {
+    if (feature !== "hi-greeting" || !body.fanRef || body.fanRef !== body.conversationRef) {
+      throw new BadRequestError("new-follower mode requires hi-greeting and matching conversationRef and fanRef");
+    }
+    if (isFanslyRequest && !body.clientContext) {
+      throw new BadRequestError("Fansly new-follower mode requires clientContext");
+    }
+    if (!isFanslyRequest && !/^[1-9]\d{0,29}$/.test(body.fanRef)) {
+      throw new BadRequestError("OnlyFans new-follower mode requires a canonical positive numeric fanRef");
+    }
+    // OnlyFans follows the kernel-context path below. This mode changes the
+    // one-message template and Hi count gate, never who may supply OF context.
   }
   if ((body.clientContext?.fanAvatarUrl !== undefined || body.clientContext?.fanUsername !== undefined) && body.greetingMode !== "new-follower") {
     throw new BadRequestError("fanAvatarUrl and fanUsername require new-follower mode");

@@ -35,6 +35,7 @@ interface QueryRule {
 
 interface ProxyRequest {
   collectionContext?: OfapiCollectionContext;
+  captureFirst?: true;
   kind: "proxy";
   accountId: string;
   pathname: string;
@@ -176,6 +177,7 @@ function parseQuery(raw: RawQuery, rules: Record<string, QueryRule>) {
  * Catalog routes carry their category explicitly in `collectionContext`.
  */
 export const OFAPI_READ_GATEWAY_OPERATIONS = [
+  "ofapi_gateway_welcome_message",
   "ofapi_gateway_chats",
   "ofapi_gateway_chat_messages",
   "ofapi_gateway_chat_search",
@@ -237,6 +239,15 @@ export function resolveOfapiReadGatewayRequest(
   const accountId = segments[0]!;
   if (!/^acct_[A-Za-z0-9]+$/.test(accountId)) {
     invalid("account id is not an OFAPI account id");
+  }
+
+  if (segments.length === 3 && segments[1] === "settings" && segments[2] === "welcome-message") {
+    return {
+      ...proxy(accountId, segments, parseQuery(rawQuery, NO_QUERY), "ofapi_gateway_welcome_message"),
+      // A current automatic template is eligibility evidence; never serve it
+      // before custody of the exact provider response is durable.
+      captureFirst: true,
+    };
   }
 
   if (segments.length === 2 && segments[1] === "chats") {
@@ -472,7 +483,7 @@ export async function executeOfapiReadGatewayRequest(
   }
 
   const request = resolveOfapiReadGatewayRequest(input.rawPath, input.rawQuery);
-  const captureFirst = Boolean(request.kind === "proxy" && request.collectionContext) || app.config.ofapiMirrorInteractiveCaptureEnabled === true;
+  const captureFirst = Boolean(request.kind === "proxy" && (request.collectionContext || request.captureFirst)) || app.config.ofapiMirrorInteractiveCaptureEnabled === true;
 
   if (request.kind === "whoami") {
     return {

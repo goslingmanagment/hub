@@ -4524,6 +4524,7 @@ export const createOfapiCommandBodySchema = z.discriminatedUnion("kind", [
   z.strictObject({
     ...ofapiCommandBaseFields,
     kind: z.literal("send_text_message_v1"),
+    outreachPurpose: z.literal("new-follower").optional(),
     payload: z.strictObject({
       text: z.string().min(1).max(10_000).refine((text) => text.trim().length > 0, {
         message: "Message text must not be blank",
@@ -4567,6 +4568,7 @@ export const ofapiCommandResponseSchema = z.object({
   commandId: z.string().uuid(),
   clientCommandId: z.string().uuid(),
   kind: ofapiCommandKindSchema,
+  outreachPurpose: z.literal("new-follower").nullable().optional(),
   accountId: z.string(),
   conversationId: z.string(),
   state: ofapiCommandStateSchema,

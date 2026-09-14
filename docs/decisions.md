@@ -335,6 +335,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 335 | A0 advertised-head reader state | Observe exact pre-apply Agent reader state separately from hot presence; preserve polling, historical unknowns and the original shadow gates. |
 | 336 | W0 REST identity preflight | Make one bounded account/me GET through the stored page session/proxy; require its private receipt and matching generation for continuity and the accepted binding workflow, with receiver REST counts unchanged. |
 | 337 | W0 container absence cleanup | Accept complete Docker absence diagnostics regardless of message casing with exact name/ID matching; preserve ownership checks, immutable-ID removal and original provider receipts. |
+| 338 | OnlyFans follower greetings | Desktop reuses kernel context for one-message Hi, reads the current welcome template through capture-first, and opts into atomic page/fan custody inside the existing OFAPI command outbox. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -13751,3 +13752,53 @@ Offline Python regressions cover the observed lowercase form, standard forms,
 identifier near-misses, daemon errors and the inspect/remove race; existing
 foreign-owner and timeout checks remain. The change adds no provider retry,
 production action or W0 acceptance. See [the cleanup note](runbooks/fansly-ws-protocol-check.md#bounded-existing-session-probe).
+
+
+## Decision 338: Port follower greeting support to the OnlyFans desktop (2026-09-15)
+
+The desktop implements its own live follower scan, conservative personal-message
+eligibility and human-reviewed draft/send flow. The existing hi-greeting mode
+`new-follower` now also accepts OnlyFans, requiring a numeric fanRef equal to
+conversationRef. It retains page assignment/platform and persona revision gates,
+and loads transcript, name and bio from the kernel. Client-supplied OnlyFans
+context remains refused; the Fansly client-context path and legacy Hi gate stay
+in place. This changes draft shape, not a kernel claim of eligibility. The
+client must recheck live history before enqueueing; archive freshness alone
+cannot prove that nobody has sent a personal greeting.
+
+`GET /api/v1/ofapi/read/:account/settings/welcome-message` is an exact no-query
+allowlist entry. It uses the assigned page, existing egress and credit admission,
+classifies as core_messages, and always takes capture-first even while the old
+interactive-capture flag is off. The response must contain an identified template
+object; an unknown/missing envelope fails closed. Actual provider credits win,
+with one estimated credit as the fallback. Reading is no permission to change
+welcome settings. The primary OFAPI contract is the desktop's vendored
+`docs/vendor/onlyfansapi/openapi.json` Get Welcome Message operation.
+
+The optional top-level `outreachPurpose: "new-follower"` on send_text_message_v1
+or send_message_v2 adds custody in the existing command intake transaction. V2
+must be one immediate free stand-alone text: no media, PPV, GIF, reply, release
+form tags or provider replay. The field is captured in the payload hash only
+when supplied, so legacy hashes and ordinary sends remain unchanged. Responses
+include a nullable purpose; the response schema also accepts its absence for
+older servers. Retry lineage cannot discard or change the purpose.
+
+Migration 0195 adds the nullable column, canonical positive numeric conversation
+identity guard (no leading-zero aliases), and a partial unique index on page and
+conversation across all chatter/device identities. An exact owned client id
+still returns its existing command; another held command yields structural
+HTTP 409 `follower_outreach_conflict` without disclosing another chatter's IDs.
+Queued, in-flight, confirmed, indeterminate and vendor HTTP failures retain
+custody permanently. Only cancellation with zero attempts or failed_* carrying
+the executor's existing typed local_precondition/auth_gate evidence releases
+it. Missing evidence holds custody; SQL NULL cannot turn an uncertain failure
+into a release. No business record is deleted, no automatic send retry is added,
+and no new executor or browser-send lease exists. Fansly followerOutreachAttempt
+remains Fansly-only. Ordinary/native sends outside this feature do not share its
+first-greeting constraint, so the final live client check is still necessary.
+
+Core must be deployed before a desktop build uses these paths. This preparation
+includes no production activation, paid live scan or real-fan send. Tests use
+local provider fixtures and PostgreSQL, including concurrent chatter admission,
+owned replays, conservative terminal custody, safe releases, context gates and
+captured/credited welcome reads.

@@ -794,3 +794,20 @@ Decision owner: core Decision #61.
 - API/worker logs for the validation window contained no command-send operation and no validation
   payload text. Public `/api/v1/health` was OK. `/api/v1/health/sync` stayed 503 due pre-existing
   workload state (Fansly conversation catch-up and unverified OF pages), not this deploy.
+
+
+### Optional first-greeting custody (Decision 338)
+
+A new-followers client may set top-level `outreachPurpose: "new-follower"` on
+`send_text_message_v1` or an immediate free stand-alone text `send_message_v2`.
+The V2 request cannot include attachments, previews, GIF, reply target, release
+form tags, locked text, PPV or provider replay. The nullable response field is
+optional for backwards-compatible parsing. Retry lineage must retain the field.
+
+The existing intake transaction and unique index admit at most one held greeting
+per page/conversation across chatter devices. Exact owned client ids retain normal
+idempotency. Other claims return 409 `follower_outreach_conflict`. Confirmed or
+uncertain sends hold custody; only cancellation before claim or executor-proven
+local no-dispatch failure releases it. Reopening/reloading a client never releases
+custody. The client must recheck live personal-message eligibility before enqueue;
+this coordination does not cover other clients' ordinary or native platform sends.

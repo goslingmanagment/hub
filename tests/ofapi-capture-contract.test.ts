@@ -85,6 +85,13 @@ describe("strict OFAPI message-page contract", () => {
 });
 
 describe("interactive OFAPI response envelopes", () => {
+  it("accepts a welcome-template object and rejects missing or foreign envelopes", () => {
+    const operation = "ofapi_gateway_welcome_message";
+    expect(validateOfapiInteractiveResponseShape(operation, { data: { id: "123", isActive: false, text: "hi" } })).toBe(true);
+    for (const body of [null, {}, { data: null }, { data: [] }, { data: {} }, { data: { success: true } }]) {
+      expect(validateOfapiInteractiveResponseShape(operation, body)).toBe(false);
+    }
+  });
   const arrayListOperations = [
     "ofapi_gateway_chats",
     "ofapi_gateway_chat_messages",
