@@ -41,3 +41,22 @@ The repository helper, five-case PostgreSQL test and runbook still match the pri
 ### Immutable partner-value correction
 
 Reviewed the subsequent four-line correction after the author's typecheck failure. Capturing `currentConversation.partnerPlatformUserId` in a local constant before its nonempty guard retains TypeScript narrowing inside the asynchronous transaction callback and gives the probe and conditional update exactly the same immutable verified ID. No assertion/cast, predicate or refusal behavior changes. No further findings. Final executor-handler SHA-256: `18d6882d4c9e04843fd77fe75790113b74984032041956a70126676719e88f9c`. The author's original failing check and negative-control receipts are retained separately; this reviewer ran no tests.
+
+## Main a9794e60 / PR186 final composition
+
+Reviewed 2026-09-14T01:06:37.727921+00:00 at `3fa4590f5fc1dcaf5ec68445c1b92e2f8a88382e`, following merge `9c939364fc9993353cfd9e2f4693592d76f42dd3` of `a9794e600dfbb10918800ab5b49241e33d7357a3` into validated topic `60d690eb44faa5470a4645d3c7ee0f659558538c`. The final commit only clarifies the validation boundary. No actionable findings; no tests, source edits or production calls by this reviewer.
+
+Across apps/packages/scripts/tests/workflows and build/package files, the only difference from the prior validated candidate is the exact merged-main UTC credits fixture (`eff98afad7b6f0e87563a831c33d0b27bb2581f109f4166900d60e82f28be86b`). All five topic source/test/runbook paths are byte-identical, and their complete diffs against a979 main equal their previous diffs against b787 main. The owned metadata-only update, immutable partner guard and actual interleaving/lease regressions remain unchanged.
+
+Removing only D327 and its quick row reproduces all current main decisions exactly, ignoring trailing whitespace. D327's body is unchanged from the prior candidate; its row and section follow incoming D324. No decision was overwritten.
+
+The prior validation receipt pins the same four executable/test hashes; its retained final check and PostgreSQL logs match their decompressed SHA-256 receipts and exit 0. The recorded 3,420 unit/9 existing skips and 48 PostgreSQL passes belong to that prior tree. COMPOSITION-MAIN-A979.md correctly claims no new local run: the unchanged topic evidence and already-validated main fixture support composition review, while fresh PR CI remains the complete-combination merge gate. No production preservation, deployment or migration acceptance is inferred.
+
+| Composed file | SHA-256 |
+| --- | --- |
+| `apps/runtime/src/services/sync/executor-handlers.ts` | `18d6882d4c9e04843fd77fe75790113b74984032041956a70126676719e88f9c` |
+| `packages/db/src/repositories/page-dm.ts` | `482fedf8bdeb55db3df2b24b5f7392db3e3fbc6fb91a94dae0728e09548b63ec` |
+| `tests/sync-handlers.test.ts` | `3422a1b1fcee1ba7a816d931ea4b958bde6d654d04800cd1aad66c3313e7404f` |
+| `tests/fansly-dm-exclusion.integration.test.ts` | `b73c0e58ef2fadbfea591444441f38ebe53017350ec5c9a39e09031638affc76` |
+| `docs/runbooks/fansly-dm-exclusion.md` | `7d7f1cb7ed75b1ea13943bb6f98fd8f8bc239213edd342a1629cfd0fa6c4f59e` |
+| `docs/decisions.md` | `e8b89eb2f7aebae1e36515902ff66d720ab64f439ba3266cc0888037b0eecf2a` |

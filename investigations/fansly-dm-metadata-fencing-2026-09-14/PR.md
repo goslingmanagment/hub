@@ -8,3 +8,9 @@ Validation on the current-main composition:
 - Mandatory Docker PostgreSQL, serial: `fansly-dm-exclusion`, `page-dm.repository`, `page-sync-lease-fencing`, `fansly-dm-conversations-sweep`; 48/48 tests, zero skips (12.485s).
 - Original-handler negative control reproduced the stale head/cursor/metadata overwrite; exact source restoration and all initial failures are retained in `investigations/fansly-dm-metadata-fencing-2026-09-14/evidence`.
 - Independent source, composition and readability review: no outstanding findings. No production action or measurement was performed for this patch.
+
+The current branch also integrates main `a9794e60` and its verified UTC fixture.
+The local check/Postgres receipts above were run on `60d690eb`; every other
+executable/test file remains byte-identical. Independent composition review
+preserves D324 and the topic decision. No redundant local suite was repeated;
+fresh PR CI validates the complete merge before merging.
