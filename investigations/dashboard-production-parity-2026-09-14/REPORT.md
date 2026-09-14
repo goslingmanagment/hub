@@ -66,3 +66,10 @@ cooldown). The only merge resolution preserves both decision entries. Final
 PostgreSQL suites: 153 passed, no skips. All pinned source hashes remained stable.
 See `final-main-validation/` for exact commands and compressed logs, and
 `REVIEW-FINAL-MAIN-MERGE.md` for the independent composition review.
+
+The publication composition `7e88384e` includes merged main `a9794e60` and
+its UTC fixture. Full check passed at the actual CI 4 GiB limit (3,580 unit
+tests, nine existing skips); thirteen serial PostgreSQL suites passed all 179
+cases. Source fingerprints were stable; `final-main-a979-validation/` retains
+exact commands and compressed logs. Independent composition review remains
+clean and preserves D323 before D324.

@@ -1,25 +1,12 @@
-The deployed dashboard contains five reviewed control and navigation patches absent from main. This restores their feature explanations, page context, reviewed mutation targets, explicit webhook reconciliation and export recovery, so a future main deployment preserves those workflows.
+Restore the five deployed dashboard patches absent from main: feature explanations, page context, reviewed mutation targets, explicit webhook reconciliation and fresh export recovery. This prevents a future main deployment from regressing those workflows.
 
-The original 103 topic paths are retained: 102 match production `38032636` byte for byte; the remaining file only expands two 2,000+ character JSX lines. Canonical emitted JavaScript AST comparison verifies identical behavior and rendered text. Historical D296–300 and new D323 explain the restoration. No new flag or backend behavior is introduced.
+The original 103 topic paths are retained: 102 match production `38032636` byte for byte; one file expands two long JSX lines with emitted JavaScript AST equality. Historical D296–300 and new D323 document the restoration. Independent reconciliation verifies all known production performance/C1 fixes and all 187 migration file identities remain present; newer main behavior is preserved. This source comparison does not certify deployment readiness or production health.
 
-Validation against the composed main candidate:
-- `pnpm check`: 3,574 unit tests passed, nine existing skips, 315 files; lint, strictness and build passed.
-- Twelve serial Docker-Postgres suites: 153 passed, no skips. They exercise config updates/gate wakeup, workboard mutations, notifications/incidents, webhook recovery/lifecycle and typed exports.
-- Independent review closed the long-line finding and found no remaining actionable issues; source hashes were stable throughout validation.
+CI's full-workspace Typecheck exceeded Node22's default approximately 2 GiB heap. The static job now has a bounded 4 GiB heap. Type coverage, error budgets, integration jobs and production configuration are unchanged. The original failure is retained.
 
-The committed investigation contains exact commands, complete logs, transfer/source manifests, formatting proof and the independent review. This PR does not deploy or change event-migration acceptance gates. C1 and provider cooldown remain separate PR topics.
+Final composition `7e88384e` includes main `a9794e60` and its UTC fixture fix:
+- `NODE_OPTIONS=--max-old-space-size=4096 pnpm check`: 3,580 unit tests passed, nine existing skips, 315 files; strictness, lint and build passed.
+- Thirteen serial mandatory Docker-Postgres suites: 179 passed, no skips. They cover configuration/gate wakeup, workboard mutations, notifications/incidents, webhook recovery/lifecycle, typed exports and the newly merged credits fixture.
+- Independent correctness/readability, main-composition, compiler-budget and production-preservation reviews have no outstanding findings. All pinned source hashes were stable during final checks.
 
-Final main composition `83471e2c` incorporates main `b78752d0` (merged C1 and
-cooldown). The only merge resolution preserves both decision entries. Final
-`pnpm check`: 3,580 passed, nine existing skips, 315 files; twelve serial Docker
-PostgreSQL suites: 153 passed, no skips. All pinned source hashes remained stable.
-See `final-main-validation/` for exact commands and compressed logs, and
-`REVIEW-FINAL-MAIN-MERGE.md` for the independent composition review.
-
-The first CI attempt failed in Typecheck when Node22 exhausted its default
-approximately 2 GiB heap. The static job now declares a bounded 4 GiB heap;
-no type coverage, error budget, integration job or production configuration
-changes. `pnpm check` passed again at that exact 4 GiB limit (3,580 tests and
-nine existing skips). Application source remains byte-identical to the final
-153-test PostgreSQL validation. The failure and new full-check receipts are
-retained in `ci-failure/` and `static-heap-validation/`; fresh CI is required.
+`investigations/dashboard-production-parity-2026-09-14/` retains exact commands, compressed logs, source manifests, formatting proof and reviews. The final receipts are in `final-main-a979-validation/`. No new runtime flag, deployment or event-migration gate change is included.
