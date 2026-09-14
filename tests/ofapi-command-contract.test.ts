@@ -63,6 +63,31 @@ function validMarkReadBody() {
 }
 
 describe("OFAPI command contract", () => {
+  it("scopes follower custody to immediate stand-alone text sends", () => {
+    const outreachPurpose = "new-follower";
+    expect(createOfapiCommandBodySchema.parse({ ...validBody(), outreachPurpose })).toMatchObject({ outreachPurpose });
+    for (const body of [validMediaBody(), validTypingBody(), validUnsendBody(), validMarkReadBody()]) {
+      expect(createOfapiCommandBodySchema.safeParse({ ...body, outreachPurpose }).success).toBe(false);
+    }
+    const v2 = {
+      ...validBody(), kind: "send_message_v2", outreachPurpose,
+      payload: {
+        text: "hello", priceCents: 0, mediaFiles: [], previews: [], lockedText: false,
+        replyToMessageId: null, giphyId: null, rfTag: [], rfPartner: [], rfGuest: [],
+        blockBannedWords: "strict_ban", reuseProviderOperation: false,
+      },
+    };
+    expect(createOfapiCommandBodySchema.parse(v2)).toMatchObject({ outreachPurpose });
+    for (const change of [
+      { mediaFiles: ["123"] }, { mediaFiles: ["123"], priceCents: 300 },
+      { giphyId: "gif" }, { replyToMessageId: "12" }, { lockedText: true },
+      { rfTag: ["13"] }, { rfPartner: ["13"] }, { rfGuest: ["13"] },
+      { reuseProviderOperation: true }, { text: "  " }, { scheduledDate: "2026-09-16" },
+    ]) {
+      expect(createOfapiCommandBodySchema.safeParse({ ...v2, payload: { ...v2.payload, ...change } }).success).toBe(false);
+    }
+  });
+
   it("accepts the versioned text-only command", () => {
     const body = validBody();
     expect(createOfapiCommandBodySchema.parse(body)).toEqual(body);

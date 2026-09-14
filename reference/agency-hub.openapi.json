@@ -103237,6 +103237,12 @@
                             "type": "null"
                           }
                         ]
+                      },
+                      "outreachPurpose": {
+                        "type": "string",
+                        "enum": [
+                          "new-follower"
+                        ]
                       }
                     },
                     "required": [
@@ -103670,6 +103676,12 @@
                           "send_text_message_v1"
                         ]
                       },
+                      "outreachPurpose": {
+                        "type": "string",
+                        "enum": [
+                          "new-follower"
+                        ]
+                      },
                       "payload": {
                         "type": "object",
                         "properties": {
@@ -103964,6 +103976,19 @@
                         "mark_chat_read_v1"
                       ]
                     },
+                    "outreachPurpose": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "enum": [
+                            "new-follower"
+                          ]
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
                     "accountId": {
                       "type": "string"
                     },
@@ -104137,6 +104162,19 @@
                         "typing_active_v1",
                         "unsend_message_v1",
                         "mark_chat_read_v1"
+                      ]
+                    },
+                    "outreachPurpose": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "enum": [
+                            "new-follower"
+                          ]
+                        },
+                        {
+                          "type": "null"
+                        }
                       ]
                     },
                     "accountId": {
@@ -104516,6 +104554,19 @@
                         "mark_chat_read_v1"
                       ]
                     },
+                    "outreachPurpose": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "enum": [
+                            "new-follower"
+                          ]
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
                     "accountId": {
                       "type": "string"
                     },
@@ -104833,6 +104884,19 @@
                         "typing_active_v1",
                         "unsend_message_v1",
                         "mark_chat_read_v1"
+                      ]
+                    },
+                    "outreachPurpose": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "enum": [
+                            "new-follower"
+                          ]
+                        },
+                        {
+                          "type": "null"
+                        }
                       ]
                     },
                     "accountId": {

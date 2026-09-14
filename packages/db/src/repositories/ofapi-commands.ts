@@ -26,6 +26,15 @@ export interface CreateOfapiCommandInput {
   payload: OfapiCommandPayload;
   payloadHash: string;
   retryOfCommandId?: string | null;
+  outreachPurpose?: "new-follower" | null;
+}
+
+/** No other chatter's command identity or message content crosses this error. */
+export class OfapiFollowerOutreachConflictError extends Error {
+  constructor() {
+    super("A follower greeting is already held for this conversation");
+    this.name = "OfapiFollowerOutreachConflictError";
+  }
 }
 
 /**
@@ -47,6 +56,7 @@ export async function createOrGetOfapiCommand(
       ofapiAccountId: input.ofapiAccountId,
       bindingGeneration: sql`(select ofapi_binding_generation from pages where id = ${input.pageId})`,
       conversationId: input.conversationId,
+      outreachPurpose: input.outreachPurpose ?? null,
       kind: input.kind,
       payload: input.payload,
       payloadHash: input.payloadHash,
@@ -58,7 +68,7 @@ export async function createOrGetOfapiCommand(
         ? sql`now() + interval '2 minutes'`
         : sql`now() + interval '400 days'`,
     })
-    .onConflictDoNothing({
+    .onConflictDoNothing(input.outreachPurpose ? undefined : {
       target: [
         ofapiCommands.pageId,
         ofapiCommands.chatterUserId,
@@ -79,6 +89,7 @@ export async function createOrGetOfapiCommand(
     ),
   });
   if (!existing) {
+    if (input.outreachPurpose) throw new OfapiFollowerOutreachConflictError();
     throw new Error("OFAPI command dedupe row vanished after unique conflict");
   }
   return { row: existing, inserted: false };

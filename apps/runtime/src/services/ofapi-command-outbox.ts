@@ -1,4 +1,4 @@
-import type { OfapiExtendedCommandKind, OfapiExtendedCommandPayload, OfapiSendV2Payload } from "@agency_hub_core/shared";
+import { isOfapiFollowerGreetingPayload, type OfapiExtendedCommandKind, type OfapiExtendedCommandPayload, type OfapiSendV2Payload } from "@agency_hub_core/shared";
 import { createHash, randomUUID } from "node:crypto";
 
 import {
@@ -6,6 +6,7 @@ import {
   checkOfapiProviderOperationReuse,
   createOrGetOfapiCommand,
   getOfapiCommandByIdForUser,
+  OfapiFollowerOutreachConflictError,
   listOfapiMappedPages,
   releaseOfapiMediaTokenCustody,
   type Database,
@@ -17,6 +18,7 @@ import type { AppContext } from "../bootstrap.ts";
 import type { HumanAuthPrincipal } from "./auth.ts";
 import {
   AppError,
+  BadRequestError,
   ConflictError,
   NotFoundError,
   ServiceUnavailableError,
@@ -49,6 +51,7 @@ type TextCommandRequest = {
   accountId: string;
   conversationId: string;
   payload: { text: string };
+  outreachPurpose?: "new-follower";
   retryOfCommandId?: string | null;
 };
 type MediaCommandRequest = {
@@ -96,7 +99,7 @@ const RETRYABLE_SOURCE_STATES = new Set([
   "cancelled",
 ]);
 
-type ExtendedCommandRequest = { clientCommandId: string; accountId: string; conversationId: string; kind: OfapiExtendedCommandKind; payload: OfapiExtendedCommandPayload; retryOfCommandId?: string | null };
+type ExtendedCommandRequest = { outreachPurpose?: "new-follower"; clientCommandId: string; accountId: string; conversationId: string; kind: OfapiExtendedCommandKind; payload: OfapiExtendedCommandPayload; retryOfCommandId?: string | null };
 
 export type CreateOfapiCommandRequest = ExtendedCommandRequest
   | TextCommandRequest
@@ -109,6 +112,7 @@ export interface OfapiCommandView {
   commandId: string;
   clientCommandId: string;
   kind: OfapiCommandKind;
+  outreachPurpose: "new-follower" | null;
   accountId: string;
   conversationId: string;
   state:
@@ -188,6 +192,7 @@ function toView(row: OfapiCommandRow, deduplicated: boolean): OfapiCommandView {
     commandId: row.id,
     clientCommandId: row.clientCommandId,
     kind: row.kind,
+    outreachPurpose: row.outreachPurpose,
     accountId: row.ofapiAccountId,
     conversationId: row.conversationId,
     state: row.state,
@@ -220,6 +225,13 @@ export async function createOfapiCommand(
   requireEnabled(app);
   const page = await resolveAssignedPage(app, principal, input.accountId);
   const retryOfCommandId = input.retryOfCommandId ?? null;
+  const outreachPurpose = "outreachPurpose" in input ? input.outreachPurpose ?? null : null;
+  if (outreachPurpose !== null && (outreachPurpose !== "new-follower"
+    || !/^[1-9]\d{0,29}$/.test(input.conversationId)
+    || (input.kind !== "send_text_message_v1" && input.kind !== "send_message_v2")
+    || (input.kind === "send_message_v2" && !isOfapiFollowerGreetingPayload(input.payload as OfapiSendV2Payload)))) {
+    throw new BadRequestError("Follower greetings require one immediate free text message");
+  }
   if (input.kind === "send_message_v2" && (input.payload as OfapiSendV2Payload).reuseProviderOperation && !retryOfCommandId) throw new ConflictError("Provider replay requires an explicit retry source");
 
   if (
@@ -243,6 +255,9 @@ export async function createOfapiCommand(
     ) {
       throw new ConflictError("Retry source must be an owned command in the same conversation");
     }
+    if (original.outreachPurpose !== outreachPurpose) {
+      throw new ConflictError("Retry source must preserve its outreach purpose");
+    }
     if (original.kind !== input.kind) {
       throw new ConflictError("Retry source must use the same command kind");
     }
@@ -257,6 +272,7 @@ export async function createOfapiCommand(
     conversationId: input.conversationId,
     payload: input.payload,
     retryOfCommandId,
+    ...(outreachPurpose === null ? {} : { outreachPurpose }),
   });
   // Provider replay eligibility is decided here, before any row exists, so an
   // ineligible recovery never becomes a failed retry child. The vendor-facing
@@ -279,6 +295,7 @@ export async function createOfapiCommand(
       payload: input.payload,
       payloadHash,
       retryOfCommandId,
+      outreachPurpose,
     });
     if (created.inserted && reuse) {
       if (reuse.issue) throw new OfapiProviderOperationReuseUnavailableError(reuse.issue);
@@ -289,6 +306,11 @@ export async function createOfapiCommand(
       if (!eligibility.eligible) throw new OfapiProviderOperationReuseUnavailableError(eligibility.issue);
     }
     return created;
+  }).catch((error: unknown) => {
+    if (error instanceof OfapiFollowerOutreachConflictError) {
+      throw new AppError("A follower greeting is already held for this conversation", 409, "follower_outreach_conflict");
+    }
+    throw error;
   });
 
   if (
@@ -297,6 +319,7 @@ export async function createOfapiCommand(
       result.row.ofapiAccountId !== input.accountId
       || result.row.conversationId !== input.conversationId
       || result.row.kind !== input.kind
+      || result.row.outreachPurpose !== outreachPurpose
       || result.row.payloadHash !== payloadHash
       || result.row.retryOfCommandId !== retryOfCommandId
     )

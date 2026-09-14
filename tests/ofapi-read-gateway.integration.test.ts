@@ -940,6 +940,33 @@ describe("OFAPI read gateway integration", () => {
     expect(upstreamRequests).toHaveLength(1);
   });
 
+  it("serves the welcome template only after capture, with page ACL and actual credit accounting", async () => {
+    expect(appContext.config.ofapiMirrorInteractiveCaptureEnabled).not.toBe(true);
+    await testDb!.pool.query(
+      `insert into ofapi_credit_state (id, spend_day, last_balance, last_balance_at)
+       values (1, current_date, 9000, now())`,
+    );
+    const denied = await inject(`${ACCOUNT_TWO}/settings/welcome-message`);
+    expect(denied.statusCode).toBe(404);
+    expect(upstreamRequests).toHaveLength(0);
+    const template = { id: "42", template: "reply_on_subscribe", text: "<p>welcome</p>", isActive: false };
+    scriptedResponses.push({ status: 200, body: { data: template, _meta: { _credits: { used: 2, balance: 8998 } } } });
+    const response = await inject(`${ACCOUNT_ONE}/settings/welcome-message`);
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.json().data).toEqual(template);
+    expect(upstreamRequests).toHaveLength(1);
+    expect(upstreamRequests[0]).toMatchObject({ method: "GET", url: `/${ACCOUNT_ONE}/settings/welcome-message` });
+    const custody = await testDb!.pool.query(
+      `select request.state, attempt.parser_outcome, attempt.settled_credits,
+        attempt.response_observation_id is not null as captured
+       from ofapi_interactive_requests request join ofapi_request_attempts attempt
+        on attempt.interactive_request_id = request.id`,
+    );
+    expect(custody.rows).toEqual([{ state: "served", parser_outcome: "accepted", settled_credits: 2, captured: true }]);
+    const ledger = await testDb!.pool.query(`select sum(credits)::int as credits, bool_and(actor_user_id is not null) as attributed from ofapi_credit_ledger where attempt_id is not null`);
+    expect(ledger.rows).toEqual([{ credits: 2, attributed: true }]);
+  });
+
   it("capture-first serves only after the raw response and attempt are durable", async () => {
     appContext.config.ofapiMirrorInteractiveCaptureEnabled = true;
     await testDb!.pool.query(

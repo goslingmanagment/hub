@@ -8,6 +8,7 @@ describe("OFAPI read gateway allowlist", () => {
   it.each([
     ["accounts", {}, "accounts"],
     ["whoami", {}, "whoami"],
+    [`${ACCOUNT}/settings/welcome-message`, {}, "proxy"],
     [`${ACCOUNT}/chats`, { limit: "50", order: "recent", skip_users: "none" }, "proxy"],
     [`${ACCOUNT}/chats/123/messages`, { limit: "100", order: "desc", first_id: "456" }, "proxy"],
     [`${ACCOUNT}/chats/123/messages/456`, {}, "proxy"],
@@ -39,6 +40,9 @@ describe("OFAPI read gateway allowlist", () => {
     [`${ACCOUNT}/users/list`, { ids: "1,2,not-a-number" }],
     [`${ACCOUNT}/media/vault`, { limit: "9" }],
     [`${ACCOUNT}/messages`, {}],
+    [`${ACCOUNT}/settings/welcome-message`, { enabled: "true" }],
+    [`${ACCOUNT}/settings/welcome-message/enabled`, {}],
+    [`${ACCOUNT}/settings`, {}],
     [`${ACCOUNT}/media/vault/delete-media`, {}],
     ["not-an-account/chats", {}],
     [`${ACCOUNT}/chats`, { limit: ["10", "20"] }],
@@ -47,6 +51,13 @@ describe("OFAPI read gateway allowlist", () => {
     expect(() => resolveOfapiReadGatewayRequest(path, query)).toThrow(
       "Invalid OFAPI read gateway request",
     );
+  });
+
+  it("requires durable custody for the welcome template with one estimated credit", () => {
+    expect(resolveOfapiReadGatewayRequest(`${ACCOUNT}/settings/welcome-message`, {})).toMatchObject({
+      kind: "proxy", operation: "ofapi_gateway_welcome_message", captureFirst: true,
+      fallbackCredits: 1, fallbackEstimated: true,
+    });
   });
 
   it("marks the upload-status poll as a known free request", () => {

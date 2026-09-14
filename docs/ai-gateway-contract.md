@@ -332,3 +332,15 @@ Production validation must use a small approved prompt and must not send any pla
 The gateway must not fall back to direct production-host Anthropic egress. Desktop Direct AI remains
 the rollback path until desktop gateway rollout is accepted and any later desktop default flip has
 its own staged rollback.
+
+
+### New-follower draft mode (Decision 339)
+
+`hi-greeting` accepts `greetingMode: "new-follower"` to assemble exactly one
+first-greeting draft without the legacy Hi transcript-count ceiling. It requires
+explicit `fanRef === conversationRef`; OnlyFans refs must be numeric native ids.
+OnlyFans keeps server-loaded transcript/profile context and rejects clientContext.
+Fansly keeps its required clientContext and restricted profile/avatar inputs.
+Page access, platform matching, persona revision, quotas and restricted capture
+are unchanged. This mode produces a reviewed draft; it neither sends a message
+nor certifies live first-contact eligibility.

@@ -11,3 +11,13 @@ export interface OfapiSendV2Payload {
   blockBannedWords: OfapiBannedWordsLevel | null; reuseProviderOperation: boolean;
 }
 export type OfapiExtendedCommandPayload = OfapiSendV2Payload | { customName: string } | { messageId: string } | Record<string, never>;
+
+/** A follower greeting is one immediate, free, stand-alone text message. */
+export function isOfapiFollowerGreetingPayload(payload: OfapiSendV2Payload): boolean {
+  return payload.text.trim().length > 0 && payload.priceCents === 0
+    && payload.mediaFiles.length === 0 && payload.previews.length === 0
+    && payload.lockedText === false && payload.replyToMessageId === null
+    && payload.giphyId === null && payload.rfTag.length === 0
+    && payload.rfPartner.length === 0 && payload.rfGuest.length === 0
+    && payload.reuseProviderOperation === false;
+}
