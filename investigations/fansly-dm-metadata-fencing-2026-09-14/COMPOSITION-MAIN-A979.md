@@ -13,5 +13,6 @@ the prior topic patches relative to b78752d0 byte-for-byte.
 The [prior review](REVIEW.md), full validation receipts and compressed logs remain
 retained. Untracked original logs are preserved. No tests, production calls, push
 or GitHub updates were performed during this composition. The earlier 3,420 unit
-and 48 PostgreSQL passes establish the prior tree only; the root coordinator will
-run final combined checks and obtain independent composition review before merge.
+and 48 PostgreSQL passes establish the prior tree only. No new local run is claimed for this composition: the topic
+patches are identical and the incoming fixture was already validated on main.
+Independent composition review and fresh PR CI are the remaining merge checks.
