@@ -181,6 +181,28 @@ const monotonicGenerationSet = sql`case
   else greatest(${pageDmConversations.lastSeenGeneration}, excluded.last_seen_generation)
 end`;
 
+/** Mark only the verified partner's exclusion; preserve the current head and metadata. */
+export async function excludePageDmConversationMessageSync(
+  db: Database,
+  input: {
+    conversationId: number;
+    platformAccountId: number;
+    partnerPlatformUserId: string;
+    reason: string;
+  },
+) {
+  const exclusion = { [FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY]: input.reason };
+  const updated = await db.update(pageDmConversations).set({
+    metadata: sql`coalesce(${pageDmConversations.metadata}, '{}'::jsonb) || ${JSON.stringify(exclusion)}::jsonb`,
+    updatedAt: new Date(),
+  }).where(and(
+    eq(pageDmConversations.id, input.conversationId),
+    eq(pageDmConversations.platformAccountId, input.platformAccountId),
+    eq(pageDmConversations.partnerPlatformUserId, input.partnerPlatformUserId),
+  )).returning({ id: pageDmConversations.id });
+  return updated.length > 0;
+}
+
 export async function upsertPageDmConversation(
   db: Database,
   input: UpsertPageDmConversationInput,
