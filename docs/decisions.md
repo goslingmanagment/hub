@@ -301,7 +301,6 @@ appends a row here in the same change (family law: updated-in-change).
 | 318 | Fansly C2a audit query plans | Use and retain a custom plan setting within the read-only export transaction so later keyset pages do not repeatedly scan exported prefixes. |
 | 319 | Prompt-cache spend | Cache only the fan-agnostic persona and template prefix (1h); send the per-fan context uncached except in coach-chat; send recaps fully uncached. Prompt text unchanged; only cache hints move. Amends #136, where the dossier "rides the dynamic 5m block". |
 | 320 | Fansly A0 head regressions | Exercise old incoming/outgoing heads and non-null timestamp rollback through the real sweep; retain a synthetic three-sweep dangling-pointer clearing without claiming message deletion or safe early stop. |
-| 325 | Fansly W0 session choice | Reuse the existing encrypted page REST session for the first limited lilly-1 socket probe; replace Management-only, preserve credential secrecy, healthy REST and every remaining live gate. |
 
 | 301 | PostgreSQL bind logging | Pin both parameter log limits to zero at server startup; retain SQL templates, duration and all other production tuning. |
 | 302 | Alias lock order | Sort username-history writes by fan ID and username, preserving conditional updates and caller result order. |
@@ -317,6 +316,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 315 | Empty observation replay heads | Probe actual version/source/kind index prefixes before an unrestricted scan head; keep ordered pages and scoped replay unchanged. |
 | 321 | Production performance parity | Restore deployed runtime fixes and exact applied migration identities on current main; preserve newer main changes and keep C1 membership and dashboard reconciliation visible as separate prerequisites. |
 | 322 | Durable provider cooldown | Retain future provider retry deadlines across queued revisions; report long Fansly cooldowns immediately without retrying early. |
+| 325 | Fansly W0 session choice | Reuse the existing encrypted page REST session for the first limited lilly-1 socket probe; replace Management-only, preserve credential secrecy, healthy REST and every remaining live gate. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
