@@ -73,6 +73,13 @@ inventory. It survives a partial next walk and can predate enabling shadow.
 successful responses. `receipts` includes recorded failures. Their difference
 retains in-flight, unclaimed and missing receipt debt even after later success.
 Lost/expired claims cannot overwrite a newer receipt; capture still survives.
+An elapsed five-minute claim can be renewed only while its original token and
+claimed revision still match, inside the same owned page-sync transaction that
+settles the receipt (Decision 328). The page lease remains execution authority;
+claim expiry permits takeover but does not discard a still-owned slow response.
+Renewal occurs after raw capture, preserves the pre-fetch revision and never
+acquires a replacement claim. A replaced/completed/erased claim or lost page
+lease keeps its missing-receipt debt. No extra HTTP request is made.
 Any erasure, restore, flag-off interval or counter discontinuity breaks a simple
 before/after denominator and must be recorded, not treated as a negative delta.
 

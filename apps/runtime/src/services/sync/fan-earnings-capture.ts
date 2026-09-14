@@ -1,5 +1,6 @@
 import {
-  claimFanEarningsRotation, settleFanEarningsReceipt, withOwnedPageSyncTransaction,
+  claimFanEarningsRotation, renewFanEarningsClaim, settleFanEarningsReceipt,
+  withOwnedPageSyncTransaction, type FanEarningsClaim, type FanEarningsReceipt,
   type FanEarningsRefreshWindow,
 } from "@agency_hub_core/db";
 import { FANSLY_MAPPER_VERSION, FanslyApiError } from "@agency_hub_core/fansly";
@@ -11,6 +12,13 @@ const ENDPOINTS = {
   lifetime: { endpoint: "fan_earnings_stats" },
   monthly: { endpoint: "fan_earnings_monthly" },
 } as const;
+
+async function settleOwnedReceipt(app: AppContext, claim: FanEarningsClaim, receipt: FanEarningsReceipt) {
+  return withOwnedPageSyncTransaction(app.db, async (tx) => {
+    if (!await renewFanEarningsClaim(tx, claim, receipt.checkedAt)) return false;
+    return settleFanEarningsReceipt(tx, claim, receipt);
+  });
+}
 
 export async function captureFanEarningsEndpoint(app: AppContext, input: {
   pageId: number;
@@ -33,10 +41,10 @@ export async function captureFanEarningsEndpoint(app: AppContext, input: {
     if (claim) {
       const rejected = error instanceof FanslyApiError && [400, 404, 410].includes(error.status ?? 0);
       try {
-        await withOwnedPageSyncTransaction(app.db, (tx) => settleFanEarningsReceipt(tx, claim, {
+        await settleOwnedReceipt(app, claim, {
           outcome: rejected ? "rejected" : "failed", observationId: null, fingerprint: null,
           checkedAt: new Date(), retryAfterAt: error instanceof FanslyApiError ? error.retryAfterAt : null,
-        }));
+        });
       } catch {
         // Preserve provider class/Retry-After and the contiguous-prefix path.
         // The durable visit-minus-receipt count retains this missing receipt.
@@ -66,7 +74,7 @@ export async function captureFanEarningsEndpoint(app: AppContext, input: {
       pageId: input.pageId, fanRef: input.fan.platformUserId, window: input.window,
       observationId: captured.observationId, payload, checkedAt: new Date(),
     });
-    await withOwnedPageSyncTransaction(app.db, (tx) => settleFanEarningsReceipt(tx, claim, receipt));
+    await settleOwnedReceipt(app, claim, receipt);
   }
   if (!Array.isArray(response.items)) {
     throw new Error(input.window === "lifetime"

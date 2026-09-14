@@ -1,0 +1,14 @@
+{
+  "base": "b78752d0d1144a8457638ffb3ae0bda33455fde1",
+  "decision": 328,
+  "state": "local draft; tests pending",
+  "files": {
+    "packages/db/src/repositories/fan-earnings-refresh.ts": "f4a13cc207bbf8fcb462125a37d6ce10f9016b9529ed39bd4a9af786afb54066",
+    "apps/runtime/src/services/sync/fan-earnings-capture.ts": "fdb8e3e77c160b1f92a9a89931439423643f06e5e737962cbb51c893cb2fdb23",
+    "tests/fan-earnings-receipts.integration.test.ts": "fbb76f0c085490e1c8cb93ecf5234c561830f96676f5de0a538002fdcd36a555",
+    "tests/fan-earnings-erasure.integration.test.ts": "0f77cb08c2f1c9d37446831f78615c393b2138b9e72f8718e0dc732553e2d616",
+    "tests/fan-earnings-claim-expiry.integration.test.ts": "1170b512eeb059243cda911484960ce84235c45c6ba567e8cc23ac6bae135204",
+    "docs/decisions.md": "2eaf2c4de0e07378873a9172b82d49a5a7651f45e40677a2e0c39c65046e3c7a",
+    "docs/runbooks/fansly-earnings-shadow.md": "961e156540436d8eb5bb468533eb03dcc53ccaae22847d32a5b0ea6c6a33c0db"
+  }
+}

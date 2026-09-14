@@ -5,6 +5,7 @@ import { tryAcquireDmArchiveWriterFenceLock } from "./erasure-fence.ts";
 
 export type FanEarningsRefreshWindow = "lifetime" | "monthly";
 export const fanEarningsPlane = (window: FanEarningsRefreshWindow) => `fan_earnings_${window}`;
+const CLAIM_TTL_MS = 5 * 60_000;
 
 export type FanEarningsClaim = {
   pageId: number;
@@ -90,7 +91,7 @@ export async function claimFanEarningsRotation(
         claimed_revision = case when ${available} then requested_revision else claimed_revision end,
         claim_token = case when ${available} then ${token}::uuid else claim_token end,
         claim_expires_at = case when ${available}
-          then ${new Date(input.now.getTime() + 5 * 60_000)} else claim_expires_at end,
+          then ${new Date(input.now.getTime() + CLAIM_TTL_MS)} else claim_expires_at end,
         updated_at = now()
       where page_id = ${input.pageId} and plane = ${fanEarningsPlane(input.window)}
         and subject_ref = ${input.fanRef}
@@ -99,4 +100,23 @@ export async function claimFanEarningsRotation(
     const row = result.rows[0];
     return row?.claim_token === token ? { ...input, token, revision: Number(row.claimed_revision) } : null;
   });
+}
+
+/** Renew only the original claim, including after a slow fetch. The caller
+ * must renew and settle inside one owned page-sync transaction. This never
+ * acquires a replacement token, consumes R+1 or recreates erased state. */
+export async function renewFanEarningsClaim(
+  db: Database,
+  claim: FanEarningsClaim,
+  now: Date,
+): Promise<boolean> {
+  const result = await db.execute(sql`
+    update subject_refresh_state
+    set claim_expires_at = ${new Date(now.getTime() + CLAIM_TTL_MS)}, updated_at = now()
+    where page_id = ${claim.pageId} and plane = ${fanEarningsPlane(claim.window)}
+      and subject_ref = ${claim.fanRef} and claim_token = ${claim.token}::uuid
+      and claimed_revision = ${claim.revision}
+    returning page_id
+  `);
+  return (result.rowCount ?? 0) === 1;
 }

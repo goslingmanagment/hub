@@ -3,7 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
-  claimFanEarningsRotation, createFanslyPage, markFanEarningsDirty, settleFanEarningsReceipt,
+  claimFanEarningsRotation, createFanslyPage, markFanEarningsDirty,
+  renewFanEarningsClaim, settleFanEarningsReceipt,
   upsertFanslyTransactionWithEarningsDirty,
 } from "@agency_hub_core/db";
 import { executeErasure, planErasure } from "../apps/runtime/src/services/erasure/index.ts";
@@ -69,6 +70,7 @@ describe("fan erasure includes earnings operational references", () => {
     expect(await settleFanEarningsReceipt(db.db, claim, {
       outcome: "failed", fingerprint: null, observationId: null, checkedAt: new Date(),
     })).toBe(false);
+    expect(await renewFanEarningsClaim(db.db, claim, new Date())).toBe(false);
     expect((await f.rows())).toHaveLength(3);
   });
 });

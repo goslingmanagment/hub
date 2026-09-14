@@ -315,6 +315,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 315 | Empty observation replay heads | Probe actual version/source/kind index prefixes before an unrestricted scan head; keep ordered pages and scoped replay unchanged. |
 | 321 | Production performance parity | Restore deployed runtime fixes and exact applied migration identities on current main; preserve newer main changes and keep C1 membership and dashboard reconciliation visible as separate prerequisites. |
 | 322 | Durable provider cooldown | Retain future provider retry deadlines across queued revisions; report long Fansly cooldowns immediately without retrying early. |
+| 328 | C2b receipt claim renewal | Renew the unchanged pre-fetch claim inside its owned settlement transaction so a slow response retains its receipt; replacement tokens and later revisions remain fenced. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -13034,3 +13035,39 @@ integration covers the existing forced incident delivery and recovery path.
 No flag, migration, provider request or production action is added by this
 change. A rollback restores the old queue behavior; it does not delete durable
 state or authorize an early request. This decision is numbered from main `478fca42` (last decision 321).
+
+## Decision 328: Keep C2b receipts after an unchanged claim expires (2026-09-14)
+
+C2b claims the daily rotation's existing fan/window before its provider call,
+with the requested revision at that instant and a five-minute claim deadline.
+A slow rate-limit wait or fetch can outlive that deadline. Raw capture still
+succeeds, but settlement previously rejected the elapsed claim even when its
+token and revision were unchanged and the page worker still owned its lease.
+The shadow report then retained an avoidable visit without a receipt.
+
+After capture, renew only the exact original token and claimed revision, then
+settle with the existing expiry guard in the same `withOwnedPageSyncTransaction`.
+The failure-receipt path uses the same ownership check and preserves the original
+provider error and Retry-After. Renewal changes only the claim deadline and
+update timestamp: it does not allocate a new token, read a new revision, count
+another visit, alter checked-at provenance or initiate a request. A concurrent
+R+1 remains pending. A replaced/completed token, mismatched revision or erased
+row cannot renew; lost page ownership aborts the transaction.
+
+This clarifies Decision 289: claim TTL permits takeover; the page lease is
+execution authority. Elapsed-only claims can be renewed under that authority.
+A lost claim cannot certify a check or overwrite another receipt. The initial
+claim stays before fetch, success stays raw-first, and existing daily rotation,
+erasure, retry policy and lost-receipt counters remain unchanged. There is no
+new flag, schema migration, target selection or production action.
+
+Regression coverage uses injected claim times and explicit interleavings, not
+five-minute waits: elapsed settlement fails without renewal; unchanged renewal
+settles only R; replaced/completed/mismatched claims cannot renew; fan erasure
+cannot recreate state; long success and failure retain their receipts; lost
+page ownership preserves capture but rejects receipt mutation. Rollback to the
+previous image preserves all state but can again leave receipts missing solely
+because a still-owned fetch exceeded the claim TTL.
+
+Decision 328 is a coordinator reservation after separately prepared Decisions
+323–327. Recheck its number against current main before publication.
