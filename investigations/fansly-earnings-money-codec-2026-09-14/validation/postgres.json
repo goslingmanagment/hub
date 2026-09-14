@@ -1,0 +1,25 @@
+{
+  "command": [
+    "pnpm",
+    "exec",
+    "vitest",
+    "run",
+    "--no-file-parallelism",
+    "tests/fan-earnings-identity.integration.test.ts",
+    "tests/fan-earnings-projection.integration.test.ts",
+    "tests/fan-earnings-audit-reconciliation.integration.test.ts",
+    "tests/fan-earnings-audit.integration.test.ts"
+  ],
+  "cwd": "/Users/dmitriy/.codex/worktrees/hub-fansly-earnings-money-codec",
+  "environmentOverrides": {
+    "ALLOW_MISSING_TEST_PREREQUISITES": "0",
+    "NODE_OPTIONS": "--max-old-space-size=8192"
+  },
+  "head": "b78752d0d1144a8457638ffb3ae0bda33455fde1",
+  "startedAt": "2026-09-14T00:50:20.727292+00:00",
+  "finishedAt": "2026-09-14T00:50:31.582463+00:00",
+  "durationSeconds": 10.855,
+  "exitCode": 0,
+  "rawSha256": "cb6b24ed0a8dea36100ea307195837b80357b169c64f663964ae4e656ae0c02a",
+  "sourceUnchanged": true
+}

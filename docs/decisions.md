@@ -315,6 +315,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 315 | Empty observation replay heads | Probe actual version/source/kind index prefixes before an unrestricted scan head; keep ordered pages and scoped replay unchanged. |
 | 321 | Production performance parity | Restore deployed runtime fixes and exact applied migration identities on current main; preserve newer main changes and keep C1 membership and dashboard reconciliation visible as separate prerequisites. |
 | 322 | Durable provider cooldown | Retain future provider retry deadlines across queued revisions; report long Fansly cooldowns immediately without retrying early. |
+| 329 | Fansly earnings money codec | Aggregate provider mills through the shared codec; preserve safe-integer refusal, event fingerprints and projection ordering. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -13034,3 +13035,25 @@ integration covers the existing forced incident delivery and recovery path.
 No flag, migration, provider request or production action is added by this
 change. A rollback restores the old queue behavior; it does not delete durable
 state or authorize an early request. This decision is numbered from main `478fca42` (last decision 321).
+
+## Decision 329: Use the shared mills codec in Fansly earnings (2026-09-14)
+
+The earnings parser guarded row and aggregate amounts with safe-integer checks,
+but summed them with raw number arithmetic. The projector independently
+truncated amounts. Both bypassed the named shared money codec required by the
+kernel's money law, although the audit established no incorrect stored amount.
+
+Use `sumMills` for aggregation and `millsToNumber` at the existing numeric event
+and repository boundaries. Both helpers construct through `millsFromInteger`;
+sums therefore use bigint internally. Preserve input and aggregate safe-integer
+checks, negative adjustments, zero versus unknown, whole-observation refusal,
+JSON event shape, content fingerprint and source-observation identity. The
+projector retains the existing null/default and truncation behavior through the
+same codec. No unit, schema, parser version or replay policy changes.
+
+Existing single-pass and whole-observation refusal regressions remain required,
+along with explicit positive/negative safe-integer and refund boundaries and
+the real PostgreSQL earnings identity/projection suites. No flag or production
+action is introduced. Rollback restores the previous application code without
+a database migration or data rewrite. D329 is reserved after the other audit
+follow-up topics; current base main is `b78752d0` (latest D322).
