@@ -37,7 +37,7 @@ Management-only и запрет reuse существующего owner token, е
 проба `lilly-1`; binding, fan-out, presence и continuity ещё требуют доказательств.
 Отзыв рабочего токена, изменение REST/polling и переходы следующих этапов этим
 выбором не разрешаются. [Контекст согласия](fansly-w0-protocol-2026-09-10/OWNER-CHOICE-20260913.md),
-[Decision 321](../docs/decisions.md#decision-321-reuse-the-existing-fansly-rest-session-for-w0-2026-09-13).
+[Decision 325](../docs/decisions.md#decision-325-reuse-the-existing-fansly-rest-session-for-w0-2026-09-13).
 
 ## 2. Основания и исходный объём
 
