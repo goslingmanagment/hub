@@ -2178,7 +2178,7 @@ export async function executeFollowersReconcileChunk(
         };
       }
 
-      await deactivatePageFollowsByGeneration(dbTx, {
+      const deactivatedIds = await deactivatePageFollowsByGeneration(dbTx, {
         platformAccountId: input.pageContext.page.id,
         generation: state.generation,
         lastSeenBefore: fullSweepStartedAt,
@@ -2218,8 +2218,31 @@ export async function executeFollowersReconcileChunk(
         terminalPageShapeComplete,
         terminalDelta,
         deactivationLimit,
+        deactivatedCount: deactivatedIds.length,
         ...activity,
       };
+    });
+
+    // A separate note avoids the run-statistics key limit. The SELECT witnesses
+    // and the guarded UPDATE result are separate observations, not an active-after count.
+    await input.telemetry.addNote("Fansly followers membership verification", {
+      followersMembership: {
+        schemaVersion: 1,
+        outcome: verification.kind,
+        generation: state.generation,
+        fullSweepStartedAt: state.fullSweepStartedAt,
+        sourceFollowerCount: verification.finalizationFollowerCount,
+        generationObservedCount: verification.generationObservedCount,
+        activeFollowerCount: verification.activeFollowerCount,
+        activeInGenerationCount: verification.activeInGenerationCount,
+        activeOutsideGenerationCount: verification.activeOutsideGenerationCount,
+        deactivationCandidateCount: verification.deactivationCandidateCount,
+        generationGraceOnlyCount: verification.generationGraceOnlyCount,
+        touchedSinceStartOnlyCount: verification.touchedSinceStartOnlyCount,
+        generationGraceAndTouchCount: verification.generationGraceAndTouchCount,
+        futureGenerationCount: verification.futureGenerationCount,
+        deactivatedCount: verification.kind === "complete" ? verification.deactivatedCount : null,
+      },
     });
 
     if (

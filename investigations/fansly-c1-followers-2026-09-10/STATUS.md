@@ -1,8 +1,84 @@
 # Fansly C1 — follower reconciliation diagnostics
 
+The diagnostic implementation is complete: decision, queue, timeline and guarded
+membership receipts are implemented. The broader C1 policy/presence gate remains
+unproven; no safe trigger suppression or equivalent presence coverage is claimed.
+The [updated candidate validation](evidence/audit-followup-validation-20260914/VALIDATION.md)
+and [independent review](REVIEW-AUDIT-FOLLOWUP.md) passed: 3,366 unit tests
+(nine existing skips) and 102 tests in eight serial Docker-Postgres suites.
+The diagnostic implementation is ready for review; the policy/presence
+acceptance gate remains separate.
+
+The [Lora-3 generation 775/776 evidence](evidence/lora3-followup-20260913T000235Z/README.md)
+is now retained in this branch: original report/review, compressed
+full source receipt, exact nine-record subset and provenance hashes. It records
+grace protection, then one actual retirement and five matching no-request
+comparisons. That natural follow-up is closed. Aggregate receipts do not identify
+the relation or prove atomic active-after state, presence equivalence or savings.
+Packaging these existing receipts performed no new production query.
+
+This branch update includes main `0a08365f` with no merge conflict. Initial
+lint validation failed on two pre-existing untracked diagnostic probes; both
+were temporarily moved for the successful run, then restored with their original
+hashes. The initial failure and restoration receipts are retained. Applied migration
+`0185_fansly_followers_membership_read.sql` remains byte-identical, SHA-256
+`bd9c2ee7987815ef6fd0f517a0783ead45954a2eb6ad7b5553c0075859940cb0`.
+The [PR description](PR.md) separates implementation completion from
+the outstanding policy gate. This work is not a production release composition;
+applied production migration 0186 must also be preserved before a future deploy.
+
+Previous branch validation (historical): [13 September main sync](MAIN-SYNC-20260913.md).
+The existing C1 draft now includes main `e913b7a6`; its 3,365 unit tests and
+86 Docker-Postgres tests pass. Independent review found no merge defects.
+This branch update introduces no policy change and is not a deployment.
+Safe suppression and equivalent presence coverage remain unproven.
+
+Historical observation: [natural completion through 18:37 UTC](OBSERVATION-20260912T183741Z.md).
+Lilly-2 request 2541 finishes in generation 792 with two actual retirements;
+the next two comparisons match and request no work. All 49 requested decisions
+in the cumulative window have an exact-generation terminal. Redundancy remains
+unproven. The [presence read-surface check](PRESENCE-MEASUREMENT-20260912.md)
+confirms that Agent timeline activity time cannot certify Workboard observation
+freshness. The 20:00 UTC runtime read still finds all three roles healthy on
+`31b73a96`. This follow-up changes only documentation and evidence.
+
+Earlier: [captured pagination overlap](OBSERVATION-20260912T165024Z.md).
+Lora-1's following comparison is 9,474/9,474 and requests no work. Lilly-2's
+generation 791 observes a duplicated relation across two adjacent pages and
+a changed terminal headline; the guard withholds deactivation and restarts.
+Its request remains incomplete in the 44-run report. All 200 attempts succeeded.
+
+Earlier: [first full receipts after restoration](OBSERVATION-20260912T155000Z.md).
+Lora-1 actually retired one row; Lilly-2 protected two absent rows under
+generation grace and retired none. The 65-run report pairs both clean-queue
+requests with exact-generation completion; 299 physical attempts all succeeded.
+Trigger suppression and savings remain unproven. The
+[presence inventory](PRESENCE-CONSUMERS-20260912.md) identifies Workboard urgency
+and other consumers that a policy change must preserve.
+
+At 16:49 UTC all three roles were healthy on `31b73a96`, which preserves the
+[restored diagnostics](RESTORED-MEMBERSHIP-20260912.md) from `64149b95`.
+The latest selected runs start after that worker's start. The three earlier terminal
+runs without actual-retirement receipts remain unknown. No C1 policy changed.
+
+Historical 12:30 state: [first natural membership receipt](NATURAL-MEMBERSHIP-20260912.md),
+following the [membership refinement](MEMBERSHIP-DIAGNOSTICS-20260912.md).
+The reviewed change is deployed in release `7aaa3185`, preserving production
+`02ff` and all 180 old migrations. The release passed 3258 unit tests (nine
+existing skips), 176 serial Docker-Postgres tests and both independent reviews.
+The standard deployment exited 0 with an executed protected-health HTTP 200;
+all three roles, compiled hashes, restricted reader and pinned CLI were verified.
+The later post-start report through 12:30 UTC has nine follower runs and one
+valid Lilly-1 receipt: one candidate and one actual retirement in generation
+687. The next incremental comparison is pending; active-after was not measured.
+All 41 requests in the earlier cumulative window completed; redundancy remains
+unproven. The older observations below retain their original cutoffs and gates.
+
 [PR166](https://github.com/goslingmanagment/core/pull/166) remains the single C1
 draft. It now includes a bounded run timeline needed to establish the cause
-before a narrow policy fix. Branch `feat/fansly-c1-followers` now includes main `c0cd21c3` (PR172).
+before a narrow policy fix. Branch `feat/fansly-c1-followers` incorporates main
+`c76c6db0` (PR175); the [main synchronization check](MAIN-SYNC-20260912.md)
+records 3,258 passing unit tests and 86 passing serial Postgres tests.
 C1 is Decision 294; the original draft used 291. Applied migrations 0182–0183
 retain their original names and contents.
 No follower predicate, cadence, presence writer or provider request changed.

@@ -1,0 +1,31 @@
+{
+  "createdAt": "2026-09-12T12:01:57.353392+00:00",
+  "releaseCommit": "7aaa3185757e6a89d1b7427b0d54aa8720c74da4",
+  "tree": "3ceb96733305593668c7c3f88bfba32a09b71884",
+  "tag": "release/fansly-c1-membership-20260912",
+  "parents": [
+    "02ff7e34239e4ca43339dfa9a11fe992155e2866",
+    "97fcbd031968a7c4fe659fe312b8f1441ab06b5e"
+  ],
+  "mergeBase": "66d6ac1a8979cfb1be6e9c365bbe9dc1981f29f3",
+  "decisionResolution": "Keep full production Decision 295; insert only C1 appended refinement before its heading. All other production blobs retained.",
+  "deltaPaths": [
+    "apps/runtime/src/services/sync/executor-handlers.ts",
+    "docs/decisions.md",
+    "docs/runbooks/fansly-followers-diagnostics.md",
+    "investigations/fansly-c1-followers-2026-09-10/MEMBERSHIP-DIAGNOSTICS-20260912.md",
+    "investigations/fansly-c1-followers-2026-09-10/REVIEW.md",
+    "investigations/fansly-c1-followers-2026-09-10/STATUS.md",
+    "investigations/fansly-c1-followers-2026-09-10/evidence/membership-20260912/validation.json",
+    "packages/db/migrations/0185_fansly_followers_membership_read.sql",
+    "packages/db/src/repositories/fans.ts",
+    "tests/followers-membership.integration.test.ts",
+    "tests/helpers/followers-membership-fixture.ts",
+    "tests/sync-handlers.test.ts"
+  ],
+  "preservedMigrationCount": 180,
+  "totalMigrationCount": 181,
+  "worktree": "/Users/dmitriy/.codex/worktrees/hub-fansly-c1-followers",
+  "newBranch": false,
+  "newWorktree": false
+}
