@@ -65,6 +65,14 @@ change as any behavior recorded here; do not maintain client-side copies.
 | Fansly known head absent after successful read (#277) | Allowlisted recovery keeps exact-ID debt, with at most five completed attempts (five message pages each) and 1m/5m/15m/1h backoff. HTTP Retry-After and stream/egress gates still apply. Exhaustion remains unresolved in the report; neither HTTP success nor history coverage acknowledges the ID. | Existing page executor and durable per-ID debt; exhausted work requires investigation, never an automatic reset. |
 | Critical-notification delivery | The durable outbox automatically retries delivery failures to a bounded attempt cap. This retries the notification only, never the failed business action. | Outbox lease/attempt policy; suppression and exhaustion are terminal. |
 
+Decision 322 preserves a future `rate_limit` / `provider_5xx` deadline when
+new requests arrive before or after retry settlement. The shared queue keeps
+the newest revision, payload and dispatch source; transport/yield supersession
+remains unchanged. A Fansly provider deadline more than 30 minutes away opens
+the existing stream incident immediately and includes the retry time. The
+provider deadline remains unclamped; manual queueing does not bypass it.
+See [the cooldown runbook](runbooks/fansly-provider-cooldown.md).
+
 ## 2. SSE wire-code registry
 
 `failure_phase` is exactly `connect | provider_response | stream`. In the

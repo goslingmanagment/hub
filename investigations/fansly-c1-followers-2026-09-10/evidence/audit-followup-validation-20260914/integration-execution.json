@@ -1,0 +1,33 @@
+{
+  "command": [
+    "pnpm",
+    "exec",
+    "vitest",
+    "run",
+    "--no-file-parallelism",
+    "tests/followers-membership.integration.test.ts",
+    "tests/followers-timeline.integration.test.ts",
+    "tests/followers-diagnostics.integration.test.ts",
+    "tests/generation-high-water.integration.test.ts",
+    "tests/page-sync-lease-fencing.integration.test.ts",
+    "tests/sync.integration.test.ts",
+    "tests/fan-churn.integration.test.ts",
+    "tests/fansly-dm-shadow.integration.test.ts"
+  ],
+  "cwd": "/Users/dmitriy/.codex/worktrees/hub-fansly-c1-followers",
+  "environmentOverrides": {
+    "NODE_OPTIONS": "--max-old-space-size=8192"
+  },
+  "startedAt": "2026-09-13T23:51:47.146866+00:00",
+  "completedAt": "2026-09-13T23:52:18.004043+00:00",
+  "exitCode": 0,
+  "head": "3a6eace148c1b9a238aaf50302f5de3e5e9f4749",
+  "mergeHead": "0a08365fbefa545397f4e91a2eae3fca7c36c444",
+  "log": "integration.log",
+  "logSha256": "b51a63c710553a641b14ce6d43b91f055d7a15621a096bc8789d72a81d934485",
+  "retainedLog": {
+    "file": "integration.log.gz",
+    "encoding": "gzip; decompression returns the original log bytes",
+    "sha256": "6f1a70e850896d5854fa0d83c71ee3da481bb3dd394d5181a17a9dc68346b46f"
+  }
+}

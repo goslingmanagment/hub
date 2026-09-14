@@ -282,6 +282,7 @@ describe("sync executor handlers", () => {
     dbMocks.countRecentTerminalDmMessageConversationFailureStreak.mockResolvedValue(0);
     dbMocks.countPageFollowsByGeneration.mockResolvedValue(0);
     dbMocks.readPageFollowDeactivationGenerationBuckets.mockResolvedValue([]);
+    dbMocks.deactivatePageFollowsByGeneration.mockResolvedValue([]);
     dbMocks.readPageFollowReconcileActivity.mockResolvedValue({
       firstSeenDuringSweepOutsideGeneration: 0,
       activeFollowerCount: 0,

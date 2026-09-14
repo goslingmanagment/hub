@@ -75,6 +75,7 @@ const SYNC_RUN_HEARTBEAT_MS = 30_000;
 const SYNC_TASK_LEASE_TTL_MS = 120_000;
 const MAX_LOCAL_EXECUTOR_CHUNKS = 500;
 const SYNC_PAGE_EXECUTE_HANDOFF_GUARD_MS = 60_000;
+const LONG_PROVIDER_COOLDOWN_MS = 30 * 60_000;
 
 export interface SyncPageChunkResult {
   kind: "idle" | "success" | "skipped" | "yielded" | "failed" | "blocked";
@@ -1003,6 +1004,12 @@ export async function executeNextSyncPageChunk(
         occurredAt: failedAt,
       });
     } else {
+      // A long provider pause needs visibility on the first failure, without
+      // waking the stream before the provider's deadline.
+      const longProviderCooldown = error instanceof FanslyApiError &&
+        (classified.retryClass === "rate_limit" || classified.retryClass === "provider_5xx") &&
+        classified.retryAt !== undefined &&
+        classified.retryAt.getTime() > failedAt.getTime() + LONG_PROVIDER_COOLDOWN_MS;
       await notifySyncChunkFailureIncident(app, {
         platformAccountId,
         pageLabel,
@@ -1011,9 +1018,11 @@ export async function executeNextSyncPageChunk(
         runId: run.id,
         hasProxy,
         previousConsecutiveFailures: taskLease.consecutiveFailures,
-        forceOpen: classified.mode === "blocked",
+        forceOpen: classified.mode === "blocked" || longProviderCooldown,
         errorCode: failure.error.code,
-        errorSummary: failure.summary,
+        errorSummary: longProviderCooldown && classified.retryAt
+          ? `${failure.summary}; provider cooldown until ${classified.retryAt.toISOString()}`
+          : failure.summary,
         occurredAt: failedAt,
       });
     }

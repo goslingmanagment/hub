@@ -1,0 +1,6 @@
+{
+  "asOf": "2026-09-13T00:02:37.114674+00:00",
+  "exitCode": 0,
+  "stdout": "/agency-hub-api-1 healthy 0 2026-09-12T22:44:51.842125346Z 74aac5093cfc\n/agency-hub-worker-1 healthy 0 2026-09-12T22:45:02.670092105Z 74aac5093cfc\n/agency-hub-scheduler-1 healthy 0 2026-09-12T22:44:51.838264557Z 74aac5093cfc\n",
+  "stderr": ""
+}

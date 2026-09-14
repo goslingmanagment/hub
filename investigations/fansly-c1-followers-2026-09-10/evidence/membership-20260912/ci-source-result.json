@@ -1,0 +1,30 @@
+{
+  "source": "97fcbd031968a7c4fe659fe312b8f1441ab06b5e",
+  "checks": [
+    {
+      "link": "https://github.com/goslingmanagment/core/actions/runs/34692446723/job/103551315817",
+      "name": "Quality Gate",
+      "state": "SUCCESS"
+    },
+    {
+      "link": "https://github.com/goslingmanagment/core/actions/runs/34692446723/job/103549998268",
+      "name": "Static checks",
+      "state": "SUCCESS"
+    },
+    {
+      "link": "https://github.com/goslingmanagment/core/actions/runs/34692446723/job/103549998275",
+      "name": "Integration 1/3",
+      "state": "SUCCESS"
+    },
+    {
+      "link": "https://github.com/goslingmanagment/core/actions/runs/34692446723/job/103549998202",
+      "name": "Integration 2/3",
+      "state": "SUCCESS"
+    },
+    {
+      "link": "https://github.com/goslingmanagment/core/actions/runs/34692446723/job/103549998374",
+      "name": "Integration 3/3",
+      "state": "SUCCESS"
+    }
+  ]
+}

@@ -105,6 +105,39 @@ HTTP savings. Initial seed, manual, scheduled and anomaly sources remain distinc
 
 ## Finish C1 and rollback
 
+### Membership protection receipts (migration 0185)
+
+Each terminal verification records `followersMembership` in a separate note,
+outside the capped run statistics. The timeline exposes its count, timestamp,
+allowlisted fields and `membership_receipt_valid`. Valid means the diagnostic
+record is well formed; it does not certify membership or close the revision.
+Older runs have no such note and remain unknown. Drain the existing timeline
+pagination and keep the run outcome and membership proof alongside the note.
+
+The note retains its own generation and `fullSweepStartedAt`, including when a
+restart marker removes the start time from the checkpoint. One existing SELECT
+counts active rows inside/outside that generation. Outside rows are partitioned
+into candidates, generation grace only, timestamp protection only, both
+protections, and future generations. Equality with the sweep start belongs to
+timestamp protection. This timestamp does not identify which writer touched a
+row. Inactive rows are excluded; `generationObservedCount` separately includes
+all generation rows and must not substitute for `activeInGenerationCount`.
+
+For `complete`, `deactivatedCount` is the actual number of rows returned by the
+guarded UPDATE. Withheld finalization leaves it null. Do not infer a measured
+active-after count by subtraction: the SELECT and UPDATE are separate database
+statements. Missing, duplicate, malformed and inconsistent-partition receipts
+are invalid. A failed note does not undo business work or change the provider
+request policy. No new flag or provider call accompanies these fields.
+
+Counts can explain protection in one generation. Equal counts across later
+generations do not identify the same row or establish redundant work. Presence
+observations also remain a benefit of full roster reads. A policy fix still
+requires a demonstrated cause and preservation of legitimate repairs/freshness.
+The [presence consumer inventory](../../investigations/fansly-c1-followers-2026-09-10/PRESENCE-CONSUMERS-20260912.md)
+identifies the current Workboard urgency, online indicator, Followers and Agent
+Read Plane dependencies. Their different thresholds are not one shared SLA.
+
 Obtain enough completed incremental and full-reconcile activity to measure all
 three branches and explain unseen combinations. Correlate request/applied
 progress with completed generations; distinguish pending-work observations
