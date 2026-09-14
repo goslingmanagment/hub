@@ -7,3 +7,9 @@ Validation against main `b78752d0`:
 - Four serial mandatory Docker-Postgres suites: 26 passed, no skips — earnings identity, projection, audit reconciliation and audit.
 - Existing single-pass/refusal/identity checks remain, with three additional safe-integer-limit/refund cases.
 - Independent correctness/readability review: no findings. Exact command receipts and stable source fingerprints are retained in the investigation.
+
+Current-main follow-up integrates `a9794e60`. The prior local validation
+certifies the unchanged topic source (`ad32f516`); the sole incoming executable/test
+change is main's verified UTC fixture. Independent `REVIEW-MAIN-A979.md`
+confirms source, decision and evidence preservation. Local suites were not
+repeated for this composition; fresh PR CI validates the full merge.
