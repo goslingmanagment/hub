@@ -1,4 +1,5 @@
 import { diagnoseFrame, MAX_FRAME_BYTES } from "./diagnostic.ts";
+import type { ProbeTransportDiagnostics } from "../../apps/runtime/src/services/egress/fansly-probe-diagnostics.ts";
 
 export const MAX_CONNECTION_DURATION_MS = 6 * 60 * 60 * 1_000;
 const AUTH_TIMEOUT_MS = 10_000;
@@ -14,6 +15,7 @@ export interface ProbeSocket extends EventTarget {
 export type StopReason = "deadline" | "aborted" | "connect_error" | "transport_error"
   | "closed" | "auth_timeout" | "pong_timeout" | "provider_error"
   | "invalid_frame" | "frame_limit" | "report_limit" | "output_error";
+export type FailurePhase = "connect" | "pre_open" | "auth_send" | "socket" | "ping";
 
 export type FrameReceipt = {
   receivedAt: string;
@@ -29,6 +31,9 @@ export interface ConnectionObservation {
   framesReceived: number;
   framesRetained: number;
   openedAt: string | null;
+  failurePhase: FailurePhase | null;
+  transportErrorCode: string | null;
+  httpStatus: number | null;
   sessionFrameAt: string | null;
   sessionObservedMs: number;
 }
@@ -46,6 +51,7 @@ export function observeFanslyConnection(input: {
   maxRecords: number;
   maxReportBytes: number;
   retain: (receipt: FrameReceipt) => void;
+  transportDiagnostics?: ProbeTransportDiagnostics;
 }): Promise<ConnectionObservation> {
   if (!Number.isInteger(input.durationMs) || input.durationMs < 1
     || input.durationMs > MAX_CONNECTION_DURATION_MS || input.key.length !== 32
@@ -81,13 +87,16 @@ export function observeFanslyConnection(input: {
       }, Math.max(1, at - performance.now()));
     }
 
-    function finish(stopReason: StopReason, closeCode: number | null = null) {
+    function finish(stopReason: StopReason, closeCode: number | null = null, failurePhase: FailurePhase | null = null) {
       if (finished) return;
       finished = true;
       clearInterval(pingTimer);
       clearTimeout(authTimer);
       clearTimeout(deadlineTimer);
       input.signal.removeEventListener("abort", abort);
+      // Freeze before close/abort can report a secondary transport error.
+      const transport = input.transportDiagnostics?.finish()
+        ?? { transportErrorCode: null, httpStatus: null };
       // Keep error handlers attached until the isolated process exits. Upgraded
       // sockets may outlive dispatcher destruction and emit late close/error.
       try { socket?.close(); } catch { /* The caller owns transport cleanup. */ }
@@ -95,6 +104,7 @@ export function observeFanslyConnection(input: {
         startedAt, finishedAt: new Date().toISOString(), stopReason,
         sessionFrameSeen, closeCode, framesReceived,
         framesRetained, openedAt, sessionFrameAt,
+        failurePhase, ...transport,
         sessionObservedMs: sessionStartedMs === null ? 0 : performance.now() - sessionStartedMs,
       });
     }
@@ -104,7 +114,7 @@ export function observeFanslyConnection(input: {
     input.signal.addEventListener("abort", abort, { once: true });
     if (input.signal.aborted) { finish("aborted"); return; }
     try { socket = input.connect(); }
-    catch { finish("connect_error"); return; }
+    catch { finish("connect_error", null, "connect"); return; }
 
     socket.addEventListener("open", () => {
       if (finished) return;
@@ -115,7 +125,7 @@ export function observeFanslyConnection(input: {
         socket!.send(JSON.stringify({
           t: 1, d: JSON.stringify({ token: input.token, v: 3 }),
         }));
-      } catch { finish("transport_error"); return; }
+      } catch { finish("transport_error", null, "auth_send"); return; }
       pingTimer = setInterval(() => {
         if (finished) return;
         if (performance.now() - (lastPongAt ?? openedMs!) > PONG_TIMEOUT_MS) {
@@ -123,7 +133,7 @@ export function observeFanslyConnection(input: {
           return;
         }
         try { socket!.send("p"); }
-        catch { finish("transport_error"); }
+        catch { finish("transport_error", null, "ping"); }
       }, PING_INTERVAL_MS);
     }, { once: true });
 
@@ -165,7 +175,7 @@ export function observeFanslyConnection(input: {
       }
       if (diagnostic.nodes[0]?.kind === "pong") lastPongAt = performance.now();
     });
-    socket.addEventListener("error", () => finish("transport_error"));
+    socket.addEventListener("error", () => finish("transport_error", null, openedAt === null ? "pre_open" : "socket"));
     socket.addEventListener("close", (event) => {
       const code: unknown = (event as Event & { code?: unknown }).code;
       finish("closed", typeof code === "number" && Number.isInteger(code) ? code : null);

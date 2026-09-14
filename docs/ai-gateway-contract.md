@@ -334,7 +334,7 @@ the rollback path until desktop gateway rollout is accepted and any later deskto
 its own staged rollback.
 
 
-### New-follower draft mode (Decision 338)
+### New-follower draft mode (Decision 339)
 
 `hi-greeting` accepts `greetingMode: "new-follower"` to assemble exactly one
 first-greeting draft without the legacy Hi transcript-count ceiling. It requires

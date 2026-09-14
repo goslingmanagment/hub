@@ -796,7 +796,7 @@ Decision owner: core Decision #61.
   workload state (Fansly conversation catch-up and unverified OF pages), not this deploy.
 
 
-### Optional first-greeting custody (Decision 338)
+### Optional first-greeting custody (Decision 339)
 
 A new-followers client may set top-level `outreachPurpose: "new-follower"` on
 `send_text_message_v1` or an immediate free stand-alone text `send_message_v2`.

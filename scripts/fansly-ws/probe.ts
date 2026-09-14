@@ -5,6 +5,7 @@ import { createDb } from "@agency_hub_core/db";
 import { loadConfig } from "@agency_hub_core/shared";
 import { readProbeGeneration, readProbeSnapshot, type resolveFanslyProbeContext } from "../../apps/runtime/src/services/egress/fansly-probe-context.ts";
 import { openFanslyProbeSocket } from "../../apps/runtime/src/services/egress/fansly-probe-socket.ts";
+import { createProbeTransportDiagnostics } from "../../apps/runtime/src/services/egress/fansly-probe-diagnostics.ts";
 import { correlationKeyFingerprint, readCorrelationKey } from "./correlation-key.ts";
 import { observeFanslyProbe, MAX_PROBE_DURATION_MS } from "./probe-observer.ts";
 import { readBindingReceipt, verifyBindingBeforeConnect } from "./binding-receipt.ts";
@@ -74,15 +75,17 @@ export async function runStoredFanslyProbe(input: {
       : await verifyBindingBeforeConnect(binding, before, input.pageLabel,
         () => readProbeGeneration(db, input.pageLabel));
     let connectionAttempts = 0;
+    const transportDiagnostics = createProbeTransportDiagnostics();
     const observation = await observeFanslyProbe({
       connect: () => {
         connectionAttempts++;
-        return openFanslyProbeSocket(before.egress);
+        return openFanslyProbeSocket(before.egress, transportDiagnostics);
       },
       token: before.token,
       key,
       durationMs: input.durationMs,
       signal: input.controller.signal,
+      transportDiagnostics,
     });
     let generationUnchanged: boolean | null = null;
     if (!input.controller.signal.aborted) {

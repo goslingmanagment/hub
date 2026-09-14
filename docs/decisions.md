@@ -335,7 +335,9 @@ appends a row here in the same change (family law: updated-in-change).
 | 335 | A0 advertised-head reader state | Observe exact pre-apply Agent reader state separately from hot presence; preserve polling, historical unknowns and the original shadow gates. |
 | 336 | W0 REST identity preflight | Make one bounded account/me GET through the stored page session/proxy; require its private receipt and matching generation for continuity and the accepted binding workflow, with receiver REST counts unchanged. |
 | 337 | W0 container absence cleanup | Accept complete Docker absence diagnostics regardless of message casing with exact name/ID matching; preserve ownership checks, immutable-ID removal and original provider receipts. |
-| 338 | OnlyFans follower greetings | Desktop reuses kernel context for one-message Hi, reads the current welcome template through capture-first, and opts into atomic page/fan custody inside the existing OFAPI command outbox. |
+| 338 | W0 transport failure receipts | Retain observed open/failure boundaries and bounded dispatcher error code/HTTP status before Undici loses them; preserve one-attempt transport, secrecy and cleanup. |
+| 339 | OnlyFans follower greetings | Desktop reuses kernel context for one-message Hi, reads the current welcome template through capture-first, and opts into atomic page/fan custody inside the existing OFAPI command outbox. |
+
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -13753,8 +13755,43 @@ identifier near-misses, daemon errors and the inspect/remove race; existing
 foreign-owner and timeout checks remain. The change adds no provider retry,
 production action or W0 acceptance. See [the cleanup note](runbooks/fansly-ws-protocol-check.md#bounded-existing-session-probe).
 
+## Decision 338: Retain bounded W0 transport failure evidence (2026-09-15)
 
-## Decision 338: Port follower greeting support to the OnlyFans desktop (2026-09-15)
+The Lilly-1 receiver attempt at 2026-09-14 20:42:08 UTC ended after 158 ms with
+`transport_error`, zero frames and confirmed cleanup. Its short receipt omitted
+the observer's `openedAt`; local Undici 7.27.2 also discarded structured request
+errors before its WebSocket error event. The retained receipt cannot establish
+whether that connection opened, and the live cause remains unresolved.
+
+Short and continuity receivers now retain the same additive fields: `openedAt`,
+`failurePhase`, `transportErrorCode` and `httpStatus`. Failure phase describes
+only the observed code boundary: `connect` for a synchronous construction
+exception, `pre_open` for an asynchronous error before open, `socket` after open,
+and `auth_send` or `ping` for those send exceptions. Other stop reasons retain
+null. These names do not diagnose DNS, TLS, proxy or provider state.
+
+One per-attempt interceptor on the existing page dispatcher's supported compose
+API captures a bounded exact allowlist of error codes before forwarding the
+original error, and the first 101 or 200–599 response status. Interim 1xx values
+are ignored. All original handler callbacks keep their receiver and control
+flow. Unknown codes/status stay null; cause lookup is limited to four objects,
+guards cycles/getters and never reads or exports arbitrary error text. The first
+request error is retained even when unclassified; the observer freezes its
+snapshot before close/cleanup so later abort errors cannot replace it.
+
+HTTP status describes only an exposed outer response, not an internal proxy
+CONNECT response. `UND_ERR_ABORTED` may represent multiple causes and does not
+establish who aborted. HTTP 101 is not an observed open or type-1 frame. A late
+close after an error does not retroactively supply a close code. No messages,
+names, stacks, URLs, headers, bodies or credentials enter the new fields.
+
+This changes operator diagnostics only: no new dispatcher connection, retry,
+timeout, auth, route, credential, resource limit, ownership or runtime flag.
+Original evidence remains unchanged; another live attempt retains its separate
+scope. See [the receipt interpretation](runbooks/fansly-ws-protocol-check.md#transport-failure-receipts)
+and [implementation status](../investigations/fansly-w0-transport-diagnostics-2026-09-15/STATUS.md).
+
+## Decision 339: Port follower greeting support to the OnlyFans desktop (2026-09-15)
 
 The desktop implements its own live follower scan, conservative personal-message
 eligibility and human-reviewed draft/send flow. The existing hi-greeting mode
@@ -13802,3 +13839,4 @@ includes no production activation, paid live scan or real-fan send. Tests use
 local provider fixtures and PostgreSQL, including concurrent chatter admission,
 owned replays, conservative terminal custody, safe releases, context gates and
 captured/credited welcome reads.
+
