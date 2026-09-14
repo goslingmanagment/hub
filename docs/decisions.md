@@ -319,6 +319,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 311 | Disjoint replay with shared allowance | Keep reserved capture/replay turns and reuse unused allowance once without restarting an exhausted cursor. |
 | 315 | Empty observation replay heads | Probe actual version/source/kind index prefixes before an unrestricted scan head; keep ordered pages and scoped replay unchanged. |
 | 321 | Production performance parity | Restore deployed runtime fixes and exact applied migration identities on current main; preserve newer main changes and keep C1 membership and dashboard reconciliation visible as separate prerequisites. |
+| 323 | Dashboard production parity | Restore the five deployed dashboard feature-control and daily-workflow patches on current main; preserve backend behavior and verify the single formatting-only exception against emitted JavaScript. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -13208,3 +13209,36 @@ membership writers/protection receipts remain in PR166; dashboard feature-contro
 changes remain in their own branch. Those outstanding differences must be
 reconciled before claiming that main preserves the whole production release.
 No deployment approval or A0/C1/W0 acceptance follows from merging these files.
+
+## Decision 323: Restore deployed dashboard controls on current main (2026-09-14)
+
+The production release contained five reviewed dashboard patches that were
+absent from main. Restoring them preserves feature explanations, page context,
+reviewed mutation targets, explicit webhook reconciliation and fresh export
+recovery instead of letting the next main deployment regress those workflows.
+
+The restoration carries the original 103 topic paths: 74 dashboard source
+files, 15 test files, one strictness-ratchet file and 13 dated investigation
+files. Of those, 102 remain byte-identical to production source
+`380326368fe39a6a9d22eb73b0b955f8ecd7c3cc`. The sole exception formats the
+analytics and history JSX blocks in `OfapiMarketing.tsx`: their original
+2,502- and 2,030-character lines violated the owner's readability requirement.
+Canonical emitted JavaScript AST equality verifies unchanged expressions,
+handlers, children and rendered whitespace. Historical Decisions 296–300 are
+restored exactly; their dated reviews remain evidence for the original patches.
+
+The candidate incorporates main `478fca42`, retaining its runtime, database,
+migration, contract, SDK, deployment and AI changes. This PR introduces no new
+flag or backend behavior. The restored UI continues to use existing read and
+reviewed-mutation contracts; controls do not automatically enable features or
+change production configuration. C1 membership and provider cooldown changes
+remain separate topics.
+
+This combined candidate requires its own independent review, `pnpm check` and
+relevant serial Docker-Postgres checks before publication. The original review
+history and formatting verification do not substitute for those checks.
+Rollback uses the prior application image without a database migration.
+Neither merge nor rollback changes event-migration gates or authorizes a deploy.
+
+Decision 323 is reserved by the coordinator after Decision 322 for provider
+cooldown. Publication must verify that numbering against current main.

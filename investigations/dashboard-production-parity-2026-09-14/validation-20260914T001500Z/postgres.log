@@ -1,0 +1,9 @@
+
+ RUN  v4.1.10 /Users/dmitriy/.codex/worktrees/hub-dashboard-production-parity-20260914
+
+
+ Test Files  12 passed (12)
+      Tests  153 passed (153)
+   Start at  03:15:50
+   Duration  42.22s (transform 1.57s, setup 0ms, import 8.11s, tests 31.08s, environment 0ms)
+
