@@ -1,5 +1,6 @@
 import {
-  claimFanEarningsRotation, renewFanEarningsClaim, settleFanEarningsReceipt,
+  assertOwnedPageSyncLease, claimFanEarningsRotation, PageSyncLeaseLostError,
+  renewFanEarningsClaim, settleFanEarningsReceipt,
   withOwnedPageSyncTransaction, type FanEarningsClaim, type FanEarningsReceipt,
   type FanEarningsRefreshWindow,
 } from "@agency_hub_core/db";
@@ -74,7 +75,16 @@ export async function captureFanEarningsEndpoint(app: AppContext, input: {
       pageId: input.pageId, fanRef: input.fan.platformUserId, window: input.window,
       observationId: captured.observationId, payload, checkedAt: new Date(),
     });
-    await settleOwnedReceipt(app, claim, receipt);
+    try {
+      await settleOwnedReceipt(app, claim, receipt);
+    } catch (error) {
+      if (error instanceof PageSyncLeaseLostError) throw error;
+      // The receipt transaction rolled back. Continue the captured baseline only
+      // while its page lease is still owned; missing receipts remain shadow debt.
+      await assertOwnedPageSyncLease(app.db);
+      app.logger.warn({ pageId: input.pageId, window: input.window },
+        "Fan-earnings success receipt could not be stored");
+    }
   }
   if (!Array.isArray(response.items)) {
     throw new Error(input.window === "lifetime"

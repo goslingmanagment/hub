@@ -338,6 +338,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 338 | W0 transport failure receipts | Retain observed open/failure boundaries and bounded dispatcher error code/HTTP status before Undici loses them; preserve one-attempt transport, secrecy and cleanup. |
 | 339 | OnlyFans follower greetings | Desktop reuses kernel context for one-message Hi, reads the current welcome template through capture-first, and opts into atomic page/fan custody inside the existing OFAPI command outbox. |
 | 340 | W0 single binding authority | Use the original receipt for every phase; remove duplicate generation arguments and avoid constructing a second dispatcher for the short post-read. |
+| 341 | Isolate captured C2b receipt failures | After durable capture, retain missing receipt debt and continue the daily walk only after an independent page-lease check; ownership or persistent database failure still stops execution. |
 
 
 ## Consensus Decisions
@@ -13858,3 +13859,27 @@ the session and constructing an unused second dispatcher for the post-read.
 A failed post-read remains unknown; a changed generation remains false. Provider
 requests, resource bounds, ownership, cleanup and live acceptance gates are unchanged.
 See [the continuity runbook](runbooks/fansly-ws-continuity.md).
+
+## Decision 341: Isolate successful C2b receipt settlement after capture (2026-09-15)
+
+A failed successful-receipt settlement could abort a daily earnings chunk after
+its provider response was durably captured, leaving the next execution to repeat
+that work. The shadow diagnostic must not restart a captured baseline solely
+because its receipt transaction rolled back.
+
+Catch that settlement failure after capture and recheck the existing page lease
+outside the rolled-back transaction. Continue only if the page is still owned;
+propagate an explicit lost-lease error or failure of the independent database
+check. Missing receipt debt stays visible and a bounded warning identifies the
+page/window. No extra provider read or replacement claim is introduced.
+
+Pre-fetch claim, provider, parser and capture failures keep their existing
+behavior. Claim renewal, revision fences, erasure, daily rotation and checkpoint
+semantics are unchanged. This adds no flag, migration or public contract.
+
+PostgreSQL fault injection rejects successful receipt updates for both lifetime
+and monthly endpoints. Both cases fail before this fix. Afterwards the same
+owned generation completes, retains all observations and missing receipt debt,
+and reuses its completed checkpoint without further provider reads. Existing
+lost-lease, claim-expiry and receipt suites remain green. See the
+[earnings shadow runbook](runbooks/fansly-earnings-shadow.md).
