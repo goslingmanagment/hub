@@ -105,6 +105,14 @@ run the entrypoint inside a production role's container: V8 heap limits alone
 cannot bound undici's fragmented-message buffers, and destroying its dispatcher
 does not forcibly close an upgraded socket.
 
+Docker `--rm` may remove the container before cleanup inspects it, or between
+the ownership check and removal by immutable ID. Cleanup accepts Docker's complete
+`no such object/container` diagnostic for that exact name/ID regardless of message
+casing; daemon errors, extra diagnostics and other identifiers remain unresolved.
+If an older launcher reports failed cleanup after a successful provider request,
+retain the original receipts and verify absence separately with read-only Docker
+inspection; do not repeat the provider request to repair the cleanup receipt.
+
 Reports stop at 1,000 frames or 8 MiB of metadata; incoming-message size is checked
 after transport delivery. Output and errors stay in the private report directory.
 Exit zero requires reaching the deadline, a valid top-level type-1 frame, and

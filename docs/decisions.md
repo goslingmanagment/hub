@@ -334,6 +334,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 334 | W0 continuity experiment | Run one bounded Lilly-1 six-hour observation and two receiver-only gaps; share short/long admission and keep binding, presence and recovery as independent evidence. |
 | 335 | A0 advertised-head reader state | Observe exact pre-apply Agent reader state separately from hot presence; preserve polling, historical unknowns and the original shadow gates. |
 | 336 | W0 REST identity preflight | Make one bounded account/me GET through the stored page session/proxy; require its private receipt and matching generation for continuity and the accepted binding workflow, with receiver REST counts unchanged. |
+| 337 | W0 container absence cleanup | Accept complete Docker absence diagnostics regardless of message casing with exact name/ID matching; preserve ownership checks, immutable-ID removal and original provider receipts. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -13726,3 +13727,27 @@ production flag, deployment or credential rotation.
 
 See [the binding workflow](runbooks/fansly-ws-protocol-check.md#rest-identity-preflight)
 and [the continuity runbook](runbooks/fansly-ws-continuity.md).
+
+## Decision 337: Recognize exact Docker absence during W0 cleanup (2026-09-14)
+
+The bounded Lilly-1 REST identity preflight returned HTTP 200 with the expected
+account, but its execution receipt reported unconfirmed cleanup with exit code 1;
+the original cleanup stderr was not retained. A subsequent read-only inspect
+returned `error: no such object: hub-fansly-w0-lilly-1`, which the shared launcher's
+capitalized `No such object` match could not recognize. A separate successful
+read-only Docker listing with exact-name and run-label filters returned no container.
+Preserve both original receipts and the separate absence evidence; this cleanup
+defect does not justify another provider request or rewriting the failed receipt.
+
+The shared short, continuity and binding launcher accepts only a complete Docker
+`no such object/container` diagnostic, optionally prefixed by `Error:` or
+`Error response from daemon:`, with case-insensitive message text and an exact,
+case-sensitive identifier. This covers automatic removal before inspect or between
+the ownership check and removal. Unknown/mixed diagnostics, daemon failures and
+different or partial identifiers leave cleanup unconfirmed. An existing container
+still requires this run's label and is removed only by its immutable ID.
+
+Offline Python regressions cover the observed lowercase form, standard forms,
+identifier near-misses, daemon errors and the inspect/remove race; existing
+foreign-owner and timeout checks remain. The change adds no provider retry,
+production action or W0 acceptance. See [the cleanup note](runbooks/fansly-ws-protocol-check.md#bounded-existing-session-probe).

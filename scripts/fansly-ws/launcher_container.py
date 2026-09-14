@@ -45,6 +45,14 @@ def page_admission(page: str):
         os.close(descriptor)
 
 
+def container_absent(stderr: bytes, identifier: str) -> bool:
+    # Docker varies diagnostic casing; the complete identifier must still match exactly.
+    return re.fullmatch(
+        rb"(?i:(?:error: |error response from daemon: )?no such (?:object|container): )"
+        + re.escape(identifier.encode("ascii")) + rb"\r?\n?", stderr,
+    ) is not None
+
+
 def remove_owned_container(name: str, run_id: str) -> dict:
     try:
         found = subprocess.run([
@@ -52,14 +60,14 @@ def remove_owned_container(name: str, run_id: str) -> dict:
             '{{.Id}} {{index .Config.Labels "' + OWNER_LABEL + '"}}', name,
         ], capture_output=True, timeout=5)
         if found.returncode != 0:
-            absent = b"No such object: " + name.encode() in found.stderr
+            absent = container_absent(found.stderr, name)
             return {"cleanupConfirmed": absent, "cleanupExitCode": found.returncode}
         fields = found.stdout.decode("ascii").strip().split()
         if len(fields) != 2 or not re.fullmatch(r"[a-f0-9]{64}", fields[0]) or fields[1] != run_id:
             return {"cleanupConfirmed": False, "cleanupExitCode": None}
         # The immutable ID prevents removal of a replacement with the same name.
         removed = subprocess.run(["docker", "rm", "--force", fields[0]], capture_output=True, timeout=10)
-        absent = b"No such container: " + fields[0].encode() in removed.stderr
+        absent = container_absent(removed.stderr, fields[0])
         return {"cleanupConfirmed": removed.returncode == 0 or absent, "cleanupExitCode": removed.returncode}
     except (OSError, UnicodeError, subprocess.TimeoutExpired):
         return {"cleanupConfirmed": False, "cleanupExitCode": None}

@@ -167,6 +167,65 @@ class ContinuityLauncherTest(unittest.TestCase):
         self.assertFalse(result["cleanupConfirmed"])
         self.assertEqual(docker.call_count, 1)
 
+    def test_cleanup_accepts_docker_absence_forms_including_live_lowercase(self):
+        for stderr in (
+            b"error: no such object: hub-fansly-w0-lilly-1\n",
+            b"Error: No such object: hub-fansly-w0-lilly-1\n",
+            b"Error response from daemon: No such container: hub-fansly-w0-lilly-1\r\n",
+            b"No such object: hub-fansly-w0-lilly-1",
+        ):
+            with self.subTest(stderr=stderr):
+                absent = subprocess.CompletedProcess([], 1, stdout=b"", stderr=stderr)
+                with patch.object(containers.subprocess, "run", return_value=absent) as docker:
+                    result = containers.remove_owned_container("hub-fansly-w0-lilly-1", "owned")
+                self.assertEqual(result, {"cleanupConfirmed": True, "cleanupExitCode": 1})
+                self.assertEqual(docker.call_count, 1)
+
+    def test_cleanup_refuses_other_identifiers_and_ambiguous_or_daemon_errors(self):
+        for stderr in (
+            b"error: no such object: hub-fansly-w0-lilly-10\n",
+            b"error: no such object: hub-fansly-w0-lilly-1-other\n",
+            b"error: no such object: other-hub-fansly-w0-lilly-1\n",
+            b"error: no such object: hub-fansly-w0-lilly\n",
+            b"error: no such object: HUB-FANSLY-W0-LILLY-1\n",
+            b"error: no such object: hub-fansly-w0-ari-1\n",
+            b"Cannot connect to the Docker daemon at unix:///var/run/docker.sock\n",
+            b"Error response from daemon: permission denied\n",
+            b"error: no such object: hub-fansly-w0-lilly-1\npermission denied\n",
+            b"permission denied\nerror: no such object: hub-fansly-w0-lilly-1\n",
+            b"unexpected error: no such object: hub-fansly-w0-lilly-1\n",
+            b"",
+        ):
+            with self.subTest(stderr=stderr):
+                failed = subprocess.CompletedProcess([], 1, stdout=b"", stderr=stderr)
+                with patch.object(containers.subprocess, "run", return_value=failed) as docker:
+                    result = containers.remove_owned_container("hub-fansly-w0-lilly-1", "owned")
+                self.assertEqual(result, {"cleanupConfirmed": False, "cleanupExitCode": 1})
+                self.assertEqual(docker.call_count, 1)
+
+    def test_owned_cleanup_accepts_auto_remove_race_only_for_exact_immutable_id(self):
+        identifier = "a" * 64
+        owned = subprocess.CompletedProcess([], 0, stdout=(identifier + " owned").encode(), stderr=b"")
+        for stderr, confirmed in (
+            (f"Error response from daemon: No such container: {identifier}\n", True),
+            (f"error response from daemon: no such container: {identifier}\n", True),
+            (f"No such container: {identifier}", True),
+            (f"Error: No such container: {identifier}\r\n", True),
+            (f"Error response from daemon: No such container: {identifier}b\n", False),
+            (f"Error response from daemon: No such container: {identifier[:12]}\n", False),
+            (f"Error response from daemon: No such container: {'b' * 64}\n", False),
+            ("Error response from daemon: No such container: hub-fansly-w0-lilly-1\n", False),
+            ("Error response from daemon: permission denied\n", False),
+            (f"Error: No such container: {identifier}\nCannot connect to the Docker daemon\n", False),
+        ):
+            with self.subTest(stderr=stderr):
+                removed = subprocess.CompletedProcess([], 1, stdout=b"", stderr=stderr.encode())
+                with patch.object(containers.subprocess, "run", side_effect=[owned, removed]) as docker:
+                    result = containers.remove_owned_container("hub-fansly-w0-lilly-1", "owned")
+                self.assertEqual(result, {"cleanupConfirmed": confirmed, "cleanupExitCode": 1})
+                self.assertEqual(docker.call_count, 2)
+                self.assertEqual(docker.call_args.args[0], ["docker", "rm", "--force", identifier])
+
     def test_owned_cleanup_removes_immutable_id_and_retains_timeout_failure(self):
         owned = subprocess.CompletedProcess([], 0, stdout=("a" * 64 + " owned").encode(), stderr=b"")
         removed = subprocess.CompletedProcess([], 0, stdout=b"", stderr=b"")
