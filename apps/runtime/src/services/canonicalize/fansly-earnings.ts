@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { millsToNumber, sumMills } from "@agency_hub_core/shared";
 
 import {
   asNumber,
@@ -94,8 +95,8 @@ export function parseFanslyEarningsObservation(
       window,
       aggregate: { grossMills: 0, netMills: 0, breakdown: [] },
     };
-    const nextGrossMills = entry.aggregate.grossMills + gross;
-    const nextNetMills = entry.aggregate.netMills + net;
+    const nextGrossMills = millsToNumber(sumMills([entry.aggregate.grossMills, gross]));
+    const nextNetMills = millsToNumber(sumMills([entry.aggregate.netMills, net]));
     if (
       !Number.isSafeInteger(nextGrossMills) ||
       !Number.isSafeInteger(nextNetMills)

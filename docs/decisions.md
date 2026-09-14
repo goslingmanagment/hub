@@ -326,6 +326,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 326 | Exhausted DM head debt and history | Retain exhausted missing-head discrepancies while allowing ordinary pending history; only unexhausted debt retains head-search priority and backoff. |
 | 327 | Fansly DM exclusion write | Merge only the verified partner's exclusion metadata under the current lease; preserve newer thread material and refuse stale-binding checkpoint advance. |
 | 328 | C2b receipt claim renewal | Renew the unchanged pre-fetch claim inside its owned settlement transaction so a slow response retains its receipt; replacement tokens and later revisions remain fenced. |
+| 329 | Fansly earnings money codec | Aggregate provider mills through the shared codec; preserve safe-integer refusal, event fingerprints and projection ordering. |
 | 330 | Voice fixture settlement boundary | Wait for committed voice completion before the next test resets tables; keep detached runtime dispatch unchanged. |
 | 331 | Earnings completion settlement | Reuse a fully completed checkpoint only for its owning request sequence; preserve read timestamps, daily cadence and newer work. |
 
@@ -13459,6 +13460,28 @@ because a still-owned fetch exceeded the claim TTL.
 
 Decision 328 is a coordinator reservation after separately prepared Decisions
 323–327. Recheck its number against current main before publication.
+
+## Decision 329: Use the shared mills codec in Fansly earnings (2026-09-14)
+
+The earnings parser guarded row and aggregate amounts with safe-integer checks,
+but summed them with raw number arithmetic. The projector independently
+truncated amounts. Both bypassed the named shared money codec required by the
+kernel's money law, although the audit established no incorrect stored amount.
+
+Use `sumMills` for aggregation and `millsToNumber` at the existing numeric event
+and repository boundaries. Both helpers construct through `millsFromInteger`;
+sums therefore use bigint internally. Preserve input and aggregate safe-integer
+checks, negative adjustments, zero versus unknown, whole-observation refusal,
+JSON event shape, content fingerprint and source-observation identity. The
+projector retains the existing null/default and truncation behavior through the
+same codec. No unit, schema, parser version or replay policy changes.
+
+Existing single-pass and whole-observation refusal regressions remain required,
+along with explicit positive/negative safe-integer and refund boundaries and
+the real PostgreSQL earnings identity/projection suites. No flag or production
+action is introduced. Rollback restores the previous application code without
+a database migration or data rewrite. D329 is reserved after the other audit
+follow-up topics; current base main is `b78752d0` (latest D322).
 
 ## Decision 330: Complete the voice fixture before resetting its database (2026-09-14)
 

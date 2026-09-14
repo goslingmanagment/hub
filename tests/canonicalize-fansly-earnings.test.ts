@@ -42,6 +42,22 @@ describe("Fansly earnings observation identity", () => {
     expect(first).toEqual(reversed);
   });
 
+  it.each([
+    { amounts: [Number.MAX_SAFE_INTEGER - 1, 1], total: Number.MAX_SAFE_INTEGER },
+    { amounts: [Number.MIN_SAFE_INTEGER + 1, -1], total: Number.MIN_SAFE_INTEGER },
+    { amounts: [-1000, 250], total: -750 },
+  ])("preserves integer mills at the supported boundary: $total", ({ amounts, total }) => {
+    const input = observation(1, 0);
+    const events = canonicalizeFanslyEarningsObservation({
+      ...input,
+      payload: amounts.map((amount, type) => ({
+        correlationAccountId: "fan-1", type, totalGross: amount, totalNet: amount,
+      })),
+    });
+    expect(events).toHaveLength(1);
+    expect(events[0]!.data).toMatchObject({ grossMills: total, netMills: total });
+  });
+
   it("keeps an unscoped empty response unknown and preserves an explicit zero", () => {
     const input = observation(1, 0);
     expect(canonicalizeFanslyEarningsObservation({ ...input, payload: [] })).toEqual([]);

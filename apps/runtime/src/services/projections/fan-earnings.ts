@@ -12,6 +12,7 @@ import {
   upsertFans,
 } from "@agency_hub_core/db";
 import { sql } from "drizzle-orm";
+import { millsToNumber } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
 
@@ -56,8 +57,8 @@ export async function runFanEarningsProjection(
           ? event.data
           : {}) as Record<string, unknown>;
         const window = typeof data.window === "string" ? data.window : "lifetime";
-        const grossMills = typeof data.grossMills === "number" ? Math.trunc(data.grossMills) : 0;
-        const netMills = typeof data.netMills === "number" ? Math.trunc(data.netMills) : null;
+        const grossMills = typeof data.grossMills === "number" ? millsToNumber(data.grossMills) : 0;
+        const netMills = typeof data.netMills === "number" ? millsToNumber(data.netMills) : null;
         const [fan] = await upsertFans(app.db, [{
           platform: "fansly",
           platformUserId: event.fanIdentityRef,

@@ -1,0 +1,18 @@
+{
+  "command": [
+    "pnpm",
+    "check"
+  ],
+  "cwd": "/Users/dmitriy/.codex/worktrees/hub-fansly-earnings-money-codec",
+  "environmentOverrides": {
+    "ALLOW_MISSING_TEST_PREREQUISITES": "0",
+    "NODE_OPTIONS": "--max-old-space-size=8192"
+  },
+  "head": "b78752d0d1144a8457638ffb3ae0bda33455fde1",
+  "startedAt": "2026-09-14T00:49:32.201892+00:00",
+  "finishedAt": "2026-09-14T00:50:20.678399+00:00",
+  "durationSeconds": 48.477,
+  "exitCode": 0,
+  "rawSha256": "594343d8c7d3830047b2178164e9499e5697dca6146fac9c44504d8082559a74",
+  "sourceUnchanged": true
+}
