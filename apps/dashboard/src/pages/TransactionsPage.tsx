@@ -12,6 +12,8 @@ import {
 import { money, SOURCE_LABELS } from "@/lib/revenueDisplay";
 import { QueryNotice } from "@/components/shared/QueryNotice";
 
+const STATE_LABELS: Record<string, string> = { pending: "Ожидает подтверждения", posted: "Проведена", unknown: "Неизвестен" };
+
 const timestamp = (value: string) =>
   new Date(value).toLocaleString("ru-RU", { timeZone: "UTC" });
 
@@ -90,7 +92,7 @@ export function TransactionsPage() {
                 <option value="">Все статусы</option>
                 {["pending", "posted", "unknown"].map((state) => (
                   <option key={state} value={state}>
-                    {state}
+                    {STATE_LABELS[state] ?? state}
                   </option>
                 ))}
               </select>
@@ -157,7 +159,7 @@ export function TransactionsPage() {
                             {SOURCE_LABELS[item.canonicalType] ??
                               item.canonicalType}
                           </td>
-                          <td className="p-3">{item.transactionState}</td>
+                          <td className="p-3">{STATE_LABELS[item.transactionState] ?? item.transactionState}</td>
                           <td className="p-3 tabular-nums whitespace-nowrap">
                             {money(item.netAmountMills)}
                           </td>

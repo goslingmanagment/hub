@@ -27,8 +27,10 @@ export function OfapiContentEvidence({
             aria-label="Страница для истории контента"
             className="rounded border border-border bg-card p-2"
             value={pageId ?? ""}
+            disabled={pages.length === 0}
             onChange={(event) => setSelected(Number(event.target.value))}
           >
+            {pages.length === 0 && <option value="">Нет страниц OnlyFans</option>}
             {pages.map((page) => (
               <option key={page.id} value={page.id}>
                 {page.label}
@@ -44,9 +46,11 @@ export function OfapiContentEvidence({
             Обновить из Hub
           </button>
         </div>
+        {pages.length === 0 && <p>Добавьте страницу OnlyFans, чтобы просматривать её сохранённые события.</p>}
+        {query.isLoading && pageId !== undefined && <p role="status">Чтение сохранённой истории…</p>}
         {query.isError && (
           <p role="alert">
-            Не удалось прочитать сохранённую историю. Повторите чтение.
+            Не удалось обновить сохранённую историю. Повторите чтение; ниже остаётся предыдущий срез, если он был загружен.
           </p>
         )}
         {query.data && (

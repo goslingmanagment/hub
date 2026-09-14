@@ -86,8 +86,8 @@ function PageCard({
   return (
     <div className="rounded-xl border border-border bg-card px-5 py-4">
       {/* Header */}
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-2">
           <span className="text-sm font-semibold text-text-primary">
             {page.pageLabel}
           </span>

@@ -26,6 +26,7 @@ import { useAdminUsers } from "@/api/adminUsers";
 import { KernelApiError } from "@/api/sdk";
 import { ModalShell } from "@/components/shared/ModalShell";
 import { StatusPanel } from "@/components/shared/StatusPanel";
+import { StaleDataNotice } from "@/components/shared/StaleDataNotice";
 import { TableSkeleton } from "@/components/shared/TableSkeleton";
 import { Tooltip } from "@/components/shared/Tooltip";
 
@@ -420,6 +421,7 @@ export function CollectionTab() {
 
   return (
     <div className="flex flex-col gap-4 pb-24">
+      {snapshotQuery.isError && <StaleDataNotice title="Показана последняя загруженная политика" error={snapshotQuery.error} />}
       {snapshot.backgroundPaused && (
         <PausedBanner
           snapshot={snapshot}
@@ -628,7 +630,7 @@ function PageHeading() {
       <h2 className="text-[17px] font-bold tracking-tight text-text-primary">Сбор данных OFAPI</h2>
       <p className="mt-1 max-w-[62ch] text-[13px] text-text-secondary">
         Фоновые запросы Hub к OnlyFans API: что собираем, как часто и под каким лимитом кредитов. Выключение
-        останавливает новые запросы и не удаляет собранное. Fansly собирается расширением и кредитов не тратит.
+        останавливает новые запросы и не удаляет собранное. Fansly настраивается в разделе «Возможности»; кредиты OFAPI на него не расходуются.
       </p>
     </div>
   );

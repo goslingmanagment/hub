@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ConfigStagedBody, ConfigUpdateBody } from "@agency_hub_core/contracts";
 
 import { kernel } from "./sdk.js";
+export { usePages as useConfigPages } from "./pages.js";
 
 export function useAdminConfig() {
   return useQuery({

@@ -35,7 +35,7 @@ import {
 } from "../apps/dashboard/src/pages/PageDetailPage.tsx";
 
 type DashboardShellValue = ComponentProps<typeof DashboardShellProvider>["value"];
-type DashboardPage = DashboardShellValue["pages"][number];
+type DashboardPage = OverviewResponse["pages"][number];
 
 function buildPageMetric(value: number | null) {
   return {
@@ -295,7 +295,7 @@ describe("dashboard sync product surfaces", () => {
     expect(html).toContain("Счётчик недоступен");
     expect(html).toContain("Аудитория разных страниц не складывается");
     expect(html).not.toContain("New subscribers");
-    expect(html).toContain('href="/pages/lana-2"');
+    expect(html).toContain('href="/pages/lana-2?period=7d"');
     expect(html).toContain("$0.00");
   });
 
@@ -305,7 +305,7 @@ describe("dashboard sync product surfaces", () => {
     const html = renderWithRouter(createElement(OverviewPage));
     expect(html.match(/Данные не удалось загрузить/g)).toHaveLength(2);
     expect(html).toContain("Повторить");
-    expect(html).toContain('href="/pages/lana"');
+    expect(html).toContain('href="/pages/lana?period=7d"');
     expect(queryMocks.useOverviewGrowth).not.toHaveBeenCalled();
   });
 

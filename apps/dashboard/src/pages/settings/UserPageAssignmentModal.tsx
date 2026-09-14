@@ -12,7 +12,7 @@ export function UserPageAssignmentModal({
   user: AuthUser;
   onClose: () => void;
 }) {
-  const { data: allPages } = useAdminPages();
+  const { data: allPages, isLoading: pagesLoading, isError: pagesError, refetch: refetchPages } = useAdminPages();
   const assignPage = useAdminAssignPage(user.username);
   const unassignPage = useAdminUnassignPage(user.username);
   const [selectedLabel, setSelectedLabel] = useState("");
@@ -21,7 +21,7 @@ export function UserPageAssignmentModal({
   const availablePages = (allPages ?? []).filter((p) => !assignedLabels.has(p.label));
 
   async function handleAssign() {
-    if (!selectedLabel) return;
+    if (!selectedLabel || pagesError || !availablePages.some((page) => page.label === selectedLabel) || assignPage.isPending || unassignPage.isPending) return;
     try {
       await assignPage.mutateAsync({ pageLabel: selectedLabel });
       toast.success(`Assigned ${selectedLabel} to ${user.username}`);
@@ -52,6 +52,9 @@ export function UserPageAssignmentModal({
           onUnassign={handleUnassign}
           assignPending={assignPage.isPending}
           unassignPending={unassignPage.isPending}
+          pagesLoading={pagesLoading && !allPages}
+          pagesError={pagesError}
+          onRetryPages={() => void refetchPages()}
         />
       </div>
 

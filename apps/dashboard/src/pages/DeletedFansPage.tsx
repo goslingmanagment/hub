@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
-import { useParams } from "react-router";
+import { useLocation, useParams, useSearchParams } from "react-router";
+import { listOffset } from "@/lib/overviewNavigation";
+import { QueryNotice } from "@/components/shared/QueryNotice";
 import { usePageDeletedFans } from "@/api/queries";
 import { Pagination } from "@/components/shared/Pagination";
 import { StatusPanel } from "@/components/shared/StatusPanel";
@@ -15,13 +16,18 @@ function joinAliases(values: Array<string | null>) {
 
 export function DeletedFansPage() {
   const { pageLabel } = useParams<{ pageLabel: string }>();
-  const [offset, setOffset] = useState(0);
+  const location = useLocation();
+  const [search, setSearch] = useSearchParams();
+  const offset = listOffset(search.get("offset"));
+  function setOffset(value: number) {
+    setSearch((previous) => {
+      const next = new URLSearchParams(previous);
+      if (value) next.set("offset", String(value)); else next.delete("offset");
+      return next;
+    }, { state: location.state });
+  }
 
-  useEffect(() => {
-    setOffset(0);
-  }, [pageLabel]);
-
-  const { data, isLoading, isError } = usePageDeletedFans(
+  const { data, isLoading, isError, refetch } = usePageDeletedFans(
     pageLabel ?? "",
     { limit: LIMIT, offset },
     { enabled: Boolean(pageLabel) },
@@ -34,6 +40,7 @@ export function DeletedFansPage() {
           title="Deleted fans failed to load"
           description="The deleted fan audit could not be fetched for this page."
           tone="error"
+          action={<button type="button" onClick={() => void refetch()}>Повторить</button>}
         />
       );
     }
@@ -42,15 +49,17 @@ export function DeletedFansPage() {
 
   return (
     <div>
+      <QueryNotice error={isError} stale={Boolean(data)} retry={refetch} />
       <div className="mb-5">
         <h1 className="text-xl font-extrabold text-text-primary">
           Deleted Fans &mdash; {pageLabel}
         </h1>
-        <p className="mt-1 text-sm text-text-muted">{data.total} total</p>
+        <p className="mt-1 text-sm text-text-muted">{offset > 0 && data.items.length === 0 ? "Число записей пока недоступно" : `${data.total} total`}</p>
+        <p className="mt-2 text-xs text-text-muted">Аккаунты, удаление которых зафиксировал Hub. Даты показывают обнаружение, а не точное время удаления; сохранённые операции остаются в истории.</p>
       </div>
 
-      <section className="overflow-hidden rounded-xl border border-border bg-card">
-        <table className="w-full border-collapse">
+      <section className="overflow-x-auto rounded-xl border border-border bg-card">
+        <table className="w-full min-w-[720px] border-collapse">
           <thead>
             <tr className="bg-hover-alt">
               {[
@@ -73,7 +82,8 @@ export function DeletedFansPage() {
             {data.items.length === 0 && (
               <tr>
                 <td colSpan={5} className="px-4 py-8 text-center text-sm text-text-muted">
-                  No deleted fans recorded.
+                  {offset > 0 ? "На этой странице списка записей нет." : "No deleted fans recorded."}
+                  {offset > 0 && <button type="button" className="ml-2 text-accent" onClick={() => setOffset(0)}>К началу списка</button>}
                 </td>
               </tr>
             )}

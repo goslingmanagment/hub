@@ -1,6 +1,7 @@
 import { KernelApiError, createClient } from "@kernel/sdk";
 
 import { clearDashboardSession } from "@/lib/queryClient";
+import { buildLoginRoute } from "@/lib/navigation";
 
 // Kernel Stage 20: the dashboard's single API client — every domain module
 // goes through the generated SDK (typed operations, runtime-validated
@@ -17,7 +18,7 @@ function redirectToLogin() {
   }
 
   clearDashboardSession();
-  window.location.assign("/login");
+  window.location.assign(buildLoginRoute(`${window.location.pathname}${window.location.search}${window.location.hash}`));
 }
 
 export const kernel = createClient({
