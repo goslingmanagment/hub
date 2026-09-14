@@ -1,0 +1,12 @@
+{
+  "priorValidatedHead": "81fb0a31aa69dbbbe259e983854948c6a9b9ceca",
+  "priorValidationBase": "1fe9dbe74daa8a4fbfd452ac352f7f290a60b1e4",
+  "main": "ce0a44b0d6778f8bd371c105f26d31f9abe8b8bd",
+  "manualResolutions": [
+    "docs/decisions.md"
+  ],
+  "voiceTestSha256": "af4e463560a2156ca25ae367cf8a88b75e94583dc447dbabb012e73a65ad4101",
+  "voiceSourceUnchanged": true,
+  "localTestsRepeated": false,
+  "freshPrCiRequired": true
+}

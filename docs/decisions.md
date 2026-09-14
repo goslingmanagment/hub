@@ -324,6 +324,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 324 | OFAPI fixture UTC clock | Cap ordinary ledger fixture timestamps at their captured instant; prove report boundaries with explicit observations while preserving future-fact exclusion. |
 | 326 | Exhausted DM head debt and history | Retain exhausted missing-head discrepancies while allowing ordinary pending history; only unexhausted debt retains head-search priority and backoff. |
 | 327 | Fansly DM exclusion write | Merge only the verified partner's exclusion metadata under the current lease; preserve newer thread material and refuse stale-binding checkpoint advance. |
+| 330 | Voice fixture settlement boundary | Wait for committed voice completion before the next test resets tables; keep detached runtime dispatch unchanged. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -13366,3 +13367,15 @@ unchanged; never recreate the row from the stale snapshot. Existing failure
 thresholds, account resolution and polling policy remain unchanged. No migration
 or runtime flag is added. The focused PostgreSQL suite interleaves a second writer
 inside the mocked lookup while exercising the real handler, journal and queries.
+
+## Decision 330: Complete the voice fixture before resetting its database (2026-09-14)
+
+The normal `end_turn` admission case ended after its `dispatched` response,
+while detached synthesis could still update the voice row and character budget.
+The next test's table reset then deadlocked with that settlement in CI.
+Use the suite's existing bounded wait for the persisted `completed` state before
+ending this case. Completion and budget reconciliation commit together; the
+remaining dispatcher cleanup does not write to the database in this case.
+Keep runtime dispatch, reset semantics and all admission assertions unchanged.
+No fixed delay, reset retry, new flag or production change is introduced.
+Decision 330 is reserved after the independently prepared Decisions 325–329.
