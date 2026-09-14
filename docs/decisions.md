@@ -322,6 +322,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 322 | Durable provider cooldown | Retain future provider retry deadlines across queued revisions; report long Fansly cooldowns immediately without retrying early. |
 | 323 | Dashboard production parity | Restore the five deployed dashboard feature-control and daily-workflow patches on current main; preserve backend behavior and verify the single formatting-only exception against emitted JavaScript. |
 | 324 | OFAPI fixture UTC clock | Cap ordinary ledger fixture timestamps at their captured instant; prove report boundaries with explicit observations while preserving future-fact exclusion. |
+| 330 | Voice fixture settlement boundary | Wait for committed voice completion before the next test resets tables; keep detached runtime dispatch unchanged. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -13313,3 +13314,15 @@ Add five PostgreSQL cases with explicit report observations at day/month boundar
 and around the failed 00:02:30 case. Keep the intentional future-entry test and
 production queries unchanged. An original-helper negative control reproduces
 132 versus 92; the corrected suite passes all 26 cases. No runtime flag is added.
+
+## Decision 330: Complete the voice fixture before resetting its database (2026-09-14)
+
+The normal `end_turn` admission case ended after its `dispatched` response,
+while detached synthesis could still update the voice row and character budget.
+The next test's table reset then deadlocked with that settlement in CI.
+Use the suite's existing bounded wait for the persisted `completed` state before
+ending this case. Completion and budget reconciliation commit together; the
+remaining dispatcher cleanup does not write to the database in this case.
+Keep runtime dispatch, reset semantics and all admission assertions unchanged.
+No fixed delay, reset retry, new flag or production change is introduced.
+Decision 330 is reserved after the independently prepared Decisions 325–329.
