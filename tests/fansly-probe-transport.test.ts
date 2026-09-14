@@ -18,6 +18,7 @@ const client = `
 import { createRequire } from "node:module";
 import { createProxyRequestDispatcher } from "./packages/shared/src/http-client.ts";
 import { openFanslyProbeSocket } from "./apps/runtime/src/services/egress/fansly-probe-socket.ts";
+import { createProbeTransportDiagnostics } from "./apps/runtime/src/services/egress/fansly-probe-diagnostics.ts";
 const require = createRequire(new URL("./apps/runtime/src/bootstrap.ts", import.meta.url));
 const { Dispatcher, setGlobalDispatcher } = require("undici");
 let fallbackCalls = 0, paceCalls = 0;
@@ -34,11 +35,12 @@ const dispatcher = createProxyRequestDispatcher({
 });
 const deadline = setTimeout(() => process.exit(3), 4000);
 const result = { opened: false, message: null, closeCode: null, error: false };
+const diagnostics = createProbeTransportDiagnostics();
 const socket = openFanslyProbeSocket({
   dispatcher, egressKey: "fixture-page",
   pace: async () => { paceCalls++; throw new Error("REST_pacing_forbidden"); },
   close: () => dispatcher.close(),
-});
+}, diagnostics);
 socket.addEventListener("open", () => { result.opened = true; });
 socket.addEventListener("message", (event) => {
   result.message = event.data;
@@ -51,7 +53,8 @@ await new Promise((resolve) => socket.addEventListener("close", (event) => {
 }, { once: true }));
 await dispatcher.destroy();
 clearTimeout(deadline);
-process.stdout.write(JSON.stringify({ ...result, fallbackCalls, paceCalls, url: socket.url }));
+process.stdout.write(JSON.stringify({ ...result, fallbackCalls, paceCalls, url: socket.url,
+  diagnostics: diagnostics.finish() }));
 `;
 
 async function runClient(proxy: string, trustFixture: boolean) {
@@ -66,6 +69,7 @@ async function runClient(proxy: string, trustFixture: boolean) {
   return JSON.parse(stdout) as {
     opened: boolean; message: string | null; closeCode: number; error: boolean;
     fallbackCalls: number; paceCalls: number; url: string;
+    diagnostics: { httpStatus: number | null; transportErrorCode: string | null };
   };
 }
 
@@ -97,6 +101,7 @@ describe("one-page Fansly probe transport", () => {
         expect(await runClient(network.url, true)).toEqual({
           opened: true, message: '{"t":2,"d":"{}"}', closeCode: 1000, error: false,
           fallbackCalls: 0, paceCalls: 0, url: "wss://wsv3.fansly.com/?v=3",
+          diagnostics: { httpStatus: 101, transportErrorCode: null },
         });
         expect(network.destinations).toEqual(["wsv3.fansly.com:443"]);
         expect(network.upgrades).toHaveLength(1);
@@ -115,12 +120,31 @@ describe("one-page Fansly probe transport", () => {
       const network = await startFanslyProbeNetwork(protocol, failure === "proxy_refused");
       if (!network) { t.skip(); return; }
       try {
-        expect(await runClient(network.url, failure !== "untrusted_tls")).toMatchObject({
+        const result = await runClient(network.url, failure !== "untrusted_tls");
+        expect(result).toMatchObject({
           opened: false, message: null, error: true, fallbackCalls: 0, paceCalls: 0,
+          diagnostics: { httpStatus: null, transportErrorCode: failure === "untrusted_tls"
+            ? "DEPTH_ZERO_SELF_SIGNED_CERT" : protocol === "http" ? "UND_ERR_ABORTED" : null },
         });
+        expect(JSON.stringify(result)).not.toContain(network.password);
         expect(network.destinations).toEqual(["wsv3.fansly.com:443"]);
         expect(network.upgrades).toEqual([]);
       } finally { await network.stop(); }
     });
+
+    it("retains an outer HTTP rejection without its headers or a fabricated open", async (t) => {
+      const network = await startFanslyProbeNetwork(protocol, false, undefined, 403);
+      if (!network) { t.skip(); return; }
+      try {
+        const result = await runClient(network.url, true);
+        expect(result).toMatchObject({ opened: false, message: null, error: true,
+          fallbackCalls: 0, paceCalls: 0, diagnostics: { httpStatus: 403 } });
+        expect(JSON.stringify(result)).not.toContain("fixture-provider-secret");
+        expect(JSON.stringify(result)).not.toContain(network.password);
+        expect(network.destinations).toEqual(["wsv3.fansly.com:443"]);
+        expect(network.upgrades).toHaveLength(1);
+        expect(network.frames).toEqual([]);
+      } finally { await network.stop(); }
+    }, 10_000);
   });
 });

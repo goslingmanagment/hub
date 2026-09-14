@@ -113,9 +113,48 @@ describe("bounded Fansly socket observation", () => {
       code: 4001, reason: syntheticSecret,
     }));
     const report = await probe.result;
-    expect(report.stopReason).toBe("transport_error");
+    expect(report).toMatchObject({ stopReason: "transport_error", failurePhase: "pre_open",
+      openedAt: null, closeCode: null, transportErrorCode: null, httpStatus: null });
     expect(JSON.stringify(report)).not.toContain(syntheticSecret);
     expect(probe.socket.close).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([false, true])("retains open independently of receiving t=1: %s", async (sessionSeen) => {
+    const probe = start();
+    probe.socket.open();
+    if (sessionSeen) probe.socket.receive(wrapped(1, {}));
+    probe.socket.dispatchEvent(new Event("error"));
+    probe.controller.abort();
+    const report = await probe.result;
+    expect(report).toMatchObject({ stopReason: "transport_error", failurePhase: "socket",
+      sessionFrameSeen: sessionSeen, closeCode: null, transportErrorCode: null, httpStatus: null });
+    expect(report.openedAt).toBe(new Date().toISOString());
+  });
+
+  it.each(["auth_send", "ping"] as const)("records the exact %s send exception without its content", async (phase) => {
+    const probe = start();
+    if (phase === "auth_send") probe.socket.send.mockImplementation(() => { throw new Error(syntheticSecret); });
+    probe.socket.open();
+    if (phase === "ping") {
+      probe.socket.receive(wrapped(1, {}));
+      probe.socket.send.mockImplementation(() => { throw new Error(syntheticSecret); });
+      await vi.advanceTimersByTimeAsync(20_000);
+    }
+    const report = await probe.result;
+    expect(report).toMatchObject({ stopReason: "transport_error", failurePhase: phase });
+    expect(report.openedAt).not.toBeNull();
+    expect(JSON.stringify(report)).not.toContain(syntheticSecret);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("identifies synchronous construction failure without inventing a transport stage", async () => {
+    const report = await observeFanslyProbe({
+      connect: () => { throw new Error(syntheticSecret); }, token: syntheticSecret,
+      key: Buffer.alloc(32), durationMs: 60_000, signal: new AbortController().signal,
+    });
+    expect(report).toMatchObject({ stopReason: "connect_error", failurePhase: "connect",
+      openedAt: null, transportErrorCode: null, httpStatus: null });
+    expect(JSON.stringify(report)).not.toContain(syntheticSecret);
   });
 
   it("never connects after cancellation or invalid bounds", async () => {
