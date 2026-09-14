@@ -59,3 +59,21 @@ The updated Decision 326 and runbook now describe this fresh-history mode/cursor
 ### Deterministic due fixture follow-up
 
 The only subsequent test change seeds `next_retry_at` at the explicit past instant `2026-01-01` together with the attempt count. This removes an unrelated PostgreSQL-versus-Node current-time race from the active-priority fixture. Cases testing backoff still explicitly set a future deadline afterward. No runtime logic or assertion was weakened; the real message-execution regression is unchanged. The author's first failing receipt is retained separately. No tests rerun by this reviewer. Final test SHA-256: `837b894681a5a38a2aa21a1e770d03270e4be6083d3a62928a09526b85914d26`.
+
+## Final main composition follow-up
+
+Reviewed 2026-09-14T00:53:11.381072+00:00 at merge `7bb73162c6a2dd85802a0fa76a277722c76a5a12` (topic parent `a88871b7`, incoming main `b78752d0d1144a8457638ffb3ae0bda33455fde1`). During review HEAD advanced to `daa7cce1ae9262e0e321611695fc5ac7a931107e` with validation evidence only; all seven source/test/document paths remain byte-identical to that merge. No actionable findings. This is a source/document composition review; no tests run by this reviewer.
+
+All topic source and regression bytes are identical to the previously reviewed topic parent except `executor-handlers.ts`, where incoming C1 changes merged automatically. The exact added/removed topic lines in that handler match the original reviewed patch; its fresh pending-history mode/cursor fix remains unchanged. The final diff against main contains only the four reviewed runtime/repository paths, the new integration test, the two topic documents and its evidence packet. Incoming main C1 diagnostics, durable cooldown queue/executor/incident behavior and their tests are preserved. The DM list wakeup continues through the shared cooldown-preserving request path, so admitting ordinary history does not waive a provider retry deadline.
+
+Removing only the Decision 326 section and its quick-index row reproduces incoming main's decision file exactly (ignoring trailing whitespace). Decision 322 and the C1 Decision 294 refinement are preserved. The runbook is byte-identical to the reviewed topic parent. Decision 326 remains the coordinator's reserved number after 322–325; it does not authorize activation, deletion certification or stage acceptance. The original source manifest intentionally describes the earlier 478f-based validation; the current composition fingerprints are recorded here and final-main test receipts remain separate.
+
+| Final composed file | SHA-256 |
+| --- | --- |
+| `apps/runtime/src/services/sync/executor-handlers.ts` | `52be63e75bafc73dcb38180d9ef55637a583f70d7692f7d821c0804c10db9048` |
+| `apps/runtime/src/services/sync/fansly-dm-conversations.ts` | `7331c010dec8ced4bf67560f38871a4032ae7bf3caceb1922e10b39ba85eca43` |
+| `packages/db/src/repositories/fansly-dm-head-debt.ts` | `63256c9b40375b7199e06ba04a1cdee75d1dabe598d99e2078187703bd5c7468` |
+| `packages/db/src/repositories/page-dm.ts` | `7d78e57cdb9d416f52dd2e3ac805e2cb1909bf618ef8dd7c781d44859b509ccf` |
+| `tests/fansly-dm-exhausted-head-history.integration.test.ts` | `837b894681a5a38a2aa21a1e770d03270e4be6083d3a62928a09526b85914d26` |
+| `docs/decisions.md` | `412c01821df4d87f055a8d4109a1a0f72865ebe493aa2d31fc4a6e2fc1f5305f` |
+| `docs/runbooks/fansly-dm-head-catchup.md` | `df00ca1ca134d502261ea1673d7949c0350ef3effb29a4e31e44b6a7933e175c` |
