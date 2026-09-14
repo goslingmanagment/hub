@@ -141,3 +141,13 @@ local export time. No real credential, message or identity was used.
 The earlier main synchronization used `940ec69f` after PR168 took Decision 286.
 Its numbering-only follow-up is retained in history. Live protocol evidence and
 every production gate remain pending.
+
+## Audit follow-up — 14 September UTC
+
+The socket egress source policy and 72 real-parser regressions are complete.
+The final main composition `1aa0d862` (main `b78752d0`) passed full check and five
+serial Docker-Postgres suites; see `evidence/final-main-validation-20260914/`.
+Independent source and composition reviews have no outstanding findings. The
+existing-session amendment is now D325; D321 in main is the restored performance
+history. No new probe or production action was performed. Diagnostic code is
+ready for review; live W0 acceptance and all subsequent gates remain open.
