@@ -93,16 +93,15 @@ async function seedUsers() {
   }, { source: "cli" });
 }
 
-async function seedLedgerFixture() {
+async function seedLedgerFixture(now = new Date()) {
   const model = await createModel(appContext.db, { slug: "model-credits", name: "Model Credits" });
   const page = await createOnlyFansPage(appContext.db, { modelId: model.id, label: "lora-of" });
   await setPageOfapiAccountId(appContext.db, { pageId: page.id, ofapiAccountId: "acct_credits" });
 
-  // Anchor inside the CURRENT UTC day — "now minus hours" would straddle the
-  // UTC midnight boundary when the suite runs early in the UTC day.
-  const now = new Date();
+  // Keep fixture history inside the captured UTC day and no later than its
+  // capture time. Fixed 00:01–00:06 offsets are future facts just after midnight.
   const dayStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
-  const minutes = (count: number) => new Date(dayStart + count * 60 * 1000);
+  const ledgerTime = (minute: number) => new Date(Math.min(dayStart + minute * 60_000, now.getTime()));
   await recordOfapiCreditSpend(appContext.db, {
     operation: "ofapi_chats",
     credits: 90,
@@ -110,7 +109,7 @@ async function seedLedgerFixture() {
     pageId: page.id,
     httpStatus: 200,
     requestId: "ofapi_chats:seed",
-    occurredAt: minutes(1),
+    occurredAt: ledgerTime(1),
   });
   await recordOfapiCreditSpend(appContext.db, {
     operation: "ofapi_chat_messages",
@@ -118,10 +117,10 @@ async function seedLedgerFixture() {
     balanceAfter: 23_950,
     pageId: page.id,
     httpStatus: 200,
-    occurredAt: minutes(2),
+    occurredAt: ledgerTime(2),
   });
   await insertOfapiCreditLedgerEntry(appContext.db, {
-    occurredAt: minutes(3),
+    occurredAt: ledgerTime(3),
     source: "webhook_accrual",
     operation: "ofapi_webhook_events",
     credits: 40,
@@ -129,20 +128,20 @@ async function seedLedgerFixture() {
     accrualDay: new Date(dayStart - 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
   });
   await insertOfapiCreditLedgerEntry(appContext.db, {
-    occurredAt: minutes(4),
+    occurredAt: ledgerTime(4),
     source: "external",
     credits: 5,
     estimated: true,
   });
   await insertOfapiCreditLedgerEntry(appContext.db, {
-    occurredAt: minutes(5),
+    occurredAt: ledgerTime(5),
     source: "refill",
     credits: -1000,
     estimated: true,
   });
   await setOfapiCreditReconcileCursor(appContext.db, {
     reconciledThroughLedgerId: 2,
-    lastReconcileAt: minutes(6),
+    lastReconcileAt: ledgerTime(6),
     lastDriftCredits: 0,
   });
 
@@ -421,6 +420,32 @@ describe("ofapi credits admin api", () => {
     expect(body.forecast.monthEndProjection).toBeGreaterThanOrEqual(132);
     expect(body.forecast.refillRecommendation).toEqual({ targetDays: 30, credits: 0 });
   }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it.for([
+    "2026-09-14T00:00:00.001Z",
+    "2026-09-14T00:02:30.000Z",
+    "2026-09-14T00:06:00.000Z",
+    "2026-09-14T23:59:59.999Z",
+    "2026-10-01T00:00:00.001Z",
+  ])("keeps seeded credit history before the report at %s", async (instant, context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const observedAt = new Date(instant);
+    // The HTTP route observes after the awaited fixture writes; use explicit
+    // instants here so neither the process nor PostgreSQL clock controls the case.
+    await seedLedgerFixture(new Date(observedAt.getTime() - 1));
+    const summary = await getOfapiCreditsSummary(appContext, observedAt);
+    expect(summary.today.total).toBe(137);
+    expect(summary.balance.value).toBe(23_950);
+    expect(summary.forecast).toMatchObject({ avgDailySpend7d: 132, monthToDateSpend: 132 });
+    const { rows } = await testDb.pool.query<{ count: number }>(
+      "select count(*)::int as count from ofapi_credit_ledger where occurred_at >= $1",
+      [observedAt],
+    );
+    expect(rows[0]?.count).toBe(0);
+  });
 
   it("recommends a refill when the balance falls short of the target runway (D5)", async (context) => {
     if (!testDb || !server) {
