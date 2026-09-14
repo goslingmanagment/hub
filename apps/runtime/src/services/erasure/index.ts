@@ -3,7 +3,7 @@ import { readFile, readdir, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { sql, type SQL } from "drizzle-orm";
-import { decryptJsonWithKeyVersion } from "@agency_hub_core/shared";
+import { decryptJsonWithKeyVersion, fanslyWsCaptureContainsSubject } from "@agency_hub_core/shared";
 
 import {
   type CapturePayloadErasureSubject,
@@ -339,9 +339,13 @@ function observationPagePredSql(scope: ResolvedScope): SQL {
 function payloadMatchPredSql(
   fanRef: string,
   payloadColumn: SQL = sql.raw("payload"),
+  wsRefs: readonly string[] = [fanRef],
 ): SQL {
   const subject = capturePayloadErasureSubject(fanRef);
-  const quoted = sql`${payloadColumn}::text like ${subject.quotedLike}`;
+  const quoted = sql`(${payloadColumn}::text like ${subject.quotedLike}
+    or (${payloadColumn}->>'codec'='fansly.ws.frame.v1'
+      and exists(select 1 from jsonb_array_elements_text(${JSON.stringify(wsRefs)}::jsonb) as ref(value)
+        where fansly_ws_json_contains(${payloadColumn}->'frame',ref.value))))`;
   if (subject.numericBoundaryRegex !== null) {
     return sql`(${quoted} or ${payloadColumn}::text ~ ${subject.numericBoundaryRegex})`;
   }
@@ -565,12 +569,15 @@ async function collectFanLineage(
   // inside the payload), hot + parked.
   const obsSources = ["observations", ...parked.observations];
   for (const source of obsSources) {
-    const matched = await rows<{ id: string }>(app, sql`
-      select id::text as id from ${sql.raw(source)}
-      where account_id in ${scope.pageIds} and ${payloadMatchPredSql(scope.fanRef!)}
+    const matched = await rows<{ id: string; kind: string }>(app, sql`
+      select id::text as id,kind from ${sql.raw(source)}
+      where account_id in ${scope.pageIds} and ${payloadMatchPredSql(scope.fanRef!, sql.raw("payload"), [scope.fanRef!, ...scope.fanGroupIds])}
     `);
     for (const row of matched) {
       candidates.add(Number(row.id));
+      // B0 preserves whole envelopes; native fan exclusivity is not certified.
+      // Apply the existing unknown/shared residual law, never erase bystanders.
+      if (row.kind === "fansly.ws.frame.v1") shared.add(Number(row.id));
     }
     // Capture precedes response indexing. A crash between those writes must
     // not hide returned fan data, and a retry after hot deletion must still
@@ -620,9 +627,9 @@ async function collectFanLineage(
       ),
       sql`, `,
     );
-    const referencing = await rows<{ id: string }>(app, sql`
+    const referencing = await rows<{ id: string; kind: string }>(app, sql`
       with target (bucket_month, object_id) as (values ${refs})
-      select distinct o.id::text as id
+      select distinct o.id::text as id,o.kind
       from target t
       join observations o
         on o.payload_bucket_month = t.bucket_month
@@ -631,6 +638,7 @@ async function collectFanLineage(
     `);
     for (const row of referencing) {
       candidates.add(Number(row.id));
+      if (row.kind === "fansly.ws.frame.v1") shared.add(Number(row.id));
     }
     const rawReferencing = await rows<{ id: string }>(app, sql`
       with target (bucket_month, object_id) as (values ${refs})
@@ -694,10 +702,14 @@ async function collectFanLineage(
           let cursor = 0;
           for (;;) {
             const receipts = await run(
-              `SELECT id,payload FROM read_parquet('${duckdbEscape(parquet)}') `
-              + `WHERE account_id IN (${scope.pageIds.join(",")}) AND kind='ofapi.action_response.v1' AND id>${cursor} ORDER BY id LIMIT 50`,
+              `SELECT id,kind,payload FROM read_parquet('${duckdbEscape(parquet)}') `
+              + `WHERE account_id IN (${scope.pageIds.join(",")}) AND kind IN ('ofapi.action_response.v1','fansly.ws.frame.v1') AND id>${cursor} ORDER BY id LIMIT 50`,
             );
             for (const receipt of receipts) {
+              if ([scope.fanRef!, ...scope.fanGroupIds].some((ref) => fanslyWsCaptureContainsSubject(receipt.payload, ref))) {
+                candidates.add(Number(receipt.id)); shared.add(Number(receipt.id));
+              }
+              if (receipt.kind !== "ofapi.action_response.v1") continue;
               const intentId = opaqueActionReceiptMatch(app, receipt.payload, scope.fanRef!);
               if (intentId) { candidates.add(Number(receipt.id)); actionIntentIds.add(intentId); }
             }
@@ -871,6 +883,13 @@ async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLine
   const ref = scope.fanRef!;
   const fanId = scope.fanId ?? -1;
   const targets: WorkTarget[] = [];
+  const wsReceiptPred = _lineage.eraseObsIds.length
+    ? sql`observation_id in ${_lineage.eraseObsIds}` : sql`false`;
+  targets.push({
+    plane: "hot", target: "fansly_ws_decode_receipts", action: "delete",
+    rows: await countOf(app, sql`select count(*)::text as n from fansly_ws_decode_receipts where ${wsReceiptPred}`),
+    run: (tx) => execCount(tx, sql`delete from fansly_ws_decode_receipts where ${wsReceiptPred}`),
+  });
 
   // Dispatch custody has no scheduled expiry, but explicit erasure reaches
   // its native fan/message identifiers even without a projected fans row.
@@ -1379,6 +1398,8 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
     ["ofapi_credit_ledger", "page_id"],
     ["ofapi_request_attempts", "page_id"],
     ["fansly_dm_shadow_sweeps", "page_id"],
+    ["fansly_ws_decode_receipts", "page_id"],
+    ["fansly_ws_connections", "page_id"],
     ["sync_http_attempts", "page_id"],
     ["sync_run_events", "page_id"],
     ["sync_raw_payloads", "page_id"],
@@ -1779,7 +1800,7 @@ async function buildWork(app: Db, input: ErasureScopeInput): Promise<ErasureWork
   // that carries the subject names the envelopes that must go with it.
   const subject: CapturePayloadErasureSubject | null = scope.fanRef === null
     ? null
-    : capturePayloadErasureSubject(scope.fanRef);
+    : { ...capturePayloadErasureSubject(scope.fanRef), wsRefs: [scope.fanRef, ...scope.fanGroupIds] };
   const catalog = await buildCapturePayloadCatalogWork(app, {
     scopeType: scope.input.scopeType,
     pageIds: scope.pageIds,

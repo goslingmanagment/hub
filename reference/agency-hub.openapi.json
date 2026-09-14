@@ -73383,7 +73383,8 @@
                 "readthrough",
                 "command_result",
                 "operator",
-                "ofapi_capture"
+                "ofapi_capture",
+                "fansly_ws"
               ]
             },
             "in": "query",
@@ -73522,7 +73523,8 @@
                               "readthrough",
                               "command_result",
                               "operator",
-                              "ofapi_capture"
+                              "ofapi_capture",
+                              "fansly_ws"
                             ]
                           },
                           "producer": {
@@ -74853,7 +74855,8 @@
                         "readthrough",
                         "command_result",
                         "operator",
-                        "ofapi_capture"
+                        "ofapi_capture",
+                        "fansly_ws"
                       ]
                     },
                     "receivedAt": {
