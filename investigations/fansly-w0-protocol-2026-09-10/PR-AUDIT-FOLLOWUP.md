@@ -86,3 +86,9 @@ Exact commands, compressed logs and fingerprints are retained in
 This follow-up ran no new live probe or production operation. The paired live
 scope, binding, fan-out, presence and six-hour continuity remain unverified;
 merging diagnostic code does not pass W0 or permit B0/B1.
+
+Current-main follow-up integrates `a9794e60`. The prior local validation
+certifies the unchanged topic source (`1aa0d862`); the sole incoming executable/test
+change is main's verified UTC fixture. Independent `REVIEW-MAIN-A979.md`
+confirms source, decision and evidence preservation. Local suites were not
+repeated for this composition; fresh PR CI validates the full merge.
