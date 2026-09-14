@@ -26,6 +26,15 @@ page leases, proxy pacing, stream pauses, HTTP Retry-After and history quota
 still apply. An exhausted ID is retained as unresolved; it is neither declared
 deleted nor silently acknowledged. A later exact receipt can still close it.
 
+Exhaustion ends additional bounded head searches, not ordinary pending history
+(Decision 326). On allowlisted pages, only uncaptured debt with fewer than five
+attempts blocks the pending-history path. Due debt keeps head-search priority;
+unexhausted debt in backoff cannot bypass its wait through ordinary history.
+The list sweep may wake pending history after all head debt is exhausted while
+the report continues to show the unresolved IDs. That history resumes from the
+oldest stored cursor, even if the expected head is still missing. This does not fix a
+provider-deleted head or change coverage into proof of exact-ID capture.
+
 ## Separate owner gates
 
 1. **Merge and deploy:** after independent review and green checks, request
