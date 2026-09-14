@@ -29,3 +29,10 @@ Earlier attempts are retained: `check.json` failed because the newly added `it.e
 [Independent review](REVIEW.md) found no outstanding actionable findings against the final source fingerprint. It explicitly corrects an earlier, disproved concern about equal timestamps: the existing balance-series query already includes an ID tiebreaker. No production ordering change is required or included.
 
 The C1 failed-job rerun is a separate validation of its existing head at a later real time. A green rerun alone does not fix the fixture; the deterministic negative control and corrected boundary tests establish the defect and correction here.
+
+Final main composition `4c1ac492` incorporates main `b78752d0` without changing
+the reviewed fixture source. Full check passed 3,420 unit tests (nine existing
+skips, 304 files); the serial Docker PostgreSQL suite passed 26 tests with no
+skips. `final-main-validation/` retains commands, compressed logs and stable
+source hashes. The only manual merge resolution preserved both decision entries;
+`REVIEW-FINAL-MAIN-MERGE.md` independently verifies the composition.
