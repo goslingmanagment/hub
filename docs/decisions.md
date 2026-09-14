@@ -314,6 +314,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 311 | Disjoint replay with shared allowance | Keep reserved capture/replay turns and reuse unused allowance once without restarting an exhausted cursor. |
 | 315 | Empty observation replay heads | Probe actual version/source/kind index prefixes before an unrestricted scan head; keep ordered pages and scoped replay unchanged. |
 | 321 | Production performance parity | Restore deployed runtime fixes and exact applied migration identities on current main; preserve newer main changes and keep C1 membership and dashboard reconciliation visible as separate prerequisites. |
+| 324 | OFAPI fixture UTC clock | Cap ordinary ledger fixture timestamps at their captured instant; prove report boundaries with explicit observations while preserving future-fact exclusion. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -12985,3 +12986,16 @@ membership writers/protection receipts remain in PR166; dashboard feature-contro
 changes remain in their own branch. Those outstanding differences must be
 reconciled before claiming that main preserves the whole production release.
 No deployment approval or A0/C1/W0 acceptance follows from merging these files.
+
+## Decision 324: Keep ordinary OFAPI fixture facts before their report (2026-09-14)
+
+The credits integration fixture used fixed 00:01–00:06 UTC timestamps. During
+C1 CI at 00:02, the forecast correctly excluded a future 40-credit webhook fact,
+returning 92 instead of the fixture's expected 132. This is a test clock defect;
+the production report must continue to exclude facts after its observation.
+
+Capture one fixture instant and cap the existing UTC-day offsets at that instant.
+Add five PostgreSQL cases with explicit report observations at day/month boundaries
+and around the failed 00:02:30 case. Keep the intentional future-entry test and
+production queries unchanged. An original-helper negative control reproduces
+132 versus 92; the corrected suite passes all 26 cases. No runtime flag is added.
