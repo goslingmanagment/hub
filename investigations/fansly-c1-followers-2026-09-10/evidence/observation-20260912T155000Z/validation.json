@@ -1,0 +1,79 @@
+{
+  "verifiedAt": "2026-09-12T16:10:19.232672+00:00",
+  "baseHead": "998ae534e2d671fcb836a10f05d21d15b31d5d19",
+  "runtimeSource": "31b73a9691f32f8c33c3fe479bca68533c7048d6",
+  "retainedRuntimeParent": "64149b95a3029035e8008cc807ab1971140830ba",
+  "reportWindowStart": "2026-09-12T14:42:55.424771+00:00",
+  "reportWindowEnd": "2026-09-12T15:50:00+00:00",
+  "snapshotAsOf": "2026-09-12T15:52:03.374647+00:00",
+  "reportSha256": "e80da69b6df7bda5d8b7f96c402f603234e948df14f41f992ac19b05b72a47d7",
+  "rows": 65,
+  "uniqueOrderedRows": true,
+  "timelineExhausted": true,
+  "atomicReadOnlySnapshot": true,
+  "validIncrementalDecisions": 7,
+  "noRequestDecisions": 5,
+  "requestedDecisions": 2,
+  "exactGenerationCompletions": 2,
+  "actualRetirements": {
+    "lora-1": 1,
+    "lilly-2": 0
+  },
+  "physicalAttemptsByStream": {
+    "followers": 14,
+    "followers_reconcile": 285
+  },
+  "physicalAttempts": 299,
+  "retryAttempts": 0,
+  "unknownPayloadSizeAttempts": 11,
+  "localTestsRerun": false,
+  "applicationCodeChanged": false,
+  "productionMutated": false,
+  "presenceFreshnessMeasured": false,
+  "savingsMeasured": false,
+  "eventLatencyMeasured": false,
+  "reviews": {
+    "correctness": "review_pr162: no findings",
+    "quality": "quality_c1: driver aggregation wording fixed; final no findings"
+  },
+  "documentsSha256": {
+    "investigations/fansly-c1-followers-2026-09-10/OBSERVATION-20260912T155000Z.md": "64ade59722b6c3ba2f9353579a4a3f08dcef0a184f71f3ea4ef3c1df2bbb3da1",
+    "investigations/fansly-c1-followers-2026-09-10/PRESENCE-CONSUMERS-20260912.md": "5cf2034c6005fe3df2a5ac775383356258f1806a2fc9f88eca27b3bdcba348f3",
+    "investigations/fansly-c1-followers-2026-09-10/STATUS.md": "f616ba525d740990ecf675064d078e29ced60d32cff7b89f7ac2fd7270ed8e32",
+    "investigations/fansly-c1-followers-2026-09-10/REVIEW.md": "feba1b3828de789889d0ec0bae2011bffd27d8a22ad2e4cc5ac6c2275d332007",
+    "docs/runbooks/fansly-followers-diagnostics.md": "020a68fe3c2695d80ab94925b88780292b4225dff48a50076e89ef614e703f5d"
+  },
+  "evidenceSha256": {
+    "report/report.json": "e80da69b6df7bda5d8b7f96c402f603234e948df14f41f992ac19b05b72a47d7",
+    "report/report.json.manifest.json": "b60f2421057715929dcd72bcb497a621951304c89a161968ec08ca8b742cb4fb",
+    "report/read-receipt.json": "531594f8c2bb2347efb4c5e9f844aa4b3b0fe4347e31e725c658e752acd03b7c",
+    "execution.json": "035466cf753ea62784ed1255c68dbcd477c6abe2a9c86dba738679ab3452ab0f",
+    "runtime.json": "acbd789fdf6a633b54c897b563135ed534abbcb6ed1472e74cc833213ba8282c",
+    "compiled-membership.json": "8af16a684f199c8ac534a675ce2482414b5ab260b87fb4b9a506693b5998afb0",
+    "summary.json": "045b04cfe0e7a57648e99813f07595e171491b23eab602f4c99cd9694fcf5cc9",
+    "source-index.json": "119c12cf4ca5e47afc9f6b84e4a21d9b83554093f0720cfad22349309a7164a1"
+  },
+  "sourceSha256": {
+    "apps/runtime/src/services/fansly-presence.ts": "5b476915e3c5e25a448d26063fddcf60d71458b9484fd42ad25b30cc7f7791dc",
+    "apps/runtime/src/services/sync/executor-handlers.ts": "f5cc826b7f8b63dc262ec58201fb580aa910eddc32980d18ff4fadb1520444f8",
+    "packages/db/src/repositories/fans.ts": "771877d7bf6cd15588b6eb7ab4418c9372f70160ee28c788d0e0d5b4c6874950",
+    "packages/db/migrations/0185_fansly_followers_membership_read.sql": "bd9c2ee7987815ef6fd0f517a0783ead45954a2eb6ad7b5553c0075859940cb0",
+    "packages/db/src/repositories/reporting.ts": "bd256d430944b69af19f8202605b3126b8718d4ba8bf57773aa373f5106acfcd",
+    "apps/runtime/src/services/reporting.ts": "639734f03f256292c063ce1f7d37f82dea78354dd53d691fc5d49c25efb3d0f5",
+    "apps/dashboard/src/pages/FollowersPage.tsx": "959cc64872f1de4728530843531d3041276f51120076c7b9b8669478833e258c",
+    "packages/db/src/repositories/workboard-v2.ts": "78002df8756d981f26762822aacb994fb28e18ef488099b603b3e01c77828232",
+    "apps/runtime/src/modules/workboard/recompute.ts": "fab688f83971e373b8b50532d424e56a7547e186b83f1cf5ddc40dea50154a6a",
+    "apps/runtime/src/modules/workboard/engine.ts": "e9b2b0e9fab93640445d385020a90df3917cf3ab744bad1dca6f084c763a791d",
+    "apps/runtime/src/modules/workboard/report.ts": "45f5fbe55cc0e9f679e508ba352fa3e05695f456fb1aa480eaa1fab60694c8ef",
+    "packages/db/src/repositories/agent-read.ts": "a85e0d5e09cdc18afd14ceab57a3212e88d2b460bd6003aa5fb6ae8950da3431",
+    "tests/sync-handlers.test.ts": "4cdd2ea0ad4c9f00a4e492731d81c5b7700c36f51cd6387264c155825f4de26a",
+    "tests/db-write.integration.test.ts": "c36a2d2c2b65317e7440cc297ce105fcb8f045a3a5464abbc0f21d8437c75ff3"
+  },
+  "limits": [
+    "The cohort contains runs started in the selected interval.",
+    "A valid receipt is separate from certified membership and actual later counts.",
+    "Counts do not identify absent rows across generations.",
+    "No physical savings, event latency or presence freshness was measured.",
+    "Current worker started after the report cutoff."
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "command": [
+    "env",
+    "ALLOW_MISSING_TEST_PREREQUISITES=0",
+    "pnpm",
+    "exec",
+    "vitest",
+    "run",
+    "--no-file-parallelism",
+    "tests/page-sync-provider-cooldown.integration.test.ts",
+    "tests/page-sync-lease-fencing.integration.test.ts",
+    "tests/fansly-dm-conversations-sweep.integration.test.ts",
+    "tests/sync.integration.test.ts",
+    "tests/notification-incidents.integration.test.ts"
+  ],
+  "cwd": "/Users/dmitriy/.codex/worktrees/hub-fansly-retry-cooldown",
+  "startedAt": "2026-09-13T23:57:29.726511+00:00",
+  "finishedAt": "2026-09-13T23:57:52.262484+00:00",
+  "durationSeconds": 22.536,
+  "exitCode": 0
+}

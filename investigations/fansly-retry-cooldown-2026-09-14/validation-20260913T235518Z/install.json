@@ -1,0 +1,13 @@
+{
+  "command": [
+    "pnpm",
+    "install",
+    "--offline",
+    "--frozen-lockfile"
+  ],
+  "cwd": "/Users/dmitriy/.codex/worktrees/hub-fansly-retry-cooldown",
+  "startedAt": "2026-09-13T23:55:36.505233+00:00",
+  "finishedAt": "2026-09-13T23:55:39.188554+00:00",
+  "durationSeconds": 2.683,
+  "exitCode": 0
+}

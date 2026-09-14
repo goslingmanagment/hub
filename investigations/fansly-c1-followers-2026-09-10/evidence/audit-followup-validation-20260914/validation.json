@@ -1,0 +1,46 @@
+{
+  "validatedAt": "2026-09-13T23:54:33.954731+00:00",
+  "parents": [
+    "3a6eace148c1b9a238aaf50302f5de3e5e9f4749",
+    "0a08365fbefa545397f4e91a2eae3fca7c36c444"
+  ],
+  "reviewedSourceSnapshotUnchangedDuringValidation": true,
+  "reviewedContentFingerprint": "5668dcf2ef8989fa71d667fe6675298c3f1b73206eb0faa70b8ad5680632b550",
+  "check": {
+    "exitCode": 0,
+    "passed": 3366,
+    "skipped": 9,
+    "unitFiles": 300,
+    "strictnessKnownErrors": 1901,
+    "strictnessDebtFiles": 121,
+    "lintPassed": true,
+    "dashboardBuildPassed": true,
+    "durationSeconds": 49.192254,
+    "receipt": "check-clean-execution.json"
+  },
+  "integration": {
+    "exitCode": 0,
+    "passed": 102,
+    "skipped": 0,
+    "files": 8,
+    "vitestDurationSeconds": 29.96,
+    "receipt": "integration-execution.json",
+    "database": "Docker postgres:16 created by tests/helpers/global-setup.ts; suites ran serially"
+  },
+  "initialFailure": {
+    "exitCode": 1,
+    "phase": "lint",
+    "count": 14,
+    "rule": "@typescript-eslint/no-explicit-any",
+    "scope": "Two pre-existing untracked sync-health-latency probes; no tracked candidate finding",
+    "receipt": "check-initial-execution.json"
+  },
+  "temporaryRelocation": {
+    "manifest": "untracked-probe-relocation.json",
+    "allOriginalBytesRestored": true,
+    "trackedExclusionsChanged": false
+  },
+  "migration0185Sha256": "bd9c2ee7987815ef6fd0f517a0783ead45954a2eb6ad7b5553c0075859940cb0",
+  "productionActions": false,
+  "policyPresenceAcceptance": false
+}

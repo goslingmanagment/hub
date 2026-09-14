@@ -367,6 +367,9 @@ describe("notification incidents integration", () => {
       `stream_failed_threshold:${page.id}:followers`,
     )).toEqual(expect.objectContaining({ status: "open" }));
     expect(telegramMocks.sendTelegramMessage).toHaveBeenCalledTimes(1);
+    expect(telegramMocks.sendTelegramMessage).toHaveBeenLastCalledWith(expect.anything(), {
+      text: expect.not.stringContaining("3x"),
+    });
   });
 
   it("detects terminal proxy failures from the newest attempt window instead of the oldest rows", async (context) => {

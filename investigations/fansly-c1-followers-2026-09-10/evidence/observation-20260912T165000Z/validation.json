@@ -1,0 +1,34 @@
+{
+  "sourceHead": "6d3dd3f1c2f6c4b512672f9fc8d2ac22cc2f468c",
+  "productionSource": "31b73a9691f32f8c33c3fe479bca68533c7048d6",
+  "ci": {
+    "run": 34705870344,
+    "conclusion": "success",
+    "checks": 5
+  },
+  "reportSha256": "9aff306bb65c8eaaf1e8645515b5a22af1644329736f6ea786750c602c1816e9",
+  "captureResultSha256": "27ef36c81e77d0a1842c17d854df7b23a8cfde6567772c43f77b194854de4724",
+  "captureExecutedSqlSha256": "194042171a643b8fc50d4935096ae05cd16b90381fcf55eb9104ea12c77ac493",
+  "captureTrimSourceSha256": "00b005a7c860e6c83af1e3a60b2320305f109418edc8da469512588c06e3a4da",
+  "reportRecordsOrderedUniqueExhausted": true,
+  "perRunCaptureCountsMatchStatistics": true,
+  "initialReportRefusedFutureCutoffBeforeSql": true,
+  "newApplicationCode": false,
+  "newLocalTests": false,
+  "productionMutations": 0,
+  "reviews": {
+    "correctness": {
+      "reviewer": "review_pr162",
+      "openFindings": 0,
+      "scope": "Report cohort, capture query, counts, hashes and interpretation limits."
+    },
+    "quality": {
+      "reviewer": "quality_c1",
+      "fixedFindings": 1,
+      "openFindings": 0,
+      "fix": "A processed relation is not described as a proven insertion.",
+      "rereviewed": true
+    }
+  },
+  "scope": "One report cohort plus a separate retained-capture snapshot; not provider completeness or historical presence."
+}
