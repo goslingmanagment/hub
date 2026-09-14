@@ -1,0 +1,55 @@
+[
+  {
+    "command": [
+      "pnpm",
+      "check"
+    ],
+    "startedAt": "2026-09-14T15:22:01.851298+00:00",
+    "finishedAt": "2026-09-14T15:23:01.249692+00:00",
+    "exitCode": 0,
+    "log": "candidate-1.log",
+    "logSha256": "bad57a847a1cd514fd9285b732dcf86b648a9647e9c3b958f3530d1497b72968",
+    "logArchive": "candidate-1.log.gz"
+  },
+  {
+    "command": [
+      "python3",
+      "tests/fansly-probe-launcher.py"
+    ],
+    "startedAt": "2026-09-14T15:23:01.250626+00:00",
+    "finishedAt": "2026-09-14T15:23:01.358692+00:00",
+    "exitCode": 0,
+    "log": "candidate-2.log",
+    "logSha256": "ceea5e339bfb84b2653af263ee2fe0a0e2de2bfaed2f3efd00a6d42b42fde502",
+    "logArchive": "candidate-2.log.gz"
+  },
+  {
+    "command": [
+      "python3",
+      "tests/fansly-continuity-launcher.py"
+    ],
+    "startedAt": "2026-09-14T15:23:01.358969+00:00",
+    "finishedAt": "2026-09-14T15:23:01.444472+00:00",
+    "exitCode": 0,
+    "log": "candidate-3.log",
+    "logSha256": "3d05864adaa7a067c6dd8f488b76741afad7cdf90e6cdbe6566339424de57b0f",
+    "logArchive": "candidate-3.log.gz"
+  },
+  {
+    "command": [
+      "pnpm",
+      "exec",
+      "vitest",
+      "run",
+      "--no-file-parallelism",
+      "tests/fansly-probe-context.integration.test.ts",
+      "tests/fansly-probe-transport.test.ts"
+    ],
+    "startedAt": "2026-09-14T15:23:01.444887+00:00",
+    "finishedAt": "2026-09-14T15:23:08.860607+00:00",
+    "exitCode": 0,
+    "log": "candidate-4.log",
+    "logSha256": "fc1d75b3f7f58cfd066fdf77a0398339d6bd532735568ee0364ffa35df661755",
+    "logArchive": "candidate-4.log.gz"
+  }
+]

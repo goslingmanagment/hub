@@ -331,6 +331,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 331 | Earnings completion settlement | Reuse a fully completed checkpoint only for its owning request sequence; preserve read timestamps, daily cadence and newer work. |
 | 332 | A0 material-query cost read plane | Expose one bounded current-head EXPLAIN through the existing read_only role; keep runtime queries and coverage gates unchanged. |
 | 333 | Live new-follower drafts | Fansly extension reads live followers and history; Hub generates one draft with profile/avatar context and coordinates one-attempt browser sends. |
+| 333 | W0 continuity experiment | Run one bounded Lilly-1 six-hour observation and two receiver-only gaps; share short/long admission and keep binding, presence and recovery as independent evidence. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -13583,3 +13584,45 @@ Migration 0193 adds the operational attempt journal. The deliberate new Fansly
 platform branch restricts this browser custody surface; OnlyFans already has
 its own kernel send outbox. Deploy Core before extension 2.2.0. No production
 messages are sent as a smoke test without a separate owner instruction.
+
+## Decision 333: Prepare a bounded Lilly-1 W0 continuity experiment (2026-09-14)
+
+The 120-second W0 probe cannot provide the accepted six-hour continuity and
+receiver-gap evidence. Keep its duration, invocation and sanitized report shape.
+Add an explicit operator-only continuity entrypoint using the existing encrypted
+Lilly-1 REST session and dedicated page proxy from Decision 325. It makes no
+REST requests, business writes, automatic recovery dispatch or runtime flag.
+
+One connection is observed for six hours from its first valid type-1 envelope;
+that is an observed frame marker, not verified account binding. After confirmed
+owned-container removal, wait 30 seconds and observe one two-minute connection,
+then repeat with a 240-second gap. Do not add short sessions to meet six hours or
+retry unexpected closure/auth/transport failure. A shared connection observer
+keeps the existing heartbeat and bounded decoding policy consistent.
+
+The reviewed short and long launchers share host/page file admission and one
+Docker name per page. A per-run UUID label authorizes cleanup of its immutable
+container ID only; a foreign/orphaned container is refused. Host and Node
+deadlines, cancellation, container memory/CPU/PID limits and bounded streamed
+metadata keep the experiment finite. The host fsyncs its regular output files
+after attach shutdown; the container's stdout is a pipe. This is W0 diagnostic
+evidence, not B0 raw-before-route durable capture or distributed worker ownership.
+
+Periodic short READ ONLY snapshots compare the credential/route fingerprint
+without allocating dispatchers or decrypting additional tokens. A failed or
+changed check stops the observer; sampled stability is not continuous config
+history. Preserve actual connection/cleanup times, interrupted gaps, output
+limits, missing receipts and unknown evidence. The original experiment key stays
+private; only its validated temporary copy is removed.
+
+Exit zero means the collection completed. Page/account binding, paired native
+browser delivery, external fan-side presence and REST recovery remain separately
+reviewed evidence. Lilly-1 is the selected creator page; another fan account is
+needed only for independent presence observation. Existing REST continues; its
+capture/run and reader receipts must prove recovery to the prior agreed boundary.
+The default backward-history targeted job is not substituted for a new-head
+catch-up. There is no provider replay, savings, reader-latency or B0 acceptance
+claim. Stop the owned experiment to roll back; healthy REST stays unchanged.
+
+See [the continuity runbook](runbooks/fansly-ws-continuity.md) and
+[implementation evidence](../investigations/fansly-w0-continuity-2026-09-14/STATUS.md).

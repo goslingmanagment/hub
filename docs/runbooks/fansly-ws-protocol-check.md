@@ -81,6 +81,8 @@ not an API/worker/scheduler deployment or a new runtime flag.
 `scripts/fansly-ws/run-probe.py` requires `--bundle`, `--environment`, `--image`,
 `--network`, `--page` and a new `--output` directory; `--seconds` defaults to 120.
 Before invoking it, verify the immutable image ID and the existing Docker network.
+Copy `launcher_inputs.py` and `launcher_container.py` alongside `run-probe.py`;
+the short and long launchers use these same reviewed admission/cleanup helpers.
 The private environment file supplies the existing runtime encryption keys and
 the existing runtime DATABASE_URL, retained within the trusted production host.
 The pool defaults to read-only transactions; every short REPEATABLE READ,
@@ -90,8 +92,10 @@ psql diagnostics still use read_only.
 
 The launcher uses a disposable container with 256 MiB memory, no swap, 0.25 CPU,
 64 PIDs, a read-only filesystem and dropped capabilities. A host-side 150-second
-deadline kills attach and force-removes only this run's UUID-named container.
-SIGTERM and failed attach shutdown also pass through container cleanup. Inspect
+deadline stops attach and removes only this run's verified container ID.
+SIGTERM and failed attach shutdown also pass through container cleanup. Short and long launchers share host/page admission and the Docker name
+`hub-fansly-w0-<page>`; a run UUID label protects ownership. An orphaned or
+foreign container is refused, never taken over. Inspect
 `execution.json` for confirmed cleanup; a failed removal is unresolved. Do not
 run the entrypoint inside a production role's container: V8 heap limits alone
 cannot bound undici's fragmented-message buffers, and destroying its dispatcher
@@ -206,3 +210,12 @@ Preserve the timeline, failed cases, unknown scope and recovery receipts.
 B0 remains blocked until those gates pass. Its capture ownership, proxy transport,
 durability, erasure, generation fences and seven-day shadow are separate work.
 This W0 PR contains no durable receiver and needs no production flag.
+
+## Explicit continuity experiment
+
+The separate [continuity runbook](fansly-ws-continuity.md) describes the prepared
+Lilly-1 six-hour observation and scheduled 30-second/240-second receiver-only
+gaps. Build that explicit entrypoint with `build-probe.mjs <new.mjs> --continuity`.
+The short probe's 5–120-second invocation and evidence meaning are unchanged.
+Both launchers must come from the same reviewed revision so their shared page
+admission applies. No repeated short probes count as a six-hour observation.

@@ -1,0 +1,27 @@
+{
+  "base": "e73513737e19b01bd74a4bfbfc6eeed1ffe56d69",
+  "files": {
+    "apps/runtime/src/services/egress/fansly-probe-context.ts": "4943f5b8d6a8e0b20f54fa5b20a62802c1bde7219f13dc5e041aa372dde6604a",
+    "docs/decisions.md": "13b0f3529c73d36de8d6e004c940de6a5abcc06330d23514c88f707f18f2b687",
+    "docs/runbooks/fansly-ws-continuity.md": "d25249f241ce1218c51d20acb3ff631325be5ce0d86f14abd5bb403876e84400",
+    "docs/runbooks/fansly-ws-protocol-check.md": "299cff822d29e4f127a2c2dcee5af97c1375c6d3307b1e4d1fb714fb7ea9a258",
+    "scripts/fansly-ws/build-probe.mjs": "8958d19e6de8a0aa16ae49d3ce8344637934db68f67b04eaab22b9c410f3454e",
+    "scripts/fansly-ws/connection-observer.ts": "abe1f25aad7fdd23cf52bf5d4ae24aecf0a7171541be1badcceb21fc3e69be13",
+    "scripts/fansly-ws/continuity-cli.ts": "2b13fb7b1fdfea60eca96fc3a3ef71e8318b057eb4622b5646ad739b47cd74ae",
+    "scripts/fansly-ws/continuity-receipts.ts": "9e5e1601c80eb83dfce3886d4c113bc75a8c3e06fed0a8d2312f9b5521dbc614",
+    "scripts/fansly-ws/continuity-runtime.ts": "c4a295401f5207b941aa845d915c899647b9f005853f6265702f65b3cfbdf2cf",
+    "scripts/fansly-ws/continuity.ts": "d9197c62feeae8cf58d37fb7135ec77b414fc1d3b1144b696f0b726d3d004e12",
+    "scripts/fansly-ws/continuity_receipt.py": "2bfb09edd8e2d25cefe87e2afe457b067c149179b75d9d08fee8cd8c3df0257b",
+    "scripts/fansly-ws/generation-watch.ts": "748bd472fabfa0f63f1c5604091c09b99037e5d52f9729c806e67d24a328eeb9",
+    "scripts/fansly-ws/launcher_container.py": "3c96431b3e9f28e561915f9a2ced3505c9186784adfb1b4cdd2df15903a363b5",
+    "scripts/fansly-ws/launcher_inputs.py": "6e20886cd5559cc911ec8f86fa795a6da3a8eeb5dc08e5eff182aec39118b0e4",
+    "scripts/fansly-ws/probe-observer.ts": "0f4ea2697d7d95f52e2c1e5b584bb48d8adb0996246dfd0cdd8c823d410f4a51",
+    "scripts/fansly-ws/run-continuity.py": "6ed753841bc6791e963ef3cad28b5bbf7327b484291fbdaf34604dc06331135b",
+    "scripts/fansly-ws/run-probe.py": "f3a6c79afefc82f1d019280cbd41885580c065f302f1d048681fe060ecdc149b",
+    "tests/fansly-continuity-launcher.py": "07638d7cfe7cf8fff4c7c5d5b85f87df56893eeaa04cd6884b323a2cfe3ba75c",
+    "tests/fansly-continuity-receipts.test.ts": "86226374dfe940085d8ed4998dec7ec4c8aa78a499ebf7ae8431c5a4e1c357c5",
+    "tests/fansly-continuity.test.ts": "b60ab6f905442f27e0af36126ceba37702a51c9a0511407dce4693e149aa70df",
+    "tests/fansly-probe-context.integration.test.ts": "5d739c812f75e1433191272f9bd728258d55872d1ca2552b06cbccd912cb6a42",
+    "tests/fansly-probe-launcher.py": "8103881f1cd92aa9bfc61e82b5abcc28ca56f9ba6c89aa94df7dfcbe3df9c9f8"
+  }
+}

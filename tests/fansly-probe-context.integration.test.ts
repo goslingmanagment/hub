@@ -7,7 +7,7 @@ import {
 import { encryptJson } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
-import { resolveFanslyProbeContext } from "../apps/runtime/src/services/egress/fansly-probe-context.ts";
+import { readProbeGeneration, resolveFanslyProbeContext } from "../apps/runtime/src/services/egress/fansly-probe-context.ts";
 import * as resolver from "../apps/runtime/src/services/egress/resolver.ts";
 import { resolvePageContext, saveProxy } from "../apps/runtime/src/services/page-context.ts";
 import { readProbeSnapshot } from "../scripts/fansly-ws/probe.ts";
@@ -99,6 +99,21 @@ async function snapshot() {
 }
 
 describe("Fansly W0 stored probe context", () => {
+  it("checks the same generation without creating dispatchers or changing any rows", async () => {
+    const page = await seed("generation-only");
+    const context = await readProbe(page.label);
+    await context.egress.close();
+    resolveSpy.mockClear();
+    const before = await snapshot();
+    expect(await readProbeGeneration(app.db, page.label)).toBe(context.generation);
+    expect(await readProbeGeneration(app.db, page.label)).toBe(context.generation);
+    expect(resolveSpy).not.toHaveBeenCalled();
+    expect(await snapshot()).toEqual(before);
+    await storeBundle(page.id, { authorization: "rotated-token" });
+    expect(await readProbeGeneration(app.db, page.label)).not.toBe(context.generation);
+    await testDb.pool.query("update pages set status = 'deleted', deleted_at = now() where id = $1", [page.id]);
+    await expect(readProbeGeneration(app.db, page.label)).rejects.toThrow(/not found/);
+  });
   it("uses the existing application/admin connection in a read-only, repeatable-read snapshot", async () => {
     const page = await seed("runtime-db-role");
     const before = await snapshot();
