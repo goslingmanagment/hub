@@ -4,6 +4,7 @@ import type { WorkboardV2Item } from "@agency_hub_core/contracts";
 import { Check, MessageSquare, MoonStar } from "lucide-react";
 
 import { usePageConversationPreview } from "@/api/queries";
+import { QueryNotice } from "@/components/shared/QueryNotice";
 import { formatMills } from "@/lib/format";
 
 import { QuadrantGlyph } from "./QuadrantGlyph.js";
@@ -55,7 +56,7 @@ function ConversationFallback({ item }: { item: WorkboardV2Item }) {
   const model = item.conversation.lastModelMessageAt;
   const preview = item.conversation.preview;
   if (!fan && !model && !preview) {
-    return <div className="text-text-muted">Нет переписки с этим фаном.</div>;
+    return <div className="text-text-muted">Сохранённая переписка недоступна.</div>;
   }
   const fanLast = (fan ? new Date(fan).getTime() : 0) >= (model ? new Date(model).getTime() : 0);
   return (
@@ -79,7 +80,7 @@ function ConversationFallback({ item }: { item: WorkboardV2Item }) {
 
 function ConversationPreview({ pageLabel, item }: { pageLabel: string; item: WorkboardV2Item }) {
   const convId = item.conversation.platformConversationId;
-  const { data, isLoading } = usePageConversationPreview(pageLabel, convId, { limit: 10 });
+  const { data, isLoading, isError, refetch } = usePageConversationPreview(pageLabel, convId, { limit: 10 });
   const messages = [...(data?.messages ?? [])].sort(
     (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
   );
@@ -88,10 +89,11 @@ function ConversationPreview({ pageLabel, item }: { pageLabel: string; item: Wor
   }
   // No synced messages (or no conversation id) → fall back to the thread's denormalized timing.
   if (messages.length === 0) {
-    return <ConversationFallback item={item} />;
+    return <><QueryNotice error={isError} stale={Boolean(data)} retry={refetch} /><ConversationFallback item={item} /></>;
   }
   return (
     <div className="flex flex-col gap-1.5">
+      <QueryNotice error={isError} stale={Boolean(data)} retry={refetch} />
       {messages.map((m) => {
         const mine = m.senderRole === "model";
         return (
@@ -268,7 +270,7 @@ export function WorkboardV2Row({
           tier={item.value.tier as ValueTier}
           estimated={item.value.confidence === "low"}
         />
-        <button type="button" onClick={() => onToggle(item.fanId)} className="min-w-0 flex-1 text-left">
+        <button type="button" onClick={() => onToggle(item.fanId)} aria-expanded={expanded} className="min-w-0 flex-1 text-left">
           <div className="flex flex-wrap items-center gap-1.5">
             <span className="max-w-[180px] truncate text-[13px] font-medium text-text-primary">{fanName(item)}</span>
             {item.online && (
@@ -309,6 +311,7 @@ export function WorkboardV2Row({
           <button
             type="button"
             onClick={() => setSnoozeOpen((open) => !open)}
+            disabled={isHandling}
             className="inline-flex items-center gap-0.5 rounded-button border border-border px-1.5 py-1 text-[11px] text-text-secondary transition-colors hover:bg-hover"
             aria-label="Отложить"
           >
@@ -322,6 +325,7 @@ export function WorkboardV2Row({
                   <button
                     key={d}
                     type="button"
+                    disabled={isHandling}
                     onClick={() => {
                       setSnoozeOpen(false);
                       onSnooze(item.fanId, d);

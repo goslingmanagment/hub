@@ -1,0 +1,12 @@
+{
+  "command": [
+    "gh",
+    "api",
+    "--allow-escape-sequences",
+    "repos/goslingmanagment/core/actions/jobs/103821767892/logs"
+  ],
+  "job": 103821767892,
+  "run": 34793396023,
+  "head": "bfdb14404a520ddfa8aab1bf64011db10b362ab4",
+  "rawSha256": "281d689c4b2e0b302d8845225f5e105ad5e9ab0dac4ee49d5d4c8267e189c2af"
+}

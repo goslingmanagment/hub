@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import type { WorkboardV2AiRun } from "@agency_hub_core/contracts";
 import { AlertTriangle, Loader2, RefreshCw } from "lucide-react";
 
-import { fmtNum, fmtUsd } from "./AiPageDashboard";
+import { fmtNum, fmtUsd } from "./AiPageDashboard.js";
 
 const TRIGGER_META: Record<string, { label: string; className: string }> = {
   cron: { label: "Cron", className: "bg-fansly/15 text-fansly" },
@@ -34,7 +34,7 @@ function RunRow({ run }: { run: WorkboardV2AiRun }) {
   const t = triggerMeta(run.trigger);
   const running = run.status === "running";
   return (
-    <div className={`flex items-start gap-3 border-b border-border px-3 py-2 text-[12px] last:border-b-0 hover:bg-hover/40 ${running ? "bg-accent/[0.04]" : ""}`}>
+    <div className={`flex flex-wrap items-start gap-3 border-b border-border px-3 py-2 text-[12px] last:border-b-0 hover:bg-hover/40 ${running ? "bg-accent/[0.04]" : ""}`}>
       <span className="w-[92px] shrink-0 text-text-muted" title={absTime(run.createdAt)}>
         {timeAgo(run.createdAt)}
       </span>
@@ -42,7 +42,7 @@ function RunRow({ run }: { run: WorkboardV2AiRun }) {
       <span className="w-[120px] shrink-0 truncate font-medium text-text-primary" title={run.pageLabel ?? ""}>
         {run.pageLabel ?? "—"}
       </span>
-      <div className="min-w-0 flex-1 text-text-secondary">
+      <div className="min-w-0 basis-full break-words text-text-secondary sm:flex-1">
         {running ? (
           <span className="inline-flex items-center gap-1.5 font-semibold text-accent">
             <Loader2 size={12} className="animate-spin" />
@@ -73,11 +73,15 @@ export function AiRunLog({
   runs,
   isLoading,
   isFetching,
+  isError = false,
+  hasSnapshot = true,
   onRefresh,
 }: {
   runs: WorkboardV2AiRun[];
   isLoading: boolean;
   isFetching: boolean;
+  isError?: boolean;
+  hasSnapshot?: boolean;
   onRefresh: () => void;
 }) {
   const [trigger, setTrigger] = useState<TriggerFilter>("all");
@@ -106,7 +110,7 @@ export function AiRunLog({
       <div className="flex flex-wrap items-center gap-2 border-b border-border px-3 py-2">
         <span className="inline-flex items-center gap-1.5 text-[13px] font-semibold text-text-primary">
           <span className={`h-1.5 w-1.5 rounded-full ${isFetching || liveCount > 0 ? "animate-pulse bg-green" : "bg-text-muted"}`} />
-          Журнал запусков классификатора
+          Журнал запусков классификатора · все страницы
         </span>
         <span className="text-[11px] text-text-muted">
           {filtered.length} записей{liveCount > 0 && ` · ${liveCount} выполняется`}
@@ -118,6 +122,7 @@ export function AiRunLog({
               <button
                 key={tt.key}
                 type="button"
+                aria-pressed={trigger === tt.key}
                 onClick={() => setTrigger(tt.key)}
                 className={`px-2 py-1 text-[11px] transition-colors ${
                   trigger === tt.key ? "bg-accent/15 font-semibold text-accent" : "bg-card text-text-secondary hover:bg-hover"
@@ -129,6 +134,7 @@ export function AiRunLog({
           </div>
           {pages.length > 1 && (
             <select
+              aria-label="Страница в журнале запусков"
               value={page}
               onChange={(e) => setPage(e.target.value)}
               className="rounded-md border border-border bg-card px-2 py-1 text-[11px] text-text-secondary"
@@ -144,6 +150,7 @@ export function AiRunLog({
           <button
             type="button"
             onClick={onRefresh}
+            disabled={isFetching}
             className="inline-flex items-center gap-1 rounded-button border border-border px-2 py-1 text-[11px] text-text-secondary transition-colors hover:bg-hover"
           >
             <RefreshCw size={12} className={isFetching ? "animate-spin" : ""} />
@@ -153,11 +160,12 @@ export function AiRunLog({
       </div>
 
       <div className="max-h-[460px] overflow-y-auto">
+        {isError && <p role="alert" className="px-3 py-3 text-xs text-warning-dark">{hasSnapshot ? "Не удалось обновить журнал. Показаны предыдущие записи." : "Не удалось загрузить журнал запусков. Нажмите «Обновить»."}</p>}
         {isLoading ? (
           <div className="py-10 text-center text-[12px] text-text-muted">Загрузка…</div>
-        ) : filtered.length === 0 ? (
+        ) : isError && !hasSnapshot ? null : filtered.length === 0 ? (
           <div className="py-10 text-center text-[12px] text-text-muted">
-            Пока нет запусков. Нажмите «Классифицировать сейчас» или дождитесь ночного прогона (03:00 UTC).
+            {runs.length > 0 ? "По этим фильтрам запусков нет. Выберите другие фильтры." : "В сохранённом журнале запусков пока нет. Ручной запуск доступен выше; ночной зависит от настроек классификатора."}
           </div>
         ) : (
           filtered.map((r) => <RunRow key={r.id} run={r} />)

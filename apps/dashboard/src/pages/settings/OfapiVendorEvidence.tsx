@@ -21,6 +21,8 @@ export function OfapiVendorEvidence() {
   const [visibility, setVisibility] = useState<Scope["visibility"]>("unknown");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const windowDays = (Date.parse(to) - Date.parse(from)) / 86_400_000;
+  const invalidWindow = !from || !to || !Number.isFinite(windowDays) || windowDays < 0 || windowDays >= 366 || to > yesterday;
   const run = async (action: () => Promise<void>) => {
     setPending(true); setError(null);
     try { await action(); } catch (reason) { setError(reason instanceof Error ? reason.message : "Не удалось прочитать состояние"); }
@@ -32,7 +34,7 @@ export function OfapiVendorEvidence() {
     <div className="mt-4 flex flex-wrap items-end gap-3">
       <label className="grid gap-1 text-sm">С<input aria-label="Сверка с даты" className={inputClass} type="date" value={from} max={yesterday} onChange={e => setFrom(e.target.value)} /></label>
       <label className="grid gap-1 text-sm">По<input aria-label="Сверка по дату" className={inputClass} type="date" value={to} max={yesterday} onChange={e => setTo(e.target.value)} /></label>
-      <button className={buttonClass} disabled={pending || !from || !to} onClick={() => void run(async () => {
+      <button className={buttonClass} disabled={pending || invalidWindow} onClick={() => void run(async () => {
         setReport(await readOfapiVendorUsage({ from, to, groupBy: "day", accountId: null, includeToday: false }));
       })}>Сверить закрытые дни · 0 credits</button>
       <button className={buttonClass} disabled={pending} onClick={() => void run(async () => {
@@ -40,9 +42,11 @@ export function OfapiVendorEvidence() {
         setKnown(value.capabilities !== null); setAccounts(value.accountIds?.join(", ") ?? ""); setVisibility(value.visibility);
       })}>Прочитать права ключа</button>
     </div>
+    {invalidWindow && <p className="mt-2 text-sm text-red-700">Выберите от 1 до 366 закрытых дней; начало не может быть позже конца.</p>}
     {pending && <p className="mt-3 text-sm" role="status">Проверяем…</p>}
     {error && <p className="mt-3 text-sm text-red-700" role="alert">{error} Черновик сохранён. При конфликте сначала перечитайте права.</p>}
     {report && <div className="mt-4 space-y-2 text-sm">
+      <p>Период полученного отчёта: {report.vendor.from} — {report.vendor.to} UTC.</p>
       <p>OFAPI: <strong>{report.vendor.totals.credits}</strong> credits · Hub: <strong>{report.local.recordedCredits}</strong> · разница: <strong>{report.difference}</strong></p>
       <p>Из Hub оценочные: {report.local.estimatedCredits}. Отдельный остаток сверки баланса: {report.local.externalResidualCredits}.</p>
       <p className="text-text-secondary">Область: {report.visibility}. Совпадение исторической области ключа не доказано. Разница сама по себе не подтверждает потерю расходов. Снимок №{report.snapshotId}, {report.observedAt}.</p>

@@ -1012,10 +1012,14 @@ function KeyRevealModal({
   const [copied, setCopied] = useState(false);
 
   async function handleCopy() {
-    await navigator.clipboard.writeText(keyValue);
-    setCopied(true);
-    toast.success("Copied to clipboard");
-    setTimeout(() => setCopied(false), 2000);
+    try {
+      await navigator.clipboard.writeText(keyValue);
+      setCopied(true);
+      toast.success("Copied to clipboard");
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      toast.error("Clipboard unavailable. Select and copy the key shown here before closing.");
+    }
   }
 
   return (
@@ -1064,10 +1068,10 @@ function ChatterDetailModal({
   onClose: () => void;
   onDeactivate: () => void;
 }) {
-  const { data: apiKeys, isLoading: keysLoading } = useAdminUserApiKeys(
+  const { data: apiKeys, isLoading: keysLoading, isError: keysError, error: keysErrorValue } = useAdminUserApiKeys(
     user.username,
   );
-  const { data: allPages } = useAdminPages();
+  const { data: allPages, isLoading: pagesLoading, isError: pagesError, refetch: refetchPages } = useAdminPages();
   const assignPage = useAdminAssignPage(user.username);
   const unassignPage = useAdminUnassignPage(user.username);
   const setUserPassword = useAdminSetPassword(user.username);
@@ -1100,7 +1104,7 @@ function ChatterDetailModal({
   );
 
   async function handleAssign() {
-    if (!selectedLabel) return;
+    if (!selectedLabel || pagesError || !availablePages.some((page) => page.label === selectedLabel) || assignPage.isPending || unassignPage.isPending) return;
     try {
       await assignPage.mutateAsync({ pageLabel: selectedLabel });
       toast.success(`Assigned ${selectedLabel} to ${user.username}`);
@@ -1160,9 +1164,10 @@ function ChatterDetailModal({
           <h3 className="mb-2 text-sm font-semibold text-text-primary">
             Key History
           </h3>
-          {keysLoading ? (
+          {keysError && <StaleDataNotice title={apiKeys ? "Key history refresh failed" : "Key history unavailable"} error={keysErrorValue} className="mb-2" />}
+          {keysLoading && !apiKeys ? (
             <p className="text-sm text-text-muted">Loading...</p>
-          ) : !apiKeys || apiKeys.length === 0 ? (
+          ) : !apiKeys ? null : apiKeys.length === 0 ? (
             <p className="text-sm text-text-muted">No keys have been issued.</p>
           ) : (
             <div className="space-y-1.5">
@@ -1214,6 +1219,9 @@ function ChatterDetailModal({
           onUnassign={handleUnassign}
           assignPending={assignPage.isPending}
           unassignPending={unassignPage.isPending}
+          pagesLoading={pagesLoading && !allPages}
+          pagesError={pagesError}
+          onRetryPages={() => void refetchPages()}
         />
 
         {/* Deactivation (#126: tombstone, never delete) */}

@@ -1,0 +1,19 @@
+{
+  "checkedAt": "2026-09-14T00:07:05.008Z",
+  "sourcePath": "apps/dashboard/src/pages/OfapiMarketing.tsx",
+  "production": "380326368fe39a6a9d22eb73b0b955f8ecd7c3cc",
+  "typescriptVersion": "6.0.3",
+  "compilerModule": "/Users/dmitriy/.codex/worktrees/hub-fansly-retry-cooldown/node_modules/.pnpm/typescript@6.0.3/node_modules/typescript/lib/typescript.js",
+  "compilerOptions": {
+    "target": 9,
+    "module": 99,
+    "jsx": 4,
+    "removeComments": true
+  },
+  "productionSha256": "4fb25283af04f57db46e2049a2942f85b0d65ecb8025ac2e271da031def906b6",
+  "candidateSha256": "c5a2f07b87041891935b239fa54560e0795ff2c4b2d7ea44d9de42719a3094d0",
+  "canonicalEmittedAstSha256": "1e044fd7acc2be98707f5e73d8f273b535a7350c48c33e68963991abd5a6448e",
+  "equal": true,
+  "comparison": "Recursive emitted-JavaScript node kinds and leaf text; positions/trivia ignored",
+  "scope": "Offline transpilation/AST comparison, including rendered JSX text; not a test-suite run"
+}
