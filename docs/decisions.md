@@ -13097,7 +13097,8 @@ A separate container and external deadline
 bound undici transport memory and lifetime. It exports only received metadata,
 makes no REST requests and performs no database writes. Its one additional
 platform guard rejects non-Fansly pages before decrypting the session; the platform
-branch budget increases from 155 to 156 for this explicit boundary.
+branch budget increases from current main's 157 to 158 for this explicit boundary
+(the original W0-only increment was 155 to 156 before the performance import).
 
 The public stable server contract remains unproven. Binding, type-1 verification
 distinct from pong, fan-out,
