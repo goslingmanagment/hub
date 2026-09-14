@@ -1,0 +1,47 @@
+{
+  "reviewedAt": "2026-09-14T00:09:30.216821+00:00",
+  "base": "478fca4220d3d07d61a9200d1860316e770cb4fe",
+  "candidateHead": "644b56b6a7d5a31e05312429e401ea1490272fd6",
+  "scope": "Static follow-up of unchanged six-file behavioral patch after main merge and three added/updated documents",
+  "sixFileAddedRemovedLinesIdenticalToPreviouslyReviewedPatch": true,
+  "testsRunByReviewer": false,
+  "productionActions": false,
+  "files": [
+    {
+      "path": "packages/db/src/repositories/page-sync.ts",
+      "sha256": "92331e7b69e39072961f9e40d76963feac1081a720941605bd8843d2ceac83a3"
+    },
+    {
+      "path": "apps/runtime/src/services/sync/executor.ts",
+      "sha256": "60dd8509adf07c4fe26b153529113ca6f7b7d510e8d9ad27715a3c5994000f44"
+    },
+    {
+      "path": "apps/runtime/src/services/notification-incidents.ts",
+      "sha256": "73a433e4ff9179067db8fdc09ce78ac39ac09873bdaef2d4ebff8162a025447e"
+    },
+    {
+      "path": "tests/page-sync-provider-cooldown.integration.test.ts",
+      "sha256": "e670a0111fc65b205e2e21b9e5c8d0bfce67c71eb80daea6b3d21d0470902dab"
+    },
+    {
+      "path": "tests/sync-executor.test.ts",
+      "sha256": "17131668e55a2ebee908c91421e7703d32a4a766b0a8443ff5f0b3595e99cfd5"
+    },
+    {
+      "path": "tests/notification-incidents.integration.test.ts",
+      "sha256": "f4f97eba1242bb5a81cd62ba5f0d719a1370401aa82461ecd7297550df073c31"
+    },
+    {
+      "path": "docs/decisions.md",
+      "sha256": "95c56e7cad5c4f2e43029632632b9a60944657fc18ea8b0a91d0c9ce73d4a51d"
+    },
+    {
+      "path": "docs/error-handling.md",
+      "sha256": "bda3f0802b4015cdeb59625ad909160a6e5744e01d82fedb758ea3e732f3a452"
+    },
+    {
+      "path": "docs/runbooks/fansly-provider-cooldown.md",
+      "sha256": "e78e923957eab63590743f5aaf6e46cc5f4de0abd64bbab35dd4781450a7fd84"
+    }
+  ]
+}
