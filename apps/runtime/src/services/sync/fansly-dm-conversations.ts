@@ -27,7 +27,6 @@ import {
   findErasureLogTouchingPageSince,
   getCheckpoint,
   observeFanslyDmHead,
-  hasUnresolvedFanslyDmHead,
   nextFanslyDmHeadRetryAt,
   listPageDmConversationsByPlatformConversationIds,
   listPageDmThreadIdsStampedWithGeneration,
@@ -1012,7 +1011,7 @@ export async function fanslyDmConversationsChunk(
         }) : null;
         const pendingHistory = headCatchupEnabled &&
           upsertedConversation.messageCoverageStatus === "pending_backfill" &&
-          !(await hasUnresolvedFanslyDmHead(dbTx, upsertedConversation.id));
+          retryAt === null;
         if (shouldRequestDmMessagesFollowup(upsertedConversation,
           headCatchupEnabled ? pendingHistory || (retryAt !== null && retryAt <= new Date()) : undefined)) {
           dmMessagesFollowupNeeded = true;

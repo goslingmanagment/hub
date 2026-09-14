@@ -322,7 +322,11 @@ appends a row here in the same change (family law: updated-in-change).
 | 322 | Durable provider cooldown | Retain future provider retry deadlines across queued revisions; report long Fansly cooldowns immediately without retrying early. |
 | 323 | Dashboard production parity | Restore the five deployed dashboard feature-control and daily-workflow patches on current main; preserve backend behavior and verify the single formatting-only exception against emitted JavaScript. |
 | 324 | OFAPI fixture UTC clock | Cap ordinary ledger fixture timestamps at their captured instant; prove report boundaries with explicit observations while preserving future-fact exclusion. |
+| 326 | Exhausted DM head debt and history | Retain exhausted missing-head discrepancies while allowing ordinary pending history; only unexhausted debt retains head-search priority and backoff. |
 | 327 | Fansly DM exclusion write | Merge only the verified partner's exclusion metadata under the current lease; preserve newer thread material and refuse stale-binding checkpoint advance. |
+| 328 | C2b receipt claim renewal | Renew the unchanged pre-fetch claim inside its owned settlement transaction so a slow response retains its receipt; replacement tokens and later revisions remain fenced. |
+| 329 | Fansly earnings money codec | Aggregate provider mills through the shared codec; preserve safe-integer refusal, event fingerprints and projection ordering. |
+| 330 | Voice fixture settlement boundary | Wait for committed voice completion before the next test resets tables; keep detached runtime dispatch unchanged. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -579,7 +583,6 @@ Legend for the matrix:
 | 49 | Monitoring / health checks | Lightweight health endpoint + uptime checks (`OF3`) `1`; not explicit (`11`) |
 | 50 | Internal ID convention | UUID-heavy internal IDs (`CF3 OF3`) `2`; serial / mixed / not explicit (`10`) |
 | 51 | API response envelope | Generic `{ data, error, meta }` envelope (`OF1 OF2`) `2`; direct resource DTOs or not explicit (`10`) |
-| 329 | Fansly earnings money codec | Aggregate provider mills through the shared codec; preserve safe-integer refusal, event fingerprints and projection ordering. |
 
 ## Linked Decisions
 | Package | Decisions | Consequence |
@@ -13316,6 +13319,41 @@ and around the failed 00:02:30 case. Keep the intentional future-entry test and
 production queries unchanged. An original-helper negative control reproduces
 132 versus 92; the corrected suite passes all 26 cases. No runtime flag is added.
 
+## Decision 326: Exhausted head debt does not block ordinary history (2026-09-14)
+
+An allowlisted Fansly conversation could remain in `pending_backfill` forever
+after its known missing head exhausted all five recovery attempts. The selector
+correctly stopped head searches, but still excluded ordinary pending history
+whenever any uncaptured head debt existed. The list writer used that same broad
+unresolved test to suppress the sibling message-stream wakeup.
+
+Ordinary pending history is now blocked only by uncaptured debt with fewer than
+five attempts. Due head debt retains its existing priority, and unexhausted debt
+in backoff still cannot enter through the history path. The list writer reuses
+its existing bounded-retry deadline result to make the same distinction; no
+additional query or retry loop is introduced.
+
+A freshly selected pending-history conversation without an active head target
+uses ordinary backfill from its oldest stored cursor. Its still-missing head
+must not force an incremental read that overlaps without advancing history.
+Due head targets and existing pinned work keep their current mode and cursor.
+
+Exhausted rows remain uncaptured and visible as `exhausted` in the reporting
+view. `hasUnresolvedFanslyDmHead` keeps its diagnostic meaning, including those
+rows. No ID is acknowledged, erased, declared provider-deleted or repaired by
+this selection change. A later exact stored receipt can still resolve the debt.
+
+The existing allowlist, five-attempt cap, page budgets, history policy, stream
+and transport gates remain in force. No flag, migration, recovery activation or
+production action is introduced. Postgres regressions cover exhausted history
+selection without debt mutation, unexhausted head priority/backoff, actual
+allowlisted sweep wakeups, and a message chunk that captures older history once
+without retrying or acknowledging the exhausted head. Rollback preserves the debt but
+can block ordinary pending history behind exhausted debt again.
+
+Decision 326 is a coordinator reservation after separately prepared Decisions
+322–325. Its number must be checked against current main before publication.
+
 ## Decision 327: Exclude an unresolvable DM partner without rewriting its thread (2026-09-14)
 
 After repeated terminal message 5xx failures and a journaled unresolved partner
@@ -13331,6 +13369,42 @@ unchanged; never recreate the row from the stale snapshot. Existing failure
 thresholds, account resolution and polling policy remain unchanged. No migration
 or runtime flag is added. The focused PostgreSQL suite interleaves a second writer
 inside the mocked lookup while exercising the real handler, journal and queries.
+
+## Decision 328: Keep C2b receipts after an unchanged claim expires (2026-09-14)
+
+C2b claims the daily rotation's existing fan/window before its provider call,
+with the requested revision at that instant and a five-minute claim deadline.
+A slow rate-limit wait or fetch can outlive that deadline. Raw capture still
+succeeds, but settlement previously rejected the elapsed claim even when its
+token and revision were unchanged and the page worker still owned its lease.
+The shadow report then retained an avoidable visit without a receipt.
+
+After capture, renew only the exact original token and claimed revision, then
+settle with the existing expiry guard in the same `withOwnedPageSyncTransaction`.
+The failure-receipt path uses the same ownership check and preserves the original
+provider error and Retry-After. Renewal changes only the claim deadline and
+update timestamp: it does not allocate a new token, read a new revision, count
+another visit, alter checked-at provenance or initiate a request. A concurrent
+R+1 remains pending. A replaced/completed token, mismatched revision or erased
+row cannot renew; lost page ownership aborts the transaction.
+
+This clarifies Decision 289: claim TTL permits takeover; the page lease is
+execution authority. Elapsed-only claims can be renewed under that authority.
+A lost claim cannot certify a check or overwrite another receipt. The initial
+claim stays before fetch, success stays raw-first, and existing daily rotation,
+erasure, retry policy and lost-receipt counters remain unchanged. There is no
+new flag, schema migration, target selection or production action.
+
+Regression coverage uses injected claim times and explicit interleavings, not
+five-minute waits: elapsed settlement fails without renewal; unchanged renewal
+settles only R; replaced/completed/mismatched claims cannot renew; fan erasure
+cannot recreate state; long success and failure retain their receipts; lost
+page ownership preserves capture but rejects receipt mutation. Rollback to the
+previous image preserves all state but can again leave receipts missing solely
+because a still-owned fetch exceeded the claim TTL.
+
+Decision 328 is a coordinator reservation after separately prepared Decisions
+323–327. Recheck its number against current main before publication.
 
 ## Decision 329: Use the shared mills codec in Fansly earnings (2026-09-14)
 
@@ -13353,3 +13427,15 @@ the real PostgreSQL earnings identity/projection suites. No flag or production
 action is introduced. Rollback restores the previous application code without
 a database migration or data rewrite. D329 is reserved after the other audit
 follow-up topics; current base main is `b78752d0` (latest D322).
+
+## Decision 330: Complete the voice fixture before resetting its database (2026-09-14)
+
+The normal `end_turn` admission case ended after its `dispatched` response,
+while detached synthesis could still update the voice row and character budget.
+The next test's table reset then deadlocked with that settlement in CI.
+Use the suite's existing bounded wait for the persisted `completed` state before
+ending this case. Completion and budget reconciliation commit together; the
+remaining dispatcher cleanup does not write to the database in this case.
+Keep runtime dispatch, reset semantics and all admission assertions unchanged.
+No fixed delay, reset retry, new flag or production change is introduced.
+Decision 330 is reserved after the independently prepared Decisions 325–329.

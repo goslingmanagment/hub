@@ -1,0 +1,15 @@
+{
+  "command": [
+    "pnpm",
+    "check"
+  ],
+  "startedAt": "2026-09-14T00:52:07.009800+00:00",
+  "finishedAt": "2026-09-14T00:52:52.849367+00:00",
+  "elapsedSeconds": 45.84,
+  "exitCode": 0,
+  "logSha256": "b422ae9b5df0fa6a31c4d983a03ac19af86c86b796c6cc701237735ed823eaab",
+  "logFile": "check.log.gz",
+  "compression": "gzip",
+  "compressedSha256": "ccbe22aadd609519d50891f63d210647f752441a943e76e7cbb7697802c48bba",
+  "logBytes": 7534
+}

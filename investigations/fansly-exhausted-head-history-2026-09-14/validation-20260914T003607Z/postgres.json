@@ -1,0 +1,23 @@
+{
+  "command": [
+    "pnpm",
+    "exec",
+    "vitest",
+    "run",
+    "--no-file-parallelism",
+    "tests/fansly-dm-exhausted-head-history.integration.test.ts",
+    "tests/fansly-dm-head-debt.integration.test.ts",
+    "tests/fansly-dm-conversations-sweep.integration.test.ts",
+    "tests/page-dm.repository.integration.test.ts",
+    "tests/projection-debt.integration.test.ts"
+  ],
+  "environment": {
+    "ALLOW_MISSING_TEST_PREREQUISITES": "0",
+    "NODE_OPTIONS": "--max-old-space-size=8192"
+  },
+  "startedAt": "2026-09-14T00:36:07.538838+00:00",
+  "finishedAt": "2026-09-14T00:36:20.296796+00:00",
+  "elapsedSeconds": 12.758,
+  "exitCode": 0,
+  "logSha256": "bf979dd8d6d03dbdfa6b494768ad1acb958c9e5890dc0836a16acea44e96d35a"
+}

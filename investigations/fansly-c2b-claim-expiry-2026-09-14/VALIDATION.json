@@ -1,0 +1,30 @@
+{
+  "recordedAt": "2026-09-14T00:55:09.836547+00:00",
+  "base": "b78752d0d1144a8457638ffb3ae0bda33455fde1",
+  "sourceManifestSha256": "6fe73b82220c27cabfa0bad751e47415882d3f136fa291d70d0835a64651241e",
+  "validatedSourcePaths": 7,
+  "sourcePinsUnchangedAfterTests": true,
+  "check": {
+    "state": "passed",
+    "passed": 3420,
+    "skipped": 9,
+    "receipt": "validation-20260914T005143Z/check.json"
+  },
+  "postgres": {
+    "state": "passed",
+    "passed": 49,
+    "skipped": 0,
+    "suites": 6,
+    "receipt": "validation-20260914T005143Z/postgres.json"
+  },
+  "negativeControl": {
+    "state": "two expected missing-receipt failures reproduced",
+    "receipt": "validation-20260914T005143Z/negative-control.json"
+  },
+  "independentReview": {
+    "file": "REVIEW.md",
+    "sha256": "35c50f95556f08d8b6f69351cdbd59b252061ea443d4bf5b684b0d29ea3f9624",
+    "outstandingFindings": 0
+  },
+  "productionActions": false
+}

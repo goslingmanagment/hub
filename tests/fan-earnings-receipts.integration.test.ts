@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
-  claimFanEarningsRotation, markFanEarningsDirty, settleFanEarningsReceipt,
+  claimFanEarningsRotation, markFanEarningsDirty, renewFanEarningsClaim, settleFanEarningsReceipt,
+  withOwnedPageSyncTransaction,
   type FanEarningsClaim,
 } from "@agency_hub_core/db";
 import { startIntegrationTestDatabase, resetIntegrationDatabase, type StartedTestDatabase } from "./helpers/db.ts";
@@ -75,6 +76,44 @@ describe("Fansly earnings revision and endpoint receipts", () => {
     expect(await settle(first, "a", 303)).toBe(false);
     expect(await settle(replacement, "b", 304)).toBe(true);
     expect(await lifetime()).toMatchObject({ refresh_visits: 3n, refresh_receipts: 1n, refresh_checks: 1n });
+  });
+
+  it("renews an elapsed unchanged claim and settles only its pre-fetch revision", async () => {
+    await settle(await claim(), "a");
+    await dirty();
+    const original = await claim(2);
+    await dirty();
+    const checkedAt = at(303);
+    const receipt = {
+      outcome: "observed" as const, observationId: await f.observation(),
+      fingerprint: "b".repeat(64), checkedAt,
+    };
+    expect(await settleFanEarningsReceipt(db.db, original, receipt)).toBe(false);
+    await withOwnedPageSyncTransaction(db.db, async (tx) => {
+      expect(await renewFanEarningsClaim(tx, original, checkedAt)).toBe(true);
+      expect(await settleFanEarningsReceipt(tx, original, receipt)).toBe(true);
+    });
+    expect(await lifetime()).toMatchObject({
+      requested_revision: 2n, applied_revision: 1n, refresh_class: "dirty",
+      refresh_visits: 2n, refresh_receipts: 2n, refresh_checks: 2n,
+      last_checked_at: checkedAt, claim_token: null,
+    });
+  });
+
+  it("cannot renew a replaced, mismatched or completed claim", async () => {
+    await dirty();
+    const original = await claim();
+    await dirty();
+    const replacement = await claim(301);
+    const before = await lifetime();
+    expect(await renewFanEarningsClaim(db.db, original, at(302))).toBe(false);
+    expect(await renewFanEarningsClaim(db.db, {
+      ...replacement, revision: original.revision,
+    }, at(302))).toBe(false);
+    expect(await lifetime()).toEqual(before);
+    expect(await settle(replacement, "b", 303)).toBe(true);
+    expect(await renewFanEarningsClaim(db.db, replacement, at(304))).toBe(false);
+    expect(await lifetime()).toMatchObject({ refresh_visits: 2n, refresh_receipts: 1n, claim_token: null });
   });
 
   it("keeps lifetime and monthly independent and preserves valid provenance after failures", async () => {
