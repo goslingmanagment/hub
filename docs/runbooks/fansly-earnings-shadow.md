@@ -80,6 +80,14 @@ claim expiry permits takeover but does not discard a still-owned slow response.
 Renewal occurs after raw capture, preserves the pre-fetch revision and never
 acquires a replacement claim. A replaced/completed/erased claim or lost page
 lease keeps its missing-receipt debt. No extra HTTP request is made.
+
+If successful receipt settlement throws after raw capture, the runtime rechecks
+the page lease outside the rolled-back receipt transaction. With ownership still
+valid, the captured daily walk continues and the missing receipt remains debt;
+it does not repeat the provider read. Lost ownership or an unavailable database
+still stops execution. This isolation does not change pre-fetch claim, provider,
+parser or capture failure handling.
+
 Any erasure, restore, flag-off interval or counter discontinuity breaks a simple
 before/after denominator and must be recorded, not treated as a negative delta.
 
