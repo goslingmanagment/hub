@@ -1,0 +1,106 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { bindingGeneration, bindingReceipt } from "./helpers/fansly-binding-fixtures.ts";
+
+const spies = vi.hoisted(() => ({
+  snapshot: vi.fn(), generation: vi.fn(), destroy: vi.fn(), end: vi.fn(), socket: vi.fn(),
+  inspect: vi.fn(), short: vi.fn(), long: vi.fn(),
+}));
+vi.mock("pg", () => ({ Pool: class { on() {} end = spies.end; } }));
+vi.mock("@agency_hub_core/db", () => ({ createDb: () => ({}) }));
+vi.mock("@agency_hub_core/shared", () => ({ loadConfig: () => ({ databaseUrl: "unused" }) }));
+vi.mock("../apps/runtime/src/services/egress/fansly-probe-context.ts", () => ({
+  readProbeSnapshot: spies.snapshot, readProbeGeneration: spies.generation,
+}));
+vi.mock("../apps/runtime/src/services/egress/fansly-probe-socket.ts", () => ({ openFanslyProbeSocket: spies.socket }));
+vi.mock("../apps/runtime/src/services/egress/fansly-binding-preflight.ts", () => ({
+  inspectFanslyBinding: spies.inspect, isNativeAccountId: (value: unknown) => value === "123",
+}));
+vi.mock("../scripts/fansly-ws/probe-observer.ts", () => ({ observeFanslyProbe: spies.short, MAX_PROBE_DURATION_MS: 120_000 }));
+vi.mock("../scripts/fansly-ws/continuity.ts", () => ({ observeFanslyContinuity: spies.long }));
+import { runStoredFanslyProbe } from "../scripts/fansly-ws/probe.ts";
+import { runStoredFanslyContinuity } from "../scripts/fansly-ws/continuity-runtime.ts";
+import { runBindingPreflight } from "../scripts/fansly-ws/binding-preflight.ts";
+
+let directory: string;
+let receiptPath: string;
+let keyPath: string;
+beforeEach(async () => {
+  vi.resetAllMocks();
+  directory = await mkdtemp(join(tmpdir(), "binding-runtime-"));
+  receiptPath = join(directory, "receipt.json");
+  keyPath = join(directory, "key");
+  await writeFile(receiptPath, JSON.stringify(bindingReceipt), { mode: 0o600 });
+  await writeFile(keyPath, Buffer.alloc(32, 1), { mode: 0o600 });
+  spies.snapshot.mockResolvedValue({ pageId: 7, expectedAccountId: "123", generation: bindingGeneration,
+    token: "SYNTHETIC_SECRET", session: { authorization: "SYNTHETIC_SECRET" }, egress: { dispatcher: { destroy: spies.destroy } } });
+  spies.generation.mockResolvedValue(bindingGeneration);
+  spies.short.mockImplementation(async (input) => {
+    input.connect();
+    return { stopReason: "deadline", sessionFrameSeen: true };
+  });
+  spies.long.mockImplementation(async (input) => { input.connect(); return true; });
+  spies.inspect.mockResolvedValue({ identityMatched: true, observedAccountId: "123", restRequests: 1,
+    httpStatus: 200, reason: "matched" });
+});
+afterEach(async () => { await rm(directory, { recursive: true, force: true }); });
+
+function run(kind: "short" | "long") {
+  const controller = new AbortController();
+  return kind === "short" ? runStoredFanslyProbe({ pageLabel: "lilly-1", durationMs: 5_000,
+    bindingReceiptFile: receiptPath, controller })
+    : runStoredFanslyContinuity({ pageLabel: "lilly-1", phase: "continuous", correlationKeyFile: keyPath,
+      bindingReceiptFile: receiptPath, expectedGeneration: undefined }, controller, () => {});
+}
+
+describe("W0 preflight and receiver boundary", () => {
+  it.each(["short", "long"] as const)("%s refuses changed or unavailable generation without any socket", async (kind) => {
+    for (const unavailable of [false, true]) {
+      spies.generation.mockReset();
+      if (unavailable) spies.generation.mockRejectedValue(new Error("SYNTHETIC_SECRET"));
+      else spies.generation.mockResolvedValue("b".repeat(64));
+      await expect(run(kind)).rejects.toThrow(unavailable ? /^binding_generation_unavailable$/ : /^binding_generation_changed$/);
+    }
+    expect(spies.socket).not.toHaveBeenCalled();
+    expect(spies.short).not.toHaveBeenCalled();
+    expect(spies.long).not.toHaveBeenCalled();
+    expect(spies.end).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["short", "long"] as const)("%s connects only after the current generation read succeeds", async (kind) => {
+    await run(kind);
+    expect(spies.socket).toHaveBeenCalledOnce();
+    expect(spies.generation.mock.invocationCallOrder[0]).toBeLessThan(spies.socket.mock.invocationCallOrder[0]!);
+    expect(spies.inspect).not.toHaveBeenCalled();
+    expect(spies.end).toHaveBeenCalledOnce();
+  });
+
+  it("the legacy short remains unverified with zero REST and no preflight read", async () => {
+    const result = await runStoredFanslyProbe({ pageLabel: "lilly-1", durationMs: 5_000, controller: new AbortController() });
+    expect(result).toMatchObject({ accountBinding: "unverified", restRequests: 0, connectionAttempts: 1 });
+    expect(result).not.toHaveProperty("bindingPreflight");
+    expect(spies.generation).not.toHaveBeenCalled();
+    expect(spies.inspect).not.toHaveBeenCalled();
+  });
+
+  it("preflight uses one snapshot and its session/dispatcher, never a socket or receiver", async () => {
+    const result = await runBindingPreflight("lilly-1", new AbortController().signal);
+    expect(spies.snapshot).toHaveBeenCalledOnce();
+    expect(spies.inspect).toHaveBeenCalledWith(expect.objectContaining({
+      expectedAccountId: "123", session: { authorization: "SYNTHETIC_SECRET" },
+      egress: { dispatcher: { destroy: spies.destroy } },
+    }));
+    expect(result).toMatchObject({ identityMatched: true, restRequests: 1, credentialRouteGeneration: bindingGeneration });
+    expect(JSON.stringify(result)).not.toContain("SYNTHETIC_SECRET");
+    expect(spies.socket).not.toHaveBeenCalled();
+    expect(spies.end).toHaveBeenCalledOnce();
+  });
+
+  it("preflight still closes the DB pool if owned dispatcher cleanup fails", async () => {
+    spies.destroy.mockRejectedValue(new Error("fixture_cleanup_failure"));
+    await expect(runBindingPreflight("lilly-1", new AbortController().signal)).rejects.toThrow("fixture_cleanup_failure");
+    expect(spies.end).toHaveBeenCalledOnce();
+  });
+});

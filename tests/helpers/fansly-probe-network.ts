@@ -5,17 +5,20 @@ import { createServer, connect, type Socket } from "node:net";
 import type { IncomingHttpHeaders } from "node:http";
 import { listenOnLoopback } from "./network.ts";
 
-const destination = "wsv3.fansly.com:443";
 const username = "fixture-user";
 const password = "fixture-password";
 const proxyAuth = `Basic ${Buffer.from(`${username}:${password}`).toString("base64")}`;
 
 /** Both proxies accept only the fixed Fansly authority and tunnel to loopback.
  * TLS still verifies wsv3.fansly.com against the child's test-only trust root. */
-export async function startFanslyProbeNetwork(protocol: "http" | "socks5", refuse = false) {
+export async function startFanslyProbeNetwork(protocol: "http" | "socks5", refuse = false, rest?: {
+  status: number; body?: string; location?: string; hang?: boolean;
+}) {
+  const destination = rest ? "apiv3.fansly.com:443" : "wsv3.fansly.com:443";
   const sockets = new Set<Socket>();
   const destinations: string[] = [];
   const upgrades: { url: string | undefined; headers: IncomingHttpHeaders }[] = [];
+  const requests: { url: string | undefined; method: string | undefined; headers: IncomingHttpHeaders }[] = [];
   const frames: number[] = [];
   const track = (socket: Socket) => {
     sockets.add(socket);
@@ -24,8 +27,17 @@ export async function startFanslyProbeNetwork(protocol: "http" | "socks5", refus
     return socket;
   };
   const target = createHttpsServer({
-    key: await readFile(new URL("../fixtures/fansly-probe.key.pem", import.meta.url)),
-    cert: await readFile(new URL("../fixtures/fansly-probe.cert.pem", import.meta.url)),
+    key: await readFile(new URL(`../fixtures/fansly-${rest ? "binding" : "probe"}.key.pem`, import.meta.url)),
+    cert: await readFile(new URL(`../fixtures/fansly-${rest ? "binding" : "probe"}.cert.pem`, import.meta.url)),
+  });
+  target.on("request", (request, response) => {
+    requests.push({ url: request.url, method: request.method, headers: request.headers });
+    if (!rest || rest.hang) return;
+    response.writeHead(rest.status, { "content-type": "application/json",
+      ...(rest.location ? { location: rest.location } : {}) });
+    // Chunked bodies exercise the streaming limit without trusting Content-Length.
+    response.write(rest.body ?? "");
+    response.end();
   });
   target.on("connection", track);
   target.on("tlsClientError", () => {}); // The untrusted-CA case deliberately fails.
@@ -119,7 +131,7 @@ export async function startFanslyProbeNetwork(protocol: "http" | "socks5", refus
     if (!proxyAddress) { await stop(); return null; }
     return {
       url: `${protocol}://${proxyAddress.host}:${proxyAddress.port}`,
-      username, password, destinations, upgrades, frames, stop,
+      username, password, destinations, upgrades, requests, frames, stop,
     };
   } catch (error) {
     await stop();

@@ -1,6 +1,7 @@
 import { CONTINUITY_PHASES, parseContinuityArgs } from "./continuity.ts";
 import { writeContinuityLine } from "./continuity-receipts.ts";
 import { runStoredFanslyContinuity } from "./continuity-runtime.ts";
+import { bindingRefusalReceipt } from "./binding-receipt.ts";
 
 const controller = new AbortController();
 process.once("SIGINT", () => controller.abort());
@@ -14,7 +15,14 @@ try {
   deadline = setTimeout(() => process.exit(124), CONTINUITY_PHASES[args.phase].durationMs + 30_000);
   const completed = await runStoredFanslyContinuity(args, controller, writeContinuityLine);
   process.exit(completed ? 0 : 2);
-} catch {
+} catch (error) {
+  const refusal = bindingRefusalReceipt(error);
+  if (refusal) {
+    await new Promise<void>((resolve, reject) => {
+      process.stdout.write(JSON.stringify(refusal) + "\n", (failure) => failure ? reject(failure) : resolve());
+    });
+    process.exit(2);
+  }
   process.stderr.write("Continuity observation failed; no credential or provider error text was exported.\n");
   process.exit(1);
 } finally { clearTimeout(deadline); }

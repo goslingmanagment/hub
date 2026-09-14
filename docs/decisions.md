@@ -333,6 +333,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 333 | Live new-follower drafts | Fansly extension reads live followers and history; Hub generates one draft with profile/avatar context and coordinates one-attempt browser sends. |
 | 334 | W0 continuity experiment | Run one bounded Lilly-1 six-hour observation and two receiver-only gaps; share short/long admission and keep binding, presence and recovery as independent evidence. |
 | 335 | A0 advertised-head reader state | Observe exact pre-apply Agent reader state separately from hot presence; preserve polling, historical unknowns and the original shadow gates. |
+| 336 | W0 REST identity preflight | Make one bounded account/me GET through the stored page session/proxy; require its private receipt and matching generation for continuity and the accepted binding workflow, with receiver REST counts unchanged. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -13672,3 +13673,56 @@ business write or flag. It neither resets the original A0 clock nor fills old
 reader evidence retrospectively. Advertised-ID state does not establish full
 transcript/text/media/link parity, event-to-reader percentiles, the >=50% goal,
 or readiness for A1. The original window, discrepancy and scope gates remain.
+
+## Decision 336: Bind W0 REST identity evidence to the receiver generation (2026-09-14)
+
+The ordinary page verify operation persists metadata and recovery state, and its
+REST observation does not carry W0's credential/route fingerprint. A successful
+verify or type-1 socket frame therefore cannot establish REST identity for the
+receiver's selected generation. Add a separate operator-only preflight for the
+existing encrypted Lilly-1 session chosen in Decision 325.
+
+One READ ONLY snapshot supplies the stored account ID, full existing session and
+page egress dispatcher. The preflight sends one fixed GET to
+`https://apiv3.fansly.com/api/v1/account/me?ngsw-bypass=true` through that dispatcher
+using the existing Fansly request-header builder. It requires HTTP 200, a valid
+account envelope and an exact numeric account-ID match. The request has a
+15-second deadline and a 1 MiB streamed-body limit, with no redirect following,
+retry or direct-route fallback. Missing binding refuses dispatch. It starts no
+socket, application bootstrap, capture observer, pacing or database write; the
+ordinary adapter and its retry/budget behavior remain unchanged.
+
+The separate sanitized `report.json` retains expected/observed numeric account
+IDs, page identity, `credentialRouteGeneration`, timing, HTTP status, match result
+and fixed failure codes. It exports no provider response body, headers, username,
+token, session or proxy secret. `restRequests` describes only this preflight:
+one admitted GET, or zero on refusal before dispatch.
+
+The short launcher accepts `--binding-receipt-file`; the updated continuity
+launcher requires it. Each mounts a validated private copy. Before a socket
+attempt the receiver validates the successful receipt against its page/account
+snapshot, compares generation and checks the current generation again. Invalid,
+failed, foreign or changed evidence prevents connection. Receiver evidence
+links the receipt by SHA-256 and records the comparison while retaining
+`restRequests: 0`. The accepted binding workflow requires a new preflight within
+the agreed experiment window; timestamps support operator review without an
+invented automatic expiry. The existing short 5–120-second invocation remains
+operational with binding unverified when the argument is omitted.
+
+Continuity starts with the receipt's generation and retains that original
+receipt across the six-hour phase and both receiver-only gaps. No phase performs
+another identity GET or replaces the expected generation with a newly observed
+one. The preflight uses the same host/page admission and bounded disposable
+container cleanup as the receivers; all launcher components must come from the
+same reviewed revision.
+
+This establishes REST account identity at a recorded generation and checks that
+generation at receiver boundaries. Overall `accountBinding` remains unverified:
+the receipt does not establish the socket actor's scope, uninterrupted config
+history between checks, paired fan-out, presence, recovery, completeness or
+W0/B0 acceptance. Source and offline checks are not live evidence. Provider
+execution retains its explicit experiment scope; this change adds no API,
+production flag, deployment or credential rotation.
+
+See [the binding workflow](runbooks/fansly-ws-protocol-check.md#rest-identity-preflight)
+and [the continuity runbook](runbooks/fansly-ws-continuity.md).

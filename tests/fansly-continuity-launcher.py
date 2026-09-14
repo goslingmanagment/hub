@@ -33,7 +33,12 @@ class ContinuityLauncherTest(unittest.TestCase):
             page="lilly-1", bundle=str(self.root / "bundle"), environment=str(self.root / "environment"),
             correlation_key_file=str(self.root / "key"), image="sha256:" + "a" * 64,
             network="fixture", output=str(self.root / "output"), run_id="fixture-run",
+            binding_receipt_file=str(self.root / "binding.json"),
         )
+        binding = {"evidenceKind": "w0_rest_identity_preflight", "identityMatched": True,
+                   "credentialRouteGeneration": "a" * 64}
+        (self.root / "binding.json").write_text(json.dumps(binding))
+        (self.root / "binding.json").chmod(0o600)
         lock = patch.object(containers, "LOCK_DIRECTORY", self.root / "locks")
         lock.start()
         self.addCleanup(lock.stop)
@@ -69,7 +74,7 @@ class ContinuityLauncherTest(unittest.TestCase):
     def test_one_six_hour_phase_then_only_two_planned_reconnections(self):
         result = self.run_observation()
         self.assertTrue(result["collectionCompleted"])
-        self.assertEqual(self.phases, [("continuous", None), ("after_short_gap", "a" * 64), ("after_long_gap", "a" * 64)])
+        self.assertEqual(self.phases, [("continuous", "a" * 64), ("after_short_gap", "a" * 64), ("after_long_gap", "a" * 64)])
         gaps = [item for item in result["phases"] if item.get("kind") == "receiver_gap"]
         self.assertEqual([item["confirmedAbsentMs"] for item in gaps], [30_000, 240_000])
         self.assertEqual(result["elapsedMs"], (21_600 + 120 + 120 + 30 + 240) * 1000)
@@ -77,6 +82,8 @@ class ContinuityLauncherTest(unittest.TestCase):
         self.assertEqual(result["recovery"], "external_evidence_required")
         self.assertFalse((self.root / "output/correlation.key").exists())
         self.assertTrue((self.root / "key").exists())
+        self.assertFalse((self.root / "output/binding-receipt.json").exists())
+        self.assertTrue((self.root / "binding.json").exists())
 
     def test_failed_cleanup_never_starts_a_gap_or_another_receiver(self):
         def failed(*args):

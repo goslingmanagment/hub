@@ -121,7 +121,9 @@ describe("W0 continuity collection", () => {
   });
 
   it("the long CLI accepts only Lilly-1 and fixed named phases, requiring the previous generation after gaps", () => {
-    const first = ["--page", "lilly-1", "--phase", "continuous", "--correlation-key-file", "key"];
+    const legacy = ["--page", "lilly-1", "--phase", "continuous", "--correlation-key-file", "key"];
+    expect(() => parseContinuityArgs(legacy)).toThrow();
+    const first = [...legacy, "--binding-receipt-file", "binding.json"];
     expect(parseContinuityArgs(first)).toMatchObject({ phase: "continuous", pageLabel: "lilly-1" });
     expect(() => parseContinuityArgs([...first, "--seconds", "21600"])).toThrow();
     expect(() => parseContinuityArgs(first.map((value) => value === "lilly-1" ? "ari-1" : value))).toThrow();

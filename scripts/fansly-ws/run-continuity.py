@@ -14,7 +14,7 @@ import signal
 import time
 
 from launcher_container import page_admission, run_container, utc_now
-from launcher_inputs import cancel, private_correlation_key, private_input
+from launcher_inputs import cancel, private_correlation_key, private_input, private_binding_receipt
 from continuity_receipt import phase_receipt
 
 PHASES = (("continuous", 21_600, 0), ("after_short_gap", 120, 30), ("after_long_gap", 120, 240))
@@ -41,8 +41,11 @@ def run(args) -> dict:
     started = time.monotonic()
     save_report()
     try:
-        with page_admission(args.page), private_correlation_key(args.correlation_key_file, output) as key:
-            expected = None
+        with page_admission(args.page), private_correlation_key(args.correlation_key_file, output) as key, \
+                private_binding_receipt(args.binding_receipt_file, output) as binding:
+            if binding is None:
+                raise ValueError("binding_receipt_required")
+            args.binding_receipt_copy, expected = binding
             fingerprint = None
             for phase, seconds, gap in PHASES:
                 # All time, including connection setup, cleanup and gaps, fits
@@ -77,7 +80,8 @@ def run(args) -> dict:
                     return result
                 receipt = phase_receipt(directory / "receipts.jsonl", phase)
                 phase_result["receipt"] = receipt
-                if expected is not None and (receipt["generation"] != expected or receipt["keyFingerprint"] != fingerprint):
+                if (receipt["generation"] != expected
+                        or (fingerprint is not None and receipt["keyFingerprint"] != fingerprint)):
                     raise ValueError("changed_experiment_identity")
                 expected = receipt["generation"]
                 fingerprint = receipt["keyFingerprint"]
@@ -92,7 +96,7 @@ def run(args) -> dict:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    for option in ("bundle", "environment", "image", "network", "page", "output", "correlation-key-file"):
+    for option in ("bundle", "environment", "image", "network", "page", "output", "correlation-key-file", "binding-receipt-file"):
         parser.add_argument("--" + option, required=True)
     args = parser.parse_args()
     if args.page != "lilly-1" or not re.fullmatch(r"sha256:[a-f0-9]{64}", args.image):
