@@ -1,7 +1,8 @@
 # Fansly W0 protocol check
 
 Authority: the accepted events plan §7 and cross-check DECISION §7; historical
-Decision 288 and the owner session-choice amendment in Decision 325.
+Decision 288, the owner session-choice amendment in Decision 325 and the
+generation-bound REST identity preflight in Decision 336.
 One W0 draft PR holds offline preparation and later approved evidence. An offline
 fixture pass does not establish the live protocol or authorize a new connection.
 
@@ -68,8 +69,10 @@ materialization, presence, fan-out, completeness or event-to-reader latency.
 The separate probe now reuses the encrypted REST session. It opens one fixed
 `wsv3` connection for 5–120 seconds, with no reconnect, REST request, pacing
 write, business writer or credential change. It records received metadata only.
-A type-1 frame remains distinct from account binding; the report always leaves
-binding, completeness, reader latency and stage readiness unverified. The correlation key is ephemeral by default. For an approved paired corpus,
+A type-1 frame remains distinct from account binding. The optional receipt
+workflow below adds REST identity and generation evidence. Overall
+`accountBinding`, completeness, reader latency and stage readiness remain
+unverified. The correlation key is ephemeral by default. For an approved paired corpus,
 supply the same private experiment key to the offline exporter and probe as
 described below. The first live receipt predates that option and cannot be paired.
 
@@ -93,7 +96,8 @@ psql diagnostics still use read_only.
 The launcher uses a disposable container with 256 MiB memory, no swap, 0.25 CPU,
 64 PIDs, a read-only filesystem and dropped capabilities. A host-side 150-second
 deadline stops attach and removes only this run's verified container ID.
-SIGTERM and failed attach shutdown also pass through container cleanup. Short and long launchers share host/page admission and the Docker name
+SIGTERM and failed attach shutdown also pass through container cleanup. Short,
+long and binding-preflight launchers share host/page admission and the Docker name
 `hub-fansly-w0-<page>`; a run UUID label protects ownership. An orphaned or
 foreign container is refused, never taken over. Inspect
 `execution.json` for confirmed cleanup; a failed removal is unresolved. Do not
@@ -105,8 +109,73 @@ Reports stop at 1,000 frames or 8 MiB of metadata; incoming-message size is chec
 after transport delivery. Output and errors stay in the private report directory.
 Exit zero requires reaching the deadline, a valid top-level type-1 frame, and
 matching before/after credential-route generations. This means a completed short
-observation only: it proves no account identity, continuous unchanged generation,
-fan-out, presence, six-hour continuity, savings or reader latency.
+observation only. With a validated binding receipt, review the separate REST
+identity and generation comparison described below. Neither result proves
+continuous unchanged generation, socket actor scope, fan-out, presence,
+six-hour continuity, savings or reader latency.
+
+## REST identity preflight
+
+For the accepted binding workflow, obtain a new preflight receipt within the
+agreed experiment window before the initial receiver connection. Review its
+timestamps; there is no automatic expiry policy. The ordinary page verify
+endpoint is not a substitute: it writes metadata/recovery state and does not
+record the W0 credential/route generation. This preflight makes its own single
+GET and stores its evidence separately from the receiver output.
+
+Build the separate operator bundle on the reviewed checkout:
+
+```sh
+node scripts/fansly-ws/build-probe.mjs <new-private-preflight.mjs> --binding-preflight
+```
+
+After approval of the precise live action, run
+`scripts/fansly-ws/run-binding-preflight.py` on the trusted host with `--bundle`,
+`--environment`, `--image sha256:<verified-id>`, `--network`, `--page lilly-1` and
+a new `--output` directory. Place the reviewed `launcher_inputs.py` and
+`launcher_container.py` alongside it. Use the same existing private runtime
+environment, immutable image and verified network as the receiver. The launcher
+shares host/page admission, resource limits, private output and owned-container
+cleanup with the short and continuity launchers. Confirm cleanup in
+`execution.json` before starting the receiver.
+
+One verified READ ONLY snapshot supplies the existing session, expected stored
+account ID and page dispatcher. The transport issues only
+`GET https://apiv3.fansly.com/api/v1/account/me?ngsw-bypass=true`, with the existing
+Fansly header builder and that snapshot's proxy route. It has a 15-second request
+deadline and a 1 MiB streamed-body limit. It follows no redirects, retries no
+failure and has no direct fallback. Missing expected account ID refuses the GET;
+HTTP errors, invalid envelopes and a different account ID fail the preflight.
+It performs no WS, database write, pacing reservation or ordinary sync dispatch.
+
+Its private `report.json` records page identity, expected/observed numeric account
+IDs, `credentialRouteGeneration`, request timing/status and the match or fixed
+failure code. It exports no provider body, response headers, username or auth
+material. An admitted GET has `restRequests: 1` in this report; a refusal before
+dispatch has `restRequests: 0`. Inspect both this report and cleanup before
+proceeding; a failed preflight is not a binding receipt for a new connection.
+
+Pass the successful private file to the short launcher as
+`--binding-receipt-file <preflight-output/report.json>`. The launcher validates
+and mounts its own private copy. Before connect, the receiver checks receipt
+schema, success, page/account and generation against its new credential snapshot,
+then rereads the current generation without another token decrypt. Rejected
+evidence or a generation mismatch means zero socket attempts. Receiver output
+retains a bounded `w0_binding_refusal` receipt for invalid input, a snapshot
+mismatch, a changed generation or an unavailable generation read. These reasons
+remain distinct; unrelated exceptions use the generic private failure path.
+Successful receiver output
+records the receipt's SHA-256 and generation comparison under `bindingPreflight`;
+`restRequests: 0` remains true for the receiver, while the separate preflight
+report accounts for the GET.
+
+Retain both original reports together. The SHA-256 identifies which receipt was
+consumed; it does not authenticate externally supplied evidence. This workflow
+proves REST identity at the recorded generation and checks receiver generation
+at connection boundaries. Overall `accountBinding` remains unverified: the
+receipt does not prove continuous configuration history, WS actor scope,
+fan-out, presence, completeness or a full W0 pass. Existing short invocations
+without this argument remain available without the added REST identity evidence.
 
 ## Paired reference comparison
 
@@ -167,8 +236,9 @@ has no provider, database, browser-control or business-write path.
 
 Before each newly approved limited probe, record its exact page/account binding,
 existing credential and route generations, page proxy, agreed interval,
-expected events, observers and stop deadline. Confirm binding through the
-authorized REST path for that credential generation. Use the existing encrypted
+expected events, observers and stop deadline. Use the separate preflight and pass
+its successful private receipt to the receiver for the accepted binding workflow.
+Use the existing encrypted
 credential path inside the trusted process; never expose raw auth in CLI
 arguments, environment exports, stdout, logs, exceptions, clipboard, chat or
 diagnostic files. Do not invent a token-reading command or copy a browser token.
@@ -185,8 +255,9 @@ REST polling and its working credential remain unchanged.
    Do not patch `window.WebSocket`, copy auth to the clipboard or use global
    Work Offline. An absent socket may require a separately approved test-profile
    navigation or waiting for a normal reconnect.
-2. Verify a real type-1 response and page/actor binding with REST evidence for the
-   same credential generation. Record the selected session's capability by scope.
+2. Verify a real type-1 response and review the separate REST identity receipt and
+   receiver generation comparison. Establish the socket actor binding and the
+   selected session's capability by scope independently.
    A pong, HTTP 101 or historical bundle alone does not pass this gate.
 3. Use browser plus one receiver and independent evidence for the same agreed
    events. Distinguish same-token fan-out from separate browser/receiver
@@ -217,5 +288,5 @@ The separate [continuity runbook](fansly-ws-continuity.md) describes the prepare
 Lilly-1 six-hour observation and scheduled 30-second/240-second receiver-only
 gaps. Build that explicit entrypoint with `build-probe.mjs <new.mjs> --continuity`.
 The short probe's 5–120-second invocation and evidence meaning are unchanged.
-Both launchers must come from the same reviewed revision so their shared page
+All three launchers must come from the same reviewed revision so their shared page
 admission applies. No repeated short probes count as a six-hour observation.

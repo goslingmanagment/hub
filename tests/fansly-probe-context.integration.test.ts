@@ -11,8 +11,10 @@ import { readProbeGeneration, resolveFanslyProbeContext } from "../apps/runtime/
 import * as resolver from "../apps/runtime/src/services/egress/resolver.ts";
 import { resolvePageContext, saveProxy } from "../apps/runtime/src/services/page-context.ts";
 import { readProbeSnapshot } from "../scripts/fansly-ws/probe.ts";
+import { inspectFanslyBinding } from "../apps/runtime/src/services/egress/fansly-binding-preflight.ts";
 import { resetIntegrationDatabase, startTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
+
 
 let testDb: StartedTestDatabase;
 let app: Pick<AppContext, "db" | "config">;
@@ -99,6 +101,32 @@ async function snapshot() {
 }
 
 describe("Fansly W0 stored probe context", () => {
+  it("binds REST identity through one snapshot without changing captured facts, credentials, recovery or pacing", async () => {
+    const page = await seed("rest-binding", { authorization: "test-token", fanslyClientId: "client" });
+    await testDb.pool.query("update pages set external_page_id = '123' where id = $1", [page.id]);
+    const before = await snapshot();
+    const context = await readProbeSnapshot(app.db, app.config, page.label);
+    const dispatch = vi.spyOn(context.egress.dispatcher!, "dispatch").mockImplementation((_options, handler) => {
+      handler.onConnect?.(() => {});
+      handler.onHeaders?.(200, [Buffer.from("content-type"), Buffer.from("application/json")], () => {}, "OK");
+      handler.onData?.(Buffer.from(JSON.stringify({ success: true,
+        response: { account: { id: "123", checkToken: "SYNTHETIC_SECRET" } } })));
+      handler.onComplete?.([]);
+      return true;
+    });
+    try {
+      const receipt = await inspectFanslyBinding({ session: context.session,
+        expectedAccountId: context.expectedAccountId, egress: context.egress });
+      expect(receipt).toMatchObject({ identityMatched: true, observedAccountId: "123", restRequests: 1 });
+      expect(dispatch).toHaveBeenCalledOnce();
+      expect(dispatch.mock.calls[0]?.[0]).toMatchObject({ method: "GET",
+        path: "/api/v1/account/me?ngsw-bypass=true", origin: "https://apiv3.fansly.com" });
+      expect(resolveSpy).toHaveBeenCalledOnce();
+      expect(await snapshot()).toEqual(before);
+      expect(JSON.stringify(receipt)).not.toContain("SYNTHETIC_SECRET");
+    } finally { dispatch.mockRestore(); await context.egress.close(); }
+  });
+
   it("checks the same generation without creating dispatchers or changing any rows", async () => {
     const page = await seed("generation-only");
     const context = await readProbe(page.label);
@@ -253,6 +281,7 @@ describe("Fansly W0 stored probe context", () => {
     resolveSpy.mockImplementationOnce(async (snapshotApp, scope) => {
       // This committed writer is deliberately outside the caller's transaction.
       await storeBundle(page.id, { authorization: "rotated-token" });
+      await testDb.pool.query("update pages set external_page_id = '456' where id = $1", [page.id]);
       await saveProxy(app, page.id, { url: "http://new-proxy.example.internal:8080" });
       return realResolveEgress(snapshotApp, scope);
     });
@@ -261,8 +290,10 @@ describe("Fansly W0 stored probe context", () => {
     try {
       expect(during.token).toBe("test-token");
       expect(during.generation).toBe(initial.generation);
+      expect(during.expectedAccountId).toBe(initial.expectedAccountId);
       expect(during.egress.egressKey).toBe(initial.egress.egressKey);
       expect(after.token).toBe("rotated-token");
+      expect(after.expectedAccountId).toBe("456");
       expect(after.generation).not.toBe(initial.generation);
       expect(after.egress.egressKey).toBe("http://new-proxy.example.internal:8080");
     } finally {

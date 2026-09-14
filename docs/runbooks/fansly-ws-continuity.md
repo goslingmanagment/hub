@@ -4,6 +4,7 @@ This is the operator-only continuity collection step in the accepted Fansly
 migration plan §7. It keeps the existing encrypted REST session and page proxy.
 It does not enable B0, route events, change polling or claim W0 acceptance.
 The selected page is `lilly-1`; another creator page is outside this runner.
+Decision 336 adds the separate REST identity preflight and receipt comparison.
 
 ## Before a live run
 
@@ -12,6 +13,14 @@ hashes, Docker network, page/credential-route fingerprint, stop deadline and
 selected test objects. A deployment approval does not itself identify a browser
 session or prove paired delivery. The earlier 120-second Lilly-1 probe remains
 separate historical evidence.
+
+Run the [REST identity preflight](fansly-ws-protocol-check.md#rest-identity-preflight)
+within the agreed experiment window before starting and retain its successful
+private `report.json`. Review the receipt's timestamps; there is no automatic
+expiry policy. It makes one bounded account/me GET and confirms the stored
+account ID for the recorded credential/route generation. The updated continuity
+runner requires this receipt and makes no REST request. An ordinary page verify
+or the historical short-probe receipt cannot replace it.
 
 Use the trusted host's existing private runtime environment file; no provider
 token is copied into arguments, logs, artifacts or new environment variables.
@@ -36,13 +45,21 @@ node scripts/fansly-ws/build-probe.mjs <new-private-bundle.mjs> --continuity
 
 After the precise live action is approved, run `scripts/fansly-ws/run-continuity.py`
 on the trusted host with `--bundle`, `--environment`, `--image sha256:<verified-id>`,
-`--network`, `--page lilly-1`, `--correlation-key-file` and a new `--output` directory.
+`--network`, `--page lilly-1`, `--correlation-key-file`,
+`--binding-receipt-file <preflight-output/report.json>` and a new `--output`
+directory. The launcher mounts a validated private receipt copy, and each phase
+validates it before connecting. Receipt success, page/account and current
+generation must match; failure prevents that phase's socket attempt. Receiver
+evidence retains the receipt's SHA-256 and comparison under `bindingPreflight`,
+separately from the preflight report. Overall `accountBinding` stays unverified.
 Deploy all four launcher modules alongside it: `launcher_inputs.py`,
 `launcher_container.py`, `continuity_receipt.py` and `run-probe.py`. The Python
 scripts require Python 3.11+ on a Unix host. Do not use the old short launcher
-concurrently: host admission is shared by the reviewed short and long launchers.
+concurrently: host admission is shared by the reviewed short, long and preflight
+launchers. Build and copy all components from the same reviewed revision.
 
-The scenario has exactly three connection attempts, with no automatic retries.
+The completed scenario has three connection attempts, with no automatic retries;
+receipt or generation refusal can stop it before a phase connects.
 Each attempt can send an HTTP Upgrade handshake; established sockets also send
 WebSocket pings and authentication frames. This is additional provider traffic,
 separate from REST requests and the `sync_http_attempts`/T0 accounting. A
@@ -55,7 +72,9 @@ separate from REST requests and the `sync_http_attempts`/T0 accounting. A
 2. Confirm removal of that owned receiver container, wait 30 seconds with no
    receiver, then observe one new connection for two minutes.
 3. Confirm removal again, wait 240 seconds, then observe one new connection for
-   two minutes. Both resumed connections must retain the first generation and key.
+   two minutes. All three phases retain the original receipt's generation and the
+   same experiment key. They do not replace it with a newly observed generation
+   or issue another REST preflight after either gap.
 
 The nominal duration is six hours eight minutes thirty seconds, plus setup and
 cleanup. Host deadline: six hours fifteen minutes, followed by bounded cleanup.
@@ -88,9 +107,12 @@ fingerprint without decrypting another token or creating a dispatcher. Each read
 has a five-second wait bound. Missing/deleted/changed state, a failed read or lost
 DB connection aborts the observer. Record the sampled intervals: these checks do
 not prove continuous configuration history between samples. Final generation
-proof is required for a completed collection, but never establishes binding.
+proof is required for a completed collection. The initial snapshot and immediate
+pre-connect generation check must already match the binding receipt's generation.
+These checks supplement the separate REST identity evidence; they do not
+establish socket actor scope or continuous configuration history.
 
-Both launchers hold the same host/page file lock. Docker's page-specific name
+All three launchers hold the same host/page file lock. Docker's page-specific name
 also refuses an orphan left by a killed launcher. Cleanup checks the run UUID
 label and removes the matching immutable container ID only. A foreign container
 or failed cleanup prevents the next gap/connection; inspect the receipt instead
@@ -118,10 +140,12 @@ and host cleanup timestamps to review the short and greater-than-three-minute
 gaps. The first six-hour phase is measured separately; short resumed phases are
 never added to it to meet the duration.
 
-Binding, fan-out, presence, reader latency and REST recovery are not auto-passed.
-Attach independently verified page/account binding through the existing authorized
-REST path for the same credential generation and the paired native browser
-observation. Matching HMAC entity references do not prove payload/version equality.
+Attach the original successful REST preflight report, its hash in receiver
+evidence and the phase generation comparisons. They establish REST account
+identity at the recorded generation and comparison at receiver boundaries only.
+Socket actor scope, fan-out, presence, reader latency and REST recovery are not
+auto-passed. Retain the paired native browser observation and independent scope
+evidence. Matching HMAC entity references do not prove payload/version equality.
 The current comparator accepts bounded short reports; this long JSONL stream is
 a new evidence format and must not be relabeled as a short probe.
 
@@ -137,5 +161,7 @@ alone does not prove this recovery. Missing permitted receipt access stays unkno
 Do not call `sync.thread.backfill` as a generic new-head catch-up: it normally
 starts at the oldest stored message and walks backward. Its start-before field
 is an input boundary, not proof of recovery through a previous head. This
-experiment adds no REST requests or automatic recovery dispatch. B0 readiness
+receiver adds no REST requests or automatic recovery dispatch. Count the separate
+preflight's one GET in the experiment evidence; a receiver `restRequests: 0`
+does not erase that request. B0 readiness
 remains an independent review of all required evidence, not the process exit code.

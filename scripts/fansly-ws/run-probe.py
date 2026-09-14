@@ -7,7 +7,7 @@ from pathlib import Path
 import re
 import signal
 
-from launcher_inputs import cancel, private_input, private_correlation_key
+from launcher_inputs import cancel, private_input, private_correlation_key, private_binding_receipt
 from launcher_container import page_admission, run_container
 
 
@@ -17,7 +17,9 @@ def run(args) -> dict:
     output = Path(args.output)
     output.mkdir(mode=0o700)
     with page_admission(args.page):
-        with private_correlation_key(args.correlation_key_file, output) as key_path:
+        with private_correlation_key(args.correlation_key_file, output) as key_path, \
+                private_binding_receipt(getattr(args, "binding_receipt_file", None), output) as binding:
+            args.binding_receipt_copy = binding[0] if binding else None
             return run_container(args, bundle, output, key_path, 150, "report.json")
 
 
@@ -27,6 +29,7 @@ def main() -> int:
         parser.add_argument("--" + option, required=True)
     parser.add_argument("--seconds", type=int, default=120)
     parser.add_argument("--correlation-key-file")
+    parser.add_argument("--binding-receipt-file")
     args = parser.parse_args()
     if not re.fullmatch(r"sha256:[a-f0-9]{64}", args.image):
         parser.error("Use the verified runtime image ID, not a mutable tag")

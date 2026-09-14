@@ -6,12 +6,14 @@ import { readProbeGeneration, readProbeSnapshot } from "../../apps/runtime/src/s
 import { openFanslyProbeSocket } from "../../apps/runtime/src/services/egress/fansly-probe-socket.ts";
 import { readCorrelationKey } from "./correlation-key.ts";
 import { observeFanslyContinuity, type parseContinuityArgs } from "./continuity.ts";
+import { BindingRefusal, readBindingReceipt, verifyBindingBeforeConnect } from "./binding-receipt.ts";
 
 export async function runStoredFanslyContinuity(
   args: ReturnType<typeof parseContinuityArgs>,
   controller: AbortController,
   writeLine: (line: string) => void,
 ) {
+  const binding = await readBindingReceipt(args.bindingReceiptFile);
   const key = await readCorrelationKey(args.correlationKeyFile);
   const config = loadConfig(process.env, { loadDotEnv: false });
   const pool = new Pool({
@@ -26,14 +28,20 @@ export async function runStoredFanslyContinuity(
   let context: Awaited<ReturnType<typeof readProbeSnapshot>> | undefined;
   try {
     context = await readProbeSnapshot(db, config, args.pageLabel);
+    const bindingPreflight = await verifyBindingBeforeConnect(binding, context, args.pageLabel,
+      () => readProbeGeneration(db, args.pageLabel));
+    if (args.expectedGeneration !== undefined && args.expectedGeneration !== context.generation) {
+      throw new BindingRefusal("binding_snapshot_mismatch", binding.sha256);
+    }
     const ownedContext = context;
     return await observeFanslyContinuity({
       ...args, token: context.token, generation: context.generation, key, controller, writeLine,
+      expectedGeneration: binding.receipt.credentialRouteGeneration, bindingPreflight,
       connect: () => openFanslyProbeSocket(ownedContext.egress),
       readGeneration: () => readProbeGeneration(db, args.pageLabel),
     });
   } finally {
-    await context?.egress.dispatcher?.destroy();
-    await pool.end();
+    try { await context?.egress.dispatcher?.destroy(); }
+    finally { await pool.end(); }
   }
 }

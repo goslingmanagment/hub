@@ -4,8 +4,9 @@ import { build } from "esbuild";
 
 const output = process.argv[2];
 const continuity = process.argv[3] === "--continuity";
-if (!output || process.argv.length !== (continuity ? 4 : 3)) {
-  throw new Error("Usage: build-probe.mjs <new-private-output.mjs> [--continuity]");
+const binding = process.argv[3] === "--binding-preflight";
+if (!output || process.argv.length !== (continuity || binding ? 4 : 3)) {
+  throw new Error("Usage: build-probe.mjs <new-private-output.mjs> [--continuity | --binding-preflight]");
 }
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const alias = Object.fromEntries([
@@ -16,7 +17,8 @@ const alias = Object.fromEntries([
 // production image. No environment values or credentials enter the bundle.
 const result = await build({
   absWorkingDir: root,
-  entryPoints: [continuity ? "scripts/fansly-ws/continuity-cli.ts" : "scripts/fansly-ws/probe-cli.ts"],
+  entryPoints: [binding ? "scripts/fansly-ws/binding-preflight-cli.ts"
+    : continuity ? "scripts/fansly-ws/continuity-cli.ts" : "scripts/fansly-ws/probe-cli.ts"],
   alias,
   bundle: true,
   packages: "external",

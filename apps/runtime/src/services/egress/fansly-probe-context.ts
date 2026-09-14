@@ -6,7 +6,7 @@ import { findPageByLabel, type Database } from "@agency_hub_core/db";
 import type { AppContext } from "../../bootstrap.ts";
 import { BadRequestError, NotFoundError, ProxyMissingError } from "../errors.ts";
 import { decodeStoredFanslySession, resolveStoredProxyConfig } from "../page-context.ts";
-import { resolveEgress, type AppEgressContext } from "./resolver.ts";
+import { resolveEgress } from "./resolver.ts";
 
 /**
  * The caller must pass its READ ONLY, REPEATABLE READ transaction as app.db.
@@ -18,7 +18,7 @@ import { resolveEgress, type AppEgressContext } from "./resolver.ts";
 export async function resolveFanslyProbeContext(
   app: Pick<AppContext, "db" | "config">,
   pageLabel: string,
-): Promise<{ token: string; pageId: number; generation: string; egress: AppEgressContext }> {
+) {
   const stored = await readStoredProbePage(app.db, pageLabel);
   const session = decodeStoredFanslySession(app, stored.credentials.encryptedSession, pageLabel);
   if (typeof session?.authorization !== "string" || session.authorization.trim().length === 0) {
@@ -28,7 +28,12 @@ export async function resolveFanslyProbeContext(
   resolveStoredProxyConfig(app, stored.proxy);
   const generation = probeGeneration(stored);
   const egress = await resolveEgress(app, { kind: "page", pageId: stored.page.id });
-  return { token: session.authorization, pageId: stored.page.id, generation, egress };
+  // Secret-bearing context stays inside the operator process. Only explicitly
+  // selected identity fields and the generation may enter a diagnostic receipt.
+  return {
+    token: session.authorization, session, pageId: stored.page.id,
+    expectedAccountId: stored.page.platformAccountId, generation, egress,
+  };
 }
 
 async function readStoredProbePage(db: Database, pageLabel: string) {

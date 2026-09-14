@@ -13,17 +13,21 @@ export const CONTINUITY_PHASES = {
 export type ContinuityPhase = keyof typeof CONTINUITY_PHASES;
 
 export function parseContinuityArgs(args: string[]) {
-  if (![6, 8].includes(args.length) || args[0] !== "--page" || args[1] !== "lilly-1"
+  if (![8, 10].includes(args.length) || args[0] !== "--page" || args[1] !== "lilly-1"
     || args[2] !== "--phase" || !Object.hasOwn(CONTINUITY_PHASES, args[3] ?? "")
     || args[4] !== "--correlation-key-file" || !args[5] || args[5].startsWith("-")
-    || /[\r\n\0]/.test(args[5])) throw new Error("invalid_continuity_arguments");
+    || /[\r\n\0]/.test(args[5]) || args[6] !== "--binding-receipt-file"
+    || !args[7] || args[7].startsWith("-") || /[\r\n\0]/.test(args[7])) {
+    throw new Error("invalid_continuity_arguments");
+  }
   const phase = args[3] as ContinuityPhase;
-  const expectedGeneration = args[7];
-  if (phase === "continuous" ? args.length !== 6
-    : args.length !== 8 || args[6] !== "--expected-generation" || !/^[a-f0-9]{64}$/.test(expectedGeneration ?? "")) {
+  const expectedGeneration = args[9];
+  if ((phase !== "continuous" && args.length !== 10)
+    || (args.length === 10 && (args[8] !== "--expected-generation" || !/^[a-f0-9]{64}$/.test(expectedGeneration ?? "")))) {
     throw new Error("invalid_continuity_generation");
   }
-  return { pageLabel: "lilly-1" as const, phase, correlationKeyFile: args[5], expectedGeneration };
+  return { pageLabel: "lilly-1" as const, phase, correlationKeyFile: args[5],
+    bindingReceiptFile: args[7], expectedGeneration };
 }
 
 /** One connection only. The host owns planned gaps and confirms container removal.
@@ -38,6 +42,7 @@ export async function observeFanslyContinuity(input: {
   readGeneration: () => Promise<string>;
   controller: AbortController;
   writeLine: (line: string) => void;
+  bindingPreflight?: { receiptSha256: string; credentialRouteGeneration: string; verifiedAt: string };
 }) {
   const limits = CONTINUITY_PHASES[input.phase];
   const output = createContinuityReceipts(input.writeLine, limits);
@@ -46,6 +51,7 @@ export async function observeFanslyContinuity(input: {
     kind: "started", schemaVersion: 1, evidenceKind: "w0_continuity_observation",
     pageLabel: "lilly-1", phase: input.phase, connectionId,
     credentialRouteGeneration: input.generation,
+    ...(input.bindingPreflight === undefined ? {} : { bindingPreflight: input.bindingPreflight }),
     correlationKeyFingerprint: correlationKeyFingerprint(input.key),
     accountBinding: "unverified", presence: "unverified", fanOut: "unverified",
     recovery: "external_evidence_required", readerLatencyMeasured: false, restRequests: 0,

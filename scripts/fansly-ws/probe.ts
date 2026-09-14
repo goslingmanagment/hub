@@ -3,15 +3,16 @@ import { Pool } from "pg";
 
 import { createDb } from "@agency_hub_core/db";
 import { loadConfig } from "@agency_hub_core/shared";
-import { readProbeSnapshot, type resolveFanslyProbeContext } from "../../apps/runtime/src/services/egress/fansly-probe-context.ts";
+import { readProbeGeneration, readProbeSnapshot, type resolveFanslyProbeContext } from "../../apps/runtime/src/services/egress/fansly-probe-context.ts";
 import { openFanslyProbeSocket } from "../../apps/runtime/src/services/egress/fansly-probe-socket.ts";
 import { correlationKeyFingerprint, readCorrelationKey } from "./correlation-key.ts";
 import { observeFanslyProbe, MAX_PROBE_DURATION_MS } from "./probe-observer.ts";
+import { readBindingReceipt, verifyBindingBeforeConnect } from "./binding-receipt.ts";
 
 export { readProbeSnapshot } from "../../apps/runtime/src/services/egress/fansly-probe-context.ts";
 
 export function parseProbeArgs(args: string[]) {
-  if (![4, 6].includes(args.length) || args[0] !== "--page" || args[2] !== "--seconds"
+  if (![4, 6, 8].includes(args.length) || args[0] !== "--page" || args[2] !== "--seconds"
     || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(args[1] ?? "")
     || !/^\d{1,3}$/.test(args[3] ?? "")) {
     throw new Error("invalid_probe_arguments");
@@ -20,15 +21,18 @@ export function parseProbeArgs(args: string[]) {
   if (durationMs < 5_000 || durationMs > MAX_PROBE_DURATION_MS) {
     throw new Error("invalid_probe_duration");
   }
-  if (args.length === 6) {
-    const keyPath = args[5];
-    if (args[4] !== "--correlation-key-file" || !keyPath
-      || keyPath.startsWith("-") || /[\r\n\0]/.test(keyPath)) {
+  const optional: { correlationKeyFile?: string; bindingReceiptFile?: string } = {};
+  for (let index = 4; index < args.length; index += 2) {
+    const key = args[index] === "--correlation-key-file" ? "correlationKeyFile"
+      : args[index] === "--binding-receipt-file" ? "bindingReceiptFile" : null;
+    const path = args[index + 1];
+    if (key === null || optional[key] !== undefined || !path
+      || path.startsWith("-") || /[\r\n\0]/.test(path)) {
       throw new Error("invalid_probe_arguments");
     }
-    return { pageLabel: args[1]!, durationMs, correlationKeyFile: keyPath };
+    optional[key] = path;
   }
-  return { pageLabel: args[1]!, durationMs };
+  return { pageLabel: args[1]!, durationMs, ...optional };
 }
 
 /** Reuse the trusted runtime configuration without exporting the provider token.
@@ -38,7 +42,10 @@ export async function runStoredFanslyProbe(input: {
   durationMs: number;
   controller: AbortController;
   correlationKeyFile?: string;
+  bindingReceiptFile?: string;
 }) {
+  const binding = input.bindingReceiptFile === undefined ? undefined
+    : await readBindingReceipt(input.bindingReceiptFile);
   const key = input.correlationKeyFile === undefined
     ? randomBytes(32) : await readCorrelationKey(input.correlationKeyFile);
   const config = loadConfig(process.env, { loadDotEnv: false });
@@ -63,6 +70,9 @@ export async function runStoredFanslyProbe(input: {
 
   try {
     const before = await readContext();
+    const bindingPreflight = binding === undefined ? undefined
+      : await verifyBindingBeforeConnect(binding, before, input.pageLabel,
+        () => readProbeGeneration(db, input.pageLabel));
     let connectionAttempts = 0;
     const observation = await observeFanslyProbe({
       connect: () => {
@@ -88,6 +98,7 @@ export async function runStoredFanslyProbe(input: {
       pageLabel: input.pageLabel,
       credentialSource: "existing_rest_session",
       credentialRouteGeneration: before.generation,
+      ...(bindingPreflight === undefined ? {} : { bindingPreflight }),
       generationUnchanged,
       accountBinding: "unverified",
       completeness: "unverified",
