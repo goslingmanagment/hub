@@ -10,3 +10,5 @@ Validation on the reviewed candidate:
 - Independent review: no actionable findings. Fresh PR CI remains the merge gate.
 
 Evidence: `investigations/voice-service-settlement-fixture-2026-09-14/`. No production behavior, flag or migration changes.
+
+Composition: local validation above was on main `1fe9dbe74daa8a4fbfd452ac352f7f290a60b1e4` plus topic `81fb0a31aa69dbbbe259e983854948c6a9b9ceca`. Before publication the branch incorporates main `ce0a44b0d6778f8bd371c105f26d31f9abe8b8bd` (merged metadata PR187). The voice test blob is unchanged; the only conflict is append-only decisions, preserving main and placing D330 after D327. No new local run is claimed for this composition; independent composition review and fresh PR CI remain required.

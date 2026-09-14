@@ -43,3 +43,5 @@ finished before reset. This passing run plus the deterministic transaction
 boundary closes the identified leak, without claiming that all possible
 asynchronous test lifecycle defects have been eliminated. Fresh PR CI remains
 required before merge. No production actions or measured production effect.
+
+Composition: local validation above was on main `1fe9dbe74daa8a4fbfd452ac352f7f290a60b1e4` plus topic `81fb0a31aa69dbbbe259e983854948c6a9b9ceca`. Before publication the branch incorporates main `ce0a44b0d6778f8bd371c105f26d31f9abe8b8bd` (merged metadata PR187). The voice test blob is unchanged; the only conflict is append-only decisions, preserving main and placing D330 after D327. No new local run is claimed for this composition; independent composition review and fresh PR CI remain required.

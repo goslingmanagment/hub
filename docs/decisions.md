@@ -322,6 +322,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 322 | Durable provider cooldown | Retain future provider retry deadlines across queued revisions; report long Fansly cooldowns immediately without retrying early. |
 | 323 | Dashboard production parity | Restore the five deployed dashboard feature-control and daily-workflow patches on current main; preserve backend behavior and verify the single formatting-only exception against emitted JavaScript. |
 | 324 | OFAPI fixture UTC clock | Cap ordinary ledger fixture timestamps at their captured instant; prove report boundaries with explicit observations while preserving future-fact exclusion. |
+| 327 | Fansly DM exclusion write | Merge only the verified partner's exclusion metadata under the current lease; preserve newer thread material and refuse stale-binding checkpoint advance. |
 | 330 | Voice fixture settlement boundary | Wait for committed voice completion before the next test resets tables; keep detached runtime dispatch unchanged. |
 
 ## Consensus Decisions
@@ -13314,6 +13315,22 @@ Add five PostgreSQL cases with explicit report observations at day/month boundar
 and around the failed 00:02:30 case. Keep the intentional future-entry test and
 production queries unchanged. An original-helper negative control reproduces
 132 versus 92; the corrected suite passes all 26 cases. No runtime flag is added.
+
+## Decision 327: Exclude an unresolvable DM partner without rewriting its thread (2026-09-14)
+
+After repeated terminal message 5xx failures and a journaled unresolved partner
+lookup, the DM handler wrote its previously loaded conversation back in full.
+A concurrent conversation/message writer could have advanced the head, stored
+cursors, coverage or metadata during that lookup; the stale upsert overwrote it.
+
+Merge only `messageSyncExcludedReason` into the current metadata, matching the
+conversation ID, page and partner verified by that lookup. Keep this update and
+the checkpoint reset in the existing lease-owned transaction. If the row was
+removed or rebound, rethrow the original provider error and leave the checkpoint
+unchanged; never recreate the row from the stale snapshot. Existing failure
+thresholds, account resolution and polling policy remain unchanged. No migration
+or runtime flag is added. The focused PostgreSQL suite interleaves a second writer
+inside the mocked lookup while exercising the real handler, journal and queries.
 
 ## Decision 330: Complete the voice fixture before resetting its database (2026-09-14)
 

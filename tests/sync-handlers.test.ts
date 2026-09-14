@@ -51,6 +51,7 @@ const dbMocks = vi.hoisted(() => ({
   upsertCheckpoint: vi.fn(),
   upsertCheckpointProgress: vi.fn(),
   upsertPageDmConversation: vi.fn(),
+  excludePageDmConversationMessageSync: vi.fn(),
   upsertPageDmMessages: vi.fn(),
   upsertPageTopSpenders: vi.fn(),
   upsertFanPageExternalPresences: vi.fn(),
@@ -294,6 +295,7 @@ describe("sync executor handlers", () => {
     dbMocks.selectNextPageDmMessageSyncCandidate.mockResolvedValue(null);
     dbMocks.upsertFanPages.mockResolvedValue(undefined);
     dbMocks.upsertPageDmConversation.mockResolvedValue(undefined);
+    dbMocks.excludePageDmConversationMessageSync.mockResolvedValue(true);
     dbMocks.upsertPageDmMessages.mockResolvedValue(undefined);
     dbMocks.upsertPageTopSpenders.mockResolvedValue(undefined);
     dbMocks.upsertFanPageExternalPresences.mockResolvedValue(undefined);
@@ -5981,13 +5983,13 @@ it("finalizes follower reconcile when offset drift duplicates raw rows but the u
       platformConversationId: "group-broken",
     });
     expect(getAccountsByIdsPage).toHaveBeenCalledWith(expect.anything(), ["fan-missing"]);
-    expect(dbMocks.upsertPageDmConversation).toHaveBeenCalledWith({}, expect.objectContaining({
-      platformConversationId: "group-broken",
-      metadata: {
-        [FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY]:
-          FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP,
-      },
-    }));
+    expect(dbMocks.excludePageDmConversationMessageSync).toHaveBeenCalledWith({}, {
+      conversationId: 777,
+      platformAccountId: 55,
+      partnerPlatformUserId: "fan-missing",
+      reason: FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP,
+    });
+    expect(dbMocks.upsertPageDmConversation).not.toHaveBeenCalled();
     expect(telemetry.addNote).toHaveBeenCalledWith(
       "Excluded DM conversation after repeated 5xx because partner account is unresolvable",
       expect.objectContaining({
