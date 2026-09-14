@@ -118,6 +118,42 @@ const response = (data: unknown, next?: string | null) =>
     }),
   );
 describe("resumable OFAPI collection reads", () => {
+  it("continues explicitly selected legacy latest-fan jobs after audience reclassification", async () => {
+    const created = await job(["fans_latest?type=new&start_date=2026-09-10&end_date=2026-09-16"]);
+    const fetch = vi.fn(async () => response({ users: [{ id: 123 }], hasMore: false }, null));
+    vi.stubGlobal("fetch", fetch);
+    await runOfapiCollectionJob(app, created.id);
+    expect(await getOfapiCollectionJob(app.db, created.id)).toMatchObject({ state: "completed", used_calls: 1 });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    const snapshots = await readOfapiStoredSnapshots(app.db, { pageId, operation: "ofapi_read_fans_latest" });
+    expect(snapshots[0]?.items).toEqual([expect.objectContaining({ fanId: "123" })]);
+  });
+  it("keeps a checkpointed legacy latest-fan plan and cursor on resume", async () => {
+    const created = await job(["fans_latest?type=new&start_date=2026-09-10&end_date=2026-09-16"]);
+    const token = (await claimOfapiCollectionJob(app.db, created.id))!;
+    const step = planOfapiReadCollection((await getOfapiCollectionJob(app.db, created.id))!, "acct_test")[0]!;
+    step.query.offset = "20";
+    await checkpointOfapiCollectionJob(app.db, { id: created.id, token,
+      checkpoint: { plan: [step], index: 0 }, state: "paused", reason: "owner_pause" });
+    await resumeOfapiCollectionJob(app.db, created.id, 0, actor);
+    const fetch = vi.fn(async (_url: unknown) => response({ users: [{ id: 124 }], hasMore: false }, null));
+    vi.stubGlobal("fetch", fetch);
+    await runOfapiCollectionJob(app, created.id);
+    expect(await getOfapiCollectionJob(app.db, created.id)).toMatchObject({ state: "completed", used_calls: 1 });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(String(fetch.mock.calls[0]?.[0])).toContain("offset=20");
+  });
+  it("does not let historical latest-fan category compatibility bypass background off", async () => {
+    const created = await job(["fans_latest"]);
+    const step = planOfapiReadCollection((await getOfapiCollectionJob(app.db, created.id))!, "acct_test")[0]!;
+    const fetch = vi.fn(); vi.stubGlobal("fetch", fetch);
+    await expect(captureOfapiCollectionRead(app, {
+      pageId, accountId: "acct_test", step,
+      context: { category: "profile_notifications", purpose: "background", jobId: created.id },
+      stepKey: "legacy-background-off", maxBytes: 1000000, beforeDispatch: async () => true,
+    })).rejects.toMatchObject({ phase: "pre_dispatch", cause: { reason: "collection_off" } });
+    expect(fetch).not.toHaveBeenCalled();
+  });
   it("finishes a legacy paused scheduled 503 locally and waits for the existing next interval", async () => {
     await applyOfapiCollectionPolicy(app.db, { expectedRevision: 0, changes: [{ pageId,
       category: "profile_notifications", mode: "scheduled", intervalMinutes: 15,

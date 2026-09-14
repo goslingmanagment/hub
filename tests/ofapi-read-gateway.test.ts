@@ -60,6 +60,22 @@ describe("OFAPI read gateway allowlist", () => {
     });
   });
 
+  it("admits the bounded latest-fan roster as interactive audience without enabling profile collection", () => {
+    const request = resolveOfapiReadGatewayRequest(`${ACCOUNT}/fans/latest`, {
+      type: "new", start_date: "2026-09-10", end_date: "2026-09-16", limit: "20", offset: "20",
+    });
+    expect(request).toMatchObject({
+      kind: "proxy", operation: "ofapi_read_fans_latest",
+      collectionContext: { category: "core_audience", purpose: "interactive" },
+      query: { type: "new", start_date: "2026-09-10", end_date: "2026-09-16", limit: "20", offset: "20" },
+    });
+    expect(resolveOfapiReadGatewayRequest(`${ACCOUNT}/fans/top`, {})).toMatchObject({
+      collectionContext: { category: "profile_notifications" },
+    });
+    expect(() => resolveOfapiReadGatewayRequest(`${ACCOUNT}/fans/latest`, { limit: "51" })).toThrow();
+    expect(() => resolveOfapiReadGatewayRequest(`${ACCOUNT}/fans/latest`, { start_date: "2026-09-10" })).toThrow();
+  });
+
   it("marks the upload-status poll as a known free request", () => {
     expect(resolveOfapiReadGatewayRequest(
       `${ACCOUNT}/media/uploads/ofapi_media_123/status`,

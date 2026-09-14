@@ -25,6 +25,7 @@ import type { PgBoss } from "pg-boss";
 import type { AppContext } from "../bootstrap.ts";
 import {
   captureOfapiCollectionRead,
+  matchesOfapiCollectionJobCategory,
   completeOfapiCollectionRead,
   type OfapiCollectionReadStep,
 } from "./ofapi-collection-read-transport.ts";
@@ -80,7 +81,9 @@ export function planOfapiReadCollection(
     const [selector, rawQuery, ...queryExtra] = entry.split("?");
     const [id, nativeId, ...extra] = selector!.split(":");
     const def = OFAPI_READ_CATALOG.find(
-      (row) => row.id === id && row.category === job.category,
+      (row) => row.id === id && matchesOfapiCollectionJobCategory(row, {
+        category: job.category, jobId: job.id, purpose: job.purpose,
+      }),
     );
     if (
       !def ||

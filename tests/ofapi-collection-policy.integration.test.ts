@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { applyOfapiCollectionPolicy, createModel, createOnlyFansPage, createOfapiCollectionJob, ensurePageSyncStates, getOfapiCollectionSnapshot, getEffectiveOfapiCollectionPolicy, previewOfapiCollectionPolicy, reserveOfapiCollectionRequest, settleOfapiCollectionRequest, updateOfapiCollectionJob, resumeOfapiCollectionJob, getOfapiCollectionJob } from "@agency_hub_core/db";
+import { resolveOfapiReadGatewayRequest } from "../apps/runtime/src/services/ofapi-read-gateway.ts";
 import type { OfapiCollectionSettings } from "@agency_hub_core/shared";
 import { createOfapiClient } from "../apps/runtime/src/services/ofapi.ts";
 import { ofapiCollectionPolicyHooks } from "../apps/runtime/src/services/ofapi-collection-policy.ts";
@@ -55,6 +56,22 @@ describe("OFAPI effective collection control", () => {
     await reserveOfapiCollectionRequest(app.db, { pageId, operation: "ofapi_capture_posts", requestId: "baseline" });
     await applyOfapiCollectionPolicy(app.db, { expectedRevision: 0, changes: [settings({ mode: "off" })] }, 1);
     await expect(reserveOfapiCollectionRequest(app.db, { pageId, operation: "ofapi_capture_posts", requestId: "explicit-off" })).rejects.toThrow("collection_off");
+  });
+  it("allows an interactive latest roster with baseline audience, honors explicit off and retains its budget", async () => {
+    const request = resolveOfapiReadGatewayRequest("acct_fixture/fans/latest", {
+      type: "new", start_date: "2026-09-10", end_date: "2026-09-16", limit: "20", offset: "0",
+    });
+    if (request.kind !== "proxy") throw new Error("Expected proxy");
+    const reserve = () => reserveOfapiCollectionRequest(app.db, {
+      pageId, operation: request.operation, requestId: randomUUID(), context: request.collectionContext!,
+    });
+    await expect(reserve()).resolves.toBeUndefined();
+    expect(await getEffectiveOfapiCollectionPolicy(app.db, "profile_notifications", pageId)).toMatchObject({ mode: "off" });
+    await applyOfapiCollectionPolicy(app.db, { expectedRevision: 0, changes: [settings({ category: "core_audience", mode: "off" })] }, 1);
+    await expect(reserve()).rejects.toThrow("collection_off");
+    await applyOfapiCollectionPolicy(app.db, { expectedRevision: 1, changes: [settings({ category: "core_audience", dailyCreditLimit: 1 })] }, 1);
+    // The baseline reservation already used this page/category's daily unit.
+    await expect(reserve()).rejects.toThrow("daily_limit");
   });
   it("preview has no egress; two windows cannot overwrite the same revision", async () => {
     const fetch = vi.fn(); vi.stubGlobal("fetch", fetch);

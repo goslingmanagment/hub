@@ -340,10 +340,10 @@ export function normalizeOfapiRead(
       ofapiReadRecord(row.subscribedOnData) ??
       ofapiReadRecord(row.subscribedByData);
     const profile =
-      def.category === "profile_notifications" &&
+      def.id === "fans_latest" || (def.category === "profile_notifications" &&
       !def.id.startsWith("notification") &&
       !def.id.startsWith("giphy") &&
-      !["user_lists", "user_list"].includes(def.id);
+      !["user_lists", "user_list"].includes(def.id));
     return {
       nativeId,
       kind: def.id,

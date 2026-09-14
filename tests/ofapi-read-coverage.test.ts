@@ -14,8 +14,24 @@ import {
   planOfapiReadCollection,
   type OfapiCollectionJob,
 } from "../apps/runtime/src/services/ofapi-collection-runner.ts";
+import { matchesOfapiCollectionJobCategory } from "../apps/runtime/src/services/ofapi-collection-read-transport.ts";
 const def = (id: string) => OFAPI_READ_CATALOG.find((row) => row.id === id)!;
 describe("closed OFAPI read coverage catalog", () => {
+  it("retains fan identity for the audience latest roster even when only the ID is returned", () => {
+    expect(def("fans_latest")).toMatchObject({ category: "core_audience", defaultCollect: false });
+    expect(normalizeOfapiRead(def("fans_latest"), {
+      data: { users: [{ id: 123 }], hasMore: false }, _pagination: { next_page: null },
+    })[0]).toMatchObject({ nativeId: "123", fanId: "123" });
+  });
+  it("limits historical category compatibility to explicit latest-fan jobs", () => {
+    const context = { category: "profile_notifications" as const, jobId: "fixture-job", purpose: "one_off" as const };
+    expect(matchesOfapiCollectionJobCategory(def("fans_latest"), context)).toBe(true);
+    expect(matchesOfapiCollectionJobCategory(def("fans_latest"), { ...context, purpose: "background" })).toBe(true);
+    expect(matchesOfapiCollectionJobCategory(def("fans_latest"), { ...context, purpose: "interactive" })).toBe(false);
+    expect(matchesOfapiCollectionJobCategory(def("fans_latest"), { category: context.category, purpose: context.purpose })).toBe(false);
+    expect(matchesOfapiCollectionJobCategory(def("fans_latest"), { ...context, category: "posts_comments" })).toBe(false);
+    expect(matchesOfapiCollectionJobCategory(def("fans_top"), { ...context, category: "core_audience" })).toBe(false);
+  });
   it("resolves account catalog operations through the existing gateway with explicit policy context", () => {
     for (const row of OFAPI_READ_CATALOG.filter(row => row.scope !== "smart_link")) {
       const query = Object.fromEntries(

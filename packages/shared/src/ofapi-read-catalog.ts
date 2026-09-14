@@ -124,7 +124,7 @@ read(
   },
   { defaultCollect: true },
 );
-read("fans_latest", "fans/latest", "profile_notifications", "users", "offset", {
+read("fans_latest", "fans/latest", "core_audience", "users", "offset", {
   ...page,
   ...dates,
   type: "enum:total|renew|new",
