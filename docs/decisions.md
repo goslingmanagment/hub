@@ -314,6 +314,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 311 | Disjoint replay with shared allowance | Keep reserved capture/replay turns and reuse unused allowance once without restarting an exhausted cursor. |
 | 315 | Empty observation replay heads | Probe actual version/source/kind index prefixes before an unrestricted scan head; keep ordered pages and scoped replay unchanged. |
 | 321 | Production performance parity | Restore deployed runtime fixes and exact applied migration identities on current main; preserve newer main changes and keep C1 membership and dashboard reconciliation visible as separate prerequisites. |
+| 326 | Exhausted DM head debt and history | Retain exhausted missing-head discrepancies while allowing ordinary pending history; only unexhausted debt retains head-search priority and backoff. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -12985,3 +12986,38 @@ membership writers/protection receipts remain in PR166; dashboard feature-contro
 changes remain in their own branch. Those outstanding differences must be
 reconciled before claiming that main preserves the whole production release.
 No deployment approval or A0/C1/W0 acceptance follows from merging these files.
+
+## Decision 326: Exhausted head debt does not block ordinary history (2026-09-14)
+
+An allowlisted Fansly conversation could remain in `pending_backfill` forever
+after its known missing head exhausted all five recovery attempts. The selector
+correctly stopped head searches, but still excluded ordinary pending history
+whenever any uncaptured head debt existed. The list writer used that same broad
+unresolved test to suppress the sibling message-stream wakeup.
+
+Ordinary pending history is now blocked only by uncaptured debt with fewer than
+five attempts. Due head debt retains its existing priority, and unexhausted debt
+in backoff still cannot enter through the history path. The list writer reuses
+its existing bounded-retry deadline result to make the same distinction; no
+additional query or retry loop is introduced.
+
+A freshly selected pending-history conversation without an active head target
+uses ordinary backfill from its oldest stored cursor. Its still-missing head
+must not force an incremental read that overlaps without advancing history.
+Due head targets and existing pinned work keep their current mode and cursor.
+
+Exhausted rows remain uncaptured and visible as `exhausted` in the reporting
+view. `hasUnresolvedFanslyDmHead` keeps its diagnostic meaning, including those
+rows. No ID is acknowledged, erased, declared provider-deleted or repaired by
+this selection change. A later exact stored receipt can still resolve the debt.
+
+The existing allowlist, five-attempt cap, page budgets, history policy, stream
+and transport gates remain in force. No flag, migration, recovery activation or
+production action is introduced. Postgres regressions cover exhausted history
+selection without debt mutation, unexhausted head priority/backoff, actual
+allowlisted sweep wakeups, and a message chunk that captures older history once
+without retrying or acknowledging the exhausted head. Rollback preserves the debt but
+can block ordinary pending history behind exhausted debt again.
+
+Decision 326 is a coordinator reservation after separately prepared Decisions
+322–325. Its number must be checked against current main before publication.

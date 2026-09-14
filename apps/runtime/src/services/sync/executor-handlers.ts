@@ -2857,6 +2857,12 @@ export async function fanslyDmMessagesChunk(
 
         const headTarget = headCatchupEnabled && currentMode !== "deep_backfill"
           ? await getFanslyDmHeadTarget(app.db, { conversationId: conversation.id }) : null;
+        if (headCatchupEnabled && headTarget === null && currentMode === "incremental" &&
+          conversation.messageCoverageStatus === "pending_backfill") {
+          // An exhausted head can still differ from the newest stored message.
+          // Resume ordinary history from its oldest cursor instead of rereading that head.
+          currentMode = "backfill";
+        }
         const nextState: DmMessagesCursorState = {
           ...(headTarget ? { headCatchup: {
             messageId: headTarget.messageId, startedAt: new Date().toISOString(), pagesRead: 0,

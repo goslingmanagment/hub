@@ -1154,6 +1154,7 @@ export async function selectNextPageDmMessageSyncCandidate(
           and ${input.includeHeadDebt ? sql`not exists (
             select 1 from fansly_dm_head_debt d
             where d.conversation_id = c.id and d.captured_at is null
+              and d.attempts < 5
           )` : sql`true`})
       )
     order by
