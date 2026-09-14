@@ -1,12 +1,14 @@
-import { useEffect, useMemo, useState } from "react";
-import { Link, useParams } from "react-router";
+import { useMemo } from "react";
+import { Link, useLocation, useParams, useSearchParams } from "react-router";
 import { usePageFollowers } from "@/api/queries";
 import { Badge } from "@/components/shared/Badge";
 import { FilterButtons } from "@/components/shared/FilterButtons";
 import { Pagination } from "@/components/shared/Pagination";
 import { SearchInput } from "@/components/shared/SearchInput";
 import { StatusPanel } from "@/components/shared/StatusPanel";
-import { buildFanProfileNavigation, buildPageSectionRoute } from "@/lib/navigation";
+import { buildFanProfileNavigation } from "@/lib/navigation";
+import { listOffset } from "@/lib/overviewNavigation";
+import { QueryNotice } from "@/components/shared/QueryNotice";
 import { TableSkeleton } from "@/components/shared/TableSkeleton";
 import { resolveFanLabelForScope } from "@agency_hub_core/shared";
 import {
@@ -23,30 +25,38 @@ const LIMIT = 50;
 const ACTIVE_WINDOW_MINUTES = 120;
 
 function isNew24h(followedAt: string) {
-  return Date.now() - new Date(followedAt).getTime() < 86_400_000;
+  const age = Date.now() - new Date(followedAt).getTime();
+  return age >= 0 && age < 86_400_000;
 }
 
 export function FollowersPage() {
   const { pageLabel } = useParams();
-  const [filter, setFilter] = useState<Filter>("all");
-  const [searchQuery, setSearchQuery] = useState("");
-  const [offset, setOffset] = useState(0);
-
-  useEffect(() => {
-    setOffset(0);
-  }, [pageLabel, filter, searchQuery]);
+  const location = useLocation();
+  const [search, setSearch] = useSearchParams();
+  const rawFilter = search.get("filter");
+  const filter: Filter = rawFilter === "new24h" || rawFilter === "unmessaged" || rawFilter === "active" || rawFilter === "subscribers" ? rawFilter : "all";
+  const searchQuery = search.get("query") ?? "";
+  const offset = listOffset(search.get("offset"));
+  function update(key: string, value: string) {
+    setSearch((previous) => {
+      const next = new URLSearchParams(previous);
+      if (value) next.set(key, value); else next.delete(key);
+      if (key !== "offset") next.delete("offset");
+      return next;
+    }, { state: location.state });
+  }
 
   const params = useMemo(() => ({
     limit: LIMIT,
     offset,
-    query: searchQuery || undefined,
-    followedWithinHours: filter === "new24h" ? 24 : undefined,
-    dmStatus: filter === "unmessaged" ? "none" as const : undefined,
-    activeWithinMinutes: filter === "active" ? ACTIVE_WINDOW_MINUTES : undefined,
-    subscriber: filter === "subscribers" ? true : undefined,
+    ...(searchQuery ? { query: searchQuery } : {}),
+    ...(filter === "new24h" ? { followedWithinHours: 24 } : {}),
+    ...(filter === "unmessaged" ? { dmStatus: "none" as const } : {}),
+    ...(filter === "active" ? { activeWithinMinutes: ACTIVE_WINDOW_MINUTES } : {}),
+    ...(filter === "subscribers" ? { subscriber: true } : {}),
   }), [filter, offset, searchQuery]);
 
-  const { data, isLoading, isError } = usePageFollowers(pageLabel!, params);
+  const { data, isLoading, isError, refetch } = usePageFollowers(pageLabel!, params);
 
   if (isLoading || !data) {
     if (isLoading) {
@@ -58,6 +68,7 @@ export function FollowersPage() {
           title="Followers failed to load"
           description="The follower list could not be fetched for this page."
           tone="error"
+          action={<button type="button" onClick={() => void refetch()}>Повторить</button>}
         />
       );
     }
@@ -85,26 +96,28 @@ export function FollowersPage() {
 
   return (
     <div>
+      <QueryNotice error={isError} stale={Boolean(data)} retry={refetch} />
       <div className="mb-5">
         <h1 className="text-xl font-extrabold text-text-primary">
           Followers &mdash; {pageLabel}
         </h1>
-        <p className="text-sm text-text-muted mt-1">{total} total</p>
+        <p className="text-sm text-text-muted mt-1">{offset > 0 && items.length === 0 ? "Число записей в фильтре пока недоступно" : `${total} в текущем фильтре`}</p>
       </div>
 
       <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
         <FilterButtons
           filters={filters}
           active={filter}
-          onChange={(next) => setFilter(next as Filter)}
+          onChange={(next) => update("filter", next)}
         />
         <SearchInput
           value={searchQuery}
-          onChange={setSearchQuery}
+          onChange={(value) => update("query", value)}
           placeholder="Search follower..."
         />
       </div>
 
+      <p className="mb-3 text-xs text-text-muted">Сохранённые записи Hub. Unmessaged означает, что диалог не записан; Active — сигнал активности за последние 120 минут.</p>
       {showEnrichmentUnavailable ? (
         <StatusPanel
           title="Follower details are not available yet"
@@ -129,7 +142,8 @@ export function FollowersPage() {
             {items.length === 0 && (
               <tr>
                 <td colSpan={6} className="px-4 py-8 text-center text-sm text-text-muted">
-                  No followers match the current filter.
+                  {offset > 0 ? "На этой странице списка записей нет." : "No followers match the current filter."}
+                  {offset > 0 && <button type="button" className="ml-2 text-accent" onClick={() => update("offset", "")}>К началу списка</button>}
                 </td>
               </tr>
             )}
@@ -140,7 +154,7 @@ export function FollowersPage() {
                 pageLabel!,
                 platform,
                 follower.platformUserId,
-                buildPageSectionRoute(pageLabel!, "followers"),
+                location.pathname + location.search,
                 fanLabel.label,
               );
               const subscriberKnown = typeof follower.isSubscriber === "boolean";
@@ -255,7 +269,7 @@ export function FollowersPage() {
                         )}
                       </div>
                     ) : (
-                      <span className="font-medium text-green">No DM yet</span>
+                      <span className="text-text-muted">Нет записанного диалога</span>
                     )}
                   </td>
                   <td className="px-4 py-3 text-sm">
@@ -283,7 +297,7 @@ export function FollowersPage() {
           offset={offset}
           limit={LIMIT}
           total={total}
-          onPageChange={setOffset}
+          onPageChange={(value) => update("offset", String(value))}
         />
       </section>
       )}

@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Navigate, Outlet, useLocation } from "react-router";
-import { useAuthMe, useOverview } from "@/api/queries";
+import { useAuthMe, usePages } from "@/api/queries";
+import { KernelApiError } from "@/api/sdk";
+import { buildLoginRoute } from "@/lib/navigation";
+import { QueryNotice } from "@/components/shared/QueryNotice";
 import { DashboardShellProvider } from "./DashboardShellContext.js";
 import { Sidebar } from "./Sidebar.js";
 import { Topbar } from "./Topbar.js";
@@ -59,34 +62,42 @@ export function ProtectedLayout() {
   const [navigationOpen, setNavigationOpen] = useState(false);
   const closeNavigation = useCallback(() => setNavigationOpen(false), []);
   useEffect(() => setNavigationOpen(false), [location.key]);
-  const { data, isLoading, isError } = useAuthMe();
+  const { data, isLoading, isError, error, refetch, isFetching } = useAuthMe();
   const {
-    data: overview,
+    data: pages,
     isLoading: isPageCatalogLoading,
     isError: isPageCatalogError,
     error: pageCatalogError,
-  } = useOverview();
+    refetch: refetchPages,
+  } = usePages({ enabled: Boolean(data?.user) && !isError });
 
   if (isLoading) {
     return (
       <div className="flex items-center justify-center min-h-screen bg-bg">
-        <div className="text-text-muted text-sm">Loading...</div>
+        <div role="status" className="text-text-muted text-sm">Проверяем вход…</div>
       </div>
     );
   }
 
-  if (isError || !data) {
-    return <Navigate to="/login" replace />;
+  if (error instanceof KernelApiError && error.status === 401) {
+    return <Navigate to={buildLoginRoute(`${location.pathname}${location.search}${location.hash}`)} replace />;
   }
+  if (isError || !data) return <div className="flex min-h-screen items-center justify-center bg-bg p-6">
+    <div role="alert" className="max-w-md rounded-xl border border-border bg-card p-6">
+      <h1 className="font-semibold text-text-primary">Не удалось проверить вход</h1>
+      <p className="mt-2 text-sm text-text-secondary">Hub не подтвердил состояние сессии. Повторите запрос, когда связь восстановится.</p>
+      <button type="button" disabled={isFetching} onClick={() => void refetch()} className="mt-4 min-h-11 rounded-lg bg-accent px-4 text-white disabled:opacity-50">{isFetching ? "Проверяем…" : "Повторить"}</button>
+    </div>
+  </div>;
 
   const shellValue = {
-    pageCatalogState: isPageCatalogLoading ? "loading" : isPageCatalogError ? "error" : "ready",
+    pageCatalogState: pages ? "ready" : isPageCatalogLoading ? "loading" : "error",
     pageCatalogError: isPageCatalogError
       ? (pageCatalogError instanceof Error ? pageCatalogError : new Error("Page catalog failed to load"))
       : null,
-    pages: overview?.pages ?? [],
+    pages: pages ?? [],
     findPageByLabel: (pageLabel: string | undefined) =>
-      overview?.pages.find((page) => page.label === pageLabel) ?? null,
+      pages?.find((page) => page.label === pageLabel) ?? null,
   } as const;
 
   return (
@@ -97,6 +108,7 @@ export function ProtectedLayout() {
         <div className="min-w-0 flex-1 md:ml-[248px]">
           <Topbar user={data.user} onOpenNavigation={() => setNavigationOpen(true)} />
           <main className="mt-[56px] min-w-0 p-0 md:p-8 max-w-[1200px]">
+            {isPageCatalogError && <div className="p-4 md:p-0"><p className="mb-1 text-sm font-semibold text-text-primary">Каталог страниц</p><QueryNotice error stale={Boolean(pages)} retry={refetchPages} /></div>}
             <Outlet />
           </main>
         </div>

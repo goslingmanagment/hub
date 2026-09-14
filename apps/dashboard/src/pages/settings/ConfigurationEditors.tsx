@@ -3,6 +3,8 @@ import type { ConfigItem, ConfigUpdateBody, ConfigUpdateResponse } from "@agency
 import { useAdminConfig, useClearConfig, useUpdateConfig } from "@/api/adminConfig";
 import { KernelApiError } from "@/api/sdk";
 import { CONFIG_COPY_RU } from "./configCopyRu.js";
+import { ConfigChoiceField } from "./ConfigChoiceField.js";
+import { CONFIG_MODE_CHOICES, configPageScope } from "./configurationChoices.js";
 
 type Scalar = string | number | boolean;
 
@@ -269,7 +271,7 @@ function MutationStatus({ pending, pendingApply, error, success, conflict }: {
   );
 }
 
-export function ConfigEditor({ item }: { item: ConfigItem }) {
+export function ConfigEditor({ item, friendly = false }: { item: ConfigItem; friendly?: boolean }) {
   const mutations = useEditorMutations();
   const [draft, setDraft] = useState<{ input: string; snapshot: ConfigSnapshot } | null>(null);
   const [confirm, setConfirm] = useState<{ action: "save" | "revert"; snapshot: ConfigSnapshot } | null>(null);
@@ -288,6 +290,12 @@ export function ConfigEditor({ item }: { item: ConfigItem }) {
   const label = copy?.title ?? item.label;
   const unit = item.kind === "number" ? copy?.unit : undefined;
   const showCancel = (draft !== null || confirm !== null) && !needsReview;
+  const useChoices = friendly && Boolean(CONFIG_MODE_CHOICES[item.key] || configPageScope(item.key));
+  function changeInput(next: string) {
+    setDraft((previous) => ({ input: next, snapshot: previous?.snapshot ?? captureConfigSnapshot(item) }));
+    setConfirm(null);
+    receipt.setReceipt(null);
+  }
 
   function resetDraft() {
     setDraft(null);
@@ -348,22 +356,17 @@ export function ConfigEditor({ item }: { item: ConfigItem }) {
     <div className="settings-editor space-y-2">
       <div className="settings-editor-controls">
         <div className="settings-editor-field flex min-w-0 items-center gap-2">
-          <input
+          {useChoices ? <ConfigChoiceField configKey={item.key} label={label} value={input} disabled={pending} invalid={draft !== null && !parsed.valid} isDraft={draft !== null} onChange={changeInput} /> : <input
             type={item.kind === "string" ? "text" : "number"}
             aria-label={`${label}${unit ? `, ${unit}` : ""} value`}
             aria-describedby={copy?.short ? `config-description-${item.key}` : undefined}
             aria-invalid={draft !== null && !parsed.valid}
             value={input}
             disabled={pending}
-            onChange={(event) => {
-              const next = event.target.value;
-              setDraft((previous) => ({ input: next, snapshot: previous?.snapshot ?? captureConfigSnapshot(item) }));
-              setConfirm(null);
-              receipt.setReceipt(null);
-            }}
+            onChange={(event) => changeInput(event.target.value)}
             className="settings-input min-w-0 flex-1 font-mono"
             style={unit ? { paddingRight: Math.min(106, 20 + unit.length * 6) } : undefined}
-          />
+          />}
           {unit && <span className="settings-unit" aria-hidden="true">{unit}</span>}
         </div>
         <button

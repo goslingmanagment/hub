@@ -1,9 +1,11 @@
 import { useAdminDbStats } from "@/api/queries";
 import { StatusPanel } from "@/components/shared/StatusPanel";
+import { StaleDataNotice } from "@/components/shared/StaleDataNotice";
 import { formatDateTime } from "@/lib/format";
 
 function formatBytes(bytes: number | null | undefined): string {
-  if (bytes == null || bytes === 0) return "0 B";
+  if (bytes == null || !Number.isFinite(bytes) || bytes < 0) return "—";
+  if (bytes === 0) return "0 B";
   const units = ["B", "KB", "MB", "GB", "TB"];
   const i = Math.floor(Math.log(bytes) / Math.log(1024));
   const value = bytes / Math.pow(1024, i);
@@ -11,7 +13,7 @@ function formatBytes(bytes: number | null | undefined): string {
 }
 
 export function DbStatsPage() {
-  const { data, isLoading, isError } = useAdminDbStats();
+  const { data, isLoading, isError, error } = useAdminDbStats();
 
   if (isLoading || !data) {
     return isLoading ? (
@@ -28,20 +30,21 @@ export function DbStatsPage() {
 
   return (
     <div>
+      {isError && <StaleDataNotice error={error} className="mb-4" />}
       <div className="mb-5">
         <h1 className="text-xl font-extrabold text-text-primary">Database Stats</h1>
         <p className="text-sm text-text-muted mt-1">Table sizes and migrations</p>
       </div>
 
       {/* Tables */}
-      <section className="overflow-hidden rounded-xl border border-border bg-card mb-8">
+      <section className="overflow-x-auto rounded-xl border border-border bg-card mb-8">
         <div className="px-4 py-3 border-b border-border">
           <h2 className="text-sm font-semibold text-text-primary">Tables</h2>
         </div>
         <table className="w-full border-collapse">
           <thead>
             <tr className="bg-hover-alt">
-              {["Table", "Rows", "Total Size", "Index Size"].map((col) => (
+              {["Table", "Rows (estimate)", "Total Size", "Index Size"].map((col) => (
                 <th
                   key={col}
                   className="px-4 py-3 text-left text-[12px] font-semibold uppercase tracking-wider text-text-muted"
@@ -83,7 +86,7 @@ export function DbStatsPage() {
       </section>
 
       {/* Migrations */}
-      <section className="overflow-hidden rounded-xl border border-border bg-card">
+      <section className="overflow-x-auto rounded-xl border border-border bg-card">
         <div className="px-4 py-3 border-b border-border">
           <h2 className="text-sm font-semibold text-text-primary">Migrations</h2>
         </div>

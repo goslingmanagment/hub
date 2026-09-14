@@ -108,21 +108,51 @@ function RecentVerdicts({ recent }: { recent: AiReport["recent"] }) {
   );
 }
 
-function SettingsForm({ report, pageLabel }: { report: AiReport; pageLabel: string }) {
+export function parseAiDailyCap(input: string): number | null {
+  if (!input.trim()) return null;
+  const value = Number(input);
+  if (!Number.isInteger(value) || value < 1 || value > 5000) throw new Error("Укажите целое число от 1 до 5000 или оставьте поле пустым для наследования.");
+  return value;
+}
+
+function settingsVersion(settings: AiReport["settings"]): string {
+  return JSON.stringify([settings.override.enabled, settings.override.dailyCapMax, settings.override.model]);
+}
+
+export function retainAiSettingsReceipt(receipt: AiReport["settings"] | null, read: AiReport["settings"]): AiReport["settings"] | null {
+  return receipt && settingsVersion(receipt) !== settingsVersion(read) ? receipt : null;
+}
+
+function SettingsForm({ report, pageLabel, stale }: { report: AiReport; pageLabel: string; stale: boolean }) {
   const settings = useWorkboardV2AiSettings(pageLabel);
-  const ov = report.settings.override;
-  const [enabledChoice, setEnabledChoice] = useState<EnabledChoice>("inherit");
-  const [capInput, setCapInput] = useState("");
-  const [modelInput, setModelInput] = useState("");
+  const [receipt, setReceipt] = useState<AiReport["settings"] | null>(null);
+  const waitingReceipt = retainAiSettingsReceipt(receipt, report.settings);
+  const shownSettings = waitingReceipt ?? report.settings;
+  const ov = shownSettings.override;
+  const [enabledChoice, setEnabledChoice] = useState<EnabledChoice>(() => ov.enabled == null ? "inherit" : ov.enabled ? "on" : "off");
+  const [capInput, setCapInput] = useState(() => ov.dailyCapMax == null ? "" : String(ov.dailyCapMax));
+  const [modelInput, setModelInput] = useState(() => ov.model ?? "");
+  const [edited, setEdited] = useState(false);
+  const version = JSON.stringify([ov.enabled, ov.dailyCapMax, ov.model]);
+  const [draftVersion, setDraftVersion] = useState(version);
+  const conflict = edited && version !== draftVersion;
+  useEffect(() => {
+    if (receipt && !waitingReceipt) setReceipt(null);
+  }, [receipt, waitingReceipt]);
+  let capError = "";
+  try { parseAiDailyCap(capInput); } catch (error) { capError = (error as Error).message; }
 
   useEffect(() => {
+    if (edited) return;
     setEnabledChoice(ov.enabled == null ? "inherit" : ov.enabled ? "on" : "off");
     setCapInput(ov.dailyCapMax == null ? "" : String(ov.dailyCapMax));
     setModelInput(ov.model ?? "");
-  }, [ov.enabled, ov.dailyCapMax, ov.model]);
+    setDraftVersion(version);
+  }, [ov.enabled, ov.dailyCapMax, ov.model, edited, version]);
 
   const onSave = () => {
-    const dailyCapMax = capInput.trim() === "" ? null : Math.max(1, Math.min(5000, Number(capInput) || 0));
+    if (capError || conflict || stale || waitingReceipt || settings.isPending) return;
+    const dailyCapMax = parseAiDailyCap(capInput);
     settings.mutate(
       {
         enabled: enabledChoice === "inherit" ? null : enabledChoice === "on",
@@ -130,14 +160,14 @@ function SettingsForm({ report, pageLabel }: { report: AiReport; pageLabel: stri
         model: modelInput.trim() === "" ? null : modelInput.trim(),
       },
       {
-        onSuccess: () => toast.success("Настройки ИИ сохранены"),
+        onSuccess: (saved) => { setReceipt(saved.settings); setEdited(false); toast.success("Настройки ИИ сохранены"); },
         onError: () => toast.error("Не удалось сохранить настройки"),
       },
     );
   };
 
   const choices: { key: EnabledChoice; label: string }[] = [
-    { key: "inherit", label: `Наследовать (${report.settings.envEnabled ? "вкл" : "выкл"})` },
+    { key: "inherit", label: `Наследовать (${shownSettings.envEnabled ? "вкл" : "выкл"})` },
     { key: "on", label: "Включено" },
     { key: "off", label: "Выключено" },
   ];
@@ -152,7 +182,9 @@ function SettingsForm({ report, pageLabel }: { report: AiReport; pageLabel: stri
               <button
                 key={c.key}
                 type="button"
-                onClick={() => setEnabledChoice(c.key)}
+                disabled={settings.isPending}
+                aria-pressed={enabledChoice === c.key}
+                onClick={() => { setEdited(true); setEnabledChoice(c.key); }}
                 className={`px-2.5 py-1 text-[12px] transition-colors ${
                   enabledChoice === c.key ? "bg-accent/15 font-semibold text-accent" : "bg-card text-text-secondary hover:bg-hover"
                 }`}
@@ -169,9 +201,13 @@ function SettingsForm({ report, pageLabel }: { report: AiReport; pageLabel: stri
             type="number"
             min={1}
             max={5000}
+            step={1}
+            aria-label="Дневной лимит вызовов"
+            aria-invalid={Boolean(capError)}
+            disabled={settings.isPending}
             value={capInput}
-            onChange={(e) => setCapInput(e.target.value)}
-            placeholder={`${report.settings.dailyCapMax} (env)`}
+            onChange={(e) => { setEdited(true); setCapInput(e.target.value); }}
+            placeholder={`${shownSettings.dailyCapMax} (env)`}
             className="w-32 rounded-md border border-border bg-card px-2 py-1 text-[12px] tabular-nums text-text-primary"
           />
         </div>
@@ -180,9 +216,11 @@ function SettingsForm({ report, pageLabel }: { report: AiReport; pageLabel: stri
           <div className="mb-1 text-[11px] font-bold uppercase tracking-wide text-text-muted">Модель</div>
           <input
             type="text"
+            aria-label="Модель классификатора"
+            disabled={settings.isPending}
             value={modelInput}
-            onChange={(e) => setModelInput(e.target.value)}
-            placeholder={`${report.settings.model} (env)`}
+            onChange={(e) => { setEdited(true); setModelInput(e.target.value); }}
+            placeholder={`${shownSettings.model} (env)`}
             className="w-full rounded-md border border-border bg-card px-2 py-1 text-[12px] text-text-primary"
           />
         </div>
@@ -190,16 +228,22 @@ function SettingsForm({ report, pageLabel }: { report: AiReport; pageLabel: stri
         <button
           type="button"
           onClick={onSave}
-          disabled={settings.isPending}
+          disabled={settings.isPending || stale || Boolean(waitingReceipt) || conflict || Boolean(capError)}
           className="rounded-button bg-accent px-3 py-1.5 text-[12px] font-semibold text-white transition-colors hover:bg-accent/90 disabled:opacity-50"
         >
           Сохранить
         </button>
       </div>
+      {waitingReceipt && <div role="status" className="space-y-2 rounded border border-border p-3 text-xs text-text-secondary"><p>Изменение сохранено: показаны значения из ответа на запись. Последнее чтение настроек пока отличается; сохранение нового изменения приостановлено.</p><button type="button" className="rounded border border-border px-2 py-1" onClick={() => { setReceipt(null); setEdited(true); }}>Сравнить с последним чтением, сохранив мой черновик</button></div>}
+      {capError && <p role="alert" className="text-xs text-warning-dark">{capError}</p>}
+      {conflict && <div role="alert" className="space-y-2 rounded border border-warning-dark/50 p-3 text-xs text-text-secondary">
+        <p>Сохранённые настройки изменились во время редактирования. Ваш черновик сохранён. Сейчас задано: статус {ov.enabled == null ? "наследовать" : ov.enabled ? "включено" : "выключено"}, лимит {ov.dailyCapMax ?? "наследовать"}, модель {ov.model ?? "наследовать"}.</p>
+        <div className="flex flex-wrap gap-2"><button type="button" className="rounded border border-border px-2 py-1" onClick={() => setEdited(false)}>Загрузить эти значения</button><button type="button" className="rounded border border-border px-2 py-1" onClick={() => setDraftVersion(version)}>Продолжить с моим черновиком</button></div>
+      </div>}
       <div className="text-[11px] text-text-muted">
-        Эффективно: <b className="text-text-secondary">{report.settings.enabled ? "включено" : "выключено"}</b> · модель{" "}
-        <b className="text-text-secondary">{report.settings.model}</b> · лимит{" "}
-        <b className="text-text-secondary">{report.settings.dailyCapMax}</b>/день
+        Эффективно: <b className="text-text-secondary">{shownSettings.enabled ? "включено" : "выключено"}</b> · модель{" "}
+        <b className="text-text-secondary">{shownSettings.model}</b> · лимит{" "}
+        <b className="text-text-secondary">{shownSettings.dailyCapMax}</b>/день
       </div>
       {!report.settings.hasApiKey && (
         <div className="text-[11px] text-warning-dark">
@@ -212,7 +256,7 @@ function SettingsForm({ report, pageLabel }: { report: AiReport; pageLabel: stri
 
 export function AiPageDashboard({ pageLabel, running = false }: { pageLabel: string; running?: boolean }) {
   // While a run is in flight, poll the report so coverage / states / verdicts fill in live.
-  const { data: report, isLoading } = useWorkboardV2Ai(pageLabel, { refetchInterval: running ? 3000 : false });
+  const { data: report, isLoading, isError, isFetching, refetch } = useWorkboardV2Ai(pageLabel, { refetchInterval: running ? 3000 : false });
   const classify = useWorkboardV2AiClassify(pageLabel);
   const qc = useQueryClient();
 
@@ -249,13 +293,15 @@ export function AiPageDashboard({ pageLabel, running = false }: { pageLabel: str
 
   const busy = running || classify.isPending;
 
-  if (isLoading || !report) {
+  if (isLoading) {
     return <div className="rounded-card border border-border bg-card py-10 text-center text-[12px] text-text-muted">Загрузка…</div>;
   }
+  if (!report) return <div role="alert" className="space-y-3 rounded-card border border-warning-dark/50 bg-card p-4 text-sm text-text-secondary"><p>Не удалось загрузить отчёт классификатора.</p><button type="button" disabled={isFetching} onClick={() => void refetch()} className="rounded border border-border px-3 py-1.5">Повторить</button></div>;
 
   return (
     <div className="space-y-4 rounded-card border border-border bg-card p-4">
-      <SettingsForm report={report} pageLabel={pageLabel} />
+      {isError && <div role="alert" className="space-y-2 rounded border border-warning-dark/50 p-3 text-xs text-text-secondary"><p>Обновление отчёта не удалось. Показаны предыдущие данные; повторите загрузку перед изменением настроек или новым запуском.</p><button type="button" disabled={isFetching} onClick={() => void refetch()} className="rounded border border-border px-2 py-1">Повторить</button></div>}
+      <SettingsForm report={report} pageLabel={pageLabel} stale={isError} />
 
       <div>
         <div className="mb-1.5 text-[11px] font-bold uppercase tracking-wide text-text-muted">Расход</div>
@@ -306,7 +352,7 @@ export function AiPageDashboard({ pageLabel, running = false }: { pageLabel: str
         <button
           type="button"
           onClick={() => runClassify(false)}
-          disabled={busy || !report.settings.hasApiKey}
+          disabled={busy || isError || !report.settings.hasApiKey}
           className="inline-flex items-center gap-1.5 rounded-button border border-border bg-card px-3 py-1.5 text-[12px] font-semibold text-text-secondary transition-colors hover:bg-hover disabled:opacity-50"
         >
           <Play size={13} />
@@ -315,7 +361,7 @@ export function AiPageDashboard({ pageLabel, running = false }: { pageLabel: str
         <button
           type="button"
           onClick={() => runClassify(true)}
-          disabled={busy || !report.settings.hasApiKey}
+          disabled={busy || isError || !report.settings.hasApiKey}
           className="inline-flex items-center gap-1.5 rounded-button border border-border bg-card px-3 py-1.5 text-[12px] font-semibold text-warning-dark transition-colors hover:bg-hover disabled:opacity-50"
         >
           <RefreshCcw size={13} />

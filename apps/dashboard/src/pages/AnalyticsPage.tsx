@@ -153,6 +153,7 @@ export function AnalyticsPage() {
               <button
                 key={option}
                 type="button"
+                aria-pressed={range === option}
                 onClick={() => setParam("range", option)}
                 className={`rounded-md px-2.5 py-1 text-[12px] font-medium transition-colors ${
                   range === option
@@ -166,12 +167,13 @@ export function AnalyticsPage() {
           </div>
         </div>
       </header>
+      {pagesQuery.isError && pagesQuery.data && <div role="alert" className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-warning-dark/60 bg-card px-4 py-3 text-[12px] text-text-secondary"><p>The page list could not be refreshed. The previous list is still shown.</p><button type="button" disabled={pagesQuery.isFetching} onClick={() => void pagesQuery.refetch()} className="rounded-md border border-border px-3 py-1.5">Retry page list</button></div>}
 
-      {pagesQuery.isPending ? (
+      {pagesQuery.isPending && !pagesQuery.data ? (
         <div className="rounded-xl border border-border bg-card px-4 py-12 text-center text-[13px] text-text-muted">
           Loading pages…
         </div>
-      ) : pagesQuery.isError ? (
+      ) : pagesQuery.isError && !pagesQuery.data ? (
         <div
           role="alert"
           className="rounded-xl border border-warning-dark/60 bg-card px-5 py-8 text-center"
@@ -196,6 +198,7 @@ export function AnalyticsPage() {
         </div>
       ) : (
       <div className="space-y-4">
+        {requestedPage && requestedPage !== activeLabel && <p role="status" className="text-[12px] text-warning-dark">Page “{requestedPage}” is unavailable in this list. Showing {activeLabel}.</p>}
         {/*
           * The compact banner: one line naming the SURFACES behind the failed
           * requests, and one retry that fires each failed query exactly once —
@@ -211,7 +214,7 @@ export function AnalyticsPage() {
           >
             <p className="text-[12px] text-text-secondary">
               <span className="font-medium text-text-primary">Some requests failed.</span>{" "}
-              Not shown: {failedSurfaces.join(", ")}. Everything else on this page answered.
+              Not shown: {failedSurfaces.join(", ")}. Other panels show their own loading and coverage state.
             </p>
             <button
               type="button"

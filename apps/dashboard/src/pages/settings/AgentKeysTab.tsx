@@ -12,6 +12,7 @@ import { ConfirmModal } from "@/components/shared/ConfirmModal";
 import { Field } from "@/components/shared/Field";
 import { ModalShell } from "@/components/shared/ModalShell";
 import { StatusPanel } from "@/components/shared/StatusPanel";
+import { StaleDataNotice } from "@/components/shared/StaleDataNotice";
 import { formatDateTime, formatRelativeTime } from "@/lib/format";
 
 /**
@@ -81,7 +82,8 @@ export function AgentKeysTab() {
 
   return (
     <>
-      <div className="mb-4 flex items-start justify-between gap-4">
+      {isError && keys && <StaleDataNotice error={error} className="mb-4" />}
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-4">
         <p className="max-w-2xl text-sm text-text-muted">
           Machine credentials for the agent read plane. A key holds no human role: it reads
           exactly the pages listed on its row, and nothing outside its capabilities. Keys
@@ -201,7 +203,7 @@ function CreateAgentKeyModal({
   onClose: () => void;
   onIssued: (token: string, name: string) => void;
 }) {
-  const { data: pages } = useAdminPages();
+  const { data: pages, isLoading: pagesLoading, isError: pagesError, error: pagesErrorValue, refetch: refetchPages, isFetching: pagesFetching } = useAdminPages();
   const [name, setName] = useState("");
   const [capabilities, setCapabilities] = useState<AgentCapability[]>([]);
   const [pageLabels, setPageLabels] = useState<string[]>([]);
@@ -215,6 +217,7 @@ function CreateAgentKeyModal({
 
   function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
+    if (!canSubmit) return;
     create.mutate({
       name: name.trim(),
       capabilities,
@@ -233,6 +236,11 @@ function CreateAgentKeyModal({
   const canSubmit = name.trim().length > 0
     && capabilities.length > 0
     && pageLabels.length > 0
+    && Boolean(pages) && !pagesError
+    && pageLabels.every((label) => pages?.some((page) => page.label === label))
+    && Number.isInteger(expiresInDays) && expiresInDays >= 1 && expiresInDays <= 365
+    && Number.isInteger(dailyRequestBudget) && dailyRequestBudget >= 1 && dailyRequestBudget <= 1_000_000
+    && Number.isInteger(dailyRowBudget) && dailyRowBudget >= 1 && dailyRowBudget <= 100_000_000
     && !create.isPending;
 
   // Belt to the parent-owned braces: while a key is being minted there is nothing
@@ -250,6 +258,7 @@ function CreateAgentKeyModal({
         <Field label="Name">
           <input
             value={name}
+            maxLength={200}
             onChange={(event) => setName(event.target.value)}
             placeholder="customs-audit"
             className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm text-text-primary"
@@ -280,6 +289,12 @@ function CreateAgentKeyModal({
           <div className="mb-1 text-sm text-text-secondary">
             Pages (explicit; a page created later is NOT granted)
           </div>
+          {pagesLoading && !pages && <p className="text-sm text-text-muted">Loading pages…</p>}
+          {pagesError && <div role="alert" className="mb-2 text-sm text-danger">
+            {pagesErrorValue instanceof Error ? pagesErrorValue.message : "Pages could not be loaded."} Your selection is kept; refresh before issuing a key.
+            <button type="button" disabled={pagesFetching} onClick={() => void refetchPages()} className="ml-2 underline">Retry</button>
+          </div>}
+          {pages && pages.length === 0 && <p className="text-sm text-text-muted">Create a page before issuing a key.</p>}
           <div className="max-h-40 space-y-1 overflow-y-auto">
             {(pages ?? []).map((page) => (
               <label key={page.label} className="flex items-center gap-2 text-sm text-text-primary">
@@ -295,11 +310,12 @@ function CreateAgentKeyModal({
           </div>
         </div>
 
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid gap-3 sm:grid-cols-3">
           <Field label="Expires in (days)">
             <input
               type="number"
               min={1}
+              max={365}
               value={expiresInDays}
               onChange={(event) => setExpiresInDays(Number(event.target.value))}
               className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm text-text-primary"
@@ -309,6 +325,7 @@ function CreateAgentKeyModal({
             <input
               type="number"
               min={1}
+              max={1_000_000}
               value={dailyRequestBudget}
               onChange={(event) => setDailyRequestBudget(Number(event.target.value))}
               className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm text-text-primary"
@@ -318,6 +335,7 @@ function CreateAgentKeyModal({
             <input
               type="number"
               min={1}
+              max={100_000_000}
               value={dailyRowBudget}
               onChange={(event) => setDailyRowBudget(Number(event.target.value))}
               className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm text-text-primary"
@@ -359,10 +377,14 @@ function TokenRevealModal({
   const [copied, setCopied] = useState(false);
 
   async function handleCopy() {
-    await navigator.clipboard.writeText(token);
-    setCopied(true);
-    toast.success("Copied to clipboard");
-    setTimeout(() => setCopied(false), 2000);
+    try {
+      await navigator.clipboard.writeText(token);
+      setCopied(true);
+      toast.success("Copied to clipboard");
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      toast.error("Clipboard unavailable. Select and copy the token shown here before closing.");
+    }
   }
 
   return (

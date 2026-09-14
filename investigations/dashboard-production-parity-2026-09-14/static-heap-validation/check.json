@@ -1,0 +1,18 @@
+{
+  "command": [
+    "pnpm",
+    "check"
+  ],
+  "cwd": "/Users/dmitriy/.codex/worktrees/hub-dashboard-production-parity-20260914",
+  "environmentOverrides": {
+    "ALLOW_MISSING_TEST_PREREQUISITES": "0",
+    "NODE_OPTIONS": "--max-old-space-size=4096"
+  },
+  "head": "bfdb14404a520ddfa8aab1bf64011db10b362ab4",
+  "startedAt": "2026-09-14T00:46:22.087679+00:00",
+  "finishedAt": "2026-09-14T00:47:07.810936+00:00",
+  "durationSeconds": 45.724,
+  "exitCode": 0,
+  "rawSha256": "661c62ffa05f989874382984dda7be2a9410d1aed4853ca6bcba66fd03b5c308",
+  "sourceUnchanged": true
+}

@@ -1,12 +1,13 @@
 import { toast } from "sonner";
 import { useReportHistory, useReportPreview, useSendReport } from "@/api/queries";
 import { StatusPanel } from "@/components/shared/StatusPanel";
+import { StaleDataNotice } from "@/components/shared/StaleDataNotice";
 import { formatDateTime } from "@/lib/format";
 
 export function NotificationsReportsTab() {
-  const { data: preview, refetch: fetchPreview, isFetching: previewLoading } = useReportPreview();
+  const { data: preview, refetch: fetchPreview, isFetching: previewLoading, isError: previewError, error: previewErrorValue } = useReportPreview();
   const sendReport = useSendReport();
-  const { data: history, isLoading: historyLoading, isError: historyError } = useReportHistory();
+  const { data: history, isLoading: historyLoading, isError: historyError, error: historyErrorValue } = useReportHistory();
 
   function handlePreview() {
     void fetchPreview();
@@ -27,7 +28,7 @@ export function NotificationsReportsTab() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center gap-3">
+      <div className="flex flex-wrap items-center gap-3">
         <button
           onClick={handlePreview}
           disabled={previewLoading}
@@ -40,9 +41,11 @@ export function NotificationsReportsTab() {
           disabled={sendReport.isPending}
           className="rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-white hover:opacity-90 disabled:opacity-40"
         >
-          {sendReport.isPending ? "Sending..." : "Send Now"}
+          {sendReport.isPending ? "Sending..." : "Send Now to Telegram"}
         </button>
       </div>
+
+      {previewError && <StatusPanel tone="error" title={preview ? "Preview refresh failed; the previous preview remains below" : "Report preview failed to load"} description={previewErrorValue instanceof Error ? previewErrorValue.message : "Try Preview Next Report again."} />}
 
       {preview && (
         <div className="rounded-xl border border-border bg-card p-4">
@@ -55,9 +58,10 @@ export function NotificationsReportsTab() {
 
       <div>
         <h3 className="mb-3 text-sm font-semibold text-text-primary">Report History</h3>
-        {historyLoading ? (
+        {historyError && history && <StaleDataNotice error={historyErrorValue} className="mb-3" />}
+        {historyLoading && !history ? (
           <StatusPanel title="Loading report history" description="Fetching recent notification reports." />
-        ) : historyError || !history ? (
+        ) : !history ? (
           <StatusPanel
             title="Report history failed to load"
             description="The notification report history could not be fetched."
@@ -69,7 +73,7 @@ export function NotificationsReportsTab() {
             description="Enable daily reports in the Settings tab to start receiving revenue summaries."
           />
         ) : (
-          <div className="overflow-hidden rounded-xl border border-border bg-card">
+          <div className="overflow-x-auto rounded-xl border border-border bg-card">
             <table className="w-full border-collapse">
               <thead>
                 <tr className="bg-hover-alt">
@@ -104,4 +108,3 @@ export function NotificationsReportsTab() {
     </div>
   );
 }
-

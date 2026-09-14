@@ -19,8 +19,9 @@ const FEATURE_ORDER: { key: string; label: string }[] = [
 ];
 
 const FEATURE_LABELS: Record<string, string> = Object.fromEntries(
-  FEATURE_ORDER.map((f) => [f.key, f.label]),
+  [...FEATURE_ORDER, { key: "voice-script", label: "Voice script" }].map((f) => [f.key, f.label]),
 );
+const TABLE_FEATURES = new Set(FEATURE_ORDER.map((feature) => feature.key));
 
 type UsageRow = AdminChatterUsageResponse["rows"][number];
 
@@ -65,6 +66,11 @@ function getFeatureCount(row: UsageRow, feature: string): number {
   return row.featureBreakdown.find((f) => f.feature === feature)?.requestCount ?? 0;
 }
 
+export function otherUsageRequests(row: Pick<UsageRow, "featureBreakdown">): number {
+  return row.featureBreakdown.reduce((count, feature) =>
+    count + (TABLE_FEATURES.has(feature.feature) ? 0 : feature.requestCount), 0);
+}
+
 const SUBTITLE: Record<UsagePeriod, string> = {
   day: "Daily AI usage by chatter and feature.",
   week: "Weekly AI usage by chatter and feature.",
@@ -80,12 +86,13 @@ export function UsagePage() {
   const today = todayISO();
   const canGoNext = range.to < today;
 
-  const { data, isLoading, isError } = useAdminChatterUsage(range);
+  const { data, isLoading, isError, isFetching, refetch } = useAdminChatterUsage(range);
 
   const rows = data?.rows ?? [];
   const activeRows = rows.filter((r) => r.totalGenerations > 0);
 
   const visibleFeatures = FEATURE_ORDER.map((f) => f.key);
+  const hasOtherFeatures = activeRows.some((row) => otherUsageRequests(row) > 0);
 
   function toggleExpanded(userId: number) {
     setExpandedUsers((prev) => {
@@ -100,9 +107,10 @@ export function UsagePage() {
     return <StatusPanel title="Loading usage" description="Fetching chatter AI usage." />;
   }
 
-  if (isError) {
+  if (isError && !data) {
     return (
-      <StatusPanel title="Usage failed to load" description="Could not fetch usage report." tone="error" />
+      <StatusPanel title="Usage failed to load" description="Could not fetch usage report." tone="error"
+        action={<button type="button" onClick={() => void refetch()} disabled={isFetching} className="rounded-lg border border-border px-3 py-2 text-sm">Retry</button>} />
     );
   }
 
@@ -110,14 +118,15 @@ export function UsagePage() {
     return <StatusPanel title="No data" description="The report returned no data." tone="error" />;
   }
 
-  const colCount = visibleFeatures.length + 4;
+  const colCount = visibleFeatures.length + 4 + Number(hasOtherFeatures);
 
   return (
     <div>
-      <div className="mb-5 flex items-end justify-between">
+      <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-xl font-extrabold text-text-primary">Usage</h1>
           <p className="mt-1 text-sm text-text-muted">{SUBTITLE[mode]}</p>
+          <p className="mt-1 text-xs text-text-muted">Counts are AI requests, including failed and cancelled requests; they do not count messages sent to fans.</p>
         </div>
         <UsageDateNav
           mode={mode}
@@ -138,7 +147,11 @@ export function UsagePage() {
         />
       </div>
 
-      <section className="overflow-hidden rounded-xl border border-border bg-card">
+      {isError && <div role="alert" className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-warning-dark/50 p-3 text-sm text-text-secondary">
+        <span>Usage could not be refreshed. The previous report is still shown.</span>
+        <button type="button" onClick={() => void refetch()} disabled={isFetching} className="rounded border border-border px-3 py-1.5">Retry</button>
+      </div>}
+      <section aria-label="AI usage by chatter" tabIndex={0} className="overflow-x-auto rounded-xl border border-border bg-card">
         <table className="w-full border-collapse">
           <thead>
             <tr className="bg-hover-alt">
@@ -153,6 +166,7 @@ export function UsagePage() {
                   {formatFeatureLabel(feature)}
                 </th>
               ))}
+              {hasOtherFeatures && <th className="px-4 py-3 text-right text-[12px] font-semibold uppercase tracking-wider text-text-muted" title="All remaining features; expand a person to see their names and request counts">Other</th>}
               <th className="px-4 py-3 text-right text-[12px] font-semibold uppercase tracking-wider text-text-muted">
                 Total
               </th>
@@ -168,7 +182,7 @@ export function UsagePage() {
             {activeRows.length === 0 && (
               <tr>
                 <td colSpan={colCount} className="px-4 py-8 text-center text-sm text-text-muted">
-                  No activity for this day.
+                  No activity for this period.
                 </td>
               </tr>
             )}
@@ -183,10 +197,12 @@ export function UsagePage() {
                     }`}
                   >
                     <td className="px-4 py-3 text-sm font-medium text-text-primary">
-                      <span className="mr-1.5 inline-block w-3 text-text-muted">
+                      <button type="button" aria-expanded={isExpanded} aria-controls={`usage-details-${row.userId}`} onClick={(event) => { event.stopPropagation(); toggleExpanded(row.userId); }} className="inline-flex items-center text-left font-medium">
+                      <span aria-hidden="true" className="mr-1.5 inline-block w-3 text-text-muted">
                         {isExpanded ? "▾" : "▸"}
                       </span>
                       {row.username}
+                      </button>
                     </td>
                     {visibleFeatures.map((feature) => {
                       const count = getFeatureCount(row, feature);
@@ -199,6 +215,7 @@ export function UsagePage() {
                         </td>
                       );
                     })}
+                    {hasOtherFeatures && <td className="px-4 py-3 text-right text-sm tabular-nums text-text-secondary">{otherUsageRequests(row) || "–"}</td>}
                     <td className="px-4 py-3 text-right text-sm font-semibold tabular-nums text-text-primary">
                       {row.totalGenerations}
                     </td>
@@ -219,9 +236,9 @@ export function UsagePage() {
                   {isExpanded && (
                     <tr className="border-t border-border-light">
                       <td colSpan={colCount} className="bg-hover-alt/50 px-4 py-3">
-                        <div className="space-y-1 text-[13px] text-text-secondary">
+                        <div id={`usage-details-${row.userId}`} className="space-y-1 text-[13px] text-text-secondary">
                           {row.featureBreakdown.map((fb, i) => (
-                            <div key={fb.feature} className="flex items-baseline gap-2">
+                            <div key={fb.feature} className="flex flex-wrap items-baseline gap-2">
                               <span className="w-3 text-center text-text-muted">
                                 {i === row.featureBreakdown.length - 1 ? "└" : "├"}
                               </span>
@@ -229,6 +246,8 @@ export function UsagePage() {
                                 {formatFeatureLabel(fb.feature)}
                               </span>
                               <span className="tabular-nums">
+                                {fb.requestCount} requests
+                                {" · "}
                                 {formatCompact(fb.tokenCounts.input)} in
                                 {" · "}
                                 {formatCompact(fb.tokenCounts.output)} out

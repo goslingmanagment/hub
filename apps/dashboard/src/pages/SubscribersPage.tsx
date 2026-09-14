@@ -18,7 +18,9 @@ import { QueryNotice } from "@/components/shared/QueryNotice";
 const LIMIT = 50;
 
 function isNewWithin24Hours(iso: string | null) {
-  return iso ? Date.now() - new Date(iso).getTime() < 86_400_000 : false;
+  if (!iso) return false;
+  const age = Date.now() - new Date(iso).getTime();
+  return age >= 0 && age < 86_400_000;
 }
 
 export function SubscribersPage() {
@@ -130,7 +132,8 @@ export function SubscribersPage() {
             {items.length === 0 && (
               <tr>
                 <td colSpan={7} className="px-4 py-8 text-center text-sm text-text-muted">
-                  No subscribers match the current filter.
+                  {offset > 0 ? "На этой странице списка записей нет." : "No subscribers match the current filter."}
+                  {offset > 0 && <button type="button" className="ml-2 text-accent" onClick={() => update("offset", "")}>К началу списка</button>}
                 </td>
               </tr>
             )}

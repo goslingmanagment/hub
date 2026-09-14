@@ -8,7 +8,7 @@ export function OwnerRoute({ children }: { children: ReactNode }) {
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-24">
-        <span className="text-sm text-text-muted">Loading...</span>
+        <span role="status" className="text-sm text-text-muted">Проверяем доступ…</span>
       </div>
     );
   }

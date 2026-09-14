@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Link } from "react-router";
 import { useAuthMe } from "@/api/queries";
 import { useOfapiExportPages } from "@/api/ofapiExports";
@@ -39,17 +39,23 @@ export function OfapiMediaPage() {
   const [handoff, setHandoff] = useState<Awaited<
     ReturnType<typeof ofapiMediaActions.handoff>
   > | null>(null);
-  async function run(action: () => Promise<void>) {
+  const inFlight = useRef(false);
+  async function run(action: () => Promise<void>, refreshedNotice?: string) {
+    if (inFlight.current) return;
+    inFlight.current = true;
     setBusy(true);
     setError("");
     setNotice("");
     try {
       await action();
-      await saved.refetch();
-      await pages.refetch();
+      const results = await Promise.all([saved.refetch(), pages.refetch()]);
+      if (results.some((result) => result.isError)) {
+        setError("Saved data could not be refreshed. Any action result above is retained; use Reload saved data to check it.");
+      } else if (refreshedNotice) setNotice(refreshedNotice);
     } catch (error) {
       setError(error instanceof Error ? error.message : String(error));
     } finally {
+      inFlight.current = false;
       setBusy(false);
     }
   }
@@ -119,11 +125,14 @@ export function OfapiMediaPage() {
     await run(async () => {
       const result = await ofapiMediaActions.handoff(input);
       setHandoff(result);
-      if (navigator.clipboard) {
+      try {
+        if (!navigator.clipboard) throw new Error("Clipboard unavailable");
         await navigator.clipboard.writeText(result.materialId);
         setNotice(
           "Verified media ID copied. Select this material in ChatGoose before sending.",
         );
+      } catch {
+        setNotice("Media ID verified. Clipboard copy was unavailable; copy the ID shown below.");
       }
     });
   }
@@ -147,7 +156,7 @@ export function OfapiMediaPage() {
         <label className="grid gap-1 text-sm text-text-muted">
           Page
           <select
-            disabled={busy}
+            disabled={busy || !pages.data}
             className={field}
             value={pageId}
             onChange={(event) => {
@@ -169,9 +178,7 @@ export function OfapiMediaPage() {
           className={button}
           disabled={busy || !pageId}
           onClick={() =>
-            void run(async () => {
-              setNotice("Reloaded saved media.");
-            })
+            void run(async () => {}, "Reloaded saved media.")
           }
         >
           Reload saved data
@@ -185,6 +192,8 @@ export function OfapiMediaPage() {
           {error || String(saved.error || pages.error)}
         </p>
       )}
+      {pages.isError && !pages.data && <button type="button" className={button} disabled={pages.isFetching} onClick={() => void pages.refetch()}>Retry page list</button>}
+      {saved.isError && saved.data && <p className="text-sm text-warning-dark">The saved snapshot is still shown; its current state could not be checked.</p>}
       {notice && (
         <p
           role="status"
@@ -193,6 +202,8 @@ export function OfapiMediaPage() {
           {notice}
         </p>
       )}
+      {(pages.isPending || (pageId > 0 && saved.isPending)) && <p role="status" className="text-sm text-text-muted">Loading saved media…</p>}
+      {pages.data && !pages.isError && pages.data.pages.length === 0 && <p className="text-sm text-text-muted">No OnlyFans pages are available. Add or bind a page in Collection controls.</p>}
       {busy && (
         <p role="status" className="text-sm text-text-muted">
           Saving the reviewed action…
@@ -294,12 +305,13 @@ export function OfapiMediaPage() {
             </label>
             <button
               className={button}
-              disabled={busy || !source || !pages.data}
+              disabled={busy || !source || !pages.data || pages.isError || !Number.isInteger(maxCredits) || maxCredits < 1 || maxCredits > 300}
               onClick={() => void previewUpload()}
             >
               Preview upload
             </button>
           </div>
+          {(!Number.isInteger(maxCredits) || maxCredits < 1 || maxCredits > 300) && <p role="alert" className="text-sm text-red-400">Maximum credits must be a whole number from 1 to 300.</p>}
           {source && (
             <p className="text-xs text-text-muted break-all">
               Verified {source.mimeType} · SHA256 {source.sha256}
@@ -345,7 +357,7 @@ export function OfapiMediaPage() {
       )}
       <section className="space-y-3">
         <h2 className="font-semibold text-text-primary">Uploads</h2>
-        {!saved.data?.uploads.length && (
+        {saved.data && !saved.isError && !saved.data.uploads.length && (
           <p className="text-sm text-text-muted">
             No upload tasks for this page.
           </p>
@@ -464,7 +476,7 @@ export function OfapiMediaPage() {
         <div className="flex flex-wrap justify-between gap-3">
           <h2 className="font-semibold text-text-primary">
             Saved vault catalog ·{" "}
-            {saved.data?.inventory.state ?? "never collected"}
+            {saved.data?.inventory.state ?? (saved.isError ? "unavailable" : pageId ? "loading…" : "select a page")}
           </h2>
           {owner && (
             <button
@@ -541,6 +553,7 @@ export function OfapiMediaPage() {
               </tr>
             </thead>
             <tbody>
+              {saved.data && !saved.isError && saved.data.media.length === 0 && <tr><td colSpan={5} className="p-3 text-text-muted">{offset > 0 ? "No saved media at this position. Return to the previous page." : "No media in the saved catalog. This does not establish that the provider vault is empty."}</td></tr>}
               {saved.data?.media.map((media) => (
                 <tr
                   key={`${media.materialKind}:${media.mediaRef}`}
@@ -604,7 +617,7 @@ export function OfapiMediaPage() {
             </tbody>
           </table>
         </div>
-        <div className="flex gap-3 text-sm text-text-muted">
+        <div className="flex flex-wrap items-center gap-3 text-sm text-text-muted">
           <button
             className={button}
             disabled={busy || offset === 0}
@@ -613,8 +626,7 @@ export function OfapiMediaPage() {
             Previous
           </button>
           <span>
-            {offset + 1}–{Math.min(offset + 50, saved.data?.totalMedia ?? 0)} of{" "}
-            {saved.data?.totalMedia ?? 0}
+            {saved.data ? saved.data.totalMedia === 0 ? "0 items" : offset >= saved.data.totalMedia ? `No items at this position · ${saved.data.totalMedia} total` : `${offset + 1}–${Math.min(offset + 50, saved.data.totalMedia)} of ${saved.data.totalMedia}` : "Item count unavailable"}
           </span>
           <button
             className={button}
