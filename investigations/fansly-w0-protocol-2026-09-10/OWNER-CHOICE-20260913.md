@@ -32,6 +32,6 @@ Stop the test receiver on conflict or failed WS auth, preserving healthy REST;
 never call logout or revoke a working session to test recovery.
 
 This note records authorization, not a live execution receipt. Historical Decision 288 and
-reviews remain intact; [Decision 321](../../docs/decisions.md#decision-321-reuse-the-existing-fansly-rest-session-for-w0-2026-09-13)
+reviews remain intact; [Decision 325](../../docs/decisions.md#decision-325-reuse-the-existing-fansly-rest-session-for-w0-2026-09-13)
 and the [runbook](../../docs/runbooks/fansly-ws-protocol-check.md) record the
 current choice and its boundaries.

@@ -14,7 +14,7 @@ and re-reviewed. See [paired validation](evidence/paired-20260913T224848Z/valida
 No live paired observation was performed. The first short connection below
 remains evidence of that earlier executable, not validation of the new option.
 
-Current update, 13 September: Decision 321 records the owner's choice to reuse
+Current update, 13 September: Decision 325 records the owner's choice to reuse
 Hub's existing encrypted Fansly REST session, with `lilly-1` as the first limited
 probe candidate. It replaces the Management-only choice; historical Decision
 288 and its offline implementation remain. [Exact approval and limits](OWNER-CHOICE-20260913.md).

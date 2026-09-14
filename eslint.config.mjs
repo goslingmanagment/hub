@@ -2,6 +2,24 @@ import js from "@eslint/js";
 import tseslint from "typescript-eslint";
 import tsParser from "@typescript-eslint/parser";
 
+const moneyRestriction = {
+  selector: "CallExpression > Identifier[name='toMills']",
+  message: "toMills was deleted (Stage 27): use millsFromInteger / millsFromDollars / millsFromCents.",
+};
+const dynamicUndiciRestriction = {
+  selector: "ImportExpression > Literal[value='undici']",
+  message: "Dynamic undici imports bypass the Stage 26 wall: use undiciRequest from @agency_hub_core/shared (http-client) or resolve transports via resolveEgress.",
+};
+const undiciRestrictions = [{
+  selector: "ImportDeclaration[source.value='undici'][importKind='value']",
+  message: "Import undici only inside services/egress or packages/shared/http-client (Stage 26): resolve transports via resolveEgress.",
+}, dynamicUndiciRestriction];
+const websocketMessage = "WebSocket transport belongs only in services/egress: use the page-scoped egress constructor.";
+const dynamicWsRestriction = {
+  selector: "ImportExpression > Literal[value=/^ws($|\\u002F)/]",
+  message: websocketMessage,
+};
+
 // The family lint standard (Stage 35), grown from the Stage 19 bootstrap.
 // Two layers:
 // - Base hygiene seeded from the desktop's config: js/ts recommended,
@@ -83,23 +101,9 @@ export default tseslint.config(
     rules: {
       // Kernel Stage 27: toMills is dead — money enters through the codec's
       // source-named constructors (packages/shared/src/money.ts) only.
-      "no-restricted-syntax": ["error", {
-        selector: "CallExpression > Identifier[name='toMills']",
-        message: "toMills was deleted (Stage 27): use millsFromInteger / millsFromDollars / millsFromCents.",
-      }, {
-        // Kernel Stage 26: outbound transport resolves through the egress
-        // seam (services/egress/resolveEgress). Type-only Dispatcher imports
-        // are fine; new VALUE imports of undici are not. Pre-seam importers
-        // are exempted in the block below and counted by the raw-fetch
-        // ratchet (scripts/check-raw-fetch.mjs).
-        selector: "ImportDeclaration[source.value='undici'][importKind='value']",
-        message: "Import undici only inside services/egress or packages/shared/http-client (Stage 26): resolve transports via resolveEgress.",
-      }, {
-        // Same wall, dynamic form: await import("undici") must not bypass
-        // the Stage 26 seam either (review R3-9).
-        selector: "ImportExpression > Literal[value='undici']",
-        message: "Dynamic undici imports bypass the Stage 26 wall: use undiciRequest from @agency_hub_core/shared (http-client) or resolve transports via resolveEgress.",
-      }],
+      // Stage 26 blocks static and dynamic undici value imports; the
+      // resolver and existing HTTP importers are exempted below.
+      "no-restricted-syntax": ["error", moneyRestriction, ...undiciRestrictions],
       "no-restricted-imports": ["error", {
         paths: [{
           // Kernel Stage 29: vendor AI SDKs live only inside the gateway
@@ -132,6 +136,28 @@ export default tseslint.config(
     },
   },
   {
+    files: ["apps/runtime/src/**/*.ts", "packages/*/src/**/*.ts"],
+    ignores: ["apps/runtime/src/services/egress/**/*.ts"],
+    rules: {
+      "no-restricted-syntax": ["error", moneyRestriction, ...undiciRestrictions, dynamicWsRestriction],
+      "no-restricted-globals": ["error", { name: "WebSocket", message: websocketMessage }],
+      // Also covers computed access and destructuring a constructor alias.
+      "no-restricted-properties": ["error", ...["globalThis", "global", "window", "self"].map((object) => ({
+        object, property: "WebSocket", message: websocketMessage,
+      }))],
+      // A separate rule preserves the core import rule's AI/module walls,
+      // including their later exemptions. Namespace/default imports cannot
+      // hide a WebSocket alias inside the existing HTTP-only undici homes.
+      "@typescript-eslint/no-restricted-imports": ["error", {
+        paths: [{
+          name: "undici", importNames: ["WebSocket", "default"],
+          allowTypeImports: true, message: websocketMessage,
+        }],
+        patterns: [{ group: ["ws", "ws/**"], allowTypeImports: true, message: websocketMessage }],
+      }],
+    },
+  },
+  {
     // Stage 29 exemption: the gateway providers are the ONE legal home for
     // vendor AI SDK imports (module-boundary patterns still apply).
     files: ["apps/runtime/src/services/ai-gateway*.ts"],
@@ -156,24 +182,23 @@ export default tseslint.config(
     },
   },
   {
-    // Stage 26 exemptions: the resolver's own modules + the dispatcher
-    // factory (the legal undici homes) and the pre-seam Fansly adapter
-    // (adopts the seam in Task 3; tracked by the raw-fetch ratchet).
-    files: [
-      "apps/runtime/src/services/egress/**/*.ts",
-      "packages/shared/src/http-client.ts",
-      "packages/fansly/src/adapter.ts",
-    ],
+    // Stage 26: the resolver's own modules are the legal transport home.
+    files: ["apps/runtime/src/services/egress/**/*.ts"],
     languageOptions: {
       parser: tsParser,
       ecmaVersion: "latest",
       sourceType: "module",
     },
     rules: {
-      "no-restricted-syntax": ["error", {
-        selector: "CallExpression > Identifier[name='toMills']",
-        message: "toMills was deleted (Stage 27): use millsFromInteger / millsFromDollars / millsFromCents.",
-      }],
+      "no-restricted-syntax": ["error", moneyRestriction],
+    },
+  },
+  {
+    // Existing HTTP-only undici exceptions keep named HTTP imports. A
+    // dynamic namespace would also expose WebSocket, so it is not exempt.
+    files: ["packages/shared/src/http-client.ts", "packages/fansly/src/adapter.ts"],
+    rules: {
+      "no-restricted-syntax": ["error", moneyRestriction, dynamicUndiciRestriction, dynamicWsRestriction],
     },
   },
   {

@@ -301,7 +301,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 318 | Fansly C2a audit query plans | Use and retain a custom plan setting within the read-only export transaction so later keyset pages do not repeatedly scan exported prefixes. |
 | 319 | Prompt-cache spend | Cache only the fan-agnostic persona and template prefix (1h); send the per-fan context uncached except in coach-chat; send recaps fully uncached. Prompt text unchanged; only cache hints move. Amends #136, where the dossier "rides the dynamic 5m block". |
 | 320 | Fansly A0 head regressions | Exercise old incoming/outgoing heads and non-null timestamp rollback through the real sweep; retain a synthetic three-sweep dangling-pointer clearing without claiming message deletion or safe early stop. |
-| 321 | Fansly W0 session choice | Reuse the existing encrypted page REST session for the first limited lilly-1 socket probe; replace Management-only, preserve credential secrecy, healthy REST and every remaining live gate. |
+| 325 | Fansly W0 session choice | Reuse the existing encrypted page REST session for the first limited lilly-1 socket probe; replace Management-only, preserve credential secrecy, healthy REST and every remaining live gate. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -12720,7 +12720,7 @@ tests and documentation; it has no runtime effect. Numbered from main
 `e913b7a6056d991d5cd657789a834b435d86aeaa`, whose last decision is 319.
 See [validation status](../investigations/fansly-a0-head-regressions-2026-09-13/STATUS.md).
 
-## Decision 321: Reuse the existing Fansly REST session for W0 (2026-09-13)
+## Decision 325: Reuse the existing Fansly REST session for W0 (2026-09-13)
 
 The owner answered «да давай использовать его же» after the proposal to reuse
 the Fansly session token already used by Hub's REST integration. This explicitly

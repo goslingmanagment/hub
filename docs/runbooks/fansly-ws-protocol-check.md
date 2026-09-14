@@ -1,7 +1,7 @@
 # Fansly W0 protocol check
 
 Authority: the accepted events plan §7 and cross-check DECISION §7; historical
-Decision 288 and the owner session-choice amendment in Decision 321.
+Decision 288 and the owner session-choice amendment in Decision 325.
 One W0 draft PR holds offline preparation and later approved evidence. An offline
 fixture pass does not establish the live protocol or authorize a new connection.
 
