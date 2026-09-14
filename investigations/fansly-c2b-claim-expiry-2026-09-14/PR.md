@@ -22,3 +22,9 @@ Validation:
   reproduced both missing receipts; the reviewed fix passes those cases.
 - Independent review has no outstanding findings. Compressed logs, exact
   commands, receipts and source hashes are retained alongside this draft.
+
+The current branch also integrates main `a9794e60` and its verified UTC fixture.
+The local check/Postgres receipts above were run on `a083dc6f`; every other
+executable/test file remains byte-identical. Independent composition review
+preserves D324 and the topic decision. No redundant local suite was repeated;
+fresh PR CI validates the complete merge before merging.

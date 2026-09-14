@@ -38,3 +38,23 @@ Source manifest SHA-256: `6fe73b82220c27cabfa0bad751e47415882d3f136fa291d70d0835
 | `tests/fan-earnings-claim-expiry.integration.test.ts` | `1170b512eeb059243cda911484960ce84235c45c6ba567e8cc23ac6bae135204` |
 | `docs/decisions.md` | `2eaf2c4de0e07378873a9172b82d49a5a7651f45e40677a2e0c39c65046e3c7a` |
 | `docs/runbooks/fansly-earnings-shadow.md` | `961e156540436d8eb5bb468533eb03dcc53ccaae22847d32a5b0ea6c6a33c0db` |
+
+## Main a9794e60 / PR186 final composition
+
+Reviewed 2026-09-14T01:07:17.383423+00:00 at `870d96bb47339cf7b08c9fec106f5fa7faeec957`, merging `a9794e600dfbb10918800ab5b49241e33d7357a3` into validated topic `a083dc6f8a107ff2c007de744cf4f1672baf1f0d`. No actionable findings. No tests, source edits or production calls by this reviewer.
+
+Independent git comparison confirms COMPOSITION-MAIN-A979.json: the only apps/packages/scripts/tests/workflows/build/package difference from the prior candidate is the exact merged-main UTC credits fixture (`eff98afad7b6f0e87563a831c33d0b27bb2581f109f4166900d60e82f28be86b`). All six topic source/test/runbook hashes match both the prior candidate and original reviewed manifest. Their complete topic patches against a979 main equal the prior patches against b787 main. Claim renewal and settlement fencing, capture ordering, R+1 handling and the failure-path behavior are unchanged.
+
+Removing only D328 and its index row reproduces current main's decision file exactly, ignoring trailing whitespace; D328's body remains byte-identical to the prior candidate. Incoming D324 precedes D328 in the quick table and full text. No main or topic decision was overwritten.
+
+The retained final check and PostgreSQL logs independently match their decompressed hashes and exit-0 receipts. The recorded 3,420 unit passes/9 existing skips and 49 PostgreSQL passes belong to the validated prior candidate, not a new run. COMPOSITION-MAIN-A979.json accurately explains why no local tests were repeated: the topic is unchanged and the only incoming fixture was already validated on main. Fresh PR CI remains the gate for the complete combination. Neither composition nor those local receipts establish production repair, savings or C2b stage acceptance.
+
+| Composed file | SHA-256 |
+| --- | --- |
+| `packages/db/src/repositories/fan-earnings-refresh.ts` | `f4a13cc207bbf8fcb462125a37d6ce10f9016b9529ed39bd4a9af786afb54066` |
+| `apps/runtime/src/services/sync/fan-earnings-capture.ts` | `fdb8e3e77c160b1f92a9a89931439423643f06e5e737962cbb51c893cb2fdb23` |
+| `tests/fan-earnings-receipts.integration.test.ts` | `fbb76f0c085490e1c8cb93ecf5234c561830f96676f5de0a538002fdcd36a555` |
+| `tests/fan-earnings-erasure.integration.test.ts` | `0f77cb08c2f1c9d37446831f78615c393b2138b9e72f8718e0dc732553e2d616` |
+| `tests/fan-earnings-claim-expiry.integration.test.ts` | `1170b512eeb059243cda911484960ce84235c45c6ba567e8cc23ac6bae135204` |
+| `docs/runbooks/fansly-earnings-shadow.md` | `961e156540436d8eb5bb468533eb03dcc53ccaae22847d32a5b0ea6c6a33c0db` |
+| `docs/decisions.md` | `e67053b85d806d5084916963e4adb64b3f56228f8687b527452757c4f65d5ee4` |
