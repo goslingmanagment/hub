@@ -1,0 +1,29 @@
+{
+  "command": [
+    "pnpm",
+    "exec",
+    "vitest",
+    "run",
+    "--no-file-parallelism",
+    "tests/production-migration-history.integration.test.ts",
+    "tests/fan-alias-concurrency.integration.test.ts",
+    "tests/ops-metrics-recent.integration.test.ts",
+    "tests/page-sync-seed-count.integration.test.ts",
+    "tests/sync-finalization-race.integration.test.ts",
+    "tests/sync-monitor.integration.test.ts",
+    "tests/canonicalize-pass-partition.integration.test.ts",
+    "tests/capture-payload-batch.integration.test.ts",
+    "tests/observations-replay-head.integration.test.ts",
+    "tests/page-sync-lease-fencing.integration.test.ts",
+    "tests/capture-payloads.repository.integration.test.ts",
+    "tests/canonicalize-sweep.integration.test.ts",
+    "tests/canonicalize-dedup.integration.test.ts",
+    "tests/fansly-dm-shadow.integration.test.ts",
+    "tests/http-client.test.ts",
+    "tests/network.test.ts"
+  ],
+  "startedAt": "2026-09-13T23:47:57.779642+00:00",
+  "completedAt": "2026-09-13T23:48:31.035583+00:00",
+  "elapsedSeconds": 33.2556869589971,
+  "exitCode": 0
+}

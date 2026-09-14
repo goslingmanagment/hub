@@ -306,6 +306,20 @@ appends a row here in the same change (family law: updated-in-change).
 | 319 | Prompt-cache spend | Cache only the fan-agnostic persona and template prefix (1h); send the per-fan context uncached except in coach-chat; send recaps fully uncached. Prompt text unchanged; only cache hints move. Amends #136, where the dossier "rides the dynamic 5m block". |
 | 320 | Fansly A0 head regressions | Exercise old incoming/outgoing heads and non-null timestamp rollback through the real sweep; retain a synthetic three-sweep dangling-pointer clearing without claiming message deletion or safe early stop. |
 
+| 301 | PostgreSQL bind logging | Pin both parameter log limits to zero at server startup; retain SQL templates, duration and all other production tuning. |
+| 302 | Alias lock order | Sort username-history writes by fan ID and username, preserving conditional updates and caller result order. |
+| 303 | Recent metrics reads | Enumerate stored index prefixes and bound each full-key range before filtering its exact series; retain sparse series and one snapshot. |
+| 304 | Sync seeding counts | Count active followers only when initial Fansly reconcile recovery can use it; keep every existing-state maintenance path. |
+| 305 | Sync finalizer authority | Cleanup rechecks the current target outcome after a lock wait and preserves committed worker results. |
+| 306 | HTTP admission after lease loss | Stop new observed read attempts per chunk while preserving in-flight response capture and existing write fencing. |
+| 307 | Single earnings parse | Validate, diagnose and build earnings drafts from one observation-local parse result, preserving whole-observation refusal and replay. |
+| 308 | Preview monitor scope | Read only DM monitor streams for conversation preview while preserving shared queue context and historical physical debt. |
+| 309 | DM shadow timeout rationale | Correct the diagnostic-only timeout explanation; provider traversal and runtime behavior stay unchanged. |
+| 310 | Unmapped webhook body batches | Fresh bounded catalog batches only for proven binding waits; mapped/export bodies keep their original read boundary. |
+| 311 | Disjoint replay with shared allowance | Keep reserved capture/replay turns and reuse unused allowance once without restarting an exhausted cursor. |
+| 315 | Empty observation replay heads | Probe actual version/source/kind index prefixes before an unrestricted scan head; keep ordered pages and scoped replay unchanged. |
+| 321 | Production performance parity | Restore deployed runtime fixes and exact applied migration identities on current main; preserve newer main changes and keep C1 membership and dashboard reconciliation visible as separate prerequisites. |
+
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
 - **Frontend app shell (12/12):** React SPA with Vite and TanStack Query fits a desktop-only internal dashboard without SSR overhead.
@@ -12903,3 +12917,294 @@ passes 3418 tests with nine existing skips and its production build. The release
 preflight is recorded in
 `investigations/feature-controls-2026-09-11/RELEASE-20260912.md`; production
 acceptance remains a separate result of the standard deployment gates.
+
+## Decision 301: PostgreSQL bind values stay outside server logs (2026-09-12)
+
+Production Compose pins `log_parameter_max_length=0` and
+`log_parameter_max_length_on_error=0` at PostgreSQL startup. A positive truncation
+length still exposes part of a raw value. These settings override volume-level
+`postgresql.auto.conf`; the existing slow-query threshold and other production
+tuning remain there. SQL templates, durations and lock-wait diagnostics remain.
+This boundary does not sanitize literal SQL or arbitrary PostgreSQL error text,
+and historical logs are retained. Role/database/session overrides must be checked
+separately.
+
+Independent review approved the narrow Compose change. The 39 Compose unit tests
+pass. A disposable PostgreSQL 16 control first reproduced both successful-query
+and error bind logging, then confirmed suppression with the new command against
+the same volume, preserving unrelated settings and SQL diagnostics through a
+further restart. Production catalog and all three runtime DSNs contain no
+matching overrides. Apply through the normal deployment and verify effective
+settings afterward; restoring the previous Compose during rollback reopens the
+old bind-logging behavior and requires explicit verification.
+
+## Decision 302: Stable alias lock order after conditional fan writes (2026-09-12)
+
+`upsertFans` orders each username-history batch by `(fan_id, username)` before
+its INSERT. Conditional fan RETURNING plus untouched-row read-back must not
+determine alias lock order: concurrent autocommit callers have already released
+their fan locks. One caller changing A and another changing B otherwise acquire
+alias locks in reciprocal order even when their input order is identical.
+
+The writer keeps field-presence groups, caller result order, last-seen write
+suppression and history timestamps, with no extra retry, query or transaction.
+Independent review approved the change. A real PostgreSQL overlap test passes
+for identical and reversed caller order; the same fixture against the deployed
+writer fails both cases with `40P01`. No-op `xmin` and rename-history assertions
+and existing fan-churn, identity and top-spender suites pass. This fixes this
+alias statement ordering; it does not claim arbitrary outer transactions can
+never deadlock.
+
+## Decision 303: Bound recent metric reads by series and requested rows (2026-09-12)
+
+Recent metric reports enumerate actual `(metric, quantile)` index prefixes with
+a recursive loose-index scan, then read at most N rows starting at each prefix.
+The full `(metric, quantile, sampled_at DESC)` order and LIMIT remain inside
+each range; exact-series equality stays outside LIMIT. The target prefix sorts
+first, so this returns its newest min(N, count) rows and discards only following
+prefixes when a sparse series contains fewer than N points. Moving equality
+inside would allow PostgreSQL to drop prefix ordering and choose the global
+time index, repeatedly filtering unrelated rows.
+
+All phases share one statement snapshot. Arbitrary, sparse and discontinued
+series remain visible without a registry or time cutoff. Equal timestamp ties
+retain the previous unspecified ordering. Migration 0186 adds a concurrent
+covering index, retaining the other access paths and the existing invalid-index
+retry protocol. It is explicitly additive and rollback compatible.
+
+Independent review approved the final query after a fresh-heap plan test
+rejected the initial equality variant. The final targeted suites pass 59 tests.
+On a disposable PostgreSQL 16 fixture with 1,000,002 samples, results match
+exactly; three warm runs visit approximately 620 tuples instead of the entire
+history (0.48-0.61 ms versus 89-96 ms locally). A populated-table migration and
+rerun keep the index valid. These synthetic results do not establish production
+latency or total CPU savings; verify the production plan after deployment.
+
+## Decision 304: Skip follower aggregates unused by sync-state maintenance (2026-09-12)
+
+The page metadata SELECT counts active followers only while initially creating
+a missing Fansly `followers_reconcile` state outside onboarding. A CASE guarded
+by the existing state primary key preserves one metadata/count snapshot. Fully
+seeded planner/executor preflights still repair legacy states and maintain
+cadence, while PostgreSQL does not execute the `page_follows` aggregate. Paused
+existing states remain authoritative. Standalone schedule and feature-gate
+contracts are unchanged; the cheap repeated ensure remains valid.
+
+Independent review approved the change. Twenty-eight targeted tests pass,
+including complete/partial states, initial recovery, active-only counts and
+maintenance. Replacing only the writer with the deployed version makes five
+no-read plan checks fail while the five initial-recovery cases continue to
+pass. This preserves the existing multi-statement seeder's concurrency scope;
+it does not introduce stronger atomicity against explicit page erasure.
+
+## Decision 305: Sync cleanup preserves a concurrent worker result (2026-09-12)
+
+Inactivity and orphan cleanup may infer a failed/partial outcome only while the
+UPDATE target still has `outcome = running`. Both outer UPDATE predicates repeat
+that condition: candidate discovery can precede a worker finalizer whose row
+lock cleanup then waits on. PostgreSQL rechecks the current target and preserves
+the worker's committed terminal outcome, statistics, summary and completion time.
+The worker finalizer remains able to replace an earlier heuristic cleanup result;
+making every finalizer running-only would give the timeout estimate priority.
+
+The change adds no lock, retry, schema or scheduling policy. Independent review
+approved both guards. Twelve real PostgreSQL concurrency cases cover both lock
+orders, every terminal outcome and finalizer rollback; existing cleanup and
+lease suites also pass. The deployed writer fails the eight finalizer-first
+commit cases while four rollback/cleanup-first cases still pass. This closes the
+same-row terminal overwrite, without changing policy for activity that appears
+in another table after the cleanup statement's snapshot.
+
+## Decision 306: Observed lease loss stops new physical read attempts (2026-09-12)
+
+A false or failed page-sync heartbeat aborts a per-chunk async-local HTTP scope
+with `PageSyncLeaseLostError`. Rate admission, retry delay and dispatch boundaries
+honor that scope, including after asynchronous telemetry and OFAPI admission
+hooks. The shared layer does not classify this control outcome as a transport
+retry. The existing heartbeat interval and durable ownership predicates remain.
+
+The scope never aborts in-flight transport reception: the response and capture
+path may finish before existing lease fencing rejects business completion.
+Nested lane/hydration contexts inherit the scope; unrelated pages and unscoped
+callers remain independent. Governed one-attempt and outbox policy are unchanged.
+Cancelled pacing reservations are not reused, and cancelled queue nodes keep
+their predecessor dependency. A known unused OFAPI collection admission is
+released only through its existing exact-attempt cancellation hook.
+
+Independent review approved runtime behavior, the revised error canon and the
+final fixtures. The combined sync/lease/retry/collection/outbox gate passes
+172 tests. A full-file test run exposed external undici spy identity surviving
+module resets; the final fixture keeps one spy and resets behavior between
+cases, preserving all real transport, capture and pacing assertions. Scope
+isolation, cancellation during admission/retry, false/error heartbeats and
+responses arriving after loss are covered. This does not promise cancellation
+before the next heartbeat observes ownership loss.
+
+## Decision 307: Reuse the earnings parse result within one observation (2026-09-12)
+
+Context-free canonicalizer families may provide one pure `{ events, rejection }`
+result for shape acceptance, diagnostics and drafts. Earnings is the sole adopted
+family. A non-null rejection refuses the whole observation, including any partial
+drafts, and keeps its parse debt. The registry type prevents combining this
+strategy with separate shape gates or an acceptance-ledger replay context.
+Standalone canonicalizer helpers remain available to existing direct callers.
+
+The earnings parser algorithm, amount validation, fingerprints, event keys,
+checkpoints and version are unchanged. A result lives only during its current
+visit; body or binding repair is still parsed afresh. Other families retain their
+existing gate/context/canonicalizer order.
+
+Independent review approved the change. Sixty-three targeted unit/integration
+tests pass, including dedup and projections. Restoring the complete deployed
+driver and registry produces six expected repeated-work failures while eleven
+new behavioral cases still pass. A valid aggregate now hashes once; two monthly
+aggregates hash twice. Malformed/partial money, empty versus explicit zero,
+unmapped repair, diagnostics and dry-run remain covered. These work counts do
+not establish the lane's production CPU share or an absolute latency gain.
+
+## Decision 308: Conversation preview reads only its DM monitor streams (2026-09-12)
+
+Conversation preview's sync UX consumes only `messages_live` and
+`messages_history`. The existing `monitorStreams` selector now requests their
+two primary streams, `dm_conversations` and `dm_messages`, instead of the
+17-stream default. Keep the shared derivation and global task rows: active
+siblings on another page can still explain a healthy queue wait. Preserve DM
+coverage, deep-backfill progress and all historical unresolved physical attempt
+debt; the 24-hour counter window is not a debt cutoff. OnlyFans' existing stream
+intersection and ingest overlay remain unchanged.
+
+Independent review approved the change. Thirty-eight unit/integration tests pass,
+including exact full/scoped DM block and UX parity, real monitor-row equality,
+old physical debt and cross-page siblings. The SQL builder confirms two stream
+names in all five filtered inputs. Page totals still execute through the shared
+snapshot; no specific preview latency improvement is claimed. There is no new
+cache, schema, contract, provider traffic or stored-state change.
+
+## Decision 309: Correct Decision 293's DM shadow timeout rationale (2026-09-12)
+
+Decision 293 incorrectly attributed full provider sweeps to 500 ms material-check
+cancellations. This check supplies diagnostic evidence for the virtual early-stop
+report; a read failure records unknown material and prevents report certification.
+Under Decision 284, the real provider sweep already continues beyond that virtual
+stop, following its existing pagination, chunk budgets and membership rules.
+
+The 5 s statement timeout gives the same diagnostic SQL more time under load,
+possibly increasing per-page wait. It does not establish fewer provider requests,
+narrower SQL scans or a five-second deadline for the whole operation. The source
+comment now states this causal boundary. The 5 s material-read timeout, 500 ms
+report-write timeout, SQL and runtime behavior are unchanged. Independent review
+traced the full caller path and verified byte-identical executable content.
+No extra runtime tests are needed for this wording-only correction.
+
+## Decision 310: Batch only webhook bodies held back by missing bindings (2026-09-12)
+
+The canonical webhook driver groups fresh catalog reads for at most eight
+pointer-only rows that cannot append under its current binding map. The entire
+candidate set excludes mapped rows, missing/ambiguous scope, binding conflicts
+and team exports, whose target accounts live in the body. Eligibility and later
+attribution use the same platform-scoped resolver. Mapped/export rows retain
+their individual read boundary. Parsing, diagnostics, zero-draft stamps and
+repair/replay behavior remain unchanged. A later run builds a fresh binding map.
+
+The envelope-authorized catalog seam preserves position, representation and
+availability checks. Individual failures retain existing per-row handling;
+batch errors fall back to individual reads. Bodies over 512 KiB logical JSON
+are deferred, bounding each batch to eight small bodies plus decoded overhead.
+No positive/negative state persists across pages or runs, and no migration or
+terminal binding-wait stamp is added.
+
+Independent review rejected both an earlier persistent hint cache (deep-prefix
+rescans and unproven applicability) and broad webhook prefetch (a wider erasure
+race). A real governed-erasure control makes the broad version append a removed
+fact; the original individual reader and final restricted scope pass. The final
+review approves the restricted candidate, with 69 targeted tests passing. A
+4,000-row synthetic unmapped pointer corpus preserves every parser call, outcome
+and cursor while reducing catalog queries from 4,000 to 500, about 1,379 ms to
+467/414 ms locally. First/deep plans use keyed probes; inline reads add no SQL.
+These fixtures do not establish production-wide CPU savings.
+
+## Decision 311: Keep capture and replay disjoint while sharing their allowance (2026-09-12)
+
+The prioritized capture pass owns versions below one; its replay pass owns
+versions at least one, respecting stronger family floors. An unstamped zero-row
+refusal cannot consume both reserved turns. Ordinary CLI, exact, dry-run and
+non-prioritized replay retain their previous eligibility and repair behavior.
+
+Private pass results track nonempty pages consumed and whether EOF was observed.
+After both reserved turns, the driver may continue the first pass once using
+unused pages and the original deadline, resuming the same forward cursor. It
+never reenters a wrapped pass. The opposite turn is persisted before borrowed
+work, and the original deadline is rechecked after that write, preserving
+overshoot/restart and family fairness. There is no public option, cursor-schema
+change, extra allowance or mid-row interruption.
+
+Independent review rejected the first predicate-only version because useful
+capture capacity fell from four rows to two when positive replay was empty.
+The final allocation restores all four while keeping refusal/positive visits
+disjoint. Fifty-two targeted tests pass, covering repair, fresh-only/small-replay
+capacity, partial/full EOF, odd page caps, borrowed time, overshoot and restart.
+An actual-driver controlled experiment independently confirms four useful
+capture/positive stamps and no duplicate poison visits. Final independent
+review approves the implementation and test-only typing correction. Parser
+versions, event identities, source facts and forward-only stamps are unchanged;
+these fixtures do not establish a production-wide latency or CPU gain.
+
+## Decision 315: Avoid full journal walks for caught-up replay families (2026-09-12)
+
+The ordinary replay selector asks for the first pending observations in numeric
+id order. Production plans for three caught-up families returned zero rows after
+walking about 2.39 million heap rows and 999,000 buffers each, taking 1.21–1.51 s.
+The same selector serves a populated webhook head in about 1 ms, so replacing
+every ordered page with a full pending-set sort would regress useful work.
+
+Unrestricted first pages with a declared source now first probe whether any
+eligible row exists using the existing 0144 health-floor index. A recursive
+index walk discovers actual parse versions under the caller's original bounds;
+each source/kind/version prefix is then checked by equality and a one-row limit.
+Unrestricted kinds use the same source/version prefix in kind/time order. Strict
+next-version comparison preserves negative and sparse versions without generating
+a range proportional to the caller's numeric floor. Repeated kinds have set
+semantics. The existence guard and original id-ordered page share one SQL
+statement and snapshot; there is no cached negative result or new round trip.
+
+Exact ids, continuation cursors, account scopes, time scopes and source-free
+calls keep their original SQL. The optimization changes no eligibility, parser,
+payload reader, stamp, cursor identity, page allowance or wrap behavior, and adds
+no index or migration. In particular, catalog bodies are still read at the
+existing per-observation boundary.
+
+A simpler range/IN guard was rejected by production plans: it made a populated
+webhook head take 1.61 s. The equality-prefix candidate reduced the same empty
+family probes to 2.34–12.78 ms; its populated webhook head took 3.49 ms. These
+are bounded read-only query probes, not a production-wide CPU claim. A local
+240,000-row correlated fixture compares the actual generated SQL with the old
+selector and checks empty and populated heap work, alongside exact result and
+scope parity. Independent review and release verification remain required.
+
+## Decision 321: Restore deployed performance fixes without replacing newer main (2026-09-14)
+
+A read-only production receipt identifies source `380326368fe3` and applied
+migrations 0185/0186, while main `0a08365f` lacks their files and the deployed
+performance fixes. A direct main deployment would restore older runtime behavior;
+a newly invented filename reusing either prefix would also conflict with the
+existing migration history. The migration ledger records filenames, not SQL hashes.
+
+Restore the exact historical 0185/0186 SQL from the identified production revision
+and retain decisions 301–311 and 315 under their production numbers. The runtime
+transfer preserves deployed alias lock order, terminal cleanup authority,
+lease-loss admission, seeded-state counts, bounded metric/payload/replay reads,
+one-pass earnings parsing and capture/replay capacity. It introduces no new
+migration, polling policy, feature flag or production action.
+
+Apply the original source changes to current main, rather than replacing files
+with the production tree. In particular, keep Decision 316 deployment/CI behavior,
+Decision 318 earnings audit plans and Decision 320 A0 regressions. Include the
+0186 additive-index rollback declaration in the current deployment script.
+Historical fixes and their tests remain individually attributable in the transfer
+manifest; their production measurements are not new measurements of this merge.
+
+This PR restores the deployed performance layer and migration identities. C1
+membership writers/protection receipts remain in PR166; dashboard feature-control
+changes remain in their own branch. Those outstanding differences must be
+reconciled before claiming that main preserves the whole production release.
+No deployment approval or A0/C1/W0 acceptance follows from merging these files.

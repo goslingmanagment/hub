@@ -1,0 +1,134 @@
+[
+  {
+    "commit": "77f1fed0",
+    "paths": [
+      "docker-compose.production.yml",
+      "tests/compose-config.test.ts"
+    ],
+    "exitCode": 0,
+    "stderr": "Applied patch to 'docker-compose.production.yml' cleanly.\nApplied patch to 'tests/compose-config.test.ts' cleanly.\n"
+  },
+  {
+    "commit": "62e87c61",
+    "paths": [
+      "packages/db/src/repositories/fans.ts",
+      "tests/fan-alias-concurrency.integration.test.ts"
+    ],
+    "exitCode": 0,
+    "stderr": "Applied patch to 'packages/db/src/repositories/fans.ts' cleanly.\nFalling back to direct application...\n"
+  },
+  {
+    "commit": "f33946aa",
+    "paths": [
+      "packages/db/migrations/0186_ops_metrics_recent_series.sql",
+      "packages/db/src/repositories/ops-metrics.ts",
+      "scripts/benchmark-ops-metrics.mjs",
+      "tests/compose-config.test.ts",
+      "tests/ops-metrics-recent.integration.test.ts"
+    ],
+    "exitCode": 0,
+    "stderr": "Falling back to direct application...\nApplied patch to 'packages/db/src/repositories/ops-metrics.ts' cleanly.\nFalling back to direct application...\nApplied patch to 'tests/compose-config.test.ts' cleanly.\nFalling back to direct application...\n"
+  },
+  {
+    "commit": "2ea98edf",
+    "paths": [
+      "packages/db/src/repositories/page-sync.ts",
+      "scripts/platform-branch-budget.json",
+      "tests/page-sync-seed-count.integration.test.ts"
+    ],
+    "exitCode": 0,
+    "stderr": "Applied patch to 'packages/db/src/repositories/page-sync.ts' cleanly.\nApplied patch to 'scripts/platform-branch-budget.json' cleanly.\nFalling back to direct application...\n"
+  },
+  {
+    "commit": "cfa4c602",
+    "paths": [
+      "packages/db/src/repositories/sync.ts",
+      "tests/sync-finalization-race.integration.test.ts"
+    ],
+    "exitCode": 0,
+    "stderr": "Applied patch to 'packages/db/src/repositories/sync.ts' cleanly.\nFalling back to direct application...\n"
+  },
+  {
+    "commit": "c1e0b15e",
+    "paths": [
+      "apps/runtime/src/services/ofapi.ts",
+      "apps/runtime/src/services/sync/executor.ts",
+      "apps/runtime/src/services/sync/rate-limiter.ts",
+      "docs/error-handling.md",
+      "packages/fansly/src/adapter.ts",
+      "packages/shared/src/http-request-scope.ts",
+      "packages/shared/src/http-request.ts",
+      "packages/shared/src/index.ts",
+      "tests/adapter-request-cancellation.test.ts",
+      "tests/http-request-cancellation.test.ts",
+      "tests/sync-executor.test.ts",
+      "tests/sync-rate-limiter.test.ts"
+    ],
+    "exitCode": 0,
+    "stderr": "Applied patch to 'apps/runtime/src/services/ofapi.ts' cleanly.\nApplied patch to 'apps/runtime/src/services/sync/executor.ts' cleanly.\nApplied patch to 'apps/runtime/src/services/sync/rate-limiter.ts' cleanly.\nApplied patch to 'docs/error-handling.md' cleanly.\nApplied patch to 'packages/fansly/src/adapter.ts' cleanly.\nFalling back to direct application...\nApplied patch to 'packages/shared/src/http-request.ts' cleanly.\nApplied patch to 'packages/shared/src/index.ts' cleanly.\nFalling back to direct application...\nFalling back to direct application...\nApplied patch to 'tests/sync-executor.test.ts' cleanly.\nApplied patch to 'tests/sync-rate-limiter.test.ts' cleanly.\n"
+  },
+  {
+    "commit": "a86ac13e",
+    "paths": [
+      "apps/runtime/src/services/canonicalize-driver.ts",
+      "apps/runtime/src/services/canonicalize/fansly-earnings.ts",
+      "apps/runtime/src/services/canonicalize/index.ts",
+      "apps/runtime/src/services/canonicalize/types.ts",
+      "tests/canonicalize-earnings-single-pass.test.ts"
+    ],
+    "exitCode": 0,
+    "stderr": "Applied patch to 'apps/runtime/src/services/canonicalize-driver.ts' cleanly.\nApplied patch to 'apps/runtime/src/services/canonicalize/fansly-earnings.ts' cleanly.\nApplied patch to 'apps/runtime/src/services/canonicalize/index.ts' cleanly.\nApplied patch to 'apps/runtime/src/services/canonicalize/types.ts' cleanly.\nFalling back to direct application...\n"
+  },
+  {
+    "commit": "ce4fb415",
+    "paths": [
+      "apps/runtime/src/services/conversations.ts",
+      "tests/runtime-page-services.test.ts",
+      "tests/sync-monitor.integration.test.ts",
+      "tests/sync-status.test.ts"
+    ],
+    "exitCode": 0,
+    "stderr": "Applied patch to 'apps/runtime/src/services/conversations.ts' cleanly.\nApplied patch to 'tests/runtime-page-services.test.ts' cleanly.\nApplied patch to 'tests/sync-monitor.integration.test.ts' cleanly.\nApplied patch to 'tests/sync-status.test.ts' cleanly.\n"
+  },
+  {
+    "commit": "4ff73c55",
+    "paths": [
+      "packages/db/src/repositories/fansly-dm-shadow.ts"
+    ],
+    "exitCode": 0,
+    "stderr": "Applied patch to 'packages/db/src/repositories/fansly-dm-shadow.ts' cleanly.\n"
+  },
+  {
+    "commit": "bdbb981c",
+    "paths": [
+      "apps/runtime/src/services/canonicalize-driver.ts",
+      "apps/runtime/src/services/payload-reader.ts",
+      "packages/db/src/index.ts",
+      "packages/db/src/repositories/capture-payloads.ts",
+      "scripts/platform-branch-budget.json",
+      "tests/capture-payload-barrel.test.ts",
+      "tests/capture-payload-batch.integration.test.ts"
+    ],
+    "exitCode": 0,
+    "stderr": "Applied patch to 'apps/runtime/src/services/canonicalize-driver.ts' cleanly.\nApplied patch to 'apps/runtime/src/services/payload-reader.ts' cleanly.\nApplied patch to 'packages/db/src/index.ts' cleanly.\nApplied patch to 'packages/db/src/repositories/capture-payloads.ts' cleanly.\nApplied patch to 'scripts/platform-branch-budget.json' cleanly.\nApplied patch to 'tests/capture-payload-barrel.test.ts' cleanly.\nFalling back to direct application...\n"
+  },
+  {
+    "commit": "96a86c1f",
+    "paths": [
+      "apps/runtime/src/services/canonicalize-driver.ts",
+      "tests/canonicalize-budget.test.ts",
+      "tests/canonicalize-pass-partition.integration.test.ts"
+    ],
+    "exitCode": 0,
+    "stderr": "Applied patch to 'apps/runtime/src/services/canonicalize-driver.ts' cleanly.\nApplied patch to 'tests/canonicalize-budget.test.ts' cleanly.\nFalling back to direct application...\n"
+  },
+  {
+    "commit": "14219b68",
+    "paths": [
+      "packages/db/src/repositories/domain-events.ts",
+      "tests/observations-replay-head.integration.test.ts"
+    ],
+    "exitCode": 0,
+    "stderr": "Applied patch to 'packages/db/src/repositories/domain-events.ts' cleanly.\nFalling back to direct application...\n"
+  }
+]

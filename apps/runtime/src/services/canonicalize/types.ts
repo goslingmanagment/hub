@@ -50,6 +50,23 @@ export type Canonicalizer = (
   context?: CanonicalizeRunContext,
 ) => CanonicalEventDraft[];
 
+/** Fixed-code refusal details; never provider payload content. */
+export interface CanonicalParseRejection {
+  code: string;
+  itemIndex?: number;
+}
+
+export interface CanonicalParseResult {
+  events: CanonicalEventDraft[];
+  /** Non-null refuses the WHOLE observation, even if some drafts were valid. */
+  rejection: CanonicalParseRejection | null;
+}
+
+/** Context-free shape validation and draft construction in one pure pass. */
+export type CanonicalParser = (
+  observation: CanonicalizableObservation,
+) => CanonicalParseResult;
+
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }

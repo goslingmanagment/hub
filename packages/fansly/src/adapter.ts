@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { setTimeout as delay } from "node:timers/promises";
 
 import { fetch, type Dispatcher } from "undici";
 
 import {
+  assertHttpRequestActive,
   buildProxyEgressKey,
   buildProxyDispatcherCacheKey,
   classifyTransportError,
@@ -17,6 +17,8 @@ import {
   sanitizeError,
   redactSensitiveText,
   resolveRetryDelayMs,
+  waitForHttpRequestDelay,
+  waitForHttpRequestPermit,
   type ProxyConfig,
 } from "@agency_hub_core/shared";
 
@@ -2259,8 +2261,9 @@ export class FanslyAdapter {
     const categoryGate = this.enterRateLimitChain(this.rateLimitChains.get(categoryKey) ?? Promise.resolve());
     this.rateLimitChains.set(categoryKey, categoryGate.chain);
 
-    await categoryGate.previous;
     try {
+      await waitForHttpRequestPermit(() => categoryGate.previous);
+      assertHttpRequestActive();
       const categoryWaitMs = await this.waitForMinimumDelay(
         this.requestTimestamps.get(categoryKey),
         minDelayMs,
@@ -2268,8 +2271,9 @@ export class FanslyAdapter {
       const globalGate = this.enterRateLimitChain(this.rateLimitChains.get(globalKey) ?? Promise.resolve());
       this.rateLimitChains.set(globalKey, globalGate.chain);
 
-      await globalGate.previous;
       try {
+        await waitForHttpRequestPermit(() => globalGate.previous);
+        assertHttpRequestActive();
         const configuredGlobalDelayMs = this.options.globalDelayMs ?? 2500;
         const effectiveGlobalDelayMs = configuredGlobalDelayMs > 0
           ? configuredGlobalDelayMs + GLOBAL_DELAY_SAFETY_MARGIN_MS
@@ -2278,21 +2282,29 @@ export class FanslyAdapter {
           this.requestTimestamps.get(globalKey),
           effectiveGlobalDelayMs,
         );
+        assertHttpRequestActive();
         const startedAt = Date.now();
         this.requestTimestamps.set(categoryKey, startedAt);
         this.requestTimestamps.set(globalKey, startedAt);
         return categoryWaitMs + globalWaitMs;
       } finally {
         globalGate.release();
-        if (this.rateLimitChains.get(globalKey) === globalGate.chain) {
-          this.rateLimitChains.delete(globalKey);
-        }
+        void globalGate.chain.then(() => {
+          if (this.rateLimitChains.get(globalKey) === globalGate.chain) {
+            this.rateLimitChains.delete(globalKey);
+          }
+        });
       }
     } finally {
       categoryGate.release();
-      if (this.rateLimitChains.get(categoryKey) === categoryGate.chain) {
-        this.rateLimitChains.delete(categoryKey);
-      }
+      // A cancelled waiter may still follow an occupied predecessor. Keep
+      // that chain visible until it settles, or a third caller could bypass
+      // the predecessor's pacing slot.
+      void categoryGate.chain.then(() => {
+        if (this.rateLimitChains.get(categoryKey) === categoryGate.chain) {
+          this.rateLimitChains.delete(categoryKey);
+        }
+      });
     }
   }
 
@@ -2319,7 +2331,7 @@ export class FanslyAdapter {
     }
 
     const waitedMs = minDelayMs - elapsed;
-    await delay(waitedMs);
+    await waitForHttpRequestDelay(waitedMs);
     return waitedMs;
   }
 }
