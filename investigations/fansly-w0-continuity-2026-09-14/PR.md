@@ -1,6 +1,6 @@
 The 120-second probe cannot collect the required six-hour continuity and receiver-gap evidence. Add an explicit operator-only Lilly-1 runner with one six-hour connection, then two bounded connections after 30-second and 240-second receiver-only gaps. The short probe keeps its CLI/duration/report shape; both launchers share page admission and verified container-ID cleanup.
 
-A shared observer streams bounded sanitized metadata, checks credential/route generations without new dispatchers, and stops on cancellation, transport/auth failure, changed generation, output failure or lost cleanup proof. t=1 is an observed marker; binding, fan-out, independent presence and external REST recovery remain unverified. No runtime flag, provider HTTP, polling change, business writer or B0 acceptance is introduced. D333 and the operator runbook document scope and rollback.
+A shared observer streams bounded sanitized metadata, checks credential/route generations without new dispatchers, and stops on cancellation, transport/auth failure, changed generation, output failure or lost cleanup proof. t=1 is an observed marker; binding, fan-out, independent presence and external REST recovery remain unverified. No additional REST requests, runtime flag, polling change, business writer or B0 acceptance is introduced. D334 and the operator runbook document scope and rollback.
 
 Validation on main e7351373 plus this candidate:
 

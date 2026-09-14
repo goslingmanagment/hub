@@ -136,3 +136,24 @@ reviewed above. Receipts distinguish archive filenames from original log hashes;
 the raw logs are retained locally and are not edited to silence whitespace checks.
 This packaging correction needs no new test run. The clean publication disposition
 remains unchanged.
+
+## Decision-number and traffic wording follow-up
+
+Compared with published head `f208d2fac357457b6bdab37a9d26d81824d31acd`,
+the W0 decision row and heading change only from 333 to coordinator-assigned
+334. Existing main decisions remain intact; no contents of concurrent PR194
+are imported or assumed merged. Current PR/STATUS references use D334, while
+the earlier review/validation fingerprints remain historical evidence.
+
+The continuity runbook now explicitly separates HTTP Upgrade and WebSocket
+authentication/ping traffic from zero additional REST requests and T0 attempt
+accounting. This corrects an overbroad traffic description without changing the
+three-connection experiment or claiming zero provider cost. Current PR/STATUS
+wording matches that scope.
+
+Verified all 22 hashes in final manifest
+`9c946e926f5b531dfebd5b6e524838445d37f32307d501af5675cae66b580c27`.
+Only decisions.md and the continuity runbook differ from the published manifest;
+the other 20 entries, including all code and tests, are unchanged. No new test
+run is needed for this documentation-only correction. No findings remain;
+the coordinator-authorized correction may be committed and pushed for fresh CI.

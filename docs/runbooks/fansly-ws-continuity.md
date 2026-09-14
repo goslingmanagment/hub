@@ -42,7 +42,11 @@ Deploy all four launcher modules alongside it: `launcher_inputs.py`,
 scripts require Python 3.11+ on a Unix host. Do not use the old short launcher
 concurrently: host admission is shared by the reviewed short and long launchers.
 
-The scenario has exactly three connection attempts, with no automatic retries:
+The scenario has exactly three connection attempts, with no automatic retries.
+Each attempt can send an HTTP Upgrade handshake; established sockets also send
+WebSocket pings and authentication frames. This is additional provider traffic,
+separate from REST requests and the `sync_http_attempts`/T0 accounting. A
+`restRequests: 0` receipt does not mean zero provider traffic or measured cost.
 
 1. One socket remains observed for six hours starting at its first valid top-level
    type-1 envelope. That envelope is a frame marker, not a verified account or
@@ -133,5 +137,5 @@ alone does not prove this recovery. Missing permitted receipt access stays unkno
 Do not call `sync.thread.backfill` as a generic new-head catch-up: it normally
 starts at the oldest stored message and walks backward. Its start-before field
 is an input boundary, not proof of recovery through a previous head. This
-experiment adds no provider reads or automatic recovery dispatch. B0 readiness
+experiment adds no REST requests or automatic recovery dispatch. B0 readiness
 remains an independent review of all required evidence, not the process exit code.

@@ -331,7 +331,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 331 | Earnings completion settlement | Reuse a fully completed checkpoint only for its owning request sequence; preserve read timestamps, daily cadence and newer work. |
 | 332 | A0 material-query cost read plane | Expose one bounded current-head EXPLAIN through the existing read_only role; keep runtime queries and coverage gates unchanged. |
 | 333 | Live new-follower drafts | Fansly extension reads live followers and history; Hub generates one draft with profile/avatar context and coordinates one-attempt browser sends. |
-| 333 | W0 continuity experiment | Run one bounded Lilly-1 six-hour observation and two receiver-only gaps; share short/long admission and keep binding, presence and recovery as independent evidence. |
+| 334 | W0 continuity experiment | Run one bounded Lilly-1 six-hour observation and two receiver-only gaps; share short/long admission and keep binding, presence and recovery as independent evidence. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -13585,7 +13585,7 @@ platform branch restricts this browser custody surface; OnlyFans already has
 its own kernel send outbox. Deploy Core before extension 2.2.0. No production
 messages are sent as a smoke test without a separate owner instruction.
 
-## Decision 333: Prepare a bounded Lilly-1 W0 continuity experiment (2026-09-14)
+## Decision 334: Prepare a bounded Lilly-1 W0 continuity experiment (2026-09-14)
 
 The 120-second W0 probe cannot provide the accepted six-hour continuity and
 receiver-gap evidence. Keep its duration, invocation and sanitized report shape.

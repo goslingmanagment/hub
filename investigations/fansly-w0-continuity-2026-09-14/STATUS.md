@@ -1,13 +1,13 @@
 # W0 continuity runner — implementation ready
 
 Base: `e73513737e19b01bd74a4bfbfc6eeed1ffe56d69` (main with PR 193 / D332).
-Branch: `feat/fansly-w0-continuity`. Decision 333.
+Branch: `feat/fansly-w0-continuity`. Decision 334.
 
 The separate operator runner can collect one six-hour Lilly-1 connection and two
 scheduled receiver-only gaps (30 and 240 seconds). It preserves the short probe's
 5–120-second invocation/report shape, shares host/page admission and removes only
-its verified container ID. There is no provider HTTP, new flag, business writer,
-automatic recovery dispatch or production deployment in this change.
+its verified container ID. The runner adds no REST requests, new flag, business writer or automatic
+recovery dispatch. No production deployment was performed by this subtask.
 
 The shared observer streams sanitized received metadata. The first top-level t=1
 marker starts a monotonic six-hour clock; it is not verified account binding.
