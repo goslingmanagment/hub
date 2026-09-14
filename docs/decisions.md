@@ -329,6 +329,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 329 | Fansly earnings money codec | Aggregate provider mills through the shared codec; preserve safe-integer refusal, event fingerprints and projection ordering. |
 | 330 | Voice fixture settlement boundary | Wait for committed voice completion before the next test resets tables; keep detached runtime dispatch unchanged. |
 | 331 | Earnings completion settlement | Reuse a fully completed checkpoint only for its owning request sequence; preserve read timestamps, daily cadence and newer work. |
+| 332 | Live new-follower drafts | Fansly extension reads live followers and history; Hub generates one draft with profile/avatar context and coordinates one-attempt browser sends. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -13511,3 +13512,42 @@ New requests, partial cursors, missing/unowned contexts and cleared checkpoints
 cannot reuse this result. Existing reset and erasure paths remain authoritative.
 No rolling cooldown, cadence change, new field, migration or runtime flag is
 introduced. C2c freshness and independent-rotation gates remain unchanged.
+
+## Decision 332: Live Fansly new-follower drafts and browser-send custody (2026-09-14)
+
+The owner selected a compact queue/chat window in the Fansly extension. The
+extension reads followers, profile images, names, bio and full personal-message
+eligibility directly from the active Fansly session. Hub pull cadence is never
+part of those reads. Generation remains an explicit human action.
+
+The existing hi-greeting lane accepts greetingMode=new-follower only with Fansly
+clientContext and fanRef. This mode uses a separate one-message template and
+accepts username plus one HTTPS Fansly avatar URL. Legacy Hi keeps its three
+variants and ten-message gate. The new mode can see a longer automatic-message
+history because eligibility is checked by the live client. The original prompt
+assets remain unchanged; the new template and builder are hash-pinned.
+
+The gateway passes the avatar as image input to Anthropic/OpenRouter, includes
+it in restricted prompt capture and debug echo, and budgets 4096 estimated
+input tokens for it. Images follow all cached text blocks, keeping the static
+prefix fan-agnostic under Decision 319. The kernel does not fetch the Fansly URL. Text/profile
+values are escaped; image/profile instructions are untrusted context.
+
+The conversations module provides page-scoped human-authenticated send custody
+for browser-direct messages. This is coordination, not a platform send API.
+Reservations serialize per page/fan and expire after 60 seconds only before
+dispatch. Dispatching/sent attempts never expire or retry; all attempts remain
+in the table during normal operation. Explicit page/fan erasure deletes this
+identity-linked custody through named erasure targets; there is no scheduled
+deletion. A UUID plus principal, page and fan fences every transition.
+The browser persists its own custody, obtains the dispatch acknowledgement,
+then performs exactly one Fansly POST. A missing acknowledgement blocks the
+send. Core rollback or loss of connectivity blocks new sends, preserving
+custody. Clients outside this feature do not participate in its reservation;
+the client performs a final live history check but cannot make native sends
+transactional with that check.
+
+Migration 0192 adds the operational attempt journal. The deliberate new Fansly
+platform branch restricts this browser custody surface; OnlyFans already has
+its own kernel send outbox. Deploy Core before extension 2.2.0. No production
+messages are sent as a smoke test without a separate owner instruction.

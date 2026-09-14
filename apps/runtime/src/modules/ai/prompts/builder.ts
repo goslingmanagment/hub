@@ -25,6 +25,7 @@ import {
   FAST_REPLY_TEMPLATE,
   HELP_ME_TEMPLATE,
   HI_GREETING_TEMPLATE,
+  NEW_FOLLOWER_GREETING_TEMPLATE,
   IMPROVE_DRAFT_TEMPLATE,
   PING_TEMPLATE,
   VOICE_SCRIPT_TEMPLATE,
@@ -81,6 +82,8 @@ export interface PromptBuildInput {
   fanSubscriptionData: string;
   fanDisplayName: string;
   fanBio?: string | undefined;
+  fanUsername?: string | undefined;
+  greetingMode?: "new-follower" | undefined;
   /** The chatter's own saved name for the fan (Fansly rename, Decision 290).
    * Rendered by the {fanCustomNameLine} slot; templates without it ignore it. */
   fanCustomName?: string | undefined;
@@ -810,6 +813,7 @@ function templateValues(input: PromptBuildInput): TemplateValues {
     fanDisplayName: escapeForPrompt(input.fanDisplayName),
     fanBioSection: fanBioSection(input.fanBio),
     fanCustomNameLine: fanCustomNameLine(input.fanCustomName),
+    fanUsername: escapeForPrompt(input.fanUsername ?? input.fanDisplayName),
     fanProfileSection: fanProfileSection(input.fanProfile),
     draftSection: draftSection(policy.requiresDraft ? input.draftText : undefined),
     coachDraftSection: coachDraftSection(policy.optionalDraft ? input.draftText : undefined),
@@ -1197,7 +1201,9 @@ export function buildPrompt(
     templateOverrides?.[input.feature]
     ?? (input.feature === "fan-summary" && input.summaryMode === "short"
       ? FAN_SUMMARY_SHORT_TEMPLATE
-      : DEFAULT_TEMPLATES[input.feature]);
+      : input.feature === "hi-greeting" && input.greetingMode === "new-follower"
+        ? NEW_FOLLOWER_GREETING_TEMPLATE
+        : DEFAULT_TEMPLATES[input.feature]);
   const template = applyPlatformWording(selectedTemplate, platform);
   const systemBlocks = buildSystemBlocks(input.feature, input.personality, platform);
   const initialValues = templateValues(input);

@@ -23,7 +23,7 @@ export interface AnthropicGatewayStreamRequest {
   system: AnthropicGatewayTextBlock[];
   messages: [{
     role: "user";
-    content: AnthropicGatewayTextBlock[];
+    content: Array<AnthropicGatewayTextBlock | { type: "image"; source: { type: "url"; url: string } }>;
   }];
   temperature?: number;
   thinking?: { type: "adaptive"; display: "summarized" } | { type: "disabled" };
@@ -259,7 +259,11 @@ export function buildAnthropicGatewayStreamRequest(
     system: toAnthropicGatewayTextBlocks(input.prompt.systemBlocks),
     messages: [{
       role: "user",
-      content: toAnthropicGatewayTextBlocks(input.prompt.userBlocks),
+      content: [
+        ...toAnthropicGatewayTextBlocks(input.prompt.userBlocks),
+        // Fan-specific images must remain after every cached text prefix.
+        ...(input.prompt.images ?? []).map(({ url }) => ({ type: "image" as const, source: { type: "url" as const, url } })),
+      ],
     }],
     ...(tuning.thinking ? { thinking: tuning.thinking } : {}),
     ...(tuning.outputConfig || options?.outputFormat
@@ -290,7 +294,7 @@ export function estimateAnthropicGatewayRequestCost(
   const cacheWrite5mTokens = systemTokens.cacheWrite5mTokens + userTokens.cacheWrite5mTokens;
   const cacheWrite1hTokens = systemTokens.cacheWrite1hTokens + userTokens.cacheWrite1hTokens;
   const estimate = estimateAiGatewayUsageCost(input.model, {
-    inputTokens: systemTokens.inputTokens + userTokens.inputTokens,
+    inputTokens: systemTokens.inputTokens + userTokens.inputTokens + (input.prompt.images?.length ?? 0) * 4096,
     outputTokens: input.maxTokens ?? tuning.maxTokens,
     cacheWriteTokens: cacheWrite5mTokens + cacheWrite1hTokens,
     cacheReadTokens: 0,

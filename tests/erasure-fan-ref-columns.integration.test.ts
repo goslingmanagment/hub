@@ -111,7 +111,8 @@ describe("erasure column-shape ratchet (§9.3)", () => {
       `select table_name, column_name
          from information_schema.columns
         where table_schema = 'public'
-          and ((table_name = 'subject_refresh_state' and column_name = 'subject_ref') or ${
+          and ((table_name = 'subject_refresh_state' and column_name = 'subject_ref')
+            or (table_name = 'follower_outreach_attempts' and column_name = 'fan_ref') or ${
         FAN_REF_COLUMN_PATTERNS.map((_, index) => `column_name like $${index + 1}`).join(" or ")
       })
         order by table_name, column_name`,
@@ -122,6 +123,7 @@ describe("erasure column-shape ratchet (§9.3)", () => {
     // added, or a broken query would make the ratchet pass by finding nothing.
     expect(discovered).toContain("media_orders.buyer_platform_user_id");
     expect(discovered).toContain("message_media_offers.fan_platform_user_id");
+    expect(discovered).toContain("follower_outreach_attempts.fan_ref");
     expect(discovered.length).toBeGreaterThan(4);
 
     // A plan for a fan nobody has ever seen still enumerates every target the

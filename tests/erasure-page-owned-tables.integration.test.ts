@@ -77,6 +77,7 @@ describe("page erasure schema inventory (R2)", () => {
     expect(children).toContain("capture_coverage");
     expect(children).toContain("page_payout_methods");
     expect(children).toContain("creator_posts");
+    expect(children).toContain("follower_outreach_attempts");
 
     for (const [table, reason] of exclusions) {
       expect(children, `${table}: excluded but it has no direct pages FK`).toContain(table);

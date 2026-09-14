@@ -1,4 +1,5 @@
 export * from "./client.ts";
+export * from "./repositories/follower-outreach.ts";
 export * from "./schema.ts";
 export * from "./repositories/creator-raw-media.ts";
 export * from "./repositories/vault-album-scans.ts";

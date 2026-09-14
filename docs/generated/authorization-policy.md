@@ -22,7 +22,7 @@ body remain handler-checked and are noted per route in the service layer.
 | `agentKey` | Agent Read Plane key only; no human principal is admitted |
 | `any` | any authenticated principal except an agent key |
 
-## Routes (260)
+## Routes (261)
 
 | Method | Path | Route key | Kind | Roles | Page scope |
 | --- | --- | --- | --- | --- | --- |
@@ -243,6 +243,7 @@ body remain handler-checked and are noted per route in the service layer.
 | GET | `/api/v1/pages/:pageLabel/fans/:platformUserId/profile/versions` | `pageFanProfileVersions` | `any` | — | page |
 | GET | `/api/v1/pages/:pageLabel/fans/:platformUserId/profile/versions/:version` | `pageFanProfileVersion` | `any` | — | page |
 | GET | `/api/v1/pages/:pageLabel/fans/:platformUserId/transactions` | `pageFanTransactions` | `session` | — | page |
+| POST | `/api/v1/pages/:pageLabel/follower-outreach/attempt` | `followerOutreachAttempt` | `any` | — | page |
 | GET | `/api/v1/pages/:pageLabel/followers` | `pageFollowers` | `any` | — | page |
 | GET | `/api/v1/pages/:pageLabel/followers/daily` | `pageFollowersDaily` | `any` | — | page |
 | GET | `/api/v1/pages/:pageLabel/money/payouts` | `moneyPayouts` | `owner-session` | — | page |
