@@ -1,7 +1,8 @@
-import { useLocation, useNavigate, useParams } from "react-router";
-import { useEffect, useState } from "react";
+import { useLocation, useNavigate, useParams, useSearchParams } from "react-router";
+import { useEffect, useReducer, useState } from "react";
 import { ArrowLeft, ChevronDown, CalendarDays, RefreshCw, Clock } from "lucide-react";
 import {
+  useAuthMe,
   usePageFanDetail,
   usePageFanProfile,
   usePageFanProfileVersion,
@@ -10,6 +11,9 @@ import {
   useCreateFanNote,
   useSpenderDetail,
 } from "@/api/queries";
+import { ReadSection, type SectionQuery } from "./daily/ReadSection.js";
+import { fanNoteDraftsReducer } from "./daily/fanNoteDrafts.js";
+import { QueryNotice } from "@/components/shared/QueryNotice";
 import { Badge } from "@/components/shared/Badge";
 import { Pagination } from "@/components/shared/Pagination";
 import { FanIntelligenceMarkdown } from "@/components/page/FanIntelligenceMarkdown";
@@ -20,7 +24,7 @@ import { formatDate, formatDateTime, transactionTypeLabel, daysRemaining } from 
 import { useSpenderPeriodStore } from "@/stores/spenderPeriodStore";
 import { toast } from "sonner";
 import { TRANSACTION_STATE_COLORS } from "@/lib/constants";
-import { resolveFanProfileBackTarget } from "@/lib/navigation";
+import { resolveFanProfileBackTarget, resolveSpenderPeriod } from "@/lib/navigation";
 import type {
   FanProfileDocument,
   FanProfileVersionListResponse,
@@ -41,51 +45,57 @@ export function FanProfilePage() {
   const { pageLabel, platform, platformUserId } = useParams();
   const location = useLocation();
   const navigate = useNavigate();
+  const [search] = useSearchParams();
   const [txOffset, setTxOffset] = useState(0);
-  const [noteBody, setNoteBody] = useState("");
   const [historyOpen, setHistoryOpen] = useState(false);
   const [intelligenceOpen, setIntelligenceOpen] = useState(false);
   const [selectedProfileVersion, setSelectedProfileVersion] = useState<number | null>(null);
   const routeKey = `${pageLabel ?? ""}\0${platform ?? ""}\0${platformUserId ?? ""}`;
+  const auth = useAuthMe();
+  const principalId = auth.data?.user.id ?? null;
+  const [noteDrafts, dispatchNoteDraft] = useReducer(fanNoteDraftsReducer, { principalId, drafts: {} });
+  const noteBody = noteDrafts.principalId === principalId ? noteDrafts.drafts[routeKey] ?? "" : "";
+  const setNoteBody = (text: string) => dispatchNoteDraft({ type: "edit", principalId, routeKey, text });
+  useEffect(() => { dispatchNoteDraft({ type: "principal", principalId }); }, [principalId]);
   const { period } = useSpenderPeriodStore();
-  const selectedPeriod = period;
+  const selectedPeriod = resolveSpenderPeriod(search.get("period"), period);
   const spenderPeriod = selectedPeriod === "all" ? "lifetime" : selectedPeriod;
 
   useEffect(() => {
     setTxOffset(0);
-    setNoteBody("");
     setHistoryOpen(false);
     setIntelligenceOpen(false);
     setSelectedProfileVersion(null);
   }, [routeKey]);
 
-  const { data, isLoading, isError } = usePageFanDetail(pageLabel!, platformUserId!);
-  const { data: latestProfileData, isLoading: latestProfileLoading } = usePageFanProfile(pageLabel!, platformUserId!);
-  const { data: profileVersionsData, isLoading: profileVersionsLoading } = usePageFanProfileVersions(
+  const { data, isLoading, isError, refetch } = usePageFanDetail(pageLabel!, platformUserId!);
+  const latestProfileQuery = usePageFanProfile(pageLabel!, platformUserId!);
+  const versionsQuery = usePageFanProfileVersions(
     pageLabel!,
     platformUserId!,
     { enabled: historyOpen },
   );
-  const { data: selectedProfileData, isLoading: selectedProfileLoading } = usePageFanProfileVersion(
+  const selectedProfileQuery = usePageFanProfileVersion(
     pageLabel!,
     platformUserId!,
     selectedProfileVersion,
     { enabled: selectedProfileVersion !== null },
   );
-  const { data: spenderDetail } = useSpenderDetail(platform!, platformUserId!, {
+  const spenderQuery = useSpenderDetail(platform!, platformUserId!, {
     scope: "page",
     pageLabel,
     period: spenderPeriod,
   });
-  const { data: txData } = usePageFanTransactions(pageLabel!, platformUserId!, {
+  const transactionsQuery = usePageFanTransactions(pageLabel!, platformUserId!, {
     limit: PAGE_SIZE,
     offset: txOffset,
   });
-  const { data: timelineTxData } = usePageFanTransactions(pageLabel!, platformUserId!, {
+  const timelineQuery = usePageFanTransactions(pageLabel!, platformUserId!, {
     limit: 10,
     offset: 0,
   });
-  const createNote = useCreateFanNote(pageLabel!, platformUserId!);
+  const createNote = useCreateFanNote();
+  const backTo = resolveFanProfileBackTarget(location.state, pageLabel);
 
   if (isLoading || !data) {
     if (isLoading) {
@@ -97,6 +107,7 @@ export function FanProfilePage() {
           title="Fan profile failed to load"
           description="The fan details could not be fetched for this page."
           tone="error"
+          action={<><button type="button" onClick={() => void refetch()}>Повторить</button> · <button type="button" onClick={() => navigate(backTo)}>Назад к списку</button></>}
         />
       );
     }
@@ -105,7 +116,12 @@ export function FanProfilePage() {
 
   const { fan, page } = data;
   const fanLabel = resolveFanLabelForScope(fan, "page");
-  const backTo = resolveFanProfileBackTarget(location.state, pageLabel);
+  const spenderDetail = spenderQuery.data;
+  const txData = transactionsQuery.data;
+  const timelineTxData = timelineQuery.data;
+  const latestProfileData = latestProfileQuery.data;
+  const profileVersionsData = versionsQuery.data;
+  const selectedProfileData = selectedProfileQuery.data;
 
   // Type breakdown from spender detail
   const typeBreakdown = spenderDetail?.typeBreakdown ?? [];
@@ -116,8 +132,8 @@ export function FanProfilePage() {
     return entry?.creatorNetAmountMills ?? 0;
   }
   const totalSpent = spenderPeriod === "lifetime"
-    ? (spenderDetail?.metrics.lifetime.scopeCreatorNetAmountMills ?? 0)
-    : (spenderDetail?.metrics.window?.creatorNetAmountMills ?? 0);
+    ? (spenderDetail?.metrics.lifetime.scopeCreatorNetAmountMills ?? null)
+    : (spenderDetail?.metrics.window?.creatorNetAmountMills ?? null);
 
   const txItems = txData?.items ?? [];
   const txTotal = txData?.total ?? 0;
@@ -127,18 +143,20 @@ export function FanProfilePage() {
   const displayedProfile = viewingHistoricalVersion
     ? selectedProfileData ?? null
     : latestProfile;
-  const profileLoading = viewingHistoricalVersion
-    ? selectedProfileLoading
-    : latestProfileLoading;
+  const profileQuery = viewingHistoricalVersion ? selectedProfileQuery : latestProfileQuery;
+  const profileLoading = profileQuery.isLoading;
   const selectedVersionIsCurrent = selectedProfileVersion !== null
     && latestProfile?.version === selectedProfileVersion;
 
   async function handleAddNote() {
     const body = noteBody.trim();
-    if (!body) return;
+    if (!body || createNote.isPending) return;
+    const submittedRoute = routeKey;
+    const submittedText = noteBody;
+    const submittedPrincipalId = principalId;
     try {
-      await createNote.mutateAsync({ body });
-      setNoteBody("");
+      await createNote.mutateAsync({ pageLabel: pageLabel!, platformUserId: platformUserId!, body });
+      dispatchNoteDraft({ type: "saved", principalId: submittedPrincipalId, routeKey: submittedRoute, submittedText });
       toast.success("Note added");
     } catch {
       toast.error("Failed to add note");
@@ -148,7 +166,7 @@ export function FanProfilePage() {
   const stats = [
     {
       label: "Total Spent",
-      value: formatUsdFromMills(totalSpent),
+      value: totalSpent === null ? "—" : formatUsdFromMills(totalSpent),
       accent: true,
     },
     {
@@ -204,6 +222,7 @@ export function FanProfilePage() {
         Back
       </button>
 
+      <QueryNotice error={isError} stale={Boolean(data)} retry={refetch} />
       {/* Header */}
       <div className="mb-6 flex items-center gap-4">
         <div className="flex h-14 w-14 items-center justify-center rounded-full bg-hover text-2xl font-bold text-text-secondary">
@@ -230,7 +249,9 @@ export function FanProfilePage() {
       </div>
 
       {/* Stats Grid */}
-      <div className="mb-6 grid grid-cols-4 gap-3.5">
+      <ReadSection title="Доход от фана" query={spenderQuery}>
+      <p className="mb-3 text-xs text-text-muted">После комиссии платформы, по сохранённым операциям на этой странице. Период: {selectedPeriod === "all" ? "всё время" : selectedPeriod}. История операций ниже включает все периоды.</p>
+      <div className="mb-6 grid grid-cols-2 lg:grid-cols-4 gap-3.5">
         {stats.map((stat) => (
           <div
             key={stat.label}
@@ -250,6 +271,7 @@ export function FanProfilePage() {
         ))}
       </div>
 
+      </ReadSection>
       {/* Subscription Status */}
       {page.isSubscriber && (
         <div className="mb-6 rounded-[10px] border border-border bg-card p-4">
@@ -310,7 +332,7 @@ export function FanProfilePage() {
       <FanIntelligenceSection
         pageLabel={page.pageLabel}
         latestProfile={latestProfile}
-        latestProfileLoading={latestProfileLoading}
+        latestProfileLoading={latestProfileQuery.isLoading}
         intelligenceOpen={intelligenceOpen}
         onOpen={() => setIntelligenceOpen(true)}
         viewingHistoricalVersion={viewingHistoricalVersion}
@@ -318,10 +340,12 @@ export function FanProfilePage() {
         selectedVersionIsCurrent={selectedVersionIsCurrent}
         onBackToLatest={() => setSelectedProfileVersion(null)}
         profileLoading={profileLoading}
+        profileQuery={profileQuery}
         displayedProfile={displayedProfile}
         historyOpen={historyOpen}
         onToggleHistory={() => setHistoryOpen((value) => !value)}
-        profileVersionsLoading={profileVersionsLoading}
+        profileVersionsLoading={versionsQuery.isLoading}
+        versionsQuery={versionsQuery}
         profileVersions={profileVersions}
         onSelectProfileVersion={handleSelectProfileVersion}
       />
@@ -333,15 +357,18 @@ export function FanProfilePage() {
         onAddNote={handleAddNote}
         isAddingNote={createNote.isPending}
         timelineEvents={timelineEvents}
+        timelineQuery={timelineQuery}
         timelineDotColor={timelineDotColor}
       />
 
+      <ReadSection title="История операций" query={transactionsQuery}>
       <FanTransactionHistorySection
         txItems={txItems}
         txTotal={txTotal}
         txOffset={txOffset}
         onPageChange={setTxOffset}
       />
+      </ReadSection>
     </div>
   );
 }
@@ -357,10 +384,12 @@ function FanIntelligenceSection({
   selectedVersionIsCurrent,
   onBackToLatest,
   profileLoading,
+  profileQuery,
   displayedProfile,
   historyOpen,
   onToggleHistory,
   profileVersionsLoading,
+  versionsQuery,
   profileVersions,
   onSelectProfileVersion,
 }: {
@@ -374,14 +403,16 @@ function FanIntelligenceSection({
   selectedVersionIsCurrent: boolean;
   onBackToLatest: () => void;
   profileLoading: boolean;
+  profileQuery: SectionQuery;
   displayedProfile: FanProfileDocument | null;
   historyOpen: boolean;
   onToggleHistory: () => void;
   profileVersionsLoading: boolean;
+  versionsQuery: SectionQuery;
   profileVersions: FanProfileVersionListResponse["items"];
   onSelectProfileVersion: (version: number) => void;
 }) {
-  if (!latestProfile && !latestProfileLoading && !intelligenceOpen) {
+  if (!latestProfile && !latestProfileLoading && !profileQuery.isError && !intelligenceOpen) {
     return (
       <button
         type="button"
@@ -428,6 +459,7 @@ function FanIntelligenceSection({
       </div>
 
       <div className="mt-4 rounded-xl border border-border bg-hover-alt/40 p-5">
+        <ReadSection title="Досье фана" query={profileQuery}>
         {profileLoading ? (
           <p className="text-sm text-text-muted">
             {viewingHistoricalVersion ? "Loading selected version..." : "Loading intelligence profile..."}
@@ -446,6 +478,7 @@ function FanIntelligenceSection({
         ) : (
           <p className="text-sm text-text-muted">No intelligence profile yet</p>
         )}
+        </ReadSection>
       </div>
 
       <div className="mt-4">
@@ -464,6 +497,7 @@ function FanIntelligenceSection({
 
         {historyOpen && (
           <div className="mt-2 overflow-hidden rounded-lg border border-border bg-card">
+            <ReadSection title="Версии досье" query={versionsQuery}>
             {profileVersionsLoading ? (
               <div className="px-4 py-4 text-sm text-text-muted">Loading versions...</div>
             ) : profileVersions.length === 0 ? (
@@ -499,6 +533,7 @@ function FanIntelligenceSection({
                 })}
               </div>
             )}
+            </ReadSection>
           </div>
         )}
       </div>
@@ -513,6 +548,7 @@ function FanProfileActivityGrid({
   onAddNote,
   isAddingNote,
   timelineEvents,
+  timelineQuery,
   timelineDotColor,
 }: {
   notes: PageFanDetailResponse["page"]["notes"];
@@ -521,10 +557,11 @@ function FanProfileActivityGrid({
   onAddNote: () => void;
   isAddingNote: boolean;
   timelineEvents: TimelineEvent[];
+  timelineQuery: SectionQuery;
   timelineDotColor: (type: string) => string;
 }) {
   return (
-    <div className="mb-6 grid grid-cols-2 gap-4">
+    <div className="mb-6 grid grid-cols-1 md:grid-cols-2 gap-4">
       <div className="rounded-xl border border-border bg-card p-5">
         <div className="mb-3 flex items-center justify-between">
           <h2 className="text-sm font-bold text-text-primary">Notes</h2>
@@ -555,6 +592,7 @@ function FanProfileActivityGrid({
         </div>
 
         <textarea
+          aria-label="Новая заметка о фане"
           value={noteBody}
           onChange={(event) => onNoteBodyChange(event.target.value)}
           placeholder="Write a note..."
@@ -565,8 +603,10 @@ function FanProfileActivityGrid({
 
       <div className="rounded-xl border border-border bg-card p-5">
         <h2 className="mb-3 text-sm font-bold text-text-primary">Timeline</h2>
+        <p className="mb-3 text-xs text-text-muted">Последние 10 сохранённых операций.</p>
+        <ReadSection title="Последние операции" query={timelineQuery}>
         {timelineEvents.length === 0 && (
-          <p className="text-xs text-text-muted">No activity yet.</p>
+          <p className="text-xs text-text-muted">Сохранённых операций нет.</p>
         )}
         <div className="relative">
           {timelineEvents.length > 0 && (
@@ -593,6 +633,7 @@ function FanProfileActivityGrid({
             ))}
           </div>
         </div>
+        </ReadSection>
       </div>
     </div>
   );
@@ -610,7 +651,7 @@ function FanTransactionHistorySection({
   onPageChange: (offset: number) => void;
 }) {
   return (
-    <section className="overflow-hidden rounded-xl border border-border bg-card">
+    <section className="overflow-x-auto rounded-xl border border-border bg-card">
       <div className="flex items-center justify-between border-b border-border px-4 py-3">
         <h2 className="text-sm font-bold text-text-primary">
           Transaction History
@@ -636,7 +677,8 @@ function FanTransactionHistorySection({
           {txItems.length === 0 && (
             <tr>
               <td colSpan={4} className="px-4 py-8 text-center text-sm text-text-muted">
-                No transactions found.
+                {txOffset > 0 ? "На этой странице списка записей нет." : "No transactions found."}
+                {txOffset > 0 && <button type="button" className="ml-2 text-accent" onClick={() => onPageChange(0)}>К началу списка</button>}
               </td>
             </tr>
           )}
@@ -694,7 +736,7 @@ function FanProfileSkeleton() {
           <div className="mt-2 h-3 w-24 rounded bg-hover-alt animate-pulse" />
         </div>
       </div>
-      <div className="mb-6 grid grid-cols-4 gap-3.5">
+      <div className="mb-6 grid grid-cols-2 lg:grid-cols-4 gap-3.5">
         {Array.from({ length: 4 }, (_, i) => (
           <div key={i} className="rounded-[10px] border border-border bg-card p-4">
             <div className="h-3 w-16 rounded bg-hover-alt animate-pulse" />

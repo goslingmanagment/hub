@@ -1,5 +1,5 @@
 import { Link, useNavigate, useSearchParams } from "react-router";
-import { resolveSettingsTab, type SettingsTab } from "@/lib/navigation";
+import { buildSettingsSectionRoute, resolveSettingsTab, type SettingsTab } from "@/lib/navigation";
 import { CredentialsTab } from "./settings/CredentialsTab.js";
 import { SyncTab } from "./settings/SyncTab.js";
 import { CollectionTab } from "./settings/CollectionTab.js";
@@ -9,8 +9,13 @@ import { UsersTab } from "./settings/UsersTab.js";
 import { ConfigurationTab } from "./settings/ConfigurationTab.js";
 import { AiPersonasTab } from "./settings/AiPersonasTab.js";
 import { AgentKeysTab } from "./settings/AgentKeysTab.js";
+import { FeaturesTab } from "./settings/FeaturesTab.js";
 
 const sections: Record<SettingsTab, { label: string; description: string }> = {
+  features: {
+    label: "Возможности",
+    description: "",
+  },
   configuration: {
     label: "Работа Hub",
     description: "Настройте обновление данных, работу AI и другие возможности Hub.",
@@ -50,7 +55,7 @@ const sections: Record<SettingsTab, { label: string; description: string }> = {
 };
 
 const navigationGroups: { id: string; label: string; tabs: SettingsTab[] }[] = [
-  { id: "system", label: "Система", tabs: ["configuration", "sync", "collection"] },
+  { id: "system", label: "Система", tabs: ["features", "configuration", "sync", "collection"] },
   { id: "accounts", label: "Аккаунты и AI", tabs: ["models", "pages", "personas"] },
   { id: "access", label: "Доступ", tabs: ["credentials", "users", "agentKeys"] },
 ];
@@ -62,9 +67,7 @@ export function SettingsPage() {
   const activeSection = sections[activeTab];
 
   function sectionHref(tab: SettingsTab) {
-    const next = new URLSearchParams(searchParams);
-    next.set("tab", tab);
-    return `/settings?${next.toString()}`;
+    return buildSettingsSectionRoute(searchParams, tab);
   }
 
   return (
@@ -119,7 +122,7 @@ export function SettingsPage() {
           </label>
 
           <section aria-labelledby="settings-section-title" className="min-w-0">
-            <div className="mb-5">
+            <div className={activeTab === "features" ? "sr-only" : "mb-5"}>
               <h2 id="settings-section-title" className="hidden text-xl font-semibold tracking-tight text-text-primary lg:block">
                 {activeSection.label}
               </h2>
@@ -136,6 +139,7 @@ export function SettingsPage() {
             {activeTab === "users" && <UsersTab />}
             {activeTab === "agentKeys" && <AgentKeysTab />}
             {activeTab === "configuration" && <ConfigurationTab />}
+            {activeTab === "features" && <FeaturesTab />}
           </section>
         </div>
       </div>

@@ -230,7 +230,7 @@ export function PageSources({
                 <Link
                   id={`source-page-${page.pageId}`}
                   className="v1-external-link"
-                  to={buildPageRoute(page.pageLabel)}
+                  to={`${buildPageRoute(page.pageLabel)}?${new URLSearchParams({ period })}`}
                   state={{ backTo }}
                 >
                   Страница →

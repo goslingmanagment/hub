@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { mutationOptions, useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import type {
   WorkboardV2AiRunsResponse,
   WorkboardV2AiSettingsBody,
@@ -56,62 +56,84 @@ export function useWorkboardV2Lists(
   });
 }
 
-export function useWorkboardV2Contact(pageLabel: string) {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (body: { fanId: number; action?: "opened" | "handled" | "snoozed"; wasProductive?: boolean }) =>
+export interface WorkboardFanTarget {
+  readonly pageLabel: string;
+  readonly fanId: number;
+}
+
+// The target travels with the intent. A paused MutationObserver can receive new
+// hook options after navigation, so no mutation may take its page from a render.
+export function workboardContactMutationOptions(qc: QueryClient) {
+  return mutationOptions({
+    mutationFn: ({ pageLabel, ...body }: WorkboardFanTarget & { action?: "opened" | "handled" | "snoozed"; wasProductive?: boolean }) =>
       kernel.workboardV2Contact({ params: { pageLabel }, body }),
-    onSuccess: () => {
+    onSuccess: (_result, { pageLabel }) => {
       qc.invalidateQueries({ queryKey: ["workboard-v2", pageLabel] });
     },
   });
 }
 
-export function useWorkboardV2Recompute(pageLabel: string) {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: () =>
+export function useWorkboardV2Contact() {
+  return useMutation(workboardContactMutationOptions(useQueryClient()));
+}
+
+export function workboardRecomputeMutationOptions(qc: QueryClient) {
+  return mutationOptions({
+    mutationFn: ({ pageLabel }: { pageLabel: string }) =>
       kernel.workboardV2Recompute({ params: { pageLabel } }),
-    onSuccess: () => {
+    onSuccess: (_result, { pageLabel }) => {
       qc.invalidateQueries({ queryKey: ["workboard-v2", pageLabel] });
     },
   });
 }
 
-export function useWorkboardV2Snooze(pageLabel: string) {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (body: { fanId: number; days: number }) =>
+export function useWorkboardV2Recompute() {
+  return useMutation(workboardRecomputeMutationOptions(useQueryClient()));
+}
+
+export function workboardSnoozeMutationOptions(qc: QueryClient) {
+  return mutationOptions({
+    mutationFn: ({ pageLabel, ...body }: WorkboardFanTarget & { days: number }) =>
       kernel.workboardV2Snooze({
         params: { pageLabel },
         body: body as Parameters<typeof kernel.workboardV2Snooze>[0]["body"],
       }),
-    onSuccess: () => {
+    onSuccess: (_result, { pageLabel }) => {
       qc.invalidateQueries({ queryKey: ["workboard-v2", pageLabel] });
     },
   });
 }
 
-export function useWorkboardV2Unsnooze(pageLabel: string) {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (fanId: number) =>
+export function useWorkboardV2Snooze() {
+  return useMutation(workboardSnoozeMutationOptions(useQueryClient()));
+}
+
+export function workboardUnsnoozeMutationOptions(qc: QueryClient) {
+  return mutationOptions({
+    mutationFn: ({ pageLabel, fanId }: WorkboardFanTarget) =>
       kernel.workboardV2Unsnooze({ params: { pageLabel, fanId } }),
-    onSuccess: () => {
+    onSuccess: (_result, { pageLabel }) => {
       qc.invalidateQueries({ queryKey: ["workboard-v2", pageLabel] });
     },
   });
 }
 
-export function useWorkboardV2UndoContact(pageLabel: string) {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (fanId: number) =>
+export function useWorkboardV2Unsnooze() {
+  return useMutation(workboardUnsnoozeMutationOptions(useQueryClient()));
+}
+
+export function workboardUndoContactMutationOptions(qc: QueryClient) {
+  return mutationOptions({
+    mutationFn: ({ pageLabel, fanId }: WorkboardFanTarget) =>
       kernel.workboardV2UndoContact({ params: { pageLabel, fanId } }),
-    onSuccess: () => {
+    onSuccess: (_result, { pageLabel }) => {
       qc.invalidateQueries({ queryKey: ["workboard-v2", pageLabel] });
     },
   });
+}
+
+export function useWorkboardV2UndoContact() {
+  return useMutation(workboardUndoContactMutationOptions(useQueryClient()));
 }
 
 // ── Workboard v2 AI analytics (L2 closing classifier) ────────────────────────
@@ -124,7 +146,7 @@ export function useWorkboardV2Ai(
     queryKey: ["workboard-v2-ai", pageLabel],
     queryFn: () => kernel.workboardV2Ai({ params: { pageLabel } }),
     enabled: options.enabled ?? true,
-    refetchInterval: options.refetchInterval,
+    ...(options.refetchInterval === undefined ? {} : { refetchInterval: options.refetchInterval }),
   });
 }
 
@@ -161,10 +183,10 @@ export function useWorkboardV2AiRuns(
   } = {},
 ) {
   const ri = options.refetchInterval;
-  return useQuery({
+  return useQuery<WorkboardV2AiRunsResponse>({
     queryKey: ["workboard-v2-ai-runs"],
     queryFn: () => kernel.workboardV2AiRuns(),
     enabled: options.enabled ?? true,
-    refetchInterval: typeof ri === "function" ? (query) => ri(query.state.data) : ri,
+    ...(ri === undefined ? {} : { refetchInterval: typeof ri === "function" ? (query) => ri(query.state.data) : ri }),
   });
 }

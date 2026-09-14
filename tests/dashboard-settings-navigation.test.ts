@@ -14,10 +14,11 @@ vi.mock("../apps/dashboard/src/pages/settings/AiPersonasTab.tsx", () => ({ AiPer
 vi.mock("../apps/dashboard/src/pages/settings/UsersTab.tsx", () => ({ UsersTab: () => "content:users" }));
 vi.mock("../apps/dashboard/src/pages/settings/AgentKeysTab.tsx", () => ({ AgentKeysTab: () => "content:agentKeys" }));
 vi.mock("../apps/dashboard/src/pages/settings/ConfigurationTab.tsx", () => ({ ConfigurationTab: () => "content:configuration" }));
+vi.mock("../apps/dashboard/src/pages/settings/FeaturesTab.tsx", () => ({ FeaturesTab: () => "content:features" }));
 
 import { SettingsPage } from "../apps/dashboard/src/pages/SettingsPage.tsx";
 
-const tabs = ["credentials", "sync", "collection", "models", "personas", "pages", "users", "agentKeys", "configuration"];
+const tabs = ["credentials", "sync", "collection", "models", "personas", "pages", "users", "agentKeys", "configuration", "features"];
 
 function renderSettings(path: string) {
   return renderToStaticMarkup(createElement(

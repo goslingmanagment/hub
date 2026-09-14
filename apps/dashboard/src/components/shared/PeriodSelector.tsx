@@ -2,6 +2,7 @@ import { usePeriodStore, type PeriodOption } from "@/stores/periodStore";
 import { useSpenderPeriodStore, type SpenderPeriodOption } from "@/stores/spenderPeriodStore";
 import { useLocation, useSearchParams } from "react-router";
 import { overviewSearch, parseOverviewState } from "@/lib/overviewNavigation";
+import { resolveDashboardPeriod, resolveSpenderPeriod } from "@/lib/navigation";
 
 const dashboardOptions: { key: PeriodOption; label: string }[] = [
   { key: "today", label: "Today" },
@@ -34,28 +35,36 @@ export function PeriodSelector({ mode = "dashboard" }: PeriodSelectorProps) {
   const overview = parseOverviewState(search, dashboardPeriod.period);
 
   const selectedKey = mode === "topSupporters"
-    ? spenderPeriod.topSupportersPeriod
+    ? resolveSpenderPeriod(search.get("period"), spenderPeriod.topSupportersPeriod)
     : mode === "spender"
-      ? spenderPeriod.period
-      : isOverview ? overview.period : dashboardPeriod.period;
+      ? resolveSpenderPeriod(search.get("period"), spenderPeriod.period)
+      : isOverview ? overview.period : resolveDashboardPeriod(search.get("period"), dashboardPeriod.period);
   const options = mode === "dashboard" ? dashboardOptions : spenderOptions;
 
   function handleSelect(key: PeriodOption | SpenderPeriodOption) {
     if (mode === "topSupporters") {
       spenderPeriod.setTopSupportersPeriod(key as SpenderPeriodOption);
-      return;
-    }
-    if (mode === "spender") {
+    } else if (mode === "spender") {
       spenderPeriod.setPeriod(key as SpenderPeriodOption);
-      return;
+    } else {
+      dashboardPeriod.setPeriod(key as PeriodOption);
     }
-    dashboardPeriod.setPeriod(key as PeriodOption);
-    if (isOverview) setSearch(overviewSearch({ ...overview, period: key as PeriodOption }));
+    if (isOverview) setSearch(overviewSearch({ ...overview, period: key as PeriodOption }), { state: location.state });
+    else {
+      const next = new URLSearchParams(search);
+      next.set("period", key);
+      next.delete("offset");
+      next.delete("spendersOffset");
+      setSearch(next, { state: location.state });
+    }
   }
 
   return (
-    <div className="flex items-center gap-1" role="group" aria-label="Reporting period">
-      {options.map((opt) => {
+    <div>
+      <select aria-label="Период отчёта" className="min-h-11 max-w-32 rounded-lg border border-border bg-card px-2 text-sm sm:hidden" value={selectedKey} onChange={(event) => handleSelect(event.target.value as PeriodOption | SpenderPeriodOption)}>
+        {options.map((opt) => <option key={opt.key} value={opt.key}>{opt.key === "today" ? "Сегодня" : opt.key === "all" ? "Всё время" : `${opt.key.slice(0, -1)} дней`}</option>)}
+      </select>
+      <div className="hidden items-center gap-1 sm:flex" role="group" aria-label="Reporting period">{options.map((opt) => {
         const isActive = selectedKey === opt.key;
         return (
           <button
@@ -72,7 +81,7 @@ export function PeriodSelector({ mode = "dashboard" }: PeriodSelectorProps) {
             {opt.label}
           </button>
         );
-      })}
+      })}</div>
     </div>
   );
 }

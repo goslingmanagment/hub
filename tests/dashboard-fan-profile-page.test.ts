@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter, Route, Routes } from "../apps/dashboard/node_modules/react-router/dist/development/index.js";
 
 const queryMocks = vi.hoisted(() => ({
+  useAuthMe: vi.fn(),
   usePageFanDetail: vi.fn(),
   usePageFanProfile: vi.fn(),
   usePageFanProfileVersion: vi.fn(),
@@ -44,6 +45,9 @@ function renderPage() {
 describe("FanProfilePage", () => {
   beforeEach(() => {
     storeMocks.period = "30d";
+    queryMocks.useAuthMe.mockReset().mockReturnValue({
+      data: { user: { id: 1, role: "owner" } },
+    });
     queryMocks.usePageFanDetail.mockReset();
     queryMocks.usePageFanProfile.mockReset();
     queryMocks.usePageFanProfileVersion.mockReset();

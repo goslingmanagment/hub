@@ -3,6 +3,7 @@ import { useAdminLogs } from "@/api/queries";
 import { FilterButtons } from "@/components/shared/FilterButtons";
 import { EventDetailPanel, getEventDisplaySeverity, SEVERITY_STYLES } from "@/components/shared/EventDetailPanel";
 import { StatusPanel } from "@/components/shared/StatusPanel";
+import { StaleDataNotice } from "@/components/shared/StaleDataNotice";
 import { formatRelativeTime } from "@/lib/format";
 
 const SEVERITY_FILTERS = [
@@ -17,11 +18,11 @@ export function LogPage() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const params = {
-    severity: severity === "all" ? undefined : severity,
+    ...(severity === "all" ? {} : { severity }),
     limit: 100,
   };
 
-  const { data, isLoading, isError } = useAdminLogs(params);
+  const { data, isLoading, isError, error } = useAdminLogs(params);
 
   function resolveEventCode(details: Record<string, unknown> | null, fallback: string | null) {
     return typeof details?.code === "string" ? details.code : fallback;
@@ -41,6 +42,7 @@ export function LogPage() {
 
   return (
     <div>
+      {isError && <StaleDataNotice error={error} className="mb-4" />}
       <div className="mb-5">
         <h1 className="text-xl font-extrabold text-text-primary">Logs</h1>
         <p className="text-sm text-text-muted mt-1">Recent sync run events</p>
@@ -54,7 +56,8 @@ export function LogPage() {
         />
       </div>
 
-      <section className="overflow-hidden rounded-xl border border-border bg-card">
+      <p className="mb-2 text-xs text-text-muted">Up to 100 recent matching records. This is a bounded view, not the full history.</p>
+      <section className="overflow-x-auto rounded-xl border border-border bg-card">
         <table className="w-full border-collapse">
           <thead>
             <tr className="bg-hover-alt">
@@ -91,6 +94,14 @@ export function LogPage() {
                   <tr
                     className="cursor-pointer border-t border-border transition-colors hover:bg-hover"
                     onClick={() => setExpandedId(isExpanded ? null : rowId)}
+                    tabIndex={0}
+                    aria-expanded={isExpanded}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        setExpandedId(isExpanded ? null : rowId);
+                      }
+                    }}
                   >
                     <td className="px-4 py-3 text-sm text-text-secondary whitespace-nowrap">
                       {log.emittedAt ? formatRelativeTime(log.emittedAt) : "\u2014"}

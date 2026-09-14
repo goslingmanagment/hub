@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useSearchParams } from "react-router";
 import { NotificationsIncidentsTab } from "./notifications/NotificationsIncidentsTab.js";
 import { NotificationsReportsTab } from "./notifications/NotificationsReportsTab.js";
 import { NotificationsSettingsTab } from "./notifications/NotificationsSettingsTab.js";
@@ -12,7 +12,9 @@ const tabs: { key: Tab; label: string }[] = [
 ];
 
 export function NotificationsPage() {
-  const [activeTab, setActiveTab] = useState<Tab>("settings");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const requestedTab = searchParams.get("tab");
+  const activeTab = tabs.find((tab) => tab.key === requestedTab)?.key ?? "settings";
 
   return (
     <div>
@@ -21,8 +23,14 @@ export function NotificationsPage() {
       <div className="mb-5 flex items-center gap-1 border-b border-border">
         {tabs.map((tab) => (
           <button
+            type="button"
             key={tab.key}
-            onClick={() => setActiveTab(tab.key)}
+            aria-current={activeTab === tab.key ? "page" : undefined}
+            onClick={() => {
+              const next = new URLSearchParams(searchParams);
+              next.set("tab", tab.key);
+              setSearchParams(next);
+            }}
             className={`px-4 py-2 text-sm font-medium transition-colors border-b-2 -mb-px ${
               activeTab === tab.key
                 ? "border-accent text-accent"
