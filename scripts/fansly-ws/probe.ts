@@ -3,7 +3,7 @@ import { Pool } from "pg";
 
 import { createDb } from "@agency_hub_core/db";
 import { loadConfig } from "@agency_hub_core/shared";
-import { readProbeGeneration, readProbeSnapshot, type resolveFanslyProbeContext } from "../../apps/runtime/src/services/egress/fansly-probe-context.ts";
+import { readProbeGeneration, readProbeSnapshot } from "../../apps/runtime/src/services/egress/fansly-probe-context.ts";
 import { openFanslyProbeSocket } from "../../apps/runtime/src/services/egress/fansly-probe-socket.ts";
 import { createProbeTransportDiagnostics } from "../../apps/runtime/src/services/egress/fansly-probe-diagnostics.ts";
 import { correlationKeyFingerprint, readCorrelationKey } from "./correlation-key.ts";
@@ -61,16 +61,11 @@ export async function runStoredFanslyProbe(input: {
   });
   pool.on("error", () => input.controller.abort());
   const db = createDb(pool);
-  const contexts: Awaited<ReturnType<typeof resolveFanslyProbeContext>>[] = [];
-
-  async function readContext() {
-    const context = await readProbeSnapshot(db, config, input.pageLabel);
-    contexts.push(context);
-    return context;
-  }
+  let before: Awaited<ReturnType<typeof readProbeSnapshot>> | undefined;
 
   try {
-    const before = await readContext();
+    before = await readProbeSnapshot(db, config, input.pageLabel);
+    const context = before;
     const bindingPreflight = binding === undefined ? undefined
       : await verifyBindingBeforeConnect(binding, before, input.pageLabel,
         () => readProbeGeneration(db, input.pageLabel));
@@ -79,7 +74,7 @@ export async function runStoredFanslyProbe(input: {
     const observation = await observeFanslyProbe({
       connect: () => {
         connectionAttempts++;
-        return openFanslyProbeSocket(before.egress, transportDiagnostics);
+        return openFanslyProbeSocket(context.egress, transportDiagnostics);
       },
       token: before.token,
       key,
@@ -90,8 +85,7 @@ export async function runStoredFanslyProbe(input: {
     let generationUnchanged: boolean | null = null;
     if (!input.controller.signal.aborted) {
       try {
-        const after = await readContext();
-        generationUnchanged = before.generation === after.generation;
+        generationUnchanged = before.generation === await readProbeGeneration(db, input.pageLabel);
       } catch { /* Failed post-read leaves continuity unknown. */ }
     }
     return {
@@ -111,10 +105,8 @@ export async function runStoredFanslyProbe(input: {
       observation,
     };
   } finally {
-    // Each context owns a fresh dispatcher, independent of the REST adapter.
-    // An upgraded WS may outlive dispatcher destruction: the isolated process
-    // must also have a hard deadline, including during cleanup.
-    await Promise.allSettled(contexts.map((context) => context.egress.dispatcher?.destroy()));
+    // Keep cleanup best-effort; the isolated process also has a hard deadline.
+    await Promise.allSettled([before?.egress.dispatcher?.destroy()]);
     await pool.end();
   }
 }

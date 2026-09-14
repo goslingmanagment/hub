@@ -14,14 +14,14 @@ class TestSocket extends EventTarget {
   receive(data: unknown) { this.dispatchEvent(new MessageEvent("message", { data })); }
 }
 
-function start(phase: ContinuityPhase = "after_short_gap", expectedGeneration = generation) {
+function start(phase: ContinuityPhase = "after_short_gap") {
   const socket = new TestSocket();
   const connect = vi.fn(() => socket);
   const controller = new AbortController();
   const lines: string[] = [];
   const readGeneration = vi.fn(async () => generation);
   const result = observeFanslyContinuity({
-    phase, generation, expectedGeneration, token: syntheticSecret, key: Buffer.alloc(32, 1),
+    phase, generation, token: syntheticSecret, key: Buffer.alloc(32, 1),
     connect, controller, readGeneration, writeLine: (line) => lines.push(line),
   });
   return { socket, connect, controller, lines, readGeneration, result,
@@ -72,13 +72,6 @@ describe("W0 continuity collection", () => {
       state: failure === "changed" ? "changed" : "unavailable" }));
     expect(run.lines.join("")).not.toContain(syntheticSecret);
     expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it("refuses a resumed phase from another generation before connecting", async () => {
-    const run = start("after_long_gap", "b".repeat(64));
-    expect(await run.result).toBe(false);
-    expect(run.connect).not.toHaveBeenCalled();
-    expect(run.records().at(-1)).toMatchObject({ reason: "generation_changed_before_connect" });
   });
 
   it("does not extend the connection for repeated t=1 frames or a wall-clock change", async () => {
@@ -132,7 +125,7 @@ describe("W0 continuity collection", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("the long CLI accepts only Lilly-1 and fixed named phases, requiring the previous generation after gaps", () => {
+  it("requires the binding receipt for every fixed phase and rejects a second generation input", () => {
     const legacy = ["--page", "lilly-1", "--phase", "continuous", "--correlation-key-file", "key"];
     expect(() => parseContinuityArgs(legacy)).toThrow();
     const first = [...legacy, "--binding-receipt-file", "binding.json"];
@@ -140,8 +133,9 @@ describe("W0 continuity collection", () => {
     expect(() => parseContinuityArgs([...first, "--seconds", "21600"])).toThrow();
     expect(() => parseContinuityArgs(first.map((value) => value === "lilly-1" ? "ari-1" : value))).toThrow();
     const resumed = first.map((value) => value === "continuous" ? "after_short_gap" : value);
-    expect(() => parseContinuityArgs(resumed)).toThrow();
-    expect(parseContinuityArgs([...resumed, "--expected-generation", generation]))
-      .toMatchObject({ expectedGeneration: generation });
+    expect(parseContinuityArgs(resumed)).toMatchObject({
+      phase: "after_short_gap", bindingReceiptFile: "binding.json",
+    });
+    expect(() => parseContinuityArgs([...resumed, "--expected-generation", generation])).toThrow();
   });
 });

@@ -52,7 +52,7 @@ function run(kind: "short" | "long") {
   return kind === "short" ? runStoredFanslyProbe({ pageLabel: "lilly-1", durationMs: 5_000,
     bindingReceiptFile: receiptPath, controller })
     : runStoredFanslyContinuity({ pageLabel: "lilly-1", phase: "continuous", correlationKeyFile: keyPath,
-      bindingReceiptFile: receiptPath, expectedGeneration: undefined }, controller, () => {});
+      bindingReceiptFile: receiptPath }, controller, () => {});
 }
 
 describe("W0 preflight and receiver boundary", () => {
@@ -75,13 +75,42 @@ describe("W0 preflight and receiver boundary", () => {
     expect(spies.generation.mock.invocationCallOrder[0]).toBeLessThan(spies.socket.mock.invocationCallOrder[0]!);
     expect(spies.inspect).not.toHaveBeenCalled();
     expect(spies.end).toHaveBeenCalledOnce();
+    expect(spies.snapshot).toHaveBeenCalledOnce();
+    expect(spies.destroy).toHaveBeenCalledOnce();
+  });
+
+  it.each(["continuous", "after_short_gap", "after_long_gap"] as const)(
+    "%s refuses a snapshot from another generation using the original binding receipt", async (phase) => {
+      spies.snapshot.mockResolvedValue({ pageId: 7, expectedAccountId: "123", generation: "b".repeat(64),
+        egress: { dispatcher: { destroy: spies.destroy } } });
+      await expect(runStoredFanslyContinuity({ pageLabel: "lilly-1", phase,
+        correlationKeyFile: keyPath, bindingReceiptFile: receiptPath }, new AbortController(), () => {}))
+        .rejects.toThrow(/^binding_snapshot_mismatch$/);
+      expect(spies.socket).not.toHaveBeenCalled();
+      expect(spies.generation).not.toHaveBeenCalled();
+      expect(spies.destroy).toHaveBeenCalledOnce();
+      expect(spies.end).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["changed", "unavailable"])("short post-read keeps %s generation evidence without another dispatcher", async (state) => {
+    spies.generation.mockResolvedValueOnce(bindingGeneration);
+    if (state === "changed") spies.generation.mockResolvedValueOnce("b".repeat(64));
+    else spies.generation.mockRejectedValueOnce(new Error("SYNTHETIC_SECRET"));
+    const result = await run("short");
+    expect(result).toMatchObject({ generationUnchanged: state === "changed" ? false : null, restRequests: 0 });
+    expect(spies.snapshot).toHaveBeenCalledOnce();
+    expect(spies.generation).toHaveBeenCalledTimes(2);
+    expect(spies.destroy).toHaveBeenCalledOnce();
+    expect(JSON.stringify(result)).not.toContain("SYNTHETIC_SECRET");
   });
 
   it("the legacy short remains unverified with zero REST and no preflight read", async () => {
     const result = await runStoredFanslyProbe({ pageLabel: "lilly-1", durationMs: 5_000, controller: new AbortController() });
     expect(result).toMatchObject({ accountBinding: "unverified", restRequests: 0, connectionAttempts: 1 });
     expect(result).not.toHaveProperty("bindingPreflight");
-    expect(spies.generation).not.toHaveBeenCalled();
+    expect(spies.generation).toHaveBeenCalledOnce();
+    expect(spies.socket.mock.invocationCallOrder[0]).toBeLessThan(spies.generation.mock.invocationCallOrder[0]!);
     expect(spies.inspect).not.toHaveBeenCalled();
   });
 
