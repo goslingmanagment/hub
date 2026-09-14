@@ -102,6 +102,11 @@
 // deliberately coupled. List readers resolve row by row (no batch loader in
 // this slice), so a replay page of 200 referenced rows costs 200 extra queries;
 // that is the number the mode's costWarning quotes.
+// Canonical webhook binding waits group up to eight pointer-only envelopes
+// proven unable to append under the current binding map; mapped/export rows
+// retain the single-row path. Bodies above 512 KiB logical JSON and
+// all inline/dual-copy envelopes retain the single-row path. No body or failure
+// result is retained across pages/runs, and parity counters keep per-row meaning.
 //
 // THE OTHER KIND OF READ, and where it went. Sites where Postgres digs INSIDE
 // the body and returns a FIELD have no body for this seam to route, and they
@@ -180,6 +185,8 @@ import {
   canonicalizeCaptureJson,
   capturePayloadRefFromColumns,
   readEnvelopeCapturePayload,
+  readEnvelopeCapturePayloadBatch,
+  type EnvelopeCapturePayloadRead,
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
@@ -362,6 +369,15 @@ type CatalogRead =
   | { ok: true; json: unknown }
   | { ok: false; reason: CaptureCasReadMismatchReason };
 
+function catalogReadResult(result: EnvelopeCapturePayloadRead): CatalogRead {
+  switch (result.status) {
+    case "loaded": return { ok: true, json: result.json };
+    case "object_missing": return { ok: false, reason: "object_missing" };
+    case "body_missing": return { ok: false, reason: "body_missing" };
+    default: return { ok: false, reason: "representation_mismatch" };
+  }
+}
+
 /** The single catalog read, with every throw already absorbed. Nothing above
  *  this function may fail because of the catalog. */
 async function loadCatalogBody(
@@ -373,16 +389,7 @@ async function loadCatalogBody(
       envelope: read.envelope,
       ref: read.ref,
     });
-    switch (result.status) {
-      case "loaded":
-        return { ok: true, json: result.json };
-      case "object_missing":
-        return { ok: false, reason: "object_missing" };
-      case "body_missing":
-        return { ok: false, reason: "body_missing" };
-      default:
-        return { ok: false, reason: "representation_mismatch" };
-    }
+    return catalogReadResult(result);
   } catch {
     return { ok: false, reason: "read_error" };
   }
@@ -457,6 +464,14 @@ export async function resolveCapturePayload(
   app: SeamContext,
   read: CapturePayloadEnvelopeRead,
 ): Promise<unknown> {
+  return resolveCapturePayloadRead(app, read);
+}
+
+async function resolveCapturePayloadRead(
+  app: SeamContext,
+  read: CapturePayloadEnvelopeRead,
+  pointerRead?: CatalogRead,
+): Promise<unknown> {
   const mode = readMode;
   // No reference: there is nothing to resolve in any mode, and this is still
   // almost every row in the system. One null check and return — no query, no
@@ -487,7 +502,7 @@ export async function resolveCapturePayload(
     if (mode === "shadow") {
       counters.shadowSkippedNullInline += 1;
     }
-    const stored = await loadCatalogBody(app.db, resolvable);
+    const stored = pointerRead ?? await loadCatalogBody(app.db, resolvable);
     if (stored.ok) {
       counters.servedNullInline += 1;
       return stored.json;
@@ -586,6 +601,64 @@ export async function resolveCapturePayloadRow<
     ref: row.payloadRef,
   });
   return payload === row.payload ? row : { ...row, payload };
+}
+
+/** A page-scoped resolver for sequential replay. The caller supplies only
+ * envelopes safe to prefetch; rows outside that set keep individual reads.
+ * Pointer-only rows are read
+ * in groups of at most eight; inline and dual-copy rows keep their ordinary
+ * path, including shadow parity. The repository defers large bodies to the
+ * single read. Results live only until their row is visited, never across a
+ * page/run, so repaired references, bodies and availability are read afresh.
+ * A failed batch falls back to per-row reads and their existing fault handling. */
+export function createCapturePayloadRowResolver<
+  T extends { id: number; payload: unknown; payloadRef: CapturePayloadRef | null },
+>(app: SeamContext, envelope: CapturePayloadEnvelopeKind, rows: readonly T[]): (row: T) => Promise<T> {
+  const positions = new Map(rows.map((row, index) => [row, index]));
+  let batchStart = -1;
+  let batchEnd = -1;
+  let reads: Array<{ ref: CapturePayloadRef; read: CatalogRead } | undefined> = [];
+  return async row => {
+    const position = positions.get(row);
+    if (position === undefined || row.payloadRef === null || !inlineAbsent(row.payload)) {
+      return resolveCapturePayloadRow(app, envelope, row.id, row);
+    }
+    if (position < batchStart || position >= batchEnd) {
+      batchStart = position;
+      batchEnd = Math.min(rows.length, position + 8);
+      reads = [];
+      const candidates = rows.slice(batchStart, batchEnd).flatMap((candidate, offset) =>
+        candidate.payloadRef !== null && inlineAbsent(candidate.payload)
+          ? [{ offset, ref: { ...candidate.payloadRef } }]
+          : []);
+      if (candidates.length > 1) {
+        try {
+          const results = await readEnvelopeCapturePayloadBatch(app.db, {
+            envelope, refs: candidates.map(entry => entry.ref),
+          });
+          for (const [index, result] of results.entries()) {
+            if (result.status !== "deferred") reads[candidates[index]!.offset] = {
+              ref: candidates[index]!.ref, read: catalogReadResult(result),
+            };
+          }
+        } catch {
+          // The normal per-envelope seam owns retryable read failures and
+          // null-inline counters. One batch failure must not reject eight rows.
+          reads = [];
+        }
+      }
+    }
+    const prefetched = reads[position - batchStart];
+    const ref = row.payloadRef;
+    const pointerRead = prefetched !== undefined && ref !== null
+      && prefetched.ref.bucketMonth === ref.bucketMonth
+      && prefetched.ref.objectId === ref.objectId ? prefetched.read : undefined;
+    reads[position - batchStart] = undefined;
+    const payload = await resolveCapturePayloadRead(app, {
+      envelope, envelopeId: row.id, inline: row.payload, ref,
+    }, pointerRead);
+    return payload === row.payload ? row : { ...row, payload };
+  };
 }
 
 /**

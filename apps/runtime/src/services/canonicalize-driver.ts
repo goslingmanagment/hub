@@ -31,7 +31,7 @@ import {
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
-import { isCapturePayloadUnavailable, resolveCapturePayloadRow } from "./payload-reader.ts";
+import { createCapturePayloadRowResolver, isCapturePayloadUnavailable, resolveCapturePayloadRow } from "./payload-reader.ts";
 import {
   CANONICALIZER_FAMILIES,
   type CanonicalizerFamily,
@@ -290,6 +290,15 @@ function sweepCursorKey(family: CanonicalizerFamily, options: CanonicalizationRu
   return `${family.source}:${family.lane}:v${family.version}:${createHash("sha256").update(scope).digest("hex")}`;
 }
 
+function resolveObservationAccountId(
+  row: ReplayObservationRow,
+  accountIdByNativeRef: ReadonlyMap<string, number>,
+): number | null {
+  return row.accountId ?? (row.nativeAccountRef
+    ? accountIdByNativeRef.get(`${row.platform}:${row.nativeAccountRef}`) ?? null
+    : null);
+}
+
 /**
  * Where the NEXT budgeted sweep starts its family rotation — the `source:lane`
  * of a family, or null for "the registry head" (defect 2026-08-22).
@@ -396,6 +405,14 @@ function createPartitionGate(
   };
 }
 
+interface FamilyRunResult {
+  budgetExhausted: boolean;
+  /** Nonempty pages, charged to the same allowance across both passes. */
+  pagesUsed: number;
+  /** An empty/partial page proved the end and wrapped this pass's cursor. */
+  reachedEnd: boolean;
+}
+
 async function runFamily(
   app: Pick<AppContext, "db" | "logger">,
   family: CanonicalizerFamily,
@@ -410,14 +427,14 @@ async function runFamily(
   /** Epoch ms after which this family must take no NEW page; null = no budget. */
   deadlineAt: number | null,
   pass: "unparsed" | "replay" | null = null,
-): Promise<boolean> {
+): Promise<FamilyRunResult> {
   const kinds = options.kinds !== undefined
     ? (family.kinds === null
       ? options.kinds
       : options.kinds.filter((kind) => family.kinds!.includes(kind)))
     : family.kinds ?? undefined;
   if (options.kinds !== undefined && kinds !== undefined && kinds.length === 0) {
-    return false;
+    return { budgetExhausted: false, pagesUsed: 0, reachedEnd: true };
   }
   const belowParseVersion = options.belowParseVersion ?? family.version;
   const now = options.now ?? new Date();
@@ -440,25 +457,59 @@ async function runFamily(
     const passes: Array<"unparsed" | "replay"> = turn.afterId === 1
       ? ["replay", "unparsed"] : ["unparsed", "replay"];
     let remainingPages = maxPages;
+    const results: FamilyRunResult[] = [];
     for (const [index, nextPass] of passes.entries()) {
       turn = await advanceCanonicalizeSweepCursor(app.db, turn, nextPass === "unparsed" ? 1 : null);
       const passDeadlineAt = index === 0 && deadlineAt !== null
         ? Date.now() + Math.max(0, Math.floor((deadlineAt - Date.now()) / 2)) : deadlineAt;
-      const scannedBefore = totals.scanned;
-      await runFamily(app, family, {
+      const result = await runFamily(app, family, {
         ...options, maxPagesPerFamily: index === 0 ? Math.floor(maxPages / 2) : remainingPages,
       }, totals, runContext, partitionGate, passDeadlineAt, nextPass);
-      remainingPages -= Math.ceil((totals.scanned - scannedBefore) / pageSize);
-      if (deadlineAt !== null && Date.now() >= deadlineAt) return true;
+      results.push(result);
+      remainingPages -= result.pagesUsed;
+      if (deadlineAt !== null && Date.now() >= deadlineAt) {
+        return { budgetExhausted: true, pagesUsed: maxPages - remainingPages, reachedEnd: false };
+      }
+    }
+    // Both reserved turns take precedence. If the first stopped at its page
+    // or half-time allowance, give it ONE continuation using what the second
+    // left unused. Its forward cursor still names the next page. Never resume
+    // a pass that reached the end: its cursor has wrapped, so that would read
+    // the same unstampable prefix again in this run.
+    if (remainingPages > 0 && !results[0]!.reachedEnd) {
+      // The deadline was checked after the second pass, before this callee's
+      // guaranteed first page. Preserve crash/overshoot fairness before work.
+      turn = await advanceCanonicalizeSweepCursor(app.db, turn, passes[0] === "unparsed" ? 1 : null);
+      if (deadlineAt !== null && Date.now() >= deadlineAt) {
+        return { budgetExhausted: true, pagesUsed: maxPages - remainingPages, reachedEnd: false };
+      }
+      results[0] = await runFamily(app, family, {
+        ...options, maxPagesPerFamily: remainingPages,
+      }, totals, runContext, partitionGate, deadlineAt, passes[0]);
+      remainingPages -= results[0].pagesUsed;
+      if (deadlineAt !== null && Date.now() >= deadlineAt) {
+        return { budgetExhausted: true, pagesUsed: maxPages - remainingPages, reachedEnd: false };
+      }
     }
     // Both passes got their turn; return to ordinary capture-first order.
     if (turn.afterId !== null) await advanceCanonicalizeSweepCursor(app.db, turn, null);
-    return false;
+    return {
+      budgetExhausted: false, pagesUsed: maxPages - remainingPages,
+      reachedEnd: results.every(result => result.reachedEnd),
+    };
   }
   const cursorKey = `${pass === "unparsed" ? "unparsed:" : ""}${sweepCursorKey(family, options)}`;
+  // Only the split replay pass excludes version zero: those pending captures
+  // have their own pass, including bodies that cannot yet parse or map.
+  // Ordinary replay/CLI keeps its original floor and can still repair them.
+  const atLeastParseVersion = pass === "replay"
+    ? Math.max(1, family.minimumParseVersion ?? 0)
+    : family.minimumParseVersion;
   let cursor = useCursor ? await getCanonicalizeSweepCursor(app.db, cursorKey) : null;
   let afterId: number | null = cursor ? cursor.afterId : options.afterId ?? null;
   let budgetExhausted = false;
+  let pagesUsed = 0;
+  let reachedEnd = false;
   const checkedAcceptedLedgers = new Set<number>();
   for (let pageIndex = 0; pageIndex < maxPages; pageIndex += 1) {
     // The budget, checked between PAGES only (never mid-row). `pageIndex > 0`
@@ -475,7 +526,7 @@ async function runFamily(
       // CLI's belowParseVersion override keeps its original stamp semantics.
       belowParseVersion: pass === "unparsed" ? 1 : belowParseVersion,
       ...(options.observationId !== undefined ? { observationId: options.observationId } : {}),
-      ...(family.minimumParseVersion === undefined ? {} : { atLeastParseVersion: family.minimumParseVersion }),
+      ...(atLeastParseVersion === undefined ? {} : { atLeastParseVersion }),
       source: family.source,
       ...(kinds !== undefined ? { kinds } : {}),
       accountId: options.accountId ?? null,
@@ -486,12 +537,27 @@ async function runFamily(
       limit: pageSize,
     });
     if (rows.length === 0) {
+      reachedEnd = true;
       if (cursor && cursor.afterId !== null) {
         await advanceCanonicalizeSweepCursor(app.db, cursor, null);
       }
       break;
     }
+    pagesUsed += 1;
     afterId = rows[rows.length - 1]!.id;
+    // Prefetch only facts that cannot append under this run's binding map.
+    // Mapped bodies must be read at their own turn: retaining one across an
+    // earlier row's processing would widen the read-to-erasure race. Exports
+    // resolve their target accounts from the body, so they are never eligible.
+    const bindingWaitRows = family.source === "webhook" ? rows.filter(row =>
+      row.accountId === null && row.platform !== null && row.platform.length > 0
+      && row.nativeAccountRef !== null && row.nativeAccountRef.length > 0
+      && !totals.bindingConflicts.includes(row.nativeAccountRef)
+      && !row.kind.startsWith("data_exports.")
+      && resolveObservationAccountId(row, runContext.accountIdByNativeRef) === null) : [];
+    const resolvePayload = family.source === "webhook"
+      ? createCapturePayloadRowResolver(app, "observation", bindingWaitRows)
+      : (row: ReplayObservationRow) => resolveCapturePayloadRow(app, "observation", row.id, row);
 
     for (const row of rows) {
       totals.scanned += 1;
@@ -510,15 +576,23 @@ async function runFamily(
         // G5 slice 2: resolve the body through the read seam BEFORE the shape
         // gate, so the family sees exactly the bytes the mode says are
         // canonical. `inline` returns the same row object untouched.
-        const observation = await resolveCapturePayloadRow(app, "observation", row.id, row);
+        const observation = await resolvePayload(row);
         // Shape gate BEFORE anything else: a payload the family cannot read
         // must not be stamped consumed. Stamping it would delete it from
         // every future replay just as surely as a DROP would — the exact
         // failure the parse_version contract exists to prevent.
-        if (family.canParse !== undefined && !family.canParse(observation)) {
+        // Some shape gates already perform the full parse. Keep that one
+        // result local to this observation so accepted drafts and rejection
+        // diagnostics do not repeat aggregation, sorting and fingerprints.
+        const parsed = family.parse?.(observation);
+        const rejection = parsed !== undefined
+          ? parsed.rejection
+          : family.canParse !== undefined && !family.canParse(observation)
+            ? family.parseRejection?.(observation) ?? { code: "unclassified" }
+            : null;
+        if (rejection !== null) {
           totals.skippedUnparseable += 1;
-          const rejection = family.parseRejection?.(observation) ?? null;
-          const reasonCode = rejection?.code ?? "unclassified";
+          const reasonCode = rejection.code ?? "unclassified";
           // The worker logs the whole run result. Bound this list so a broad
           // version bump over a poison corpus cannot turn diagnostics into its
           // own log-volume incident.
@@ -547,16 +621,13 @@ async function runFamily(
           }
           acceptedPostRefs = new Set(await listObservedPostRefsForCapture(app.db, row.accountId, row.id));
         }
-        const drafts = family.canonicalize(observation, {
+        const drafts = (parsed?.events ?? family.canonicalize(observation, {
           ...runContext, ...(acceptedPostRefs === undefined ? {} : { acceptedPostRefs }),
-        })
+        }))
           .map((draft) => clampDraftOccurredAt(draft, row.receivedAt, now));
         // Capture-first rows (webhook) carry only the vendor account ref;
         // resolve it against the page map before the unmapped check.
-        const accountId = row.accountId
-          ?? (row.nativeAccountRef
-            ? runContext.accountIdByNativeRef.get(`${row.platform}:${row.nativeAccountRef}`) ?? null
-            : null);
+        const accountId = resolveObservationAccountId(row, runContext.accountIdByNativeRef);
 
         // Export webhooks are team-level, with an explicit account_ids list.
         // Attribute the same source fact only to those named accounts; an
@@ -679,11 +750,11 @@ async function runFamily(
       }
     }
 
-    const reachedEnd = rows.length < pageSize;
+    reachedEnd = rows.length < pageSize;
     if (cursor) cursor = await advanceCanonicalizeSweepCursor(app.db, cursor, reachedEnd ? null : afterId);
     if (reachedEnd) break;
   }
-  return budgetExhausted;
+  return { budgetExhausted, pagesUsed, reachedEnd };
 }
 
 /** One global latch; CLI/test stubs without config only log. Never called in dry-run. */
@@ -791,7 +862,7 @@ export async function runCanonicalization(
     // Family isolation: a structural failure in one family (e.g. its list
     // query dying on a transient error) must not stall the other sources.
     try {
-      const budgetExhausted = await runFamily(
+      const { budgetExhausted } = await runFamily(
         app,
         family,
         options,

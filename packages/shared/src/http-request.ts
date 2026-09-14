@@ -1,4 +1,9 @@
-import { setTimeout as delay } from "node:timers/promises";
+import {
+  assertHttpRequestActive,
+  getHttpRequestSignal,
+  waitForHttpRequestDelay,
+  waitForHttpRequestPermit,
+} from "./http-request-scope.ts";
 
 import type {
   HttpRequestEvent,
@@ -61,11 +66,15 @@ export async function executeObservedRequest<TResponse, TResult>(input: {
   }) => ObservedRequestOutcome<TResult> | Promise<ObservedRequestOutcome<TResult>>;
 }) {
   const retries = input.retries ?? 3;
+  const signal = getHttpRequestSignal();
 
   for (let attempt = 0; attempt <= retries; attempt += 1) {
     const attemptNumber = attempt + 1;
     const retriesRemaining = retries - attempt;
-    const rateLimitWaitMs = await input.waitForRateLimit?.() ?? 0;
+    const rateLimitWaitMs = await waitForHttpRequestPermit(async () => (
+      await input.waitForRateLimit?.() ?? 0
+    ));
+    assertHttpRequestActive();
     const startedAt = new Date();
 
     await emitRequestEvent(input.observer, {
@@ -83,13 +92,23 @@ export async function executeObservedRequest<TResponse, TResult>(input: {
 
     let response: TResponse;
     try {
+      // Observers may persist admission and yield to a lease heartbeat.
+      assertHttpRequestActive();
       response = await input.execute();
     } catch (error) {
       const durationMs = Date.now() - startedAt.getTime();
-      const outcome = await input.onTransportError(error, {
-        attemptNumber,
-        retriesRemaining,
-      });
+      const cancelledBeforeDispatch = signal?.aborted && error === signal.reason;
+      const outcome: ObservedTransportOutcome = cancelledBeforeDispatch
+        ? {
+          kind: "failed",
+          failureKind: "policy",
+          errorMessage: "HTTP request cancelled before dispatch",
+          error,
+        }
+        : await input.onTransportError(error, {
+          attemptNumber,
+          retriesRemaining: signal?.aborted ? 0 : retriesRemaining,
+        });
       const terminalEvent = buildTerminalEvent({
         ...input,
         outcome,
@@ -100,7 +119,7 @@ export async function executeObservedRequest<TResponse, TResult>(input: {
       });
       await emitRequestEvent(input.observer, terminalEvent);
       if (outcome.kind === "retry") {
-        await delay(outcome.retryDelayMs);
+        await waitForHttpRequestDelay(outcome.retryDelayMs);
         continue;
       }
 
@@ -110,7 +129,7 @@ export async function executeObservedRequest<TResponse, TResult>(input: {
     const durationMs = Date.now() - startedAt.getTime();
     const outcome = await input.onResponse(response, {
       attemptNumber,
-      retriesRemaining,
+      retriesRemaining: signal?.aborted ? 0 : retriesRemaining,
     });
     const terminalEvent = buildTerminalEvent({
       ...input,
@@ -127,7 +146,7 @@ export async function executeObservedRequest<TResponse, TResult>(input: {
     }
 
     if (outcome.kind === "retry") {
-      await delay(outcome.retryDelayMs);
+      await waitForHttpRequestDelay(outcome.retryDelayMs);
       continue;
     }
 

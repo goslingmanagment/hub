@@ -1,0 +1,10 @@
+{
+  "command": [
+    "pnpm",
+    "check"
+  ],
+  "startedAt": "2026-09-13T23:47:10.013369+00:00",
+  "completedAt": "2026-09-13T23:47:57.778445+00:00",
+  "elapsedSeconds": 47.761590375001106,
+  "exitCode": 0
+}
