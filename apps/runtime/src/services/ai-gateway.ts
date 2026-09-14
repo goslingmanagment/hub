@@ -517,7 +517,7 @@ export async function prepareAiGatewayStream(
         fanRef: input.fanRef ?? null,
         promptBlocks: [
           { role: "system", blocks: input.prompt.systemBlocks },
-          { role: "user", blocks: input.prompt.userBlocks },
+          { role: "user", blocks: input.prompt.userBlocks, ...(input.prompt.images?.length ? { images: input.prompt.images } : {}) },
         ],
         completion: record.completionText,
         params: {

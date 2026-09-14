@@ -11,6 +11,7 @@ import {
   FAST_REPLY_TEMPLATE,
   HELP_ME_TEMPLATE,
   HI_GREETING_TEMPLATE,
+  NEW_FOLLOWER_GREETING_TEMPLATE,
   IMPROVE_DRAFT_TEMPLATE,
   PING_TEMPLATE,
   VOICE_SCRIPT_TEMPLATE,
@@ -25,6 +26,7 @@ const TEMPLATE_FILES: ReadonlyArray<[file: string, constant: string]> = [
   ['chat-review.md', CHAT_REVIEW_TEMPLATE],
   ['ping.md', PING_TEMPLATE],
   ['hi-greeting.md', HI_GREETING_TEMPLATE],
+  ['new-follower-greeting.md', NEW_FOLLOWER_GREETING_TEMPLATE],
   ['coach-chat.md', COACH_CHAT_TEMPLATE],
   ['voice-script.md', VOICE_SCRIPT_TEMPLATE],
 ];
@@ -41,7 +43,7 @@ describe('templates.ts ↔ templates/*.md byte-sync', () => {
   }
 
   it('covers every .md template file', () => {
-    expect(TEMPLATE_FILES).toHaveLength(10);
+    expect(TEMPLATE_FILES).toHaveLength(11);
   });
 
   for (const [file, constant] of TEMPLATE_FILES) {

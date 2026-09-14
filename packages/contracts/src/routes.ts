@@ -1907,6 +1907,12 @@ export const aiGatewayPromptBlockSchema = z.object({
   cache: aiGatewayPromptCacheTtlSchema,
 }).strict();
 
+// A single profile image supplied by the live Fansly client. The kernel never
+// fetches the platform URL: providers receive it as image input through the
+// existing gateway. Reject credentials, custom ports and non-platform hosts.
+export const fanslyAvatarUrlSchema = z.string().max(4096).regex(/^https:\/\/[a-z0-9-]+\.fansly\.com\//);
+export const aiGatewayImagesSchema = z.array(z.object({ url: fanslyAvatarUrlSchema }).strict()).max(1);
+
 // Feature-lane-only debug echo. Deliberately separate from the raw gateway
 // prompt-block schema (100k): an assembled block is much larger than the wire
 // values it carries. clientContext admits a 300k transcript, the builder places
@@ -1926,6 +1932,7 @@ export const aiFeatureDebugInputFrameSchema = z.object({
   systemBlocks: z.array(aiFeatureDebugPromptBlockSchema).min(1).max(64),
   userBlocks: z.array(aiFeatureDebugPromptBlockSchema).min(1).max(64),
   contextManifest: z.record(z.string(), z.unknown()).nullable(),
+  images: aiGatewayImagesSchema.optional(),
 }).strict();
 
 export const aiGatewayStreamBodySchema = z.object({
@@ -1943,6 +1950,7 @@ export const aiGatewayStreamBodySchema = z.object({
   prompt: z.object({
     systemBlocks: z.array(aiGatewayPromptBlockSchema).min(1).max(64),
     userBlocks: z.array(aiGatewayPromptBlockSchema).min(1).max(64),
+    images: aiGatewayImagesSchema.optional(),
   }).strict(),
 }).strict();
 
@@ -2220,6 +2228,7 @@ export const aiFeatureStreamBodySchema = z.object({
   // chatterQuestion field is absent or whitespace-only.
   preset: z.literal("situation").optional(),
   summaryMode: z.literal("short").optional(),
+  greetingMode: z.literal("new-follower").optional(),
   // Stage 32: client-loaded context for platforms whose kernel archive is
   // pull-cadenced (Fansly: dm_conversations 30 min / dm_messages 24 h — no
   // webhook lane), where the client reads the conversation live at
@@ -2238,6 +2247,8 @@ export const aiFeatureStreamBodySchema = z.object({
     // account note contentType 12002). Read by the ping template today;
     // optional for clients released before it.
     fanCustomName: z.string().max(200).optional(),
+    fanUsername: z.string().max(200).optional(),
+    fanAvatarUrl: fanslyAvatarUrlSchema.optional(),
     pingSegment: z.enum(["segment-a", "segment-b", "active"]).optional(),
     // Whole days since the fan's latest text message, computed from the same
     // analysis (and clock) that selected pingSegment. Ping only; optional for
@@ -6887,6 +6898,22 @@ const baseRouteSchemas = {
       401: errorResponseSchema,
       403: errorResponseSchema,
       404: errorResponseSchema,
+    },
+  },
+  followerOutreachAttempt: {
+    auth: { kind: "any", scope: "page" },
+    tags: ["conversations"],
+    summary: "Reserve and record one human-triggered follower greeting send",
+    params: pageParamsSchema,
+    body: z.object({
+      fanRef: z.string().regex(/^\d{1,24}$/),
+      attemptId: z.string().uuid(),
+      action: z.enum(["reserve", "dispatch", "sent"]),
+      messageRef: z.string().regex(/^\d{1,24}$/).optional(),
+    }).strict(),
+    response: {
+      200: z.object({ owned: z.boolean(), state: z.enum(["reserved", "dispatching", "sent", "expired"]), expiresAt: isoTimestamp.nullable() }).strict(),
+      400: errorResponseSchema, 401: errorResponseSchema, 403: errorResponseSchema, 404: errorResponseSchema,
     },
   },
   workboardV2Unclaim: {

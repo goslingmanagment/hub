@@ -94,6 +94,7 @@ export interface AiFeatureRequestBody {
   coachHistory?: Array<{ question: string; answer: string }>;
   preset?: "situation";
   summaryMode?: "short";
+  greetingMode?: "new-follower";
   /** Stage 32: client-loaded context (Fansly — the kernel archive is
    * pull-cadenced: dm_conversations 30 min / dm_messages 24 h, no webhooks;
    * the extension reads the conversation live at generation time). */
@@ -106,6 +107,8 @@ export interface AiFeatureRequestBody {
     fanBio?: string;
     /** Decision 290: the chatter's saved name for the fan (Fansly rename). */
     fanCustomName?: string;
+    fanUsername?: string;
+    fanAvatarUrl?: string;
     pingSegment?: PingSegment;
     /** Whole days since the fan's last text message (same clock as pingSegment). */
     fanSilenceDays?: number;
@@ -321,6 +324,12 @@ export async function prepareAiFeatureStream(
     throw new PersonaDefinitionChangedError();
   }
 
+  if (body.greetingMode !== undefined && (feature !== "hi-greeting" || !isFanslyRequest || !body.clientContext || !body.fanRef)) {
+    throw new BadRequestError("new-follower mode requires Fansly hi-greeting, fanRef and clientContext");
+  }
+  if ((body.clientContext?.fanAvatarUrl !== undefined || body.clientContext?.fanUsername !== undefined) && body.greetingMode !== "new-follower") {
+    throw new BadRequestError("fanAvatarUrl and fanUsername require new-follower mode");
+  }
   let contextValues: {
     transcript: string;
     messageCount: number;
@@ -455,7 +464,7 @@ export async function prepareAiFeatureStream(
       "gate_min_messages",
     );
   }
-  if (feature === "hi-greeting" && contextValues.messageCount > HI_GREETING_MAX_TRANSCRIPT) {
+  if (feature === "hi-greeting" && body.greetingMode !== "new-follower" && contextValues.messageCount > HI_GREETING_MAX_TRANSCRIPT) {
     throw new ProductGateError(
       `hi-greeting is only available for conversations with at most ${HI_GREETING_MAX_TRANSCRIPT} messages`,
       "gate_hi_greeting_limit",
@@ -589,6 +598,8 @@ export async function prepareAiFeatureStream(
     fanDisplayName: contextValues.fanDisplayName,
     fanBio: contextValues.fanBio,
     fanCustomName: contextValues.fanCustomName,
+    fanUsername: body.clientContext?.fanUsername,
+    greetingMode: body.greetingMode,
     fanProfile: fanProfile
       ? { body: fanProfile.body, generatedAt: fanProfile.generatedAt }
       : undefined,
@@ -752,6 +763,7 @@ export async function prepareAiFeatureStream(
     prompt: {
       systemBlocks: prompt.systemBlocks,
       userBlocks: prompt.userBlocks,
+      ...(body.clientContext?.fanAvatarUrl ? { images: [{ url: body.clientContext.fanAvatarUrl }] } : {}),
     },
   };
   let debugFrame: AiFeatureDebugInputFrame | undefined;
@@ -764,6 +776,7 @@ export async function prepareAiFeatureStream(
           systemBlocks: prompt.systemBlocks,
           userBlocks: prompt.userBlocks,
           contextManifest: contextManifest ?? null,
+          ...(body.clientContext?.fanAvatarUrl ? { images: [{ url: body.clientContext.fanAvatarUrl }] } : {}),
         };
         app.logger.info({
           feature,

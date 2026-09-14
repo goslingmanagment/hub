@@ -33,7 +33,7 @@ interface OpenrouterStreamRequest {
   stream: true;
   max_tokens: number;
   temperature?: number;
-  messages: Array<{ role: "system" | "user"; content: string }>;
+  messages: Array<{ role: "system" | "user"; content: string | Array<{ type: "text"; text: string } | { type: "image_url"; image_url: { url: string } }> }>;
   usage: { include: true };
 }
 
@@ -52,7 +52,10 @@ export function buildOpenrouterGatewayStreamRequest(
     temperature: input.temperature ?? getAnthropicGatewayFeatureTemperature(input.feature),
     messages: [
       { role: "system", content: joinBlocks(input.prompt.systemBlocks) },
-      { role: "user", content: joinBlocks(input.prompt.userBlocks) },
+      { role: "user", content: input.prompt.images?.length ? [
+        { type: "text", text: joinBlocks(input.prompt.userBlocks) },
+        ...input.prompt.images.map(({ url }) => ({ type: "image_url" as const, image_url: { url } })),
+      ] : joinBlocks(input.prompt.userBlocks) },
     ],
     usage: { include: true },
   };
@@ -66,7 +69,7 @@ export function estimateOpenrouterGatewayRequestCost(
   const chars = [...input.prompt.systemBlocks, ...input.prompt.userBlocks]
     .reduce((sum, block) => sum + block.text.length, 0);
   const estimate = estimateAiGatewayUsageCost(input.model, {
-    inputTokens: Math.max(1, Math.ceil(chars / APPROX_CHARS_PER_TOKEN)),
+    inputTokens: Math.max(1, Math.ceil(chars / APPROX_CHARS_PER_TOKEN)) + (input.prompt.images?.length ?? 0) * 4096,
     outputTokens: input.maxTokens ?? FEATURE_MAX_TOKENS[input.feature],
     cacheWriteTokens: 0,
     cacheReadTokens: 0,

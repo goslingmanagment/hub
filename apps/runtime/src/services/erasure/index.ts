@@ -795,6 +795,7 @@ export interface FanRefErasureColumn {
  * a target the plan actually emits) or in that test's justified-exception list.
  */
 export const FAN_REF_ERASURE_COLUMNS: readonly FanRefErasureColumn[] = [
+  { column: "follower_outreach_attempts.fan_ref", target: "follower_outreach_attempts", reach: "predicate" },
   // Only the two earnings endpoint planes use subject_ref as a fan reference.
   { column: "subject_refresh_state.subject_ref", target: "subject_refresh_state", reach: "predicate" },
   // dmArchivePred: `fan_platform_user_id = ref or platform_conversation_id = ref
@@ -870,6 +871,15 @@ async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLine
   const ref = scope.fanRef!;
   const fanId = scope.fanId ?? -1;
   const targets: WorkTarget[] = [];
+
+  // Dispatch custody has no scheduled expiry, but explicit erasure reaches
+  // its native fan/message identifiers even without a projected fans row.
+  const outreachPred = sql`platform_account_id in ${scope.pageIds} and fan_ref = ${ref}`;
+  targets.push({
+    plane: "hot", target: "follower_outreach_attempts", action: "delete",
+    rows: await countOf(app, sql`select count(*)::text as n from follower_outreach_attempts where ${outreachPred}`),
+    run: tx => execCount(tx, sql`delete from follower_outreach_attempts where ${outreachPred}`),
+  });
 
   targets.push({
     plane: "hot",
@@ -1346,6 +1356,7 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
   });
 
   const deletions: Array<[string, string]> = [
+    ["follower_outreach_attempts", "platform_account_id"],
     ["ofapi_media_catalog", "page_id"],
     ["ofapi_media_sources", "page_id"],
     ["ofapi_marketing_projection_receipts", "page_id"],

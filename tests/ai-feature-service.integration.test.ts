@@ -1186,6 +1186,7 @@ describe("AI feature registry gates (Stage 30 Task 4)", () => {
     const hiText = capture.input!.body.prompt.userBlocks.map((block) => block.text).join("\n");
     expect(hiText).not.toContain("<fan_spending_data>");
 
+
     // hi-greeting locks once the conversation outgrows the legacy cap (10).
     for (let extra = 0; extra < 12; extra += 1) {
       await testDb.pool.query(
@@ -1370,6 +1371,26 @@ describe("voice-script feature (voice notes lane)", () => {
 });
 
 describe("client-context path (Stage 32)", () => {
+  it("fences follower send custody by human authentication, assigned page and platform", async (context) => {
+    if (!testDb) { context.skip(); return; }
+    const payload = { fanRef: "123", attemptId: randomUUID(), action: "reserve" };
+    const url = "/api/v1/pages/svc-fs/follower-outreach/attempt";
+    const anonymous = await apiServer!.inject({ method: "POST", url, payload });
+    expect(anonymous.statusCode).toBe(401);
+    const headers = { authorization: `Bearer ${chatterKey}` };
+    const claim = await apiServer!.inject({ method: "POST", url, headers, payload });
+    expect(claim.statusCode, claim.body).toBe(200);
+    expect(claim.json()).toMatchObject({ owned: true, state: "reserved" });
+    const wrongPlatform = await apiServer!.inject({ method: "POST", url: "/api/v1/pages/svc-of/follower-outreach/attempt", headers, payload });
+    expect(wrongPlatform.statusCode).toBe(404);
+    const model = await createModel(appContext.db, { slug: "unassigned", name: "Unassigned" });
+    if (!model) throw new Error("model fixture missing");
+    await createFanslyPage(appContext.db, { modelId: model.id, label: "unassigned-fs" });
+    const forbidden = await apiServer!.inject({ method: "POST", url: "/api/v1/pages/unassigned-fs/follower-outreach/attempt", headers, payload });
+    expect([403, 404]).toContain(forbidden.statusCode);
+    const noReceipt = await apiServer!.inject({ method: "POST", url, headers, payload: { ...payload, action: "sent" } });
+    expect(noReceipt.statusCode).toBe(400);
+  });
   it("uses client-loaded values verbatim and runs the gates on client counts", async (context) => {
     if (!testDb) {
       context.skip();
@@ -1418,6 +1439,17 @@ describe("client-context path (Stage 32)", () => {
     expect(hi.statusCode, hi.body).toBe(200);
     const hiText = capture.input!.body.prompt.userBlocks.map((block) => block.text).join("\n");
     expect(hiText).not.toContain("<fan_spending_data>");
+
+    const newFollowerContext = { ...baseContext, fanBio: "loves cats", fanUsername: "catfan", fanCustomName: "Charles", fanAvatarUrl: "https://cdn3.fansly.com/avatar.jpg" };
+    const newFollower = await call("hi-greeting", newFollowerContext, { greetingMode: "new-follower", fanRef: FAN });
+    expect(newFollower.statusCode, newFollower.body).toBe(200);
+    expect(capture.input!.body.prompt.images).toEqual([{ url: newFollowerContext.fanAvatarUrl }]);
+    const newFollowerText = capture.input!.body.prompt.userBlocks.map((block) => block.text).join("\n");
+    expect(newFollowerText).toContain("exactly ONE");
+    expect(newFollowerText).toContain("catfan");
+    expect(newFollowerText).toContain("loves cats");
+    expect((await call("hi-greeting", newFollowerContext)).statusCode).toBe(400);
+    expect((await call("fast-reply", newFollowerContext, { greetingMode: "new-follower", fanRef: FAN })).statusCode).toBe(400);
 
     // ping demands the client-computed segment, honors the active block, and
     // proceeds on a quiet segment.
