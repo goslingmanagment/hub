@@ -16,11 +16,13 @@ type MaterialReport = {
 
 let db: StartedTestDatabase;
 let pageId: number;
+let probeKind: "material" | "reader" = "material";
 const reader = `material_probe_${randomUUID().replaceAll("-", "")}`;
 beforeAll(async () => {
   db = await startTestDatabase();
   await db.pool.query(`create role ${reader};
-    grant execute on function public.fansly_dm_shadow_material_probe(text, integer) to ${reader}`);
+    grant execute on function public.fansly_dm_shadow_material_probe(text, integer) to ${reader};
+    grant execute on function public.fansly_dm_shadow_reader_probe(text, integer) to ${reader}`);
 }, 120_000);
 afterAll(async () => {
   if (db) {
@@ -53,9 +55,10 @@ async function withReader<T>(run: (client: PoolClient) => Promise<T>) {
 
 async function probe(client: PoolClient, limit: number | null = 100, page = "material-cost") {
   const result = await client.query<{ report: MaterialReport }>(
-    "select public.fansly_dm_shadow_material_probe($1, $2) as report", [page, limit],
+    `select public.fansly_dm_shadow_${probeKind}_probe($1, $2) as report`, [page, limit],
   );
-  return result.rows[0]!.report;
+  const report = result.rows[0]!.report as MaterialReport & { readerPlan?: MaterialReport["materialPlan"] };
+  return { ...report, materialPlan: probeKind === "reader" ? report.readerPlan ?? null : report.materialPlan };
 }
 
 async function seedHeads(count: number) {
@@ -67,8 +70,9 @@ async function seedHeads(count: number) {
     from generate_series(1, $2::integer) s(n)`, [pageId, count]);
 }
 
-describe("bounded A0 material cost read plane", () => {
-  it("executes the hot material plan without exposing bodies or changing stored state", async () => {
+describe.each(["material", "reader"] as const)("bounded A0 %s cost read plane", kind => {
+  beforeEach(() => { probeKind = kind; });
+  it("executes the fixed plan without exposing bodies or changing stored state", async () => {
     await seedHeads(3);
     await db.pool.query(`insert into page_dm_messages (
       conversation_id, platform_account_id, platform_message_id, created_at, content, deleted_at
@@ -81,7 +85,7 @@ describe("bounded A0 material cost read plane", () => {
     const before = await db.pool.query("select to_jsonb(d) as debt from fansly_dm_head_debt d order by d.conversation_id");
     const report = await withReader(client => probe(client));
     expect(report).toMatchObject({ page: "material-cost", status: "measured",
-      scope: "current_stored_heads_hot_material_query" });
+      scope: kind === "reader" ? "current_stored_heads_agent_reader_state_query" : "current_stored_heads_hot_material_query" });
     expect(report.sampledHeads).toHaveLength(3);
     expect(report.materialPlan?.[0]?.Plan["Actual Rows"]).toBe(3);
     expect(report.materialPlan?.[0]?.["Execution Time"]).toBeGreaterThanOrEqual(0);
@@ -91,14 +95,15 @@ describe("bounded A0 material cost read plane", () => {
   });
 
   it("keeps table access and PUBLIC execution closed", async () => {
-    for (const table of ["page_dm_threads", "page_dm_messages", "fansly_dm_head_debt"]) {
+    for (const table of ["page_dm_threads", "page_dm_messages", "fansly_dm_head_debt",
+      "message_archive", "dm_message_archive"]) {
       await withReader(async client => {
         await expect(client.query(`select * from public.${table}`)).rejects.toMatchObject({ code: "42501" });
       });
     }
     const acl = await db.pool.query(`select count(*)::integer as grants
       from pg_proc p cross join lateral aclexplode(p.proacl) a
-      where p.oid = 'public.fansly_dm_shadow_material_probe(text,integer)'::regprocedure
+      where p.oid = 'public.fansly_dm_shadow_${kind}_probe(text,integer)'::regprocedure
         and a.grantee = 0 and a.privilege_type = 'EXECUTE'`);
     expect(acl.rows[0].grants).toBe(0);
   });
@@ -123,7 +128,7 @@ describe("bounded A0 material cost read plane", () => {
   });
 
   it.each([null, 0, -1, 101])("refuses an invalid sample limit %s", async limit => {
-    await expect(withReader(client => probe(client, limit))).rejects.toThrow("invalid_material_probe_sample_limit");
+    await expect(withReader(client => probe(client, limit))).rejects.toThrow(`invalid_${kind}_probe_sample_limit`);
   });
 
   it("refuses unknown and non-Fansly pages and keeps an empty sample unmeasured", async () => {
@@ -141,7 +146,7 @@ describe("bounded A0 material cost read plane", () => {
     await expect(withReader(async client => {
       await client.query(statement);
       return probe(client);
-    })).rejects.toThrow("material_probe_requires_repeatable_read_only");
+    })).rejects.toThrow(`${kind}_probe_requires_repeatable_read_only`);
   });
 
   it.each([
@@ -151,13 +156,13 @@ describe("bounded A0 material cost read plane", () => {
     await expect(withReader(async client => {
       await client.query(statement);
       return probe(client);
-    })).rejects.toThrow("material_probe_requires_bounded_timeouts");
+    })).rejects.toThrow(`${kind}_probe_requires_bounded_timeouts`);
   });
 
   it("quotes stored head IDs as data, even when they contain SQL syntax", async () => {
     await seedHeads(1);
     const messageId = "head'); select pg_sleep(30); --";
-    await db.pool.query("update page_dm_threads set last_message_id = $1", [messageId]);
+    await db.pool.query("update page_dm_threads set last_message_id = $1, platform_conversation_id = $1", [messageId]);
     const report = await withReader(client => probe(client));
     expect(report.sampledHeads[0]?.messageId).toBe(messageId);
     expect(report.status).toBe("measured");

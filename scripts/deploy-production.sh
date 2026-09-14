@@ -396,6 +396,7 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   "0097_retire_onlyfans_legacy_dm_messages.sql"
   "0186_ops_metrics_recent_series.sql"
   "0192_fansly_dm_shadow_material_probe.sql"
+  "0194_fansly_dm_shadow_reader_probe.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"

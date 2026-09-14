@@ -332,6 +332,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 332 | A0 material-query cost read plane | Expose one bounded current-head EXPLAIN through the existing read_only role; keep runtime queries and coverage gates unchanged. |
 | 333 | Live new-follower drafts | Fansly extension reads live followers and history; Hub generates one draft with profile/avatar context and coordinates one-attempt browser sends. |
 | 334 | W0 continuity experiment | Run one bounded Lilly-1 six-hour observation and two receiver-only gaps; share short/long admission and keep binding, presence and recovery as independent evidence. |
+| 335 | A0 advertised-head reader state | Observe exact pre-apply Agent reader state separately from hot presence; preserve polling, historical unknowns and the original shadow gates. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -13626,3 +13627,48 @@ claim. Stop the owned experiment to roll back; healthy REST stays unchanged.
 
 See [the continuity runbook](runbooks/fansly-ws-continuity.md) and
 [implementation evidence](../investigations/fansly-w0-continuity-2026-09-14/STATUS.md).
+
+## Decision 335: Measure advertised DM heads using Agent reader state (2026-09-14)
+
+A0's `missingHotHeadsBelowStop` counts exact live hot-table copies. An archived
+head can be readable without one, and a pending or deleted archive version can
+override a live hot copy. A captured head-debt timestamp is historical evidence,
+not current reader state. Keep that existing counter and SQL unchanged.
+
+For pages already in `fanslyDmShadowPageAllowlist`, read the advertised IDs from
+one provider list page before applying its writes. A narrow batch follows Agent
+operation 6's source preference (cold archive, message archive, hot) and tombstone
+dominance, with page/platform/group/message fences and the current account
+binding for cross-source tombstones. Resolve hot threads by their current scoped
+group; a previously cached thread ID cannot widen or suppress reader evidence.
+Read only state columns. Empty text is not a pending-content test.
+
+Seven nullable scalar counters record checked/unknown IDs and materialized,
+missing, deleted, pending and archive-only materialized heads below the virtual
+stop. Legacy or mid-sweep instrumentation stays unknown through completion;
+only newly observed full sweeps initialize zeros. Failure leaves both diagnostic
+reads unknown and the business sweep continues. The existing report is incomplete
+when reader evidence is unavailable. A complete observation is still not a
+completeness or discrepancy gate pass.
+
+The old hot query and new reader query share one READ ONLY / REPEATABLE READ
+transaction. A monotonic budget is capped at five seconds and the dispatch's
+remaining allowance; each data query receives the remaining statement timeout.
+Elapsed pool checkout consumes this allowance but checkout itself cannot be
+cancelled here. Transaction setup/cleanup and network return are not covered by
+an end-to-end five-second promise. There is no independent second five-second
+wait or acquisition retry. Flag `none` performs neither diagnostic read.
+
+Additive migration 0194 exposes the fixed reader query for a separate bounded
+`read_only` EXPLAIN using internally selected current stored heads. Migration
+0192 remains byte-exact and its measured costs still describe only the hot query.
+Both operational probes are pinned to their runtime SQL by parser tests. A cost
+sample does not cover historical provider lists, pool waits, report writes or
+reader publication latency. Stop invoking the new probe to stop that measurement;
+application rollback may retain its unused function.
+
+This adds no early stop, freshness degradation, cadence change, deletion repair,
+business write or flag. It neither resets the original A0 clock nor fills old
+reader evidence retrospectively. Advertised-ID state does not establish full
+transcript/text/media/link parity, event-to-reader percentiles, the >=50% goal,
+or readiness for A1. The original window, discrepancy and scope gates remain.

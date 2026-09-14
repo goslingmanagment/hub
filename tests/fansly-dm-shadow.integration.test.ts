@@ -93,7 +93,9 @@ describe("A0 shadow against the real sweep", () => {
 
   it("keeps HTTP, raw capture, business state, success and scheduled slots identical across resumes", async () => {
     const off = await fixture(false);
+    const diagnostic = vi.spyOn(dbRepo, "readFanslyDmShadowSnapshot");
     const offResults = [await off.chunk(2), await off.chunk(2)];
+    expect(diagnostic).not.toHaveBeenCalled();
     const baseline = await businessSnapshot();
     expect((await report()).sweeps).toHaveLength(0);
     await resetIntegrationDatabase(db.pool);
@@ -157,7 +159,7 @@ describe("A0 shadow against the real sweep", () => {
 
   it("keeps a missing material read unknown without rolling back the sweep", async () => {
     const source = await fixture(true);
-    vi.spyOn(dbRepo, "readFanslyDmShadowMaterial").mockRejectedValue(new Error("read unavailable"));
+    vi.spyOn(dbRepo, "readFanslyDmShadowSnapshot").mockRejectedValue(new Error("read unavailable"));
     expect((await source.chunk(4)).satisfied).toBe(true);
     expect((await report()).sweeps[0]).toMatchObject({ status: "incomplete", diagnostics: {
       unknownMaterialChecks: 4, missingHotHeadsBelowStop: 0,
@@ -243,7 +245,7 @@ describe("A0 shadow against the real sweep", () => {
       completeCoverage: false, visibilityChangesBelowStop: null,
       unresolvedIdentityChangesBelowStop: null, exclusionReasonChangesBelowStop: null,
       subscriptionTierChangesBelowStop: null, headTimestampChangesBelowStop: null,
-      headSenderChangesBelowStop: null,
+      headSenderChangesBelowStop: null, readerHeadsChecked: null, unknownReaderHeadChecks: null,
     } });
     expect((await source.checkpoint())?.state).toMatchObject({ membershipCertified: true });
     expect(source.calls).toHaveLength(4);
@@ -266,6 +268,34 @@ describe("A0 shadow against the real sweep", () => {
       materialLagSamples: 1, maxDiscoveryToCaptureMs: 12346, missingHotHeadsBelowStop: 1,
     } });
   });
+
+  it.each(["materialized", "content_pending", "deleted", "missing"] as const)(
+    "records advertised %s state before the normal writer changes the thread head", async state => {
+      const source = await fixture(true);
+      await db.pool.query("update page_dm_threads set last_message_id = 'previous' where platform_conversation_id = 'g3'");
+      if (state !== "missing") {
+        await db.pool.query(`insert into message_archive
+          (account_id, platform, conversation_ref, message_ref, occurred_at, content_pending, deleted_at)
+          select platform_account_id, 'fansly', platform_conversation_id, 'msg-g3',
+            last_message_at, $1, case when $2 then now() end
+          from page_dm_threads where platform_conversation_id = 'g3'`,
+        [state === "content_pending", state === "deleted"]);
+      }
+      await source.chunk(4);
+      const counters = (await report()).sweeps[0].diagnostics;
+      expect(counters.missingHotHeadsBelowStop).toBe(1);
+      expect(counters).toMatchObject({ readerHeadsChecked: 4, unknownReaderHeadChecks: 0,
+        readerMaterializedHeadsBelowStop: Number(state === "materialized"),
+        readerMissingHeadsBelowStop: Number(state === "missing"), readerDeletedHeadsBelowStop: Number(state === "deleted"),
+        readerPendingHeadsBelowStop: Number(state === "content_pending"),
+        readerArchiveOnlyHeadsBelowStop: Number(state === "materialized"),
+      });
+      expect((await db.pool.query(`select last_message_id from page_dm_threads
+        where platform_conversation_id = 'g3'`)).rows[0].last_message_id).toBe("msg-g3");
+      // The metadata sweep does not write message bodies; diagnostics must not either.
+      expect((await db.pool.query("select count(*)::integer as count from page_dm_messages")).rows[0].count).toBe(0);
+    },
+  );
 
   it("keeps a rejected full sweep incomplete rather than reporting zero misses", async () => {
     const source = await fixture(true, [groupsPage({

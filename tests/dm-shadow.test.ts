@@ -157,4 +157,24 @@ describe("DM virtual-stop diagnostics", () => {
       maxHistorySyncAgeMs: 3_601_000,
     });
   });
+
+  it("keeps reader state separate from hot presence, counts below stop and never mutates the prior cursor", () => {
+    const source = initial();
+    const stopped = advanceDmShadow(source, page(head({ readerHead: {
+      state: "materialized", source: "hot", liveHotCopy: true,
+    } })));
+    const result = advanceDmShadow(stopped, page(
+      ...(["materialized", "missing", "deleted", "content_pending"] as const).map(state => head({
+        materialConfirmed: false, readerHead: { state, source: "message_archive", liveHotCopy: false },
+      })), head(), head({ listMessageId: null }),
+    ));
+    expect(result).toMatchObject({ readerHeadsChecked: 5, unknownReaderHeadChecks: 1,
+      readerMaterializedHeadsBelowStop: 1, readerMissingHeadsBelowStop: 1, readerDeletedHeadsBelowStop: 1,
+      readerPendingHeadsBelowStop: 1, readerArchiveOnlyHeadsBelowStop: 1 });
+    expect(result.missingHotHeadsBelowStop).toBe(4);
+    expect(stopped.readerHeadsChecked).toBe(1);
+    expect(source.readerHeadsChecked).toBe(0);
+    expect(result.stopPage).toBe(stopped.stopPage);
+  });
+
 });

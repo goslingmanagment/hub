@@ -1,3 +1,5 @@
+import type { FanslyDmReaderHeadReceipt } from "@agency_hub_core/db";
+
 import type { ConversationHeadDiffReason } from "./fansly-dm-head-diff.ts";
 import type { DmShadowState } from "./dm-shadow-state.ts";
 
@@ -10,6 +12,7 @@ export type DmShadowConversation = {
   previousTimestampMs: number | null;
   previousMessageId: string | null;
   materialConfirmed: boolean | null;
+  readerHead?: FanslyDmReaderHeadReceipt | null;
   discoveryToCaptureMs: number | null;
   historyPending: boolean;
   lastHistorySyncAtMs: number | null;
@@ -85,6 +88,24 @@ export function advanceDmShadow(state: DmShadowState, page: {
       next.maxDiscoveryToCaptureMs = Math.max(next.maxDiscoveryToCaptureMs, item.discoveryToCaptureMs);
     }
     if (item.materialConfirmed === null) next.unknownMaterialChecks += 1;
+    if (item.listMessageId !== null) {
+      const reader = item.readerHead;
+      if (reader?.state == null) {
+        if (next.unknownReaderHeadChecks !== null) next.unknownReaderHeadChecks += 1;
+      } else {
+        if (next.readerHeadsChecked !== null) next.readerHeadsChecked += 1;
+        if (belowStop) {
+          const counters = {
+            materialized: "readerMaterializedHeadsBelowStop", missing: "readerMissingHeadsBelowStop",
+            deleted: "readerDeletedHeadsBelowStop", content_pending: "readerPendingHeadsBelowStop",
+          } as const;
+          const counter = counters[reader.state];
+          if (next[counter] !== null) next[counter] += 1;
+          if (reader.state === "materialized" && !reader.liveHotCopy &&
+            next.readerArchiveOnlyHeadsBelowStop !== null) next.readerArchiveOnlyHeadsBelowStop += 1;
+        }
+      }
+    }
     const markerValid = hasValidMarker(item);
     if (!markerValid) {
       next.invalidMarkers += 1;
