@@ -1,0 +1,44 @@
+[
+  {
+    "original": "evidence/c1-ci-failure/failure-excerpt.txt",
+    "stored": "evidence/c1-ci-failure/failure-excerpt.txt.gz",
+    "rawSha256": "4b7358303449296ab4068a350f374a8fb60ad1234e2df0d9abdc75ec9ab64221",
+    "bytes": 5650
+  },
+  {
+    "original": "validation-20260914T001945Z/check-final.log",
+    "stored": "validation-20260914T001945Z/check-final.log.gz",
+    "rawSha256": "492ac70d0a6ec5d666ab11f995611f4ce4bc5c3e544075fb7968cb216b2db37c",
+    "bytes": 7462
+  },
+  {
+    "original": "validation-20260914T001945Z/check-reviewed.log",
+    "stored": "validation-20260914T001945Z/check-reviewed.log.gz",
+    "rawSha256": "88404ac06691b3643ec42397dd0c617fa999d562839985430ae719b87317269d",
+    "bytes": 7461
+  },
+  {
+    "original": "validation-20260914T001945Z/check.log",
+    "stored": "validation-20260914T001945Z/check.log.gz",
+    "rawSha256": "d7d83603eb83c486c258f76728075a072d6ff365437e1e1000876ea04923f996",
+    "bytes": 4144
+  },
+  {
+    "original": "validation-20260914T001945Z/install.log",
+    "stored": "validation-20260914T001945Z/install.log.gz",
+    "rawSha256": "d17a386738bdcc433694efe31cf445afa39f8b9198cf255632802517e675a798",
+    "bytes": 2117
+  },
+  {
+    "original": "validation-20260914T001945Z/postgres.log",
+    "stored": "validation-20260914T001945Z/postgres.log.gz",
+    "rawSha256": "f4dfb96111d6f91f6d7ee0dba6d645675d8caec6df09774dece0fa7fba9fa02b",
+    "bytes": 250
+  },
+  {
+    "original": "validation-20260914T001945Z/regression-before.log",
+    "stored": "validation-20260914T001945Z/regression-before.log.gz",
+    "rawSha256": "b98d50a4e3b2de1a3e478e1581083242a1a97cd19b97a0083ed661134e67c560",
+    "bytes": 1484
+  }
+]
