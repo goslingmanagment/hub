@@ -1,0 +1,1 @@
+Raw command logs and the original failure excerpt are stored as gzip without changing their decompressed bytes. Historical execution receipts retain the command-time filenames. `log-storage.json` maps those names to stored files and pins uncompressed SHA-256 values.
