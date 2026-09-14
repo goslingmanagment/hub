@@ -2942,9 +2942,10 @@ export async function fanslyDmMessagesChunk(
             limit: FANSLY_DM_MESSAGE_PAGE_LIMIT,
           });
         } catch (error) {
+          const partnerPlatformUserId = currentConversation.partnerPlatformUserId;
           if (
             !isTerminalFanslyServerError(error) ||
-            !currentConversation.partnerPlatformUserId
+            !partnerPlatformUserId
           ) {
             throw error;
           }
@@ -2967,7 +2968,7 @@ export async function fanslyDmMessagesChunk(
           const resolution = await probeFanslyAccountResolution(
             app,
             requestContext,
-            currentConversation.partnerPlatformUserId,
+            partnerPlatformUserId,
             { platformAccountId: input.pageContext.page.id, syncRunId: input.syncRunId },
           );
           if (resolution !== "unresolved") {
@@ -2978,7 +2979,7 @@ export async function fanslyDmMessagesChunk(
             const excluded = await excludePageDmConversationMessageSync(dbTx, {
               conversationId: currentConversation.id,
               platformAccountId: input.pageContext.page.id,
-              partnerPlatformUserId: currentConversation.partnerPlatformUserId,
+              partnerPlatformUserId,
               reason: FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP,
             });
             // The lookup concerned the old binding. A changed or removed row

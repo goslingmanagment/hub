@@ -1,0 +1,24 @@
+{
+  "command": [
+    "pnpm",
+    "check"
+  ],
+  "cwd": "/Users/dmitriy/.codex/worktrees/hub-fansly-dm-metadata-fencing",
+  "startedAt": "2026-09-14T00:43:26.470643+00:00",
+  "finishedAt": "2026-09-14T00:43:39.251785+00:00",
+  "durationSeconds": 12.781,
+  "exitCode": 1,
+  "sourcesBefore": {
+    "apps/runtime/src/services/sync/executor-handlers.ts": "526f0fb06edeb2e0189b5b3998bdba8eb88cd0d7086672d327a76fa3866763c1",
+    "packages/db/src/repositories/page-dm.ts": "482fedf8bdeb55db3df2b24b5f7392db3e3fbc6fb91a94dae0728e09548b63ec",
+    "tests/sync-handlers.test.ts": "3422a1b1fcee1ba7a816d931ea4b958bde6d654d04800cd1aad66c3313e7404f",
+    "tests/fansly-dm-exclusion.integration.test.ts": "b73c0e58ef2fadbfea591444441f38ebe53017350ec5c9a39e09031638affc76"
+  },
+  "sourcesAfter": {
+    "apps/runtime/src/services/sync/executor-handlers.ts": "526f0fb06edeb2e0189b5b3998bdba8eb88cd0d7086672d327a76fa3866763c1",
+    "packages/db/src/repositories/page-dm.ts": "482fedf8bdeb55db3df2b24b5f7392db3e3fbc6fb91a94dae0728e09548b63ec",
+    "tests/sync-handlers.test.ts": "3422a1b1fcee1ba7a816d931ea4b958bde6d654d04800cd1aad66c3313e7404f",
+    "tests/fansly-dm-exclusion.integration.test.ts": "b73c0e58ef2fadbfea591444441f38ebe53017350ec5c9a39e09031638affc76"
+  },
+  "logSha256": "061e931e6b3aef52dc05da2d11bff8a64be9178a6fb8bba871fc50b6ab8e5b6b"
+}

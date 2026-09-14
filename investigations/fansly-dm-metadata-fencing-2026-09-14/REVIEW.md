@@ -31,3 +31,13 @@ Decision 327 and the runbook accurately state the narrow write, refusal behavior
 | `tests/fansly-dm-exclusion.integration.test.ts` | `b73c0e58ef2fadbfea591444441f38ebe53017350ec5c9a39e09031638affc76` |
 | `docs/decisions.md` | `e40a19201113c21fc6546b73d0dcec40fa5155e2998dd9360f36a2dcf79844a8` |
 | `docs/runbooks/fansly-dm-exclusion.md` | `7d7f1cb7ed75b1ea13943bb6f98fd8f8bc239213edd342a1629cfd0fa6c4f59e` |
+
+## Final main composition follow-up
+
+No new findings on `33b4e9091962edfc1e45c003ebb30ba0a9794b2b`, composed with main `b78752d0d1144a8457638ffb3ae0bda33455fde1`. The final diff from current main retains exactly the narrow runtime/repository and unit changes reviewed above. The executor handler and unit-test whole-file hashes change only because C1's existing membership diagnostic code and fixture were added from main; provider-cooldown implementation remains unchanged. Every main decision body/reference row is preserved, including D322; D327 remains the added topic. The new runbook is now included in the commit.
+
+The repository helper, five-case PostgreSQL test and runbook still match the prior review hashes. New composition fingerprints: executor-handlers.ts `526f0fb06edeb2e0189b5b3998bdba8eb88cd0d7086672d327a76fa3866763c1`; sync-handlers.test.ts `3422a1b1fcee1ba7a816d931ea4b958bde6d654d04800cd1aad66c3313e7404f`; decisions.md `2a789f586886151234aa00d732fd68ecda2e78f50b2d4cca59c73d7dd12dc2fd`. No tests were run by this reviewer; the planned original-handler negative control and final merged-candidate checks remain separate validation work.
+
+### Immutable partner-value correction
+
+Reviewed the subsequent four-line correction after the author's typecheck failure. Capturing `currentConversation.partnerPlatformUserId` in a local constant before its nonempty guard retains TypeScript narrowing inside the asynchronous transaction callback and gives the probe and conditional update exactly the same immutable verified ID. No assertion/cast, predicate or refusal behavior changes. No further findings. Final executor-handler SHA-256: `18d6882d4c9e04843fd77fe75790113b74984032041956a70126676719e88f9c`. The author's original failing check and negative-control receipts are retained separately; this reviewer ran no tests.
