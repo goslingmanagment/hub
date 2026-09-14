@@ -65,6 +65,53 @@ SELECT fansly_events_measurement_report(
 COMMIT;
 ```
 
+## Current material-query cost (Decision 332)
+
+`public.fansly_dm_shadow_material_probe(text, integer)` is an inert, on-demand
+read operation. Migration 0192 grants EXECUTE to the existing `read_only` role;
+it grants no table access and introduces no flag. One call selects the newest
+1–100 visible, nonempty current head IDs for one named Fansly page, then runs
+`EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)` on the same typed VALUES, hot-message
+EXISTS and head-debt join used by `readFanslyDmShadowMaterial`.
+
+Set the deadlines **before** the function SELECT. The function rejects writable
+or non-repeatable-read transactions, disabled/timeouts above the bounds below,
+unknown/non-Fansly pages and sample limits outside 1–100. It accepts no SQL or
+head IDs from the caller. The execution plan contains head identifiers and
+database plan metadata, but no message bodies, usernames or credentials.
+
+```sql
+BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;
+SET LOCAL statement_timeout = '5s';
+SET LOCAL lock_timeout = '100ms';
+SELECT current_user AS role,
+  current_setting('transaction_read_only') AS read_only,
+  current_setting('transaction_isolation') AS isolation,
+  current_setting('statement_timeout') AS statement_timeout,
+  current_setting('lock_timeout') AS lock_timeout;
+SELECT public.fansly_dm_shadow_material_probe('lilly-1', 100);
+ROLLBACK;
+```
+
+Use the existing `read_only` connection; verify the identity receipt and retain
+the raw output, command/source revision, timestamps and SHA-256 in a new private
+evidence directory. Read the six explicit page labels serially, one call per
+page, with an 8-second remote process limit (one-second kill grace), a 20-second
+local outer limit per call and a 45-second overall budget. Stop on a failed call
+or exhausted budget; remaining pages are unmeasured. A timeout is unknown cost,
+and `no_sample` returns a null plan, not a zero-duration success. Do not retry
+to obtain a prettier number. Apply this additive migration through the normal
+reviewed deployment; application rollback may leave the unused function in
+place. To stop measurement, stop invoking it. No polling configuration changes.
+
+This is a biased sample of **current stored heads**, not provider responses at
+the original pre-apply boundary. The sample can warm shared buffers before the
+material query. EXPLAIN timings include instrumentation and exclude client/pool
+waits, report writes, pipeline scheduling and reader publication. Its result
+rows are not returned, so the plan is not a count of present heads. It establishes
+neither archive/serving completeness nor event-to-reader p95/p99, and cannot
+pass A0 or establish the 50% savings goal. Keep the original A0 clock and gates.
+
 ## Interpretation and acceptance
 
 - `attempts` counts one `sync_http_attempts` row per physical request, grouped

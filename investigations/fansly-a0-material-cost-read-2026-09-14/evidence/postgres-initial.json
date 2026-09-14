@@ -1,0 +1,27 @@
+{
+  "command": [
+    "pnpm",
+    "exec",
+    "vitest",
+    "run",
+    "--no-file-parallelism",
+    "tests/fansly-dm-material-probe.integration.test.ts",
+    "tests/fansly-dm-shadow.integration.test.ts",
+    "tests/fansly-events-measurement.integration.test.ts",
+    "tests/production-migration-history.integration.test.ts",
+    "tests/migrate-runner.integration.test.ts"
+  ],
+  "cwd": "/Users/dmitriy/.codex/worktrees/hub-fansly-a0-material-cost-read",
+  "startedAt": "2026-09-14T15:05:54.125650+00:00",
+  "completedAt": "2026-09-14T15:06:10.855609+00:00",
+  "exitCode": 0,
+  "environment": {
+    "NODE_OPTIONS": "--max-old-space-size=4096",
+    "ALLOW_MISSING_TEST_PREREQUISITES": "0"
+  },
+  "head": "4e18d130ea6ca4b834141789265cce8442f8fcae",
+  "logSha256": "0c38120d80c2f563ef2093e75edbc49304566df7965f9ee932c881f30994091a",
+  "compressedLogPath": "evidence/postgres-initial.log.gz",
+  "compressedLogSha256": "555a4da0cf0af02a4af209ae814446d91fc4c9c64a121848ba6798a4295692c2",
+  "validatedSourceManifestSha256": "16ec48b2f7f6720fb84704fbaff54c2576fd6a3763c111b4b3d2ff2d1ff05870"
+}
