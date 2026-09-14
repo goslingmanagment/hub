@@ -98,6 +98,22 @@ update resolves it. Retry state is stored with a fifteen-minute floor and a
 longer provider Retry-After; current daily rotation is the only retry mechanism.
 Corrections outside transaction lookback need that independent rotation.
 
+## Retrying a completed generation
+
+Decision 331 prevents a completed spender walk from running again when its
+later scheduler settlement failed. Reuse requires the same page, stream and
+request sequence, a completed zero cursor and current lease ownership. The
+`reusedCompletedWalk` statistic reports zero fans fetched; the checkpoint,
+`completedAt` and last successful read timestamp stay unchanged. Stream
+settlement time is not a new provider-check time.
+
+A newer explicit request or ordinary next scheduled generation still walks.
+Partial progress carrying an older `completedAt` still continues. Reset/erasure
+removes the applicable checkpoint through the existing path. There is no new
+flag or operator action; rollback restores the possibility of repeated work
+without changing persisted checkpoint format. This fix does not pass C2c or
+establish any production savings or historical attribution.
+
 ## Rollback and next gate
 
 On diagnostic failures, capture/latency regression or unexplained discrepancies,

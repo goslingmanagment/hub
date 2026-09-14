@@ -1,0 +1,26 @@
+{
+  "evidence/check.log.gz": {
+    "originalSha256": "adaf15457dff595433697d82effacb159870e0ab169c09fd3a3dc2da4a3cadca",
+    "compressedSha256": "64e5853071a482329f8522c6a412b4ccf002efe3b39229e7299644571faebd71"
+  },
+  "evidence/install.log.gz": {
+    "originalSha256": "9ba208de18064ce5d34cd60367611594146de66129c892dc2a9f18099a54f724",
+    "compressedSha256": "08e27a9dbc62477789e34848dd6650c08b34c36872dae6d06e8efdb3b6709a4b"
+  },
+  "evidence/postgres.log.gz": {
+    "originalSha256": "5ec449625c453e60f7e311fad53ee3d3b6d058b9d4ac9387b1082cf10a8bd3f4",
+    "compressedSha256": "82b36d361de872cb217cb710fcde3553a72974ae0cdb73907b32cab6525393fa"
+  },
+  "evidence/reproduction-final.log.gz": {
+    "originalSha256": "39bc1b223e3a9174368f352f75690936a203c60f078fdf35b2bfa577254d96aa",
+    "compressedSha256": "72787ddca9601b28979b4fda2e718870e6faa82a7157e7772af12742670b9c86"
+  },
+  "evidence/reproduction.log.gz": {
+    "originalSha256": "62f7c432d817c88d39bd89b1c399b2e7742bdf70ebc3ff29b94c220a406925d9",
+    "compressedSha256": "8d3e844800d32f5f599dc94125183ce99cdf9cecb79b7ee4b0ce2a5cae49840a"
+  },
+  "evidence/reproduction-test-before-fix.ts.gz": {
+    "originalSha256": "80e03a6a3e3255a4d98326eb6d99bf7a33552253ff1075302484b2e3e1b17268",
+    "compressedSha256": "9fc1910945ae263e1ff6f4c059e727683269300a1c50c577e210d87c8479c322"
+  }
+}
