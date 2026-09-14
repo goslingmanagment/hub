@@ -1,5 +1,7 @@
 # Decision-number coordination
 
+This receipt records the correction before the later main-4d9 rebase.
+
 The published W0 candidate `f208d2fac357457b6bdab37a9d26d81824d31acd`
 used Decision 333. Concurrent PR194 had already reserved that number for its
 separate follower-outreach topic. The coordinator assigned W0 Decision 334.

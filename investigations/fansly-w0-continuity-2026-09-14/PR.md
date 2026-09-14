@@ -2,11 +2,11 @@ The 120-second probe cannot collect the required six-hour continuity and receive
 
 A shared observer streams bounded sanitized metadata, checks credential/route generations without new dispatchers, and stops on cancellation, transport/auth failure, changed generation, output failure or lost cleanup proof. t=1 is an observed marker; binding, fan-out, independent presence and external REST recovery remain unverified. No additional REST requests, runtime flag, polling change, business writer or B0 acceptance is introduced. D334 and the operator runbook document scope and rollback.
 
-Validation on main e7351373 plus this candidate:
+Validation after rebasing onto main 4d9cac4a (PR194), with the W0 source patch unchanged:
 
-- pnpm check: PASS — 3,770 tests, 9 existing skips; typecheck, lint and dashboard build passed.
-- Python launcher suites: PASS — 18 tests covering shared host ownership, immutable-ID cleanup, cancellation/gaps and incomplete receipts.
-- Serial Docker-Postgres/real-proxy batch: PASS — 44 tests across fansly-probe-context.integration.test.ts, fansly-probe-transport.test.ts and fansly-dm-material-probe.integration.test.ts.
+- pnpm check: PASS — 3,776 tests, 9 existing skips; typecheck, lint and dashboard build passed.
+- Python launcher suites on unchanged launcher code: PASS — 18 tests covering shared host ownership, immutable-ID cleanup, cancellation/gaps and incomplete receipts.
+- Serial Docker-Postgres/real-proxy batch: PASS — 49 tests across fansly-probe-context.integration.test.ts, fansly-probe-transport.test.ts, fansly-dm-material-probe.integration.test.ts and incoming main's follower-outreach.integration.test.ts.
 - Both operator bundles build for node22 and pass local syntax checks; no provider execution.
 - Independent review: P1 Docker stdout fsync bug fixed. An actual piped-child regression passes and the old fsync behavior reproduces EINVAL. No findings remain in source review.
 

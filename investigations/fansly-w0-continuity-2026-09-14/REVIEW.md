@@ -157,3 +157,35 @@ Only decisions.md and the continuity runbook differ from the published manifest;
 the other 20 entries, including all code and tests, are unchanged. No new test
 run is needed for this documentation-only correction. No findings remain;
 the coordinator-authorized correction may be committed and pushed for fresh CI.
+
+## Main 4d9cac4a composition follow-up
+
+Independently compared previous base `e73513737e19b01bd74a4bfbfc6eeed1ffe56d69`
+and topic `a459032b51eb17800cc825d5ca498d7e59caced3` with new base
+`4d9cac4acffbbf1cbb17b74cac0b4d76f01ce65d` and rebased head
+`961eef6fa0d71b2b5070ea0573ff1adb1af98549`. The executable/test patch is
+byte-identical (SHA-256 `252a6e8112810316e7819782c5b2324e799a09d50ff01dde9c7932054b7d15a4`).
+Every prior topic file is byte-identical after rebase except decisions.md.
+
+The manual decision resolution retains all incoming main bytes, including D333,
+and inserts the unchanged W0 D334 reference row and complete section. Removing
+those additions recovers main plus the single blank separator before the new
+section. Incoming follower outreach, AI, contracts and erasure paths are disjoint
+from the W0 source paths; no runtime conflict or extra topic change was introduced.
+
+All 22 current source hashes verify; manifest SHA-256 is
+`70033ea58702cfad2fb6508833b682a20d7707bde5bea09d42186a56f5cedb4f`.
+No findings. Prior validation remains valid for the unchanged topic source; the
+author is separately running the requested composition checks and fresh PR CI.
+This review performed no tests, production calls or branch mutations.
+
+## Main 4d9cac4a validation receipt follow-up
+
+Verified both lossless archives named by `validation/composition-main-4d9.json`
+against their recorded original log hashes. The exact reviewed composition passed
+`pnpm check` with 3,776 tests and nine existing skips in 328 files, and 49 serial
+PostgreSQL/real-transport tests across four suites, including incoming follower
+outreach. Both commands exited zero between 15:49:33 and 15:50:30 UTC. All 22
+source manifest hashes remain unchanged. No findings remain; the reviewed
+composition and evidence are ready for the coordinator-authorized publication
+and fresh CI. This review did not execute tests or production actions.

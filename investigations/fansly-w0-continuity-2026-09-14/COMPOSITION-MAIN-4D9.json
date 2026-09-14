@@ -1,6 +1,14 @@
 {
-  "base": "4d9cac4acffbbf1cbb17b74cac0b4d76f01ce65d",
-  "files": {
+  "observedAt": "2026-09-14T15:48:48.365204+00:00",
+  "previousBase": "e73513737e19b01bd74a4bfbfc6eeed1ffe56d69",
+  "previousHead": "a459032b51eb17800cc825d5ca498d7e59caced3",
+  "composedBase": "4d9cac4acffbbf1cbb17b74cac0b4d76f01ce65d",
+  "rebasedHeadBeforeReceipts": "961eef6fa0d71b2b5070ea0573ff1adb1af98549",
+  "onlyConflict": "docs/decisions.md: exact main D333 plus unchanged topic D334 row/body",
+  "sourcePatchByteIdentical": true,
+  "sourcePatchSha256": "252a6e8112810316e7819782c5b2324e799a09d50ff01dde9c7932054b7d15a4",
+  "mainDecisionContentPreserved": true,
+  "sourceFiles": {
     "apps/runtime/src/services/egress/fansly-probe-context.ts": "4943f5b8d6a8e0b20f54fa5b20a62802c1bde7219f13dc5e041aa372dde6604a",
     "docs/decisions.md": "dbbf2f51ab81c01437f622fadfb038dbaa202ffdfc6539b68f9a5547f6df656f",
     "docs/runbooks/fansly-ws-continuity.md": "8c60a48be9eb10ebfeace7860d7d0d7f15077cf63bc9329cf66089bdda8c2180",
@@ -23,5 +31,19 @@
     "tests/fansly-continuity.test.ts": "b60ab6f905442f27e0af36126ceba37702a51c9a0511407dce4693e149aa70df",
     "tests/fansly-probe-context.integration.test.ts": "5d739c812f75e1433191272f9bd728258d55872d1ca2552b06cbccd912cb6a42",
     "tests/fansly-probe-launcher.py": "8103881f1cd92aa9bfc61e82b5abcc28ca56f9ba6c89aa94df7dfcbe3df9c9f8"
+  },
+  "priorDecisionHash": "f80de53b82ceceb41320b31611fac10b5489d990a8519d4614648ff39e03cd08",
+  "validation": {
+    "receipt": "validation/composition-main-4d9.json",
+    "fullCheck": {
+      "passed": 3776,
+      "skipped": 9,
+      "files": 328
+    },
+    "serialPostgresAndTransport": {
+      "passed": 49,
+      "files": 4
+    },
+    "finishedAt": "2026-09-14T15:50:30.671394+00:00"
   }
 }

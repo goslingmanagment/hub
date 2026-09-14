@@ -1,6 +1,6 @@
 # W0 continuity runner — implementation ready
 
-Base: `e73513737e19b01bd74a4bfbfc6eeed1ffe56d69` (main with PR 193 / D332).
+Current base: `4d9cac4acffbbf1cbb17b74cac0b4d76f01ce65d` (main with PR 194 / D333).
 Branch: `feat/fansly-w0-continuity`. Decision 334.
 
 The separate operator runner can collect one six-hour Lilly-1 connection and two
@@ -22,7 +22,23 @@ browser/proxy surface was provided to this implementation task. The independent
 fan-side observer concerns presence only. All live actions and recovery receipts
 remain separate from these offline implementation results.
 
-## Validation on the final candidate
+## Validation after composing current main
+
+Rebased onto main `4d9cac4a`. Only the append-only decisions document conflicted;
+main's D333 and W0's D334 are both preserved. The complete topic diff under apps,
+packages, scripts, tests and .github is byte-identical to the prior candidate.
+COMPOSITION-MAIN-4D9.json retains that proof and the source fingerprints.
+
+- Full `pnpm check`: PASS — 3,776 tests, 9 existing skips, 328 files;
+  typecheck, lint and dashboard build passed.
+- Serial Docker-Postgres/transport: PASS — 49 tests in four suites, adding
+  incoming main's follower-outreach.integration.test.ts to the original batch.
+- Test window: 14 September 2026, 15:49:33–15:50:30 UTC. Commands and original
+  output hashes are in validation/composition-main-4d9.json; lossless logs are
+  retained beside it. Python and bundle code remain unchanged from their
+  preceding successful checks below.
+
+## Earlier corrected-candidate validation
 
 - `NODE_OPTIONS=--max-old-space-size=4096 pnpm check`: PASS, 3,770 unit tests,
   9 existing skips, typecheck/lint/dashboard build. The existing test:unit script
@@ -57,8 +73,8 @@ claimed to be B0's per-fact durable capture.
 The first short-launcher Python pass failed one stale extracted-helper import;
 fixed in the test. The initial failure, the pre-review green checks (which did
 not detect P1), the P1 negative control and final corrected results are retained.
-REVIEW.md records the finding and resolution; independent final artifact review
-is requested. No original failure log was overwritten.
+REVIEW.md records the finding, resolution and completed independent artifact
+review. No original failure log was overwritten.
 
 ## Publication and live boundary
 
