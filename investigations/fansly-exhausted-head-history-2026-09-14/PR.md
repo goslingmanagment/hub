@@ -8,3 +8,9 @@ Final main composition `7bb73162` (main `b78752d0`):
 - Independent source/readability review closed the execution finding. All pinned source hashes remained stable in final validation.
 
 The investigation retains exact commands, compressed logs, the initial deterministic-fixture timing failure and the correction. No production action or measurement was performed for this patch; catch-up remains controlled by its existing allowlist.
+
+Current-main follow-up integrates `a9794e60`. The prior local validation
+certifies the unchanged topic source (`7bb73162`); the sole incoming executable/test
+change is main's verified UTC fixture. Independent `REVIEW-MAIN-A979.md`
+confirms source, decision and evidence preservation. Local suites were not
+repeated for this composition; fresh PR CI validates the full merge.
