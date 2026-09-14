@@ -8,3 +8,10 @@ Validation against the composed main candidate:
 - Independent review closed the long-line finding and found no remaining actionable issues; source hashes were stable throughout validation.
 
 The committed investigation contains exact commands, complete logs, transfer/source manifests, formatting proof and the independent review. This PR does not deploy or change event-migration acceptance gates. C1 and provider cooldown remain separate PR topics.
+
+Final main composition `83471e2c` incorporates main `b78752d0` (merged C1 and
+cooldown). The only merge resolution preserves both decision entries. Final
+`pnpm check`: 3,580 passed, nine existing skips, 315 files; twelve serial Docker
+PostgreSQL suites: 153 passed, no skips. All pinned source hashes remained stable.
+See `final-main-validation/` for exact commands and compressed logs, and
+`REVIEW-FINAL-MAIN-MERGE.md` for the independent composition review.

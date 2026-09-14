@@ -59,3 +59,10 @@ in 12 serial Docker-Postgres suites with no skips. Source hashes remained stable
 The remaining publication steps are coordinator verification of D323 numbering
 and final review context. Deployment remains gated on the other production/main
 differences and the owner's approval.
+
+Final main composition `83471e2c` incorporates main `b78752d0` (merged C1 and
+cooldown). The only merge resolution preserves both decision entries. Final
+`pnpm check`: 3,580 passed, nine existing skips, 315 files; twelve serial Docker
+PostgreSQL suites: 153 passed, no skips. All pinned source hashes remained stable.
+See `final-main-validation/` for exact commands and compressed logs, and
+`REVIEW-FINAL-MAIN-MERGE.md` for the independent composition review.
