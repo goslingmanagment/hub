@@ -1,0 +1,28 @@
+{
+  "command": [
+    "pnpm",
+    "exec",
+    "vitest",
+    "run",
+    "--no-file-parallelism",
+    "tests/fansly-dm-reader-heads.integration.test.ts",
+    "tests/fansly-dm-material-probe.integration.test.ts",
+    "tests/fansly-dm-shadow.integration.test.ts",
+    "tests/fansly-dm-conversations-sweep.integration.test.ts",
+    "tests/agent-transcript-window.integration.test.ts",
+    "tests/agent-transcript-tombstone.integration.test.ts",
+    "tests/production-migration-history.integration.test.ts",
+    "tests/migrate-runner.integration.test.ts"
+  ],
+  "environment": {
+    "ALLOW_MISSING_TEST_PREREQUISITES": "0",
+    "NODE_OPTIONS": "--max-old-space-size=8192"
+  },
+  "head": "5f247b4312ea60ab2b81625a4ca49bd8046fb3cf",
+  "startedAt": "2026-09-14T15:52:28.543798+00:00",
+  "finishedAt": "2026-09-14T15:52:49.065059+00:00",
+  "durationSeconds": 20.521166874998016,
+  "exitCode": 0,
+  "rawSha256": "80d82a66bc97ef86bcc7e2f28872f361a2eb6c942667550b384c68d176b2bdd9",
+  "compressedSha256": "2e028bc9f9e463cea780095f6be54d5e59552b6726e1accdbb5038df54890e02"
+}
