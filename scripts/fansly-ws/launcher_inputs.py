@@ -116,6 +116,4 @@ def container_command(args, name: str, key_path: Path | None = None) -> list[str
         command.extend(["--correlation-key-file", CORRELATION_KEY_TARGET])
     if binding_path is not None:
         command.extend(["--binding-receipt-file", BINDING_RECEIPT_TARGET])
-    if getattr(args, "expected_generation", None) is not None:
-        command.extend(["--expected-generation", args.expected_generation])
     return command

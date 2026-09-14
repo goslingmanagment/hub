@@ -13,7 +13,7 @@ export const CONTINUITY_PHASES = {
 export type ContinuityPhase = keyof typeof CONTINUITY_PHASES;
 
 export function parseContinuityArgs(args: string[]) {
-  if (![8, 10].includes(args.length) || args[0] !== "--page" || args[1] !== "lilly-1"
+  if (args.length !== 8 || args[0] !== "--page" || args[1] !== "lilly-1"
     || args[2] !== "--phase" || !Object.hasOwn(CONTINUITY_PHASES, args[3] ?? "")
     || args[4] !== "--correlation-key-file" || !args[5] || args[5].startsWith("-")
     || /[\r\n\0]/.test(args[5]) || args[6] !== "--binding-receipt-file"
@@ -21,13 +21,8 @@ export function parseContinuityArgs(args: string[]) {
     throw new Error("invalid_continuity_arguments");
   }
   const phase = args[3] as ContinuityPhase;
-  const expectedGeneration = args[9];
-  if ((phase !== "continuous" && args.length !== 10)
-    || (args.length === 10 && (args[8] !== "--expected-generation" || !/^[a-f0-9]{64}$/.test(expectedGeneration ?? "")))) {
-    throw new Error("invalid_continuity_generation");
-  }
   return { pageLabel: "lilly-1" as const, phase, correlationKeyFile: args[5],
-    bindingReceiptFile: args[7], expectedGeneration };
+    bindingReceiptFile: args[7] };
 }
 
 /** One connection only. The host owns planned gaps and confirms container removal.
@@ -35,7 +30,6 @@ export function parseContinuityArgs(args: string[]) {
 export async function observeFanslyContinuity(input: {
   phase: ContinuityPhase;
   generation: string;
-  expectedGeneration?: string | undefined;
   token: string;
   key: Buffer;
   connect: () => ProbeSocket;
@@ -57,11 +51,6 @@ export async function observeFanslyContinuity(input: {
     accountBinding: "unverified", presence: "unverified", fanOut: "unverified",
     recovery: "external_evidence_required", readerLatencyMeasured: false, restRequests: 0,
   });
-  if (input.expectedGeneration !== undefined && input.generation !== input.expectedGeneration) {
-    output.write({ kind: "finished", collectionCompleted: false, reason: "generation_changed_before_connect" }, true);
-    return false;
-  }
-
   const stopWatching = watchProbeGeneration({
     read: input.readGeneration, expected: input.generation, controller: input.controller,
     retain: (receipt) => output.write(receipt),

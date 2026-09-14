@@ -69,7 +69,6 @@ def run(args) -> dict:
                         gap_receipt["confirmedAbsentMs"] = (time.monotonic() - gap_started) * 1000
                         save_report()
                 args.phase = phase
-                args.expected_generation = expected
                 directory = output / phase
                 directory.mkdir(mode=0o700)
                 execution = run_container(args, bundle, directory, key, seconds + 45, "receipts.jsonl")
@@ -83,7 +82,6 @@ def run(args) -> dict:
                 if (receipt["generation"] != expected
                         or (fingerprint is not None and receipt["keyFingerprint"] != fingerprint)):
                     raise ValueError("changed_experiment_identity")
-                expected = receipt["generation"]
                 fingerprint = receipt["keyFingerprint"]
                 save_report()
             result["collectionCompleted"] = True

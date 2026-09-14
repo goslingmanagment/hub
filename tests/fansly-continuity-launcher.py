@@ -51,7 +51,8 @@ class ContinuityLauncherTest(unittest.TestCase):
     def phase(self, args, bundle, output, key, timeout, filename):
         self.assertEqual(bundle, b"fixture")
         self.assertEqual(key.read_bytes(), b"k" * 32)
-        self.phases.append((args.phase, args.expected_generation))
+        binding = json.loads(args.binding_receipt_copy.read_text())
+        self.phases.append((args.phase, binding["credentialRouteGeneration"]))
         seconds = 21_600 if args.phase == "continuous" else 120
         self.assertEqual(timeout, seconds + 45)
         self.clock += seconds

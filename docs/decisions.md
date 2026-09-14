@@ -337,6 +337,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 337 | W0 container absence cleanup | Accept complete Docker absence diagnostics regardless of message casing with exact name/ID matching; preserve ownership checks, immutable-ID removal and original provider receipts. |
 | 338 | W0 transport failure receipts | Retain observed open/failure boundaries and bounded dispatcher error code/HTTP status before Undici loses them; preserve one-attempt transport, secrecy and cleanup. |
 | 339 | OnlyFans follower greetings | Desktop reuses kernel context for one-message Hi, reads the current welcome template through capture-first, and opts into atomic page/fan custody inside the existing OFAPI command outbox. |
+| 340 | W0 single binding authority | Use the original receipt for every phase; remove duplicate generation arguments and avoid constructing a second dispatcher for the short post-read. |
 
 
 ## Consensus Decisions
@@ -13840,3 +13841,20 @@ local provider fixtures and PostgreSQL, including concurrent chatter admission,
 owned replays, conservative terminal custody, safe releases, context gates and
 captured/credited welcome reads.
 
+
+## Decision 340: Keep one W0 binding authority and dispatcher (2026-09-15)
+
+Decision 336 made the original REST identity receipt mandatory for continuity.
+Each phase already compares that same private receipt with its fresh snapshot
+and immediately rechecks generation before connecting. The extra
+`--expected-generation` argument duplicated that authority across Python, the
+Node runtime and the observer. Remove it; the host still checks phase receipts
+against the original generation, and the periodic/final generation watch remains.
+All launcher components must come from the same reviewed revision.
+
+The short probe now reads only generation after observation. It owns one initial
+credential/dispatcher snapshot and one dispatcher cleanup, rather than decrypting
+the session and constructing an unused second dispatcher for the post-read.
+A failed post-read remains unknown; a changed generation remains false. Provider
+requests, resource bounds, ownership, cleanup and live acceptance gates are unchanged.
+See [the continuity runbook](runbooks/fansly-ws-continuity.md).

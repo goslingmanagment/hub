@@ -52,6 +52,9 @@ validates it before connecting. Receipt success, page/account and current
 generation must match; failure prevents that phase's socket attempt. Receiver
 evidence retains the receipt's SHA-256 and comparison under `bindingPreflight`,
 separately from the preflight report. Overall `accountBinding` stays unverified.
+The original binding receipt is the sole expected-generation input for all
+phases. The internal `--expected-generation` argument was removed in Decision
+339; rebuild and copy the matching Node bundle and Python launcher together.
 Deploy all four launcher modules alongside it: `launcher_inputs.py`,
 `launcher_container.py`, `continuity_receipt.py` and `run-probe.py`. The Python
 scripts require Python 3.11+ on a Unix host. Do not use the old short launcher

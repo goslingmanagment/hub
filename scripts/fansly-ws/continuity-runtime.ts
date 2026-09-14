@@ -7,7 +7,7 @@ import { openFanslyProbeSocket } from "../../apps/runtime/src/services/egress/fa
 import { createProbeTransportDiagnostics } from "../../apps/runtime/src/services/egress/fansly-probe-diagnostics.ts";
 import { readCorrelationKey } from "./correlation-key.ts";
 import { observeFanslyContinuity, type parseContinuityArgs } from "./continuity.ts";
-import { BindingRefusal, readBindingReceipt, verifyBindingBeforeConnect } from "./binding-receipt.ts";
+import { readBindingReceipt, verifyBindingBeforeConnect } from "./binding-receipt.ts";
 
 export async function runStoredFanslyContinuity(
   args: ReturnType<typeof parseContinuityArgs>,
@@ -31,14 +31,11 @@ export async function runStoredFanslyContinuity(
     context = await readProbeSnapshot(db, config, args.pageLabel);
     const bindingPreflight = await verifyBindingBeforeConnect(binding, context, args.pageLabel,
       () => readProbeGeneration(db, args.pageLabel));
-    if (args.expectedGeneration !== undefined && args.expectedGeneration !== context.generation) {
-      throw new BindingRefusal("binding_snapshot_mismatch", binding.sha256);
-    }
     const ownedContext = context;
     const transportDiagnostics = createProbeTransportDiagnostics();
     return await observeFanslyContinuity({
       ...args, token: context.token, generation: context.generation, key, controller, writeLine,
-      expectedGeneration: binding.receipt.credentialRouteGeneration, bindingPreflight,
+      bindingPreflight,
       connect: () => openFanslyProbeSocket(ownedContext.egress, transportDiagnostics),
       transportDiagnostics,
       readGeneration: () => readProbeGeneration(db, args.pageLabel),
