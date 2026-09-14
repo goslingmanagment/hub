@@ -1,0 +1,19 @@
+{
+  "main": "4ecbfc839fa47a5951d785f374774e4fa9942ba7",
+  "compositionHead": "f29b0784ecf0b74393f462670b0a385b5808ddad",
+  "sourceSha256": {
+    "apps/runtime/src/services/sync/fan-earnings.ts": "0cfa7c51a5934adb1b5ab01a4bb5d78fa425180cc7fc75690495988d6a37fe0d",
+    "tests/fan-earnings-completion-settlement.integration.test.ts": "764673a9defb2ad8b75cc844b6e06478555c83bf9dc69b2ee4c2a96eaa235bdf",
+    "docs/decisions.md": "db7ca1f3393dbe11270452a1a19a1f636b0c24d5caab998e805cae1b7bf56a18",
+    "docs/runbooks/fansly-earnings-shadow.md": "7e41406d69ffcbd12a62cf898bc1a66ffde807e143d30e58850a7d0061901ceb"
+  },
+  "checkReceipt": "check-fresh-clock.json",
+  "postgresReceipt": "postgres-fresh-clock.json",
+  "reviewsSha256": {
+    "REVIEW.md": "431b38999181c88be03528e75b29be4eb18b633fa216fb2a213b1d42b3cb190a",
+    "REVIEW-SECOND.md": "737c3ab359be6970ce89d93e878fae64411cb9ad15cecb4f502e56ab5da1660a",
+    "REVIEW-MAIN-4ECB.md": "504be1a9fd272815446027f8949c983b14f457d99c0b4365b8c113b0e5fd4cf8"
+  },
+  "providerCalls": 0,
+  "productionActions": 0
+}

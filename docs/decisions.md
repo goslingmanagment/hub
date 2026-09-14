@@ -327,6 +327,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 327 | Fansly DM exclusion write | Merge only the verified partner's exclusion metadata under the current lease; preserve newer thread material and refuse stale-binding checkpoint advance. |
 | 328 | C2b receipt claim renewal | Renew the unchanged pre-fetch claim inside its owned settlement transaction so a slow response retains its receipt; replacement tokens and later revisions remain fenced. |
 | 330 | Voice fixture settlement boundary | Wait for committed voice completion before the next test resets tables; keep detached runtime dispatch unchanged. |
+| 331 | Earnings completion settlement | Reuse a fully completed checkpoint only for its owning request sequence; preserve read timestamps, daily cadence and newer work. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -13470,3 +13471,20 @@ remaining dispatcher cleanup does not write to the database in this case.
 Keep runtime dispatch, reset semantics and all admission assertions unchanged.
 No fixed delay, reset retry, new flag or production change is introduced.
 Decision 330 is reserved after the independently prepared Decisions 325–329.
+
+## Decision 331: Settle a completed earnings generation without fetching it again (2026-09-14)
+
+An earnings walk can commit its completed cursor before `completePageSync`
+fails. Retrying that same request previously started from cursor zero and read
+both endpoints for every spender again. A Docker-Postgres reproduction confirms
+this boundary; it does not establish the cause of historical production traffic.
+
+Reuse the existing checkpoint only when its `cursor_seq` matches the current
+page/stream execution sequence, its fan cursor is exactly zero and its full-walk
+completion timestamp is valid. Assert the current lease before returning the
+completed result. Preserve the checkpoint and its original timestamps; record
+`reusedCompletedWalk` so settlement is distinguishable from new endpoint reads.
+New requests, partial cursors, missing/unowned contexts and cleared checkpoints
+cannot reuse this result. Existing reset and erasure paths remain authoritative.
+No rolling cooldown, cadence change, new field, migration or runtime flag is
+introduced. C2c freshness and independent-rotation gates remain unchanged.

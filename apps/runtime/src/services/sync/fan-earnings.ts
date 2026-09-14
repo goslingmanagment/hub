@@ -1,5 +1,5 @@
 import {
-  assertOwnedPageSyncLease, getCheckpoint, listPageFanNativeIds,
+  assertOwnedPageSyncLease, getCheckpoint, getPageSyncExecutionContext, listPageFanNativeIds,
   upsertCheckpoint, upsertCheckpointProgress,
 } from "@agency_hub_core/db";
 import { FanslyApiError } from "@agency_hub_core/fansly";
@@ -52,6 +52,19 @@ export async function executeFanEarningsChunk(
   const window = { after: new Date(0), before: new Date() };
   const checkpoint = await getCheckpoint(app.db, input.pageContext.page.id, "fan_earnings");
   const state = checkpoint?.state as { cursorFanId?: number; completedAt?: string } | null;
+  const execution = getPageSyncExecutionContext();
+  if (execution?.pageId === input.pageContext.page.id && execution.stream === "fan_earnings" &&
+    checkpoint?.cursorSeq === execution.requestSeq && state?.cursorFanId === 0 &&
+    typeof state.completedAt === "string" && Number.isFinite(Date.parse(state.completedAt))) {
+    // The walk committed before its generation could settle. Keep that read's
+    // timestamps and finish only this generation, without fetching it again.
+    await assertOwnedPageSyncLease(app.db);
+    return {
+      satisfied: true,
+      yieldReason: null,
+      stats: { fansFetched: 0, walkCompleted: true, reusedCompletedWalk: true },
+    };
+  }
   let cursorFanId = typeof state?.cursorFanId === "number" ? state.cursorFanId : 0;
   // A43 (W8.2): the PERSISTED cursor advances only through one contiguous
   // prefix of successful fans. A fan-scoped rejection stops the walk; it may
