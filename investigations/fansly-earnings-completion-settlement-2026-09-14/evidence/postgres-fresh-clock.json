@@ -1,0 +1,29 @@
+{
+  "command": [
+    "pnpm",
+    "exec",
+    "vitest",
+    "run",
+    "--no-file-parallelism",
+    "tests/fan-earnings-completion-settlement.integration.test.ts",
+    "tests/fan-earnings-capture.integration.test.ts",
+    "tests/fan-earnings-receipts.integration.test.ts",
+    "tests/page-sync-lease-fencing.integration.test.ts"
+  ],
+  "environment": {
+    "ALLOW_MISSING_TEST_PREREQUISITES": "0"
+  },
+  "baseCommit": "f29b0784ecf0b74393f462670b0a385b5808ddad",
+  "startedAt": "2026-09-14T01:46:14.276715+00:00",
+  "endedAt": "2026-09-14T01:46:24.695391+00:00",
+  "seconds": 10.419,
+  "exitCode": 0,
+  "sourceSha256": {
+    "apps/runtime/src/services/sync/fan-earnings.ts": "0cfa7c51a5934adb1b5ab01a4bb5d78fa425180cc7fc75690495988d6a37fe0d",
+    "tests/fan-earnings-completion-settlement.integration.test.ts": "764673a9defb2ad8b75cc844b6e06478555c83bf9dc69b2ee4c2a96eaa235bdf",
+    "docs/decisions.md": "db7ca1f3393dbe11270452a1a19a1f636b0c24d5caab998e805cae1b7bf56a18",
+    "docs/runbooks/fansly-earnings-shadow.md": "7e41406d69ffcbd12a62cf898bc1a66ffde807e143d30e58850a7d0061901ceb"
+  },
+  "sourceUnchanged": true,
+  "logSha256": "a5f5eb28e06f6ac6ad546c3831fe8ae0b19f1f3aede411a7fda928a244436d62"
+}

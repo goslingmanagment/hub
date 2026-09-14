@@ -1,5 +1,8 @@
 # Completion-settlement composition with main 4ecbfc83
 
+Historical composition receipt before the later fixture-clock adjustment.
+Final fixture revalidation is recorded in REPORT.md and evidence/final-validation.json.
+
 Merged exact main `4ecbfc839fa47a5951d785f374774e4fa9942ba7` (history
 PR188 and voice-fixture PR191) into reviewed topic `a56f3092`.
 The only conflict was the append-only decision document. Resolution preserves

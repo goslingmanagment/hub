@@ -13,8 +13,8 @@ import { earningsShadowFixture } from "./helpers/earnings-shadow-fixture.ts";
 let db: StartedTestDatabase;
 let f: Awaited<ReturnType<typeof earningsShadowFixture>>;
 let visits: EarningsVisit[];
-const now = new Date("2026-09-14T12:00:00Z");
-const retryAt = new Date(now.getTime() + 60_000);
+let now: Date;
+let retryAt: Date;
 const oneWalk: EarningsVisit[] = ["fan-a", "fan-b"].flatMap((fanRef) => [
   { fanRef, window: "lifetime" }, { fanRef, window: "monthly" },
 ]);
@@ -26,6 +26,8 @@ beforeEach(async () => {
   f = await earningsShadowFixture(db, false);
   visits = [];
   f.app.adapter = earningsShadowAdapter(visits);
+  now = new Date();
+  retryAt = new Date(now.getTime() + 60_000);
   // Seed a quiescent page; the real scheduler admits the earnings generation.
   await db.pool.query(`update page_sync_states
     set applied_seq = request_seq, status = 'paused' where page_id = $1`, [f.page.id]);

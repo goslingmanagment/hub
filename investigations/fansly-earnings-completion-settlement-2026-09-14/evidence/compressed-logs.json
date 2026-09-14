@@ -22,5 +22,13 @@
   "evidence/reproduction-test-before-fix.ts.gz": {
     "originalSha256": "80e03a6a3e3255a4d98326eb6d99bf7a33552253ff1075302484b2e3e1b17268",
     "compressedSha256": "9fc1910945ae263e1ff6f4c059e727683269300a1c50c577e210d87c8479c322"
+  },
+  "evidence/check-fresh-clock.log.gz": {
+    "originalSha256": "f72d256504cc4c746d556c12695031b411d3205b4558a31b3b2f63ecb27941ad",
+    "compressedSha256": "a0ff6d558e63e759bc838de01ba1a11ed5d001057c9ee68548d89201a9ef8ae8"
+  },
+  "evidence/postgres-fresh-clock.log.gz": {
+    "originalSha256": "a5f5eb28e06f6ac6ad546c3831fe8ae0b19f1f3aede411a7fda928a244436d62",
+    "compressedSha256": "1f476e31c742e49ba698644c56557bad4023332981325ca684cbb2e2975db34c"
   }
 }

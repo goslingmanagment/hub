@@ -11,7 +11,7 @@ no field, schema migration, flag, cadence cap or new scheduling policy. D331 and
 the earnings shadow runbook explain the `reusedCompletedWalk` statistic and the
 difference between scheduler settlement time and the original provider read.
 
-The separate 200-line PostgreSQL suite covers eight boundaries: healthy same-slot
+The separate 202-line PostgreSQL suite covers eight boundaries: healthy same-slot
 settlement, failed settlement/retry of the same generation, a queued newer
 request, partial continuation carrying old completedAt, first-fan rejection in
 a newer generation, absent execution context with an existing owned checkpoint,
@@ -22,15 +22,23 @@ the corrected retry retains one sequence and an identical checkpoint.
 | Validation | Result | Command wall time |
 | --- | --- | --- |
 | Original-code reproduction | 2/2 cases passed, demonstrating the gap plus a healthy control | 4.543s |
-| Four serial Docker-Postgres suites | 39/39 passed, no skips | 10.378s |
-| pnpm check | Strictness/lint/build passed; 3,580 unit tests passed, nine existing skips, 315 files | 48.043s |
+| Four serial Docker-Postgres suites | 39/39 passed, no skips | 10.419s |
+| pnpm check | Strictness/lint/build passed; 3,580 unit tests passed, nine existing skips, 315 files | 45.051s |
 
-Final local checks used main `ce0a44b0d6778f8bd371c105f26d31f9abe8b8bd`
-plus the topic changes. The exact source/doc fingerprints stayed unchanged
-through both final runs; PostgreSQL ended at 01:34:52.684979 UTC and check at
-01:35:59.957061 UTC on 14 September. The initial reproduction stopped at a
-wrapper-error assertion; its log is retained alongside the corrected assertion
-against the original PostgreSQL cause. No failure evidence was replaced.
+Final local checks used the composed main
+`4ecbfc839fa47a5951d785f374774e4fa9942ba7` plus the topic and fresh per-case
+fixture timestamps. Exact runtime/test/doc fingerprints stayed unchanged
+through both final runs; PostgreSQL ended at 01:46:24.695391 UTC and check at
+01:47:31.864937 UTC on 14 September. The earlier ce0a44b0 validation remains
+retained separately; final receipts use the `*-fresh-clock` filenames.
+
+The second review initially inferred a fixture lease-expiry bug, then withdrew
+it after checking that PostgreSQL supplies the lease clock. The per-case
+scheduling timestamp adjustment is compatible, not a fix for a proven expiry
+bug; REVIEW-SECOND.md preserves the correction. Both independent source reviews
+and the main composition review are clean. The changed fixture was revalidated
+in full. The initial reproduction's wrapper-error assertion failure is retained
+alongside the corrected assertion against the original PostgreSQL cause.
 
 Commands, timestamps, exits and source hashes are in `evidence/*.json`;
 `validate.py` captures the final check/PG receipts. Complete logs and original
