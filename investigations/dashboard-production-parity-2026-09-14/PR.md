@@ -15,3 +15,11 @@ cooldown). The only merge resolution preserves both decision entries. Final
 PostgreSQL suites: 153 passed, no skips. All pinned source hashes remained stable.
 See `final-main-validation/` for exact commands and compressed logs, and
 `REVIEW-FINAL-MAIN-MERGE.md` for the independent composition review.
+
+The first CI attempt failed in Typecheck when Node22 exhausted its default
+approximately 2 GiB heap. The static job now declares a bounded 4 GiB heap;
+no type coverage, error budget, integration job or production configuration
+changes. `pnpm check` passed again at that exact 4 GiB limit (3,580 tests and
+nine existing skips). Application source remains byte-identical to the final
+153-test PostgreSQL validation. The failure and new full-check receipts are
+retained in `ci-failure/` and `static-heap-validation/`; fresh CI is required.

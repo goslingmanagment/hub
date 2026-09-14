@@ -13291,3 +13291,11 @@ Neither merge nor rollback changes event-migration gates or authorizes a deploy.
 
 Decision 323 is reserved by the coordinator after Decision 322 for provider
 cooldown. Publication must verify that numbering against current main.
+
+PR185 CI exposed an additional build prerequisite: Node 22's default roughly
+2 GiB heap aborts while typechecking the restored full workspace. The static
+CI job now declares a bounded 4 GiB heap for its host-side Node processes.
+The strictness ratchet and its per-file debt budget are unchanged; unit scripts
+retain their own memory settings. This workflow environment does not enter the
+production image, running services, database or integration jobs. Retain the
+failed job log and validate the full static command with the declared budget.
