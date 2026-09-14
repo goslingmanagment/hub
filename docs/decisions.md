@@ -322,7 +322,9 @@ appends a row here in the same change (family law: updated-in-change).
 | 322 | Durable provider cooldown | Retain future provider retry deadlines across queued revisions; report long Fansly cooldowns immediately without retrying early. |
 | 323 | Dashboard production parity | Restore the five deployed dashboard feature-control and daily-workflow patches on current main; preserve backend behavior and verify the single formatting-only exception against emitted JavaScript. |
 | 324 | OFAPI fixture UTC clock | Cap ordinary ledger fixture timestamps at their captured instant; prove report boundaries with explicit observations while preserving future-fact exclusion. |
+| 326 | Exhausted DM head debt and history | Retain exhausted missing-head discrepancies while allowing ordinary pending history; only unexhausted debt retains head-search priority and backoff. |
 | 327 | Fansly DM exclusion write | Merge only the verified partner's exclusion metadata under the current lease; preserve newer thread material and refuse stale-binding checkpoint advance. |
+| 330 | Voice fixture settlement boundary | Wait for committed voice completion before the next test resets tables; keep detached runtime dispatch unchanged. |
 | 331 | Earnings completion settlement | Reuse a fully completed checkpoint only for its owning request sequence; preserve read timestamps, daily cadence and newer work. |
 
 ## Consensus Decisions
@@ -13316,6 +13318,41 @@ and around the failed 00:02:30 case. Keep the intentional future-entry test and
 production queries unchanged. An original-helper negative control reproduces
 132 versus 92; the corrected suite passes all 26 cases. No runtime flag is added.
 
+## Decision 326: Exhausted head debt does not block ordinary history (2026-09-14)
+
+An allowlisted Fansly conversation could remain in `pending_backfill` forever
+after its known missing head exhausted all five recovery attempts. The selector
+correctly stopped head searches, but still excluded ordinary pending history
+whenever any uncaptured head debt existed. The list writer used that same broad
+unresolved test to suppress the sibling message-stream wakeup.
+
+Ordinary pending history is now blocked only by uncaptured debt with fewer than
+five attempts. Due head debt retains its existing priority, and unexhausted debt
+in backoff still cannot enter through the history path. The list writer reuses
+its existing bounded-retry deadline result to make the same distinction; no
+additional query or retry loop is introduced.
+
+A freshly selected pending-history conversation without an active head target
+uses ordinary backfill from its oldest stored cursor. Its still-missing head
+must not force an incremental read that overlaps without advancing history.
+Due head targets and existing pinned work keep their current mode and cursor.
+
+Exhausted rows remain uncaptured and visible as `exhausted` in the reporting
+view. `hasUnresolvedFanslyDmHead` keeps its diagnostic meaning, including those
+rows. No ID is acknowledged, erased, declared provider-deleted or repaired by
+this selection change. A later exact stored receipt can still resolve the debt.
+
+The existing allowlist, five-attempt cap, page budgets, history policy, stream
+and transport gates remain in force. No flag, migration, recovery activation or
+production action is introduced. Postgres regressions cover exhausted history
+selection without debt mutation, unexhausted head priority/backoff, actual
+allowlisted sweep wakeups, and a message chunk that captures older history once
+without retrying or acknowledging the exhausted head. Rollback preserves the debt but
+can block ordinary pending history behind exhausted debt again.
+
+Decision 326 is a coordinator reservation after separately prepared Decisions
+322–325. Its number must be checked against current main before publication.
+
 ## Decision 327: Exclude an unresolvable DM partner without rewriting its thread (2026-09-14)
 
 After repeated terminal message 5xx failures and a journaled unresolved partner
@@ -13331,6 +13368,18 @@ unchanged; never recreate the row from the stale snapshot. Existing failure
 thresholds, account resolution and polling policy remain unchanged. No migration
 or runtime flag is added. The focused PostgreSQL suite interleaves a second writer
 inside the mocked lookup while exercising the real handler, journal and queries.
+
+## Decision 330: Complete the voice fixture before resetting its database (2026-09-14)
+
+The normal `end_turn` admission case ended after its `dispatched` response,
+while detached synthesis could still update the voice row and character budget.
+The next test's table reset then deadlocked with that settlement in CI.
+Use the suite's existing bounded wait for the persisted `completed` state before
+ending this case. Completion and budget reconciliation commit together; the
+remaining dispatcher cleanup does not write to the database in this case.
+Keep runtime dispatch, reset semantics and all admission assertions unchanged.
+No fixed delay, reset retry, new flag or production change is introduced.
+Decision 330 is reserved after the independently prepared Decisions 325–329.
 
 ## Decision 331: Settle a completed earnings generation without fetching it again (2026-09-14)
 

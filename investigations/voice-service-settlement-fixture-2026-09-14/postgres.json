@@ -1,0 +1,31 @@
+{
+  "command": [
+    "pnpm",
+    "exec",
+    "vitest",
+    "run",
+    "--no-file-parallelism",
+    "tests/voice-notes-service.integration.test.ts",
+    "tests/voice-notes.repository.integration.test.ts"
+  ],
+  "cwd": "/Users/dmitriy/.codex/worktrees/hub-voice-service-settlement-fixture-20260914",
+  "environmentOverrides": {
+    "ALLOW_MISSING_TEST_PREREQUISITES": "0",
+    "NODE_OPTIONS": "--max-old-space-size=4096"
+  },
+  "startedAt": "2026-09-14T01:25:21.981849+00:00",
+  "completedAt": "2026-09-14T01:25:33.535071+00:00",
+  "durationSeconds": 11.553,
+  "exitCode": 0,
+  "sourceBefore": {
+    "tests/voice-notes-service.integration.test.ts": "af4e463560a2156ca25ae367cf8a88b75e94583dc447dbabb012e73a65ad4101",
+    "docs/decisions.md": "28bbf2cc531df81bca4472b5e6cd6115356004a605a62d5257ad9e60fb43e204"
+  },
+  "sourceAfter": {
+    "tests/voice-notes-service.integration.test.ts": "af4e463560a2156ca25ae367cf8a88b75e94583dc447dbabb012e73a65ad4101",
+    "docs/decisions.md": "28bbf2cc531df81bca4472b5e6cd6115356004a605a62d5257ad9e60fb43e204"
+  },
+  "sourceUnchanged": true,
+  "rawSha256": "f6e3d7b4e49fc3f71b2e83ecf54b24aecbb464c6f11d4f9869d9057c2abcb202",
+  "log": "postgres.log.gz"
+}
