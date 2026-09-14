@@ -329,7 +329,8 @@ appends a row here in the same change (family law: updated-in-change).
 | 329 | Fansly earnings money codec | Aggregate provider mills through the shared codec; preserve safe-integer refusal, event fingerprints and projection ordering. |
 | 330 | Voice fixture settlement boundary | Wait for committed voice completion before the next test resets tables; keep detached runtime dispatch unchanged. |
 | 331 | Earnings completion settlement | Reuse a fully completed checkpoint only for its owning request sequence; preserve read timestamps, daily cadence and newer work. |
-| 332 | Live new-follower drafts | Fansly extension reads live followers and history; Hub generates one draft with profile/avatar context and coordinates one-attempt browser sends. |
+| 332 | A0 material-query cost read plane | Expose one bounded current-head EXPLAIN through the existing read_only role; keep runtime queries and coverage gates unchanged. |
+| 333 | Live new-follower drafts | Fansly extension reads live followers and history; Hub generates one draft with profile/avatar context and coordinates one-attempt browser sends. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -13513,7 +13514,38 @@ cannot reuse this result. Existing reset and erasure paths remain authoritative.
 No rolling cooldown, cadence change, new field, migration or runtime flag is
 introduced. C2c freshness and independent-rotation gates remain unchanged.
 
-## Decision 332: Live Fansly new-follower drafts and browser-send custody (2026-09-14)
+## Decision 332: Expose a bounded A0 material-query cost read (2026-09-14)
+
+The production read-only role cannot SELECT the three base tables used by A0's
+material check. The prepared current-head sample and EXPLAIN therefore stopped
+at their privilege preflight, leaving actual query cost unknown. Broad table
+access is unnecessary for this measurement.
+
+Migration 0192 adds one EXECUTE-only `fansly_dm_shadow_material_probe(text, integer)`
+function for the existing `read_only` role. It resolves one Fansly page, selects
+at most 100 current visible nonempty stored heads, quotes their IDs as typed
+VALUES, and explains the runtime material query with ANALYZE and BUFFERS. The
+fixed query preserves the non-deleted hot-message predicate and exact-ID debt
+join. A source-fidelity test requires any later runtime query change to address
+the probe explicitly. No arbitrary SQL/ID input, table grant, flag, new index,
+provider request or runtime-path change is introduced.
+
+The function requires an already read-only, repeatable-read transaction and
+caller-established statement/lock deadlines of at most five seconds/100 ms.
+EXPLAIN requires a VOLATILE PL/pgSQL function; the fixed SECURITY DEFINER search
+path and qualified base tables keep object resolution controlled. PUBLIC loses
+EXECUTE. Empty samples return a null plan; failures remain unmeasured. The
+migration is additive and application-rollback compatible; stop measurement by
+stopping calls, without a polling/configuration change.
+
+A current stored-head sample is not a retained provider response from before
+apply. The plan does not return predicate results or establish hot/archive/reader
+completeness. Instrumentation/cache effects and the separate application waits
+remain outside a latency guarantee. This operation closes only the privilege
+blocker for bounded cost measurement; A0's original clock, discrepancy evidence,
+freshness gates, provider-side deletion treatment and unmeasured savings remain.
+
+## Decision 333: Live Fansly new-follower drafts and browser-send custody (2026-09-14)
 
 The owner selected a compact queue/chat window in the Fansly extension. The
 extension reads followers, profile images, names, bio and full personal-message
@@ -13547,7 +13579,7 @@ custody. Clients outside this feature do not participate in its reservation;
 the client performs a final live history check but cannot make native sends
 transactional with that check.
 
-Migration 0192 adds the operational attempt journal. The deliberate new Fansly
+Migration 0193 adds the operational attempt journal. The deliberate new Fansly
 platform branch restricts this browser custody surface; OnlyFans already has
 its own kernel send outbox. Deploy Core before extension 2.2.0. No production
 messages are sent as a smoke test without a separate owner instruction.
