@@ -88,6 +88,30 @@ export function microUsdToMills(value: MicroUsd): Mills {
   return BigInt(Math.trunc(value / 1000));
 }
 
+/**
+ * Micro-USD → a display string for the AI plane (Decision 349: the chatter's
+ * own spend in `/account`). The AI ledger's unit is micro-USD, so the cabinet
+ * must not divide by 1_000_000 by hand — it asks here, exactly as the platform
+ * plane asks `formatUsdFromMills`. Sub-cent amounts round DOWN to `< $0.01`
+ * rather than to `$0.00`, so a person who spent something never reads zero;
+ * `approximate` prefixes the house `~` used by the owner's usage report.
+ */
+export function formatUsdFromMicroUsd(
+  value: number,
+  options: { approximate?: boolean } = {},
+): string {
+  const micro = microUsdFromDbInt(value);
+  const prefix = options.approximate ? "~" : "";
+  if (micro <= 0) return "$0";
+  if (micro < 10_000) return `${prefix}< $0.01`;
+  return prefix + new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(micro / 1_000_000);
+}
+
 // ─── Display / aggregation over mills (names preserved) ──────────────────
 
 export function millsToDecimalString(value: MillsLike): string {
