@@ -172,6 +172,8 @@ describe("LIVE_CONFIG_KEYS", () => {
     expect(LIVE_CONFIG_KEYS.has("fanslyDmBoundedPolicies")).toBe(true);
     expect(LIVE_CONFIG_KEYS.has("fanslyFollowersSettlementReuseEnabled")).toBe(true);
     expect(LIVE_CONFIG_KEYS.has("fanslyFollowersSettlementReusePageAllowlist")).toBe(true);
-    expect(LIVE_CONFIG_KEYS.size).toBe(77);
+    expect(LIVE_CONFIG_KEYS.has("fanslyFanEarningsRecoveryEnabled")).toBe(true);
+    expect(LIVE_CONFIG_KEYS.has("fanslyFanEarningsRecoveryPageAllowlist")).toBe(true);
+    expect(LIVE_CONFIG_KEYS.size).toBe(79);
   });
 });

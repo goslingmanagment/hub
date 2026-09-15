@@ -1,6 +1,6 @@
 # Fansly addressed earnings targets
 
-Decision 345. Default-off C2c selection consumes existing C2b debt within an
+Decisions 345 and 348. Default-off C2c selection consumes existing C2b debt within an
 ordinary earnings chunk. Daily spender rotation keeps its schedule and cursor.
 Activation requires accepted C2b scope/coverage and an explicit cost budget.
 
@@ -66,3 +66,37 @@ subject custody; page/model erasure also removes admission rows.
 No rotation interval increase exists here. The final C2c rotation decision and
 acceptance still require quiet-correction coverage, per-fan/window maximum age
 and measured cost. Retain the daily baseline until those requirements are met.
+
+
+## Isolated daily recovery (Decision 348)
+
+Additional gates are `fanslyFanEarningsRecoveryEnabled=false` and
+`fanslyFanEarningsRecoveryPageAllowlist` empty. They also require the addressed
+selection gates and a positive attempt budget. With recovery off the preceding
+Decision 345 behavior remains unchanged, including the daily rejection stop.
+
+When enabled, daily selection uses its own durable cursor and strict receipts.
+A fan-scoped 400/404/410 without cooldown leaves endpoint debt and allows the
+other endpoint and remaining daily fans to run. The cursor cannot cross failed
+receipt persistence. Global errors preserve auth/cooldown handling. Both valid
+and rejected responses retain their own checked/changed/failure history.
+
+A completed roster with any tracked endpoint debt, stale/missing check, current
+claim or unknown attribution uses `fan_earnings_unconfirmed_coverage` quality hold.
+It preserves the previous certified full timestamp. `walkCompletedAt` means the
+roster was traversed; `completedAt` remains the last certified result. Current
+coverage can recover after a later valid response even if cumulative audit
+counters still record a historical missing receipt.
+
+Addressed selection adds known endpoints at age >=24h (or never checked), even
+without new transaction/event signals. It stays within the existing rolling cap
+and one extra physical attempt per ordinary chunk. No extra scheduler wakeup is
+introduced. This is an eligibility threshold, not an accepted maximum latency:
+cap exhaustion, backoff and undiscovered references can leave coverage overdue.
+Quiet changes increment the existing `unsignaled_changes` receipt counter.
+
+Turning recovery off, emptying its allowlist or removing addressed admission
+restores the daily legacy walk from zero at its next chunk. Keep all captured
+receipts and debt. In-flight admitted responses can finish owned capture.
+Neither a clean default-off deployment nor simulated tests accept production
+quiet-correction coverage, a new rotation interval, or HTTP savings.

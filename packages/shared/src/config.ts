@@ -103,6 +103,8 @@ const envSchema = z.object({
   FANSLY_DM_SHADOW_PAGE_ALLOWLIST: z.string().default("none"),
   FANSLY_WS_CAPTURE_ENABLED: booleanSchema.default(false),
   FANSLY_WS_CAPTURE_PAGE_ALLOWLIST: z.string().default(""),
+  FANSLY_FAN_EARNINGS_RECOVERY_ENABLED: booleanSchema.default(false),
+  FANSLY_FAN_EARNINGS_RECOVERY_PAGE_ALLOWLIST: z.string().default(""),
   FANSLY_FAN_EARNINGS_TARGETS_ENABLED: booleanSchema.default(false),
   FANSLY_FAN_EARNINGS_TARGETS_PAGE_ALLOWLIST: z.string().default(""),
   FANSLY_FAN_EARNINGS_TARGETS_DAILY_ATTEMPT_LIMIT: z.coerce.number().int().min(0).max(1000).default(0),
@@ -429,6 +431,8 @@ export interface AppConfig {
   fanslyDmShadowPageAllowlist?: string;
   fanslyWsCaptureEnabled?: boolean;
   fanslyWsCapturePageAllowlist?: string;
+  fanslyFanEarningsRecoveryEnabled?: boolean;
+  fanslyFanEarningsRecoveryPageAllowlist?: string;
   fanslyFanEarningsTargetsEnabled?: boolean;
   fanslyFanEarningsTargetsPageAllowlist?: string;
   fanslyFanEarningsTargetsDailyAttemptLimit?: number;
@@ -770,6 +774,8 @@ export function loadConfig(
     fanslyDmShadowPageAllowlist: parsed.FANSLY_DM_SHADOW_PAGE_ALLOWLIST,
     fanslyWsCaptureEnabled: parsed.FANSLY_WS_CAPTURE_ENABLED,
     fanslyWsCapturePageAllowlist: parsed.FANSLY_WS_CAPTURE_PAGE_ALLOWLIST,
+    fanslyFanEarningsRecoveryEnabled: parsed.FANSLY_FAN_EARNINGS_RECOVERY_ENABLED,
+    fanslyFanEarningsRecoveryPageAllowlist: parsed.FANSLY_FAN_EARNINGS_RECOVERY_PAGE_ALLOWLIST,
     fanslyFanEarningsTargetsEnabled: parsed.FANSLY_FAN_EARNINGS_TARGETS_ENABLED,
     fanslyFanEarningsTargetsPageAllowlist: parsed.FANSLY_FAN_EARNINGS_TARGETS_PAGE_ALLOWLIST,
     fanslyFanEarningsTargetsDailyAttemptLimit: parsed.FANSLY_FAN_EARNINGS_TARGETS_DAILY_ATTEMPT_LIMIT,
