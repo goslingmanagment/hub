@@ -418,7 +418,9 @@ describe("[sync-critical] WP-F2 engagement projections", () => {
     // BY CLASSIFICATION (§3.4), never by a quiet exemption in this file.
     const declared = new Set(OPERATIONAL_STATE_TABLES.map((entry) => entry.table));
     expect(declared.has("subject_refresh_state")).toBe(true);
-    const projected = new Set(PROJECTION_REGISTRY.flatMap((projection) => projection.tables));
+    const projected = new Set(PROJECTION_REGISTRY
+      .filter((projection) => projection.rebuildKind !== "none")
+      .flatMap((projection) => projection.tables));
     expect(projected.has("subject_refresh_state")).toBe(false);
 
     const engagement = findProjection(FANSLY_ENGAGEMENT_PROJECTION);

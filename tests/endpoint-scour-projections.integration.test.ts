@@ -537,9 +537,16 @@ describe("[sync-critical] WP-F1 statistics projections", () => {
     // this file: the declared set and the set no projection truncates must be
     // the same set.
     const declared = new Set(OPERATIONAL_STATE_TABLES.map((entry) => entry.table));
-    const projected = new Set(PROJECTION_REGISTRY.flatMap((projection) => projection.tables));
+    const projected = new Set(PROJECTION_REGISTRY
+      .filter((projection) => projection.rebuildKind !== "none")
+      .flatMap((projection) => projection.tables));
     for (const table of declared) {
       expect(projected.has(table)).toBe(false);
+    }
+    for (const projection of PROJECTION_REGISTRY.filter((entry) => entry.stateClass === "operational_state")) {
+      expect(projection.rebuildKind).toBe("none");
+      expect(projection.rebuild).toBeNull();
+      expect(projection.tables.every((table) => declared.has(table))).toBe(true);
     }
     expect(declared.has("capture_coverage")).toBe(true);
 
