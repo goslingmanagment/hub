@@ -1,4 +1,4 @@
-# Runbook: deploying the unified chatter account (Decision 347)
+# Runbook: deploying the unified chatter account (Decision 349)
 
 One wave, three owner-gated steps: the kernel first, then the console and the
 cabinet, then the clients. This runbook covers the kernel deploy (PR-1A), whose

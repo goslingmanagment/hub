@@ -2,7 +2,7 @@
 > Machine-generated reference — regenerate by re-running that prompt in a
 > fresh session; do not hand-edit.
 >
-> **STALE (Decision 347, 2026-09-15):** `routes.ts` gained the account-link,
+> **STALE (Decision 349, 2026-09-15):** `routes.ts` gained the account-link,
 > password-sign-in, own-device and own-usage schemas; `errorResponseSchema`
 > gained an optional `reason`; `deviceTokenItemSchema` gained
 > `lastClientVersion` and `adminUserSchema` gained `registrationState`.

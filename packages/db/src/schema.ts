@@ -290,7 +290,7 @@ export const users = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => ({
-    // Decision 347 (Р4, migration 0200): logins are unique case-insensitively.
+    // Decision 349 (Р4, migration 0200): logins are unique case-insensitively.
     usernameLowerUidx: uniqueIndex("users_username_lower_uidx").on(sql`lower(${table.username})`),
   }),
 );
@@ -2074,7 +2074,7 @@ export const deviceTokens = pgTable(
     harvestMachineId: uuid("harvest_machine_id"),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
-    // Decision 347 (Р7, migration 0199): the x-client-version the token last
+    // Decision 349 (Р7, migration 0199): the x-client-version the token last
     // presented, stamped by the same UPDATE as last_used_at. Routing metadata,
     // never authority (#145).
     lastClientVersion: text("last_client_version"),
@@ -2114,7 +2114,7 @@ export const pendingDeviceTokens = pgTable(
   }),
 );
 
-// Decision 347 (migration 0199): one-time invite / password-reset links. The
+// Decision 349 (migration 0199): one-time invite / password-reset links. The
 // raw token lives only in the creation response; the row keeps its sha256
 // digest and a display prefix. Rows are never deleted — used, expired and
 // revoked links stay as facts. The partial unique index holds "at most one

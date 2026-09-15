@@ -17,7 +17,7 @@ import {
 } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 
-// Decision 347 Р4: a login is one identity in any case. One normalization for
+// Decision 349 Р4: a login is one identity in any case. One normalization for
 // the invite, the legacy create and every sign-in, and a unique index on
 // lower(username) (migration 0200) so two concurrent creates cannot both win.
 

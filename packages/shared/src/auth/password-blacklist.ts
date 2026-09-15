@@ -1,4 +1,4 @@
-// Decision 347 (§4.2): the agreed import path for the common-password
+// Decision 349 (§4.2): the agreed import path for the common-password
 // blacklist, shared by the kernel (authoritative, on redeem) and the dashboard's
 // /join form (early feedback), so the two never drift apart.
 //

@@ -2,7 +2,7 @@
 > Machine-generated reference — regenerate by re-running that prompt in a
 > fresh session; do not hand-edit.
 >
-> **STALE (Decision 347, 2026-09-15):** migration 0199 adds the `account_links`
+> **STALE (Decision 349, 2026-09-15):** migration 0199 adds the `account_links`
 > table (one-time invite / password-reset links: sha256 digest + display
 > prefix, `used_at`, `revoked_at`/`revoked_reason`, a partial unique index for
 > "at most one active link per user", never deleted) and

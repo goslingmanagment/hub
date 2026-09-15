@@ -397,7 +397,7 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   "0186_ops_metrics_recent_series.sql"
   "0192_fansly_dm_shadow_material_probe.sql"
   "0194_fansly_dm_shadow_reader_probe.sql"
-  # Decision 347 (unified chatter account). Both are PURELY ADDITIVE and the
+  # Decision 349 (unified chatter account). Both are PURELY ADDITIVE and the
   # previous image never reads them: 0199 creates `account_links` and adds the
   # nullable `device_tokens.last_client_version`; 0200 adds a unique index on
   # lower(username), which the old code neither queries nor violates (it already

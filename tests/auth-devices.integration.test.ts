@@ -18,7 +18,7 @@ import {
 } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 
-// Decision 347 §4.4: the cabinet's own two operations ("sign out this device",
+// Decision 349 §4.4: the cabinet's own two operations ("sign out this device",
 // "sign out on all devices") and the owner's two ("revoke this sign-in",
 // "terminate all access"), each doing exactly what its name says — no more and
 // no less.

@@ -123,7 +123,7 @@ export interface AdminUserDetailed extends AuthenticatedUser {
   apiKeyStatus: AdminUserApiKeyStatus | null;
   disabledAt: string | null;
   lastActiveAt: string | null;
-  /** Decision 347 (§4.1 p.12): "invited" until the invite link sets a password. */
+  /** Decision 349 (§4.1 p.12): "invited" until the invite link sets a password. */
   registrationState: "invited" | "active";
 }
 
@@ -429,7 +429,7 @@ export async function listUsersDetailed(app: AppContext) {
   return result;
 }
 
-/** Decision 347 (Р4): two concurrent creates of the same login (any case) race
+/** Decision 349 (Р4): two concurrent creates of the same login (any case) race
  * on the lower(username) unique index; the loser gets the same 400 the
  * pre-check gives, never a 500. */
 export async function createUserOrRefuseDuplicate(
@@ -451,7 +451,7 @@ export async function createUserOrRefuseDuplicate(
   return created;
 }
 
-/** Decision 347 (Р4): one normalization for invite, legacy create and login. */
+/** Decision 349 (Р4): one normalization for invite, legacy create and login. */
 export function normalizeUsername(username: string) {
   return username.trim();
 }
@@ -559,7 +559,7 @@ export async function setUserPassword(
       "password_reset",
     );
     const deletedPendingDeviceTokens = await deletePendingDeviceTokensForUser(dbTx, user.id);
-    // Decision 347 §4.1 p.6: a password set by any path retires every active link.
+    // Decision 349 §4.1 p.6: a password set by any path retires every active link.
     const revokedAccountLinks = await revokeActiveAccountLinks(dbTx, user.id, "password_set");
 
     await recordAudit({ db: dbTx }, {
@@ -609,7 +609,7 @@ export async function deactivateUser(
     const revokedTokens = await revokeDeviceTokensForUser(dbTx, user.id, "user_deactivated");
     const revokedSessions = await revokeAuthSessionsForUser(dbTx, user.id, "user_deactivated");
     const deletedPendingDeviceTokens = await deletePendingDeviceTokensForUser(dbTx, user.id);
-    // Decision 347 §4.1 p.7: an invite or reset link must not outlive the
+    // Decision 349 §4.1 p.7: an invite or reset link must not outlive the
     // account; reactivation does not revive it — the owner mints a new one.
     const revokedAccountLinks = await revokeActiveAccountLinks(dbTx, user.id, "user_deactivated");
 
@@ -747,7 +747,7 @@ export async function assignPageToUser(
 }
 
 /**
- * The transaction-aware core of a page assignment (Decision 347 §5.2): callers
+ * The transaction-aware core of a page assignment (Decision 349 §5.2): callers
  * that already hold a transaction — the atomic invite — compose it; the
  * standalone route wraps it. Stage 22: the grant log is the durable record; the
  * legacy assignment row is dual-written until the read path flips.
@@ -1133,7 +1133,7 @@ function clearLoginBackoff(app: AppContext, username: string): void {
 export type LockedUserRow = NonNullable<Awaited<ReturnType<typeof lockUserForDeviceTokenMutation>>>;
 
 /**
- * Decision 347 §4.3 — the ONE password check for every password-based sign-in
+ * Decision 349 §4.3 — the ONE password check for every password-based sign-in
  * (cookie login and device sign-in alike), closing the login race:
  *
  * 1. the shared per-account backoff;
@@ -1693,7 +1693,7 @@ export async function activatePendingDeviceToken(
   };
 }
 
-/** Decision 347 §4.5: why a presented bearer was refused, when that is safe to
+/** Decision 349 §4.5: why a presented bearer was refused, when that is safe to
  * say. Only a device token that MATCHED a row carries a reason. */
 export interface AuthFailure {
   reason: AuthFailureReason;
@@ -1806,7 +1806,7 @@ export async function authenticateAgentKey(app: AppContext, agentKeyToken: strin
 
 export interface BearerAuthResult {
   principal: AuthPrincipal | null;
-  /** Set only by the device-token lane (Decision 347 §4.5). */
+  /** Set only by the device-token lane (Decision 349 §4.5). */
   failure: AuthFailure | null;
 }
 
@@ -1976,7 +1976,7 @@ export async function revokeDeviceTokensForUsername(
   return { revokedCount: revoked.length };
 }
 
-// --- Decision 347: password-based device sign-in and the revocation ladder ---
+// --- Decision 349: password-based device sign-in and the revocation ladder ---
 
 /** Static device-token issuance policy shared by the cookie and password lanes. */
 function mintDeviceTokenMaterial(mode: "active" | "pending") {

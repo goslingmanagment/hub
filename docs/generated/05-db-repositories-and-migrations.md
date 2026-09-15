@@ -2,7 +2,7 @@
 > Machine-generated reference — regenerate by re-running that prompt in a
 > fresh session; do not hand-edit.
 >
-> **STALE (Decision 347, 2026-09-15):** migrations run to 0200.
+> **STALE (Decision 349, 2026-09-15):** migrations run to 0200.
 > `repositories/auth.ts` gained the account-link family (`createAccountLink`,
 > `findAccountLinkByDigest` with `FOR UPDATE`, `findAccountLinkForUser`,
 > `listAccountLinks`, `revokeActiveAccountLinks`, `revokeAccountLinkById`,

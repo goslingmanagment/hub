@@ -1,4 +1,4 @@
--- Decision 347 (unified chatter account, PR-1A): one-time invite and
+-- Decision 349 (unified chatter account, PR-1A): one-time invite and
 -- password-reset links, plus the client version a device token last presented.
 -- Additive only; nothing is dropped, nothing is rewritten. Links are never
 -- deleted: a used / expired / revoked row stays as a fact (DP 7).

@@ -410,7 +410,7 @@ export function registerIdentityRoutes(server: ApiServer, ctx: ApiModuleContext)
     return { grants: await listUserGrants(appContext, request.params.username) };
   });
 
-  // --- Decision 347: unified chatter account (PR-1A) ---
+  // --- Decision 349: unified chatter account (PR-1A) ---
   // Legacy in-handler guards mirror the declared policy (#143 dual layer):
   // owner-session for the console, any-session for the cabinet, public for the
   // three link / sign-in routes, which are rate-limited per IP.

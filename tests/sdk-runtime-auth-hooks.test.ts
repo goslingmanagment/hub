@@ -89,7 +89,7 @@ describe("onAuthError coverage beyond the typed path", () => {
   });
 });
 
-// Decision 347 §4.5: the kernel's 401 for a revoked or expired device token
+// Decision 349 §4.5: the kernel's 401 for a revoked or expired device token
 // carries a machine `reason`. A client heals itself from that reason, so every
 // transport has to hand the parsed envelope over — a stringified body or a
 // dropped `error` code would leave the desktop and the extension guessing.

@@ -1,4 +1,4 @@
-// Decision 347 (§4.2): the password rule for link redemption (invite /
+// Decision 349 (§4.2): the password rule for link redemption (invite /
 // password reset), shared by the kernel (authoritative) and the dashboard's
 // /join form (early feedback). `login`, `adminSetPassword` and
 // `authChangePassword` keep their historical min-8 rule so existing accounts

@@ -25,7 +25,7 @@ import { UnauthorizedError } from "../services/errors.ts";
 
 export interface PrincipalRequest {
   auth?: AuthPrincipal | null;
-  /** Decision 347 §4.5: why the presented device token was refused, kept
+  /** Decision 349 §4.5: why the presented device token was refused, kept
    * BESIDE the memoized null principal so the 401 can carry a reason. */
   authFailure?: AuthFailure | null;
   pendingDeviceTokenAuth?: PendingDeviceTokenActivationCredential | null;

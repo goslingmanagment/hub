@@ -1,4 +1,4 @@
-// Decision 347 (§4.1): one-time invite and password-reset links — the whole
+// Decision 349 (§4.1): one-time invite and password-reset links — the whole
 // registration ceremony of the unified chatter account.
 //
 // Invariants this file keeps (pinned by tests/account-links.integration.test.ts):

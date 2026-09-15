@@ -184,7 +184,7 @@ describe("user deactivation (#126)", () => {
     })).status).toBe(400);
   }, 60_000);
 
-  // Decision 347 §4.1 p.7: an invite or reset link is a credential in waiting,
+  // Decision 349 §4.1 p.7: an invite or reset link is a credential in waiting,
   // so it dies with the account — and reactivation does NOT bring it back, the
   // owner mints a fresh one.
   it("revokes active links on deactivation and never revives them on reactivation", async (context) => {

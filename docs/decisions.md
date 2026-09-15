@@ -118,7 +118,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 114 | Stage 35 documentation close | Maps regenerated in all three repos, client CLAUDE.md files rewritten to post-migration truth, release-hygiene asserts added, orientation drills PASS ×3 — the migration's documentation standard is in force |
 | 115 | Release audits | Codex (gpt-5.5 xhigh) audited three surfaces pre-release: the lint burn-down is behavior-neutral, chunk-budget overshoot and any-platform clientContext fixed; persona apiKey-auth left open, then ACCEPTED AS IS by the owner |
 | 116 | Identity/auth credentials | Humans authenticate with password plus per-device tokens, robots with API keys; chatter password provisioning moves into the live dashboard; must_change_password stays FROZEN; a client key-fallback deletion gate is defined |
-| 117 | Dashboard + workboard | #112 REVERSED — the rebuild is CANCELLED and apps/dashboard is the live maintained admin surface (its carry-over features become backlog); the workboard direction is deprecated and Stage 34 stays a banner'd placeholder. PARTIALLY REVERSED by #347: the chatter web surface it left conditional ("unless the owner later orders…") was ordered on 2026-09-15 |
+| 117 | Dashboard + workboard | #112 REVERSED — the rebuild is CANCELLED and apps/dashboard is the live maintained admin surface (its carry-over features become backlog); the workboard direction is deprecated and Stage 34 stays a banner'd placeholder. PARTIALLY REVERSED by #349: the chatter web surface it left conditional ("unless the owner later orders…") was ordered on 2026-09-15 |
 | 118 | Stage 28 erasure scope | Page-scope erasure also purges the page's config/secret rows (page_credentials, egress_endpoints), which soft delete (#72) deliberately keeps as a two-way door; DP 7 unaffected since these are config, not captured facts |
 | 119 | Stage 34 standalone workboard | #117 clause (2) NARROWED — only the in-core workboard is deprecated; the STANDALONE workboard app is an ACTIVE direction again with kernel sessions, per-page grants, repo ~/code/workboard, Fansly-only v1 |
 | 120 | AI gateway quotas | Daily caps per chatter/page raised (requests 200→500, cost $5→$10) and quota denial made legible end-to-end: the SDK classifies 429 as rate_limit and the desktop gains CG-HUB-03; product gates later get machine codes |
@@ -3376,7 +3376,7 @@ note is historical, the design-pass prompt and PRD skeleton are banner'd and
 must not be run. No identity/auth work waits on a chatter web surface —
 chatter password self-service remains owner-managed (dashboard Set password,
 #116) unless the owner later orders a standalone change-password page.
-**PARTIALLY REVERSED by Decision 347 (2026-09-15, owner):** that condition was
+**PARTIALLY REVERSED by Decision 349 (2026-09-15, owner):** that condition was
 met — the owner ordered invite-link registration, self-service password reset
 and the `/account` cabinet. Everything else in #117 stands.
 
@@ -14189,7 +14189,7 @@ still requires quiet-correction/reader coverage and measured physical cost.
 No interval reduction, savings acceptance or whole-migration acceptance follows
 from shipping this default-off code. See [the earnings runbook](runbooks/fansly-earnings-targets.md).
 
-## Decision 347: Unified chatter account and registration by invite link (2026-09-15)
+## Decision 349: Unified chatter account and registration by invite link (2026-09-15)
 
 The unified account already existed: `users` is platform-neutral, page
 assignments know no platform, and both clients sign in with one login and mint

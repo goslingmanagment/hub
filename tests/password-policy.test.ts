@@ -11,7 +11,7 @@ import {
 } from "../packages/shared/src/password-policy.ts";
 import { authRedeemAccountLinkBodySchema } from "../packages/contracts/src/routes.ts";
 
-// Decision 347 §4.2. The floor and the blacklist have to agree: a 12-character
+// Decision 349 §4.2. The floor and the blacklist have to agree: a 12-character
 // minimum makes a plain top-1000 almost unreachable, so the rule also matches
 // the STEM of a padded word. These cases are the ones a person actually types.
 

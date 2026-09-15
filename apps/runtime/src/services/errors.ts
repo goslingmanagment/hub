@@ -25,7 +25,7 @@ export class BadRequestError extends AppError {
   }
 }
 
-/** Decision 347 (§4.5): why a PRESENTED device token that matched a row was
+/** Decision 349 (§4.5): why a PRESENTED device token that matched a row was
  * refused. An unknown digest carries no reason (no enumeration oracle);
  * `user_disabled` is unreachable because deactivation revokes every token. */
 export type AuthFailureReason = "token_revoked" | "token_expired";
@@ -47,7 +47,7 @@ export class ForbiddenError extends AppError {
   }
 }
 
-// Decision 347 (§4.2): a user flagged must_change_password (frozen #116b flag)
+// Decision 349 (§4.2): a user flagged must_change_password (frozen #116b flag)
 // may not sign a device in by password until an owner resets it. Its own code
 // so clients map it to a specific line instead of a generic 403.
 export class PasswordChangeRequiredError extends AppError {
@@ -75,7 +75,7 @@ export class UnknownAiFeatureError extends AppError {
 export class ConflictError extends AppError {
   /** Documented structured extension (docs/error-handling.md §3): the machine
    * reason for the conflict, serialized only when non-null. Account-link
-   * redemption uses used | expired | revoked (Decision 347). */
+   * redemption uses used | expired | revoked (Decision 349). */
   readonly reason: string | null;
 
   constructor(message: string, options?: { reason?: string | null }) {

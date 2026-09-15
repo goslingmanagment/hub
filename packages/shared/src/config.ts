@@ -282,7 +282,7 @@ const envSchema = z.object({
   // dual-written); true = the access_grants projection. Flip only after the
   // prod parity diff is exactly zero.
   ACCESS_GRANTS_READ_ENABLED: booleanSchema.default(false),
-  // Decision 347 kill switch: false makes the PUBLIC link routes
+  // Decision 349 kill switch: false makes the PUBLIC link routes
   // (inspect / redeem) answer 404; owners can still mint links. Live-wired:
   // read per request via loadEffectiveConfig — a flip needs no restart.
   ACCOUNT_LINKS_ENABLED: booleanSchema.default(true),
@@ -581,7 +581,7 @@ export interface AppConfig {
   revenueRouteRoleEnforcement?: "log" | "enforce";
   authPolicyEnforcement?: "log" | "enforce";
   accessGrantsReadEnabled?: boolean;
-  /** Decision 347: public invite / reset link routes (live-wired kill switch). */
+  /** Decision 349: public invite / reset link routes (live-wired kill switch). */
   accountLinksEnabled?: boolean;
   chatMuseAiGatewayEnabled?: boolean;
   chatMuseAiGatewayDailyRequestLimit?: number;

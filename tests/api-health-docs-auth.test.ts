@@ -594,7 +594,7 @@ describe("auth route parsing", () => {
   });
 
   it("accepts lowercase bearer authorization schemes", async () => {
-    // Decision 347: the request layer resolves bearers through the structured
+    // Decision 349: the request layer resolves bearers through the structured
     // credential path (principal + refusal reason).
     routeMocks.authenticateBearerCredential.mockResolvedValue({ principal: leadPrincipal, failure: null });
     const server = await buildApiServer(createRouteTestContext());

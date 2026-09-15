@@ -12,7 +12,7 @@ import {
 } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 
-// Decision 347: the cabinet's "my AI spend". Its own repository query, with no
+// Decision 349: the cabinet's "my AI spend". Its own repository query, with no
 // role filter — listChatterUsageSummary hard-filters `role = 'chatter'`, which
 // would leave a team_lead's or an owner's cabinet empty. Costs stay micro-USD
 // integers end to end; nothing here does money arithmetic by hand.

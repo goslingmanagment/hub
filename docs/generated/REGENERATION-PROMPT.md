@@ -75,7 +75,7 @@ When regenerating the maps:
   a decision and a date; it describes the delta without rewriting the body
   around it; and regeneration deletes it, because the regenerated body is the
   real answer. Several accumulating banners mean the maps are due for a pass —
-  not that bodies may now be edited. Precedent: Decision 347 (2026-09-15)
+  not that bodies may now be edited. Precedent: Decision 349 (2026-09-15)
   banner'd maps 02, 03, 04, 05, 15 and 20.
 - Map the tree as it is TODAY (post-kernel-migration). Every claim must be
   verified against current code — subsystems that no longer exist are

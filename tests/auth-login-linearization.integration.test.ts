@@ -18,7 +18,7 @@ import {
 } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 
-// Decision 347 §4.3: a password verified BEFORE the transaction is not
+// Decision 349 §4.3: a password verified BEFORE the transaction is not
 // authority. Every password-based sign-in re-reads the user row under
 // `FOR UPDATE` and compares the hash, the deactivation tombstone and the
 // device-token epoch with what it verified — so a reset, a deactivation or a

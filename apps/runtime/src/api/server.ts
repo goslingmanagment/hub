@@ -219,7 +219,7 @@ export async function buildApiServer(appContext: AppContext) {
     // instead of "rate limited", so clients retried on the wrong semantics.
     // An AppError is the boundary's own contract: same wire shape as before,
     // no duck-typing reintroduced.
-    // Neutral wording (Decision 347 §2): the limiter now guards link
+    // Neutral wording (Decision 349 §2): the limiter now guards link
     // inspection and redemption as well as the two sign-in routes.
     errorResponseBuilder: () => new TooManyRequestsError("Too many attempts"),
   });
@@ -386,7 +386,7 @@ export async function buildApiServer(appContext: AppContext) {
     if (!verdict.allow && isAuthPolicyEnforced()) {
       switch (verdict.statusCode) {
         case 401:
-          // Decision 347 §4.5: the device-token lane's structured reason
+          // Decision 349 §4.5: the device-token lane's structured reason
           // travels on the middleware's 401 exactly as on the handler's.
           throw unauthorizedFor(request);
         case 404:

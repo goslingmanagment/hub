@@ -75,7 +75,7 @@ export interface ListChatterUsageSummaryInput {
   toExclusive: Date;
 }
 
-/** Decision 347: one user's own report — every role, every page, no chatter filter. */
+/** Decision 349: one user's own report — every role, every page, no chatter filter. */
 export interface ListUserUsageReportInput {
   userId: number;
   from: Date;
@@ -737,7 +737,7 @@ export async function listChatterUsageSummary(
 }
 
 /**
- * Decision 347 (§5.2): the caller's OWN usage. Deliberately a separate query
+ * Decision 349 (§5.2): the caller's OWN usage. Deliberately a separate query
  * from listChatterUsageSummary, which hard-filters `role = 'chatter'` (a
  * team_lead's or owner's cabinet would be empty) and from the quota totals,
  * whose per-page semantics serve the gateway budget. Same aggregation rules as

@@ -15,7 +15,7 @@ import {
 } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 
-// Decision 347 §4.5: a 401 for a device token that MATCHED a row says why —
+// Decision 349 §4.5: a 401 for a device token that MATCHED a row says why —
 // token_revoked or token_expired — so the client can wipe its custody and show
 // a sign-in screen instead of a permanent red line. Anything else says nothing:
 // a reason on an unknown digest would be an enumeration oracle.

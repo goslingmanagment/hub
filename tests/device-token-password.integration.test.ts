@@ -19,7 +19,7 @@ import {
 } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 
-// Decision 347 Р2: the single client sign-in — username + password, no cookie,
+// Decision 349 Р2: the single client sign-in — username + password, no cookie,
 // `active` for the extension and `pending` (reserve → activate) for the
 // desktop. It shares the login backoff, the login failure audit and the §4.3
 // password core with the cookie lane.

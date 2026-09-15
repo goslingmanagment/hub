@@ -251,7 +251,7 @@ function notifyAuthError(options: KernelClientOptions, error: KernelApiError) {
 
 /** The error envelope of a non-OK SSE handshake, parsed like the typed path
  * parses it: `body` is the JSON envelope when there is one (so a structured
- * `reason` — Decision 347's token_revoked / token_expired — reaches the
+ * `reason` — Decision 349's token_revoked / token_expired — reaches the
  * client's self-healing), the raw text otherwise, and `code` is its `error`. */
 async function sseHandshakeError(
   label: string,

@@ -53,7 +53,7 @@ export async function createUser(db: Database, input: CreateUserInput) {
   return created;
 }
 
-/** Decision 347 (Р4): logins are matched case-insensitively; the unique index
+/** Decision 349 (Р4): logins are matched case-insensitively; the unique index
  * on lower(username) (migration 0200) keeps this lookup unambiguous. */
 export async function findUserByUsername(db: Database, username: string) {
   return db.query.users.findFirst({
@@ -302,7 +302,7 @@ export interface CreateDeviceTokenInput {
   tokenDigest: string;
   keyPrefix: string;
   expiresAt: Date;
-  /** Decision 347 (Р7): the issuing client's x-client-version, when known. */
+  /** Decision 349 (Р7): the issuing client's x-client-version, when known. */
   lastClientVersion?: string | null | undefined;
 }
 
@@ -443,7 +443,7 @@ export async function setDeviceTokenHarvestMachine(
 export async function updateDeviceTokenUse(db: Database, deviceTokenId: number, input: {
   lastUsedAt: Date;
   expiresAt?: Date;
-  /** Decision 347 (Р7): stamped by the SAME statement as lastUsedAt; a request
+  /** Decision 349 (Р7): stamped by the SAME statement as lastUsedAt; a request
    * without the header leaves the previous value in place. */
   lastClientVersion?: string | null;
 }) {
@@ -463,7 +463,7 @@ export async function listDeviceTokensForUser(db: Database, userId: number) {
   });
 }
 
-/** The caller's live devices (Decision 347 cabinet): not revoked, not expired. */
+/** The caller's live devices (Decision 349 cabinet): not revoked, not expired. */
 export async function listActiveDeviceTokensForUser(db: Database, userId: number, now = new Date()) {
   return db.query.deviceTokens.findMany({
     where: and(
@@ -532,7 +532,7 @@ export async function updateUserDisabledAt(
   return updated;
 }
 
-// --- Account links (Decision 347): one-time invite / password-reset links ---
+// --- Account links (Decision 349): one-time invite / password-reset links ---
 // Never deleted: a used, expired or revoked link is a fact. Writers take the
 // user row lock (lockUserForDeviceTokenMutation) BEFORE touching a link row —
 // the same users -> credential order the device-token paths use.

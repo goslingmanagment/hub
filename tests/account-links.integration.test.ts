@@ -28,7 +28,7 @@ import {
 } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 
-// Decision 347 §4.1: the invite / password-reset link lifecycle. The raw token
+// Decision 349 §4.1: the invite / password-reset link lifecycle. The raw token
 // exists once, in the creation response; at most one link is active per user;
 // every link is a fact that is revoked, never deleted.
 
@@ -512,7 +512,7 @@ describe("redeem", () => {
 
   // Review finding: `assertInviteAllowed` lets an INVITE through for a user who
   // has a password but never redeemed a link — which is every person onboarded
-  // before Decision 347 shipped. Redeeming it is a password change, so it must
+  // before Decision 349 shipped. Redeeming it is a password change, so it must
   // drag the same revocation ladder behind it as a reset; otherwise the owner
   // could hand out an invite link and silently re-password a live account while
   // its old devices and sessions kept working.
