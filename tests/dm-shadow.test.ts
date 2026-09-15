@@ -120,7 +120,7 @@ describe("DM virtual-stop diagnostics", () => {
     });
   });
 
-  it("survives restart and an outage longer than an hour with a scalar cursor", () => {
+  it("survives restart and an outage longer than an hour with bounded diagnostics", () => {
     const stopped = advanceDmShadow(initial(), page(head()));
     const restored = parseDmShadowState(JSON.parse(JSON.stringify(stopped)));
     expect(restored).toEqual(stopped);
@@ -130,7 +130,9 @@ describe("DM virtual-stop diagnostics", () => {
     });
     expect(result.changedHeadsBelowStop).toBe(1);
     expect(result.maxObservationGapMs).toBe(2 * 3_600_000 - 1000);
-    expect(Object.values(result).every((value) => value === null || typeof value !== "object"))
+    const { readerWitnesses, ...scalars } = result;
+    expect(readerWitnesses).toEqual([]);
+    expect(Object.values(scalars).every((value) => value === null || typeof value !== "object"))
       .toBe(true);
   });
 

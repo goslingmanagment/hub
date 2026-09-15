@@ -351,6 +351,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 351 | Chatter cabinet `/account` and invitation page `/join` | A chatter's own surface on the hub: an invitation link redeemed into a password, then who-I-am, my devices, my password and my own AI spend. Partially reverses #117 at the owner's order (see 349). |
 | 352 | Unified-account rights matrix | Role × sign-in method × page assignments × device rights × client-local cache is a named, tested artefact (`docs/identity-rights-matrix.md` + `tests/rights-matrix.integration.test.ts`), not an implication of #349: an owner's device token is NOT an owner session, the cabinet is cookie-only, and "revoke all devices" leaves the cookie session and the legacy API key alive — so offboarding is a runbook, with the Fansly session, the 60 s SSE recheck and the desktop's local cache named as boundaries the hub does not control |
 | 353 | Fansly status-only earnings rechecks | Exact pending-to-posted signals still fetch both endpoints; a content revision preserves strict money debt while valid unchanged status rechecks may finish. |
+| 354 | A0 reader discrepancy witnesses | Retain at most twenty verified capture pointers per sweep beside exact pre-apply reader state; preserve counters, legacy unknowns, polling and historical attribution limits. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -14539,3 +14540,51 @@ outstanding signal, no active claim and unchanged mutation preconditions. It
 changes classification only; the next normal budgeted REST receipt must settle
 the debt. Preserve raw evidence, prior checks, changes and certified completion.
 The [earnings runbook](runbooks/fansly-earnings-targets.md) records this boundary.
+
+
+## Decision 354: Retain bounded A0 reader discrepancy witnesses (2026-09-15)
+
+The Lilly-2 G6917/G6918 report retained missing-head counts but no per-ID
+pre-apply evidence. The existing investigation found one plausible shared
+candidate in both raw windows; it cannot prove which IDs the historical
+counters counted. Another current-state read cannot reconstruct that snapshot.
+Those two historical cases remain unexplained and the original A0 clock stays.
+
+New fully instrumented sweeps retain the first twenty missing, deleted,
+content-pending or unknown advertised-reader states below the virtual stop.
+Each witness contains only an observation pointer, canonical JSON v1 SHA-256,
+zero-based position in its retained data array, one-based sweep page number,
+worker-clock read start/end and reader state/source/live-hot-copy. The index is
+matched by unique group/head pair in the trimmed capture; it is never inferred
+from mapped-array order. Ambiguous/unavailable capture linkage and excess
+candidates increment an omitted counter. Existing aggregate counts continue
+without truncation. Failed reads yield unknown state and null source/hot-copy.
+The source for a deleted state is the preferred reader source, not necessarily
+the source supplying the dominating tombstone. Read times bracket the existing
+snapshot query, not an exact database snapshot instant or provider latency.
+
+Pointers travel in the existing bounded diagnostics JSON, cursor and report.
+There is no new table, SQL query, migration, provider request or flag. Legacy
+and mid-sweep witness scope is null, never reconstructed as a complete prefix.
+Existing report-failure accounting remains; failure cannot block the business
+sweep. Full polling, destructive-finalization authority, freshness and A1 gates
+are unchanged. A cap or missing linkage is explicit incomplete attribution,
+not permission to accept unrepresented discrepancies.
+
+Offline resolution validates observation ID/page/platform/kind and recomputes
+the digest from the currently retained inline/CAS body before using the index.
+JSONB object key ordering is normalized by the frozen canonical JSON v1 codec.
+The platform-branch budget increases by one for this offline envelope guard;
+it rejects non-Fansly observations and introduces no provider dispatch branch.
+Changed/erased/missing bodies fail closed, without falling back to another item
+or copying identities into the diagnostics store. Existing erasure law retains
+some shared observations/CAS bodies unchanged to preserve bystander lineage;
+their pointers remain resolvable residuals, not anonymous data. Page/model
+erasure already removes the cursor and shadow report. No new fan identity or
+message text is persisted outside existing capture.
+
+Rollback to the prior runtime drops the optional cursor fields; a later upgrade
+keeps that resumed generation unknown. Saved reports remain evidence. These
+witnesses improve attribution of future discrepancies; they do not prove
+provider deletion, close G6917/G6918, reset the clock or establish A0/A1 GO,
+HTTP savings or event-to-reader latency. See the A0 runbook.
