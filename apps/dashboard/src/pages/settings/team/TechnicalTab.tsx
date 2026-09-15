@@ -449,6 +449,13 @@ function TokenRevealModal({
 
 const MACHINE_ID_PATTERN = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
+/** Mirrors the contract's `z.string().uuid()` so a typo is refused before the
+ * round-trip — a mistyped machineId would bind harvest authority to a machine
+ * that does not exist. */
+export function isMachineId(value: string): boolean {
+  return MACHINE_ID_PATTERN.test(value.trim());
+}
+
 /**
  * Binds one Desktop install's preserved machineId to one of a person's device
  * tokens, so harvested captures are attributable to a machine the owner chose.
@@ -470,7 +477,7 @@ export function HarvestBindingSection() {
   const candidates = (users ?? []).filter((user) => !user.disabledAt);
   const activeDevices = (devices.data ?? []).filter((device) => device.isActive);
   const selected = activeDevices.find((device) => device.id === tokenId) ?? null;
-  const machineIdValid = MACHINE_ID_PATTERN.test(machineId.trim());
+  const machineIdValid = isMachineId(machineId);
 
   function apply(nextMachineId: string | null) {
     if (tokenId === null) return;

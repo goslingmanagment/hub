@@ -22,7 +22,7 @@ import {
   hydrationDecisionStatusIsDefiniteRefusal, frozenHydrationDecisionSummary,
 } from "../apps/dashboard/src/pages/AgentHydrationPage.tsx";
 import { editWebhookSelection, OfapiWebhookRecovery, webhookApplyIsRunning, webhookReadbackResolvesAction } from "../apps/dashboard/src/pages/settings/OfapiWebhookRecovery.tsx";
-import { AgentKeysTab } from "../apps/dashboard/src/pages/settings/AgentKeysTab.tsx";
+import { AgentKeysSection } from "../apps/dashboard/src/pages/settings/team/TechnicalTab.tsx";
 import { PageAssignmentsEditor } from "../apps/dashboard/src/pages/settings/PageAssignmentsEditor.tsx";
 import { DbStatsPage } from "../apps/dashboard/src/pages/dev/DbStatsPage.tsx";
 import { IncidentsPage } from "../apps/dashboard/src/pages/dev/IncidentsPage.tsx";
@@ -225,7 +225,7 @@ describe("settings and diagnostics error states", () => {
 
   it("shows stale agent key permissions explicitly", () => {
     queries.useAgentKeys.mockReturnValue(query([], true));
-    expect(render(AgentKeysTab)).toContain("Showing cached data");
+    expect(render(AgentKeysSection)).toContain("Showing cached data");
   });
 
   it("preserves the Telegram credential form during refresh errors and explains its send", () => {
