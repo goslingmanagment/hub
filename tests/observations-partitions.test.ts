@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const dbMocks = vi.hoisted(() => ({
+  capturePayloadBucketMonth: (instant: Date) =>
+    `${instant.getUTCFullYear()}-${String(instant.getUTCMonth() + 1).padStart(2, "0")}-01`,
+  ensureCapturePayloadCatalogPartitions: vi.fn(),
   ensureDomainEventPartitions: vi.fn(),
   ensureObservationPartitions: vi.fn(),
   getDomainEventPartitionLeadMonths: vi.fn(),
@@ -37,6 +40,8 @@ beforeEach(() => {
   // existing cases keep exercising the observations-side branches.
   dbMocks.ensureDomainEventPartitions.mockResolvedValue([]);
   dbMocks.getDomainEventPartitionLeadMonths.mockResolvedValue(12);
+  dbMocks.ensureCapturePayloadCatalogPartitions.mockReset();
+  dbMocks.ensureCapturePayloadCatalogPartitions.mockResolvedValue([]);
   incidentMocks.notifyOfapiGlobalIncident.mockReset();
   incidentMocks.resolveOfapiGlobalIncident.mockReset();
 });
@@ -66,6 +71,48 @@ describe("runObservationsPartitionCheck", () => {
     const [, input] = incidentMocks.notifyOfapiGlobalIncident.mock.calls[0]!;
     expect(input.kind).toBe("observations_partitions");
     expect(input.errorSummary).toContain("below the 2-month floor");
+  });
+
+  it("extends the CAS catalog months on the same lead as observations", async () => {
+    dbMocks.ensureObservationPartitions.mockResolvedValue([]);
+    dbMocks.getObservationPartitionLeadMonths.mockResolvedValue(3);
+    dbMocks.ensureCapturePayloadCatalogPartitions.mockImplementation(
+      async (_db: unknown, month: string) => [
+        `capture_payload_objects_${month.slice(0, 7).replace("-", "_")}`,
+      ],
+    );
+
+    const result = await runObservationsPartitionCheck(
+      appStub(),
+      new Date("2026-11-15T03:10:00Z"),
+    );
+
+    // The catalog got monthly partitions ONLY from migration 0123 (through
+    // 2027-02, then the 2031 catch-all) and nothing extended them: from
+    // 2027-03 every live catalog write would fail 23514 and capture would
+    // silently fall back to inline bodies.
+    expect(
+      dbMocks.ensureCapturePayloadCatalogPartitions.mock.calls.map(([, month]) => month),
+    ).toEqual(["2026-11-01", "2026-12-01", "2027-01-01", "2027-02-01"]);
+    expect(result.ensured).toContain("capture_payload_objects_2027_02");
+    expect(result.failed).toBe(false);
+  });
+
+  it("pages when the catalog's own pre-creation fails", async () => {
+    dbMocks.ensureObservationPartitions.mockResolvedValue([]);
+    dbMocks.getObservationPartitionLeadMonths.mockResolvedValue(3);
+    dbMocks.ensureCapturePayloadCatalogPartitions.mockRejectedValue(
+      new Error("must be owner of table capture_payload_objects"),
+    );
+
+    const result = await runObservationsPartitionCheck(appStub());
+
+    // The catalog has no lead query, so the FAILURE is the only signal there
+    // is — and the dual-write swallows the 23514 that follows.
+    expect(result.failed).toBe(true);
+    expect(incidentMocks.notifyOfapiGlobalIncident).toHaveBeenCalledTimes(1);
+    const [, input] = incidentMocks.notifyOfapiGlobalIncident.mock.calls[0]!;
+    expect(input.errorSummary).toContain("capture_payload_objects");
   });
 
   it("pages when pre-creation itself fails, even if existing lead looks fine", async () => {
