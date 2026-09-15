@@ -3,6 +3,7 @@ export * from "./capture-coverage.ts";
 export * from "./fans.ts";
 export * from "./dm-text.ts";
 export * from "./money.ts";
+export * from "./password-policy.ts";
 export * from "./proxy-string.ts";
 export * from "./spender-retention.ts";
 export * from "./time.ts";

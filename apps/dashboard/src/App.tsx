@@ -1,11 +1,14 @@
 import { lazy, Suspense } from "react";
 import { Routes, Route, Navigate, useParams } from "react-router";
 import { OwnerRoute } from "./components/layout/OwnerRoute.js";
+import { ChatterLayout } from "./components/layout/ChatterLayout.js";
 import { ProtectedLayout } from "./components/layout/ProtectedLayout.js";
 import { ErrorBoundary } from "./components/shared/ErrorBoundary.js";
 import { resolveLegacyWorkboardRedirect } from "./lib/navigation.js";
 
 const LoginPage = lazy(() => import("./pages/LoginPage.js").then((m) => ({ default: m.LoginPage })));
+const JoinPage = lazy(() => import("./pages/account/JoinPage.js").then((m) => ({ default: m.JoinPage })));
+const AccountPage = lazy(() => import("./pages/account/AccountPage.js").then((m) => ({ default: m.AccountPage })));
 const OverviewPage = lazy(() => import("./pages/OverviewPage.js").then((m) => ({ default: m.OverviewPage })));
 const TransactionsPage = lazy(() => import("./pages/TransactionsPage.js").then((m) => ({ default: m.TransactionsPage })));
 const PageDetailPage = lazy(() => import("./pages/PageDetailPage.js").then((m) => ({ default: m.PageDetailPage })));
@@ -48,6 +51,12 @@ export function App() {
       <Suspense fallback={<LazyFallback />}>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
+          {/* Decision 351: /join has no session yet — it is the page that
+              creates the credential — so it sits outside ProtectedLayout. */}
+          <Route path="/join" element={<JoinPage />} />
+          <Route element={<ChatterLayout />}>
+            <Route path="/account" element={<AccountPage />} />
+          </Route>
           <Route element={<ProtectedLayout />}>
             <Route index element={<OverviewPage />} />
             <Route path="transactions" element={<TransactionsPage />} />

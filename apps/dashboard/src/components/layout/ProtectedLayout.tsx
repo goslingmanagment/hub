@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Navigate, Outlet, useLocation } from "react-router";
 import { useAuthMe, usePages } from "@/api/queries";
 import { KernelApiError } from "@/api/sdk";
-import { buildLoginRoute } from "@/lib/navigation";
+import { CHATTER_HOME, buildLoginRoute } from "@/lib/navigation";
 import { QueryNotice } from "@/components/shared/QueryNotice";
 import { DashboardShellProvider } from "./DashboardShellContext.js";
 import { Sidebar } from "./Sidebar.js";
@@ -89,6 +89,13 @@ export function ProtectedLayout() {
       <button type="button" disabled={isFetching} onClick={() => void refetch()} className="mt-4 min-h-11 rounded-lg bg-accent px-4 text-white disabled:opacity-50">{isFetching ? "Проверяем…" : "Повторить"}</button>
     </div>
   </div>;
+
+  // Decision 351: every page behind this layout is owner or team-lead work and
+  // answers 403 for a chatter. Send them to their own cabinet instead of
+  // rendering a console full of refusals.
+  if (data.user.role === "chatter") {
+    return <Navigate to={CHATTER_HOME} replace />;
+  }
 
   const shellValue = {
     pageCatalogState: pages ? "ready" : isPageCatalogLoading ? "loading" : "error",

@@ -2,7 +2,7 @@ import { useRef, useState, type FormEvent } from "react";
 import { useNavigate, Navigate, useSearchParams } from "react-router";
 import { useLogin, useAuthMe } from "@/api/queries";
 import { KernelApiError } from "@/api/sdk";
-import { resolveLoginReturnPath } from "@/lib/navigation";
+import { resolveLoginReturnPath, resolveRoleHome } from "@/lib/navigation";
 
 export function LoginPage() {
   const navigate = useNavigate();
@@ -25,7 +25,7 @@ export function LoginPage() {
   }
 
   if (auth?.user && !authQuery.isError) {
-    return <Navigate to={returnTo} replace />;
+    return <Navigate to={resolveRoleHome(auth.user.role, returnTo)} replace />;
   }
 
   function handleSubmit(e: FormEvent) {
@@ -35,7 +35,7 @@ export function LoginPage() {
     login.mutate(
       { username, password },
       {
-        onSuccess: () => navigate(returnTo, { replace: true }),
+        onSuccess: (state) => navigate(resolveRoleHome(state.user.role, returnTo), { replace: true }),
         onSettled: () => { submitting.current = false; },
       },
     );

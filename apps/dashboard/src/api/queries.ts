@@ -8,6 +8,7 @@ export * from "./adminPages.js";
 export * from "./adminSync.js";
 export * from "./adminUsage.js";
 export * from "./adminUsers.js";
+export * from "./account.js";
 export * from "./auth.js";
 export * from "./conversations.js";
 export * from "./dev.js";
