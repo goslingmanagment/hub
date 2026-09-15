@@ -7519,9 +7519,8 @@ const baseRouteSchemas = {
     auth: { kind: "any-session" },
     tags: ["auth"],
     summary: "Change the caller's own password",
-    description: "Verifies the current password, sets the new one, clears "
-      + "must_change_password, and revokes every session — log in again with the "
-      + "new credential.",
+    description: "Verifies the current password, sets the new one and revokes "
+      + "every session — log in again with the new credential.",
     body: changePasswordBodySchema,
     response: {
       200: z.object({ ok: z.literal(true) }),
