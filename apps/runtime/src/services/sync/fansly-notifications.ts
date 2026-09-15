@@ -52,6 +52,13 @@
 // LANE TO THE NEXT UTC DAY. It never drops: a response already fetched is
 // journaled before the cap is consulted again.
 //
+// …AND THE HEAD'S SHARE OF IT IS RESERVED. Both phases spend the same daily
+// allowance, so a backfill that walks at chunk speed used to drink the day on
+// its first dispatch and leave the head one poll per UTC day — observed on
+// production with four of six pages parked in `backfill` since ~00:15 UTC.
+// The backfill now stops at `backfillAttemptCeiling(dailyCap)` and comes back
+// when the head is next due; the forward poll keeps the full allowance.
+//
 // THE REPEAT-REQUEST GUARD is WP-F1's lesson, paid for on production on
 // 2026-08-22: a walk that re-issues the identical request spends a whole day's
 // cap proving nothing. The identical `before` twice in one walk stops the walk
@@ -118,6 +125,36 @@ const FORWARD_MAX_PAGES_PER_POLL = 20;
  *  budget (5 requests / 45 s) bites long before this on a healthy lane; this is
  *  the ceiling for a lane that is being re-queued aggressively. */
 const BACKFILL_CALLS_PER_CHUNK = 30;
+
+/** Scheduled head polls in one UTC day at this lane's cadence — the 48 polls
+ *  Decision #226 budgets the daily cap around. */
+const FORWARD_POLLS_PER_UTC_DAY = Math.floor(86_400_000 / FORWARD_POLL_INTERVAL_MS);
+
+/**
+ * Attempts the one-off deep backfill MUST leave for the forward head poll.
+ *
+ * Both phases spend one UTC-day allowance (`dailyCap - callsToday`), so the
+ * backfill — which walks as fast as the chunk budget lets it — used to drink
+ * the whole day on its first dispatch and leave the head ONE poll per day.
+ * That contradicts Decision #226's own budget ("48 head polls plus
+ * pagination") in the lane where a missed poll is a PERMANENT loss: the
+ * provider announces a liker, a reply or a purchase once.
+ *
+ * 48 polls at one attempt each, plus a quarter as headroom for the polls that
+ * page or retry (an attempt, not a call, is what the cap counts). The forward
+ * poll itself is never bounded by this — it keeps the full allowance,
+ * including whatever the backfill did not spend.
+ */
+export const FORWARD_HEAD_RESERVED_ATTEMPTS = Math.ceil(FORWARD_POLLS_PER_UTC_DAY * 1.25);
+
+/**
+ * How many attempts the backfill may have spent today before it yields. Never
+ * below 1: a deliberately small cap should slow the one-off walk down, not
+ * park it forever.
+ */
+export function backfillAttemptCeiling(dailyCap: number): number {
+  return Math.max(1, dailyCap - FORWARD_HEAD_RESERVED_ATTEMPTS);
+}
 
 
 // ── cursor state ─────────────────────────────────────────────────────────────
@@ -450,6 +487,18 @@ export function forwardPollDue(
   }
   const last = Date.parse(state.lastForwardPollAt);
   return !Number.isFinite(last) || now.getTime() - last >= FORWARD_POLL_INTERVAL_MS;
+}
+
+/** When the head is next due. A backfill that stops on the head reserve comes
+ *  back THEN — not after the UTC roll, which is what parked the whole lane in
+ *  `backfill` for the rest of the day. */
+export function nextForwardPollAt(
+  state: Pick<FanslyNotificationsCursorState, "lastForwardPollAt">,
+  now: Date,
+): Date {
+  const last = state.lastForwardPollAt === null ? Number.NaN : Date.parse(state.lastForwardPollAt);
+  const due = Number.isFinite(last) ? last + FORWARD_POLL_INTERVAL_MS : now.getTime();
+  return new Date(Math.max(due, now.getTime()));
 }
 
 export async function fanslyNotificationsChunk(
@@ -918,12 +967,19 @@ export async function fanslyNotificationsChunk(
   }
 
   let callsInChunk = 0;
+  const backfillCeiling = backfillAttemptCeiling(dailyCap);
   while (
     input.budget.hasRequestCapacity(1) && input.budget.hasWallClockCapacity()
     && callsInChunk < BACKFILL_CALLS_PER_CHUNK
   ) {
     if (!hasDayCapacity()) {
       deferred = "daily_call_budget";
+      break;
+    }
+    // THE HEAD'S RESERVE. History keeps; the head does not — so the one-off
+    // walk stops here and hands the rest of the day back to the forward poll.
+    if (state.callsToday >= backfillCeiling) {
+      deferred = "head_reserve";
       break;
     }
     const before = backfill.nextBeforeRef;
@@ -1057,16 +1113,21 @@ export async function fanslyNotificationsChunk(
   return {
     satisfied: false,
     yieldReason: deferred === null ? input.budget.resolveYieldReason(1) : null,
-    // Deferred at the cap: come back after the UTC roll. Otherwise a jittered
-    // continuation, because burst shape is the ban-risk surface.
+    // Deferred at the cap: come back after the UTC roll — nothing may be spent
+    // today. Deferred on the HEAD'S RESERVE: come back when the head is due,
+    // because attempts remain and they belong to the forward poll. Otherwise a
+    // jittered continuation, because burst shape is the ban-risk surface.
     continuationRetryAt: deferred === null
       ? backfillContinuationAt(now, continuationDelayMs)
+      : deferred === "head_reserve"
+      ? nextForwardPollAt(state, now)
       : nextFanslyUtcDayStart(now),
     stats: {
       phase: "backfill",
       journaled,
       callsToday: state.callsToday,
       dailyCap,
+      backfillCeiling,
       deferred,
       notificationFloorAt: backfill.floorAt,
       nextBeforeRef: backfill.nextBeforeRef,
