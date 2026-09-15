@@ -342,6 +342,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 342 | New follower roster correction | Date-bounded fans_latest is core audience; explicit old collection jobs retain their category and limits |
 | 343 | Fansly B0 default-off raw capture | Dedicated page ownership and resolver transport journal business envelopes before metadata decode; live W0 and B1 gates remain separate. |
 | 344 | Fansly B1 default-off addressed REST hints | Replay-safe subject revisions, fenced budgeted DM reads and raw staging preserve ordinary history and rollback; activation stays separate from development. |
+| 345 | Fansly C2c default-off targets | Consume due per-fan/window debt within existing earnings chunks under a strict additional-attempt cap; retain daily rotation and separate activation/coverage requirements. |
 
 
 ## Consensus Decisions
@@ -14017,3 +14018,47 @@ boundaries (159 -> 161); no new platform dispatch framework is introduced.
 The read-only views separate signal-to-hot commit evidence from archive/Read
 Plane convergence and admitted attempts from confirmed transport completion.
 See [the B1 runbook](runbooks/fansly-ws-hints.md).
+
+
+## Decision 345: Fansly C2c default-off addressed earnings (2026-09-15)
+
+Consume the existing C2b per-fan/window queue behind a separate default-false
+flag, empty page allowlist and zero additional-attempt limit. This is the
+addressed-selection part of C2c. Independent daily spender rotation retains its
+existing schedule, cursor, completion and failure policy; no longer interval or
+freshness relaxation is implemented or authorized by this decision.
+
+One ordinary earnings chunk may reserve one physical request for one due
+endpoint, leaving capacity for at least one complete two-endpoint daily fan.
+There is no new scheduler/wakeup or event-only success path. An already
+completed owning generation settles without starting a new addressed read.
+Selection accepts existing dirty native fan references regardless of positive,
+zero, negative or absent local fan records. Lifetime/monthly remain separate
+claims, outcomes and retries. An unchanged, empty or invalid snapshot never
+clears recalculation debt; R+1 cannot be consumed by an in-flight R.
+
+The physical-attempt reservation and claim visit commit under the locked page
+lease before transport. Current base-stream and target flags/allowlists and the
+0..1000 per-page rolling 24-hour limit are checked at admission. A zero limit
+admits nothing. Reservation custody survives crashes and flag flips; the
+adapter receives only one attempt. Admission refusal records no provider visit
+or receipt. The existing proxy resolver, pacing and absolute provider cooldown
+remain authoritative.
+
+Addressed 400/404/410 with no Retry-After retain per-endpoint failure receipts
+and allow unrelated daily work. This does not change how an independently
+selected daily spender's own rejection stops the contiguous daily walk. Auth,
+cooldown, capture, DB and ownership failures retain executor behavior. Success
+receipt settlement for addressed work is strict; C2b baseline capture retains
+its existing best-effort diagnostic settlement behavior (Decision 341).
+
+The admission ledger has no fan reference; fan erasure preserves its
+conservative page budget, page/model erasure removes it. Existing subject
+claims and erasure custody remain the source of target ownership. No money
+formula, canonical identity or projection writer changes.
+
+Production acceptance still requires per-fan/window max-age, unknown/zero-net
+fan coverage, quiet corrections, reader convergence and comparable physical
+cost evidence. Daily completion certifies only its existing spender scope,
+not every addressed target. No savings, low-latency or full C2c completion is
+inferred from this additive code. See [the runbook](runbooks/fansly-earnings-targets.md).

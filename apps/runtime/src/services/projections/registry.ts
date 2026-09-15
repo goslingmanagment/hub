@@ -393,6 +393,11 @@ export const OPERATIONAL_STATE_TABLES: readonly {
     justification: "B1 routing custody and revision receipts must survive replay. Truncation would increment dirty revisions twice and spend additional platform attempts.",
   },
   {
+    table: "fan_earnings_target_attempts", stateClass: "operational_state",
+    writer: "services/sync/fan-earnings-targets.ts",
+    justification: "C2c physical-attempt custody; replay or config changes must not reset the rolling budget.",
+  },
+  {
     table: "fansly_ws_hint_attempts", stateClass: "operational_state",
     writer: "services/sync/fansly-ws-hints.ts",
     justification: "B1 physical attempt admissions enforce the rolling additional egress cap. Resetting this ledger would grant the budget again within the same window.",

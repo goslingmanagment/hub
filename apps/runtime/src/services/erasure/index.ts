@@ -1413,6 +1413,7 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
     ["fansly_ws_connections", "page_id"],
     ["fansly_ws_hint_receipts", "page_id"],
     ["fansly_ws_hint_attempts", "page_id"],
+    ["fan_earnings_target_attempts", "page_id"],
     ["sync_http_attempts", "page_id"],
     ["sync_run_events", "page_id"],
     ["sync_raw_payloads", "page_id"],

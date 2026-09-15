@@ -10,6 +10,7 @@ import type { ExecutorRequestContext, StreamChunkResult } from "./executor-types
 import { fanslyNewStreamAllowed, isPageAllowlisted } from "./fansly-stream-gate.ts";
 import { createPageRateLimitWaiter } from "./rate-limiter.ts";
 import { captureFanEarningsEndpoint } from "./fan-earnings-capture.ts";
+import { runFanEarningsTargetStep } from "./fan-earnings-targets.ts";
 
 function fanslyNewStreamSkip(reason: string): StreamChunkResult {
   return { satisfied: true, yieldReason: null, stats: { skipped: reason }, gatedSkip: reason };
@@ -65,6 +66,7 @@ export async function executeFanEarningsChunk(
       stats: { fansFetched: 0, walkCompleted: true, reusedCompletedWalk: true },
     };
   }
+  await runFanEarningsTargetStep(app, { ...input, pageContext: input.pageContext });
   let cursorFanId = typeof state?.cursorFanId === "number" ? state.cursorFanId : 0;
   // A43 (W8.2): the PERSISTED cursor advances only through one contiguous
   // prefix of successful fans. A fan-scoped rejection stops the walk; it may

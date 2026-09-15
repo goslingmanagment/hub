@@ -24,22 +24,23 @@ async function settleOwnedReceipt(app: AppContext, claim: FanEarningsClaim, rece
 export async function captureFanEarningsEndpoint(app: AppContext, input: {
   pageId: number;
   syncRunId: number;
-  fan: { fanId: number; platformUserId: string };
+  fan: { fanId: number | null; platformUserId: string };
   window: FanEarningsRefreshWindow;
   after: Date;
   before: Date;
   shadow: boolean;
+  target?: { claim: FanEarningsClaim; wasAdmitted: () => boolean };
   fetch: () => Promise<{ items: unknown; raw?: unknown }>;
 }) {
-  const claim = input.shadow ? await withOwnedPageSyncTransaction(app.db, (tx) =>
+  const claim = input.target?.claim ?? (input.shadow ? await withOwnedPageSyncTransaction(app.db, (tx) =>
     claimFanEarningsRotation(tx, {
       pageId: input.pageId, fanRef: input.fan.platformUserId, window: input.window, now: new Date(),
-    })) : null;
+    })) : null);
   let response: { items: unknown; raw?: unknown };
   try {
     response = await input.fetch();
   } catch (error) {
-    if (claim) {
+    if (claim && (!input.target || input.target.wasAdmitted())) {
       const rejected = error instanceof FanslyApiError && [400, 404, 410].includes(error.status ?? 0);
       try {
         await settleOwnedReceipt(app, claim, {
@@ -62,7 +63,8 @@ export async function captureFanEarningsEndpoint(app: AppContext, input: {
     platformAccountId: input.pageId, syncRunId: input.syncRunId, endpoint,
     requestParams: {
       after: input.after.toISOString(), before: input.before.toISOString(),
-      fanId: input.fan.fanId, correlationAccountId: input.fan.platformUserId, spendersOnly: true,
+      fanId: input.fan.fanId, correlationAccountId: input.fan.platformUserId, spendersOnly: !input.target,
+      ...(input.target ? { selection: "target" } : {}),
     },
     responsePayload: payload, mapperVersion: FANSLY_MAPPER_VERSION,
     payloadKind: "mapping_critical", retainUntil: retentionDate(),
@@ -76,9 +78,10 @@ export async function captureFanEarningsEndpoint(app: AppContext, input: {
       observationId: captured.observationId, payload, checkedAt: new Date(),
     });
     try {
-      await settleOwnedReceipt(app, claim, receipt);
+      const settled = await settleOwnedReceipt(app, claim, receipt);
+      if (input.target && !settled) throw new Error("fan_earnings_target_claim_fenced");
     } catch (error) {
-      if (error instanceof PageSyncLeaseLostError) throw error;
+      if (error instanceof PageSyncLeaseLostError || input.target) throw error;
       // The receipt transaction rolled back. Continue the captured baseline only
       // while its page lease is still owned; missing receipts remain shadow debt.
       await assertOwnedPageSyncLease(app.db);
