@@ -9,7 +9,10 @@ import {
   setConfigOverride,
 } from "@agency_hub_core/db";
 import { FanslyApiError } from "@agency_hub_core/fansly";
-import { FANSLY_NOTIFICATION_DECLARED_TYPE_CSV } from "@agency_hub_core/shared";
+import {
+  FANSLY_NOTIFICATION_DECLARED_TYPE_CSV,
+  FANSLY_NOTIFICATION_TYPE_GROUPS,
+} from "@agency_hub_core/shared";
 
 import { SyncChunkBudget } from "../apps/runtime/src/services/sync/chunk-budget.ts";
 import {
@@ -569,6 +572,64 @@ describe("[sync-critical] WP-F2 notifications lane", () => {
     const state = await cursor(seeded.id);
     // …and the walk is still open at the cursor it could not follow.
     expect(state!.forward.beforeRef).toBe(ref(2));
+  });
+
+  it("re-raises a 429 rather than narrowing the lane on a rate limit", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const seeded = await seedPage();
+    // Decision #275: a Retry-After beyond the 60 s in-process clamp arrives as
+    // a TERMINAL FanslyApiError(429) carrying the deadline. Read as a type
+    // refusal it would discard that deadline and narrow the lane one durable
+    // step per rate limit, with no path back.
+    const retryAfterAt = new Date(NOW.getTime() + 15 * 60_000);
+    const adapter = adapterStub({
+      fail: () => new FanslyApiError("rate limited", 429, undefined, undefined, retryAfterAt),
+    });
+    const telemetry = telemetryStub();
+    await expect(fanslyNotificationsChunk(
+      appStub(adapter),
+      input(seeded.id, telemetry, new SyncChunkBudget()),
+    )).rejects.toMatchObject({ status: 429, retryAfterAt });
+
+    // ONE attempt, no widening, nothing durable: the executor's rate_limit
+    // path owns this, exactly as it owns 401/403 and 5xx.
+    expect(adapter.calls).toHaveLength(1);
+    expect(adapter.calls[0]?.types).toBeNull();
+    expect(telemetry.anomalies).toHaveLength(0);
+    const state = await cursor(seeded.id);
+    expect(state!.filterMode).toBe("unfiltered");
+    expect(state!.filterRefusals).toBe(0);
+  });
+
+  it("rotates the type group after a SERVED call instead of polling one forever", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const seeded = await seedPage();
+    // Every wide form is refused, every group form is served: the lane lands
+    // in `type_groups` and stays there.
+    const isGroupForm = (types: readonly number[] | null) =>
+      types !== null && types.join(",") !== FANSLY_NOTIFICATION_DECLARED_TYPE_CSV;
+    const adapter = adapterStub({
+      fail: (call) => isGroupForm(call.types) ? null : new FanslyApiError("bad type", 400),
+      pages: (_call, index) => index <= 2 ? envelope([row(1)]) : envelope([]),
+    });
+    await drain(seeded.id, adapter, telemetryStub());
+
+    const served = adapter.calls.filter((call) => isGroupForm(call.types));
+    expect(served).toHaveLength(2);
+    // The purchase group first — money leads the degraded path — and then the
+    // NEXT group, not the same one again. The index used to move only on a
+    // refusal, so a lane that reached `type_groups` asked for one group's
+    // codes forever and never saw the rest.
+    expect(served[0]?.types).toEqual(FANSLY_NOTIFICATION_TYPE_GROUPS[0]);
+    expect(served[1]?.types).toEqual(FANSLY_NOTIFICATION_TYPE_GROUPS[1]);
+    const state = await cursor(seeded.id);
+    expect(state!.typeGroupIndex).toBe(2);
   });
 
   it("falls back to the FULL declared CSV when the unfiltered form is refused", async (context) => {
