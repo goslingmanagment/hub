@@ -103,6 +103,10 @@ const envSchema = z.object({
   FANSLY_DM_SHADOW_PAGE_ALLOWLIST: z.string().default("none"),
   FANSLY_WS_CAPTURE_ENABLED: booleanSchema.default(false),
   FANSLY_WS_CAPTURE_PAGE_ALLOWLIST: z.string().default(""),
+  FANSLY_WS_HINTS_ENABLED: booleanSchema.default(false),
+  FANSLY_WS_HINTS_PAGE_ALLOWLIST: z.string().default(""),
+  FANSLY_WS_HINTS_TYPE_ALLOWLIST: z.string().default(""),
+  FANSLY_WS_HINTS_POLICIES: z.string().default("{}"),
   FANSLY_FAN_EARNINGS_SHADOW_PAGE_ALLOWLIST: z.string().default("none"),
   FANSLY_DM_DEEP_BACKFILL_ENABLED: booleanSchema.default(false),
   FANSLY_DM_DEEP_BACKFILL_MAX_REQUESTS_PER_RUN: z.coerce.number().int().min(0).default(1),
@@ -417,6 +421,10 @@ export interface AppConfig {
   fanslyDmShadowPageAllowlist?: string;
   fanslyWsCaptureEnabled?: boolean;
   fanslyWsCapturePageAllowlist?: string;
+  fanslyWsHintsEnabled?: boolean;
+  fanslyWsHintsPageAllowlist?: string;
+  fanslyWsHintsTypeAllowlist?: string;
+  fanslyWsHintsPolicies?: string;
   fanslyFanEarningsShadowPageAllowlist?: string;
   fanslyDmDeepBackfillEnabled?: boolean;
   fanslyDmDeepBackfillMaxRequestsPerRun?: number;
@@ -746,6 +754,10 @@ export function loadConfig(
     fanslyDmShadowPageAllowlist: parsed.FANSLY_DM_SHADOW_PAGE_ALLOWLIST,
     fanslyWsCaptureEnabled: parsed.FANSLY_WS_CAPTURE_ENABLED,
     fanslyWsCapturePageAllowlist: parsed.FANSLY_WS_CAPTURE_PAGE_ALLOWLIST,
+    fanslyWsHintsEnabled: parsed.FANSLY_WS_HINTS_ENABLED,
+    fanslyWsHintsPageAllowlist: parsed.FANSLY_WS_HINTS_PAGE_ALLOWLIST,
+    fanslyWsHintsTypeAllowlist: parsed.FANSLY_WS_HINTS_TYPE_ALLOWLIST,
+    fanslyWsHintsPolicies: parsed.FANSLY_WS_HINTS_POLICIES,
     fanslyFanEarningsShadowPageAllowlist: parsed.FANSLY_FAN_EARNINGS_SHADOW_PAGE_ALLOWLIST,
     fanslyDmDeepBackfillEnabled: parsed.FANSLY_DM_DEEP_BACKFILL_ENABLED,
     fanslyDmDeepBackfillMaxRequestsPerRun: parsed.FANSLY_DM_DEEP_BACKFILL_MAX_REQUESTS_PER_RUN,

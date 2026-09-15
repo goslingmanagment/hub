@@ -54,6 +54,7 @@ export interface ProjectionCheckpointInput {
 }
 
 const PROJECTION_ONLY_DOMAIN_EVENT_TYPES = new Set([
+  "fansly.ws_signal_observed",
   "ofapi.post_like_observed",
   "ofapi.chat_queue_observed",
   "ofapi.read_snapshot_observed",

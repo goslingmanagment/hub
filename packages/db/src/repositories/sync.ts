@@ -198,6 +198,7 @@ function normalizeTriggerToSource(trigger: string | null | undefined): SyncReque
     case "onboarding":
     case "recovery":
     case "anomaly":
+    case "event":
     case "reset":
       return trigger;
     case "worker":

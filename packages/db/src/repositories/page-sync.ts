@@ -76,6 +76,7 @@ export type SyncRequestSource =
   | "onboarding"
   | "recovery"
   | "anomaly"
+  | "event"
   | "reset";
 export type SyncWorkClass = "live" | "history" | "maintenance";
 
@@ -522,6 +523,26 @@ const SYNC_STREAM_PRIORITY_BY_SOURCE: Record<SyncRequestSource, Record<SyncStrea
     payouts: 13,
     media_stats: 12,
   },
+  event: {
+    light: 60,
+    transactions: 50,
+    fan_identities: 49,
+    top_spenders: 45,
+    subscribers: 40,
+    followers: 35,
+    followers_reconcile: 34,
+    dm_conversations: 30,
+    dm_messages: 25,
+    fan_earnings: 20,
+    purchase_history: 19,
+    posts: 18,
+    stats_snapshot: 17,
+    notifications: 16,
+    catalog: 15,
+    post_replies: 14,
+    payouts: 13,
+    media_stats: 12,
+  },
   recovery: {
     light: 70,
     transactions: 60,
@@ -810,6 +831,7 @@ function streamPriorityBySourceSql(streamColumnName: string, sourceColumnName: s
       when 'onboarding' then ${priorityCase("onboarding")}
       when 'recovery' then ${priorityCase("recovery")}
       when 'anomaly' then ${priorityCase("anomaly")}
+      when 'event' then ${priorityCase("event")}
       when 'reset' then ${priorityCase("reset")}
       else ${priorityCase("scheduled")}
     end
@@ -3092,8 +3114,15 @@ export async function requestPageSync(
         throw new Error(`Sync stream "${stream}" does not exist for page ${input.pageId}`);
       }
 
+      // B1 can wake an idle DM stream for one budgeted target. Never replace
+      // queued ordinary work with an event-only request; the ordinary chunk
+      // can consume the same durable subject queue itself.
+      if (input.source === "event" && (stream !== "dm_messages" || current.status !== "idle"
+        || current.requestSeq > current.appliedSeq)) continue;
+
       const nextRequestSeq = current.requestSeq + 1;
-      const rawRequestPayload = input.requestPayloadByStream?.[stream] ?? {};
+      const rawRequestPayload = input.source === "event" ? { fanslyWsHintOnly: true }
+        : input.requestPayloadByStream?.[stream] ?? {};
       const requestPayload = Object.keys(rawRequestPayload).length > 0
         ? { ...rawRequestPayload, revision: nextRequestSeq }
         : rawRequestPayload;

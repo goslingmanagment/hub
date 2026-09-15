@@ -175,6 +175,7 @@ export const syncRequestSourceEnum = pgEnum("sync_request_source", [
   "onboarding",
   "recovery",
   "anomaly",
+  "event",
   "reset",
 ]);
 export const syncWorkClassEnum = pgEnum("sync_work_class", [

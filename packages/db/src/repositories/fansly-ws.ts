@@ -76,7 +76,7 @@ export async function captureFanslyWsFrame(db: Database, input: {
     const inserted = await insertObservation(owned, {
       source: "fansly_ws", producer: "fansly:b0", platform: "fansly", accountId: input.pageId,
       nativeAccountRef: input.accountRef, kind: FANSLY_WS_CAPTURE_KIND,
-      payload: { codec: FANSLY_WS_CAPTURE_KIND, frame: input.frame },
+      payload: { codec: FANSLY_WS_CAPTURE_KIND, frame: input.frame, generation: input.generation },
       payloadHash: createHash("sha256").update(input.frame).digest(),
       idempotencyKey: `${input.connectionId}:${input.ordinal}`, receivedAt: input.receivedAt,
     });
