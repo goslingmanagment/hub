@@ -9,7 +9,6 @@ import {
   useRevokeMyDevices,
 } from "@/api/queries";
 import { KernelApiError } from "@/api/sdk";
-import { clearDashboardSession } from "@/lib/queryClient";
 import {
   START_GUIDE_URL,
   USAGE_WINDOW_DAYS,
@@ -169,7 +168,8 @@ function ChangePassword() {
         </p>
         <button
           type="button"
-          onClick={() => { clearDashboardSession(); window.location.assign("/login"); }}
+          // A full page load, so nothing cached under the dead session survives.
+          onClick={() => window.location.assign("/login")}
           className="mt-4 min-h-11 rounded-lg bg-accent px-4 text-sm font-semibold text-white hover:opacity-90"
         >
           Войти заново
