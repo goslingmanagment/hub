@@ -1,6 +1,7 @@
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
 /**
@@ -13,12 +14,30 @@ import { describe, expect, it } from "vitest";
  * never heard of one. Copy that slips back into the machinery vocabulary is a
  * regression, so this gate reads the shipped copy rather than trusting review.
  *
+ * The copy is extracted with the TypeScript parser, not a regex. The first
+ * version of this gate matched `>([^<>{}]+)<` and was therefore blind to every
+ * JSX text node containing an interpolation — `<p>Токен {name} истёк</p>`
+ * passed it silently, which is precisely the shape real copy has. A parser
+ * sees each text segment around `{…}` as its own JsxText node, so the hole
+ * cannot come back.
+ *
  * `TechnicalTab.tsx` is excluded BY NAME: it is the one screen that is about
  * machines (agent keys, harvest machine ids) and is allowed to say so.
  */
 
 const TEAM_DIR = path.resolve("apps/dashboard/src/pages/settings/team");
 const EXCLUDED_FILES = new Set(["TechnicalTab.tsx"]);
+
+// Shared components that render INSIDE the Team tab. Their copy reaches the
+// same screen, so it lives under the same rule; they are clean today and this
+// keeps them that way.
+const SHARED_IN_TEAM = [
+  "apps/dashboard/src/pages/settings/PageAssignmentsEditor.tsx",
+  "apps/dashboard/src/components/shared/ConfirmModal.tsx",
+  "apps/dashboard/src/components/shared/ModalShell.tsx",
+  "apps/dashboard/src/components/shared/StaleDataNotice.tsx",
+  "apps/dashboard/src/components/shared/StatusPanel.tsx",
+].map((relative) => path.resolve(relative));
 
 const BANNED = [
   { label: "токен", pattern: /(?<!\p{L})токен/iu },
@@ -36,90 +55,105 @@ const BANNED = [
 ] as const;
 
 /**
- * Everything a person can read on screen: string and template literals plus
- * JSX text. Comments are dropped (they explain the machinery on purpose) and
- * so are import specifiers (`@/api/queries` is a path, not a sentence).
+ * Everything a person can read on screen: JSX text (each segment around an
+ * interpolation), string literals and the static parts of template literals.
+ *
+ * Left out on purpose: comments (they explain the machinery deliberately),
+ * import/export module specifiers (`@/api/queries` is a path, not a sentence)
+ * and `className` values (a Tailwind class list is not copy).
  */
-export function extractUserFacingText(source: string): string[] {
-  const code = source
-    .split("\n")
-    .filter((line) => !/^\s*import\b/.test(line) && !/\bfrom\s+["']/.test(line))
-    .join("\n");
+export function extractUserFacingText(source: string, fileName = "file.tsx"): string[] {
+  const scriptKind = fileName.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
+  const parsed = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true, scriptKind);
+  const found: string[] = [];
 
-  const literals: string[] = [];
-  let stripped = "";
-  let index = 0;
-
-  while (index < code.length) {
-    const char = code[index]!;
-    const next = code[index + 1];
-
-    if (char === "/" && next === "/") {
-      while (index < code.length && code[index] !== "\n") index += 1;
-      continue;
+  function visit(node: ts.Node): void {
+    if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
+      return;
     }
-    if (char === "/" && next === "*") {
-      index += 2;
-      while (index < code.length && !(code[index] === "*" && code[index + 1] === "/")) index += 1;
-      index += 2;
-      continue;
+    if (ts.isJsxAttribute(node) && node.name.getText(parsed) === "className") {
+      return;
     }
-    if (char === '"' || char === "'" || char === "`") {
-      const quote = char;
-      index += 1;
-      let value = "";
-      while (index < code.length && code[index] !== quote) {
-        if (code[index] === "\\") {
-          value += code[index + 1] ?? "";
-          index += 2;
-          continue;
-        }
-        value += code[index];
-        index += 1;
-      }
-      index += 1;
-      literals.push(value);
-      stripped += '""';
-      continue;
+    if (ts.isJsxText(node)) {
+      found.push(node.text);
+    } else if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
+      found.push(node.text);
+    } else if (
+      node.kind === ts.SyntaxKind.TemplateHead
+      || node.kind === ts.SyntaxKind.TemplateMiddle
+      || node.kind === ts.SyntaxKind.TemplateTail
+    ) {
+      found.push((node as ts.TemplateLiteralLikeNode).text);
     }
-
-    stripped += char;
-    index += 1;
+    ts.forEachChild(node, visit);
   }
 
-  const jsxText = [...stripped.matchAll(/>([^<>{}]+)</g)].map((match) => match[1]!);
-  return [...literals, ...jsxText].filter((text) => text.trim() !== "");
+  visit(parsed);
+  return found.filter((text) => text.trim() !== "");
 }
 
-function teamFiles(): string[] {
-  return readdirSync(TEAM_DIR)
-    .filter((name) => /\.tsx?$/.test(name))
-    .filter((name) => !EXCLUDED_FILES.has(name))
-    .filter((name) => statSync(path.join(TEAM_DIR, name)).isFile());
+/** Recursive: a subdirectory of team/ is still the Team tab. */
+function collectFiles(dir: string): string[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) return collectFiles(full);
+    if (!/\.tsx?$/.test(entry.name)) return [];
+    if (EXCLUDED_FILES.has(entry.name)) return [];
+    return [full];
+  });
+}
+
+function offendersIn(file: string): string[] {
+  const texts = extractUserFacingText(readFileSync(file, "utf8"), path.basename(file));
+  return texts.flatMap((text) => (
+    BANNED.filter(({ pattern }) => pattern.test(text)).map(({ label }) => `${label}: ${text.trim()}`)
+  ));
 }
 
 describe("Team tab copy vocabulary (§2)", () => {
-  const files = teamFiles();
+  const files = [...collectFiles(TEAM_DIR), ...SHARED_IN_TEAM];
+  const names = files.map((file) => path.basename(file));
 
-  it("scans the shipped Team files", () => {
-    expect(files.length).toBeGreaterThan(0);
-    expect(files).toContain("TeamTab.tsx");
-    expect(files).toContain("InviteModal.tsx");
-    expect(files).toContain("LinkRevealModal.tsx");
-    expect(files).toContain("UserDetailModal.tsx");
-    expect(files).not.toContain("TechnicalTab.tsx");
+  it("scans every shipped Team file and the shared components rendered inside it", () => {
+    expect(names).toEqual(expect.arrayContaining([
+      "TeamTab.tsx",
+      "InviteModal.tsx",
+      "LinkRevealModal.tsx",
+      "UserDetailModal.tsx",
+      "teamView.ts",
+      "PageAssignmentsEditor.tsx",
+      "ConfirmModal.tsx",
+      "ModalShell.tsx",
+      "StaleDataNotice.tsx",
+      "StatusPanel.tsx",
+    ]));
+    expect(names).not.toContain("TechnicalTab.tsx");
   });
 
-  it.each(files)("%s speaks about logins, devices and links only", (name) => {
-    const texts = extractUserFacingText(readFileSync(path.join(TEAM_DIR, name), "utf8"));
-    const offenders = texts.flatMap((text) => (
-      BANNED.filter(({ pattern }) => pattern.test(text)).map(({ label }) => `${label}: ${text.trim()}`)
-    ));
-    expect(offenders).toEqual([]);
+  it.each(files.map((file) => [path.basename(file), file] as const))(
+    "%s speaks about logins, devices and links only",
+    (_name, file) => {
+      expect(offendersIn(file)).toEqual([]);
+    },
+  );
+
+  // A gate that cannot fail is not a gate. These are the exact shapes the rule
+  // exists to keep out — including the interpolated JSX node the previous
+  // regex-based extractor walked straight past.
+  it("sees copy split by an interpolation, in either half", () => {
+    const interpolated = extractUserFacingText(
+      "export const view = <p>Токен {u.name} истёк, введите ключ</p>;",
+    );
+    expect(interpolated.join("|")).toContain("Токен");
+    expect(interpolated.join("|")).toContain("введите ключ");
+    expect(interpolated.some((text) => BANNED.some(({ pattern }) => pattern.test(text)))).toBe(true);
   });
 
-  // A gate that cannot fail is not a gate: these are the exact phrasings the
-  // rule exists to keep out, in both languages.
+  it("sees copy inside a template literal around its interpolations", () => {
+    const templated = extractUserFacingText('const m = `Ваш ключ ${id} отозван`;', "file.ts");
+    expect(templated.some((text) => BANNED.some(({ pattern }) => pattern.test(text)))).toBe(true);
+  });
+
   it.each([
     "Токен устройства истёк",
     "Ваш device token отозван",
@@ -145,18 +179,20 @@ describe("Team tab copy vocabulary (§2)", () => {
     expect(BANNED.filter(({ pattern }) => pattern.test(sample))).toEqual([]);
   });
 
-  it("reads literals and JSX text but not comments or import paths", () => {
+  it("reads copy but not comments, import paths or class lists", () => {
     const texts = extractUserFacingText([
       'import { kernel } from "@/api/queries";',
       "// a device token is machinery",
       "/* the key lives in the result */",
       'const label = "Устройства";',
-      "export const view = <span>Завершить вход</span>;",
+      'export const view = <span className="prefix-token-key">Завершить вход</span>;',
     ].join("\n"));
 
     expect(texts).toContain("Устройства");
     expect(texts).toContain("Завершить вход");
-    expect(texts.join("\n")).not.toContain("device token");
-    expect(texts.join("\n")).not.toContain("@/api/queries");
+    const joined = texts.join("\n");
+    expect(joined).not.toContain("device token");
+    expect(joined).not.toContain("@/api/queries");
+    expect(joined).not.toContain("prefix-token-key");
   });
 });
