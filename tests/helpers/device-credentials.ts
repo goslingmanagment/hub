@@ -4,6 +4,8 @@ import { randomToken, sha256Hex } from "@agency_hub_core/shared";
 import type { AppContext } from "../../apps/runtime/src/bootstrap.ts";
 import {
   DEVICE_TOKEN_PREFIX,
+  DEVICE_TOKEN_TTL_MS,
+  KEY_PREFIX_DISPLAY_LENGTH,
   assignPageToUser,
   listEffectivePageAssignments,
   type AuditContext,
@@ -20,12 +22,18 @@ import {
  * hundred times over instead of the thing under test.
  *
  * So the fixture writes the row the way the service does — same prefix, same
- * digest, same 90-day expiry — and nothing else. It lives in tests/ on purpose:
- * production has no credential path that skips a password.
+ * digest, same 90-day expiry, all three imported from the service so they
+ * cannot drift — and nothing else. It lives in tests/ on purpose: production has
+ * no credential path that skips a password.
+ *
+ * **It deliberately writes no audit row and no observation.** A fixture is not a
+ * business fact, and a journal full of tokens nobody issued would make the DP 7
+ * pins meaningless. The real issuance path's journaling is pinned where it
+ * belongs — `tests/device-token-password.integration.test.ts` › *the issuance
+ * audit*, over `issueDeviceTokenWithPassword`. The `audit` argument here is
+ * accepted only so call sites read like the service calls they replaced, and is
+ * used solely by the page assignment below (which IS a real service call).
  */
-
-const DEVICE_TOKEN_TTL_MS = 90 * 24 * 60 * 60 * 1000;
-const KEY_PREFIX_DISPLAY_LENGTH = 10;
 
 export interface IssuedTestDeviceToken {
   token: string;
@@ -38,6 +46,7 @@ export interface IssuedTestDeviceToken {
 export async function issueDeviceTokenForUsername(
   app: AppContext,
   input: { username: string; label: string; expiresAt?: Date },
+  /** Ignored: see the note above — this path journals nothing. */
   _audit?: AuditContext,
 ): Promise<IssuedTestDeviceToken> {
   const user = await findUserByUsername(app.db, input.username);

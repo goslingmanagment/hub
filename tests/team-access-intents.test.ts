@@ -30,13 +30,13 @@ const sdk = vi.hoisted(() => ({
   adminDeactivateUser: vi.fn(),
   adminReactivateUser: vi.fn(),
   adminListUsers: vi.fn(),
-  // Everything the old three-call provisioning used. Present so the invite
-  // test can prove they are NOT reached any more.
-  adminCreateUser: vi.fn(),
-  adminSetPassword: vi.fn(),
+  // The one survivor of the old three-call provisioning: assigning a page is
+  // still a real operation, and the invite test proves the atomic invite does
+  // NOT fall back to it. The other three (`adminCreateUser`, `adminSetPassword`,
+  // `adminIssueApiKey`) no longer exist on the SDK at all since Decision 353 —
+  // asserting `not.toHaveBeenCalled` on a hand-made mock of a deleted operation
+  // proves nothing, so they are gone from here too.
   adminAssignPage: vi.fn(),
-  adminIssueApiKey: vi.fn(),
-  adminRevokeApiKeys: vi.fn(),
 }));
 vi.mock("../apps/dashboard/src/api/sdk.ts", () => ({ kernel: sdk }));
 
@@ -147,12 +147,10 @@ describe("inviting is one call", () => {
         expiresInHours: 168,
       },
     });
-    // The provisioning dance this replaced (#116): three calls, a dictated
-    // password and a half-made account whenever a later step failed.
-    expect(sdk.adminCreateUser).not.toHaveBeenCalled();
-    expect(sdk.adminSetPassword).not.toHaveBeenCalled();
+    // The provisioning dance this replaced (#116) was three calls that could
+    // leave a half-made account behind. The invite is ONE call: no separate
+    // page assignment rides along behind it.
     expect(sdk.adminAssignPage).not.toHaveBeenCalled();
-    expect(sdk.adminIssueApiKey).not.toHaveBeenCalled();
     expect(client.getQueryState(["admin", "users"])?.isInvalidated).toBe(true);
   });
 });
@@ -166,7 +164,6 @@ describe("links", () => {
       params: { username: USER },
       body: { kind: "password_reset" },
     });
-    expect(sdk.adminSetPassword).not.toHaveBeenCalled();
   });
 
   it("«Отправить приглашение заново» asks for an invite link for that person", async () => {

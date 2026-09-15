@@ -70,8 +70,8 @@ import { findPageSummaryByLabel } from "@agency_hub_core/db";
 
 export const SESSION_COOKIE_NAME = "agency_hub_core_session";
 /** How much of a bearer is safe to show an operator (and to store as the
- * lookup-free display prefix). */
-const KEY_PREFIX_DISPLAY_LENGTH = 10;
+ * lookup-free display prefix). Exported so a fixture cannot drift from it. */
+export const KEY_PREFIX_DISPLAY_LENGTH = 10;
 
 // Fixed argon2id hash used to equalize timing on login failure paths so that a
 // missing/ineligible user is indistinguishable from a wrong password. The plaintext
@@ -1236,7 +1236,7 @@ export const DEVICE_TOKEN_PREFIX = "agency_hub_device_";
  * fail its authentication even after a newer Core has activated the digest
  * into device_tokens. */
 export const PENDING_DEVICE_TOKEN_PREFIX = "agency_hub_pending_device_";
-const DEVICE_TOKEN_TTL_MS = 90 * 24 * 60 * 60 * 1000;
+export const DEVICE_TOKEN_TTL_MS = 90 * 24 * 60 * 60 * 1000;
 const PENDING_DEVICE_TOKEN_TTL_MS = 10 * 60 * 1000;
 /** Sliding refresh never extends past creation + this hard cap. */
 const DEVICE_TOKEN_MAX_LIFETIME_MS = 365 * 24 * 60 * 60 * 1000;

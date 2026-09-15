@@ -2,6 +2,13 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 
 import { createFanslyPage, createModel } from "@agency_hub_core/db";
 
+import { createAccountLinkForUsername } from "../apps/runtime/src/services/account-links.ts";
+import {
+  authenticateDeviceToken,
+  authenticateSessionToken,
+  loginWithPassword,
+} from "../apps/runtime/src/services/auth.ts";
+import { issueDeviceTokenForUsername } from "./helpers/device-credentials.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
@@ -95,11 +102,6 @@ describe("CLI admin flows", () => {
     expect(logs.some((line) => line.includes("Created user dima"))).toBe(true);
     expect(logs.some((line) => line.includes("Assigned lead to lana"))).toBe(true);
     expect(logs.some((line) => line.includes("all of their sign-ins were ended"))).toBe(true);
-    // The retired lane wrote nothing on the way out.
-    expect(logs.some((line) => line.startsWith("agency_hub_core_"))).toBe(false);
-
-    const keyRows = await testDb.pool.query("select count(*)::int as count from api_keys");
-    expect(keyRows.rows[0]?.count).toBe(0);
 
     const assignmentsAfterPage = await testDb.pool.query(`
       select count(*)::int as count
@@ -108,5 +110,81 @@ describe("CLI admin flows", () => {
       where u.username = 'lead'
     `);
     expect(assignmentsAfterPage.rows[0]?.count).toBe(1);
+  });
+
+  it("`user set-password` ends every sign-in, not just the cookie ones", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    // Decision 353: before this PR the CLI reset advanced the epoch and revoked
+    // SESSIONS, and left device tokens alive — so "I reset his password" was a
+    // false statement about a laptop still holding a working bearer. It now runs
+    // terminateAccessTx, the same primitive a reset link runs.
+    const appContext = createTestAppContext(testDb);
+    vi.spyOn(console, "log").mockImplementation(() => {});
+
+    const run = async (args: string[]) => {
+      const program = await loadCliProgram(appContext);
+      await program.parseAsync(args, { from: "user" });
+    };
+
+    await run(["user", "add", "--username", "dima", "--role", "owner", "--password", "owner-secret"]);
+    await run([
+      "user", "add", "--username", "lead", "--role", "team_lead", "--password", "lead-secret",
+    ]);
+
+    const device = await issueDeviceTokenForUsername(appContext, {
+      username: "lead",
+      label: "Desktop · lead-pc",
+    }, { source: "cli" });
+    const session = await loginWithPassword(appContext, {
+      username: "lead",
+      password: "lead-secret",
+    });
+    const link = await createAccountLinkForUsername(appContext, {
+      username: "lead",
+      kind: "password_reset",
+    }, { source: "cli", actorUserId: 1 });
+
+    const epochBefore = await testDb.pool.query<{ epoch: number }>(
+      "select device_token_epoch as epoch from users where username = 'lead'",
+    );
+
+    // Everything is alive before the reset.
+    expect((await authenticateDeviceToken(appContext, device.token)).principal).not.toBeNull();
+    expect(await authenticateSessionToken(appContext, session.sessionToken)).not.toBeNull();
+
+    await run(["user", "set-password", "--username", "lead", "--password", "lead-secret-2"]);
+
+    // The device token is refused WITH the self-healing reason, so the client
+    // wipes its custody and shows a sign-in screen instead of a red line.
+    expect(await authenticateDeviceToken(appContext, device.token)).toEqual({
+      principal: null,
+      failure: { reason: "token_revoked" },
+    });
+    expect(await authenticateSessionToken(appContext, session.sessionToken)).toBeNull();
+
+    const linkRow = await testDb.pool.query<{ revoked_reason: string | null }>(
+      "select revoked_reason from account_links where id = $1 and revoked_at is not null",
+      [link.id],
+    );
+    expect(linkRow.rows).toEqual([{ revoked_reason: "password_set" }]);
+
+    const epochAfter = await testDb.pool.query<{ epoch: number }>(
+      "select device_token_epoch as epoch from users where username = 'lead'",
+    );
+    expect(Number(epochAfter.rows[0]!.epoch)).toBeGreaterThan(Number(epochBefore.rows[0]!.epoch));
+
+    // And the new password is the one that works.
+    await expect(loginWithPassword(appContext, {
+      username: "lead",
+      password: "lead-secret",
+    })).rejects.toThrow();
+    expect(await loginWithPassword(appContext, {
+      username: "lead",
+      password: "lead-secret-2",
+    })).toBeTruthy();
   });
 });

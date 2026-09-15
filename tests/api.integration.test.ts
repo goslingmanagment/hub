@@ -2212,7 +2212,10 @@ describe("api integration", () => {
         url: "/api/v1/admin/users",
         headers: { cookie: sessionCookieFrom(login) },
       });
-      expect(list.statusCode).toBeGreaterThanOrEqual(500);
+      // Exactly 500: response validation refuses the row. Not a 200 with the
+      // role stripped, not a 200 with it through — the deploy runbook's §6.1(a)
+      // gate exists because this is what a surviving row costs.
+      expect(list.statusCode).toBe(500);
       expect(list.body).not.toContain("content_manager");
     } finally {
       await testDb.pool.query("delete from users where username = 'legacy-content-manager'");
