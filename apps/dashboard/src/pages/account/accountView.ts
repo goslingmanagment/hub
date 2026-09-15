@@ -23,8 +23,8 @@ interface ClientOffer {
 
 /**
  * One offer per platform, keyed by platform so a new platform is a map entry
- * and not a branch (the platform-branch ratchet: no `platform ===` anywhere in
- * the dashboard's own code).
+ * and not a branch — the Stage 18 platform-branch ratchet counts strict
+ * comparison sites here, and this tree adds none.
  */
 const CLIENT_OFFERS = new Map<Platform, ClientOffer>([
   ["fansly", {

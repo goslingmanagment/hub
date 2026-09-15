@@ -348,6 +348,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 348 | Fansly C2c default-off isolated daily earnings recovery and age-based targets |
 | 349 | Unified chatter account and invite registration | One-time invite/reset links (`account_links`, 0199), case-insensitive logins (0200), one cookie-free password sign-in for both clients, a structured 401 `reason`, three honest revocation operations and `last_client_version`; one password check under `FOR UPDATE` closes the login race; every existing route stays wire-compatible until PR-4. PARTIALLY REVERSES #117 (the owner ordered the chatter cabinet #117 left conditional) |
 | 350 | Вкладка «Команда»: приглашение ссылкой | Человека заводит одна операция и одноразовая ссылка; три операции отзыва названы по тому, что они делают; UI API-ключей для людей удалён, машинное уехало в «Техническое». |
+| 351 | Chatter cabinet `/account` and invitation page `/join` | A chatter's own surface on the hub: an invitation link redeemed into a password, then who-I-am, my devices, my password and my own AI spend. Partially reverses #117 at the owner's order (see 349). |
 
 
 ## Consensus Decisions
@@ -14382,3 +14383,63 @@ Plan and review disposition: `investigations/unified-account-2026-09-15/PLAN.md`
 только `*.ts`, а два сравнения удалённого `UsersTab.tsx` лежали в `.tsx` и
 никогда в него не входили; новая группировка страниц по платформе сделана
 через `Map` и таблицы соответствия.
+
+## Decision 351: The chatter's cabinet `/account` and the invitation page `/join` (2026-09-15)
+
+Decision #117 recorded that no identity work waits on a chatter-facing web
+surface "unless the owner later asks for one". The owner asked (PLAN §11), so
+#117 is partially reversed here: the hub grows exactly two chatter pages, and
+nothing else about #117 changes. The kernel side — the link lifecycle, the
+self-service routes and the password rule — is Decision 349; the owner's
+«Команда» tab is Decision 350. This entry is the dashboard's chatter surface
+(PLAN §6.2, Р5).
+
+`/join` lives outside `ProtectedLayout`, because it is the page that creates the
+credential a session would need. Its one-time secret arrives in the URL fragment
+and is read from there only: a fragment is not sent to the server, so it stays
+out of Fastify's request log and the host nginx access log, and the page never
+writes it into a query string, a path, a query key or a rendered attribute. It
+travels exactly twice, both times as a POST body field — inspect, then redeem.
+An active link asks for a password twice against the shared 12–256-character,
+not-in-the-top-1000 rule, run locally for an instant answer with the kernel
+still authoritative; a used, expired, revoked or unknown link gets one sentence,
+«Ссылка недействительна. Попроси новую у владельца», with no oracle about which
+of those it was. Redemption ends on a screen showing the login in full and
+offering only the clients that person's own pages need — the platforms come from
+`inspect`, so a Fansly-only chatter is never told to download a desktop app. A
+`password_reset` link says plainly that every previous sign-in is over.
+
+`/account` sits under a new `ChatterLayout`: one line of chrome, no owner
+sidebar, no page catalogue. It answers four questions — who am I and which pages
+are mine, which devices am I signed in on, how do I change my password, and what
+did my AI work cost (today, over thirty days, by day and by feature). The owner
+and a team lead may open it too; it is their account as well, and the layout does
+not branch on role. Spend is reported through a new shared constructor,
+`formatUsdFromMicroUsd`, so the AI plane's unit is converted in one place
+(Stage 27: never hand-roll money arithmetic at a call site).
+
+A chatter now lands there and stays there. `LoginPage` resolves the
+post-sign-in destination through `resolveRoleHome`, which overrides even a
+remembered `next` for a chatter, and `ProtectedLayout` turns a chatter back to
+the cabinet rather than rendering a console in which every page answers 403.
+
+The vocabulary of PLAN §2 is enforced mechanically, not by review.
+`tests/dashboard-account-copy-vocabulary.test.ts` scans every user-visible
+string under `pages/account` — with a real scanner, so a URL's `//` is not read
+as a comment and an import specifier is not read as copy — and fails on
+«токен», «ключ», «API», «bearer», «активация», «резервация», «префикс» in
+either language. The same gate refuses to render a sign-in's own metadata: no
+prefix, no issue date, no expiry. A person knows a login, a password and their
+devices; the rest is machinery, like a session cookie.
+
+The dashboard's SDK client no longer treats a 401 from `authChangePassword` as
+an expired session. The kernel answers 401 for a wrong current password, and
+bouncing someone to `/login` for a typo would throw away the form instead of
+telling them what happened.
+
+`password-policy.ts` is one module. `/join` runs the kernel's own
+`checkNewPassword`, not a second implementation of it written for the browser —
+which is why it inherits the two-list rule and the stem check (Decision 349)
+without a line of dashboard code changing. It is exported from the shared
+package's browser entry as well as its index, because the dashboard resolves
+`@agency_hub_core/shared` to `browser.ts`.
