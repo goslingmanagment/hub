@@ -7,6 +7,7 @@ const dbMocks = vi.hoisted(() => ({
   getOfapiFinancialTruthSummaries: vi.fn(),
   listVisiblePages: vi.fn(),
   listPageSyncStates: vi.fn(),
+  listCheckpointStates: vi.fn(),
   listSyncMonitorStreamRows: vi.fn(),
 }));
 
@@ -18,6 +19,7 @@ vi.mock("@agency_hub_core/db", async () => {
     getOfapiFinancialTruthSummaries: dbMocks.getOfapiFinancialTruthSummaries,
     listVisiblePages: dbMocks.listVisiblePages,
     listPageSyncStates: dbMocks.listPageSyncStates,
+    listCheckpointStates: dbMocks.listCheckpointStates,
     listSyncMonitorStreamRows: dbMocks.listSyncMonitorStreamRows,
   };
 });
@@ -170,9 +172,23 @@ function buildVisiblePage(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function boundedCheckpoint(fullCompletedAt: string | null) {
+  return {
+    version: 2, mode: "bounded", generation: 7,
+    completedAt: "2026-03-24T12:00:00.000Z", offset: 300, observedCount: 300,
+    pageCount: 3, unchangedPageStreak: 3, providerTotalMode: "present", providerReportedTotal: 500,
+    fullSweepStartedAt: "2026-03-24T11:59:00.000Z", lastFullSweepCompletedAt: fullCompletedAt,
+    polling: { anchorSlot: 100, slotOffsetSeconds: 0, lastCertifiedFull: fullCompletedAt === null ? null : {
+      anchorSlot: 100, startedAt: "2026-03-24T10:00:00.000Z", completedAt: fullCompletedAt,
+    } },
+    previousTimestampMs: null, stopInvalidated: false,
+  };
+}
+
 describe("sync status service", () => {
   beforeEach(() => {
     dbMocks.getOfapiFinancialTruthSummaries.mockResolvedValue(new Map());
+    dbMocks.listCheckpointStates.mockResolvedValue([]);
     // Read paths never seed: `getSyncStatusSnapshot` serves GETs, so any call
     // into the seeding/repair writer is a regression, not a slow path. Every
     // test in this file therefore fails loudly if the read path writes.
@@ -183,6 +199,26 @@ describe("sync status service", () => {
 
   afterEach(() => {
     vi.clearAllMocks();
+  });
+
+  it.each([true, false])("keeps full freshness separate from a recent bounded pass, monitor=%s", async (includeMonitorRows) => {
+    const fullCompletedAt = "2026-03-24T10:12:00.000Z";
+    dbMocks.listVisiblePages.mockResolvedValue([buildVisiblePage()]);
+    dbMocks.listPageSyncStates.mockResolvedValue([buildTaskRow({ stream: "dm_conversations" })]);
+    dbMocks.listCheckpointStates.mockResolvedValue([{ pageId: 7, state: boundedCheckpoint(fullCompletedAt) }]);
+    dbMocks.listSyncMonitorStreamRows.mockResolvedValue([buildMonitorRow({ stream: "dm_conversations" })]);
+    const snapshot = await getSyncStatusSnapshot({ db: {}, config: {} } as never, {
+      pageIds: [7], now: new Date("2026-03-24T12:00:00.000Z"), includeMonitorRows,
+    });
+    expect(snapshot.pages[0]?.blocks.messages_live).toMatchObject({
+      state: "delayed", primaryFresh: false,
+      metrics: expect.objectContaining({ lastFullSweepCompletedAt: fullCompletedAt }),
+      progress: expect.objectContaining({ percent: null, percentValid: false, total: null }),
+      substreams: expect.arrayContaining([expect.objectContaining({
+        stream: "dm_conversations", succeededAt: fullCompletedAt, state: "delayed",
+      })]),
+    });
+    if (!includeMonitorRows) expect(dbMocks.listSyncMonitorStreamRows).not.toHaveBeenCalled();
   });
 
   it.each(["ready", "coverage", "physical debt", "active sibling"] as const)(

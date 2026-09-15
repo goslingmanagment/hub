@@ -10,6 +10,7 @@ import {
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
+import { parseDmBoundedSweepState } from "./sync/dm-bounded-state.ts";
 import { BadRequestError } from "./errors.ts";
 import { parseTransactionBackfillState } from "./sync/transaction-backfill.ts";
 import {
@@ -585,6 +586,11 @@ function buildDmConversationProgress(
   row: SyncMonitorStreamRow,
   status: SyncMonitorStatus,
 ): SyncMonitorProgress | null {
+  const bounded = parseDmBoundedSweepState(row.checkpointState);
+  if (bounded) return {
+    label: `${bounded.observedCount.toLocaleString()} conversations checked in bounded scan`,
+    current: bounded.observedCount, total: null, unit: "conversations", percent: null,
+  };
   const state = parseDmConversationCursorState(row.checkpointState);
   if (!state) {
     return null;

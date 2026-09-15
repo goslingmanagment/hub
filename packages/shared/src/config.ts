@@ -106,6 +106,9 @@ const envSchema = z.object({
   FANSLY_FAN_EARNINGS_TARGETS_ENABLED: booleanSchema.default(false),
   FANSLY_FAN_EARNINGS_TARGETS_PAGE_ALLOWLIST: z.string().default(""),
   FANSLY_FAN_EARNINGS_TARGETS_DAILY_ATTEMPT_LIMIT: z.coerce.number().int().min(0).max(1000).default(0),
+  FANSLY_DM_BOUNDED_ENABLED: booleanSchema.default(false),
+  FANSLY_DM_BOUNDED_PAGE_ALLOWLIST: z.string().default(""),
+  FANSLY_DM_BOUNDED_POLICIES: z.string().default("{}"),
   FANSLY_WS_HINTS_ENABLED: booleanSchema.default(false),
   FANSLY_WS_HINTS_PAGE_ALLOWLIST: z.string().default(""),
   FANSLY_WS_HINTS_TYPE_ALLOWLIST: z.string().default(""),
@@ -427,6 +430,9 @@ export interface AppConfig {
   fanslyFanEarningsTargetsEnabled?: boolean;
   fanslyFanEarningsTargetsPageAllowlist?: string;
   fanslyFanEarningsTargetsDailyAttemptLimit?: number;
+  fanslyDmBoundedEnabled?: boolean;
+  fanslyDmBoundedPageAllowlist?: string;
+  fanslyDmBoundedPolicies?: string;
   fanslyWsHintsEnabled?: boolean;
   fanslyWsHintsPageAllowlist?: string;
   fanslyWsHintsTypeAllowlist?: string;
@@ -763,6 +769,9 @@ export function loadConfig(
     fanslyFanEarningsTargetsEnabled: parsed.FANSLY_FAN_EARNINGS_TARGETS_ENABLED,
     fanslyFanEarningsTargetsPageAllowlist: parsed.FANSLY_FAN_EARNINGS_TARGETS_PAGE_ALLOWLIST,
     fanslyFanEarningsTargetsDailyAttemptLimit: parsed.FANSLY_FAN_EARNINGS_TARGETS_DAILY_ATTEMPT_LIMIT,
+    fanslyDmBoundedEnabled: parsed.FANSLY_DM_BOUNDED_ENABLED,
+    fanslyDmBoundedPageAllowlist: parsed.FANSLY_DM_BOUNDED_PAGE_ALLOWLIST,
+    fanslyDmBoundedPolicies: parsed.FANSLY_DM_BOUNDED_POLICIES,
     fanslyWsHintsEnabled: parsed.FANSLY_WS_HINTS_ENABLED,
     fanslyWsHintsPageAllowlist: parsed.FANSLY_WS_HINTS_PAGE_ALLOWLIST,
     fanslyWsHintsTypeAllowlist: parsed.FANSLY_WS_HINTS_TYPE_ALLOWLIST,

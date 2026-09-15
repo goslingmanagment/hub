@@ -343,6 +343,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 343 | Fansly B0 default-off raw capture | Dedicated page ownership and resolver transport journal business envelopes before metadata decode; live W0 and B1 gates remain separate. |
 | 344 | Fansly B1 default-off addressed REST hints | Replay-safe subject revisions, fenced budgeted DM reads and raw staging preserve ordinary history and rollback; activation stays separate from development. |
 | 345 | Fansly C2c default-off targets | Consume due per-fan/window debt within existing earnings chunks under a strict additional-attempt cap; retain daily rotation and separate activation/coverage requirements. |
+| 346 | Fansly A1 default-off bounded DM polling | Separate resumable head walks from certified full membership; retain old scheduler slots and expose full-list freshness independently. |
 
 
 ## Consensus Decisions
@@ -14062,3 +14063,48 @@ fan coverage, quiet corrections, reader convergence and comparable physical
 cost evidence. Daily completion certifies only its existing spender scope,
 not every addressed target. No savings, low-latency or full C2c completion is
 inferred from this additive code. See [the runbook](runbooks/fansly-earnings-targets.md).
+
+
+## Decision 346: Fansly A1 default-off bounded dialog polling (2026-09-15)
+
+A1 is implemented behind a default-false flag, empty page allowlist and explicit
+per-page policy. Missing or invalid policy runs the existing full sweep. The
+1800-second scheduler cadence and 3600-second full-list freshness target remain
+unchanged. This ships dormant code; it does not accept A0, enable A1, or establish
+HTTP savings or event-to-reader latency.
+
+Full30 means a full sweep in every original scheduler slot. Longer candidate
+intervals (60/180/360 minutes) use the scheduled/start slot persisted when a full
+begins; finishing later never postpones its next deadline. A resumed full stays
+full. An expired deadline, disabled page or invalid policy abandons a bounded
+continuation at the next chunk boundary and opens a new full at offset zero with
+a fresh generation. A changed slot offset also falls back to full.
+
+A separately parsed `mode: "bounded"` stores bounded continuation and a frozen
+proof of the last certified full. Three unchanged pages with matching raw list
+and embedded message IDs, valid descending timestamps strictly older than that
+full's START minus 60 seconds, are the candidate stop. All head-diff reasons
+participate. Ties reset the streak; unknown markers and order violations disable
+stopping for the rest of that walk. A chunk request cap yields durable progress;
+it never substitutes for the boundary or claims complete recovery.
+
+Bounded pages share raw-first capture, lease and erasure fences, head repair and
+DM follow-ups. They never stamp membership generations, count a generation as a
+full proof, or hide unseen threads. Even provider exhaustion completes only the
+bounded run, through checkpoint progress plus executor quality hold; it does not
+renew `succeeded_at`, clear failures or advance checkpoint full success. Old full
+parsers reject the new mode, so binary rollback also starts a fresh full.
+
+Detailed status and the lightweight overview/sidebar summary independently read
+certified `lastFullSweepCompletedAt`, retaining the existing freshness target and
+operational error/pause precedence. Bounded progress has no full-list percentage.
+The detailed messages_live metrics expose the full completion timestamp. These
+two Fansly-only checkpoint filters deliberately raise the platform-branch budget
+from 161 to 163; they add no provider routing. Existing default-off cursor JSON
+and readers keep their previous behavior. No schema migration is required.
+
+Mutable offset deletion/insertion without duplicate or total drift remains an
+unproved provider behavior. Quiet unread/flags/deletions/membership require the
+old full schedule until equivalent detection and freshness are accepted. A0
+calendar windows and live canary acceptance gate activation, not implementation.
+See [the A1 runbook](runbooks/fansly-dm-bounded.md).
