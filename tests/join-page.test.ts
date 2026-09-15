@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "../apps/dashboard/node_modules/react-router/dist/development/index.js";
 
-// Decision 349, PR-1C. The api layer is mocked (@tanstack/react-query does not
+// Decision 351, PR-1C. The api layer is mocked (@tanstack/react-query does not
 // resolve from the root test suite), so these render the real page against
 // hook states the kernel can actually produce.
 

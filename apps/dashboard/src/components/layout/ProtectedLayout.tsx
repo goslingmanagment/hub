@@ -90,7 +90,7 @@ export function ProtectedLayout() {
     </div>
   </div>;
 
-  // Decision 349: every page behind this layout is owner or team-lead work and
+  // Decision 351: every page behind this layout is owner or team-lead work and
   // answers 403 for a chatter. Send them to their own cabinet instead of
   // rendering a console full of refusals.
   if (data.user.role === "chatter") {

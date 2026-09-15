@@ -218,7 +218,7 @@ export function resolveLoginReturnPath(value: string | null | undefined): string
   const path = decodeURIComponent(new URL(value, "https://hub.invalid").pathname).replace(/\/+$/, "");
   const route = path.toLowerCase();
   if (route === "/login") return "/";
-  // Decision 349: /join carries its one-time invitation secret in the URL
+  // Decision 351: /join carries its one-time invitation secret in the URL
   // fragment, precisely because a fragment is never sent to the server. `next`
   // IS sent — it is a query parameter — so carrying the fragment across would
   // write the secret into the hub's request log and the host's access log.
@@ -237,7 +237,7 @@ export function buildLoginRoute(returnTo: string): string {
   return target === "/" ? "/login" : `/login?${new URLSearchParams({ next: target }).toString()}`;
 }
 
-/** Decision 349: the chatter's own home. The owner console is not theirs. */
+/** Decision 351: the chatter's own home. The owner console is not theirs. */
 export const CHATTER_HOME = "/account";
 
 /**

@@ -21,7 +21,7 @@ import {
   usageWindow,
 } from "./accountView.js";
 
-// Decision 349: the cabinet. One person, their own account: who they are, the
+// Decision 351: the cabinet. One person, their own account: who they are, the
 // devices they are signed in on, their password, and what their AI work cost.
 // Every route it calls is any-session and self-scoped — there is nothing here
 // an owner could not also open about themselves.

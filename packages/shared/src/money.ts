@@ -89,7 +89,7 @@ export function microUsdToMills(value: MicroUsd): Mills {
 }
 
 /**
- * Micro-USD → a display string for the AI plane (Decision 349: the chatter's
+ * Micro-USD → a display string for the AI plane (Decision 351: the chatter's
  * own spend in `/account`). The AI ledger's unit is micro-USD, so the cabinet
  * must not divide by 1_000_000 by hand — it asks here, exactly as the platform
  * plane asks `formatUsdFromMills`. Sub-cent amounts round DOWN to `< $0.01`

@@ -6,7 +6,7 @@ import {
   previousBusinessDate,
 } from "@agency_hub_core/shared";
 
-// Decision 349 (PLAN §2 "Словарь"): everything a person reads on /join and
+// Decision 351 (PLAN §2 "Словарь"): everything a person reads on /join and
 // /account is written in terms of ЛОГИН, ПАРОЛЬ and УСТРОЙСТВА. The words
 // «токен», «ключ», «API», «bearer», «активация», «резервация», «префикс» do not
 // appear here — `tests/dashboard-account-copy-vocabulary.test.ts` scans every

@@ -6,7 +6,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { formatUsdFromMicroUsd } from "../packages/shared/src/money.ts";
 
-// Decision 349, PR-1C. The cabinet renders against mocked api hooks; the money
+// Decision 351, PR-1C. The cabinet renders against mocked api hooks; the money
 // assertions go through the shared micro-USD constructor, never hand arithmetic.
 
 const mocks = vi.hoisted(() => ({

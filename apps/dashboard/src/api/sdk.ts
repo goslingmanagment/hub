@@ -30,7 +30,7 @@ export const kernel = createClient({
   auth: { mode: "cookie" },
   onAuthError: (error, operation) => {
     // A failed login is a normal form error, not an expired session. So is a
-    // mistyped current password in the cabinet (Decision 349): the kernel
+    // mistyped current password in the cabinet (Decision 351): the kernel
     // answers 401 there too, and bouncing the person to /login would lose the
     // form instead of telling them the password did not match.
     if (error.status === 401 && !AUTH_FORM_OPERATIONS.has(operation ?? "")) {

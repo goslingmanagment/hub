@@ -15,7 +15,7 @@ import {
   redeemFailureMessage,
 } from "./accountView.js";
 
-// Decision 349: the first screen a new chatter ever sees. It lives OUTSIDE
+// Decision 351: the first screen a new chatter ever sees. It lives OUTSIDE
 // ProtectedLayout — there is no session yet, and the whole point of the page is
 // to create the credential that will make one.
 //

@@ -4,7 +4,7 @@ import path from "node:path";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
-// Decision 349 / PLAN §2 "Словарь для пользователя": a chatter knows exactly
+// Decision 351 / PLAN §2 "Словарь для пользователя": a chatter knows exactly
 // three things — ЛОГИН, ПАРОЛЬ, УСТРОЙСТВА. A device token is internal
 // machinery, like a session cookie, and the words for that machinery must never
 // reach a screen. This gate reads every user-visible string on the chatter's

@@ -3,7 +3,7 @@ import type { ChangePasswordBody } from "@agency_hub_core/contracts";
 
 import { kernel } from "./sdk.js";
 
-// Decision 349: the chatter's own surface — the invitation page (/join, public)
+// Decision 351: the chatter's own surface — the invitation page (/join, public)
 // and the cabinet (/account, any live session). Everything goes through the
 // generated SDK, like every other domain module (dashboard-sdk-ban).
 //

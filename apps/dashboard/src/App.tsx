@@ -51,7 +51,7 @@ export function App() {
       <Suspense fallback={<LazyFallback />}>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
-          {/* Decision 349: /join has no session yet — it is the page that
+          {/* Decision 351: /join has no session yet — it is the page that
               creates the credential — so it sits outside ProtectedLayout. */}
           <Route path="/join" element={<JoinPage />} />
           <Route element={<ChatterLayout />}>

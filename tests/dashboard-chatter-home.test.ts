@@ -2,7 +2,7 @@ import { createElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// Decision 349: a chatter's home is /account. Every owner page behind
+// Decision 351: a chatter's home is /account. Every owner page behind
 // ProtectedLayout answers 403 for them, so neither a fresh sign-in nor a
 // remembered `next` may land them there.
 
