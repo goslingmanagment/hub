@@ -415,6 +415,9 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # docs/runbooks/unified-account-deploy.md.
   "0199_account_links.sql"
   "0200_users_username_lower_uidx.sql"
+  # Decision 353: additive earnings metadata; old writers remain compatible
+  # and retain strict debt through their legacy dirty reason.
+  "0201_fan_earnings_content_revision.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"
