@@ -21,7 +21,7 @@ export type TeamStatus = "invited" | "active" | "disabled";
 export const TEAM_STATUS_LABEL: Readonly<Record<TeamStatus, string>> = {
   invited: "ждёт регистрации",
   active: "активен",
-  disabled: "деактивирован",
+  disabled: "доступ отключён",
 };
 
 export const ROLE_LABEL: Readonly<Record<UserRole, string>> = {
@@ -45,6 +45,25 @@ export function findTeamMember(
   username: string,
 ): AdminUser | null {
   return users.find((user) => user.username === username) ?? null;
+}
+
+/** The kernel's unique username index is case-insensitive (#349). Match that
+ * rule before inviting, including disabled rows whose identity is retained. */
+export function findTeamMemberByLogin(
+  users: readonly AdminUser[],
+  username: string,
+): AdminUser | null {
+  const normalized = username.trim().toLowerCase();
+  return users.find((user) => user.username.toLowerCase() === normalized) ?? null;
+}
+
+export function restoreTeamMemberMessage(user: AdminUser): string {
+  const access = user.registrationState === "invited"
+    ? "Пароль ещё не задан. После возвращения создайте новое приглашение в разделе «Ссылки»."
+    : user.mustChangePassword
+      ? "Перед входом в расширение или приложение нужно сменить пароль. После восстановления откройте раздел «Ссылки» и выберите «Сбросить пароль ссылкой»."
+      : "Человек сможет снова войти с прежним паролем. Если пароль забыт, создайте ссылку для сброса.";
+  return `Вернётся тот же участник с сохранённой историей, ролью и назначенными страницами. ${access} Прежние входы и ссылки останутся недействительными.`;
 }
 
 /** Working people float up (freshest device activity first); never-active

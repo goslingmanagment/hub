@@ -30,6 +30,31 @@ the route behind the button; owner cookie session required.
 A link is one-time and lives 7 days by default (30 at most). Used, expired and
 revoked links are kept as facts, never deleted.
 
+### The login already exists
+
+The invite form checks the whole team, including disabled participants, using
+the same case-insensitive login rule as the kernel. `Nikita` and `nikita` are
+one login. A duplicate opens the existing participant's card rather than
+creating or restoring an account automatically. A stale list is refreshed
+after a failed invite; the form keeps its inputs and gives an inline recovery
+path.
+
+- **Access disabled:** choose «Перейти к восстановлению», review the saved
+  role and pages, then confirm «Восстановить доступ» only for the same person.
+  Their history and login belong to that identity. For someone else, choose
+  another login.
+- **Waiting for registration:** use «Отправить приглашение заново» on their
+  card. Creating the same person again is unnecessary.
+- **Already active:** open the card to check their pages/devices or use
+  «Сбросить пароль ссылкой» if they forgot the password.
+
+Disabled participants also remain visible under «Отключённые участники» on the
+Team tab. Restoration does not revive old links or sign-ins. If the person
+never set a password, create a new invitation after restoring. If a mandatory
+password change is pending (`mustChangePassword`), create a password-reset
+link before they sign in to a client. Otherwise the old password works again,
+and a reset link is needed only if they forgot it.
+
 ## Which operation, when
 
 | Situation | Use | Route |

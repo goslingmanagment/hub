@@ -32,7 +32,7 @@ const queries = vi.hoisted(() => ({
 vi.mock("../apps/dashboard/src/api/queries.ts", () => queries);
 
 import { TeamTab } from "../apps/dashboard/src/pages/settings/team/TeamTab.tsx";
-import { InviteModal } from "../apps/dashboard/src/pages/settings/team/InviteModal.tsx";
+import { ExistingMemberNotice, InviteModal } from "../apps/dashboard/src/pages/settings/team/InviteModal.tsx";
 import { LinkRevealModal } from "../apps/dashboard/src/pages/settings/team/LinkRevealModal.tsx";
 import { UserDetailModal } from "../apps/dashboard/src/pages/settings/team/UserDetailModal.tsx";
 import {
@@ -40,6 +40,7 @@ import {
   daysToHours,
   deviceRevokedReasonLabel,
   findTeamMember,
+  findTeamMemberByLogin,
   formatRelativeRu,
   groupPagesByPlatform,
   INVITE_DEFAULT_DAYS,
@@ -48,6 +49,7 @@ import {
   linkRevokedReasonLabel,
   linkStateLabel,
   REVOCATION_LABEL,
+  restoreTeamMemberMessage,
   splitDevices,
   sortTeamByActivity,
   teamStatus,
@@ -125,6 +127,7 @@ function render(component: ComponentType<Record<string, unknown>>, props: Record
 }
 
 function mockEverything() {
+  queries.useAdminUsers.mockReturnValue(query<AdminUser[]>([]));
   queries.useCreateInvite.mockReturnValue(mutation());
   queries.useCreateAccountLink.mockReturnValue(mutation());
   queries.useUserDevices.mockReturnValue(query<DeviceTokenItem[]>([]));
@@ -180,6 +183,57 @@ describe("findTeamMember", () => {
   it("returns null when the person is no longer in the list", () => {
     expect(findTeamMember([], "missing")).toBeNull();
     expect(findTeamMember([user({ username: "grisha" })], "sveta")).toBeNull();
+  });
+});
+
+describe("existing-login recovery", () => {
+  it("finds an inactive identity using the kernel's case-insensitive uniqueness rule", () => {
+    const disabled = user({ username: "Nikita", disabledAt: "2026-09-15T00:00:00.000Z" });
+    expect(findTeamMemberByLogin([disabled], " nikITA ")).toBe(disabled);
+    expect(findTeamMemberByLogin([disabled], "nikita-2")).toBeNull();
+  });
+
+  it.each(["active", "invited"] as const)("also detects an existing %s participant", (registrationState) => {
+    const existing = user({ username: "Nikita", registrationState });
+    expect(findTeamMemberByLogin([existing], "NIKITA")).toBe(existing);
+  });
+
+  it("routes a disabled login to explicit restoration without claiming it is a new account", () => {
+    const markup = render(ExistingMemberNotice as ComponentType<Record<string, unknown>>, {
+      user: user({ username: "Nikita", disabledAt: "2026-09-15T00:00:00.000Z" }),
+      onOpen: vi.fn(),
+    });
+    expect(markup).toContain("Логин «Nikita» уже занят");
+    expect(markup).toContain("тот же человек");
+    expect(markup).toContain("Перейти к восстановлению");
+    expect(markup).toContain("Для другого человека выберите другой логин");
+  });
+
+  it("keeps restoration and password recovery distinct", () => {
+    const active = restoreTeamMemberMessage(user({ username: "Nikita" }));
+    expect(active).toContain("войти с прежним паролем");
+    expect(active).toContain("ролью и назначенными страницами");
+    expect(active).toContain("Прежние входы и ссылки останутся недействительными");
+    const invited = restoreTeamMemberMessage(user({ username: "Nikita", registrationState: "invited" }));
+    expect(invited).toContain("создайте новое приглашение");
+    expect(invited).not.toContain("войти с прежним паролем");
+  });
+
+  it("requires a reset link when the restored password must be changed before client sign-in", () => {
+    const message = restoreTeamMemberMessage(user({ username: "Nikita", mustChangePassword: true }));
+    expect(message).toContain("Перед входом в расширение или приложение нужно сменить пароль");
+    expect(message).toContain("Сбросить пароль ссылкой");
+    expect(message).not.toContain("войти с прежним паролем");
+    expect(message).not.toContain("создайте новое приглашение");
+  });
+
+  it("keeps an unfinished registration on the invitation path even if a password-change flag is present", () => {
+    const message = restoreTeamMemberMessage(user({
+      username: "Nikita", registrationState: "invited", mustChangePassword: true,
+    }));
+    expect(message).toContain("Пароль ещё не задан");
+    expect(message).toContain("создайте новое приглашение");
+    expect(message).not.toContain("Сбросить пароль ссылкой");
   });
 });
 
@@ -337,14 +391,16 @@ describe("TeamTab", () => {
     expect(markup).toContain("lora");
   });
 
-  it("keeps deactivated people as a tombstoned, collapsed list (#126)", () => {
+  it("keeps disabled people visible and recoverable without expanding a hidden list (#126)", () => {
     mockEverything();
     queries.useAdminUsers.mockReturnValue(query([
       user({ username: "ivan", disabledAt: new Date(Date.now() - 24 * HOUR).toISOString() }),
     ]));
 
     const markup = render(TeamTab);
-    expect(markup).toContain("Деактивированные (1)");
+    expect(markup).toContain("Отключённые участники (1)");
+    expect(markup).toContain("ivan");
+    expect(markup).toContain("Восстановить доступ");
     expect(markup).toContain("В команде");
     expect(markup).toContain("пока никого");
   });
@@ -428,7 +484,7 @@ describe("UserDetailModal", () => {
     const markup = renderCard(user({ username: "admin", role: "owner" }));
 
     expect(markup).not.toContain(REVOCATION_LABEL.allAccess);
-    expect(markup).not.toContain("Деактивировать");
+    expect(markup).not.toContain("Отключить доступ");
     expect(markup).not.toContain("Сбросить пароль ссылкой");
     expect(markup).not.toContain("Отправить приглашение заново");
     // What an owner CAN do to their own sign-ins stays available.
@@ -442,7 +498,7 @@ describe("UserDetailModal", () => {
     queries.useUserDevices.mockReturnValue(query([device({ id: 1, label: "Firefox · Windows" })]));
     const markup = renderCard(user({ username: "grisha", role: "chatter" }));
     expect(markup).toContain(REVOCATION_LABEL.allAccess);
-    expect(markup).toContain("Деактивировать");
+    expect(markup).toContain("Отключить доступ");
   });
 
   it("prints the link history with its state and offers to revoke a live one", () => {
@@ -471,9 +527,27 @@ describe("UserDetailModal", () => {
 
   it("offers deactivation for a working person and a return for a deactivated one", () => {
     mockEverything();
-    expect(renderCard(user({ username: "grisha" }))).toContain("Деактивировать");
+    expect(renderCard(user({ username: "grisha" }))).toContain("Отключить доступ");
     expect(renderCard(user({ username: "ivan", disabledAt: "2026-09-01T00:00:00.000Z" })))
-      .toContain("Вернуть в команду");
+      .toContain("Восстановить доступ");
+  });
+
+  it.each(["active", "invited"] as const)("makes a disabled %s participant's recovery primary and pages read-only", (registrationState) => {
+    mockEverything();
+    const markup = renderCard(user({
+      username: "Nikita", registrationState, disabledAt: "2026-09-15T00:00:00.000Z",
+      assignedPages: [{ id: 11, label: "lora", platform: "fansly", modelSlug: "lora", modelName: "Lora" }],
+    }));
+    expect(markup.indexOf("Восстановить доступ")).toBeLessThan(markup.indexOf("Устройства"));
+    expect(markup).toContain("Сохранённые страницы");
+    expect(markup).toContain("lora");
+    expect(markup).not.toContain("Сбросить пароль ссылкой");
+    expect(markup).not.toContain("Отправить приглашение заново");
+    expect(markup).not.toContain("Назначить страницу");
+    expect(markup).not.toContain(">Снять<");
+    expect(markup).not.toContain(REVOCATION_LABEL.allAccess);
+    expect(markup).not.toContain(REVOCATION_LABEL.allDevices);
+    expect(markup).not.toContain("понадобится новая ссылка");
   });
 });
 
@@ -493,6 +567,7 @@ describe("InviteModal", () => {
       create: mutation(),
       onClose: vi.fn(),
       onCreated: vi.fn(),
+      onOpenExisting: vi.fn(),
     });
 
     expect(markup.indexOf("Fansly")).toBeLessThan(markup.indexOf("OnlyFans"));
@@ -511,6 +586,7 @@ describe("InviteModal", () => {
       create: mutation(),
       onClose: vi.fn(),
       onCreated: vi.fn(),
+      onOpenExisting: vi.fn(),
     });
     expect(markup).toMatch(/<button[^>]*disabled=""[^>]*>Создать приглашение<\/button>/);
   });

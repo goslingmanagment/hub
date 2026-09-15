@@ -5,6 +5,8 @@ export function ConfirmModal({
   message,
   confirmLabel = "Delete",
   cancelLabel = "Cancel",
+  closeLabel = "Close",
+  tone = "danger",
   isPending,
   onConfirm,
   onClose,
@@ -13,12 +15,14 @@ export function ConfirmModal({
   message: string;
   confirmLabel?: string;
   cancelLabel?: string;
+  closeLabel?: string;
+  tone?: "danger" | "primary";
   isPending: boolean;
   onConfirm: () => void;
   onClose: () => void;
 }) {
   return (
-    <ModalShell title={title} onClose={onClose}>
+    <ModalShell title={title} onClose={onClose} closeLabel={closeLabel}>
       <p className="text-sm text-text-secondary">{message}</p>
       <div className="mt-6 flex items-center justify-end gap-2">
         <button
@@ -32,7 +36,7 @@ export function ConfirmModal({
           type="button"
           disabled={isPending}
           onClick={onConfirm}
-          className="rounded-lg bg-danger px-3 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50"
+          className={`rounded-lg ${tone === "primary" ? "bg-accent" : "bg-danger"} px-3 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50`}
         >
           {confirmLabel}
         </button>

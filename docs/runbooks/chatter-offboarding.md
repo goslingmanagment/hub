@@ -21,7 +21,7 @@ the classic offboarding mistake:
 | **«Отозвать вход»** | one device token | every other sign-in |
 | **«Отозвать все устройства»** | every device token and reservation | **the cookie session and the legacy API key** |
 | **«Завершить все входы»** | device tokens, reservations, sessions, API keys, active links | the password — a fresh login still works |
-| **Деактивировать** | all of the above, permanently | nothing; the account cannot sign in at all |
+| **«Отключить доступ»** | all of the above; login blocked until explicitly restored | identity, history, saved role and page assignments |
 
 For an actual departure you need the last two, in that order.
 
@@ -33,7 +33,7 @@ For an actual departure you need the last two, in that order.
    The password is untouched on purpose: this operation is also the one you use
    for a suspected leak, where the person keeps working.
 
-2. **Деактивировать** — `POST /api/v1/admin/users/<login>/deactivate`.
+2. **«Отключить доступ»** — `POST /api/v1/admin/users/<login>/deactivate`.
    The account is tombstoned (`disabled_at`; nothing is ever deleted — DP 7).
    From here on both sign-in lanes refuse with the same answer they give for a
    login that never existed, so a former chatter learns nothing about whether
@@ -74,7 +74,7 @@ devices. The words "token", "key" and "API" never appear on their screen.
 | «Отозвать вход» (that device) | «Сессия на этом устройстве завершена, войдите снова» — the sign-in screen; the client wipes its own stored sign-in | unchanged |
 | «Отозвать все устройства» | the same, on every device | **still signed in** — the cabinet still opens |
 | «Завершить все входы» | the same, on every device | signed out; the next page load asks for the password, which still works |
-| Деактивировать | the same, and signing in again fails with «Неверный логин или пароль» | the same |
+| «Отключить доступ» | the same, and signing in again fails with «Неверный логин или пароль» | the same |
 
 An already open stream keeps delivering for up to 60 seconds after the
 revocation before it closes — expect that gap rather than treating it as a bug.
@@ -93,7 +93,16 @@ All of this is pinned by `tests/rights-matrix.integration.test.ts`
 
 ## If they come back
 
-Reactivation (`POST /api/v1/admin/users/<login>/reactivate`) restores password
-login and nothing else: every revoked credential stays revoked and links are not
-revived. Re-assign pages, then send a fresh reset link
-(`docs/runbooks/chatter-onboarding.md`).
+Open the same person under **«Отключённые участники»** and choose
+**«Восстановить доступ»** (`POST /api/v1/admin/users/<login>/reactivate`).
+The confirmation states that their saved role and assigned pages become usable
+again. Review those pages before confirming; restoration must never transfer
+someone else's history to a new person with the same name.
+
+Every old sign-in and link stays revoked. If the person already set a password
+and no mandatory password change is pending, they can log in with it again.
+If `mustChangePassword` is set, the confirmation directs the owner to create a
+password-reset link before client sign-in; restoration does not clear that
+flag. A reset link also helps if the password was forgotten. If the person
+never registered, create a fresh invitation from the restored card's «Ссылки»
+section. See `docs/runbooks/chatter-onboarding.md`.

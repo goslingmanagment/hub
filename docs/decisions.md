@@ -350,6 +350,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 350 | Вкладка «Команда»: приглашение ссылкой | Человека заводит одна операция и одноразовая ссылка; три операции отзыва названы по тому, что они делают; UI API-ключей для людей удалён, машинное уехало в «Техническое». |
 | 351 | Chatter cabinet `/account` and invitation page `/join` | A chatter's own surface on the hub: an invitation link redeemed into a password, then who-I-am, my devices, my password and my own AI spend. Partially reverses #117 at the owner's order (see 349). |
 | 352 | Unified-account rights matrix | Role × sign-in method × page assignments × device rights × client-local cache is a named, tested artefact (`docs/identity-rights-matrix.md` + `tests/rights-matrix.integration.test.ts`), not an implication of #349: an owner's device token is NOT an owner session, the cabinet is cookie-only, and "revoke all devices" leaves the cookie session and the legacy API key alive — so offboarding is a runbook, with the Fansly session, the 60 s SSE recheck and the desktop's local cache named as boundaries the hub does not control |
+| 353 | Recover an existing team identity | The invite form finds active, invited and disabled logins before creation and offers their existing card. Disabled participants stay visible; restoring access is explicit, preserves identity and grants, and never revives old links or sign-ins. |
 
 
 ## Consensus Decisions
@@ -14499,3 +14500,39 @@ No kernel behaviour changed in this entry: it is documentation and tests over
 the PR-1A surface, and every row passed as built.
 
 Plan: `investigations/unified-account-2026-09-15/PLAN.md` §7 (Р11).
+
+## Decision 353: Recover the existing participant instead of recreating them (2026-09-15)
+
+The Team invite form offered no route out of `User "Nikita" already exists`
+after offboarding. The kernel was preserving #126 correctly: disabled users
+keep their identity, history and unique login. The dashboard hid those rows in
+a collapsed section and exposed the raw duplicate-create failure.
+
+Invitation now checks the complete team list with #349's case-insensitive
+login semantics. A match explains whether the participant is disabled,
+waiting for registration, or already active, then offers their existing card.
+The new-person fields are hidden while there is a match; their role/page input
+is never applied to the old person. A failed invite refreshes the list to
+resolve another tab's concurrent creation. Unknown failures stay inline in
+Russian, and a failed list read cannot authorize creation.
+
+«Отключённые участники» is expanded initially. The operation is named
+«Отключить доступ», and its confirmation explains that the login and history
+remain. The disabled participant's card leads with «Восстановить доступ» and
+shows saved pages without offering page/link edits the kernel rejects.
+Restoration is a separate explicit confirmation for the same person, never an
+automatic consequence of entering a duplicate name. It restores the stored
+role and page grants; a different person needs a different login.
+
+The confirmation distinguishes three recovery paths: an existing password
+works again after restoration unless `mustChangePassword` is set; that flag
+requires a password-reset link before signing in to a client. An unregistered
+participant needs a new invitation. Old links and sign-ins stay revoked in all
+cases. A reset is also available for someone who forgot their password. This
+corrects #350's UI copy and the onboarding/offboarding runbooks; it does not
+change #126's lifecycle or the kernel contract.
+
+Regression coverage includes disabled-login detection, visible restoration,
+read-only disabled cards, the existing identity/role/grants surviving a
+rejected duplicate invite, and explicit restoration followed by a fresh
+invitation with the previous link still revoked.

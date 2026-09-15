@@ -28,6 +28,7 @@ import {
   LINK_KIND_LABEL,
   linkStateLabel,
   REVOCATION_LABEL,
+  restoreTeamMemberMessage,
   ROLE_LABEL,
   splitDevices,
   TEAM_PAGE_LABELS,
@@ -104,6 +105,14 @@ export function UserDetailModal({
             )}
           </div>
 
+          {status === "disabled" && (
+            <AccountStateSection
+              user={user}
+              onDeactivate={() => setConfirmation("deactivate")}
+              onReactivate={() => setConfirmation("reactivate")}
+            />
+          )}
+
           {status === "invited" && (
             <p className="rounded-lg border border-border bg-hover-alt px-3 py-2 text-sm text-text-secondary">
               Человек ещё не открыл приглашение и не придумал пароль. Пока этого не
@@ -113,6 +122,7 @@ export function UserDetailModal({
 
           <DevicesSection
             username={user.username}
+            disabled={status === "disabled"}
             onRevokeAll={() => setConfirmation("revokeAllDevices")}
             onTerminate={ownerIsProtected(user) ? null : () => setConfirmation("terminateAccess")}
           />
@@ -123,9 +133,9 @@ export function UserDetailModal({
             onLinkCreated={onLinkCreated}
           />
 
-          <PagesSection user={user} />
+          {status === "disabled" ? <SavedPagesSection user={user} /> : <PagesSection user={user} />}
 
-          {!ownerIsProtected(user) && (
+          {!ownerIsProtected(user) && status !== "disabled" && (
             <AccountStateSection
               user={user}
               onDeactivate={() => setConfirmation("deactivate")}
@@ -169,10 +179,12 @@ export function UserDetailModal({
 
 function DevicesSection({
   username,
+  disabled,
   onRevokeAll,
   onTerminate,
 }: {
   username: string;
+  disabled: boolean;
   onRevokeAll: () => void;
   /** null for an owner: the kernel refuses to terminate their access. */
   onTerminate: (() => void) | null;
@@ -263,24 +275,26 @@ function DevicesSection({
         </div>
       )}
 
-      <div className="mt-3 flex flex-wrap items-center gap-2">
-        <button
-          type="button"
-          onClick={onRevokeAll}
-          className="rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-medium text-text-secondary hover:bg-hover"
-        >
-          {REVOCATION_LABEL.allDevices}
-        </button>
-        {onTerminate && (
+      {!disabled && (
+        <div className="mt-3 flex flex-wrap items-center gap-2">
           <button
             type="button"
-            onClick={onTerminate}
-            className="rounded-lg border border-danger/25 bg-danger/5 px-3 py-1.5 text-xs font-medium text-danger hover:bg-danger/10"
+            onClick={onRevokeAll}
+            className="rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-medium text-text-secondary hover:bg-hover"
           >
-            {REVOCATION_LABEL.allAccess}
+            {REVOCATION_LABEL.allDevices}
           </button>
-        )}
-      </div>
+          {onTerminate && (
+            <button
+              type="button"
+              onClick={onTerminate}
+              className="rounded-lg border border-danger/25 bg-danger/5 px-3 py-1.5 text-xs font-medium text-danger hover:bg-danger/10"
+            >
+              {REVOCATION_LABEL.allAccess}
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -302,8 +316,10 @@ function LinksSection({
   const revokeLink = useRevokeLink(user.username);
   const invited = teamStatus(user) === "invited";
   const canReset = LINK_RESETTABLE_ROLES.has(user.role);
+  const disabled = Boolean(user.disabledAt);
 
   function handleCreate(kind: "invite" | "password_reset") {
+    if (disabled) return;
     createLink.mutate({ kind }, {
       onSuccess: (link) => {
         onLinkCreated({
@@ -353,7 +369,7 @@ function LinksSection({
                 {linkStateLabel(link, formatDateTime)} · создана {formatDateTime(link.createdAt)}
               </span>
             </div>
-            {link.state === "active" && (
+            {link.state === "active" && !disabled && (
               <button
                 type="button"
                 disabled={revokeLink.isPending}
@@ -367,31 +383,35 @@ function LinksSection({
         ))}
       </div>
 
-      <div className="mt-3 flex flex-wrap items-center gap-2">
-        {invited ? (
-          <button
-            type="button"
-            disabled={createLink.isPending}
-            onClick={() => handleCreate("invite")}
-            className="rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-medium text-text-secondary hover:bg-hover disabled:opacity-50"
-          >
-            {createLink.isPending ? "Создаём…" : "Отправить приглашение заново"}
-          </button>
-        ) : canReset && (
-          <button
-            type="button"
-            disabled={createLink.isPending}
-            onClick={() => handleCreate("password_reset")}
-            className="rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-medium text-text-secondary hover:bg-hover disabled:opacity-50"
-          >
-            {createLink.isPending ? "Создаём…" : "Сбросить пароль ссылкой"}
-          </button>
-        )}
-        <p className="text-xs text-text-muted">
-          Новая ссылка отменяет прежнюю. Когда человек задаст пароль, все прежние
-          входы завершатся.
-        </p>
-      </div>
+      {disabled ? (
+        <p className="mt-3 text-xs text-text-muted">Новые ссылки можно создать после восстановления доступа.</p>
+      ) : (
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          {invited ? (
+            <button
+              type="button"
+              disabled={createLink.isPending}
+              onClick={() => handleCreate("invite")}
+              className="rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-medium text-text-secondary hover:bg-hover disabled:opacity-50"
+            >
+              {createLink.isPending ? "Создаём…" : "Отправить приглашение заново"}
+            </button>
+          ) : canReset && (
+            <button
+              type="button"
+              disabled={createLink.isPending}
+              onClick={() => handleCreate("password_reset")}
+              className="rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-medium text-text-secondary hover:bg-hover disabled:opacity-50"
+            >
+              {createLink.isPending ? "Создаём…" : "Сбросить пароль ссылкой"}
+            </button>
+          )}
+          <p className="text-xs text-text-muted">
+            Новая ссылка отменяет прежнюю. Когда человек задаст пароль, все прежние
+            входы завершатся.
+          </p>
+        </div>
+      )}
     </div>
   );
 }
@@ -399,6 +419,21 @@ function LinksSection({
 /* ------------------------------------------------------------------ */
 /*  Pages                                                              */
 /* ------------------------------------------------------------------ */
+
+function SavedPagesSection({ user }: { user: AdminUser }) {
+  return (
+    <div>
+      <h3 className="mb-2 text-sm font-semibold text-text-primary">Сохранённые страницы</h3>
+      <p className="text-xs text-text-muted">
+        После восстановления доступа участник снова сможет работать с этими страницами.
+      </p>
+      <ul className="mt-2 space-y-1 text-sm text-text-secondary">
+        {user.assignedPages.map((page) => <li key={page.id}>{page.label} · {page.modelName}</li>)}
+      </ul>
+      {user.assignedPages.length === 0 && <p className="mt-2 text-sm text-text-muted">Страниц пока нет.</p>}
+    </div>
+  );
+}
 
 function PagesSection({ user }: { user: AdminUser }) {
   const { data: allPages, isLoading, isError, refetch } = useAdminPages();
@@ -467,15 +502,15 @@ function AccountStateSection({
     return (
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-hover-alt px-3 py-2.5">
         <p className="text-xs text-text-muted">
-          Деактивирован {formatDateTime(user.disabledAt)}. История сохранена.
-          После возвращения в команду понадобится новая ссылка — прежние входы остаются завершёнными.
+          Доступ отключён {formatDateTime(user.disabledAt)}. Логин и история сохранены.
+          Восстановите доступ, если возвращается тот же человек.
         </p>
         <button
           type="button"
           onClick={onReactivate}
-          className="shrink-0 rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-medium text-text-secondary hover:bg-hover"
+          className="shrink-0 rounded-lg bg-accent px-3 py-1.5 text-sm font-semibold text-white hover:opacity-90"
         >
-          Вернуть в команду
+          Восстановить доступ
         </button>
       </div>
     );
@@ -484,15 +519,15 @@ function AccountStateSection({
   return (
     <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-danger/25 bg-danger/5 px-3 py-2.5">
       <p className="text-xs text-text-muted">
-        Деактивация завершает все входы {user.username} и убирает человека из списка.
-        История сохраняется — вернуть в команду можно позже.
+        Отключение завершит все входы {user.username}. Участник перейдёт в раздел
+        «Отключённые участники». Его логин и история сохранятся; доступ можно восстановить.
       </p>
       <button
         type="button"
         onClick={onDeactivate}
         className="shrink-0 rounded-lg border border-danger/25 bg-card px-3 py-1.5 text-xs font-medium text-danger transition-colors hover:bg-danger/10"
       >
-        Деактивировать
+        Отключить доступ
       </button>
     </div>
   );
@@ -543,21 +578,21 @@ function ConfirmationDialog({
       },
     },
     deactivate: {
-      title: `Деактивировать ${user.username}?`,
-      message: "Человек выходит отовсюду и уходит из списка команды. История и авторство "
-        + "сохраняются — вернуть в команду можно в любой момент.",
-      confirmLabel: "Деактивировать",
+      title: `Отключить доступ ${user.username}?`,
+      message: "Все входы и ссылки перестанут работать. Участник появится в разделе "
+        + "«Отключённые участники». Его логин, история, роль и страницы сохранятся. "
+        + "Позже можно восстановить доступ тому же человеку; создать другого с этим логином нельзя.",
+      confirmLabel: "Отключить доступ",
       isPending: deactivate.isPending,
       run: async () => {
         await deactivate.mutateAsync();
-        toast.success(`${user.username} деактивирован`);
+        toast.success(`Доступ ${user.username} отключён`);
       },
     },
     reactivate: {
-      title: `Вернуть ${user.username} в команду?`,
-      message: "Человек снова появится в списке. Прежние входы остаются завершёнными: "
-        + "отправьте новое приглашение или ссылку для пароля.",
-      confirmLabel: "Вернуть",
+      title: `Восстановить доступ ${user.username}?`,
+      message: restoreTeamMemberMessage(user),
+      confirmLabel: "Восстановить доступ",
       isPending: reactivate.isPending,
       run: async () => {
         await reactivate.mutateAsync();
@@ -583,9 +618,11 @@ function ConfirmationDialog({
       message={dialog.message}
       confirmLabel={dialog.confirmLabel}
       cancelLabel="Отмена"
+      closeLabel="Закрыть"
+      tone={kind === "reactivate" ? "primary" : "danger"}
       isPending={dialog.isPending}
       onConfirm={handleConfirm}
-      onClose={onClose}
+      onClose={() => { if (!dialog.isPending) onClose(); }}
     />
   );
 }

@@ -18,6 +18,7 @@ import {
   deactivateUser,
   issueDeviceTokenForUsername,
   loginWithPassword,
+  reactivateUser,
   setUserPassword,
   terminateAllAccess,
 } from "../apps/runtime/src/services/auth.ts";
@@ -149,6 +150,50 @@ describe("invite creation", () => {
       username: "GRISHA",
       pageLabels: [],
     }, OWNER_AUDIT)).rejects.toThrow(/already exists/i);
+  });
+
+  it("restores a disabled invite under the same identity, with a new link and unchanged pages", async (context) => {
+    const setup = requireSetup(context);
+    if (!setup) return;
+    const invited = await createInvite(setup.app, {
+      username: "Nikita", pageLabels: ["lora-fansly"],
+    }, OWNER_AUDIT);
+    await deactivateUser(setup.app, { username: "Nikita" }, OWNER_AUDIT);
+
+    // Retrying Invite must never transfer the identity, assign the form's
+    // new pages to the old person, or reopen access without confirmation.
+    await expect(createInvite(setup.app, {
+      username: "nikita", pageLabels: ["lora-vip"], role: "team_lead",
+    }, OWNER_AUDIT)).rejects.toThrow(/already exists/i);
+    const disabled = await findUserByUsername(setup.testDb.db, "NIKITA");
+    expect(disabled?.id).toBe(invited.user.id);
+    expect(disabled?.disabledAt).not.toBeNull();
+    expect(disabled?.role).toBe("chatter");
+    const before = await setup.testDb.pool.query(
+      "select * from user_page_assignments where user_id = $1 order by platform_account_id", [invited.user.id],
+    );
+    expect(before.rows).toHaveLength(1);
+    expect(before.rows[0]?.platform_account_id).toBe(BigInt(invited.user.assignedPages[0]!.id));
+
+    await reactivateUser(setup.app, { username: "nikita" }, OWNER_AUDIT);
+    const restored = await findUserByUsername(setup.testDb.db, "Nikita");
+    expect(restored?.id).toBe(invited.user.id);
+    expect(restored?.disabledAt).toBeNull();
+    expect((await setup.testDb.pool.query(
+      "select * from user_page_assignments where user_id = $1 order by platform_account_id", [invited.user.id],
+    )).rows).toEqual(before.rows);
+    expect(await activeLinkCount(setup.testDb, invited.user.id)).toBe(0);
+
+    const replacement = await createAccountLinkForUsername(setup.app, {
+      username: "Nikita", kind: "invite",
+    }, OWNER_AUDIT);
+    await expect(redeemAccountLink(setup.app, {
+      token: invited.link.token, password: STRONG_PASSWORD,
+    })).rejects.toMatchObject({ statusCode: 409, reason: "revoked" });
+    await redeemAccountLink(setup.app, {
+      token: replacement.token, password: STRONG_PASSWORD,
+    });
+    expect((await findUserByUsername(setup.testDb.db, "Nikita"))?.id).toBe(invited.user.id);
   });
 
   it("invites a team_lead without demanding a password up front", async (context) => {

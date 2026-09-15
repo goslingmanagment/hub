@@ -208,6 +208,7 @@ export function TeamTab() {
           create={createInvite}
           onClose={() => setModal(null)}
           onCreated={(link) => setModal({ type: "reveal", link, returnTo: null })}
+          onOpenExisting={openDetail}
         />
       )}
 
@@ -298,7 +299,7 @@ function DeactivatedSection({
   users: AdminUser[];
   onOpen: (username: string) => void;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(true);
 
   return (
     <div>
@@ -309,15 +310,19 @@ function DeactivatedSection({
         className="mb-3 flex items-center gap-1.5 text-sm font-bold text-text-muted transition-colors hover:text-text-primary"
       >
         <span className={`inline-block text-xs transition-transform ${open ? "rotate-90" : ""}`}>{"▸"}</span>
-        Деактивированные ({users.length})
+        Отключённые участники ({users.length})
       </button>
+
+      <p className="mb-3 text-xs text-text-muted">
+        Логины и история сохранены. Чтобы вернуть того же человека, откройте его карточку.
+      </p>
 
       {open && (
         <section className="overflow-x-auto rounded-xl border border-border bg-card">
           <table className="w-full border-collapse">
             <thead>
               <tr className="bg-hover-alt">
-                {["Логин", "Роль", "Деактивирован", ""].map((column, index) => (
+                {["Логин", "Роль", "Доступ отключён", ""].map((column, index) => (
                   <th key={column || `actions-${index}`} className={thClass}>{column}</th>
                 ))}
               </tr>
@@ -336,7 +341,7 @@ function DeactivatedSection({
                       onClick={() => onOpen(user.username)}
                       className="whitespace-nowrap rounded-lg border border-border bg-card px-2.5 py-1 text-xs font-medium text-text-secondary transition-colors hover:bg-hover"
                     >
-                      Открыть
+                      Восстановить доступ
                     </button>
                   </td>
                 </tr>
