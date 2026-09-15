@@ -19,8 +19,8 @@ the classic offboarding mistake:
 | Operation | Kills | Leaves alive |
 |---|---|---|
 | **«Отозвать вход»** | one device token | every other sign-in |
-| **«Отозвать все устройства»** | every device token and reservation | **the cookie session and the legacy API key** |
-| **«Завершить все входы»** | device tokens, reservations, sessions, API keys, active links | the password — a fresh login still works |
+| **«Отозвать все устройства»** | every device token and reservation | **the cookie session** |
+| **«Завершить все входы»** | device tokens, reservations, sessions, active links | the password — a fresh login still works |
 | **Деактивировать** | all of the above, permanently | nothing; the account cannot sign in at all |
 
 For an actual departure you need the last two, in that order.
@@ -28,8 +28,8 @@ For an actual departure you need the last two, in that order.
 ## Steps
 
 1. **«Завершить все входы»** — `POST /api/v1/admin/users/<login>/terminate-access`.
-   Every device token, reservation, cookie session, API key and unused invite or
-   reset link of that person dies at once, and the device-token epoch advances.
+   Every device token, reservation, cookie session and unused invite or reset
+   link of that person dies at once, and the device-token epoch advances.
    The password is untouched on purpose: this operation is also the one you use
    for a suspected leak, where the person keeps working.
 
@@ -37,7 +37,7 @@ For an actual departure you need the last two, in that order.
    The account is tombstoned (`disabled_at`; nothing is ever deleted — DP 7).
    From here on both sign-in lanes refuse with the same answer they give for a
    login that never existed, so a former chatter learns nothing about whether
-   their account still exists. Assignments, passwords and keys are frozen: they
+   their account still exists. Assignments, passwords and links are frozen: they
    cannot be re-opened without reactivating first.
 
    Deactivation alone would have covered step 1, but running step 1 first means

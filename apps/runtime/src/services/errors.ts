@@ -47,15 +47,6 @@ export class ForbiddenError extends AppError {
   }
 }
 
-// Decision 349 (§4.2): a user flagged must_change_password (frozen #116b flag)
-// may not sign a device in by password until an owner resets it. Its own code
-// so clients map it to a specific line instead of a generic 403.
-export class PasswordChangeRequiredError extends AppError {
-  constructor(message = "The owner must reset this account's password before it can sign in") {
-    super(message, 403, "password_change_required");
-  }
-}
-
 export class NotFoundError extends AppError {
   constructor(message = "Not found") {
     super(message, 404, "not_found");

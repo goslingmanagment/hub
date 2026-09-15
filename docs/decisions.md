@@ -117,7 +117,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 113 | Family CI + toolchain | Core ESLint raised to the family standard with its 162-violation backlog burned to zero, `pnpm check` added, pnpm 10.33.1/Node 22/TS 6/vitest 4 pinned family-wide, and a strictness ratchet enforced as `pnpm typecheck` |
 | 114 | Stage 35 documentation close | Maps regenerated in all three repos, client CLAUDE.md files rewritten to post-migration truth, release-hygiene asserts added, orientation drills PASS ×3 — the migration's documentation standard is in force |
 | 115 | Release audits | Codex (gpt-5.5 xhigh) audited three surfaces pre-release: the lint burn-down is behavior-neutral, chunk-budget overshoot and any-platform clientContext fixed; persona apiKey-auth left open, then ACCEPTED AS IS by the owner |
-| 116 | Identity/auth credentials | Humans authenticate with password plus per-device tokens, robots with API keys; chatter password provisioning moves into the live dashboard; must_change_password stays FROZEN; a client key-fallback deletion gate is defined |
+| 116 | Identity/auth credentials | Humans authenticate with password plus per-device tokens, robots with API keys; chatter password provisioning moves into the live dashboard; must_change_password stays FROZEN; a client key-fallback deletion gate is defined. TOMBSTONED by #353: (b) the frozen flag is retired (the field stays on the wire as a deprecated constant `false`) and (c) the api-key lane is deleted outright, robots included |
 | 117 | Dashboard + workboard | #112 REVERSED — the rebuild is CANCELLED and apps/dashboard is the live maintained admin surface (its carry-over features become backlog); the workboard direction is deprecated and Stage 34 stays a banner'd placeholder. PARTIALLY REVERSED by #349: the chatter web surface it left conditional ("unless the owner later orders…") was ordered on 2026-09-15 |
 | 118 | Stage 28 erasure scope | Page-scope erasure also purges the page's config/secret rows (page_credentials, egress_endpoints), which soft delete (#72) deliberately keeps as a two-way door; DP 7 unaffected since these are config, not captured facts |
 | 119 | Stage 34 standalone workboard | #117 clause (2) NARROWED — only the in-core workboard is deprecated; the STANDALONE workboard app is an ACTIVE direction again with kernel sessions, per-page grants, repo ~/code/workboard, Fansly-only v1 |
@@ -349,7 +349,8 @@ appends a row here in the same change (family law: updated-in-change).
 | 349 | Unified chatter account and invite registration | One-time invite/reset links (`account_links`, 0199), case-insensitive logins (0200), one cookie-free password sign-in for both clients, a structured 401 `reason`, three honest revocation operations and `last_client_version`; one password check under `FOR UPDATE` closes the login race; every existing route stays wire-compatible until PR-4. PARTIALLY REVERSES #117 (the owner ordered the chatter cabinet #117 left conditional) |
 | 350 | Вкладка «Команда»: приглашение ссылкой | Человека заводит одна операция и одноразовая ссылка; три операции отзыва названы по тому, что они делают; UI API-ключей для людей удалён, машинное уехало в «Техническое». |
 | 351 | Chatter cabinet `/account` and invitation page `/join` | A chatter's own surface on the hub: an invitation link redeemed into a password, then who-I-am, my devices, my password and my own AI spend. Partially reverses #117 at the owner's order (see 349). |
-| 352 | Unified-account rights matrix | Role × sign-in method × page assignments × device rights × client-local cache is a named, tested artefact (`docs/identity-rights-matrix.md` + `tests/rights-matrix.integration.test.ts`), not an implication of #349: an owner's device token is NOT an owner session, the cabinet is cookie-only, and "revoke all devices" leaves the cookie session and the legacy API key alive — so offboarding is a runbook, with the Fansly session, the 60 s SSE recheck and the desktop's local cache named as boundaries the hub does not control |
+| 352 | Unified-account rights matrix | Role × sign-in method × page assignments × device rights × client-local cache is a named, tested artefact (`docs/identity-rights-matrix.md` + `tests/rights-matrix.integration.test.ts`), not an implication of #349: an owner's device token is NOT an owner session, the cabinet is cookie-only, and "revoke all devices" leaves the cookie session alive — so offboarding is a runbook, with the Fansly session, the 60 s SSE recheck and the desktop's local cache named as boundaries the hub does not control. AMENDED by #353: the legacy API key that also survived "revoke all devices" no longer exists |
+| 353 | PR-4: the legacy credential lanes retired | The api-key lane deleted end to end (routes, authenticator, service, repository, CLI group, `authMethod`), the cookie token-issuance routes and the HTTP create-user/set-password deleted, `must_change_password` retired with `mustChangePassword` frozen on the wire as a deprecated `false`, `content_manager` out of the wire role enum. Tombstones #116(b) and #116(c). An unknown bearer prefix authenticates nobody. Tables, column and PG enum survive as facts (DP 7); model-scope grants stay dead until `ACCESS_GRANTS_READ_ENABLED` flips (#70 ritual) |
 
 
 ## Consensus Decisions
@@ -14499,3 +14500,83 @@ No kernel behaviour changed in this entry: it is documentation and tests over
 the PR-1A surface, and every row passed as built.
 
 Plan: `investigations/unified-account-2026-09-15/PLAN.md` §7 (Р11).
+
+## Decision 353: PR-4 — the API-key lane, cookie token issuance and `must_change_password` are retired (2026-09-15)
+
+#349 gave the clients one sign-in and left every old door standing so the fleet
+could cross on its own schedule. This is the demolition, and it is the last PR
+of the unified-account track. Nothing here is new behaviour: it is the removal
+of behaviour that no longer had a caller — which is exactly why it had to be a
+PR with gates rather than a cleanup commit.
+
+**The api-key lane is gone in one cut, people and robots alike (Р8, owner's
+decision 2026-09-15).** Deleted: `adminListApiKeys` / `adminIssueApiKey` /
+`adminRevokeApiKeys`, `authenticateApiKeyToken`, `roleCanUseApiKey`,
+`issueChatterApiKey` / `revokeUserApiKeys` / `listApiKeysForUsers`, every
+`api_keys` repository function, the `apikey` CLI group, `apiKeyItemSchema` /
+`issuedApiKeyResponseSchema`, `apiKeyStatus` on the admin user, the api-key
+columns of the adoption report and the `apiKeys` counter of
+`adminTerminateAllAccess`. `authMethod` is now `session | device_token`. This
+reverses the tail of #116(c) ("Issue Key survives — for automation"): production
+had no robot on a key at all — the keys that existed belonged to deactivated
+test users and to one owner account.
+
+**The most load-bearing deletion is a branch nobody would call a feature.** The
+bearer dispatcher used to END in the api-key lane: device-token prefix, agent-key
+prefix, and then *everything else* fell through to a digest lookup in `api_keys`.
+So every unrecognized string — a typo, a stale credential, a probe — cost a
+database read and sat one live row away from a principal. Now an unmatched prefix
+is nobody: no lookup, no reason, no oracle. The pin for it is not a mock but a
+live `api_keys` row inserted by hand and refused
+(`tests/agent-key-authentication.integration.test.ts`).
+
+**A device is signed in by password, and only by password.** `authIssueDeviceToken`
+and `authReserveDeviceToken` (cookie session) and `adminIssueDeviceToken` (the
+owner minting a bearer on someone's behalf) are gone with their services. What
+remains is `issueDeviceTokenWithPassword` in `active` or `pending` mode — the §4.3
+core that re-reads the password hash, the tombstone and the epoch under the user
+lock. The "session revalidated after the lock" race cases moved onto that core:
+the class of bug they guarded — a cookie minting a bearer — no longer exists.
+
+**`must_change_password` is retired, and the FIELD is not (tombstone of
+#116(b)).** The route allowlist in `server.ts`, the 403 `password_change_required`
+branch and every write of the column are deleted; nothing reads it. But
+`mustChangePassword` stays in `authUserSchema` **forever**, as a deprecated
+constant `false`: the vendored SDKs in both clients declare it required, and
+`$strip` tolerates an extra field but never a missing one — removing it would
+turn `/auth/me` into `response_validation_failed` on every install that has not
+re-vendored, which the extension would show as "hub unavailable". The column
+stays too (migrations are forward-only). A hand-set row is simply ignored, and
+that is pinned.
+
+**Creating a person is not an HTTP shape any more.** `adminCreateUser` and
+`adminSetPassword` are deleted: an owner account is minted by `hub user add` on
+the box, and everyone else is invited — and reset — by link. The CLI
+`user set-password` now runs the SAME primitive the link redemption runs
+(`terminateAccessTx`), because until this PR it left device tokens alive: "I
+reset his password" was a false statement about a laptop still holding a live
+token.
+
+**`content_manager` left the wire role enum**; the PG enum value stays. A
+historical row is therefore expressible only by raw SQL, and the admin user list
+fails closed on one rather than publishing a role no client can parse — pinned,
+because the merge gate for this PR was "zero such rows in production".
+
+**What survives, deliberately.** The `api_keys` table with every row in it, the
+`must_change_password` column, the PG role enum value: facts are never deleted
+(DP 7), and no `delete from` was added. The policy kind is still called `apiKey`
+even though the only credential it admits is a device token — renaming it touches
+hundreds of declarations and buys nothing but tidiness (§12), so the name is
+documented as historical instead. The duplicate in-handler guards from #143 stay
+where they are. And model-scope grants remain DEAD in production until
+`ACCESS_GRANTS_READ_ENABLED` is flipped under the #70 staged-flag ritual — that
+flip is not part of this track.
+
+**Merge gates (the owner verifies before merging, not the executor).** Every
+active device token reporting `last_client_version` ≥ 2.4.0 (extension) or
+≥ 0.1.55 (desktop), Mac installs included; zero rows with
+`must_change_password`; zero rows with role `content_manager`. The orphan
+cleanup — deactivate `probe-ops`, drop the #22 grants, check user #4 — is
+production data, not code, and rides in the PR body as an owner checklist.
+
+Plan: `investigations/unified-account-2026-09-15/PLAN.md` §10.

@@ -11,6 +11,16 @@
 > `authRevokeAllDevices`, `authMyUsage` (any-session). The error boundary now
 > serializes a structured `reason` on 401 `unauthorized` and 409 `conflict`,
 > and the global 429 message is the neutral "Too many attempts".
+>
+> **STALE (Decision 353, 2026-09-15):** the API-key lane no longer exists. The
+> `apiKey` contract kind keeps its historical NAME but admits only a device
+> token; `authMethod` is `session | device_token`; the `api_keys` routes,
+> service, repository functions and CLI group are gone, as are the cookie
+> issuance routes and the HTTP create-user/set-password. A bearer matching no
+> lane prefix is refused with no lookup. `must_change_password` is retired (no
+> gate, no 403 `password_change_required`, `mustChangePassword` a deprecated
+> wire constant `false`) and `content_manager` left the wire role enum. The
+> `api_keys` table, the column and the PG enum value all stay as facts.
 
 # HTTP API surface
 
