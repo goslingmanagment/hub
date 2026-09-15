@@ -14,7 +14,6 @@ import {
   deletePendingDeviceTokensForUser,
   findAgentKeyByDigest,
   findAuthSessionByDigest,
-  findAuthSessionById,
   findPendingDeviceTokenByDigest,
   findUserById,
   findUserByUsername,
@@ -61,7 +60,6 @@ import {
 import type { AppContext } from "../bootstrap.ts";
 import {
   BadRequestError,
-  ConflictError,
   ForbiddenError,
   NotFoundError,
   TooManyRequestsError,

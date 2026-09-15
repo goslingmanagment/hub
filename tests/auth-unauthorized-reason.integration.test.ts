@@ -8,7 +8,7 @@ import {
   createUserAccount,
   revokeDeviceTokensForUsername,
 } from "../apps/runtime/src/services/auth.ts";
-import { issueChatterDeviceToken, issueDeviceTokenForUsername } from "./helpers/device-credentials.ts";
+import { issueDeviceTokenForUsername } from "./helpers/device-credentials.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,

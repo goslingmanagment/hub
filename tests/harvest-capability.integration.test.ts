@@ -266,7 +266,7 @@ describe("desktop harvest capability", () => {
       context.skip();
       return;
     }
-    const { aliceKey, aliceToken, bobToken } = await seedIdentity();
+    const { aliceToken, bobToken } = await seedIdentity();
     const ownerCookie = await loginOwnerCookie();
     const event = harvestEvent();
 

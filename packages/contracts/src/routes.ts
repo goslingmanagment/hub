@@ -15,7 +15,6 @@ import {
   SPENDER_SERIES_GRANULARITIES,
   FANSLY_CLIENT_CHECK_ROUTES,
   aiUsageFeatures,
-  creatableUserRoles,
   fanFlagTypes,
   ofapiCaptureJobStates,
   transactionReportingBuckets,
@@ -56,7 +55,6 @@ const spenderSeriesGranularityEnum = z.enum(SPENDER_SERIES_GRANULARITIES);
 const nonCustomPeriodEnum = z.enum(["today", "7d", "30d", "all"]);
 const transactionReportingBucketEnum = z.enum(transactionReportingBuckets);
 const userRoleEnum = z.enum(userRoles);
-const creatableUserRoleEnum = z.enum(creatableUserRoles);
 const fanFlagEnum = z.enum(fanFlagTypes);
 const aiUsageFeatureEnum = z.enum(aiUsageFeatures);
 const spenderScopeKindEnum = z.enum(["page", "model", "agency"]);
