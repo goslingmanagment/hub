@@ -794,8 +794,13 @@ describe("[sync-critical] WP-F2 notifications lane", () => {
     // was paginated under. Rotating inside the fetch would have sent this
     // `before` cursor through a different type set and skipped rows.
     expect(served[2]?.types).toEqual(FANSLY_NOTIFICATION_TYPE_GROUPS[1]);
+    // One rotation, not two: only the forward walk's boundary moves the index.
+    // The backfill's chunk exit is NOT a walk boundary — the walk continues at
+    // the same cursor in the next chunk — so rotating there would change the
+    // filter under a running walk, and would skip a group whenever a chunk
+    // served a page and then took a refusal (the refusal advances it too).
     const state = await cursor(seeded.id);
-    expect(state!.typeGroupIndex).toBe(2);
+    expect(state!.typeGroupIndex).toBe(1);
   });
 
   it("falls back to the FULL declared CSV when the unfiltered form is refused", async (context) => {
