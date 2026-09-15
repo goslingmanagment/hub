@@ -9,11 +9,17 @@ import { buildJoinLink, currentOrigin, telegramMessage } from "./teamView.js";
 /**
  * Decision 348 — the one and only place a fresh link is ever visible.
  *
- * The secret comes back from the create mutation's RESULT and is held in React
- * state alone: it is never written to a query cache, never re-fetched, never
- * logged and never put in a URL path (the person's browser carries it in the
- * `#` fragment). If the owner closes this dialog without copying, the link is
- * gone and the cure is to create another one — which supersedes this one.
+ * The secret comes back from the create mutation's RESULT: it is never written
+ * to a query cache, never re-fetched, never logged and never put in a URL path
+ * (the person's browser carries it in the `#` fragment). It does live on in the
+ * MUTATION result until that mutation is reset, so closing this dialog resets
+ * it — `onClose` is wired in TeamTab to `.reset()` both link mutations, and the
+ * secret leaves memory with the dialog rather than idling in the cache.
+ *
+ * Escape and backdrop clicks do NOT close it (`explicitCloseOnly`): this is the
+ * one dialog whose contents cannot be reopened, and a stray click on the
+ * backdrop would destroy the only copy of a link already committed server-side.
+ * If it is lost anyway, the cure is a new link, which supersedes this one.
  */
 
 export interface RevealedLink {
@@ -50,7 +56,7 @@ export function LinkRevealModal({
     : `Приглашение для ${link.username}`;
 
   return (
-    <ModalShell title={title} onClose={onClose}>
+    <ModalShell title={title} onClose={onClose} closeLabel="Закрыть" explicitCloseOnly>
       <div className="space-y-4">
         <p className="text-sm font-medium text-warning">
           Ссылка показывается один раз. Скопируйте её сейчас и отправьте человеку

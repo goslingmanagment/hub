@@ -30,7 +30,9 @@ import {
  *
  * Both link-minting mutations live HERE rather than in the modals that trigger
  * them: their result carries the only copy of a fresh link, and TanStack drops
- * a per-call callback when the observer that issued it unmounts.
+ * a per-call callback when the observer that issued it unmounts. The flip side
+ * of holding them here is that the raw link would sit in the mutation cache
+ * after the reveal dialog closed, so closing it resets both mutations.
  */
 
 type ModalState =
@@ -223,6 +225,10 @@ export function TeamTab() {
           link={modal.link}
           onClose={() => {
             const returnTo = modal.returnTo;
+            // The link is gone from this screen; drop it from memory too,
+            // rather than leaving it in the mutation cache until gc.
+            createInvite.reset();
+            createLink.reset();
             setModal(returnTo ? { type: "detail", username: returnTo } : null);
           }}
         />
