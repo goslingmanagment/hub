@@ -564,6 +564,158 @@ describe("the kill switch", () => {
   });
 });
 
+describe("over HTTP, end to end", () => {
+  async function ownerCookie(activeServer: NonNullable<typeof server>) {
+    const response = await activeServer.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: { username: "owner", password: "owner-secret" },
+    });
+    expect(response.statusCode).toBe(200);
+    const header = response.headers["set-cookie"];
+    const value = Array.isArray(header) ? header[0] : header;
+    return String(value).split(";")[0]!;
+  }
+
+  it("invites, inspects and redeems through the routes the clients actually call", async (context) => {
+    const setup = requireSetup(context);
+    if (!setup) return;
+    const cookie = await ownerCookie(setup.server);
+
+    const invited = await setup.server.inject({
+      method: "POST",
+      url: "/api/v1/admin/invites",
+      headers: { cookie },
+      payload: { username: "grisha", pageLabels: ["lora-fansly"] },
+    });
+    expect(invited.statusCode).toBe(200);
+    const body = invited.json<{
+      user: { username: string; registrationState: string; role: string };
+      link: { id: number; kind: string; keyPrefix: string; token: string; expiresAt: string };
+    }>();
+    expect(body.user).toMatchObject({
+      username: "grisha",
+      role: "chatter",
+      registrationState: "invited",
+    });
+    expect(body.link.kind).toBe("invite");
+
+    const inspected = await setup.server.inject({
+      method: "POST",
+      url: "/api/v1/auth/links/inspect",
+      payload: { token: body.link.token },
+    });
+    expect(inspected.statusCode).toBe(200);
+    expect(inspected.json()).toEqual({
+      state: "active",
+      kind: "invite",
+      username: "grisha",
+      expiresAt: body.link.expiresAt,
+      platforms: ["fansly"],
+    });
+
+    const redeemed = await setup.server.inject({
+      method: "POST",
+      url: "/api/v1/auth/links/redeem",
+      payload: { token: body.link.token, password: STRONG_PASSWORD },
+    });
+    expect(redeemed.statusCode).toBe(200);
+    expect(redeemed.json()).toEqual({ username: "grisha" });
+
+    // The console now shows a registered person and a used link.
+    const listed = await setup.server.inject({
+      method: "GET",
+      url: "/api/v1/admin/users/grisha/links",
+      headers: { cookie },
+    });
+    expect(listed.statusCode).toBe(200);
+    expect(listed.json<Array<{ id: number; state: string }>>()).toEqual([
+      expect.objectContaining({ id: body.link.id, state: "used" }),
+    ]);
+    const users = await setup.server.inject({
+      method: "GET",
+      url: "/api/v1/admin/users",
+      headers: { cookie },
+    });
+    expect(users.json<Array<{ username: string; registrationState: string }>>()
+      .find((user) => user.username === "grisha")?.registrationState).toBe("active");
+
+    // And the person can sign a device in with the password they just chose.
+    const signedIn = await setup.server.inject({
+      method: "POST",
+      url: "/api/v1/auth/device-tokens/password",
+      payload: {
+        username: "grisha",
+        password: STRONG_PASSWORD,
+        label: "Firefox · Windows",
+        mode: "active",
+      },
+    });
+    expect(signedIn.statusCode).toBe(200);
+  });
+
+  it("revokes a link through the route, and the token stops working", async (context) => {
+    const setup = requireSetup(context);
+    if (!setup) return;
+    const cookie = await ownerCookie(setup.server);
+    const invited = await createInvite(setup.app, {
+      username: "grisha",
+      pageLabels: [],
+    }, OWNER_AUDIT);
+
+    const revoked = await setup.server.inject({
+      method: "POST",
+      url: `/api/v1/admin/users/grisha/links/${invited.link.id}/revoke`,
+      headers: { cookie },
+    });
+    expect(revoked.statusCode).toBe(200);
+    expect(revoked.json()).toMatchObject({ state: "revoked", revokedReason: "revoked_by_owner" });
+
+    const inspected = await setup.server.inject({
+      method: "POST",
+      url: "/api/v1/auth/links/inspect",
+      payload: { token: invited.link.token },
+    });
+    expect(inspected.json()).toEqual({ state: "revoked" });
+
+    const unknown = await setup.server.inject({
+      method: "POST",
+      url: "/api/v1/auth/links/inspect",
+      payload: { token: "nothing-matches-this" },
+    });
+    expect(unknown.statusCode).toBe(404);
+  });
+
+  it("refuses the console routes to everyone but the owner", async (context) => {
+    const setup = requireSetup(context);
+    if (!setup) return;
+    await createUserAccount(setup.app, {
+      username: "lead",
+      role: "team_lead",
+      password: "lead-secret-1",
+    }, { source: "cli" });
+    const login = await setup.server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: { username: "lead", password: "lead-secret-1" },
+    });
+    const header = login.headers["set-cookie"];
+    const cookie = String(Array.isArray(header) ? header[0] : header).split(";")[0]!;
+
+    expect((await setup.server.inject({
+      method: "POST",
+      url: "/api/v1/admin/invites",
+      headers: { cookie },
+      payload: { username: "grisha", pageLabels: [] },
+    })).statusCode).toBe(403);
+    expect((await setup.server.inject({
+      method: "POST",
+      url: "/api/v1/admin/invites",
+      payload: { username: "grisha", pageLabels: [] },
+    })).statusCode).toBe(401);
+  });
+});
+
 describe("concurrent writers", () => {
   it("never leaves two active links when two creates race", async (context) => {
     const setup = requireSetup(context);

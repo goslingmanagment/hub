@@ -578,12 +578,13 @@ export async function findAccountLinkForUser(
   db: Database,
   input: { linkId: number; userId: number },
 ) {
-  return db.query.accountLinks.findFirst({
+  const record = await db.query.accountLinks.findFirst({
     where: and(
       eq(accountLinks.id, input.linkId),
       eq(accountLinks.userId, input.userId),
     ),
-  }) ?? null;
+  });
+  return record ?? null;
 }
 
 export async function listAccountLinks(db: Database, userId: number) {
