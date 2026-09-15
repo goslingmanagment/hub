@@ -97,3 +97,37 @@ Reactivation (`POST /api/v1/admin/users/<login>/reactivate`) restores password
 login and nothing else: every revoked credential stays revoked and links are not
 revived. Re-assign pages, then send a fresh reset link
 (`docs/runbooks/chatter-onboarding.md`).
+
+## Dormant accounts nobody offboarded (census, Decision 353)
+
+Deactivation is an event; an account nobody ever decided about is a slow leak.
+The 2026-09-15 census found three, and they are listed here rather than fixed in
+code because each one is a judgement about a person, not a migration:
+
+- **`probe-ops` (#16)** — a live test account with no credentials. Deactivate it;
+  a robot that needs to read production gets an agent key (#195), and one that
+  needs to act gets its own account and signs a device in by password.
+- **User #22** — holds page grants on `lora-of` and `lora-vip-of` and does
+  nothing with them. Unassign the pages, then deactivate.
+- **User #4** — created and never acted. Deactivate it or write down why it
+  exists.
+
+Re-run the census when the team changes shape. Two queries, under the app psql
+user (the `read_only` role does not see these tables):
+
+```sql
+-- accounts with no live credential and no recent activity
+select u.id, u.username, u.role, u.disabled_at,
+       max(d.last_used_at) as last_device_use
+from users u
+left join device_tokens d on d.user_id = u.id
+group by u.id
+order by last_device_use nulls first;
+
+-- page grants held by accounts that are not signing in
+select u.username, p.platform, p.label
+from user_page_assignments a
+join users u on u.id = a.user_id
+join pages p on p.id = a.platform_account_id
+order by 1, 2, 3;
+```
