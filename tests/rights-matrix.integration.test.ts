@@ -19,7 +19,7 @@ import {
 } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 
-// Decision 350 — the rights matrix of the unified account (plan §7). One test
+// Decision 352 — the rights matrix of the unified account (plan §7). One test
 // per row: not "does this service function work" (the PR-1A suites pin that),
 // but "what can THIS person, signed in THIS way, reach right now" — the axes a
 // single shared login does NOT by itself make consistent: role, sign-in method,
