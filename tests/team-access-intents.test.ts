@@ -6,7 +6,7 @@ import {
 } from "../apps/dashboard/node_modules/@tanstack/react-query/build/modern/index.js";
 
 /**
- * Decision 348 §4.4 — which route each button of the Team card actually fires.
+ * Decision 350 §4.4 — which route each button of the Team card actually fires.
  *
  * The labels are the promise the owner acts on ("завершить все входы" when
  * firing someone), and a label wired to the wrong route is the one bug in this

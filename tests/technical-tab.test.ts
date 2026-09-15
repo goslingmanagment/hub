@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
 /**
- * Decision 348 — "Техническое": agent read-plane keys (moved here unchanged
+ * Decision 350 — "Техническое": agent read-plane keys (moved here unchanged
  * from the old Ключи агентов tab) and the Desktop harvest binding.
  *
  * This is the only console screen allowed to name the machinery, so it is

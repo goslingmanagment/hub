@@ -6,7 +6,7 @@ import type {
 } from "@agency_hub_core/contracts";
 import { platforms, type Platform, type UserRole } from "@agency_hub_core/shared";
 
-// Decision 348 — the Team tab's pure view logic: statuses, sorting, platform
+// Decision 350 — the Team tab's pure view logic: statuses, sorting, platform
 // grouping, the join link and the Telegram template. Every user-facing word
 // here obeys the §2 vocabulary (login, password, devices, links — nothing
 // about the credential machinery underneath); tests/dashboard-team-copy-
@@ -193,7 +193,7 @@ export const REVOCATION_LABEL = {
 } as const;
 
 // The kernel's reasons as written today (`revoked` = revoke-all,
-// `self_revoked`, `user_deactivated`) plus the Decision 347 additions.
+// `self_revoked`, `user_deactivated`) plus the Decision 349 additions.
 const DEVICE_REVOKED_REASON_LABEL: Readonly<Record<string, string>> = {
   revoked: "все устройства отозваны",
   revoked_by_owner: "вход завершён владельцем",

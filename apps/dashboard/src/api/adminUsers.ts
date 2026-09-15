@@ -7,7 +7,7 @@ import type {
 
 import { kernel } from "./sdk.js";
 
-// Decision 348: the Team tab talks to the kernel through these hooks only.
+// Decision 350: the Team tab talks to the kernel through these hooks only.
 // People are invited by a one-time link (adminCreateInvite), never created
 // with a hand-typed password.
 //

@@ -15,7 +15,7 @@ import {
 import type { RevealedLink } from "./LinkRevealModal.js";
 
 /**
- * Decision 348 — inviting a person is ONE call (`adminCreateInvite`): the
+ * Decision 350 — inviting a person is ONE call (`adminCreateInvite`): the
  * account, its page assignments and the one-time link are created together or
  * not at all. The old three-call provisioning (create → set password → assign)
  * left half-made accounts behind whenever a later step failed, and made the

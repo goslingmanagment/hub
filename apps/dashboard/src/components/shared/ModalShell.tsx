@@ -6,7 +6,7 @@ export function ModalShell({
   onClose,
   closeLabel = "Close",
   restoreFocusRef,
-  // Decision 348: a dialog holding something the person cannot get back — a
+  // Decision 350: a dialog holding something the person cannot get back — a
   // one-time link shown once — refuses the casual dismissals. Escape and a
   // stray backdrop click stop closing it; only the explicit close button does.
   explicitCloseOnly = false,

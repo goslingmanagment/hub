@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AccountLinkItem, AdminUser, DeviceTokenItem } from "@agency_hub_core/contracts";
 
 /**
- * Decision 348 — the Team tab, replacing tests/users-tab.test.ts.
+ * Decision 350 — the Team tab, replacing tests/users-tab.test.ts.
  *
  * What is worth pinning here is the owner's side of the invite story: who
  * shows as waiting for their registration, which revocation each button

@@ -19,7 +19,7 @@ import { StaleDataNotice } from "@/components/shared/StaleDataNotice";
 import { formatDateTime, formatRelativeTime } from "@/lib/format";
 
 /**
- * Decision 348 — "Техническое": the ONE place in the console where the
+ * Decision 350 — "Техническое": the ONE place in the console where the
  * machinery is named out loud.
  *
  * Everywhere else the owner deals in people, logins, devices and links (§2

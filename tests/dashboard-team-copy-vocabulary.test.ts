@@ -5,7 +5,7 @@ import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
 /**
- * Decision 348 / plan §2 — the owner's vocabulary, pinned.
+ * Decision 350 / plan §2 — the owner's vocabulary, pinned.
  *
  * A device token is machinery, like a session cookie. The person on the other
  * end of Telegram knows three things — a login, a password and the devices

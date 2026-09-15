@@ -7,7 +7,7 @@ import { formatDateTime } from "@/lib/format";
 import { buildJoinLink, currentOrigin, telegramMessage } from "./teamView.js";
 
 /**
- * Decision 348 — the one and only place a fresh link is ever visible.
+ * Decision 350 — the one and only place a fresh link is ever visible.
  *
  * The secret comes back from the create mutation's RESULT: it is never written
  * to a query cache, never re-fetched, never logged and never put in a URL path
