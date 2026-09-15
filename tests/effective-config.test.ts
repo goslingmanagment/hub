@@ -167,6 +167,6 @@ describe("LIVE_CONFIG_KEYS", () => {
     expect(LIVE_CONFIG_KEYS.has("fanslyWsHintsPageAllowlist")).toBe(true);
     expect(LIVE_CONFIG_KEYS.has("fanslyWsHintsTypeAllowlist")).toBe(true);
     expect(LIVE_CONFIG_KEYS.has("fanslyWsHintsPolicies")).toBe(true);
-    expect(LIVE_CONFIG_KEYS.size).toBe(69);
+    expect(LIVE_CONFIG_KEYS.size).toBe(72);
   });
 });
