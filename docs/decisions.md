@@ -347,6 +347,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 347 | Fansly C1 default-off certified follower settlement reuse |
 | 348 | Fansly C2c default-off isolated daily earnings recovery and age-based targets |
 | 349 | Unified chatter account and invite registration | One-time invite/reset links (`account_links`, 0199), case-insensitive logins (0200), one cookie-free password sign-in for both clients, a structured 401 `reason`, three honest revocation operations and `last_client_version`; one password check under `FOR UPDATE` closes the login race; every existing route stays wire-compatible until PR-4. PARTIALLY REVERSES #117 (the owner ordered the chatter cabinet #117 left conditional) |
+| 350 | Вкладка «Команда»: приглашение ссылкой | Человека заводит одна операция и одноразовая ссылка; три операции отзыва названы по тому, что они делают; UI API-ключей для людей удалён, машинное уехало в «Техническое». |
 
 
 ## Consensus Decisions
@@ -14303,3 +14304,60 @@ their DEVICES. The words "token", "key", "API" and "activation" do not appear in
 user-facing text; machine codes such as `token_revoked` stay machine codes.
 
 Plan and review disposition: `investigations/unified-account-2026-09-15/PLAN.md`.
+
+
+## Decision 350: Вкладка «Команда» — приглашение ссылкой, честный отзыв, без API-ключей в интерфейсе (2026-09-15)
+
+Консоль владельца переписана под единый аккаунт чаттера (PR-1B поверх
+контрактов Decision 349; план — `investigations/unified-account-2026-09-15/PLAN.md`,
+§2, §4.1, §4.4, §6.1). `UsersTab.tsx` (1246 строк) заменён каталогом
+`apps/dashboard/src/pages/settings/team/`: `TeamTab`, `InviteModal`,
+`LinkRevealModal`, `UserDetailModal`, `TechnicalTab` и чистый `teamView.ts`.
+
+**Приглашение — одна операция.** Раньше владелец делал три вызова
+(`adminCreateUser` → `adminSetPassword` → `adminAssignPage`) с ручным
+ретраем, сам придумывал пароль и диктовал его в Telegram; упавший второй шаг
+оставлял полусозданного человека. Теперь `adminCreateInvite` создаёт аккаунт,
+назначает страницы и чеканит одноразовую ссылку в одной транзакции. Роль
+(чаттер по умолчанию, тимлид) и срок ссылки (7 дней, максимум 30) убраны под
+«Дополнительно»: у обычного приглашения два поля — логин и страницы.
+`provisionChatter` и `AddChatterModal` удалены вместе с их тестами.
+
+**Ссылка живёт ровно один показ.** Сырой токен существует только в результате
+мутации: он не попадает ни в кэш запросов, ни в лог, ни в путь URL — браузер
+несёт его во фрагменте `/join#…`. `LinkRevealModal` даёт ссылку, кнопку
+«Скопировать» и готовое сообщение для Telegram (ссылка, логин, страница «Как
+начать»). Обе мутации, чеканящие ссылки, принадлежат вкладке, а не модалке:
+TanStack выбрасывает per-call колбэк, когда размонтируется выпустивший его
+наблюдатель, и модалка, закрытая в полёте, потеряла бы единственную копию
+ссылки. Потерянную ссылку не восстанавливают — создают новую (§4.1 п.5, п.10).
+
+**Три отзыва названы честно (Р6, §4.4).** «Завершить вход на устройстве» —
+один device-токен; «Отозвать все устройства» — все device-токены и резервации;
+«Завершить все входы» (с подтверждением) — ещё и сессии, API-ключи и активные
+ссылки, при этом человек остаётся в команде и его пароль продолжает работать.
+Сегодняшний revoke-all не трогал сессии и ключи, и называть его «выйти
+отовсюду» было неправдой. Список устройств показывается честно: несколько
+записей на одном ноутбуке — это несколько реальных входов, они не схлопываются.
+
+**API-ключей у людей больше нет (Р8).** `IssueKeyButton`, `NewKeyModal`,
+`KeyRevealModal`, Key History, `CreateUserModal`, хуки `useIssueApiKey` /
+`useRevokeApiKeys` и вся копия про «ключ» удалены без замены; аккаунты
+владельца заводятся только через CLI. Агентские ключи Read Plane переехали без
+изменений в новый раздел «Техническое» (та же группа «Доступ», прежний
+диплинк `?tab=agentKeys`) вместе с привязкой harvest по machineId — это
+единственный экран консоли, которому разрешено называть механику.
+
+**Словарь §2 закреплён гейтом.** `tests/dashboard-team-copy-vocabulary.test.ts`
+читает пользовательские строки и JSX-текст из `settings/team/**` (без
+комментариев и путей импорта) и падает на «токен», «ключ», «API», «bearer»,
+«активация», «резервация», «префикс» и их английских двойниках;
+`TechnicalTab.tsx` исключён по имени. Гейт носит с собой примеры, на которых
+обязан падать, — правило, которое ничего не ловит, не правило.
+
+Серверные хендлеры новых роутов в этом PR — заглушки 501 (PR-1A); тесты
+вкладки мокают api-слой, потому что `@tanstack/react-query` не резолвится из
+корневых тестов. Бюджет `platform ===` не изменился (163): ратчет считает
+только `*.ts`, а два сравнения удалённого `UsersTab.tsx` лежали в `.tsx` и
+никогда в него не входили; новая группировка страниц по платформе сделана
+через `Map` и таблицы соответствия.
