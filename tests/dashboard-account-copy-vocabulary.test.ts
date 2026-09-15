@@ -1,85 +1,86 @@
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
 // Decision 349 / PLAN §2 "Словарь для пользователя": a chatter knows exactly
 // three things — ЛОГИН, ПАРОЛЬ, УСТРОЙСТВА. A device token is internal
 // machinery, like a session cookie, and the words for that machinery must never
-// reach a screen. This gate reads every user-visible string in the /join and
-// /account tree and fails on any of them.
+// reach a screen. This gate reads every user-visible string on the chatter's
+// surface and fails on any of them.
 //
 // It is deliberately mechanical: copy drifts back into jargon one well-meaning
 // sentence at a time, and a reviewer who has read the PLAN is not always the
 // one reviewing the change.
 
-const ACCOUNT_DIR = path.resolve("apps/dashboard/src/pages/account");
+// Every file a chatter's eyes land on. The cabinet is NOT just `pages/account`:
+// half of what is on screen at /account — the header, the "checking your
+// sign-in" states, the sign-out button — is ChatterLayout, and a gate that
+// stopped at the page directory would wave all of it through.
+const ROOT = path.resolve("apps/dashboard/src");
+const SCANNED = [
+  "pages/account",
+  "components/layout/ChatterLayout.tsx",
+];
 
-function sourceFiles(dir: string): string[] {
-  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) return sourceFiles(full);
-    return /\.tsx?$/.test(entry.name) ? [full] : [];
-  });
+function sourceFiles(target: string): string[] {
+  const full = path.resolve(ROOT, target);
+  if (!statSync(full).isDirectory()) return /\.tsx?$/.test(full) ? [full] : [];
+  return readdirSync(full, { withFileTypes: true }).flatMap((entry) =>
+    sourceFiles(path.join(full, entry.name)),
+  );
 }
 
 /**
- * One pass over the source that separates code from comments from literals.
- * A naive regex cannot do this: `"https://ext…"` contains a `//` that is not a
- * comment, and a stripped-too-eagerly string swallows the rest of the file.
+ * Everything in this source that a person could read: JSX text and string /
+ * template literals, minus module specifiers and comments.
  *
- * Returns the literals (string and template contents) and a `blanked` copy of
- * the source where comments are gone and literal contents are emptied — so the
- * JSX skeleton survives and its text nodes can be read off it.
+ * Parsed with the TypeScript parser rather than matched with a regex, because
+ * inside a .tsx the two are genuinely ambiguous to a regex: `useState<string>(x)`
+ * looks exactly like a tag, `//` inside a URL looks exactly like a comment, and
+ * `<p>Привет, {name}! Придумай пароль</p>` is one sentence to the eye but never
+ * one `>…<` match. The first version of this gate used regexes and had all
+ * three bugs — it read no text at all out of a component whose braces nested,
+ * and said so by passing. The parser gives the same answer the compiler does.
+ *
+ * The parser also splits a text node at each interpolation, so the halves
+ * around `{name}` are scanned separately and are never glued into a word that
+ * nobody wrote.
  */
-function scan(source: string): { literals: string[]; blanked: string } {
-  const literals: string[] = [];
-  let blanked = "";
-  let index = 0;
-  while (index < source.length) {
-    const char = source[index]!;
-    const next = source[index + 1];
-    if (char === "/" && next === "/") {
-      while (index < source.length && source[index] !== "\n") index += 1;
-      continue;
-    }
-    if (char === "/" && next === "*") {
-      index += 2;
-      while (index < source.length && !(source[index] === "*" && source[index + 1] === "/")) index += 1;
-      index += 2;
-      continue;
-    }
-    if (char === '"' || char === "'" || char === "`") {
-      const quote = char;
-      index += 1;
-      let literal = "";
-      while (index < source.length && source[index] !== quote) {
-        if (source[index] === "\\") {
-          literal += source[index + 1] ?? "";
-          index += 2;
-          continue;
-        }
-        literal += source[index];
-        index += 1;
-      }
-      index += 1;
-      // A module specifier is machinery, not copy: `@/api/sdk` is not a
-      // sentence anyone reads. Everything else counts.
-      if (!/\b(from|import|require\()\s*$/.test(blanked)) literals.push(literal);
-      blanked += `${quote}${quote}`;
-      continue;
-    }
-    blanked += char;
-    index += 1;
-  }
-  return { literals, blanked };
-}
+function readableText(source: string, fileName: string): string[] {
+  const parsed = ts.createSourceFile(
+    fileName,
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    fileName.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
+  );
+  const texts: string[] = [];
 
-/** JSX text nodes: what sits between two tags with no expression in it. */
-function jsxText(blanked: string): string[] {
-  return [...blanked.matchAll(/>([^<>{}]+)</g)]
-    .map((match) => match[1]!.trim())
-    .filter((text) => text !== "");
+  function isModuleSpecifier(node: ts.Node): boolean {
+    const parent = node.parent;
+    if (!parent) return false;
+    if ((ts.isImportDeclaration(parent) || ts.isExportDeclaration(parent)) && parent.moduleSpecifier === node) {
+      return true;
+    }
+    // A dynamic `import("…")`.
+    return ts.isCallExpression(parent) && parent.expression.kind === ts.SyntaxKind.ImportKeyword;
+  }
+
+  function visit(node: ts.Node): void {
+    if (ts.isJsxText(node)) {
+      texts.push(node.text);
+    } else if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
+      if (!isModuleSpecifier(node)) texts.push(node.text);
+    } else if (ts.isTemplateHead(node) || ts.isTemplateMiddle(node) || ts.isTemplateTail(node)) {
+      texts.push(node.text);
+    }
+    ts.forEachChild(node, visit);
+  }
+
+  visit(parsed);
+  return texts;
 }
 
 const FORBIDDEN: { word: string; pattern: RegExp }[] = [
@@ -97,30 +98,91 @@ const FORBIDDEN: { word: string; pattern: RegExp }[] = [
   { word: "bearer", pattern: /\bbearer\b/i },
 ];
 
-describe("account copy vocabulary", () => {
-  const files = sourceFiles(ACCOUNT_DIR);
+/** Every forbidden word a person could read in this source. */
+function violations(source: string, fileName = "probe.tsx"): string[] {
+  return readableText(source, fileName).flatMap((text) =>
+    FORBIDDEN.filter(({ pattern }) => pattern.test(text)).map(({ word }) => word),
+  );
+}
 
-  it("covers the whole /join and /account tree", () => {
+// The gate's own falsifiability. Every case here is a shape the first version
+// of this gate let through; if this block ever goes green by finding nothing,
+// the gate below is decoration.
+describe("the vocabulary gate itself", () => {
+  it("reads copy that an interpolation interrupts", () => {
+    expect(violations("<p>Твой ключ {id} истёк</p>")).toEqual(["ключ"]);
+    expect(violations("<p>{name}, твой токен просрочен</p>")).toEqual(["токен"]);
+  });
+
+  it("reads copy split by several interpolations, attributes and nested braces", () => {
+    expect(violations('<p style={{ color: "red" }}>Вход {a} по ключу {b} истёк</p>'))
+      .toEqual(["ключ"]);
+  });
+
+  it("reads copy nested inside an expression, and the copy around it", () => {
+    const source = [
+      "function Card() {",
+      "  return (",
+      "    <div>",
+      "      {ok ? <p>Твой ключ истёк</p> : null}",
+      "      <span>Выйти</span>",
+      "    </div>",
+      "  );",
+      "}",
+    ].join("\n");
+    expect(violations(source)).toEqual(["ключ"]);
+  });
+
+  it("reads a plain string and both halves of a template literal", () => {
+    expect(violations('const a = "Введите API-ключ";').sort()).toEqual(["API", "ключ"]);
+    expect(violations("const a = `срок действия токена ${x} истёк`;")).toEqual(["токен"]);
+  });
+
+  it("never glues two halves of a word into one an author did not write", () => {
+    expect(violations("<p>клю{x}ч</p>")).toEqual([]);
+  });
+
+  it("leaves alone the words that merely contain a forbidden one", () => {
+    expect(violations("<p>Включите расширение, подключите страницу, деактивация отменена</p>"))
+      .toEqual([]);
+    expect(violations("<p>The rapid, capable chapter</p>")).toEqual([]);
+  });
+
+  it("is not fooled by a generic that looks like a tag, or a URL that looks like a comment", () => {
+    expect(violations('const [v] = useState<string | null>(null);\nconst u = "https://ext.gosling-agency.ru/start.html";'))
+      .toEqual([]);
+  });
+
+  it("does not mistake a module specifier for something a person reads", () => {
+    expect(violations('import { kernel } from "@/api/sdk";')).toEqual([]);
+    expect(violations('const p = import("./pages/api-keys.js");')).toEqual([]);
+  });
+
+  it("ignores comments, which nobody on the page can read", () => {
+    expect(violations("// the device token and the API key live here\n<p>Готово</p>")).toEqual([]);
+  });
+});
+
+describe("account copy vocabulary", () => {
+  const files = SCANNED.flatMap((target) => sourceFiles(target));
+
+  it("covers every file a chatter looks at, chrome included", () => {
     // A rename must not silently switch this gate off.
-    expect(files.length).toBeGreaterThanOrEqual(3);
+    expect(files.length).toBeGreaterThanOrEqual(4);
     expect(files.map((file) => path.basename(file)).sort()).toEqual(
-      expect.arrayContaining(["AccountPage.tsx", "JoinPage.tsx", "accountView.ts"]),
+      expect.arrayContaining(["AccountPage.tsx", "ChatterLayout.tsx", "JoinPage.tsx", "accountView.ts"]),
     );
   });
 
   it("never says token, key, API, bearer, activation, reservation or prefix to a person", () => {
-    const offenders: string[] = [];
-    for (const file of files) {
+    const offenders = files.flatMap((file) => {
       const source = readFileSync(file, "utf8");
-      const { literals, blanked } = scan(source);
-      for (const text of [...literals, ...jsxText(blanked)]) {
-        for (const { word, pattern } of FORBIDDEN) {
-          if (pattern.test(text)) {
-            offenders.push(`${path.relative(ACCOUNT_DIR, file)}: "${text.trim()}" contains "${word}"`);
-          }
-        }
-      }
-    }
+      return readableText(source, file).flatMap((text) =>
+        FORBIDDEN
+          .filter(({ pattern }) => pattern.test(text))
+          .map(({ word }) => `${path.relative(ROOT, file)}: "${text.trim()}" contains "${word}"`),
+      );
+    });
     expect(offenders).toEqual([]);
   });
 
@@ -131,6 +193,6 @@ describe("account copy vocabulary", () => {
     const offenders = files.filter((file) =>
       /\b(keyPrefix|expiresAt|createdAt)\b/.test(readFileSync(file, "utf8")),
     );
-    expect(offenders.map((file) => path.relative(ACCOUNT_DIR, file))).toEqual([]);
+    expect(offenders.map((file) => path.relative(ROOT, file))).toEqual([]);
   });
 });
