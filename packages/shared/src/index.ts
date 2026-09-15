@@ -18,6 +18,7 @@ export * from "./http-request.ts";
 export * from "./http-request-scope.ts";
 export * from "./logger.ts";
 export * from "./money.ts";
+export * from "./password-policy.ts";
 export * from "./proxy.ts";
 export * from "./proxy-string.ts";
 export * from "./snowflake.ts";

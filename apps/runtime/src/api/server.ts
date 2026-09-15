@@ -32,11 +32,13 @@ import {
   principalLogFields,
   requireOwner,
   SESSION_COOKIE_NAME,
+  type AuthFailure,
   type AuthPrincipal,
   type PendingDeviceTokenActivationCredential,
 } from "../services/auth.ts";
 import {
   AppError,
+  ConflictError,
   ForbiddenError,
   NotFoundError,
   OfapiCollectionRefusedError,
@@ -52,7 +54,7 @@ import {
   type RoutePolicyTableRow,
 } from "./auth-policy.ts";
 import { formatRequestValidationMessage } from "./error-boundary.ts";
-import { createRequestAuth } from "./request-auth.ts";
+import { createRequestAuth, unauthorizedFor } from "./request-auth.ts";
 import type { ApiModuleContext } from "../modules/context.ts";
 import { registerAgentReadRoutes } from "../modules/agent-read/index.ts";
 import { registerAudienceRoutes } from "../modules/audience/index.ts";
@@ -79,6 +81,7 @@ import { ensureOfapiQueues } from "../services/ofapi-events.ts";
 declare module "fastify" {
   interface FastifyRequest {
     auth?: AuthPrincipal | null;
+    authFailure?: AuthFailure | null;
     pendingDeviceTokenAuth?: PendingDeviceTokenActivationCredential | null;
     authPolicy?: { routeKey: string; verdict: AuthPolicyVerdict };
   }
@@ -188,6 +191,7 @@ export async function buildApiServer(appContext: AppContext) {
   server.setValidatorCompiler(validatorCompiler);
   server.setSerializerCompiler(serializerCompiler);
   server.decorateRequest("auth");
+  server.decorateRequest("authFailure");
   server.decorateRequest("pendingDeviceTokenAuth");
   server.decorateRequest("authPolicy");
 
@@ -214,7 +218,9 @@ export async function buildApiServer(appContext: AppContext) {
     // instead of "rate limited", so clients retried on the wrong semantics.
     // An AppError is the boundary's own contract: same wire shape as before,
     // no duck-typing reintroduced.
-    errorResponseBuilder: () => new TooManyRequestsError("Too many login attempts"),
+    // Neutral wording (Decision 347 §2): the limiter now guards link
+    // inspection and redemption as well as the two sign-in routes.
+    errorResponseBuilder: () => new TooManyRequestsError("Too many attempts"),
   });
   await server.register(swagger, {
     openapi: {
@@ -379,7 +385,9 @@ export async function buildApiServer(appContext: AppContext) {
     if (!verdict.allow && isAuthPolicyEnforced()) {
       switch (verdict.statusCode) {
         case 401:
-          throw new UnauthorizedError();
+          // Decision 347 §4.5: the device-token lane's structured reason
+          // travels on the middleware's 401 exactly as on the handler's.
+          throw unauthorizedFor(request);
         case 404:
           // The message names the label for a HUMAN (the dashboard's own error
           // states read it) and is STATIC for an agent: on the read plane a page
@@ -507,6 +515,23 @@ export async function buildApiServer(appContext: AppContext) {
         statusCode: error.statusCode,
         reason: error.reason,
         retryAfterMs: error.retryAfterMs,
+      });
+      return;
+    }
+
+    if (
+      (error instanceof UnauthorizedError || error instanceof ConflictError)
+      && error.reason !== null
+    ) {
+      // Documented structured extension (docs/error-handling.md §3): the
+      // machine `reason` beside the code — token_revoked | token_expired on a
+      // 401 for a presented device token, used | expired | revoked on the
+      // account-link 409. A reason-less error keeps the plain envelope.
+      reply.code(error.statusCode).send({
+        error: error.code,
+        message: error.message,
+        statusCode: error.statusCode,
+        reason: error.reason,
       });
       return;
     }

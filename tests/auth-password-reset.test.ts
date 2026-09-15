@@ -48,6 +48,7 @@ const repoMocks = vi.hoisted(() => ({
   listUserPageAssignments: vi.fn(),
   listUsers: vi.fn(),
   lockUserForDeviceTokenMutation: vi.fn(),
+  revokeActiveAccountLinks: vi.fn(),
   revokeApiKeysByIds: vi.fn(),
   revokeApiKeysForUser: vi.fn(),
   revokeAuthSession: vi.fn(),
@@ -105,6 +106,7 @@ beforeEach(() => {
     db.state.users.find((user) => user.id === userId) ?? null);
   repoMocks.advanceDeviceTokenEpoch.mockResolvedValue({ deviceTokenEpoch: 1 });
   repoMocks.deletePendingDeviceTokensForUser.mockResolvedValue([]);
+  repoMocks.revokeActiveAccountLinks.mockResolvedValue([]);
   repoMocks.updateUserPasswordHash.mockImplementation(async (db: MockDb, userId: number, passwordHash: string) => {
     const user = db.state.users.find((entry) => entry.id === userId) ?? null;
     if (user) {

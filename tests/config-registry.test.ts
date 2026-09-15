@@ -73,6 +73,8 @@ describe("config registry", () => {
   // is 'none' (not overridable via the DB). A new 'live'/'boot' key must update this set
   // deliberately — it can't slip in unnoticed.
   const LIVE_KEYS = [
+    // Decision 347: the public invite/reset link kill switch.
+    "accountLinksEnabled",
     "fanslyDmBoundedEnabled",
     "fanslyDmBoundedPageAllowlist",
     "fanslyDmBoundedPolicies",

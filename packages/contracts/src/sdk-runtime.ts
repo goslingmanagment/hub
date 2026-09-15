@@ -249,6 +249,33 @@ function notifyAuthError(options: KernelClientOptions, error: KernelApiError) {
   }
 }
 
+/** The error envelope of a non-OK SSE handshake, parsed like the typed path
+ * parses it: `body` is the JSON envelope when there is one (so a structured
+ * `reason` — Decision 347's token_revoked / token_expired — reaches the
+ * client's self-healing), the raw text otherwise, and `code` is its `error`. */
+async function sseHandshakeError(
+  label: string,
+  response: Response,
+): Promise<KernelApiError> {
+  const text = await response.text().catch(() => "");
+  let body: unknown;
+  try {
+    body = text ? JSON.parse(text) : null;
+  } catch {
+    body = text;
+  }
+  const envelope = (body ?? {}) as { error?: unknown; message?: unknown };
+  return new KernelApiError(
+    typeof envelope.message === "string"
+      ? envelope.message
+      : `${label} failed with ${response.status}`,
+    response.status === 401 || response.status === 403 ? "auth" : "server",
+    response.status,
+    typeof envelope.error === "string" ? envelope.error : null,
+    body,
+  );
+}
+
 export function createKernelClient(
   operations: Record<KernelOperationKey, KernelOperationDef>,
   options: KernelClientOptions,
@@ -476,13 +503,7 @@ export function subscribeSyncEvents(options: KernelClientOptions, input: {
       return;
     }
     if (!response.ok || !response.body) {
-      const error = new KernelApiError(
-        `events/stream failed with ${response.status}`,
-        response.status === 401 || response.status === 403 ? "auth" : "server",
-        response.status,
-        null,
-        await response.text().catch(() => null),
-      );
+      const error = await sseHandshakeError("events/stream", response);
       notifyAuthError(options, error);
       throw error;
     }
@@ -744,13 +765,7 @@ export function subscribeDomainEvents(options: KernelClientOptions, input: {
       return;
     }
     if (!response.ok || !response.body) {
-      const error = new KernelApiError(
-        `events/v2/stream failed with ${response.status}`,
-        response.status === 401 || response.status === 403 ? "auth" : "server",
-        response.status,
-        null,
-        await response.text().catch(() => null),
-      );
+      const error = await sseHandshakeError("events/v2/stream", response);
       notifyAuthError(options, error);
       throw error;
     }

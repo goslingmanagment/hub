@@ -17,15 +17,34 @@ export class BadRequestError extends AppError {
   }
 }
 
+/** Decision 347 (§4.5): why a PRESENTED device token that matched a row was
+ * refused. An unknown digest carries no reason (no enumeration oracle);
+ * `user_disabled` is unreachable because deactivation revokes every token. */
+export type AuthFailureReason = "token_revoked" | "token_expired";
+
 export class UnauthorizedError extends AppError {
-  constructor(message = "Unauthorized") {
+  /** Documented structured extension (docs/error-handling.md §3): serialized as
+   * `reason` in the body only when non-null. */
+  readonly reason: AuthFailureReason | null;
+
+  constructor(message = "Unauthorized", options?: { reason?: AuthFailureReason | null }) {
     super(message, 401, "unauthorized");
+    this.reason = options?.reason ?? null;
   }
 }
 
 export class ForbiddenError extends AppError {
   constructor(message = "Forbidden") {
     super(message, 403, "forbidden");
+  }
+}
+
+// Decision 347 (§4.2): a user flagged must_change_password (frozen #116b flag)
+// may not sign a device in by password until an owner resets it. Its own code
+// so clients map it to a specific line instead of a generic 403.
+export class PasswordChangeRequiredError extends AppError {
+  constructor(message = "The owner must reset this account's password before it can sign in") {
+    super(message, 403, "password_change_required");
   }
 }
 
@@ -46,8 +65,14 @@ export class UnknownAiFeatureError extends AppError {
 }
 
 export class ConflictError extends AppError {
-  constructor(message: string) {
+  /** Documented structured extension (docs/error-handling.md §3): the machine
+   * reason for the conflict, serialized only when non-null. Account-link
+   * redemption uses used | expired | revoked (Decision 347). */
+  readonly reason: string | null;
+
+  constructor(message: string, options?: { reason?: string | null }) {
     super(message, 409, "conflict");
+    this.reason = options?.reason ?? null;
   }
 }
 

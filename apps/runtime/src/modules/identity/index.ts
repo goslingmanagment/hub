@@ -4,6 +4,15 @@ import type { FastifyReply } from "fastify";
 import { auditCtx } from "../../api/request-auth.ts";
 import type { AppContext } from "../../bootstrap.ts";
 import {
+  createAccountLinkForUsername,
+  createInvite,
+  inspectAccountLink,
+  listAccountLinksForUsername,
+  redeemAccountLink,
+  revokeAccountLinkForUsername,
+} from "../../services/account-links.ts";
+import { getOwnUsageReport } from "../../services/ai-usage.ts";
+import {
   SESSION_COOKIE_NAME,
   assignPageToUser,
   activatePendingDeviceToken,
@@ -16,15 +25,21 @@ import {
   issueChatterApiKey,
   issueDeviceToken,
   issueDeviceTokenForUsername,
+  issueDeviceTokenWithPassword,
   reservePendingDeviceToken,
   listApiKeysForUsers,
   listDeviceTokensForUsername,
+  listOwnDevices,
   listUserGrants,
   listUsersDetailed,
   loginWithPassword,
   logoutSessionToken,
+  normalizeClientVersionHeader,
   reactivateUser,
+  revokeAllOwnDevices,
   revokeCurrentDeviceToken,
+  revokeDeviceTokenForUsername,
+  revokeOwnDevice,
   requireOwner,
   requireSessionUser,
   revokeDeviceTokensForUsername,
@@ -32,9 +47,10 @@ import {
   revokeUserApiKeys,
   setUserPassword,
   setDeviceTokenHarvestCapabilityForUsername,
+  terminateAllAccess,
   unassignPageFromUser,
 } from "../../services/auth.ts";
-import { AppError, NotFoundError } from "../../services/errors.ts";
+import { NotFoundError } from "../../services/errors.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 
 // Identity module (target §6.1): auth, sessions, users, api-keys. Handlers
@@ -395,43 +411,157 @@ export function registerIdentityRoutes(server: ApiServer, ctx: ApiModuleContext)
   });
 
   // --- Decision 347: unified chatter account (PR-1A) ---
-  // Contract-first step: the routes are declared and registered so the policy
-  // table and the generated SDK carry them; the handlers land in the next
-  // commits of the same PR.
-  const notImplemented = () => {
-    throw new AppError("Not implemented yet", 501, "not_implemented");
-  };
-  const ownerOnly = async (request: Parameters<typeof requirePrincipal>[0]) => {
+  // Legacy in-handler guards mirror the declared policy (#143 dual layer):
+  // owner-session for the console, any-session for the cabinet, public for the
+  // three link / sign-in routes, which are rate-limited per IP.
+
+  server.post("/api/v1/admin/invites", {
+    schema: routeSchemas.adminCreateInvite,
+  }, async (request) => {
     const principal = await requirePrincipal(request);
     requireOwner(principal);
-    return notImplemented();
-  };
-  const sessionOnly = async (request: Parameters<typeof requirePrincipal>[0]) => {
-    const principal = await requirePrincipal(request);
-    requireSessionUser(principal);
-    return notImplemented();
-  };
+    return createInvite(appContext, {
+      username: request.body.username,
+      role: request.body.role,
+      pageLabels: request.body.pageLabels,
+      expiresInHours: request.body.expiresInHours,
+    }, auditCtx(principal));
+  });
 
-  server.post("/api/v1/admin/invites", { schema: routeSchemas.adminCreateInvite }, ownerOnly);
-  server.post("/api/v1/admin/users/:username/links", { schema: routeSchemas.adminCreateAccountLink }, ownerOnly);
-  server.get("/api/v1/admin/users/:username/links", { schema: routeSchemas.adminListAccountLinks }, ownerOnly);
-  server.post("/api/v1/admin/users/:username/links/:linkId/revoke", { schema: routeSchemas.adminRevokeAccountLink }, ownerOnly);
-  server.delete("/api/v1/admin/users/:username/device-tokens/:tokenId", { schema: routeSchemas.adminRevokeDeviceToken }, ownerOnly);
-  server.post("/api/v1/admin/users/:username/terminate-access", { schema: routeSchemas.adminTerminateAllAccess }, ownerOnly);
+  server.post("/api/v1/admin/users/:username/links", {
+    schema: routeSchemas.adminCreateAccountLink,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    return createAccountLinkForUsername(appContext, {
+      username: request.params.username,
+      kind: request.body.kind,
+      expiresInHours: request.body.expiresInHours,
+    }, auditCtx(principal));
+  });
+
+  server.get("/api/v1/admin/users/:username/links", {
+    schema: routeSchemas.adminListAccountLinks,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    return listAccountLinksForUsername(appContext, request.params.username);
+  });
+
+  server.post("/api/v1/admin/users/:username/links/:linkId/revoke", {
+    schema: routeSchemas.adminRevokeAccountLink,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    return revokeAccountLinkForUsername(appContext, {
+      username: request.params.username,
+      linkId: request.params.linkId,
+    }, auditCtx(principal));
+  });
+
+  server.delete("/api/v1/admin/users/:username/device-tokens/:tokenId", {
+    schema: routeSchemas.adminRevokeDeviceToken,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    return revokeDeviceTokenForUsername(appContext, {
+      username: request.params.username,
+      deviceTokenId: request.params.tokenId,
+    }, auditCtx(principal));
+  });
+
+  server.post("/api/v1/admin/users/:username/terminate-access", {
+    schema: routeSchemas.adminTerminateAllAccess,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    return terminateAllAccess(appContext, {
+      username: request.params.username,
+    }, auditCtx(principal));
+  });
+
+  // Public link routes: the token travels in the body only (never the path, so
+  // it never reaches an access log); per-IP limits bound guessing.
   server.post("/api/v1/auth/links/inspect", {
     schema: routeSchemas.authInspectAccountLink,
     config: { rateLimit: { max: 30, timeWindow: 60_000 } },
-  }, notImplemented);
+  }, async (request) => {
+    return inspectAccountLink(appContext, request.body.token);
+  });
+
   server.post("/api/v1/auth/links/redeem", {
     schema: routeSchemas.authRedeemAccountLink,
     config: { rateLimit: { max: 10, timeWindow: 60_000 } },
-  }, notImplemented);
+  }, async (request) => {
+    return redeemAccountLink(appContext, {
+      token: request.body.token,
+      password: request.body.password,
+    });
+  });
+
+  // Р2: the single client sign-in — no cookie, one call, active or pending.
   server.post("/api/v1/auth/device-tokens/password", {
     schema: routeSchemas.authIssueDeviceTokenWithPassword,
     config: { rateLimit: { max: 20, timeWindow: 60_000 } },
-  }, notImplemented);
-  server.get("/api/v1/auth/devices", { schema: routeSchemas.authListDevices }, sessionOnly);
-  server.delete("/api/v1/auth/devices/:deviceId", { schema: routeSchemas.authRevokeDevice }, sessionOnly);
-  server.post("/api/v1/auth/devices/revoke-all", { schema: routeSchemas.authRevokeAllDevices }, sessionOnly);
-  server.get("/api/v1/auth/usage", { schema: routeSchemas.authMyUsage }, sessionOnly);
+  }, async (request) => {
+    const issued = await issueDeviceTokenWithPassword(appContext, {
+      username: request.body.username,
+      password: request.body.password,
+      label: request.body.label,
+      mode: request.body.mode,
+      clientVersion: normalizeClientVersionHeader(request.headers["x-client-version"]),
+    });
+    return issued.mode === "active"
+      ? {
+        mode: "active" as const,
+        token: issued.token,
+        id: issued.id,
+        label: issued.label,
+        keyPrefix: issued.keyPrefix,
+        expiresAt: issued.expiresAt.toISOString(),
+      }
+      : {
+        mode: "pending" as const,
+        token: issued.token,
+        reservationId: issued.reservationId,
+        label: issued.label,
+        keyPrefix: issued.keyPrefix,
+        reservationExpiresAt: issued.reservationExpiresAt.toISOString(),
+      };
+  });
+
+  // Cabinet (any live cookie session, any human role).
+  server.get("/api/v1/auth/devices", {
+    schema: routeSchemas.authListDevices,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireSessionUser(principal);
+    return listOwnDevices(appContext, principal);
+  });
+
+  server.delete("/api/v1/auth/devices/:deviceId", {
+    schema: routeSchemas.authRevokeDevice,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireSessionUser(principal);
+    return revokeOwnDevice(appContext, principal, {
+      deviceId: request.params.deviceId,
+    }, auditCtx(principal));
+  });
+
+  server.post("/api/v1/auth/devices/revoke-all", {
+    schema: routeSchemas.authRevokeAllDevices,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireSessionUser(principal);
+    return revokeAllOwnDevices(appContext, principal, auditCtx(principal));
+  });
+
+  server.get("/api/v1/auth/usage", {
+    schema: routeSchemas.authMyUsage,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireSessionUser(principal);
+    return getOwnUsageReport(appContext, principal, request.query);
+  });
 }

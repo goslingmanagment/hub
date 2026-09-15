@@ -23,15 +23,19 @@ import {
   findUserByUsername,
   insertAuditEvent,
   insertObservation,
+  isUniqueViolation,
+  listActiveDeviceTokensForUser,
   listApiKeys,
   listUserPageAssignments,
   listUsers,
   lockUserForApiKeyRotation,
   lockUserForDeviceTokenMutation,
   recordAgentKeyUse,
+  revokeActiveAccountLinks,
   revokeApiKeysByIds,
   revokeApiKeysForUser,
   revokeAuthSessionsForUser,
+  revokeAuthSessionsForUserExcept,
   revokeAuthSession,
   revokeDeviceTokenById,
   touchApiKey,
@@ -64,7 +68,16 @@ import {
 } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
-import { BadRequestError, ConflictError, ForbiddenError, NotFoundError, TooManyRequestsError, UnauthorizedError } from "./errors.ts";
+import {
+  BadRequestError,
+  ConflictError,
+  ForbiddenError,
+  NotFoundError,
+  PasswordChangeRequiredError,
+  TooManyRequestsError,
+  UnauthorizedError,
+  type AuthFailureReason,
+} from "./errors.ts";
 import { findPageSummaryByLabel } from "@agency_hub_core/db";
 
 export const SESSION_COOKIE_NAME = "agency_hub_core_session";
@@ -77,7 +90,7 @@ const API_KEY_DISPLAY_LENGTH = 10;
 const DUMMY_PASSWORD_HASH =
   "$argon2id$v=19$m=65536,t=3,p=4$uBvthN/XqL8U0tfIpEFZog$GEU0fF0w4vScnjMXlxqLdhsBF8L7Ixzhj8R3ISHudHA";
 
-interface AuditContext {
+export interface AuditContext {
   source: string;
   actorUserId?: number | null;
   /** Set instead of `actorUserId` when the actor is an agent key (no human);
@@ -196,7 +209,7 @@ function roleCanUseApiKey(role: UserRole) {
   return role === "chatter";
 }
 
-function roleCanUseSession(role: UserRole) {
+export function roleCanUseSession(role: UserRole) {
   // Stage 22: every human role is session-capable (the workboard's substrate);
   // dashboard route access stays a separate, narrower check below.
   return role === "owner" || role === "team_lead" || role === "chatter";
@@ -212,7 +225,7 @@ function roleCanUseDashboard(role: UserRole) {
  * `assignedPageIds` enforcement shape is load-bearing for the middleware and
  * SSE filtering.
  */
-async function listEffectivePageAssignments(app: AppContext, userId: number) {
+export async function listEffectivePageAssignments(app: AppContext, userId: number) {
   if (app.config?.accessGrantsReadEnabled) {
     return resolveGrantedPageAssignments(app.db, userId);
   }
@@ -233,7 +246,7 @@ function mapAssignedPages(
 
 /** Decision #126: a deactivated user is frozen on every mutation path that
  * could re-open access (credentials, assignments) — reactivate first. */
-function assertUserNotDeactivated(user: { username: string; disabledAt: Date | null }) {
+export function assertUserNotDeactivated(user: { username: string; disabledAt: Date | null }) {
   if (user.disabledAt) {
     throw new BadRequestError(`User "${user.username}" is deactivated`);
   }
@@ -267,7 +280,7 @@ async function getAuthenticatedUserByUsername(app: AppContext, username: string)
   return getAuthenticatedUserById(app, user.id);
 }
 
-async function getAdminUserById(app: AppContext, userId: number) {
+export async function getAdminUserById(app: AppContext, userId: number) {
   const user = await findUserById(app.db, userId);
   if (!user) {
     return null;
@@ -416,6 +429,33 @@ export async function listUsersDetailed(app: AppContext) {
   return result;
 }
 
+/** Decision 347 (Р4): two concurrent creates of the same login (any case) race
+ * on the lower(username) unique index; the loser gets the same 400 the
+ * pre-check gives, never a 500. */
+export async function createUserOrRefuseDuplicate(
+  db: AppContext["db"],
+  input: Parameters<typeof createUser>[1],
+) {
+  let created: Awaited<ReturnType<typeof createUser>>;
+  try {
+    created = await createUser(db, input);
+  } catch (error) {
+    if (isUniqueViolation(error)) {
+      throw new BadRequestError(`User "${input.username}" already exists`);
+    }
+    throw error;
+  }
+  if (!created) {
+    throw new Error("User insert returned no row");
+  }
+  return created;
+}
+
+/** Decision 347 (Р4): one normalization for invite, legacy create and login. */
+export function normalizeUsername(username: string) {
+  return username.trim();
+}
+
 export async function createUserAccount(
   app: AppContext,
   input: {
@@ -437,7 +477,7 @@ export async function createUserAccount(
     throw new BadRequestError(`Role "${input.role}" does not accept a password in Phase 2`);
   }
 
-  const existing = await findUserByUsername(app.db, input.username);
+  const existing = await findUserByUsername(app.db, normalizeUsername(input.username));
   if (existing) {
     throw new BadRequestError(`User "${input.username}" already exists`);
   }
@@ -450,8 +490,8 @@ export async function createUserAccount(
   // failure must not leave the user row committed behind a 500 (the retry
   // then hits "already exists").
   const created = await withAuditTransaction(app, async (dbTx) => {
-    const createdUser = await createUser(dbTx, {
-      username: input.username,
+    const createdUser = await createUserOrRefuseDuplicate(dbTx, {
+      username: normalizeUsername(input.username),
       role: input.role,
       passwordHash,
     });
@@ -519,6 +559,8 @@ export async function setUserPassword(
       "password_reset",
     );
     const deletedPendingDeviceTokens = await deletePendingDeviceTokensForUser(dbTx, user.id);
+    // Decision 347 §4.1 p.6: a password set by any path retires every active link.
+    const revokedAccountLinks = await revokeActiveAccountLinks(dbTx, user.id, "password_set");
 
     await recordAudit({ db: dbTx }, {
       ...audit,
@@ -528,6 +570,7 @@ export async function setUserPassword(
         username: user.username,
         revokedSessions: revokedSessions.length,
         deletedPendingDeviceTokens: deletedPendingDeviceTokens.length,
+        revokedAccountLinks: revokedAccountLinks.length,
         mustChangePassword: input.mustChangePassword ?? false,
       },
     });
@@ -566,6 +609,9 @@ export async function deactivateUser(
     const revokedTokens = await revokeDeviceTokensForUser(dbTx, user.id, "user_deactivated");
     const revokedSessions = await revokeAuthSessionsForUser(dbTx, user.id, "user_deactivated");
     const deletedPendingDeviceTokens = await deletePendingDeviceTokensForUser(dbTx, user.id);
+    // Decision 347 §4.1 p.7: an invite or reset link must not outlive the
+    // account; reactivation does not revive it — the owner mints a new one.
+    const revokedAccountLinks = await revokeActiveAccountLinks(dbTx, user.id, "user_deactivated");
 
     await recordAudit({ db: dbTx }, {
       ...audit,
@@ -577,6 +623,7 @@ export async function deactivateUser(
         revokedDeviceTokens: revokedTokens.length,
         revokedSessions: revokedSessions.length,
         deletedPendingDeviceTokens: deletedPendingDeviceTokens.length,
+        revokedAccountLinks: revokedAccountLinks.length,
       },
     });
 
@@ -657,6 +704,7 @@ export async function changeOwnPassword(
     await updateUserMustChangePassword(dbTx, user.id, false);
     const revokedSessions = await revokeAuthSessionsForUser(dbTx, user.id, "password_changed");
     const deletedPendingDeviceTokens = await deletePendingDeviceTokensForUser(dbTx, user.id);
+    const revokedAccountLinks = await revokeActiveAccountLinks(dbTx, user.id, "password_set");
     await recordAudit({ db: dbTx }, {
       source: "api",
       actorUserId: user.id,
@@ -666,6 +714,7 @@ export async function changeOwnPassword(
         username: user.username,
         revokedSessions: revokedSessions.length,
         deletedPendingDeviceTokens: deletedPendingDeviceTokens.length,
+        revokedAccountLinks: revokedAccountLinks.length,
       },
     });
   });
@@ -691,30 +740,46 @@ export async function assignPageToUser(
     throw new NotFoundError(`Page "${input.pageLabel}" not found`);
   }
 
-  // Stage 22: the grant log is the durable record; the legacy assignment row
-  // is dual-written until the read path flips (then the table freezes).
   // Grant + assignment + audit commit together (review R1-7).
   await withAuditTransaction(app, async (dbTx) => {
-    await insertAccessGrant(dbTx, {
-      userId: user.id,
-      scopeType: "page",
-      scopeId: page.id,
-      grantedBy: audit.actorUserId ?? null,
-    });
-    if (!app.config?.accessGrantsReadEnabled) {
-      await assignUserToPage(dbTx, user.id, page.id);
-    }
+    await assignPageToUserTx(app, dbTx, { user, page }, audit);
+  });
+}
 
-    await recordAudit({ db: dbTx }, {
-      ...audit,
-      eventType: "user.page_assigned",
-      targetUserId: user.id,
-      platformAccountId: page.id,
-      metadata: {
-        username: user.username,
-        pageLabel: page.label,
-      },
-    });
+/**
+ * The transaction-aware core of a page assignment (Decision 347 §5.2): callers
+ * that already hold a transaction — the atomic invite — compose it; the
+ * standalone route wraps it. Stage 22: the grant log is the durable record; the
+ * legacy assignment row is dual-written until the read path flips.
+ */
+export async function assignPageToUserTx(
+  app: Pick<AppContext, "config">,
+  dbTx: AppContext["db"],
+  input: {
+    user: { id: number; username: string };
+    page: { id: number; label: string };
+  },
+  audit: AuditContext,
+) {
+  await insertAccessGrant(dbTx, {
+    userId: input.user.id,
+    scopeType: "page",
+    scopeId: input.page.id,
+    grantedBy: audit.actorUserId ?? null,
+  });
+  if (!app.config?.accessGrantsReadEnabled) {
+    await assignUserToPage(dbTx, input.user.id, input.page.id);
+  }
+
+  await recordAudit({ db: dbTx }, {
+    ...audit,
+    eventType: "user.page_assigned",
+    targetUserId: input.user.id,
+    platformAccountId: input.page.id,
+    metadata: {
+      username: input.user.username,
+      pageLabel: input.page.label,
+    },
   });
 }
 
@@ -1064,17 +1129,37 @@ function clearLoginBackoff(app: AppContext, username: string): void {
   loginBackoffRegistryFor(app).delete(loginBackoffKey(username));
 }
 
-export async function loginWithPassword(
+/** The user row as it stands under the credential-mutation lock. */
+export type LockedUserRow = NonNullable<Awaited<ReturnType<typeof lockUserForDeviceTokenMutation>>>;
+
+/**
+ * Decision 347 §4.3 — the ONE password check for every password-based sign-in
+ * (cookie login and device sign-in alike), closing the login race:
+ *
+ * 1. the shared per-account backoff;
+ * 2. lookup (case-insensitive); unknown / deactivated / no password / not
+ *    session-capable → dummy verify, backoff, `auth.login_failed`, 401 — the
+ *    same answer as a wrong password, no oracle;
+ * 3. argon2 verify OUTSIDE the transaction (it is slow; the lock stays short);
+ * 4. INSIDE the transaction: `FOR UPDATE` on the user row, then the hash, the
+ *    tombstone and the device-token epoch are compared with what was verified.
+ *    A reset, a deactivation or a revoke-all that committed while this request
+ *    was in flight makes the request 401 — it never mints on stale authority;
+ * 5. only then does `run` create the session or token in the SAME transaction.
+ */
+export async function verifyPasswordAndLockUser<T>(
   app: AppContext,
   input: {
     username: string;
     password: string;
   },
-) {
+  run: (dbTx: AppContext["db"], user: LockedUserRow) => Promise<T>,
+): Promise<T> {
   const now = Date.now();
-  assertLoginNotBackedOff(app, input.username, now);
+  const username = normalizeUsername(input.username);
+  assertLoginNotBackedOff(app, username, now);
 
-  const user = await findUserByUsername(app.db, input.username);
+  const user = await findUserByUsername(app.db, username);
 
   // Deactivated shares the invalid-credentials path (decision #126): the same
   // 401, dummy verify, and backoff as an unknown username — no oracle.
@@ -1082,16 +1167,16 @@ export async function loginWithPassword(
     // Run a dummy verification so this path takes comparable time to the
     // wrong-password path below, avoiding a username-enumeration timing oracle.
     await argon2.verify(DUMMY_PASSWORD_HASH, input.password).catch(() => false);
-    recordLoginFailureForBackoff(app, input.username, now);
+    recordLoginFailureForBackoff(app, username, now);
     await recordFailedLoginAuditBestEffort(app, {
-      username: input.username,
+      username,
     });
     throw new UnauthorizedError("Invalid username or password");
   }
 
   const isValid = await argon2.verify(user.passwordHash, input.password);
   if (!isValid) {
-    recordLoginFailureForBackoff(app, input.username, now);
+    recordLoginFailureForBackoff(app, username, now);
     await recordFailedLoginAuditBestEffort(app, {
       username: user.username,
       targetUserId: user.id,
@@ -1099,32 +1184,60 @@ export async function loginWithPassword(
     throw new UnauthorizedError("Invalid username or password");
   }
 
-  clearLoginBackoff(app, input.username);
+  clearLoginBackoff(app, username);
 
-  const authenticatedUser = await getAuthenticatedUserById(app, user.id);
-  if (!authenticatedUser) {
-    throw new UnauthorizedError("Authentication failed");
-  }
+  // Credential row + audit dual-write commit together (review R1-7), and the
+  // authority is re-read under the lock: what was verified must still be true.
+  return withAuditTransaction(app, async (dbTx) => {
+    const locked = await lockUserForDeviceTokenMutation(dbTx, user.id);
+    if (
+      !locked
+      || locked.disabledAt
+      || !roleCanUseSession(locked.role)
+      || locked.passwordHash !== user.passwordHash
+      || locked.deviceTokenEpoch !== user.deviceTokenEpoch
+    ) {
+      // The same wording as a wrong password: which boundary won the race is
+      // not the caller's business.
+      throw new UnauthorizedError("Invalid username or password");
+    }
+    return run(dbTx, locked);
+  });
+}
 
+export async function loginWithPassword(
+  app: AppContext,
+  input: {
+    username: string;
+    password: string;
+  },
+) {
   // Session row + audit dual-write commit together (review R1-7): an audit
   // failure must not leave a usable-but-undisclosed session row behind a 500.
   const sessionToken = randomToken(32);
-  const expiresAt = new Date(Date.now() + app.config.sessionTtlDays * 24 * 60 * 60 * 1000);
-  await withAuditTransaction(app, async (dbTx) => {
+  let expiresAt = new Date(0);
+  const user = await verifyPasswordAndLockUser(app, input, async (dbTx, locked) => {
+    expiresAt = new Date(Date.now() + app.config.sessionTtlDays * 24 * 60 * 60 * 1000);
     await createAuthSession(dbTx, {
-      userId: user.id,
+      userId: locked.id,
       tokenDigest: sha256Hex(sessionToken),
       expiresAt,
     });
 
     await recordAudit({ db: dbTx }, {
       source: "api",
-      actorUserId: user.id,
-      targetUserId: user.id,
+      actorUserId: locked.id,
+      targetUserId: locked.id,
       eventType: "auth.login",
-      metadata: { username: user.username },
+      metadata: { username: locked.username },
     });
+    return locked;
   });
+
+  const authenticatedUser = await getAuthenticatedUserById(app, user.id);
+  if (!authenticatedUser) {
+    throw new UnauthorizedError("Authentication failed");
+  }
 
   return {
     sessionToken,
@@ -1580,35 +1693,76 @@ export async function activatePendingDeviceToken(
   };
 }
 
-export async function authenticateDeviceToken(app: AppContext, deviceToken: string) {
+/** Decision 347 §4.5: why a presented bearer was refused, when that is safe to
+ * say. Only a device token that MATCHED a row carries a reason. */
+export interface AuthFailure {
+  reason: AuthFailureReason;
+}
+
+export type DeviceTokenAuthResult =
+  | { principal: HumanAuthPrincipal; failure: null }
+  | { principal: null; failure: AuthFailure | null };
+
+/** x-client-version as the device-token lane records it: a short trimmed
+ * string or nothing (the same bounds client-versions.ts logs under). */
+export function normalizeClientVersionHeader(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const version = value.trim();
+  return version.length > 0 && version.length <= 64 ? version : null;
+}
+
+export async function authenticateDeviceToken(
+  app: AppContext,
+  deviceToken: string,
+  options?: { clientVersion?: string | null },
+): Promise<DeviceTokenAuthResult> {
   const record = await findDeviceTokenByDigest(app.db, sha256Hex(deviceToken));
   const now = new Date();
-  if (!record || record.revokedAt || record.expiresAt <= now) {
-    return null;
+  if (!record) {
+    // Unknown digest: no reason — a reason here would be an enumeration oracle.
+    return { principal: null, failure: null };
+  }
+  if (record.revokedAt) {
+    return { principal: null, failure: { reason: "token_revoked" } };
+  }
+  if (record.expiresAt <= now) {
+    return { principal: null, failure: { reason: "token_expired" } };
   }
 
   const user = await getAuthenticatedUserById(app, record.userId);
   if (!user || !roleCanUseSession(user.role)) {
-    return null;
+    // Unreachable by design (deactivation revokes every token); if a row ever
+    // survives, fail closed without a reason.
+    return { principal: null, failure: null };
   }
 
   // Sliding expiry: each (throttled) use extends the token up to the hard cap;
-  // an idle device dies at expires_at.
+  // an idle device dies at expires_at. The client version rides the same
+  // statement (Р7): one write per request, never a second.
   const cap = new Date(record.createdAt.getTime() + DEVICE_TOKEN_MAX_LIFETIME_MS);
   const slid = new Date(Math.min(now.getTime() + DEVICE_TOKEN_TTL_MS, cap.getTime()));
   const worthBumping = slid.getTime() - record.expiresAt.getTime() >= DEVICE_TOKEN_REFRESH_GRANULARITY_MS;
+  const clientVersion = options?.clientVersion ?? null;
   await updateDeviceTokenUse(app.db, record.id, {
     lastUsedAt: now,
     ...(worthBumping ? { expiresAt: slid } : {}),
+    ...(clientVersion !== null && clientVersion !== record.lastClientVersion
+      ? { lastClientVersion: clientVersion }
+      : {}),
   });
 
   return {
-    authMethod: "device_token" as const,
-    user,
-    assignedPageIds: user.assignedPages.map((page) => page.id),
-    deviceTokenId: record.id,
-    ...(record.harvestMachineId ? { harvestMachineId: record.harvestMachineId } : {}),
-  } satisfies AuthPrincipal;
+    principal: {
+      authMethod: "device_token" as const,
+      user,
+      assignedPageIds: user.assignedPages.map((page) => page.id),
+      deviceTokenId: record.id,
+      ...(record.harvestMachineId ? { harvestMachineId: record.harvestMachineId } : {}),
+    },
+    failure: null,
+  };
 }
 
 // --- Agent Read Plane keys (agent-read slice 0b) ---
@@ -1650,17 +1804,34 @@ export async function authenticateAgentKey(app: AppContext, agentKeyToken: strin
   } satisfies AgentAuthPrincipal;
 }
 
-/** Prefix-discriminated bearer authentication: agent key, api key or device token. */
-export async function authenticateBearerToken(app: AppContext, token: string) {
+export interface BearerAuthResult {
+  principal: AuthPrincipal | null;
+  /** Set only by the device-token lane (Decision 347 §4.5). */
+  failure: AuthFailure | null;
+}
+
+/** Prefix-discriminated bearer authentication with the structured refusal:
+ * agent key, api key or device token. The request layer memoizes both halves. */
+export async function authenticateBearerCredential(
+  app: AppContext,
+  token: string,
+  options?: { clientVersion?: string | null },
+): Promise<BearerAuthResult> {
   if (token.startsWith(DEVICE_TOKEN_PREFIX) || token.startsWith(PENDING_DEVICE_TOKEN_PREFIX)) {
-    return authenticateDeviceToken(app, token);
+    return authenticateDeviceToken(app, token, options);
   }
   // Before the api-key fallback: an agent key must never be resolved by the
   // legacy path, whose principal would carry a human user.
   if (token.startsWith(AGENT_KEY_TOKEN_PREFIX)) {
-    return authenticateAgentKey(app, token);
+    return { principal: await authenticateAgentKey(app, token), failure: null };
   }
-  return authenticateApiKeyToken(app, token);
+  return { principal: await authenticateApiKeyToken(app, token), failure: null };
+}
+
+/** Prefix-discriminated bearer authentication: agent key, api key or device
+ * token — the principal-only view (SSE revalidation and the older callers). */
+export async function authenticateBearerToken(app: AppContext, token: string) {
+  return (await authenticateBearerCredential(app, token)).principal;
 }
 
 export async function listDeviceTokensForUsername(app: AppContext, username: string) {
@@ -1681,9 +1852,7 @@ function deviceTokenResponse(token: Awaited<ReturnType<typeof listDeviceTokensFo
     isActive: token.revokedAt === null && token.expiresAt > new Date(),
     expiresAt: token.expiresAt.toISOString(),
     lastUsedAt: token.lastUsedAt?.toISOString() ?? null,
-    // Contract-first step of Decision 347: the column lands with migration
-    // 0199 in the next commit of the same PR; until then the field is null.
-    lastClientVersion: null,
+    lastClientVersion: token.lastClientVersion ?? null,
     createdAt: token.createdAt.toISOString(),
     revokedAt: token.revokedAt?.toISOString() ?? null,
     revokedReason: token.revokedReason ?? null,
@@ -1805,6 +1974,324 @@ export async function revokeDeviceTokensForUsername(
     return revokedTokens;
   });
   return { revokedCount: revoked.length };
+}
+
+// --- Decision 347: password-based device sign-in and the revocation ladder ---
+
+/** Static device-token issuance policy shared by the cookie and password lanes. */
+function mintDeviceTokenMaterial(mode: "active" | "pending") {
+  const tokenBody = randomToken(24);
+  const prefix = mode === "active" ? DEVICE_TOKEN_PREFIX : PENDING_DEVICE_TOKEN_PREFIX;
+  return {
+    rawToken: `${prefix}${tokenBody}`,
+    keyPrefix: `${prefix}${tokenBody.slice(0, API_KEY_DISPLAY_LENGTH)}`,
+  };
+}
+
+export type IssuedDeviceCredential =
+  | {
+    mode: "active";
+    token: string;
+    id: number;
+    label: string;
+    keyPrefix: string;
+    expiresAt: Date;
+  }
+  | {
+    mode: "pending";
+    token: string;
+    reservationId: number;
+    label: string;
+    keyPrefix: string;
+    reservationExpiresAt: Date;
+  };
+
+/**
+ * Р2: the single client sign-in — username + password → a device token
+ * (`active`, the extension) or a reservation to activate (`pending`, the
+ * desktop), with no cookie session anywhere. Rides the §4.3 core, so a reset
+ * that commits mid-request wins and the request answers 401.
+ */
+export async function issueDeviceTokenWithPassword(
+  app: AppContext,
+  input: {
+    username: string;
+    password: string;
+    label: string;
+    mode: "active" | "pending";
+    clientVersion: string | null;
+  },
+): Promise<IssuedDeviceCredential> {
+  const material = mintDeviceTokenMaterial(input.mode);
+  return verifyPasswordAndLockUser(app, input, async (dbTx, user) => {
+    // §4.2: the frozen flag keeps its meaning — a flagged account cannot sign a
+    // device in until an owner resets the password (the cookie lane's route
+    // allowlist enforces the same thing after login).
+    if (user.mustChangePassword) {
+      throw new PasswordChangeRequiredError();
+    }
+    // Time is sampled after the lock wait, as activation does.
+    const now = Date.now();
+    if (input.mode === "active") {
+      const expiresAt = new Date(now + DEVICE_TOKEN_TTL_MS);
+      const created = await createDeviceToken(dbTx, {
+        userId: user.id,
+        label: input.label,
+        tokenDigest: sha256Hex(material.rawToken),
+        keyPrefix: material.keyPrefix,
+        expiresAt,
+        lastClientVersion: input.clientVersion,
+      });
+      await recordAudit({ db: dbTx }, {
+        source: "api",
+        actorUserId: user.id,
+        targetUserId: user.id,
+        eventType: "device_token.issued",
+        metadata: {
+          username: user.username,
+          label: input.label,
+          keyPrefix: material.keyPrefix,
+          via: "password",
+          clientVersion: input.clientVersion,
+        },
+      });
+      return {
+        mode: "active",
+        token: material.rawToken,
+        id: created.id,
+        label: created.label,
+        keyPrefix: material.keyPrefix,
+        expiresAt,
+      };
+    }
+
+    const expiresAt = new Date(now + PENDING_DEVICE_TOKEN_TTL_MS);
+    const reservation = await createPendingDeviceToken(dbTx, {
+      userId: user.id,
+      label: input.label,
+      tokenDigest: sha256Hex(material.rawToken),
+      keyPrefix: material.keyPrefix,
+      expiresAt,
+    });
+    await recordAudit({ db: dbTx }, {
+      source: "api",
+      actorUserId: user.id,
+      targetUserId: user.id,
+      eventType: "device_token.reserved",
+      metadata: {
+        username: user.username,
+        label: input.label,
+        keyPrefix: material.keyPrefix,
+        expiresAt: expiresAt.toISOString(),
+        via: "password",
+        clientVersion: input.clientVersion,
+      },
+    });
+    return {
+      mode: "pending",
+      token: material.rawToken,
+      reservationId: reservation.id,
+      label: reservation.label,
+      keyPrefix: material.keyPrefix,
+      reservationExpiresAt: reservation.expiresAt,
+    };
+  });
+}
+
+/**
+ * §4.4 "Завершить все входы" inside a transaction that already holds the user
+ * lock: device tokens, reservations, sessions, API keys, epoch. Shared by the
+ * owner action, the deactivation-adjacent flows and the link-based reset.
+ */
+export async function terminateAccessTx(
+  dbTx: AppContext["db"],
+  user: { id: number },
+  reason: string,
+) {
+  await advanceDeviceTokenEpoch(dbTx, user.id);
+  const deviceTokens = await revokeDeviceTokensForUser(dbTx, user.id, reason);
+  const pending = await deletePendingDeviceTokensForUser(dbTx, user.id);
+  const sessions = await revokeAuthSessionsForUser(dbTx, user.id, reason);
+  const apiKeys = await revokeApiKeysForUser(dbTx, user.id, reason);
+  return {
+    deviceTokens: deviceTokens.length,
+    pendingDeviceTokens: pending.length,
+    sessions: sessions.length,
+    apiKeys: apiKeys.length,
+  };
+}
+
+/** Owner action "Завершить все входы" (§4.4): every credential and every
+ * active link, epoch advanced. The password stays; the account stays enabled. */
+export async function terminateAllAccess(
+  app: AppContext,
+  input: { username: string },
+  audit: AuditContext,
+) {
+  const user = await findUserByUsername(app.db, input.username);
+  if (!user) {
+    throw new NotFoundError(`User "${input.username}" not found`);
+  }
+  if (user.role === "owner") {
+    // An owner cannot lock the console out from under themselves (mirrors
+    // deactivateUser).
+    throw new BadRequestError("Owner sign-ins cannot be terminated this way");
+  }
+
+  return withAuditTransaction(app, async (dbTx) => {
+    await lockUserForDeviceTokenMutation(dbTx, user.id);
+    const terminated = await terminateAccessTx(dbTx, user, "access_terminated");
+    const links = await revokeActiveAccountLinks(dbTx, user.id, "access_terminated");
+    await recordAudit({ db: dbTx }, {
+      ...audit,
+      eventType: "user.access_terminated",
+      targetUserId: user.id,
+      metadata: {
+        username: user.username,
+        revokedDeviceTokens: terminated.deviceTokens,
+        deletedPendingDeviceTokens: terminated.pendingDeviceTokens,
+        revokedSessions: terminated.sessions,
+        revokedApiKeys: terminated.apiKeys,
+        revokedAccountLinks: links.length,
+      },
+    });
+    return {
+      deviceTokens: terminated.deviceTokens,
+      sessions: terminated.sessions,
+      apiKeys: terminated.apiKeys,
+      links: links.length,
+    };
+  });
+}
+
+/** Owner action "Отозвать вход" (§4.4): exactly one device token. */
+export async function revokeDeviceTokenForUsername(
+  app: AppContext,
+  input: { username: string; deviceTokenId: number },
+  audit: AuditContext,
+) {
+  const user = await findUserByUsername(app.db, input.username);
+  if (!user) {
+    throw new NotFoundError(`User "${input.username}" not found`);
+  }
+  return withAuditTransaction(app, async (dbTx) => {
+    const token = await findDeviceTokenForUser(dbTx, {
+      deviceTokenId: input.deviceTokenId,
+      userId: user.id,
+    });
+    if (!token) {
+      throw new NotFoundError(`Device ${input.deviceTokenId} not found for "${input.username}"`);
+    }
+    const revoked = await revokeDeviceTokenById(dbTx, {
+      deviceTokenId: token.id,
+      userId: user.id,
+      reason: "revoked_by_owner",
+    });
+    await recordAudit({ db: dbTx }, {
+      ...audit,
+      eventType: "device_token.revoked_by_owner",
+      targetUserId: user.id,
+      metadata: {
+        username: user.username,
+        deviceTokenId: token.id,
+        label: token.label,
+        changed: revoked !== null,
+      },
+    });
+    return { revoked: true as const };
+  });
+}
+
+function ownDeviceResponse(token: Awaited<ReturnType<typeof listActiveDeviceTokensForUser>>[number]) {
+  return {
+    id: token.id,
+    label: token.label,
+    keyPrefix: token.keyPrefix,
+    lastClientVersion: token.lastClientVersion ?? null,
+    expiresAt: token.expiresAt.toISOString(),
+    lastUsedAt: token.lastUsedAt?.toISOString() ?? null,
+    createdAt: token.createdAt.toISOString(),
+  };
+}
+
+/** Cabinet: the caller's live devices. Revoked and expired rows stay in the
+ * owner's list; the person sees only what can still sign in. */
+export async function listOwnDevices(app: AppContext, principal: AuthPrincipal) {
+  requireSessionUser(principal);
+  const tokens = await listActiveDeviceTokensForUser(app.db, principal.user.id, new Date());
+  return tokens.map((token) => ownDeviceResponse(token));
+}
+
+/** Cabinet "Выйти с этого устройства": one of the caller's own device tokens.
+ * A device that is not the caller's is 404 — never 403, which would confirm
+ * the id exists. */
+export async function revokeOwnDevice(
+  app: AppContext,
+  principal: AuthPrincipal,
+  input: { deviceId: number },
+  audit: AuditContext,
+) {
+  requireSessionUser(principal);
+  const userId = principal.user.id;
+  return withAuditTransaction(app, async (dbTx) => {
+    const token = await findDeviceTokenForUser(dbTx, { deviceTokenId: input.deviceId, userId });
+    if (!token) {
+      throw new NotFoundError("Device not found");
+    }
+    const revoked = await revokeDeviceTokenById(dbTx, {
+      deviceTokenId: token.id,
+      userId,
+      reason: "self_revoked",
+    });
+    await recordAudit({ db: dbTx }, {
+      ...audit,
+      eventType: "device_token.self_revoked",
+      targetUserId: userId,
+      metadata: {
+        username: principal.user.username,
+        deviceTokenId: token.id,
+        label: token.label,
+        changed: revoked !== null,
+      },
+    });
+    return { revoked: true as const };
+  });
+}
+
+/** Cabinet "Выйти на всех устройствах" (§4.4 self): every device token and
+ * reservation, every session EXCEPT the one making the request, epoch++. */
+export async function revokeAllOwnDevices(
+  app: AppContext,
+  principal: AuthPrincipal,
+  audit: AuditContext,
+) {
+  requireSessionUser(principal);
+  const userId = principal.user.id;
+  const keepSessionId = principal.authSessionId;
+  return withAuditTransaction(app, async (dbTx) => {
+    await lockUserForDeviceTokenMutation(dbTx, userId);
+    await advanceDeviceTokenEpoch(dbTx, userId);
+    const deviceTokens = await revokeDeviceTokensForUser(dbTx, userId, "self_revoked_all");
+    const pending = await deletePendingDeviceTokensForUser(dbTx, userId);
+    const sessions = await revokeAuthSessionsForUserExcept(dbTx, {
+      userId,
+      keepSessionId,
+      revokedReason: "self_revoked_all",
+    });
+    await recordAudit({ db: dbTx }, {
+      ...audit,
+      eventType: "auth.devices_revoked_all",
+      targetUserId: userId,
+      metadata: {
+        username: principal.user.username,
+        revokedDeviceTokens: deviceTokens.length,
+        deletedPendingDeviceTokens: pending.length,
+        revokedSessions: sessions.length,
+        keptSessionId: keepSessionId,
+      },
+    });
+    return { deviceTokens: deviceTokens.length, sessions: sessions.length };
+  });
 }
 
 // --- Model-scope grants (kernel Stage 22) ---

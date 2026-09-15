@@ -13,7 +13,7 @@ import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 
 const routeMocks = vi.hoisted(() => ({
   authenticateApiKeyToken: vi.fn(),
-  authenticateBearerToken: vi.fn(),
+  authenticateBearerCredential: vi.fn(),
   authenticateSessionToken: vi.fn(),
   getPublicSyncHealth: vi.fn(),
   getSystemHealth: vi.fn(),
@@ -24,7 +24,7 @@ vi.mock("../apps/runtime/src/services/auth.ts", async (importOriginal) => {
   return {
     ...actual,
     authenticateApiKeyToken: routeMocks.authenticateApiKeyToken,
-    authenticateBearerToken: routeMocks.authenticateBearerToken,
+    authenticateBearerCredential: routeMocks.authenticateBearerCredential,
     authenticateSessionToken: routeMocks.authenticateSessionToken,
   };
 });
@@ -594,7 +594,9 @@ describe("auth route parsing", () => {
   });
 
   it("accepts lowercase bearer authorization schemes", async () => {
-    routeMocks.authenticateBearerToken.mockResolvedValue(leadPrincipal);
+    // Decision 347: the request layer resolves bearers through the structured
+    // credential path (principal + refusal reason).
+    routeMocks.authenticateBearerCredential.mockResolvedValue({ principal: leadPrincipal, failure: null });
     const server = await buildApiServer(createRouteTestContext());
 
     try {
@@ -608,7 +610,11 @@ describe("auth route parsing", () => {
 
       expect(response.statusCode).toBe(200);
       expect(response.json().user.username).toBe("lead");
-      expect(routeMocks.authenticateBearerToken).toHaveBeenCalledWith(expect.anything(), "chatter-key");
+      expect(routeMocks.authenticateBearerCredential).toHaveBeenCalledWith(
+        expect.anything(),
+        "chatter-key",
+        { clientVersion: null },
+      );
     } finally {
       await server.close();
     }

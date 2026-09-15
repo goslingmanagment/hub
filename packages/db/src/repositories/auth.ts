@@ -1,9 +1,10 @@
-import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, isNull, ne, sql } from "drizzle-orm";
 
 import type { UserRole } from "@agency_hub_core/shared";
 
 import type { Database } from "../client.ts";
 import {
+  accountLinks,
   apiKeys,
   auditEvents,
   authSessions,
@@ -52,10 +53,27 @@ export async function createUser(db: Database, input: CreateUserInput) {
   return created;
 }
 
+/** Decision 347 (Р4): logins are matched case-insensitively; the unique index
+ * on lower(username) (migration 0200) keeps this lookup unambiguous. */
 export async function findUserByUsername(db: Database, username: string) {
   return db.query.users.findFirst({
-    where: eq(users.username, username),
+    where: sql`lower(${users.username}) = lower(${username})`,
   });
+}
+
+/** True for a PostgreSQL unique-violation (23505) anywhere in the cause chain —
+ * the concurrent-create race the lower(username) index turns into a 400. */
+export function isUniqueViolation(error: unknown, constraint?: string) {
+  let current: unknown = error;
+  while (typeof current === "object" && current !== null) {
+    if ("code" in current && current.code === "23505") {
+      if (constraint === undefined) return true;
+      const named = "constraint" in current ? current.constraint : undefined;
+      return named === constraint;
+    }
+    current = "cause" in current ? current.cause : undefined;
+  }
+  return false;
 }
 
 export async function findUserById(db: Database, userId: number) {
@@ -284,6 +302,8 @@ export interface CreateDeviceTokenInput {
   tokenDigest: string;
   keyPrefix: string;
   expiresAt: Date;
+  /** Decision 347 (Р7): the issuing client's x-client-version, when known. */
+  lastClientVersion?: string | null | undefined;
 }
 
 export interface CreatePendingDeviceTokenInput {
@@ -295,7 +315,14 @@ export interface CreatePendingDeviceTokenInput {
 }
 
 export async function createDeviceToken(db: Database, input: CreateDeviceTokenInput) {
-  const [created] = await db.insert(deviceTokens).values(input).returning();
+  const [created] = await db.insert(deviceTokens).values({
+    userId: input.userId,
+    label: input.label,
+    tokenDigest: input.tokenDigest,
+    keyPrefix: input.keyPrefix,
+    expiresAt: input.expiresAt,
+    lastClientVersion: input.lastClientVersion ?? null,
+  }).returning();
   return created!;
 }
 
@@ -416,10 +443,16 @@ export async function setDeviceTokenHarvestMachine(
 export async function updateDeviceTokenUse(db: Database, deviceTokenId: number, input: {
   lastUsedAt: Date;
   expiresAt?: Date;
+  /** Decision 347 (Р7): stamped by the SAME statement as lastUsedAt; a request
+   * without the header leaves the previous value in place. */
+  lastClientVersion?: string | null;
 }) {
   await db.update(deviceTokens).set({
     lastUsedAt: input.lastUsedAt,
     ...(input.expiresAt ? { expiresAt: input.expiresAt } : {}),
+    ...(typeof input.lastClientVersion === "string"
+      ? { lastClientVersion: input.lastClientVersion }
+      : {}),
   }).where(eq(deviceTokens.id, deviceTokenId));
 }
 
@@ -428,6 +461,33 @@ export async function listDeviceTokensForUser(db: Database, userId: number) {
     where: eq(deviceTokens.userId, userId),
     orderBy: (table, { desc }) => [desc(table.createdAt)],
   });
+}
+
+/** The caller's live devices (Decision 347 cabinet): not revoked, not expired. */
+export async function listActiveDeviceTokensForUser(db: Database, userId: number, now = new Date()) {
+  return db.query.deviceTokens.findMany({
+    where: and(
+      eq(deviceTokens.userId, userId),
+      isNull(deviceTokens.revokedAt),
+      gt(deviceTokens.expiresAt, now),
+    ),
+    orderBy: (table, { desc }) => [desc(table.createdAt)],
+  });
+}
+
+/** "Sign out on all devices" keeps the session that issued the request. */
+export async function revokeAuthSessionsForUserExcept(
+  db: Database,
+  input: { userId: number; keepSessionId: number; revokedReason: string | null },
+) {
+  return db.update(authSessions).set({
+    revokedAt: new Date(),
+    revokedReason: input.revokedReason,
+  }).where(and(
+    eq(authSessions.userId, input.userId),
+    ne(authSessions.id, input.keepSessionId),
+    isNull(authSessions.revokedAt),
+  )).returning({ id: authSessions.id });
 }
 
 export async function revokeDeviceTokensForUser(db: Database, userId: number, reason: string) {
@@ -470,4 +530,114 @@ export async function updateUserDisabledAt(
   }).where(eq(users.id, userId)).returning();
 
   return updated;
+}
+
+// --- Account links (Decision 347): one-time invite / password-reset links ---
+// Never deleted: a used, expired or revoked link is a fact. Writers take the
+// user row lock (lockUserForDeviceTokenMutation) BEFORE touching a link row —
+// the same users -> credential order the device-token paths use.
+
+export type AccountLinkKind = "invite" | "password_reset";
+
+export interface CreateAccountLinkInput {
+  userId: number;
+  kind: AccountLinkKind;
+  tokenDigest: string;
+  keyPrefix: string;
+  createdBy: number | null;
+  expiresAt: Date;
+  metadata?: Record<string, unknown>;
+}
+
+export async function createAccountLink(db: Database, input: CreateAccountLinkInput) {
+  const [created] = await db.insert(accountLinks).values({
+    userId: input.userId,
+    kind: input.kind,
+    tokenDigest: input.tokenDigest,
+    keyPrefix: input.keyPrefix,
+    createdBy: input.createdBy,
+    expiresAt: input.expiresAt,
+    metadata: input.metadata ?? {},
+  }).returning();
+  return created!;
+}
+
+export async function findAccountLinkByDigest(
+  db: Database,
+  tokenDigest: string,
+  input?: { forUpdate?: boolean },
+) {
+  const query = db.select().from(accountLinks)
+    .where(eq(accountLinks.tokenDigest, tokenDigest))
+    .limit(1);
+  const [record] = input?.forUpdate === true ? await query.for("update") : await query;
+  return record ?? null;
+}
+
+export async function findAccountLinkForUser(
+  db: Database,
+  input: { linkId: number; userId: number },
+) {
+  return db.query.accountLinks.findFirst({
+    where: and(
+      eq(accountLinks.id, input.linkId),
+      eq(accountLinks.userId, input.userId),
+    ),
+  }) ?? null;
+}
+
+export async function listAccountLinks(db: Database, userId: number) {
+  return db.query.accountLinks.findMany({
+    where: eq(accountLinks.userId, userId),
+    orderBy: (table, { desc: orderDesc }) => [orderDesc(table.createdAt), orderDesc(table.id)],
+  });
+}
+
+/** Revokes every still-active link of the user (supersede / password set /
+ * deactivation / access termination). Returns the revoked ids. */
+export async function revokeActiveAccountLinks(db: Database, userId: number, reason: string) {
+  return db.update(accountLinks).set({
+    revokedAt: new Date(),
+    revokedReason: reason,
+  }).where(and(
+    eq(accountLinks.userId, userId),
+    isNull(accountLinks.usedAt),
+    isNull(accountLinks.revokedAt),
+  )).returning({ id: accountLinks.id });
+}
+
+export async function revokeAccountLinkById(
+  db: Database,
+  input: { linkId: number; userId: number; reason: string },
+) {
+  const [revoked] = await db.update(accountLinks).set({
+    revokedAt: new Date(),
+    revokedReason: input.reason,
+  }).where(and(
+    eq(accountLinks.id, input.linkId),
+    eq(accountLinks.userId, input.userId),
+    isNull(accountLinks.usedAt),
+    isNull(accountLinks.revokedAt),
+  )).returning();
+  return revoked ?? null;
+}
+
+export async function markAccountLinkUsed(db: Database, linkId: number, usedAt: Date) {
+  const [updated] = await db.update(accountLinks).set({ usedAt })
+    .where(and(eq(accountLinks.id, linkId), isNull(accountLinks.usedAt)))
+    .returning({ id: accountLinks.id });
+  return updated ?? null;
+}
+
+/** Has the user ever redeemed a link of this kind? (§4.1 p.4: an invite may be
+ * re-issued only to an unfinished registration.) */
+export async function hasRedeemedAccountLink(db: Database, userId: number, kind: AccountLinkKind) {
+  const [row] = await db.select({ id: accountLinks.id }).from(accountLinks)
+    .where(and(
+      eq(accountLinks.userId, userId),
+      eq(accountLinks.kind, kind),
+      sql`${accountLinks.usedAt} is not null`,
+    ))
+    .limit(1);
+  return row !== undefined;
 }

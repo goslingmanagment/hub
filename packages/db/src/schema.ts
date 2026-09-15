@@ -274,19 +274,26 @@ export const models = pgTable("models", {
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
-export const users = pgTable("users", {
-  id: bigserial("id", { mode: "number" }).primaryKey(),
-  username: text("username").notNull().unique(),
-  role: userRoleEnum("role").notNull(),
-  passwordHash: text("password_hash"),
-  mustChangePassword: boolean("must_change_password").default(false).notNull(),
-  deviceTokenEpoch: bigint("device_token_epoch", { mode: "number" }).default(0).notNull(),
-  // Deactivation tombstone (decision #126, mirrors the Stage 13 pages
-  // standard): NULL = active. Set freezes every auth path; never hard-delete.
-  disabledAt: timestamp("disabled_at", { withTimezone: true }),
-  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
-});
+export const users = pgTable(
+  "users",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    username: text("username").notNull().unique(),
+    role: userRoleEnum("role").notNull(),
+    passwordHash: text("password_hash"),
+    mustChangePassword: boolean("must_change_password").default(false).notNull(),
+    deviceTokenEpoch: bigint("device_token_epoch", { mode: "number" }).default(0).notNull(),
+    // Deactivation tombstone (decision #126, mirrors the Stage 13 pages
+    // standard): NULL = active. Set freezes every auth path; never hard-delete.
+    disabledAt: timestamp("disabled_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    // Decision 347 (Р4, migration 0200): logins are unique case-insensitively.
+    usernameLowerUidx: uniqueIndex("users_username_lower_uidx").on(sql`lower(${table.username})`),
+  }),
+);
 
 export const pages = pgTable(
   "pages",
@@ -2067,6 +2074,10 @@ export const deviceTokens = pgTable(
     harvestMachineId: uuid("harvest_machine_id"),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+    // Decision 347 (Р7, migration 0199): the x-client-version the token last
+    // presented, stamped by the same UPDATE as last_used_at. Routing metadata,
+    // never authority (#145).
+    lastClientVersion: text("last_client_version"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     revokedAt: timestamp("revoked_at", { withTimezone: true }),
     revokedReason: text("revoked_reason"),
@@ -2100,6 +2111,39 @@ export const pendingDeviceTokens = pgTable(
   (table) => ({
     userIdx: index("pending_device_tokens_user_idx").on(table.userId),
     expiryIdx: index("pending_device_tokens_expiry_idx").on(table.expiresAt),
+  }),
+);
+
+// Decision 347 (migration 0199): one-time invite / password-reset links. The
+// raw token lives only in the creation response; the row keeps its sha256
+// digest and a display prefix. Rows are never deleted — used, expired and
+// revoked links stay as facts. The partial unique index holds "at most one
+// active link per user"; writers take the user row lock first.
+export const accountLinks = pgTable(
+  "account_links",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    userId: bigint("user_id", { mode: "number" })
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    kind: text("kind").$type<"invite" | "password_reset">().notNull(),
+    tokenDigest: text("token_digest").notNull().unique(),
+    keyPrefix: text("key_prefix").notNull(),
+    createdBy: bigint("created_by", { mode: "number" })
+      .references(() => users.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    usedAt: timestamp("used_at", { withTimezone: true }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    revokedReason: text("revoked_reason"),
+    metadata: jsonbSafe("metadata").$type<Record<string, unknown>>().default({}).notNull(),
+  },
+  (table) => ({
+    userIdx: index("account_links_user_idx").on(table.userId),
+    oneActiveUidx: uniqueIndex("account_links_one_active_uidx")
+      .on(table.userId)
+      .where(sql`${table.usedAt} is null and ${table.revokedAt} is null`),
+    kindCheck: check("account_links_kind_check", sql`${table.kind} in ('invite', 'password_reset')`),
   }),
 );
 

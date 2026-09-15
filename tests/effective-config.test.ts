@@ -170,6 +170,9 @@ describe("LIVE_CONFIG_KEYS", () => {
     expect(LIVE_CONFIG_KEYS.has("fanslyDmBoundedEnabled")).toBe(true);
     expect(LIVE_CONFIG_KEYS.has("fanslyDmBoundedPageAllowlist")).toBe(true);
     expect(LIVE_CONFIG_KEYS.has("fanslyDmBoundedPolicies")).toBe(true);
-    expect(LIVE_CONFIG_KEYS.size).toBe(75);
+    // Decision 347 added the public invite/reset link kill switch, read per
+    // request so a flip never waits for a deploy.
+    expect(LIVE_CONFIG_KEYS.has("accountLinksEnabled")).toBe(true);
+    expect(LIVE_CONFIG_KEYS.size).toBe(76);
   });
 });
