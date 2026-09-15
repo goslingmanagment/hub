@@ -439,20 +439,26 @@ describe("redeem", () => {
       pageLabels: [],
     }, OWNER_AUDIT);
 
+    // The verdict is machine-readable, so the /join page can point at the rule
+    // that was broken instead of matching on the message text.
     await expect(redeemAccountLink(setup.app, {
       token: invited.link.token,
       password: "short-1",
-    })).rejects.toMatchObject({ statusCode: 400 });
+    })).rejects.toMatchObject({ statusCode: 400, reason: "too_short" });
+    await expect(redeemAccountLink(setup.app, {
+      token: invited.link.token,
+      password: "x".repeat(257),
+    })).rejects.toMatchObject({ statusCode: 400, reason: "too_long" });
     // A blacklisted password is refused whatever the case it is typed in —
     // the rule normalizes before it looks (trim + lower-case).
     await expect(redeemAccountLink(setup.app, {
       token: invited.link.token,
       password: "1qaz2wsx3edc",
-    })).rejects.toMatchObject({ statusCode: 400 });
+    })).rejects.toMatchObject({ statusCode: 400, reason: "common" });
     await expect(redeemAccountLink(setup.app, {
       token: invited.link.token,
       password: "1QAZ2WSX3EDC",
-    })).rejects.toMatchObject({ statusCode: 400 });
+    })).rejects.toMatchObject({ statusCode: 400, reason: "common" });
     // The link survives a refused attempt: the person simply picks again.
     expect(await activeLinkCount(setup.testDb)).toBe(1);
   });
@@ -613,6 +619,14 @@ describe("over HTTP, end to end", () => {
       expiresAt: body.link.expiresAt,
       platforms: ["fansly"],
     });
+
+    const tooCommon = await setup.server.inject({
+      method: "POST",
+      url: "/api/v1/auth/links/redeem",
+      payload: { token: body.link.token, password: "1qaz2wsx3edc" },
+    });
+    expect(tooCommon.statusCode).toBe(400);
+    expect(tooCommon.json()).toMatchObject({ error: "bad_request", reason: "common" });
 
     const redeemed = await setup.server.inject({
       method: "POST",

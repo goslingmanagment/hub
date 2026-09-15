@@ -38,6 +38,7 @@ import {
 } from "../services/auth.ts";
 import {
   AppError,
+  BadRequestError,
   ConflictError,
   ForbiddenError,
   NotFoundError,
@@ -520,13 +521,16 @@ export async function buildApiServer(appContext: AppContext) {
     }
 
     if (
-      (error instanceof UnauthorizedError || error instanceof ConflictError)
+      (error instanceof UnauthorizedError
+        || error instanceof ConflictError
+        || error instanceof BadRequestError)
       && error.reason !== null
     ) {
       // Documented structured extension (docs/error-handling.md §3): the
       // machine `reason` beside the code — token_revoked | token_expired on a
       // 401 for a presented device token, used | expired | revoked on the
-      // account-link 409. A reason-less error keeps the plain envelope.
+      // account-link 409, too_short | too_long | common on the redeem 400.
+      // A reason-less error keeps the plain envelope.
       reply.code(error.statusCode).send({
         error: error.code,
         message: error.message,

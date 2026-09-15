@@ -12,8 +12,16 @@ export class AppError extends Error {
 }
 
 export class BadRequestError extends AppError {
-  constructor(message: string) {
+  /** Documented structured extension (docs/error-handling.md §3): a machine
+   * reason beside the human message, serialized only when non-null. Decision
+   * 347 uses it for the password rule on link redemption (too_short | too_long
+   * | common), so the /join page can say WHICH rule was broken without matching
+   * on prose. Every other bad request stays reason-less. */
+  readonly reason: string | null;
+
+  constructor(message: string, options?: { reason?: string | null }) {
     super(message, 400, "bad_request");
+    this.reason = options?.reason ?? null;
   }
 }
 

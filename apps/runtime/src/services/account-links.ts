@@ -416,7 +416,9 @@ export async function redeemAccountLink(
   }
   const verdict = checkNewPassword(input.password);
   if (verdict !== "ok") {
-    throw new BadRequestError(PASSWORD_POLICY_MESSAGES[verdict]);
+    // The verdict travels as a machine `reason` beside the message: the /join
+    // page tells "too common" from "too short" without parsing prose.
+    throw new BadRequestError(PASSWORD_POLICY_MESSAGES[verdict], { reason: verdict });
   }
   const tokenDigest = sha256Hex(input.token);
   const peek = await findAccountLinkByDigest(app.db, tokenDigest);
