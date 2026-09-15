@@ -349,6 +349,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 349 | Unified chatter account and invite registration | One-time invite/reset links (`account_links`, 0199), case-insensitive logins (0200), one cookie-free password sign-in for both clients, a structured 401 `reason`, three honest revocation operations and `last_client_version`; one password check under `FOR UPDATE` closes the login race; every existing route stays wire-compatible until PR-4. PARTIALLY REVERSES #117 (the owner ordered the chatter cabinet #117 left conditional) |
 | 350 | Вкладка «Команда»: приглашение ссылкой | Человека заводит одна операция и одноразовая ссылка; три операции отзыва названы по тому, что они делают; UI API-ключей для людей удалён, машинное уехало в «Техническое». |
 | 351 | Chatter cabinet `/account` and invitation page `/join` | A chatter's own surface on the hub: an invitation link redeemed into a password, then who-I-am, my devices, my password and my own AI spend. Partially reverses #117 at the owner's order (see 349). |
+| 352 | Unified-account rights matrix | Role × sign-in method × page assignments × device rights × client-local cache is a named, tested artefact (`docs/identity-rights-matrix.md` + `tests/rights-matrix.integration.test.ts`), not an implication of #349: an owner's device token is NOT an owner session, the cabinet is cookie-only, and "revoke all devices" leaves the cookie session and the legacy API key alive — so offboarding is a runbook, with the Fansly session, the 60 s SSE recheck and the desktop's local cache named as boundaries the hub does not control |
 
 
 ## Consensus Decisions
@@ -14443,3 +14444,58 @@ which is why it inherits the two-list rule and the stem check (Decision 349)
 without a line of dashboard code changing. It is exported from the shared
 package's browser entry as well as its index, because the dashboard resolves
 `@agency_hub_core/shared` to `browser.ts`.
+
+## Decision 352: The unified account's rights matrix (2026-09-15)
+
+#349 gave every person in the agency one account and one password. It did NOT,
+by itself, give them one coherent set of rights: the same login reaches
+different things depending on the ROLE it carries, the METHOD it signed in with,
+the PAGES it is granted, which DEVICES have live sign-ins, and what the client
+happens to be holding in its LOCAL CACHE. Those five axes are independent, and
+"the chatter has an account now" answers none of them. So the matrix is a
+deliverable with a name and a test file, not a paragraph inside #349:
+`docs/identity-rights-matrix.md`, pinned row by row by
+`tests/rights-matrix.integration.test.ts` over HTTP against a live server in
+enforce mode.
+
+**Three statements the matrix makes that the code always meant but nothing
+said.** A device token is never an owner session: the owner signing in to a
+client gets a client principal and the console answers 403 — the mechanical half
+of Р10, which keeps the owner's console account separate from anything used on a
+chatter's machine. The cabinet is cookie-only, and a device token there is
+refused with 403 and no `reason`, so a client must not read it as a dead
+credential and wipe its custody. And the dashboard and the cabinet are different
+gates: a chatter holds a real cookie session and still cannot open `/models`.
+
+**"Revoke all devices" is not an eviction.** §4.4 says it touches device tokens
+and reservations only, and the matrix test now proves what that leaves standing:
+the person's cookie session AND their legacy API key both keep working. That is
+the single most dangerous thing an owner could assume wrongly during an
+offboarding, so it is stated in the matrix, tested, and turned into an ordered
+ladder in `docs/runbooks/chatter-offboarding.md`: terminate all access, then
+deactivate, then the manual steps. `docs/runbooks/chatter-onboarding.md` is the
+other half — invite, "ждёт регистрации", reset by link, and which revocation to
+reach for when.
+
+**The boundaries are part of the artefact.** A rights matrix that only lists
+what the hub controls is a lie by omission, so the document names what it does
+not: the chatter's Fansly session in their own Firefox is not the hub's to end;
+an already-open SSE stream closes at the next authorisation re-check, up to 60 s
+later (`SSE_AUTH_REVALIDATE_INTERVAL_MS`); the desktop's local database is
+hidden when the identity changes but erased only by a purge run on that machine
+(D23 of the desktop repo, #145); and `GET /ofapi/read/accounts` answers `200 []`
+rather than 403 once the last OnlyFans assignment is gone, because it is a list
+rather than a page-scoped operation — the 403/404 appears on the per-account
+reads. Rows that can only be checked by hand or inside a client are marked as
+such instead of being quietly dropped.
+
+`tests/auth-policy.integration.test.ts` was deliberately NOT extended with the
+roles row: that suite pins the declarative policy layer against the legacy
+in-handler guards in both enforcement modes, and its fixture has neither device
+tokens nor password sign-in. The roles row is a statement about principals, not
+about those two layers agreeing, so it lives in one place — the matrix file.
+
+No kernel behaviour changed in this entry: it is documentation and tests over
+the PR-1A surface, and every row passed as built.
+
+Plan: `investigations/unified-account-2026-09-15/PLAN.md` §7 (Р11).
