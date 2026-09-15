@@ -23,7 +23,7 @@
   "apps/runtime/src/modules/workboard/classify-closing.ts": 1,
   "apps/runtime/src/modules/workboard/index.ts": 1,
   "apps/runtime/src/modules/workboard/report.ts": 2,
-  "apps/runtime/src/services/auth.ts": 5,
+  "apps/runtime/src/services/auth.ts": 1,
   "apps/runtime/src/services/connections.ts": 4,
   "apps/runtime/src/services/fan-profiles.ts": 1,
   "apps/runtime/src/services/health.ts": 2,

@@ -3,8 +3,9 @@ import type {
   AdminChatterUsageResponse,
   AiUsageBatchBody,
   AiUsageBatchResponse,
+  AuthMyUsageResponse,
 } from "@agency_hub_core/contracts";
-import { insertAiUsageEvents, listChatterUsageSummary } from "@agency_hub_core/db";
+import { insertAiUsageEvents, listChatterUsageSummary, listUserUsageReport } from "@agency_hub_core/db";
 import {
   MOSCOW_TIME_ZONE,
   businessDateToUtcStart,
@@ -14,7 +15,7 @@ import {
 } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
-import { requireApiKeyUser, type AuthPrincipal } from "./auth.ts";
+import { requireApiKeyUser, requireSessionUser, type AuthPrincipal } from "./auth.ts";
 import { BadRequestError } from "./errors.ts";
 
 const COMPLETED_AT_FUTURE_SKEW_MS = 5 * 60 * 1000;
@@ -47,7 +48,7 @@ function resolveDefaultUsageRange(now: Date) {
   };
 }
 
-function resolveRequestedUsageRange(query: AdminChatterUsageQuery, now: Date) {
+export function resolveRequestedUsageRange(query: AdminChatterUsageQuery, now: Date) {
   const hasFrom = Boolean(query.from);
   const hasTo = Boolean(query.to);
   if (hasFrom !== hasTo) {
@@ -145,5 +146,37 @@ export async function getAdminChatterUsageReport(
       timeZone: range.timeZone,
     },
     rows,
+  };
+}
+
+/**
+ * Decision 349: the caller's OWN usage (any session, any human role) — the same
+ * range semantics as the admin report, over a dedicated repository query that
+ * carries no role filter (listChatterUsageSummary would leave a team_lead's or
+ * owner's cabinet empty).
+ */
+export async function getOwnUsageReport(
+  app: AppContext,
+  principal: AuthPrincipal,
+  query: AdminChatterUsageQuery,
+): Promise<AuthMyUsageResponse> {
+  requireSessionUser(principal);
+  const now = new Date();
+  const range = resolveRequestedUsageRange(query, now);
+  const report = await listUserUsageReport(app.db, {
+    userId: principal.user.id,
+    from: range.fromBound,
+    toExclusive: range.toExclusiveBound,
+    timeZone: range.timeZone,
+  });
+
+  return {
+    range: {
+      from: range.from,
+      to: range.to,
+      timeZone: range.timeZone,
+    },
+    row: report.row,
+    daily: report.daily,
   };
 }

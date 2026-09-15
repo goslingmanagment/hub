@@ -79,6 +79,7 @@ export function createTestAppContext(
     trustProxy?: boolean;
     authPolicyEnforcement?: "log" | "enforce";
     accessGrantsReadEnabled?: boolean;
+    accountLinksEnabled?: boolean;
     revenueRouteRoleEnforcement?: "log" | "enforce";
   },
 ) {
@@ -192,6 +193,7 @@ export function createTestAppContext(
         overrides?.ofapiDesktopCommandOutboxEnabled ?? false,
       ofapiDesktopCommandExecutionEnabled:
         overrides?.ofapiDesktopCommandExecutionEnabled ?? false,
+      accountLinksEnabled: overrides?.accountLinksEnabled ?? true,
       chatMuseAiGatewayEnabled: overrides?.chatMuseAiGatewayEnabled ?? false,
       chatMuseAiGatewayDailyRequestLimit:
         overrides?.chatMuseAiGatewayDailyRequestLimit ?? 200,

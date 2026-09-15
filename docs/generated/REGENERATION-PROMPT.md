@@ -62,6 +62,21 @@ When regenerating the maps:
   > Machine-generated reference — regenerate by re-running that prompt in a
   > fresh session; do not hand-edit.
 
+- **The one sanctioned hand-edit: a STALE banner.** "Do not hand-edit" is about
+  the BODY — nobody may fix a map by editing its prose, because the next
+  regeneration silently discards the fix and the map lies convincingly until
+  then. A change that knowingly outdates a map may instead add a marker directly
+  under the generated banner, so a reader meets it before the stale text:
+
+  > **STALE (Decision NNN, YYYY-MM-DD):** one paragraph naming what changed —
+  > the tables, routes or services this map does not know about yet.
+
+  Rules: it sits between the banner and the `#` title and nowhere else; it names
+  a decision and a date; it describes the delta without rewriting the body
+  around it; and regeneration deletes it, because the regenerated body is the
+  real answer. Several accumulating banners mean the maps are due for a pass —
+  not that bodies may now be edited. Precedent: Decision 349 (2026-09-15)
+  banner'd maps 02, 03, 04, 05, 15 and 20.
 - Map the tree as it is TODAY (post-kernel-migration). Every claim must be
   verified against current code — subsystems that no longer exist are
   dropped, new ones (whatever the code contains now) are mapped.

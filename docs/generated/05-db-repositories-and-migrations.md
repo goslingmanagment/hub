@@ -1,6 +1,16 @@
 > Generated 2026-07-15 from docs/generated/REGENERATION-PROMPT.md at commit 7df9a45.
 > Machine-generated reference — regenerate by re-running that prompt in a
 > fresh session; do not hand-edit.
+>
+> **STALE (Decision 349, 2026-09-15):** migrations run to 0200.
+> `repositories/auth.ts` gained the account-link family (`createAccountLink`,
+> `findAccountLinkByDigest` with `FOR UPDATE`, `findAccountLinkForUser`,
+> `listAccountLinks`, `revokeActiveAccountLinks`, `revokeAccountLinkById`,
+> `markAccountLinkUsed`, `hasRedeemedAccountLink`), plus
+> `listActiveDeviceTokensForUser`, `revokeAuthSessionsForUserExcept` and
+> `isUniqueViolation`; `findUserByUsername` now matches on `lower(username)`.
+> `repositories/ai-usage.ts` gained `listUserUsageReport` (one user, every
+> role, with daily buckets).
 
 # DB Client, Migrations, and Repositories
 

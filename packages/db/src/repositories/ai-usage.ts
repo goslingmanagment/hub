@@ -75,6 +75,26 @@ export interface ListChatterUsageSummaryInput {
   toExclusive: Date;
 }
 
+/** Decision 349: one user's own report — every role, every page, no chatter filter. */
+export interface ListUserUsageReportInput {
+  userId: number;
+  from: Date;
+  toExclusive: Date;
+  /** IANA zone the daily buckets are cut in (the report's business days). */
+  timeZone: string;
+}
+
+export interface UserUsageDailyRow {
+  date: string;
+  requestCount: number;
+  costMicroUsd: number;
+}
+
+export interface UserUsageReport {
+  row: Omit<ChatterUsageSummaryRow, "userId">;
+  daily: UserUsageDailyRow[];
+}
+
 export interface GetAiGatewayDailyUsageTotalsInput {
   userId: number;
   pageId: number;
@@ -714,4 +734,201 @@ export async function listChatterUsageSummary(
       featureBreakdown,
     } satisfies ChatterUsageSummaryRow;
   });
+}
+
+/**
+ * Decision 349 (§5.2): the caller's OWN usage. Deliberately a separate query
+ * from listChatterUsageSummary, which hard-filters `role = 'chatter'` (a
+ * team_lead's or owner's cabinet would be empty) and from the quota totals,
+ * whose per-page semantics serve the gateway budget. Same aggregation rules as
+ * the admin report, plus daily buckets by completed_at in the report zone.
+ */
+export async function listUserUsageReport(
+  db: Database,
+  input: ListUserUsageReportInput,
+): Promise<UserUsageReport> {
+  const totalsResult = await db.execute(sql`
+    with filtered_events as (
+      select ${aiUsageEvents.id} as id,
+             ${aiUsageEvents.inputTokens} as "inputTokens",
+             ${aiUsageEvents.outputTokens} as "outputTokens",
+             ${aiUsageEvents.cacheWriteTokens} as "cacheWriteTokens",
+             ${aiUsageEvents.cacheReadTokens} as "cacheReadTokens",
+             ${aiUsageEvents.costMicroUsd} as "costMicroUsd",
+             ${aiUsageEvents.costApproximate} as "costApproximate",
+             ${aiUsageEvents.provider} as provider,
+             ${aiUsageEvents.gatewayOutcome} as "gatewayOutcome",
+             ${aiUsageEvents.quotaAccepted} as "quotaAccepted",
+             ${aiUsageEvents.isRegeneration} as "isRegeneration"
+      from ${aiUsageEvents}
+      where ${aiUsageEvents.userId} = ${input.userId}
+        and ${aiUsageEvents.completedAt} >= ${input.from}
+        and ${aiUsageEvents.completedAt} < ${input.toExclusive}
+    )
+    select u.username,
+           count(fe.id)::int as "totalGenerations",
+           coalesce(sum(fe."inputTokens"), 0)::bigint as "inputTokens",
+           coalesce(sum(fe."outputTokens"), 0)::bigint as "outputTokens",
+           coalesce(sum(fe."cacheWriteTokens"), 0)::bigint as "cacheWriteTokens",
+           coalesce(sum(fe."cacheReadTokens"), 0)::bigint as "cacheReadTokens",
+           coalesce(sum(fe."costMicroUsd"), 0)::bigint as "costMicroUsd",
+           coalesce(bool_or(fe."costApproximate"), false) as "costApproximate",
+           count(fe.id) filter (
+             where fe.provider is not null
+                or fe."gatewayOutcome" is not null
+                or fe."quotaAccepted" is not null
+           )::int as "gatewayRequestCount",
+           count(fe.id) filter (where fe."gatewayOutcome" = 'completed')::int as "gatewayCompletedCount",
+           count(fe.id) filter (where fe."gatewayOutcome" = 'failed')::int as "gatewayFailedCount",
+           count(fe.id) filter (where fe."gatewayOutcome" = 'cancelled')::int as "gatewayCancelledCount",
+           count(fe.id) filter (where fe."gatewayOutcome" = 'quota_denied')::int as "gatewayQuotaDeniedCount",
+           count(fe.id) filter (
+             where fe.provider is not null
+               and fe."quotaAccepted" = true
+               and fe."gatewayOutcome" is null
+           )::int as "gatewayOpenReservationCount",
+           count(fe.id) filter (where fe."isRegeneration")::int as "regenerationCount"
+    from ${users} u
+    left join filtered_events fe on true
+    where u.id = ${input.userId}
+    group by u.id, u.username
+  `);
+  const totals = totalsResult.rows[0] as Record<string, unknown> | undefined;
+  if (!totals) {
+    throw new Error(`User ${input.userId} not found for the usage report`);
+  }
+
+  const featureBreakdownResult = await db.execute(sql`
+    select ${aiUsageEvents.feature} as feature,
+           count(*)::int as "requestCount",
+           coalesce(sum(${aiUsageEvents.inputTokens}), 0)::bigint as "inputTokens",
+           coalesce(sum(${aiUsageEvents.outputTokens}), 0)::bigint as "outputTokens",
+           coalesce(sum(${aiUsageEvents.cacheWriteTokens}), 0)::bigint as "cacheWriteTokens",
+           coalesce(sum(${aiUsageEvents.cacheReadTokens}), 0)::bigint as "cacheReadTokens",
+           coalesce(sum(${aiUsageEvents.costMicroUsd}), 0)::bigint as "costMicroUsd",
+           coalesce(bool_or(${aiUsageEvents.costApproximate}), false) as "costApproximate",
+           count(*) filter (where ${aiUsageEvents.isRegeneration})::int as "regenerationCount"
+    from ${aiUsageEvents}
+    where ${aiUsageEvents.userId} = ${input.userId}
+      and ${aiUsageEvents.completedAt} >= ${input.from}
+      and ${aiUsageEvents.completedAt} < ${input.toExclusive}
+    group by ${aiUsageEvents.feature}
+    order by "requestCount" desc, ${aiUsageEvents.feature} asc
+  `);
+
+  const providerBreakdownResult = await db.execute(sql`
+    select ${aiUsageEvents.provider} as provider,
+           count(*)::int as "requestCount",
+           coalesce(sum(${aiUsageEvents.costMicroUsd}), 0)::bigint as "costMicroUsd"
+    from ${aiUsageEvents}
+    where ${aiUsageEvents.userId} = ${input.userId}
+      and ${aiUsageEvents.completedAt} >= ${input.from}
+      and ${aiUsageEvents.completedAt} < ${input.toExclusive}
+      and ${aiUsageEvents.provider} is not null
+    group by ${aiUsageEvents.provider}
+    order by "requestCount" desc, ${aiUsageEvents.provider} asc
+  `);
+
+  // Daily buckets in the report zone: completed_at shifted into the zone and
+  // truncated to its calendar day (the admin report's business-day boundary).
+  const dailyResult = await db.execute(sql`
+    select to_char(timezone(${input.timeZone}, ${aiUsageEvents.completedAt}), 'YYYY-MM-DD') as date,
+           count(*)::int as "requestCount",
+           coalesce(sum(${aiUsageEvents.costMicroUsd}), 0)::bigint as "costMicroUsd"
+    from ${aiUsageEvents}
+    where ${aiUsageEvents.userId} = ${input.userId}
+      and ${aiUsageEvents.completedAt} >= ${input.from}
+      and ${aiUsageEvents.completedAt} < ${input.toExclusive}
+    group by 1
+    order by 1 asc
+  `);
+
+  const totalGenerations = normalizeNumber(totals.totalGenerations as NumericValue, "totalGenerations");
+  const inputTokens = normalizeNumber(totals.inputTokens as NumericValue, "inputTokens");
+  const outputTokens = normalizeNumber(totals.outputTokens as NumericValue, "outputTokens");
+  const cacheWriteTokens = normalizeNumber(totals.cacheWriteTokens as NumericValue, "cacheWriteTokens");
+  const cacheReadTokens = normalizeNumber(totals.cacheReadTokens as NumericValue, "cacheReadTokens");
+  const regenerationCount = normalizeRowNumber(totals, "regenerationCount");
+
+  const featureBreakdown = featureBreakdownResult.rows.map((row) => {
+    const requestCount = normalizeNumber(row.requestCount as NumericValue, "requestCount");
+    const featureInput = normalizeNumber(row.inputTokens as NumericValue, "inputTokens");
+    const featureOutput = normalizeNumber(row.outputTokens as NumericValue, "outputTokens");
+    const featureCacheWrite = normalizeNumber(row.cacheWriteTokens as NumericValue, "cacheWriteTokens");
+    const featureCacheRead = normalizeNumber(row.cacheReadTokens as NumericValue, "cacheReadTokens");
+    const featureRegenerations = normalizeNumber(row.regenerationCount as NumericValue, "regenerationCount");
+    return {
+      feature: normalizeFeature(row.feature, "feature"),
+      requestCount,
+      sharePct: roundPercentage(requestCount, totalGenerations),
+      tokenCounts: {
+        input: featureInput,
+        output: featureOutput,
+        cacheWrite: featureCacheWrite,
+        cacheRead: featureCacheRead,
+        cacheTotal: featureCacheWrite + featureCacheRead,
+      },
+      costMicroUsd: normalizeRowNumber(row as Record<string, unknown>, "costMicroUsd"),
+      costApproximate: normalizeRowBoolean(row as Record<string, unknown>, "costApproximate"),
+      regenerateRatePct: roundPercentage(featureRegenerations, requestCount),
+    };
+  });
+
+  const providerBreakdown: ChatterUsageSummaryRow["gateway"]["providerBreakdown"] = [];
+  for (const row of providerBreakdownResult.rows) {
+    const provider = row.provider;
+    if (provider !== "anthropic" && provider !== "openrouter") {
+      continue;
+    }
+    providerBreakdown.push({
+      provider,
+      requestCount: normalizeRowNumber(row as Record<string, unknown>, "requestCount"),
+      costMicroUsd: normalizeRowNumber(row as Record<string, unknown>, "costMicroUsd"),
+    });
+  }
+
+  const topFeature = featureBreakdown[0]
+    ? {
+      feature: featureBreakdown[0].feature,
+      requestCount: featureBreakdown[0].requestCount,
+      sharePct: featureBreakdown[0].sharePct,
+    }
+    : null;
+  const regenerateRatePct = roundPercentage(regenerationCount, totalGenerations);
+
+  return {
+    row: {
+      username: String(totals.username ?? ""),
+      totalGenerations,
+      tokenCounts: {
+        input: inputTokens,
+        output: outputTokens,
+        cacheWrite: cacheWriteTokens,
+        cacheRead: cacheReadTokens,
+        cacheTotal: cacheWriteTokens + cacheReadTokens,
+      },
+      cost: {
+        microUsd: normalizeRowNumber(totals, "costMicroUsd"),
+        approximate: normalizeRowBoolean(totals, "costApproximate"),
+      },
+      gateway: {
+        requestCount: normalizeRowNumber(totals, "gatewayRequestCount"),
+        completedCount: normalizeRowNumber(totals, "gatewayCompletedCount"),
+        failedCount: normalizeRowNumber(totals, "gatewayFailedCount"),
+        cancelledCount: normalizeRowNumber(totals, "gatewayCancelledCount"),
+        quotaDeniedCount: normalizeRowNumber(totals, "gatewayQuotaDeniedCount"),
+        openReservationCount: normalizeRowNumber(totals, "gatewayOpenReservationCount"),
+        providerBreakdown,
+      },
+      topFeature,
+      featureBreakdown,
+      regenerateRatePct,
+      warning: totalGenerations > 0 && regenerateRatePct > 30,
+    },
+    daily: dailyResult.rows.map((row) => ({
+      date: String(row.date ?? ""),
+      requestCount: normalizeNumber(row.requestCount as NumericValue, "requestCount"),
+      costMicroUsd: normalizeRowNumber(row as Record<string, unknown>, "costMicroUsd"),
+    })),
+  };
 }

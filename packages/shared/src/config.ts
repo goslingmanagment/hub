@@ -282,6 +282,10 @@ const envSchema = z.object({
   // dual-written); true = the access_grants projection. Flip only after the
   // prod parity diff is exactly zero.
   ACCESS_GRANTS_READ_ENABLED: booleanSchema.default(false),
+  // Decision 349 kill switch: false makes the PUBLIC link routes
+  // (inspect / redeem) answer 404; owners can still mint links. Live-wired:
+  // read per request via loadEffectiveConfig — a flip needs no restart.
+  ACCOUNT_LINKS_ENABLED: booleanSchema.default(true),
   CHATMUSE_AI_GATEWAY_ENABLED: booleanSchema.default(false),
   CHATMUSE_AI_GATEWAY_DAILY_REQUEST_LIMIT: z.coerce.number().int().min(0).default(500),
   CHATMUSE_AI_GATEWAY_DAILY_MICRO_USD_LIMIT: z.coerce.number().int().min(0).default(10_000_000),
@@ -577,6 +581,8 @@ export interface AppConfig {
   revenueRouteRoleEnforcement?: "log" | "enforce";
   authPolicyEnforcement?: "log" | "enforce";
   accessGrantsReadEnabled?: boolean;
+  /** Decision 349: public invite / reset link routes (live-wired kill switch). */
+  accountLinksEnabled?: boolean;
   chatMuseAiGatewayEnabled?: boolean;
   chatMuseAiGatewayDailyRequestLimit?: number;
   chatMuseAiGatewayDailyMicroUsdLimit?: number;
@@ -895,6 +901,7 @@ export function loadConfig(
     revenueRouteRoleEnforcement: parsed.REVENUE_ROUTE_ROLE_ENFORCEMENT,
     authPolicyEnforcement: parsed.AUTH_POLICY_ENFORCEMENT,
     accessGrantsReadEnabled: parsed.ACCESS_GRANTS_READ_ENABLED,
+    accountLinksEnabled: parsed.ACCOUNT_LINKS_ENABLED,
     chatMuseAiGatewayEnabled: parsed.CHATMUSE_AI_GATEWAY_ENABLED,
     chatMuseAiGatewayDailyRequestLimit: parsed.CHATMUSE_AI_GATEWAY_DAILY_REQUEST_LIMIT,
     chatMuseAiGatewayDailyMicroUsdLimit: parsed.CHATMUSE_AI_GATEWAY_DAILY_MICRO_USD_LIMIT,

@@ -3,14 +3,16 @@ import { timingSafeEqual } from "node:crypto";
 import type { AppContext } from "../bootstrap.ts";
 import {
   SESSION_COOKIE_NAME,
-  authenticateBearerToken,
+  authenticateBearerCredential,
   authenticatePendingDeviceTokenForActivation,
   authenticateSessionToken,
   isAgentPrincipal,
+  normalizeClientVersionHeader,
   requireAgentPrincipal,
   requireDashboardUser,
   requireHumanPrincipal,
   type AgentAuthPrincipal,
+  type AuthFailure,
   type AuthPrincipal,
   type HumanAuthPrincipal,
   type PendingDeviceTokenActivationCredential,
@@ -23,9 +25,18 @@ import { UnauthorizedError } from "../services/errors.ts";
 
 export interface PrincipalRequest {
   auth?: AuthPrincipal | null;
+  /** Decision 349 §4.5: why the presented device token was refused, kept
+   * BESIDE the memoized null principal so the 401 can carry a reason. */
+  authFailure?: AuthFailure | null;
   pendingDeviceTokenAuth?: PendingDeviceTokenActivationCredential | null;
   headers: Record<string, string | string[] | undefined>;
   cookies: Record<string, string | undefined>;
+}
+
+/** The 401 for a request whose principal did not resolve, with the structured
+ * reason when the device-token lane recorded one. */
+export function unauthorizedFor(request: Pick<PrincipalRequest, "authFailure">) {
+  return new UnauthorizedError(undefined, { reason: request.authFailure?.reason ?? null });
 }
 
 function bearerToken(request: PrincipalRequest): string | null {
@@ -128,8 +139,13 @@ export function createRequestAuth(appContext: AppContext) {
     const token = bearerToken(request);
     if (token !== null) {
       // Stage 22: prefix-discriminated — agency_hub_core_ api keys and
-      // agency_hub_device_ device tokens are both first-class bearers.
-      request.auth = await authenticateBearerToken(appContext, token);
+      // agency_hub_device_ device tokens are both first-class bearers. The
+      // client version rides along so the device-token lane can stamp it (Р7).
+      const result = await authenticateBearerCredential(appContext, token, {
+        clientVersion: normalizeClientVersionHeader(request.headers["x-client-version"]),
+      });
+      request.auth = result.principal;
+      request.authFailure = result.failure;
       return request.auth;
     }
 
@@ -171,7 +187,7 @@ export function createRequestAuth(appContext: AppContext) {
   async function requirePrincipal(request: PrincipalRequest): Promise<HumanAuthPrincipal> {
     const principal = await resolvePrincipal(request);
     if (!principal) {
-      throw new UnauthorizedError();
+      throw unauthorizedFor(request);
     }
     requireHumanPrincipal(principal);
     return principal;
@@ -181,7 +197,7 @@ export function createRequestAuth(appContext: AppContext) {
   async function requireAgentKeyPrincipal(request: PrincipalRequest): Promise<AgentAuthPrincipal> {
     const principal = await resolvePrincipal(request);
     if (!principal) {
-      throw new UnauthorizedError();
+      throw unauthorizedFor(request);
     }
     requireAgentPrincipal(principal);
     return principal;

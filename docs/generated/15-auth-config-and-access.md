@@ -1,6 +1,18 @@
 > Generated 2026-07-15 from docs/generated/REGENERATION-PROMPT.md at commit 7df9a45.
 > Machine-generated reference — regenerate by re-running that prompt in a
 > fresh session; do not hand-edit.
+>
+> **STALE (Decision 349, 2026-09-15):** registration is now an invite link and
+> sign-in is one cookie-free password call. `verifyPasswordAndLockUser` is the
+> single password check for both lanes and re-reads the hash, the deactivation
+> tombstone and the device-token epoch under `FOR UPDATE` before minting
+> anything (`loginWithPassword` runs on it). New services: the account-link
+> lifecycle, `issueDeviceTokenWithPassword` (active|pending),
+> `revokeOwnDevice`, `revokeAllOwnDevices`, `terminateAllAccess`,
+> `revokeDeviceTokenForUsername`, `getOwnUsageReport`.
+> `authenticateDeviceToken` returns a principal OR a structured failure
+> (`token_revoked` | `token_expired`) that the 401 carries. Logins are
+> case-insensitive; the new live config key is `ACCOUNT_LINKS_ENABLED`.
 
 # Authentication, authorization, access grants, and configuration
 

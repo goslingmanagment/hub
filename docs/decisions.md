@@ -118,7 +118,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 114 | Stage 35 documentation close | Maps regenerated in all three repos, client CLAUDE.md files rewritten to post-migration truth, release-hygiene asserts added, orientation drills PASS ×3 — the migration's documentation standard is in force |
 | 115 | Release audits | Codex (gpt-5.5 xhigh) audited three surfaces pre-release: the lint burn-down is behavior-neutral, chunk-budget overshoot and any-platform clientContext fixed; persona apiKey-auth left open, then ACCEPTED AS IS by the owner |
 | 116 | Identity/auth credentials | Humans authenticate with password plus per-device tokens, robots with API keys; chatter password provisioning moves into the live dashboard; must_change_password stays FROZEN; a client key-fallback deletion gate is defined |
-| 117 | Dashboard + workboard | #112 REVERSED — the rebuild is CANCELLED and apps/dashboard is the live maintained admin surface (its carry-over features become backlog); the workboard direction is deprecated and Stage 34 stays a banner'd placeholder |
+| 117 | Dashboard + workboard | #112 REVERSED — the rebuild is CANCELLED and apps/dashboard is the live maintained admin surface (its carry-over features become backlog); the workboard direction is deprecated and Stage 34 stays a banner'd placeholder. PARTIALLY REVERSED by #349: the chatter web surface it left conditional ("unless the owner later orders…") was ordered on 2026-09-15 |
 | 118 | Stage 28 erasure scope | Page-scope erasure also purges the page's config/secret rows (page_credentials, egress_endpoints), which soft delete (#72) deliberately keeps as a two-way door; DP 7 unaffected since these are config, not captured facts |
 | 119 | Stage 34 standalone workboard | #117 clause (2) NARROWED — only the in-core workboard is deprecated; the STANDALONE workboard app is an ACTIVE direction again with kernel sessions, per-page grants, repo ~/code/workboard, Fansly-only v1 |
 | 120 | AI gateway quotas | Daily caps per chatter/page raised (requests 200→500, cost $5→$10) and quota denial made legible end-to-end: the SDK classifies 429 as rate_limit and the desktop gains CG-HUB-03; product gates later get machine codes |
@@ -346,6 +346,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 346 | Fansly A1 default-off bounded DM polling | Separate resumable head walks from certified full membership; retain old scheduler slots and expose full-list freshness independently. |
 | 347 | Fansly C1 default-off certified follower settlement reuse |
 | 348 | Fansly C2c default-off isolated daily earnings recovery and age-based targets |
+| 349 | Unified chatter account and invite registration | One-time invite/reset links (`account_links`, 0199), case-insensitive logins (0200), one cookie-free password sign-in for both clients, a structured 401 `reason`, three honest revocation operations and `last_client_version`; one password check under `FOR UPDATE` closes the login race; every existing route stays wire-compatible until PR-4. PARTIALLY REVERSES #117 (the owner ordered the chatter cabinet #117 left conditional) |
 
 
 ## Consensus Decisions
@@ -3375,6 +3376,9 @@ note is historical, the design-pass prompt and PRD skeleton are banner'd and
 must not be run. No identity/auth work waits on a chatter web surface —
 chatter password self-service remains owner-managed (dashboard Set password,
 #116) unless the owner later orders a standalone change-password page.
+**PARTIALLY REVERSED by Decision 349 (2026-09-15, owner):** that condition was
+met — the owner ordered invite-link registration, self-service password reset
+and the `/account` cabinet. Everything else in #117 stands.
 
 **Decision #118 (2026-07-07, owner):** Stage 28.4 page-scope erasure also
 purges the page's config/secret rows (`page_credentials`,
@@ -14184,3 +14188,118 @@ unseen references and unknown attribution remain unproved. Production activation
 still requires quiet-correction/reader coverage and measured physical cost.
 No interval reduction, savings acceptance or whole-migration acceptance follows
 from shipping this default-off code. See [the earnings runbook](runbooks/fansly-earnings-targets.md).
+
+## Decision 349: Unified chatter account and registration by invite link (2026-09-15)
+
+The unified account already existed: `users` is platform-neutral, page
+assignments know no platform, and both clients sign in with one login and mint
+their own device tokens. What was broken was the CEREMONY — there was no
+registration, no password reset, two different sign-in protocols (both of which
+needed a cookie session), no device list, and error text that talked about API
+keys. The owner ordered one wave: the kernel first (this entry, PR-1A),
+then the console and the chatter cabinet, then one release of each client, then
+the removal of the legacy lane (PR-4).
+
+**Р1 — registration is an invite link.** One-time links in a new `account_links`
+table (migration 0199) serve both `invite` and `password_reset`. There is no open
+self-registration; the owner hands the link over in Telegram by hand. **Р2 — one
+sign-in protocol:** username + password → a device token, no cookie anywhere
+(`POST /api/v1/auth/device-tokens/password`), in `active` mode (the extension
+writes custody in one atomic store) or `pending` mode (the desktop keeps its
+existing reserve → activate move). **Р3 — a structured 401 `reason`**
+(`token_revoked` | `token_expired`) for a presented device token that MATCHED a
+row, so a client can heal itself; an unknown digest never gets a reason.
+**Р4 — logins are case-insensitive**, with a unique index on `lower(username)`
+(migration 0200) and one normalization shared by the invite, the legacy create
+and the login. **Р5 — the `/account` cabinet lives on the hub** (PR-1C).
+**Р6 — three honest revocation operations** (§4.4 of the plan): revoke one
+sign-in; revoke every device (tokens + reservations + epoch); terminate all
+access (adds sessions, API keys and active links). A reset by link ALWAYS
+terminates all access. **Р7 — `device_tokens.last_client_version`** is stamped by
+the same UPDATE as `last_used_at`; it is routing metadata, never authority
+(#145). Р8–Р12 (removing the `api_keys` lane wholesale, the rights matrix, the
+two owner accounts, and what this track deliberately does not do) are executed
+and recorded by the later PRs of the same wave.
+
+**Link lifecycle contract** (pinned by `tests/account-links.integration.test.ts`):
+the raw token is 32 random bytes returned EXACTLY ONCE in the creation response —
+the row keeps only a sha256 digest and a 10-character display prefix, and the
+token never reaches an audit row, an observation, a log line or a URL path (it
+travels in the URL fragment and comes back in a POST body). Seven days by
+default, thirty at most, one-time: `used_at` is set in the same transaction as
+the password. An `invite` completes only an unfinished registration; a user who
+already has a password gets a `password_reset`, and an owner gets neither (owners
+change their own password). **What the ladder does depends on the ACCOUNT, not
+on the label of the link:** a reset always terminates every sign-in, and so does
+an invite redeemed on an account that already had a password — only a first
+registration has nothing to terminate. Review finding: "has never redeemed an
+invite" is true of everyone onboarded before this decision, so the eligibility
+check alone would have let an invite link re-password a live account while its
+devices and sessions kept working. A new link of either kind supersedes every previously
+active link of that user, and so does any password set, any deactivation and any
+termination of access — `revoked_reason` records which. At most ONE active link
+per user: every writer takes the user row lock first (users → link, the same
+order the device-token paths use) and a partial unique index is the belt.
+Nothing is ever deleted: used, expired and revoked links stay as facts (DP 7).
+
+**One password check closes the login race.** `verifyPasswordAndLockUser` is now
+the single path for every password-based sign-in: shared per-account backoff,
+case-insensitive lookup, an identical 401 for unknown / deactivated / password-less
+/ not-session-capable accounts (dummy verify, backoff, `auth.login_failed`), argon2
+verification OUTSIDE the transaction, and then — INSIDE the transaction, under
+`FOR UPDATE` on the user row — a re-comparison of the password hash, the
+deactivation tombstone and the device-token epoch before anything is minted.
+`loginWithPassword` was verified BEFORE its transaction and created sessions
+without re-reading the row, so a reset committing mid-request still handed out a
+session on the old password; it now runs on this core. A password chosen through
+a link is 12–256 characters and not in the shared common-password blacklist
+(`packages/shared/src/password-policy.ts`); `login`, `adminSetPassword` and
+`authChangePassword` keep their historical min-8 rule so existing accounts keep
+working. `must_change_password` stays frozen (#116b) and links never set it, but
+a password sign-in by a flagged account answers 403 `password_change_required`
+so the flag does not quietly lose its meaning.
+
+**Compatibility is the point of the additive shape.** No existing route changes
+its wire form: `login`, `authIssueDeviceToken`, `authReserveDeviceToken`,
+`authActivateDeviceToken`, `adminCreateUser` and `adminSetPassword` behave
+exactly as before (they are removed in PR-4, once the fleet has moved), and
+`mustChangePassword` stays in `authUserSchema` because the vendored client SDKs
+require the field. The additions are three fields (`lastClientVersion`,
+`registrationState`, the optional `reason` in the error envelope) and thirteen
+routes. The three public routes carry per-IP rate limits: 30/min inspect, 10/min
+redeem, 20/min password sign-in.
+
+**The kill switch covers the link PAGES, not sign-in.** `ACCOUNT_LINKS_ENABLED`
+(live, editable, no restart) makes `/auth/links/inspect` and
+`/auth/links/redeem` answer 404 while the owner can still mint links in the
+console. It deliberately does NOT gate `authIssueDeviceTokenWithPassword`: after
+PR-E1 and PR-D1 that route is the fleet's only way in, so a switch that could
+turn it off would be a lock-out button. Sign-in is bounded by its rate limit and
+the per-account backoff instead.
+
+**Deploying it.** Both migrations are additive, and the previous image reads
+neither, so they are listed in `ROLLBACK_COMPATIBLE_MIGRATIONS`
+(`scripts/deploy-production.sh`). That listing is what keeps the deploy safe in
+the one case that can fail: `0200` adds a unique index on `lower(username)` and
+production data can refuse it. The precondition is
+`select lower(username), count(*) from users group by 1 having count(*) > 1`
+returning zero rows; the owner runs it before the deploy and renames one of any
+colliding pair. If it fails anyway, the failure lands after the old container is
+gone (startup owns migration), `0199` is committed while `0200` rolled back with
+its own transaction, and — because both files are on that list — the deploy
+script restores the previous image by itself; the only manual step left is the
+rename. Runbook: `docs/runbooks/unified-account-deploy.md`.
+
+**PARTIALLY REVERSES #117** by the owner's order of 2026-09-15: that entry's
+"no identity/auth work waits on a chatter web surface — chatter password
+self-service remains owner-managed unless the owner later orders a standalone
+change-password page" was written with the caveat, and the owner has now ordered
+it. The rest of #117 (the dashboard is the live maintained console; the workboard
+direction is closed) stands unchanged.
+
+The user-facing vocabulary is fixed by §2 of the plan and binds every screen,
+guide and error string that follows: a person knows a login, a password and
+their DEVICES. The words "token", "key", "API" and "activation" do not appear in
+user-facing text; machine codes such as `token_revoked` stay machine codes.
+
+Plan and review disposition: `investigations/unified-account-2026-09-15/PLAN.md`.
