@@ -340,6 +340,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 340 | W0 single binding authority | Use the original receipt for every phase; remove duplicate generation arguments and avoid constructing a second dispatcher for the short post-read. |
 | 341 | Isolate captured C2b receipt failures | After durable capture, retain missing receipt debt and continue the daily walk only after an independent page-lease check; ownership or persistent database failure still stops execution. |
 | 342 | New follower roster correction | Date-bounded fans_latest is core audience; explicit old collection jobs retain their category and limits |
+| 343 | Fansly B0 default-off raw capture | Dedicated page ownership and resolver transport journal business envelopes before metadata decode; live W0 and B1 gates remain separate. |
 
 
 ## Consensus Decisions
@@ -13913,3 +13914,36 @@ rewritten or deleted, and no production policy is changed by this preparation.
 The existing operation/query contract and SDK pin are unchanged. Deploy this
 support before the desktop fix (desktop D34); fixtures/DB checks do not establish
 live provider semantics or completion of a release.
+
+
+## Decision 343: Fansly B0 default-off durable capture (2026-09-15)
+
+The next migration slice is a capture-only receiver in the existing worker.
+Default-off code and deployment proceed independently of W0 live-entry evidence;
+W0 still gates activation and seven accepted durable shadow days gate B1.
+Full REST polling and freshness remain unchanged.
+
+A dedicated PostgreSQL session owns each page with an advisory lock. Its loss
+closes the socket. The existing page resolver supplies a separate dispatcher,
+with HTTP CONNECT/SOCKS5 and no direct fallback. Credential/page/route generations
+are rechecked before opening, periodically, and under row locks at capture commit.
+Wire/message/queue budgets and independent watchdogs bound transport and DB stalls.
+The live flag and exact page allowlist both default empty/off; kill is at most 60s.
+
+Migration 0196 adds connection/gap and decode-receipt journals and the fansly_ws
+source. A connection UUID plus ordinal deduplicates raw envelopes; raw and pending
+receipt commit before business metadata decode. Known transport controls are
+excluded, including nested batch controls. Unknown children and decoder limits
+remain durable debt. No domain events, projections, hints or general dispatch
+framework are added. Auth refusal blocks the same generation across restarts;
+other failures retry with bounded backoff and cannot log credentials or raw.
+
+The nested JSON erasure codec is shared across inline/CAS and lake matching, with
+fan/group pre-erasure fences. Whole B0 envelopes have no certified exclusive fan
+attribution, so fan-erasure reports them as unknown-exclusive residuals and keeps
+them under the existing residual law. Page/model erasure removes all B0 stores.
+Lake predicates cannot reselect shared residual IDs. This limitation is explicit;
+B0 does not assert complete fan erasure or recovery of transient facts by REST.
+
+See [the B0 runbook](runbooks/fansly-ws-capture.md) for staged activation, offline
+metadata repair, diagnostics, failure bounds and rollback.

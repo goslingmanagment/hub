@@ -62,6 +62,8 @@ import { describe, expect, it } from "vitest";
 //     `capture_rewrite_runs` — the erasure's governance, for the same class of
 //     act.
 const SANCTIONED_DELETER_FILES = [
+  // B0: Map.delete releases an in-memory supervisor handle only. No SQL deletion.
+  "apps/runtime/src/services/fansly-ws/worker.ts",
   // Decision270: owner reset of encrypted-response-derived configuration, no source deletion.
   "apps/runtime/src/services/projections/ofapi-marketing.ts",
   // Decision266: owner-invoked reset of replayable OFAPI snapshot projection only.

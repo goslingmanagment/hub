@@ -95,7 +95,7 @@ async function runPage(app: AppContext, label: string, signal: AbortSignal) {
         reason = "auth_refused";
         throw new Error("fansly_ws_generation_blocked");
       }
-      await replayFanslyWsDecode(owned.db, pageId);
+      await replayFanslyWsDecode(owned.db, pageId).catch(() => undefined);
       if (controller.signal.aborted) throw new Error("fansly_ws_stopped");
       connectionId = randomUUID();
       const id = connectionId;
@@ -119,7 +119,9 @@ async function runPage(app: AppContext, label: string, signal: AbortSignal) {
         guard: (verified) => serial(async () => {
           await validate(owned.db);
           await guardFanslyWsConnection(owned.db, id, verified);
-          await replayFanslyWsDecode(owned.db, pageId);
+          // Metadata repair cannot interrupt a healthy raw journal. Ownership
+          // and status checks above remain fail-closed; pending debt survives.
+          await replayFanslyWsDecode(owned.db, pageId).catch(() => undefined);
         }),
       });
     } catch {

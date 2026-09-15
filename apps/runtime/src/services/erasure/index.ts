@@ -1663,9 +1663,13 @@ async function lakeTargets(
   }
   await withDuckDb(async (run) => {
     for (const file of lakeFiles) {
-      const pred = file.table === "domain_events"
+      const selected = file.table === "domain_events"
         ? duckdbEventPred(scope)
         : duckdbObservationPred(scope, lineage?.eraseObsIds ?? []);
+      // A payload match must not reselect an envelope already classified as
+      // shared/unknown-exclusive by the raw codec or event lineage.
+      const shared = file.table === "observations" ? lineage?.sharedObsIds ?? [] : [];
+      const pred = shared.length > 0 ? `(${selected}) AND id NOT IN (${shared.join(",")})` : selected;
       const parquets: Array<{ path: string; restricted: boolean }> = [
         { path: file.parquetPath, restricted: false },
       ];

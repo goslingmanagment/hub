@@ -56,12 +56,17 @@ async function fixture() {
 }
 
 describe("B0 PostgreSQL ownership and journal", () => {
-  it("the actual worker observes live off and closes within the 60-second kill-switch bound", async () => {
+  it("the actual worker retains capture through replay failure and observes live off within 60 seconds", async () => {
     const f = await fixture(); await f.owner.close();
     await testDb.pool.query("update pages set external_page_id='999' where id=$1", [f.page.id]);
+    await testDb.pool.query(`create function b0_fail_settle() returns trigger language plpgsql as $$
+      begin raise exception 'injected'; end $$;
+      create trigger b0_fail_settle before update on fansly_ws_decode_receipts for each row execute function b0_fail_settle()`);
     const stop = vi.fn();
+    let activeSocket: EventTarget;
     const open = vi.spyOn(socketTransport, "openFanslyReceiverSocket").mockImplementation(() => {
       const socket = Object.assign(new EventTarget(), { send: vi.fn() });
+      activeSocket = socket;
       queueMicrotask(() => {
         socket.dispatchEvent(new Event("open"));
         socket.dispatchEvent(new MessageEvent("message", { data: '{"t":1,"d":"{}"}' }));
@@ -75,13 +80,21 @@ describe("B0 PostgreSQL ownership and journal", () => {
     try {
       await vi.waitFor(() => expect(open).toHaveBeenCalledOnce());
       await vi.waitFor(async () => expect((await testDb.pool.query("select count(*)::int n from observations where source='fansly_ws'")).rows[0].n).toBe(1));
+      await vi.waitFor(async () => expect((await testDb.pool.query("select count(*)::int n from fansly_ws_connections where verified_at is not null")).rows[0].n).toBe(1), { timeout: 8000 });
+      activeSocket!.dispatchEvent(new MessageEvent("message", { data: f.frame("456") }));
+      await vi.waitFor(async () => expect((await testDb.pool.query("select count(*)::int n from observations where source='fansly_ws'")).rows[0].n).toBe(2));
+      expect(stop).not.toHaveBeenCalled();
+      expect((await testDb.pool.query("select distinct state from fansly_ws_decode_receipts")).rows).toEqual([{ state: "pending" }]);
       const changedAt = Date.now(); f.app.config.fanslyWsCaptureEnabled = false;
       await vi.waitFor(() => expect(stop).toHaveBeenCalledOnce(), { timeout: 15_000 });
       expect(Date.now() - changedAt).toBeLessThan(60_000);
-    } finally { await worker.stop(); open.mockRestore(); }
+    } finally {
+      await worker.stop(); open.mockRestore();
+      await testDb.pool.query("drop trigger b0_fail_settle on fansly_ws_decode_receipts; drop function b0_fail_settle()");
+    }
     expect((await testDb.pool.query("select stop_reason from fansly_ws_connections where id<>$1::uuid", [f.id])).rows)
       .toEqual([{ stop_reason: "disabled" }]);
-  });
+  }, 30_000);
   it("one owner per page, death notifies, restart owns a new connection and leaves a gap", async () => {
     const f = await fixture();
     expect(await acquireFanslyWsOwnership(testDb.connectionString, f.page.id, vi.fn())).toBeNull();
@@ -201,7 +214,8 @@ describe("B0 PostgreSQL ownership and journal", () => {
     const dir = join(lakeDir, "capture/observations/2024"); await mkdir(dir, { recursive: true });
     const parquet = join(dir, "01.parquet"); const scratch = join(lakeDir, "seed.ndjson");
     const base = { id: 9001, source: "fansly_ws", producer: "fansly:b0", platform: "fansly", account_id: f.page.id,
-      native_account_ref: "999", kind: FANSLY_WS_CAPTURE_KIND, payload: { codec: FANSLY_WS_CAPTURE_KIND, frame: f.frame() },
+      native_account_ref: "999", kind: FANSLY_WS_CAPTURE_KIND, payload: { codec: FANSLY_WS_CAPTURE_KIND,
+        frame: JSON.stringify({ t: 99999, d: { accountId: 123, bystanderId: 456 } }) },
       payload_hash: "00", idempotency_key: "lake-b0", observed_at: null,
       received_at: "2024-01-10T00:00:00Z", actor_principal_id: null, parse_version: 0 };
     await writeFile(scratch, JSON.stringify(base) + "\n" + JSON.stringify({ ...base, id: 9002,
@@ -213,6 +227,8 @@ describe("B0 PostgreSQL ownership and journal", () => {
     const plan = await planErasure(f.app, { scopeType: "fan", platform: "fansly", fanRef: "123" });
     expect(plan.sharedObservations).toBe(1);
     expect(plan.targets.filter((t) => t.plane === "lake" && t.rows > 0)).toEqual([]);
+    const ownerId = Number((await testDb.pool.query("insert into users(username,role) values ('b0-owner','owner') returning id")).rows[0].id);
+    await executeErasure(f.app, { scopeType: "fan", platform: "fansly", fanRef: "123" }, { initiatedBy: ownerId });
     expect(await readParquetIds(parquet)).toEqual([9001, 9002]);
   });
 });

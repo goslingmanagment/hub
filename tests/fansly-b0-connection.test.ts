@@ -13,7 +13,7 @@ class Socket extends EventTarget {
   send = vi.fn();
   frame(frame: string) { this.dispatchEvent(new MessageEvent("message", { data: frame })); }
 }
-function harness(overrides: Partial<Parameters<typeof receiveFanslyConnection>[0]> = {}) {
+function harness(overrides: Partial<Parameters<typeof receiveFanslyConnection>[0]> = {}, authenticated = true) {
   const socket = new Socket();
   const stop = vi.fn();
   const controller = new AbortController();
@@ -24,7 +24,7 @@ function harness(overrides: Partial<Parameters<typeof receiveFanslyConnection>[0
   const done = receiveFanslyConnection({ open: () => ({ socket, stop }), token: "SYNTHETIC_AUTH",
     signal: controller.signal, capture, decode, settle, guard, ...overrides });
   socket.dispatchEvent(new Event("open"));
-  socket.frame(JSON.stringify({ t: 1, d: JSON.stringify({ token: "SYNTHETIC_AUTH" }) }));
+  if (authenticated) socket.frame(JSON.stringify({ t: 1, d: JSON.stringify({ token: "SYNTHETIC_AUTH" }) }));
   return { socket, stop, controller, capture, decode, settle, guard, done };
 }
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
@@ -94,9 +94,31 @@ describe("Fansly B0 durable receiver", () => {
     expect(await h.done).toBe("guard_unavailable"); expect(h.stop).toHaveBeenCalledOnce();
   });
 
-  it("does not accept pong as authentication; WS401 never writes a business payload", async () => {
+  it("WS401 never writes a business payload", async () => {
     const h = harness(); h.socket.frame('{"t":0,"d":"{\\"code\\":401}"}');
     expect(await h.done).toBe("auth_refused"); expect(h.capture).not.toHaveBeenCalled();
+  });
+
+  it("pong alone cannot clear the authentication deadline", async () => {
+    vi.useFakeTimers();
+    const h = harness({}, false);
+    h.socket.frame('{"t":2,"d":"{}"}');
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(await h.done).toBe("auth_timeout");
+    expect(h.capture).not.toHaveBeenCalled();
+  });
+
+  it("resets the failure sequence once after a verified quiet minute with working guards and pongs", async () => {
+    vi.useFakeTimers();
+    const onStable = vi.fn(); const h = harness({ onStable });
+    for (let i = 0; i < 3; i++) {
+      h.socket.frame('{"t":2,"d":"{}"}');
+      await vi.advanceTimersByTimeAsync(20_000);
+    }
+    expect(onStable).toHaveBeenCalledOnce();
+    h.socket.frame(known); await vi.advanceTimersByTimeAsync(0);
+    expect(onStable).toHaveBeenCalledOnce();
+    h.controller.abort(); await h.done;
   });
 
   it("preserves unknown raw children while stripping nested control secrets", () => {

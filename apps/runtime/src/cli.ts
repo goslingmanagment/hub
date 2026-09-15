@@ -15,6 +15,7 @@ import {
   getPageDmConversationById,
   insertDeliveryAttempt,
   insertErasureLog,
+  replayFanslyWsDecode,
 } from "@agency_hub_core/db";
 import {
   createProxyRequestDispatcher,
@@ -1848,6 +1849,28 @@ export function buildProgram() {
       } finally {
         await app.close();
       }
+    });
+
+  program
+    .command("fansly:decode-ws")
+    .description("B0: settle bounded metadata receipts from durable WS raw; no provider requests")
+    .requiredOption("--page <label>", "one exact page label")
+    .option("--max-batches <n>", "at most 20 retained observations per batch", "50")
+    .action(async (options) => {
+      const limit = Number(options.maxBatches);
+      if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1000) throw new InvalidArgumentError("max-batches must be 1..1000");
+      const app = await createAppContext();
+      try {
+        const stored = await findPageByLabel(app.db, options.page);
+        if (!stored) throw new Error("Page not found");
+        let decoded = 0;
+        for (let batch = 0; batch < limit; batch++) {
+          const count = await replayFanslyWsDecode(app.db, stored.page.id);
+          decoded += count;
+          if (count < 20) break;
+        }
+        console.log(JSON.stringify({ pageId: stored.page.id, decoded }));
+      } finally { await app.close(); }
     });
 
   program

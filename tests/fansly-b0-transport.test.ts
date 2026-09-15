@@ -34,6 +34,17 @@ process.stdout.write(JSON.stringify({opened,fallback}));
 `;
 
 describe("B0 real proxy transport", () => {
+  it("rejects unsolicited compression without waiting for the auth timeout", async () => {
+    const network = await startFanslyProbeNetwork("http", false, undefined, 101, true, true);
+    if (!network) throw new Error("local proxy fixture required");
+    const env: NodeJS.ProcessEnv = { ...process.env, B0_PROXY: network.url, NODE_EXTRA_CA_CERTS: ca };
+    delete env.NODE_TLS_REJECT_UNAUTHORIZED;
+    try {
+      const { stdout } = await exec(process.execPath, ["--import", "tsx/esm", "--input-type=module", "-e", client],
+        { cwd: root, env, timeout: 6000, maxBuffer: 4096 });
+      expect(JSON.parse(stdout)).toEqual({ opened: false, fallback: 0 });
+    } finally { await network.stop(); }
+  }, 10_000);
   it.each(["http", "socks5"] as const)("%s closes upgraded transport even when peer ignores close", async (protocol) => {
     const network = await startFanslyProbeNetwork(protocol, false, undefined, 101, true);
     if (!network) throw new Error("local proxy fixture required");

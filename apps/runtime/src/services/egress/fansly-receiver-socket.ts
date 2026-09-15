@@ -27,7 +27,9 @@ export function openFanslyReceiverSocket(egress: AppEgressContext) {
       upgraded = socket;
       if (stopped) { socket.destroy(); return; }
       if (Object.keys(headers).some((name) => name.toLowerCase() === "sec-websocket-extensions")) {
-        socket.destroy(); return;
+        socket.destroy();
+        handler.onResponseError?.(controller, new Error("fansly_receiver_extensions_refused"));
+        return;
       }
       const installBudget = (event: string | symbol) => {
         if (event !== "data") return;
