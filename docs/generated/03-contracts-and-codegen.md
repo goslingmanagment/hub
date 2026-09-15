@@ -1,6 +1,13 @@
 > Generated 2026-07-15 from docs/generated/REGENERATION-PROMPT.md at commit 7df9a45.
 > Machine-generated reference — regenerate by re-running that prompt in a
 > fresh session; do not hand-edit.
+>
+> **STALE (Decision 347, 2026-09-15):** `routes.ts` gained the account-link,
+> password-sign-in, own-device and own-usage schemas; `errorResponseSchema`
+> gained an optional `reason`; `deviceTokenItemSchema` gained
+> `lastClientVersion` and `adminUserSchema` gained `registrationState`.
+> `KERNEL_SDK_VERSION` is 0.2.0 and `scripts/vendor-sdk.mjs` reads the version
+> from the generated meta instead of a literal.
 
 # API contracts, code generation and the SDK boundary
 

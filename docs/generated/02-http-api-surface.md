@@ -1,6 +1,16 @@
 > Generated 2026-07-15 from docs/generated/REGENERATION-PROMPT.md at commit 7df9a45.
 > Machine-generated reference — regenerate by re-running that prompt in a
 > fresh session; do not hand-edit.
+>
+> **STALE (Decision 347, 2026-09-15):** the identity module gained thirteen
+> routes — `adminCreateInvite`, `adminCreateAccountLink`,
+> `adminListAccountLinks`, `adminRevokeAccountLink`, `adminRevokeDeviceToken`,
+> `adminTerminateAllAccess` (owner-session); `authInspectAccountLink`,
+> `authRedeemAccountLink`, `authIssueDeviceTokenWithPassword` (public, per-IP
+> rate limits 30/10/20 per minute); `authListDevices`, `authRevokeDevice`,
+> `authRevokeAllDevices`, `authMyUsage` (any-session). The error boundary now
+> serializes a structured `reason` on 401 `unauthorized` and 409 `conflict`,
+> and the global 429 message is the neutral "Too many attempts".
 
 # HTTP API surface
 

@@ -1,6 +1,12 @@
 > Generated 2026-07-15 from docs/generated/REGENERATION-PROMPT.md at commit 7df9a45.
 > Machine-generated reference — regenerate by re-running that prompt in a
 > fresh session; do not hand-edit.
+>
+> **STALE (Decision 347, 2026-09-15):** the console's Russian configuration
+> copy carries the new `accountLinksEnabled` entry. The "Команда" tab
+> (replacing the users tab and every API-key surface), the "Техническое"
+> section and the `/join` and `/account` pages land in PR-1B and PR-1C of the
+> same wave.
 
 # Dashboard Frontend
 
