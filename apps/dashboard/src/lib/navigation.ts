@@ -216,7 +216,20 @@ export function isSafeInAppPath(value: string) {
 export function resolveLoginReturnPath(value: string | null | undefined): string {
   if (!value || !isSafeInAppPath(value)) return "/";
   const path = decodeURIComponent(new URL(value, "https://hub.invalid").pathname).replace(/\/+$/, "");
-  return path.toLowerCase() === "/login" ? "/" : value;
+  const route = path.toLowerCase();
+  if (route === "/login") return "/";
+  // Decision 349: /join carries its one-time invitation secret in the URL
+  // fragment, precisely because a fragment is never sent to the server. `next`
+  // IS sent — it is a query parameter — so carrying the fragment across would
+  // write the secret into the hub's request log and the host's access log.
+  // Dropped here, centrally, so no caller can leak it by forwarding
+  // `location.hash` without thinking about what is in it.
+  //
+  // Only /join. Fragments elsewhere are ordinary anchors and are kept: the
+  // settings deep links return a person to the exact control they were sent
+  // away from.
+  if (route === "/join") return value.split("#")[0] ?? "/";
+  return value;
 }
 
 export function buildLoginRoute(returnTo: string): string {

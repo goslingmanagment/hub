@@ -32,6 +32,7 @@ import {
   readLinkToken,
   redeemFailureMessage,
 } from "../apps/dashboard/src/pages/account/accountView.ts";
+import { buildLoginRoute, resolveLoginReturnPath } from "../apps/dashboard/src/lib/navigation.ts";
 
 const SECRET = "7f3a9c1e5b2d4a6f8c0e2a4b6d8f0a1c";
 
@@ -69,6 +70,31 @@ describe("readLinkToken", () => {
     expect(readLinkToken("")).toBeNull();
     expect(readLinkToken("#")).toBeNull();
     expect(readLinkToken("#   ")).toBeNull();
+  });
+});
+
+describe("the invitation secret never reaches a query string", () => {
+  // /join keeps its one-time secret in the URL fragment because a fragment is
+  // not sent to the server. `next` is a query parameter — it lands in the hub's
+  // request log and the host's access log — so the fragment is dropped before
+  // any login route is built, centrally, where no caller can forget.
+  it("drops the fragment from a login return path", () => {
+    expect(resolveLoginReturnPath(`/join#${SECRET}`)).toBe("/join");
+    const route = buildLoginRoute(`/join#${SECRET}`);
+    expect(route).not.toContain(SECRET);
+    expect(route).not.toContain("#");
+    expect(route).not.toContain("%23");
+  });
+
+  it("keeps the path and the query of the join route, and sheds only the fragment", () => {
+    expect(resolveLoginReturnPath(`/join?x=1#${SECRET}`)).toBe("/join?x=1");
+    expect(resolveLoginReturnPath(`/JOIN#${SECRET}`)).toBe("/JOIN");
+    expect(resolveLoginReturnPath(`/join/#${SECRET}`)).toBe("/join/");
+  });
+
+  it("leaves ordinary anchors alone — only the join route carries a secret there", () => {
+    const anchored = "/settings?tab=configuration&feature=voice#config-voiceNotesEnabled";
+    expect(resolveLoginReturnPath(anchored)).toBe(anchored);
   });
 });
 

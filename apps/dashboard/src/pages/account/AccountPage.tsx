@@ -1,4 +1,4 @@
-import { useState, type FormEvent, type ReactNode } from "react";
+import { useRef, useState, type FormEvent, type ReactNode } from "react";
 import { MOSCOW_TIME_ZONE, formatUsdFromMicroUsd, toBusinessDate } from "@agency_hub_core/shared";
 import {
   useAuthMe,
@@ -155,6 +155,7 @@ function Devices() {
 
 function ChangePassword() {
   const change = useChangeMyPassword();
+  const submitting = useRef(false);
   const [current, setCurrent] = useState("");
   const [next, setNext] = useState("");
   const [confirmation, setConfirmation] = useState("");
@@ -180,11 +181,18 @@ function ChangePassword() {
 
   function handleSubmit(event: FormEvent) {
     event.preventDefault();
-    if (change.isPending || !current) return;
+    // `isPending` alone loses the race between two fast clicks — the same ref
+    // guard the invitation form uses. Changing a password twice would revoke
+    // the sessions twice and answer 401 the second time.
+    if (submitting.current || change.isPending || !current) return;
     const found = changePasswordProblem(next, confirmation);
     setProblem(found);
     if (found) return;
-    change.mutate({ currentPassword: current, newPassword: next });
+    submitting.current = true;
+    change.mutate(
+      { currentPassword: current, newPassword: next },
+      { onSettled: () => { submitting.current = false; } },
+    );
   }
 
   const serverProblem = change.isError

@@ -1,3 +1,6 @@
+import { readFileSync, readdirSync } from "node:fs";
+import path from "node:path";
+
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -116,6 +119,46 @@ beforeEach(() => {
   mocks.useRevokeMyDevices.mockReset().mockReturnValue(mutationState());
   mocks.useChangeMyPassword.mockReset().mockReturnValue(mutationState());
   mocks.useMyUsage.mockReset().mockReturnValue({ data: usageResponse(), isLoading: false, isError: false });
+});
+
+describe("submit handlers on the chatter surface", () => {
+  // A ref, not `isPending`: two fast clicks both read the old pending flag, and
+  // React has not re-rendered between them. Submitting a password change twice
+  // revokes every session twice and answers 401 the second time; submitting a
+  // redemption twice spends the link and then reports it unusable. Pinned for
+  // the directory, so a third form cannot be written without the guard —
+  // `renderToStaticMarkup` cannot click a button twice, so this is checked at
+  // the source.
+  const dir = path.resolve("apps/dashboard/src/pages/account");
+  const files = readdirSync(dir).filter((name) => name.endsWith(".tsx"));
+
+  function handlerBody(source: string): string | null {
+    const start = source.indexOf("function handleSubmit(");
+    if (start === -1) return null;
+    let depth = 0;
+    for (let index = source.indexOf("{", start); index < source.length; index += 1) {
+      if (source[index] === "{") depth += 1;
+      if (source[index] === "}") {
+        depth -= 1;
+        if (depth === 0) return source.slice(start, index + 1);
+      }
+    }
+    return null;
+  }
+
+  it("covers both forms a chatter can submit", () => {
+    const withHandler = files.filter((name) => handlerBody(readFileSync(path.join(dir, name), "utf8")));
+    expect(withHandler.sort()).toEqual(["AccountPage.tsx", "JoinPage.tsx"]);
+  });
+
+  it("guards every one of them with a ref before calling the kernel", () => {
+    const offenders = files.filter((name) => {
+      const body = handlerBody(readFileSync(path.join(dir, name), "utf8"));
+      if (!body || !body.includes(".mutate(")) return false;
+      return !/if\s*\(\s*submitting\.current/.test(body) || !body.includes("submitting.current = true");
+    });
+    expect(offenders).toEqual([]);
+  });
 });
 
 describe("groupPagesByPlatform", () => {
