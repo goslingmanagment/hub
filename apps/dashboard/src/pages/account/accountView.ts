@@ -90,10 +90,13 @@ export function roleLabel(role: string): string {
 export const PASSWORD_HINT =
   `Не короче ${PASSWORD_MIN_LENGTH} символов. Подойдёт любая фраза, которую помнишь только ты.`;
 
+/** One wording for "we have seen this password before", wherever it is caught. */
+const TOO_SIMPLE_MESSAGE = "Такой пароль слишком простой — его легко угадать. Придумай другой.";
+
 const POLICY_MESSAGES: Record<string, string> = {
   too_short: `Пароль должен быть не короче ${PASSWORD_MIN_LENGTH} символов.`,
   too_long: `Пароль должен быть не длиннее ${PASSWORD_MAX_LENGTH} символов.`,
-  common: "Такой пароль слишком простой — его легко угадать. Придумай другой.",
+  common: TOO_SIMPLE_MESSAGE,
 };
 
 /**
@@ -148,6 +151,13 @@ export function doneHeadline(kind: LinkKind): string {
   return kind === "password_reset" ? "Новый пароль сохранён" : "Готово";
 }
 
+/** The machine `reason` the kernel puts beside its message, when there is one. */
+export function readErrorReason(body: unknown): string | null {
+  if (typeof body !== "object" || body === null) return null;
+  const reason = (body as { reason?: unknown }).reason;
+  return typeof reason === "string" ? reason : null;
+}
+
 /**
  * Turns a failed redemption into one honest sentence. A password the server
  * refused reads as a password problem; anything about the link itself reads as
@@ -158,6 +168,13 @@ export function redeemFailureMessage(
 ): string {
   const status = error?.status ?? null;
   if (status === 400) {
+    // Decision 349 gives the refusal a machine `reason`, so the page can name
+    // the rule instead of matching on the kernel's prose. Only `common` ever
+    // arrives over HTTP — the route schema rejects a too-short or too-long
+    // password first, as a plain validation 400 with no reason — and when it
+    // does, it gets the same sentence the local check would have given, so the
+    // person never sees two different wordings for one rule.
+    if (error?.reason === "common") return TOO_SIMPLE_MESSAGE;
     return "Такой пароль не подходит: он слишком простой или слишком короткий. Придумай другой.";
   }
   if (status === 429) {

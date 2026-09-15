@@ -19,7 +19,7 @@ vi.mock("../apps/dashboard/src/api/sdk.ts", () => ({
       _category: string,
       readonly status: number,
       _code: string | null = null,
-      _body: unknown = null,
+      readonly body: unknown = null,
     ) { super(message); }
   },
 }));
@@ -29,6 +29,7 @@ import { KernelApiError } from "../apps/dashboard/src/api/sdk.ts";
 import {
   clientOffersForPlatforms,
   passwordProblem,
+  readErrorReason,
   readLinkToken,
   redeemFailureMessage,
 } from "../apps/dashboard/src/pages/account/accountView.ts";
@@ -117,6 +118,16 @@ describe("passwordProblem", () => {
   });
 });
 
+describe("readErrorReason", () => {
+  it("finds the machine reason in an error body and nothing else", () => {
+    expect(readErrorReason({ error: "bad_request", reason: "common" })).toBe("common");
+    expect(readErrorReason({ error: "bad_request" })).toBeNull();
+    expect(readErrorReason({ reason: 7 })).toBeNull();
+    expect(readErrorReason(null)).toBeNull();
+    expect(readErrorReason("common")).toBeNull();
+  });
+});
+
 describe("clientOffersForPlatforms", () => {
   it("offers only the clients the person's own pages need", () => {
     expect(clientOffersForPlatforms(["fansly"]).map((offer) => offer.platform)).toEqual(["fansly"]);
@@ -133,6 +144,22 @@ describe("clientOffersForPlatforms", () => {
 describe("redeemFailureMessage", () => {
   it("reads a refused password as a password problem", () => {
     expect(redeemFailureMessage({ status: 400 })).toContain("пароль");
+  });
+
+  it("names the rule when the kernel says which one was broken", () => {
+    // Over HTTP only `common` arrives: the route schema rejects the length
+    // cases first, as a plain validation 400 with no reason.
+    expect(redeemFailureMessage({ status: 400, reason: "common" }))
+      .toBe("Такой пароль слишком простой — его легко угадать. Придумай другой.");
+    // And it is the same sentence the local check gives, so one rule never
+    // shows a person two different wordings.
+    expect(passwordProblem("1q2w3e4r5t6y", "1q2w3e4r5t6y"))
+      .toBe(redeemFailureMessage({ status: 400, reason: "common" }));
+  });
+
+  it("keeps the general phrase for a 400 that names nothing", () => {
+    expect(redeemFailureMessage({ status: 400, reason: null }))
+      .toContain("слишком простой или слишком короткий");
   });
 
   it("reads a spent or unknown link as the single ask-the-owner line", () => {
@@ -215,10 +242,28 @@ describe("JoinPage", () => {
     }));
     mocks.useRedeemAccountLink.mockReturnValue(redeemState({
       isError: true,
-      error: new KernelApiError("weak", "validation", 400, "validation", null),
+      error: new KernelApiError("weak", "validation", 400, "bad_request", null),
     }));
     const html = renderJoin();
     expect(html).toContain("Такой пароль не подходит");
     expect(html).not.toContain("Ссылка недействительна");
+  });
+
+  it("says a common password is common, in the kernel's own words", () => {
+    mocks.useInspectAccountLink.mockReturnValue(inspectState({
+      data: { state: "active", kind: "invite", username: "grisha", expiresAt: "2026-09-22T00:00:00.000Z", platforms: ["fansly"] },
+    }));
+    mocks.useRedeemAccountLink.mockReturnValue(redeemState({
+      isError: true,
+      error: new KernelApiError("too common", "validation", 400, "bad_request", {
+        error: "bad_request",
+        message: "This password is too common; choose a less predictable one",
+        statusCode: 400,
+        reason: "common",
+      }),
+    }));
+    const html = renderJoin();
+    expect(html).toContain("слишком простой");
+    expect(html).not.toContain("слишком короткий");
   });
 });

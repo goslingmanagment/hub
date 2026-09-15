@@ -11,6 +11,7 @@ import {
   joinHeadline,
   joinSubheadline,
   passwordProblem,
+  readErrorReason,
   readLinkToken,
   redeemFailureMessage,
 } from "./accountView.js";
@@ -143,7 +144,9 @@ export function JoinPage() {
 
   const serverProblem = redeem.isError
     ? redeemFailureMessage(
-      redeem.error instanceof KernelApiError ? { status: redeem.error.status } : null,
+      redeem.error instanceof KernelApiError
+        ? { status: redeem.error.status, reason: readErrorReason(redeem.error.body) }
+        : null,
     )
     : null;
 
