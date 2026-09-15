@@ -1190,10 +1190,14 @@ export async function fanslyNotificationsChunk(
     await saveProgress();
   }
 
-  // The chunk's walk is over — the narrowed lane may change form here, never
-  // between two pages of the same walk.
-  rotateTypeGroupAtWalkBoundary();
-
+  // NO ROTATION HERE. A chunk is not a walk: the deep backfill spans many
+  // chunks and carries `nextBeforeRef` across them, so rotating at a chunk seam
+  // sends page N+1 through a different `type` filter than the cursor it
+  // inherited — exactly what the walk-boundary rule exists to prevent. It also
+  // double-advances when a chunk served a page and then took a refusal, which
+  // skips a group nobody ever asked for. The forward boundary rotates often
+  // enough alone: a due head poll interrupts a running backfill, so the form
+  // changes at least once per head cadence.
   if (backfill.done) {
     // `backfill: null` is what "the one-off walk is over" looks like durably.
     state = { ...state, phase: "forward", backfill: null };
