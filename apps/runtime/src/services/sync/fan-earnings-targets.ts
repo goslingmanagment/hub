@@ -23,6 +23,14 @@ export function fanEarningsTargetLimit(config: AppConfig, pageLabel: string) {
     && Number.isSafeInteger(limit) && limit! > 0 && limit! <= 1000 ? limit! : 0;
 }
 
+export const FAN_EARNINGS_RECOVERY_MAX_AGE_MS = 24 * 60 * 60_000;
+
+export function fanEarningsRecoveryEnabled(config: AppConfig, pageLabel: string) {
+  return config.fanslyFanEarningsRecoveryEnabled === true
+    && isPageAllowlisted(config.fanslyFanEarningsRecoveryPageAllowlist ?? "", pageLabel)
+    && fanEarningsTargetLimit(config, pageLabel) > 0;
+}
+
 /** Additive C2c consumer. One due endpoint, leaving at least one complete
  * two-request fan for daily rotation. No scheduler, cursor or cadence change. */
 export async function runFanEarningsTargetStep(app: AppContext, input: ExecutorRequestContext & {
@@ -40,14 +48,17 @@ export async function runFanEarningsTargetStep(app: AppContext, input: ExecutorR
     await assertOwnedPageSyncLease(db, { lock: true });
     return run(db);
   });
-  const claim = await owned(db => claimFanEarningsTarget(db, page.id, new Date()));
+  const config = await loadEffectiveConfig(app.db, app.config);
+  const maxAgeMs = fanEarningsRecoveryEnabled(config, page.label) ? FAN_EARNINGS_RECOVERY_MAX_AGE_MS : undefined;
+  const claim = await owned(db => claimFanEarningsTarget(db, page.id, new Date(), maxAgeMs));
   if (!claim) return;
   let admitted = false;
   const observer: HttpRequestObserver = {
     async onRequestEvent(event) {
       if (event.state === "started") {
-        const limit24h = fanEarningsTargetLimit(await loadEffectiveConfig(app.db, app.config), page.label);
-        if (!limit24h || admitted || !input.budget.hasRequestCapacity(3) || !input.budget.hasWallClockCapacity()) {
+        const currentConfig = await loadEffectiveConfig(app.db, app.config);
+        const limit24h = fanEarningsTargetLimit(currentConfig, page.label);
+        if (!limit24h || (claim.ageSelected && !fanEarningsRecoveryEnabled(currentConfig, page.label)) || admitted || !input.budget.hasRequestCapacity(3) || !input.budget.hasWallClockCapacity()) {
           throw new TargetAdmissionDeferred("fan_earnings_target_disabled");
         }
         const allowed = await owned(async db => {

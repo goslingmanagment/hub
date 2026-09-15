@@ -80,6 +80,8 @@ describe("config registry", () => {
     "fanslyDmBoundedPolicies",
     "fanslyWsCaptureEnabled",
     "fanslyWsCapturePageAllowlist",
+    "fanslyFanEarningsRecoveryEnabled",
+    "fanslyFanEarningsRecoveryPageAllowlist",
     "fanslyFanEarningsTargetsEnabled",
     "fanslyFanEarningsTargetsPageAllowlist",
     "fanslyFanEarningsTargetsDailyAttemptLimit",

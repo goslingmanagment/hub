@@ -345,6 +345,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 345 | Fansly C2c default-off targets | Consume due per-fan/window debt within existing earnings chunks under a strict additional-attempt cap; retain daily rotation and separate activation/coverage requirements. |
 | 346 | Fansly A1 default-off bounded DM polling | Separate resumable head walks from certified full membership; retain old scheduler slots and expose full-list freshness independently. |
 | 347 | Fansly C1 default-off certified follower settlement reuse |
+| 348 | Fansly C2c default-off isolated daily earnings recovery and age-based targets |
 
 
 ## Consensus Decisions
@@ -14140,3 +14141,46 @@ is included. Legitimate repairs and presence consumers retain the original walk.
 Full C1 activation/savings acceptance still needs production evidence; this
 reproduced failure-path fix can be developed and shipped dormant independently.
 See [the follower runbook](runbooks/fansly-followers-diagnostics.md).
+
+
+## Decision 348: Fansly C2c isolated daily earnings recovery (2026-09-15)
+
+The daily positive-spender roster previously stopped at one fan's 400/404/410.
+`FANSLY_FAN_EARNINGS_RECOVERY_ENABLED=false` plus an empty
+`FANSLY_FAN_EARNINGS_RECOVERY_PAGE_ALLOWLIST` gate a separate recovery cursor.
+Recovery also requires the existing addressed-target gates and positive budget.
+The daily cadence is unchanged; no weekly rotation or relaxed freshness ships.
+
+Recovery captures and settles lifetime/monthly independently using strict owned
+claims, including when C2b shadow is off. Only 400/404/410 without Retry-After may
+be crossed, and only after its failed endpoint receipt commits. The other
+endpoint and remaining roster proceed. Rejections retain per-endpoint counters,
+backoff and debt. Empty/invalid snapshots cannot establish checked freshness.
+Raw capture and successful receipt failures stop progress. Failure-receipt DB
+errors cannot replace an original auth/cooldown error with a generic error.
+
+The recovery cursor is a separate field under `mode: recovery`, bound to the
+owning request. Disabled/old code starts the legacy roster at zero, so it cannot
+silently cross deferred fans. Completed walks with current endpoint debt or
+unknown-attribution debt use quality hold, preserving prior full success and
+incidents. A completed retry reuses the same result; certified success retains
+its original time through Decision 347 settlement. Later valid rechecks can
+close current coverage debt; historical visits-minus-receipts remain an audit
+counter and cannot make coverage permanently unconfirmable.
+
+Addressed selection may also visit already tracked endpoints whose last valid
+check is missing or at least 24 hours old, without requiring a new signal. This
+includes known zero/negative/undiscovered references and can detect quiet changes.
+It uses the existing one-extra-endpoint-per-chunk and rolling physical-attempt
+cap. The recovery gate is rechecked immediately before age-only transport;
+deferring that claim never manufactures a due target under a disabled gate.
+No new wakeup or guaranteed 24-hour completion is implied: budget exhaustion,
+backoff and ordinary dispatch remain visible overdue coverage.
+
+No schema migration, money formula or projection change is required. Existing
+per-fan/window reports and certified `completedAt` remain authoritative; one
+fresh fan cannot refresh the entire page. Only tracked references are covered;
+unseen references and unknown attribution remain unproved. Production activation
+still requires quiet-correction/reader coverage and measured physical cost.
+No interval reduction, savings acceptance or whole-migration acceptance follows
+from shipping this default-off code. See [the earnings runbook](runbooks/fansly-earnings-targets.md).

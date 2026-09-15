@@ -29,13 +29,16 @@ export async function captureFanEarningsEndpoint(app: AppContext, input: {
   after: Date;
   before: Date;
   shadow: boolean;
+  /** Recovery crosses a rejection only after its endpoint debt is durable. */
+  isolateRejection?: boolean;
   target?: { claim: FanEarningsClaim; wasAdmitted: () => boolean };
   fetch: () => Promise<{ items: unknown; raw?: unknown }>;
 }) {
-  const claim = input.target?.claim ?? (input.shadow ? await withOwnedPageSyncTransaction(app.db, (tx) =>
+  const claim = input.target?.claim ?? ((input.shadow || input.isolateRejection) ? await withOwnedPageSyncTransaction(app.db, (tx) =>
     claimFanEarningsRotation(tx, {
       pageId: input.pageId, fanRef: input.fan.platformUserId, window: input.window, now: new Date(),
     })) : null);
+  if (input.isolateRejection && !claim) throw new Error("fan_earnings_recovery_claim_required");
   let response: { items: unknown; raw?: unknown };
   try {
     response = await input.fetch();
@@ -43,11 +46,15 @@ export async function captureFanEarningsEndpoint(app: AppContext, input: {
     if (claim && (!input.target || input.target.wasAdmitted())) {
       const rejected = error instanceof FanslyApiError && [400, 404, 410].includes(error.status ?? 0);
       try {
-        await settleOwnedReceipt(app, claim, {
+        const settled = await settleOwnedReceipt(app, claim, {
           outcome: rejected ? "rejected" : "failed", observationId: null, fingerprint: null,
           checkedAt: new Date(), retryAfterAt: error instanceof FanslyApiError ? error.retryAfterAt : null,
         });
-      } catch {
+        if (input.isolateRejection && settled && rejected && error instanceof FanslyApiError
+          && error.retryAfterAt === null) return { outcome: "rejected" as const };
+      } catch (receiptError) {
+        if (input.isolateRejection && rejected && error instanceof FanslyApiError
+          && error.retryAfterAt === null) throw receiptError;
         // Preserve provider class/Retry-After and the contiguous-prefix path.
         // The durable visit-minus-receipt count retains this missing receipt.
         app.logger.warn({ pageId: input.pageId, window: input.window },
@@ -72,16 +79,18 @@ export async function captureFanEarningsEndpoint(app: AppContext, input: {
 
   // Raw and observation writes finish before parse, lease/claim settlement,
   // or the caller's next endpoint. Lost claims never discard captured bytes.
+  let outcome: "observed" | "empty" | "invalid" = "observed";
   if (claim) {
     const receipt = buildFanEarningsReceipt({
       pageId: input.pageId, fanRef: input.fan.platformUserId, window: input.window,
       observationId: captured.observationId, payload, checkedAt: new Date(),
     });
+    outcome = receipt.outcome === "observed" ? "observed" : receipt.outcome === "empty" ? "empty" : "invalid";
     try {
       const settled = await settleOwnedReceipt(app, claim, receipt);
-      if (input.target && !settled) throw new Error("fan_earnings_target_claim_fenced");
+      if ((input.target || input.isolateRejection) && !settled) throw new Error("fan_earnings_target_claim_fenced");
     } catch (error) {
-      if (error instanceof PageSyncLeaseLostError || input.target) throw error;
+      if (error instanceof PageSyncLeaseLostError || input.target || input.isolateRejection) throw error;
       // The receipt transaction rolled back. Continue the captured baseline only
       // while its page lease is still owned; missing receipts remain shadow debt.
       await assertOwnedPageSyncLease(app.db);
@@ -94,4 +103,5 @@ export async function captureFanEarningsEndpoint(app: AppContext, input: {
       ? "Fansly fan earnings stats response was not an array"
       : "Fansly monthly fan earnings response was not an array");
   }
+  return { outcome };
 }
