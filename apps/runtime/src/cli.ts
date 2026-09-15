@@ -78,12 +78,9 @@ import {
   assignPageToUser,
   createUserAccount,
   deactivateUser,
-  issueChatterApiKey,
-  listApiKeysForUsers,
   listUsersDetailed,
   reactivateUser,
   recordAudit,
-  revokeUserApiKeys,
   setUserPassword,
   unassignPageFromUser,
 } from "./services/auth.ts";
@@ -1221,7 +1218,7 @@ export function buildProgram() {
         // Operator smoke runs as the named user with owner-style page reach
         // (canAccessPage: owner role passes; others need the assignment).
         const principal = {
-          authMethod: "api_key" as const,
+          authMethod: "device_token" as const,
           user: { id: user.id, username: user.username, role: user.role },
           assignedPageIds: [pageRow.page.id],
         };
@@ -1425,7 +1422,6 @@ export function buildProgram() {
     });
 
   const user = program.command("user");
-  const apiKey = program.command("apikey");
 
   pageAdd
     .command("fansly")
@@ -2948,8 +2944,8 @@ export function buildProgram() {
           username: options.username,
         }, auditContext());
         console.log(
-          `Deactivated ${options.username} (revoked ${result.revokedApiKeys} key(s), `
-          + `${result.revokedDeviceTokens} device token(s), ${result.revokedSessions} session(s))`,
+          `Deactivated ${options.username} (revoked ${result.revokedDeviceTokens} `
+          + `device token(s), ${result.revokedSessions} session(s))`,
         );
       } finally {
         await app.close();
@@ -2965,7 +2961,7 @@ export function buildProgram() {
         await reactivateUser(app, {
           username: options.username,
         }, auditContext());
-        console.log(`Reactivated ${options.username} — password login works again; issue fresh keys if needed`);
+        console.log(`Reactivated ${options.username} — password login works again; the person signs in again on each device`);
       } finally {
         await app.close();
       }
@@ -2988,7 +2984,11 @@ export function buildProgram() {
           username: options.username,
           password,
         }, auditContext());
-        console.log(`Updated password for ${options.username}`);
+        // Decision 353: this is the full reset primitive — every device token,
+        // reservation and session of that person is now revoked.
+        console.log(
+          `Updated password for ${options.username} — all of their sign-ins were ended`,
+        );
       } finally {
         await app.close();
       }
@@ -3023,86 +3023,6 @@ export function buildProgram() {
           pageLabel: options.page,
         }, auditContext());
         console.log(`Unassigned ${options.username} from ${options.page}`);
-      } finally {
-        await app.close();
-      }
-    });
-
-  apiKey
-    .command("create")
-    .requiredOption("--username <username>")
-    .option(
-      "--page <label>",
-      "also assign the user to this page before rotating the single API key",
-    )
-    .action(async (options) => {
-      const app = await createAppContext();
-      try {
-        const result = await issueChatterApiKey(app, {
-          username: options.username,
-          pageLabel: options.page,
-        }, auditContext());
-        console.log(result.key);
-      } finally {
-        await app.close();
-      }
-    });
-
-  apiKey
-    .command("revoke")
-    .requiredOption("--username <username>")
-    .action(async (options) => {
-      const app = await createAppContext();
-      try {
-        const revoked = await revokeUserApiKeys(app, {
-          username: options.username,
-        }, auditContext());
-        console.log(`Revoked ${revoked.length} API key(s) for ${options.username}`);
-      } finally {
-        await app.close();
-      }
-    });
-
-  apiKey
-    .command("list")
-    .action(async () => {
-      const app = await createAppContext();
-      try {
-        const rows = await listApiKeysForUsers(app);
-        printRows(
-          ["username", "role", "key_prefix", "created_at", "last_used_at", "revoked_at"],
-          rows.map((row) => [
-            row.username,
-            row.role,
-            row.keyPrefix,
-            row.createdAt,
-            row.lastUsedAt,
-            row.revokedAt,
-          ]),
-        );
-      } finally {
-        await app.close();
-      }
-    });
-
-  apiKey
-    .command("show")
-    .requiredOption("--username <username>")
-    .action(async (options) => {
-      const app = await createAppContext();
-      try {
-        const rows = await listApiKeysForUsers(app, [options.username]);
-        printRows(
-          ["username", "role", "key_prefix", "created_at", "last_used_at", "revoked_at"],
-          rows.map((row) => [
-            row.username,
-            row.role,
-            row.keyPrefix,
-            row.createdAt,
-            row.lastUsedAt,
-            row.revokedAt,
-          ]),
-        );
       } finally {
         await app.close();
       }

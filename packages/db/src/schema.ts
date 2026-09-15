@@ -2036,6 +2036,12 @@ export const authSessions = pgTable(
   }),
 );
 
+/**
+ * TOMBSTONE (Decision 353). The api-key lane is retired: nothing issues, reads
+ * or authenticates these rows any more. The TABLE stays — every row is a fact
+ * about a credential that once existed, and DP 7 forbids deleting facts. The
+ * mapping stays so a forensic read has a typed handle on it.
+ */
 export const apiKeys = pgTable(
   "api_keys",
   {

@@ -127,7 +127,12 @@ export const ofapiCaptureJobStates = [
 ] as const;
 export type OfapiCaptureJobState = (typeof ofapiCaptureJobStates)[number];
 
-export const userRoles = ["owner", "team_lead", "chatter", "content_manager"] as const;
+// Decision 353: `content_manager` left the wire enum with the API-key lane —
+// the role had no credential path (no session, no bearer) and zero rows in
+// production. The PG enum value stays (migrations are forward-only), so a
+// historical row is still readable by raw SQL; it simply cannot be created,
+// authenticated or serialized any more.
+export const userRoles = ["owner", "team_lead", "chatter"] as const;
 export type UserRole = (typeof userRoles)[number];
 export const creatableUserRoles = ["owner", "team_lead", "chatter"] as const;
 export type CreatableUserRole = (typeof creatableUserRoles)[number];

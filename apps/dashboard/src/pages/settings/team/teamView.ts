@@ -28,7 +28,6 @@ export const ROLE_LABEL: Readonly<Record<UserRole, string>> = {
   owner: "владелец",
   team_lead: "тимлид",
   chatter: "чаттер",
-  content_manager: "контент-менеджер",
 };
 
 /** Deactivation wins over everything; an account that has not set its

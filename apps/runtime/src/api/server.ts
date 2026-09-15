@@ -316,7 +316,6 @@ export async function buildApiServer(appContext: AppContext) {
   // here. Legacy guards stay in place until the post-flip cleanup, so rollback
   // is AUTH_POLICY_ENFORCEMENT=log.
   const routePolicyIndex = buildRoutePolicyIndex();
-  const MUST_CHANGE_PASSWORD_ALLOWED_ROUTES = new Set(["me", "logout", "authChangePassword"]);
   const isAuthPolicyEnforced = () => appContext.config.authPolicyEnforcement === "enforce";
 
   // Route → declaration table, collected at registration time. Feeds the
@@ -370,18 +369,9 @@ export async function buildApiServer(appContext: AppContext) {
     });
     request.authPolicy = { routeKey: entry.key, verdict };
 
-    // Stage 22: a session flagged must_change_password may only touch the
-    // self-serve auth surface. Enforced UNCONDITIONALLY (new behavior, no
-    // legacy guard to diverge from — the log-mode comparison doesn't apply).
-    const pendingPrincipal = request.auth;
-    if (
-      pendingPrincipal
-      && pendingPrincipal.authMethod === "session"
-      && pendingPrincipal.user.mustChangePassword
-      && !MUST_CHANGE_PASSWORD_ALLOWED_ROUTES.has(entry.key)
-    ) {
-      throw new ForbiddenError("Password change required before using this route");
-    }
+    // Decision 353: the Stage 22 must_change_password route allowlist is gone
+    // with the flag. Nothing reads the column any more; `mustChangePassword` on
+    // the wire is a deprecated constant `false`.
 
     if (!verdict.allow && isAuthPolicyEnforced()) {
       switch (verdict.statusCode) {

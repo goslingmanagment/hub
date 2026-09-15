@@ -78,6 +78,8 @@ const ROLE_LABELS: Record<string, string> = {
   owner: "владелец",
   team_lead: "старший",
   chatter: "чаттер",
+  // Decision 353 retired the role from the wire enum; the label survives for a
+  // historical row that only raw SQL can still show.
   content_manager: "контент-менеджер",
 };
 

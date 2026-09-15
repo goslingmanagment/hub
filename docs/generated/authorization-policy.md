@@ -22,7 +22,7 @@ body remain handler-checked and are noted per route in the service layer.
 | `agentKey` | Agent Read Plane key only; no human principal is admitted |
 | `any` | any authenticated principal except an agent key |
 
-## Routes (274)
+## Routes (266)
 
 | Method | Path | Route key | Kind | Roles | Page scope |
 | --- | --- | --- | --- | --- | --- |
@@ -147,14 +147,9 @@ body remain handler-checked and are noted per route in the service layer.
 | POST | `/api/v1/admin/sync/trigger-all` | `adminSyncTriggerAll` | `owner-session` | — | — |
 | GET | `/api/v1/admin/usage/chatters` | `adminChatterUsage` | `owner-session` | — | — |
 | GET | `/api/v1/admin/users` | `adminListUsers` | `owner-session` | — | — |
-| POST | `/api/v1/admin/users` | `adminCreateUser` | `owner-session` | — | — |
-| DELETE | `/api/v1/admin/users/:username/api-keys` | `adminRevokeApiKeys` | `owner-session` | — | — |
-| GET | `/api/v1/admin/users/:username/api-keys` | `adminListApiKeys` | `owner-session` | — | — |
-| POST | `/api/v1/admin/users/:username/api-keys` | `adminIssueApiKey` | `owner-session` | — | — |
 | POST | `/api/v1/admin/users/:username/deactivate` | `adminDeactivateUser` | `owner-session` | — | — |
 | DELETE | `/api/v1/admin/users/:username/device-tokens` | `adminRevokeDeviceTokens` | `owner-session` | — | — |
 | GET | `/api/v1/admin/users/:username/device-tokens` | `adminListDeviceTokens` | `owner-session` | — | — |
-| POST | `/api/v1/admin/users/:username/device-tokens` | `adminIssueDeviceToken` | `owner-session` | — | — |
 | DELETE | `/api/v1/admin/users/:username/device-tokens/:tokenId` | `adminRevokeDeviceToken` | `owner-session` | — | — |
 | PATCH | `/api/v1/admin/users/:username/device-tokens/:tokenId/harvest-capability` | `adminSetDeviceTokenHarvestCapability` | `owner-session` | — | — |
 | GET | `/api/v1/admin/users/:username/grants` | `adminListUserGrants` | `owner-session` | — | — |
@@ -165,7 +160,6 @@ body remain handler-checked and are noted per route in the service layer.
 | DELETE | `/api/v1/admin/users/:username/models/:modelSlug` | `adminRevokeModel` | `owner-session` | — | — |
 | POST | `/api/v1/admin/users/:username/pages` | `adminAssignPage` | `owner-session` | — | — |
 | DELETE | `/api/v1/admin/users/:username/pages/:pageLabel` | `adminUnassignPage` | `owner-session` | — | — |
-| PATCH | `/api/v1/admin/users/:username/password` | `adminSetPassword` | `owner-session` | — | — |
 | POST | `/api/v1/admin/users/:username/reactivate` | `adminReactivateUser` | `owner-session` | — | — |
 | POST | `/api/v1/admin/users/:username/terminate-access` | `adminTerminateAllAccess` | `owner-session` | — | — |
 | GET | `/api/v1/agent/capabilities` | `agentCapabilities` | `agentKey` | — | — |
@@ -199,11 +193,9 @@ body remain handler-checked and are noted per route in the service layer.
 | GET | `/api/v1/archive/conversations/:ref/messages` | `archiveConversationMessages` | `session` | — | — |
 | GET | `/api/v1/archive/search` | `archiveSearch` | `session` | — | — |
 | POST | `/api/v1/auth/change-password` | `authChangePassword` | `any-session` | — | — |
-| POST | `/api/v1/auth/device-tokens` | `authIssueDeviceToken` | `any-session` | — | — |
 | POST | `/api/v1/auth/device-tokens/activate` | `authActivateDeviceToken` | `pending-device-token` | — | — |
 | DELETE | `/api/v1/auth/device-tokens/current` | `authRevokeCurrentDeviceToken` | `device-token` | — | — |
 | POST | `/api/v1/auth/device-tokens/password` | `authIssueDeviceTokenWithPassword` | `public` | — | — |
-| POST | `/api/v1/auth/device-tokens/reservations` | `authReserveDeviceToken` | `any-session` | — | — |
 | GET | `/api/v1/auth/devices` | `authListDevices` | `any-session` | — | — |
 | DELETE | `/api/v1/auth/devices/:deviceId` | `authRevokeDevice` | `any-session` | — | — |
 | POST | `/api/v1/auth/devices/revoke-all` | `authRevokeAllDevices` | `any-session` | — | — |

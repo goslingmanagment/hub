@@ -25,7 +25,6 @@ import {
   markAccountLinkUsed,
   revokeAccountLinkById,
   revokeActiveAccountLinks,
-  updateUserMustChangePassword,
   updateUserPasswordHash,
   type AccountLinkKind,
 } from "@agency_hub_core/db";
@@ -458,8 +457,6 @@ export async function redeemAccountLink(
     }
 
     await updateUserPasswordHash(dbTx, user.id, passwordHash);
-    // A password the person chose themselves satisfies the frozen flag.
-    await updateUserMustChangePassword(dbTx, user.id, false);
     await markAccountLinkUsed(dbTx, link.id, now);
     const otherLinks = await revokeActiveAccountLinks(dbTx, user.id, "password_set");
     // `user` is the row as it stands under the lock, read BEFORE the update
@@ -490,7 +487,6 @@ export async function redeemAccountLink(
         revokedDeviceTokens: terminated?.deviceTokens ?? 0,
         deletedPendingDeviceTokens: terminated?.pendingDeviceTokens ?? 0,
         revokedSessions: terminated?.sessions ?? 0,
-        revokedApiKeys: terminated?.apiKeys ?? 0,
       },
     });
     return { username: user.username };
