@@ -14,6 +14,24 @@ interface AvailablePageLike {
   modelName: string;
 }
 
+export interface PageAssignmentsLabels {
+  assigned: string;
+  empty: string;
+  unassign: string;
+  assignHeading: string;
+  select: string;
+  assign: string;
+}
+
+const DEFAULT_LABELS: PageAssignmentsLabels = {
+  assigned: "Assigned Pages",
+  empty: "No pages assigned.",
+  unassign: "Unassign",
+  assignHeading: "Assign a Page",
+  select: "Select a page...",
+  assign: "Assign",
+};
+
 export function PageAssignmentsEditor({
   assignedPages,
   availablePages,
@@ -26,6 +44,7 @@ export function PageAssignmentsEditor({
   pagesLoading = false,
   pagesError = false,
   onRetryPages,
+  labels = DEFAULT_LABELS,
 }: {
   assignedPages: AssignedPageLike[];
   availablePages: AvailablePageLike[];
@@ -38,12 +57,13 @@ export function PageAssignmentsEditor({
   pagesLoading?: boolean;
   pagesError?: boolean;
   onRetryPages?: () => void;
+  labels?: PageAssignmentsLabels;
 }) {
   return (
     <div>
-      <h3 className="mb-2 text-sm font-semibold text-text-primary">Assigned Pages</h3>
+      <h3 className="mb-2 text-sm font-semibold text-text-primary">{labels.assigned}</h3>
       {assignedPages.length === 0 ? (
-        <p className="text-sm text-text-muted">No pages assigned.</p>
+        <p className="text-sm text-text-muted">{labels.empty}</p>
       ) : (
         <div className="space-y-1.5">
           {assignedPages.map((page) => (
@@ -62,7 +82,7 @@ export function PageAssignmentsEditor({
                 onClick={() => onUnassign(page.label)}
                 className="rounded px-2 py-0.5 text-xs font-medium text-danger hover:bg-hover disabled:opacity-50"
               >
-                Unassign
+                {labels.unassign}
               </button>
             </div>
           ))}
@@ -77,7 +97,7 @@ export function PageAssignmentsEditor({
 
       {availablePages.length > 0 && (
         <div className="mt-3">
-          <h3 className="mb-2 text-sm font-semibold text-text-primary">Assign a Page</h3>
+          <h3 className="mb-2 text-sm font-semibold text-text-primary">{labels.assignHeading}</h3>
           <div className="flex items-center gap-2">
             <select
               aria-label="Page to assign"
@@ -86,7 +106,7 @@ export function PageAssignmentsEditor({
               onChange={(event) => onSelectedLabelChange(event.target.value)}
               className="min-w-0 flex-1 rounded-lg border border-border bg-bg px-3 py-2 text-sm outline-none focus:border-accent"
             >
-              <option value="">Select a page...</option>
+              <option value="">{labels.select}</option>
               {availablePages.map((page) => (
                 <option key={page.id} value={page.label}>
                   {page.label} ({page.platform} / {page.modelName})
@@ -99,7 +119,7 @@ export function PageAssignmentsEditor({
               onClick={onAssign}
               className="rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50"
             >
-              Assign
+              {labels.assign}
             </button>
           </div>
         </div>

@@ -11,8 +11,8 @@ vi.mock("../apps/dashboard/src/pages/settings/CollectionTab.tsx", () => ({ Colle
 vi.mock("../apps/dashboard/src/pages/settings/ModelsTab.tsx", () => ({ ModelsTab: () => "content:models" }));
 vi.mock("../apps/dashboard/src/pages/settings/PagesTab.tsx", () => ({ PagesTab: () => "content:pages" }));
 vi.mock("../apps/dashboard/src/pages/settings/AiPersonasTab.tsx", () => ({ AiPersonasTab: () => "content:personas" }));
-vi.mock("../apps/dashboard/src/pages/settings/UsersTab.tsx", () => ({ UsersTab: () => "content:users" }));
-vi.mock("../apps/dashboard/src/pages/settings/AgentKeysTab.tsx", () => ({ AgentKeysTab: () => "content:agentKeys" }));
+vi.mock("../apps/dashboard/src/pages/settings/team/TeamTab.tsx", () => ({ TeamTab: () => "content:users" }));
+vi.mock("../apps/dashboard/src/pages/settings/team/TechnicalTab.tsx", () => ({ TechnicalTab: () => "content:agentKeys" }));
 vi.mock("../apps/dashboard/src/pages/settings/ConfigurationTab.tsx", () => ({ ConfigurationTab: () => "content:configuration" }));
 vi.mock("../apps/dashboard/src/pages/settings/FeaturesTab.tsx", () => ({ FeaturesTab: () => "content:features" }));
 

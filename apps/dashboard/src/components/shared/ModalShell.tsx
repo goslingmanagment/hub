@@ -6,19 +6,24 @@ export function ModalShell({
   onClose,
   closeLabel = "Close",
   restoreFocusRef,
+  // Decision 350: a dialog holding something the person cannot get back — a
+  // one-time link shown once — refuses the casual dismissals. Escape and a
+  // stray backdrop click stop closing it; only the explicit close button does.
+  explicitCloseOnly = false,
 }: {
   children: ReactNode;
   title: string;
   onClose: () => void;
   closeLabel?: string;
   restoreFocusRef?: RefObject<HTMLElement | null>;
+  explicitCloseOnly?: boolean;
 }) {
   const titleId = useId();
   const dialogRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") { e.preventDefault(); onClose(); return; }
+      if (e.key === "Escape") { e.preventDefault(); if (!explicitCloseOnly) onClose(); return; }
       if (e.key !== "Tab") return;
       const dialog = dialogRef.current;
       const elements = [...(dialog?.querySelectorAll<HTMLElement>('a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])') ?? [])].filter(element => element.getClientRects().length > 0);
@@ -29,7 +34,7 @@ export function ModalShell({
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [onClose, explicitCloseOnly]);
 
   // Focus the first interactive element on open and restore focus to whatever was focused
   // (the trigger) on close, so keyboard users are moved into the dialog and back out again.
@@ -52,7 +57,7 @@ export function ModalShell({
       className="fixed inset-0 z-30 flex items-center justify-center bg-black/20 p-6"
       // Parent space-y utilities must not leave an uncovered strip behind the dialog.
       style={{ margin: 0 }}
-      onClick={onClose}
+      onClick={explicitCloseOnly ? undefined : onClose}
     >
       <div
         ref={dialogRef}

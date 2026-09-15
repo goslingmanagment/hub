@@ -5,10 +5,10 @@ import { SyncTab } from "./settings/SyncTab.js";
 import { CollectionTab } from "./settings/CollectionTab.js";
 import { ModelsTab } from "./settings/ModelsTab.js";
 import { PagesTab } from "./settings/PagesTab.js";
-import { UsersTab } from "./settings/UsersTab.js";
+import { TeamTab } from "./settings/team/TeamTab.js";
 import { ConfigurationTab } from "./settings/ConfigurationTab.js";
 import { AiPersonasTab } from "./settings/AiPersonasTab.js";
-import { AgentKeysTab } from "./settings/AgentKeysTab.js";
+import { TechnicalTab } from "./settings/team/TechnicalTab.js";
 import { FeaturesTab } from "./settings/FeaturesTab.js";
 
 const sections: Record<SettingsTab, { label: string; description: string }> = {
@@ -46,11 +46,11 @@ const sections: Record<SettingsTab, { label: string; description: string }> = {
   },
   users: {
     label: "Команда",
-    description: "Добавляйте сотрудников и выбирайте, с какими страницами они могут работать.",
+    description: "Приглашайте людей ссылкой, смотрите их устройства и выбирайте, с какими страницами они работают.",
   },
   agentKeys: {
-    label: "Ключи агентов",
-    description: "Выдавайте помощникам доступ только к нужным данным и страницам.",
+    label: "Техническое",
+    description: "Ключи агентов и привязка сбора данных к устройству — всё, что нужно только машинам.",
   },
 };
 
@@ -136,8 +136,8 @@ export function SettingsPage() {
             {activeTab === "models" && <ModelsTab />}
             {activeTab === "personas" && <AiPersonasTab />}
             {activeTab === "pages" && <PagesTab />}
-            {activeTab === "users" && <UsersTab />}
-            {activeTab === "agentKeys" && <AgentKeysTab />}
+            {activeTab === "users" && <TeamTab />}
+            {activeTab === "agentKeys" && <TechnicalTab />}
             {activeTab === "configuration" && <ConfigurationTab />}
             {activeTab === "features" && <FeaturesTab />}
           </section>

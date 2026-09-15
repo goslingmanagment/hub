@@ -4,9 +4,12 @@ import { toast } from "sonner";
 import { AGENT_CAPABILITIES, type AgentCapability, type AgentKeyItem } from "@agency_hub_core/contracts";
 import {
   useAdminPages,
+  useAdminUsers,
   useAgentKeys,
   useCreateAgentKey,
   useRevokeAgentKey,
+  useSetHarvestCapability,
+  useUserDevices,
 } from "@/api/queries";
 import { ConfirmModal } from "@/components/shared/ConfirmModal";
 import { Field } from "@/components/shared/Field";
@@ -16,14 +19,14 @@ import { StaleDataNotice } from "@/components/shared/StaleDataNotice";
 import { formatDateTime, formatRelativeTime } from "@/lib/format";
 
 /**
- * Agent Read Plane keys: issue, list, revoke.
+ * Decision 350 — "Техническое": the ONE place in the console where the
+ * machinery is named out loud.
  *
- * The whole surface exists so the owner can see, at a glance, the two things
- * that make one of these keys dangerous or safe: WHICH pages it reads and WHICH
- * capabilities it holds. Both are printed on the row rather than hidden behind a
- * detail view; a grant nobody looks at is a grant nobody controls.
- *
- * The issued token appears exactly once, in a modal, and is never fetched again.
+ * Everywhere else the owner deals in people, logins, devices and links (§2
+ * vocabulary, pinned by tests/dashboard-team-copy-vocabulary.test.ts, which
+ * excludes this file by name). Here live the two surfaces that are genuinely
+ * about machines: agent read-plane keys, and the Desktop harvest binding that
+ * ties one preserved machine identity to one sign-in.
  */
 
 const CAPABILITY_HELP: Readonly<Record<AgentCapability, string>> = {
@@ -34,7 +37,22 @@ const CAPABILITY_HELP: Readonly<Record<AgentCapability, string>> = {
   "request:hydration": "Filing a hydration request (execution stays an owner decision)",
 };
 
-export function AgentKeysTab() {
+export function TechnicalTab() {
+  return (
+    <div className="space-y-10">
+      <section>
+        <h2 className="mb-3 text-sm font-bold text-text-primary">Ключи агентов</h2>
+        <AgentKeysSection />
+      </section>
+      <section>
+        <h2 className="mb-3 text-sm font-bold text-text-primary">Привязка сбора данных</h2>
+        <HarvestBindingSection />
+      </section>
+    </div>
+  );
+}
+
+export function AgentKeysSection() {
   const { data: keys, isLoading, isError, error } = useAgentKeys();
   const [creating, setCreating] = useState(false);
   const [issuedToken, setIssuedToken] = useState<{ token: string; name: string } | null>(null);
@@ -422,5 +440,151 @@ function TokenRevealModal({
         </button>
       </div>
     </ModalShell>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  Harvest binding                                                    */
+/* ------------------------------------------------------------------ */
+
+const MACHINE_ID_PATTERN = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+
+/** Mirrors the contract's `z.string().uuid()` so a typo is refused before the
+ * round-trip — a mistyped machineId would bind harvest authority to a machine
+ * that does not exist. */
+export function isMachineId(value: string): boolean {
+  return MACHINE_ID_PATTERN.test(value.trim());
+}
+
+/**
+ * Binds one Desktop install's preserved machineId to one of a person's device
+ * tokens, so harvested captures are attributable to a machine the owner chose.
+ * Rebinding the same machineId transfers the authority atomically server-side;
+ * the UI never has to revoke first.
+ *
+ * The machineId is technical by nature and lives only here and in the Desktop
+ * app's own Diagnostics screen — never in the Team tab.
+ */
+export function HarvestBindingSection() {
+  const { data: users, isLoading: usersLoading, isError: usersError, error: usersErrorValue } = useAdminUsers();
+  const [username, setUsername] = useState("");
+  const [tokenId, setTokenId] = useState<number | null>(null);
+  const [machineId, setMachineId] = useState("");
+
+  const devices = useUserDevices(username, { enabled: username !== "" });
+  const setCapability = useSetHarvestCapability(username);
+
+  const candidates = (users ?? []).filter((user) => !user.disabledAt);
+  const activeDevices = (devices.data ?? []).filter((device) => device.isActive);
+  const selected = activeDevices.find((device) => device.id === tokenId) ?? null;
+  const machineIdValid = isMachineId(machineId);
+
+  function apply(nextMachineId: string | null) {
+    if (tokenId === null) return;
+    setCapability.mutate({ tokenId, machineId: nextMachineId }, {
+      onSuccess: () => {
+        toast.success(nextMachineId ? "Machine bound to this sign-in" : "Binding removed");
+        if (!nextMachineId) setMachineId("");
+      },
+      onError: (error) => {
+        toast.error(error instanceof Error ? error.message : "Binding failed");
+      },
+    });
+  }
+
+  return (
+    <div className="space-y-3">
+      <p className="max-w-2xl text-sm text-text-muted">
+        Desktop harvest authority: one machineId belongs to exactly one sign-in. Take the
+        machineId from the app&apos;s Diagnostics screen («Диагностика приложения»).
+      </p>
+
+      {usersError && <StaleDataNotice title="Team list unavailable" error={usersErrorValue} />}
+      {usersLoading && !users && <p className="text-sm text-text-muted">Loading…</p>}
+
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Field label="Person">
+          <select
+            value={username}
+            onChange={(event) => {
+              setUsername(event.target.value);
+              setTokenId(null);
+            }}
+            className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm text-text-primary"
+          >
+            <option value="">Select a person…</option>
+            {candidates.map((user) => (
+              <option key={user.id} value={user.username}>{user.username}</option>
+            ))}
+          </select>
+        </Field>
+
+        <Field label="Sign-in">
+          <select
+            value={tokenId === null ? "" : String(tokenId)}
+            disabled={username === "" || devices.isError}
+            onChange={(event) => setTokenId(event.target.value === "" ? null : Number(event.target.value))}
+            className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm text-text-primary disabled:opacity-50"
+          >
+            <option value="">Select a sign-in…</option>
+            {activeDevices.map((device) => (
+              <option key={device.id} value={String(device.id)}>
+                {device.label}
+                {device.harvestMachineId ? " — bound" : ""}
+              </option>
+            ))}
+          </select>
+        </Field>
+      </div>
+
+      {devices.isError && (
+        <StaleDataNotice title="Sign-ins unavailable" error={devices.error} />
+      )}
+      {username !== "" && devices.data && activeDevices.length === 0 && (
+        <p className="text-sm text-text-muted">This person has no live sign-in to bind.</p>
+      )}
+
+      {selected && (
+        <div className="rounded-lg border border-border bg-bg px-3 py-2.5">
+          <div className="text-xs text-text-muted">
+            Currently bound: {selected.harvestMachineId
+              ? <code className="font-mono">{selected.harvestMachineId}</code>
+              : "nothing"}
+          </div>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <input
+              value={machineId}
+              aria-label="machineId"
+              placeholder="00000000-0000-0000-0000-000000000000"
+              onChange={(event) => setMachineId(event.target.value)}
+              className="min-w-0 flex-1 rounded-lg border border-border bg-card px-3 py-2 font-mono text-sm text-text-primary"
+            />
+            <button
+              type="button"
+              disabled={!machineIdValid || setCapability.isPending}
+              onClick={() => apply(machineId.trim())}
+              className="rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50"
+            >
+              {setCapability.isPending ? "Saving…" : "Bind"}
+            </button>
+            {selected.harvestMachineId && (
+              <button
+                type="button"
+                disabled={setCapability.isPending}
+                onClick={() => apply(null)}
+                className="rounded-lg border border-danger/25 bg-danger/5 px-3 py-2 text-sm font-medium text-danger hover:bg-danger/10 disabled:opacity-50"
+              >
+                Remove binding
+              </button>
+            )}
+          </div>
+          {machineId.trim() !== "" && !machineIdValid && (
+            <p role="alert" className="mt-1 text-xs text-danger">
+              A machineId is a UUID, e.g. 3f2504e0-4f89-11d3-9a0c-0305e82c3301.
+            </p>
+          )}
+        </div>
+      )}
+    </div>
   );
 }

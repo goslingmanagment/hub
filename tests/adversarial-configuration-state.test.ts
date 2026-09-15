@@ -24,8 +24,8 @@ vi.mock("../apps/dashboard/src/pages/settings/CollectionTab.tsx", () => ({ Colle
 vi.mock("../apps/dashboard/src/pages/settings/ModelsTab.tsx", () => ({ ModelsTab: () => null }));
 vi.mock("../apps/dashboard/src/pages/settings/PagesTab.tsx", () => ({ PagesTab: () => null }));
 vi.mock("../apps/dashboard/src/pages/settings/AiPersonasTab.tsx", () => ({ AiPersonasTab: () => null }));
-vi.mock("../apps/dashboard/src/pages/settings/UsersTab.tsx", () => ({ UsersTab: () => null }));
-vi.mock("../apps/dashboard/src/pages/settings/AgentKeysTab.tsx", () => ({ AgentKeysTab: () => null }));
+vi.mock("../apps/dashboard/src/pages/settings/team/TeamTab.tsx", () => ({ TeamTab: () => null }));
+vi.mock("../apps/dashboard/src/pages/settings/team/TechnicalTab.tsx", () => ({ TechnicalTab: () => null }));
 vi.mock("../apps/dashboard/src/pages/settings/FeaturesTab.tsx", () => ({ FeaturesTab: () => null }));
 
 import { SettingsPage } from "../apps/dashboard/src/pages/SettingsPage.tsx";
