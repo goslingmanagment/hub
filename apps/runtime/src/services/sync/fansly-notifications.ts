@@ -56,8 +56,11 @@
 // allowance, so a backfill that walks at chunk speed used to drink the day on
 // its first dispatch and leave the head one poll per UTC day — observed on
 // production with four of six pages parked in `backfill` since ~00:15 UTC.
-// The backfill now stops at `backfillAttemptCeiling(dailyCap)` and comes back
-// when the head is next due; the forward poll keeps the full allowance.
+// The backfill now stops when ITS OWN spend (`backfillCallsToday`) reaches
+// `backfillAttemptCeiling(dailyCap)` and comes back when the head is next due;
+// the forward poll keeps the full allowance. Its own counter because the head
+// always spends first: bounding the lane-wide counter would hand the head the
+// backfill's share and park the walk for good.
 //
 // THE REPEAT-REQUEST GUARD is WP-F1's lesson, paid for on production on
 // 2026-08-22: a walk that re-issues the identical request spends a whole day's
@@ -148,9 +151,12 @@ const FORWARD_POLLS_PER_UTC_DAY = Math.floor(86_400_000 / FORWARD_POLL_INTERVAL_
 export const FORWARD_HEAD_RESERVED_ATTEMPTS = Math.ceil(FORWARD_POLLS_PER_UTC_DAY * 1.25);
 
 /**
- * How many attempts the backfill may have spent today before it yields. Never
- * below 1: a deliberately small cap should slow the one-off walk down, not
- * park it forever.
+ * How many attempts the backfill may spend ON ITS OWN ACCOUNT in one UTC day
+ * before it yields the rest to the head — measured against
+ * `backfillCallsToday`, never against the lane-wide counter the head also
+ * spends from. Never below 1: `fanslyNotificationsDailyCallBudget` is
+ * live-editable (min 1), and a cap dialled down during a ban scare must slow
+ * the one-off walk down, not end historical capture in silence.
  */
 export function backfillAttemptCeiling(dailyCap: number): number {
   return Math.max(1, dailyCap - FORWARD_HEAD_RESERVED_ATTEMPTS);
@@ -197,6 +203,17 @@ export interface FanslyNotificationsCursorState {
   utcDay: string;
   /** HTTP ATTEMPTS spent by this lane on `utcDay`. Retries included. */
   callsToday: number;
+  /**
+   * The BACKFILL'S OWN share of `callsToday`, same UTC day, retries included.
+   *
+   * Its own counter because the head always spends first (the cursor starts in
+   * `forward`, and a due head poll interrupts a running backfill), so measuring
+   * the backfill's ceiling against the lane-wide counter let the head consume
+   * the backfill's whole allowance: at any cap ≤ 61 the walk got zero calls per
+   * day, forever, with no anomaly. The reserve is about the HEAD's share, so
+   * the thing it bounds has to be the BACKFILL's spend.
+   */
+  backfillCallsToday: number;
   /** The overlap stop for the forward poll. */
   newestSeenNotificationId: string | null;
   /** ISO instant of the last completed forward poll. */
@@ -284,6 +301,10 @@ export function parseFanslyNotificationsCursorState(
     phase: state.phase === "backfill" ? "backfill" : "forward",
     utcDay,
     callsToday: Math.max(0, asInt(state.callsToday, 0)),
+    // A cursor written before this field existed reads as "the backfill has
+    // spent nothing today", which is the safe default: the UTC day it belongs
+    // to is the one being resumed and the lane-wide cap still bounds it.
+    backfillCallsToday: Math.max(0, asInt(state.backfillCallsToday, 0)),
     newestSeenNotificationId: asNullableString(state.newestSeenNotificationId),
     lastForwardPollAt: asNullableString(state.lastForwardPollAt),
     filterMode: parseFilterMode(state.filterMode),
@@ -321,6 +342,7 @@ export function emptyFanslyNotificationsCursorState(now: Date): FanslyNotificati
     phase: "forward",
     utcDay: utcDayKey(now),
     callsToday: 0,
+    backfillCallsToday: 0,
     newestSeenNotificationId: null,
     lastForwardPollAt: null,
     filterMode: "unfiltered",
@@ -338,6 +360,17 @@ export const utcDayKey = fanslyUtcDayKey;
 /** A new UTC day resets the attempt counter. Nothing else about the cursor
  *  changes: a walk that deferred mid-page resumes at exactly that page. */
 export const rollUtcDay = rollFanslyUtcDay;
+
+/** The shared roll owns the lane-wide counter; the backfill's share belongs to
+ *  the same UTC day, so it rolls with it. `rollUtcDay` returns the SAME object
+ *  when the day has not changed, which is the test used here. */
+export function rollNotificationsUtcDay(
+  state: FanslyNotificationsCursorState,
+  now: Date,
+): FanslyNotificationsCursorState {
+  const rolled = rollUtcDay(state, now);
+  return rolled === state ? rolled : { ...rolled, backfillCallsToday: 0 };
+}
 
 // ── shape helpers over the journaled bodies ──────────────────────────────────
 
@@ -544,7 +577,7 @@ export async function fanslyNotificationsChunk(
 
   const checkpoint = await getCheckpoint(app.db, pageId, STREAM);
   await input.telemetry.recordCheckpointLoaded(STREAM, summarizeCheckpoint(checkpoint));
-  let state = rollUtcDay(
+  let state = rollNotificationsUtcDay(
     parseFanslyNotificationsCursorState(checkpoint?.state)
       ?? emptyFanslyNotificationsCursorState(now),
     now,
@@ -573,6 +606,10 @@ export async function fanslyNotificationsChunk(
   const { attemptBudget, complete: completeLane, requestContext, saveProgress } = lane;
 
   let journaled = 0;
+  /** Pages this dispatch actually got a body for. Gates the type-group
+   *  rotation below: a walk that only collected refusals has already had its
+   *  index moved by the refusal branch. */
+  let served = 0;
   let deferred: string | null = null;
   /**
    * The type fork's TERMINAL. Widening is finite: unfiltered → the declared CSV
@@ -606,6 +643,30 @@ export async function fanslyNotificationsChunk(
 
   /** Room for one more call today? Crossing this defers; it never drops. */
   const hasDayCapacity = attemptBudget.hasCapacity;
+
+  /**
+   * ONE WALK, ONE FILTER FORM — so this runs at a walk boundary, never between
+   * two pages of the same walk. Rotating inside `fetchPage` would have sent
+   * page N+1 through a different `type` filter than the `before` cursor it
+   * inherited from page N: rows outside the new group are skipped and the
+   * committed head ref jumps between groups.
+   *
+   * It still has to rotate SOMEWHERE: the index used to move only on a
+   * refusal, so a lane that reached `type_groups` polled whichever group it
+   * landed on forever and never asked for the others again — the purchase
+   * codes 32007/45012 among them. Everything captured through a narrowed form
+   * is already claimed `partial_provider_surface`, so rotating widens what is
+   * asked for without making any coverage claim stronger.
+   */
+  const rotateTypeGroupAtWalkBoundary = () => {
+    if (served === 0 || state.filterMode !== "type_groups") {
+      return;
+    }
+    state = {
+      ...state,
+      typeGroupIndex: (state.typeGroupIndex + 1) % FANSLY_NOTIFICATION_TYPE_GROUPS.length,
+    };
+  };
 
 
   /**
@@ -654,22 +715,9 @@ export async function fanslyNotificationsChunk(
       if (classifyNotificationResponse(response.raw) === "invalid") {
         throw new FanslyLaneInvalidResponseError(OBSERVATION_KIND);
       }
-      // A SERVED call clears the refusal counter and, while the lane is down
-      // to one group per call, ROTATES to the next one. Without the rotation
-      // the index only ever moved on a refusal, so a lane that reached
-      // `type_groups` polled the group it happened to land on forever and the
-      // other groups — the purchase codes among them — were never asked for
-      // again. Every write through a narrowed form is already claimed as
-      // `partial_provider_surface`, so rotating widens what is captured
-      // without making the coverage claim any stronger.
-      if (state.filterRefusals !== 0 || state.filterMode === "type_groups") {
-        state = {
-          ...state,
-          filterRefusals: 0,
-          typeGroupIndex: state.filterMode === "type_groups"
-            ? (state.typeGroupIndex + 1) % FANSLY_NOTIFICATION_TYPE_GROUPS.length
-            : state.typeGroupIndex,
-        };
+      served += 1;
+      if (state.filterRefusals !== 0) {
+        state = { ...state, filterRefusals: 0 };
       }
       return { payload: response.raw, observationId: persisted.observationId ?? null };
     } catch (error) {
@@ -817,10 +865,10 @@ export async function fanslyNotificationsChunk(
         break;
       }
       const before = state.forward.beforeRef ?? HEAD_CURSOR;
-      // REPEAT-REQUEST GUARD, spent before any egress. The identical `before`
-      // twice in one walk is a loop's first visible step (WP-F1 spent a whole
+      // REPEAT-REQUEST GUARD. The identical `before` twice in one walk AFTER A
+      // PAGE CAME BACK is a loop's first visible step (WP-F1 spent a whole
       // day's cap on that shape on production), and there is nothing to learn
-      // from issuing it.
+      // from issuing it again.
       if (state.forward.lastRequestedBefore === before) {
         await input.telemetry.addAnomaly({
           code: "fansly_notifications_cursor_repeat",
@@ -832,10 +880,6 @@ export async function fanslyNotificationsChunk(
         stopReason = "cursor_repeat";
         break;
       }
-      state = {
-        ...state,
-        forward: { ...state.forward, lastRequestedBefore: before, pages: state.forward.pages + 1 },
-      };
 
       const page = await fetchPage(before, "forward");
       if (page === null) {
@@ -844,12 +888,21 @@ export async function fanslyNotificationsChunk(
           await saveProgress();
           break;
         }
-        // The form was refused and the mode widened. Retry the same cursor on
-        // the next iteration — the guard above would block it, so clear it:
-        // this is a DIFFERENT request (different `type` form), not a repeat.
-        state = { ...state, forward: { ...state.forward, lastRequestedBefore: null } };
+        // The form was refused and the mode widened; the same cursor is a
+        // DIFFERENT request now. Nothing to undo — the mark is only armed by a
+        // request that came back with a body.
         continue;
       }
+      // ARMED ONLY BY A SERVED PAGE, and this is the whole point: the mark used
+      // to be written (and durably saved by the attempt observer) BEFORE the
+      // request went out, so any rethrow — a terminal 429, a 5xx, a dead
+      // session — left the lane looking at its own dead attempt and the retry
+      // declared a provider loop. An attempted request that never returned a
+      // body is not a repeat.
+      state = {
+        ...state,
+        forward: { ...state.forward, lastRequestedBefore: before, pages: state.forward.pages + 1 },
+      };
       const rows = notificationRows(page.payload);
       const bounds = pageRefBounds(rows);
 
@@ -920,6 +973,8 @@ export async function fanslyNotificationsChunk(
         forward: emptyForwardWalk(),
         phase: state.backfill !== null && !state.backfill.done ? "backfill" : "forward",
       };
+      // The walk is over, so this is where the narrowed lane may change form.
+      rotateTypeGroupAtWalkBoundary();
       await coverage(
         CAPTURE_COVERAGE_PLANES.notifications,
         archiveStatus("window_captured"),
@@ -1007,8 +1062,12 @@ export async function fanslyNotificationsChunk(
       break;
     }
     // THE HEAD'S RESERVE. History keeps; the head does not — so the one-off
-    // walk stops here and hands the rest of the day back to the forward poll.
-    if (state.callsToday >= backfillCeiling) {
+    // walk stops at ITS OWN share of the day and hands the rest back to the
+    // forward poll. Measured on `backfillCallsToday`, never on the lane-wide
+    // counter: the head always spends first, so bounding the lane-wide number
+    // let the head eat this budget and park the walk permanently at any cap
+    // the reserve covers.
+    if (state.backfillCallsToday >= backfillCeiling) {
       deferred = "head_reserve";
       break;
     }
@@ -1043,21 +1102,31 @@ export async function fanslyNotificationsChunk(
       await saveProgress();
       break;
     }
-    backfill.lastRequestedBefore = before;
     callsInChunk += 1;
 
+    // The attempts this call costs — retries included — land on the backfill's
+    // own counter, which is what its ceiling is measured against.
+    const spentBefore = state.callsToday;
     const page = await fetchPage(before, "backfill");
+    state = {
+      ...state,
+      backfillCallsToday: state.backfillCallsToday + (state.callsToday - spentBefore),
+    };
     if (page === null) {
       if (filterExhausted) {
         state = { ...state, backfill };
         await saveProgress();
         break;
       }
-      // Form refused and widened; the same cursor is a different request now.
-      backfill.lastRequestedBefore = null;
+      // Form refused and widened; the same cursor is a different request now,
+      // and the repeat mark was never armed for a call that brought no body.
       state = { ...state, backfill };
       continue;
     }
+    // ARMED ONLY BY A SERVED PAGE (see the forward walk): a rethrown 429, 5xx
+    // or dead session must leave the walk resumable at exactly this cursor,
+    // not looking like a provider that ignored `before`.
+    backfill.lastRequestedBefore = before;
     backfill.lastObservationId = page.observationId ?? backfill.lastObservationId;
     const rows = notificationRows(page.payload);
     const bounds = pageRefBounds(rows);
@@ -1121,6 +1190,10 @@ export async function fanslyNotificationsChunk(
     await saveProgress();
   }
 
+  // The chunk's walk is over — the narrowed lane may change form here, never
+  // between two pages of the same walk.
+  rotateTypeGroupAtWalkBoundary();
+
   if (backfill.done) {
     // `backfill: null` is what "the one-off walk is over" looks like durably.
     state = { ...state, phase: "forward", backfill: null };
@@ -1132,6 +1205,7 @@ export async function fanslyNotificationsChunk(
         phase: "backfill",
         journaled,
         callsToday: state.callsToday,
+        backfillCallsToday: state.backfillCallsToday,
         dailyCap,
         notificationFloorAt: backfill.floorAt,
         backfillDone: true,
@@ -1156,6 +1230,7 @@ export async function fanslyNotificationsChunk(
       phase: "backfill",
       journaled,
       callsToday: state.callsToday,
+      backfillCallsToday: state.backfillCallsToday,
       dailyCap,
       backfillCeiling,
       deferred,

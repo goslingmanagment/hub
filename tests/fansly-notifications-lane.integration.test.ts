@@ -443,11 +443,11 @@ describe("[sync-critical] WP-F2 notifications lane", () => {
     const seeded = await seedPage();
     // A deliberately small allowance, so the lane hits the boundary with work
     // still to do — the only state in which "defers, never drops" means
-    // anything. 64 leaves the backfill exactly 4 attempts above the head's
-    // reserve; the head itself is never bounded by that reserve.
+    // anything. This leaves the BACKFILL two attempts of its own; the head's
+    // spend does not come out of them.
     await setConfigOverride(testDb.db, {
       key: "fanslyNotificationsDailyCallBudget",
-      value: FORWARD_HEAD_RESERVED_ATTEMPTS + 4,
+      value: FORWARD_HEAD_RESERVED_ATTEMPTS + 2,
       userId: null,
       groupId: randomUUID(),
     });
@@ -478,8 +478,10 @@ describe("[sync-critical] WP-F2 notifications lane", () => {
     expect(result?.continuationRetryAt?.toISOString()).toBe("2026-08-19T09:30:00.000Z");
 
     const state = await cursor(seeded.id);
-    // AT the number, never past it: the check runs BEFORE the call, so two
-    // calls at two attempts each is exactly the backfill's ceiling.
+    // AT the number, never past it: the check runs BEFORE the call, so one
+    // backfill call at two attempts is exactly the backfill's ceiling — while
+    // the lane-wide counter also carries the head poll's two.
+    expect(state!.backfillCallsToday).toBe(2);
     expect(state!.callsToday).toBe(4);
     expect(adapter.calls).toHaveLength(2);
     // NEVER DROPS: every attempt spent produced a journaled body.
@@ -494,10 +496,10 @@ describe("[sync-critical] WP-F2 notifications lane", () => {
       return;
     }
     const seeded = await seedPage();
-    // Two attempts of backfill room above the head's reserve.
+    // One attempt of backfill room of its own.
     await setConfigOverride(testDb.db, {
       key: "fanslyNotificationsDailyCallBudget",
-      value: FORWARD_HEAD_RESERVED_ATTEMPTS + 2,
+      value: FORWARD_HEAD_RESERVED_ATTEMPTS + 1,
       userId: null,
       groupId: randomUUID(),
     });
@@ -529,12 +531,66 @@ describe("[sync-critical] WP-F2 notifications lane", () => {
     expect(adapter.calls.map((call) => call.before)).toEqual(["0", ref(1), "0"]);
 
     const state = await cursor(seeded.id);
-    // The head spent past the backfill's ceiling: the reserve bounds the
-    // one-off walk, never the poll.
+    // The head spent past the backfill's ceiling, and the backfill's own
+    // counter stopped exactly at it: the reserve bounds the one-off walk,
+    // never the poll.
     expect(state!.callsToday).toBe(3);
-    expect(state!.callsToday).toBeGreaterThan(
-      backfillAttemptCeiling(FORWARD_HEAD_RESERVED_ATTEMPTS + 2),
+    expect(state!.backfillCallsToday).toBe(
+      backfillAttemptCeiling(FORWARD_HEAD_RESERVED_ATTEMPTS + 1),
     );
+    expect(state!.callsToday).toBeGreaterThan(state!.backfillCallsToday);
+  });
+
+  it("gives the backfill its own share at a cap the head would otherwise eat", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const seeded = await seedPage();
+    // `fanslyNotificationsDailyCallBudget` is live-editable (min 1) — an owner
+    // dialling it down during a ban scare must SLOW the one-off walk, not end
+    // historical capture in silence. Measured against the lane-wide counter
+    // this cap gave the backfill zero calls a day, for ever, with no anomaly:
+    // the head always spends first.
+    await setConfigOverride(testDb.db, {
+      key: "fanslyNotificationsDailyCallBudget",
+      value: 30,
+      userId: null,
+      groupId: randomUUID(),
+    });
+    expect(backfillAttemptCeiling(30)).toBe(1);
+    const adapter = adapterStub({ pages: (call) => envelope([row(call.before === "0" ? 1 : 2)]) });
+    const telemetry = telemetryStub();
+
+    for (let chunk = 0; chunk < 4; chunk += 1) {
+      await fanslyNotificationsChunk(
+        appStub(adapter),
+        input(seeded.id, telemetry, new SyncChunkBudget()),
+      );
+    }
+
+    // The head poll, then ONE backfill page — the walk moved.
+    expect(adapter.calls.map((call) => call.before)).toEqual(["0", ref(1)]);
+    const parked = await cursor(seeded.id);
+    expect(parked!.backfillCallsToday).toBe(1);
+    expect(parked!.backfill).not.toBeNull();
+
+    // …and the next UTC day gives it another one, because the share rolls with
+    // the lane-wide counter.
+    const tomorrow = new Date(NOW.getTime() + 86_400_000);
+    await fanslyNotificationsChunk(
+      appStub(adapter),
+      input(seeded.id, telemetry, new SyncChunkBudget(), tomorrow),
+    );
+    const rolled = await cursor(seeded.id);
+    expect(rolled!.utcDay).toBe("2026-08-20");
+    expect(rolled!.backfillCallsToday).toBe(0);
+    await fanslyNotificationsChunk(
+      appStub(adapter),
+      input(seeded.id, telemetry, new SyncChunkBudget(), tomorrow),
+    );
+    expect(adapter.calls).toHaveLength(4);
+    expect((await cursor(seeded.id))!.backfillCallsToday).toBe(1);
   });
 
   it("still defers the forward walk itself at the true daily cap", async (context) => {
@@ -604,7 +660,110 @@ describe("[sync-critical] WP-F2 notifications lane", () => {
     expect(state!.filterRefusals).toBe(0);
   });
 
-  it("rotates the type group after a SERVED call instead of polling one forever", async (context) => {
+  it("resumes the deep backfill after a terminal 429 instead of calling it a loop", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const seeded = await seedPage();
+    // The repeat mark used to be armed — and durably saved by the attempt
+    // observer — BEFORE the request left, so a rethrown 429 left the lane
+    // looking at its own dead attempt: the retry read it as a provider that
+    // ignores `before`, marked the walk done and set `backfill: null`. One
+    // rate limit, history walk over.
+    const bodies = [
+      envelope([row(1), row(2)]),
+      envelope([]),
+      envelope([row(3), row(4)]),
+      envelope([]),
+    ];
+    const adapter = adapterStub({
+      fail: (_call, index) =>
+        index === 1
+          ? new FanslyApiError(
+            "rate limited",
+            429,
+            undefined,
+            undefined,
+            new Date(NOW.getTime() + 15 * 60_000),
+          )
+          : null,
+      pages: (_call, index) => bodies[Math.min(index, bodies.length - 1)],
+    });
+    const telemetry = telemetryStub();
+
+    await fanslyNotificationsChunk(
+      appStub(adapter),
+      input(seeded.id, telemetry, new SyncChunkBudget()),
+    );
+    await expect(fanslyNotificationsChunk(
+      appStub(adapter),
+      input(seeded.id, telemetry, new SyncChunkBudget()),
+    )).rejects.toMatchObject({ status: 429 });
+
+    // The executor's rate_limit retry: the walk picks up at exactly the cursor
+    // it could not fetch, and runs to the floor.
+    const resumed = await fanslyNotificationsChunk(
+      appStub(adapter),
+      input(seeded.id, telemetry, new SyncChunkBudget()),
+    );
+    expect(adapter.calls.map((call) => call.before)).toEqual(["0", ref(2), ref(2), ref(4)]);
+    expect(
+      telemetry.anomalies.filter((entry) => entry.code === "fansly_notifications_cursor_repeat"),
+      "an attempt that never returned a body is not a repeat",
+    ).toHaveLength(0);
+    expect(resumed.satisfied).toBe(true);
+    const state = await cursor(seeded.id);
+    expect(state!.backfill).toBeNull();
+    const archive = (await coverageRows(seeded.id))
+      .find((entry) => entry.plane === "notifications")!;
+    expect(archive.status).toBe("provider_exhausted");
+  });
+
+  it("re-polls the head after a terminal 429 instead of declaring a cursor repeat", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const seeded = await seedPage();
+    // Settle the one-off walk first, so the lane is a pure head poller.
+    const settled = adapterStub({
+      pages: (_call, index) => index === 0 ? envelope([row(5)]) : envelope([]),
+    });
+    await drain(seeded.id, settled, telemetryStub());
+    expect((await cursor(seeded.id))!.backfill).toBeNull();
+
+    const limited = adapterStub({
+      fail: () =>
+        new FanslyApiError(
+          "rate limited",
+          429,
+          undefined,
+          undefined,
+          new Date(NOW.getTime() + 15 * 60_000),
+        ),
+    });
+    await expect(fanslyNotificationsChunk(
+      appStub(limited),
+      input(seeded.id, telemetryStub(), new SyncChunkBudget(), new Date(NOW.getTime() + 1_800_000)),
+    )).rejects.toMatchObject({ status: 429 });
+
+    const telemetry = telemetryStub();
+    const recovered = adapterStub({ pages: () => envelope([row(4), row(5)]) });
+    const result = await fanslyNotificationsChunk(
+      appStub(recovered),
+      input(seeded.id, telemetry, new SyncChunkBudget(), new Date(NOW.getTime() + 3_600_000)),
+    );
+
+    // A REAL call — not a "the cursor did not advance" stop that fetches
+    // nothing and still costs the poll.
+    expect(recovered.calls.map((call) => call.before)).toEqual(["0"]);
+    expect(telemetry.anomalies).toHaveLength(0);
+    expect(result.satisfied).toBe(true);
+    expect((await cursor(seeded.id))!.newestSeenNotificationId).toBe(ref(4));
+  });
+
+  it("rotates the type group at the walk boundary, never mid-pagination", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -616,18 +775,25 @@ describe("[sync-critical] WP-F2 notifications lane", () => {
       types !== null && types.join(",") !== FANSLY_NOTIFICATION_DECLARED_TYPE_CSV;
     const adapter = adapterStub({
       fail: (call) => isGroupForm(call.types) ? null : new FanslyApiError("bad type", 400),
-      pages: (_call, index) => index <= 2 ? envelope([row(1)]) : envelope([]),
+      // call 2 = the head page; calls 3-4 = a TWO-page backfill walk in one
+      // chunk, which is where a mid-pagination rotation would show up.
+      pages: (_call, index) =>
+        index === 2 ? envelope([row(1)]) : index === 3 ? envelope([row(2)]) : envelope([]),
     });
     await drain(seeded.id, adapter, telemetryStub());
 
     const served = adapter.calls.filter((call) => isGroupForm(call.types));
-    expect(served).toHaveLength(2);
-    // The purchase group first — money leads the degraded path — and then the
-    // NEXT group, not the same one again. The index used to move only on a
-    // refusal, so a lane that reached `type_groups` asked for one group's
-    // codes forever and never saw the rest.
+    expect(served).toHaveLength(3);
+    // The purchase group first — money leads the degraded path — then the NEXT
+    // group on the NEXT walk. The index used to move only on a refusal, so a
+    // lane that reached `type_groups` asked for one group's codes forever and
+    // never saw the rest.
     expect(served[0]?.types).toEqual(FANSLY_NOTIFICATION_TYPE_GROUPS[0]);
     expect(served[1]?.types).toEqual(FANSLY_NOTIFICATION_TYPE_GROUPS[1]);
+    // ONE WALK, ONE FORM: page 2 of the backfill walk keeps the filter page 1
+    // was paginated under. Rotating inside the fetch would have sent this
+    // `before` cursor through a different type set and skipped rows.
+    expect(served[2]?.types).toEqual(FANSLY_NOTIFICATION_TYPE_GROUPS[1]);
     const state = await cursor(seeded.id);
     expect(state!.typeGroupIndex).toBe(2);
   });
