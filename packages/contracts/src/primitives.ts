@@ -65,6 +65,12 @@ export const errorResponseSchema = z.object({
   error: z.string(),
   message: z.string(),
   statusCode: z.number().int(),
+  // Documented structured extension (docs/error-handling.md §3): a machine
+  // reason alongside the code, present only where the registry says so —
+  // `unauthorized` for a presented device token that matched a row
+  // (token_revoked | token_expired) and `conflict` on account-link redemption
+  // (used | expired | revoked). Optional, so every other error stays as it was.
+  reason: z.string().optional(),
 });
 
 export const paginationQuerySchema = z.object({

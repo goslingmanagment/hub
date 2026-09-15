@@ -40,6 +40,7 @@ describe("users catalog loading failures", () => {
       apiKeyStatus: null,
       disabledAt: null,
       lastActiveAt: null,
+      registrationState: "active",
     };
     const markup = renderUsers([owner], true);
     expect(markup).toContain("dmitriy");

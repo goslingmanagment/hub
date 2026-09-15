@@ -1,6 +1,6 @@
 {
   "name": "@kernel/sdk",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Generated kernel API client. Do not edit by hand — regenerate with `pnpm contracts:generate`.",
   "type": "module",
   "exports": {

@@ -34,7 +34,7 @@ import {
   setDeviceTokenHarvestCapabilityForUsername,
   unassignPageFromUser,
 } from "../../services/auth.ts";
-import { NotFoundError } from "../../services/errors.ts";
+import { AppError, NotFoundError } from "../../services/errors.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 
 // Identity module (target §6.1): auth, sessions, users, api-keys. Handlers
@@ -393,4 +393,45 @@ export function registerIdentityRoutes(server: ApiServer, ctx: ApiModuleContext)
     requireOwner(principal);
     return { grants: await listUserGrants(appContext, request.params.username) };
   });
+
+  // --- Decision 347: unified chatter account (PR-1A) ---
+  // Contract-first step: the routes are declared and registered so the policy
+  // table and the generated SDK carry them; the handlers land in the next
+  // commits of the same PR.
+  const notImplemented = () => {
+    throw new AppError("Not implemented yet", 501, "not_implemented");
+  };
+  const ownerOnly = async (request: Parameters<typeof requirePrincipal>[0]) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    return notImplemented();
+  };
+  const sessionOnly = async (request: Parameters<typeof requirePrincipal>[0]) => {
+    const principal = await requirePrincipal(request);
+    requireSessionUser(principal);
+    return notImplemented();
+  };
+
+  server.post("/api/v1/admin/invites", { schema: routeSchemas.adminCreateInvite }, ownerOnly);
+  server.post("/api/v1/admin/users/:username/links", { schema: routeSchemas.adminCreateAccountLink }, ownerOnly);
+  server.get("/api/v1/admin/users/:username/links", { schema: routeSchemas.adminListAccountLinks }, ownerOnly);
+  server.post("/api/v1/admin/users/:username/links/:linkId/revoke", { schema: routeSchemas.adminRevokeAccountLink }, ownerOnly);
+  server.delete("/api/v1/admin/users/:username/device-tokens/:tokenId", { schema: routeSchemas.adminRevokeDeviceToken }, ownerOnly);
+  server.post("/api/v1/admin/users/:username/terminate-access", { schema: routeSchemas.adminTerminateAllAccess }, ownerOnly);
+  server.post("/api/v1/auth/links/inspect", {
+    schema: routeSchemas.authInspectAccountLink,
+    config: { rateLimit: { max: 30, timeWindow: 60_000 } },
+  }, notImplemented);
+  server.post("/api/v1/auth/links/redeem", {
+    schema: routeSchemas.authRedeemAccountLink,
+    config: { rateLimit: { max: 10, timeWindow: 60_000 } },
+  }, notImplemented);
+  server.post("/api/v1/auth/device-tokens/password", {
+    schema: routeSchemas.authIssueDeviceTokenWithPassword,
+    config: { rateLimit: { max: 20, timeWindow: 60_000 } },
+  }, notImplemented);
+  server.get("/api/v1/auth/devices", { schema: routeSchemas.authListDevices }, sessionOnly);
+  server.delete("/api/v1/auth/devices/:deviceId", { schema: routeSchemas.authRevokeDevice }, sessionOnly);
+  server.post("/api/v1/auth/devices/revoke-all", { schema: routeSchemas.authRevokeAllDevices }, sessionOnly);
+  server.get("/api/v1/auth/usage", { schema: routeSchemas.authMyUsage }, sessionOnly);
 }

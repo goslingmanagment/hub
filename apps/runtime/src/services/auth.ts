@@ -110,6 +110,8 @@ export interface AdminUserDetailed extends AuthenticatedUser {
   apiKeyStatus: AdminUserApiKeyStatus | null;
   disabledAt: string | null;
   lastActiveAt: string | null;
+  /** Decision 347 (§4.1 p.12): "invited" until the invite link sets a password. */
+  registrationState: "invited" | "active";
 }
 
 /**
@@ -303,6 +305,7 @@ async function getAdminUserById(app: AppContext, userId: number) {
       : null,
     disabledAt: user.disabledAt?.toISOString() ?? null,
     lastActiveAt: lastActiveMs > 0 ? new Date(lastActiveMs).toISOString() : null,
+    registrationState: user.passwordHash === null ? "invited" : "active",
   } satisfies AdminUserDetailed;
 }
 
@@ -1678,6 +1681,9 @@ function deviceTokenResponse(token: Awaited<ReturnType<typeof listDeviceTokensFo
     isActive: token.revokedAt === null && token.expiresAt > new Date(),
     expiresAt: token.expiresAt.toISOString(),
     lastUsedAt: token.lastUsedAt?.toISOString() ?? null,
+    // Contract-first step of Decision 347: the column lands with migration
+    // 0199 in the next commit of the same PR; until then the field is null.
+    lastClientVersion: null,
     createdAt: token.createdAt.toISOString(),
     revokedAt: token.revokedAt?.toISOString() ?? null,
     revokedReason: token.revokedReason ?? null,

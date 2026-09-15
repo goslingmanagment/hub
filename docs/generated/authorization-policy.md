@@ -22,7 +22,7 @@ body remain handler-checked and are noted per route in the service layer.
 | `agentKey` | Agent Read Plane key only; no human principal is admitted |
 | `any` | any authenticated principal except an agent key |
 
-## Routes (261)
+## Routes (274)
 
 | Method | Path | Route key | Kind | Roles | Page scope |
 | --- | --- | --- | --- | --- | --- |
@@ -39,6 +39,7 @@ body remain handler-checked and are noted per route in the service layer.
 | GET | `/api/v1/admin/db/stats` | `adminDbStats` | `owner-session` | — | — |
 | GET | `/api/v1/admin/device-token-adoption` | `adminDeviceTokenAdoption` | `owner-session` | — | — |
 | GET | `/api/v1/admin/incidents` | `adminIncidents` | `owner-session` | — | — |
+| POST | `/api/v1/admin/invites` | `adminCreateInvite` | `owner-session` | — | — |
 | GET | `/api/v1/admin/logs` | `adminLogs` | `owner-session` | — | — |
 | GET | `/api/v1/admin/models` | `adminModels` | `owner-session` | — | — |
 | POST | `/api/v1/admin/models` | `adminCreateModel` | `owner-session` | — | — |
@@ -154,14 +155,19 @@ body remain handler-checked and are noted per route in the service layer.
 | DELETE | `/api/v1/admin/users/:username/device-tokens` | `adminRevokeDeviceTokens` | `owner-session` | — | — |
 | GET | `/api/v1/admin/users/:username/device-tokens` | `adminListDeviceTokens` | `owner-session` | — | — |
 | POST | `/api/v1/admin/users/:username/device-tokens` | `adminIssueDeviceToken` | `owner-session` | — | — |
+| DELETE | `/api/v1/admin/users/:username/device-tokens/:tokenId` | `adminRevokeDeviceToken` | `owner-session` | — | — |
 | PATCH | `/api/v1/admin/users/:username/device-tokens/:tokenId/harvest-capability` | `adminSetDeviceTokenHarvestCapability` | `owner-session` | — | — |
 | GET | `/api/v1/admin/users/:username/grants` | `adminListUserGrants` | `owner-session` | — | — |
+| GET | `/api/v1/admin/users/:username/links` | `adminListAccountLinks` | `owner-session` | — | — |
+| POST | `/api/v1/admin/users/:username/links` | `adminCreateAccountLink` | `owner-session` | — | — |
+| POST | `/api/v1/admin/users/:username/links/:linkId/revoke` | `adminRevokeAccountLink` | `owner-session` | — | — |
 | POST | `/api/v1/admin/users/:username/models` | `adminGrantModel` | `owner-session` | — | — |
 | DELETE | `/api/v1/admin/users/:username/models/:modelSlug` | `adminRevokeModel` | `owner-session` | — | — |
 | POST | `/api/v1/admin/users/:username/pages` | `adminAssignPage` | `owner-session` | — | — |
 | DELETE | `/api/v1/admin/users/:username/pages/:pageLabel` | `adminUnassignPage` | `owner-session` | — | — |
 | PATCH | `/api/v1/admin/users/:username/password` | `adminSetPassword` | `owner-session` | — | — |
 | POST | `/api/v1/admin/users/:username/reactivate` | `adminReactivateUser` | `owner-session` | — | — |
+| POST | `/api/v1/admin/users/:username/terminate-access` | `adminTerminateAllAccess` | `owner-session` | — | — |
 | GET | `/api/v1/agent/capabilities` | `agentCapabilities` | `agentKey` | — | — |
 | GET | `/api/v1/agent/coverage` | `agentCoverage` | `agentKey` | — | — |
 | GET | `/api/v1/agent/hydration-requests` | `agentHydrationRequestList` | `owner-session` | — | — |
@@ -196,10 +202,17 @@ body remain handler-checked and are noted per route in the service layer.
 | POST | `/api/v1/auth/device-tokens` | `authIssueDeviceToken` | `any-session` | — | — |
 | POST | `/api/v1/auth/device-tokens/activate` | `authActivateDeviceToken` | `pending-device-token` | — | — |
 | DELETE | `/api/v1/auth/device-tokens/current` | `authRevokeCurrentDeviceToken` | `device-token` | — | — |
+| POST | `/api/v1/auth/device-tokens/password` | `authIssueDeviceTokenWithPassword` | `public` | — | — |
 | POST | `/api/v1/auth/device-tokens/reservations` | `authReserveDeviceToken` | `any-session` | — | — |
+| GET | `/api/v1/auth/devices` | `authListDevices` | `any-session` | — | — |
+| DELETE | `/api/v1/auth/devices/:deviceId` | `authRevokeDevice` | `any-session` | — | — |
+| POST | `/api/v1/auth/devices/revoke-all` | `authRevokeAllDevices` | `any-session` | — | — |
+| POST | `/api/v1/auth/links/inspect` | `authInspectAccountLink` | `public` | — | — |
+| POST | `/api/v1/auth/links/redeem` | `authRedeemAccountLink` | `public` | — | — |
 | POST | `/api/v1/auth/login` | `login` | `public` | — | — |
 | POST | `/api/v1/auth/logout` | `logout` | `public` | — | — |
 | GET | `/api/v1/auth/me` | `me` | `any` | — | — |
+| GET | `/api/v1/auth/usage` | `authMyUsage` | `any-session` | — | — |
 | GET | `/api/v1/events/snapshot` | `eventsSnapshot` | `apiKey` | — | — |
 | GET | `/api/v1/events/stream` | `eventsStream` | `apiKey` | — | — |
 | GET | `/api/v1/events/v2/snapshot` | `eventsV2Snapshot` | `any` | — | — |

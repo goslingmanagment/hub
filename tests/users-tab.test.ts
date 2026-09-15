@@ -18,6 +18,7 @@ describe("findAdminUserByUsername", () => {
       apiKeyStatus: null,
       disabledAt: null,
       lastActiveAt: null,
+      registrationState: "active" as const,
     };
     const refreshedUser = {
       ...staleUser,
@@ -55,6 +56,7 @@ describe("sortChattersByActivity", () => {
       apiKeyStatus: null,
       disabledAt: null,
       lastActiveAt,
+      registrationState: "active" as const,
     };
   }
 
