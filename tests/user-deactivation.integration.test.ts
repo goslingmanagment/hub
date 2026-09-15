@@ -183,4 +183,63 @@ describe("user deactivation (#126)", () => {
       headers: { cookie: ownerCookie },
     })).status).toBe(400);
   }, 60_000);
+
+  // Decision 347 §4.1 p.7: an invite or reset link is a credential in waiting,
+  // so it dies with the account — and reactivation does NOT bring it back, the
+  // owner mints a fresh one.
+  it("revokes active links on deactivation and never revives them on reactivation", async (context) => {
+    if (!requireSetup(context)) return;
+    const ownerCookie = cookieOf(await login("dima", "owner-secret"));
+
+    const createLink = async () => {
+      const response = await fetch(`${baseUrl}/api/v1/admin/users/vera/links`, {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie: ownerCookie },
+        body: JSON.stringify({ kind: "password_reset" }),
+      });
+      return { status: response.status, body: await response.json() as { id: number; token: string } };
+    };
+    const listLinks = async () => {
+      const response = await fetch(`${baseUrl}/api/v1/admin/users/vera/links`, {
+        headers: { cookie: ownerCookie },
+      });
+      return await response.json() as Array<{
+        id: number;
+        state: string;
+        revokedReason: string | null;
+      }>;
+    };
+
+    const link = await createLink();
+    expect(link.status).toBe(200);
+    expect((await listLinks()).find((row) => row.id === link.body.id)?.state).toBe("active");
+
+    expect((await fetch(`${baseUrl}/api/v1/admin/users/vera/deactivate`, {
+      method: "POST",
+      headers: { cookie: ownerCookie },
+    })).status).toBe(200);
+    expect((await listLinks()).find((row) => row.id === link.body.id)).toMatchObject({
+      state: "revoked",
+      revokedReason: "user_deactivated",
+    });
+
+    const redeem = await fetch(`${baseUrl}/api/v1/auth/links/redeem`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ token: link.body.token, password: "correct-horse-battery-1" }),
+    });
+    expect(redeem.status).toBe(409);
+    expect((await redeem.json() as { reason?: string }).reason).toBe("revoked");
+
+    expect((await fetch(`${baseUrl}/api/v1/admin/users/vera/reactivate`, {
+      method: "POST",
+      headers: { cookie: ownerCookie },
+    })).status).toBe(200);
+    expect((await listLinks()).find((row) => row.id === link.body.id)?.state).toBe("revoked");
+
+    // A new link, on the other hand, works immediately.
+    const replacement = await createLink();
+    expect(replacement.status).toBe(200);
+    expect((await listLinks()).find((row) => row.id === replacement.body.id)?.state).toBe("active");
+  }, 60_000);
 });

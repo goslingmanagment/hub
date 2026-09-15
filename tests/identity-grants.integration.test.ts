@@ -184,7 +184,12 @@ describe("Stage 22 identity", () => {
     await testDb!.pool.query(
       "update device_tokens set expires_at = now() - interval '1 minute' where label = 'antons-macbook'",
     );
-    expect(await authenticateDeviceToken(app!, deviceToken)).toBeNull();
+    // Decision 347: the lane answers with a principal OR a structured refusal;
+    // an expired row yields no principal and the reason the client heals on.
+    expect(await authenticateDeviceToken(app!, deviceToken)).toEqual({
+      principal: null,
+      failure: { reason: "token_expired" },
+    });
     await testDb!.pool.query(
       "update device_tokens set expires_at = now() + interval '1 day' where label = 'antons-macbook'",
     );
