@@ -4,6 +4,7 @@ export function ConfirmModal({
   title,
   message,
   confirmLabel = "Delete",
+  cancelLabel = "Cancel",
   isPending,
   onConfirm,
   onClose,
@@ -11,6 +12,7 @@ export function ConfirmModal({
   title: string;
   message: string;
   confirmLabel?: string;
+  cancelLabel?: string;
   isPending: boolean;
   onConfirm: () => void;
   onClose: () => void;
@@ -24,7 +26,7 @@ export function ConfirmModal({
           onClick={onClose}
           className="rounded-lg border border-border bg-card px-3 py-2 text-sm text-text-secondary hover:bg-hover"
         >
-          Cancel
+          {cancelLabel}
         </button>
         <button
           type="button"

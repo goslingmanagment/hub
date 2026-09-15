@@ -27,8 +27,10 @@ import {
   formatRelativeRu,
   LINK_KIND_LABEL,
   linkStateLabel,
+  REVOCATION_LABEL,
   ROLE_LABEL,
   splitDevices,
+  TEAM_PAGE_LABELS,
   TEAM_STATUS_LABEL,
   teamStatus,
 } from "./teamView.js";
@@ -51,6 +53,18 @@ type Confirmation = "revokeAllDevices" | "terminateAccess" | "deactivate" | "rea
 
 const LINK_RESETTABLE_ROLES: ReadonlySet<string> = new Set(["chatter", "team_lead"]);
 
+/**
+ * The kernel refuses to terminate an owner's access or to deactivate an owner
+ * (`adminTerminateAllAccess` and `deactivateUser` both answer 400): the owner
+ * must not be able to lock themselves out of the only console. Offering the
+ * buttons anyway would put an English server error in front of a Russian
+ * screen, so they are not rendered for an owner at all — the same treatment
+ * the password link already gets through LINK_RESETTABLE_ROLES.
+ */
+function ownerIsProtected(user: AdminUser): boolean {
+  return user.role === "owner";
+}
+
 export function UserDetailModal({
   user,
   createLink,
@@ -69,6 +83,7 @@ export function UserDetailModal({
     <>
       <ModalShell
         title={user.username}
+        closeLabel="Закрыть"
         onClose={() => {
           // While a confirmation is up, Escape belongs to the confirmation.
           if (!confirmation) onClose();
@@ -99,7 +114,7 @@ export function UserDetailModal({
           <DevicesSection
             username={user.username}
             onRevokeAll={() => setConfirmation("revokeAllDevices")}
-            onTerminate={() => setConfirmation("terminateAccess")}
+            onTerminate={ownerIsProtected(user) ? null : () => setConfirmation("terminateAccess")}
           />
 
           <LinksSection
@@ -110,11 +125,20 @@ export function UserDetailModal({
 
           <PagesSection user={user} />
 
-          <AccountStateSection
-            user={user}
-            onDeactivate={() => setConfirmation("deactivate")}
-            onReactivate={() => setConfirmation("reactivate")}
-          />
+          {!ownerIsProtected(user) && (
+            <AccountStateSection
+              user={user}
+              onDeactivate={() => setConfirmation("deactivate")}
+              onReactivate={() => setConfirmation("reactivate")}
+            />
+          )}
+
+          {ownerIsProtected(user) && (
+            <p className="rounded-lg border border-border bg-hover-alt px-3 py-2.5 text-xs text-text-muted">
+              Владельца нельзя деактивировать и нельзя завершить все его входы —
+              иначе консоль осталась бы без хозяина. Пароль владелец меняет сам.
+            </p>
+          )}
         </div>
 
         <div className="mt-6 flex items-center justify-end">
@@ -150,7 +174,8 @@ function DevicesSection({
 }: {
   username: string;
   onRevokeAll: () => void;
-  onTerminate: () => void;
+  /** null for an owner: the kernel refuses to terminate their access. */
+  onTerminate: (() => void) | null;
 }) {
   const { data: devices, isLoading, isError, error } = useUserDevices(username);
   const revokeDevice = useRevokeDevice(username);
@@ -203,7 +228,7 @@ function DevicesSection({
               onClick={() => handleRevoke(device)}
               className="shrink-0 rounded-lg border border-border bg-card px-2.5 py-1 text-xs font-medium text-danger transition-colors hover:bg-danger/10 disabled:opacity-50"
             >
-              Завершить вход на устройстве
+              {REVOCATION_LABEL.device}
             </button>
           </div>
         ))}
@@ -244,15 +269,17 @@ function DevicesSection({
           onClick={onRevokeAll}
           className="rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-medium text-text-secondary hover:bg-hover"
         >
-          Отозвать все устройства
+          {REVOCATION_LABEL.allDevices}
         </button>
-        <button
-          type="button"
-          onClick={onTerminate}
-          className="rounded-lg border border-danger/25 bg-danger/5 px-3 py-1.5 text-xs font-medium text-danger hover:bg-danger/10"
-        >
-          Завершить все входы
-        </button>
+        {onTerminate && (
+          <button
+            type="button"
+            onClick={onTerminate}
+            className="rounded-lg border border-danger/25 bg-danger/5 px-3 py-1.5 text-xs font-medium text-danger hover:bg-danger/10"
+          >
+            {REVOCATION_LABEL.allAccess}
+          </button>
+        )}
       </div>
     </div>
   );
@@ -418,6 +445,7 @@ function PagesSection({ user }: { user: AdminUser }) {
       pagesLoading={isLoading && !allPages}
       pagesError={isError}
       onRetryPages={() => void refetch()}
+      labels={TEAM_PAGE_LABELS}
     />
   );
 }
@@ -490,7 +518,7 @@ function ConfirmationDialog({
 
   const dialogs = {
     revokeAllDevices: {
-      title: `Отозвать все устройства ${user.username}?`,
+      title: `${REVOCATION_LABEL.allDevices} — ${user.username}?`,
       message: "Расширение и приложение на всех устройствах перестанут работать и попросят "
         + "войти заново. Вход в консоль и пароль не затрагиваются.",
       confirmLabel: "Отозвать",
@@ -503,7 +531,7 @@ function ConfirmationDialog({
       },
     },
     terminateAccess: {
-      title: `Завершить все входы ${user.username}?`,
+      title: `${REVOCATION_LABEL.allAccess} — ${user.username}?`,
       message: "Завершаются входы на всех устройствах, вход в консоль и все действующие "
         + "ссылки. Человек остаётся в команде, пароль продолжает работать — он сможет "
         + "войти заново сам.",
@@ -554,6 +582,7 @@ function ConfirmationDialog({
       title={dialog.title}
       message={dialog.message}
       confirmLabel={dialog.confirmLabel}
+      cancelLabel="Отмена"
       isPending={dialog.isPending}
       onConfirm={handleConfirm}
       onClose={onClose}

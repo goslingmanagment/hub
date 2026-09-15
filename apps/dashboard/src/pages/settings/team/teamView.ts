@@ -151,9 +151,13 @@ const LINK_REVOKED_REASON_LABEL: Readonly<Record<string, string>> = {
   revoked_by_owner: "отозвана владельцем",
 };
 
+/** A reason the kernel grew after this build is still a machine word
+ * (`revoked_by_owner`), and showing it verbatim would put exactly the
+ * vocabulary §2 forbids on the owner's screen. An unknown reason degrades to
+ * no reason at all: the state alone is already true. */
 export function linkRevokedReasonLabel(reason: string | null): string | null {
   if (!reason) return null;
-  return LINK_REVOKED_REASON_LABEL[reason] ?? reason;
+  return LINK_REVOKED_REASON_LABEL[reason] ?? null;
 }
 
 export function linkStateLabel(
@@ -178,9 +182,18 @@ export function linkStateLabel(
 /*  Devices                                                            */
 /* ------------------------------------------------------------------ */
 
+/** The three revocations of §4.4, each named for how far it actually reaches.
+ * The card renders these constants and tests/team-access-intents.test.ts ties
+ * each one to the kernel operation it fires, so a label can never drift away
+ * from the thing it promises to do. */
+export const REVOCATION_LABEL = {
+  device: "Завершить вход на устройстве",
+  allDevices: "Отозвать все устройства",
+  allAccess: "Завершить все входы",
+} as const;
+
 // The kernel's reasons as written today (`revoked` = revoke-all,
-// `self_revoked`, `user_deactivated`) plus the Decision 347 additions; an
-// unknown reason is shown verbatim rather than hidden.
+// `self_revoked`, `user_deactivated`) plus the Decision 347 additions.
 const DEVICE_REVOKED_REASON_LABEL: Readonly<Record<string, string>> = {
   revoked: "все устройства отозваны",
   revoked_by_owner: "вход завершён владельцем",
@@ -192,9 +205,11 @@ const DEVICE_REVOKED_REASON_LABEL: Readonly<Record<string, string>> = {
   access_terminated: "все входы завершены",
 };
 
+/** Same rule as links: an unrecognised reason is dropped rather than shown
+ * raw, and the caller falls back to the plain "вход завершён". */
 export function deviceRevokedReasonLabel(reason: string | null): string | null {
   if (!reason) return null;
-  return DEVICE_REVOKED_REASON_LABEL[reason] ?? reason;
+  return DEVICE_REVOKED_REASON_LABEL[reason] ?? null;
 }
 
 /** Live sign-ins first (freshest activity on top); everything else — expired
@@ -237,3 +252,19 @@ export function formatRelativeRu(iso: string, now: number = Date.now()): string 
   const days = Math.floor(hours / 24);
   return `${days} дн назад`;
 }
+
+
+/* ------------------------------------------------------------------ */
+/*  Pages                                                              */
+/* ------------------------------------------------------------------ */
+
+/** The shared page-assignment editor ships English copy for the screens that
+ * have always used it; inside the Team card it speaks the owner's language. */
+export const TEAM_PAGE_LABELS = {
+  assigned: "Страницы",
+  empty: "Страниц пока нет.",
+  unassign: "Снять",
+  assignHeading: "Назначить страницу",
+  select: "Выбери страницу…",
+  assign: "Назначить",
+} as const;
