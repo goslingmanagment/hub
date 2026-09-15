@@ -431,7 +431,10 @@ describe("redeem", () => {
       .toMatchObject({ passwordHash: null });
   });
 
-  it("holds the password rule: too short and too common are refused", async (context) => {
+  // Over HTTP only `common` can reach a client: the route schema rejects the
+  // length cases first, with a plain validation 400 and no reason. These are the
+  // service-level verdicts (the HTTP `common` case is pinned further down).
+  it("holds the password rule, with the verdict as a machine reason", async (context) => {
     const setup = requireSetup(context);
     if (!setup) return;
     const invited = await createInvite(setup.app, {
@@ -463,7 +466,7 @@ describe("redeem", () => {
     expect(await activeLinkCount(setup.testDb)).toBe(1);
   });
 
-  it("terminates every sign-in when the link is a password reset, and only sets the password when it is an invite", async (context) => {
+  it("terminates every sign-in on a reset, and leaves a FIRST registration nothing to terminate", async (context) => {
     const setup = requireSetup(context);
     if (!setup) return;
     const invited = await createInvite(setup.app, {
@@ -505,6 +508,61 @@ describe("redeem", () => {
       username: "grisha",
       password: "brand-new-secret-7",
     })).user.username).toBe("grisha");
+  });
+
+  // Review finding: `assertInviteAllowed` lets an INVITE through for a user who
+  // has a password but never redeemed a link — which is every person onboarded
+  // before Decision 347 shipped. Redeeming it is a password change, so it must
+  // drag the same revocation ladder behind it as a reset; otherwise the owner
+  // could hand out an invite link and silently re-password a live account while
+  // its old devices and sessions kept working.
+  it("terminates the old sign-ins when an INVITE is redeemed on an account that already had a password", async (context) => {
+    const setup = requireSetup(context);
+    if (!setup) return;
+    await createUserAccount(setup.app, {
+      username: "nikita",
+      role: "team_lead",
+      password: "chatter-secret-1",
+    }, { source: "cli" });
+    const device = await issueDeviceTokenForUsername(setup.app, {
+      username: "nikita",
+      label: "Firefox · Windows",
+    }, OWNER_AUDIT);
+    await loginWithPassword(setup.app, { username: "nikita", password: "chatter-secret-1" });
+    expect(await countRows(
+      setup.testDb,
+      "select count(*)::text as count from auth_sessions where revoked_at is null",
+    )).toBe(1);
+
+    const invite = await createAccountLinkForUsername(setup.app, {
+      username: "nikita",
+      kind: "invite",
+    }, OWNER_AUDIT);
+    await redeemAccountLink(setup.app, { token: invite.token, password: "brand-new-secret-7" });
+
+    expect(await countRows(
+      setup.testDb,
+      "select count(*)::text as count from device_tokens where revoked_at is null",
+    )).toBe(0);
+    expect(await countRows(
+      setup.testDb,
+      "select count(*)::text as count from auth_sessions where revoked_at is null",
+    )).toBe(0);
+    expect(device.token).toMatch(/^agency_hub_device_/);
+    await expect(loginWithPassword(setup.app, {
+      username: "nikita",
+      password: "chatter-secret-1",
+    })).rejects.toMatchObject({ statusCode: 401 });
+    expect((await loginWithPassword(setup.app, {
+      username: "nikita",
+      password: "brand-new-secret-7",
+    })).user.username).toBe("nikita");
+
+    // The journal says which of the two shapes this redemption was.
+    const audit = await setup.testDb.pool.query<{ metadata: Record<string, unknown> }>(
+      "select metadata from audit_events where event_type = 'user.password_set_via_link' order by id desc limit 1",
+    );
+    expect(audit.rows[0]?.metadata).toMatchObject({ terminatedExistingAccess: true });
   });
 });
 

@@ -403,9 +403,16 @@ const CONFLICT_MESSAGES: Record<Exclude<AccountLinkState, "active">, string> = {
 
 /**
  * §4.1 p.3/6/9, §4.2, §4.4: set the password through a link. One-time — the
- * link is marked used in the same transaction as the password. A reset link
- * also terminates every sign-in of the account; an invite only sets the
- * password. Every check is repeated under the user + link locks.
+ * link is marked used in the same transaction as the password. Every check is
+ * repeated under the user + link locks.
+ *
+ * Whether the old sign-ins survive depends on whether there WAS an account
+ * behind them, not on the label of the link: a reset always terminates every
+ * sign-in, and so does an invite redeemed on an account that already had a
+ * password. Only a first registration — no password yet — has nothing to
+ * terminate. (Review clarification to §4.1 p.4: `assertInviteAllowed` lets an
+ * invite through for a user who has a password but never redeemed one, which is
+ * every person onboarded before this decision shipped.)
  */
 export async function redeemAccountLink(
   app: AppContext,
@@ -416,8 +423,11 @@ export async function redeemAccountLink(
   }
   const verdict = checkNewPassword(input.password);
   if (verdict !== "ok") {
-    // The verdict travels as a machine `reason` beside the message: the /join
-    // page tells "too common" from "too short" without parsing prose.
+    // The verdict travels as a machine `reason` beside the message. Over HTTP
+    // only `common` can reach a client: the route schema's own min(12)/max(256)
+    // rejects the length cases first, with a plain validation 400 that carries
+    // no reason. The length verdicts stay because this function is also called
+    // directly (CLI, tests) and because the rule must not live in two places.
     throw new BadRequestError(PASSWORD_POLICY_MESSAGES[verdict], { reason: verdict });
   }
   const tokenDigest = sha256Hex(input.token);
@@ -452,8 +462,15 @@ export async function redeemAccountLink(
     await updateUserMustChangePassword(dbTx, user.id, false);
     await markAccountLinkUsed(dbTx, link.id, now);
     const otherLinks = await revokeActiveAccountLinks(dbTx, user.id, "password_set");
-    const terminated = link.kind === "password_reset"
-      ? await terminateAccessTx(dbTx, user, "password_reset")
+    // `user` is the row as it stands under the lock, read BEFORE the update
+    // above, so this is the pre-redemption password.
+    const hadPassword = user.passwordHash !== null;
+    const terminated = link.kind === "password_reset" || hadPassword
+      ? await terminateAccessTx(
+        dbTx,
+        user,
+        link.kind === "password_reset" ? "password_reset" : "password_set",
+      )
       : null;
 
     await recordAudit({ db: dbTx }, {
@@ -467,6 +484,9 @@ export async function redeemAccountLink(
         kind: link.kind,
         keyPrefix: link.keyPrefix,
         revokedAccountLinks: otherLinks.length,
+        // False only for a first registration; a re-set of an existing
+        // password always terminates the old sign-ins.
+        terminatedExistingAccess: terminated !== null,
         revokedDeviceTokens: terminated?.deviceTokens ?? 0,
         deletedPendingDeviceTokens: terminated?.pendingDeviceTokens ?? 0,
         revokedSessions: terminated?.sessions ?? 0,

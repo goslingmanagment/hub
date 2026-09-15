@@ -397,6 +397,24 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   "0186_ops_metrics_recent_series.sql"
   "0192_fansly_dm_shadow_material_probe.sql"
   "0194_fansly_dm_shadow_reader_probe.sql"
+  # Decision 347 (unified chatter account). Both are PURELY ADDITIVE and the
+  # previous image never reads them: 0199 creates `account_links` and adds the
+  # nullable `device_tokens.last_client_version`; 0200 adds a unique index on
+  # lower(username), which the old code neither queries nor violates (it already
+  # enforced a case-sensitive UNIQUE on the same column).
+  #
+  # They are listed here because 0200 is the one migration of this pair that can
+  # FAIL on production data — a pre-existing pair of logins differing only in
+  # case. Startup owns migration, so that failure lands after the old container
+  # is already gone: without these entries the delta (0199 committed and in the
+  # ledger, 0200 rolled back with its own transaction) would count as
+  # non-compatible, automatic rollback would switch itself off, and production
+  # would be left with no running image at all. With them the deploy restores
+  # the previous image by itself, and the only manual step left is renaming the
+  # colliding login. Precondition query and the failure drill:
+  # docs/runbooks/unified-account-deploy.md.
+  "0199_account_links.sql"
+  "0200_users_username_lower_uidx.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"

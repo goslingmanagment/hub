@@ -14153,7 +14153,13 @@ travels in the URL fragment and comes back in a POST body). Seven days by
 default, thirty at most, one-time: `used_at` is set in the same transaction as
 the password. An `invite` completes only an unfinished registration; a user who
 already has a password gets a `password_reset`, and an owner gets neither (owners
-change their own password). A new link of either kind supersedes every previously
+change their own password). **What the ladder does depends on the ACCOUNT, not
+on the label of the link:** a reset always terminates every sign-in, and so does
+an invite redeemed on an account that already had a password — only a first
+registration has nothing to terminate. Review finding: "has never redeemed an
+invite" is true of everyone onboarded before this decision, so the eligibility
+check alone would have let an invite link re-password a live account while its
+devices and sessions kept working. A new link of either kind supersedes every previously
 active link of that user, and so does any password set, any deactivation and any
 termination of access — `revoked_reason` records which. At most ONE active link
 per user: every writer takes the user row lock first (users → link, the same
@@ -14184,10 +14190,29 @@ exactly as before (they are removed in PR-4, once the fleet has moved), and
 `mustChangePassword` stays in `authUserSchema` because the vendored client SDKs
 require the field. The additions are three fields (`lastClientVersion`,
 `registrationState`, the optional `reason` in the error envelope) and thirteen
-routes. Both migrations are additive; the image can be rolled back by hand. The
-public link routes carry per-IP rate limits (30/min inspect, 10/min redeem,
-20/min password sign-in) and a live kill switch, `ACCOUNT_LINKS_ENABLED` — false
-makes them answer 404 while the owner can still mint links in the console.
+routes. The three public routes carry per-IP rate limits: 30/min inspect, 10/min
+redeem, 20/min password sign-in.
+
+**The kill switch covers the link PAGES, not sign-in.** `ACCOUNT_LINKS_ENABLED`
+(live, editable, no restart) makes `/auth/links/inspect` and
+`/auth/links/redeem` answer 404 while the owner can still mint links in the
+console. It deliberately does NOT gate `authIssueDeviceTokenWithPassword`: after
+PR-E1 and PR-D1 that route is the fleet's only way in, so a switch that could
+turn it off would be a lock-out button. Sign-in is bounded by its rate limit and
+the per-account backoff instead.
+
+**Deploying it.** Both migrations are additive, and the previous image reads
+neither, so they are listed in `ROLLBACK_COMPATIBLE_MIGRATIONS`
+(`scripts/deploy-production.sh`). That listing is what keeps the deploy safe in
+the one case that can fail: `0200` adds a unique index on `lower(username)` and
+production data can refuse it. The precondition is
+`select lower(username), count(*) from users group by 1 having count(*) > 1`
+returning zero rows; the owner runs it before the deploy and renames one of any
+colliding pair. If it fails anyway, the failure lands after the old container is
+gone (startup owns migration), `0199` is committed while `0200` rolled back with
+its own transaction, and — because both files are on that list — the deploy
+script restores the previous image by itself; the only manual step left is the
+rename. Runbook: `docs/runbooks/unified-account-deploy.md`.
 
 **PARTIALLY REVERSES #117** by the owner's order of 2026-09-15: that entry's
 "no identity/auth work waits on a chatter web surface — chatter password

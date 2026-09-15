@@ -4,7 +4,7 @@ import { createModel, createOnlyFansPage, insertAiUsageEvents } from "@agency_hu
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
-import { createUserAccount } from "../apps/runtime/src/services/auth.ts";
+import { createUserAccount, setUserPassword } from "../apps/runtime/src/services/auth.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
@@ -141,6 +141,10 @@ describe("my AI usage", () => {
       { id: "mine-1", feature: "fast-reply", completedAt: "2026-06-19T10:00:00.000Z", costMicroUsd: 1_500 },
       { id: "mine-2", feature: "fast-reply", completedAt: "2026-06-19T12:00:00.000Z", costMicroUsd: 2_500, isRegeneration: true },
       { id: "mine-3", feature: "hi-greeting", completedAt: "2026-06-20T09:00:00.000Z", costMicroUsd: 4_000 },
+      // 22:00 UTC is already the NEXT day in Moscow (UTC+3). If the buckets
+      // were cut in UTC this would land on 06-19 and the assertion below fails,
+      // which is the whole point of pinning it.
+      { id: "mine-4", feature: "fast-reply", completedAt: "2026-06-19T22:00:00.000Z", costMicroUsd: 500 },
     ]);
     await seedUsage(setup.testDb, 2, page!.id, [
       { id: "theirs-1", feature: "fast-reply", completedAt: "2026-06-19T11:00:00.000Z", costMicroUsd: 90_000 },
@@ -157,19 +161,63 @@ describe("my AI usage", () => {
     const report = response.json<UsageReport>();
     expect(report.range).toEqual({ from: "2026-06-19", to: "2026-06-20", timeZone: "Europe/Moscow" });
     expect(report.row.username).toBe("grisha");
-    expect(report.row.totalGenerations).toBe(3);
-    expect(report.row.cost.microUsd).toBe(8_000);
+    expect(report.row.totalGenerations).toBe(4);
+    expect(report.row.cost.microUsd).toBe(8_500);
     expect(report.row.topFeature?.feature).toBe("fast-reply");
     expect(report.row.featureBreakdown.map((entry) => entry.feature).sort())
       .toEqual(["fast-reply", "hi-greeting"]);
-    expect(report.row.regenerateRatePct).toBeCloseTo(33.3, 0);
+    expect(report.row.regenerateRatePct).toBeCloseTo(25, 0);
+    // Buckets are the report zone's calendar days (Europe/Moscow), not UTC.
     expect(report.daily).toEqual([
       { date: "2026-06-19", requestCount: 2, costMicroUsd: 4_000 },
-      { date: "2026-06-20", requestCount: 1, costMicroUsd: 4_000 },
+      { date: "2026-06-20", requestCount: 2, costMicroUsd: 4_500 },
     ]);
     // The other person's row is not in this report at any cost.
     expect(JSON.stringify(report)).not.toContain("90000");
     expect(JSON.stringify(report)).not.toContain("nikita");
+  });
+
+  it("reports for every human role, not just chatters", async (context) => {
+    const setup = requireSetup(context);
+    if (!setup) return;
+    const model = await createModel(setup.testDb.db, { slug: "lora", name: "Lora" });
+    const page = await createOnlyFansPage(setup.testDb.db, {
+      modelId: model!.id,
+      label: "lora-of",
+    });
+    await createUserAccount(setup.app, {
+      username: "owner",
+      role: "owner",
+      password: "owner-secret-1",
+    }, { source: "cli" });
+    await createUserAccount(setup.app, { username: "vera", role: "chatter" }, { source: "cli" });
+    await setUserPassword(setup.app, {
+      username: "vera",
+      password: "chatter-secret-3",
+    }, { source: "cli" });
+
+    // ids 1..4: grisha, nikita, owner, vera (identities restart per test).
+    await seedUsage(setup.testDb, 3, page!.id, [
+      { id: "owner-1", feature: "fast-reply", completedAt: "2026-06-19T10:00:00.000Z", costMicroUsd: 3_000 },
+    ]);
+    await seedUsage(setup.testDb, 4, page!.id, [
+      { id: "vera-1", feature: "fast-reply", completedAt: "2026-06-19T10:00:00.000Z", costMicroUsd: 7_000 },
+    ]);
+
+    for (const [username, password, cost] of [
+      ["owner", "owner-secret-1", 3_000],
+      ["vera", "chatter-secret-3", 7_000],
+    ] as const) {
+      const cookie = await login(setup.server, username, password);
+      const report = (await setup.server.inject({
+        method: "GET",
+        url: "/api/v1/auth/usage?from=2026-06-19&to=2026-06-19",
+        headers: { cookie },
+      })).json<UsageReport>();
+      expect(report.row.username, username).toBe(username);
+      expect(report.row.cost.microUsd, username).toBe(cost);
+      expect(report.row.totalGenerations, username).toBe(1);
+    }
   });
 
   it("answers an empty report for someone who has generated nothing", async (context) => {
