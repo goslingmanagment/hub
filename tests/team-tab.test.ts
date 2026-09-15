@@ -24,6 +24,8 @@ const queries = vi.hoisted(() => ({
   useRevokeLink: vi.fn(),
   useTerminateAccess: vi.fn(),
   useAdminDeactivateUser: vi.fn(),
+  useAdminDeleteUser: vi.fn(),
+  useAuthMe: vi.fn(),
   useAdminReactivateUser: vi.fn(),
   useAdminPages: vi.fn(),
   useAdminAssignPage: vi.fn(),
@@ -70,6 +72,7 @@ function user(overrides: Partial<AdminUser> & { username: string }): AdminUser {
     assignedPages: [],
     apiKeyStatus: null,
     disabledAt: null,
+    deletedAt: null,
     lastActiveAt: null,
     registrationState: "active",
     ...overrides,
@@ -137,6 +140,8 @@ function mockEverything() {
   queries.useRevokeLink.mockReturnValue(mutation());
   queries.useTerminateAccess.mockReturnValue(mutation());
   queries.useAdminDeactivateUser.mockReturnValue(mutation());
+  queries.useAdminDeleteUser.mockReturnValue(mutation());
+  queries.useAuthMe.mockReturnValue(query({ user: { id: 1, role: "owner" } }));
   queries.useAdminReactivateUser.mockReturnValue(mutation());
   queries.useAdminPages.mockReturnValue(query<unknown[]>([]));
   queries.useAdminAssignPage.mockReturnValue(mutation());
@@ -177,12 +182,22 @@ describe("findTeamMember", () => {
       assignedPages: [{ id: 11, label: "lana", platform: "fansly", modelSlug: "lana", modelName: "Lana" }],
       lastActiveAt: "2026-09-15T00:00:00.000Z",
     });
-    expect(findTeamMember([refreshed], stale.username)).toEqual(refreshed);
+    expect(findTeamMember([refreshed], stale.id)).toEqual(refreshed);
+  });
+
+  it("does not resolve a deleted identity to a recreated login", () => {
+    const old = user({ id: 17, username: "Nikita", deletedAt: "2026-09-15T00:00:00.000Z" });
+    const replacement = user({ id: 29, username: "Nikita" });
+    expect(findTeamMember([old, replacement], old.id)).toBeNull();
+    expect(findTeamMember([replacement], old.id)).toBeNull();
+    expect(findTeamMember([replacement], replacement.id)).toBe(replacement);
+    expect(findTeamMemberByLogin([old, replacement], "nikita")).toBe(replacement);
+    expect(findTeamMemberByLogin([old], "nikita")).toBeNull();
   });
 
   it("returns null when the person is no longer in the list", () => {
-    expect(findTeamMember([], "missing")).toBeNull();
-    expect(findTeamMember([user({ username: "grisha" })], "sveta")).toBeNull();
+    expect(findTeamMember([], 99)).toBeNull();
+    expect(findTeamMember([user({ username: "grisha" })], 99)).toBeNull();
   });
 });
 
@@ -206,7 +221,7 @@ describe("existing-login recovery", () => {
     expect(markup).toContain("Логин «Nikita» уже занят");
     expect(markup).toContain("тот же человек");
     expect(markup).toContain("Перейти к восстановлению");
-    expect(markup).toContain("Для другого человека выберите другой логин");
+    expect(markup).toContain("Чтобы создать новый аккаунт с этим логином, сначала удалите прежний в его карточке");
   });
 
   it("keeps restoration and password recovery distinct", () => {
@@ -598,6 +613,7 @@ describe("LinkRevealModal", () => {
 
     const markup = render(LinkRevealModal as ComponentType<Record<string, unknown>>, {
       link: {
+        userId: 17,
         username: "grisha",
         kind: "invite",
         secret: "s3cr3t",
@@ -617,7 +633,7 @@ describe("LinkRevealModal", () => {
     vi.stubGlobal("window", { location: { origin: "https://gosling-agency.ru" } });
     const onClose = vi.fn();
     const markup = render(LinkRevealModal as ComponentType<Record<string, unknown>>, {
-      link: { username: "grisha", kind: "invite", secret: "s3cr3t", expiresAt: "2026-09-22T00:00:00.000Z" },
+      link: { userId: 17, username: "grisha", kind: "invite", secret: "s3cr3t", expiresAt: "2026-09-22T00:00:00.000Z" },
       onClose,
     });
     // The backdrop carries no click handler, so only the explicit buttons close it.
@@ -630,6 +646,7 @@ describe("LinkRevealModal", () => {
     vi.stubGlobal("window", { location: { origin: "https://gosling-agency.ru" } });
     const markup = render(LinkRevealModal as ComponentType<Record<string, unknown>>, {
       link: {
+        userId: 17,
         username: "grisha",
         kind: "password_reset",
         secret: "s3cr3t",

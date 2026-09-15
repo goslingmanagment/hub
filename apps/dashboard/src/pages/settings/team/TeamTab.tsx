@@ -3,6 +3,7 @@ import type { AdminUser } from "@agency_hub_core/contracts";
 
 import { useAdminUsers, useCreateAccountLink, useCreateInvite } from "@/api/queries";
 import { StatusPanel } from "@/components/shared/StatusPanel";
+import { ModalShell } from "@/components/shared/ModalShell";
 import { StaleDataNotice } from "@/components/shared/StaleDataNotice";
 import { InviteModal } from "./InviteModal.js";
 import { LinkRevealModal, type RevealedLink } from "./LinkRevealModal.js";
@@ -38,8 +39,8 @@ import {
 type ModalState =
   | null
   | { type: "invite" }
-  | { type: "detail"; username: string }
-  | { type: "reveal"; link: RevealedLink; returnTo: string | null };
+  | { type: "detail"; userId: number }
+  | { type: "reveal"; link: RevealedLink; returnTo: number | null };
 
 const STATUS_DOT_CLASS: Readonly<Record<TeamStatus, string>> = {
   invited: "bg-warning",
@@ -55,9 +56,8 @@ export function TeamTab() {
   const { data: users, isLoading, isError, error, isFetching, refetch } = useAdminUsers();
   const [modal, setModal] = useState<ModalState>(null);
 
-  const detailUsername = modal?.type === "detail" ? modal.username : "";
   const createInvite = useCreateInvite();
-  const createLink = useCreateAccountLink(detailUsername);
+  const createLink = useCreateAccountLink();
 
   if (isLoading && !users) {
     return <div className="py-12 text-center text-sm text-text-muted">Загружаем команду…</div>;
@@ -87,13 +87,12 @@ export function TeamTab() {
     );
   }
 
-  const items = users ?? [];
+  const items = (users ?? []).filter((user) => !user.deletedAt);
   const present = sortTeamByActivity(items.filter((user) => !user.disabledAt));
   const deactivated = items.filter((user) => user.disabledAt);
-  const detailUser = modal?.type === "detail" ? findTeamMember(items, modal.username) : null;
 
-  function openDetail(username: string) {
-    setModal({ type: "detail", username });
+  function openDetail(userId: number) {
+    setModal({ type: "detail", userId });
   }
 
   return (
@@ -158,7 +157,7 @@ export function TeamTab() {
                   {present.map((user) => (
                     <tr
                       key={user.id}
-                      onClick={() => openDetail(user.username)}
+                      onClick={() => openDetail(user.id)}
                       className="cursor-pointer border-t border-border transition-colors hover:bg-hover-alt"
                     >
                       <td className={`${tdClass} font-medium text-text-primary`}>
@@ -184,7 +183,7 @@ export function TeamTab() {
                       <td className={`${tdClass} text-right`} onClick={(event) => event.stopPropagation()}>
                         <button
                           type="button"
-                          onClick={() => openDetail(user.username)}
+                          onClick={() => openDetail(user.id)}
                           className="whitespace-nowrap rounded-lg border border-border bg-card px-2.5 py-1 text-xs font-medium text-text-secondary transition-colors hover:bg-hover"
                         >
                           Открыть
@@ -212,12 +211,15 @@ export function TeamTab() {
         />
       )}
 
-      {modal?.type === "detail" && detailUser && (
-        <UserDetailModal
-          user={detailUser}
+      {modal?.type === "detail" && (
+        <TeamMemberDetail
+          users={items}
+          userId={modal.userId}
           createLink={createLink}
-          onClose={() => setModal(null)}
-          onLinkCreated={(link) => setModal({ type: "reveal", link, returnTo: detailUser.username })}
+          onClose={() => setModal((current) => (
+            current?.type === "detail" && current.userId === modal.userId ? null : current
+          ))}
+          onLinkCreated={(link) => setModal({ type: "reveal", link, returnTo: link.userId })}
         />
       )}
 
@@ -226,16 +228,37 @@ export function TeamTab() {
           link={modal.link}
           onClose={() => {
             const returnTo = modal.returnTo;
-            // The link is gone from this screen; drop it from memory too,
-            // rather than leaving it in the mutation cache until gc.
+            // Release the observed results. With gcTime: 0 the completed
+            // issuance mutations are now collected without a retention delay.
             createInvite.reset();
             createLink.reset();
-            setModal(returnTo ? { type: "detail", username: returnTo } : null);
+            setModal(returnTo !== null ? { type: "detail", userId: returnTo } : null);
           }}
         />
       )}
     </>
   );
+}
+
+/** Resolve an open card by immutable identity after every list refresh. */
+export function TeamMemberDetail({ users, userId, createLink, onClose, onLinkCreated }: {
+  users: readonly AdminUser[];
+  userId: number;
+  createLink: ReturnType<typeof useCreateAccountLink>;
+  onClose: () => void;
+  onLinkCreated: (link: RevealedLink) => void;
+}) {
+  const user = findTeamMember(users, userId);
+  if (!user) {
+    return (
+      <ModalShell title="Участник больше недоступен" closeLabel="Закрыть" onClose={onClose}>
+        <p className="text-sm text-text-secondary">
+          Этот аккаунт удалён или больше не доступен. Закройте карточку и выберите участника в списке.
+        </p>
+      </ModalShell>
+    );
+  }
+  return <UserDetailModal key={user.id} user={user} createLink={createLink} onClose={onClose} onLinkCreated={onLinkCreated} />;
 }
 
 function StatusCell({ user }: { user: AdminUser }) {
@@ -297,7 +320,7 @@ function DeactivatedSection({
   onOpen,
 }: {
   users: AdminUser[];
-  onOpen: (username: string) => void;
+  onOpen: (userId: number) => void;
 }) {
   const [open, setOpen] = useState(true);
 
@@ -338,7 +361,7 @@ function DeactivatedSection({
                   <td className={`${tdClass} text-right`}>
                     <button
                       type="button"
-                      onClick={() => onOpen(user.username)}
+                      onClick={() => onOpen(user.id)}
                       className="whitespace-nowrap rounded-lg border border-border bg-card px-2.5 py-1 text-xs font-medium text-text-secondary transition-colors hover:bg-hover"
                     >
                       Восстановить доступ

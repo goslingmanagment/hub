@@ -5,6 +5,8 @@ import type { AccountLinkItem, AdminUser, DeviceTokenItem } from "@agency_hub_co
 import {
   useAdminAssignPage,
   useAdminDeactivateUser,
+  useAdminDeleteUser,
+  useAuthMe,
   useAdminPages,
   useAdminReactivateUser,
   useAdminUnassignPage,
@@ -50,7 +52,7 @@ import {
  * loses that handoff if the modal closes mid-flight.
  */
 
-type Confirmation = "revokeAllDevices" | "terminateAccess" | "deactivate" | "reactivate";
+type Confirmation = "revokeAllDevices" | "terminateAccess" | "deactivate" | "reactivate" | "deleteAccount";
 
 const LINK_RESETTABLE_ROLES: ReadonlySet<string> = new Set(["chatter", "team_lead"]);
 
@@ -79,6 +81,8 @@ export function UserDetailModal({
 }) {
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
   const status = teamStatus(user);
+  const { data: auth } = useAuthMe();
+  const canDelete = Boolean(auth?.user) && !ownerIsProtected(user) && auth?.user.id !== user.id;
 
   return (
     <>
@@ -121,7 +125,7 @@ export function UserDetailModal({
           )}
 
           <DevicesSection
-            username={user.username}
+            userId={user.id}
             disabled={status === "disabled"}
             onRevokeAll={() => setConfirmation("revokeAllDevices")}
             onTerminate={ownerIsProtected(user) ? null : () => setConfirmation("terminateAccess")}
@@ -141,6 +145,24 @@ export function UserDetailModal({
               onDeactivate={() => setConfirmation("deactivate")}
               onReactivate={() => setConfirmation("reactivate")}
             />
+          )}
+
+          {canDelete && (
+            <div className="rounded-lg border border-danger/25 bg-danger/5 px-3 py-3">
+              <h3 className="text-sm font-semibold text-text-primary">Удаление аккаунта</h3>
+              <p className="mt-1 text-xs text-text-muted">
+                Удаление необратимо. Все входы и ссылки перестанут работать, а логин освободится.
+                История работы сохранится за прежним участником.
+              </p>
+              <button
+                type="button"
+                disabled={createLink.isPending}
+                onClick={() => setConfirmation("deleteAccount")}
+                className="mt-3 rounded-lg border border-danger/25 bg-card px-3 py-1.5 text-xs font-medium text-danger hover:bg-danger/10 disabled:opacity-50"
+              >
+                Удалить аккаунт
+              </button>
+            </div>
           )}
 
           {ownerIsProtected(user) && (
@@ -167,6 +189,7 @@ export function UserDetailModal({
           kind={confirmation}
           user={user}
           onClose={() => setConfirmation(null)}
+          onDeleted={onClose}
         />
       )}
     </>
@@ -178,19 +201,19 @@ export function UserDetailModal({
 /* ------------------------------------------------------------------ */
 
 function DevicesSection({
-  username,
+  userId,
   disabled,
   onRevokeAll,
   onTerminate,
 }: {
-  username: string;
+  userId: number;
   disabled: boolean;
   onRevokeAll: () => void;
   /** null for an owner: the kernel refuses to terminate their access. */
   onTerminate: (() => void) | null;
 }) {
-  const { data: devices, isLoading, isError, error } = useUserDevices(username);
-  const revokeDevice = useRevokeDevice(username);
+  const { data: devices, isLoading, isError, error } = useUserDevices(userId);
+  const revokeDevice = useRevokeDevice(userId);
   const [historyOpen, setHistoryOpen] = useState(false);
 
   const { active, history } = splitDevices(devices ?? []);
@@ -312,17 +335,18 @@ function LinksSection({
   createLink: ReturnType<typeof useCreateAccountLink>;
   onLinkCreated: (link: RevealedLink) => void;
 }) {
-  const { data: links, isLoading, isError, error } = useUserLinks(user.username);
-  const revokeLink = useRevokeLink(user.username);
+  const { data: links, isLoading, isError, error } = useUserLinks(user.id);
+  const revokeLink = useRevokeLink(user.id);
   const invited = teamStatus(user) === "invited";
   const canReset = LINK_RESETTABLE_ROLES.has(user.role);
   const disabled = Boolean(user.disabledAt);
 
   function handleCreate(kind: "invite" | "password_reset") {
     if (disabled) return;
-    createLink.mutate({ kind }, {
+    createLink.mutate({ userId: user.id, kind }, {
       onSuccess: (link) => {
         onLinkCreated({
+          userId: user.id,
           username: user.username,
           kind: link.kind,
           secret: link.token,
@@ -437,8 +461,8 @@ function SavedPagesSection({ user }: { user: AdminUser }) {
 
 function PagesSection({ user }: { user: AdminUser }) {
   const { data: allPages, isLoading, isError, refetch } = useAdminPages();
-  const assignPage = useAdminAssignPage(user.username);
-  const unassignPage = useAdminUnassignPage(user.username);
+  const assignPage = useAdminAssignPage(user.id);
+  const unassignPage = useAdminUnassignPage(user.id);
   const [selectedLabel, setSelectedLabel] = useState("");
 
   const assignedLabels = new Set(user.assignedPages.map((page) => page.label));
@@ -537,19 +561,22 @@ function AccountStateSection({
 /*  Confirmations                                                      */
 /* ------------------------------------------------------------------ */
 
-function ConfirmationDialog({
+export function ConfirmationDialog({
   kind,
   user,
   onClose,
+  onDeleted,
 }: {
   kind: Confirmation;
   user: AdminUser;
   onClose: () => void;
+  onDeleted: () => void;
 }) {
-  const revokeAllDevices = useRevokeAllDevices(user.username);
-  const terminateAccess = useTerminateAccess(user.username);
-  const deactivate = useAdminDeactivateUser(user.username);
-  const reactivate = useAdminReactivateUser(user.username);
+  const revokeAllDevices = useRevokeAllDevices(user.id);
+  const terminateAccess = useTerminateAccess(user.id);
+  const deactivate = useAdminDeactivateUser(user.id);
+  const reactivate = useAdminReactivateUser(user.id);
+  const deleteAccount = useAdminDeleteUser(user.id);
 
   const dialogs = {
     revokeAllDevices: {
@@ -581,12 +608,26 @@ function ConfirmationDialog({
       title: `Отключить доступ ${user.username}?`,
       message: "Все входы и ссылки перестанут работать. Участник появится в разделе "
         + "«Отключённые участники». Его логин, история, роль и страницы сохранятся. "
-        + "Позже можно восстановить доступ тому же человеку; создать другого с этим логином нельзя.",
+        + "Позже можно восстановить доступ тому же человеку. Пока аккаунт сохранён, его логин остаётся занят.",
       confirmLabel: "Отключить доступ",
       isPending: deactivate.isPending,
       run: async () => {
         await deactivate.mutateAsync();
         toast.success(`Доступ ${user.username} отключён`);
+      },
+    },
+    deleteAccount: {
+      title: `Удалить аккаунт ${user.username}?`,
+      message: `Аккаунт ${user.username} будет удалён без возможности восстановления. `
+        + "Все его входы, ссылки и доступ к страницам будут отозваны. "
+        + "Логин освободится: новый участник с этим логином получит отдельный аккаунт. "
+        + "История работы и финансовые записи останутся за прежним участником.",
+      confirmLabel: "Удалить навсегда",
+      isPending: deleteAccount.isPending,
+      run: async () => {
+        await deleteAccount.mutateAsync();
+        toast.success(`Аккаунт ${user.username} удалён`);
+        onDeleted();
       },
     },
     reactivate: {
@@ -604,6 +645,7 @@ function ConfirmationDialog({
   const dialog = dialogs[kind];
 
   async function handleConfirm() {
+    if (dialog.isPending) return;
     try {
       await dialog.run();
       onClose();

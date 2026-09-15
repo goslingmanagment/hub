@@ -1,3 +1,4 @@
+import { fixtureUserId } from "./helpers/user-identity.ts";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { createFanslyPage, createModel, findUserByUsername } from "@agency_hub_core/db";
@@ -5,18 +6,18 @@ import { createFanslyPage, createModel, findUserByUsername } from "@agency_hub_c
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import {
-  createAccountLinkForUsername,
+  createAccountLinkForUserId,
   createInvite,
   inspectAccountLink,
-  listAccountLinksForUsername,
+  listAccountLinksForUserId,
   redeemAccountLink,
-  revokeAccountLinkForUsername,
+  revokeAccountLinkForUserId,
 } from "../apps/runtime/src/services/account-links.ts";
 import {
   changeOwnPassword,
   createUserAccount,
   deactivateUser,
-  issueDeviceTokenForUsername,
+  issueDeviceTokenForUserId,
   loginWithPassword,
   reactivateUser,
   setUserPassword,
@@ -158,7 +159,7 @@ describe("invite creation", () => {
     const invited = await createInvite(setup.app, {
       username: "Nikita", pageLabels: ["lora-fansly"],
     }, OWNER_AUDIT);
-    await deactivateUser(setup.app, { username: "Nikita" }, OWNER_AUDIT);
+    await deactivateUser(setup.app, { userId: await fixtureUserId(setup.app, "Nikita") }, OWNER_AUDIT);
 
     // Retrying Invite must never transfer the identity, assign the form's
     // new pages to the old person, or reopen access without confirmation.
@@ -175,7 +176,7 @@ describe("invite creation", () => {
     expect(before.rows).toHaveLength(1);
     expect(before.rows[0]?.platform_account_id).toBe(BigInt(invited.user.assignedPages[0]!.id));
 
-    await reactivateUser(setup.app, { username: "nikita" }, OWNER_AUDIT);
+    await reactivateUser(setup.app, { userId: await fixtureUserId(setup.app, "nikita") }, OWNER_AUDIT);
     const restored = await findUserByUsername(setup.testDb.db, "Nikita");
     expect(restored?.id).toBe(invited.user.id);
     expect(restored?.disabledAt).toBeNull();
@@ -184,8 +185,8 @@ describe("invite creation", () => {
     )).rows).toEqual(before.rows);
     expect(await activeLinkCount(setup.testDb, invited.user.id)).toBe(0);
 
-    const replacement = await createAccountLinkForUsername(setup.app, {
-      username: "Nikita", kind: "invite",
+    const replacement = await createAccountLinkForUserId(setup.app, {
+      userId: await fixtureUserId(setup.app, "Nikita"), kind: "invite",
     }, OWNER_AUDIT);
     await expect(redeemAccountLink(setup.app, {
       token: invited.link.token, password: STRONG_PASSWORD,
@@ -219,12 +220,12 @@ describe("link supersession and revocation", () => {
       pageLabels: [],
     }, OWNER_AUDIT);
 
-    const second = await createAccountLinkForUsername(setup.app, {
-      username: "grisha",
+    const second = await createAccountLinkForUserId(setup.app, {
+      userId: await fixtureUserId(setup.app, "grisha"),
       kind: "invite",
     }, OWNER_AUDIT);
 
-    const links = await listAccountLinksForUsername(setup.app, "grisha");
+    const links = await listAccountLinksForUserId(setup.app, await fixtureUserId(setup.app, "grisha"));
     expect(links).toHaveLength(2);
     const first = links.find((link) => link.id === invited.link.id);
     expect(first?.state).toBe("revoked");
@@ -247,15 +248,15 @@ describe("link supersession and revocation", () => {
       pageLabels: [],
     }, OWNER_AUDIT);
 
-    const revoked = await revokeAccountLinkForUsername(setup.app, {
-      username: "grisha",
+    const revoked = await revokeAccountLinkForUserId(setup.app, {
+      userId: await fixtureUserId(setup.app, "grisha"),
       linkId: invited.link.id,
     }, OWNER_AUDIT);
     expect(revoked.state).toBe("revoked");
     expect(revoked.revokedReason).toBe("revoked_by_owner");
 
-    const again = await revokeAccountLinkForUsername(setup.app, {
-      username: "grisha",
+    const again = await revokeAccountLinkForUserId(setup.app, {
+      userId: await fixtureUserId(setup.app, "grisha"),
       linkId: invited.link.id,
     }, OWNER_AUDIT);
     expect(again.state).toBe("revoked");
@@ -268,18 +269,18 @@ describe("link supersession and revocation", () => {
 
     await createInvite(setup.app, { username: "one", pageLabels: [] }, OWNER_AUDIT);
     await setUserPassword(setup.app, {
-      username: "one",
+      userId: await fixtureUserId(setup.app, "one"),
       password: "owner-chosen-1",
     }, OWNER_AUDIT);
-    expect((await listAccountLinksForUsername(setup.app, "one"))[0]).toMatchObject({
+    expect((await listAccountLinksForUserId(setup.app, await fixtureUserId(setup.app, "one")))[0]).toMatchObject({
       state: "revoked",
       revokedReason: "password_set",
     });
 
     const two = await createInvite(setup.app, { username: "two", pageLabels: [] }, OWNER_AUDIT);
     await redeemAccountLink(setup.app, { token: two.link.token, password: STRONG_PASSWORD });
-    await createAccountLinkForUsername(setup.app, {
-      username: "two",
+    await createAccountLinkForUserId(setup.app, {
+      userId: await fixtureUserId(setup.app, "two"),
       kind: "password_reset",
     }, OWNER_AUDIT);
     const twoUser = await findUserByUsername(setup.testDb.db, "two");
@@ -291,8 +292,8 @@ describe("link supersession and revocation", () => {
     expect(await activeLinkCount(setup.testDb)).toBe(0);
 
     const three = await createInvite(setup.app, { username: "three", pageLabels: [] }, OWNER_AUDIT);
-    await deactivateUser(setup.app, { username: "three" }, OWNER_AUDIT);
-    const threeLinks = await listAccountLinksForUsername(setup.app, "three");
+    await deactivateUser(setup.app, { userId: await fixtureUserId(setup.app, "three") }, OWNER_AUDIT);
+    const threeLinks = await listAccountLinksForUserId(setup.app, await fixtureUserId(setup.app, "three"));
     expect(threeLinks[0]).toMatchObject({
       id: three.link.id,
       state: "revoked",
@@ -307,19 +308,19 @@ describe("link supersession and revocation", () => {
       username: "grisha",
       pageLabels: [],
     }, OWNER_AUDIT);
-    await createAccountLinkForUsername(setup.app, {
-      username: "grisha",
+    await createAccountLinkForUserId(setup.app, {
+      userId: await fixtureUserId(setup.app, "grisha"),
       kind: "invite",
     }, OWNER_AUDIT);
-    const last = await createAccountLinkForUsername(setup.app, {
-      username: "grisha",
+    const last = await createAccountLinkForUserId(setup.app, {
+      userId: await fixtureUserId(setup.app, "grisha"),
       kind: "invite",
     }, OWNER_AUDIT);
     await redeemAccountLink(setup.app, { token: last.token, password: STRONG_PASSWORD });
 
     expect(await countRows(setup.testDb, "select count(*)::text as count from account_links"))
       .toBe(3);
-    const states = (await listAccountLinksForUsername(setup.app, "grisha"))
+    const states = (await listAccountLinksForUserId(setup.app, await fixtureUserId(setup.app, "grisha")))
       .map((link) => link.state).sort();
     expect(states).toEqual(["revoked", "revoked", "used"]);
     expect(invited.link.id).toBeGreaterThan(0);
@@ -339,13 +340,13 @@ describe("which link a user may get", () => {
       password: STRONG_PASSWORD,
     });
 
-    await expect(createAccountLinkForUsername(setup.app, {
-      username: "grisha",
+    await expect(createAccountLinkForUserId(setup.app, {
+      userId: await fixtureUserId(setup.app, "grisha"),
       kind: "invite",
     }, OWNER_AUDIT)).rejects.toThrow(/already registered/i);
 
-    const reset = await createAccountLinkForUsername(setup.app, {
-      username: "grisha",
+    const reset = await createAccountLinkForUserId(setup.app, {
+      userId: await fixtureUserId(setup.app, "grisha"),
       kind: "password_reset",
     }, OWNER_AUDIT);
     expect(reset.kind).toBe("password_reset");
@@ -356,8 +357,8 @@ describe("which link a user may get", () => {
     if (!setup) return;
     await createInvite(setup.app, { username: "grisha", pageLabels: [] }, OWNER_AUDIT);
 
-    const again = await createAccountLinkForUsername(setup.app, {
-      username: "grisha",
+    const again = await createAccountLinkForUserId(setup.app, {
+      userId: await fixtureUserId(setup.app, "grisha"),
       kind: "invite",
     }, OWNER_AUDIT);
     expect(again.kind).toBe("invite");
@@ -367,19 +368,19 @@ describe("which link a user may get", () => {
     const setup = requireSetup(context);
     if (!setup) return;
 
-    await expect(createAccountLinkForUsername(setup.app, {
-      username: "owner",
+    await expect(createAccountLinkForUserId(setup.app, {
+      userId: await fixtureUserId(setup.app, "owner"),
       kind: "password_reset",
     }, OWNER_AUDIT)).rejects.toMatchObject({ statusCode: 400 });
-    await expect(createAccountLinkForUsername(setup.app, {
-      username: "owner",
+    await expect(createAccountLinkForUserId(setup.app, {
+      userId: await fixtureUserId(setup.app, "owner"),
       kind: "invite",
     }, OWNER_AUDIT)).rejects.toMatchObject({ statusCode: 400 });
 
     await createInvite(setup.app, { username: "grisha", pageLabels: [] }, OWNER_AUDIT);
-    await deactivateUser(setup.app, { username: "grisha" }, OWNER_AUDIT);
-    await expect(createAccountLinkForUsername(setup.app, {
-      username: "grisha",
+    await deactivateUser(setup.app, { userId: await fixtureUserId(setup.app, "grisha") }, OWNER_AUDIT);
+    await expect(createAccountLinkForUserId(setup.app, {
+      userId: await fixtureUserId(setup.app, "grisha"),
       kind: "invite",
     }, OWNER_AUDIT)).rejects.toThrow(/deactivated/i);
   });
@@ -387,8 +388,8 @@ describe("which link a user may get", () => {
   it("404s for an unknown user", async (context) => {
     const setup = requireSetup(context);
     if (!setup) return;
-    await expect(createAccountLinkForUsername(setup.app, {
-      username: "nobody",
+    await expect(createAccountLinkForUserId(setup.app, {
+      userId: 2_147_483_647,
       kind: "invite",
     }, OWNER_AUDIT)).rejects.toMatchObject({ statusCode: 404 });
   });
@@ -525,8 +526,8 @@ describe("redeem", () => {
 
     // An invite leaves the sign-ins that exist alone (there are none yet, so
     // mint one and prove the NEXT invite-less path does not touch it).
-    const keptDevice = await issueDeviceTokenForUsername(setup.app, {
-      username: "grisha",
+    const keptDevice = await issueDeviceTokenForUserId(setup.app, {
+      userId: await fixtureUserId(setup.app, "grisha"),
       label: "Firefox · Windows",
     }, OWNER_AUDIT);
     expect(await countRows(
@@ -534,8 +535,8 @@ describe("redeem", () => {
       "select count(*)::text as count from device_tokens where revoked_at is null",
     )).toBe(1);
 
-    const reset = await createAccountLinkForUsername(setup.app, {
-      username: "grisha",
+    const reset = await createAccountLinkForUserId(setup.app, {
+      userId: await fixtureUserId(setup.app, "grisha"),
       kind: "password_reset",
     }, OWNER_AUDIT);
     await redeemAccountLink(setup.app, { token: reset.token, password: "brand-new-secret-7" });
@@ -569,8 +570,8 @@ describe("redeem", () => {
       role: "team_lead",
       password: "chatter-secret-1",
     }, { source: "cli" });
-    const device = await issueDeviceTokenForUsername(setup.app, {
-      username: "nikita",
+    const device = await issueDeviceTokenForUserId(setup.app, {
+      userId: await fixtureUserId(setup.app, "nikita"),
       label: "Firefox · Windows",
     }, OWNER_AUDIT);
     await loginWithPassword(setup.app, { username: "nikita", password: "chatter-secret-1" });
@@ -579,8 +580,8 @@ describe("redeem", () => {
       "select count(*)::text as count from auth_sessions where revoked_at is null",
     )).toBe(1);
 
-    const invite = await createAccountLinkForUsername(setup.app, {
-      username: "nikita",
+    const invite = await createAccountLinkForUserId(setup.app, {
+      userId: await fixtureUserId(setup.app, "nikita"),
       kind: "invite",
     }, OWNER_AUDIT);
     await redeemAccountLink(setup.app, { token: invite.token, password: "brand-new-secret-7" });
@@ -619,12 +620,12 @@ describe("secrets never leave the creation response", () => {
       username: "grisha",
       pageLabels: ["lora-fansly"],
     }, OWNER_AUDIT);
-    const reset = await createAccountLinkForUsername(setup.app, {
-      username: "grisha",
+    const reset = await createAccountLinkForUserId(setup.app, {
+      userId: await fixtureUserId(setup.app, "grisha"),
       kind: "invite",
     }, OWNER_AUDIT);
     await redeemAccountLink(setup.app, { token: reset.token, password: STRONG_PASSWORD });
-    await terminateAllAccess(setup.app, { username: "grisha" }, OWNER_AUDIT);
+    await terminateAllAccess(setup.app, { userId: await fixtureUserId(setup.app, "grisha") }, OWNER_AUDIT);
 
     const journal = await setup.testDb.pool.query<{ body: string }>(`
       select coalesce(metadata::text, '') as body from audit_events
@@ -657,8 +658,8 @@ describe("the kill switch", () => {
     }, OWNER_AUDIT);
 
     // Minting stays open — the owner is not locked out of preparing a link.
-    const minted = await createAccountLinkForUsername(setup.disabledLinksApp, {
-      username: "grisha",
+    const minted = await createAccountLinkForUserId(setup.disabledLinksApp, {
+      userId: await fixtureUserId(setup.disabledLinksApp, "grisha"),
       kind: "invite",
     }, OWNER_AUDIT);
     expect(minted.token.length).toBeGreaterThan(20);
@@ -742,7 +743,7 @@ describe("over HTTP, end to end", () => {
     // The console now shows a registered person and a used link.
     const listed = await setup.server.inject({
       method: "GET",
-      url: "/api/v1/admin/users/grisha/links",
+      url: `/api/v1/admin/users/by-id/${await fixtureUserId(app!, "grisha")}/links`,
       headers: { cookie },
     });
     expect(listed.statusCode).toBe(200);
@@ -782,7 +783,7 @@ describe("over HTTP, end to end", () => {
 
     const revoked = await setup.server.inject({
       method: "POST",
-      url: `/api/v1/admin/users/grisha/links/${invited.link.id}/revoke`,
+      url: `/api/v1/admin/users/by-id/${await fixtureUserId(app!, "grisha")}/links/${invited.link.id}/revoke`,
       headers: { cookie },
     });
     expect(revoked.statusCode).toBe(200);
@@ -841,9 +842,9 @@ describe("concurrent writers", () => {
     const user = await findUserByUsername(setup.testDb.db, "grisha");
 
     const results = await Promise.allSettled([
-      createAccountLinkForUsername(setup.app, { username: "grisha", kind: "invite" }, OWNER_AUDIT),
-      createAccountLinkForUsername(setup.app, { username: "grisha", kind: "invite" }, OWNER_AUDIT),
-      createAccountLinkForUsername(setup.app, { username: "grisha", kind: "invite" }, OWNER_AUDIT),
+      createAccountLinkForUserId(setup.app, { userId: user!.id, kind: "invite" }, OWNER_AUDIT),
+      createAccountLinkForUserId(setup.app, { userId: user!.id, kind: "invite" }, OWNER_AUDIT),
+      createAccountLinkForUserId(setup.app, { userId: user!.id, kind: "invite" }, OWNER_AUDIT),
     ]);
     for (const result of results) {
       // Every writer either created its link or failed for a stated reason;
@@ -861,12 +862,12 @@ describe("concurrent writers", () => {
   it("never leaves an active link created before a concurrent password reset alive afterwards", async (context) => {
     const setup = requireSetup(context);
     if (!setup) return;
-    await createInvite(setup.app, { username: "grisha", pageLabels: [] }, OWNER_AUDIT);
+    const invited = await createInvite(setup.app, { username: "grisha", pageLabels: [] }, OWNER_AUDIT);
 
     const [linkResult] = await Promise.allSettled([
-      createAccountLinkForUsername(setup.app, { username: "grisha", kind: "invite" }, OWNER_AUDIT),
+      createAccountLinkForUserId(setup.app, { userId: invited.user.id, kind: "invite" }, OWNER_AUDIT),
       setUserPassword(setup.app, {
-        username: "grisha",
+        userId: invited.user.id,
         password: "owner-chosen-42",
       }, OWNER_AUDIT),
     ]);
@@ -875,7 +876,7 @@ describe("concurrent writers", () => {
     // password write came last the link it superseded is retired.
     expect(await activeLinkCount(setup.testDb)).toBeLessThanOrEqual(1);
     if (linkResult?.status === "fulfilled") {
-      const links = await listAccountLinksForUsername(setup.app, "grisha");
+      const links = await listAccountLinksForUserId(setup.app, await fixtureUserId(setup.app, "grisha"));
       const created = links.find((link) => link.id === linkResult.value.id);
       expect(created).toBeDefined();
       expect(["active", "revoked"]).toContain(created!.state);

@@ -1,3 +1,4 @@
+import { fixtureUserId } from "./helpers/user-identity.ts";
 import { setTimeout as sleep } from "node:timers/promises";
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -15,7 +16,7 @@ import {
   deviceTokenAdoptionReport,
   issueChatterApiKey,
   issueDeviceToken,
-  revokeDeviceTokensForUsername,
+  revokeDeviceTokensForUserId,
   setUserPassword,
 } from "../apps/runtime/src/services/auth.ts";
 import {
@@ -239,7 +240,7 @@ describe("pending device-token activation protocol", () => {
     if (!setup) return;
     await expectPendingInvalidated(setup, {
       method: "PATCH",
-      url: "/api/v1/admin/users/anton/password",
+      url: `/api/v1/admin/users/by-id/${await fixtureUserId(app!, "anton")}/password`,
       payload: { password: "new-chatter-secret" },
     });
   });
@@ -249,7 +250,7 @@ describe("pending device-token activation protocol", () => {
     if (!setup) return;
     await expectPendingInvalidated(setup, {
       method: "DELETE",
-      url: "/api/v1/admin/users/anton/device-tokens",
+      url: `/api/v1/admin/users/by-id/${await fixtureUserId(app!, "anton")}/device-tokens`,
     });
   });
 
@@ -258,7 +259,7 @@ describe("pending device-token activation protocol", () => {
     if (!setup) return;
     await expectPendingInvalidated(setup, {
       method: "POST",
-      url: "/api/v1/admin/users/anton/deactivate",
+      url: `/api/v1/admin/users/by-id/${await fixtureUserId(app!, "anton")}/deactivate`,
     });
   });
 
@@ -348,9 +349,9 @@ describe("legacy/admin issuance authority races", () => {
   it("cannot mint after revoke-all linearizes first", async (context) => {
     const setup = requireSetup(context);
     if (!setup) return;
-    await exerciseRace(setup, () => revokeDeviceTokensForUsername(
+    await exerciseRace(setup, async () => revokeDeviceTokensForUserId(
       setup.app,
-      { username: "anton" },
+      { userId: await fixtureUserId(setup.app, "anton") },
       { source: "cli" },
     ));
   });
@@ -358,8 +359,8 @@ describe("legacy/admin issuance authority races", () => {
   it("cannot mint after password reset linearizes first", async (context) => {
     const setup = requireSetup(context);
     if (!setup) return;
-    await exerciseRace(setup, () => setUserPassword(setup.app, {
-      username: "anton",
+    await exerciseRace(setup, async () => setUserPassword(setup.app, {
+      userId: await fixtureUserId(setup.app, "anton"),
       password: "post-race-secret",
     }, { source: "cli" }));
   });
@@ -368,9 +369,9 @@ describe("legacy/admin issuance authority races", () => {
     const setup = requireSetup(context);
     if (!setup) return;
     const owner = await findUserByUsername(setup.testDb.db, "owner");
-    await exerciseRace(setup, () => deactivateUser(
+    await exerciseRace(setup, async () => deactivateUser(
       setup.app,
-      { username: "anton" },
+      { userId: await fixtureUserId(setup.app, "anton") },
       { source: "cli", actorUserId: owner!.id },
     ));
   });
@@ -506,9 +507,9 @@ describe("device-token adoption report (D116(c) foundation, desktop D19)", () =>
       "update device_tokens set last_used_at = now() where id = $1",
       [revokedIssued.id],
     );
-    await revokeDeviceTokensForUsername(
+    await revokeDeviceTokensForUserId(
       activeApp,
-      { username: "revokedtoken" },
+      { userId: await fixtureUserId(activeApp, "revokedtoken") },
       { source: "cli" },
     );
 
@@ -523,7 +524,7 @@ describe("device-token adoption report (D116(c) foundation, desktop D19)", () =>
       [expiredIssued.id],
     );
 
-    await issueChatterApiKey(activeApp, { username: "keyonly" }, { source: "cli" });
+    await issueChatterApiKey(activeApp, { userId: await fixtureUserId(activeApp, "keyonly") }, { source: "cli" });
 
     // A second live-but-unused token with a LATER expiry must not leak its
     // dates into the row: both token fields describe the freshest-used token.
@@ -567,7 +568,7 @@ describe("device-token adoption report (D116(c) foundation, desktop D19)", () =>
     });
 
     // Deactivation removes a chatter from the denominator entirely.
-    await deactivateUser(activeApp, { username: "keyonly" }, { source: "cli" });
+    await deactivateUser(activeApp, { userId: await fixtureUserId(activeApp, "keyonly") }, { source: "cli" });
     const after = await deviceTokenAdoptionReport(activeApp);
     expect(after.chatters.some((row) => row.username === "keyonly")).toBe(false);
     expect(after.summary.activeChatters).toBe(4);

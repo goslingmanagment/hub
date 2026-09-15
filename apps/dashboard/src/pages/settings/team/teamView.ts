@@ -42,9 +42,9 @@ export function teamStatus(user: Pick<AdminUser, "disabledAt" | "registrationSta
 
 export function findTeamMember(
   users: readonly AdminUser[],
-  username: string,
+  userId: number,
 ): AdminUser | null {
-  return users.find((user) => user.username === username) ?? null;
+  return users.find((user) => user.id === userId && !user.deletedAt) ?? null;
 }
 
 /** The kernel's unique username index is case-insensitive (#349). Match that
@@ -54,7 +54,7 @@ export function findTeamMemberByLogin(
   username: string,
 ): AdminUser | null {
   const normalized = username.trim().toLowerCase();
-  return users.find((user) => user.username.toLowerCase() === normalized) ?? null;
+  return users.find((user) => !user.deletedAt && user.username.toLowerCase() === normalized) ?? null;
 }
 
 export function restoreTeamMemberMessage(user: AdminUser): string {

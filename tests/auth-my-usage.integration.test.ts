@@ -1,3 +1,4 @@
+import { fixtureUserId } from "./helpers/user-identity.ts";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { createModel, createOnlyFansPage, insertAiUsageEvents } from "@agency_hub_core/db";
@@ -192,7 +193,7 @@ describe("my AI usage", () => {
     }, { source: "cli" });
     await createUserAccount(setup.app, { username: "vera", role: "chatter" }, { source: "cli" });
     await setUserPassword(setup.app, {
-      username: "vera",
+      userId: await fixtureUserId(setup.app, "vera"),
       password: "chatter-secret-3",
     }, { source: "cli" });
 

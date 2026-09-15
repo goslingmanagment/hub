@@ -1,3 +1,4 @@
+import { fixtureUserId } from "./helpers/user-identity.ts";
 import argon2 from "argon2";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
@@ -120,7 +121,7 @@ async function assignPage(
 ) {
   const response = await activeServer.inject({
     method: "POST",
-    url: `/api/v1/admin/users/${username}/pages`,
+    url: `/api/v1/admin/users/by-id/${await fixtureUserId(app!, username)}/pages`,
     headers: { cookie: ownerCookie },
     payload: { pageLabel },
   });
@@ -135,7 +136,7 @@ async function unassignPage(
 ) {
   const response = await activeServer.inject({
     method: "DELETE",
-    url: `/api/v1/admin/users/${username}/pages/${pageLabel}`,
+    url: `/api/v1/admin/users/by-id/${await fixtureUserId(app!, username)}/pages/${pageLabel}`,
     headers: { cookie: ownerCookie },
   });
   expect(response.statusCode).toBe(200);
@@ -151,7 +152,7 @@ async function issueApiKey(
 ) {
   const response = await activeServer.inject({
     method: "POST",
-    url: `/api/v1/admin/users/${username}/api-keys`,
+    url: `/api/v1/admin/users/by-id/${await fixtureUserId(app!, username)}/api-keys`,
     headers: { cookie: ownerCookie },
     payload: {},
   });
@@ -356,7 +357,7 @@ describe("§7 — the revocation ladder as the person experiences it", () => {
 
     const revoked = await setup.server.inject({
       method: "DELETE",
-      url: `/api/v1/admin/users/grisha/device-tokens/${firefox.id}`,
+      url: `/api/v1/admin/users/by-id/${await fixtureUserId(app!, "grisha")}/device-tokens/${firefox.id}`,
       headers: { cookie: ownerCookie },
     });
     expect(revoked.statusCode).toBe(200);
@@ -389,7 +390,7 @@ describe("§7 — the revocation ladder as the person experiences it", () => {
 
     const revoked = await setup.server.inject({
       method: "DELETE",
-      url: "/api/v1/admin/users/grisha/device-tokens",
+      url: `/api/v1/admin/users/by-id/${await fixtureUserId(app!, "grisha")}/device-tokens`,
       headers: { cookie: ownerCookie },
     });
     expect(revoked.statusCode).toBe(200);
@@ -430,7 +431,7 @@ describe("§7 — the revocation ladder as the person experiences it", () => {
     // An unused reset link is a credential in waiting, so it belongs in the row.
     const link = await setup.server.inject({
       method: "POST",
-      url: "/api/v1/admin/users/grisha/links",
+      url: `/api/v1/admin/users/by-id/${await fixtureUserId(app!, "grisha")}/links`,
       headers: { cookie: ownerCookie },
       payload: { kind: "password_reset" },
     });
@@ -439,7 +440,7 @@ describe("§7 — the revocation ladder as the person experiences it", () => {
 
     const terminated = await setup.server.inject({
       method: "POST",
-      url: "/api/v1/admin/users/grisha/terminate-access",
+      url: `/api/v1/admin/users/by-id/${await fixtureUserId(app!, "grisha")}/terminate-access`,
       headers: { cookie: ownerCookie },
     });
     expect(terminated.statusCode).toBe(200);
@@ -489,7 +490,7 @@ describe("§7 — the revocation ladder as the person experiences it", () => {
 
     const link = await setup.server.inject({
       method: "POST",
-      url: "/api/v1/admin/users/grisha/links",
+      url: `/api/v1/admin/users/by-id/${await fixtureUserId(app!, "grisha")}/links`,
       headers: { cookie: ownerCookie },
       payload: { kind: "password_reset" },
     });
@@ -530,7 +531,7 @@ describe("§7 — the revocation ladder as the person experiences it", () => {
 
     const deactivated = await setup.server.inject({
       method: "POST",
-      url: "/api/v1/admin/users/grisha/deactivate",
+      url: `/api/v1/admin/users/by-id/${await fixtureUserId(app!, "grisha")}/deactivate`,
       headers: { cookie: ownerCookie },
     });
     expect(deactivated.statusCode).toBe(200);
@@ -589,7 +590,7 @@ describe("§7 — roles", () => {
     // session: the console stays shut (Р10 — this is why the owner's console
     // account and any account used on a chatter machine stay separate).
     expect((await get(setup.server, "/api/v1/admin/users", bearer)).statusCode).toBe(403);
-    expect((await get(setup.server, "/api/v1/admin/users/lead/links", bearer)).statusCode)
+    expect((await get(setup.server, `/api/v1/admin/users/by-id/${await fixtureUserId(app!, "lead")}/links`, bearer)).statusCode)
       .toBe(403);
     // Nor does a device token open the cabinet: that surface is cookie-only.
     expect((await get(setup.server, "/api/v1/auth/devices", bearer)).statusCode).toBe(403);
@@ -611,7 +612,7 @@ describe("§7 — roles", () => {
     expect((await get(setup.server, "/api/v1/models", { cookie: leadCookie })).statusCode).toBe(200);
     expect((await get(setup.server, "/api/v1/admin/users", { cookie: leadCookie })).statusCode)
       .toBe(403);
-    expect((await get(setup.server, "/api/v1/admin/users/lead/links", { cookie: leadCookie }))
+    expect((await get(setup.server, `/api/v1/admin/users/by-id/${await fixtureUserId(app!, "lead")}/links`, { cookie: leadCookie }))
       .statusCode).toBe(403);
 
     // Clients: exactly the assigned pages, the same rule as for a chatter.

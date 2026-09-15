@@ -1,3 +1,4 @@
+import { fixtureUserId } from "./helpers/user-identity.ts";
 import { randomUUID } from "node:crypto";
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -92,7 +93,7 @@ beforeEach(async (context) => {
   }
   chatterUserId = chatter.id;
   chatterKey = (await issueChatterApiKey(appContext, {
-    username: "chatter",
+    userId: await fixtureUserId(appContext, "chatter"),
     pageLabel: "lora-of",
   }, { source: "cli" })).key;
 

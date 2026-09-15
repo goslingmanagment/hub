@@ -13,8 +13,8 @@ export function UserPageAssignmentModal({
   onClose: () => void;
 }) {
   const { data: allPages, isLoading: pagesLoading, isError: pagesError, refetch: refetchPages } = useAdminPages();
-  const assignPage = useAdminAssignPage(user.username);
-  const unassignPage = useAdminUnassignPage(user.username);
+  const assignPage = useAdminAssignPage(user.id);
+  const unassignPage = useAdminUnassignPage(user.id);
   const [selectedLabel, setSelectedLabel] = useState("");
 
   const assignedLabels = new Set(user.assignedPages.map((p) => p.label));

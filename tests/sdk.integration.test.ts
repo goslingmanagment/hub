@@ -1,3 +1,4 @@
+import { fixtureUserId } from "./helpers/user-identity.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 
@@ -81,7 +82,7 @@ beforeAll(async () => {
   const lana = await createFanslyPage(testDb.db, { modelId: model.id, label: "lana" });
   lanaPageId = lana.id;
   const issued = await issueChatterApiKey(seedContext, {
-    username: "anton",
+    userId: await fixtureUserId(seedContext, "anton"),
     pageLabel: "lana",
   }, { source: "cli" });
   chatterKey = issued.key;

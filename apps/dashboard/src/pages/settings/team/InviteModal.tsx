@@ -37,7 +37,7 @@ export function InviteModal({
   create: ReturnType<typeof useCreateInvite>;
   onClose: () => void;
   onCreated: (link: RevealedLink) => void;
-  onOpenExisting: (username: string) => void;
+  onOpenExisting: (userId: number) => void;
 }) {
   const { data: pages, isLoading: pagesLoading, isError: pagesError, refetch: refetchPages, isFetching: pagesFetching } = useAdminPages();
   const { data: users, isError: usersError, refetch: refetchUsers, isFetching: usersFetching } = useAdminUsers();
@@ -81,6 +81,7 @@ export function InviteModal({
     }, {
       onSuccess: (result) => {
         onCreated({
+          userId: result.user.id,
           username: result.user.username,
           kind: result.link.kind,
           secret: result.link.token,
@@ -137,7 +138,7 @@ export function InviteModal({
           <ExistingMemberNotice
             user={existing}
             disabled={create.isPending}
-            onOpen={() => { if (!create.isPending) onOpenExisting(existing.username); }}
+            onOpen={() => { if (!create.isPending) onOpenExisting(existing.id); }}
           />
         )}
         {(!users || usersError) && (
@@ -277,7 +278,7 @@ export function ExistingMemberNotice({ user, onOpen, disabled = false }: { user:
       <p className="font-semibold text-text-primary">Логин «{user.username}» уже занят</p>
       <p>
         {user.disabledAt
-          ? "У этого участника отключён доступ. Его логин и история сохранены. Если возвращается тот же человек, восстановите его доступ. Для другого человека выберите другой логин."
+          ? "У этого участника отключён доступ. Его логин и история сохранены. Если возвращается тот же человек, восстановите его доступ. Чтобы создать новый аккаунт с этим логином, сначала удалите прежний в его карточке."
           : user.registrationState === "invited"
             ? "Участник уже приглашён, но ещё не задал пароль. Откройте его карточку, чтобы создать новую ссылку."
             : "Этот участник уже в команде. Откройте его карточку, чтобы проверить доступ или помочь со входом."}

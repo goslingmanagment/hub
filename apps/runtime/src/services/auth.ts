@@ -28,8 +28,8 @@ import {
   listApiKeys,
   listUserPageAssignments,
   listUsers,
-  lockUserForApiKeyRotation,
   lockUserForDeviceTokenMutation,
+  markUserDeleted,
   recordAgentKeyUse,
   revokeActiveAccountLinks,
   revokeApiKeysByIds,
@@ -53,6 +53,7 @@ import {
   listPagesByIds,
   resolveGrantedPageAssignments,
   revokeAccessGrants,
+  revokeAllAccessGrantsForUser,
   revokeDeviceTokensForUser,
   setDeviceTokenHarvestMachine,
   updateDeviceTokenUse,
@@ -122,6 +123,7 @@ export interface AdminUserApiKeyStatus {
 export interface AdminUserDetailed extends AuthenticatedUser {
   apiKeyStatus: AdminUserApiKeyStatus | null;
   disabledAt: string | null;
+  deletedAt: string | null;
   lastActiveAt: string | null;
   /** Decision 349 (§4.1 p.12): "invited" until the invite link sets a password. */
   registrationState: "invited" | "active";
@@ -244,9 +246,25 @@ function mapAssignedPages(
   }));
 }
 
-/** Decision #126: a deactivated user is frozen on every mutation path that
- * could re-open access (credentials, assignments) — reactivate first. */
-export function assertUserNotDeactivated(user: { username: string; disabledAt: Date | null }) {
+/** Deleted identities remain in storage for history, never for account work. */
+export async function getExistingUserById(db: AppContext["db"], userId: number) {
+  const user = await findUserById(db, userId);
+  if (!user || user.deletedAt) throw new NotFoundError("User not found");
+  return user;
+}
+
+/** Every existing-account write takes the same identity lock and revalidates
+ * permanent deletion after waiting. A reusable username is never re-resolved. */
+export async function lockExistingUserById(dbTx: AppContext["db"], userId: number) {
+  const user = await lockUserForDeviceTokenMutation(dbTx, userId);
+  if (!user || user.deletedAt) throw new NotFoundError("User not found");
+  return user;
+}
+
+/** Disabled accounts are frozen for new credentials and assignment changes;
+ * a permanently deleted account can never be restored at all. */
+export function assertUserNotDeactivated(user: { username: string; disabledAt: Date | null; deletedAt: Date | null }) {
+  if (user.deletedAt) throw new NotFoundError("User not found");
   if (user.disabledAt) {
     throw new BadRequestError(`User "${user.username}" is deactivated`);
   }
@@ -257,7 +275,7 @@ async function getAuthenticatedUserById(app: AppContext, userId: number) {
   // Deactivation is fail-closed at the principal root (decision #126): every
   // authenticate* path resolves through here, so a disabled row can never
   // become a principal even if a credential row survived revocation.
-  if (!user || user.disabledAt) {
+  if (!user || user.disabledAt || user.deletedAt) {
     return null;
   }
 
@@ -271,18 +289,9 @@ async function getAuthenticatedUserById(app: AppContext, userId: number) {
   } satisfies AuthenticatedUser;
 }
 
-async function getAuthenticatedUserByUsername(app: AppContext, username: string) {
-  const user = await findUserByUsername(app.db, username);
-  if (!user) {
-    return null;
-  }
-
-  return getAuthenticatedUserById(app, user.id);
-}
-
 export async function getAdminUserById(app: AppContext, userId: number) {
   const user = await findUserById(app.db, userId);
-  if (!user) {
+  if (!user || user.deletedAt) {
     return null;
   }
 
@@ -317,6 +326,7 @@ export async function getAdminUserById(app: AppContext, userId: number) {
       }
       : null,
     disabledAt: user.disabledAt?.toISOString() ?? null,
+    deletedAt: null,
     lastActiveAt: lastActiveMs > 0 ? new Date(lastActiveMs).toISOString() : null,
     registrationState: user.passwordHash === null ? "invited" : "active",
   } satisfies AdminUserDetailed;
@@ -509,22 +519,21 @@ export async function createUserAccount(
     return createdUser;
   });
 
-  return getAuthenticatedUserById(app, created.id);
+  const user = await getAuthenticatedUserById(app, created.id);
+  if (!user) throw new NotFoundError("Created account is no longer available");
+  return user;
 }
 
 export async function setUserPassword(
   app: AppContext,
   input: {
-    username: string;
+    userId: number;
     password: string;
     mustChangePassword?: boolean;
   },
   audit: AuditContext,
 ) {
-  const user = await findUserByUsername(app.db, input.username);
-  if (!user) {
-    throw new NotFoundError(`User "${input.username}" not found`);
-  }
+  const user = await getExistingUserById(app.db, input.userId);
   // Stage 22: every session-capable role may hold a password (the chatter
   // invite flow v1 is admin-set-password); content_manager stays out.
   if (!roleCanUseSession(user.role)) {
@@ -534,10 +543,7 @@ export async function setUserPassword(
 
   const passwordHash = await argon2.hash(input.password, { type: argon2.argon2id });
   await withAuditTransaction(app, async (dbTx) => {
-    const lockedUser = await lockUserForDeviceTokenMutation(dbTx, user.id);
-    if (!lockedUser) {
-      throw new NotFoundError(`User "${input.username}" not found`);
-    }
+    const lockedUser = await lockExistingUserById(dbTx, user.id);
     if (!roleCanUseSession(lockedUser.role)) {
       throw new BadRequestError(`Role "${lockedUser.role}" cannot use password login`);
     }
@@ -567,7 +573,7 @@ export async function setUserPassword(
       eventType: "user.password_updated",
       targetUserId: user.id,
       metadata: {
-        username: user.username,
+        username: lockedUser.username,
         revokedSessions: revokedSessions.length,
         deletedPendingDeviceTokens: deletedPendingDeviceTokens.length,
         revokedAccountLinks: revokedAccountLinks.length,
@@ -577,81 +583,114 @@ export async function setUserPassword(
   });
 }
 
-/**
- * Decision #126: offboarding is a tombstone, never a DELETE — fact tables
- * reference users.id (ofapi_commands is RESTRICT) and spend/audit attribution
- * must survive. Tombstone + every credential revocation commit together;
- * getAuthenticatedUserById fails closed on the tombstone as the belt.
- */
+/** Disable keeps the login reserved and can be explicitly reversed. Both
+ * lifecycle operations revoke credentials under the same immutable-user lock. */
 export async function deactivateUser(
   app: AppContext,
-  input: { username: string },
+  input: { userId: number },
   audit: AuditContext,
 ) {
-  const user = await findUserByUsername(app.db, input.username);
-  if (!user) {
-    throw new NotFoundError(`User "${input.username}" not found`);
-  }
-  if (user.role === "owner") {
-    throw new BadRequestError("Owner accounts cannot be deactivated");
-  }
-  if (audit.actorUserId != null && audit.actorUserId === user.id) {
-    throw new BadRequestError("You cannot deactivate your own account");
-  }
-  if (user.disabledAt) {
-    throw new BadRequestError(`User "${user.username}" is already deactivated`);
-  }
-
   return withAuditTransaction(app, async (dbTx) => {
-    await lockUserForDeviceTokenMutation(dbTx, user.id);
+    const user = await lockExistingUserById(dbTx, input.userId);
+    assertUserCanBeOffboarded(user, audit, "deactivated");
+    if (user.disabledAt) {
+      throw new BadRequestError(`User "${user.username}" is already deactivated`);
+    }
     await updateUserDisabledAt(dbTx, user.id, new Date());
-    const revokedKeys = await revokeApiKeysForUser(dbTx, user.id, "user_deactivated");
-    const revokedTokens = await revokeDeviceTokensForUser(dbTx, user.id, "user_deactivated");
-    const revokedSessions = await revokeAuthSessionsForUser(dbTx, user.id, "user_deactivated");
-    const deletedPendingDeviceTokens = await deletePendingDeviceTokensForUser(dbTx, user.id);
-    // Decision 349 §4.1 p.7: an invite or reset link must not outlive the
-    // account; reactivation does not revive it — the owner mints a new one.
-    const revokedAccountLinks = await revokeActiveAccountLinks(dbTx, user.id, "user_deactivated");
-
+    const revoked = await terminateAccessTx(dbTx, user, "user_deactivated");
+    const links = await revokeActiveAccountLinks(dbTx, user.id, "user_deactivated");
     await recordAudit({ db: dbTx }, {
       ...audit,
       eventType: "user.deactivated",
       targetUserId: user.id,
       metadata: {
         username: user.username,
-        revokedApiKeys: revokedKeys.length,
-        revokedDeviceTokens: revokedTokens.length,
-        revokedSessions: revokedSessions.length,
-        deletedPendingDeviceTokens: deletedPendingDeviceTokens.length,
-        revokedAccountLinks: revokedAccountLinks.length,
+        revokedApiKeys: revoked.apiKeys,
+        revokedDeviceTokens: revoked.deviceTokens,
+        revokedSessions: revoked.sessions,
+        deletedPendingDeviceTokens: revoked.pendingDeviceTokens,
+        revokedAccountLinks: links.length,
       },
     });
-
     return {
       ok: true as const,
-      revokedApiKeys: revokedKeys.length,
-      revokedDeviceTokens: revokedTokens.length,
-      revokedSessions: revokedSessions.length,
+      revokedApiKeys: revoked.apiKeys,
+      revokedDeviceTokens: revoked.deviceTokens,
+      revokedSessions: revoked.sessions,
     };
   });
 }
 
-/** Clears the #126 tombstone. The stored password works again immediately;
- * keys and device tokens stay revoked — issue fresh ones. */
-export async function reactivateUser(
+function assertUserCanBeOffboarded(
+  user: { id: number; role: UserRole },
+  audit: AuditContext,
+  action: "deactivated" | "deleted",
+) {
+  if (user.role === "owner") throw new BadRequestError(`Owner accounts cannot be ${action}`);
+  if (audit.actorUserId === user.id) throw new BadRequestError("You cannot remove your own account access");
+}
+
+/** Permanent deletion retains the row, name and every attribution FK, while
+ * releasing the login for an unrelated new identity. It cannot be undone. */
+export async function deleteUser(
   app: AppContext,
-  input: { username: string },
+  input: { userId: number },
   audit: AuditContext,
 ) {
-  const user = await findUserByUsername(app.db, input.username);
-  if (!user) {
-    throw new NotFoundError(`User "${input.username}" not found`);
-  }
-  if (!user.disabledAt) {
-    throw new BadRequestError(`User "${user.username}" is not deactivated`);
-  }
+  return withAuditTransaction(app, async (dbTx) => {
+    const user = await lockExistingUserById(dbTx, input.userId);
+    assertUserCanBeOffboarded(user, audit, "deleted");
+    const deletedAt = new Date();
+    const revoked = await terminateAccessTx(dbTx, user, "user_deleted");
+    const links = await revokeActiveAccountLinks(dbTx, user.id, "user_deleted");
+    const revokedGrants = await revokeAllAccessGrantsForUser(dbTx, {
+      userId: user.id,
+      revokedBy: audit.actorUserId ?? null,
+      revokedAt: deletedAt,
+    });
+    // This table is only the legacy live projection. Its durable history is
+    // the grant log above; clear it even when reads currently use grants.
+    const assignments = await listUserPageAssignments(dbTx, user.id);
+    for (const assignment of assignments) {
+      await unassignUserFromPage(dbTx, user.id, assignment.pageId);
+    }
+    await markUserDeleted(dbTx, user.id, deletedAt);
+    await recordAudit({ db: dbTx }, {
+      ...audit,
+      eventType: "user.deleted",
+      targetUserId: user.id,
+      metadata: {
+        username: user.username,
+        revokedApiKeys: revoked.apiKeys,
+        revokedDeviceTokens: revoked.deviceTokens,
+        revokedSessions: revoked.sessions,
+        deletedPendingDeviceTokens: revoked.pendingDeviceTokens,
+        revokedAccountLinks: links.length,
+        revokedGrants,
+        unassignedPageIds: assignments.map((assignment) => assignment.pageId),
+      },
+    });
+    return {
+      ok: true as const,
+      revokedApiKeys: revoked.apiKeys,
+      revokedDeviceTokens: revoked.deviceTokens,
+      revokedSessions: revoked.sessions,
+    };
+  });
+}
 
-  await withAuditTransaction(app, async (dbTx) => {
+/** Restore only a disabled, non-deleted identity. Old credentials stay revoked;
+ * a password-change requirement is preserved along with the stored password. */
+export async function reactivateUser(
+  app: AppContext,
+  input: { userId: number },
+  audit: AuditContext,
+) {
+  return withAuditTransaction(app, async (dbTx) => {
+    const user = await lockExistingUserById(dbTx, input.userId);
+    if (!user.disabledAt) {
+      throw new BadRequestError(`User "${user.username}" is not deactivated`);
+    }
     await updateUserDisabledAt(dbTx, user.id, null);
     await recordAudit({ db: dbTx }, {
       ...audit,
@@ -659,9 +698,8 @@ export async function reactivateUser(
       targetUserId: user.id,
       metadata: { username: user.username },
     });
+    return { ok: true as const };
   });
-
-  return { ok: true as const };
 }
 
 /**
@@ -678,7 +716,7 @@ export async function changeOwnPassword(
   },
 ) {
   const user = await findUserById(app.db, input.userId);
-  if (!user || !user.passwordHash) {
+  if (!user || user.deletedAt || user.disabledAt || !user.passwordHash) {
     throw new UnauthorizedError("Invalid current password");
   }
   const isValid = await argon2.verify(user.passwordHash, input.currentPassword);
@@ -692,8 +730,10 @@ export async function changeOwnPassword(
     if (
       !lockedUser
       || lockedUser.disabledAt
+      || lockedUser.deletedAt
       || !roleCanUseSession(lockedUser.role)
       || lockedUser.passwordHash !== user.passwordHash
+      || lockedUser.deviceTokenEpoch !== user.deviceTokenEpoch
     ) {
       throw new UnauthorizedError("Password authority changed while the request was in flight");
     }
@@ -724,15 +764,12 @@ export async function changeOwnPassword(
 export async function assignPageToUser(
   app: AppContext,
   input: {
-    username: string;
+    userId: number;
     pageLabel: string;
   },
   audit: AuditContext,
 ) {
-  const user = await findUserByUsername(app.db, input.username);
-  if (!user) {
-    throw new NotFoundError(`User "${input.username}" not found`);
-  }
+  const user = await getExistingUserById(app.db, input.userId);
   assertUserNotDeactivated(user);
 
   const page = await findPageSummaryByLabel(app.db, input.pageLabel);
@@ -742,7 +779,7 @@ export async function assignPageToUser(
 
   // Grant + assignment + audit commit together (review R1-7).
   await withAuditTransaction(app, async (dbTx) => {
-    await assignPageToUserTx(app, dbTx, { user, page }, audit);
+    await assignPageToUserTx(app, dbTx, { userId: user.id, page }, audit);
   });
 }
 
@@ -756,28 +793,30 @@ export async function assignPageToUserTx(
   app: Pick<AppContext, "config">,
   dbTx: AppContext["db"],
   input: {
-    user: { id: number; username: string };
+    userId: number;
     page: { id: number; label: string };
   },
   audit: AuditContext,
 ) {
+  const user = await lockExistingUserById(dbTx, input.userId);
+  assertUserNotDeactivated(user);
   await insertAccessGrant(dbTx, {
-    userId: input.user.id,
+    userId: user.id,
     scopeType: "page",
     scopeId: input.page.id,
     grantedBy: audit.actorUserId ?? null,
   });
   if (!app.config?.accessGrantsReadEnabled) {
-    await assignUserToPage(dbTx, input.user.id, input.page.id);
+    await assignUserToPage(dbTx, user.id, input.page.id);
   }
 
   await recordAudit({ db: dbTx }, {
     ...audit,
     eventType: "user.page_assigned",
-    targetUserId: input.user.id,
+    targetUserId: user.id,
     platformAccountId: input.page.id,
     metadata: {
-      username: input.user.username,
+      username: user.username,
       pageLabel: input.page.label,
     },
   });
@@ -786,15 +825,12 @@ export async function assignPageToUserTx(
 export async function unassignPageFromUser(
   app: AppContext,
   input: {
-    username: string;
+    userId: number;
     pageLabel: string;
   },
   audit: AuditContext,
 ) {
-  const user = await findUserByUsername(app.db, input.username);
-  if (!user) {
-    throw new NotFoundError(`User "${input.username}" not found`);
-  }
+  const user = await getExistingUserById(app.db, input.userId);
 
   const page = await findPageSummaryByLabel(app.db, input.pageLabel);
   if (!page) {
@@ -805,6 +841,8 @@ export async function unassignPageFromUser(
   // hard-delete continues only while assignments are still the read path.
   // Revoke + audit commit together (review R1-7).
   await withAuditTransaction(app, async (dbTx) => {
+    const lockedUser = await lockExistingUserById(dbTx, user.id);
+    assertUserNotDeactivated(lockedUser);
     await revokeAccessGrants(dbTx, {
       userId: user.id,
       scopeType: "page",
@@ -821,7 +859,7 @@ export async function unassignPageFromUser(
       targetUserId: user.id,
       platformAccountId: page.id,
       metadata: {
-        username: user.username,
+        username: lockedUser.username,
         pageLabel: page.label,
       },
     });
@@ -831,15 +869,12 @@ export async function unassignPageFromUser(
 export async function issueChatterApiKey(
   app: AppContext,
   input: {
-    username: string;
+    userId: number;
     pageLabel?: string;
   },
   audit: AuditContext,
 ) {
-  const user = await findUserByUsername(app.db, input.username);
-  if (!user) {
-    throw new NotFoundError(`User "${input.username}" not found`);
-  }
+  const user = await getExistingUserById(app.db, input.userId);
   if (!roleCanUseApiKey(user.role)) {
     throw new BadRequestError(`Role "${user.role}" cannot use API keys`);
   }
@@ -857,7 +892,14 @@ export async function issueChatterApiKey(
   const keyPrefix = `${API_KEY_PREFIX}${tokenBody.slice(0, API_KEY_DISPLAY_LENGTH)}`;
   const tokenDigest = sha256Hex(rawKey);
   await withAuditTransaction(app, async (dbTx) => {
-    await lockUserForApiKeyRotation(dbTx, user.id);
+    const lockedUser = await lockExistingUserById(dbTx, user.id);
+    assertUserNotDeactivated(lockedUser);
+    if (!roleCanUseApiKey(lockedUser.role)) {
+      throw new BadRequestError(`Role "${lockedUser.role}" cannot use API keys`);
+    }
+    if (lockedUser.deviceTokenEpoch !== user.deviceTokenEpoch) {
+      throw new ConflictError("Account authority changed while issuance was in flight");
+    }
     if (page) {
       await insertAccessGrant(dbTx, {
         userId: user.id,
@@ -883,7 +925,7 @@ export async function issueChatterApiKey(
       targetUserId: user.id,
       platformAccountId: page?.id ?? null,
       metadata: {
-        username: user.username,
+        username: lockedUser.username,
         keyPrefix,
         rotatedKeys: activeKeys.length,
         pageLabel: page?.label ?? null,
@@ -909,18 +951,14 @@ export async function issueChatterApiKey(
 export async function revokeUserApiKeys(
   app: AppContext,
   input: {
-    username: string;
+    userId: number;
     reason?: string | null;
   },
   audit: AuditContext,
 ) {
-  const user = await findUserByUsername(app.db, input.username);
-  if (!user) {
-    throw new NotFoundError(`User "${input.username}" not found`);
-  }
-
   // Revoke + audit commit together (review R1-7).
   const revoked = await withAuditTransaction(app, async (dbTx) => {
+    const user = await lockExistingUserById(dbTx, input.userId);
     const revokedKeys = await revokeApiKeysForUser(dbTx, user.id, input.reason ?? "revoked");
 
     await recordAudit({ db: dbTx }, {
@@ -941,24 +979,11 @@ export async function revokeUserApiKeys(
 
 export async function listApiKeysForUsers(
   app: AppContext,
-  usernames?: string[],
+  userIds?: number[],
 ) {
-  if (!usernames || usernames.length === 0) {
-    return listApiKeys(app.db);
+  if (userIds && userIds.length > 0) {
+    for (const userId of userIds) await getExistingUserById(app.db, userId);
   }
-
-  const userIds: number[] = [];
-  for (const username of usernames) {
-    const user = await findUserByUsername(app.db, username);
-    if (user) {
-      userIds.push(user.id);
-    }
-  }
-
-  if (userIds.length === 0) {
-    return [];
-  }
-
   return listApiKeys(app.db, userIds);
 }
 
@@ -1163,7 +1188,7 @@ export async function verifyPasswordAndLockUser<T>(
 
   // Deactivated shares the invalid-credentials path (decision #126): the same
   // 401, dummy verify, and backoff as an unknown username — no oracle.
-  if (!user || !roleCanUseSession(user.role) || !user.passwordHash || user.disabledAt) {
+  if (!user || !roleCanUseSession(user.role) || !user.passwordHash || user.disabledAt || user.deletedAt) {
     // Run a dummy verification so this path takes comparable time to the
     // wrong-password path below, avoiding a username-enumeration timing oracle.
     await argon2.verify(DUMMY_PASSWORD_HASH, input.password).catch(() => false);
@@ -1193,6 +1218,7 @@ export async function verifyPasswordAndLockUser<T>(
     if (
       !locked
       || locked.disabledAt
+      || locked.deletedAt
       || !roleCanUseSession(locked.role)
       || locked.passwordHash !== user.passwordHash
       || locked.deviceTokenEpoch !== user.deviceTokenEpoch
@@ -1452,10 +1478,7 @@ export async function issueDeviceToken(
   },
   audit: AuditContext,
 ) {
-  const user = await findUserById(app.db, input.userId);
-  if (!user) {
-    throw new NotFoundError("User not found");
-  }
+  const user = await getExistingUserById(app.db, input.userId);
   if (!roleCanUseSession(user.role)) {
     throw new BadRequestError(`Role "${user.role}" cannot hold device tokens`);
   }
@@ -1467,10 +1490,7 @@ export async function issueDeviceToken(
   const expiresAt = new Date(Date.now() + DEVICE_TOKEN_TTL_MS);
   // Token row + audit commit together (review R1-7).
   const created = await withAuditTransaction(app, async (dbTx) => {
-    const lockedUser = await lockUserForDeviceTokenMutation(dbTx, user.id);
-    if (!lockedUser) {
-      throw new NotFoundError("User not found");
-    }
+    const lockedUser = await lockExistingUserById(dbTx, user.id);
     if (!roleCanUseSession(lockedUser.role)) {
       throw new BadRequestError(`Role "${lockedUser.role}" cannot hold device tokens`);
     }
@@ -1530,7 +1550,7 @@ export async function reservePendingDeviceToken(
   audit: AuditContext,
 ) {
   const userAtStart = await findUserById(app.db, input.userId);
-  if (!userAtStart || userAtStart.disabledAt || !roleCanUseSession(userAtStart.role)) {
+  if (!userAtStart || userAtStart.disabledAt || userAtStart.deletedAt || !roleCanUseSession(userAtStart.role)) {
     throw new UnauthorizedError("Session is no longer eligible to reserve a device token");
   }
   const tokenBody = randomToken(24);
@@ -1543,6 +1563,7 @@ export async function reservePendingDeviceToken(
     if (
       !user
       || user.disabledAt
+      || user.deletedAt
       || !roleCanUseSession(user.role)
       || !session
       || session.userId !== user.id
@@ -1605,7 +1626,7 @@ export async function authenticatePendingDeviceTokenForActivation(
   const pending = await findPendingDeviceTokenByDigest(app.db, digest);
   if (pending && pending.expiresAt > now) {
     const user = await findUserById(app.db, pending.userId);
-    if (user && !user.disabledAt && roleCanUseSession(user.role)) {
+    if (user && !user.disabledAt && !user.deletedAt && roleCanUseSession(user.role)) {
       return { token: rawToken, userId: user.id, state: "pending" };
     }
     return null;
@@ -1615,7 +1636,7 @@ export async function authenticatePendingDeviceTokenForActivation(
     return null;
   }
   const user = await findUserById(app.db, active.userId);
-  return user && !user.disabledAt && roleCanUseSession(user.role)
+  return user && !user.disabledAt && !user.deletedAt && roleCanUseSession(user.role)
     ? { token: rawToken, userId: user.id, state: "active" }
     : null;
 }
@@ -1633,7 +1654,7 @@ export async function activatePendingDeviceToken(
   const digest = sha256Hex(credential.token);
   const activated = await withAuditTransaction(app, async (dbTx) => {
     const user = await lockUserForDeviceTokenMutation(dbTx, credential.userId);
-    if (!user || user.disabledAt || !roleCanUseSession(user.role)) {
+    if (!user || user.disabledAt || user.deletedAt || !roleCanUseSession(user.role)) {
       throw new UnauthorizedError("Invalid pending device token");
     }
     // Time is sampled only after the potentially long row-lock wait.  A
@@ -1834,11 +1855,8 @@ export async function authenticateBearerToken(app: AppContext, token: string) {
   return (await authenticateBearerCredential(app, token)).principal;
 }
 
-export async function listDeviceTokensForUsername(app: AppContext, username: string) {
-  const user = await findUserByUsername(app.db, username);
-  if (!user) {
-    throw new NotFoundError(`User "${username}" not found`);
-  }
+export async function listDeviceTokensForUserId(app: AppContext, userId: number) {
+  const user = await getExistingUserById(app.db, userId);
   const tokens = await listDeviceTokensForUser(app.db, user.id);
   return tokens.map((token) => deviceTokenResponse(token));
 }
@@ -1859,23 +1877,21 @@ function deviceTokenResponse(token: Awaited<ReturnType<typeof listDeviceTokensFo
   };
 }
 
-export async function setDeviceTokenHarvestCapabilityForUsername(
+export async function setDeviceTokenHarvestCapabilityForUserId(
   app: AppContext,
-  input: { username: string; deviceTokenId: number; machineId: string | null },
+  input: { userId: number; deviceTokenId: number; machineId: string | null },
   audit: AuditContext,
 ) {
-  const user = await findUserByUsername(app.db, input.username);
-  if (!user) {
-    throw new NotFoundError(`User "${input.username}" not found`);
-  }
 
   return withAuditTransaction(app, async (dbTx) => {
+    const user = await lockExistingUserById(dbTx, input.userId);
+    assertUserNotDeactivated(user);
     const token = await findDeviceTokenForUser(dbTx, {
       deviceTokenId: input.deviceTokenId,
       userId: user.id,
     });
     if (!token) {
-      throw new NotFoundError(`Device token ${input.deviceTokenId} not found for "${input.username}"`);
+      throw new NotFoundError(`Device token ${input.deviceTokenId} not found for "${input.userId}"`);
     }
     if (token.revokedAt || token.expiresAt <= new Date()) {
       throw new BadRequestError("Harvest capability requires an active device token");
@@ -1915,6 +1931,7 @@ export async function revokeCurrentDeviceToken(
   requireHumanPrincipal(principal);
   const deviceTokenId = requireDeviceTokenUser(principal);
   await withAuditTransaction(app, async (dbTx) => {
+    await lockExistingUserById(dbTx, principal.user.id);
     const revoked = await revokeDeviceTokenById(dbTx, {
       deviceTokenId,
       userId: principal.user.id,
@@ -1934,30 +1951,22 @@ export async function revokeCurrentDeviceToken(
   return { revoked: true as const };
 }
 
-export async function issueDeviceTokenForUsername(
+export async function issueDeviceTokenForUserId(
   app: AppContext,
-  input: { username: string; label: string },
+  input: { userId: number; label: string },
   audit: AuditContext,
 ) {
-  const user = await findUserByUsername(app.db, input.username);
-  if (!user) {
-    throw new NotFoundError(`User "${input.username}" not found`);
-  }
-  return issueDeviceToken(app, { userId: user.id, label: input.label }, audit);
+  return issueDeviceToken(app, input, audit);
 }
 
-export async function revokeDeviceTokensForUsername(
+export async function revokeDeviceTokensForUserId(
   app: AppContext,
-  input: { username: string },
+  input: { userId: number },
   audit: AuditContext,
 ) {
-  const user = await findUserByUsername(app.db, input.username);
-  if (!user) {
-    throw new NotFoundError(`User "${input.username}" not found`);
-  }
   // Revoke + audit commit together (review R1-7).
   const revoked = await withAuditTransaction(app, async (dbTx) => {
-    await lockUserForDeviceTokenMutation(dbTx, user.id);
+    const user = await lockExistingUserById(dbTx, input.userId);
     await advanceDeviceTokenEpoch(dbTx, user.id);
     const revokedTokens = await revokeDeviceTokensForUser(dbTx, user.id, "revoked");
     const deletedPendingDeviceTokens = await deletePendingDeviceTokensForUser(dbTx, user.id);
@@ -2125,21 +2134,15 @@ export async function terminateAccessTx(
  * active link, epoch advanced. The password stays; the account stays enabled. */
 export async function terminateAllAccess(
   app: AppContext,
-  input: { username: string },
+  input: { userId: number },
   audit: AuditContext,
 ) {
-  const user = await findUserByUsername(app.db, input.username);
-  if (!user) {
-    throw new NotFoundError(`User "${input.username}" not found`);
-  }
-  if (user.role === "owner") {
-    // An owner cannot lock the console out from under themselves (mirrors
-    // deactivateUser).
-    throw new BadRequestError("Owner sign-ins cannot be terminated this way");
-  }
 
   return withAuditTransaction(app, async (dbTx) => {
-    await lockUserForDeviceTokenMutation(dbTx, user.id);
+    const user = await lockExistingUserById(dbTx, input.userId);
+    if (user.role === "owner") {
+      throw new BadRequestError("Owner sign-ins cannot be terminated this way");
+    }
     const terminated = await terminateAccessTx(dbTx, user, "access_terminated");
     const links = await revokeActiveAccountLinks(dbTx, user.id, "access_terminated");
     await recordAudit({ db: dbTx }, {
@@ -2165,22 +2168,19 @@ export async function terminateAllAccess(
 }
 
 /** Owner action "Отозвать вход" (§4.4): exactly one device token. */
-export async function revokeDeviceTokenForUsername(
+export async function revokeDeviceTokenForUserId(
   app: AppContext,
-  input: { username: string; deviceTokenId: number },
+  input: { userId: number; deviceTokenId: number },
   audit: AuditContext,
 ) {
-  const user = await findUserByUsername(app.db, input.username);
-  if (!user) {
-    throw new NotFoundError(`User "${input.username}" not found`);
-  }
   return withAuditTransaction(app, async (dbTx) => {
+    const user = await lockExistingUserById(dbTx, input.userId);
     const token = await findDeviceTokenForUser(dbTx, {
       deviceTokenId: input.deviceTokenId,
       userId: user.id,
     });
     if (!token) {
-      throw new NotFoundError(`Device ${input.deviceTokenId} not found for "${input.username}"`);
+      throw new NotFoundError(`Device ${input.deviceTokenId} not found for "${input.userId}"`);
     }
     const revoked = await revokeDeviceTokenById(dbTx, {
       deviceTokenId: token.id,
@@ -2234,6 +2234,7 @@ export async function revokeOwnDevice(
   requireSessionUser(principal);
   const userId = principal.user.id;
   return withAuditTransaction(app, async (dbTx) => {
+    await lockExistingUserById(dbTx, userId);
     const token = await findDeviceTokenForUser(dbTx, { deviceTokenId: input.deviceId, userId });
     if (!token) {
       throw new NotFoundError("Device not found");
@@ -2269,7 +2270,7 @@ export async function revokeAllOwnDevices(
   const userId = principal.user.id;
   const keepSessionId = principal.authSessionId;
   return withAuditTransaction(app, async (dbTx) => {
-    await lockUserForDeviceTokenMutation(dbTx, userId);
+    await lockExistingUserById(dbTx, userId);
     await advanceDeviceTokenEpoch(dbTx, userId);
     const deviceTokens = await revokeDeviceTokensForUser(dbTx, userId, "self_revoked_all");
     const pending = await deletePendingDeviceTokensForUser(dbTx, userId);
@@ -2298,19 +2299,18 @@ export async function revokeAllOwnDevices(
 
 export async function grantModelToUser(
   app: AppContext,
-  input: { username: string; modelSlug: string },
+  input: { userId: number; modelSlug: string },
   audit: AuditContext,
 ) {
-  const user = await findUserByUsername(app.db, input.username);
-  if (!user) {
-    throw new NotFoundError(`User "${input.username}" not found`);
-  }
+  const user = await getExistingUserById(app.db, input.userId);
   const model = await findModelBySlug(app.db, input.modelSlug);
   if (!model) {
     throw new NotFoundError(`Model "${input.modelSlug}" not found`);
   }
   // Grant + audit commit together (review R1-7).
   await withAuditTransaction(app, async (dbTx) => {
+    const lockedUser = await lockExistingUserById(dbTx, user.id);
+    assertUserNotDeactivated(lockedUser);
     await insertAccessGrant(dbTx, {
       userId: user.id,
       scopeType: "model",
@@ -2321,7 +2321,7 @@ export async function grantModelToUser(
       ...audit,
       eventType: "user.model_granted",
       targetUserId: user.id,
-      metadata: { username: user.username, modelSlug: model.slug },
+      metadata: { username: lockedUser.username, modelSlug: model.slug },
     });
   });
   return { ok: true as const };
@@ -2329,19 +2329,18 @@ export async function grantModelToUser(
 
 export async function revokeModelFromUser(
   app: AppContext,
-  input: { username: string; modelSlug: string },
+  input: { userId: number; modelSlug: string },
   audit: AuditContext,
 ) {
-  const user = await findUserByUsername(app.db, input.username);
-  if (!user) {
-    throw new NotFoundError(`User "${input.username}" not found`);
-  }
+  const user = await getExistingUserById(app.db, input.userId);
   const model = await findModelBySlug(app.db, input.modelSlug);
   if (!model) {
     throw new NotFoundError(`Model "${input.modelSlug}" not found`);
   }
   // Revoke + audit commit together (review R1-7).
   await withAuditTransaction(app, async (dbTx) => {
+    const lockedUser = await lockExistingUserById(dbTx, user.id);
+    assertUserNotDeactivated(lockedUser);
     await revokeAccessGrants(dbTx, {
       userId: user.id,
       scopeType: "model",
@@ -2352,18 +2351,15 @@ export async function revokeModelFromUser(
       ...audit,
       eventType: "user.model_revoked",
       targetUserId: user.id,
-      metadata: { username: user.username, modelSlug: model.slug },
+      metadata: { username: lockedUser.username, modelSlug: model.slug },
     });
   });
   return { ok: true as const };
 }
 
 /** Grant history for the admin surface — scope labels resolved for display. */
-export async function listUserGrants(app: AppContext, username: string) {
-  const user = await findUserByUsername(app.db, username);
-  if (!user) {
-    throw new NotFoundError(`User "${username}" not found`);
-  }
+export async function listUserGrants(app: AppContext, userId: number) {
+  const user = await getExistingUserById(app.db, userId);
   const grants = await listGrantsForUser(app.db, user.id);
   const modelIds = grants.filter((g) => g.scopeType === "model").map((g) => g.scopeId);
   const pageIds = grants.filter((g) => g.scopeType === "page").map((g) => g.scopeId);
@@ -2389,5 +2385,3 @@ export async function listUserGrants(app: AppContext, username: string) {
     revokedAt: grant.revokedAt?.toISOString() ?? null,
   }));
 }
-
-export { getAuthenticatedUserByUsername };

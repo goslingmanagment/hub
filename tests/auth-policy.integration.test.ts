@@ -1,3 +1,4 @@
+import { fixtureUserId } from "./helpers/user-identity.ts";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { createFanslyPage, createModel, insertAgentKey } from "@agency_hub_core/db";
@@ -83,14 +84,14 @@ beforeAll(async () => {
   await createFanslyPage(testDb.db, { modelId: model.id, label: "lily1" });
 
   const issued = await issueChatterApiKey(seedContext, {
-    username: "anton",
+    userId: await fixtureUserId(seedContext, "anton"),
     pageLabel: "lana",
   }, { source: "cli" });
   chatterKey = issued.key;
 
   // The module role-matrix wants a team_lead with a page in scope.
   await assignPageToUser(seedContext, {
-    username: "lead",
+    userId: await fixtureUserId(seedContext, "lead"),
     pageLabel: "lana",
   }, { source: "cli" });
 

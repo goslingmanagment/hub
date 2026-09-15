@@ -42,6 +42,8 @@ import {
   assignPageToUserTx,
   createUserOrRefuseDuplicate,
   getAdminUserById,
+  getExistingUserById,
+  lockExistingUserById,
   listEffectivePageAssignments,
   normalizeUsername,
   recordAudit,
@@ -192,7 +194,7 @@ export async function createInvite(
       if (!page) {
         throw new NotFoundError(`Page "${label}" not found`);
       }
-      await assignPageToUserTx(app, dbTx, { user, page }, audit);
+      await assignPageToUserTx(app, dbTx, { userId: user.id, page }, audit);
     }
 
     const link = await createAccountLink(dbTx, {
@@ -236,29 +238,23 @@ export async function createInvite(
 
 /** §4.1 p.4–8: a new link of either kind for an existing user; it supersedes
  * every previously active link of that user. */
-export async function createAccountLinkForUsername(
+export async function createAccountLinkForUserId(
   app: AppContext,
   input: {
-    username: string;
+    userId: number;
     kind: AccountLinkKind;
     expiresInHours?: number | undefined;
   },
   audit: AuditContext,
 ) {
-  const user = await findUserByUsername(app.db, input.username);
-  if (!user) {
-    throw new NotFoundError(`User "${input.username}" not found`);
-  }
+  const user = await getExistingUserById(app.db, input.userId);
   assertLinkKindAllowedForRole(user, input.kind);
   assertUserNotDeactivated(user);
   const ttlHours = resolveLinkTtlHours(input.expiresInHours);
 
   const material = mintLinkMaterial(ttlHours, Date.now());
   const link = await withAuditTransaction(app, async (dbTx) => {
-    const locked = await lockUserForDeviceTokenMutation(dbTx, user.id);
-    if (!locked) {
-      throw new NotFoundError(`User "${input.username}" not found`);
-    }
+    const locked = await lockExistingUserById(dbTx, user.id);
     // Everything is re-checked under the lock: the right to this kind of link
     // may have changed while the request waited.
     assertLinkKindAllowedForRole(locked, input.kind);
@@ -301,11 +297,8 @@ export async function createAccountLinkForUsername(
   };
 }
 
-export async function listAccountLinksForUsername(app: AppContext, username: string) {
-  const user = await findUserByUsername(app.db, username);
-  if (!user) {
-    throw new NotFoundError(`User "${username}" not found`);
-  }
+export async function listAccountLinksForUserId(app: AppContext, userId: number) {
+  const user = await getExistingUserById(app.db, userId);
   const now = new Date();
   const links = await listAccountLinks(app.db, user.id);
   return links.map((link) => accountLinkItem(link, now));
@@ -313,20 +306,16 @@ export async function listAccountLinksForUsername(app: AppContext, username: str
 
 /** Owner revocation of one link. Idempotent: an already used / revoked /
  * expired link is returned as it is. */
-export async function revokeAccountLinkForUsername(
+export async function revokeAccountLinkForUserId(
   app: AppContext,
-  input: { username: string; linkId: number },
+  input: { userId: number; linkId: number },
   audit: AuditContext,
 ) {
-  const user = await findUserByUsername(app.db, input.username);
-  if (!user) {
-    throw new NotFoundError(`User "${input.username}" not found`);
-  }
   return withAuditTransaction(app, async (dbTx) => {
-    await lockUserForDeviceTokenMutation(dbTx, user.id);
+    const user = await lockExistingUserById(dbTx, input.userId);
     const link = await findAccountLinkForUser(dbTx, { linkId: input.linkId, userId: user.id });
     if (!link) {
-      throw new NotFoundError(`Link ${input.linkId} not found for "${input.username}"`);
+      throw new NotFoundError(`Link ${input.linkId} not found for "${input.userId}"`);
     }
     const now = new Date();
     if (accountLinkState(link, now) !== "active") {
@@ -380,8 +369,8 @@ export async function inspectAccountLink(
     return { state };
   }
   const user = await findUserById(app.db, link.userId);
-  if (!user || user.disabledAt) {
-    // Deactivation revokes links; if a row ever survives, say no more than that.
+  if (!user || user.disabledAt || user.deletedAt) {
+    // Disabling or deleting revokes links; if one survives, reveal no more.
     return { state: "revoked" };
   }
   const pages = await listEffectivePageAssignments(app, user.id);
@@ -453,7 +442,7 @@ export async function redeemAccountLink(
     if (state !== "active") {
       throw new ConflictError(CONFLICT_MESSAGES[state], { reason: state });
     }
-    if (user.disabledAt || !roleCanUseSession(user.role)) {
+    if (user.disabledAt || user.deletedAt || !roleCanUseSession(user.role)) {
       throw new ConflictError(CONFLICT_MESSAGES.revoked, { reason: "revoked" });
     }
 

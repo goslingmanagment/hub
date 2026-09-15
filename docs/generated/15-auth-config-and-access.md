@@ -14,6 +14,12 @@
 > (`token_revoked` | `token_expired`) that the 401 carries. Logins are
 > case-insensitive; the new live config key is `ACCOUNT_LINKS_ENABLED`.
 
+> **STALE (Decision 354, 2026-09-15):** user administration now addresses immutable
+> IDs through `/admin/users/by-id/:userId`, SDK 0.3 retires username routes,
+> migration 0201 adds permanent account deletion and partial login uniqueness,
+> and Team state/cache ownership follows IDs. See Decision 354 and
+> `docs/runbooks/user-account-deletion.md`; the body predates this change.
+
 # Authentication, authorization, access grants, and configuration
 
 Identity HTTP handlers live in `apps/runtime/src/modules/identity/index.ts`.

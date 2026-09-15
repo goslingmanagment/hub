@@ -1,3 +1,4 @@
+import { fixtureUserId } from "./helpers/user-identity.ts";
 import { runMediaPlaneProjection } from "../apps/runtime/src/services/projections/media-plane.ts";
 import { getOfapiAsyncLifecycle } from "../apps/runtime/src/services/ofapi-async-lifecycle.ts";
 import { encryptJson } from "@agency_hub_core/shared";
@@ -747,7 +748,7 @@ describe("owned OFAPI uploads and vault catalog", () => {
     const chatter = (
       await issueChatterApiKey(
         app,
-        { username: "chatter", pageLabel: "media-page" },
+        { userId: await fixtureUserId(app, "chatter"), pageLabel: "media-page" },
         { source: "cli" },
       )
     ).key;

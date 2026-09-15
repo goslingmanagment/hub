@@ -1,3 +1,4 @@
+import { fixtureUserId } from "./helpers/user-identity.ts";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
@@ -77,7 +78,7 @@ async function bindHarvestCapability(input: {
 }) {
   return server!.inject({
     method: "PATCH",
-    url: `/api/v1/admin/users/${input.username}/device-tokens/${input.tokenId}/harvest-capability`,
+    url: `/api/v1/admin/users/by-id/${await fixtureUserId(app!, input.username)}/device-tokens/${input.tokenId}/harvest-capability`,
     headers: { cookie: input.ownerCookie },
     payload: { machineId: input.machineId },
   });
@@ -114,11 +115,11 @@ async function seedIdentity() {
   });
 
   const aliceKey = await issueChatterApiKey(app!, {
-    username: "alice",
+    userId: await fixtureUserId(app!, "alice"),
     pageLabel: "harvest-of",
   }, { source: "test" });
   await assignPageToUser(app!, {
-    username: "bob",
+    userId: await fixtureUserId(app!, "bob"),
     pageLabel: "harvest-of",
   }, { source: "test" });
 
@@ -213,7 +214,7 @@ describe("desktop harvest capability", () => {
     // A chatter cannot mint its own capability through the owner route.
     const unprivilegedGrant = await server.inject({
       method: "PATCH",
-      url: `/api/v1/admin/users/alice/device-tokens/${aliceToken.id}/harvest-capability`,
+      url: `/api/v1/admin/users/by-id/${await fixtureUserId(app!, "alice")}/device-tokens/${aliceToken.id}/harvest-capability`,
       headers: { authorization: `Bearer ${aliceToken.token}` },
       payload: { machineId: MACHINE_ID },
     });

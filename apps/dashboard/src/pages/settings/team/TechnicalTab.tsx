@@ -467,20 +467,20 @@ export function isMachineId(value: string): boolean {
  */
 export function HarvestBindingSection() {
   const { data: users, isLoading: usersLoading, isError: usersError, error: usersErrorValue } = useAdminUsers();
-  const [username, setUsername] = useState("");
+  const [userId, setUserId] = useState<number | null>(null);
   const [tokenId, setTokenId] = useState<number | null>(null);
   const [machineId, setMachineId] = useState("");
 
-  const devices = useUserDevices(username, { enabled: username !== "" });
-  const setCapability = useSetHarvestCapability(username);
-
-  const candidates = (users ?? []).filter((user) => !user.disabledAt);
-  const activeDevices = (devices.data ?? []).filter((device) => device.isActive);
+  const candidates = (users ?? []).filter((user) => !user.disabledAt && !user.deletedAt);
+  const selectedUser = candidates.find((user) => user.id === userId) ?? null;
+  const devices = useUserDevices(selectedUser?.id ?? null);
+  const setCapability = useSetHarvestCapability(selectedUser?.id ?? null);
+  const activeDevices = selectedUser ? (devices.data ?? []).filter((device) => device.isActive) : [];
   const selected = activeDevices.find((device) => device.id === tokenId) ?? null;
   const machineIdValid = isMachineId(machineId);
 
   function apply(nextMachineId: string | null) {
-    if (tokenId === null) return;
+    if (!selectedUser || tokenId === null || !selected || usersError || devices.isError || setCapability.isPending) return;
     setCapability.mutate({ tokenId, machineId: nextMachineId }, {
       onSuccess: () => {
         toast.success(nextMachineId ? "Machine bound to this sign-in" : "Binding removed");
@@ -505,16 +505,17 @@ export function HarvestBindingSection() {
       <div className="grid gap-3 sm:grid-cols-2">
         <Field label="Person">
           <select
-            value={username}
+            value={selectedUser ? String(selectedUser.id) : ""}
             onChange={(event) => {
-              setUsername(event.target.value);
+              setUserId(event.target.value === "" ? null : Number(event.target.value));
+              setMachineId("");
               setTokenId(null);
             }}
             className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm text-text-primary"
           >
             <option value="">Select a person…</option>
             {candidates.map((user) => (
-              <option key={user.id} value={user.username}>{user.username}</option>
+              <option key={user.id} value={String(user.id)}>{user.username}</option>
             ))}
           </select>
         </Field>
@@ -522,7 +523,7 @@ export function HarvestBindingSection() {
         <Field label="Sign-in">
           <select
             value={tokenId === null ? "" : String(tokenId)}
-            disabled={username === "" || devices.isError}
+            disabled={!selectedUser || usersError || devices.isError}
             onChange={(event) => setTokenId(event.target.value === "" ? null : Number(event.target.value))}
             className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm text-text-primary disabled:opacity-50"
           >
@@ -540,7 +541,7 @@ export function HarvestBindingSection() {
       {devices.isError && (
         <StaleDataNotice title="Sign-ins unavailable" error={devices.error} />
       )}
-      {username !== "" && devices.data && activeDevices.length === 0 && (
+      {selectedUser && devices.data && activeDevices.length === 0 && (
         <p className="text-sm text-text-muted">This person has no live sign-in to bind.</p>
       )}
 
@@ -561,7 +562,7 @@ export function HarvestBindingSection() {
             />
             <button
               type="button"
-              disabled={!machineIdValid || setCapability.isPending}
+              disabled={!machineIdValid || usersError || devices.isError || setCapability.isPending}
               onClick={() => apply(machineId.trim())}
               className="rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50"
             >
@@ -570,7 +571,7 @@ export function HarvestBindingSection() {
             {selected.harvestMachineId && (
               <button
                 type="button"
-                disabled={setCapability.isPending}
+                disabled={usersError || devices.isError || setCapability.isPending}
                 onClick={() => apply(null)}
                 className="rounded-lg border border-danger/25 bg-danger/5 px-3 py-2 text-sm font-medium text-danger hover:bg-danger/10 disabled:opacity-50"
               >

@@ -28,6 +28,7 @@ const sdk = vi.hoisted(() => ({
   adminTerminateAllAccess: vi.fn(),
   adminSetDeviceTokenHarvestCapability: vi.fn(),
   adminDeactivateUser: vi.fn(),
+  adminDeleteUser: vi.fn(),
   adminReactivateUser: vi.fn(),
   adminListUsers: vi.fn(),
   // Everything the old three-call provisioning used. Present so the invite
@@ -43,6 +44,7 @@ vi.mock("../apps/dashboard/src/api/sdk.ts", () => ({ kernel: sdk }));
 import {
   createAccountLinkMutationOptions,
   createInviteMutationOptions,
+  deleteUserMutationOptions,
   revokeAllDevicesMutationOptions,
   revokeDeviceMutationOptions,
   revokeLinkMutationOptions,
@@ -51,7 +53,7 @@ import {
 } from "../apps/dashboard/src/api/adminUsers.ts";
 import { REVOCATION_LABEL } from "../apps/dashboard/src/pages/settings/team/teamView.ts";
 
-const USER = "grisha";
+const USER = 17;
 const clients: QueryClient[] = [];
 
 function makeClient() {
@@ -79,23 +81,98 @@ beforeEach(() => {
 });
 afterEach(() => {
   for (const client of clients.splice(0)) client.clear();
+  vi.useRealTimers();
+});
+
+async function verifySecretLifetime<TData, TVariables>(
+  client: QueryClient,
+  options: MutationObserverOptions<TData, Error, TVariables, unknown>,
+  variables: TVariables,
+  result: TData,
+) {
+  const observer = new MutationObserver(client, options);
+  const unsubscribe = observer.subscribe(() => {});
+  const reveal = vi.fn();
+  try {
+    await observer.mutate(variables, { onSuccess: reveal });
+    await vi.runOnlyPendingTimersAsync();
+    // The tab still owns the observer while the reveal is open. A short
+    // cache lifetime must not lose the only copy of the issued secret.
+    expect(reveal).toHaveBeenCalledOnce();
+    expect(reveal.mock.calls[0]?.[0]).toEqual(result);
+    expect(observer.getCurrentResult().data).toEqual(result);
+    expect(client.getMutationCache().getAll().map((mutation) => mutation.state.data)).toEqual([result]);
+
+    observer.reset();
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(observer.getCurrentResult().data).toBeUndefined();
+    // This checks the actual cache, not just the detached observer's result:
+    // reset alone otherwise leaves the secret in a retained mutation.
+    expect(client.getMutationCache().getAll()).toEqual([]);
+  } finally {
+    unsubscribe();
+  }
+}
+
+describe("issued links leave the mutation cache when their reveal closes", () => {
+  const link = {
+    id: 42,
+    kind: "invite" as const,
+    keyPrefix: "test-only",
+    token: "one-time-test-secret",
+    expiresAt: "2026-09-22T12:00:00.000Z",
+  };
+
+  it("keeps a new account invitation available until reset, then evicts its secret", async () => {
+    vi.useFakeTimers();
+    const client = makeClient();
+    const result = {
+      user: {
+        id: USER,
+        username: "Nikita",
+        role: "chatter" as const,
+        mustChangePassword: false,
+        assignedPages: [],
+        apiKeyStatus: null,
+        disabledAt: null,
+        deletedAt: null,
+        lastActiveAt: null,
+        registrationState: "invited" as const,
+      },
+      link,
+    };
+    sdk.adminCreateInvite.mockResolvedValueOnce(result);
+    await verifySecretLifetime(client, createInviteMutationOptions(client), {
+      username: "Nikita", pageLabels: [],
+    }, result);
+  });
+
+  it("keeps a replacement link available until reset, then evicts its secret", async () => {
+    vi.useFakeTimers();
+    const client = makeClient();
+    sdk.adminCreateAccountLink.mockResolvedValueOnce(link);
+    await verifySecretLifetime(client, createAccountLinkMutationOptions(client), {
+      userId: USER, kind: "invite",
+    }, link);
+  });
 });
 
 describe("the three revocations fire the three routes (§4.4)", () => {
   it(`«${REVOCATION_LABEL.device}» revokes exactly that one sign-in`, async () => {
     const client = makeClient();
     client.setQueryData(["admin", "users", USER, "devices"], []);
-    client.setQueryData(["admin", "users", "someone-else", "devices"], []);
+    client.setQueryData(["admin", "users", 999, "devices"], []);
 
     await run(client, revokeDeviceMutationOptions(client, USER), 7);
 
     expect(sdk.adminRevokeDeviceToken).toHaveBeenCalledExactlyOnceWith({
-      params: { username: USER, tokenId: 7 },
+      params: { userId: USER, tokenId: 7 },
     });
     expect(sdk.adminRevokeDeviceTokens).not.toHaveBeenCalled();
     expect(sdk.adminTerminateAllAccess).not.toHaveBeenCalled();
     expect(client.getQueryState(["admin", "users", USER, "devices"])?.isInvalidated).toBe(true);
-    expect(client.getQueryState(["admin", "users", "someone-else", "devices"])?.isInvalidated).toBe(false);
+    expect(client.getQueryState(["admin", "users", 999, "devices"])?.isInvalidated).toBe(false);
   });
 
   it(`«${REVOCATION_LABEL.allDevices}» revokes every device and nothing else`, async () => {
@@ -104,7 +181,7 @@ describe("the three revocations fire the three routes (§4.4)", () => {
 
     await run(client, revokeAllDevicesMutationOptions(client, USER), undefined);
 
-    expect(sdk.adminRevokeDeviceTokens).toHaveBeenCalledExactlyOnceWith({ params: { username: USER } });
+    expect(sdk.adminRevokeDeviceTokens).toHaveBeenCalledExactlyOnceWith({ params: { userId: USER } });
     expect(sdk.adminRevokeDeviceToken).not.toHaveBeenCalled();
     expect(sdk.adminTerminateAllAccess).not.toHaveBeenCalled();
     // Links are untouched by this one, so their cache entry stays valid.
@@ -118,7 +195,7 @@ describe("the three revocations fire the three routes (§4.4)", () => {
 
     await run(client, terminateAccessMutationOptions(client, USER), undefined);
 
-    expect(sdk.adminTerminateAllAccess).toHaveBeenCalledExactlyOnceWith({ params: { username: USER } });
+    expect(sdk.adminTerminateAllAccess).toHaveBeenCalledExactlyOnceWith({ params: { userId: USER } });
     expect(sdk.adminRevokeDeviceToken).not.toHaveBeenCalled();
     expect(sdk.adminRevokeDeviceTokens).not.toHaveBeenCalled();
     expect(sdk.adminDeactivateUser).not.toHaveBeenCalled();
@@ -160,10 +237,10 @@ describe("inviting is one call", () => {
 describe("links", () => {
   it("«Сбросить пароль ссылкой» asks for a password_reset link for that person", async () => {
     const client = makeClient();
-    await run(client, createAccountLinkMutationOptions(client, USER), { kind: "password_reset" as const });
+    await run(client, createAccountLinkMutationOptions(client), { userId: USER, kind: "password_reset" as const });
 
     expect(sdk.adminCreateAccountLink).toHaveBeenCalledExactlyOnceWith({
-      params: { username: USER },
+      params: { userId: USER },
       body: { kind: "password_reset" },
     });
     expect(sdk.adminSetPassword).not.toHaveBeenCalled();
@@ -171,10 +248,10 @@ describe("links", () => {
 
   it("«Отправить приглашение заново» asks for an invite link for that person", async () => {
     const client = makeClient();
-    await run(client, createAccountLinkMutationOptions(client, USER), { kind: "invite" as const });
+    await run(client, createAccountLinkMutationOptions(client), { userId: USER, kind: "invite" as const });
 
     expect(sdk.adminCreateAccountLink).toHaveBeenCalledExactlyOnceWith({
-      params: { username: USER },
+      params: { userId: USER },
       body: { kind: "invite" },
     });
   });
@@ -186,7 +263,7 @@ describe("links", () => {
     await run(client, revokeLinkMutationOptions(client, USER), 42);
 
     expect(sdk.adminRevokeAccountLink).toHaveBeenCalledExactlyOnceWith({
-      params: { username: USER, linkId: 42 },
+      params: { userId: USER, linkId: 42 },
     });
     expect(client.getQueryState(["admin", "users", USER, "links"])?.isInvalidated).toBe(true);
   });
@@ -200,15 +277,81 @@ describe("harvest binding", () => {
       machineId: "3f2504e0-4f89-11d3-9a0c-0305e82c3301",
     });
     expect(sdk.adminSetDeviceTokenHarvestCapability).toHaveBeenCalledExactlyOnceWith({
-      params: { username: USER, tokenId: 3 },
+      params: { userId: USER, tokenId: 3 },
       body: { machineId: "3f2504e0-4f89-11d3-9a0c-0305e82c3301" },
     });
 
     sdk.adminSetDeviceTokenHarvestCapability.mockClear();
     await run(client, setHarvestCapabilityMutationOptions(client, USER), { tokenId: 3, machineId: null });
     expect(sdk.adminSetDeviceTokenHarvestCapability).toHaveBeenCalledExactlyOnceWith({
-      params: { username: USER, tokenId: 3 },
+      params: { userId: USER, tokenId: 3 },
       body: { machineId: null },
     });
+  });
+});
+
+
+describe("account ID ownership when a login is reused", () => {
+  it("deletes only the old ID and removes only its private caches", async () => {
+    const client = makeClient();
+    const oldId = 17;
+    const replacementId = 29;
+    client.setQueryData(["admin", "users"], [
+      { id: oldId, username: "Nikita" },
+      { id: replacementId, username: "Nikita" },
+    ]);
+    for (const id of [oldId, replacementId]) {
+      client.setQueryData(["admin", "users", id, "devices"], [{ id: id * 10 }]);
+      client.setQueryData(["admin", "users", id, "links"], [{ id: id * 100 }]);
+    }
+
+    await run(client, deleteUserMutationOptions(client, oldId), undefined);
+
+    expect(sdk.adminDeleteUser).toHaveBeenCalledExactlyOnceWith({ params: { userId: oldId } });
+    expect(client.getQueryData(["admin", "users"])).toEqual([{ id: replacementId, username: "Nikita" }]);
+    expect(client.getQueryData(["admin", "users", oldId, "devices"])).toBeUndefined();
+    expect(client.getQueryData(["admin", "users", oldId, "links"])).toBeUndefined();
+    expect(client.getQueryData(["admin", "users", replacementId, "devices"])).toEqual([{ id: 290 }]);
+    expect(client.getQueryState(["admin", "users", replacementId, "links"])?.isInvalidated).toBe(false);
+  });
+
+  it("a failed stale deletion never changes the replacement account or its caches", async () => {
+    const client = makeClient();
+    const replacement = { id: 29, username: "Nikita" };
+    client.setQueryData(["admin", "users"], [replacement]);
+    client.setQueryData(["admin", "users", replacement.id, "devices"], [{ id: 290 }]);
+    sdk.adminDeleteUser.mockRejectedValueOnce(new Error("Account no longer exists"));
+
+    await expect(run(client, deleteUserMutationOptions(client, 17), undefined)).rejects.toThrow("Account no longer exists");
+
+    expect(sdk.adminDeleteUser).toHaveBeenCalledExactlyOnceWith({ params: { userId: 17 } });
+    expect(client.getQueryData(["admin", "users"])).toEqual([replacement]);
+    expect(client.getQueryData(["admin", "users", replacement.id, "devices"])).toEqual([{ id: 290 }]);
+  });
+
+  it("a pending link retains its original identity when the tab's observer options change", async () => {
+    const client = makeClient();
+    client.setQueryData(["admin", "users", 17, "links"], []);
+    client.setQueryData(["admin", "users", 29, "links"], []);
+    let release!: (value: { token: string }) => void;
+    sdk.adminCreateAccountLink.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    const observer = new MutationObserver(client, createAccountLinkMutationOptions(client));
+    const unsubscribe = observer.subscribe(() => {});
+    try {
+      const pending = observer.mutate({ userId: 17, kind: "password_reset" });
+      await vi.waitFor(() => expect(sdk.adminCreateAccountLink).toHaveBeenCalled());
+      // Re-rendering the long-lived Team tab updates options without changing
+      // the account captured in this mutation's variables.
+      observer.setOptions(createAccountLinkMutationOptions(client));
+      release({ token: "one-time-secret" });
+      await pending;
+      expect(sdk.adminCreateAccountLink).toHaveBeenCalledExactlyOnceWith({
+        params: { userId: 17 }, body: { kind: "password_reset" },
+      });
+      expect(client.getQueryState(["admin", "users", 17, "links"])?.isInvalidated).toBe(true);
+      expect(client.getQueryState(["admin", "users", 29, "links"])?.isInvalidated).toBe(false);
+    } finally {
+      unsubscribe();
+    }
   });
 });
