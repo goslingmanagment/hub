@@ -19,19 +19,28 @@ export type FanEarningsClaim = {
  * the fan table nor a positive spend balance is required to retain a target. */
 export async function markFanEarningsDirty(
   db: Database,
-  input: { pageId: number; fanRefs: string[]; now: Date },
+  input: { pageId: number; fanRefs: string[]; now: Date; statusOnly?: boolean },
 ) {
+  const statusOnly = input.statusOnly === true;
+  const reason = statusOnly ? "transaction_status_change" : "semantic_transaction_change";
   for (const fanRef of [...new Set(input.fanRefs)].sort()) {
     if (!fanRef) throw new Error("Missing earnings fan reference");
     await db.execute(sql`
       insert into subject_refresh_state (
         page_id, plane, subject_ref, refresh_class, next_due_at,
-        dirty_reason, requested_revision
+        dirty_reason, requested_revision, earnings_content_revision
       ) select ${input.pageId}, plane, ${fanRef}, 'dirty', ${input.now},
-          'semantic_transaction_change', 1
+          ${reason}, 1, ${statusOnly ? 0 : 1}
         from unnest(array['fan_earnings_lifetime', 'fan_earnings_monthly']) as plane
       on conflict (page_id, plane, subject_ref) do update set
         requested_revision = subject_refresh_state.requested_revision + 1,
+        -- A pre-deploy/rollback writer only records the strict reason. Carry
+        -- its revision forward even if it did not know the new column.
+        earnings_content_revision = case when not ${statusOnly}
+          then subject_refresh_state.requested_revision + 1
+          else greatest(subject_refresh_state.earnings_content_revision,
+            case when subject_refresh_state.dirty_reason is distinct from 'transaction_status_change'
+              then subject_refresh_state.requested_revision else 0 end) end,
         refresh_class = 'dirty', dirty_reason = excluded.dirty_reason,
         next_due_at = least(subject_refresh_state.next_due_at, excluded.next_due_at),
         updated_at = now()

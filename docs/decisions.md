@@ -350,7 +350,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 350 | Вкладка «Команда»: приглашение ссылкой | Человека заводит одна операция и одноразовая ссылка; три операции отзыва названы по тому, что они делают; UI API-ключей для людей удалён, машинное уехало в «Техническое». |
 | 351 | Chatter cabinet `/account` and invitation page `/join` | A chatter's own surface on the hub: an invitation link redeemed into a password, then who-I-am, my devices, my password and my own AI spend. Partially reverses #117 at the owner's order (see 349). |
 | 352 | Unified-account rights matrix | Role × sign-in method × page assignments × device rights × client-local cache is a named, tested artefact (`docs/identity-rights-matrix.md` + `tests/rights-matrix.integration.test.ts`), not an implication of #349: an owner's device token is NOT an owner session, the cabinet is cookie-only, and "revoke all devices" leaves the cookie session and the legacy API key alive — so offboarding is a runbook, with the Fansly session, the 60 s SSE recheck and the desktop's local cache named as boundaries the hub does not control |
-
+| 353 | Fansly status-only earnings rechecks | Exact pending-to-posted signals still fetch both endpoints; a content revision preserves strict money debt while valid unchanged status rechecks may finish. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -14499,3 +14499,43 @@ No kernel behaviour changed in this entry: it is documentation and tests over
 the PR-1A surface, and every row passed as built.
 
 Plan: `investigations/unified-account-2026-09-15/PLAN.md` §7 (Р11).
+
+
+## Decision 353: Confirm status-only Fansly earnings rechecks (2026-09-15)
+
+The Lilly-1 canary exposed a permanent false hold: a retained transaction changed
+only from raw status1/pending to status2/posted, while both earnings endpoints
+already included its unchanged amounts. Later valid unchanged responses could
+never settle the signal under Decision289's blanket changed-content condition.
+The wallet balance also changed; it was already correctly excluded from semantic
+comparison. Retained before/after transaction and earnings observations establish
+this case; HTTP200 alone does not establish it.
+
+Both endpoint revisions still advance on that exact status transition. All other
+persisted semantic fields, including occurrence time, must match. New, reversed,
+unknown-status, money, type, binding and activity changes remain strict. Migration
+0201 adds `earnings_content_revision`, the highest revision requiring changed
+content. A valid nonempty bound recheck against an existing baseline may settle
+status-only R when that high-water revision has already been applied. It does not
+advance last_changed_at or change counters. R+1, independent endpoints, missing
+claims, empty/invalid responses, provider backoff and daily rotation retain their
+existing behavior. This acknowledges a recheck, not provider recomputation.
+
+All pre-migration earnings revisions start strict. A writer overlapping deploy
+or an old rollback writer only supplies the legacy strict dirty reason; receipt
+settlement rejects unchanged acknowledgement for that reason, and a later new
+status mark carries its revision into the high-water column. Thus rollback cannot
+quietly lose money debt. No parser, projection, money formula, flag or cadence
+changes. The existing live C2b/C2c scopes select this behavior.
+
+The bounded `fansly_earnings_refresh_status(page_label, fan_ref)` diagnostic
+returns the two known endpoint rows' operational metadata through `read_only`.
+PUBLIC execute is revoked; no base-table privileges are added. It permits exact
+revision/receipt preflight without an app-user diagnostic fallback.
+
+Legacy debt is not automatically cleared. A separately reviewed owner-authorized
+repair may reclassify only an exact revision with retained proof covering every
+outstanding signal, no active claim and unchanged mutation preconditions. It
+changes classification only; the next normal budgeted REST receipt must settle
+the debt. Preserve raw evidence, prior checks, changes and certified completion.
+The [earnings runbook](runbooks/fansly-earnings-targets.md) records this boundary.
