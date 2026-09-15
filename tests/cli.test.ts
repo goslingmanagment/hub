@@ -353,18 +353,16 @@ describe("CLI parsing", () => {
     ).rejects.toThrow("unknown option '--account'");
   });
 
-  it("documents apikey create as username-only with optional page assignment", () => {
+  it("has no apikey group left to document (Decision 353)", () => {
     const helpProgram = buildProgram();
-    const apiKeyCommand = helpProgram.commands.find((command) => command.name() === "apikey");
-    expect(apiKeyCommand).toBeDefined();
+    expect(helpProgram.commands.find((command) => command.name() === "apikey")).toBeUndefined();
 
-    const createCommand = apiKeyCommand?.commands.find((command) => command.name() === "create");
-    expect(createCommand).toBeDefined();
-
-    const help = createCommand?.helpInformation();
-    expect(help).toContain("--username <username>");
-    expect(help).toContain("--page <label>");
-    expect(help).toContain("also assign the user to this page");
+    // What replaced it: the owner mints accounts and resets passwords from the
+    // box, and every bearer is a device token the person signs in for.
+    const userCommand = helpProgram.commands.find((command) => command.name() === "user");
+    expect(userCommand).toBeDefined();
+    const names = userCommand!.commands.map((command) => command.name());
+    expect(names).toEqual(expect.arrayContaining(["add", "set-password", "assign-page"]));
   });
 
   it("documents page onboarding requirements and model revenue", () => {

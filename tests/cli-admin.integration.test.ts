@@ -58,7 +58,7 @@ describe("CLI admin flows", () => {
     });
   });
 
-  it("issues user API keys with optional page assignment side effects", async (context) => {
+  it("creates accounts, assigns pages and resets a password — no key group left", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -76,41 +76,36 @@ describe("CLI admin flows", () => {
     };
 
     await run(["user", "add", "--username", "dima", "--role", "owner", "--password", "owner-secret"]);
-    await run(["user", "add", "--username", "anton", "--role", "chatter"]);
-    await run(["apikey", "create", "--username", "anton"]);
+    await run(["user", "add", "--username", "lead", "--role", "team_lead", "--password", "lead-secret"]);
     const assignmentsBeforePage = await testDb.pool.query(`
       select count(*)::int as count
       from user_page_assignments upa
       join users u on u.id = upa.user_id
-      where u.username = 'anton'
+      where u.username = 'lead'
     `);
     expect(assignmentsBeforePage.rows[0]?.count).toBe(0);
 
-    await run(["apikey", "create", "--username", "anton", "--page", "lana"]);
-    await run(["apikey", "show", "--username", "anton"]);
-    await run(["apikey", "revoke", "--username", "anton"]);
+    await run(["user", "assign-page", "--username", "lead", "--page", "lana"]);
+    // Decision 353: `set-password` is the full reset primitive — it ends every
+    // sign-in of that person, which is why the CLI says so out loud.
+    await run(["user", "set-password", "--username", "lead", "--password", "lead-secret-2"]);
 
     consoleSpy.mockRestore();
 
     expect(logs.some((line) => line.includes("Created user dima"))).toBe(true);
-    expect(logs.some((line) => line.startsWith("agency_hub_core_"))).toBe(true);
-    expect(logs.some((line) => line.includes("Revoked 1 API key(s) for anton"))).toBe(true);
+    expect(logs.some((line) => line.includes("Assigned lead to lana"))).toBe(true);
+    expect(logs.some((line) => line.includes("all of their sign-ins were ended"))).toBe(true);
+    // The retired lane wrote nothing on the way out.
+    expect(logs.some((line) => line.startsWith("agency_hub_core_"))).toBe(false);
 
-    const keyRows = await testDb.pool.query(`
-      select count(*)::int as count,
-             bool_and(revoked_at is not null) as revoked
-      from api_keys ak
-      join users u on u.id = ak.user_id
-      where u.username = 'anton'
-    `);
-    expect(keyRows.rows[0]?.count).toBe(2);
-    expect(keyRows.rows[0]?.revoked).toBe(true);
+    const keyRows = await testDb.pool.query("select count(*)::int as count from api_keys");
+    expect(keyRows.rows[0]?.count).toBe(0);
 
     const assignmentsAfterPage = await testDb.pool.query(`
       select count(*)::int as count
       from user_page_assignments upa
       join users u on u.id = upa.user_id
-      where u.username = 'anton'
+      where u.username = 'lead'
     `);
     expect(assignmentsAfterPage.rows[0]?.count).toBe(1);
   });

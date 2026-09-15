@@ -130,7 +130,7 @@ export function registerIdentityRoutes(server: ApiServer, ctx: ApiModuleContext)
   });
 
   // Decision 353: there is no HTTP create-user and no HTTP set-password. An
-  // owner account is minted by `hub user create` on the box; everyone else is
+  // owner account is minted by `hub user add` on the box; everyone else is
   // invited — and reset — by link (adminCreateInvite / adminCreateAccountLink).
 
   server.post("/api/v1/admin/users/:username/pages", {
