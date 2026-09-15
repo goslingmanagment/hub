@@ -209,12 +209,12 @@ beforeEach(async () => {
     label: "lora-of",
   });
   await setPageOfapiAccountId(testDb.db, {
-    pageId: onlyFansPage.id,
+    pageId: onlyFansPage!.id,
     ofapiAccountId: OF_ACCOUNT_ID,
   });
   await testDb.pool.query(
     "update pages set username = 'loravie', display_name = 'Lora Free', ofapi_auth_status = 'connected' where id = $1",
-    [onlyFansPage.id],
+    [onlyFansPage!.id],
   );
 
   server = await buildApiServer(app);
