@@ -92,7 +92,7 @@ async function waitForUserLockWaiters(
       from pg_stat_activity
       where datname = current_database()
         and wait_event_type = 'Lock'
-        and query ilike '%for update%'
+        and query ~* 'for (no key )?update'
     `);
     if (Number(result.rows[0]?.count ?? 0) >= minimum) return;
     await sleep(10);

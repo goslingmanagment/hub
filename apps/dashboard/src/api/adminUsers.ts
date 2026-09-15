@@ -222,6 +222,19 @@ export function deleteUserMutationOptions(qc: QueryClient, userId: number) {
       qc.removeQueries({ queryKey: [...USERS_KEY, userId] });
       await qc.invalidateQueries({ queryKey: USERS_KEY, exact: true });
     },
+    onError: async () => {
+      // The server may have committed even when its response was lost. Read
+      // its current list before deciding whether the old identity still exists.
+      // A failed refresh keeps the error and cached account visible for retry.
+      await qc.cancelQueries({ queryKey: USERS_KEY, exact: true });
+      await qc.invalidateQueries({ queryKey: USERS_KEY, exact: true });
+      const users = qc.getQueryData<AdminUser[]>(USERS_KEY);
+      if (qc.getQueryState(USERS_KEY)?.status === "success"
+        && users && !users.some((user) => user.id === userId)) {
+        await qc.cancelQueries({ queryKey: [...USERS_KEY, userId] });
+        qc.removeQueries({ queryKey: [...USERS_KEY, userId] });
+      }
+    },
   });
 }
 

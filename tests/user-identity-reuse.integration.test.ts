@@ -54,7 +54,7 @@ async function waitForUserLockWaiters(db: StartedTestDatabase, minimum: number) 
     const result = await db.pool.query<{ count: string }>(`
       select count(*)::text as count from pg_stat_activity
       where datname = current_database() and wait_event_type = 'Lock'
-        and query ilike '%for update%'
+        and query ~* 'for (no key )?update'
     `);
     return Number(result.rows[0]?.count ?? 0);
   }, { timeout: 5_000, interval: 10 }).toBeGreaterThanOrEqual(minimum);
@@ -91,6 +91,61 @@ beforeEach(async () => {
 afterAll(async () => { await server?.close(); await testDb?.stop(); });
 
 describe("immutable user identities and reusable logins", () => {
+  it("allows concurrent owner grants whose audit actors reference each other's locked identities", async (context) => {
+    const setup = requireSetup(context);
+    if (!setup) return;
+    const secondOwner = await createUserAccount(setup.app, {
+      username: "second-owner", role: "owner", password: OLD_PASSWORD,
+    }, audit());
+    const blocker = await setup.testDb.pool.connect();
+    const outcomes: Array<Promise<PromiseSettledResult<unknown>>> = [];
+    // Hold both real service transactions after their user lock and before
+    // grant FK checks. This makes the conflicting actor references deterministic.
+    await setup.testDb.pool.query(`
+      create function pause_identity_grant() returns trigger language plpgsql as $$ begin
+        perform pg_advisory_xact_lock_shared(9101501);
+        return new;
+      end $$;
+      create trigger pause_identity_grant before insert on access_grants
+        for each row execute function pause_identity_grant();
+    `);
+    try {
+      await blocker.query("begin");
+      await blocker.query("select pg_advisory_xact_lock(9101501)");
+      for (const [userId, actorUserId] of [[ownerId, secondOwner.id], [secondOwner.id, ownerId]]) {
+        outcomes.push(grantModelToUser(setup.app, { userId: userId!, modelSlug: "lora-model" }, {
+          source: "cli", actorUserId: actorUserId!,
+        }).then(
+          (value) => ({ status: "fulfilled" as const, value }),
+          (reason: unknown) => ({ status: "rejected" as const, reason }),
+        ));
+      }
+      await expect.poll(async () => {
+        const result = await setup.testDb.pool.query<{ count: string }>(`
+          select count(*)::text as count from pg_stat_activity
+          where datname = current_database() and wait_event = 'advisory'
+            and query ilike 'insert into "access_grants"%'
+        `);
+        return Number(result.rows[0]?.count ?? 0);
+      }, { timeout: 5_000, interval: 10 }).toBe(2);
+      await blocker.query("commit");
+      expect(await Promise.all(outcomes)).toEqual([
+        { status: "fulfilled", value: { ok: true } },
+        { status: "fulfilled", value: { ok: true } },
+      ]);
+      const grants = await setup.testDb.pool.query("select user_id, granted_by from access_grants order by user_id");
+      expect(grants.rows).toEqual([
+        { user_id: BigInt(ownerId), granted_by: BigInt(secondOwner.id) },
+        { user_id: BigInt(secondOwner.id), granted_by: BigInt(ownerId) },
+      ]);
+    } finally {
+      await blocker.query("rollback").catch(() => undefined);
+      blocker.release();
+      await Promise.all(outcomes);
+      await setup.testDb.pool.query("drop trigger pause_identity_grant on access_grants; drop function pause_identity_grant()");
+    }
+  });
+
   it("retires the original identity without transferring access, links or history to its reused login", async (context) => {
     const setup = requireSetup(context);
     if (!setup) return;

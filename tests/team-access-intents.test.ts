@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   MutationObserver,
+  QueryObserver,
   QueryClient,
   type MutationObserverOptions,
 } from "../apps/dashboard/node_modules/@tanstack/react-query/build/modern/index.js";
@@ -292,6 +293,73 @@ describe("harvest binding", () => {
 
 
 describe("account ID ownership when a login is reused", () => {
+  it.for(["lost response", "stale target"])("reconciles a deleted identity after %s without touching its replacement", async (failure) => {
+    const client = makeClient();
+    const original = { id: 17, username: "Nikita" };
+    const replacement = { id: 29, username: "Nikita" };
+    client.setQueryData(["admin", "users"], [original]);
+    client.setQueryData(["admin", "users", 17, "devices"], [{ id: 170 }]);
+    client.setQueryData(["admin", "users", 29, "devices"], [{ id: 290 }]);
+    const observer = new QueryObserver(client, {
+      queryKey: ["admin", "users"], queryFn: () => sdk.adminListUsers(), staleTime: Infinity, retry: false,
+    });
+    const unsubscribe = observer.subscribe(() => {});
+    sdk.adminListUsers.mockResolvedValue([replacement]);
+    sdk.adminDeleteUser.mockRejectedValueOnce(Object.assign(new Error(failure), {
+      status: failure === "stale target" ? 404 : undefined,
+    }));
+    try {
+      await expect(run(client, deleteUserMutationOptions(client, 17), undefined)).rejects.toThrow(failure);
+      expect(sdk.adminListUsers).toHaveBeenCalledOnce();
+      expect(client.getQueryData(["admin", "users"])).toEqual([replacement]);
+      expect(client.getQueryData(["admin", "users", 17, "devices"])).toBeUndefined();
+      expect(client.getQueryData(["admin", "users", 29, "devices"])).toEqual([{ id: 290 }]);
+      expect(sdk.adminDeleteUser).toHaveBeenCalledExactlyOnceWith({ params: { userId: 17 } });
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  it("retains an account when a failed deletion is confirmed not to have committed", async () => {
+    const client = makeClient();
+    const original = { id: 17, username: "Nikita" };
+    client.setQueryData(["admin", "users"], [original]);
+    const observer = new QueryObserver(client, {
+      queryKey: ["admin", "users"], queryFn: () => sdk.adminListUsers(), staleTime: Infinity, retry: false,
+    });
+    const unsubscribe = observer.subscribe(() => {});
+    sdk.adminListUsers.mockResolvedValue([original]);
+    sdk.adminDeleteUser.mockRejectedValueOnce(new Error("Request failed"));
+    try {
+      await expect(run(client, deleteUserMutationOptions(client, 17), undefined)).rejects.toThrow("Request failed");
+      expect(sdk.adminListUsers).toHaveBeenCalledOnce();
+      expect(client.getQueryData(["admin", "users"])).toEqual([original]);
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  it("keeps the original error and cached identity if reconciliation also fails", async () => {
+    const client = makeClient();
+    const original = { id: 17, username: "Nikita" };
+    client.setQueryData(["admin", "users"], [original]);
+    client.setQueryData(["admin", "users", 17, "devices"], [{ id: 170 }]);
+    const observer = new QueryObserver(client, {
+      queryKey: ["admin", "users"], queryFn: () => sdk.adminListUsers(), staleTime: Infinity, retry: false,
+    });
+    const unsubscribe = observer.subscribe(() => {});
+    sdk.adminListUsers.mockRejectedValue(new Error("Still offline"));
+    sdk.adminDeleteUser.mockRejectedValueOnce(new Error("Lost deletion response"));
+    try {
+      await expect(run(client, deleteUserMutationOptions(client, 17), undefined)).rejects.toThrow("Lost deletion response");
+      expect(client.getQueryData(["admin", "users"])).toEqual([original]);
+      expect(client.getQueryData(["admin", "users", 17, "devices"])).toEqual([{ id: 170 }]);
+      expect(observer.getCurrentResult().isError).toBe(true);
+    } finally {
+      unsubscribe();
+    }
+  });
+
   it("deletes only the old ID and removes only its private caches", async () => {
     const client = makeClient();
     const oldId = 17;

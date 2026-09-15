@@ -40,7 +40,8 @@ vi.mock("../apps/dashboard/src/components/shared/ConfirmModal.tsx", async () => 
     },
   };
 });
-vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
+vi.mock("../apps/dashboard/node_modules/sonner/dist/index.mjs", () => ({ toast }));
 
 import { TeamMemberDetail } from "../apps/dashboard/src/pages/settings/team/TeamTab.tsx";
 import { ConfirmationDialog, UserDetailModal } from "../apps/dashboard/src/pages/settings/team/UserDetailModal.tsx";
@@ -128,6 +129,23 @@ describe("permanent account deletion", () => {
 
     expect(onClose).toHaveBeenCalledOnce();
     expect(deletion.mutateAsync).not.toHaveBeenCalled();
+  });
+
+  it("does not announce success or expose SDK internals after an uncertain deletion", async () => {
+    const deletion = mutation();
+    deletion.mutateAsync.mockRejectedValueOnce(new Error("DELETE /api/v1/admin/users/by-id/:userId failed with 500"));
+    queries.useAdminDeleteUser.mockReturnValue(deletion);
+    const onDeleted = vi.fn();
+    const onClose = vi.fn();
+    renderToStaticMarkup(createElement(ConfirmationDialog, {
+      kind: "deleteAccount", user: member(17), onClose, onDeleted,
+    }));
+
+    await confirmation.current!.onConfirm();
+
+    expect(onDeleted).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(toast.error).toHaveBeenLastCalledWith("Не удалось подтвердить удаление. Проверьте состояние участника в списке.");
   });
 
   it("does not offer deletion for an owner or the signed-in user", () => {

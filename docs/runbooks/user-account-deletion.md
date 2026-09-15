@@ -91,6 +91,16 @@ owner-authorized production operation.
 6. Owner/self deletion is refused; disabled account restoration still works.
 7. Run contracts generation, the full unit/build gate, affected database suites
    and browser checks of delete/cancel/recreate/stale-card behavior.
+8. Concurrent grants whose actor references another locked user must both
+   commit; the common lifecycle lock is `FOR NO KEY UPDATE`, compatible with
+   actor foreign-key checks. Preserve the deletion/issuance serialization tests.
+9. Drop the DELETE response after commit: the console refreshes its account
+   list, retires the old card and permits reinvitation of the freed login.
+   If the deletion or subsequent refresh fails, preserve the error and do not
+   optimistically remove an account whose absence has not been confirmed.
+10. Upgrade a populated pre-0201 database: preserve user/password/session data,
+    keep disabled logins reserved, and reject restoration/renaming of a deleted
+    identity while permitting a different ID to use the released login.
 
 ## Local verification recorded 2026-09-15
 
@@ -110,3 +120,17 @@ owner-authorized production operation.
   "Участник больше недоступен". The new card required explicit selection.
 - Independent backend and UI review completed. No production account, server,
   installed client or release artifact was changed by this local work.
+
+## Adversarial follow-up verification (Decision 355)
+
+- Reproduced and fixed cross-user grant/audit FK deadlock (`40P01`) and stale
+  account state after an indeterminate DELETE response. Both new regressions
+  failed against `ed4469c1` before the fixes.
+- Final `pnpm check`: **349 unit suites / 4123 passed / 9 existing skips**;
+  ESLint, strictness ratchet (unchanged debt) and dashboard build passed.
+- **31 affected PostgreSQL/schema suites / 586 passed / zero skips** with
+  missing prerequisites forbidden. Includes populated 0200-to-0201 upgrade.
+- Browser verified severed DELETE response, automatic old-card retirement and
+  immediately available same-login invitation. Only synthetic local data used.
+- Independent source reviews of both follow-up fixes found no new issues.
+  Evidence and screenshots: `output/adversarial-review/README.md`.

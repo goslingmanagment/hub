@@ -337,11 +337,14 @@ export async function createPendingDeviceToken(
 
 /** User-row lock shared by credential/grant writers and account lifecycle
  * operations. It closes the update-then-insert race where deletion or
- * revoke-all could miss authority created in the same transaction window. */
+ * revoke-all could miss authority created in the same transaction window.
+ * The immutable ID is never changed or physically deleted. NO KEY UPDATE
+ * still serializes these writers, while allowing audit/grant actor foreign
+ * keys to reference another locked user without a cross-user deadlock. */
 export async function lockUserForDeviceTokenMutation(db: Database, userId: number) {
   const [locked] = await db.select().from(users)
     .where(eq(users.id, userId))
-    .for("update");
+    .for("no key update");
   return locked ?? null;
 }
 

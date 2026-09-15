@@ -14625,3 +14625,41 @@ on failed audit, reused login isolation and legacy-route refusal. Browser QA of
 the actual dashboard with a disposable local HTTP fixture verified cancel,
 confirm/delete, same-login recreation and the unavailable old card. Production
 was not changed; local verification is not a release claim.
+
+## Decision 355: Account lifecycle lock compatibility and uncertain deletion recovery (2026-09-15)
+
+**Context.** Adversarial review of Decision 354 reproduced two reliability
+defects in local revision `ed4469c1`: cross-user grant/audit foreign keys could
+deadlock, and a lost DELETE response left the deleted account cached.
+
+**Lock compatibility.** The shared identity lock uses `FOR NO KEY UPDATE`.
+Identity IDs never change, so concurrent audit/grant foreign keys may safely
+take `KEY SHARE` on the actor. `FOR UPDATE` creates a cross-user wait cycle
+when two owners grant access to each other; real PostgreSQL reproduced
+`40P01`. The replacement lock still serializes lifecycle/credential/grant
+writers. All deletion, hash, epoch and session rechecks remain required.
+
+**Uncertain deletion.** An unsuccessful delete response refreshes the current
+user list, because the server may have committed before the connection failed.
+Only a confirmed-absent immutable ID loses its private caches. Failed refresh
+retains cached state and an error; a replacement account is never removed.
+The confirmation reports uncertainty in plain language without SDK route names.
+
+**Regression evidence.** Real QueryObserver tests exercise lost response,
+stale-target 404, uncommitted failure and failed reconciliation. PostgreSQL
+tests synchronize two owner grants before their FK checks and verify both
+commit; existing deletion/login/device races keep their coverage. A populated
+0200-to-0201 migration test preserves users/passwords/sessions, retains disabled
+login reservations, allows a new ID to reuse a deleted login and rejects
+tombstone restoration/renaming. Browser QA uses actual dashboard components
+with disposable mock data and a deliberately severed DELETE response.
+The baseline security scan is sealed separately from its follow-up fixes.
+No production state or installed clients were changed.
+
+**Validation.** Full `pnpm check` passed: 349 unit suites, 4123 tests passed
+and 9 existing skips, ESLint and dashboard build. Strictness ratchet remains
+at 1893 accepted pre-existing errors in 120 files, with no added debt.
+All 31 affected PostgreSQL/schema suites passed: 586 tests, zero skips under
+`ALLOW_MISSING_TEST_PREREQUISITES=0`. Independent follow-up reviews of backend
+and UI found no new issues. Local evidence is retained under
+`output/adversarial-review/`; the output directory is not release content.

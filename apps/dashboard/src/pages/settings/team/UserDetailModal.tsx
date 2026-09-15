@@ -650,7 +650,9 @@ export function ConfirmationDialog({
       await dialog.run();
       onClose();
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Не удалось выполнить действие");
+      toast.error(kind === "deleteAccount"
+        ? "Не удалось подтвердить удаление. Проверьте состояние участника в списке."
+        : error instanceof Error ? error.message : "Не удалось выполнить действие");
     }
   }
 
