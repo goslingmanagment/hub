@@ -67,6 +67,8 @@ import type { CapturePayloadRef } from "./capture-payloads.ts";
  * sets, and the difference would be invisible until it mattered.
  */
 export interface CapturePayloadErasureSubject {
+  ref: string;
+  wsRefs?: readonly string[];
   /** `%"<ref>"%` — the quoted-JSON form, always present. */
   quotedLike: string;
   /** The bare-numeric form with boundaries; null when the ref is not numeric. */
@@ -75,6 +77,7 @@ export interface CapturePayloadErasureSubject {
 
 export function capturePayloadErasureSubject(fanRef: string): CapturePayloadErasureSubject {
   return {
+    ref: fanRef,
     quotedLike: `%"${fanRef}"%`,
     numericBoundaryRegex: /^\d+$/.test(fanRef)
       ? `[:\\[,[:space:]]${fanRef}[,}\\]]`
@@ -174,6 +177,9 @@ export async function scanCapturePayloadObjectsForErasureSubject(
         where b.bucket_month = o.bucket_month and b.object_id = o.object_id
           and (
             b.body::text like ${subject.quotedLike}
+            or (b.body->>'codec'='fansly.ws.frame.v1'
+              and exists(select 1 from jsonb_array_elements_text(${JSON.stringify(subject.wsRefs ?? [subject.ref])}::jsonb) as ref(value)
+                where fansly_ws_json_contains(b.body->'frame',ref.value)))
             ${subject.numericBoundaryRegex === null
               ? sql``
               : sql`or b.body::text ~ ${subject.numericBoundaryRegex}`}

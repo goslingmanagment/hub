@@ -132,7 +132,7 @@ async function runCatalogSweep() {
   const work = await buildCapturePayloadCatalogWork(appStub(), {
     scopeType: "fan",
     pageIds: [pageId],
-    subject: { quotedLike: `%"${FAN}"%`, numericBoundaryRegex: null },
+    subject: { ref: FAN, quotedLike: `%"${FAN}"%`, numericBoundaryRegex: null },
   });
   return sweepCapturePayloadCatalog(appStub(), {
     scopeRef: `fan:onlyfans:${FAN}`,

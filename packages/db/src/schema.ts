@@ -3414,6 +3414,7 @@ export const OBSERVATION_SOURCES = [
   "command_result",
   "operator",
   "ofapi_capture",
+  "fansly_ws",
 ] as const;
 export type ObservationSource = (typeof OBSERVATION_SOURCES)[number];
 
@@ -3465,7 +3466,7 @@ export const observations = pgTable(
     kindReceivedIdx: index("observations_kind_received_idx").on(table.kind, table.receivedAt),
     parseIdx: index("observations_parse_idx").on(table.parseVersion, table.receivedAt),
     sourceCheck: check("observations_source_check", sql`
-      ${table.source} in ('webhook','pull','client_capture','readthrough','command_result','operator','ofapi_capture')
+      ${table.source} in ('webhook','pull','client_capture','readthrough','command_result','operator','ofapi_capture','fansly_ws')
     `),
   }),
 );

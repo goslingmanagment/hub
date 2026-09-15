@@ -88,6 +88,7 @@ const CENSUS_NON_KIND_LITERALS = new Map<string, string>([
  * `kind: "ofapi_burn_rate"` and mean something else) cannot pollute it.
  */
 const DIRECT_WRITERS = [
+  "packages/db/src/repositories/fansly-ws.ts",
   // The insert primitive itself and the CAS dual-write that wraps it. Neither
   // mints a kind of its own — both are handed one by a caller above.
   "packages/db/src/repositories/observations.ts",

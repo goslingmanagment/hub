@@ -71,6 +71,12 @@ function probeGeneration(stored: Awaited<ReturnType<typeof readStoredProbePage>>
   })).digest("hex");
 }
 
+/** B0 calls this inside its row-locked capture transaction. No decryption or
+ * dispatcher allocation, with the identical digest used by W0 receipts. */
+export async function readFanslyPageGeneration(db: Database, pageLabel: string) {
+  return probeGeneration(await readStoredProbePage(db, pageLabel));
+}
+
 export async function readProbeSnapshot(
   db: Database,
   config: AppContext["config"],

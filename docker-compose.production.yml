@@ -99,6 +99,7 @@ services:
   # to two workers — job coordination is singleton-key/lock based, no other
   # config changes needed.
   worker:
+    stop_grace_period: 60s
     image: ${RUNTIME_IMAGE:-agency_hub_core/runtime:production}
     logging: *production-logging
     restart: unless-stopped

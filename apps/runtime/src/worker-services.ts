@@ -1,3 +1,4 @@
+import { startFanslyWsWorker } from "./services/fansly-ws/worker.ts";
 import { ensureOfapiMediaQueue, OFAPI_MEDIA_SWEEP_QUEUE, runOfapiMediaUploadSweep } from "./services/ofapi-media-worker.ts";
 import { ensureOfapiCollectionQueues, startOfapiCollectionWorker } from "./services/ofapi-collection-runner.ts";
 import { ofapiCollectionHandlers } from "./services/ofapi-collection-handlers.ts";
@@ -555,6 +556,7 @@ export async function startWorkerServices(
 
   // Stage 21: the v2 conformance instrument — permanent, read-only (one
   // checkpoint row), unconditional like the sweeps.
+  const fanslyWs = startFanslyWsWorker(app);
   const domainEventsSmoke = startDomainEventsSmokeConsumer(app);
   // Stage 23: domain events → debounced per-fan board recompute.
   const workboardEventRecompute = startWorkboardEventRecompute(app, boss);
@@ -626,6 +628,7 @@ export async function startWorkerServices(
         });
       }
       abortController.abort();
+      await fanslyWs.stop();
       await domainEventsSmoke.stop().catch((error) => {
         app.logger.warn({ err: error }, "v2 smoke consumer failed during shutdown");
       });

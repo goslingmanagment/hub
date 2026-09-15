@@ -493,3 +493,16 @@ must not reject a provider timestamp within that same second. Outside those
 seconds `history_window_failed` still retains the raw page and old offset. A
 retry of a legacy scan uses its original query bounds and offset; normalization
 must never change the provider query halfway through pagination.
+
+
+### Fansly B0 capture (Decision #343)
+
+Ownership/generation loss, unavailable capture, overflow and transport failure
+close the receiver and retain an unknown coverage gap. Pending decode settlement
+never retries a provider request: raw survives and bounded inline repair settles
+metadata later. Unknown children remain debt. An auth 401 blocks its generation
+across restarts; other failures use bounded backoff, reset by a durable capture
+or 60 verified seconds. Socket teardown destroys the upgraded transport even if
+the peer ignores close. Only fixed reasons/page labels enter logs; provider
+errors, SQL errors, tokens and raw frames do not. See the
+[B0 runbook](runbooks/fansly-ws-capture.md) for precise limits and residuals.

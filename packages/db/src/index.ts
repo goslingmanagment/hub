@@ -1,3 +1,4 @@
+export * from "./repositories/fansly-ws.ts";
 export * from "./client.ts";
 export * from "./repositories/follower-outreach.ts";
 export * from "./schema.ts";

@@ -39,6 +39,7 @@ export interface WrittenObservationKind {
 }
 
 export const WRITTEN_OBSERVATION_KINDS: readonly WrittenObservationKind[] = [
+  { kind: "fansly.ws.frame.v1", source: "fansly_ws", writer: "services/fansly-ws/worker.ts" },
   { kind: "ofapi.collection_read_materialized.v1", source: "ofapi_capture", writer: "services/ofapi-collection-read-transport.ts" },
   { kind: "ofapi.collection_read_response.v1", source: "ofapi_capture", writer: "services/ofapi-collection-read-transport.ts" },
   { kind: "ofapi_gateway_chat_search", source: "readthrough", writer: "services/ofapi-read-gateway.ts" },
@@ -439,6 +440,7 @@ export interface RawOnlyObservationKind {
 }
 
 export const RAW_ONLY_OBSERVATION_KINDS: readonly RawOnlyObservationKind[] = [
+  { kind: "fansly.ws.frame.v1", justification: "B0 capture only; durable per-child decode receipts retain unknown/invalid debt. No canonical business facts or routing before B1." },
   { kind: "ofapi.collection_read_materialized.v1", justification:"Completion evidence for one bounded GET capture step. Its normalized facts are independently replayed from the retained response and projection-only snapshot event." },
   { kind: "ofapi_gateway_chat_search", justification: "A query-scoped list of message IDs; retained as read evidence, never a message body or full-history coverage assertion." },
   { kind: "ofapi.binding.replaced", justification: "Control-plane audit evidence. Binding, access and credit state use their existing control repositories; this response is not a business fact." },

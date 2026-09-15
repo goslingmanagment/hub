@@ -13,7 +13,7 @@ const proxyAuth = `Basic ${Buffer.from(`${username}:${password}`).toString("base
  * TLS still verifies wsv3.fansly.com against the child's test-only trust root. */
 export async function startFanslyProbeNetwork(protocol: "http" | "socks5", refuse = false, rest?: {
   status: number; body?: string; location?: string; hang?: boolean;
-}, upgradeStatus = 101) {
+}, upgradeStatus = 101, stallClose = false, unsolicitedCompression = false) {
   const destination = rest ? "apiv3.fansly.com:443" : "wsv3.fansly.com:443";
   const sockets = new Set<Socket>();
   const destinations: string[] = [];
@@ -51,13 +51,17 @@ export async function startFanslyProbeNetwork(protocol: "http" | "socks5", refus
     const accept = createHash("sha1")
       .update(`${request.headers["sec-websocket-key"]}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`)
       .digest("base64");
-    socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n`
-      + `Connection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
     const pong = Buffer.from('{"t":2,"d":"{}"}');
-    socket.write(Buffer.concat([Buffer.from([0x81, pong.length]), pong]));
+    // Upgrade + first frame in ONE write exercises Undici's upgrade-head path.
+    socket.write(Buffer.concat([
+      Buffer.from(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n`
+        + `Connection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n`
+        + (unsolicitedCompression ? "Sec-WebSocket-Extensions: permessage-deflate\r\n" : "") + "\r\n"),
+      Buffer.from([0x81, pong.length]), pong,
+    ]));
     socket.once("data", (data: Buffer) => {
       frames.push(data[0]! & 0x0f);
-      socket.end(Buffer.from([0x88, 2, 3, 232]));
+      if (!stallClose) socket.end(Buffer.from([0x88, 2, 3, 232]));
     });
   });
   const proxy = createServer();

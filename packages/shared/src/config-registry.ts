@@ -110,6 +110,8 @@ export const CONFIG_DESCRIPTORS: readonly ConfigDescriptor[] = [
   { key: "sessionTtlDays", envName: "SESSION_TTL_DAYS", configField: "sessionTtlDays", kind: "number", subsystem: "Security", label: "Session TTL (days)", default: "30", editability: EDITABLE, runtimeApply: "none", comparable: true, min: 1, max: 365 },
   { key: "isProduction", envName: "NODE_ENV", configField: "isProduction", kind: "derived", subsystem: "Core", label: "Production mode", default: "false", editability: NEVER, runtimeApply: "none", comparable: true, note: "Derived from NODE_ENV." },
 
+  { key: "fanslyWsCaptureEnabled", envName: "FANSLY_WS_CAPTURE_ENABLED", configField: "fanslyWsCaptureEnabled", kind: "boolean", subsystem: "Fansly", label: "Fansly B0 capture", default: "false", editability: EDITABLE, runtimeApply: "live", comparable: true, note: "Capture-only receiver. Activation requires accepted W0 evidence for the current generation. Off stops sockets within 60 seconds." },
+  { key: "fanslyWsCapturePageAllowlist", envName: "FANSLY_WS_CAPTURE_PAGE_ALLOWLIST", configField: "fanslyWsCapturePageAllowlist", kind: "string", subsystem: "Fansly", label: "Fansly B0 capture pages", default: "", editability: EDITABLE, runtimeApply: "live", comparable: true, note: "Comma-separated exact page labels. Empty or none means no pages. B0 does not apply business facts or route hints." },
   // ── Fansly ────────────────────────────────────────────────────────────────
   {
     key: "fanslyFanEarningsShadowPageAllowlist",
