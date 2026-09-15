@@ -449,13 +449,29 @@ function isAuthFailure(error: unknown): boolean {
   return error instanceof FanslyApiError && (error.status === 401 || error.status === 403);
 }
 
+/**
+ * A 429 is the PROVIDER'S PACE, not a statement about the `type` form, and it
+ * belongs to the executor: `classifyTaskFailure` maps FanslyApiError(429) to
+ * the `rate_limit` retry class and takes its wake-up instant from the error's
+ * own `retryAfterAt`. A terminal 429 reaches here whenever the adapter's
+ * Retry-After exceeds the 60 s in-process clamp (Decision #275), so reading it
+ * as a refusal discarded the deadline AND narrowed the lane one durable step
+ * per occurrence — unfiltered → declared_csv → one type group per call — with
+ * no path back.
+ *
+ * Only 429 is excluded: it is the single transient 4xx on the executor's retry
+ * path. 408/425 are NOT classified there (they fall into `provider_bad_data`
+ * like any other 4xx), and 404 has its own bounded provider_404 ladder, so
+ * neither is carved out here.
+ */
 function isClientRefusal(error: unknown): boolean {
   return error instanceof FanslyApiError
     && typeof error.status === "number"
     && error.status >= 400
     && error.status < 500
     && error.status !== 401
-    && error.status !== 403;
+    && error.status !== 403
+    && error.status !== 429;
 }
 
 // ── the handler ──────────────────────────────────────────────────────────────
@@ -638,8 +654,22 @@ export async function fanslyNotificationsChunk(
       if (classifyNotificationResponse(response.raw) === "invalid") {
         throw new FanslyLaneInvalidResponseError(OBSERVATION_KIND);
       }
-      if (state.filterRefusals !== 0) {
-        state = { ...state, filterRefusals: 0 };
+      // A SERVED call clears the refusal counter and, while the lane is down
+      // to one group per call, ROTATES to the next one. Without the rotation
+      // the index only ever moved on a refusal, so a lane that reached
+      // `type_groups` polled the group it happened to land on forever and the
+      // other groups — the purchase codes among them — were never asked for
+      // again. Every write through a narrowed form is already claimed as
+      // `partial_provider_surface`, so rotating widens what is captured
+      // without making the coverage claim any stronger.
+      if (state.filterRefusals !== 0 || state.filterMode === "type_groups") {
+        state = {
+          ...state,
+          filterRefusals: 0,
+          typeGroupIndex: state.filterMode === "type_groups"
+            ? (state.typeGroupIndex + 1) % FANSLY_NOTIFICATION_TYPE_GROUPS.length
+            : state.typeGroupIndex,
+        };
       }
       return { payload: response.raw, observationId: persisted.observationId ?? null };
     } catch (error) {
