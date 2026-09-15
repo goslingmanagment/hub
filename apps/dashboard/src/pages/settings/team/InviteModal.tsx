@@ -92,7 +92,7 @@ export function InviteModal({
   };
 
   return (
-    <ModalShell title="Пригласить в команду" onClose={closeUnlessPending}>
+    <ModalShell title="Пригласить в команду" onClose={closeUnlessPending} closeLabel="Закрыть">
       <form className="space-y-4" onSubmit={handleSubmit}>
         <Field label="Логин">
           <input
