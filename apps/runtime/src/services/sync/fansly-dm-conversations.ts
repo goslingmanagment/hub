@@ -1,27 +1,11 @@
-// The Fansly dm_conversations sweep: one full offset walk of the page's
-// messaging groups per generation, applied page by page, finalized (or
-// deliberately NOT finalized) on the last one.
-//
-// Extracted from executor-handlers.ts without a behaviour change. What moved
-// with it: the sweep's own constants, the contract-drift restart, the
-// dm_messages follow-up predicate and the DM preview truncation. What is new
-// here is shape, not policy:
-//
-//   * the sweep's state is a tagged union in memory (cursor-state.ts) whose
-//     PERSISTED JSON is unchanged to the byte — rollback compatibility is the
-//     reason, and the integration suite's `toEqual` pins are the proof;
-//   * every checkpoint write goes through one `writeSweepCheckpoint`, which
-//     calls the same repository functions with the same arguments the four
-//     inline upserts did;
-//   * "did this conversation change?" is `diffConversationHead`
-//     (fansly-dm-head-diff.ts), a pure function over the FULL head scope, with
-//     the streak still counting only the legacy subset (see the call site).
-//
-// The direction of imports is one-way on purpose: nothing here imports
-// executor-handlers.ts, so the handler module is a leaf.
+// Full offset sweeps own membership generations and finalization. The A1
+// bounded mode shares capture/head repair writers but cannot certify a full
+// list, stamp membership generations, or advance full-list success. With A1
+// disabled, full cursors retain their legacy persisted shape.
 
 import {
   fanslyDmReaderHeadKey,
+  computeCurrentPageSyncSlot,
   assertOwnedPageSyncLease,
   countPageDmThreadsByGeneration,
   countPageDmVisibleThreadsBelowGeneration,
@@ -53,6 +37,11 @@ import {
   FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP,
   type FanslyDmMessageSyncExcludedReason,
 } from "@agency_hub_core/shared";
+
+import {
+  advanceDmBoundedStop, dmFullSweepDue, parseDmBoundedSweepState,
+  resolveDmBoundedPolicy, serializeDmBoundedSweepState, type DmBoundedSweepState,
+} from "./dm-bounded-state.ts";
 
 import { loadEffectiveConfig } from "../effective-config.ts";
 import { isPageAllowlisted } from "./fansly-stream-gate.ts";
@@ -102,6 +91,8 @@ import {
   diffConversationHead,
 } from "./fansly-dm-head-diff.ts";
 import type { ExecutorRequestContext, StreamChunkResult } from "./executor-types.ts";
+
+type DmRunningSweep = DmConversationSweepInProgressState | DmBoundedSweepState;
 
 /** G3: the Fansly dm_conversations sweep's own membership verdict — the row-
  *  side generation set did not reproduce the count the sweep observed, and no
@@ -169,7 +160,7 @@ function truncateDmPreview(content: string | null | undefined, maxLength = 280) 
 async function writeSweepCheckpoint(
   db: Database,
   input:
-    & { platformAccountId: number; state: DmConversationSweepState }
+    & { platformAccountId: number; state: DmConversationSweepState | DmBoundedSweepState }
     & (
       | {
         outcome: "progress";
@@ -180,7 +171,8 @@ async function writeSweepCheckpoint(
       | { outcome: "success"; lastSuccessfulRunId: number }
     ),
 ) {
-  const state = input.outcome === "progress" && input.generationSetCount !== undefined
+  const state = input.state.kind === "bounded" ? serializeDmBoundedSweepState(input.state)
+    : input.outcome === "progress" && input.generationSetCount !== undefined
     ? serializeDmConversationSweepState(input.state, {
       generationSetCount: input.generationSetCount,
     })
@@ -284,6 +276,21 @@ export async function fanslyDmConversationsChunk(
   // `lastFullSweepCompletedAt` is read off the raw record too, so the UX
   // timestamp survives the round trip.
   const parsedState = parseDmConversationSweepState(checkpoint?.state);
+  const previousBounded = parseDmBoundedSweepState(checkpoint?.state);
+  const boundedPolicy = resolveDmBoundedPolicy(effective, input.pageContext.page.label);
+  const cadenceSeconds = input.streamState.cadenceSeconds;
+  const slotOffsetSeconds = input.streamState.slotOffsetSeconds;
+  const schedulingKnown = cadenceSeconds === 1800 && Number.isSafeInteger(slotOffsetSeconds) &&
+    slotOffsetSeconds >= 0 && slotOffsetSeconds < 1800 &&
+    Number.isSafeInteger(input.streamState.lastScheduledSlot) && input.streamState.lastScheduledSlot >= 0;
+  const currentSlot = schedulingKnown
+    ? computeCurrentPageSyncSlot(new Date(), cadenceSeconds, slotOffsetSeconds) : -1;
+  const previousSchedule = previousBounded?.polling ?? parsedState?.polling;
+  const fullDue = dmFullSweepDue({
+    policy: boundedPolicy, schedule: previousSchedule, currentSlot, cadenceSeconds, slotOffsetSeconds,
+  });
+  const canStartBounded = !fullDue && (previousBounded !== null ||
+    (parsedState?.kind === "completed" && parsedState.membershipCertified));
   // A completed document parses now instead of coming back as null, but it is
   // not a resumable cursor and never was: only the in_progress arm resumes, so
   // a completed (or unparseable) record still opens a fresh sweep below.
@@ -293,9 +300,24 @@ export async function fanslyDmConversationsChunk(
   // would burn a generation and re-fetch a page for nothing.
   const legacyCountEvidenceMissing = existingState !== null &&
     isUnresumableLegacyDmConversationCursorState(checkpoint?.state);
-  let state: DmConversationSweepInProgressState;
+  let state: DmRunningSweep;
   if (existingState) {
     state = existingState;
+  } else if (canStartBounded && previousSchedule?.lastCertifiedFull) {
+    state = previousBounded?.completedAt === null ? previousBounded : {
+      kind: "bounded", version: 2, mode: "bounded", completedAt: null,
+      generation: previousBounded?.generation ?? parsedState!.generation,
+      offset: 0, observedCount: 0, pageCount: 0, unchangedPageStreak: 0,
+      providerTotalMode: "unobserved", providerReportedTotal: null,
+      fullSweepStartedAt: new Date().toISOString(),
+      lastFullSweepCompletedAt: previousSchedule.lastCertifiedFull.completedAt,
+      polling: previousSchedule, previousTimestampMs: null, stopInvalidated: false,
+    };
+    if (state.pageCount === 0) {
+      await writeSweepCheckpoint(app.db, {
+        platformAccountId: input.pageContext.page.id, outcome: "progress", state,
+      });
+    }
   } else {
     const checkpointGeneration = asNumber(checkpointStateRecord?.generation) ?? 0;
     const storedGeneration = await maxPageDmThreadGeneration(app.db, input.pageContext.page.id);
@@ -310,6 +332,11 @@ export async function fanslyDmConversationsChunk(
       unchangedPageStreak: 0,
       fullSweepStartedAt: new Date().toISOString(),
       lastFullSweepCompletedAt: asNullableString(checkpointStateRecord?.lastFullSweepCompletedAt),
+      ...(boundedPolicy && schedulingKnown ? { polling: {
+        anchorSlot: Math.min(currentSlot, input.streamState.lastScheduledSlot),
+        slotOffsetSeconds,
+        lastCertifiedFull: previousSchedule?.lastCertifiedFull ?? null,
+      } } : {}),
     };
     const progressCheckpoint = await writeSweepCheckpoint(app.db, {
       platformAccountId: input.pageContext.page.id,
@@ -322,7 +349,7 @@ export async function fanslyDmConversationsChunk(
     );
   }
 
-  let shadow = shadowEnabled
+  let shadow = shadowEnabled && state.kind !== "bounded"
     ? state.diagnostics ?? createDmShadowState({
       startedAtMs: Date.parse(state.fullSweepStartedAt),
       boundaryMs: parsedState?.kind === "completed" && parsedState.membershipCertified &&
@@ -387,6 +414,9 @@ export async function fanslyDmConversationsChunk(
       unchangedPageStreak: 0,
       fullSweepStartedAt: new Date().toISOString(),
       lastFullSweepCompletedAt: state.lastFullSweepCompletedAt,
+      ...(state.polling ? { polling: state.kind === "bounded" ? {
+        ...state.polling, anchorSlot: Math.min(currentSlot, input.streamState.lastScheduledSlot),
+      } : state.polling } : {}),
     };
     const progressCheckpoint = await writeSweepCheckpoint(app.db, {
       platformAccountId: input.pageContext.page.id,
@@ -610,7 +640,7 @@ export async function fanslyDmConversationsChunk(
       messageBackfillComplete: boolean;
       lastMessageSyncAt: Date | null;
       isVisible: boolean;
-      lastSeenGeneration: number;
+      lastSeenGeneration: number | null;
       metadata: Record<string, unknown>;
       platformConversationId: string;
     }> = [];
@@ -862,11 +892,11 @@ export async function fanslyDmConversationsChunk(
       if (breaksLegacyUnchangedPage(headDiff.reasons)) {
         unchangedPage = false;
       }
-      if (shadow) {
+      if (shadow || state.kind === "bounded") {
         const rawHeadCreatedAt = group?.lastMessage?.createdAt;
         shadowConversations.push({
           reasons: headDiff.reasons,
-          listMessageId: incomingLastMessageId,
+          listMessageId: state.kind === "bounded" ? conversation.lastMessageId ?? null : incomingLastMessageId,
           embeddedMessageId: group?.lastMessage?.id ?? null,
           timestampMs: typeof rawHeadCreatedAt === "number" && Number.isFinite(rawHeadCreatedAt)
             ? normalizeFanslyTimestamp(rawHeadCreatedAt).getTime()
@@ -915,7 +945,7 @@ export async function fanslyDmConversationsChunk(
         messageBackfillComplete: existing?.messageBackfillComplete ?? false,
         lastMessageSyncAt: existing?.lastMessageSyncAt ?? null,
         isVisible: true,
-        lastSeenGeneration: state.generation,
+        lastSeenGeneration: state.kind === "bounded" ? null : state.generation,
         metadata,
       });
     }
@@ -927,13 +957,16 @@ export async function fanslyDmConversationsChunk(
       conversations: shadowConversations,
     });
 
-    const nextState: DmConversationSweepInProgressState = {
+    const boundedStop = state.kind === "bounded" ? advanceDmBoundedStop(state,
+      shadowConversations.map((item) => ({ ...item, unchanged: item.reasons.length === 0 }))) : null;
+    const nextState: DmRunningSweep = {
       ...state,
       observedCount: finalObservedCount,
       unchangedPageStreak: unchangedPage ? state.unchangedPageStreak + 1 : 0,
       offset: page.done ? state.offset : state.offset + 100,
       ...(nextShadow === undefined ? {} : { diagnostics: nextShadow }),
-    };
+      ...(boundedStop ?? {}),
+    } as DmRunningSweep;
     const pageWrite = await withOwnedPageSyncTransaction(app.db, async (dbTx) => {
       // G3 erasure fence (Stage 28 / PR4): with the cumulative array gone, the
       // rows carrying this generation ARE the sweep's membership record, and a
@@ -956,7 +989,7 @@ export async function fanslyDmConversationsChunk(
       // and, unlike the array, it is read at the same isolation as the write
       // that follows it. It has to be read BEFORE the upserts: afterwards
       // every id on the page would carry the generation.
-      const overlappingConversationIds = await listPageDmThreadIdsStampedWithGeneration(dbTx, {
+      const overlappingConversationIds = state.kind === "bounded" ? [] : await listPageDmThreadIdsStampedWithGeneration(dbTx, {
         platformAccountId: input.pageContext.page.id,
         generation: state.generation,
         platformConversationIds: [...uniqueCurrentConversationIds],
@@ -1021,6 +1054,15 @@ export async function fanslyDmConversationsChunk(
           headCatchupEnabled ? pendingHistory || (retryAt !== null && retryAt <= new Date()) : undefined)) {
           dmMessagesFollowupNeeded = true;
         }
+      }
+
+      if (nextState.kind === "bounded") {
+        const boundedComplete = page.done || nextState.unchangedPageStreak >= 3;
+        const checkpoint = await writeSweepCheckpoint(dbTx, {
+          platformAccountId: input.pageContext.page.id, outcome: "progress",
+          state: { ...nextState, completedAt: boundedComplete ? new Date().toISOString() : null },
+        });
+        return { kind: "bounded" as const, boundedComplete, dmMessagesFollowupNeeded, checkpoint };
       }
 
       // One indexed count of the rows this sweep has stamped, read INSIDE the
@@ -1098,6 +1140,7 @@ export async function fanslyDmConversationsChunk(
             generation: state.generation,
           });
         }
+        const completedAt = new Date().toISOString();
         const completedState: DmConversationSweepCompletedState = {
           kind: "completed",
           generation: state.generation,
@@ -1115,8 +1158,16 @@ export async function fanslyDmConversationsChunk(
           // stands until a sweep certifies itself.
           lastFullSweepCompletedAt: finalizationWithheld
             ? state.lastFullSweepCompletedAt
-            : new Date().toISOString(),
+            : completedAt,
           ...(nextShadow === undefined ? {} : { diagnostics: nextShadow }),
+          ...(state.polling ? { polling: {
+            ...state.polling,
+            lastCertifiedFull: finalizationWithheld ? state.polling.lastCertifiedFull : {
+              startedAt: state.fullSweepStartedAt,
+              completedAt,
+              anchorSlot: state.polling.anchorSlot,
+            },
+          } } : {}),
         };
         // Note the completed state carries no `mode`, so the parser refuses it
         // as a resumable cursor and the next chunk opens a fresh sweep under a
@@ -1243,6 +1294,18 @@ export async function fanslyDmConversationsChunk(
         source: "scheduled",
         ...pageSyncDependencyInput(app),
       });
+    }
+
+    if (pageWrite.kind === "bounded") {
+      if (pageWrite.boundedComplete) {
+        return {
+          satisfied: true, yieldReason: null, qualityHold: "fansly_dm_bounded_only",
+          stats: { processedConversations, repairedHeads, pageCount: nextState.pageCount,
+            boundedCompleted: true, fullSweepCompleted: false },
+        } satisfies StreamChunkResult;
+      }
+      state = nextState;
+      continue;
     }
 
     // Early warning: a mid-sweep divergence is what the completion check will

@@ -5,6 +5,7 @@ import {
   getSyncStreamsForPlatform,
   listSyncMonitorStreamRows,
   listPageSyncStates,
+  listCheckpointStates,
   listVisiblePages,
   type PageSyncState,
   SYNC_DOMAIN_POLICY,
@@ -29,6 +30,7 @@ import {
   parseFollowersReconcileProgressState,
   parseSubscribersCursorState,
 } from "./sync/cursor-state.ts";
+import { dmFullSweepCompletedAt, parseDmBoundedSweepState } from "./sync/dm-bounded-state.ts";
 import { filterOnlyFansAudienceStreams } from "./sync/ofapi-audience-sync.ts";
 import { parseTransactionBackfillState } from "./sync/transaction-backfill.ts";
 
@@ -84,6 +86,7 @@ export interface SyncTaskReadStatus {
   requestedSeq: number;
   appliedSeq: number;
   succeededAt: string | null;
+  lastFullSweepCompletedAt?: string | null;
   progressedAt: string | null;
   failedAt: string | null;
   nextDueAt: string | null;
@@ -952,7 +955,10 @@ function deriveTaskState(
   monitorRow: SyncMonitorStreamRow | null,
   now: Date,
   queueContext?: QueueContext,
+  dmCheckpoint?: unknown,
 ): SyncTaskReadStatus {
+  const fullCompletedAt = task.stream === "dm_conversations" ? dmFullSweepCompletedAt(dmCheckpoint, now) : undefined;
+  if (fullCompletedAt !== undefined) task = { ...task, succeededAt: fullCompletedAt === null ? null : new Date(fullCompletedAt) };
   const policy = SYNC_STREAM_POLICY[task.stream];
   const queueAgeSeconds = task.requestSeq > task.appliedSeq && task.requestedAt
     ? ageSeconds(task.requestedAt, now)
@@ -965,7 +971,12 @@ function deriveTaskState(
   const queueDelayed = queueAgeSeconds !== null &&
     (queueAgeSeconds * 1000) > policy.queueDelayThresholdMs;
   const nextDueAt = computeNextDueAt(task);
-  const progress = buildProgressFromPayload(task, monitorRow);
+  const bounded = task.stream === "dm_conversations" ? parseDmBoundedSweepState(dmCheckpoint) : null;
+  const progress = bounded ? {
+    label: `${bounded.observedCount.toLocaleString()} conversations checked in bounded scan`,
+    current: bounded.observedCount, total: null, unit: "conversations", percent: null, percentValid: false,
+    details: { mode: "bounded", completedAt: bounded.completedAt, lastFullSweepCompletedAt: fullCompletedAt ?? null },
+  } : buildProgressFromPayload(task, monitorRow);
 
   let state: Exclude<SyncDomainBlockState, "not_available">;
   let statusReason: SyncStatusReason | null = null;
@@ -1024,6 +1035,9 @@ function deriveTaskState(
     } else {
       state = "scheduled";
     }
+  } else if (fullCompletedAt === null) {
+    state = "delayed";
+    statusReason = buildStatusReason("full_sweep_unconfirmed", "No confirmed full dialog scan is available.");
   } else if (task.succeededAt === null && task.requestSeq === 0) {
     state = "not_started";
   } else if (task.succeededAt !== null && policy.freshnessSlaSeconds !== null && freshnessAgeSeconds !== null &&
@@ -1056,6 +1070,7 @@ function deriveTaskState(
     requestedSeq: task.requestSeq,
     appliedSeq: task.appliedSeq,
     succeededAt: iso(task.succeededAt),
+    ...(fullCompletedAt === undefined ? {} : { lastFullSweepCompletedAt: fullCompletedAt }),
     progressedAt: iso(task.progressedAt),
     failedAt: iso(task.failedAt),
     nextDueAt: iso(nextDueAt),
@@ -1242,6 +1257,7 @@ function deriveDomainState(
   const progressRole = progressStream ? taskRoleForBlock(policy, progressStream) : null;
 
   const metricsRow = monitorRows[0] ?? null;
+  const fullCompletedAt = supportedTasks.find((task) => task.stream === "dm_conversations")?.lastFullSweepCompletedAt;
   const domainMetrics = (() => {
     switch (block) {
       case "connection":
@@ -1258,6 +1274,7 @@ function deriveDomainState(
       case "messages_live":
         return {
           visibleConversationCount: metricsRow?.dmConversationCount ?? 0,
+          ...(fullCompletedAt === undefined ? {} : { lastFullSweepCompletedAt: fullCompletedAt }),
         };
       case "messages_history":
         return {
@@ -1564,7 +1581,8 @@ export async function getSyncStatusSnapshot(
   const monitorStreams = includeMonitorRows
     ? (input?.monitorStreams ?? [...getSyncStreamsForPlatform("fansly")])
     : (input?.monitorStreams ?? []);
-  const [taskRows, monitorRows] = await Promise.all([
+  const fanslyPageIds = scopedPages.filter((page) => page.platform === "fansly").map((page) => page.id);
+  const [taskRows, monitorRows, dmCheckpoints] = await Promise.all([
     listPageSyncStates(app.db),
     monitorStreams.length > 0
       ? listSyncMonitorStreamRows(app.db, {
@@ -1574,7 +1592,9 @@ export async function getSyncStatusSnapshot(
         streams: monitorStreams,
       })
       : Promise.resolve([] as SyncMonitorStreamRow[]),
+    listCheckpointStates(app.db, fanslyPageIds, "dm_conversations"),
   ]);
+  const dmCheckpointByPage = new Map(dmCheckpoints.map((row) => [row.pageId, row.state]));
 
   const ofapiDmIngestPageIds = isOfapiDmProjectionEnabled(app.config)
     ? new Set(
@@ -1696,7 +1716,7 @@ export async function getSyncStatusSnapshot(
 
             return deriveTaskState(effectiveTaskRow, monitorRow, now, {
               activeSiblingStreams,
-            });
+            }, dmCheckpointByPage.get(page.id));
           });
         const domainMonitorRows = monitorRows.filter((row) =>
           row.pageId === page.id &&

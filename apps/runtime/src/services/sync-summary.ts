@@ -15,6 +15,7 @@ import {
   ofapiAuthStatusNeedsAction,
 } from "./ofapi-account-health.ts";
 import { filterOnlyFansAudienceStreams } from "./sync/ofapi-audience-sync.ts";
+import { dmFullSweepCompletedAt } from "./sync/dm-bounded-state.ts";
 import { ofapiAudienceQualityHoldFor } from "./sync/cursor-state.ts";
 import { isOfapiFanIdentitiesEligiblePage } from "./sync/ofapi-fan-identities.ts";
 import { filterOnlyFansDmPollingStreams } from "./sync/onlyfans-dm-polling.ts";
@@ -87,7 +88,15 @@ function isStalled(task: PageSyncState, now: Date) {
     (now.getTime() - lastActiveAt.getTime()) > policy.progressStallThresholdMs;
 }
 
-function toStreamSyncUx(task: PageSyncState, now: Date, qualityHold: string | null): SyncUxSummary {
+function toStreamSyncUx(
+  task: PageSyncState,
+  now: Date,
+  qualityHold: string | null,
+  fullCompletedAt: string | null | undefined,
+): SyncUxSummary {
+  if (fullCompletedAt !== undefined) {
+    task = { ...task, succeededAt: fullCompletedAt === null ? null : new Date(fullCompletedAt) };
+  }
   const activeRun = task.status === "running" && task.startedAt
     ? {
       startedAt: task.startedAt.toISOString(),
@@ -95,7 +104,7 @@ function toStreamSyncUx(task: PageSyncState, now: Date, qualityHold: string | nu
     }
     : null;
 
-  return buildStreamSyncUx({
+  const summary = buildStreamSyncUx({
     stream: task.stream,
     status: task.status,
     stalled: isStalled(task, now),
@@ -128,6 +137,23 @@ function toStreamSyncUx(task: PageSyncState, now: Date, qualityHold: string | nu
     lastErrorSummary: task.lastErrorSummary ?? task.blockerMessage,
     consecutiveFailures: task.consecutiveFailures,
   });
+  // A bounded run cannot renew full-list freshness. Keep pause/auth/retry and
+  // active-work precedence from the shared UX, including on lightweight reads.
+  const slaSeconds = SYNC_STREAM_POLICY[task.stream].freshnessSlaSeconds;
+  const fullIsStale = fullCompletedAt === null || (fullCompletedAt !== undefined &&
+    slaSeconds !== null && now.getTime() - Date.parse(fullCompletedAt) > slaSeconds * 1000);
+  if (fullIsStale && (summary.state === "healthy" ||
+    (summary.state === "setup" && task.status === "idle" && task.requestSeq <= task.appliedSeq))) {
+    return buildSummary("attention", {
+      label: fullCompletedAt === null ? "Full scan unverified" : "Delayed",
+      headline: "Full dialog scan needs to catch up",
+      detail: fullCompletedAt === null
+        ? "No confirmed full dialog scan is available."
+        : "The last full dialog scan is older than the freshness target.",
+      updatedAt: fullCompletedAt,
+    });
+  }
+  return summary;
 }
 
 function hasUsableOfapiConnection(app: AppContext, page: VisiblePage) {
@@ -179,6 +205,7 @@ function buildPageSummarySyncUx(
   taskRows: PageSyncState[],
   now: Date,
   audienceQualityHold: string | null,
+  dmCheckpoint: unknown,
 ) {
   const actionRequired = buildOfapiAuthSyncUx(app, page) ?? buildCredentialSyncUx(app, page);
   if (actionRequired) {
@@ -225,7 +252,10 @@ function buildPageSummarySyncUx(
   const supportedStreams = new Set(applicableStreams);
   const streamSummaries = taskRows
     .filter((task) => supportedStreams.has(task.stream))
-    .map((task) => toStreamSyncUx(task, now, task.stream === "subscribers" ? audienceQualityHold : null));
+    .map((task) => toStreamSyncUx(
+      task, now, task.stream === "subscribers" ? audienceQualityHold : null,
+      task.stream === "dm_conversations" ? dmFullSweepCompletedAt(dmCheckpoint, now) : undefined,
+    ));
 
   return buildPageSyncUx(streamSummaries);
 }
@@ -267,10 +297,13 @@ export async function getSyncStatusSummarySnapshot(
   // sync planner tick, the executor, and the explicit admin paths
   // (sync-control.ts, sync-blocks.ts). A page with no state rows is reported as
   // such — buildPageSummarySyncUx already handles an empty row list.
-  const [taskRows, checkpoints] = await Promise.all([
+  const fanslyPageIds = scopedPages.filter((page) => page.platform === "fansly").map((page) => page.id);
+  const [taskRows, checkpoints, dmCheckpoints] = await Promise.all([
     listPageSyncStates(app.db),
     listCheckpointStates(app.db, scopedPageIds, "subscribers"),
+    listCheckpointStates(app.db, fanslyPageIds, "dm_conversations"),
   ]);
+  const dmCheckpointByPage = new Map(dmCheckpoints.map((row) => [row.pageId, row.state]));
   const audienceHolds = new Map(checkpoints.map((row) => [row.pageId, ofapiAudienceQualityHoldFor(row.state)]));
   const taskRowsByPageId = new Map<number, PageSyncState[]>();
   for (const task of taskRows) {
@@ -292,7 +325,10 @@ export async function getSyncStatusSummarySnapshot(
       modelName: page.modelName,
       username: page.username,
       displayName: page.displayName,
-      syncUx: buildPageSummarySyncUx(app, page, taskRowsByPageId.get(page.id) ?? [], now, audienceHolds.get(page.id) ?? null),
+      syncUx: buildPageSummarySyncUx(
+        app, page, taskRowsByPageId.get(page.id) ?? [], now,
+        audienceHolds.get(page.id) ?? null, dmCheckpointByPage.get(page.id),
+      ),
     })),
   };
 }

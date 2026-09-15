@@ -92,6 +92,19 @@ function buildTaskRow(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function boundedCheckpoint(fullCompletedAt: string | null) {
+  return {
+    version: 2, mode: "bounded", generation: 7,
+    completedAt: "2026-03-24T12:00:00.000Z", offset: 300, observedCount: 300,
+    pageCount: 3, unchangedPageStreak: 3, providerTotalMode: "present", providerReportedTotal: 500,
+    fullSweepStartedAt: "2026-03-24T11:59:00.000Z", lastFullSweepCompletedAt: fullCompletedAt,
+    polling: { anchorSlot: 100, slotOffsetSeconds: 0, lastCertifiedFull: fullCompletedAt === null ? null : {
+      anchorSlot: 100, startedAt: "2026-03-24T10:00:00.000Z", completedAt: fullCompletedAt,
+    } },
+    previousTimestampMs: null, stopInvalidated: false,
+  };
+}
+
 describe("sync summary service", () => {
   beforeEach(() => {
     dbMocks.listCheckpointStates.mockResolvedValue([]);
@@ -136,6 +149,43 @@ describe("sync summary service", () => {
       headline: "Up to date",
       requiresAction: false,
     });
+  });
+
+  it.each([
+    ["2026-03-24T10:12:00.000Z", "attention"],
+    [null, "attention"],
+    ["2026-03-24T11:12:00.000Z", "healthy"],
+  ])("uses certified full freshness in the lightweight summary: %s", async (fullCompletedAt, state) => {
+    dbMocks.listVisiblePages.mockResolvedValue([buildVisiblePage()]);
+    dbMocks.listPageSyncStates.mockResolvedValue([
+      buildTaskRow({ stream: "light" }), buildTaskRow({ stream: "dm_conversations" }),
+    ]);
+    dbMocks.listCheckpointStates.mockImplementation(async (_db, _ids, stream) =>
+      stream === "dm_conversations" ? [{ pageId: 7, state: boundedCheckpoint(fullCompletedAt) }] : []);
+    const snapshot = await getSyncStatusSummarySnapshot({ db: {}, config: {} } as never, {
+      pageIds: [7], now: new Date("2026-03-24T12:00:00.000Z"),
+    });
+    expect(snapshot.pages[0]?.syncUx.state).toBe(state);
+    expect(snapshot.pages[0]?.syncUx.headline).not.toContain("Audience");
+    expect(snapshot.pages[0]?.syncUx.detail).not.toContain("subscribers");
+    expect(dbMocks.listSyncMonitorStreamRows).not.toHaveBeenCalled();
+    expect(dbMocks.ensurePageSyncStates).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [{ status: "paused" }, "off"],
+    [{ status: "blocked", blockerKind: "auth" }, "attention"],
+    [{ status: "retrying", retryAt: new Date("2026-03-24T12:05:00Z") }, "retrying"],
+  ])("preserves operational precedence over full freshness: %j", async (overrides, state) => {
+    dbMocks.listVisiblePages.mockResolvedValue([buildVisiblePage()]);
+    dbMocks.listPageSyncStates.mockResolvedValue([buildTaskRow({ stream: "dm_conversations", ...overrides })]);
+    dbMocks.listCheckpointStates.mockImplementation(async (_db, _ids, stream) =>
+      stream === "dm_conversations" ? [{ pageId: 7, state: boundedCheckpoint(null) }] : []);
+    const snapshot = await getSyncStatusSummarySnapshot({ db: {}, config: {} } as never, {
+      pageIds: [7], now: new Date("2026-03-24T12:00:00.000Z"),
+    });
+    expect(snapshot.pages[0]?.syncUx.state).toBe(state);
+    if (overrides.status === "blocked") expect(snapshot.pages[0]?.syncUx.requiresAction).toBe(true);
   });
 
   it("reports action required from page credentials without monitor metrics", async () => {
