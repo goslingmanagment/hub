@@ -170,9 +170,14 @@ describe("LIVE_CONFIG_KEYS", () => {
     expect(LIVE_CONFIG_KEYS.has("fanslyDmBoundedEnabled")).toBe(true);
     expect(LIVE_CONFIG_KEYS.has("fanslyDmBoundedPageAllowlist")).toBe(true);
     expect(LIVE_CONFIG_KEYS.has("fanslyDmBoundedPolicies")).toBe(true);
-    // Decision 347 added the public invite/reset link kill switch, read per
+    expect(LIVE_CONFIG_KEYS.has("fanslyFollowersSettlementReuseEnabled")).toBe(true);
+    expect(LIVE_CONFIG_KEYS.has("fanslyFollowersSettlementReusePageAllowlist")).toBe(true);
+    expect(LIVE_CONFIG_KEYS.has("fanslyFanEarningsRecoveryEnabled")).toBe(true);
+    expect(LIVE_CONFIG_KEYS.has("fanslyFanEarningsRecoveryPageAllowlist")).toBe(true);
+    // Decision 349 added the public invite/reset link kill switch, read per
     // request so a flip never waits for a deploy.
     expect(LIVE_CONFIG_KEYS.has("accountLinksEnabled")).toBe(true);
-    expect(LIVE_CONFIG_KEYS.size).toBe(76);
+    // Both sides of this merge added live keys: 79 from main + this one.
+    expect(LIVE_CONFIG_KEYS.size).toBe(80);
   });
 });

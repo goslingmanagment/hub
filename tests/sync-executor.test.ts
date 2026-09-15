@@ -247,6 +247,19 @@ describe("sync executor", () => {
     });
   });
 
+  it("settles a reused result with its original freshness and provider recovery cutoff", async () => {
+    const app = { db: {}, logger: { warn: vi.fn(), error: vi.fn() } } as never;
+    const succeededAt = new Date("2026-03-14T12:00:00.000Z");
+    dbMocks.acquirePageSyncLease.mockResolvedValueOnce({ ...taskLease, stream: "followers_reconcile" });
+    handlerMocks.executeStreamChunk.mockResolvedValue({
+      satisfied: true, yieldReason: null, succeededAt, stats: { reusedCompletedWalk: true },
+    });
+    expect(await executeNextSyncPageChunk(app, 55)).toMatchObject({ kind: "success" });
+    expect(dbMocks.completePageSync).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ succeededAt }));
+    expect(notificationMocks.resolveSyncChunkRecoveryIncidents).toHaveBeenCalledWith(app,
+      expect.objectContaining({ providerRecoveredAt: succeededAt, recoveredAt: expect.any(Date) }));
+  });
+
   it("settles an unverified audience sweep without success or incident recovery", async () => {
     const app = { db: {}, logger: { warn: vi.fn(), error: vi.fn() } } as never;
     dbMocks.acquirePageSyncLease.mockResolvedValueOnce({ ...taskLease, stream: "subscribers" });

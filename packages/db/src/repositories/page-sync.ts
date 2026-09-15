@@ -2410,10 +2410,15 @@ export async function completePageSync(
     workClass?: SyncWorkClass | null;
     progress?: Record<string, unknown>;
     now?: Date;
+    succeededAt?: Date;
     dependencyOptions?: PageSyncDependencyOptions;
   },
 ) {
   const now = input.now ?? new Date();
+  const succeededAt = input.succeededAt ?? now;
+  if (!Number.isFinite(succeededAt.getTime()) || succeededAt > now) {
+    throw new Error("A certified sync time must be finite and no later than settlement");
+  }
   const result = await db.execute(sql`
     update ${pageSyncStates}
     set status = case
@@ -2424,7 +2429,7 @@ export async function completePageSync(
         leased_seq = null,
         progressed_at = coalesce(${input.progressedAt ?? null}, progressed_at, ${now}),
         finished_at = ${now},
-        succeeded_at = ${now},
+        succeeded_at = ${succeededAt},
         retry_kind = null,
         retry_at = null,
         blocker_kind = null,

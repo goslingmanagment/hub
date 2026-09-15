@@ -10,7 +10,8 @@ import type { ExecutorRequestContext, StreamChunkResult } from "./executor-types
 import { fanslyNewStreamAllowed, isPageAllowlisted } from "./fansly-stream-gate.ts";
 import { createPageRateLimitWaiter } from "./rate-limiter.ts";
 import { captureFanEarningsEndpoint } from "./fan-earnings-capture.ts";
-import { runFanEarningsTargetStep } from "./fan-earnings-targets.ts";
+import { executeFanEarningsRecovery } from "./fan-earnings-recovery.ts";
+import { fanEarningsRecoveryEnabled, runFanEarningsTargetStep } from "./fan-earnings-targets.ts";
 
 function fanslyNewStreamSkip(reason: string): StreamChunkResult {
   return { satisfied: true, yieldReason: null, stats: { skipped: reason }, gatedSkip: reason };
@@ -30,6 +31,10 @@ export async function executeFanEarningsChunk(
   }
   if (!fanslyNewStreamAllowed(effective.fanslyNewStreamPageAllowlist, input.pageContext.page.label)) {
     return fanslyNewStreamSkip("not_allowlisted");
+  }
+
+  if (fanEarningsRecoveryEnabled(effective, input.pageContext.page.label)) {
+    return executeFanEarningsRecovery(app, { ...input, pageContext: input.pageContext });
   }
 
   const shadow = isPageAllowlisted(
