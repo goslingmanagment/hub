@@ -75,6 +75,10 @@ describe("config registry", () => {
   const LIVE_KEYS = [
     "fanslyWsCaptureEnabled",
     "fanslyWsCapturePageAllowlist",
+    "fanslyWsHintsEnabled",
+    "fanslyWsHintsPageAllowlist",
+    "fanslyWsHintsTypeAllowlist",
+    "fanslyWsHintsPolicies",
     "fanslyFanEarningsShadowPageAllowlist",
     "fanslyDmShadowPageAllowlist",
     "fanslyDmHeadCatchupPageAllowlist",

@@ -1,4 +1,6 @@
 import { OFAPI_CONTENT_KINDS, canonicalizeOfapiContentObservation } from "./ofapi-content-events.ts";
+import { canonicalizeFanslyWsObservation, canParseFanslyWsObservation } from "./fansly-ws.ts";
+import { FANSLY_WS_CAPTURE_KIND } from "@agency_hub_core/shared";
 import { canonicalizeOfapiReadObservation, canParseOfapiReadObservation } from "./ofapi-read-collections.ts";
 // Canonicalizer registry (Stage 8). The driver job and the parse_version
 // sweep dispatch on observation.source through this table; a family's
@@ -79,7 +81,7 @@ import {
 } from "./fansly-payouts.ts";
 
 interface CanonicalizerFamilyBase {
-  source: "webhook" | "pull" | "command_result" | "client_capture" | "ofapi_capture";
+  source: "webhook" | "pull" | "command_result" | "client_capture" | "ofapi_capture" | "fansly_ws";
   /** Only replay settled material; lower versions remain owned by capture jobs. */
   minimumParseVersion?: number;
   /**
@@ -149,6 +151,11 @@ export type CanonicalizerFamily = CanonicalizerFamilyBase & (
 );
 
 export const CANONICALIZER_FAMILIES: readonly CanonicalizerFamily[] = [
+  {
+    source: "fansly_ws", lane: "signals", kinds: [FANSLY_WS_CAPTURE_KIND], version: 1,
+    canonicalize: canonicalizeFanslyWsObservation, canParse: canParseFanslyWsObservation,
+    projectionOnly: true,
+  },
   { source:"ofapi_capture", lane:"read_collections", kinds:["ofapi.collection_read_response.v1"], version:1, canonicalize:canonicalizeOfapiReadObservation, canParse:canParseOfapiReadObservation, projectionOnly:true },
   {
     source: "ofapi_capture", lane: "ofapi-posts", kinds: ["ofapi.posts_page.v1"],

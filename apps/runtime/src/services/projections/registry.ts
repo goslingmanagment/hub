@@ -1,3 +1,4 @@
+import { FANSLY_WS_HINT_PROJECTION, runFanslyWsHintProjection } from "./fansly-ws-hints.ts";
 import { OFAPI_MEDIA_EVENT, OFAPI_MEDIA_PROJECTION, runOfapiMediaProjection, rebuildOfapiMediaProjection } from "./ofapi-media.ts";
 import { OFAPI_CONTENT_PROJECTION, runOfapiContentProjection, rebuildOfapiContentProjection } from "./ofapi-content-events.ts";
 import { OFAPI_READ_SNAPSHOT_PROJECTION, runOfapiReadSnapshotProjection, rebuildOfapiReadSnapshotProjection } from "./ofapi-read-snapshots.ts";
@@ -34,8 +35,8 @@ import { OFAPI_TYPED_EXPORT_EVENT, OFAPI_TYPED_EXPORT_PROJECTION, runOfapiTypedE
 // would reset every refresh cycle and re-trigger "first sight" backfills for
 // the whole catalogue — an egress storm against a platform whose failure mode
 // is a model ban. `OPERATIONAL_STATE_TABLES` names those tables, and the
-// registry test asserts no projection's `tables` intersects it: that
-// intersection being empty IS "operational state is never truncated by a
+// registry test permits it only for non-rebuildable operational consumers:
+// excluding every truncating rebuild IS "operational state is never truncated by a
 // rebuild", checked rather than promised.
 
 import { listDetachedPartitionsHoldingAccount, listEventAccounts } from "@agency_hub_core/db";
@@ -140,6 +141,12 @@ function count(result: Record<string, unknown>, key: string): number {
 }
 
 export const PROJECTION_REGISTRY: readonly ProjectionDefinition[] = [
+  {
+    name: FANSLY_WS_HINT_PROJECTION, eventTypes: ["fansly.ws_signal_observed"],
+    tables: ["fansly_ws_hint_receipts", "subject_refresh_state"], stateClass: "operational_state",
+    rebuildKind: "none", rebuild: null, label: "Fansly WS hints routed", run: runFanslyWsHintProjection,
+    didWork: result => count(result, "applied") > 0,
+  },
   { name:OFAPI_CONTENT_PROJECTION, eventTypes:["ofapi.chat_queue_observed"], tables:["ofapi_chat_queue_state"], stateClass:"fact_projection", rebuildKind:"truncate_replay", label:"OFAPI queue evidence projected", run:runOfapiContentProjection, rebuild:rebuildOfapiContentProjection, didWork:result=>count(result,"applied")>0 },
   { name:OFAPI_READ_SNAPSHOT_PROJECTION, eventTypes:["ofapi.read_snapshot_observed"], tables:["ofapi_read_snapshots"], stateClass:"fact_projection", rebuildKind:"truncate_replay", label:"OFAPI read snapshots projected", run:runOfapiReadSnapshotProjection, rebuild:rebuildOfapiReadSnapshotProjection, didWork:result=>count(result,"applied")>0 },
   { name: OFAPI_MEDIA_PROJECTION, eventTypes: [OFAPI_MEDIA_EVENT], tables: ["ofapi_media_catalog"], stateClass: "fact_projection", rebuildKind: "truncate_replay", label: "OFAPI media metadata projection complete", run: runOfapiMediaProjection, rebuild: rebuildOfapiMediaProjection, didWork: result => count(result, "applied") > 0 },
@@ -380,6 +387,16 @@ export const OPERATIONAL_STATE_TABLES: readonly {
   writer: string;
   justification: string;
 }[] = [
+  {
+    table: "fansly_ws_hint_receipts", stateClass: "operational_state",
+    writer: "services/projections/fansly-ws-hints.ts",
+    justification: "B1 routing custody and revision receipts must survive replay. Truncation would increment dirty revisions twice and spend additional platform attempts.",
+  },
+  {
+    table: "fansly_ws_hint_attempts", stateClass: "operational_state",
+    writer: "services/sync/fansly-ws-hints.ts",
+    justification: "B1 physical attempt admissions enforce the rolling additional egress cap. Resetting this ledger would grant the budget again within the same window.",
+  },
   {
     table: "capture_coverage",
     stateClass: "operational_state",

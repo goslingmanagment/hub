@@ -885,6 +885,16 @@ async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLine
   const targets: WorkTarget[] = [];
   const wsReceiptPred = _lineage.eraseObsIds.length
     ? sql`observation_id in ${_lineage.eraseObsIds}` : sql`false`;
+  const wsHintGroups = await app.db.execute<{ group_ref: string }>(sql`
+    select distinct group_ref from fansly_ws_hint_receipts where ${wsReceiptPred} and group_ref is not null
+  `);
+  const wsGroupRefs = [...new Set([...scope.fanGroupIds, ref, ...wsHintGroups.rows.map(row => row.group_ref)])];
+  const wsHintReceiptPred = sql`page_id in ${scope.pageIds} and (${wsReceiptPred} or group_ref in ${wsGroupRefs})`;
+  targets.push({
+    plane: "hot", target: "fansly_ws_hint_receipts", action: "delete",
+    rows: await countOf(app, sql`select count(*)::text as n from fansly_ws_hint_receipts where ${wsHintReceiptPred}`),
+    run: (tx) => execCount(tx, sql`delete from fansly_ws_hint_receipts where ${wsHintReceiptPred}`),
+  });
   targets.push({
     plane: "hot", target: "fansly_ws_decode_receipts", action: "delete",
     rows: await countOf(app, sql`select count(*)::text as n from fansly_ws_decode_receipts where ${wsReceiptPred}`),
@@ -990,6 +1000,7 @@ async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLine
 
   // fan_earnings_stats FKs fans with RESTRICT — must clear before the fans row.
   const earningsRefreshPred = sql`page_id in ${scope.pageIds} and (
+    (plane = 'fansly_ws_dm' and subject_ref in ${wsGroupRefs}) or
     (plane in ('fan_earnings_lifetime', 'fan_earnings_monthly') and subject_ref = ${ref})
     or (plane = 'fan_earnings_attribution' and exists (
       select 1 from transactions t
@@ -1400,6 +1411,8 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
     ["fansly_dm_shadow_sweeps", "page_id"],
     ["fansly_ws_decode_receipts", "page_id"],
     ["fansly_ws_connections", "page_id"],
+    ["fansly_ws_hint_receipts", "page_id"],
+    ["fansly_ws_hint_attempts", "page_id"],
     ["sync_http_attempts", "page_id"],
     ["sync_run_events", "page_id"],
     ["sync_raw_payloads", "page_id"],

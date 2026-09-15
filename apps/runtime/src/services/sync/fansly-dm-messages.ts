@@ -176,6 +176,7 @@ export class DmMessagesChunkRequestObserver implements HttpRequestObserver {
 }
 
 export interface FanslyDmMessagePageOutcome {
+  rawPayloadId: number;
   page: FanslyDmMessagePage;
   normalizedMessages: FanslyDmMessageUpsertInput;
   /** Rows this page adds that page_dm_messages does not already hold. */
@@ -250,6 +251,17 @@ export async function fetchAndJournalFanslyDmMessagePage(
     capturedAt: rawPayload.capturedAt,
   });
 
+  return { ...await normalizeFanslyDmMessagePage(app, input, page), rawPayloadId: rawPayload.id };
+}
+
+/** Shared REST normalization for a newly captured page or an already durable
+ * B1 page. Replaying it performs no HTTP and never writes the hot tables. */
+export async function normalizeFanslyDmMessagePage(
+  app: AppContext,
+  input: Pick<Parameters<typeof fetchAndJournalFanslyDmMessagePage>[1],
+    "telemetry" | "platformAccountId" | "platform" | "pageAccountId" | "conversation">,
+  page: FanslyDmMessagePage,
+): Promise<Omit<FanslyDmMessagePageOutcome, "rawPayloadId">> {
   const existingIds = await getExistingPageDmMessageIds(app.db, {
     conversationId: input.conversation.id,
     platformMessageIds: page.items.map((message) => message.id),

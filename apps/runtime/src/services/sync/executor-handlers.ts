@@ -175,6 +175,7 @@ import {
 // already import them from this file; both now live in executor-types.ts so a
 // handler module can be a leaf.
 import type { ExecutorRequestContext, StreamChunkResult } from "./executor-types.ts";
+import { runFanslyWsHintStep } from "./fansly-ws-hints.ts";
 export type { ExecutorRequestContext, StreamChunkResult };
 
 const DM_MESSAGES_PARTNER_UNRESOLVABLE_FAILURE_STREAK_THRESHOLD = 3;
@@ -2680,6 +2681,12 @@ export async function fanslyDmMessagesChunk(
 
   assertDmSharedRateLimitEnabled(app);
   await input.telemetry.recordPhaseStarted("dm_messages");
+  await runFanslyWsHintStep(app, input);
+  if (input.streamState.dispatchSource === "event" && input.streamState.requestPayload.fanslyWsHintOnly === true) {
+    // Addressed hint custody cannot certify the ordinary DM stream's
+    // freshness or recovery, even when this step applied its target.
+    return { satisfied: true, yieldReason: null, qualityHold: "fansly_ws_hint_only", stats: { fanslyWsHintOnly: true } };
+  }
   const effective = await loadEffectiveConfig(app.db, app.config);
   const headCatchupEnabled = isPageAllowlisted(
     effective.fanslyDmHeadCatchupPageAllowlist, input.pageContext.page.label,

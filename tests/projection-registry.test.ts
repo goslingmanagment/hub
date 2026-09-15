@@ -54,7 +54,7 @@ describe("projection registry", () => {
   // rebuild that truncated `capture_coverage` would erase every retention floor
   // the backfill paid egress to discover and re-trigger the whole first-sight
   // backfill set — bounded only by the per-lane daily caps.
-  it("never lets a projection's tables include capture-plane operational state", () => {
+  it("never lets a rebuild truncate capture-plane operational state", () => {
     expect(OPERATIONAL_STATE_TABLES.length).toBeGreaterThan(0);
     for (const entry of OPERATIONAL_STATE_TABLES) {
       expect(entry.stateClass).toBe("operational_state");
@@ -63,6 +63,12 @@ describe("projection registry", () => {
     }
     for (const projection of PROJECTION_REGISTRY) {
       for (const table of projection.tables) {
+        if (projection.stateClass === "operational_state") {
+          expect(projection.rebuildKind).toBe("none");
+          expect(projection.rebuild).toBeNull();
+          expect(isOperationalStateTable(table)).toBe(true);
+          continue;
+        }
         expect(
           isOperationalStateTable(table),
           `${projection.name} declares ${table}, which is operational state`,

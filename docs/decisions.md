@@ -341,6 +341,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 341 | Isolate captured C2b receipt failures | After durable capture, retain missing receipt debt and continue the daily walk only after an independent page-lease check; ownership or persistent database failure still stops execution. |
 | 342 | New follower roster correction | Date-bounded fans_latest is core audience; explicit old collection jobs retain their category and limits |
 | 343 | Fansly B0 default-off raw capture | Dedicated page ownership and resolver transport journal business envelopes before metadata decode; live W0 and B1 gates remain separate. |
+| 344 | Fansly B1 default-off addressed REST hints | Replay-safe subject revisions, fenced budgeted DM reads and raw staging preserve ordinary history and rollback; activation stays separate from development. |
 
 
 ## Consensus Decisions
@@ -13947,3 +13948,72 @@ B0 does not assert complete fan erasure or recovery of transient facts by REST.
 
 See [the B0 runbook](runbooks/fansly-ws-capture.md) for staged activation, offline
 metadata repair, diagnostics, failure bounds and rollback.
+
+
+## Decision 344: Fansly B1 default-off addressed REST hints (2026-09-15)
+
+B1 development, review and deployment proceed while W0 and the accepted B0
+corpus remain activation requirements. Defaults are false, empty page/type
+allowlists and an empty baseline-policy map. B2 direct WS business writes are
+outside this decision. Full discovery, scheduled slots and history stay active.
+
+B0 envelopes now retain the capture generation beside the original frame.
+The existing canonicalizer emits projection-only address/debt events; the
+minutely projector reads those events and atomically inserts a routing receipt
+with a dirty revision in subject_refresh_state. Receipts deduplicate event IDs
+across replay. A claim of R cannot settle R+1. Operational routing/attempt
+receipts and the subject queue have no truncating projection rebuild. The
+registry explicitly permits operational consumers only with rebuildKind=none.
+Old envelopes lacking a generation remain unattributable; parser knowledge is
+not live evidence for enabling a type. Delete/correlation/bulk targets remain
+mutation debt and never become a head-read repair claim.
+
+DM dispatch uses the existing page executor and requestPageSync, with latency
+stated as minutes; this route does not establish the 30-second p95 target.
+An event request can claim only an idle, fully applied DM stream under its row
+lock. Its payload restricts execution to one hint step, so it cannot replace
+ordinary queued work or induce an uncharged ordinary chunk after the hint
+budget is exhausted. An already scheduled ordinary chunk may perform at most
+one hint attempt, leaving four of its five request slots for its existing
+live/deep-history policy. Other discovery streams retain their priority.
+Event-only custody settles as a quality hold: it never refreshes ordinary
+DM succeeded_at, clears its failure streak or resolves its recovery incidents.
+Its addressed progress is proved by B1 receipts instead.
+
+Each physical hint attempt is admitted before transport under the actual page
+lease, the credential/route generation and the erasure fence. Current flags,
+types, activation boundary and a fixed pre-activation baseline are checked
+again at admission. The page-wide rolling 24-hour cap is floor(baseline/20),
+including failed attempts and conservative crash reservations across policy or
+generation changes. No baseline grants no extra HTTP. Shared egress pacing and
+absolute Retry-After remain authoritative. B1 does not probe auth. Target 404
+and 5xx without provider cooldown defer that subject; auth, cooldown, capture
+and ownership failures retain the executor's policy.
+
+A hint walk freezes the original hot-table boundary. Up to five REST pages are
+journaled and staged by raw IDs, with no partial hot writes: otherwise an
+intermediate head could hide the missing middle from ordinary overlap checks
+when B1 is disabled. On the boundary/exhaustion, the shared REST normalizer
+replays the staged pages and the ordinary hot writer applies them atomically
+with the claim receipt. Older staged material fills missing IDs without
+replacing a newer ordinary REST version. At the five-page cap, raw facts remain
+and the unresolved target backs off; ordinary polling still sees its original
+boundary. No checkpoint, membership generation or history-coverage claim is
+borrowed from this auxiliary walk.
+Reaching the boundary alone cannot settle a message-created revision: every
+enabled exact target must exist as an active REST-derived hot row. A stale
+response leaves target_unconfirmed debt and starts the next attempt at the
+head. Safe contiguous writes may remain, but no completion receipt is stamped
+for an unconfirmed message, including an older disabled-type revision.
+
+For an unknown group, one addressed group_detail response is captured, then the
+queue retains membership_pending until independent full discovery binds it.
+A group detail alone cannot prove visible roster membership. Erasure reaches
+known group queues and their routing receipts; page/model erasure also removes
+attempt custody. The B0 unknown-exclusive raw-envelope limitation remains.
+
+The two new platform comparisons guard the WS observation and REST context
+boundaries (159 -> 161); no new platform dispatch framework is introduced.
+The read-only views separate signal-to-hot commit evidence from archive/Read
+Plane convergence and admitted attempts from confirmed transport completion.
+See [the B1 runbook](runbooks/fansly-ws-hints.md).

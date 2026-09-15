@@ -1,0 +1,289 @@
+import { randomUUID } from "node:crypto";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  acquireTargetedPageSyncLease, ensurePageSyncStates, getPageDmConversationById, getPageSyncState,
+  requestPageSync, routeFanslyWsHintEvent, runWithPageSyncExecutionContext, startSyncRun,
+  upsertFans, upsertPageDmConversation, upsertPageDmMessages, type Database,
+  beginFanslyWsConnection, captureFanslyWsFrame, openNotificationIncidentWithRecoveryGuard,
+} from "@agency_hub_core/db";
+import { resolveFanslyWsHintPolicy, FANSLY_WS_CAPTURE_KIND } from "@agency_hub_core/shared";
+import { FanslyApiError, type FanslyMessage, type FanslyRequestContext } from "@agency_hub_core/fansly";
+import { resetIntegrationDatabase, seedFanslyPage, startTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
+import { createTestAppContext } from "./helpers/runtime.ts";
+import { fakeTelemetry } from "./helpers/fansly-dm-sweep.ts";
+import { saveProxy, resolvePageContext } from "../apps/runtime/src/services/page-context.ts";
+import { readProbeGeneration, readFanslyPageGeneration } from "../apps/runtime/src/services/egress/fansly-probe-context.ts";
+import { runFanslyWsHintStep } from "../apps/runtime/src/services/sync/fansly-ws-hints.ts";
+import { fanslyDmMessagesChunk } from "../apps/runtime/src/services/sync/executor-handlers.ts";
+import { executeNextSyncPageChunk } from "../apps/runtime/src/services/sync/executor.ts";
+import { incidentKey } from "../apps/runtime/src/services/notification-incidents.ts";
+import { SyncChunkBudget } from "../apps/runtime/src/services/sync/chunk-budget.ts";
+import { runCanonicalization } from "../apps/runtime/src/services/canonicalize-driver.ts";
+import { runFanslyWsHintProjection } from "../apps/runtime/src/services/projections/fansly-ws-hints.ts";
+import { executeErasure, planErasure } from "../apps/runtime/src/services/erasure/index.ts";
+
+let db: StartedTestDatabase;
+beforeAll(async () => { db = await startTestDatabase(); }, 120_000);
+afterAll(async () => { await db?.stop(); });
+beforeEach(async () => { await resetIntegrationDatabase(db.pool); });
+
+async function fixture(routeInitial = true) {
+  const app = createTestAppContext(db, { syncSharedRateLimitEnabled: true });
+  const { page } = await seedFanslyPage(app.db, app.config.encryptionKey);
+  if (!page) throw new Error("page missing");
+  await db.pool.query("update pages set external_page_id='999' where id=$1", [page.id]);
+  await saveProxy(app, page.id, { url: "http://proxy.example.test:8080", username: "test", password: "test" });
+  const generation = await readProbeGeneration(app.db, page.label);
+  Object.assign(app.config, {
+    fanslyWsCaptureEnabled: true, fanslyWsCapturePageAllowlist: page.label,
+    fanslyWsHintsEnabled: true, fanslyWsHintsPageAllowlist: page.label,
+    fanslyWsHintsTypeAllowlist: "message_created,group_created",
+    fanslyWsHintsPolicies: JSON.stringify({ [page.label]: {
+      generation, activationAt: "2026-01-01T00:00:00Z", baselineAttempts24h: 1000, baselineReference: "fixture",
+    } }),
+  });
+  const policy = resolveFanslyWsHintPolicy(app.config, page.label)!;
+  const [fan] = await upsertFans(app.db, [{ platform: "fansly", platformUserId: "111" }]);
+  const thread = await upsertPageDmConversation(app.db, {
+    platformAccountId: page.id, fanId: fan!.id, platformConversationId: "100",
+    partnerPlatformUserId: "111", partnerUsername: null, partnerDisplayName: null,
+    conversationFlags: 0, unreadCount: 0, subscriptionTierId: null,
+    lastMessageId: "150", lastUnreadMessageId: null, lastMessageAt: new Date("2026-09-15T01:00:00Z"),
+    lastMessageSenderId: "111", lastMessageSenderRole: "fan", lastMessagePreview: "head",
+    messageCoverageStatus: "complete", newestStoredMessageId: "100", oldestStoredMessageId: "100",
+    storedMessageCount: 1, lastMessageSyncAt: new Date("2026-01-01"), isVisible: true, lastSeenGeneration: 1, metadata: {},
+  });
+  if (!thread) throw new Error("thread missing");
+  await upsertPageDmMessages(app.db, [{
+    conversationId: thread.id, platformAccountId: page.id, platformMessageId: "100",
+    senderPlatformUserId: "111", senderRole: "fan", createdAt: new Date("2026-09-15T00:00:00Z"),
+    content: "original boundary", totalTipAmountCents: 0, inReplyToMessageId: null, inReplyToRootMessageId: null,
+  }]);
+  const route = (id = 1, groupRef = "100") => app.db.transaction(tx => routeFanslyWsHintEvent(tx as unknown as Database, {
+    id, pageId: page.id, observationId: id, receivedAt: new Date(), generation,
+    node: { path: [], outcome: "hint", hint: { type: "message_created", groupRef, messageRef: "150" } },
+  }, policy));
+  if (routeInitial) await route();
+  await ensurePageSyncStates(app.db, { pageId: page.id });
+  const lease = await acquireTargetedPageSyncLease(app.db, {
+    pageId: page.id, stream: "dm_messages", workerId: "b1-test", leaseToken: randomUUID(), leaseTtlMs: 120_000,
+  });
+  if (!lease) throw new Error("lease missing");
+  const run = await startSyncRun(app.db, { platformAccountId: page.id, stream: "dm_messages", trigger: "scheduled" });
+  const pageContext = await resolvePageContext(app, page.label);
+  const telemetry = { ...fakeTelemetry(), getRequestObserver: () => ({ onRequestEvent: async () => {} }),
+    recordDmMessagesChunkSummary: vi.fn(async () => {}) };
+  const calls: string[] = [];
+  const physical = async (context: FanslyRequestContext, operation: string) => {
+    await context.requestObserver?.onRequestEvent({ state: "started", requestId: randomUUID(), operation,
+      endpointTemplate: "/message", method: "GET", attemptNumber: 1, timestamp: new Date(), pagination: null, rateLimitWaitMs: null });
+    calls.push(operation);
+  };
+  const messages = Array.from({ length: 51 }, (_, index) => ({
+    id: String(150 - index), groupId: "100", senderId: "111", content: `m-${150 - index}`,
+    createdAt: Date.parse("2026-09-15T00:00:00Z") + (150 - index) * 1000,
+  } as FanslyMessage));
+  app.adapter.getMessagesPage = vi.fn(async (context, params) => {
+    await physical(context, "messages");
+    const start = params.before ? messages.findIndex(message => message.id === params.before) + 1 : 0;
+    const items = messages.slice(start, start + (params.limit ?? 25));
+    return { items, raw: { messages: items }, groupId: params.groupId, before: params.before ?? null, done: items.length < (params.limit ?? 25) };
+  });
+  app.adapter.getGroupDetail = vi.fn(async (context, _groupId) => {
+    await physical(context, "group_detail");
+    throw new FanslyApiError("gone", 404);
+  });
+  const input = (source = "scheduled", hintOnly = false) => ({
+    pageContext, syncRunId: run!.id, budget: new SyncChunkBudget(5), telemetry,
+    streamState: { ...lease, dispatchSource: source, requestPayload: { fanslyWsHintOnly: hintOnly } },
+  });
+  const execution = { ...lease, fetchSeq: 0 };
+  const owned = <T>(action: () => Promise<T>) => runWithPageSyncExecutionContext(execution, action);
+  const step = () => owned(() => runFanslyWsHintStep(app, input() as never));
+  const due = () => db.pool.query("update subject_refresh_state set next_due_at=now(),retry_after_at=null where page_id=$1", [page.id]);
+  return { app, page, thread, policy, lease, route, calls, physical, messages, input, owned, step, due };
+}
+
+describe("B1 REST execution and rollback", () => {
+  it("routes real durable B0 material through canonicalization and the registered projector exactly once", async () => {
+    const f = await fixture(false);
+    const connectionId = randomUUID();
+    await beginFanslyWsConnection(db.db, { id: connectionId, pageId: f.page.id, generation: f.policy.generation });
+    await captureFanslyWsFrame(db.db, {
+      connectionId, pageId: f.page.id, generation: f.policy.generation, accountRef: "999",
+      ordinal: 1, receivedAt: new Date(), frame: JSON.stringify({ t: 10000, d: {
+        serviceId: 5, event: { type: 1, message: { id: "150", groupId: "100", content: "private" } },
+      } }), validate: async tx => {
+        if (await readFanslyPageGeneration(tx, f.page.label) !== f.policy.generation) throw new Error("generation changed");
+      },
+    });
+    const canonical = await runCanonicalization(f.app, { accountId: f.page.id, kinds: [FANSLY_WS_CAPTURE_KIND] });
+    expect(canonical).toMatchObject({ errored: 0, stamped: 1 });
+    expect(await runFanslyWsHintProjection(f.app, { accountId: f.page.id })).toMatchObject({ applied: 1 });
+    const events = (await db.pool.query("select type,data from domain_events where type='fansly.ws_signal_observed'")).rows;
+    expect(events).toHaveLength(1);
+    expect(JSON.stringify(events)).not.toContain("private");
+    await db.pool.query("update projection_seq_watermarks set high_seq=0 where projection='fansly_ws_hints'");
+    expect(await runFanslyWsHintProjection(f.app, { accountId: f.page.id })).toMatchObject({ applied: 0 });
+    expect((await db.pool.query("select requested_revision from subject_refresh_state where plane='fansly_ws_dm'")).rows)
+      .toEqual([{ requested_revision: 1n }]);
+    expect(f.calls).toEqual([]);
+  });
+  it("stages partial pages without hot overlap, then ordinary polling recovers the full gap after off", async () => {
+    const f = await fixture();
+    await f.step();
+    expect(f.calls).toEqual(["messages"]);
+    expect((await db.pool.query("select count(*)::int n from page_dm_messages")).rows[0].n).toBe(1);
+    expect(await getPageDmConversationById(db.db, f.thread.id)).toMatchObject({ newestStoredMessageId: "100", storedMessageCount: 1 });
+    f.app.config.fanslyWsHintsEnabled = false;
+    await f.owned(() => fanslyDmMessagesChunk(f.app, f.input() as never));
+    expect((await db.pool.query("select count(*)::int n from page_dm_messages")).rows[0].n).toBe(51);
+    expect(await getPageDmConversationById(db.db, f.thread.id)).toMatchObject({ newestStoredMessageId: "150" });
+  });
+  it("applies the whole staged chain atomically only on reaching the original boundary", async () => {
+    const f = await fixture();
+    await f.step(); await f.due(); await f.step();
+    expect((await db.pool.query("select count(*)::int n from page_dm_messages")).rows[0].n).toBe(1);
+    await f.due(); await f.step();
+    expect(f.calls).toHaveLength(3);
+    expect((await db.pool.query("select count(*)::int n from page_dm_messages")).rows[0].n).toBe(51);
+    expect((await db.pool.query("select requested_revision,applied_revision from subject_refresh_state where plane='fansly_ws_dm'")).rows)
+      .toEqual([{ requested_revision: 1n, applied_revision: 1n }]);
+  });
+  it("rolls back all hot writes and settlement together if finalization fails", async () => {
+    const f = await fixture();
+    await f.step(); await f.due(); await f.step(); await f.due();
+    await db.pool.query(`create function b1_fail_finalize() returns trigger language plpgsql as $$
+      begin raise exception 'injected finalize failure'; end $$;
+      create trigger b1_fail_finalize before update on page_dm_threads for each row execute function b1_fail_finalize()`);
+    try {
+      await expect(f.step()).rejects.toThrow();
+      expect((await db.pool.query("select count(*)::int n from page_dm_messages")).rows[0].n).toBe(1);
+      expect((await db.pool.query("select applied_revision from subject_refresh_state where plane='fansly_ws_dm'")).rows[0].applied_revision).toBe(0n);
+      expect((await db.pool.query("select hot_applied_at from fansly_ws_hint_receipts")).rows[0].hot_applied_at).toBeNull();
+    } finally {
+      await db.pool.query("drop trigger b1_fail_finalize on page_dm_threads; drop function b1_fail_finalize()");
+    }
+  });
+  it("keeps an unseen exact target dirty even when stale REST reaches the old boundary", async () => {
+    const f = await fixture();
+    const original = f.app.adapter.getMessagesPage;
+    f.app.adapter.getMessagesPage = vi.fn(async (context, params) => {
+      await f.physical(context, "messages");
+      const items = f.messages.slice(-1);
+      return { items, raw: { messages: items }, groupId: params.groupId, before: null, done: true };
+    });
+    await f.step();
+    const state = (await db.pool.query("select applied_revision,last_refresh_outcome,backfill_cursor from subject_refresh_state where plane='fansly_ws_dm'")).rows[0];
+    expect(state).toMatchObject({ applied_revision: 0n, last_refresh_outcome: "target_unconfirmed" });
+    expect(state.backfill_cursor).not.toHaveProperty("before");
+    expect((await db.pool.query("select hot_applied_at from fansly_ws_hint_receipts")).rows[0].hot_applied_at).toBeNull();
+    f.app.adapter.getMessagesPage = original;
+    for (let page = 0; page < 3; page++) { await f.due(); await f.step(); }
+    expect(f.calls).toHaveLength(4);
+    expect((await db.pool.query("select applied_revision from subject_refresh_state where plane='fansly_ws_dm'")).rows[0].applied_revision).toBe(1n);
+    expect((await db.pool.query("select hot_applied_at from fansly_ws_hint_receipts")).rows[0].hot_applied_at).not.toBeNull();
+  });
+  it("rechecks the type allowlist immediately before physical dispatch", async () => {
+    const f = await fixture();
+    const original = f.app.adapter.getMessagesPage;
+    f.app.adapter.getMessagesPage = vi.fn(async (context, params) => {
+      f.app.config.fanslyWsHintsTypeAllowlist = "group_created";
+      return original.call(f.app.adapter, context, params);
+    });
+    await f.step();
+    expect(f.calls).toEqual([]);
+    expect((await db.pool.query("select count(*)::int n from fansly_ws_hint_attempts")).rows[0].n).toBe(0);
+  });
+  it("reads an unknown group once without inventing visible membership", async () => {
+    const f = await fixture();
+    await db.pool.query("update subject_refresh_state set next_due_at=now()+interval '1 hour'");
+    await f.route(2, "99");
+    f.app.adapter.getGroupDetail = vi.fn(async (context, id) => {
+      await f.physical(context, "group_detail");
+      const parsed = { id, type: 1, groupFlags: 0, users: [{ groupId: id, userId: "999", type: 1, permissionFlags: 0 }] };
+      return { parsed, raw: parsed };
+    });
+    await f.step();
+    await db.pool.query("update subject_refresh_state set next_due_at=now(),retry_after_at=null where subject_ref='99'");
+    await f.step();
+    expect(f.calls).toEqual(["group_detail"]);
+    expect((await db.pool.query("select count(*)::int n from page_dm_threads where platform_conversation_id='99'")).rows[0].n).toBe(0);
+    expect((await db.pool.query("select last_refresh_outcome from subject_refresh_state where subject_ref='99'")).rows[0].last_refresh_outcome).toBe("membership_pending");
+  });
+  it("erasure reaches known group custody and all page-owned B1 stores", async () => {
+    const f = await fixture(); await f.step();
+    const ownerId = Number((await db.pool.query("insert into users(username,role) values ('b1-owner','owner') returning id")).rows[0].id);
+    const scope = { scopeType: "fan", platform: "fansly", fanRef: "111" } as const;
+    expect((await planErasure(f.app, scope)).resolvedFanGroupIds).toContain("100");
+    await executeErasure(f.app, scope, { initiatedBy: ownerId });
+    expect((await db.pool.query("select count(*)::int n from subject_refresh_state where plane='fansly_ws_dm'")).rows[0].n).toBe(0);
+    expect((await db.pool.query("select count(*)::int n from fansly_ws_hint_receipts")).rows[0].n).toBe(0);
+    // Attempt budget has no fan reference and remains conservative after fan erasure.
+    expect((await db.pool.query("select count(*)::int n from fansly_ws_hint_attempts")).rows[0].n).toBe(1);
+    await executeErasure(f.app, { scopeType: "page", pageLabel: f.page.label }, { initiatedBy: ownerId });
+    expect((await db.pool.query("select count(*)::int n from fansly_ws_hint_attempts")).rows[0].n).toBe(0);
+  });
+  it("does no ordinary HTTP in an event-only wakeup, including when disabled or out of budget", async () => {
+    const f = await fixture();
+    f.app.config.fanslyWsHintsEnabled = false;
+    await f.owned(() => fanslyDmMessagesChunk(f.app, f.input("event", true) as never));
+    expect(f.calls).toEqual([]);
+    f.app.config.fanslyWsHintsEnabled = true;
+    await db.pool.query(`insert into fansly_ws_hint_attempts(page_id,request_id,attempt_number,generation)
+      select $1, 'spent-'||n, 1, $2 from generate_series(1,50) n`, [f.page.id, f.policy.generation]);
+    await f.owned(() => fanslyDmMessagesChunk(f.app, f.input("event", true) as never));
+    expect(f.calls).toEqual([]);
+  });
+  it.each(["disabled", "budget_exhausted"])("settles an event-only %s run without ordinary freshness or incident recovery", async (mode) => {
+    const f = await fixture();
+    if (mode === "disabled") f.app.config.fanslyWsHintsEnabled = false;
+    else await db.pool.query(`insert into fansly_ws_hint_attempts(page_id,request_id,attempt_number,generation)
+      select $1, 'spent-'||n, 1, $2 from generate_series(1,50) n`, [f.page.id, f.policy.generation]);
+    await db.pool.query(`update page_sync_states set status='idle',applied_seq=request_seq,
+      leased_seq=null,lease_token=null,lease_expires_at=null,succeeded_at='2026-07-17T14:25:00Z'
+      where page_id=$1`, [f.page.id]);
+    await requestPageSync(db.db, { pageId: f.page.id, streams: ["dm_messages"], source: "event" });
+    await db.pool.query(`update page_sync_states set progressed_at='2026-07-17T14:25:00Z',
+      consecutive_failures=2,last_error_code='http_500',last_error_summary='prior failure'
+      where page_id=$1 and stream='dm_messages'`, [f.page.id]);
+    const key = incidentKey({ kind: "stream_failed_threshold", platformAccountId: f.page.id, stream: "dm_messages" });
+    await openNotificationIncidentWithRecoveryGuard(db.db, {
+      incidentKey: key, kind: "stream_failed_threshold", platformAccountId: f.page.id, stream: "dm_messages",
+      occurredAt: new Date("2026-07-17T14:26:00Z"),
+    });
+    const result = await executeNextSyncPageChunk(f.app, f.page.id);
+    expect(result).toMatchObject({ kind: "skipped", stream: "dm_messages" });
+    const state = await getPageSyncState(db.db, f.page.id, "dm_messages");
+    expect(state).toMatchObject({ status: "idle", leaseToken: null, consecutiveFailures: 2,
+      lastErrorCode: "http_500", lastErrorSummary: "prior failure" });
+    expect(state?.requestSeq).toBe(state?.appliedSeq);
+    expect(state?.succeededAt?.toISOString()).toBe("2026-07-17T14:25:00.000Z");
+    expect(state?.progressedAt?.toISOString()).toBe("2026-07-17T14:25:00.000Z");
+    expect((await db.pool.query("select status from notification_incidents where incident_key=$1", [key])).rows[0].status).toBe("open");
+    expect((await db.pool.query("select outcome,stats from sync_runs where id=$1", [result.runId])).rows[0])
+      .toMatchObject({ outcome: "skipped", stats: { qualityHold: "fansly_ws_hint_only" } });
+    expect(f.calls).toEqual([]);
+  });
+  it("isolates a disappeared hinted group while ordinary history still progresses", async () => {
+    const f = await fixture();
+    await db.pool.query("update subject_refresh_state set next_due_at=now()+interval '1 hour'");
+    await f.route(2, "99");
+    await f.owned(() => fanslyDmMessagesChunk(f.app, f.input() as never));
+    expect(f.calls[0]).toBe("group_detail");
+    expect(f.calls.filter(call => call === "messages")).toHaveLength(3);
+    expect((await db.pool.query("select count(*)::int n from page_dm_messages")).rows[0].n).toBe(51);
+  });
+  it("event wakeup cannot replace an existing ordinary request", async () => {
+    const f = await fixture();
+    const before = await getPageSyncState(db.db, f.page.id, "dm_messages");
+    expect(await requestPageSync(db.db, { pageId: f.page.id, streams: ["dm_messages"], source: "event" })).toEqual([]);
+    expect(await getPageSyncState(db.db, f.page.id, "dm_messages")).toEqual(before);
+    await db.pool.query(`update page_sync_states set status='idle',applied_seq=request_seq,
+      leased_seq=null,lease_token=null,lease_expires_at=null where page_id=$1 and stream='dm_messages'`, [f.page.id]);
+    await requestPageSync(db.db, { pageId: f.page.id, streams: ["dm_messages"], source: "event" });
+    expect(await getPageSyncState(db.db, f.page.id, "dm_messages")).toMatchObject({
+      dispatchSource: "event", requestPayload: { fanslyWsHintOnly: true },
+    });
+  });
+});
