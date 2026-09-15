@@ -224,6 +224,18 @@ export function buildLoginRoute(returnTo: string): string {
   return target === "/" ? "/login" : `/login?${new URLSearchParams({ next: target }).toString()}`;
 }
 
+/** Decision 349: the chatter's own home. The owner console is not theirs. */
+export const CHATTER_HOME = "/account";
+
+/**
+ * Where a signed-in principal belongs. A chatter has no owner page to return
+ * to — every one of them answers 403 — so a remembered `next` never overrides
+ * the cabinet for them. Every other role keeps the requested destination.
+ */
+export function resolveRoleHome(role: string, requested: string): string {
+  return role === "chatter" ? CHATTER_HOME : requested;
+}
+
 export function resolveFanProfileBackTarget(
   state: unknown,
   pageLabel: string | undefined,
