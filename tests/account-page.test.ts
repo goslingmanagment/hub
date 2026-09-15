@@ -17,7 +17,13 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../apps/dashboard/src/api/queries.ts", () => mocks);
 vi.mock("../apps/dashboard/src/api/sdk.ts", () => ({
   KernelApiError: class extends Error {
-    constructor(message: string, _category: string, readonly status: number) { super(message); }
+    constructor(
+      message: string,
+      _category: string,
+      readonly status: number,
+      _code: string | null = null,
+      _body: unknown = null,
+    ) { super(message); }
   },
 }));
 
@@ -196,7 +202,7 @@ describe("AccountPage", () => {
   it("says a mistyped current password was wrong instead of dropping the form", () => {
     mocks.useChangeMyPassword.mockReturnValue(mutationState({
       isError: true,
-      error: new KernelApiError("invalid", "auth", 401),
+      error: new KernelApiError("invalid", "auth", 401, "auth", null),
     }));
     expect(render()).toContain("Текущий пароль не подошёл.");
   });

@@ -14,7 +14,13 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../apps/dashboard/src/api/queries.ts", () => mocks);
 vi.mock("../apps/dashboard/src/api/sdk.ts", () => ({
   KernelApiError: class extends Error {
-    constructor(message: string, _category: string, readonly status: number) { super(message); }
+    constructor(
+      message: string,
+      _category: string,
+      readonly status: number,
+      _code: string | null = null,
+      _body: unknown = null,
+    ) { super(message); }
   },
 }));
 
@@ -137,7 +143,7 @@ describe("JoinPage", () => {
   it("says the same thing for an unknown link and for a missing fragment", () => {
     mocks.useInspectAccountLink.mockReturnValue(inspectState({
       isError: true,
-      error: new KernelApiError("not found", "not_found", 404),
+      error: new KernelApiError("not found", "not_found", 404, "not_found", null),
     }));
     expect(renderJoin()).toContain("Ссылка недействительна. Попроси новую у владельца.");
 
@@ -183,7 +189,7 @@ describe("JoinPage", () => {
     }));
     mocks.useRedeemAccountLink.mockReturnValue(redeemState({
       isError: true,
-      error: new KernelApiError("weak", "validation", 400),
+      error: new KernelApiError("weak", "validation", 400, "validation", null),
     }));
     const html = renderJoin();
     expect(html).toContain("Такой пароль не подходит");

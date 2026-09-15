@@ -23,7 +23,13 @@ vi.mock("../apps/dashboard/src/api/queries.ts", () => ({
 }));
 vi.mock("../apps/dashboard/src/api/sdk.ts", () => ({
   KernelApiError: class extends Error {
-    constructor(message: string, _category: string, readonly status: number) { super(message); }
+    constructor(
+      message: string,
+      _category: string,
+      readonly status: number,
+      _code: string | null = null,
+      _body: unknown = null,
+    ) { super(message); }
   },
 }));
 vi.mock("../apps/dashboard/src/lib/queryClient.ts", () => ({ clearDashboardSession: vi.fn() }));
