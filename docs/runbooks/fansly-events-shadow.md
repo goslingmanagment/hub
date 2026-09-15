@@ -251,6 +251,50 @@ keeps the existing allowlist procedure; old parsers drop new optional fields,
 which remain unknown if newer code later resumes the same generation. The
 additive unused probe may remain installed.
 
+## Reader discrepancy witnesses (Decision 354)
+
+New sweeps add `readerWitnesses` (first20 total per sweep) and
+`readerWitnessesOmitted` to the existing `diagnostics` report/cursor. They cover
+missing/deleted/content-pending/unknown reader states **below** the virtual stop,
+including an advertised ID with a null embedded head. Aggregate counters remain
+complete even after the sample cap. `null` means legacy or mid-sweep coverage;
+`[]` with omitted0 means no witnessed candidates in that instrumented scope.
+Omitted>0 means candidates lack retained witnesses, whether because of the cap,
+a missing capture receipt, ambiguous mapping or unavailable hashing. It is not
+zero unexplained discrepancy evidence. The first20 are deterministic, not a
+representative sample or a completeness verdict. No message IDs/text are copied.
+
+Each pointer carries an observation ID, canonical JSON v1 SHA-256, zero-based
+index into the **trimmed retained** `data` array and one-based sweep page number.
+`readStartedAtMs`/`readFinishedAtMs` are worker-clock bounds around the existing
+pre-apply read, before hydration/repair/write; they are not the precise database
+snapshot instant or event latency. `source` is the preferred reader source; for
+`deleted` the dominating tombstone can come from another source. Unknown reads
+have null source and liveHotCopy, not evidence of absent hot material.
+
+Read the existing report view/function through `read_only` in READ ONLY. For
+selected witnesses only, load their exact `observations` envelopes and current
+bodies (`coalesce(o.payload,b.body)`; join hot CAS by bucket_month/object_id).
+Use the existing `resolveDmShadowWitness(witness, pageId, observation)` helper
+from `apps/runtime/src/services/sync/dm-shadow-witness.ts` on that local export.
+It validates observation ID/account/platform/kind and recomputes the hash before
+resolving the row. Missing body, wrong scope, changed hash or bad index is
+unresolved. Never search another index on mismatch or trust the original
+observation hash without checking the current body. Export only needed markers,
+not whole message/account payloads, and keep original read receipts private.
+
+Erasure may remove/rewrite capture, making the pointer unresolvable. Existing
+shared-observation erasure policy can also preserve the original body; such
+pointers remain resolvable residuals. This does not promise anonymization. The
+existing page/model erasure already removes shadow reports and cursors.
+
+The historical G6917/G6918 scalar reports cannot be retroactively attributed.
+Their existing raw candidate is not proof of provider deletion or of an exact
+historical reader miss. Keep them unknown; do not reset the original A0 clock or
+credit earlier days to the new witness scope. Ordinary full polling collects
+new evidence without extra provider requests. Rollback drops optional cursor
+fields and later resumes remain unknown; saved reports are preserved.
+
 ## Rollback
 
 Through the normal owner-approved Configuration save, set this allowlist to

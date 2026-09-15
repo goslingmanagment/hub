@@ -2,6 +2,7 @@ import type { FanslyDmReaderHeadReceipt } from "@agency_hub_core/db";
 
 import type { ConversationHeadDiffReason } from "./fansly-dm-head-diff.ts";
 import type { DmShadowState } from "./dm-shadow-state.ts";
+import { DM_SHADOW_WITNESS_LIMIT, type DmShadowWitnessPointer } from "./dm-shadow-witness.ts";
 
 export type DmShadowConversation = {
   reasons: readonly ConversationHeadDiffReason[];
@@ -13,6 +14,7 @@ export type DmShadowConversation = {
   previousMessageId: string | null;
   materialConfirmed: boolean | null;
   readerHead?: FanslyDmReaderHeadReceipt | null;
+  readerWitnessPointer?: DmShadowWitnessPointer | null;
   discoveryToCaptureMs: number | null;
   historyPending: boolean;
   lastHistorySyncAtMs: number | null;
@@ -70,7 +72,7 @@ export function advanceDmShadow(state: DmShadowState, page: {
   responseBytes: number;
   conversations: readonly DmShadowConversation[];
 }): DmShadowState {
-  const next = { ...state };
+  const next = { ...state, readerWitnesses: state.readerWitnesses?.slice() ?? null };
   const belowStop = state.stopPage !== null;
   next.pageCount += 1;
   next.maxObservationGapMs = Math.max(
@@ -90,6 +92,14 @@ export function advanceDmShadow(state: DmShadowState, page: {
     if (item.materialConfirmed === null) next.unknownMaterialChecks += 1;
     if (item.listMessageId !== null) {
       const reader = item.readerHead;
+      if (belowStop && reader?.state !== "materialized" && next.readerWitnesses !== null) {
+        const pointer = item.readerWitnessPointer;
+        if (pointer && next.readerWitnesses.length < DM_SHADOW_WITNESS_LIMIT) {
+          next.readerWitnesses.push({ ...pointer, pageNumber: next.pageCount,
+            state: reader?.state ?? "unknown", source: reader?.state == null ? null : reader.source,
+            liveHotCopy: reader?.state == null ? null : reader.liveHotCopy });
+        } else if (next.readerWitnessesOmitted !== null) next.readerWitnessesOmitted += 1;
+      }
       if (reader?.state == null) {
         if (next.unknownReaderHeadChecks !== null) next.unknownReaderHeadChecks += 1;
       } else {

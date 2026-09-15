@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { DM_SHADOW_WITNESS_LIMIT, dmShadowWitnessSchema } from "./dm-shadow-witness.ts";
 
 const count = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 
@@ -10,8 +11,8 @@ export const dmShadowPolicySchema = z.object({
 export const DEFAULT_DM_SHADOW_POLICY = { depth: 3, overlapMs: 60_000 };
 export type DmShadowPolicy = z.infer<typeof dmShadowPolicySchema>;
 
-// Only bounded scalars travel in the existing cursor. No conversation IDs,
-// payloads or growing arrays belong in checkpoint state.
+// Bounded scalars and at most 20 capture pointers travel in the cursor.
+// No conversation IDs or payloads are copied into checkpoint state.
 export const dmShadowStateSchema = z.object({
   version: z.literal(1),
   depth: dmShadowPolicySchema.shape.depth,
@@ -48,6 +49,8 @@ export const dmShadowStateSchema = z.object({
   readerDeletedHeadsBelowStop: count.nullable().default(null),
   readerPendingHeadsBelowStop: count.nullable().default(null),
   readerArchiveOnlyHeadsBelowStop: count.nullable().default(null),
+  readerWitnesses: z.array(dmShadowWitnessSchema).max(DM_SHADOW_WITNESS_LIMIT).nullable().default(null),
+  readerWitnessesOmitted: count.nullable().default(null),
   materialLagSamples: count,
   maxDiscoveryToCaptureMs: count,
   unknownMaterialChecks: count,
@@ -111,6 +114,8 @@ export function createDmShadowState(input: {
     readerDeletedHeadsBelowStop: reasonCount,
     readerPendingHeadsBelowStop: reasonCount,
     readerArchiveOnlyHeadsBelowStop: reasonCount,
+    readerWitnesses: input.completeCoverage ? [] : null,
+    readerWitnessesOmitted: reasonCount,
     materialLagSamples: 0,
     maxDiscoveryToCaptureMs: 0,
     unknownMaterialChecks: 0,
