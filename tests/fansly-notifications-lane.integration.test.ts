@@ -13,10 +13,13 @@ import { FANSLY_NOTIFICATION_DECLARED_TYPE_CSV } from "@agency_hub_core/shared";
 
 import { SyncChunkBudget } from "../apps/runtime/src/services/sync/chunk-budget.ts";
 import {
+  backfillAttemptCeiling,
   backfillContinuationAt,
   compareNotificationRefs,
   fanslyNotificationsChunk,
+  FORWARD_HEAD_RESERVED_ATTEMPTS,
   forwardPollDue,
+  nextForwardPollAt,
   parseFanslyNotificationsCursorState,
   typesForFilterMode,
 } from "../apps/runtime/src/services/sync/fansly-notifications.ts";
@@ -429,17 +432,19 @@ describe("[sync-critical] WP-F2 notifications lane", () => {
     expect(stuck.calls.length).toBeLessThan(10);
   });
 
-  it("counts ATTEMPTS, defers at the cap, and still journals what it fetched", async (context) => {
+  it("counts ATTEMPTS, defers at the backfill's ceiling, and still journals what it fetched", async (context) => {
     if (!testDb) {
       context.skip();
       return;
     }
     const seeded = await seedPage();
-    // A deliberately small cap, so the lane hits it with work still to do —
-    // the only state in which "defers, never drops" means anything.
+    // A deliberately small allowance, so the lane hits the boundary with work
+    // still to do — the only state in which "defers, never drops" means
+    // anything. 64 leaves the backfill exactly 4 attempts above the head's
+    // reserve; the head itself is never bounded by that reserve.
     await setConfigOverride(testDb.db, {
       key: "fanslyNotificationsDailyCallBudget",
-      value: 4,
+      value: FORWARD_HEAD_RESERVED_ATTEMPTS + 4,
       userId: null,
       groupId: randomUUID(),
     });
@@ -458,25 +463,112 @@ describe("[sync-critical] WP-F2 notifications lane", () => {
         appStub(adapter),
         input(seeded.id, telemetry, new SyncChunkBudget()),
       );
-      if (result.stats?.deferred === "daily_call_budget") {
+      if (result.stats?.deferred === "head_reserve") {
         break;
       }
     }
 
-    expect(result?.stats?.deferred).toBe("daily_call_budget");
+    expect(result?.stats?.deferred).toBe("head_reserve");
     expect(result?.satisfied).toBe(false);
-    // "Come back after the UTC roll", not a failure.
-    expect(result?.continuationRetryAt?.toISOString()).toBe("2026-08-20T00:05:00.000Z");
+    // "Come back when the head is due", not "after the UTC roll" and not a
+    // failure: attempts remain today and they belong to the forward poll.
+    expect(result?.continuationRetryAt?.toISOString()).toBe("2026-08-19T09:30:00.000Z");
 
     const state = await cursor(seeded.id);
     // AT the number, never past it: the check runs BEFORE the call, so two
-    // calls at two attempts each is exactly the cap.
+    // calls at two attempts each is exactly the backfill's ceiling.
     expect(state!.callsToday).toBe(4);
     expect(adapter.calls).toHaveLength(2);
     // NEVER DROPS: every attempt spent produced a journaled body.
     expect(await observations(seeded.id)).toHaveLength(2);
     // …and the walk is still open, which is what makes the deferral real.
     expect(state!.backfill).not.toBeNull();
+  });
+
+  it("hands the rest of the day back to the head poll instead of parking in backfill", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const seeded = await seedPage();
+    // Two attempts of backfill room above the head's reserve.
+    await setConfigOverride(testDb.db, {
+      key: "fanslyNotificationsDailyCallBudget",
+      value: FORWARD_HEAD_RESERVED_ATTEMPTS + 2,
+      userId: null,
+      groupId: randomUUID(),
+    });
+    const adapter = adapterStub({ pages: () => envelope([row(1)]) });
+    const telemetry = telemetryStub();
+
+    // Head poll, then the backfill walks until it reaches the head's reserve.
+    await fanslyNotificationsChunk(
+      appStub(adapter),
+      input(seeded.id, telemetry, new SyncChunkBudget()),
+    );
+    const parked = await fanslyNotificationsChunk(
+      appStub(adapter),
+      input(seeded.id, telemetry, new SyncChunkBudget()),
+    );
+    expect(parked.stats?.deferred).toBe("head_reserve");
+
+    // …and at the stream's own cadence the lane polls the HEAD again, with
+    // attempts the backfill was not allowed to touch. Before the reserve
+    // existed the backfill had drunk the whole UTC day by ~00:15 and the head
+    // — the only place a liker/reply/purchase is ever announced — polled once
+    // a day.
+    const later = new Date(NOW.getTime() + 1_800_000);
+    const head = await fanslyNotificationsChunk(
+      appStub(adapter),
+      input(seeded.id, telemetry, new SyncChunkBudget(), later),
+    );
+    expect(head.stats?.phase).toBe("forward");
+    expect(adapter.calls.map((call) => call.before)).toEqual(["0", ref(1), "0"]);
+
+    const state = await cursor(seeded.id);
+    // The head spent past the backfill's ceiling: the reserve bounds the
+    // one-off walk, never the poll.
+    expect(state!.callsToday).toBe(3);
+    expect(state!.callsToday).toBeGreaterThan(
+      backfillAttemptCeiling(FORWARD_HEAD_RESERVED_ATTEMPTS + 2),
+    );
+  });
+
+  it("still defers the forward walk itself at the true daily cap", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const seeded = await seedPage();
+    const first = adapterStub({ pages: () => envelope([row(10)]) });
+    await fanslyNotificationsChunk(
+      appStub(first),
+      input(seeded.id, telemetryStub(), new SyncChunkBudget()),
+    );
+    // One attempt left for the whole day, and the backfill's ceiling is below
+    // it — the forward poll may still spend it.
+    await setConfigOverride(testDb.db, {
+      key: "fanslyNotificationsDailyCallBudget",
+      value: 2,
+      userId: null,
+      groupId: randomUUID(),
+    });
+
+    // A page with no overlap: the walk wants a second call it cannot afford.
+    const second = adapterStub({ pages: () => envelope([row(1), row(2)]) });
+    const later = new Date(NOW.getTime() + 1_800_000);
+    const result = await fanslyNotificationsChunk(
+      appStub(second),
+      input(seeded.id, telemetryStub(), new SyncChunkBudget(), later),
+    );
+
+    expect(second.calls).toHaveLength(1);
+    expect(result.stats?.deferred).toBe("daily_call_budget");
+    // The whole allowance is gone, so this one IS "come back after the roll".
+    expect(result.continuationRetryAt?.toISOString()).toBe("2026-08-20T00:05:00.000Z");
+    const state = await cursor(seeded.id);
+    // …and the walk is still open at the cursor it could not follow.
+    expect(state!.forward.beforeRef).toBe(ref(2));
   });
 
   it("falls back to the FULL declared CSV when the unfiltered form is refused", async (context) => {
@@ -612,6 +704,25 @@ describe("WP-F2 walk helpers", () => {
     expect(forwardPollDue(base, new Date(NOW.getTime() + 1_800_000))).toBe(true);
     // A lane that has never polled is always due.
     expect(forwardPollDue({ lastForwardPollAt: null } as never, NOW)).toBe(true);
+  });
+
+  it("reserves the head's share of the daily allowance from the backfill", () => {
+    // 48 scheduled polls plus a quarter as pagination/retry headroom.
+    expect(FORWARD_HEAD_RESERVED_ATTEMPTS).toBe(60);
+    // The shipped cap: the backfill gets what is left, not the whole day.
+    expect(backfillAttemptCeiling(96)).toBe(36);
+    // A deliberately small cap slows the one-off walk down; it never parks it.
+    expect(backfillAttemptCeiling(8)).toBe(1);
+  });
+
+  it("sends a reserve-deferred backfill back when the head is next due", () => {
+    const state = { lastForwardPollAt: NOW.toISOString() };
+    expect(nextForwardPollAt(state, new Date(NOW.getTime() + 60_000)).toISOString())
+      .toBe(new Date(NOW.getTime() + 1_800_000).toISOString());
+    // Never into the past, and a lane that has never polled goes now.
+    const overdue = new Date(NOW.getTime() + 3_600_000);
+    expect(nextForwardPollAt(state, overdue)).toEqual(overdue);
+    expect(nextForwardPollAt({ lastForwardPollAt: null }, NOW)).toEqual(NOW);
   });
 
   it("maps each filter mode to the form it issues", () => {
