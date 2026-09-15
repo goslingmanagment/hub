@@ -177,7 +177,7 @@ describe("kernel SDK against a live server", () => {
       auth: { mode: "bearer", token: () => chatterKey },
     });
     const me = await bearer.me();
-    expect(me.authMethod).toBe("api_key");
+    expect(me.authMethod).toBe("device_token");
     expect(me.user.username).toBe("anton");
 
     const pages = await bearer.pages();

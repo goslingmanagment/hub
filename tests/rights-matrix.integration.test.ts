@@ -141,24 +141,6 @@ async function unassignPage(
   expect(response.statusCode).toBe(200);
 }
 
-/** The legacy chatter bearer key. It is on its way out (Р8 removes the whole
- * lane in PR-4), which is exactly why the matrix has to say what today's
- * revocations do and do not do to it. */
-async function issueApiKey(
-  activeServer: NonNullable<typeof server>,
-  ownerCookie: string,
-  username: string,
-) {
-  const response = await activeServer.inject({
-    method: "POST",
-    url: `/api/v1/admin/users/${username}/api-keys`,
-    headers: { cookie: ownerCookie },
-    payload: {},
-  });
-  expect(response.statusCode).toBe(200);
-  return response.json<{ key: string }>().key;
-}
-
 /** Invites grisha the way the owner will from the console, then redeems the
  * link the way /join will — so every row below starts from a real
  * registration rather than from a hand-made password row. */
@@ -385,7 +367,6 @@ describe("§7 — the revocation ladder as the person experiences it", () => {
     const desktop = await signInDevice(setup.server, "grisha", CHATTER_PASSWORD, "Desktop · kevin");
     const chatterCookie = await loginCookie(setup.server, "grisha", CHATTER_PASSWORD);
     const ownerCookie = await loginCookie(setup.server, "dmitriy", OWNER_PASSWORD);
-    const apiKey = await issueApiKey(setup.server, ownerCookie, "grisha");
 
     const revoked = await setup.server.inject({
       method: "DELETE",
@@ -410,22 +391,19 @@ describe("§7 — the revocation ladder as the person experiences it", () => {
     expect(devices.statusCode).toBe(200);
     expect(devices.json<unknown[]>()).toEqual([]);
 
-    // And neither does it touch a legacy API key (§4.4 says so in as many
-    // words). This is the operational trap the offboarding runbook exists to
-    // close: "revoke all devices" is NOT "this person is out".
-    expect((await get(setup.server, "/api/v1/auth/me", {
-      authorization: `Bearer ${apiKey}`,
-    })).statusCode).toBe(200);
+    // Decision 353 removed the other half of this trap: there is no longer a
+    // legacy key that survives "revoke all devices". The trap that remains is
+    // the live cookie session above — the offboarding runbook exists to close
+    // it: "revoke all devices" is NOT "this person is out".
   }, 60_000);
 
-  it("row «terminated all access»: tokens, sessions, keys and links die — a fresh login with the same password does not", async (context) => {
+  it("row «terminated all access»: tokens, sessions and links die — a fresh login with the same password does not", async (context) => {
     const setup = requireSetup(context);
     if (!setup) return;
     await registerChatter(setup.app, ["lora-fansly"]);
     const device = await signInDevice(setup.server, "grisha", CHATTER_PASSWORD, "Firefox · Windows");
     const chatterCookie = await loginCookie(setup.server, "grisha", CHATTER_PASSWORD);
     const ownerCookie = await loginCookie(setup.server, "dmitriy", OWNER_PASSWORD);
-    const apiKey = await issueApiKey(setup.server, ownerCookie, "grisha");
 
     // An unused reset link is a credential in waiting, so it belongs in the row.
     const link = await setup.server.inject({
@@ -449,10 +427,6 @@ describe("§7 — the revocation ladder as the person experiences it", () => {
     })).statusCode).toBe(401);
     expect((await get(setup.server, "/api/v1/auth/me", { cookie: chatterCookie })).statusCode)
       .toBe(401);
-    // This is the operation that DOES reach the legacy key.
-    expect((await get(setup.server, "/api/v1/auth/me", {
-      authorization: `Bearer ${apiKey}`,
-    })).statusCode).toBe(401);
 
     // The link is dead for redemption and discloses nothing but its state.
     const redeem = await setup.server.inject({
@@ -655,8 +629,9 @@ describe("§7 — roles", () => {
   it("content_manager: cannot sign in anywhere, by either lane", async (context) => {
     const setup = requireSetup(context);
     if (!setup) return;
-    // Not a creatable role through any service — the rows exist historically,
-    // so the fixture writes one the only way it can.
+    // Decision 353 took the role out of the wire enum too; the PG enum value
+    // stays, so a historical row is still expressible — by raw SQL and nothing
+    // else. What the row can do is the point: nothing, on either lane.
     const hash = await argon2.hash(CHATTER_PASSWORD, { type: argon2.argon2id });
     await setup.testDb.pool.query(
       "insert into users (username, role, password_hash) values ($1, 'content_manager', $2)",

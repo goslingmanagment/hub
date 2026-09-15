@@ -2547,11 +2547,16 @@ describe("api integration", () => {
 
     // A fresh audited action adds a distinct observation with the actor.
     const appContext = createTestAppContext(testDb);
-    await issueChatterDeviceToken(appContext, { username: "anton", pageLabel: "lana" }, { source: "cli" });
-    const issued = await testDb.pool.query<{ n: string }>(
-      "select count(*)::text as n from observations where source = 'operator' and kind = 'api_key.issued'",
+    const before = observations.rows.length;
+    await assignPageToUser(appContext, { username: "anton", pageLabel: "lana" }, { source: "cli" });
+    const after = await testDb.pool.query<{ kind: string; producer: string }>(
+      "select kind, producer from observations where source = 'operator' order by id",
     );
-    expect(Number(issued.rows[0]!.n)).toBeGreaterThanOrEqual(1);
+    expect(after.rows.length).toBe(before + 1);
+    expect(after.rows.at(-1)).toMatchObject({
+      kind: "user.page_assigned",
+      producer: "api:admin",
+    });
   });
 
   it("gates raw revenue routes to dashboard session roles (Stage 2 chatter-read-scope) [sync-critical]", async (context) => {

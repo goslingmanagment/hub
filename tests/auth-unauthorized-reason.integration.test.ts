@@ -1,5 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
+import { sha256Hex } from "@agency_hub_core/shared";
+
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import {
@@ -165,17 +167,26 @@ describe("everything else stays silent", () => {
     }
   });
 
-  it("gives NO reason for a revoked API key — that lane has no self-healing contract", async (context) => {
+  it("gives NO reason for a retired api-key bearer — that lane no longer exists", async (context) => {
     const setup = requireSetup(context);
     if (!setup) return;
     await createUserAccount(setup.app, { username: "vera", role: "chatter" }, { source: "cli" });
-    const apiKey = (await issueChatterDeviceToken(setup.app, { username: "vera" }, OWNER_AUDIT)).key;
-    await setup.testDb.pool.query("update api_keys set revoked_at = now()");
+    const user = await setup.testDb.pool.query<{ id: number }>(
+      "select id from users where username = 'vera'",
+    );
+    // A live api_keys row, exactly as the table still holds them: Decision 353
+    // left the facts and took the lane, so this bearer is refused with no
+    // reason at all — there is nothing for a client to self-heal towards.
+    const legacyKey = "agency_hub_core_retiredlanebearer00";
+    await setup.testDb.pool.query(
+      "insert into api_keys (user_id, key_prefix, token_digest) values ($1, $2, $3)",
+      [user.rows[0]!.id, legacyKey.slice(0, 20), sha256Hex(legacyKey)],
+    );
 
     const response = await setup.server.inject({
       method: "GET",
       url: "/api/v1/auth/me",
-      headers: { authorization: `Bearer ${apiKey}` },
+      headers: { authorization: `Bearer ${legacyKey}` },
     });
     expect(response.statusCode).toBe(401);
     expect(response.json<{ reason?: string }>().reason).toBeUndefined();

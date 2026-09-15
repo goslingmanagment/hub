@@ -154,7 +154,7 @@ beforeEach(async (context) => {
 });
 
 describe("desktop harvest capability", () => {
-  it("rejects harvest-version spoofing by ordinary API keys and device tokens", async (context) => {
+  it("rejects harvest-version spoofing by ordinary device tokens", async (context) => {
     if (!testDb || !server) {
       context.skip();
       return;
@@ -162,8 +162,9 @@ describe("desktop harvest capability", () => {
     const { aliceKey, aliceToken } = await seedIdentity();
     const event = harvestEvent();
 
-    const viaApiKey = await postHarvest(aliceKey.key, event);
-    expect(viaApiKey.statusCode).toBe(403);
+    // Two tokens of the same person, neither carrying the harvest capability.
+    const viaUnboundDevice = await postHarvest(aliceKey.key, event);
+    expect(viaUnboundDevice.statusCode).toBe(403);
 
     const viaOrdinaryDevice = await postHarvest(aliceToken.token, event);
     expect(viaOrdinaryDevice.statusCode).toBe(403);
@@ -265,7 +266,7 @@ describe("desktop harvest capability", () => {
       context.skip();
       return;
     }
-    const { aliceToken, bobToken } = await seedIdentity();
+    const { aliceKey, aliceToken, bobToken } = await seedIdentity();
     const ownerCookie = await loginOwnerCookie();
     const event = harvestEvent();
 
@@ -331,13 +332,6 @@ describe("desktop harvest capability", () => {
     const { aliceKey, aliceToken, bobToken } = await seedIdentity();
     const ownerCookie = await loginOwnerCookie();
 
-    const viaApiKey = await server.inject({
-      method: "DELETE",
-      url: "/api/v1/auth/device-tokens/current",
-      headers: { authorization: `Bearer ${aliceKey.key}` },
-    });
-    expect(viaApiKey.statusCode).toBe(403);
-
     const viaSession = await server.inject({
       method: "DELETE",
       url: "/api/v1/auth/device-tokens/current",
@@ -377,7 +371,9 @@ describe("desktop harvest capability", () => {
       from device_tokens
       order by id
     `);
+    // Exactly itself: alice's OTHER device and bob's are both untouched.
     expect(rows.rows).toEqual([
+      { id: String(aliceKey.id), revoked: false, reason: null },
       { id: String(aliceToken.id), revoked: true, reason: "self_revoked" },
       { id: String(bobToken.id), revoked: false, reason: null },
     ]);
