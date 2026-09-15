@@ -151,3 +151,22 @@ predicates while retaining captured diagnostics and the read operation. This
 slice changes no follower business state to repair. A whole-image rollback
 must also preserve any C2a v2 readers already in use. No direct SQL repair or
 production reset belongs to this diagnostic procedure.
+
+
+## Certified settlement reuse (Decision 347)
+
+The default-off flag `FANSLY_FOLLOWERS_SETTLEMENT_REUSE_ENABLED` and empty
+`FANSLY_FOLLOWERS_SETTLEMENT_REUSE_PAGE_ALLOWLIST` enable only retry after a
+certified terminal checkpoint committed but its owning queue request did not
+settle. The versioned `completion` object binds the certified generation and
+request to the checkpoint success run/time. Reuse requires current ownership;
+it emits `reusedCompletedWalk: true` and `processedThisChunk: 0` without provider
+calls or checkpoint/membership writes. `succeeded_at` stays at the original read.
+Newer auth/proxy incidents stay open; R+1 remains pending.
+
+Malformed/old/uncertified proofs and other revisions use the original walk.
+Disabling either gate restores that path. This changes no anomaly predicate,
+normal reconcile scheduling, snapshot restart, grace, blast-radius limit or
+presence refresh. It does not prove that separate naturally requested generations
+are redundant. PostgreSQL regression injects a settlement failure, reacquires a
+new lease and checks preserved membership/checkpoint plus the queued successor.

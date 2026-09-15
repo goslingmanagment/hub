@@ -65,6 +65,35 @@ describe("notification incidents integration", () => {
     await resetIntegrationDatabase(testDb.pool);
   });
 
+  it("keeps later provider failures open when only an old completed result settles", async () => {
+    if (!testDb) throw new Error("Database required");
+    const model = await createModel(testDb.db, { slug: "settlement", name: "Settlement" });
+    if (!model) throw new Error("Missing model");
+    const page = await createFanslyPage(testDb.db, { modelId: model.id, label: "settlement" });
+    if (!page) throw new Error("Missing page");
+    const app = createTestAppContext(testDb);
+    const oldRead = new Date("2026-09-15T10:00:00Z");
+    const failureAt = new Date("2026-09-15T10:01:00Z");
+    for (const kind of ["auth_blocked", "proxy_failed", "stream_failed_threshold"] as const) {
+      const stream = kind === "stream_failed_threshold" ? "followers_reconcile" : null;
+      await openNotificationIncident(testDb.db, {
+        incidentKey: `${kind}:${page.id}${stream ? `:${stream}` : ""}`,
+        kind, platformAccountId: page.id, stream, now: failureAt,
+        errorSummary: "failure after the certified read",
+      });
+    }
+    await resolveSyncChunkRecoveryIncidents(app, {
+      platformAccountId: page.id, pageLabel: page.label, platform: "fansly",
+      stream: "followers_reconcile", providerRecoveredAt: oldRead,
+      recoveredAt: new Date("2026-09-15T10:02:00Z"),
+    });
+    for (const kind of ["auth_blocked", "proxy_failed"]) {
+      expect((await getNotificationIncidentByKey(testDb.db, `${kind}:${page.id}`))?.status).toBe("open");
+    }
+    expect((await getNotificationIncidentByKey(testDb.db,
+      `stream_failed_threshold:${page.id}:followers_reconcile`))?.status).toBe("resolved");
+  });
+
   it("opens auth incidents once, resolves them on recovery, and reopens after a later recurrence", async (context) => {
     if (!testDb) {
       context.skip();

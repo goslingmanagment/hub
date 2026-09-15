@@ -23,6 +23,8 @@ export type ExecutorRequestContext = {
 
 export type StreamChunkResult = {
   satisfied: boolean;
+  /** Original certified read time when settling an already committed result. */
+  succeededAt?: Date;
   yieldReason: SyncChunkYieldReason | null;
   continuationRetryAt?: Date | null;
   continuationRequestSource?: SyncRequestSource | null;

@@ -1,3 +1,4 @@
+import { readFollowersReconcileCompletion } from "./followers-reconcile-completion.ts";
 import { followersReconcileDecision } from "./followers-reconcile-decision.ts";
 import {
   aggregateTransactionTopSpenders,
@@ -14,6 +15,7 @@ import {
   getEarliestSpenderTransactionAt,
   getPageDmConversationById,
   getCheckpoint,
+  getPageSyncExecutionContext,
   getCurrentSubscribers,
   listFanslyPurchaseHistoryCaptures,
   listFanslyDmRawPayloadsAfterId,
@@ -2003,6 +2005,17 @@ export async function executeFollowersReconcileChunk(
   };
   const checkpoint = await getCheckpoint(app.db, input.pageContext.page.id, "followers_reconcile");
   await input.telemetry.recordCheckpointLoaded("followers_reconcile", summarizeCheckpoint(checkpoint));
+  const effective = await loadEffectiveConfig(app.db, app.config);
+  const execution = getPageSyncExecutionContext();
+  const settlementReuseEnabled = effective.fanslyFollowersSettlementReuseEnabled === true &&
+    isPageAllowlisted(effective.fanslyFollowersSettlementReusePageAllowlist, pageContext.page.label) &&
+    execution?.pageId === pageContext.page.id && execution.stream === "followers_reconcile";
+  const completion = settlementReuseEnabled && execution
+    ? readFollowersReconcileCompletion(checkpoint, execution.requestSeq, new Date()) : null;
+  if (completion) {
+    await assertOwnedPageSyncLease(app.db);
+    return { satisfied: true, yieldReason: null, ...completion } satisfies StreamChunkResult;
+  }
 
   const existingState = parseFollowersReconcileCursorState(
     checkpoint?.state,
@@ -2193,11 +2206,13 @@ export async function executeFollowersReconcileChunk(
         pageId: input.pageContext.page.id,
         syncType: "followers",
       });
+      const completedAt = new Date();
       return {
         kind: "complete" as const,
         checkpoint: await upsertCheckpoint(dbTx, {
           platformAccountId: input.pageContext.page.id,
           stream: "followers_reconcile",
+          ...(settlementReuseEnabled ? { now: completedAt } : {}),
           state: {
             revision: state.revision,
             generation: state.generation,
@@ -2208,6 +2223,10 @@ export async function executeFollowersReconcileChunk(
             sourceFollowerCount: finalizationFollowerCount,
             snapshotRestartCount: 0,
             verificationPending: false,
+            ...(settlementReuseEnabled ? { completion: {
+              version: 1, runId: input.syncRunId, completedAt: completedAt.toISOString(),
+              membershipProof, generationObservedCount,
+            } } : {}),
           },
           lastSuccessfulRunId: input.syncRunId,
         }),
