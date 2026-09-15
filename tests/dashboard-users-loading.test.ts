@@ -40,7 +40,6 @@ describe("team catalog loading failures", () => {
       role: "owner",
       mustChangePassword: false,
       assignedPages: [],
-      apiKeyStatus: null,
       disabledAt: null,
       lastActiveAt: null,
       registrationState: "active",

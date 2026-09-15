@@ -22,8 +22,8 @@ import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import {
   createUserAccount,
-  issueChatterApiKey,
 } from "../apps/runtime/src/services/auth.ts";
+import { issueChatterDeviceToken } from "./helpers/device-credentials.ts";
 import { ofapiCollectionPolicyHooks } from "../apps/runtime/src/services/ofapi-collection-policy.ts";
 import { createOfapiCreditSpendSink } from "../apps/runtime/src/services/ofapi-credits.ts";
 import {
@@ -227,7 +227,7 @@ beforeEach(async (context) => {
     username: "chatter",
     role: "chatter",
   }, { source: "cli" });
-  chatterKey = (await issueChatterApiKey(appContext, {
+  chatterKey = (await issueChatterDeviceToken(appContext, {
     username: "chatter",
     pageLabel: "lora-of",
   }, { source: "cli" })).key;

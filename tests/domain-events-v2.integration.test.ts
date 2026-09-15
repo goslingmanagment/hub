@@ -31,8 +31,8 @@ import { executeErasure } from "../apps/runtime/src/services/erasure/index.ts";
 import {
   assignPageToUser,
   createUserAccount,
-  issueChatterApiKey,
 } from "../apps/runtime/src/services/auth.ts";
+import { issueChatterDeviceToken } from "./helpers/device-credentials.ts";
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 
@@ -82,7 +82,7 @@ beforeAll(async () => {
   const lily = await createFanslyPage(testDb.db, { modelId: model.id, label: "lily1" });
   lanaId = lana.id;
   lilyId = lily.id;
-  const issued = await issueChatterApiKey(seedContext, {
+  const issued = await issueChatterDeviceToken(seedContext, {
     username: "anton",
     pageLabel: "lana",
   }, { source: "cli" });
@@ -379,7 +379,7 @@ describe("event stream v2", () => {
       username: "scope-race",
       role: "chatter",
     }, { source: "cli" });
-    const raceKey = (await issueChatterApiKey(seedContext, {
+    const raceKey = (await issueChatterDeviceToken(seedContext, {
       username: "scope-race",
       pageLabel: "lana",
     }, { source: "cli" })).key;

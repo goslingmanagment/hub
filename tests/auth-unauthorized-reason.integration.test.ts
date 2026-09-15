@@ -4,10 +4,9 @@ import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import {
   createUserAccount,
-  issueChatterApiKey,
-  issueDeviceTokenForUsername,
   revokeDeviceTokensForUsername,
 } from "../apps/runtime/src/services/auth.ts";
+import { issueChatterDeviceToken, issueDeviceTokenForUsername } from "./helpers/device-credentials.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
@@ -170,7 +169,7 @@ describe("everything else stays silent", () => {
     const setup = requireSetup(context);
     if (!setup) return;
     await createUserAccount(setup.app, { username: "vera", role: "chatter" }, { source: "cli" });
-    const apiKey = (await issueChatterApiKey(setup.app, { username: "vera" }, OWNER_AUDIT)).key;
+    const apiKey = (await issueChatterDeviceToken(setup.app, { username: "vera" }, OWNER_AUDIT)).key;
     await setup.testDb.pool.query("update api_keys set revoked_at = now()");
 
     const response = await setup.server.inject({

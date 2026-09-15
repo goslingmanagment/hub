@@ -6,9 +6,8 @@ import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import {
   createUserAccount,
-  issueChatterApiKey,
-  issueDeviceTokenForUsername,
 } from "../apps/runtime/src/services/auth.ts";
+import { issueChatterDeviceToken, issueDeviceTokenForUsername } from "./helpers/device-credentials.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
@@ -69,7 +68,7 @@ describe("AI persona owner administration", () => {
       { username: "chatter", role: "chatter" },
       { source: "cli" },
     );
-    chatterKey = (await issueChatterApiKey(
+    chatterKey = (await issueChatterDeviceToken(
       appContext,
       { username: "chatter" },
       { source: "cli" },

@@ -12,9 +12,8 @@ import { runCanonicalization } from "../apps/runtime/src/services/canonicalize-d
 import {
   assignPageToUser,
   createUserAccount,
-  issueChatterApiKey,
-  issueDeviceToken,
 } from "../apps/runtime/src/services/auth.ts";
+import { issueChatterDeviceToken, issueDeviceTokenForUsername } from "./helpers/device-credentials.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import {
   resetIntegrationDatabase,
@@ -113,7 +112,7 @@ async function seedIdentity() {
     ofapiAccountId: "acct_harvest",
   });
 
-  const aliceKey = await issueChatterApiKey(app!, {
+  const aliceKey = await issueChatterDeviceToken(app!, {
     username: "alice",
     pageLabel: "harvest-of",
   }, { source: "test" });
@@ -122,18 +121,12 @@ async function seedIdentity() {
     pageLabel: "harvest-of",
   }, { source: "test" });
 
-  const alice = await testDb!.pool.query<{ id: string }>(
-    "select id::text from users where username = 'alice'",
-  );
-  const bob = await testDb!.pool.query<{ id: string }>(
-    "select id::text from users where username = 'bob'",
-  );
-  const aliceToken = await issueDeviceToken(app!, {
-    userId: Number(alice.rows[0]!.id),
+  const aliceToken = await issueDeviceTokenForUsername(app!, {
+    username: "alice",
     label: "alice-desktop",
   }, { source: "test" });
-  const bobToken = await issueDeviceToken(app!, {
-    userId: Number(bob.rows[0]!.id),
+  const bobToken = await issueDeviceTokenForUsername(app!, {
+    username: "bob",
     label: "bob-desktop",
   }, { source: "test" });
 

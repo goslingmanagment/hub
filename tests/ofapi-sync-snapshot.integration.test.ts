@@ -28,8 +28,8 @@ import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { runCanonicalization } from "../apps/runtime/src/services/canonicalize-driver.ts";
 import {
   createUserAccount,
-  issueChatterApiKey,
 } from "../apps/runtime/src/services/auth.ts";
+import { issueChatterDeviceToken } from "./helpers/device-credentials.ts";
 import {
   decodeOfapiSyncSnapshotStateCursor,
   encodeOfapiSyncSnapshotStateCursor,
@@ -191,7 +191,7 @@ beforeEach(async (context) => {
     username: "chatter",
     role: "chatter",
   }, { source: "cli" });
-  chatterKey = (await issueChatterApiKey(appContext, {
+  chatterKey = (await issueChatterDeviceToken(appContext, {
     username: "chatter",
     pageLabel: "lora-of",
   }, { source: "cli" })).key;
@@ -685,7 +685,7 @@ describe("OFAPI sync snapshot", () => {
       username: "chatter-two",
       role: "chatter",
     }, { source: "cli" });
-    const chatterTwoKey = (await issueChatterApiKey(appContext, {
+    const chatterTwoKey = (await issueChatterDeviceToken(appContext, {
       username: "chatter-two",
       pageLabel: "lora-vip-of",
     }, { source: "cli" })).key;

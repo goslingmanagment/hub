@@ -263,14 +263,19 @@ describe("who is refused", () => {
     expect(response.statusCode).toBe(401);
   });
 
-  it("answers 403 password_change_required for a flagged account", async (context) => {
+  it("ignores a must_change_password row: the flag is retired, not enforced", async (context) => {
     const setup = requireSetup(context);
     if (!setup) return;
+    // Decision 353 retired #116(b). The column survives (forward-only), so this
+    // sets it the only way left — by hand — and proves nothing reads it: the
+    // sign-in succeeds and the wire still says `false`.
     await setUserPassword(setup.app, {
       username: "grisha",
       password: "owner-chosen-42",
-      mustChangePassword: true,
     }, { source: "cli" });
+    await setup.testDb.pool.query(
+      "update users set must_change_password = true where username = 'grisha'",
+    );
 
     const response = await signIn(setup.server, {
       username: "grisha",
@@ -278,11 +283,16 @@ describe("who is refused", () => {
       label: "Firefox · Windows",
       mode: "active",
     });
-    expect(response.statusCode).toBe(403);
-    expect(response.json<{ error: string }>().error).toBe("password_change_required");
-    expect(await setup.testDb.pool.query<{ count: string }>(
-      "select count(*)::text as count from device_tokens",
-    ).then((result) => Number(result.rows[0]?.count))).toBe(0);
+    expect(response.statusCode).toBe(200);
+
+    const token = response.json<{ token: string }>().token;
+    const me = await setup.server.inject({
+      method: "GET",
+      url: "/api/v1/auth/me",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(me.statusCode).toBe(200);
+    expect(me.json<{ user: { mustChangePassword: boolean } }>().user.mustChangePassword).toBe(false);
   });
 
   it("shares ONE per-account backoff with the cookie login", async (context) => {

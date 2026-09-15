@@ -61,12 +61,11 @@ import {
   SESSION_COOKIE_NAME,
   assignPageToUser,
   createUserAccount,
-  issueChatterApiKey,
-  issueDeviceTokenForUsername,
   setDeviceTokenHarvestCapabilityForUsername,
   setUserPassword,
   unassignPageFromUser,
 } from "../apps/runtime/src/services/auth.ts";
+import { issueChatterDeviceToken, issueDeviceTokenForUsername } from "./helpers/device-credentials.ts";
 import { getModelRevenueReport, getPageRevenueReport } from "../apps/runtime/src/services/reporting.ts";
 import { ensureSyncQueues, SYNC_PAGE_EXECUTE_QUEUE } from "../apps/runtime/src/services/sync-queue.ts";
 import {
@@ -2149,16 +2148,11 @@ describe("api integration", () => {
     }
   });
 
-  it("reads legacy content_manager users but rejects creating new ones through admin APIs", async (context) => {
+  it("has no HTTP way to create a user at all (Decision 353: CLI or invite link)", async (context) => {
     if (!testDb || !server) {
       context.skip();
       return;
     }
-
-    await testDb.pool.query(`
-      insert into users (username, role, password_hash)
-      values ('legacy-content-manager', 'content_manager', null)
-    `);
 
     const login = await server.inject({
       method: "POST",
@@ -2170,55 +2164,71 @@ describe("api integration", () => {
     });
     const cookie = sessionCookieFrom(login);
 
-    const list = await server.inject({
-      method: "GET",
-      url: "/api/v1/admin/users",
-      headers: {
-        cookie,
-      },
-    });
-    expect(list.statusCode).toBe(200);
-    expect(list.json()).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        username: "legacy-content-manager",
-        role: "content_manager",
-      }),
-    ]));
-
-    const create = await server.inject({
-      method: "POST",
-      url: "/api/v1/admin/users",
-      headers: {
-        cookie,
-      },
-      payload: {
-        username: "new-content-manager",
-        role: "content_manager",
-      },
-    });
-    expect(create.statusCode).toBe(400);
+    // An owner mints an owner account with `hub user create` on the box and
+    // invites everyone else by link; POST /admin/users and the admin password
+    // reset are gone, so "create a user over HTTP" is not a shape the kernel has.
+    for (const attempt of [
+      { method: "POST" as const, url: "/api/v1/admin/users", payload: { username: "smuggled", role: "chatter" } },
+      { method: "PATCH" as const, url: "/api/v1/admin/users/anton/password", payload: { password: "owner-set-secret" } },
+    ]) {
+      const response = await server.inject({ ...attempt, headers: { cookie } });
+      expect(response.statusCode, attempt.url).toBe(404);
+    }
 
     const createdRows = await testDb.pool.query<{ count: string }>(`
       select count(*)::text as count
       from users
-      where username = 'new-content-manager'
+      where username = 'smuggled'
     `);
     expect(createdRows.rows[0]?.count).toBe("0");
   });
 
-  it("lists admin users with api key summaries and exposes key activity details", async (context) => {
+  it("fails closed on a legacy content_manager row instead of publishing a retired role", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+
+    // Decision 353 took content_manager out of the wire enum (the PG enum value
+    // stays — migrations are forward-only). The merge gate for this PR is "zero
+    // content_manager rows in production"; this pins what happens if that gate
+    // were ever violated: the admin list REFUSES rather than emitting a role no
+    // client knows how to parse.
+    await testDb.pool.query(`
+      insert into users (username, role, password_hash)
+      values ('legacy-content-manager', 'content_manager', null)
+    `);
+    try {
+      const login = await server.inject({
+        method: "POST",
+        url: "/api/v1/auth/login",
+        payload: {
+          username: "dima",
+          password: "owner-secret",
+        },
+      });
+      const list = await server.inject({
+        method: "GET",
+        url: "/api/v1/admin/users",
+        headers: { cookie: sessionCookieFrom(login) },
+      });
+      expect(list.statusCode).toBeGreaterThanOrEqual(500);
+      expect(list.body).not.toContain("content_manager");
+    } finally {
+      await testDb.pool.query("delete from users where username = 'legacy-content-manager'");
+    }
+  });
+
+  it("lists admin users with no API-key surface left on them", async (context) => {
     if (!testDb || !server) {
       context.skip();
       return;
     }
 
     const appContext = createTestAppContext(testDb);
-    const firstKey = await issueChatterApiKey(appContext, {
+    await issueChatterDeviceToken(appContext, {
       username: "anton",
       pageLabel: "lana",
-    }, { source: "cli" });
-    const secondKey = await issueChatterApiKey(appContext, {
-      username: "anton",
     }, { source: "cli" });
 
     const login = await server.inject({
@@ -2239,49 +2249,30 @@ describe("api integration", () => {
       },
     });
     expect(usersResponse.statusCode).toBe(200);
-    expect(usersResponse.json()).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        username: "anton",
-        role: "chatter",
-        apiKeyStatus: {
-          activeKeyPrefix: secondKey.keyPrefix,
-          activeKeyCount: 1,
-          activeKeyCreatedAt: expect.any(String),
-          activeKeyLastUsedAt: null,
-        },
-      }),
-      expect.objectContaining({
-        username: "dima",
-        role: "owner",
-        apiKeyStatus: null,
-      }),
+    const users = usersResponse.json<Array<Record<string, unknown>>>();
+    expect(users).toEqual(expect.arrayContaining([
+      expect.objectContaining({ username: "anton", role: "chatter", registrationState: "invited" }),
+      expect.objectContaining({ username: "dima", role: "owner" }),
     ]));
+    // Decision 353: not "null", not "empty" — absent. The dashboard has no
+    // field to render and no client has one to parse.
+    for (const user of users) {
+      expect(Object.keys(user)).not.toContain("apiKeyStatus");
+    }
 
-    const apiKeysResponse = await server.inject({
-      method: "GET",
-      url: "/api/v1/admin/users/anton/api-keys",
-      headers: {
-        cookie,
-      },
-    });
-    expect(apiKeysResponse.statusCode).toBe(200);
-    expect(apiKeysResponse.json()).toEqual([
-      expect.objectContaining({
-        keyPrefix: secondKey.keyPrefix,
-        isActive: true,
-        revokedAt: null,
-        revokedReason: null,
-      }),
-      expect.objectContaining({
-        keyPrefix: firstKey.keyPrefix,
-        isActive: false,
-        revokedAt: expect.any(String),
-        revokedReason: "rotated",
-      }),
-    ]);
+    // The three api-key routes are gone from the contract, so the paths 404.
+    for (const method of ["GET", "POST", "DELETE"] as const) {
+      const response = await server.inject({
+        method,
+        url: "/api/v1/admin/users/anton/api-keys",
+        headers: { cookie },
+        ...(method === "POST" ? { payload: {} } : {}),
+      });
+      expect(response.statusCode, method).toBe(404);
+    }
   });
 
-  it("ingests ai usage batches for chatter api keys and stores rows against the authenticated chatter", async (context) => {
+  it("ingests ai usage batches for chatter device tokens and stores rows against the authenticated chatter", async (context) => {
     if (!testDb || !server) {
       context.skip();
       return;
@@ -2291,7 +2282,7 @@ describe("api integration", () => {
     vi.setSystemTime(new Date("2026-04-04T12:00:00.000Z"));
 
     const appContext = createTestAppContext(testDb);
-    const issuedKey = await issueChatterApiKey(appContext, {
+    const issuedKey = await issueChatterDeviceToken(appContext, {
       username: "anton",
       pageLabel: "lana",
     }, { source: "cli" });
@@ -2445,11 +2436,11 @@ describe("api integration", () => {
       role: "chatter",
       passwordHash: null,
     });
-    const antonKey = await issueChatterApiKey(appContext, {
+    const antonKey = await issueChatterDeviceToken(appContext, {
       username: "anton",
       pageLabel: "lana",
     }, { source: "cli" });
-    const borisKey = await issueChatterApiKey(appContext, {
+    const borisKey = await issueChatterDeviceToken(appContext, {
       username: "boris",
       pageLabel: "lana",
     }, { source: "cli" });
@@ -2556,7 +2547,7 @@ describe("api integration", () => {
 
     // A fresh audited action adds a distinct observation with the actor.
     const appContext = createTestAppContext(testDb);
-    await issueChatterApiKey(appContext, { username: "anton", pageLabel: "lana" }, { source: "cli" });
+    await issueChatterDeviceToken(appContext, { username: "anton", pageLabel: "lana" }, { source: "cli" });
     const issued = await testDb.pool.query<{ n: string }>(
       "select count(*)::text as n from observations where source = 'operator' and kind = 'api_key.issued'",
     );
@@ -2570,7 +2561,7 @@ describe("api integration", () => {
     }
 
     const appContext = createTestAppContext(testDb);
-    const chatterKey = await issueChatterApiKey(appContext, {
+    const chatterKey = await issueChatterDeviceToken(appContext, {
       username: "anton",
       pageLabel: "lana",
     }, { source: "cli" });
@@ -2643,7 +2634,7 @@ describe("api integration", () => {
     vi.setSystemTime(new Date("2026-04-04T12:00:00.000Z"));
 
     const appContext = createTestAppContext(testDb);
-    const issuedKey = await issueChatterApiKey(appContext, {
+    const issuedKey = await issueChatterDeviceToken(appContext, {
       username: "anton",
       pageLabel: "lana",
     }, { source: "cli" });
@@ -2695,7 +2686,7 @@ describe("api integration", () => {
     }
 
     const appContext = createTestAppContext(testDb);
-    const issuedKey = await issueChatterApiKey(appContext, {
+    const issuedKey = await issueChatterDeviceToken(appContext, {
       username: "anton",
       pageLabel: "lana",
     }, { source: "cli" });
@@ -2805,7 +2796,7 @@ describe("api integration", () => {
       role: "chatter",
       passwordHash: null,
     });
-    const antonKey = await issueChatterApiKey(appContext, {
+    const antonKey = await issueChatterDeviceToken(appContext, {
       username: "anton",
       pageLabel: "lana",
     }, { source: "cli" });
@@ -3023,7 +3014,7 @@ describe("api integration", () => {
     vi.setSystemTime(new Date("2026-04-04T22:00:00.000Z"));
 
     const appContext = createTestAppContext(testDb);
-    const antonKey = await issueChatterApiKey(appContext, {
+    const antonKey = await issueChatterDeviceToken(appContext, {
       username: "anton",
       pageLabel: "lana",
     }, { source: "cli" });
@@ -3162,7 +3153,7 @@ describe("api integration", () => {
     }
 
     const appContext = createTestAppContext(testDb);
-    const { key } = await issueChatterApiKey(appContext, {
+    const { key } = await issueChatterDeviceToken(appContext, {
       username: "anton",
       pageLabel: "lana",
     }, { source: "cli" });
@@ -3212,7 +3203,7 @@ describe("api integration", () => {
       pageLabel: "lily1",
     }, { source: "cli" });
 
-    const { key } = await issueChatterApiKey(appContext, {
+    const { key } = await issueChatterDeviceToken(appContext, {
       username: "anton",
     }, { source: "cli" });
 
@@ -3278,7 +3269,7 @@ describe("api integration", () => {
     }
 
     const appContext = createTestAppContext(testDb);
-    const { key, assignedPages } = await issueChatterApiKey(appContext, {
+    const { key, assignedPages } = await issueChatterDeviceToken(appContext, {
       username: "anton",
     }, { source: "cli" });
     expect(assignedPages).toEqual([]);
@@ -4413,7 +4404,7 @@ describe("api integration", () => {
     }
 
     const appContext = createTestAppContext(testDb);
-    const { key } = await issueChatterApiKey(appContext, {
+    const { key } = await issueChatterDeviceToken(appContext, {
       username: "anton",
       pageLabel: "lana",
     }, { source: "cli" });
@@ -4466,7 +4457,7 @@ describe("api integration", () => {
     }
 
     const appContext = createTestAppContext(testDb);
-    const { key } = await issueChatterApiKey(appContext, {
+    const { key } = await issueChatterDeviceToken(appContext, {
       username: "anton",
       pageLabel: "lana",
     }, { source: "cli" });
@@ -4628,7 +4619,7 @@ describe("api integration", () => {
     const ofModel = await createModel(appContext.db, { slug: "lora-of-model", name: "Lora OF" });
     await createOnlyFansPage(appContext.db, { modelId: ofModel.id, label: "lora-of" });
     await assignPageToUser(appContext, { username: "anton", pageLabel: "lana" }, { source: "cli" });
-    const { key } = await issueChatterApiKey(appContext, {
+    const { key } = await issueChatterDeviceToken(appContext, {
       username: "anton",
       pageLabel: "lora-of",
     }, { source: "cli" });
@@ -4776,7 +4767,7 @@ describe("api integration", () => {
     const leadCookie = sessionCookieFrom(leadLogin);
 
     const appContext = createTestAppContext(testDb);
-    const { key } = await issueChatterApiKey(appContext, {
+    const { key } = await issueChatterDeviceToken(appContext, {
       username: "anton",
       pageLabel: "lana",
     }, { source: "cli" });
@@ -5978,7 +5969,7 @@ describe("api integration", () => {
     }]);
 
     const appContext = createTestAppContext(testDb);
-    const { key } = await issueChatterApiKey(appContext, {
+    const { key } = await issueChatterDeviceToken(appContext, {
       username: "anton",
       pageLabel: "lana",
     }, { source: "cli" });
@@ -6223,7 +6214,7 @@ describe("api integration", () => {
     ]);
 
     const appContext = createTestAppContext(testDb);
-    const { key } = await issueChatterApiKey(appContext, {
+    const { key } = await issueChatterDeviceToken(appContext, {
       username: "anton",
       pageLabel: "lana",
     }, { source: "cli" });
@@ -9129,7 +9120,7 @@ describe("api integration", () => {
       username: "anton",
       pageLabel: "lana-workboard-api-key",
     }, { source: "cli" });
-    const { key } = await issueChatterApiKey(appContext, {
+    const { key } = await issueChatterDeviceToken(appContext, {
       username: "anton",
     }, { source: "cli" });
 
@@ -9262,7 +9253,7 @@ describe("api integration", () => {
     });
 
     const appContext = createTestAppContext(testDb);
-    const { key } = await issueChatterApiKey(appContext, {
+    const { key } = await issueChatterDeviceToken(appContext, {
       username: "anton",
       pageLabel: "lana",
     }, { source: "cli" });
@@ -9874,7 +9865,7 @@ describe("api integration", () => {
 
     // Chatter bearer keys are not a dashboard surface — 403 on both.
     const appContext = createTestAppContext(testDb);
-    const chatterKey = await issueChatterApiKey(appContext, {
+    const chatterKey = await issueChatterDeviceToken(appContext, {
       username: "anton",
       pageLabel: "lana",
     }, { source: "cli" });
@@ -10283,7 +10274,7 @@ describe("api integration", () => {
     const appContext = createTestAppContext(testDb);
     const HARVEST_MACHINE = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
     const HV_UPLOADER_MACHINE = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
-    const issuedKey = await issueChatterApiKey(appContext, {
+    const issuedKey = await issueChatterDeviceToken(appContext, {
       username: "anton",
       pageLabel: "lana",
     }, { source: "cli" });
@@ -10455,7 +10446,7 @@ describe("api integration", () => {
       username: "hv-uploader",
       role: "chatter",
     }, { source: "cli" });
-    await issueChatterApiKey(appContext, {
+    await issueChatterDeviceToken(appContext, {
       username: "hv-uploader",
       pageLabel: "hv-of",
     }, { source: "cli" });
@@ -10627,7 +10618,7 @@ describe("api integration", () => {
         completion: VOICE_SCRIPT,
         params: { outcome: "completed" },
       });
-      const issued = await issueChatterApiKey(
+      const issued = await issueChatterDeviceToken(
         appContext,
         { username: "anton", pageLabel: "lana" },
         { source: "cli" },

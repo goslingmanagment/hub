@@ -7,10 +7,9 @@ import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { createAccountLinkForUsername } from "../apps/runtime/src/services/account-links.ts";
 import {
   createUserAccount,
-  issueChatterApiKey,
-  issueDeviceTokenForUsername,
   setUserPassword,
 } from "../apps/runtime/src/services/auth.ts";
+import { issueChatterDeviceToken, issueDeviceTokenForUsername } from "./helpers/device-credentials.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
@@ -195,7 +194,7 @@ describe("the cabinet's device list", () => {
     const setup = requireSetup(context);
     if (!setup) return;
     await createUserAccount(setup.app, { username: "vera", role: "chatter" }, { source: "cli" });
-    const apiKey = (await issueChatterApiKey(setup.app, { username: "vera" }, OWNER_AUDIT)).key;
+    const apiKey = (await issueChatterDeviceToken(setup.app, { username: "vera" }, OWNER_AUDIT)).key;
     const device = await issueDeviceTokenForUsername(setup.app, {
       username: "grisha",
       label: "Firefox · Windows",
@@ -306,7 +305,7 @@ describe("the owner's revocations", () => {
       username: "vera",
       password: "chatter-secret-2",
     }, OWNER_AUDIT);
-    const apiKey = (await issueChatterApiKey(setup.app, { username: "vera" }, OWNER_AUDIT)).key;
+    const apiKey = (await issueChatterDeviceToken(setup.app, { username: "vera" }, OWNER_AUDIT)).key;
     const device = await issueDeviceTokenForUsername(setup.app, {
       username: "vera",
       label: "Firefox · Windows",

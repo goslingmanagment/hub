@@ -10,8 +10,8 @@ import {
   assignPageToUser,
   authenticateAgentKey,
   createUserAccount,
-  issueChatterApiKey,
 } from "../apps/runtime/src/services/auth.ts";
+import { issueChatterDeviceToken } from "./helpers/device-credentials.ts";
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 
@@ -26,7 +26,7 @@ const MONITORING_TOKEN = "monitor-secret";
 let testDb: StartedTestDatabase | null = null;
 let enforceServer: Awaited<ReturnType<typeof buildApiServer>> | null = null;
 let logServer: Awaited<ReturnType<typeof buildApiServer>> | null = null;
-let chatterKey = "";
+let chatterDeviceToken = "";
 /** A live Agent Read Plane key (slice 0b): authenticates, admitted nowhere yet. */
 const agentKeyToken = `${AGENT_KEY_TOKEN_PREFIX}policyprobe000000000`;
 let agentAppContext: AppContext;
@@ -82,11 +82,11 @@ beforeAll(async () => {
   const lanaPage = await createFanslyPage(testDb.db, { modelId: model.id, label: "lana" });
   await createFanslyPage(testDb.db, { modelId: model.id, label: "lily1" });
 
-  const issued = await issueChatterApiKey(seedContext, {
+  const issued = await issueChatterDeviceToken(seedContext, {
     username: "anton",
     pageLabel: "lana",
   }, { source: "cli" });
-  chatterKey = issued.key;
+  chatterDeviceToken = issued.key;
 
   // The module role-matrix wants a team_lead with a page in scope.
   await assignPageToUser(seedContext, {
@@ -153,13 +153,13 @@ describe("enforce mode: the declared policy answers before any handler", () => {
     expect(me.statusCode).toBe(401);
   });
 
-  it("owner-session routes refuse chatter keys and team leads, admit the owner", async (context) => {
+  it("owner-session routes refuse chatter device tokens and team leads, admit the owner", async (context) => {
     const servers = requireServers(context);
     if (!servers) return;
     const viaChatter = await servers.enforce.inject({
       method: "GET",
       url: "/api/v1/admin/users",
-      headers: { authorization: `Bearer ${chatterKey}` },
+      headers: { authorization: `Bearer ${chatterDeviceToken}` },
     });
     expect(viaChatter.statusCode).toBe(403);
 
@@ -180,13 +180,13 @@ describe("enforce mode: the declared policy answers before any handler", () => {
     expect(viaOwner.statusCode).toBe(200);
   });
 
-  it("session routes refuse api keys, admit dashboard sessions", async (context) => {
+  it("session routes refuse bearers, admit dashboard sessions", async (context) => {
     const servers = requireServers(context);
     if (!servers) return;
     const viaChatter = await servers.enforce.inject({
       method: "GET",
       url: "/api/v1/models",
-      headers: { authorization: `Bearer ${chatterKey}` },
+      headers: { authorization: `Bearer ${chatterDeviceToken}` },
     });
     expect(viaChatter.statusCode).toBe(403);
 
@@ -199,7 +199,7 @@ describe("enforce mode: the declared policy answers before any handler", () => {
     expect(viaLead.statusCode).toBe(200);
   });
 
-  it("apiKey routes refuse sessions, admit bearer keys", async (context) => {
+  it("apiKey routes refuse sessions, admit device tokens", async (context) => {
     const servers = requireServers(context);
     if (!servers) return;
     const ownerCookie = await loginCookie(servers.enforce, "dima", "owner-secret");
@@ -213,7 +213,7 @@ describe("enforce mode: the declared policy answers before any handler", () => {
     const viaChatter = await servers.enforce.inject({
       method: "GET",
       url: "/api/v1/ofapi/credits/summary",
-      headers: { authorization: `Bearer ${chatterKey}` },
+      headers: { authorization: `Bearer ${chatterDeviceToken}` },
     });
     expect(viaChatter.statusCode).toBe(200);
   });
@@ -224,7 +224,7 @@ describe("enforce mode: the declared policy answers before any handler", () => {
     const viaChatter = await servers.enforce.inject({
       method: "GET",
       url: "/api/v1/auth/me",
-      headers: { authorization: `Bearer ${chatterKey}` },
+      headers: { authorization: `Bearer ${chatterDeviceToken}` },
     });
     expect(viaChatter.statusCode).toBe(200);
 
@@ -256,7 +256,7 @@ describe("enforce mode: the declared policy answers before any handler", () => {
     const viaChatter = await servers.enforce.inject({
       method: "GET",
       url: "/api/v1/health/sync",
-      headers: { authorization: `Bearer ${chatterKey}` },
+      headers: { authorization: `Bearer ${chatterDeviceToken}` },
     });
     expect(viaChatter.statusCode).toBe(403);
   });
@@ -267,21 +267,21 @@ describe("enforce mode: the declared policy answers before any handler", () => {
     const assigned = await servers.enforce.inject({
       method: "GET",
       url: "/api/v1/pages/lana/subscribers",
-      headers: { authorization: `Bearer ${chatterKey}` },
+      headers: { authorization: `Bearer ${chatterDeviceToken}` },
     });
     expect(assigned.statusCode).toBe(200);
 
     const unassigned = await servers.enforce.inject({
       method: "GET",
       url: "/api/v1/pages/lily1/subscribers",
-      headers: { authorization: `Bearer ${chatterKey}` },
+      headers: { authorization: `Bearer ${chatterDeviceToken}` },
     });
     expect(unassigned.statusCode).toBe(403);
 
     const unknown = await servers.enforce.inject({
       method: "GET",
       url: "/api/v1/pages/ghost/subscribers",
-      headers: { authorization: `Bearer ${chatterKey}` },
+      headers: { authorization: `Bearer ${chatterDeviceToken}` },
     });
     expect(unknown.statusCode).toBe(404);
 
@@ -297,12 +297,12 @@ describe("enforce mode: the declared policy answers before any handler", () => {
   it("stage 2's revenue tightening is reproduced declaratively (session-only)", async (context) => {
     const servers = requireServers(context);
     if (!servers) return;
-    // pageRevenue declares kind:"session" — a chatter bearer key on an assigned
+    // pageRevenue declares kind:"session" — a chatter bearer on an assigned
     // page's ledger is refused by role, not by page scope.
     const viaChatter = await servers.enforce.inject({
       method: "GET",
       url: "/api/v1/pages/lana/revenue",
-      headers: { authorization: `Bearer ${chatterKey}` },
+      headers: { authorization: `Bearer ${chatterDeviceToken}` },
     });
     expect(viaChatter.statusCode).toBe(403);
   });
@@ -314,14 +314,14 @@ describe("log mode: legacy guards keep answering, statuses identical to enforce"
     if (!servers) return;
     const cases: Array<{ url: string; headers?: Record<string, string>; expected: number }> = [
       { url: "/api/v1/admin/users", expected: 401 },
-      { url: "/api/v1/admin/users", headers: { authorization: `Bearer ${chatterKey}` }, expected: 403 },
-      { url: "/api/v1/models", headers: { authorization: `Bearer ${chatterKey}` }, expected: 403 },
-      { url: "/api/v1/pages/lily1/subscribers", headers: { authorization: `Bearer ${chatterKey}` }, expected: 403 },
-      { url: "/api/v1/pages/ghost/subscribers", headers: { authorization: `Bearer ${chatterKey}` }, expected: 404 },
+      { url: "/api/v1/admin/users", headers: { authorization: `Bearer ${chatterDeviceToken}` }, expected: 403 },
+      { url: "/api/v1/models", headers: { authorization: `Bearer ${chatterDeviceToken}` }, expected: 403 },
+      { url: "/api/v1/pages/lily1/subscribers", headers: { authorization: `Bearer ${chatterDeviceToken}` }, expected: 403 },
+      { url: "/api/v1/pages/ghost/subscribers", headers: { authorization: `Bearer ${chatterDeviceToken}` }, expected: 404 },
       // Valid query so schema validation does not answer first — the 403 must
       // come from Stage 2's legacy enforceRevenueRouteRoleScope guard.
-      { url: "/api/v1/pages/lana/revenue?period=7d", headers: { authorization: `Bearer ${chatterKey}` }, expected: 403 },
-      { url: "/api/v1/pages/lana/subscribers", headers: { authorization: `Bearer ${chatterKey}` }, expected: 200 },
+      { url: "/api/v1/pages/lana/revenue?period=7d", headers: { authorization: `Bearer ${chatterDeviceToken}` }, expected: 403 },
+      { url: "/api/v1/pages/lana/subscribers", headers: { authorization: `Bearer ${chatterDeviceToken}` }, expected: 200 },
     ];
 
     for (const testCase of cases) {
@@ -410,7 +410,7 @@ describe("per-module role matrix (Stage 19)", () => {
     const leadCookie = await loginCookie(servers.enforce, "lead", "lead-secret");
     const principals: Record<string, Record<string, string>> = {
       anon: {},
-      chatter: { authorization: `Bearer ${chatterKey}` },
+      chatter: { authorization: `Bearer ${chatterDeviceToken}` },
       lead: { cookie: leadCookie },
       owner: { cookie: ownerCookie },
     };

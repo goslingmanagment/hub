@@ -66,7 +66,6 @@ function user(overrides: Partial<AdminUser> & { username: string }): AdminUser {
     role: "chatter",
     mustChangePassword: false,
     assignedPages: [],
-    apiKeyStatus: null,
     disabledAt: null,
     lastActiveAt: null,
     registrationState: "active",

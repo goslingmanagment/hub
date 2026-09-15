@@ -14,7 +14,8 @@ import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { createGatewayClosingClassifier } from "../apps/runtime/src/modules/workboard/index.ts";
 import type { AiGatewayProvider } from "../apps/runtime/src/services/ai-gateway.ts";
-import { createUserAccount, issueChatterApiKey } from "../apps/runtime/src/services/auth.ts";
+import { createUserAccount } from "../apps/runtime/src/services/auth.ts";
+import { issueChatterDeviceToken } from "./helpers/device-credentials.ts";
 import { runAiAcceptanceProjection } from "../apps/runtime/src/services/projections/ai-acceptance.ts";
 import {
   resetIntegrationDatabase,
@@ -157,7 +158,7 @@ beforeEach(async (context) => {
   if (!chatter) {
     throw new Error("chatter creation failed");
   }
-  chatterKey = (await issueChatterApiKey(appContext, {
+  chatterKey = (await issueChatterDeviceToken(appContext, {
     username: "resto-chatter",
     pageLabel: "resto-of",
   }, { source: "cli" })).key;

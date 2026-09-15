@@ -54,7 +54,7 @@ function humanOf(input: {
 }
 
 const owner = humanOf({ authMethod: "session", role: "owner" });
-const chatter = humanOf({ authMethod: "api_key", role: "chatter", assignedPageIds: [7] });
+const chatter = humanOf({ authMethod: "device_token", role: "chatter", assignedPageIds: [7] });
 
 describe("canAccessPage with an agent principal", () => {
   it("grants exactly the key's page ids", () => {

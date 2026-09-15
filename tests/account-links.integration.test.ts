@@ -16,11 +16,11 @@ import {
   changeOwnPassword,
   createUserAccount,
   deactivateUser,
-  issueDeviceTokenForUsername,
   loginWithPassword,
   setUserPassword,
   terminateAllAccess,
 } from "../apps/runtime/src/services/auth.ts";
+import { issueDeviceTokenForUsername } from "./helpers/device-credentials.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
