@@ -38,12 +38,16 @@ import { UserDetailModal } from "../apps/dashboard/src/pages/settings/team/UserD
 import {
   buildJoinLink,
   daysToHours,
+  deviceRevokedReasonLabel,
+  findTeamMember,
   formatRelativeRu,
   groupPagesByPlatform,
   INVITE_DEFAULT_DAYS,
   INVITE_MAX_DAYS,
   isValidUsername,
+  linkRevokedReasonLabel,
   linkStateLabel,
+  REVOCATION_LABEL,
   splitDevices,
   sortTeamByActivity,
   teamStatus,
@@ -162,6 +166,23 @@ describe("teamStatus", () => {
   });
 });
 
+describe("findTeamMember", () => {
+  it("returns the freshest record, so a modal never edits a stale copy", () => {
+    const stale = user({ username: "anton" });
+    const refreshed = user({
+      username: "anton",
+      assignedPages: [{ id: 11, label: "lana", platform: "fansly", modelSlug: "lana", modelName: "Lana" }],
+      lastActiveAt: "2026-09-15T00:00:00.000Z",
+    });
+    expect(findTeamMember([refreshed], stale.username)).toEqual(refreshed);
+  });
+
+  it("returns null when the person is no longer in the list", () => {
+    expect(findTeamMember([], "missing")).toBeNull();
+    expect(findTeamMember([user({ username: "grisha" })], "sveta")).toBeNull();
+  });
+});
+
 describe("sortTeamByActivity", () => {
   it("puts freshest activity first and never-active rows last, alphabetically", () => {
     const sorted = sortTeamByActivity([
@@ -235,6 +256,26 @@ describe("linkStateLabel", () => {
     expect(linkStateLabel(link({ id: 4, state: "revoked", revokedReason: "superseded" }), formatDate))
       .toBe("отозвана — заменена новой");
     expect(linkStateLabel(link({ id: 5, state: "revoked", revokedReason: null }), formatDate))
+      .toBe("отозвана");
+  });
+});
+
+describe("revocation reasons", () => {
+  it("translates the reasons it knows", () => {
+    expect(deviceRevokedReasonLabel("password_set")).toBe("пароль изменён");
+    expect(linkRevokedReasonLabel("superseded")).toBe("заменена новой");
+  });
+
+  it("drops a reason it does not know instead of printing the machine word", () => {
+    expect(deviceRevokedReasonLabel("some_future_kernel_reason")).toBeNull();
+    expect(linkRevokedReasonLabel("some_future_kernel_reason")).toBeNull();
+    expect(deviceRevokedReasonLabel(null)).toBeNull();
+    expect(linkRevokedReasonLabel(null)).toBeNull();
+  });
+
+  it("falls back to the plain state for an unknown link reason", () => {
+    const formatDate = (iso: string) => iso.slice(0, 10);
+    expect(linkStateLabel(link({ id: 9, state: "revoked", revokedReason: "future_reason" }), formatDate))
       .toBe("отозвана");
   });
 });
@@ -338,9 +379,9 @@ describe("UserDetailModal", () => {
     mockEverything();
     queries.useUserDevices.mockReturnValue(query([device({ id: 1, label: "Firefox · Windows" })]));
     const markup = renderCard(user({ username: "grisha" }));
-    expect(markup).toContain("Завершить вход на устройстве");
-    expect(markup).toContain("Отозвать все устройства");
-    expect(markup).toContain("Завершить все входы");
+    expect(markup).toContain(REVOCATION_LABEL.device);
+    expect(markup).toContain(REVOCATION_LABEL.allDevices);
+    expect(markup).toContain(REVOCATION_LABEL.allAccess);
   });
 
   it("shows a live sign-in by its label, client version and last use", () => {
@@ -379,6 +420,31 @@ describe("UserDetailModal", () => {
     expect(markup).not.toContain("Отправить приглашение заново");
   });
 
+  // The kernel answers 400 to both, in English. A button that can only produce
+  // a foreign error message is worse than no button.
+  it("offers an owner no dead end: no termination, no deactivation, no link reset", () => {
+    mockEverything();
+    queries.useUserDevices.mockReturnValue(query([device({ id: 1, label: "Firefox · Windows" })]));
+    const markup = renderCard(user({ username: "admin", role: "owner" }));
+
+    expect(markup).not.toContain(REVOCATION_LABEL.allAccess);
+    expect(markup).not.toContain("Деактивировать");
+    expect(markup).not.toContain("Сбросить пароль ссылкой");
+    expect(markup).not.toContain("Отправить приглашение заново");
+    // What an owner CAN do to their own sign-ins stays available.
+    expect(markup).toContain(REVOCATION_LABEL.device);
+    expect(markup).toContain(REVOCATION_LABEL.allDevices);
+    expect(markup).toContain("Владельца нельзя деактивировать");
+  });
+
+  it("still offers both to everyone else", () => {
+    mockEverything();
+    queries.useUserDevices.mockReturnValue(query([device({ id: 1, label: "Firefox · Windows" })]));
+    const markup = renderCard(user({ username: "grisha", role: "chatter" }));
+    expect(markup).toContain(REVOCATION_LABEL.allAccess);
+    expect(markup).toContain("Деактивировать");
+  });
+
   it("prints the link history with its state and offers to revoke a live one", () => {
     mockEverything();
     queries.useUserLinks.mockReturnValue(query([
@@ -391,6 +457,16 @@ describe("UserDetailModal", () => {
     expect(markup).toContain("использована");
     expect(markup).toContain("приглашение");
     expect(markup).toContain("Отозвать ссылку");
+  });
+
+  it("gives the shared page editor the owner's language", () => {
+    mockEverything();
+    const markup = renderCard(user({ username: "grisha" }));
+    expect(markup).toContain("Страниц пока нет.");
+    expect(markup).toContain("Закрыть");
+    expect(markup).not.toContain("Assigned Pages");
+    expect(markup).not.toContain("No pages assigned.");
+    expect(markup).not.toContain(">Close<");
   });
 
   it("offers deactivation for a working person and a return for a deactivated one", () => {
@@ -459,6 +535,19 @@ describe("LinkRevealModal", () => {
     expect(markup).toContain("Скопировать");
     expect(markup).toContain("Логин: grisha");
     expect(markup).toContain("Приглашение для grisha");
+  });
+
+  it("cannot be dismissed by a stray backdrop click — the link is unrecoverable", () => {
+    vi.stubGlobal("window", { location: { origin: "https://gosling-agency.ru" } });
+    const onClose = vi.fn();
+    const markup = render(LinkRevealModal as ComponentType<Record<string, unknown>>, {
+      link: { username: "grisha", kind: "invite", secret: "s3cr3t", expiresAt: "2026-09-22T00:00:00.000Z" },
+      onClose,
+    });
+    // The backdrop carries no click handler, so only the explicit buttons close it.
+    expect(markup).toContain("Готово");
+    expect(markup).toContain("Закрыть");
+    expect(markup).not.toContain(">Close<");
   });
 
   it("titles a password link for what it is", () => {
