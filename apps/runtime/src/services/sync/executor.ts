@@ -706,6 +706,7 @@ export async function executeNextSyncPageChunk(
           requestSeq: taskLease.leasedSeq ?? taskLease.requestSeq,
           leaseToken: taskLease.leaseToken ?? "",
           progressedAt: progressAt,
+          ...(result.succeededAt ? { succeededAt: result.succeededAt } : {}),
           phase,
           workClass,
           progress,
@@ -757,6 +758,7 @@ export async function executeNextSyncPageChunk(
           pageLabel: pageContext.page.label,
           platform: pageContext.platform,
           recoveredAt,
+          ...(result.succeededAt ? { providerRecoveredAt: result.succeededAt } : {}),
           stream: taskLease.stream,
         });
         await resolveOfapiCreditsIncidentIfRecovered(app, taskLease, budget, recoveredAt);

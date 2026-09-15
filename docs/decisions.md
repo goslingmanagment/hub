@@ -344,6 +344,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 344 | Fansly B1 default-off addressed REST hints | Replay-safe subject revisions, fenced budgeted DM reads and raw staging preserve ordinary history and rollback; activation stays separate from development. |
 | 345 | Fansly C2c default-off targets | Consume due per-fan/window debt within existing earnings chunks under a strict additional-attempt cap; retain daily rotation and separate activation/coverage requirements. |
 | 346 | Fansly A1 default-off bounded DM polling | Separate resumable head walks from certified full membership; retain old scheduler slots and expose full-list freshness independently. |
+| 347 | Fansly C1 default-off certified follower settlement reuse |
 
 
 ## Consensus Decisions
@@ -14108,3 +14109,34 @@ unproved provider behavior. Quiet unread/flags/deletions/membership require the
 old full schedule until equivalent detection and freshness are accepted. A0
 calendar windows and live canary acceptance gate activation, not implementation.
 See [the A1 runbook](runbooks/fansly-dm-bounded.md).
+
+
+## Decision 347: Fansly C1 certified follower settlement reuse (2026-09-15)
+
+A PostgreSQL counterexample reproduced a committed certified reconcile followed
+by failed queue settlement: retrying the same request reread the terminal page,
+double-counted the walk and opened a snapshot-mismatch generation. This is a
+specific duplicate path, not evidence that ordinary anomaly requests or grace
+passes can be suppressed.
+
+`FANSLY_FOLLOWERS_SETTLEMENT_REUSE_ENABLED=false` and an empty
+`FANSLY_FOLLOWERS_SETTLEMENT_REUSE_PAGE_ALLOWLIST` keep the old behavior. Enabled
+owned execution records a versioned completion proof in the same transaction as
+membership verification, blast-radius protection, retirement and rollup writes.
+The proof binds the request revision, generation, source count, membership proof,
+run and original completion timestamp to the checkpoint's last-success fields.
+Missing, malformed, future, uncertified and mismatching receipts take the original
+path. Non-destructive closure never gets this proof.
+
+A valid proof for the active lease's request allows only settlement. It performs
+no provider reads, membership writes, presence refresh or checkpoint refresh.
+The lease must still be owned; completing R cannot acknowledge R+1. The executor
+passes the original read time to `completePageSync.succeededAt`, while queue
+settlement/finished time remains current. Provider auth/proxy recovery uses that
+original time so the no-HTTP retry cannot clear a later provider incident.
+
+No schema change, cadence change, anomaly suppression, cooldown or relaxed grace
+is included. Legitimate repairs and presence consumers retain the original walk.
+Full C1 activation/savings acceptance still needs production evidence; this
+reproduced failure-path fix can be developed and shipped dormant independently.
+See [the follower runbook](runbooks/fansly-followers-diagnostics.md).

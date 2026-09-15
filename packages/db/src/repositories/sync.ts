@@ -793,12 +793,13 @@ export async function upsertCheckpoint(
     cursorTimestamp?: Date | null;
     state?: Record<string, unknown>;
     lastSuccessfulRunId?: number | null;
+    now?: Date;
   },
 ) {
   return upsertCheckpointRow(db, {
     ...input,
     touchSuccessMetadata: true,
-    now: new Date(),
+    now: input.now ?? new Date(),
   });
 }
 

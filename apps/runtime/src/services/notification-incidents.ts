@@ -642,19 +642,22 @@ export async function resolveSyncChunkRecoveryIncidents(
     pageLabel: string;
     platform: "fansly" | "onlyfans";
     recoveredAt?: Date;
+    /** A reused result proves provider health only at its original read time. */
+    providerRecoveredAt?: Date;
     stream: SyncStream;
   },
 ) {
   const recoveredAt = input.recoveredAt ?? new Date();
+  const providerRecoveredAt = input.providerRecoveredAt ?? recoveredAt;
   await resolveIncidentAndNotify(app, {
     ...input,
     kind: "auth_blocked",
-    recoveredAt,
+    recoveredAt: providerRecoveredAt,
   });
   await resolveIncidentAndNotify(app, {
     ...input,
     kind: "proxy_failed",
-    recoveredAt,
+    recoveredAt: providerRecoveredAt,
   });
   // W3.1: a successful chunk implies the page context resolved, which the
   // fail-closed guard only allows with a proxy present.
