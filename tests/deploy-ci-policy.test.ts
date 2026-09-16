@@ -53,11 +53,15 @@ function publicationAllowed(event: string, ref: string, quality: string): boolea
     "github.ref": ref,
     "needs.quality.result": quality,
   };
-  // This gate deliberately uses only conjunctions of equality checks. Reject
-  // unrecognised syntax instead of accidentally treating a new OR as safe.
+  // This gate deliberately uses only conjunctions of equality checks plus the
+  // one status function that overrides GitHub's skip propagation (a skipped
+  // job in the needs chain skips every dependant that has no status function,
+  // even when its direct dependencies succeeded). Reject unrecognised syntax
+  // instead of accidentally treating a new OR as safe.
   const condition = job("publish").if;
   if (!condition) throw new Error("Publishing has no explicit condition");
   return condition.split("&&").every(clause => {
+    if (clause.trim() === "!cancelled()") return true;
     const match = clause.trim().match(/^(github\.event_name|github\.ref|needs\.quality\.result) == '([^']+)'$/);
     if (!match?.[1] || !match[2]) throw new Error(`Unsupported publication condition: ${clause}`);
     return context[match[1]] === match[2];
@@ -124,6 +128,17 @@ describe("CI production image publication policy", () => {
       },
     });
     expect(result.status === 0, result.stderr).toBe(allowed);
+  });
+
+  // The integration matrix is skipped on a proven tree, and GitHub carries a
+  // skipped dependency's status down the whole `needs` chain: a dependant
+  // whose `if` has no status function is skipped too, whatever its direct
+  // dependencies did. Publishing sits behind that matrix through the gate, so
+  // it must override the propagation — `always()` would also publish after a
+  // cancellation, which is why it is `!cancelled()` and nothing weaker.
+  it("publishing overrides skip propagation from the proven-tree matrix", () => {
+    expect(job("publish").if?.startsWith("!cancelled() && ")).toBe(true);
+    expect(job("quality").if).toBe("always()");
   });
 
   it("reuses a proof only where the workflow says it does, and records one only when fresh", () => {

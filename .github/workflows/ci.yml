@@ -227,7 +227,10 @@ jobs:
     # spends nothing extra.
     timeout-minutes: 45
     strategy:
-      fail-fast: false
+      # A PR needs one red shard to send the author back; the other two would
+      # bill ~10 minutes each to say the same thing. Main keeps the complete
+      # record of every shard for its gate history.
+      fail-fast: ${{ github.event_name == 'pull_request' }}
       matrix:
         shard: [1, 2, 3]
 
@@ -304,11 +307,15 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  # `!cancelled()` is load-bearing: a skipped job (the integration matrix on a
+  # proven tree) propagates "skipped" down the whole needs chain, and a job
+  # without a status function inherits it even when its direct dependencies
+  # succeeded — the first fingerprint-gated main run published nothing.
   publish:
     name: Publish checked production image
     runs-on: ubuntu-latest
     needs: [static, quality]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.quality.result == 'success'
+    if: "!cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.quality.result == 'success'"
     timeout-minutes: 15
     # The only write token in this workflow. PRs and manual dispatches cannot
     # enter this job; no checkout/build/test code runs with package permission.
