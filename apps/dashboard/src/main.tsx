@@ -24,5 +24,3 @@ createRoot(document.getElementById("root")!).render(
     </BrowserRouter>
   </QueryClientProvider>,
 );
-
-// Temporary frontend-only CI validation; removed before merging.

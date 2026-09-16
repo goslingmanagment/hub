@@ -100,7 +100,7 @@ quick-ref table up top), Git tags, and production itself.**
   fetch) run inside the test suite.
 - Tests live in root `tests/`; no drizzle-orm imports inside tests; SSE tests
   need listen+fetch (not inject).
-- **A full CI run costs roughly 43–46 runner-minutes** (Decisions 359–361).
+- **A full CI run costs roughly 43–47 runner-minutes** (Decisions 359–361).
   Keep unfinished work in a Draft PR: heavy jobs wait for Ready for review,
   and the draft Quality Gate deliberately stays red. Returning a PR to Draft
   cancels its superseded run. Do not use CI-skip markers in commit messages,
