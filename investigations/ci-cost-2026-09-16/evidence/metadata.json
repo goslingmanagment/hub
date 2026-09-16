@@ -1,0 +1,10 @@
+{
+  "retrieved_at_utc": "2026-09-16T11:23:01.000706+00:00",
+  "source_revision": "c57df2238b1a8432a283b5098c6e66a8059d79f8",
+  "local_head": "b48f173d93e3693550e2db139de3b11107d44ce2",
+  "run_window": "2026-09-01..2026-09-16",
+  "run_count_snapshot": 292,
+  "rate_usd_per_minute": 0.006,
+  "invoice_source": "authenticated GitHub billing DOM snapshots; REST token lacks user scope",
+  "github_protection_snapshot": "main protected false; rulesets API 403 upgrade/payment-related capability unavailable"
+}

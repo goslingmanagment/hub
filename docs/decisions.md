@@ -353,7 +353,9 @@ appends a row here in the same change (family law: updated-in-change).
 | 353 | Fansly status-only earnings rechecks | Exact pending-to-posted signals still fetch both endpoints; a content revision preserves strict money debt while valid unchanged status rechecks may finish. |
 | 354 | A0 reader discrepancy witnesses | Retain at most twenty verified capture pointers per sweep beside exact pre-apply reader state; preserve counters, legacy unknowns, polling and historical attribution limits. |
 | 358 | Fansly purchase-history rejections | A provider answer naming one media as unservable (404/410, now 422 "error getting account media") is a fact about that target: journaled verbatim, consumed, walk continues. Per request namespace, three such rejections must be proven target-local against a completed, provider-served witness before another target is spent; a witness rejected with the streak's status blocks the stream as `purchase_history_rejection_storm`, a different status is no vote, no witness defers instead of blocking. The streak is derived from captures, not stored; after a storm one unblock buys one target of evidence, and a served page retries the storm's members once. |
-| 359 | W0 continuity reference comparison | Validate and hash a complete native phase while comparing only its overlap with a bounded browser window; retain independent live gates as unverified. |
+| 359 | CI gate reuse by tree fingerprint | A run first hashes every blob the gate can observe (`scripts/ci-gate-fingerprint.sh`: the full tree minus prose no check reads) and looks up an earlier passing Quality Gate for that hash in the Artifacts API; a hit skips the test jobs and passes the gate citing the proving run, main still builds and publishes its image. A fresh pass records `quality-gate-<hash>` (30 days). `pnpm typecheck` runs once per job: `build:production` = typecheck + `build:artifacts`, CI and the Dockerfile call `build:artifacts`. `workflow_dispatch` `full: true` forces every job. |
+| 360 | CI volume rules | Nightly runs only what PRs never run (the whole `tests/api.integration.test.ts`) six days a week and the full one-process suite on Mondays and on dispatch. The integration matrix fails fast on pull requests only. Work-in-progress pushes carry `[skip ci]`; CI runs on the push that is ready for review; failed jobs are re-run, not workflows. |
+| 363 | W0 continuity reference comparison | Validate and hash a complete native phase while comparing only its overlap with a bounded browser window; retain independent live gates as unverified. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -14745,7 +14747,148 @@ test's request count.
 the pending target is consumed as `terminal_rejected` on its first request and
 the stream proceeds; no further manual action.
 
-## Decision 359: Compare native W0 continuity evidence offline (2026-09-16)
+## Decision 359: The CI gate is reused by tree fingerprint, and typecheck runs once (2026-09-16)
+
+**Incident.** GitHub Actions is the account's whole metered bill. From
+2026-09-01 to 09-16 `ci.yml` ran 292 times (198 pull-request pushes, 78 main
+merges, 16 nightlies), ~10 700 billable minutes at $0.006 — about $120 a
+month at that pace, against a $50 budget with "stop usage" on. The budget
+ran out on 2026-09-16 at 07:43 UTC and every run for the rest of the morning
+died as `startup_failure` ("recent account payments have failed or your
+spending limit needs to be increased"), unnoticed inside the repository:
+blocked runs are not retried and nothing in the tree reports them. A run is
+four machines for ~46 billable minutes (Static ~13, three integration shards
+~10 each, the aggregator rounds to 1), and the median grew from 35 to 43
+minutes in the same fortnight as files were added.
+
+**What the minutes bought.** Most runs re-checked bytes that had already
+passed. Of the 43 main merges whose PR could be matched, 36 (84 %) landed a
+tree identical to the one the PR run had proven green minutes earlier —
+squash merge with an unmoved base. The two main runs that failed after a
+green PR were flakes (a unit test that assumed the UTC date would not roll at
+00:57 UTC, and shard 3), not integration conflicts. 26 pushes changed only
+`investigations/`, `docs/plans`, `docs/decisions.md`, `docs/reports` after a
+green run on the same PR, and 5 PRs changed nothing else at all; together
+$8 of a $64 fortnight. `pnpm typecheck` ran three times per Static job: as
+its own step, inside `build:production`, and again inside the Docker image
+build — ~2.5 machine-minutes of the same answer. `vitest --no-isolate` was
+measured and rejected: 59 of 349 unit files fail on shared module state and
+the wall time does not move (import time is replaced by test time).
+
+**Decision.**
+
+1. *The unit of proof is the gate-visible tree, not the commit.* A new first
+   job, `fingerprint`, prints `scripts/ci-gate-fingerprint.sh`: sha256 over
+   `git ls-tree -r` (mode, type, blob, path) of the whole tree minus the
+   paths no check reads — `investigations/`, `docs/plans`, `docs/audits`,
+   `docs/reports`, `docs/migration-history`, `docs/decisions.md`, `.claude/`,
+   `.agentic/` and the root prose files. The list is deliberately short:
+   `docs/generated`, `docs/runbooks` and the agent-read skill doc stay in the
+   hash because tests and the contracts step read them, and
+   `tests/ci-gate-fingerprint.test.ts` pins both the semantics and the rule
+   that no test reads an excluded path.
+2. *A hash with a passing gate on record is not re-tested.* The job asks the
+   Artifacts API for a non-expired `quality-gate-<hash>`; a hit skips the
+   integration matrix and, on a PR, the Static job; on main the Static job
+   still builds and publishes the image (the deploy pulls it, Decision 316)
+   but skips typecheck, lint, contracts and unit tests. The Quality Gate
+   passes citing the proving run. A fresh pass uploads the empty proof
+   (30-day retention). Failure modes fail closed: an API error leaves the
+   proof empty and the full gate runs; a failed `fingerprint` job skips the
+   test jobs WITHOUT a proof and the gate fails. `workflow_dispatch` with
+   `full: true` bypasses the lookup.
+3. *Typecheck runs once per job.* `build:production` becomes
+   `pnpm typecheck && pnpm build:artifacts`; CI (after its own Typecheck
+   step) and the Dockerfile call `build:artifacts`. The deploy script keeps
+   `build:production`, so a release built outside CI is still typechecked.
+
+**Not done, and why.** Skipping the Docker image build on PRs that touch no
+build input would save ~2 minutes a run but would let a dev-only dependency
+used at runtime reach main before the image smoke caught it. The nightly full
+suite (4 % of spend) is unchanged. Cheaper runners (self-hosted, or a
+third-party `runs-on`) are the only lever that survives suite growth and were
+declined for now by the owner.
+
+**Expected effect.** At September's volume roughly 40 % fewer billable
+minutes: main merges of an unmoved base cost ~8 minutes instead of ~46,
+prose-only pushes ~2 instead of ~46, and every remaining run is ~2 minutes
+shorter. The fingerprint job itself bills one minute per run.
+
+**First run (PR #222, run 35111827978).** Fingerprint job 6 s, no proof on
+record, full gate: Static 12.0 min (13.3 before the typecheck cut), shards
+9.6 / 11.0 / 10.7 min, Quality Gate 6 s, proof artifact recorded with a
+30-day expiry. This paragraph is the prose-only push that exercised the skip.
+
+**Correction, same day (Decision 360's PR).** The first main run after the
+merge (35113902586) reused the proof as designed — 206 s wall, tests skipped,
+image built and saved — and then SKIPPED the publish job. GitHub propagates a
+skipped job's status down the entire `needs` chain: a dependant whose `if`
+carries no status function is skipped even when its direct dependencies
+succeeded, and publish sat behind the skipped integration matrix through the
+gate. Its condition now starts with `!cancelled()` (not `always()`, which
+would also publish after a cancellation); `tests/deploy-ci-policy.test.ts`
+pins it. Main commit 2290ffb3 has no published image; the next main run
+publishes the next one.
+
+## Decision 360: CI volume rules — nightly runs the gap, PR shards fail fast, WIP pushes skip CI (2026-09-16)
+
+**Context.** After Decision 359 the remaining spend is the number of full
+runs and what each one repeats. Three repeats were measured on the same
+16-day window:
+
+- The nightly ran `pnpm test` — 349 unit files plus every integration file —
+  once a day, 27–38 minutes, 404 minutes in 16 days. A PR run already
+  executes every integration file (the three `test:sync-critical:db` shards
+  cover `tests/*.integration.test.ts` entirely), the unit set, and the
+  `[sync-critical]` subset of `tests/api.integration.test.ts`. The only tests
+  a PR never runs are the other 77 of that file's 104.
+- When one integration shard failed on a PR, the other two ran to completion
+  (~10 billable minutes each) with `fail-fast: false`; 18 runs failed in the
+  window.
+- 105 of 198 PR runs were not the last push of their PR: review-fix pushes,
+  agents pushing per commit (one branch: 15 runs). A cancelled superseded run
+  still bills the minutes it used (565 minutes in the window).
+
+**Decision.**
+
+1. *Nightly runs what PRs do not.* Six days a week the schedule runs the
+   whole `tests/api.integration.test.ts` (`pnpm test:api:full`, ~2 minutes);
+   on Mondays and on manual dispatch it runs the full one-process suite —
+   the rebuild proofs, the ratchets, vitest's parallel file mode — as the
+   backstop that keeps the split honest. Two crons, told apart by
+   `github.event.schedule`.
+2. *The integration matrix fails fast on pull requests only*
+   (`fail-fast: ${{ github.event_name == 'pull_request' }}`). One red shard
+   sends the author back; main keeps the complete record of every shard.
+3. *A push that is not ready for review carries `[skip ci]`* in its commit
+   message, so GitHub creates no run; CI runs on the push that is. Failed
+   jobs are re-run, not whole workflows. The rule lives in CLAUDE.md, which
+   is what agents read. A `[skip ci]` left on a final commit costs nothing
+   but time: the main run finds no proof and runs the full gate. The marker
+   is matched anywhere in the commit message, so it must never appear in a
+   PR title or body (the squash commit inherits them) or in a commit message
+   that merely mentions it — this PR's first commit skipped its own CI run by
+   describing the rule.
+
+**Measured and not adopted: `vitest --no-isolate` on the shards.** Locally,
+all three shards, same machine, same day: shard 1 216 s against 265 s
+isolated, shard 2 243 s — roughly a fifth of a shard's wall time, which is
+the module-import share (134 s of 622 s per shard on the 2-vCPU runner) —
+and shard 3 580 s, SLOWER, because seven files failed and two of them
+(`device-token-password`, `admin-config-api`) sat in hook timeouts on state
+another file had left behind. The price is order-dependent module state: `tests/fansly-proxy-missing`
+mocks `services/telegram.ts` with `vi.mock`, and once a worker has evaluated
+that module for an earlier file the mock no longer reaches it (one assertion
+fails); run later in the same worker, the mocked module is what
+`tests/notification-incidents` gets instead of the real one (nine assertions
+fail); `tests/telegram-report` spies on `globalThis.fetch` and failed in one
+run of shard 1 and passed in the next. Six integration files use `vi.mock`,
+one spies on `globalThis`, eight use fake timers; a per-file
+`vi.resetModules()` around each of them would give most of the saving back.
+At post-359 volume the whole lever is ~15 % of a full run, not worth a gate
+that can go red by file order.
+
+## Decision 363: Compare native W0 continuity evidence offline (2026-09-16)
 
 The six-hour receiver streams bounded JSONL; the short-report comparator cannot
 read that format. An operator-only comparator now validates a whole completed

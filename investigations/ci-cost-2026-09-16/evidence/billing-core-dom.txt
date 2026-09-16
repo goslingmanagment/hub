@@ -1,0 +1,300 @@
+- link "Skip to content":
+  - /url: "#start-of-content"
+- region "Payment Retry Banner":
+  - paragraph:
+    - strong: Your payment authorization has failed
+    - text: Please contact your bank to resolve the issue.
+    - link "Learn more":
+      - /url: https://docs.github.com/en/billing/how-tos/set-up-payment/manage-payment-info
+  - link "Update payment method":
+    - /url: /settings/billing/payment_information
+    - generic: Update payment method
+  - button "Retry failed authorization":
+    - generic: Retry authorization
+- banner "Global navigation menu":
+  - button "Open menu":
+  - link "Homepage (g then d)":
+    - /url: /
+  - navigation "Breadcrumbs":
+    - list:
+      - link "Settings":
+        - /url: /settings
+        - generic: Settings
+  - button "Open quick search dialog, type / to search":
+    - text: Type
+    - generic: /
+    - text: to search
+  - link "Chat with Copilot":
+    - /url: /copilot
+  - button "Open Copilot…":
+  - button "Create new...":
+  - link "All issues (g then i)":
+    - /url: /issues
+  - link "All pull requests (g then p)":
+    - /url: /pulls
+  - link "All repositories":
+    - /url: /repos
+  - link "You have unread notifications (g then n)":
+    - /url: /notifications
+  - button "Open user navigation menu":
+    - img "User avatar"
+- main:
+  - generic "goslingmanagment (goslingmanagment) settings":
+    - img "@goslingmanagment"
+    - heading "goslingmanagment (goslingmanagment) settings" [level=1]:
+      - link "goslingmanagment (goslingmanagment)":
+        - /url: /goslingmanagment
+      - generic: settings
+    - paragraph: Your personal account
+  - navigation "User settings":
+    - list:
+      - link "Public profile":
+        - /url: /settings/profile
+        - generic: Public profile
+      - link "Account":
+        - /url: /settings/admin
+        - generic: Account
+      - link "Appearance":
+        - /url: /settings/appearance
+        - generic: Appearance
+      - link "Accessibility":
+        - /url: /settings/accessibility
+        - generic: Accessibility
+      - link "Notifications":
+        - /url: /settings/notifications
+        - generic: Notifications
+      - heading "Access" [level=2]
+      - list "Access":
+        - button "Billing and licensing" [expanded]:
+          - generic: Billing and licensing
+        - list "Billing and licensing":
+          - link "Overview":
+            - /url: https://github.com/settings/billing
+            - generic: Overview
+          - link "Usage":
+            - /url: https://github.com/settings/billing/usage
+            - generic: Usage
+          - link "AI usage":
+            - /url: /settings/billing/ai_usage
+            - generic: AI usage
+          - link "Budgets and alerts":
+            - /url: https://github.com/settings/billing/budgets
+            - generic: Budgets and alerts
+          - link "Licensing":
+            - /url: /settings/billing/licensing
+            - generic: Licensing
+          - link "Payment information":
+            - /url: /settings/billing/payment_information
+            - generic: Payment information
+          - link "Payment history":
+            - /url: https://github.com/account/billing/history
+            - generic: Payment history
+          - link "Additional billing details":
+            - /url: /settings/billing/subscriptions
+            - generic: Additional billing details
+          - link "Education benefits":
+            - /url: /settings/education/benefits
+            - generic: Education benefits
+        - link "Emails":
+          - /url: /settings/emails
+          - generic: Emails
+        - link "Password and authentication":
+          - /url: /settings/security
+          - generic: Password and authentication
+        - link "Sessions":
+          - /url: /settings/sessions
+          - generic: Sessions
+        - link "SSH and GPG keys":
+          - /url: /settings/keys
+          - generic: SSH and GPG keys
+        - link "Credentials":
+          - /url: /settings/credentials
+          - generic: Credentials
+        - link "Organizations":
+          - /url: /settings/organizations
+          - generic: Organizations
+        - link "Enterprises":
+          - /url: /settings/enterprises
+          - generic: Enterprises
+        - button "Moderation":
+          - generic: Moderation
+      - heading "Code, planning, and automation" [level=2]
+      - list "Code, planning, and automation":
+        - link "Repositories":
+          - /url: /settings/repositories
+          - generic: Repositories
+        - link "Codespaces":
+          - /url: /settings/codespaces
+          - generic: Codespaces
+        - link "Packages":
+          - /url: /settings/packages
+          - generic: Packages
+        - button "Copilot":
+          - generic: Copilot
+        - link "Pages":
+          - /url: /settings/pages
+          - generic: Pages
+        - link "Saved replies":
+          - /url: /settings/replies
+          - generic: Saved replies
+      - heading "Security" [level=2]
+      - list "Security":
+        - link "Code security":
+          - /url: /settings/security_analysis
+          - generic: Code security
+      - heading "Integrations" [level=3]
+      - list "Integrations":
+        - link "Applications":
+          - /url: /settings/installations
+          - generic: Applications
+        - link "Scheduled reminders":
+          - /url: /settings/reminders
+          - generic: Scheduled reminders
+      - heading "Archives" [level=2]
+      - list "Archives":
+        - link "Security log":
+          - /url: /settings/security-log
+          - generic: Security log
+        - link "Sponsorship log":
+          - /url: /settings/sponsors-log
+          - generic: Sponsorship log
+      - link "Developer settings":
+        - /url: /settings/apps
+        - generic: Developer settings
+  - region "Billing budget alert":
+    - heading "Billing budget alert" [level=2]
+    - generic: You've used 100% of your Actions budget. Additional usage will be stopped.
+    - button "Update your budget":
+      - generic: Update your budget
+    - button "Dismiss banner":
+  - heading "Metered usage" [level=1]
+  - button "Get usage report":
+    - generic: Get usage report
+  - generic: Search or filter usage (chart updates as you type)
+  - img "Search"
+  - generic: repo:goslingmanagment/core
+  - combobox "Search or filter usage (chart updates as you type)" [expanded] [active]: repo:goslingmanagment/core
+  - button "Clear Search or filter usage (chart updates as you type)":
+  - listbox "Suggestions":
+    - heading [level=3]: Repository
+    - option "goslingmanagment/core, autocomplete this Repository":
+      - generic: goslingmanagment/core
+    - option "goslingmanagment/customs-tracker-bot, autocomplete this Repository":
+      - generic: goslingmanagment/customs-tracker-bot
+  - generic: 2 suggestions.
+  - 'button "Group by: SKUs"':
+    - generic: "Group by: SKUs"
+  - 'button "Timeframe: Current month"':
+    - generic: "Timeframe: Current month"
+  - status: goslingmanagment/core usage grouped by skus chart showing data for Current month. 32 data points found.
+  - heading "goslingmanagment/core usage grouped by skus" [level=2]
+  - text: Sep 1 - Sep 30, 2026
+  - button "Chart options":
+  - button "Customization settings":
+  - region "goslingmanagment/core usage grouped by skus. Interactive chart.":
+    - generic: Line chart with 2 lines.
+    - button "View as data table, Chart"
+    - generic: The chart has 1 X axis displaying Time. Data ranges from 2026-09-01 00:00:00 to 2026-09-16 00:00:00.
+    - generic: The chart has 1 Y axis displaying values. Data ranges from 0 to 63.64.
+    - application:
+      - region "Toggle series visibility, Chart":
+        - list:
+          - button "Show Actions Linux" [pressed]
+          - button "Show Actions storage" [pressed]
+      - img "Interactive chart":
+        - region "Actions Linux, line 1 of 2 with 16 data points.":
+          - 'img "Usage Tuesday, Sep 1 2026, Gross: $0.14 Billed: $0.00 Discount: $0.14."'
+          - 'img "Usage Wednesday, Sep 2 2026, Gross: $0.14 Billed: $0.00 Discount: $0.14."'
+          - 'img "Usage Thursday, Sep 3 2026, Gross: $2.54 Billed: $0.00 Discount: $2.54."'
+          - 'img "Usage Friday, Sep 4 2026, Gross: $4.46 Billed: $0.00 Discount: $4.46."'
+          - 'img "Usage Saturday, Sep 5 2026, Gross: $1.62 Billed: $0.00 Discount: $1.62."'
+          - 'img "Usage Sunday, Sep 6 2026, Gross: $6.17 Billed: $0.00 Discount: $6.17."'
+          - 'img "Usage Monday, Sep 7 2026, Gross: $4.07 Billed: $1.78 Discount: $2.29."'
+          - 'img "Usage Tuesday, Sep 8 2026, Gross: $4.36 Billed: $4.36 Discount: $0.00."'
+          - 'img "Usage Wednesday, Sep 9 2026, Gross: $1.27 Billed: $1.27 Discount: $0.00."'
+          - 'img "Usage Thursday, Sep 10 2026, Gross: $3.76 Billed: $3.76 Discount: $0.00."'
+          - 'img "Usage Friday, Sep 11 2026, Gross: $1.59 Billed: $1.59 Discount: $0.00."'
+          - 'img "Usage Saturday, Sep 12 2026, Gross: $7.04 Billed: $7.04 Discount: $0.00."'
+          - 'img "Usage Sunday, Sep 13 2026, Gross: $1.69 Billed: $1.69 Discount: $0.00."'
+          - 'img "Usage Monday, Sep 14 2026, Gross: $15.82 Billed: $15.82 Discount: $0.00."'
+          - 'img "Usage Tuesday, Sep 15 2026, Gross: $8.96 Billed: $8.96 Discount: $0.00."'
+          - 'img "Usage Wednesday, Sep 16 2026, Gross: $0.01 Billed: $0.01 Discount: $0.00."'
+        - region "Actions storage, line 2 of 2 with 16 data points.":
+          - 'img "Usage Tuesday, Sep 1 2026, Gross: N/A Billed: N/A Discount: N/A."'
+          - 'img "Usage Wednesday, Sep 2 2026, Gross: N/A Billed: N/A Discount: N/A."'
+          - 'img "Usage Thursday, Sep 3 2026, Gross: N/A Billed: N/A Discount: N/A."'
+          - 'img "Usage Friday, Sep 4 2026, Gross: N/A Billed: N/A Discount: N/A."'
+          - 'img "Usage Saturday, Sep 5 2026, Gross: N/A Billed: N/A Discount: N/A."'
+          - 'img "Usage Sunday, Sep 6 2026, Gross: N/A Billed: N/A Discount: N/A."'
+          - 'img "Usage Monday, Sep 7 2026, Gross: N/A Billed: N/A Discount: N/A."'
+          - 'img "Usage Tuesday, Sep 8 2026, Gross: N/A Billed: N/A Discount: N/A."'
+          - 'img "Usage Wednesday, Sep 9 2026, Gross: N/A Billed: N/A Discount: N/A."'
+          - 'img "Usage Thursday, Sep 10 2026, Gross: N/A Billed: N/A Discount: N/A."'
+          - 'img "Usage Friday, Sep 11 2026, Gross: N/A Billed: N/A Discount: N/A."'
+          - 'img "Usage Saturday, Sep 12 2026, Gross: N/A Billed: N/A Discount: N/A."'
+          - 'img "Usage Sunday, Sep 13 2026, Gross: $0.01 Billed: $0.00 Discount: $0.01."'
+          - 'img "Usage Monday, Sep 14 2026, Gross: $0.03 Billed: $0.00 Discount: $0.03."'
+          - 'img "Usage Tuesday, Sep 15 2026, Gross: $0.06 Billed: $0.00 Discount: $0.06."'
+          - 'img "Usage Wednesday, Sep 16 2026, Gross: $0.03 Billed: $0.00 Discount: $0.03."'
+        - generic: Actions Linux
+        - generic: Actions storage
+        - generic: Sep 1
+        - generic: Sep 3
+        - generic: Sep 5
+        - generic: Sep 7
+        - generic: Sep 9
+        - generic: Sep 11
+        - generic: Sep 13
+        - generic: Sep 15
+        - generic: $0
+        - generic: $10
+        - generic: $20
+        - generic: $30
+        - generic: $40
+        - generic: $50
+        - generic: $60
+        - generic: $70
+    - generic: End of interactive chart.
+  - heading "Usage breakdown" [level=3]
+  - generic: Usage for Sep 1 - Sep 30, 2026. For license-based products, the price/unit is a prorated portion of the monthly price.
+  - region "Usage breakdown table (scrollable)":
+    - generic: SKUs
+    - generic: Units
+    - generic: Price/unit
+    - generic: Gross amount
+    - generic: Billed amount
+    - generic: Actions Linux
+    - generic: 10,606.67 min
+    - generic: $0.006
+    - generic: $63.64
+    - generic: $46.28
+    - generic: Actions storage
+    - generic: 401.57 GB-hr
+    - generic: $0.000336
+    - generic: $0.13
+    - generic: $0
+- contentinfo:
+  - heading "Footer" [level=2]
+  - link "GitHub Homepage":
+    - /url: https://github.com
+  - generic: © 2026 GitHub, Inc.
+  - navigation "Footer":
+    - heading "Footer navigation" [level=3]
+    - list "Footer navigation":
+      - link "Terms":
+        - /url: https://docs.github.com/site-policy/github-terms/github-terms-of-service
+      - link "Privacy":
+        - /url: https://docs.github.com/site-policy/privacy-policies/github-privacy-statement
+      - link "Security":
+        - /url: https://github.com/security
+      - link "Status":
+        - /url: https://www.githubstatus.com/
+      - link "Community":
+        - /url: https://github.community/
+      - link "Docs":
+        - /url: https://docs.github.com/
+      - link "Contact":
+        - /url: https://support.github.com?tags=dotcom-footer
+      - button "Manage cookies"
+      - button "Do not share my personal information"
+- status: 1Password menu is available. Press down arrow to select.
