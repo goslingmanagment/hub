@@ -5,9 +5,12 @@ import { FANSLY_WS_HINT_TYPES, type FanslyWsHintType } from "./fansly-ws-hints.t
 const policySchema = z.object({
   generation: z.string().regex(/^[0-9a-f]{64}$/),
   activationAt: z.iso.datetime({ offset: true }),
+  expiresAt: z.iso.datetime({ offset: true }).optional(),
+  attemptLimit24h: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(),
   baselineAttempts24h: z.number().int().min(20).max(Number.MAX_SAFE_INTEGER),
   baselineReference: z.string().min(1).max(512),
-}).strict();
+}).strict().refine(policy => policy.expiresAt === undefined
+  || Date.parse(policy.expiresAt) > Date.parse(policy.activationAt));
 
 export type FanslyWsHintPolicy = z.infer<typeof policySchema> & {
   enabledTypes: ReadonlySet<FanslyWsHintType>;
@@ -23,7 +26,7 @@ const labels = (value: string | undefined) => new Set((value ?? "").split(",")
 export function resolveFanslyWsHintPolicy(config: Pick<AppConfig,
   "fanslyWsCaptureEnabled" | "fanslyWsCapturePageAllowlist" | "fanslyWsHintsEnabled"
   | "fanslyWsHintsPageAllowlist" | "fanslyWsHintsTypeAllowlist" | "fanslyWsHintsPolicies"
->, pageLabel: string): FanslyWsHintPolicy | null {
+>, pageLabel: string, now = new Date()): FanslyWsHintPolicy | null {
   if (config.fanslyWsCaptureEnabled !== true || config.fanslyWsHintsEnabled !== true
     || !labels(config.fanslyWsCapturePageAllowlist).has(pageLabel)
     || !labels(config.fanslyWsHintsPageAllowlist).has(pageLabel)) return null;
@@ -36,5 +39,9 @@ export function resolveFanslyWsHintPolicy(config: Pick<AppConfig,
     || !Object.hasOwn(policies, pageLabel)) return null;
   const parsed = policySchema.safeParse((policies as Record<string, unknown>)[pageLabel]);
   if (!parsed.success) return null;
-  return { ...parsed.data, enabledTypes, maxAttempts24h: Math.floor(parsed.data.baselineAttempts24h / 20) };
+  if (parsed.data.expiresAt !== undefined
+    && !(now.getTime() < Date.parse(parsed.data.expiresAt))) return null;
+  return { ...parsed.data, enabledTypes, maxAttempts24h: Math.min(
+    Math.floor(parsed.data.baselineAttempts24h / 20), parsed.data.attemptLimit24h ?? Number.MAX_SAFE_INTEGER,
+  ) };
 }

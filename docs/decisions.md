@@ -356,6 +356,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 356 | Immutable user IDs and permanent account deletion | All account-target admin routes, service writes, dashboard cards/caches and CLI actions use immutable userId. Permanent deletion revokes access, preserves historical identity and frees the login for a new ID; disabled accounts remain restorable. Username routes are retired. |
 | 357 | Account lifecycle concurrency and uncertain deletion | Non-key user locks preserve actor references; an indeterminate deletion refreshes the account list before retiring the old card. |
 | 358 | Fansly purchase-history rejections | A provider answer naming one media as unservable (404/410, now 422 "error getting account media") is a fact about that target: journaled verbatim, consumed, walk continues. Per request namespace, three such rejections must be proven target-local against a completed, provider-served witness before another target is spent; a witness rejected with the streak's status blocks the stream as `purchase_history_rejection_storm`, a different status is no vote, no witness defers instead of blocking. The streak is derived from captures, not stored; after a storm one unblock buys one target of evidence, and a served page retries the storm's members once. |
+| 364 | Fansly bounded early B1 canary | Owner-approved Lilly-1/message-created trial replaces its seven-day entry wait with durable evidence, a 60-minute expiry and at most ten additional attempts; full polling and broader rollout gates remain. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -14909,3 +14910,47 @@ test's request count.
 **Effect on the incident.** After deploy and one more owner unblock of ari-1,
 the pending target is consumed as `terminal_rejected` on its first request and
 the stream proceeds; no further manual action.
+
+## Decision 364: Bound the first B1 canary instead of waiting seven days (2026-09-16)
+
+The owner asked to reduce serial validation waits and approved continuing with
+a short, one-page B1 trial while full polling remains enabled. This amends the
+calendar entry requirement in Decisions 343/344 and the September 7 migration
+plan for that trial only. It does not declare the old W0/B0 acceptance complete.
+
+The first trial is Lilly-1 and `message_created`, for at most 60 minutes and
+ten additional physical attempts, still below five percent of the retained
+per-page baseline. W0's already running continuity/gap experiment must finish
+and clean up; transport/auth/generation failure is a refusal. Reuse the accepted
+paired DM and current Away presence evidence. A quiet gap remains unknown but
+does not force a new experiment before additive reads with unchanged polling.
+B0 must durably capture and decode the selected live type under the accepted
+generation and demonstrate its kill-switch before enabling B1. Tests, not
+production fault injection or waiting for random failures, cover known recovery
+and fencing paths. The current runbook specifies the exact entry/exit checks.
+
+The existing page policy gains optional `expiresAt` and `attemptLimit24h`.
+Malformed bounds fail closed; expiry must follow activation. Expiry rejects new
+policy resolution and admission at the deadline, including after lock waits.
+Expiry is rechecked after database admission/commit and the final telemetry
+await before dispatch. A late refusal keeps committed budget custody and closes
+started telemetry as a policy failure; an uncommitted reservation rolls back.
+Already dispatched responses may finish durable capture and fenced settlement;
+ordinary polling and B0 continue. The optional attempt cap only lowers the
+existing five-percent rolling-24-hour allowance, counted across policies and
+generations. No timer, automation, new queue, schema or counter reset is needed.
+Older policies remain compatible; both bounds are mandatory for the early
+trial. Every audited setting still changes separately, with B1 enabled last.
+
+A quiet trial expires as inconclusive; no automatic extension or additional
+test message is authorized. A successful sample establishes its selected route
+and rollback, not complete event coverage, reader latency percentiles or causal
+savings. Keep the seven-day B0 observation in the background for broader rollout.
+A0/A1, freshness and polling-reduction gates remain unchanged. Repeat green
+checks only for a relevant change, failure or a specific uncovered risk.
+
+Validation covers exact expiry, invalid bounds, a cap that cannot enlarge the
+baseline, refusal between claim and dispatch, durable capture of an admitted
+response after expiry, event-only refusal with ordinary-polling recovery, and
+rolling-attempt custody after a policy edit. See
+[`fansly-ws-hints.md`](runbooks/fansly-ws-hints.md#bounded-early-canary-decision-364).
