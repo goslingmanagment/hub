@@ -72,7 +72,7 @@ export const WRITTEN_OBSERVATION_KINDS: readonly WrittenObservationKind[] = [
   { kind: "post_tips", source: "pull", writer: "services/sync/executor-handlers.ts" },
   { kind: "posts", source: "pull", writer: "services/sync/executor-handlers.ts" },
   { kind: "purchase_history", source: "pull", writer: "services/sync/executor-handlers.ts" },
-  // Decision 355: a witness page the purchase-history contract proof re-asked
+  // Decision 358: a witness page the purchase-history contract proof re-asked
   // for. Same body as `purchase_history` (real order rows), journaled apart so
   // it never forks a completed target chain; canonicalized by the same family.
   { kind: "purchase_history_contract_probe", source: "pull", writer: "services/sync/executor-handlers.ts" },
@@ -445,7 +445,7 @@ export interface RawOnlyObservationKind {
 }
 
 export const RAW_ONLY_OBSERVATION_KINDS: readonly RawOnlyObservationKind[] = [
-  { kind: "purchase_history_contract_storm", justification: "Decision 355: the purchase-history lane's own verdict that a rejection storm was raised, journaled before the stream is blocked so the next run can tell an owner unblock from an executor retry. A lane fact, not a provider fact; nothing to canonicalize." },
+  { kind: "purchase_history_contract_storm", justification: "Decision 358: the purchase-history lane's own verdict that a rejection storm was raised, journaled before the stream is blocked so the next run can tell an owner unblock from an executor retry. A lane fact, not a provider fact; nothing to canonicalize." },
   { kind: "ofapi.collection_read_materialized.v1", justification:"Completion evidence for one bounded GET capture step. Its normalized facts are independently replayed from the retained response and projection-only snapshot event." },
   { kind: "ofapi_gateway_chat_search", justification: "A query-scoped list of message IDs; retained as read evidence, never a message body or full-history coverage assertion." },
   { kind: "ofapi.binding.replaced", justification: "Control-plane audit evidence. Binding, access and credit state use their existing control repositories; this response is not a business fact." },

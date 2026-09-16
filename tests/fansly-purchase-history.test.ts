@@ -148,7 +148,7 @@ describe("Fansly purchase-history cursor v5", () => {
       ],
       utcDay: "2026-08-23",
       callsToday: 4,
-      // A cursor written by the first cut of Decision 355; the streak is
+      // A cursor written by the first cut of Decision 358; the streak is
       // derived from captures now and the field is simply ignored.
       rejectionStreak: 2,
     };
@@ -298,7 +298,7 @@ describe("Fansly purchase-history page classification", () => {
   });
 
   it("lets a later served answer supersede a rejection of the same question", () => {
-    // A retried target (Decision 355) the repaired provider now serves: the
+    // A retried target (Decision 358) the repaired provider now serves: the
     // rejection and the rows are not a fork, the rows win.
     const index = classifyFanslyPurchaseHistoryCaptures([
       {
