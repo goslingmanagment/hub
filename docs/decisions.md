@@ -14811,3 +14811,8 @@ declined for now by the owner.
 minutes: main merges of an unmoved base cost ~8 minutes instead of ~46,
 prose-only pushes ~2 instead of ~46, and every remaining run is ~2 minutes
 shorter. The fingerprint job itself bills one minute per run.
+
+**First run (PR #222, run 35111827978).** Fingerprint job 6 s, no proof on
+record, full gate: Static 12.0 min (13.3 before the typecheck cut), shards
+9.6 / 11.0 / 10.7 min, Quality Gate 6 s, proof artifact recorded with a
+30-day expiry. This paragraph is the prose-only push that exercised the skip.
