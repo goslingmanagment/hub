@@ -18,7 +18,16 @@ describe("CI cost accounting", () => {
   it("does not mistake a failed draft gate for successful reuse", () => {
     expect(summarizeRun({ ...run, conclusion: "failure" }, [{ ...job, conclusion: "skipped" }]).mode).toBe("no-completed-heavy-checks");
     expect(summarizeRun(run, [{ ...job, conclusion: "skipped" }, { ...job, name: "Quality Gate" }]).mode).toBe("gate-reused");
-    expect(summarizeRun(run, [{ ...job, conclusion: "skipped" }, { ...job, name: "PR description edit (no gate)", conclusion: "skipped" }]).mode).toBe("metadata-only");
+    expect(summarizeRun({ ...run, conclusion: "skipped" }, [{ ...job, conclusion: "skipped" }, { ...job, name: "PR description edit (no gate)", conclusion: "skipped" }]).mode).toBe("metadata-only");
+  });
+  it("recognizes the actual unevaluated skipped-job name without misclassifying cancellation", () => {
+    // Observed on hosted description-edit run 35124939415.
+    const name = "github.event.action == 'edited' && !github.event.changes.title && !github.event.changes.base && 'PR description edit (no gate)' || 'Quality Gate'";
+    const jobs = [{ ...job, name, conclusion: "skipped" }];
+    const metadata = summarizeRun({ ...run, conclusion: "skipped" }, jobs);
+    expect(metadata.mode).toBe("metadata-only");
+    expect(metadata.runner_minutes).toBe(0);
+    expect(summarizeRun({ ...run, conclusion: "cancelled" }, jobs).mode).toBe("no-completed-heavy-checks");
   });
   it("distinguishes image-only main from fresh static with a DB proof", () => {
     expect(summarizeRun(run, [{ ...job, steps: [{ name: "Typecheck", conclusion: "skipped" }] }]).mode).toBe("gate-reused-image");

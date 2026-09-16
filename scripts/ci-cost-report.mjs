@@ -16,7 +16,10 @@ export function summarizeRun(run, jobs) {
   const integrationRan = used.some(job => job.name.startsWith("Integration "));
   let mode = run.name === "Nightly" ? "nightly" : "other";
   if (run.name === "CI") {
-    if (completed.some(job => job.name === "PR description edit (no gate)")) mode = "metadata-only";
+    // GitHub leaves dynamic names unevaluated when the job is skipped. A
+    // cancelled real run can contain the same raw name, so require skipped.
+    if (run.conclusion === "skipped"
+      && completed.some(job => job.name.includes("PR description edit (no gate)"))) mode = "metadata-only";
     else if (integrationRan) mode = "full";
     else if (staticJob?.conclusion === "skipped" && run.conclusion === "success"
       && completed.some(job => job.name === "Quality Gate" && job.conclusion === "success")) mode = "gate-reused";

@@ -47,7 +47,11 @@ Node 22; isolated worktree; normal per-file Vitest isolation retained.
 
 Six cheap policy cases were added between the worker measurements; the application test set and isolation were unchanged. These are local measurements, not an estimate of GitHub savings. The slowest application unit file is `fansly-binding-transport.test.ts`; its deliberately real network deadline accounts for about 15s. This change keeps that coverage and does not replace real transport evidence with fake timers.
 
-The integration, Docker and hosted validation results are recorded below when complete. Raw local logs live outside the implementation worktree under the owner's `investigations/ci-cost-2026-09-16/implementation/`; they are not runtime inputs or production changes.
+Hosted admission checks confirmed Draft skips heavy jobs and fails the required gate (run `35124769984`). Ready started all checks (run `35124864973`). A description edit created only skipped jobs without a check named `Quality Gate` (run `35124939415`), and the existing full run continued.
+
+That live response exposed a reporting edge: GitHub returns the unevaluated dynamic name for a skipped job. The cost classifier now recognizes the actual API name and requires a skipped run, with a regression case that distinguishes cancellation. The partial full run was then cancelled intentionally to avoid finishing a stale revision; final hosted validation runs on the corrected commit.
+
+The remaining Docker and hosted validation results are recorded below when complete. Raw local logs live outside the implementation worktree under the owner's `investigations/ci-cost-2026-09-16/implementation/`; they are not runtime inputs or production changes.
 
 ## Interpretation and limits
 
