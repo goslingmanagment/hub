@@ -8,9 +8,12 @@ export const OFAPI_TYPED_EXPORT_SWEEP_QUEUE = "ofapi.typed-export.sweep";
 /** Only explicitly created export jobs; this never enables baseline/background capture. */
 export async function runOfapiTypedExportSweep(app: AppContext) {
   await resumeOfapiExportCancellationStatus(app);
+  // Creation, approval and the lease use the host clock. A database clock
+  // slightly behind it must not hide an otherwise immediately runnable job.
+  const now = new Date();
   const jobs = await app.db.execute<{ id: string; page_id: string }>(sql`select id,page_id from ofapi_capture_jobs
     where kind='account_export' and target->>'profile' in (${sql.join(OFAPI_TYPED_EXPORT_PROFILES.map(value => sql`${value}`), sql`,`)})
-      and ((state='awaiting_parse' and reason_code is null) or (state in ('ready','retry_wait') and next_attempt_at<=now()))
+      and ((state='awaiting_parse' and reason_code is null) or (state in ('ready','retry_wait') and next_attempt_at<=${now}))
     order by updated_at limit 5`);
   const outcomes = [];
   for (const job of jobs.rows) {

@@ -28,7 +28,7 @@ const csv = (account = accountId, date = "2026-07-01", total = "0") => Buffer.fr
 let responses: Record<string, unknown>[]; let vendorFetch: ReturnType<typeof vi.fn>;
 beforeAll(async () => { const started = await startIntegrationTestDatabase(); if (!started) throw new Error("Integration database unavailable"); testDb = started; }, 120000);
 afterAll(async () => { await testDb?.stop(); });
-afterEach(async () => { vi.unstubAllGlobals(); await server?.close(); server = null; });
+afterEach(async () => { vi.useRealTimers(); vi.unstubAllGlobals(); await server?.close(); server = null; });
 beforeEach(async () => {
   await resetIntegrationDatabase(testDb.pool);
   app = createTestAppContext(testDb, { ofapiMirrorBackgroundCaptureEnabled: false, ofapiDmDailyCreditBudget: 100, ofapiBackfillDailyCreditBudget: 100, ofapiCreditFloor: 10 });
@@ -67,6 +67,31 @@ async function completed(creditCost = 1, terminalStatus: "completed" | "failed" 
   return (await getOfapiCaptureJob(app.db, quoted.id))!;
 }
 describe("bounded typed exports and visitor coverage", () => {
+  it("uses the host clock for freshly created and approved jobs when the database clock lags", async () => {
+    const { rows } = await testDb.pool.query<{ clock: Date }>("select clock_timestamp() as clock");
+    // Only Date is controlled: PostgreSQL and actual transport timers keep
+    // running. Creation, approval and leasing already use the host clock.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(rows[0]!.clock.getTime() + 60_000);
+    const quoted = await createQuoted();
+    expect(vendorFetch).toHaveBeenCalledTimes(1);
+    await approveOwnerOfapiTypedExport(app, { jobId: quoted.id, expectedRowVersion: quoted.rowVersion, approvedMaxCredits: 2, reason: "clock regression", dryRun: false }, actorId);
+    responses.push({ data: { id: exportId, status: "pending" } });
+    expect((await runOfapiTypedExportSweep(app))[0]?.kind).toBe("success");
+    expect(vendorFetch.mock.calls.filter(call => String(call[0]).endsWith("/start"))).toHaveLength(1);
+  });
+  it.each(["ready", "retry_wait"])("does not dispatch a %s job before its host-clock deadline", async state => {
+    const { rows } = await testDb.pool.query<{ clock: Date }>("select clock_timestamp() as clock");
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(rows[0]!.clock.getTime() + 60_000);
+    const created = await createOwnerOfapiTypedExport(app, { ...input, pageId }, actorId);
+    const future = new Date(Date.now() + 60_000);
+    await testDb.pool.query("update ofapi_capture_jobs set state=$2,next_attempt_at=$3 where id=$1", [created.jobId, state, future]);
+    const before = await getOfapiCaptureJob(app.db, created.jobId!);
+    expect(await runOfapiTypedExportSweep(app)).toEqual([]);
+    expect(vendorFetch).not.toHaveBeenCalled();
+    expect(await getOfapiCaptureJob(app.db, created.jobId!)).toEqual(before);
+  });
   it("runs quote → separate approval → captured status → safe download → source-attributed daily report with legacy capture off", async () => {
     expect(await createOwnerOfapiTypedExport(app, { ...input, pageId, dryRun: true }, actorId)).toMatchObject({ state: "preview", estimatedCredits: 1 });
     expect(vendorFetch).not.toHaveBeenCalled();
