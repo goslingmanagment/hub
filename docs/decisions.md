@@ -359,6 +359,8 @@ appends a row here in the same change (family law: updated-in-change).
 | 362 | Fansly retained HTTP comparison | Offline comparison binds existing measurement exports to their SHA-256 manifests, selects explicit pages, counts all physical-attempt sources once, and withholds a percentage for unmatched windows, page identities or incomplete run telemetry. Count changes never establish causal savings or reader latency. |
 | 363 | W0 continuity reference comparison | Validate and hash a complete native phase while comparing only its overlap with a bounded browser window; retain independent live gates as unverified. |
 | 364 | Fansly bounded early B1 canary | Owner-approved Lilly-1/message-created trial replaces its seven-day entry wait with durable evidence, a 60-minute expiry and at most ten additional attempts; full polling and broader rollout gates remain. |
+| 365 | Full CI worker imports and latency benchmark | DB workers import only pure context constants and load the production migrator only for partial schemas. Earnings scale correctness keeps all data/assertions; synthetic 100ms WAN delay is retained in the explicit benchmark. File isolation, serial DB files and full reset remain. |
+| 366 | Typed export scheduling clock | Typed-export due selection uses the Node clock already used by task creation, approval and leasing; real-DB skew tests preserve future ready/retry_wait deadlines without sleeps or retries. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -15076,3 +15078,70 @@ baseline, refusal between claim and dispatch, durable capture of an admitted
 response after expiry, event-only refusal with ordinary-polling recovery, and
 rolling-attempt custody after a policy edit. See
 [`fansly-ws-hints.md`](runbooks/fansly-ws-hints.md#bounded-early-canary-decision-364).
+
+## Decision 365: Remove unused worker setup imports and make synthetic latency explicit (2026-09-16)
+
+**Context.** Even when no prior tree proof can be reused, a full CI run loads
+unnecessary test infrastructure and deliberately sleeps inside a correctness
+fixture. The owner authorized further savings conditional on regression
+verification. Current main was merged before measuring the same application
+source and test selection before/after.
+
+**Decision.** `tests/helpers/db-context.ts` owns the template name, admin
+injection key and Vitest context augmentation, without runtime dependencies.
+Global setup and DB workers import that module separately. Workers no longer
+import the Testcontainers global-setup graph for two constants. The production
+migration runner is loaded in a worker only for a requested partial schema;
+global setup still uses it to build every complete template. Import failure
+remains inside cleanup, before acquiring a migration client.
+
+The earnings audit scale fixture still exports 120,000 observations through
+real psql, checks the exact 151 response bursts, and checks 1,000 projected
+receipts. The existing `FANSLY_AUDIT_BENCHMARK_OUTPUT` opt-in additionally enables
+its 100ms synthetic delay per burst and records that delay in the measurement.
+Normal CI no longer exercises that artificial WAN-latency scenario; real
+transport deadlines, SQL timeouts, data volume and correctness assertions stay.
+
+**Safety boundary.** Keep per-file isolation, serial integration files, full
+dynamic database reset, fresh health-state seeds and real authentication.
+Increasing DB file workers is not safe while files share cluster-wide roles
+and advisory-lock probes. Changing auth fixture construction would also change
+audit/observation side effects. Neither is part of this decision.
+
+The independent static review found no blocking findings. Before/after
+measurements, unchanged test selection, full regression results and the
+explicit benchmark check are recorded in
+[`ci-cold-run-followups-2026-09-16.md`](reports/ci-cold-run-followups-2026-09-16.md).
+Local timings are not runner billing, and this change makes no monthly savings
+forecast. These test-infrastructure changes preserve production and migration
+semantics; the separate scheduling correction discovered in acceptance is
+recorded in Decision 366. Deployment is outside this change.
+
+## Decision 366: Typed export due selection uses the same clock as creation and leasing (2026-09-16)
+
+**Context.** Regression testing for Decision 365 exposed typed-export failures
+on both the optimized branch and its unoptimized control. Task creation,
+approval and lease acquisition use Node time, while the typed sweep's initial
+SQL selection used PostgreSQL `now()`. A database clock slightly behind the
+host can exclude an immediately due task before the lease gets a chance to
+validate it.
+
+**Decision.** After cancellation recovery, capture one Node `new Date()` for
+the sweep's due-time comparison, as the ordinary capture scheduler already
+does. Preserve state/profile filters, ordering and limit, the lease's own
+fresh deadline check, locking, lease token, spend limits and request fencing.
+There are no additional requests, retries or sleeps.
+
+**Regression evidence.** A real-Postgres test advances only JavaScript Date by
+60 seconds relative to the database and exercises creation plus separate
+approval. It fails on the original worker and passes with the correction.
+Future ready/retry_wait jobs remain completely unchanged and issue no vendor
+request. All 21 cases in that file pass after the fix; real transport timers
+are not mocked. Independent review found no blocking findings.
+
+The original intermittent failures lack a contemporaneous clock/error
+snapshot; an extra diagnostic query removed the symptom during inspection.
+The mixed-clock defect itself is reproduced deterministically, without
+claiming a direct measurement of the earlier failures' exact timing. See the
+[acceptance report](reports/ci-cold-run-followups-2026-09-16.md) for full-shard
+and hosted validation. Deployment remains outside this change.
