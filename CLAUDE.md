@@ -99,6 +99,17 @@ quick-ref table up top), Git tags, and production itself.**
   fetch) run inside the test suite.
 - Tests live in root `tests/`; no drizzle-orm imports inside tests; SSE tests
   need listen+fetch (not inject).
+- **Every push is four machines for ~46 billable minutes** (Decision 359).
+  Push work-in-progress with `[skip ci]` in the commit message (GitHub then
+  creates no run at all) and let CI run on the push that is ready for review;
+  prose-only pushes (`investigations/`, `docs/plans`, `docs/decisions.md` …)
+  are already skipped by the tree fingerprint, and a squash merge of an
+  unmoved base reuses the PR's proof. Re-run failed jobs, not the whole
+  workflow. A `[skip ci]` left on a final commit is harmless: the main run
+  finds no proof and runs the full gate. Never write the marker into a PR
+  title or body, or into a commit message that merely talks about it: the
+  squash commit inherits the text and main skips the run that publishes the
+  image (PR #223 skipped itself this way).
 - Prod read-only diagnostics need no permission: the Agent Read Plane
   (`read_only` role), `/health*`, SSH for logs/status only (`docker ps/logs`,
   `journalctl`, `df`), psql **only via the `read_only` role — never the app

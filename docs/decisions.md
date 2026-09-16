@@ -354,6 +354,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 354 | A0 reader discrepancy witnesses | Retain at most twenty verified capture pointers per sweep beside exact pre-apply reader state; preserve counters, legacy unknowns, polling and historical attribution limits. |
 | 358 | Fansly purchase-history rejections | A provider answer naming one media as unservable (404/410, now 422 "error getting account media") is a fact about that target: journaled verbatim, consumed, walk continues. Per request namespace, three such rejections must be proven target-local against a completed, provider-served witness before another target is spent; a witness rejected with the streak's status blocks the stream as `purchase_history_rejection_storm`, a different status is no vote, no witness defers instead of blocking. The streak is derived from captures, not stored; after a storm one unblock buys one target of evidence, and a served page retries the storm's members once. |
 | 359 | CI gate reuse by tree fingerprint | A run first hashes every blob the gate can observe (`scripts/ci-gate-fingerprint.sh`: the full tree minus prose no check reads) and looks up an earlier passing Quality Gate for that hash in the Artifacts API; a hit skips the test jobs and passes the gate citing the proving run, main still builds and publishes its image. A fresh pass records `quality-gate-<hash>` (30 days). `pnpm typecheck` runs once per job: `build:production` = typecheck + `build:artifacts`, CI and the Dockerfile call `build:artifacts`. `workflow_dispatch` `full: true` forces every job. |
+| 360 | CI volume rules | Nightly runs only what PRs never run (the whole `tests/api.integration.test.ts`) six days a week and the full one-process suite on Mondays and on dispatch. The integration matrix fails fast on pull requests only. Work-in-progress pushes carry `[skip ci]`; CI runs on the push that is ready for review; failed jobs are re-run, not workflows. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -14816,3 +14817,72 @@ shorter. The fingerprint job itself bills one minute per run.
 record, full gate: Static 12.0 min (13.3 before the typecheck cut), shards
 9.6 / 11.0 / 10.7 min, Quality Gate 6 s, proof artifact recorded with a
 30-day expiry. This paragraph is the prose-only push that exercised the skip.
+
+**Correction, same day (Decision 360's PR).** The first main run after the
+merge (35113902586) reused the proof as designed — 206 s wall, tests skipped,
+image built and saved — and then SKIPPED the publish job. GitHub propagates a
+skipped job's status down the entire `needs` chain: a dependant whose `if`
+carries no status function is skipped even when its direct dependencies
+succeeded, and publish sat behind the skipped integration matrix through the
+gate. Its condition now starts with `!cancelled()` (not `always()`, which
+would also publish after a cancellation); `tests/deploy-ci-policy.test.ts`
+pins it. Main commit 2290ffb3 has no published image; the next main run
+publishes the next one.
+
+## Decision 360: CI volume rules — nightly runs the gap, PR shards fail fast, WIP pushes skip CI (2026-09-16)
+
+**Context.** After Decision 359 the remaining spend is the number of full
+runs and what each one repeats. Three repeats were measured on the same
+16-day window:
+
+- The nightly ran `pnpm test` — 349 unit files plus every integration file —
+  once a day, 27–38 minutes, 404 minutes in 16 days. A PR run already
+  executes every integration file (the three `test:sync-critical:db` shards
+  cover `tests/*.integration.test.ts` entirely), the unit set, and the
+  `[sync-critical]` subset of `tests/api.integration.test.ts`. The only tests
+  a PR never runs are the other 77 of that file's 104.
+- When one integration shard failed on a PR, the other two ran to completion
+  (~10 billable minutes each) with `fail-fast: false`; 18 runs failed in the
+  window.
+- 105 of 198 PR runs were not the last push of their PR: review-fix pushes,
+  agents pushing per commit (one branch: 15 runs). A cancelled superseded run
+  still bills the minutes it used (565 minutes in the window).
+
+**Decision.**
+
+1. *Nightly runs what PRs do not.* Six days a week the schedule runs the
+   whole `tests/api.integration.test.ts` (`pnpm test:api:full`, ~2 minutes);
+   on Mondays and on manual dispatch it runs the full one-process suite —
+   the rebuild proofs, the ratchets, vitest's parallel file mode — as the
+   backstop that keeps the split honest. Two crons, told apart by
+   `github.event.schedule`.
+2. *The integration matrix fails fast on pull requests only*
+   (`fail-fast: ${{ github.event_name == 'pull_request' }}`). One red shard
+   sends the author back; main keeps the complete record of every shard.
+3. *A push that is not ready for review carries `[skip ci]`* in its commit
+   message, so GitHub creates no run; CI runs on the push that is. Failed
+   jobs are re-run, not whole workflows. The rule lives in CLAUDE.md, which
+   is what agents read. A `[skip ci]` left on a final commit costs nothing
+   but time: the main run finds no proof and runs the full gate. The marker
+   is matched anywhere in the commit message, so it must never appear in a
+   PR title or body (the squash commit inherits them) or in a commit message
+   that merely mentions it — this PR's first commit skipped its own CI run by
+   describing the rule.
+
+**Measured and not adopted: `vitest --no-isolate` on the shards.** Locally,
+all three shards, same machine, same day: shard 1 216 s against 265 s
+isolated, shard 2 243 s — roughly a fifth of a shard's wall time, which is
+the module-import share (134 s of 622 s per shard on the 2-vCPU runner) —
+and shard 3 580 s, SLOWER, because seven files failed and two of them
+(`device-token-password`, `admin-config-api`) sat in hook timeouts on state
+another file had left behind. The price is order-dependent module state: `tests/fansly-proxy-missing`
+mocks `services/telegram.ts` with `vi.mock`, and once a worker has evaluated
+that module for an earlier file the mock no longer reaches it (one assertion
+fails); run later in the same worker, the mocked module is what
+`tests/notification-incidents` gets instead of the real one (nine assertions
+fail); `tests/telegram-report` spies on `globalThis.fetch` and failed in one
+run of shard 1 and passed in the next. Six integration files use `vi.mock`,
+one spies on `globalThis`, eight use fake timers; a per-file
+`vi.resetModules()` around each of them would give most of the saving back.
+At post-359 volume the whole lever is ~15 % of a full run, not worth a gate
+that can go red by file order.
