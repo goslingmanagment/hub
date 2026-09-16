@@ -585,3 +585,8 @@ ari-1 ~440; пик 24 зап/мин (= пейсинг 2.5 с), lilly-2 акти�
 
 - Narrow the shared Fansly `pausePageSyncForAuth` / `markPageSyncAuthBlocked` ownership predicates separately; they still replace unrelated blockers.
 - Move direct Telegram delivery outside account-health transactions while preserving incident recovery ordering (P2).
+
+## Decision 358 follow-ups (purchase-history rejection storms)
+
+- Commit the executor's storm-block acknowledgement WITH the block and keep it while the evidence allowance is unconsumed; today it is the ordinary `sync_runs` record (not atomic with `blockPageSync`, deleted by the 30-day observability cleanup), so a block whose run row never landed, or a storm lifted after a month, costs one extra owner unblock (zero requests). P2, self-converging. Added 2026-09-16.
+- Owner reset path for the nine ramp-gated Fansly streams (`purchase_history` maps to the refused `messages_history` group): a per-stream reset route mirroring `resetFollowersReconcileStream` — contract change. Until then the unblock is an owner-run `page_sync_states` update. Added 2026-09-16.
