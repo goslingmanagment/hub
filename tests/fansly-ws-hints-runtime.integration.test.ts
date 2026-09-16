@@ -6,7 +6,7 @@ import {
   upsertFans, upsertPageDmConversation, upsertPageDmMessages, type Database,
   beginFanslyWsConnection, captureFanslyWsFrame, openNotificationIncidentWithRecoveryGuard,
 } from "@agency_hub_core/db";
-import { resolveFanslyWsHintPolicy, FANSLY_WS_CAPTURE_KIND } from "@agency_hub_core/shared";
+import { resolveFanslyWsHintPolicy, FANSLY_WS_CAPTURE_KIND, type HttpRequestObserver } from "@agency_hub_core/shared";
 import { FanslyApiError, type FanslyMessage, type FanslyRequestContext } from "@agency_hub_core/fansly";
 import { resetIntegrationDatabase, seedFanslyPage, startTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
@@ -71,7 +71,7 @@ async function fixture(routeInitial = true) {
   if (!lease) throw new Error("lease missing");
   const run = await startSyncRun(app.db, { platformAccountId: page.id, stream: "dm_messages", trigger: "scheduled" });
   const pageContext = await resolvePageContext(app, page.label);
-  const telemetry = { ...fakeTelemetry(), getRequestObserver: () => ({ onRequestEvent: async () => {} }),
+  const telemetry = { ...fakeTelemetry(), getRequestObserver: (): HttpRequestObserver => ({ onRequestEvent: async () => {} }),
     recordDmMessagesChunkSummary: vi.fn(async () => {}) };
   const calls: string[] = [];
   const physical = async (context: FanslyRequestContext, operation: string) => {
@@ -194,6 +194,112 @@ describe("B1 REST execution and rollback", () => {
     await f.step();
     expect(f.calls).toEqual([]);
     expect((await db.pool.query("select count(*)::int n from fansly_ws_hint_attempts")).rows[0].n).toBe(0);
+  });
+  function boundPolicy(f: Awaited<ReturnType<typeof fixture>>, bounds: { expiresAt?: string; attemptLimit24h?: number }) {
+    const policies = JSON.parse(f.app.config.fanslyWsHintsPolicies!);
+    Object.assign(policies[f.page.label], bounds);
+    f.app.config.fanslyWsHintsPolicies = JSON.stringify(policies);
+  }
+  it("refuses physical dispatch when the canary expires after claim selection", async () => {
+    const f = await fixture();
+    const deadline = new Date(Date.now() + 1000);
+    boundPolicy(f, { expiresAt: deadline.toISOString() });
+    const original = f.app.adapter.getMessagesPage;
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      f.app.adapter.getMessagesPage = vi.fn(async (context, params) => {
+        vi.setSystemTime(deadline);
+        return original.call(f.app.adapter, context, params);
+      });
+      await f.step();
+      expect(f.calls).toEqual([]);
+      expect((await db.pool.query("select count(*)::int n from fansly_ws_hint_attempts")).rows[0].n).toBe(0);
+      expect(f.app.config.fanslyWsHintsEnabled).toBe(true);
+    } finally { vi.useRealTimers(); }
+  });
+  it("retains a response admitted before expiry and leaves ordinary polling able to finish the gap", async () => {
+    const f = await fixture();
+    const deadline = new Date(Date.now() + 1000);
+    boundPolicy(f, { expiresAt: deadline.toISOString() });
+    const original = f.app.adapter.getMessagesPage;
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      f.app.adapter.getMessagesPage = vi.fn(async (context, params) => {
+        const result = await original.call(f.app.adapter, context, params);
+        vi.setSystemTime(deadline);
+        return result;
+      });
+      await f.step();
+      const staged = (await db.pool.query("select backfill_cursor from subject_refresh_state where plane='fansly_ws_dm'")).rows[0];
+      expect(staged.backfill_cursor.rawPageIds).toHaveLength(1);
+      await f.due();
+      await f.owned(() => fanslyDmMessagesChunk(f.app, f.input("event", true) as never));
+      expect(f.calls).toEqual(["messages"]);
+      await f.owned(() => fanslyDmMessagesChunk(f.app, f.input() as never));
+      expect((await db.pool.query("select count(*)::int n from page_dm_messages")).rows[0].n).toBe(51);
+      expect((await db.pool.query("select count(*)::int n from fansly_ws_hint_attempts")).rows[0].n).toBe(1);
+      expect(f.app.config.fanslyWsCaptureEnabled).toBe(true);
+      expect(f.app.config.fanslyWsHintsEnabled).toBe(true);
+    } finally { vi.useRealTimers(); }
+  });
+  it("rolls back admission if a database wait crosses the deadline", async () => {
+    const f = await fixture();
+    const deadline = new Date(Date.now() + 1000);
+    boundPolicy(f, { expiresAt: deadline.toISOString() });
+    const blocker = await db.pool.connect();
+    await blocker.query("select pg_advisory_lock(36410)");
+    await db.pool.query(`create function b1_wait_admission() returns trigger language plpgsql as $$
+      begin perform pg_advisory_xact_lock(36410); return new; end $$;
+      create trigger b1_wait_admission before insert on fansly_ws_hint_attempts
+      for each row execute function b1_wait_admission()`);
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const pending = f.step();
+    try {
+      await vi.waitFor(async () => {
+        const locks = await db.pool.query("select count(*)::int n from pg_locks where locktype='advisory' and objid=36410 and not granted");
+        expect(locks.rows[0].n).toBe(1);
+      });
+      vi.setSystemTime(deadline);
+      await blocker.query("select pg_advisory_unlock(36410)");
+      await pending;
+      expect(f.calls).toEqual([]);
+      expect((await db.pool.query("select count(*)::int n from fansly_ws_hint_attempts")).rows[0].n).toBe(0);
+    } finally {
+      await blocker.query("select pg_advisory_unlock(36410)");
+      await pending.finally(() => {
+        vi.useRealTimers();
+        blocker.release();
+      });
+      await db.pool.query("drop trigger b1_wait_admission on fansly_ws_hint_attempts; drop function b1_wait_admission()");
+    }
+  });
+  it("refuses dispatch after a late telemetry write and retains the committed reservation", async () => {
+    const f = await fixture();
+    const deadline = new Date(Date.now() + 1000);
+    boundPolicy(f, { expiresAt: deadline.toISOString() });
+    const input = f.input();
+    const states: string[] = [];
+    input.telemetry.getRequestObserver = () => ({ onRequestEvent: async event => {
+      states.push(event.state);
+      if (event.state === "started") vi.setSystemTime(deadline);
+    } });
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      await f.owned(() => runFanslyWsHintStep(f.app, input as never));
+      expect(f.calls).toEqual([]);
+      expect(states).toEqual(["started", "failed"]);
+      expect((await db.pool.query("select count(*)::int n from fansly_ws_hint_attempts")).rows[0].n).toBe(1);
+    } finally { vi.useRealTimers(); }
+  });
+  it("counts a lower canary cap against existing physical attempts without resetting on a policy edit", async () => {
+    const f = await fixture();
+    boundPolicy(f, { attemptLimit24h: 2 });
+    await f.step(); await f.due(); await f.step(); await f.due();
+    boundPolicy(f, { expiresAt: new Date(Date.now() + 60_000).toISOString() });
+    await f.step();
+    expect(f.calls).toEqual(["messages", "messages"]);
+    expect((await db.pool.query("select count(*)::int n from fansly_ws_hint_attempts")).rows[0].n).toBe(2);
+    expect((await db.pool.query("select applied_revision from subject_refresh_state where plane='fansly_ws_dm'")).rows[0].applied_revision).toBe(0n);
   });
   it("reads an unknown group once without inventing visible membership", async () => {
     const f = await fixture();
