@@ -158,3 +158,22 @@ owner-authorized production operation.
   strictness debt remains 1893 errors in 120 files, with no added debt.
 - All 197 already published migrations match `origin/main` byte for byte.
   Local evidence: `output/production-release/`.
+
+## Verified production release (2026-09-16)
+
+Source `579b0e34932020607d0ebdc44f9683f24360ffa9` was deployed by the standard
+script in 179 seconds, completing at 01:00:35 UTC. Source is published on
+`origin/fix/disabled-user-recovery`; `main` was not advanced by this deploy.
+All three application containers have that revision and healthy status.
+Migration 0202, the partial username index and immutable identity trigger
+were independently verified through `read_only`. API and sync health returned
+200 with contract `8e9dda0b2352b0b7a106e515a3282493b0977db4c730466681e985e20e7c33b2`.
+PostgreSQL's container ID and StartedAt did not change. The local production
+CLI now matches this source/contract.
+
+Served HTML and entry/settings asset bytes match the built release; the login
+screen rendered without console errors. The available browser had no owner
+session, so live authenticated Team operations were not exercised. Real
+accounts and client installations were not changed for testing; extension
+publication is outside this Hub deployment. Detailed local receipts, checks
+and screenshot: `output/production-release/README.md`.
