@@ -79,20 +79,73 @@ describe("CI production image publication policy", () => {
     expect(job("publish").needs).toEqual(expect.arrayContaining(["static", "quality"]));
   });
 
-  it.each([
-    ["success", "success", true],
-    ["failure", "success", false],
-    ["success", "failure", false],
-    ["cancelled", "success", false],
-    ["success", "skipped", false],
-  ] as const)("Quality Gate accepts static=%s integration=%s only when both pass", (staticResult, integrationResult, allowed) => {
-    expect(job("quality").needs).toEqual(expect.arrayContaining(["static", "integration"]));
+  // The gate's shell reads its inputs from step env (never inline expressions),
+  // so the policy is exercised by running that shell with the four variables
+  // the workflow binds. `proven_by` empty = no earlier proof for this tree.
+  it("binds the gate shell's inputs from the fingerprint and gate jobs", () => {
+    expect(job("quality").needs).toEqual(expect.arrayContaining(["fingerprint", "static", "integration"]));
     expect(job("quality").if).toBe("always()");
-    const script = shell(step("quality", "Every gate job succeeded"))
-      .replaceAll("${{ needs.static.result }}", staticResult)
-      .replaceAll("${{ needs.integration.result }}", integrationResult);
-    const result = spawnSync("bash", ["-euo", "pipefail", "-c", script], { encoding: "utf8" });
+    expect(step("quality", "Every gate job succeeded").env).toEqual({
+      PROVEN_BY: "${{ needs.fingerprint.outputs.proven_by }}",
+      FINGERPRINT: "${{ needs.fingerprint.outputs.hash }}",
+      STATIC: "${{ needs.static.result }}",
+      INTEGRATION: "${{ needs.integration.result }}",
+    });
+  });
+
+  it.each([
+    // No proof on record: both gate jobs must have run and passed.
+    ["", "success", "success", true],
+    ["", "failure", "success", false],
+    ["", "success", "failure", false],
+    ["", "cancelled", "success", false],
+    ["", "success", "skipped", false],
+    // A failed fingerprint job skips the tests WITHOUT a proof: fail closed.
+    ["", "skipped", "skipped", false],
+    // Proof on record: tests skipped by design; static is skipped on a PR and
+    // must have succeeded on main (it still builds the image there).
+    ["35013876329", "skipped", "skipped", true],
+    ["35013876329", "success", "skipped", true],
+    ["35013876329", "failure", "skipped", false],
+    ["35013876329", "cancelled", "skipped", false],
+    // A proof never excuses a test job that ran and did not pass.
+    ["35013876329", "success", "failure", false],
+    ["35013876329", "skipped", "success", false],
+  ] as const)("Quality Gate with proven_by=%s static=%s integration=%s passes: %s", (provenBy, staticResult, integrationResult, allowed) => {
+    const result = spawnSync("bash", ["-euo", "pipefail", "-c", shell(step("quality", "Every gate job succeeded"))], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        PROVEN_BY: provenBy,
+        FINGERPRINT: "f".repeat(64),
+        STATIC: staticResult,
+        INTEGRATION: integrationResult,
+        GITHUB_STEP_SUMMARY: "/dev/null",
+      },
+    });
     expect(result.status === 0, result.stderr).toBe(allowed);
+  });
+
+  it("reuses a proof only where the workflow says it does, and records one only when fresh", () => {
+    const unproven = "needs.fingerprint.outputs.proven_by == ''";
+    expect(job("integration").needs).toEqual(["fingerprint"]);
+    expect(job("integration").if).toBe(unproven);
+    expect(job("static").needs).toEqual(["fingerprint"]);
+    // Main must always enter the static job: the deploy pulls the image it builds.
+    expect(job("static").if).toBe(`${unproven} || (github.event_name == 'push' && github.ref == 'refs/heads/main')`);
+    for (const name of ["Typecheck", "Lint (family standard + architecture walls)", "Contracts are regenerated (routes.ts ↔ committed artifacts)", "Reliable unit tests"]) {
+      expect(step("static", name).if, name).toBe(unproven);
+    }
+    for (const name of ["Production build", "Production Docker image build", "Chromium Headless Shell runtime smoke", "Startup capability manifest smoke"]) {
+      expect(step("static", name).if, name).toBeUndefined();
+    }
+    expect(step("quality", "Record this fingerprint as proven").if).toBe(unproven);
+    const upload = step("quality", "Publish the proof for later identical trees");
+    expect(upload.if).toBe(unproven);
+    expect(upload.with?.name).toBe("quality-gate-${{ needs.fingerprint.outputs.hash }}");
+    // The lookup reads artifacts with the smallest token that can; nothing else in the job writes.
+    expect(job("fingerprint").permissions).toEqual({ actions: "read", contents: "read" });
+    expect(shell(step("fingerprint", "Look up an earlier passing gate for this fingerprint"))).toContain("select(.expired == false)");
   });
 
   it("grants no write permissions to builds, tests, or the root workflow", () => {

@@ -353,6 +353,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 353 | Fansly status-only earnings rechecks | Exact pending-to-posted signals still fetch both endpoints; a content revision preserves strict money debt while valid unchanged status rechecks may finish. |
 | 354 | A0 reader discrepancy witnesses | Retain at most twenty verified capture pointers per sweep beside exact pre-apply reader state; preserve counters, legacy unknowns, polling and historical attribution limits. |
 | 358 | Fansly purchase-history rejections | A provider answer naming one media as unservable (404/410, now 422 "error getting account media") is a fact about that target: journaled verbatim, consumed, walk continues. Per request namespace, three such rejections must be proven target-local against a completed, provider-served witness before another target is spent; a witness rejected with the streak's status blocks the stream as `purchase_history_rejection_storm`, a different status is no vote, no witness defers instead of blocking. The streak is derived from captures, not stored; after a storm one unblock buys one target of evidence, and a served page retries the storm's members once. |
+| 359 | CI gate reuse by tree fingerprint | A run first hashes every blob the gate can observe (`scripts/ci-gate-fingerprint.sh`: the full tree minus prose no check reads) and looks up an earlier passing Quality Gate for that hash in the Artifacts API; a hit skips the test jobs and passes the gate citing the proving run, main still builds and publishes its image. A fresh pass records `quality-gate-<hash>` (30 days). `pnpm typecheck` runs once per job: `build:production` = typecheck + `build:artifacts`, CI and the Dockerfile call `build:artifacts`. `workflow_dispatch` `full: true` forces every job. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -14743,3 +14744,70 @@ test's request count.
 **Effect on the incident.** After deploy and one more owner unblock of ari-1,
 the pending target is consumed as `terminal_rejected` on its first request and
 the stream proceeds; no further manual action.
+
+## Decision 359: The CI gate is reused by tree fingerprint, and typecheck runs once (2026-09-16)
+
+**Incident.** GitHub Actions is the account's whole metered bill. From
+2026-09-01 to 09-16 `ci.yml` ran 292 times (198 pull-request pushes, 78 main
+merges, 16 nightlies), ~10 700 billable minutes at $0.006 — about $120 a
+month at that pace, against a $50 budget with "stop usage" on. The budget
+ran out on 2026-09-16 at 07:43 UTC and every run for the rest of the morning
+died as `startup_failure` ("recent account payments have failed or your
+spending limit needs to be increased"), unnoticed inside the repository:
+blocked runs are not retried and nothing in the tree reports them. A run is
+four machines for ~46 billable minutes (Static ~13, three integration shards
+~10 each, the aggregator rounds to 1), and the median grew from 35 to 43
+minutes in the same fortnight as files were added.
+
+**What the minutes bought.** Most runs re-checked bytes that had already
+passed. Of the 43 main merges whose PR could be matched, 36 (84 %) landed a
+tree identical to the one the PR run had proven green minutes earlier —
+squash merge with an unmoved base. The two main runs that failed after a
+green PR were flakes (a unit test that assumed the UTC date would not roll at
+00:57 UTC, and shard 3), not integration conflicts. 26 pushes changed only
+`investigations/`, `docs/plans`, `docs/decisions.md`, `docs/reports` after a
+green run on the same PR, and 5 PRs changed nothing else at all; together
+$8 of a $64 fortnight. `pnpm typecheck` ran three times per Static job: as
+its own step, inside `build:production`, and again inside the Docker image
+build — ~2.5 machine-minutes of the same answer. `vitest --no-isolate` was
+measured and rejected: 59 of 349 unit files fail on shared module state and
+the wall time does not move (import time is replaced by test time).
+
+**Decision.**
+
+1. *The unit of proof is the gate-visible tree, not the commit.* A new first
+   job, `fingerprint`, prints `scripts/ci-gate-fingerprint.sh`: sha256 over
+   `git ls-tree -r` (mode, type, blob, path) of the whole tree minus the
+   paths no check reads — `investigations/`, `docs/plans`, `docs/audits`,
+   `docs/reports`, `docs/migration-history`, `docs/decisions.md`, `.claude/`,
+   `.agentic/` and the root prose files. The list is deliberately short:
+   `docs/generated`, `docs/runbooks` and the agent-read skill doc stay in the
+   hash because tests and the contracts step read them, and
+   `tests/ci-gate-fingerprint.test.ts` pins both the semantics and the rule
+   that no test reads an excluded path.
+2. *A hash with a passing gate on record is not re-tested.* The job asks the
+   Artifacts API for a non-expired `quality-gate-<hash>`; a hit skips the
+   integration matrix and, on a PR, the Static job; on main the Static job
+   still builds and publishes the image (the deploy pulls it, Decision 316)
+   but skips typecheck, lint, contracts and unit tests. The Quality Gate
+   passes citing the proving run. A fresh pass uploads the empty proof
+   (30-day retention). Failure modes fail closed: an API error leaves the
+   proof empty and the full gate runs; a failed `fingerprint` job skips the
+   test jobs WITHOUT a proof and the gate fails. `workflow_dispatch` with
+   `full: true` bypasses the lookup.
+3. *Typecheck runs once per job.* `build:production` becomes
+   `pnpm typecheck && pnpm build:artifacts`; CI (after its own Typecheck
+   step) and the Dockerfile call `build:artifacts`. The deploy script keeps
+   `build:production`, so a release built outside CI is still typechecked.
+
+**Not done, and why.** Skipping the Docker image build on PRs that touch no
+build input would save ~2 minutes a run but would let a dev-only dependency
+used at runtime reach main before the image smoke caught it. The nightly full
+suite (4 % of spend) is unchanged. Cheaper runners (self-hosted, or a
+third-party `runs-on`) are the only lever that survives suite growth and were
+declined for now by the owner.
+
+**Expected effect.** At September's volume roughly 40 % fewer billable
+minutes: main merges of an unmoved base cost ~8 minutes instead of ~46,
+prose-only pushes ~2 instead of ~46, and every remaining run is ~2 minutes
+shorter. The fingerprint job itself bills one minute per run.
