@@ -352,6 +352,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 352 | Unified-account rights matrix | Role × sign-in method × page assignments × device rights × client-local cache is a named, tested artefact (`docs/identity-rights-matrix.md` + `tests/rights-matrix.integration.test.ts`), not an implication of #349: an owner's device token is NOT an owner session, the cabinet is cookie-only, and "revoke all devices" leaves the cookie session and the legacy API key alive — so offboarding is a runbook, with the Fansly session, the 60 s SSE recheck and the desktop's local cache named as boundaries the hub does not control |
 | 353 | Fansly status-only earnings rechecks | Exact pending-to-posted signals still fetch both endpoints; a content revision preserves strict money debt while valid unchanged status rechecks may finish. |
 | 354 | A0 reader discrepancy witnesses | Retain at most twenty verified capture pointers per sweep beside exact pre-apply reader state; preserve counters, legacy unknowns, polling and historical attribution limits. |
+| 355 | W0 continuity reference comparison | Validate and hash a complete native phase while comparing only its overlap with a bounded browser window; retain independent live gates as unverified. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -14588,3 +14589,25 @@ keeps that resumed generation unknown. Saved reports remain evidence. These
 witnesses improve attribution of future discrepancies; they do not prove
 provider deletion, close G6917/G6918, reset the clock or establish A0/A1 GO,
 HTTP savings or event-to-reader latency. See the A0 runbook.
+
+## Decision 355: Compare native W0 continuity evidence offline (2026-09-16)
+
+The six-hour receiver streams bounded JSONL; the short-report comparator cannot
+read that format. An operator-only comparator now validates a whole completed
+phase and its exact-byte SHA256, then reuses the existing HMAC entity-reference
+comparison for the intersection with a declared browser window. Frames outside
+that intersection are counted but do not consume its 10,000-frame /32 MiB budget.
+The original phase's byte/record limits, connection identity, monotonic sequence,
+generation receipts, frame counts and completed session duration remain required.
+
+Private regular inputs, bounded line reads and a new mode0600 output prevent
+unbounded loading or accidental artifact replacement. The output keeps the native
+continuity evidence kind and phase; it does not relabel the stream as a short
+probe. Malformed, interrupted and incomplete phases fail closed. Unknown or
+partial in-window diagnostics retain the existing comparison debt semantics.
+
+Receipt consistency is separate from provenance and live acceptance. Host fsync,
+cleanup, gaps, clock alignment, browser completeness, account binding, fan-out,
+presence, payload/version equality and reader latency still need their own
+evidence. This adds no network request, production runtime path, flag or migration
+and needs no runtime deployment. See `docs/runbooks/fansly-ws-continuity.md`.
