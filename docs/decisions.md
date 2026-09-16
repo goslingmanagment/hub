@@ -352,7 +352,8 @@ appends a row here in the same change (family law: updated-in-change).
 | 352 | Unified-account rights matrix | Role × sign-in method × page assignments × device rights × client-local cache is a named, tested artefact (`docs/identity-rights-matrix.md` + `tests/rights-matrix.integration.test.ts`), not an implication of #349: an owner's device token is NOT an owner session, the cabinet is cookie-only, and "revoke all devices" leaves the cookie session and the legacy API key alive — so offboarding is a runbook, with the Fansly session, the 60 s SSE recheck and the desktop's local cache named as boundaries the hub does not control |
 | 353 | Fansly status-only earnings rechecks | Exact pending-to-posted signals still fetch both endpoints; a content revision preserves strict money debt while valid unchanged status rechecks may finish. |
 | 354 | A0 reader discrepancy witnesses | Retain at most twenty verified capture pointers per sweep beside exact pre-apply reader state; preserve counters, legacy unknowns, polling and historical attribution limits. |
-| 358 | W0 continuity reference comparison | Validate and hash a complete native phase while comparing only its overlap with a bounded browser window; retain independent live gates as unverified. |
+| 358 | Fansly purchase-history rejections | A provider answer naming one media as unservable (404/410, now 422 "error getting account media") is a fact about that target: journaled verbatim, consumed, walk continues. Per request namespace, three such rejections must be proven target-local against a completed, provider-served witness before another target is spent; a witness rejected with the streak's status blocks the stream as `purchase_history_rejection_storm`, a different status is no vote, no witness defers instead of blocking. The streak is derived from captures, not stored; after a storm one unblock buys one target of evidence, and a served page retries the storm's members once. |
+| 359 | W0 continuity reference comparison | Validate and hash a complete native phase while comparing only its overlap with a bounded browser window; retain independent live gates as unverified. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -14590,7 +14591,161 @@ witnesses improve attribution of future discrepancies; they do not prove
 provider deletion, close G6917/G6918, reset the clock or establish A0/A1 GO,
 HTTP savings or event-to-reader latency. See the A0 runbook.
 
-## Decision 358: Compare native W0 continuity evidence offline (2026-09-16)
+## Decision 358: A purchase-history rejection is a fact about the target, proven per namespace by a served witness (2026-09-16)
+
+**Incident.** ari-1's `purchase_history` stream was blocked from 2026-09-02 to
+2026-09-15 by one media: a $4.99 video sold in a DM at 15:15 UTC whose order
+history Fansly answered with HTTP 422 `{"code":99,"details":"error getting
+account media"}` twenty-seven minutes later, and byte-identically again when
+the block was lifted by hand on 2026-09-15. The media id is far older than any
+other content the page has sold and is absent from its vault and raw-media
+inventories — a media the account no longer holds, referenced by a message
+that still does. Every other page walked the same request shape successfully
+in the same fortnight (lora-1 alone: 237 single-media targets).
+
+**Root cause, three layers.** (1) The lane's target-local set was a literal
+`[404, 410]`; a 422 fell through to the executor's "any other 4xx parks as
+`provider_bad_data`" rule, which is a fact about the REQUEST CONTRACT applied
+to a fact about ONE TARGET. (2) Fansly's error code 99 is generic: under HTTP
+400 it is the bare-probe / parameter-drift shape ("missing accountMediaId",
+probe-proven systemic, Stage 16), under HTTP 422 it is "I understood the
+request but cannot serve this entity". The handler's comment conflated the two
+("code-99 parameter drift remain stream-level"); the HTTP status carries the
+distinction, the code does not. (3) A `provider_bad_data` block is deliberate
+and preserved (#249), but for the nine ramp-gated Fansly streams no owner reset
+path exists (`BLOCK_TASKS` maps `purchase_history` to the `messages_history`
+group whose reset is refused outright), and the incident pages once. The block
+was correct to exist and impossible to leave.
+
+**Decision.**
+
+1. *Which provider answers are target-local is the classifier's decision on
+   the durable payload, not a status list in the handler.*
+   `classifyFanslyPurchaseHistoryCapture` reads HTTP 422 as
+   `terminal_rejected` — terminal, not blocked, zero rows — beside 404/410's
+   `terminal_missing`. The live rejection and every replay of the capture go
+   through the same function, so they can never disagree. 400 and every other
+   non-2xx stay `http_rejected`. Auth, 429 and 5xx never reach the
+   classifier's terminal verdict: the handler consults it first and re-throws
+   anything it does not call terminal, unjournaled, so the executor's
+   classification (`rate_limit`, `provider_5xx`, the 404 ladder,
+   `provider_bad_data`) is unchanged and no operator-unliftable capture block
+   is created for a transient. The transport ledger (`sync_http_attempts`)
+   already holds those bodies. (Elsewhere in this kernel — the OFAPI capture
+   transport — 422 is bucketed with 400/409 as `request_rejected`; that is a
+   different vendor with a different contract, and this reading is Fansly's,
+   evidenced above.)
+2. *The rejection is captured verbatim.* The journaled payload carries status,
+   Fansly code, the parsed `details` and the redacted body prefix the adapter
+   retained. Before this change only status and code survived; the string
+   that names the cause did not.
+3. *A streak of rejections IN ONE REQUEST NAMESPACE must be proven
+   target-local before that namespace spends another target.* Single media
+   (`accountMediaId`) and bundles (`accountMediaBundleId`) are different query
+   parameters; a break in one says nothing about the other, and a served
+   bundle must not reset a single-media streak. A rejection looks exactly
+   like a request-shape break one target at a time; unproven, a broken
+   contract would walk the whole queue marking every target terminal,
+   quietly, at the daily cap's pace. So at
+   `FANSLY_PURCHASE_HISTORY_REJECTION_PROOF_THRESHOLD` (3) the lane, before
+   requesting the next target of that namespace, re-asks page one of a
+   *witness*: a target this page already walked to completion AND the provider
+   actually served (its newest answer a served page), newest served page
+   first, up to five, targets served earlier in the same run first. The
+   witness page is validated like any page — a malformed "success" proves
+   nothing and is a storm vote. A served witness proves the contract: the
+   rejected media really were unservable. A witness rejected WITH A MEMBER'S
+   STATUS is a storm vote; rejected with a different status (a 404 against a
+   422 streak) it is skipped — the provider telling entities apart is
+   evidence the contract works. Once every witness of the pool has answered
+   and at least one voted, the lane throws `purchase_history_rejection_storm`,
+   which the executor parks as `provider_bad_data` naming the streak, the
+   statuses and the witnesses — after journaling its own VERDICT
+   (`purchase_history_contract_storm`, a raw-only observation kind): provider
+   answers alone cannot tell an owner unblock from an executor retry after a
+   run that died with every witness voted. The verdict says the lane raised
+   the storm; the executor's record of THE RUN THAT DECLARED IT (`sync_runs`:
+   failed, `chunkStatus: "failed"`, error code
+   `purchase_history_rejection_storm` — the verdict row carries its run id)
+   says it blocked on it; the evidence target below needs both. That run,
+   not the newest finished one: an older block cannot vouch for a newer
+   verdict, and a run in between (a day-cap yield, a transport retry of the
+   evidence request) cannot erase an unblock. A verdict the executor never
+   acted on — the run died between the two — is re-declared by the next
+   proof, spending nothing. The chunk budget is five requests and a proof
+   rarely fits one run: it RESUMES — witnesses probed since the newest
+   rejection are not asked again, and a proof cut short spends no target;
+   a proof found concluded without a verdict declares it, spending nothing.
+4. *Everything is derived from the captures, nothing is stored.* Per
+   namespace the timeline is every served page, every rejected page and every
+   witness page, by capture id. A served answer — target page or witness —
+   closes an EPOCH; between two of them the rejected targets are the streak,
+   each counted by its NEWEST answer (a chain served on page one and rejected
+   on a continuation is a rejection), and the witnesses probed after the
+   newest rejection are the proof attempt in progress. A rejection journaled
+   a moment before a crash still counts; a cursor written before this
+   decision needs no migration. Witness pages are journaled under
+   `purchase_history_contract_probe` — as `purchase_history` captures a newer
+   page one would fork the witness's completed chain into `cursor_conflict` —
+   registered as an observation kind and canonicalized by the same family as
+   `purchase_history` (a witness page carries real order rows), and NOT added
+   to the Agent Read Plane's payload allowlist: that list is a reviewed
+   appendix, fail-closed by design, and widening it is a separate decision.
+5. *No evidence is not evidence of a break.* A namespace with no served
+   witness (a new page, or one whose first targets were all unservable), or
+   whose every witness was skipped for answering with a different status, is
+   never blocked on it: it may spend ONE target per UTC day as evidence (the
+   first call of the day, budget permitting) and otherwise defers with a
+   `purchase_history_contract_unproven` anomaly — and while one namespace
+   waits for tomorrow, the first pending target of a namespace that is not
+   gated is brought forward and the lane keeps its ordinary cadence; only
+   when nothing ungated is left does the walk sleep until the next UTC day. A
+   target served earlier in the run and refused on a continuation is a
+   member, never a witness.
+6. *A storm has an exit, and its members are not lost.* The storm's record is
+   the voted witness captures. The owner lifts the block as always
+   (`page_sync_states`); the next run then spends exactly ONE target of that
+   namespace as fresh evidence. Its rejection restarts the proof attempt (the
+   witnesses are asked again — the provider's state may have changed), which
+   ends in a storm again unless one serves. Its served page — or a witness
+   served on a later proof — is a REPAIR: every member of the epoch still
+   rejected exactly once at its cursor is re-queued ahead of the rest of the
+   walk with a `retry` mark, at the cursor it was rejected at (a continuation
+   refused at `order-1` resumes at `order-1`, never from page one, which the
+   chain already holds); a later served answer supersedes the earlier
+   rejection in the chain resolver, and a second rejection settles the target
+   for good. The retries a repair owes are themselves derived from the
+   captures at every run, so a crash between the repairing page and the
+   checkpoint cannot lose them; recovered that way they queue behind the
+   walk's continuations and ahead of fresh work — the order a run without
+   the crash produces — so the page that repaired the contract finishes
+   first and is the witness the retries may need, and the storm's members
+   are recovered before anything found later is spent.
+
+**What this does not do.** It does not add an owner reset path for the
+ramp-gated Fansly streams (a contract change; the current unblock is an
+owner-run `page_sync_states` update) and does not re-alert on standing
+blocks. The executor's block acknowledgement is its ordinary run record,
+neither committed with the block nor kept past the 30-day observability
+retention: a block whose run row never landed, or a storm the owner lifts
+after a month, buys nothing on the first unblock — the lane re-declares
+(zero requests, one verdict row) and the second unblock works. Bounded and
+self-converging; an acknowledgement written with the block and retained
+while unconsumed would close it and is left for a later change. It cannot tell a bulk deletion from a broken contract: a creator who
+wiped her vault gives a 404 streak AND 404 witnesses, which is a storm by
+the rule above — the exit is one target per unblock, and each served target
+proves the contract again; an owner who sees repeated storms on a healthy
+page should read them as that. A rejection outside any streak stays terminal like a 404; only the
+members of a proven-false storm are retried. `FanslyApiError` is unchanged.
+The mid-proof attempt-cap deferral is not pinned by the integration harness
+(the chunk-budget deferral is); the lane's daily attempt cap is far above any
+test's request count.
+
+**Effect on the incident.** After deploy and one more owner unblock of ari-1,
+the pending target is consumed as `terminal_rejected` on its first request and
+the stream proceeds; no further manual action.
+
+## Decision 359: Compare native W0 continuity evidence offline (2026-09-16)
 
 The six-hour receiver streams bounded JSONL; the short-report comparator cannot
 read that format. An operator-only comparator now validates a whole completed

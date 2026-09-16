@@ -17,7 +17,9 @@ import {
   getCheckpoint,
   getPageSyncExecutionContext,
   getCurrentSubscribers,
+  getSyncRun,
   listFanslyPurchaseHistoryCaptures,
+  listFanslyPurchaseHistoryStormVerdicts,
   listFanslyDmRawPayloadsAfterId,
   listFanslyMessagePurchaseTargetsAfterId,
   maxPageFollowGeneration,
@@ -139,13 +141,24 @@ import {
   classifyFanslyPurchaseHistoryCapture,
   classifyFanslyPurchaseHistoryCaptures,
   extractFanslyPurchaseHistoryTargets,
+  classifyFanslyPurchaseHistoryProbe,
+  deriveFanslyPurchaseHistoryRejectionStreaks,
   extractFanslyPurchaseHistoryTargetsFromTransactions,
+  FANSLY_PURCHASE_HISTORY_CONTRACT_PROBE_ENDPOINT,
+  FANSLY_PURCHASE_HISTORY_CONTRACT_STORM_ENDPOINT,
   FANSLY_PURCHASE_HISTORY_DAILY_ATTEMPT_CAP,
+  FANSLY_PURCHASE_HISTORY_PROOF_WITNESS_LIMIT,
+  FANSLY_PURCHASE_HISTORY_REJECTION_PROOF_THRESHOLD,
   FANSLY_PURCHASE_HISTORY_RESULT_LIMIT,
   fanslyPurchaseHistoryTargetKey,
+  fanslyPurchaseHistoryTargetRejection,
+  isServedStatus,
   parseFanslyPurchaseHistoryCursorState,
+  rejectedFanslyPurchaseHistoryPayload,
   type FanslyPurchaseHistoryCaptureClassification,
   type FanslyPurchaseHistoryCursorStateV5,
+  type FanslyPurchaseHistoryPendingTarget,
+  type FanslyPurchaseHistoryTarget,
 } from "./fansly-purchase-history.ts";
 import { isOnlyFansTopSpendersEnabled } from "./onlyfans-top-spenders.ts";
 import {
@@ -3458,6 +3471,50 @@ export async function executePurchaseHistoryChunk(
       ),
     ),
   );
+  type PurchaseHistoryKind = FanslyPurchaseHistoryTarget["kind"];
+  // Every namespace's epoch — streak, proof attempt, storm record, owed
+  // retries — read off the captures and the journaled witness pages.
+  const streaks = deriveFanslyPurchaseHistoryRejectionStreaks(
+    captureIndex,
+    (await Promise.all(
+      (await listFanslyPurchaseHistoryCaptures(
+        app.db,
+        input.pageContext.page.id,
+        FANSLY_PURCHASE_HISTORY_CONTRACT_PROBE_ENDPOINT,
+      )).map((row) => resolveRawCapturePayloadRow(app, row)),
+    )).flatMap((row) => {
+      const probe = classifyFanslyPurchaseHistoryProbe(row);
+      return probe ? [probe] : [];
+    }),
+    (await listFanslyPurchaseHistoryStormVerdicts(app.db, input.pageContext.page.id))
+      .flatMap((verdict) =>
+        verdict.kind === "single" || verdict.kind === "bundle"
+          ? [{ id: verdict.id, kind: verdict.kind, syncRunId: verdict.syncRunId }]
+          : []
+      ),
+  );
+  // A verdict says the lane RAISED a storm; only the executor knows it
+  // BLOCKED on it, and it says so on the record of the run that declared the
+  // verdict — that run, not the newest finished one, so an older block cannot
+  // vouch for a newer verdict and a run in between (a day-cap yield, a
+  // transport retry) cannot erase an unblock. A run that died between verdict
+  // and block is retried with no owner in the loop and must not be handed the
+  // evidence target an unblock buys.
+  const stormBlockRecorded: Record<PurchaseHistoryKind, boolean> = { single: false, bundle: false };
+  for (const kind of ["single", "bundle"] as const) {
+    const verdictRunId = streaks[kind].stormDeclared ? streaks[kind].stormVerdictRunId : null;
+    if (verdictRunId === null) {
+      continue;
+    }
+    const verdictRun = await getSyncRun(app.db, verdictRunId);
+    const runError = verdictRun?.stats.error;
+    stormBlockRecorded[kind] = verdictRun !== null
+      && verdictRun.status === "failed"
+      && verdictRun.stats.chunkStatus === "failed"
+      && typeof runError === "object"
+      && runError !== null
+      && (runError as { code?: unknown }).code === "purchase_history_rejection_storm";
+  }
   const capturedTargetKeys = new Set(captureIndex.capturedTargetKeys);
   const capturedContentIds = new Set(captureIndex.capturedContentIds);
   const validatedCompleteTargetKeys = new Set(captureIndex.validatedCompleteTargetKeys);
@@ -3475,8 +3532,26 @@ export async function executePurchaseHistoryChunk(
   // Rebuild the provider cursor from the durable page chain. This covers both
   // ordinary crash windows (raw page committed, checkpoint not advanced) and
   // v3 checkpoints that falsely dropped a target after one non-empty page.
-  const reconciledPendingTargets = state.pendingTargets.flatMap((target) => {
+  const chainByTargetKey = new Map(captureIndex.chains.map((chain) => [chain.targetKey, chain]));
+  const keptPendingTargets = state.pendingTargets.flatMap((target) => {
     const targetKey = fanslyPurchaseHistoryTargetKey(target);
+    if (target.retry) {
+      // A retry (Decision 358) is owed exactly one more answer, chain or no
+      // chain: served, or rejected a second time at its cursor, it is settled.
+      // A chain that is resumable elsewhere re-asks its own cursor below; the
+      // retry would only duplicate the pending key.
+      const chain = chainByTargetKey.get(targetKey);
+      if (
+        chain
+        && (chain.status === "resumable"
+          || isServedStatus(chain.lastStatusCode)
+          || chain.rejectionsAtLastCursor >= 2)
+      ) {
+        return [];
+      }
+      consumedResumableTargetKeys.add(targetKey);
+      return [target];
+    }
     if (
       validatedCompleteTargetKeys.has(targetKey) ||
       validatedCompleteContentIds.has(target.contentId)
@@ -3495,9 +3570,37 @@ export async function executePurchaseHistoryChunk(
     }
     return [target];
   });
-  for (const resumable of captureIndex.resumableTargets) {
-    if (!consumedResumableTargetKeys.has(fanslyPurchaseHistoryTargetKey(resumable))) {
-      reconciledPendingTargets.push(resumable);
+  const resumedContinuations = captureIndex.resumableTargets.filter((resumable) =>
+    !consumedResumableTargetKeys.has(fanslyPurchaseHistoryTargetKey(resumable))
+  );
+  // Retries a repaired storm owes (Decision 358), read off the captures so a
+  // crash between the repairing page and the checkpoint cannot lose them.
+  // The queue is continuations first (the page that repaired the contract
+  // finishes and becomes the witness the retries may need), then the
+  // retries — a retry asked at a cursor is a re-asked rejection, not a walk in
+  // progress, whatever its `before` — then fresh work: the order a run
+  // without the crash produces.
+  const pendingKeys = new Set(keptPendingTargets.map(fanslyPurchaseHistoryTargetKey));
+  const owedRetries = [...streaks.single.owedRetries, ...streaks.bundle.owedRetries]
+    .filter((retry) => !pendingKeys.has(retry.targetKey))
+    .map((retry) => ({ ...retry.target, before: retry.before, retry: true as const }));
+  const reconciledPendingTargets: FanslyPurchaseHistoryPendingTarget[] = [];
+  // One entry per target key, first wins: the cursor parser refuses
+  // duplicates, and a refused cursor would restart discovery from zero.
+  {
+    const seenKeys = new Set<string>();
+    for (const target of [
+      ...keptPendingTargets.filter((target) => target.before !== null && target.retry !== true),
+      ...resumedContinuations,
+      ...keptPendingTargets.filter((target) => target.retry === true),
+      ...owedRetries,
+      ...keptPendingTargets.filter((target) => target.before === null && target.retry !== true),
+    ]) {
+      const targetKey = fanslyPurchaseHistoryTargetKey(target);
+      if (!seenKeys.has(targetKey)) {
+        seenKeys.add(targetKey);
+        reconciledPendingTargets.push(target);
+      }
     }
   }
   if (JSON.stringify(reconciledPendingTargets) !== JSON.stringify(state.pendingTargets)) {
@@ -3520,6 +3623,380 @@ export async function executePurchaseHistoryChunk(
     );
   }
 
+  const orderHistoryRequestParams = (target: FanslyPurchaseHistoryPendingTarget) =>
+    target.kind === "single"
+      ? {
+        accountMediaId: target.contentId,
+        before: target.before,
+        limit: FANSLY_PURCHASE_HISTORY_RESULT_LIMIT,
+      }
+      : {
+        accountMediaBundleId: target.contentId,
+        before: target.before,
+        limit: FANSLY_PURCHASE_HISTORY_RESULT_LIMIT,
+      };
+
+  // THE REJECTION STREAK AND ITS PROOF (Decision 358). A target-local
+  // rejection (404/410/422) is consumed on the provider's word: journaled,
+  // marked terminal, next target. That is right for a media the creator
+  // deleted and wrong for a request-shape break — the 400/code-99 drift
+  // family, or a 422 Fansly started answering to everything — which looks
+  // exactly the same one target at a time and would walk the whole queue
+  // marking every target terminal, quietly, at the daily cap's pace. So a
+  // streak of rejections in one request namespace (single media and bundles
+  // are different query parameters; a break in one says nothing about the
+  // other) must be PROVEN target-local before that namespace spends another
+  // target: re-ask page one of a witness — a target this page already walked
+  // to completion and the provider actually served. Served → the contract
+  // works, the rejected media really were unservable. Rejected with a
+  // member's status, or answering a malformed body → a storm vote. Rejected
+  // with a DIFFERENT status → the provider tells entities apart, which is
+  // evidence the contract works; no vote. Every witness voted → a storm:
+  // block, fail closed, name it. The chunk budget is five requests, so a
+  // proof rarely fits one run: it RESUMES — witnesses already probed since
+  // the newest rejection are not asked again.
+  //
+  // All of it is read off the captures (`streaks`), never stored. Witness
+  // pages are journaled under their own endpoint — as `purchase_history`
+  // captures a newer page one would fork the witness's completed chain into
+  // `cursor_conflict` — and read back into the same timeline, so a served
+  // witness closes the epoch durably and a voted one is the storm's record.
+  // After a storm the owner's unblock buys exactly ONE target of fresh
+  // evidence: its rejection restarts the proof attempt, its served page is a
+  // repair — and a repair owes the storm's members one retry each, at the
+  // cursor they were rejected at.
+  const servedThisRun: Record<PurchaseHistoryKind, FanslyPurchaseHistoryTarget[]> = {
+    single: [],
+    bundle: [],
+  };
+  const evidenceSpent: Record<PurchaseHistoryKind, boolean> = { single: false, bundle: false };
+  const dayGated = new Set<PurchaseHistoryKind>();
+  const rejectionsThisRun = new Map<string, number>();
+  let probeRequests = 0;
+  let probesServed = 0;
+  let probesRejected = 0;
+  let retriesQueued = 0;
+  let deferredToNextDay = false;
+
+  const rejectionsAtCursor = (target: FanslyPurchaseHistoryPendingTarget) => {
+    const targetKey = fanslyPurchaseHistoryTargetKey(target);
+    const chain = chainByTargetKey.get(targetKey);
+    const durable = chain && (chain.lastRequestBefore ?? "") === (target.before ?? "")
+      ? chain.rejectionsAtLastCursor
+      : 0;
+    return durable + (rejectionsThisRun.get(targetKey) ?? 0);
+  };
+
+  const budgetsAllowOneMore = () =>
+    attemptBudget.hasCapacity()
+    && input.budget.hasRequestCapacity()
+    && input.budget.hasWallClockCapacity();
+
+  const noteRejection = (target: FanslyPurchaseHistoryPendingTarget, status: number) => {
+    const streak = streaks[target.kind];
+    const targetKey = fanslyPurchaseHistoryTargetKey(target);
+    rejectionsThisRun.set(targetKey, (rejectionsThisRun.get(targetKey) ?? 0) + 1);
+    streak.members = [
+      ...streak.members.filter((member) => member.targetKey !== targetKey),
+      {
+        target: { kind: target.kind, contentId: target.contentId },
+        targetKey,
+        before: target.before,
+        status,
+        lastCaptureId: null,
+      },
+    ];
+    streak.count = streak.members.length;
+    streak.statuses = [...new Set(streak.members.map((member) => member.status))];
+    // A new rejection restarts the proof attempt; the storm record survives,
+    // the verdict does not (the next storm needs its own).
+    streak.probedWitnessKeys = [];
+    streak.votes = 0;
+    streak.votedWitnessKeys = [];
+    streak.stormDeclared = false;
+    // A target served earlier in this run and rejected now is no witness:
+    // its newest answer is the rejection.
+    servedThisRun[target.kind] = servedThisRun[target.kind].filter((served) =>
+      served.contentId !== target.contentId
+    );
+  };
+
+  /** A served answer closes the namespace's epoch. If a storm was voted in
+   *  it, the contract is REPAIRED: the members still rejected once at their
+   *  cursor are owed one retry each, returned for the caller to queue. */
+  const noteServed = async (
+    target: FanslyPurchaseHistoryTarget,
+  ): Promise<FanslyPurchaseHistoryPendingTarget[]> => {
+    const streak = streaks[target.kind];
+    const pendingKeys = new Set(state.pendingTargets.map(fanslyPurchaseHistoryTargetKey));
+    const retries: FanslyPurchaseHistoryPendingTarget[] = streak.stormVoted
+      ? streak.members
+        .filter((member) =>
+          !pendingKeys.has(member.targetKey)
+          && rejectionsAtCursor({ ...member.target, before: member.before }) === 1
+        )
+        .map((member) => ({ ...member.target, before: member.before, retry: true as const }))
+      : [];
+    if (retries.length > 0) {
+      retriesQueued += retries.length;
+      await input.telemetry.addAnomaly({
+        code: "purchase_history_rejection_retry_queued",
+        severity: "info",
+        message:
+          `Fansly served a ${target.kind} target after a rejection storm; retrying ${retries.length} target(s) rejected while the contract was broken`,
+        details: {
+          mediaKind: target.kind,
+          contentIds: retries.map((retry) => retry.contentId),
+        },
+      });
+    }
+    streak.count = 0;
+    streak.statuses = [];
+    streak.members = [];
+    streak.probedWitnessKeys = [];
+    streak.votes = 0;
+    streak.votedWitnessKeys = [];
+    streak.stormVoted = false;
+    streak.stormDeclared = false;
+    streak.owedRetries = streak.owedRetries.filter((owed) =>
+      owed.targetKey !== fanslyPurchaseHistoryTargetKey(target)
+    );
+    servedThisRun[target.kind].push({ kind: target.kind, contentId: target.contentId });
+    return retries;
+  };
+
+  const gateRejectionStreak = async (
+    kind: PurchaseHistoryKind,
+  ): Promise<"proven" | "evidence" | "deferred_budget" | "deferred_day"> => {
+    const streak = streaks[kind];
+    // Read before any probe spends an attempt: "first call of the UTC day" is
+    // the allowance for spending a target with no witness to prove against.
+    const freshDay = state.callsToday === 0;
+    const unproven = async (reason: string) => {
+      if (freshDay && !evidenceSpent[kind]) {
+        if (!budgetsAllowOneMore()) {
+          return "deferred_budget" as const;
+        }
+        evidenceSpent[kind] = true;
+        await input.telemetry.addAnomaly({
+          code: "purchase_history_contract_unproven",
+          severity: "warn",
+          message:
+            `${streak.count} consecutive ${kind} purchase-history rejections (HTTP ${streak.statuses.join("/")}) with no usable witness; spending one target as evidence`,
+          details: { mediaKind: kind, reason, rejectionStreak: streak.count, statuses: streak.statuses },
+        });
+        return "evidence" as const;
+      }
+      await input.telemetry.addAnomaly({
+        code: "purchase_history_contract_unproven",
+        severity: "warn",
+        message:
+          `${streak.count} consecutive ${kind} purchase-history rejections (HTTP ${streak.statuses.join("/")}) with no usable witness; deferring the walk to the next UTC day`,
+        details: { mediaKind: kind, reason, rejectionStreak: streak.count, statuses: streak.statuses },
+      });
+      return "deferred_day" as const;
+    };
+
+    const seen = new Set<string>();
+    const pool = [
+      // Served in this run first — the freshest proof there is — then the
+      // durable chains, newest served page first.
+      ...[...servedThisRun[kind]].reverse(),
+      ...captureIndex.chains
+        .filter((chain) =>
+          chain.status === "complete"
+          && chain.target.kind === kind
+          && chain.lastServedCaptureId !== null
+          && isServedStatus(chain.lastStatusCode)
+        )
+        .sort((left, right) => (right.lastServedCaptureId ?? 0) - (left.lastServedCaptureId ?? 0))
+        .map((chain) => chain.target),
+    ].filter((witness) => {
+      const witnessKey = fanslyPurchaseHistoryTargetKey(witness);
+      if (seen.has(witnessKey)) {
+        return false;
+      }
+      seen.add(witnessKey);
+      return true;
+    }).slice(0, FANSLY_PURCHASE_HISTORY_PROOF_WITNESS_LIMIT);
+    const probed = new Set(streak.probedWitnessKeys);
+    const remaining = pool.filter((witness) => !probed.has(fanslyPurchaseHistoryTargetKey(witness)));
+
+    const declareStorm = async (voted: string[]): Promise<never> => {
+      // The verdict goes to the journal BEFORE the block: it is the only
+      // evidence the next run has that a storm was raised and then lifted by
+      // the owner (an executor retry after a crash has no such record).
+      await journalPurchaseHistory(
+        FANSLY_PURCHASE_HISTORY_CONTRACT_STORM_ENDPOINT,
+        { mediaKind: kind },
+        {
+          verdict: "storm",
+          mediaKind: kind,
+          rejectionStreak: streak.count,
+          statuses: streak.statuses,
+          witnesses: voted,
+        },
+        { action: "journaling purchase_history rejection storm verdict" },
+      );
+      streak.stormDeclared = true;
+      throw new FanslyPurchaseHistoryContractError({
+        code: "purchase_history_rejection_storm",
+        message:
+          `Fansly rejected ${streak.count} consecutive ${kind} purchase-history targets with HTTP ${streak.statuses.join("/")} and then the served witness${voted.length === 1 ? "" : "es"} ${voted.join(", ")}; the ${kind} request contract is broken. Unblocking the stream spends one more ${kind} target as fresh evidence.`,
+      });
+    };
+
+    if (streak.stormDeclared && stormBlockRecorded[kind] && !evidenceSpent[kind]) {
+      // The storm was declared, the executor blocked on it, and the stream is
+      // running again: the owner's unblock buys exactly one target's worth of
+      // fresh evidence. Its rejection restarts the proof attempt; its served
+      // page is a repair. Declared but never blocked (the run died first) is
+      // no unblock: the proof below re-declares, spending nothing.
+      if (!budgetsAllowOneMore()) {
+        return "deferred_budget";
+      }
+      evidenceSpent[kind] = true;
+      await input.telemetry.addAnomaly({
+        code: "purchase_history_storm_evidence",
+        severity: "info",
+        message:
+          `Resuming after a ${kind} rejection storm: spending one target as fresh evidence before re-proving the contract`,
+        details: { mediaKind: kind, rejectionStreak: streak.count, statuses: streak.statuses },
+      });
+      return "evidence";
+    }
+    if (streak.votes > 0 && remaining.length === 0) {
+      // Every witness answered and at least one voted, but the block never
+      // landed (no verdict, or a verdict the executor never acted on): declare
+      // it now, spending nothing.
+      return declareStorm(streak.votedWitnessKeys);
+    }
+    if (pool.length === 0) {
+      // No evidence is not evidence of a break. Never block on it: one target
+      // per UTC day is the pace at which a page with nothing served yet may
+      // find out.
+      return unproven("no_witness");
+    }
+
+    const votes: string[] = [];
+    const skipped: string[] = [];
+    for (const witness of remaining) {
+      if (!budgetsAllowOneMore()) {
+        // The probes so far are journaled; the proof resumes from them.
+        return "deferred_budget";
+      }
+      const witnessKey = fanslyPurchaseHistoryTargetKey(witness);
+      const probeParams = orderHistoryRequestParams({ ...witness, before: null });
+      probeRequests += 1;
+      let probe: Awaited<ReturnType<AppContext["adapter"]["getMediaOrderHistoryPage"]>>;
+      try {
+        probe = await app.adapter.getMediaOrderHistoryPage(requestContext, probeParams);
+      } catch (error) {
+        const rejection = fanslyPurchaseHistoryTargetRejection(error);
+        if (rejection === null) {
+          throw error;
+        }
+        const rejectedPayload = rejectedFanslyPurchaseHistoryPayload(rejection);
+        const classified = classifyFanslyPurchaseHistoryCapture({
+          id: null,
+          targetKey: witnessKey,
+          requestBefore: null,
+          statusCode: rejection.status,
+          responsePayload: rejectedPayload,
+        });
+        if (!classified.terminal || classified.blocked) {
+          // Auth, rate limit, 5xx, 400/code-99 drift: the executor's, unchanged.
+          throw error;
+        }
+        await journalPurchaseHistory(
+          FANSLY_PURCHASE_HISTORY_CONTRACT_PROBE_ENDPOINT,
+          probeParams,
+          rejectedPayload,
+          {
+            action: "capturing rejected purchase_history contract probe",
+            row: {
+              statusCode: rejection.status,
+              errorMessage: error instanceof Error ? error.message : String(error),
+            },
+          },
+        );
+        probesRejected += 1;
+        streak.probedWitnessKeys = [...streak.probedWitnessKeys, witnessKey];
+        const label =
+          `${witnessKey} (HTTP ${rejection.status}${rejection.details === null ? "" : `: ${rejection.details}`})`;
+        if (streak.statuses.includes(rejection.status)) {
+          streak.votes += 1;
+          streak.votedWitnessKeys = [...streak.votedWitnessKeys, witnessKey];
+          streak.stormVoted = true;
+          votes.push(label);
+        } else {
+          // A different answer for a different entity: the provider is
+          // discriminating, not broken. No vote; try the next witness.
+          skipped.push(label);
+        }
+        continue;
+      }
+      await journalPurchaseHistory(
+        FANSLY_PURCHASE_HISTORY_CONTRACT_PROBE_ENDPOINT,
+        probeParams,
+        probe.raw,
+        { action: "capturing purchase_history contract probe" },
+      );
+      const page = classifyFanslyPurchaseHistoryCapture({
+        id: null,
+        targetKey: witnessKey,
+        requestBefore: null,
+        statusCode: null,
+        responsePayload: probe.raw,
+      });
+      if (page.blocked) {
+        // A "success" whose body is not an order-history page proves nothing,
+        // exactly as it would block an ordinary target.
+        probesRejected += 1;
+        streak.probedWitnessKeys = [...streak.probedWitnessKeys, witnessKey];
+        streak.votes += 1;
+        streak.votedWitnessKeys = [...streak.votedWitnessKeys, witnessKey];
+        streak.stormVoted = true;
+        votes.push(`${witnessKey} (malformed body: ${page.outcome})`);
+        continue;
+      }
+      probesServed += 1;
+      const provenStreak = streak.count;
+      const provenStatuses = streak.statuses;
+      const repaired = streak.stormVoted;
+      const retries = await noteServed(witness);
+      if (retries.length > 0) {
+        state = { ...state, pendingTargets: [...retries, ...state.pendingTargets] };
+        await savePurchaseHistoryProgress();
+      }
+      await input.telemetry.addAnomaly({
+        code: "purchase_history_rejection_streak_proven",
+        severity: "info",
+        message:
+          `Fansly served completed ${kind} target ${witness.contentId}; ${provenStreak} consecutive rejections (HTTP ${provenStatuses.join("/")}) were target-local`,
+        details: {
+          mediaKind: kind,
+          witnessContentId: witness.contentId,
+          rejectionStreak: provenStreak,
+          statuses: provenStatuses,
+          repaired,
+          retriesQueued: retries.length,
+          skippedWitnesses: skipped,
+        },
+      });
+      return "proven";
+    }
+
+    if (streak.votes > 0) {
+      // Every witness of the pool has answered and at least one voted.
+      return declareStorm(votes.length > 0 ? votes : streak.votedWitnessKeys);
+    }
+    // Every witness answered with a status other than the members': the
+    // provider tells entities apart. No vote either way — same footing as no
+    // witness at all.
+    return unproven("witnesses_discriminated");
+  };
+
   let transactionRowsScanned = 0;
   let transactionScanBatches = 0;
   let transactionTargetsDiscovered = 0;
@@ -3530,6 +4007,13 @@ export async function executePurchaseHistoryChunk(
   let targetsSkipped = 0;
   let pagesFetched = 0;
   let orderRowsCaptured = 0;
+  const proofStats = () => ({
+    probeRequests,
+    probesServed,
+    probesRejected,
+    retriesQueued,
+    rejectionStreaks: { single: streaks.single.count, bundle: streaks.bundle.count },
+  });
 
   while (
     attemptBudget.hasCapacity()
@@ -3558,6 +4042,7 @@ export async function executePurchaseHistoryChunk(
               targetsSkipped,
               pagesFetched,
               orderRowsCaptured,
+              ...proofStats(),
             },
           };
         }
@@ -3619,6 +4104,7 @@ export async function executePurchaseHistoryChunk(
               targetsSkipped,
               pagesFetched,
               orderRowsCaptured,
+              ...proofStats(),
             },
           };
         }
@@ -3654,6 +4140,7 @@ export async function executePurchaseHistoryChunk(
               targetsSkipped,
               pagesFetched,
               orderRowsCaptured,
+              ...proofStats(),
               walkCompleted: true,
             },
           };
@@ -3691,60 +4178,96 @@ export async function executePurchaseHistoryChunk(
     }
 
     const target = state.pendingTargets[0]!;
-    const targetKey = fanslyPurchaseHistoryTargetKey(target);
-    const requestParams = target.kind === "single"
-      ? {
-        accountMediaId: target.contentId,
-        before: target.before,
-        limit: FANSLY_PURCHASE_HISTORY_RESULT_LIMIT,
+    if (streaks[target.kind].count >= FANSLY_PURCHASE_HISTORY_REJECTION_PROOF_THRESHOLD) {
+      const gate = await gateRejectionStreak(target.kind);
+      if (gate === "deferred_budget") {
+        break;
       }
-      : {
-        accountMediaBundleId: target.contentId,
-        before: target.before,
-        limit: FANSLY_PURCHASE_HISTORY_RESULT_LIMIT,
-      };
+      if (gate === "deferred_day") {
+        // One namespace waiting for tomorrow must not hold the other: bring
+        // the first servable target of a namespace that is not gated forward.
+        // Only when nothing ungated is left does the whole lane sleep.
+        dayGated.add(target.kind);
+        // Any namespace not yet deferred today — a gated one gets its own
+        // gate (a proof, or its own deferral), so the run always either
+        // spends a request or sleeps; never "runnable" with nothing to do.
+        const otherIndex = state.pendingTargets.findIndex((candidate) =>
+          candidate.kind !== target.kind && !dayGated.has(candidate.kind)
+        );
+        if (otherIndex > 0) {
+          const other = state.pendingTargets[otherIndex]!;
+          state = {
+            ...state,
+            pendingTargets: [
+              other,
+              ...state.pendingTargets.filter((_candidate, index) => index !== otherIndex),
+            ],
+          };
+          await savePurchaseHistoryProgress();
+          continue;
+        }
+        deferredToNextDay = true;
+        break;
+      }
+      if (gate === "proven") {
+        // The proof spent this iteration's attempt; re-check the budgets.
+        continue;
+      }
+      // "evidence": the target itself is the next proof — request it. The
+      // gate checked the budgets before saying so.
+    }
+    const targetKey = fanslyPurchaseHistoryTargetKey(target);
+    const requestParams = orderHistoryRequestParams(target);
     let page: Awaited<ReturnType<AppContext["adapter"]["getMediaOrderHistoryPage"]>>;
     try {
       page = await app.adapter.getMediaOrderHistoryPage(requestContext, requestParams);
     } catch (error) {
-      // A deleted media item is target-local. Capture the terminal outcome and
-      // move on; auth/rate-limit/server failures and code-99 parameter drift
-      // remain stream-level and fail loudly.
-      const targetScoped = error instanceof FanslyApiError &&
-        typeof error.status === "number" &&
-        [404, 410].includes(error.status);
-      if (!targetScoped) {
+      // A provider answer that names THIS media as the thing it cannot serve
+      // is a fact about the target, not about the request contract: capture it
+      // verbatim, consume the target, move on. WHICH answers count is the
+      // classifier's decision on the durable payload (404/410 gone, 422 "error
+      // getting account media"), so the live rejection and every replay of it
+      // read the same way. Auth, rate limit, 5xx and the 400/code-99 drift
+      // shape keep their stream-level classification in the executor. They are
+      // not journaled here: the transport ledger already holds their bodies,
+      // and a journaled non-terminal 4xx would block this stream before egress
+      // until a code repair — a block no operator could lift.
+      const rejection = fanslyPurchaseHistoryTargetRejection(error);
+      if (rejection === null) {
         throw error;
       }
-      const rejectedPayload = {
-          error: {
-            status: error.status,
-            code: error.code ?? null,
-          },
-        };
-      await journalPurchaseHistory("purchase_history", requestParams, rejectedPayload, {
-        action: "capturing rejected purchase_history target",
-        row: { statusCode: error.status, errorMessage: error.message },
-      });
+      const rejectedPayload = rejectedFanslyPurchaseHistoryPayload(rejection);
       const capture = classifyFanslyPurchaseHistoryCapture({
         id: null,
         targetKey,
         requestBefore: target.before,
-        statusCode: error.status,
+        statusCode: rejection.status,
         responsePayload: rejectedPayload,
       });
       if (!capture.terminal || capture.blocked) {
-        throw purchaseHistoryCaptureBlockError(capture);
+        throw error;
       }
+      await journalPurchaseHistory("purchase_history", requestParams, rejectedPayload, {
+        action: "capturing rejected purchase_history target",
+        row: {
+          statusCode: rejection.status,
+          errorMessage: error instanceof Error ? error.message : String(error),
+        },
+      });
+      noteRejection(target, rejection.status);
       await input.telemetry.addAnomaly({
         code: "purchase_history_media_rejected",
         severity: "warn",
-        message: `Skipped purchase-history media after HTTP ${error.status}`,
+        message: `Skipped purchase-history media after HTTP ${rejection.status}`,
         details: {
           mediaKind: target.kind,
           contentId: target.contentId,
-          status: error.status,
-          fanslyCode: error.code ?? null,
+          retry: target.retry === true,
+          status: rejection.status,
+          fanslyCode: rejection.code,
+          fanslyDetails: rejection.details,
+          outcome: capture.outcome,
+          rejectionStreak: streaks[target.kind].count,
         },
       });
       pagesFetched += 1;
@@ -3792,12 +4315,19 @@ export async function executePurchaseHistoryChunk(
     }
     capturedTargetKeys.add(targetKey);
     capturedContentIds.add(target.contentId);
+    // A served page is the provider's own proof that the contract works — and,
+    // after a storm, that it has been repaired: the streak's members get their
+    // one retry, queued right behind whatever this target still owes.
+    const retries = await noteServed(target);
     state = capture.terminal
-      ? { ...state, pendingTargets: state.pendingTargets.slice(1) }
+      ? { ...state, pendingTargets: [...retries, ...state.pendingTargets.slice(1)] }
       : {
         ...state,
         pendingTargets: [
-          { ...target, before: capture.nextBefore! },
+          // The retry was owed at ONE cursor; the pages behind it are
+          // ordinary pagination.
+          { kind: target.kind, contentId: target.contentId, before: capture.nextBefore! },
+          ...retries,
           ...state.pendingTargets.slice(1),
         ],
       };
@@ -3809,15 +4339,17 @@ export async function executePurchaseHistoryChunk(
     orderRowsCaptured += orderRows;
   }
 
+  const ungatedWorkRemains = state.pendingTargets.some((candidate) => !dayGated.has(candidate.kind));
+  const deferToNextDay = !attemptBudget.hasCapacity() || (deferredToNextDay && !ungatedWorkRemains);
   return {
     satisfied: false,
-    yieldReason: attemptBudget.hasCapacity() ? input.budget.resolveYieldReason() : null,
-    ...(attemptBudget.hasCapacity()
-      ? {}
-      : {
+    yieldReason: deferToNextDay ? null : input.budget.resolveYieldReason(),
+    ...(deferToNextDay
+      ? {
         continuationRetryAt: nextFanslyUtcDayStart(now),
         continuationRequestSource: "scheduled" as const,
-      }),
+      }
+      : {}),
     stats: {
       transactionCursorId: state.transactionCursorId,
       transactionRowsScanned,
@@ -3831,6 +4363,8 @@ export async function executePurchaseHistoryChunk(
       targetsSkipped,
       pagesFetched,
       orderRowsCaptured,
+      ...proofStats(),
+      ...(dayGated.size > 0 ? { deferred: "contract_unproven" } : {}),
     },
   };
 }

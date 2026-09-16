@@ -4,8 +4,17 @@
 // impossible: pre-create partitions 3 months ahead daily, and page the owner
 // through the incident layer when pre-creation fails or the lead shrinks
 // below the floor.
+//
+// It maintains three families on the same lead: `observations` (Stage 7),
+// `domain_events` (Stage 8) and the G5 CAS catalog. The LEAD FLOOR is measured
+// on the first two only — the catalog has no lead query, and a missing catalog
+// month is not a lost fact (capture falls back to inline bodies by design,
+// #215/#220) but a failure to CREATE one still pages, because that silent
+// fallback is exactly what hid the problem.
 
 import {
+  capturePayloadBucketMonth,
+  ensureCapturePayloadCatalogPartitions,
   ensureDomainEventPartitions,
   ensureObservationPartitions,
   getDomainEventPartitionLeadMonths,
@@ -42,6 +51,27 @@ export async function ensureObservationsPartitionSchedule(boss: QueueCreationCli
   await boss.schedule(OBSERVATIONS_PARTITIONS_QUEUE, "10 3 * * *", null, { tz: "UTC" });
 }
 
+/**
+ * The four CAS catalog parents, from the current month through the same lead
+ * the observations side keeps. `ensureCapturePayloadCatalogPartitions` takes
+ * ONE `YYYY-MM-01` bucket month and is idempotent, so this is a plain loop; it
+ * returns `[]` for 2031+ on its own, which is how 0123's `*_future` catch-all
+ * stays un-overlapped.
+ */
+async function ensureCatalogPartitionLead(
+  db: AppContext["db"],
+  now: Date,
+): Promise<string[]> {
+  const created: string[] = [];
+  for (let delta = 0; delta <= OBSERVATION_PARTITION_LEAD_TARGET_MONTHS; delta += 1) {
+    const month = capturePayloadBucketMonth(
+      new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + delta, 1)),
+    );
+    created.push(...await ensureCapturePayloadCatalogPartitions(db, month));
+  }
+  return created;
+}
+
 export async function runObservationsPartitionCheck(
   app: Pick<AppContext, "config" | "db" | "logger">,
   now = new Date(),
@@ -58,6 +88,15 @@ export async function runObservationsPartitionCheck(
       monthsAhead: OBSERVATION_PARTITION_LEAD_TARGET_MONTHS,
       now,
     }));
+    // G5: and the CAS catalog's, on the same lead. Migration 0123 pre-created
+    // months only through 2027-02 because it was written before anything wrote
+    // to the catalog live; nothing since extends them — the only caller of the
+    // helper is the owner-run historical backfill, which addresses PAST months.
+    // An uncovered live month fails with 23514, capture-cas-dual-write swallows
+    // it (counters.failed++, NO_REFS) and capture silently falls back to inline
+    // bodies. The fallback is deliberate (#215/#220); running out of partitions
+    // is not.
+    ensured = ensured.concat(await ensureCatalogPartitionLead(app.db, now));
   } catch (error) {
     failure = error;
     app.logger.warn({ err: error }, "Observations partition pre-creation failed");
