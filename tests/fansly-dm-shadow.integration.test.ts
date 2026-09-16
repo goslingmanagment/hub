@@ -9,6 +9,7 @@ import { groupsPage, HEAD_CREATED_AT_MS, PAGE_ACCOUNT_ID, seedThreadInput,
   sweepAdapter } from "./helpers/fansly-dm-sweep.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 import { INTEGRATION_TEST_TIMEOUT_MS } from "./helpers/timeouts.ts";
+import { resolveDmShadowWitness } from "../apps/runtime/src/services/sync/dm-shadow-witness.ts";
 
 const START = new Date("2026-09-10T12:00:00Z");
 const BOUNDARY = "2026-09-10T11:30:00Z";
@@ -290,6 +291,20 @@ describe("A0 shadow against the real sweep", () => {
         readerPendingHeadsBelowStop: Number(state === "content_pending"),
         readerArchiveOnlyHeadsBelowStop: Number(state === "materialized"),
       });
+      expect(counters.readerWitnessesOmitted).toBe(0);
+      expect(counters.readerWitnesses).toHaveLength(state === "materialized" ? 0 : 1);
+      if (state !== "materialized") {
+        const witness = counters.readerWitnesses[0];
+        expect(witness).toMatchObject({ state, pageNumber: 4, itemIndex: 0,
+          source: state === "missing" ? null : "message_archive", liveHotCopy: false });
+        const observation = (await db.pool.query(`select o.id, o.account_id as "accountId", o.platform, o.kind,
+          coalesce(o.payload, b.body) as payload from observations o
+          left join capture_json_hot_bodies b on b.bucket_month = o.payload_bucket_month
+            and b.object_id = o.payload_object_id where o.id = $1`, [witness.observationId])).rows[0];
+        expect(resolveDmShadowWitness(witness, Number(observation.accountId), {
+          ...observation, id: Number(observation.id), accountId: Number(observation.accountId),
+        })).toEqual({ conversationRef: "g3", messageId: "msg-g3" });
+      }
       expect((await db.pool.query(`select last_message_id from page_dm_threads
         where platform_conversation_id = 'g3'`)).rows[0].last_message_id).toBe("msg-g3");
       // The metadata sweep does not write message bodies; diagnostics must not either.

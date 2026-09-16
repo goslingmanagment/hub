@@ -4,7 +4,7 @@ import { runMigrations } from "../packages/db/src/migrate-runner.ts";
 import { startIntegrationTestDatabase } from "./helpers/db.ts";
 
 it("upgrades populated identities without losing credentials or releasing disabled logins", async (context) => {
-  const testDb = await startIntegrationTestDatabase({ through: "0200_users_username_lower_uidx.sql" });
+  const testDb = await startIntegrationTestDatabase({ through: "0201_fan_earnings_content_revision.sql" });
   if (!testDb) { context.skip(); return; }
   const client = await testDb.pool.connect();
   try {
@@ -23,7 +23,7 @@ it("upgrades populated identities without losing credentials or releasing disabl
     expect((await client.query("select * from users order by id")).rows)
       .toEqual(beforeUsers.rows.map((user) => ({ ...user, deleted_at: null })));
     expect((await client.query("select * from auth_sessions order by id")).rows).toEqual(beforeSessions.rows);
-    expect((await client.query("select * from schema_migrations where id <= '0200_users_username_lower_uidx.sql' order by id")).rows)
+    expect((await client.query("select * from schema_migrations where id <= '0201_fan_earnings_content_revision.sql' order by id")).rows)
       .toEqual(beforeHistory.rows);
     for (const username of ["nikita", "OLGA"]) {
       await expect(client.query("insert into users (username, role) values ($1, 'chatter')", [username]))

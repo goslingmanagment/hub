@@ -5810,6 +5810,8 @@ export const subjectRefreshState = pgTable(
     /** C2b: only earnings planes use claims and revision settlement. */
     requestedRevision: bigint("requested_revision", { mode: "number" }).default(0).notNull(),
     appliedRevision: bigint("applied_revision", { mode: "number" }).default(0).notNull(),
+    /** Latest earnings signal that requires changed aggregate content. */
+    earningsContentRevision: bigint("earnings_content_revision", { mode: "number" }).default(0).notNull(),
     claimedRevision: bigint("claimed_revision", { mode: "number" }),
     claimToken: uuid("claim_token"),
     claimExpiresAt: timestamp("claim_expires_at", { withTimezone: true }),

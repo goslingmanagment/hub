@@ -9,10 +9,10 @@
 > `device_tokens.last_client_version`; migration 0200 adds the unique index on
 > `lower(username)`.
 
-> **STALE (Decision 354, 2026-09-15):** user administration now addresses immutable
+> **STALE (Decision 356, 2026-09-15):** user administration now addresses immutable
 > IDs through `/admin/users/by-id/:userId`, SDK 0.3 retires username routes,
-> migration 0201 adds permanent account deletion and partial login uniqueness,
-> and Team state/cache ownership follows IDs. See Decision 354 and
+> migration 0202 adds permanent account deletion and partial login uniqueness,
+> and Team state/cache ownership follows IDs. See Decision 356 and
 > `docs/runbooks/user-account-deletion.md`; the body predates this change.
 
 # Database Schema

@@ -350,9 +350,11 @@ appends a row here in the same change (family law: updated-in-change).
 | 350 | Вкладка «Команда»: приглашение ссылкой | Человека заводит одна операция и одноразовая ссылка; три операции отзыва названы по тому, что они делают; UI API-ключей для людей удалён, машинное уехало в «Техническое». |
 | 351 | Chatter cabinet `/account` and invitation page `/join` | A chatter's own surface on the hub: an invitation link redeemed into a password, then who-I-am, my devices, my password and my own AI spend. Partially reverses #117 at the owner's order (see 349). |
 | 352 | Unified-account rights matrix | Role × sign-in method × page assignments × device rights × client-local cache is a named, tested artefact (`docs/identity-rights-matrix.md` + `tests/rights-matrix.integration.test.ts`), not an implication of #349: an owner's device token is NOT an owner session, the cabinet is cookie-only, and "revoke all devices" leaves the cookie session and the legacy API key alive — so offboarding is a runbook, with the Fansly session, the 60 s SSE recheck and the desktop's local cache named as boundaries the hub does not control |
-| 353 | Recover an existing team identity | The invite form finds active, invited and disabled logins before creation and offers their existing card. Disabled participants stay visible; restoring access is explicit, preserves identity and grants, and never revives old links or sign-ins. |
-| 354 | Immutable user IDs and permanent account deletion | All account-target admin routes, service writes, dashboard cards/caches and CLI actions use immutable userId. Permanent deletion revokes access, preserves historical identity and frees the login for a new ID; disabled accounts remain restorable. Username routes are retired. |
-
+| 353 | Fansly status-only earnings rechecks | Exact pending-to-posted signals still fetch both endpoints; a content revision preserves strict money debt while valid unchanged status rechecks may finish. |
+| 354 | A0 reader discrepancy witnesses | Retain at most twenty verified capture pointers per sweep beside exact pre-apply reader state; preserve counters, legacy unknowns, polling and historical attribution limits. |
+| 355 | Recover an existing team identity | The invite form finds active, invited and disabled logins before creation and offers their existing card. Disabled participants stay visible; restoring access is explicit, preserves identity and grants, and never revives old links or sign-ins. |
+| 356 | Immutable user IDs and permanent account deletion | All account-target admin routes, service writes, dashboard cards/caches and CLI actions use immutable userId. Permanent deletion revokes access, preserves historical identity and frees the login for a new ID; disabled accounts remain restorable. Username routes are retired. |
+| 357 | Account lifecycle concurrency and uncertain deletion | Non-key user locks preserve actor references; an indeterminate deletion refreshes the account list before retiring the old card. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -14502,7 +14504,96 @@ the PR-1A surface, and every row passed as built.
 
 Plan: `investigations/unified-account-2026-09-15/PLAN.md` §7 (Р11).
 
-## Decision 353: Recover the existing participant instead of recreating them (2026-09-15)
+
+## Decision 353: Confirm status-only Fansly earnings rechecks (2026-09-15)
+
+The Lilly-1 canary exposed a permanent false hold: a retained transaction changed
+only from raw status1/pending to status2/posted, while both earnings endpoints
+already included its unchanged amounts. Later valid unchanged responses could
+never settle the signal under Decision289's blanket changed-content condition.
+The wallet balance also changed; it was already correctly excluded from semantic
+comparison. Retained before/after transaction and earnings observations establish
+this case; HTTP200 alone does not establish it.
+
+Both endpoint revisions still advance on that exact status transition. All other
+persisted semantic fields, including occurrence time, must match. New, reversed,
+unknown-status, money, type, binding and activity changes remain strict. Migration
+0201 adds `earnings_content_revision`, the highest revision requiring changed
+content. A valid nonempty bound recheck against an existing baseline may settle
+status-only R when that high-water revision has already been applied. It does not
+advance last_changed_at or change counters. R+1, independent endpoints, missing
+claims, empty/invalid responses, provider backoff and daily rotation retain their
+existing behavior. This acknowledges a recheck, not provider recomputation.
+
+All pre-migration earnings revisions start strict. A writer overlapping deploy
+or an old rollback writer only supplies the legacy strict dirty reason; receipt
+settlement rejects unchanged acknowledgement for that reason, and a later new
+status mark carries its revision into the high-water column. Thus rollback cannot
+quietly lose money debt. No parser, projection, money formula, flag or cadence
+changes. The existing live C2b/C2c scopes select this behavior.
+
+The bounded `fansly_earnings_refresh_status(page_label, fan_ref)` diagnostic
+returns the two known endpoint rows' operational metadata through `read_only`.
+PUBLIC execute is revoked; no base-table privileges are added. It permits exact
+revision/receipt preflight without an app-user diagnostic fallback.
+
+Legacy debt is not automatically cleared. A separately reviewed owner-authorized
+repair may reclassify only an exact revision with retained proof covering every
+outstanding signal, no active claim and unchanged mutation preconditions. It
+changes classification only; the next normal budgeted REST receipt must settle
+the debt. Preserve raw evidence, prior checks, changes and certified completion.
+The [earnings runbook](runbooks/fansly-earnings-targets.md) records this boundary.
+
+
+## Decision 354: Retain bounded A0 reader discrepancy witnesses (2026-09-15)
+
+The Lilly-2 G6917/G6918 report retained missing-head counts but no per-ID
+pre-apply evidence. The existing investigation found one plausible shared
+candidate in both raw windows; it cannot prove which IDs the historical
+counters counted. Another current-state read cannot reconstruct that snapshot.
+Those two historical cases remain unexplained and the original A0 clock stays.
+
+New fully instrumented sweeps retain the first twenty missing, deleted,
+content-pending or unknown advertised-reader states below the virtual stop.
+Each witness contains only an observation pointer, canonical JSON v1 SHA-256,
+zero-based position in its retained data array, one-based sweep page number,
+worker-clock read start/end and reader state/source/live-hot-copy. The index is
+matched by unique group/head pair in the trimmed capture; it is never inferred
+from mapped-array order. Ambiguous/unavailable capture linkage and excess
+candidates increment an omitted counter. Existing aggregate counts continue
+without truncation. Failed reads yield unknown state and null source/hot-copy.
+The source for a deleted state is the preferred reader source, not necessarily
+the source supplying the dominating tombstone. Read times bracket the existing
+snapshot query, not an exact database snapshot instant or provider latency.
+
+Pointers travel in the existing bounded diagnostics JSON, cursor and report.
+There is no new table, SQL query, migration, provider request or flag. Legacy
+and mid-sweep witness scope is null, never reconstructed as a complete prefix.
+Existing report-failure accounting remains; failure cannot block the business
+sweep. Full polling, destructive-finalization authority, freshness and A1 gates
+are unchanged. A cap or missing linkage is explicit incomplete attribution,
+not permission to accept unrepresented discrepancies.
+
+Offline resolution validates observation ID/page/platform/kind and recomputes
+the digest from the currently retained inline/CAS body before using the index.
+JSONB object key ordering is normalized by the frozen canonical JSON v1 codec.
+The platform-branch budget increases by one for this offline envelope guard;
+it rejects non-Fansly observations and introduces no provider dispatch branch.
+Changed/erased/missing bodies fail closed, without falling back to another item
+or copying identities into the diagnostics store. Existing erasure law retains
+some shared observations/CAS bodies unchanged to preserve bystander lineage;
+their pointers remain resolvable residuals, not anonymous data. Page/model
+erasure already removes the cursor and shadow report. No new fan identity or
+message text is persisted outside existing capture.
+
+Rollback to the prior runtime drops the optional cursor fields; a later upgrade
+keeps that resumed generation unknown. Saved reports remain evidence. These
+witnesses improve attribution of future discrepancies; they do not prove
+provider deletion, close G6917/G6918, reset the clock or establish A0/A1 GO,
+HTTP savings or event-to-reader latency. See the A0 runbook.
+
+
+## Decision 355: Recover the existing participant instead of recreating them (2026-09-15)
 
 The Team invite form offered no route out of `User "Nikita" already exists`
 after offboarding. The kernel was preserving #126 correctly: disabled users
@@ -14539,11 +14630,11 @@ rejected duplicate invite, and explicit restoration followed by a fresh
 invitation with the previous link still revoked.
 
 
-## Decision 354: Immutable account addressing and reusable logins (2026-09-15)
+## Decision 356: Immutable account addressing and reusable logins (2026-09-15)
 
 The owner explicitly requested the architectural rework and regression checks
 following the Nikita delete/recreate failure. This supersedes #126's permanent
-username reservation and #353's recovery-only answer **for deleted accounts**.
+username reservation and #355's recovery-only answer **for deleted accounts**.
 Disabling stays a separate, reversible action that retains its login and saved
 access. Historical facts still survive; no `users` row or captured business
 fact is hard-deleted.
@@ -14559,7 +14650,7 @@ are retained; generated SDK 0.3 records the breaking parameter/path change.
 Sign-in, self-service identity and invitation redemption remain wire-compatible.
 
 **Three lifecycle states.** Enabled and disabled rows reserve their normalized
-login. A permanent `deleted_at` tombstone (migration 0201) excludes the row from
+login. A permanent `deleted_at` tombstone (migration 0202) excludes the row from
 login lookup and normal admin lists, and releases its username by replacing
 both unconditional unique constraints with a partial case-insensitive index
 where `deleted_at IS NULL`. A recreated username always means a newly inserted
@@ -14626,9 +14717,9 @@ the actual dashboard with a disposable local HTTP fixture verified cancel,
 confirm/delete, same-login recreation and the unavailable old card. Production
 was not changed; local verification is not a release claim.
 
-## Decision 355: Account lifecycle lock compatibility and uncertain deletion recovery (2026-09-15)
+## Decision 357: Account lifecycle lock compatibility and uncertain deletion recovery (2026-09-15)
 
-**Context.** Adversarial review of Decision 354 reproduced two reliability
+**Context.** Adversarial review of Decision 356 reproduced two reliability
 defects in local revision `ed4469c1`: cross-user grant/audit foreign keys could
 deadlock, and a lost DELETE response left the deleted account cached.
 
@@ -14649,7 +14740,7 @@ The confirmation reports uncertainty in plain language without SDK route names.
 stale-target 404, uncommitted failure and failed reconciliation. PostgreSQL
 tests synchronize two owner grants before their FK checks and verify both
 commit; existing deletion/login/device races keep their coverage. A populated
-0200-to-0201 migration test preserves users/passwords/sessions, retains disabled
+0200-to-0201 migration test (0202 after release renumbering) preserves users/passwords/sessions, retains disabled
 login reservations, allows a new ID to reuse a deleted login and rejects
 tombstone restoration/renaming. Browser QA uses actual dashboard components
 with disposable mock data and a deliberately severed DELETE response.

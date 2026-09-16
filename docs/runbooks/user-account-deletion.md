@@ -1,6 +1,6 @@
 # User account identity, deletion and login reuse
 
-Decision 354; implementation follows the owner-authorized account lifecycle
+Decision 356; implementation follows the owner-authorized account lifecycle
 rework. This is account removal, not erasure of historical business facts.
 
 ## Identity and lifecycle
@@ -18,7 +18,7 @@ rework. This is account removal, not erasure of historical business facts.
   The account cannot be
   restored or receive new credentials. New creation with the same login gets
   a different ID and no inherited role, grants, credentials or links.
-- Migration 0201 replaces both unconditional username uniqueness constraints
+- Migration 0202 replaces both unconditional username uniqueness constraints
   with a unique case-folded index over `deleted_at IS NULL`. Lookup by login
   excludes deleted accounts. Historical joins continue to use user IDs.
 
@@ -98,7 +98,7 @@ owner-authorized production operation.
    list, retires the old card and permits reinvitation of the freed login.
    If the deletion or subsequent refresh fails, preserve the error and do not
    optimistically remove an account whose absence has not been confirmed.
-10. Upgrade a populated pre-0201 database: preserve user/password/session data,
+10. Upgrade a populated pre-0202 database: preserve user/password/session data,
     keep disabled logins reserved, and reject restoration/renaming of a deleted
     identity while permitting a different ID to use the released login.
 
@@ -121,7 +121,7 @@ owner-authorized production operation.
 - Independent backend and UI review completed. No production account, server,
   installed client or release artifact was changed by this local work.
 
-## Adversarial follow-up verification (Decision 355)
+## Adversarial follow-up verification (Decision 357)
 
 - Reproduced and fixed cross-user grant/audit FK deadlock (`40P01`) and stale
   account state after an indeterminate DELETE response. Both new regressions
@@ -129,8 +129,32 @@ owner-authorized production operation.
 - Final `pnpm check`: **349 unit suites / 4123 passed / 9 existing skips**;
   ESLint, strictness ratchet (unchanged debt) and dashboard build passed.
 - **31 affected PostgreSQL/schema suites / 586 passed / zero skips** with
-  missing prerequisites forbidden. Includes populated 0200-to-0201 upgrade.
+  missing prerequisites forbidden. Includes populated 0200-to-0201 upgrade on the original branch (renumbered to 0202 for release).
 - Browser verified severed DELETE response, automatic old-card retirement and
   immediately available same-login invitation. Only synthetic local data used.
 - Independent source reviews of both follow-up fixes found no new issues.
   Evidence and screenshots: `output/adversarial-review/README.md`.
+
+## Production release preparation (2026-09-16)
+
+- Production and `origin/main` were independently verified at `c57df2238b1a`.
+  Merge that revision before releasing so the already deployed Fansly earnings
+  and A0 witness fixes remain present.
+- Production already applied `0201_fan_earnings_content_revision.sql`. Rename
+  the unpublished account migration to `0202_users_deleted_at.sql`; preserve
+  the applied migration byte for byte. Decision entries are now 355–357.
+- The populated identity upgrade regression starts at production's 0201 and
+  upgrades to 0202, checking existing passwords, sessions, migration history,
+  disabled-login reservations and immutable historical identity.
+- The production clean full image matches the dependency checksum
+  `0667a9e9cd490c9c7ee729e146cfbfa2e432a5c983c3ceec9804f4d9eb24ccd4`.
+  Use the standard deploy script in `dist-only` / `apps` mode without image
+  garbage collection. Preserve the current Postgres container and staged flags.
+- Migration 0202 is deliberately absent from the old-image rollback allowlist.
+  After login reuse, recovery must preserve the new identity semantics.
+- Final merged-source gates passed: `pnpm check` (350 unit suites, 4130 passed,
+  9 existing skips; lint/build/strictness ratchet passed) and 34 PostgreSQL/schema
+  suites (619 passed, zero skips, missing prerequisites forbidden). Existing
+  strictness debt remains 1893 errors in 120 files, with no added debt.
+- All 197 already published migrations match `origin/main` byte for byte.
+  Local evidence: `output/production-release/`.

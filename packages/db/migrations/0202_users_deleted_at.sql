@@ -1,4 +1,4 @@
--- Decision 354: a deleted account keeps its immutable id and all historical
+-- Decision 356: a deleted account keeps its immutable id and all historical
 -- references. The human-readable login can be assigned to a DIFFERENT row.
 -- Disabled accounts remain restorable and continue reserving their login.
 -- Transactional migration: the uniqueness replacement is never half-applied.

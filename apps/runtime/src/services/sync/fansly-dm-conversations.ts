@@ -78,6 +78,7 @@ import { advanceDmShadow, type DmShadowConversation } from "./dm-shadow.ts";
 import { createDmShadowState } from "./dm-shadow-state.ts";
 import { readDmShadowMaterial } from "./dm-shadow-material.ts";
 import { persistDmShadowReport } from "./dm-shadow-report.ts";
+import { createDmShadowWitnessPointers, DM_SHADOW_WITNESS_LIMIT } from "./dm-shadow-witness.ts";
 import {
   assertDmSharedRateLimitEnabled,
   normalizeDmTimestampWithAnomaly,
@@ -470,7 +471,7 @@ export async function fanslyDmConversationsChunk(
     const nextPageCount = state.pageCount + 1;
 
     const capturedPayload = trimFanslyMessagingGroupsPayload(page.raw);
-    await persistRawPayload(app.db, {
+    const listCapture = await persistRawPayload(app.db, {
       platformAccountId: input.pageContext.page.id,
       syncRunId: input.syncRunId,
       endpoint: "dm_conversations",
@@ -602,6 +603,7 @@ export async function fanslyDmConversationsChunk(
         conversation,
       ]),
     );
+    const readerReadStartedAtMs = Date.now();
     const shadowMaterial = shadow === undefined ? null : await readDmShadowMaterial(app, {
       pageId: input.pageContext.page.id,
       maxDurationMs: input.budget.maxWallClockMs - input.budget.elapsedMs,
@@ -611,6 +613,11 @@ export async function fanslyDmConversationsChunk(
         messageId: item.lastMessageId,
       }] : []),
     });
+    const witnessPointer = shadow?.readerWitnesses != null && shadow.stopPage !== null &&
+      shadow.readerWitnesses.length < DM_SHADOW_WITNESS_LIMIT
+      ? createDmShadowWitnessPointers({ observationId: listCapture.observationId,
+        payload: capturedPayload, readStartedAtMs: readerReadStartedAtMs, readFinishedAtMs: Date.now() })
+      : null;
     let unchangedPage = true;
     const shadowConversations: DmShadowConversation[] = [];
     const hydratedAccountsById = new Map<string, FanslyAccount>();
@@ -906,6 +913,7 @@ export async function fanslyDmConversationsChunk(
           readerHead: conversation.lastMessageId ? shadowMaterial?.reader.get(fanslyDmReaderHeadKey({
             conversationRef: conversation.groupId, messageId: conversation.lastMessageId,
           })) ?? null : null,
+          readerWitnessPointer: witnessPointer?.(conversation.groupId, conversation.lastMessageId ?? null) ?? null,
           materialConfirmed: shadowMaterial === null ? null
             : existing !== null && shadowMaterial.hot.get(existing.id)?.present === true,
           discoveryToCaptureMs: existing === null ? null
