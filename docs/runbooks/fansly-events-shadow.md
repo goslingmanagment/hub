@@ -54,6 +54,55 @@ Missing bodies, run receipts or completion proofs remain incomplete. Repeated
 exports use different paths; do not concatenate overlapping windows as unique
 attempts or sweeps.
 
+### Compare retained HTTP windows (Decision 362)
+
+Run the offline comparator on two completed `report` exports. Each report's
+original `.manifest.json` must remain beside it. Inputs must be regular private
+files (no group/other access or symlinks), at most 32 MiB per report and 16 KiB
+per manifest. The output must be new; it is created with mode 0600. No database,
+Fansly request, flag change or new collection is performed by this command.
+
+```sh
+node --import tsx/esm scripts/fansly-events/compare-http-cli.ts \
+  /absolute/evidence/baseline.json /absolute/evidence/current.json \
+  /absolute/evidence/http-comparison.json lilly-1 lilly-2
+```
+
+Choose the same explicit page cohort before comparing. The command verifies
+exact file SHA-256, report/manifest dates, completed export ordering and the
+manifest's **sweep count** (not HTTP attempts). All selected-page sources,
+streams, operations and states contribute to the attempt total. Retry ordinals
+and retry outcomes are separate subsets and are never added to that total.
+Per-page, per-stream and per-source totals keep redistribution visible.
+Nonzero submillisecond window boundaries are rejected instead of rounded;
+microsecond timestamps in the exporter receipts remain accepted.
+
+`eligibleForObservedCountComparison` requires equal, nonoverlapping, ordered
+whole UTC-day windows (at most eight days each), closed before export started;
+the same observed page ID for each selected label; coverage for each selected
+page and attempt stream; and known zero run losses with no unfinished attempts.
+Because the existing coverage export has labels but no page IDs, a page without
+any attempt rows has unverified identity, even if coverage exists. Reused labels
+and absent pages cannot silently become a comparable zero. Attempt source can
+differ from its parent run source, so source equality is not a coverage test.
+
+On incomplete evidence, a valid comparison artifact still records the observed
+counts/delta and `blockers`, with a null percentage. Exit zero means the artifact
+was written; inspect eligibility before interpreting it. Null loss sums are
+unknown. Mixed known/null sums remain explicitly partial, with unknown runs and
+null counter groups shown. Overlapping-run losses are never trimmed or assigned
+to an attempt day. Boundary runs with complete zero losses are allowed. Missing
+payload sizes do not invalidate request counts; bytes describe captured JSON,
+not network egress or proxy spend.
+
+Even an eligible negative `observedAttemptChangePercent` is an observed count
+change, not causal savings. Check workload, activation/policy evidence and reader
+freshness separately. This ledger excludes browser/bootstrap HTTP and WebSocket
+traffic. The result always keeps `causalSavings=unverified` and
+`readerLatency=unmeasured`; it does not close the migration's savings or latency
+acceptance. Hash verification binds the retained pair but does not authenticate
+its provenance. Keep the original read receipts with the evidence.
+
 The SQL calls are also available from ordinary read_only psql:
 
 ```sql
