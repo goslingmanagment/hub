@@ -56,6 +56,9 @@ export const SYNC_PULL_CANONICALIZED_KINDS: ReadonlySet<string> = new Set([
   "earnings_transactions",
   "dm_messages",
   "purchase_history",
+  // Decision 355: a witness page of the purchase-history contract proof is a
+  // real order-history page; its rows are the same facts and dedupe the same.
+  "purchase_history_contract_probe",
 ]);
 
 function fanslyEarningsTransactions(
@@ -224,6 +227,7 @@ export function canonicalizeSyncPullObservation(
       }
       return observation.platform === "fansly" ? fanslyDmMessages(observation, context) : [];
     case "purchase_history":
+    case "purchase_history_contract_probe":
       return observation.platform === "fansly"
         ? fanslyPurchaseHistory(observation, context)
         : [];

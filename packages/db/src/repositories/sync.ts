@@ -612,6 +612,9 @@ export interface FanslyPurchaseHistoryCaptureRow {
 export async function listFanslyPurchaseHistoryCaptures(
   db: Database,
   pageId: number,
+  // The contract proof (Decision 355) journals witness pages under their own
+  // endpoint so they never enter a target's chain; it reads them back here.
+  endpoint: "purchase_history" | "purchase_history_contract_probe" = "purchase_history",
 ): Promise<FanslyPurchaseHistoryCaptureRow[]> {
   const result = await db.execute<{
     id: string;
@@ -637,7 +640,7 @@ export async function listFanslyPurchaseHistoryCaptures(
            rp.payload_object_id::text as "payloadObjectId"
     from ${syncRawPayloads} rp
     where rp.page_id = ${pageId}
-      and rp.endpoint = 'purchase_history'
+      and rp.endpoint = ${endpoint}
       and (
         nullif(rp.request_params ->> 'accountMediaId', '') is not null
         or nullif(rp.request_params ->> 'accountMediaBundleId', '') is not null
@@ -651,6 +654,31 @@ export async function listFanslyPurchaseHistoryCaptures(
     statusCode: row.statusCode,
     responsePayload: row.responsePayload,
     payloadRef: capturePayloadRefFromColumns(row.payloadBucketMonth, row.payloadObjectId),
+  }));
+}
+
+/**
+ * The storm verdicts the purchase-history contract proof journaled (Decision
+ * 355): the lane's own record that it raised a storm, with the run that
+ * raised it — the executor's record of THAT run says whether it blocked.
+ */
+export async function listFanslyPurchaseHistoryStormVerdicts(
+  db: Database,
+  pageId: number,
+): Promise<Array<{ id: number; kind: string | null; syncRunId: number | null }>> {
+  const result = await db.execute<{ id: string; kind: string | null; syncRunId: string | null }>(sql`
+    select rp.id::text as id,
+           rp.request_params ->> 'mediaKind' as kind,
+           rp.sync_run_id::text as "syncRunId"
+    from ${syncRawPayloads} rp
+    where rp.page_id = ${pageId}
+      and rp.endpoint = 'purchase_history_contract_storm'
+    order by rp.id asc
+  `);
+  return result.rows.map((row) => ({
+    id: Number(row.id),
+    kind: row.kind,
+    syncRunId: row.syncRunId === null ? null : Number(row.syncRunId),
   }));
 }
 
