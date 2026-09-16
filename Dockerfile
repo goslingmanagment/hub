@@ -65,8 +65,11 @@ COPY apps ./apps
 COPY packages ./packages
 COPY scripts ./scripts
 
+# Direct Docker/full deploys typecheck by default. CI may reuse its explicit
+# typecheck or an identical-tree proof, but must opt out deliberately.
+ARG CI_TYPECHECK_ALREADY_PASSED=false
 RUN --mount=type=cache,id=agency-hub-corepack-build-${BUILDARCH},target=/corepack,sharing=locked \
-    pnpm build:artifacts
+    bash scripts/build-container.sh
 
 FROM ${NODE_BASE_IMAGE} AS runtime
 

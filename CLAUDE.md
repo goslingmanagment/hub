@@ -93,23 +93,24 @@ quick-ref table up top), Git tags, and production itself.**
   (React SPA, served same-origin), `packages/{contracts,db,sdk,
   shared,fansly}`. ESM everywhere, TS strict.
 - `pnpm check` = typecheck + lint + unit tests + build. Integration tests
-  (`tests/*.integration.test.ts`) need **Docker Desktop** (Testcontainers) and
-  run nightly in CI; don't run two vitest suites in parallel (Testcontainers
-  port clash). Ratchet scripts (platform branches, retention deleters, raw
+  (`tests/*.integration.test.ts`) need **Docker Desktop** (Testcontainers).
+  PR CI covers them with three shards or matching proofs; nightly runs the
+  full API file daily and the entire suite weekly. Do not run two Vitest
+  suites in parallel (Testcontainers port clash). Ratchets (platform branches, retention deleters, raw
   fetch) run inside the test suite.
 - Tests live in root `tests/`; no drizzle-orm imports inside tests; SSE tests
   need listen+fetch (not inject).
-- **Every push is four machines for ~46 billable minutes** (Decision 359).
-  Push work-in-progress with `[skip ci]` in the commit message (GitHub then
-  creates no run at all) and let CI run on the push that is ready for review;
-  prose-only pushes (`investigations/`, `docs/plans`, `docs/decisions.md` …)
-  are already skipped by the tree fingerprint, and a squash merge of an
-  unmoved base reuses the PR's proof. Re-run failed jobs, not the whole
-  workflow. A `[skip ci]` left on a final commit is harmless: the main run
-  finds no proof and runs the full gate. Never write the marker into a PR
-  title or body, or into a commit message that merely talks about it: the
-  squash commit inherits the text and main skips the run that publishes the
-  image (PR #223 skipped itself this way).
+- **A full CI run costs roughly 43–46 runner-minutes** (Decisions 359–361).
+  Keep unfinished work in a Draft PR: heavy jobs wait for Ready for review,
+  and the draft Quality Gate deliberately stays red. Returning a PR to Draft
+  cancels its superseded run. Do not use CI-skip markers in commit messages,
+  PR titles or bodies: squash may copy even an EARLIER commit message onto
+  main and suppress image publication. Clear old markers from the final
+  squash message when merging an existing branch. Reviewed Markdown prose
+  reuses the tree proof; code/data in evidence directories remain checked.
+  Dashboard source-only changes may reuse the backend integration proof;
+  static checks, unit tests and the image still run. Re-run failed jobs,
+  not the whole workflow; dispatch with `full: true` to bypass both proofs.
 - Prod read-only diagnostics need no permission: the Agent Read Plane
   (`read_only` role), `/health*`, SSH for logs/status only (`docker ps/logs`,
   `journalctl`, `df`), psql **only via the `read_only` role — never the app

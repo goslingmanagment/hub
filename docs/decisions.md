@@ -355,6 +355,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 358 | Fansly purchase-history rejections | A provider answer naming one media as unservable (404/410, now 422 "error getting account media") is a fact about that target: journaled verbatim, consumed, walk continues. Per request namespace, three such rejections must be proven target-local against a completed, provider-served witness before another target is spent; a witness rejected with the streak's status blocks the stream as `purchase_history_rejection_storm`, a different status is no vote, no witness defers instead of blocking. The streak is derived from captures, not stored; after a storm one unblock buys one target of evidence, and a served page retries the storm's members once. |
 | 359 | CI gate reuse by tree fingerprint | A run first hashes every blob the gate can observe (`scripts/ci-gate-fingerprint.sh`: the full tree minus prose no check reads) and looks up an earlier passing Quality Gate for that hash in the Artifacts API; a hit skips the test jobs and passes the gate citing the proving run, main still builds and publishes its image. A fresh pass records `quality-gate-<hash>` (30 days). `pnpm typecheck` runs once per job: `build:production` = typecheck + `build:artifacts`, CI and the Dockerfile call `build:artifacts`. `workflow_dispatch` `full: true` forces every job. |
 | 360 | CI volume rules | Nightly runs only what PRs never run (the whole `tests/api.integration.test.ts`) six days a week and the full one-process suite on Mondays and on dispatch. The integration matrix fails fast on pull requests only. Work-in-progress pushes carry `[skip ci]`; CI runs on the push that is ready for review; failed jobs are re-run, not workflows. |
+| 361 | Safe CI reuse and build cost | Fingerprints ignore only reviewed regular Markdown; a separate DB proof excludes dashboard source/public only. Draft PRs block the gate without heavy jobs; squash defaults omit old commit messages and PR titles reject CI-skip instructions. Docker typechecks by default; CI builds once with Buildx layer cache and two isolated unit workers. Proof uploads tolerate reruns; read-only cost reporting deduplicates carried-over jobs. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -14886,3 +14887,85 @@ one spies on `globalThis`, eight use fake timers; a per-file
 `vi.resetModules()` around each of them would give most of the saving back.
 At post-359 volume the whole lever is ~15 % of a full run, not worth a gate
 that can go red by file order.
+
+## Decision 361: CI reuse preserves the checks it claims to replace (2026-09-16)
+
+**Why.** The follow-up to Decisions 359–360 verified two proof-only PR runs at
+2 rounded runner-minutes and two main builds/publications at 7, against 43–46
+for a fresh full gate. It also reproduced three defects: the fingerprint
+excluded executable evidence that ESLint checks; direct full Docker deploys
+had lost the backend typecheck; and squash defaults copied historical WIP
+skip instructions onto main. These corrections supersede the affected claims
+in 359–360; the historical entries remain unchanged.
+
+**Proof boundaries.** `ci-gate-fingerprint.sh` ignores only regular,
+non-executable `.md` files in the previously reviewed prose locations. Code,
+data, unknown paths, symlinks and executable files remain inputs, including
+those under `investigations/`, `.claude/` and `.agentic/`. A behavioral test
+adds evidence that ESLint rejects and proves that its fingerprint changes.
+
+The second `integration` fingerprint omits only regular files under
+`apps/dashboard/src/` and `apps/dashboard/public/`. Dashboard manifests,
+configuration and index.html, lockfiles, all tests/helpers, scripts, shared
+packages and every unknown path remain hashed. A source-boundary ratchet
+rejects backend or integration/helper imports and reads of those omitted
+paths, including common composed path expressions. This is deliberately a
+narrow graph boundary, not a universal dynamic-dependency solver. Static
+checks, all unit tests and the production image still run after frontend
+source changes. Any deliberate new cross-boundary dependency must restore
+its inputs to the DB fingerprint before it can pass that ratchet.
+
+The lookup validates the exact artifact name, expiry, repository identity,
+and a completed successful producer running this CI workflow. Lookup errors
+mean a full check, never a skip. Manual `full: true` bypasses both proofs.
+Quality Gate validates the fingerprint job result; main additionally requires
+successful static/image checks. Failures, cancellation, drafts and unexplained
+skips cannot produce a green gate. A new DB proof is uploaded only when DB
+jobs actually succeeded; a fresh full proof can combine fresh static checks
+with an independently proven DB tree. Both proof uploads use `overwrite`
+so rerun-all and partial upload failures do not collide with an earlier
+attempt of the same run. The checked runtime image retains its per-attempt
+artifact name, identity verification and isolated publishing token.
+
+**WIP and merge.** Keep unfinished PRs in Draft. Heavy jobs wait for Ready for
+review; draft Quality Gate intentionally fails, and the `ready_for_review`
+event runs the checks. Returning to draft cancels a superseded PR run. Agents
+must not use skip instructions in commit messages or PR metadata. Repository
+squash defaults are `PR_TITLE` + `BLANK` (applied and read back via the API), so earlier WIP commit messages
+cannot silently suppress the main push. CI rejects skip instructions in PR
+titles, including edits after an earlier successful head. A body-only edited
+event uses a separate concurrency group and a different, non-required check
+name; it neither cancels real CI nor overwrites Quality Gate with skipped
+success. Title/base edits remain real gate events.
+
+**Build.** Direct Docker builds and full/auto deploys typecheck by default.
+Only CI explicitly sets `CI_TYPECHECK_ALREADY_PASSED=true` after its host
+check or matching full-tree proof; invalid values fail. Docker builds the
+production output once; the duplicated host build is removed. Unit tests
+were exercised from a clean checkout without host dist. Buildx loads the
+actual linux/amd64 image for both existing smoke tests and image-ID checks;
+`context: .` preserves preceding generator/metadata checks. GHA layer cache
+persists across runners, `pull: true` refreshes the base, and cache-export
+failure does not excuse a failed build or smoke. Build/test jobs gain no
+registry-write credentials. Cache mounts are not claimed to persist through
+GHA layer export.
+
+**Test execution and accounting.** The CI unit job uses two workers while
+retaining per-file isolation. Vitest 4 defaults to `CPUs - 1`, leaving only
+one worker on the private 2-vCPU runner. Local Node 22 measurements on the
+same machine were about 195s at one worker and 100s at two, with all tests
+passing; this is not a promise of the same percentage on GitHub. Integration
+file parallelism and the weekly/full API coverage policy are unchanged.
+
+`pnpm ci:cost --days 7 --limit 100` reads completed runs and every attempt,
+reports rounded runner-minutes by run/job, and marks a truncated sample. A
+rerun-failed-jobs API response copies old successful jobs with new IDs; the
+report deduplicates their name/start/end timestamps instead of billing them
+twice. A metadata-only run is not counted as proof reuse. This is an estimate,
+not the billing ledger, and creates no additional paid workflow.
+
+**Validation record.** Implementation and independent review evidence is
+recorded in `docs/reports/ci-cost-safe-followups-2026-09-16.md`. Hosted cache,
+event handling and savings require actual runs of this revision; local
+policy tests alone do not certify GitHub orchestration. Production deployment
+is outside this change.
