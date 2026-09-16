@@ -1,0 +1,37 @@
+name: Nightly
+
+# Stage 35 CI floor: the full Testcontainers integration suite — including the
+# projection rebuild-from-fixtures proofs (message-archive, fan-earnings,
+# ofapi-dm) and the ratchet scripts that run inside it — every night. PRs run
+# the sync-critical subset only (see ci.yml); this is the backstop that keeps
+# the rest of the suite honest.
+
+on:
+  schedule:
+    - cron: "20 2 * * *"
+  workflow_dispatch:
+
+jobs:
+  full-suite:
+    name: Full suite (Testcontainers)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Full test suite (unit + integration + rebuild proofs + ratchets)
+        run: pnpm test
