@@ -355,6 +355,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 358 | Fansly purchase-history rejections | A provider answer naming one media as unservable (404/410, now 422 "error getting account media") is a fact about that target: journaled verbatim, consumed, walk continues. Per request namespace, three such rejections must be proven target-local against a completed, provider-served witness before another target is spent; a witness rejected with the streak's status blocks the stream as `purchase_history_rejection_storm`, a different status is no vote, no witness defers instead of blocking. The streak is derived from captures, not stored; after a storm one unblock buys one target of evidence, and a served page retries the storm's members once. |
 | 359 | CI gate reuse by tree fingerprint | A run first hashes every blob the gate can observe (`scripts/ci-gate-fingerprint.sh`: the full tree minus prose no check reads) and looks up an earlier passing Quality Gate for that hash in the Artifacts API; a hit skips the test jobs and passes the gate citing the proving run, main still builds and publishes its image. A fresh pass records `quality-gate-<hash>` (30 days). `pnpm typecheck` runs once per job: `build:production` = typecheck + `build:artifacts`, CI and the Dockerfile call `build:artifacts`. `workflow_dispatch` `full: true` forces every job. |
 | 360 | CI volume rules | Nightly runs only what PRs never run (the whole `tests/api.integration.test.ts`) six days a week and the full one-process suite on Mondays and on dispatch. The integration matrix fails fast on pull requests only. Work-in-progress pushes carry `[skip ci]`; CI runs on the push that is ready for review; failed jobs are re-run, not workflows. |
+| 362 | Fansly retained HTTP comparison | Offline comparison binds existing measurement exports to their SHA-256 manifests, selects explicit pages, counts all physical-attempt sources once, and withholds a percentage for unmatched windows, page identities or incomplete run telemetry. Count changes never establish causal savings or reader latency. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -14886,3 +14887,42 @@ one spies on `globalThis`, eight use fake timers; a per-file
 `vi.resetModules()` around each of them would give most of the saving back.
 At post-359 volume the whole lever is ~15 % of a full run, not worth a gate
 that can go red by file order.
+
+## Decision 362: Compare retained Fansly HTTP measurements without inferring savings (2026-09-16)
+
+T0 already exports physical sync HTTP-attempt aggregates and overlapping-run
+loss counters. The accepted migration needs comparable evidence; the previous
+comparison used an investigation-specific script. A reusable offline command
+now consumes those same completed report/manifest pairs and an explicit page
+cohort. It adds no runtime behavior, DB query, schema, collection or flag.
+
+The comparator checks the exact SHA-256, report/manifest window agreement and
+sweep record count, bounded private files, consistent page identities and safe
+integer aggregates. Nonzero submillisecond window bounds fail closed rather
+than being rounded to UTC midnight. A comparison percentage requires ordered,
+nonoverlapping, equal whole UTC-day windows closed before export; stable page
+IDs; page/stream run coverage; and complete zero-loss telemetry with no started
+attempts. Missing attempt rows cannot establish a page's identity from the
+label-only coverage export. Run and attempt sources need not match.
+
+Every selected-page source, stream, operation and state contributes once.
+Retry ordinals/outcomes remain subsets. Unknown run telemetry, all-null or
+mixed-null loss counters, unrecorded and unfinished attempts remain explicit
+blockers. Boundary-run losses are not assigned to an attempt day; known-zero
+boundary runs remain valid. Payload-size gaps do not block request counts.
+
+Observed counts and their delta remain available when evidence is incomplete,
+but the percentage is null. Even an eligible count reduction does not prove
+causality, workload equivalence, freshness parity, proxy spend or reader latency.
+Browser/bootstrap HTTP and WebSocket traffic remain outside this ledger. The
+CLI writes a new private artifact, strips unrelated input fields and returns
+sanitized failures. Hash binding is not exporter authentication. See the
+[A0/T0 runbook](runbooks/fansly-events-shadow.md#compare-retained-http-windows-decision-362).
+
+Validation covers retry accounting, unknown/null losses, boundary runs, missing
+coverage, changed identities, mismatched/microsecond windows, hash integrity,
+private file handling and preserved outputs; a PostgreSQL 16 test compares two
+actual measurement-function exports. The retained September 5/12 daily pair
+reproduces 30,684 → 37,268 recorded attempts and correctly withholds the
+percentage because all 7,125 baseline runs have unknown loss telemetry. This
+historical reproduction does not assert a current production saving.
