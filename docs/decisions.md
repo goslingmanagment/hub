@@ -352,7 +352,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 352 | Unified-account rights matrix | Role × sign-in method × page assignments × device rights × client-local cache is a named, tested artefact (`docs/identity-rights-matrix.md` + `tests/rights-matrix.integration.test.ts`), not an implication of #349: an owner's device token is NOT an owner session, the cabinet is cookie-only, and "revoke all devices" leaves the cookie session and the legacy API key alive — so offboarding is a runbook, with the Fansly session, the 60 s SSE recheck and the desktop's local cache named as boundaries the hub does not control |
 | 353 | Fansly status-only earnings rechecks | Exact pending-to-posted signals still fetch both endpoints; a content revision preserves strict money debt while valid unchanged status rechecks may finish. |
 | 354 | A0 reader discrepancy witnesses | Retain at most twenty verified capture pointers per sweep beside exact pre-apply reader state; preserve counters, legacy unknowns, polling and historical attribution limits. |
-| 355 | Fansly purchase-history rejections | A provider answer naming one media as unservable (404/410, now 422 "error getting account media") is a fact about that target: journaled verbatim, consumed, walk continues. Per request namespace, three such rejections must be proven target-local against a completed, provider-served witness before another target is spent; a witness rejected with the streak's status blocks the stream as `purchase_history_rejection_storm`, a different status is no vote, no witness defers instead of blocking. The streak is derived from captures, not stored; after a storm one unblock buys one target of evidence, and a served page retries the storm's members once. |
+| 358 | Fansly purchase-history rejections | A provider answer naming one media as unservable (404/410, now 422 "error getting account media") is a fact about that target: journaled verbatim, consumed, walk continues. Per request namespace, three such rejections must be proven target-local against a completed, provider-served witness before another target is spent; a witness rejected with the streak's status blocks the stream as `purchase_history_rejection_storm`, a different status is no vote, no witness defers instead of blocking. The streak is derived from captures, not stored; after a storm one unblock buys one target of evidence, and a served page retries the storm's members once. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -14590,7 +14590,7 @@ witnesses improve attribution of future discrepancies; they do not prove
 provider deletion, close G6917/G6918, reset the clock or establish A0/A1 GO,
 HTTP savings or event-to-reader latency. See the A0 runbook.
 
-## Decision 355: A purchase-history rejection is a fact about the target, proven per namespace by a served witness (2026-09-16)
+## Decision 358: A purchase-history rejection is a fact about the target, proven per namespace by a served witness (2026-09-16)
 
 **Incident.** ari-1's `purchase_history` stream was blocked from 2026-09-02 to
 2026-09-15 by one media: a $4.99 video sold in a DM at 15:15 UTC whose order

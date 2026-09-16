@@ -15,7 +15,7 @@ export type FanslyPurchaseHistoryPendingTarget = FanslyPurchaseHistoryTarget & {
   before: string | null;
   /**
    * A rejected target re-queued ONCE after a rejection storm turned out to be
-   * a repaired contract (Decision 355). Checkpoint reconciliation keeps a retry
+   * a repaired contract (Decision 358). Checkpoint reconciliation keeps a retry
    * even though its chain reads complete; a second rejection settles it.
    */
   retry?: true;
@@ -54,7 +54,7 @@ export type FanslyPurchaseHistoryCursorStateV5 = {
  * Older cursor shapes remain readable so a deploy can resume in-flight work.
  * Parsed state is always normalized to v5: v4's per-target provider cursor,
  * plus the durable UTC-day attempt allowance shared by the other lanes. The
- * rejection streak (Decision 355) is deliberately NOT cursor state: it is
+ * rejection streak (Decision 358) is deliberately NOT cursor state: it is
  * derived from the captures themselves, so a crash between a journaled
  * rejection and the checkpoint write cannot lose it.
  */
@@ -932,7 +932,7 @@ function resolveFanslyPurchaseHistoryTargetChain(
     }
 
     // A later SERVED answer to the same question supersedes a rejection of
-    // it: a retried target (Decision 355) that the repaired provider now
+    // it: a retried target (Decision 358) that the repaired provider now
     // serves must not read as a fork between "gone" and "here are the rows".
     const unblockedPages = pages.filter((page) => !page.blocked);
     const servedPages = unblockedPages.filter((page) => isServedStatus(page.statusCode));
@@ -1110,7 +1110,7 @@ export function classifyFanslyPurchaseHistoryProbe(
 }
 
 /**
- * Each request namespace's epoch, read off the captures (Decision 355).
+ * Each request namespace's epoch, read off the captures (Decision 358).
  * Nothing here is checkpoint state: a rejection journaled a millisecond
  * before a crash still counts, a proof cut short by the chunk budget resumes
  * where it stopped, a repair that crashed before its checkpoint still owes

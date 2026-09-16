@@ -612,7 +612,7 @@ export interface FanslyPurchaseHistoryCaptureRow {
 export async function listFanslyPurchaseHistoryCaptures(
   db: Database,
   pageId: number,
-  // The contract proof (Decision 355) journals witness pages under their own
+  // The contract proof (Decision 358) journals witness pages under their own
   // endpoint so they never enter a target's chain; it reads them back here.
   endpoint: "purchase_history" | "purchase_history_contract_probe" = "purchase_history",
 ): Promise<FanslyPurchaseHistoryCaptureRow[]> {

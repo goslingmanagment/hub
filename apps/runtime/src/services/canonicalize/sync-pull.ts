@@ -56,7 +56,7 @@ export const SYNC_PULL_CANONICALIZED_KINDS: ReadonlySet<string> = new Set([
   "earnings_transactions",
   "dm_messages",
   "purchase_history",
-  // Decision 355: a witness page of the purchase-history contract proof is a
+  // Decision 358: a witness page of the purchase-history contract proof is a
   // real order-history page; its rows are the same facts and dedupe the same.
   "purchase_history_contract_probe",
 ]);

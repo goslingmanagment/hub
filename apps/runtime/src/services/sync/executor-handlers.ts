@@ -3536,7 +3536,7 @@ export async function executePurchaseHistoryChunk(
   const keptPendingTargets = state.pendingTargets.flatMap((target) => {
     const targetKey = fanslyPurchaseHistoryTargetKey(target);
     if (target.retry) {
-      // A retry (Decision 355) is owed exactly one more answer, chain or no
+      // A retry (Decision 358) is owed exactly one more answer, chain or no
       // chain: served, or rejected a second time at its cursor, it is settled.
       // A chain that is resumable elsewhere re-asks its own cursor below; the
       // retry would only duplicate the pending key.
@@ -3573,7 +3573,7 @@ export async function executePurchaseHistoryChunk(
   const resumedContinuations = captureIndex.resumableTargets.filter((resumable) =>
     !consumedResumableTargetKeys.has(fanslyPurchaseHistoryTargetKey(resumable))
   );
-  // Retries a repaired storm owes (Decision 355), read off the captures so a
+  // Retries a repaired storm owes (Decision 358), read off the captures so a
   // crash between the repairing page and the checkpoint cannot lose them.
   // The queue is continuations first (the page that repaired the contract
   // finishes and becomes the witness the retries may need), then the
@@ -3636,7 +3636,7 @@ export async function executePurchaseHistoryChunk(
         limit: FANSLY_PURCHASE_HISTORY_RESULT_LIMIT,
       };
 
-  // THE REJECTION STREAK AND ITS PROOF (Decision 355). A target-local
+  // THE REJECTION STREAK AND ITS PROOF (Decision 358). A target-local
   // rejection (404/410/422) is consumed on the provider's word: journaled,
   // marked terminal, next target. That is right for a media the creator
   // deleted and wrong for a request-shape break — the 400/code-99 drift
