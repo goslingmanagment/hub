@@ -66,7 +66,7 @@ COPY packages ./packages
 COPY scripts ./scripts
 
 RUN --mount=type=cache,id=agency-hub-corepack-build-${BUILDARCH},target=/corepack,sharing=locked \
-    pnpm build:production
+    pnpm build:artifacts
 
 FROM ${NODE_BASE_IMAGE} AS runtime
 
