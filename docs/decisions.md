@@ -352,7 +352,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 352 | Unified-account rights matrix | Role × sign-in method × page assignments × device rights × client-local cache is a named, tested artefact (`docs/identity-rights-matrix.md` + `tests/rights-matrix.integration.test.ts`), not an implication of #349: an owner's device token is NOT an owner session, the cabinet is cookie-only, and "revoke all devices" leaves the cookie session and the legacy API key alive — so offboarding is a runbook, with the Fansly session, the 60 s SSE recheck and the desktop's local cache named as boundaries the hub does not control |
 | 353 | Fansly status-only earnings rechecks | Exact pending-to-posted signals still fetch both endpoints; a content revision preserves strict money debt while valid unchanged status rechecks may finish. |
 | 354 | A0 reader discrepancy witnesses | Retain at most twenty verified capture pointers per sweep beside exact pre-apply reader state; preserve counters, legacy unknowns, polling and historical attribution limits. |
-| 355 | W0 continuity reference comparison | Validate and hash a complete native phase while comparing only its overlap with a bounded browser window; retain independent live gates as unverified. |
+| 358 | W0 continuity reference comparison | Validate and hash a complete native phase while comparing only its overlap with a bounded browser window; retain independent live gates as unverified. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -14590,7 +14590,7 @@ witnesses improve attribution of future discrepancies; they do not prove
 provider deletion, close G6917/G6918, reset the clock or establish A0/A1 GO,
 HTTP savings or event-to-reader latency. See the A0 runbook.
 
-## Decision 355: Compare native W0 continuity evidence offline (2026-09-16)
+## Decision 358: Compare native W0 continuity evidence offline (2026-09-16)
 
 The six-hour receiver streams bounded JSONL; the short-report comparator cannot
 read that format. An operator-only comparator now validates a whole completed
