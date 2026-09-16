@@ -356,6 +356,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 359 | CI gate reuse by tree fingerprint | A run first hashes every blob the gate can observe (`scripts/ci-gate-fingerprint.sh`: the full tree minus prose no check reads) and looks up an earlier passing Quality Gate for that hash in the Artifacts API; a hit skips the test jobs and passes the gate citing the proving run, main still builds and publishes its image. A fresh pass records `quality-gate-<hash>` (30 days). `pnpm typecheck` runs once per job: `build:production` = typecheck + `build:artifacts`, CI and the Dockerfile call `build:artifacts`. `workflow_dispatch` `full: true` forces every job. |
 | 360 | CI volume rules | Nightly runs only what PRs never run (the whole `tests/api.integration.test.ts`) six days a week and the full one-process suite on Mondays and on dispatch. The integration matrix fails fast on pull requests only. Work-in-progress pushes carry `[skip ci]`; CI runs on the push that is ready for review; failed jobs are re-run, not workflows. |
 | 362 | Fansly retained HTTP comparison | Offline comparison binds existing measurement exports to their SHA-256 manifests, selects explicit pages, counts all physical-attempt sources once, and withholds a percentage for unmatched windows, page identities or incomplete run telemetry. Count changes never establish causal savings or reader latency. |
+| 363 | W0 continuity reference comparison | Validate and hash a complete native phase while comparing only its overlap with a bounded browser window; retain independent live gates as unverified. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -14926,3 +14927,25 @@ actual measurement-function exports. The retained September 5/12 daily pair
 reproduces 30,684 → 37,268 recorded attempts and correctly withholds the
 percentage because all 7,125 baseline runs have unknown loss telemetry. This
 historical reproduction does not assert a current production saving.
+
+## Decision 363: Compare native W0 continuity evidence offline (2026-09-16)
+
+The six-hour receiver streams bounded JSONL; the short-report comparator cannot
+read that format. An operator-only comparator now validates a whole completed
+phase and its exact-byte SHA256, then reuses the existing HMAC entity-reference
+comparison for the intersection with a declared browser window. Frames outside
+that intersection are counted but do not consume its 10,000-frame /32 MiB budget.
+The original phase's byte/record limits, connection identity, monotonic sequence,
+generation receipts, frame counts and completed session duration remain required.
+
+Private regular inputs, bounded line reads and a new mode0600 output prevent
+unbounded loading or accidental artifact replacement. The output keeps the native
+continuity evidence kind and phase; it does not relabel the stream as a short
+probe. Malformed, interrupted and incomplete phases fail closed. Unknown or
+partial in-window diagnostics retain the existing comparison debt semantics.
+
+Receipt consistency is separate from provenance and live acceptance. Host fsync,
+cleanup, gaps, clock alignment, browser completeness, account binding, fan-out,
+presence, payload/version equality and reader latency still need their own
+evidence. This adds no network request, production runtime path, flag or migration
+and needs no runtime deployment. See `docs/runbooks/fansly-ws-continuity.md`.
