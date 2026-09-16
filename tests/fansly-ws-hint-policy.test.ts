@@ -32,6 +32,31 @@ describe("B1 activation policy", () => {
     expect(policy?.maxAttempts24h).toBe(10);
     expect([...policy!.enabledTypes]).toEqual(["message_created"]);
   });
+  const bounded = (change: Record<string, unknown>) => ({ ...config,
+    fanslyWsHintsPolicies: JSON.stringify({ "lilly-1": {
+      generation, activationAt: "2026-09-15T00:00:00Z", baselineAttempts24h: 203,
+      baselineReference: "test-baseline", ...change,
+    } }),
+  });
+  it("expires at the exact deadline, including when the flag remains enabled", () => {
+    const timed = bounded({ expiresAt: "2026-09-15T04:00:00+03:00" });
+    expect(resolveFanslyWsHintPolicy(timed, "lilly-1", new Date("2026-09-15T00:59:59.999Z"))).not.toBeNull();
+    expect(resolveFanslyWsHintPolicy(timed, "lilly-1", new Date("2026-09-15T01:00:00Z"))).toBeNull();
+    expect(resolveFanslyWsHintPolicy(timed, "lilly-1", new Date("2026-09-16T00:00:00Z"))).toBeNull();
+  });
+  it.each([
+    { expiresAt: "invalid" }, { expiresAt: "2026-09-15T00:00:00Z" },
+    { expiresAt: "2026-09-14T23:59:59Z" }, { expiresAt: null },
+    { attemptLimit24h: 0 }, { attemptLimit24h: -1 }, { attemptLimit24h: 1.5 },
+    { attemptLimit24h: "2" }, { attemptLimit24h: null },
+  ])("refuses a malformed or nonpositive canary bound %j", change => {
+    expect(resolveFanslyWsHintPolicy(bounded(change), "lilly-1", new Date("2026-09-15T00:30:00Z"))).toBeNull();
+  });
+  it("only tightens the five-percent allowance without changing its measured baseline", () => {
+    expect(resolveFanslyWsHintPolicy(bounded({ attemptLimit24h: 2 }), "lilly-1"))
+      .toMatchObject({ maxAttempts24h: 2, baselineAttempts24h: 203, baselineReference: "test-baseline" });
+    expect(resolveFanslyWsHintPolicy(bounded({ attemptLimit24h: 999 }), "lilly-1")?.maxAttempts24h).toBe(10);
+  });
 });
 
 describe("B1 canonical signal material", () => {

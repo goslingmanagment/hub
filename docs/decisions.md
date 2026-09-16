@@ -356,6 +356,9 @@ appends a row here in the same change (family law: updated-in-change).
 | 359 | CI gate reuse by tree fingerprint | A run first hashes every blob the gate can observe (`scripts/ci-gate-fingerprint.sh`: the full tree minus prose no check reads) and looks up an earlier passing Quality Gate for that hash in the Artifacts API; a hit skips the test jobs and passes the gate citing the proving run, main still builds and publishes its image. A fresh pass records `quality-gate-<hash>` (30 days). `pnpm typecheck` runs once per job: `build:production` = typecheck + `build:artifacts`, CI and the Dockerfile call `build:artifacts`. `workflow_dispatch` `full: true` forces every job. |
 | 360 | CI volume rules | Nightly runs only what PRs never run (the whole `tests/api.integration.test.ts`) six days a week and the full one-process suite on Mondays and on dispatch. The integration matrix fails fast on pull requests only. Work-in-progress pushes carry `[skip ci]`; CI runs on the push that is ready for review; failed jobs are re-run, not workflows. |
 | 361 | Safe CI reuse and build cost | Fingerprints ignore only reviewed regular Markdown; a separate DB proof excludes dashboard source/public only. Draft PRs block the gate without heavy jobs; squash defaults omit old commit messages and PR titles reject CI-skip instructions. Docker typechecks by default; CI builds once with Buildx layer cache and two isolated unit workers. Proof uploads tolerate reruns; read-only cost reporting deduplicates carried-over jobs. |
+| 362 | Fansly retained HTTP comparison | Offline comparison binds existing measurement exports to their SHA-256 manifests, selects explicit pages, counts all physical-attempt sources once, and withholds a percentage for unmatched windows, page identities or incomplete run telemetry. Count changes never establish causal savings or reader latency. |
+| 363 | W0 continuity reference comparison | Validate and hash a complete native phase while comparing only its overlap with a bounded browser window; retain independent live gates as unverified. |
+| 364 | Fansly bounded early B1 canary | Owner-approved Lilly-1/message-created trial replaces its seven-day entry wait with durable evidence, a 60-minute expiry and at most ten additional attempts; full polling and broader rollout gates remain. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -14969,3 +14972,107 @@ recorded in `docs/reports/ci-cost-safe-followups-2026-09-16.md`. Hosted cache,
 event handling and savings require actual runs of this revision; local
 policy tests alone do not certify GitHub orchestration. Production deployment
 is outside this change.
+## Decision 362: Compare retained Fansly HTTP measurements without inferring savings (2026-09-16)
+
+T0 already exports physical sync HTTP-attempt aggregates and overlapping-run
+loss counters. The accepted migration needs comparable evidence; the previous
+comparison used an investigation-specific script. A reusable offline command
+now consumes those same completed report/manifest pairs and an explicit page
+cohort. It adds no runtime behavior, DB query, schema, collection or flag.
+
+The comparator checks the exact SHA-256, report/manifest window agreement and
+sweep record count, bounded private files, consistent page identities and safe
+integer aggregates. Nonzero submillisecond window bounds fail closed rather
+than being rounded to UTC midnight. A comparison percentage requires ordered,
+nonoverlapping, equal whole UTC-day windows closed before export; stable page
+IDs; page/stream run coverage; and complete zero-loss telemetry with no started
+attempts. Missing attempt rows cannot establish a page's identity from the
+label-only coverage export. Run and attempt sources need not match.
+
+Every selected-page source, stream, operation and state contributes once.
+Retry ordinals/outcomes remain subsets. Unknown run telemetry, all-null or
+mixed-null loss counters, unrecorded and unfinished attempts remain explicit
+blockers. Boundary-run losses are not assigned to an attempt day; known-zero
+boundary runs remain valid. Payload-size gaps do not block request counts.
+
+Observed counts and their delta remain available when evidence is incomplete,
+but the percentage is null. Even an eligible count reduction does not prove
+causality, workload equivalence, freshness parity, proxy spend or reader latency.
+Browser/bootstrap HTTP and WebSocket traffic remain outside this ledger. The
+CLI writes a new private artifact, strips unrelated input fields and returns
+sanitized failures. Hash binding is not exporter authentication. See the
+[A0/T0 runbook](runbooks/fansly-events-shadow.md#compare-retained-http-windows-decision-362).
+
+Validation covers retry accounting, unknown/null losses, boundary runs, missing
+coverage, changed identities, mismatched/microsecond windows, hash integrity,
+private file handling and preserved outputs; a PostgreSQL 16 test compares two
+actual measurement-function exports. The retained September 5/12 daily pair
+reproduces 30,684 → 37,268 recorded attempts and correctly withholds the
+percentage because all 7,125 baseline runs have unknown loss telemetry. This
+historical reproduction does not assert a current production saving.
+
+## Decision 363: Compare native W0 continuity evidence offline (2026-09-16)
+
+The six-hour receiver streams bounded JSONL; the short-report comparator cannot
+read that format. An operator-only comparator now validates a whole completed
+phase and its exact-byte SHA256, then reuses the existing HMAC entity-reference
+comparison for the intersection with a declared browser window. Frames outside
+that intersection are counted but do not consume its 10,000-frame /32 MiB budget.
+The original phase's byte/record limits, connection identity, monotonic sequence,
+generation receipts, frame counts and completed session duration remain required.
+
+Private regular inputs, bounded line reads and a new mode0600 output prevent
+unbounded loading or accidental artifact replacement. The output keeps the native
+continuity evidence kind and phase; it does not relabel the stream as a short
+probe. Malformed, interrupted and incomplete phases fail closed. Unknown or
+partial in-window diagnostics retain the existing comparison debt semantics.
+
+Receipt consistency is separate from provenance and live acceptance. Host fsync,
+cleanup, gaps, clock alignment, browser completeness, account binding, fan-out,
+presence, payload/version equality and reader latency still need their own
+evidence. This adds no network request, production runtime path, flag or migration
+and needs no runtime deployment. See `docs/runbooks/fansly-ws-continuity.md`.
+
+## Decision 364: Bound the first B1 canary instead of waiting seven days (2026-09-16)
+
+The owner asked to reduce serial validation waits and approved continuing with
+a short, one-page B1 trial while full polling remains enabled. This amends the
+calendar entry requirement in Decisions 343/344 and the September 7 migration
+plan for that trial only. It does not declare the old W0/B0 acceptance complete.
+
+The first trial is Lilly-1 and `message_created`, for at most 60 minutes and
+ten additional physical attempts, still below five percent of the retained
+per-page baseline. W0's already running continuity/gap experiment must finish
+and clean up; transport/auth/generation failure is a refusal. Reuse the accepted
+paired DM and current Away presence evidence. A quiet gap remains unknown but
+does not force a new experiment before additive reads with unchanged polling.
+B0 must durably capture and decode the selected live type under the accepted
+generation and demonstrate its kill-switch before enabling B1. Tests, not
+production fault injection or waiting for random failures, cover known recovery
+and fencing paths. The current runbook specifies the exact entry/exit checks.
+
+The existing page policy gains optional `expiresAt` and `attemptLimit24h`.
+Malformed bounds fail closed; expiry must follow activation. Expiry rejects new
+policy resolution and admission at the deadline, including after lock waits.
+Expiry is rechecked after database admission/commit and the final telemetry
+await before dispatch. A late refusal keeps committed budget custody and closes
+started telemetry as a policy failure; an uncommitted reservation rolls back.
+Already dispatched responses may finish durable capture and fenced settlement;
+ordinary polling and B0 continue. The optional attempt cap only lowers the
+existing five-percent rolling-24-hour allowance, counted across policies and
+generations. No timer, automation, new queue, schema or counter reset is needed.
+Older policies remain compatible; both bounds are mandatory for the early
+trial. Every audited setting still changes separately, with B1 enabled last.
+
+A quiet trial expires as inconclusive; no automatic extension or additional
+test message is authorized. A successful sample establishes its selected route
+and rollback, not complete event coverage, reader latency percentiles or causal
+savings. Keep the seven-day B0 observation in the background for broader rollout.
+A0/A1, freshness and polling-reduction gates remain unchanged. Repeat green
+checks only for a relevant change, failure or a specific uncovered risk.
+
+Validation covers exact expiry, invalid bounds, a cap that cannot enlarge the
+baseline, refusal between claim and dispatch, durable capture of an admitted
+response after expiry, event-only refusal with ordinary-polling recovery, and
+rolling-attempt custody after a policy edit. See
+[`fansly-ws-hints.md`](runbooks/fansly-ws-hints.md#bounded-early-canary-decision-364).
