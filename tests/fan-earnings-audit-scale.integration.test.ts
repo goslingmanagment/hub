@@ -48,6 +48,9 @@ it("exhausts 120,000 retained captures without claiming that an absent projectio
     from generate_series(1, 120000) i`, [f.page.id, Buffer.alloc(32)]);
   const started = performance.now();
   const outputDirectory = join(directory, "corpus");
+  // Ordinary CI verifies the real 120k export and exact burst count. Explicit
+  // benchmark runs additionally simulate WAN latency, as before.
+  const artificialRoundTripMs = process.env.FANSLY_AUDIT_BENCHMARK_OUTPUT ? 100 : 0;
   let responseBatches = 0;
   const exported = await exportEarningsAudit({
     page: f.page.label, from: "2026-01-01T00:00:00Z", to: new Date().toISOString(), outputDirectory,
@@ -58,7 +61,7 @@ it("exhausts 120,000 retained captures without claiming that an absent projectio
       async readMany(sql, count) {
         responseBatches += 1;
         // Reproduce WAN round-trip cost once per burst, not once per page.
-        await delay(100);
+        if (artificialRoundTripMs > 0) await delay(artificialRoundTripMs);
         return reader.readMany(sql, count);
       },
       close: () => reader.close(),
@@ -72,7 +75,7 @@ it("exhausts 120,000 retained captures without claiming that an absent projectio
     verified: false, projectorCaughtUp: false, outcomes: { projection_pending: 1000 },
   });
   await retainMeasurement("corpus", {
-    observations: 120000, fanWindows: 1000, responseBatches, artificialRoundTripMs: 100,
+    observations: 120000, fanWindows: 1000, responseBatches, artificialRoundTripMs,
   }, started, "local_docker_psql");
 }, 120_000);
 
