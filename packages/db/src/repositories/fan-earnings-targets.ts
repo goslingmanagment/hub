@@ -58,6 +58,27 @@ export async function deferFanEarningsTarget(db: Database, claim: FanEarningsCla
       and claim_token=${claim.token}::uuid and claimed_revision=${claim.revision}`);
 }
 
+/** Decision 368. A spender is fresh only when BOTH earnings endpoints carry a
+ * VALID check inside the window, neither is dirty, neither is inside a
+ * failure/provider cooldown and neither is mid-claim. A missing plane row is
+ * never fresh. The conditions are deliberately at least as strict as
+ * `countFanEarningsRecoveryDebt`, so a skip can never manufacture debt. */
+export async function isFanEarningsFresh(db: Database, input: {
+  pageId: number; fanRef: string; maxAgeMs: number; now: Date;
+}): Promise<boolean> {
+  const result = await db.execute<{ fresh: boolean }>(sql`
+    select count(*) = 2 as fresh from subject_refresh_state
+    where page_id = ${input.pageId} and subject_ref = ${input.fanRef}
+      and plane in ('fan_earnings_lifetime','fan_earnings_monthly')
+      and last_checked_at is not null
+      and last_checked_at > ${new Date(input.now.getTime() - input.maxAgeMs)}
+      and requested_revision <= applied_revision
+      and claim_token is null
+      and last_refresh_outcome = 'observed'
+      and (retry_after_at is null or retry_after_at <= ${input.now})`);
+  return result.rows[0]?.fresh === true;
+}
+
 /** Certification covers every tracked endpoint and explicit unknown attribution
  * debt; it never makes an unvisited/failed endpoint fresh via another fan. */
 export async function countFanEarningsRecoveryDebt(db: Database, pageId: number, now: Date, maxAgeMs: number) {

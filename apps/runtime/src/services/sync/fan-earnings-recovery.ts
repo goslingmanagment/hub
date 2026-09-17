@@ -1,11 +1,16 @@
 import {
   assertOwnedPageSyncLease, countFanEarningsRecoveryDebt, getCheckpoint,
-  getPageSyncExecutionContext, listPageFanNativeIds, upsertCheckpoint, upsertCheckpointProgress,
+  getPageSyncExecutionContext, isFanEarningsFresh, listPageFanNativeIds,
+  upsertCheckpoint, upsertCheckpointProgress,
 } from "@agency_hub_core/db";
 import type { AppContext } from "../../bootstrap.ts";
+import { loadEffectiveConfig } from "../effective-config.ts";
 import { captureFanEarningsEndpoint } from "./fan-earnings-capture.ts";
-import { FAN_EARNINGS_RECOVERY_MAX_AGE_MS, runFanEarningsTargetStep } from "./fan-earnings-targets.ts";
+import {
+  fanEarningsEffectiveMaxAgeMs, fanEarningsRosterMaxAgeMs, runFanEarningsTargetStep,
+} from "./fan-earnings-targets.ts";
 import { composeRequestObservers } from "./chunk-budget.ts";
+import { isPageAllowlisted } from "./fansly-stream-gate.ts";
 import { createPageRateLimitWaiter } from "./rate-limiter.ts";
 import type { ExecutorRequestContext, StreamChunkResult } from "./executor-types.ts";
 
@@ -48,7 +53,30 @@ export async function executeFanEarningsRecovery(app: AppContext, input: Executo
     requestObserver: composeRequestObservers(input.telemetry.getRequestObserver(), input.budget),
     rateLimitWaiter: createPageRateLimitWaiter(app, input.pageContext),
   };
+  const config = await loadEffectiveConfig(app.db, app.config);
+  // Decision 368: null keeps the every-spender recovery roster unchanged. Only a
+  // shadow page marks its fans dirty on a new transaction, so only a shadow page
+  // may trust a receipt and skip; recovery writes receipts without that signal.
+  const rosterMaxAgeMs = isPageAllowlisted(
+    config.fanslyFanEarningsShadowPageAllowlist, input.pageContext.page.label,
+  ) ? fanEarningsRosterMaxAgeMs(config) : null;
+  // The walk judges freshness per fan as it goes but certifies coverage once, at
+  // the end. A multi-chunk walk can outlive the window it skipped under, so the
+  // debt count is anchored to the walk's START: every fan read during the walk
+  // was checked at or after it, and every skipped fan was inside the window at
+  // that moment. Dirty, failed and claimed rows stay debt either way.
+  const walkStartedAt = sameWalk && typeof state.walkStartedAt === "string"
+    && Number.isFinite(Date.parse(state.walkStartedAt))
+    ? state.walkStartedAt : new Date().toISOString();
+  // Separate cursor field makes a disabled gate or an old binary start the
+  // legacy roster from zero instead of crossing recovery's deferred fans.
+  const recordCursor = (recoveryCursorFanId: number) => upsertCheckpointProgress(app.db, {
+    platformAccountId: pageId, stream: "fan_earnings",
+    state: { mode: "recovery", revision: execution.requestSeq, recoveryCursorFanId, walkStartedAt,
+      ...(previousCompletedAt ? { completedAt: previousCompletedAt } : {}) },
+  });
   let fansFetched = 0;
+  let fansFresh = 0;
   let rejectedEndpoints = 0;
   let exhausted = false;
   while (input.budget.hasRequestCapacity(2) && input.budget.hasWallClockCapacity()) {
@@ -57,6 +85,15 @@ export async function executeFanEarningsRecovery(app: AppContext, input: Executo
       platformAccountId: pageId, afterFanId: cursor, limit: 1, spendersOnly: true,
     });
     if (!fan) { exhausted = true; break; }
+    // A skip requests nothing: it is durable progress, not crossed debt.
+    if (rosterMaxAgeMs !== null && await isFanEarningsFresh(app.db, {
+      pageId, fanRef: fan.platformUserId, maxAgeMs: rosterMaxAgeMs, now: new Date(),
+    })) {
+      cursor = fan.fanId;
+      fansFresh++;
+      await recordCursor(cursor);
+      continue;
+    }
     const window = { after: new Date(0), before: new Date() };
     for (const endpoint of ["lifetime", "monthly"] as const) {
       await assertOwnedPageSyncLease(app.db);
@@ -71,22 +108,20 @@ export async function executeFanEarningsRecovery(app: AppContext, input: Executo
     }
     cursor = fan.fanId;
     fansFetched++;
-    // Separate cursor field makes a disabled gate or an old binary start the
-    // legacy roster from zero instead of crossing recovery's deferred fans.
-    await upsertCheckpointProgress(app.db, {
-      platformAccountId: pageId, stream: "fan_earnings",
-      state: { mode: "recovery", revision: execution.requestSeq, recoveryCursorFanId: cursor,
-        ...(previousCompletedAt ? { completedAt: previousCompletedAt } : {}) },
-    });
+    await recordCursor(cursor);
   }
   if (!exhausted) return {
     satisfied: false, yieldReason: input.budget.resolveYieldReason(2),
-    stats: { fansFetched, rejectedEndpoints, recoveryCursorFanId: cursor },
+    stats: { fansFetched, fansFresh, rejectedEndpoints, recoveryCursorFanId: cursor },
   };
   const completedAt = new Date();
-  const debt = await countFanEarningsRecoveryDebt(app.db, pageId, completedAt, FAN_EARNINGS_RECOVERY_MAX_AGE_MS);
+  // The debt window follows the roster: a spender the roster may legitimately
+  // skip is covered, not unconfirmed.
+  const debt = await countFanEarningsRecoveryDebt(
+    app.db, pageId, new Date(walkStartedAt), fanEarningsEffectiveMaxAgeMs(config),
+  );
   const completion = {
-    mode: "recovery", revision: execution.requestSeq, recoveryCursorFanId: 0,
+    mode: "recovery", revision: execution.requestSeq, recoveryCursorFanId: 0, walkStartedAt,
     walkCompletedAt: completedAt.toISOString(), completionRunId: input.syncRunId,
     ...(debt ? { qualityHold: DEBT_HOLD, ...(previousCompletedAt ? { completedAt: previousCompletedAt } : {}) }
       : { completedAt: completedAt.toISOString() }),
@@ -101,6 +136,6 @@ export async function executeFanEarningsRecovery(app: AppContext, input: Executo
   return {
     satisfied: true, yieldReason: null,
     ...(debt ? { qualityHold: DEBT_HOLD } : { succeededAt: completedAt }),
-    stats: { fansFetched, rejectedEndpoints, walkCompleted: true, unconfirmedEndpoints: debt },
+    stats: { fansFetched, fansFresh, rejectedEndpoints, walkCompleted: true, unconfirmedEndpoints: debt },
   };
 }

@@ -361,6 +361,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 365 | Agent transcript count ceiling | Count the filtered, deduplicated transcript up to the caller's probe threshold plus one; keep delivery's 1500-row ceiling separate so truncated counts cannot claim exactness. |
 | 366 | Fansly events final mode | B0 capture and permanent B1 hints on every Fansly page; bounded dialog polling with a 180-minute certified full on the five deep inboxes; the full-list freshness target follows the accepted interval (interval + one slot) instead of a silent full30 promise; earnings rotation and follower reconcile unchanged. |
 | 367 | A1 stop rule follows the measured A0 rule | An uncertain list marker resets only its page's unchanged streak; timestamp ties and a list shifting down between requests are not signals. The stricter Decision 346 wording (walk-wide invalidation) made live bounded walks full-length on four of five pages. A1 stays at least as strict as A0: its boundary is the certified full's start, A0 used the completion. |
+| 368 | Age-aware Fansly earnings roster | On SHADOW pages only, a live `fanslyFanEarningsRosterMaxAgeHours` lets the daily roster skip a spender whose BOTH earnings endpoints were validly checked inside the window and are neither dirty, failed nor cooling down. 0 (default) reads every spender every day; 1-47 equals 0; 48-168 enables the rotation. Hourly transactions and C2b dirty marks still drive addressed reads; coverage debt and age-based target selection follow the same window, debt anchored to the walk start. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -15128,3 +15129,80 @@ conversation sitting at a page seam while a conversation above it disappears
 between the two requests waits for the next certified full. Unit tests pin the
 tie, shift and marker cases; the integration suite pins flags-only resets and
 the three-page stop.
+
+## Decision 368: Age-aware Fansly earnings roster (2026-09-17)
+
+Every daily Fansly `fan_earnings` walk re-read EVERY spender: two HTTP calls per
+fan (lifetime stats + monthly stats), 5,784 attempts per day fleet-wide. The
+Lilly-1 shadow measured what those re-reads find: **0 content changes in 705
+rotation checks**. The changes that do happen arrive through the transaction
+stream, which is read hourly and marks the affected fan dirty (C2b), and through
+the addressed C2c lane that reads those dirty endpoints. The roster's own value
+is the quiet case: a Fansly-side correction that never produces a transaction.
+
+The owner approved a 48-hour rotation — the separate owner decision on max-age
+that the C2c gate in `docs/runbooks/fansly-earnings-shadow.md` required. A new
+live config key, `fanslyFanEarningsRosterMaxAgeHours` (env
+`FANSLY_FAN_EARNINGS_ROSTER_MAX_AGE_HOURS`, integer 0-168, default 0), lets the
+daily walk skip a spender WITHOUT any HTTP when the page is in
+`fanslyFanEarningsShadowPageAllowlist` and **both** of its earnings planes
+(`fan_earnings_lifetime` and `fan_earnings_monthly`) satisfy all of:
+
+- a VALID check (`last_checked_at`, written only for an observed receipt with an
+  observation id and a fingerprint) newer than `now - hours`;
+- not dirty — `requested_revision <= applied_revision`;
+- not mid-claim and last receipt `observed` — the same conditions
+  `countFanEarningsRecoveryDebt` already treats as coverage debt, so a skip can
+  never manufacture debt;
+- not inside a cooldown — `retry_after_at` is null or already past.
+
+A missing plane row is never fresh. Therefore **dirty, failed, rejected,
+half-covered, cooling-down and never-checked fans are always read** — the
+rotation only stops re-reading endpoints that were confirmed intact recently.
+
+**The shadow allowlist is load-bearing, not an implementation detail.** Only a
+shadow page writes its transactions through
+`upsertFanslyTransactionWithEarningsDirty`, which is the sole writer that bumps
+`requested_revision` on the earnings planes. Receipts, however, are also written
+on recovery and target pages. A page with receipts but without the shadow write
+path would accumulate `observed` rows, start being skipped, and a NEW
+transaction would never dirty the fan — nothing would re-read it until the
+window expired. Both walks therefore gate the skip on the shadow allowlist, so
+the signal that can interrupt a skip always exists wherever a skip can happen.
+Values 1-47 are treated as 0 (off): the daily cadence already re-reads inside
+24 hours, so a shorter window could not skip anything and would only add a
+query. The default 0 keeps today's behavior byte-identical.
+
+A skip is a success, not a rejection: it advances both the in-memory and the
+persisted cursor, so the A43 contiguous-prefix rule (Decision #133) is
+preserved — a rejection after skipped fans still persists exactly the prefix it
+did before, and the skipped fans are counted in a new `fansFresh` stat next to
+`fansFetched`. Cadence, scheduler, budgets, checkpoints and contracts are
+unchanged, and there is no schema migration: the freshness read is one SQL
+statement over the existing `subject_refresh_state` rows.
+
+A multi-chunk recovery walk can outlive the window it skipped under: a fan
+skipped at age N minus a minute crosses N before the walk's last chunk lands, and
+a debt count taken at completion would report it as unconfirmed coverage and
+raise a false `fan_earnings_unconfirmed_coverage` hold. The recovery walk
+therefore persists `walkStartedAt` in its checkpoint state and counts debt as of
+that instant: every fan read during the walk was checked at or after it, and
+every skipped fan was inside the window at that moment. Dirty, failed and
+claimed rows remain debt regardless of which instant is used.
+
+Two other consumers follow the same window through
+`fanEarningsEffectiveMaxAgeMs(config) = max(24h, rosterMaxAge)`: the recovery
+walk's completion debt count (so a fan the roster legitimately skipped is not
+reported as `fan_earnings_unconfirmed_coverage`) and the age-based selection in
+`claimFanEarningsTarget` (so the additive C2c lane does not re-read inside the
+roster age either). Dirty-driven target selection keeps its existing gates.
+
+What changes operationally: a quiet Fansly-side correction on an undisturbed
+spender is now seen within N hours PLUS one daily cadence rather than within a
+day — a walk landing when the fan is a minute short of N skips it, and the next
+walk is a day later, so the practical bound at 48 hours is about 72 hours. At 48
+hours the roster load roughly halves or better once receipts exist. The skip
+needs the page in `fanslyFanEarningsShadowPageAllowlist` (currently all six
+Fansly pages) and receipts to read, so savings start on the SECOND daily walk
+after receipts appear. Rollback is setting the key back to 0 — the next walk reads
+every spender again, no data is deleted and no state needs repair.
