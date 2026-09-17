@@ -357,6 +357,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 357 | Account lifecycle concurrency and uncertain deletion | Non-key user locks preserve actor references; an indeterminate deletion refreshes the account list before retiring the old card. |
 | 358 | Fansly purchase-history rejections | A provider answer naming one media as unservable (404/410, now 422 "error getting account media") is a fact about that target: journaled verbatim, consumed, walk continues. Per request namespace, three such rejections must be proven target-local against a completed, provider-served witness before another target is spent; a witness rejected with the streak's status blocks the stream as `purchase_history_rejection_storm`, a different status is no vote, no witness defers instead of blocking. The streak is derived from captures, not stored; after a storm one unblock buys one target of evidence, and a served page retries the storm's members once. |
 | 364 | Fansly bounded early B1 canary | Owner-approved Lilly-1/message-created trial replaces its seven-day entry wait with durable evidence, a 60-minute expiry and at most ten additional attempts; full polling and broader rollout gates remain. |
+| 365 | Agent transcript count ceiling | Count the filtered, deduplicated transcript up to the caller's probe threshold plus one; keep delivery's 1500-row ceiling separate so truncated counts cannot claim exactness. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -14954,3 +14955,23 @@ baseline, refusal between claim and dispatch, durable capture of an admitted
 response after expiry, event-only refusal with ordinary-polling recovery, and
 rolling-attempt custody after a policy edit. See
 [`fansly-ws-hints.md`](runbooks/fansly-ws-hints.md#bounded-early-canary-decision-364).
+
+## Decision 365: Separate transcript count and delivery ceilings (2026-09-17)
+
+The A0 reader investigation recorded a count defect outside its missing-head
+diagnosis. PostgreSQL regression tests now reproduce it: populations of 1501,
+5001 and 5002 matching messages all returned `{value:1500, exact:true}` because
+the count reused the transcript delivery builder's 1500-row ceiling.
+
+The shared SQL builder receives the caller's row bound explicitly. Delivery and
+its EXPLAIN seam retain the 1500-row maximum. Counting keeps the same source
+precedence, tombstones, deduplication, window and filters, clears the delivery
+cursor, and probes `probeMax + 1` rows. At the runtime threshold of 5001, a count
+through 5001 is exact; 5002 means at least 5002 and is marked `exact:false`.
+Existing read timeouts and response contracts remain unchanged.
+
+Boundary tests cover 1500, 1501, 5001, 5002 and 7000 matching messages, duplicate
+source rows, a smaller probe threshold, an empty filtered population, and the
+unchanged delivery ceiling. Existing reader tests retain source/window/tombstone
+and cursor coverage. This does not explain A0's missing advertised head or its
+historical unknowns, change polling, or establish Fansly migration acceptance.
