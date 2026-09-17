@@ -359,6 +359,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 364 | Fansly bounded early B1 canary | Owner-approved Lilly-1/message-created trial replaces its seven-day entry wait with durable evidence, a 60-minute expiry and at most ten additional attempts; full polling and broader rollout gates remain. |
 | 365 | Agent transcript count ceiling | Count the filtered, deduplicated transcript up to the caller's probe threshold plus one; keep delivery's 1500-row ceiling separate so truncated counts cannot claim exactness. |
 | 366 | Fansly events final mode | B0 capture and permanent B1 hints on every Fansly page; bounded dialog polling with a 180-minute certified full on the five deep inboxes; the full-list freshness target follows the accepted interval (interval + one slot) instead of a silent full30 promise; earnings rotation and follower reconcile unchanged. |
+| 367 | A1 stop rule follows the measured A0 rule | An uncertain list marker resets only its page's unchanged streak; timestamp ties and a list shifting down between requests are not signals. The stricter Decision 346 wording (walk-wide invalidation) made live bounded walks full-length on four of five pages. A1 stays at least as strict as A0: its boundary is the certified full's start, A0 used the completion. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -15050,3 +15051,40 @@ target returns to 3,600 seconds on the very next status read, so a page whose
 last certified full is older than an hour shows `delayed` until that fresh full
 completes; this is expected, not a regression. Disable B1 through its flag, B0
 through its allowlist. No data is deleted by any rollback.
+
+## Decision 367: The A1 stop rule follows the rule the A0 shadow measured (2026-09-17)
+
+Fifty minutes after Decision 366 enabled bounded polling, the retained list
+captures showed the bounded walks still reading almost every page: lilly-1
+35 of 35, lora-1 at least 58 of 78, lora-3 at least 28 of 33, lora-2 20 of 42,
+while the A0 shadow's virtual stop on the same inboxes sat at page 3 to 10.
+The cause is a difference between the two stop rules. A0 (`advanceDmShadow`)
+treats an uncertain marker (list `lastMessageId` without a matching embedded
+message, or no usable timestamp) as "this page is not unchanged" and ignores
+timestamp ties. A1 (`advanceDmBoundedStop`, Decision 346) treated an uncertain
+marker as walk-wide invalidation and a tie as a page reset. Production lists
+carry thousands of both per sweep (lilly-1: 1,387 uncertain markers and 447
+adjacent ties per 35-page sweep; lora-1: 3,076 and 2,278 per 78 pages), so the
+stricter rule could never accumulate three clean pages.
+
+A1 now applies the A0 rule: a page counts as unchanged only when every item is
+unchanged across the full head-diff scope, carries a valid marker and sits
+strictly older than the last certified full's start minus 60 seconds; an
+uncertain marker resets the streak for that page only; ties are not a signal;
+neither is a head newer than the previous page's last one, which only means the
+list shifted down between two requests, so that head sits above the walked
+offset and is read by the next walk's first page and by B1 hints. The order
+rule that Decision 346 added on top of A0 would have fired on every busy inbox
+for the same reason and has been removed; a cursor an older binary already
+invalidated stays invalidated. Everything else in Decision 346 stands: no
+membership stamping, no hiding, no full success from a bounded completion,
+chunk caps and resume.
+
+The seven-day A0 evidence in Decision 366 (no below-stop change carrying a new
+message) was collected under a rule A1 is now at least as strict as: A0's
+boundary was the previous full's completion, A1 uses its start. The residual
+class both rules share stays as accepted there: a non-message change on the
+conversation sitting at a page seam while a conversation above it disappears
+between the two requests waits for the next certified full. Unit tests pin the
+tie, shift and marker cases; the integration suite pins flags-only resets and
+the three-page stop.
