@@ -44,6 +44,10 @@ own the page concurrently. Capture transactions lock page/credential/egress rows
 and compare the W0 generation digest before commit. A five-second guard checks
 generation and records progress; its independent watchdog stops a stuck guard
 within 20 seconds. Live config has a separate watchdog.
+Failed or stalled live-config reads close connections as `guard_unavailable`;
+`disabled` records an explicit flag/allowlist removal or worker shutdown.
+Older receivers also recorded config failures as `disabled`, so that historical
+reason alone does not prove an operator changed the flag. Keep those receipts.
 
 Only the page resolver's dedicated HTTP CONNECT/SOCKS5 dispatcher may connect to
 the fixed Fansly WS authority; there is no direct fallback. Compression is not
