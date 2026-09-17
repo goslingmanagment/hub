@@ -121,5 +121,6 @@ export function receiveFanslyConnection(input: {
 }
 
 function isStopReason(reason: unknown): reason is FanslyWsStopReason {
-  return reason === "disabled" || reason === "ownership_lost" || reason === "generation_changed";
+  return reason === "disabled" || reason === "ownership_lost" || reason === "generation_changed"
+    || reason === "guard_unavailable";
 }
