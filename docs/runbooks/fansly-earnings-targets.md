@@ -88,7 +88,7 @@ roster was traversed; `completedAt` remains the last certified result. Current
 coverage can recover after a later valid response even if cumulative audit
 counters still record a historical missing receipt.
 
-Addressed selection adds known endpoints at age >=24h (or never checked), even
+Addressed selection adds known endpoints at age >= max(24h, `fanslyFanEarningsRosterMaxAgeHours`) when the roster age is set (or never checked), even
 without new transaction/event signals. It stays within the existing rolling cap
 and one extra physical attempt per ordinary chunk. No extra scheduler wakeup is
 introduced. This is an eligibility threshold, not an accepted maximum latency:

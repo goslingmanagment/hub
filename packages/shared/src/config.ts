@@ -108,6 +108,7 @@ const envSchema = z.object({
   FANSLY_FAN_EARNINGS_TARGETS_ENABLED: booleanSchema.default(false),
   FANSLY_FAN_EARNINGS_TARGETS_PAGE_ALLOWLIST: z.string().default(""),
   FANSLY_FAN_EARNINGS_TARGETS_DAILY_ATTEMPT_LIMIT: z.coerce.number().int().min(0).max(1000).default(0),
+  FANSLY_FAN_EARNINGS_ROSTER_MAX_AGE_HOURS: z.coerce.number().int().min(0).max(168).default(0),
   FANSLY_FOLLOWERS_SETTLEMENT_REUSE_ENABLED: booleanSchema.default(false),
   FANSLY_FOLLOWERS_SETTLEMENT_REUSE_PAGE_ALLOWLIST: z.string().default(""),
   FANSLY_DM_BOUNDED_ENABLED: booleanSchema.default(false),
@@ -440,6 +441,7 @@ export interface AppConfig {
   fanslyFanEarningsTargetsEnabled?: boolean;
   fanslyFanEarningsTargetsPageAllowlist?: string;
   fanslyFanEarningsTargetsDailyAttemptLimit?: number;
+  fanslyFanEarningsRosterMaxAgeHours?: number;
   fanslyFollowersSettlementReuseEnabled?: boolean;
   fanslyFollowersSettlementReusePageAllowlist?: string;
   fanslyDmBoundedEnabled?: boolean;
@@ -785,6 +787,7 @@ export function loadConfig(
     fanslyFanEarningsTargetsEnabled: parsed.FANSLY_FAN_EARNINGS_TARGETS_ENABLED,
     fanslyFanEarningsTargetsPageAllowlist: parsed.FANSLY_FAN_EARNINGS_TARGETS_PAGE_ALLOWLIST,
     fanslyFanEarningsTargetsDailyAttemptLimit: parsed.FANSLY_FAN_EARNINGS_TARGETS_DAILY_ATTEMPT_LIMIT,
+    fanslyFanEarningsRosterMaxAgeHours: parsed.FANSLY_FAN_EARNINGS_ROSTER_MAX_AGE_HOURS,
     fanslyFollowersSettlementReuseEnabled: parsed.FANSLY_FOLLOWERS_SETTLEMENT_REUSE_ENABLED,
     fanslyFollowersSettlementReusePageAllowlist: parsed.FANSLY_FOLLOWERS_SETTLEMENT_REUSE_PAGE_ALLOWLIST,
     fanslyDmBoundedEnabled: parsed.FANSLY_DM_BOUNDED_ENABLED,
