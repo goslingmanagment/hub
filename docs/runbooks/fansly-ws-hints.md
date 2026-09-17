@@ -1,9 +1,20 @@
 # Fansly B1 addressed REST hints
 
-Decision 344; Decision 364 adds a bounded early canary approved by the owner.
-Code and deployment are default-off. General rollout still requires W0, seven
-accepted B0 shadow days, type-specific corpus and a measured baseline. The
-one-page exception below replaces the seven-day wait only for that experiment.
+Decision 344; Decision 364 adds a bounded early canary approved by the owner;
+Decision 366 makes hints the permanent mode on every Fansly page. Code and
+deployment are default-off; production enables them through the audited console.
+
+## Permanent mode (Decision 366)
+
+Every Fansly page carries a policy without `expiresAt` and without
+`attemptLimit24h`, so the five-percent rolling allowance is the only cap. The
+policy stays pinned to the page's generation. When a chatter's session or the
+page proxy rotates, `fansly_ws_connections.generation` changes, receipts start
+reporting `disabled`, and hints stop for that page until the policy is re-pinned
+to the new digest (read it from `fansly_ws_connections` under `read_only`, edit
+the policy, verify all-role convergence). Nothing is lost meanwhile: the bounded
+walk still discovers new messages within 30 minutes and the certified full within
+its interval. The sections below record the original canary procedure.
 
 ## Configuration
 

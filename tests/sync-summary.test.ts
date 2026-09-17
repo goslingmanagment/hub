@@ -4,6 +4,7 @@ import type * as DbModule from "@agency_hub_core/db";
 
 const dbMocks = vi.hoisted(() => ({
   ensurePageSyncStates: vi.fn(),
+  getConfigOverrides: vi.fn(),
   listPageSyncStates: vi.fn(),
   listCheckpointStates: vi.fn(),
   listSyncMonitorStreamRows: vi.fn(),
@@ -15,6 +16,7 @@ vi.mock("@agency_hub_core/db", async () => {
   return {
     ...actual,
     ensurePageSyncStates: dbMocks.ensurePageSyncStates,
+    getConfigOverrides: dbMocks.getConfigOverrides,
     listPageSyncStates: dbMocks.listPageSyncStates,
     listCheckpointStates: dbMocks.listCheckpointStates,
     listSyncMonitorStreamRows: dbMocks.listSyncMonitorStreamRows,
@@ -108,6 +110,7 @@ function boundedCheckpoint(fullCompletedAt: string | null) {
 describe("sync summary service", () => {
   beforeEach(() => {
     dbMocks.listCheckpointStates.mockResolvedValue([]);
+    dbMocks.getConfigOverrides.mockResolvedValue(new Map());
     // Read paths never seed: this snapshot serves GET /overview and (through
     // listConnectionStatuses) the Sidebar's /admin/connections on every page.
     // Any call into the seeding/repair writer is a regression.
@@ -170,6 +173,32 @@ describe("sync summary service", () => {
     expect(snapshot.pages[0]?.syncUx.detail).not.toContain("subscribers");
     expect(dbMocks.listSyncMonitorStreamRows).not.toHaveBeenCalled();
     expect(dbMocks.ensurePageSyncStates).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    // Decision 366: the accepted 180-minute interval promises a certified
+    // full within 210 minutes of the last one (completed 10:12 below);
+    // full30 pages keep the 60-minute target.
+    [180, "2026-03-24T13:41:00.000Z", "healthy"],
+    [180, "2026-03-24T13:43:00.000Z", "attention"],
+    [30, "2026-03-24T11:13:00.000Z", "attention"],
+  ])("judges full freshness against the page's accepted full interval %s at %s", async (fullIntervalMinutes, nowIso, state) => {
+    const fullCompletedAt = "2026-03-24T10:12:00.000Z";
+    dbMocks.getConfigOverrides.mockResolvedValue(new Map([
+      ["fanslyDmBoundedEnabled", { value: true, version: 1 }],
+      ["fanslyDmBoundedPageAllowlist", { value: "lana", version: 1 }],
+      ["fanslyDmBoundedPolicies", { value: JSON.stringify({ lana: { fullIntervalMinutes } }), version: 1 }],
+    ]));
+    dbMocks.listVisiblePages.mockResolvedValue([buildVisiblePage()]);
+    dbMocks.listPageSyncStates.mockResolvedValue([
+      buildTaskRow({ stream: "light" }), buildTaskRow({ stream: "dm_conversations" }),
+    ]);
+    dbMocks.listCheckpointStates.mockImplementation(async (_db, _ids, stream) =>
+      stream === "dm_conversations" ? [{ pageId: 7, state: boundedCheckpoint(fullCompletedAt) }] : []);
+    const snapshot = await getSyncStatusSummarySnapshot({ db: {}, config: {} } as never, {
+      pageIds: [7], now: new Date(nowIso),
+    });
+    expect(snapshot.pages[0]?.syncUx.state).toBe(state);
   });
 
   it.each([

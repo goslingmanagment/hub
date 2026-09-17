@@ -89,6 +89,16 @@ export function resolveDmBoundedPolicy(config: Pick<AppConfig,
   return result.success ? result.data : null;
 }
 
+/** The full-list freshness target follows the configured full interval. The
+ * target is applied to the age of the last certified COMPLETION: the next full
+ * is due `fullIntervalMinutes` after the previous start and gets one 1800 s
+ * scheduler slot to finish, which today's walks (4-142 list pages) fit. Full30
+ * or no policy keeps the stream's own target explicitly, so a page outside A1
+ * reads exactly as before even if the stream constant ever moves. */
+export function dmFullSweepFreshnessSlaSeconds(policy: DmBoundedPolicy | null, fallback: number | null) {
+  return policy && policy.fullIntervalMinutes !== 30 ? (policy.fullIntervalMinutes + 30) * 60 : fallback;
+}
+
 /** Same 1800-second scheduler slots; completion never moves the full deadline. */
 export function dmFullSweepDue(input: {
   policy: DmBoundedPolicy | null;

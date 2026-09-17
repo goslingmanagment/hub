@@ -35,14 +35,27 @@ Request caps apply to a dispatch; cursor progress survives subsequent dispatches
 It does not stamp membership generations, hide unseen threads, certify full
 membership, renew full success or clear an existing failure. Reaching the end of
 the provider list has the same limited meaning in bounded mode. Full-list
-freshness comes only from the certified full completion (3600-second target);
-detailed status and lightweight summary both enforce this independently of a
-recent bounded run. Bounded progress never shows a whole-list percentage.
+freshness comes only from the certified full completion. Its target follows the
+page's live policy: `(fullIntervalMinutes + 30) × 60` seconds, so full30 and
+unlisted pages keep 3600 and a 180-minute page is judged against 12 600
+(Decision 366). Detailed status and lightweight summary both enforce this
+independently of a recent bounded run, and both fall back to 3600 on the very
+next read after the page leaves A1 (expect `delayed` until the fresh full
+completes). `/health/sync` inherits the same target through the block's
+`delayed` state (`stalled_streams`). The target only applies to a certified A1
+proof; a legacy full cursor keeps 3600. The read paths derive it from config
+alone, so a cadence or slot-offset mismatch (where the executor falls back to
+full-every-slot) reads leniently. Bounded progress never shows a whole-list
+percentage.
 
 Mutable offsets may omit a group after delete+insert below the read offset with
 unchanged totals. Timestamp order and zero observed misses cannot prove a stable
-snapshot. Quiet changes to unread, flags, deletion and membership still require
-the old full schedule until another detector has passed the accepted contract.
+snapshot. Quiet changes to unread, flags, deletion and membership are detected
+only by the certified full. Decision 366 accepted a 180-minute full on the five
+deep inboxes (lilly-1, lilly-2, lora-1, lora-2, lora-3) after seven A0 days
+showed no below-stop change carrying a new message, sixteen flag changes on a
+column nothing reads, and 21/0/one-sweep changes to unread, visibility and heads;
+WS hints cover new messages and conversations in between. Ari-1 keeps full30.
 
 ## Activation evidence
 
@@ -55,9 +68,11 @@ The accepted plan permits only one page/setting at a time, with explicit
 30→60→180→360 decisions. Each step requires its own comparison window (at least
 three days; seven for the first substantial change and complex inboxes), full
 comparator, dropped-frame/churn checks, physical HTTP-attempt cost and reader
-freshness evidence. Do not silently raise the 3600-second freshness target to
-make a longer interval look healthy. If unchanged freshness needs full30, keep
-full30 and report that measured savings do not support the proposed step.
+freshness evidence. The freshness target is never raised silently: it is derived
+from the same per-page policy that lengthens the interval (Decision 366), so a
+page reads as delayed exactly when its own accepted full is late. Decision 366
+skipped the 60-minute rung and activated 180 on the five deep inboxes in one
+authorized round; further rungs (360) still need their own evidence and decision.
 
 ## Rollback and verification
 

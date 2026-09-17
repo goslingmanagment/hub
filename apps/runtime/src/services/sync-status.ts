@@ -30,7 +30,10 @@ import {
   parseFollowersReconcileProgressState,
   parseSubscribersCursorState,
 } from "./sync/cursor-state.ts";
-import { dmFullSweepCompletedAt, parseDmBoundedSweepState } from "./sync/dm-bounded-state.ts";
+import { loadEffectiveConfig } from "./effective-config.ts";
+import {
+  dmFullSweepCompletedAt, dmFullSweepFreshnessSlaSeconds, parseDmBoundedSweepState, resolveDmBoundedPolicy,
+} from "./sync/dm-bounded-state.ts";
 import { filterOnlyFansAudienceStreams } from "./sync/ofapi-audience-sync.ts";
 import { parseTransactionBackfillState } from "./sync/transaction-backfill.ts";
 
@@ -956,10 +959,16 @@ function deriveTaskState(
   now: Date,
   queueContext?: QueueContext,
   dmCheckpoint?: unknown,
+  dmFullSweepSlaSeconds?: number | null,
 ): SyncTaskReadStatus {
   const fullCompletedAt = task.stream === "dm_conversations" ? dmFullSweepCompletedAt(dmCheckpoint, now) : undefined;
   if (fullCompletedAt !== undefined) task = { ...task, succeededAt: fullCompletedAt === null ? null : new Date(fullCompletedAt) };
   const policy = SYNC_STREAM_POLICY[task.stream];
+  // Decision 366: a page with an accepted longer full interval is judged
+  // against that interval, not the full30 target it no longer promises. Only a
+  // certified A1 proof earns it; a legacy full cursor keeps the stream target.
+  const freshnessSlaSeconds = task.stream === "dm_conversations" && fullCompletedAt !== undefined
+    && dmFullSweepSlaSeconds !== undefined ? dmFullSweepSlaSeconds : policy.freshnessSlaSeconds;
   const queueAgeSeconds = task.requestSeq > task.appliedSeq && task.requestedAt
     ? ageSeconds(task.requestedAt, now)
     : null;
@@ -1040,17 +1049,17 @@ function deriveTaskState(
     statusReason = buildStatusReason("full_sweep_unconfirmed", "No confirmed full dialog scan is available.");
   } else if (task.succeededAt === null && task.requestSeq === 0) {
     state = "not_started";
-  } else if (task.succeededAt !== null && policy.freshnessSlaSeconds !== null && freshnessAgeSeconds !== null &&
-    freshnessAgeSeconds > policy.freshnessSlaSeconds) {
+  } else if (task.succeededAt !== null && freshnessSlaSeconds !== null && freshnessAgeSeconds !== null &&
+    freshnessAgeSeconds > freshnessSlaSeconds) {
     state = "delayed";
     statusReason = buildStatusReason("stale", "Last successful sync is older than the freshness target.");
   } else {
     state = "up_to_date";
   }
 
-  const isFresh = policy.freshnessSlaSeconds === null
+  const isFresh = freshnessSlaSeconds === null
     ? task.succeededAt !== null
-    : freshnessAgeSeconds !== null && freshnessAgeSeconds <= policy.freshnessSlaSeconds;
+    : freshnessAgeSeconds !== null && freshnessAgeSeconds <= freshnessSlaSeconds;
   // The failure streak resets only on a real success, so a task that flips
   // retrying -> running/pending/backfilling between failures is still carrying
   // its wedge — keep the error visible until the streak actually clears
@@ -1582,7 +1591,7 @@ export async function getSyncStatusSnapshot(
     ? (input?.monitorStreams ?? [...getSyncStreamsForPlatform("fansly")])
     : (input?.monitorStreams ?? []);
   const fanslyPageIds = scopedPages.filter((page) => page.platform === "fansly").map((page) => page.id);
-  const [taskRows, monitorRows, dmCheckpoints] = await Promise.all([
+  const [taskRows, monitorRows, dmCheckpoints, effectiveConfig] = await Promise.all([
     listPageSyncStates(app.db),
     monitorStreams.length > 0
       ? listSyncMonitorStreamRows(app.db, {
@@ -1593,8 +1602,16 @@ export async function getSyncStatusSnapshot(
       })
       : Promise.resolve([] as SyncMonitorStreamRow[]),
     listCheckpointStates(app.db, fanslyPageIds, "dm_conversations"),
+    // The live A1 policy decides each Fansly page's full-list freshness target.
+    fanslyPageIds.length > 0 ? loadEffectiveConfig(app.db, app.config) : Promise.resolve(null),
   ]);
   const dmCheckpointByPage = new Map(dmCheckpoints.map((row) => [row.pageId, row.state]));
+  const dmFullSweepSlaByPage = new Map(scopedPages
+    .filter((page) => fanslyPageIds.includes(page.id))
+    .map((page) => [page.id, dmFullSweepFreshnessSlaSeconds(
+      effectiveConfig ? resolveDmBoundedPolicy(effectiveConfig, page.label) : null,
+      SYNC_STREAM_POLICY.dm_conversations.freshnessSlaSeconds,
+    )] as const));
 
   const ofapiDmIngestPageIds = isOfapiDmProjectionEnabled(app.config)
     ? new Set(
@@ -1716,7 +1733,7 @@ export async function getSyncStatusSnapshot(
 
             return deriveTaskState(effectiveTaskRow, monitorRow, now, {
               activeSiblingStreams,
-            }, dmCheckpointByPage.get(page.id));
+            }, dmCheckpointByPage.get(page.id), dmFullSweepSlaByPage.get(page.id));
           });
         const domainMonitorRows = monitorRows.filter((row) =>
           row.pageId === page.id &&
