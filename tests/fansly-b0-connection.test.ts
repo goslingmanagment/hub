@@ -108,6 +108,28 @@ describe("Fansly B0 durable receiver", () => {
     expect(h.capture).not.toHaveBeenCalled();
   });
 
+  it("business frames cannot hide a missing pong, and stopped sockets cannot capture late frames", async () => {
+    vi.useFakeTimers();
+    const h = harness();
+    for (let i = 0; i < 6; i++) {
+      await vi.advanceTimersByTimeAsync(5_000);
+      h.socket.frame(known);
+      await vi.advanceTimersByTimeAsync(0);
+    }
+    expect(h.capture).toHaveBeenCalledTimes(6);
+    expect(h.stop).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(await h.done).toBe("pong_timeout");
+    expect(h.stop).toHaveBeenCalledOnce();
+    const sends = h.socket.send.mock.calls.length;
+    h.socket.frame('{"t":2,"d":"{}"}');
+    h.socket.frame(known);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(h.capture).toHaveBeenCalledTimes(6);
+    expect(h.socket.send).toHaveBeenCalledTimes(sends);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("resets the failure sequence once after a verified quiet minute with working guards and pongs", async () => {
     vi.useFakeTimers();
     const onStable = vi.fn(); const h = harness({ onStable });
