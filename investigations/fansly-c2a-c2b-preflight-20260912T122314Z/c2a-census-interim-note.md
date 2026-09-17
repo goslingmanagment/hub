@@ -1,0 +1,1 @@
+The first census transaction began at 12:37:46 UTC, before its requested 12:38:00 cutoff. It proves its repeatable-read snapshot only, not coverage through the future cutoff. Preserve it as interim evidence. The final census uses 12:37:00 UTC, wholly before both reads; do not add the two snapshots.
