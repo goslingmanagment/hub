@@ -16,6 +16,7 @@ import { resetIntegrationDatabase, seedFanslyPage, startTestDatabase, type Start
 import { createTestAppContext } from "./helpers/runtime.ts";
 import { TIERED_TABLES, ndjsonToParquet, readParquetIds } from "../apps/runtime/src/services/tiering/index.ts";
 import * as socketTransport from "../apps/runtime/src/services/egress/fansly-receiver-socket.ts";
+import * as liveConfig from "../apps/runtime/src/services/effective-config.ts";
 import { startFanslyWsWorker } from "../apps/runtime/src/services/fansly-ws/worker.ts";
 
 let testDb: StartedTestDatabase;
@@ -56,6 +57,45 @@ async function fixture() {
 }
 
 describe("B0 PostgreSQL ownership and journal", () => {
+  it.each(["rejected", "stalled"])("records an unavailable guard when live configuration is %s", async (failure) => {
+    const f = await fixture();
+    await finishFanslyWsConnection(f.owner.db, f.id, "disabled");
+    await f.owner.close();
+    await testDb.pool.query("update pages set external_page_id='999' where id=$1", [f.page.id]);
+    const stop = vi.fn();
+    const open = vi.spyOn(socketTransport, "openFanslyReceiverSocket").mockImplementation(() => {
+      const socket = Object.assign(new EventTarget(), { send: vi.fn((data: string) => {
+        if (data === "p") socket.dispatchEvent(new MessageEvent("message", { data: '{"t":2,"d":"{}"}' }));
+      }) });
+      queueMicrotask(() => {
+        socket.dispatchEvent(new Event("open"));
+        socket.dispatchEvent(new MessageEvent("message", { data: '{"t":1,"d":"{}"}' }));
+        socket.dispatchEvent(new MessageEvent("message", { data: f.frame() }));
+      });
+      return { socket, stop } as unknown as ReturnType<typeof socketTransport.openFanslyReceiverSocket>;
+    });
+    const load = vi.spyOn(liveConfig, "loadEffectiveConfig");
+    f.app.config.fanslyWsCaptureEnabled = true;
+    f.app.config.fanslyWsCapturePageAllowlist = f.page.label;
+    const worker = startFanslyWsWorker(f.app);
+    try {
+      await vi.waitFor(async () => expect((await testDb.pool.query(
+        "select count(*)::int n from observations where source='fansly_ws'",
+      )).rows[0].n).toBe(1));
+      if (failure === "rejected") load.mockRejectedValue(new Error("config_read_failed"));
+      else load.mockImplementation(() => new Promise(() => {}));
+      await vi.waitFor(() => expect(stop).toHaveBeenCalledOnce(), { timeout: 35_000 });
+      await vi.waitFor(async () => expect((await testDb.pool.query(`select stop_reason from fansly_ws_connections
+        where id<>$1::uuid`, [f.id])).rows).toEqual([{ stop_reason: "guard_unavailable" }]));
+      expect(open).toHaveBeenCalledOnce();
+      expect((await testDb.pool.query("select payload from observations where source='fansly_ws'")).rows)
+        .toEqual([{ payload: expect.objectContaining({ frame: f.frame() }) }]);
+    } finally { await worker.stop(); load.mockRestore(); open.mockRestore(); }
+    const replacement = await acquireFanslyWsOwnership(testDb.connectionString, f.page.id, vi.fn());
+    expect(replacement).not.toBeNull();
+    if (replacement) { owners.push(replacement); await replacement.close(); }
+  }, 45_000);
+
   it("reconnects after a missing pong, preserves the gap and captures with the same generation", async () => {
     const f = await fixture();
     await finishFanslyWsConnection(f.owner.db, f.id, "disabled");

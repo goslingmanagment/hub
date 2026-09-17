@@ -24,7 +24,9 @@ export function startFanslyWsWorker(app: AppContext) {
   let stopped = false;
   let polling = false;
   let configReadAt = Date.now();
-  const stopPages = () => { for (const page of pages.values()) page.controller.abort("disabled"); };
+  const stopPages = (reason: "disabled" | "guard_unavailable") => {
+    for (const page of pages.values()) page.controller.abort(reason);
+  };
   async function poll() {
     if (stopped || polling) return;
     polling = true;
@@ -42,17 +44,17 @@ export function startFanslyWsWorker(app: AppContext) {
         }).finally(() => pages.delete(label));
         pages.set(label, { controller, done });
       }
-    } catch { stopPages(); }
+    } catch { stopPages("guard_unavailable"); }
     finally { polling = false; }
   }
   const timer = setInterval(() => {
-    if (Date.now() - configReadAt > 20_000) stopPages();
+    if (Date.now() - configReadAt > 20_000) stopPages("guard_unavailable");
     void poll();
   }, 10_000);
   void poll();
   return {
     async stop() {
-      stopped = true; clearInterval(timer); stopPages();
+      stopped = true; clearInterval(timer); stopPages("disabled");
       await Promise.all([...pages.values()].map((page) => page.done));
     },
   };
@@ -63,7 +65,7 @@ async function runPage(app: AppContext, label: string, signal: AbortSignal) {
   let previousGeneration: string | null = null;
   while (!signal.aborted) {
     const controller = new AbortController();
-    const abort = () => controller.abort("disabled");
+    const abort = () => controller.abort(signal.reason === "guard_unavailable" ? "guard_unavailable" : "disabled");
     signal.addEventListener("abort", abort, { once: true });
     if (signal.aborted) abort();
     let owner: Awaited<ReturnType<typeof acquireFanslyWsOwnership>> = null;

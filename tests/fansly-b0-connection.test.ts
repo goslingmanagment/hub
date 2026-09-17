@@ -81,7 +81,7 @@ describe("Fansly B0 durable receiver", () => {
     expect(h.decode).not.toHaveBeenCalled();
   });
 
-  it.each(["ownership_lost", "generation_changed", "disabled"])("closes immediately on %s", async (reason) => {
+  it.each(["ownership_lost", "generation_changed", "guard_unavailable", "disabled"])("closes immediately on %s", async (reason) => {
     const h = harness(); h.controller.abort(reason);
     expect(await h.done).toBe(reason); expect(h.stop).toHaveBeenCalledOnce();
     h.socket.frame(known); expect(h.capture).not.toHaveBeenCalled();
