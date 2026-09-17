@@ -122,20 +122,24 @@ export function advanceDmBoundedStop(state: DmBoundedSweepState, items: readonly
   const boundary = state.polling.lastCertifiedFull;
   let unchanged = items.length > 0 && boundary !== null;
   let previousTimestampMs = state.previousTimestampMs;
-  let stopInvalidated = state.stopInvalidated;
+  // Decision 367: the rule is the one the seven-day A0 shadow measured. An
+  // uncertain marker only keeps THIS page from counting as unchanged; a
+  // timestamp tie or a newer head after an older one (the list shifting down
+  // between two requests) is not a signal, because such an item moved ABOVE
+  // the walked offset and is read by the next walk's first page and by B1.
+  // Production lists carry thousands of uncertain markers and ties per sweep,
+  // so the earlier walk-wide invalidation made every bounded walk a full one.
+  // `stopInvalidated` stays in the persisted state for cursor compatibility
+  // and is only carried, never newly set.
   for (const item of items) {
     const at = item.timestampMs;
     const valid = item.listMessageId !== null && item.listMessageId === item.embeddedMessageId &&
       at !== null && Number.isSafeInteger(at) && at > 0;
-    // A known order violation remains debt through this walk. Equal times do
-    // not establish a boundary, including ties split over adjacent pages.
-    if (!valid || (at !== null && previousTimestampMs !== null && at > previousTimestampMs)) {
-      stopInvalidated = true;
-    }
-    unchanged &&= valid && item.unchanged && at !== previousTimestampMs && boundary !== null &&
+    unchanged &&= valid && item.unchanged && boundary !== null &&
       at! < Date.parse(boundary.startedAt) - 60_000;
     if (valid) previousTimestampMs = at;
   }
+  const stopInvalidated = state.stopInvalidated;
   return {
     previousTimestampMs,
     stopInvalidated,
