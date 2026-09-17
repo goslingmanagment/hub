@@ -6,7 +6,11 @@ gateway, and the owner dashboard. Clients are the OnlyFans desktop app
 (`~/code/goose/of-desktop`) and the Fansly extension (`~/code/goose/fansly-ext`);
 they consume this repo through a vendored SDK and hold no keys, prompts, or
 money logic. Production: one VPS, Docker (api + worker + scheduler + Postgres),
-DB `agency_hub_core`, deployed by `scripts/deploy-production.sh`.
+DB `agency_hub_core`, deployed by `scripts/deploy-production.sh`. Production
+is open to every agent for reading without asking (SSH, `docker ps`/`logs`,
+`journalctl`, psql reads via the `read_only` role, `/health*`, the Agent Read
+Plane); anything that changes it (deploy, flags, restarts, DB writes, files on
+the VPS) only when the owner asks.
 
 ## Where the truth is
 
