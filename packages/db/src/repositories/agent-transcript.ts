@@ -43,7 +43,7 @@ import { witnessFor, witnessesFor, type PlaneReadWitness } from "./agent-read-wi
  *     no predicate in this function may ever influence a capture floor.
  */
 
-/** The hard internal ceiling on rows the union may materialize for one page. */
+/** The delivery ceiling; independent count probes use their own row bound. */
 export const AGENT_TRANSCRIPT_UNION_MAX_ROWS = 1500;
 
 export interface AgentTranscriptFilters {

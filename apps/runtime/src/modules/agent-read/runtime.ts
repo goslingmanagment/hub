@@ -47,7 +47,7 @@ import type { AgentPlaneMode } from "./epistemics.ts";
  * for budget must not have taken a slot it never releases.
  */
 
-/** The count probe's ceiling: 0..5000 is exact, 5001 means "at least 5001". */
+/** Maximum exact count; one extra probe row establishes a lower bound. */
 export const AGENT_COUNT_PROBE_MAX = 5001;
 
 export const AGENT_TIMEOUT_MS = {
