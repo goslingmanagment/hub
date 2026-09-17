@@ -359,6 +359,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 363 | W0 continuity reference comparison | Validate and hash a complete native phase while comparing only its overlap with a bounded browser window; retain independent live gates as unverified. |
 | 364 | Fansly bounded early B1 canary | Owner-approved Lilly-1/message-created trial replaces its seven-day entry wait with durable evidence, a 60-minute expiry and at most ten additional attempts; full polling and broader rollout gates remain. |
 | 365 | Agent transcript count ceiling | Count the filtered, deduplicated transcript up to the caller's probe threshold plus one; keep delivery's 1500-row ceiling separate so truncated counts cannot claim exactness. |
+| 366 | Fansly events final mode | B0 capture and permanent B1 hints on every Fansly page; bounded dialog polling with a 180-minute certified full on the five deep inboxes; the full-list freshness target follows the accepted interval (interval + one slot) instead of a silent full30 promise; earnings rotation and follower reconcile unchanged. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -15015,3 +15016,77 @@ source rows, a smaller probe threshold, an empty filtered population, and the
 unchanged delivery ceiling. Existing reader tests retain source/window/tombstone
 and cursor coverage. This does not explain A0's missing advertised head or its
 historical unknowns, change polling, or establish Fansly migration acceptance.
+
+## Decision 366: Fansly events final mode — events on every page, 180-minute certified full (2026-09-17)
+
+The owner asked to finish the polling-to-events migration wherever possible and
+authorized the deployments and console flips (2026-09-17). The September 7 plan
+left one product choice open: keep the full30 freshness promise and accept that
+request volume barely moves, or accept rarer full walks. Codex asked; no answer
+came. This decision makes that choice explicit and reversible instead of leaving
+full polling running under a finished-looking event pipeline.
+
+**Evidence (seven A0 days, 2026-09-10 22:58 to 2026-09-17 15:37 UTC, complete
+sweeps).** Below-stop changes per page: lilly-1 17, lilly-2 27, lora-1 23 plus
+one mass head clearing (G4830, 2,364 pointers to null on list pages 50-77),
+lora-2 7, lora-3 2, ari-1 none because a four-page inbox never stops early. Not
+one involved a new message, so WS `message_created` covers none of them, but the
+categories matter: sixteen were `conversation_flags`, a column no Hub route, UI,
+prompt or agent response reads; most of the rest were `message_sync_excluded_reason`,
+a Hub-internal classification. The load-bearing quiet columns (`unread_count`,
+`is_visible`, `last_message_id`) moved 21, 0 and 2,364 times fleet-wide, the last
+inside the single G4830 sweep. The WS protocol carries new messages (5/1),
+deletions (5/10, journaled as mutation debt), conversation creation (4/8),
+membership (4/6, 4/7) and the creator's own hide (4/9); it carries no flags, no
+edits and no unread counters as numbers, and has no sequence or replay, so a
+periodic full REST walk stays the independent detector. Production on
+2026-09-16 UTC made 33,812 physical sync attempts, 16,176 of them the
+`dm_conversations` full walks (48 slots × 4-142 list pages per page).
+
+**Decision.**
+
+1. B0 capture runs on all six Fansly pages. B1 hints run permanently (no
+   `expiresAt`) on all six for `message_created` and `group_created`, each policy
+   pinned to the page's current generation with its 2026-09-16 attempt count as
+   baseline. The pin stays: a session or proxy rotation stops hints for that page
+   until the policy is re-pinned (runbook step). That is a latency regression to
+   the bounded walk's 30 minutes, not a data loss.
+2. A1 bounded dialog polling runs on lilly-1, lilly-2, lora-1, lora-2 and lora-3
+   with `fullIntervalMinutes: 180`; ari-1 keeps full30 because it has nothing to
+   save. Accepted staleness: quiet-state changes below the stop (unread,
+   visibility and membership, deleted heads, tier, exclusion reason, flags) are
+   detected by the next certified full within 210 minutes instead of 60. New
+   messages and conversations reach Hub through hints within about a minute on a
+   healthy socket and through the bounded walk within 30 minutes regardless.
+3. The full-list freshness target follows the accepted interval:
+   `(fullIntervalMinutes + 30) × 60` seconds, so full30 keeps 3,600 and 180 gives
+   12,600. Detailed status and the lightweight summary read the live A1 policy
+   per page. This amends Decision 346 and the A1 runbook's "do not silently
+   raise" rule: the target is raised explicitly, by the same per-page policy that
+   lengthens the interval, and falls back on its own when A1 is disabled. Only a
+   certified A1 proof earns the longer target; a legacy full cursor keeps 3,600.
+   `/health/sync` holds no target of its own but inherits this one through the
+   snapshot's `delayed` state (`stalled_streams`): without this rule a 180-minute
+   page would have shown the deploy gate degraded for most of every interval.
+   Known limitation: the read paths derive the target from config alone, while
+   the executor falls back to full-every-slot on a cadence or slot-offset
+   mismatch; that abnormal configuration reads leniently, never strictly.
+4. C1 settlement reuse is allowed on all Fansly pages: the same certified-walk
+   reuse as the Lora-2 canary, zero freshness cost.
+5. Unchanged: the daily fan-earnings roster (an age-aware roster needs code and
+   its own acceptance; the Lilly-1 shadow found zero changes and zero quiet
+   corrections in 705 rotation checks), follower anomaly reconciles (about 3,100
+   attempts per day fleet-wide; a cooldown is a separate design), history
+   backfill, and B2 direct DM writes.
+
+**Expected and measured.** Modelled savings from step 2 alone are about 11,000
+attempts per day (roughly a third of the 2026-09-16 baseline); the ≥50 % goal is
+not claimed. The comparable measurement is one full UTC day through
+`fansly_events_measurement_report` after all flips, against 2026-09-16.
+
+**Rollback.** Disable A1 or remove a page from its allowlist: the next chunk
+abandons the bounded cursor and opens a fresh full at offset zero. The freshness
+target returns to 3,600 seconds on the very next status read, so a page whose
+last certified full is older than an hour shows `delayed` until that fresh full
+completes; this is expected, not a regression. Disable B1 through its flag, B0
+through its allowlist. No data is deleted by any rollback.
