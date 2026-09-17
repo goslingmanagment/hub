@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { advanceDmBoundedStop, dmFullSweepCompletedAt, dmFullSweepDue,
+import { advanceDmBoundedStop, dmFullSweepCompletedAt, dmFullSweepDue, dmFullSweepFreshnessSlaSeconds,
   parseDmBoundedSweepState, resolveDmBoundedPolicy,
   type DmBoundedSweepState } from "../apps/runtime/src/services/sync/dm-bounded-state.ts";
 import { parseDmConversationSweepState } from "../apps/runtime/src/services/sync/cursor-state.ts";
@@ -22,6 +22,15 @@ describe("A1 bounded contract", () => {
     expect(dmFullSweepDue({ ...base, currentSlot: 101, policy: { fullIntervalMinutes: 60 } })).toBe(false);
     expect(dmFullSweepDue({ ...base, currentSlot: 102, policy: { fullIntervalMinutes: 60 } })).toBe(true);
     expect(dmFullSweepDue({ ...base, currentSlot: 101, slotOffsetSeconds: 900, policy: { fullIntervalMinutes: 60 } })).toBe(true);
+  });
+
+  it("derives the full-list freshness target from the accepted interval plus one slot", () => {
+    expect(dmFullSweepFreshnessSlaSeconds(null, 3600)).toBe(3600);
+    expect(dmFullSweepFreshnessSlaSeconds({ fullIntervalMinutes: 30 }, 3600)).toBe(3600);
+    expect(dmFullSweepFreshnessSlaSeconds({ fullIntervalMinutes: 60 }, 3600)).toBe(5400);
+    expect(dmFullSweepFreshnessSlaSeconds({ fullIntervalMinutes: 180 }, 3600)).toBe(12600);
+    expect(dmFullSweepFreshnessSlaSeconds({ fullIntervalMinutes: 360 }, 3600)).toBe(23400);
+    expect(dmFullSweepFreshnessSlaSeconds(null, null)).toBeNull();
   });
 
   it("does not hide a 00:10 change behind a full that finished at 00:12", () => {
