@@ -177,7 +177,8 @@ describe("LIVE_CONFIG_KEYS", () => {
     // Decision 349 added the public invite/reset link kill switch, read per
     // request so a flip never waits for a deploy.
     expect(LIVE_CONFIG_KEYS.has("accountLinksEnabled")).toBe(true);
-    // Both sides of this merge added live keys: 79 from main + this one.
-    expect(LIVE_CONFIG_KEYS.size).toBe(80);
+    // Decision 368 wired the earnings roster max age as a live key.
+    expect(LIVE_CONFIG_KEYS.has("fanslyFanEarningsRosterMaxAgeHours")).toBe(true);
+    expect(LIVE_CONFIG_KEYS.size).toBe(81);
   });
 });

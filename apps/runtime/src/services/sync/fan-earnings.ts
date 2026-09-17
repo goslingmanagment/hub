@@ -1,6 +1,6 @@
 import {
-  assertOwnedPageSyncLease, getCheckpoint, getPageSyncExecutionContext, listPageFanNativeIds,
-  upsertCheckpoint, upsertCheckpointProgress,
+  assertOwnedPageSyncLease, getCheckpoint, getPageSyncExecutionContext, isFanEarningsFresh,
+  listPageFanNativeIds, upsertCheckpoint, upsertCheckpointProgress,
 } from "@agency_hub_core/db";
 import { FanslyApiError } from "@agency_hub_core/fansly";
 import type { AppContext } from "../../bootstrap.ts";
@@ -11,7 +11,9 @@ import { fanslyNewStreamAllowed, isPageAllowlisted } from "./fansly-stream-gate.
 import { createPageRateLimitWaiter } from "./rate-limiter.ts";
 import { captureFanEarningsEndpoint } from "./fan-earnings-capture.ts";
 import { executeFanEarningsRecovery } from "./fan-earnings-recovery.ts";
-import { fanEarningsRecoveryEnabled, runFanEarningsTargetStep } from "./fan-earnings-targets.ts";
+import {
+  fanEarningsRecoveryEnabled, fanEarningsRosterMaxAgeMs, runFanEarningsTargetStep,
+} from "./fan-earnings-targets.ts";
 
 function fanslyNewStreamSkip(reason: string): StreamChunkResult {
   return { satisfied: true, yieldReason: null, stats: { skipped: reason }, gatedSkip: reason };
@@ -40,6 +42,12 @@ export async function executeFanEarningsChunk(
   const shadow = isPageAllowlisted(
     effective.fanslyFanEarningsShadowPageAllowlist, input.pageContext.page.label,
   );
+  // Decision 368: null keeps the every-spender daily roster byte-identical.
+  // Only a shadow page marks its fans dirty on a new transaction
+  // (`upsertFanslyTransactionWithEarningsDirty`), so only a shadow page may
+  // trust a receipt and skip — receipts alone also exist on recovery/target
+  // pages, where nothing would re-read a skipped fan before the window ends.
+  const rosterMaxAgeMs = shadow ? fanEarningsRosterMaxAgeMs(effective) : null;
   const requestContext = {
     session: input.pageContext.session,
     proxy: input.pageContext.proxy,
@@ -79,6 +87,7 @@ export async function executeFanEarningsChunk(
   let persistableCursorFanId = cursorFanId;
   let fansFetched = 0;
   let fansSkipped = 0;
+  let fansFresh = 0;
   let walkCompleted = false;
   let rejectedFanError: FanslyApiError | null = null;
 
@@ -96,6 +105,20 @@ export async function executeFanEarningsChunk(
     if (!fan) {
       walkCompleted = true;
       break;
+    }
+
+    // A skip requests nothing, so it is a success: it belongs to the same
+    // contiguous prefix and keeps the walk's keyset progress intact.
+    if (rosterMaxAgeMs !== null && await isFanEarningsFresh(app.db, {
+      pageId: input.pageContext.page.id,
+      fanRef: fan.platformUserId,
+      maxAgeMs: rosterMaxAgeMs,
+      now: new Date(),
+    })) {
+      cursorFanId = fan.fanId;
+      persistableCursorFanId = fan.fanId;
+      fansFresh += 1;
+      continue;
     }
 
     try {
@@ -159,7 +182,7 @@ export async function executeFanEarningsChunk(
       state: { cursorFanId: 0, completedAt: new Date().toISOString() },
       lastSuccessfulRunId: input.syncRunId,
     });
-  } else if (fansFetched > 0) {
+  } else if (fansFetched > 0 || fansFresh > 0) {
     const progressState = {
       cursorFanId: persistableCursorFanId,
       ...(state?.completedAt ? { completedAt: state.completedAt } : {}),
@@ -191,7 +214,7 @@ export async function executeFanEarningsChunk(
     return {
       satisfied: true,
       yieldReason: null,
-      stats: { fansFetched, fansSkipped, walkCompleted: true },
+      stats: { fansFetched, fansSkipped, fansFresh, walkCompleted: true },
     };
   }
   return {
@@ -199,6 +222,6 @@ export async function executeFanEarningsChunk(
     // The walk exits on hasRequestCapacity(2) — resolve the reason against
     // the same two-call unit cost or every non-final chunk yields reasonless.
     yieldReason: input.budget.resolveYieldReason(2),
-    stats: { fansFetched, fansSkipped, cursorFanId },
+    stats: { fansFetched, fansSkipped, fansFresh, cursorFanId },
   };
 }
