@@ -27,9 +27,13 @@ next chunk, without interpreting the bounded offset as a full continuation.
 It checked a prefix using the existing page egress, rate limiter, raw-first
 capture, lease/erasure fences, normalization, head debt and message follow-ups.
 Its stop requires three fully unchanged pages, matching raw list/embedded head
-IDs, descending known timestamps and a boundary strictly before the last
-certified full's start minus 60 seconds. Equal timestamps reset the streak;
-unknown markers and ordering violations disable early stopping for that walk.
+IDs, usable timestamps and a boundary strictly before the last certified
+full's start minus 60 seconds. Since Decision 367 the rule is the one the A0
+shadow measured (A1's boundary is even stricter: the full's start, not its
+completion): an uncertain marker (list head without a matching embedded
+message, or no usable timestamp) only keeps that page from counting as
+unchanged; timestamp ties and a list shifting down between two requests are
+not signals; nothing invalidates the stop for the rest of a walk any more.
 Request caps apply to a dispatch; cursor progress survives subsequent dispatches.
 
 It does not stamp membership generations, hide unseen threads, certify full
