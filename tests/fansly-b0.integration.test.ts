@@ -56,6 +56,59 @@ async function fixture() {
 }
 
 describe("B0 PostgreSQL ownership and journal", () => {
+  it("reconnects after a missing pong, preserves the gap and captures with the same generation", async () => {
+    const f = await fixture();
+    await finishFanslyWsConnection(f.owner.db, f.id, "disabled");
+    await f.owner.close();
+    await testDb.pool.query("update pages set external_page_id='999' where id=$1", [f.page.id]);
+    const generation = await readProbeGeneration(f.app.db, f.page.label);
+    const stops: ReturnType<typeof vi.fn>[] = [];
+    const open = vi.spyOn(socketTransport, "openFanslyReceiverSocket").mockImplementation(() => {
+      const first = stops.length === 0;
+      const stop = vi.fn(); stops.push(stop);
+      const socket = Object.assign(new EventTarget(), { send: vi.fn((data: string) => {
+        // The failed connection still delivers business traffic, as observed
+        // in W0. Only its heartbeat response is absent. The next one answers.
+        if (data === "p") socket.dispatchEvent(new MessageEvent("message", {
+          data: first ? f.frame("456") : '{"t":2,"d":"{}"}',
+        }));
+      }) });
+      queueMicrotask(() => {
+        socket.dispatchEvent(new Event("open"));
+        socket.dispatchEvent(new MessageEvent("message", { data: '{"t":1,"d":"{}"}' }));
+        socket.dispatchEvent(new MessageEvent("message", { data: f.frame(first ? "123" : "789") }));
+      });
+      return { socket, stop } as unknown as ReturnType<typeof socketTransport.openFanslyReceiverSocket>;
+    });
+    f.app.config.fanslyWsCaptureEnabled = true;
+    f.app.config.fanslyWsCapturePageAllowlist = f.page.label;
+    const worker = startFanslyWsWorker(f.app);
+    try {
+      await vi.waitFor(() => expect(open).toHaveBeenCalledTimes(2), { timeout: 45_000 });
+      await vi.waitFor(async () => expect((await testDb.pool.query(
+        "select count(*)::int n from observations where source='fansly_ws'",
+      )).rows[0].n).toBe(3));
+      const rows = (await testDb.pool.query(`select id,generation,closed_at,stop_reason,gap_state,gap_since,started_at
+        from fansly_ws_connections where id<>$1::uuid order by started_at`, [f.id])).rows;
+      expect(rows).toHaveLength(2);
+      expect(rows[0]).toMatchObject({ generation, stop_reason: "pong_timeout", gap_state: "unknown" });
+      expect(rows[0].closed_at).toBeInstanceOf(Date);
+      expect(rows[1]).toMatchObject({ generation, closed_at: null, stop_reason: null, gap_state: "unknown" });
+      expect(rows[1].gap_since).toEqual(rows[0].closed_at);
+      expect(rows[1].started_at.getTime()).toBeGreaterThan(rows[0].closed_at.getTime());
+      expect(stops[0]).toHaveBeenCalledOnce();
+      expect(stops[1]).not.toHaveBeenCalled();
+      expect(await acquireFanslyWsOwnership(testDb.connectionString, f.page.id, vi.fn())).toBeNull();
+      expect(await isFanslyWsGenerationBlocked(f.app.db, f.page.id, generation)).toBe(false);
+      const raw = (await testDb.pool.query("select payload from observations where source='fansly_ws' order by id")).rows;
+      expect(raw.map(row => row.payload.frame)).toEqual([f.frame("123"), f.frame("456"), f.frame("789")]);
+    } finally { await worker.stop(); open.mockRestore(); }
+    expect(stops[1]).toHaveBeenCalledOnce();
+    expect((await testDb.pool.query(`select stop_reason from fansly_ws_connections
+      where id<>$1::uuid order by started_at`, [f.id])).rows)
+      .toEqual([{ stop_reason: "pong_timeout" }, { stop_reason: "disabled" }]);
+  }, 60_000);
+
   it("the actual worker retains capture through replay failure and observes live off within 60 seconds", async () => {
     const f = await fixture(); await f.owner.close();
     await testDb.pool.query("update pages set external_page_id='999' where id=$1", [f.page.id]);
