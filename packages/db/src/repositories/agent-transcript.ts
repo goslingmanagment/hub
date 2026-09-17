@@ -112,8 +112,7 @@ function boolPredicate(column: SQL, expected: boolean | undefined): SQL {
   return expected ? sql`(${column})` : sql`not (${column})`;
 }
 
-function buildUnionQuery(input: AgentTranscriptInput): SQL {
-  const limit = Math.min(input.limit, AGENT_TRANSCRIPT_UNION_MAX_ROWS);
+function buildUnionQuery(input: AgentTranscriptInput, limit: number): SQL {
   const { filters } = input;
   const includeDeleted = filters.includeDeleted ?? true;
   const descending = input.sortDir === "desc";
@@ -420,7 +419,9 @@ export async function listAgentTranscript(
   db: Database,
   input: AgentTranscriptInput,
 ): Promise<{ rows: AgentTranscriptRow[]; witnesses: PlaneReadWitness[] }> {
-  const result = await db.execute<Record<string, unknown>>(buildUnionQuery(input));
+  const result = await db.execute<Record<string, unknown>>(
+    buildUnionQuery(input, Math.min(input.limit, AGENT_TRANSCRIPT_UNION_MAX_ROWS)),
+  );
   return {
     rows: result.rows.map(toRow),
     // All three message stores are scanned by the union, on both platforms: on
@@ -439,16 +440,16 @@ export async function listAgentTranscript(
 }
 
 /**
- * The count probe: `count(*) from (<the same dedup query> limit 5001)`. 5001 means
- * "at least 5001" and is reported with `exact:false` — a lower bound, never an
- * estimate.
+ * Count the same filtered, deduplicated population up to `probeMax + 1`.
+ * The extra row distinguishes an exact count from a lower bound. Delivery's
+ * smaller row ceiling and cursor must not truncate this independent probe.
  */
 export async function countAgentTranscript(
   db: Database,
   input: AgentTranscriptInput,
   probeMax: number,
 ): Promise<{ value: number; exact: boolean }> {
-  const probe = buildUnionQuery({ ...input, limit: probeMax + 1, after: undefined });
+  const probe = buildUnionQuery({ ...input, after: undefined }, probeMax + 1);
   const result = await db.execute<{ count: string }>(
     sql`select count(*)::text as count from (${probe}) probe`,
   );
@@ -462,7 +463,7 @@ export async function explainAgentTranscript(
   input: AgentTranscriptInput,
 ): Promise<string> {
   const result = await db.execute<{ "QUERY PLAN": string }>(
-    sql`explain (format text) ${buildUnionQuery(input)}`,
+    sql`explain (format text) ${buildUnionQuery(input, Math.min(input.limit, AGENT_TRANSCRIPT_UNION_MAX_ROWS))}`,
   );
   return result.rows.map((row) => row["QUERY PLAN"]).join("\n");
 }

@@ -141,3 +141,27 @@ it("keeps both cursor orders stable across tied timestamps, duplicates and null 
       .toEqual({ value: 4, exact: true });
   }
 });
+
+it.each([1500, 1501, 5001, 5002, 7000])(
+  "counts %i matching messages independently of the delivery ceiling",
+  async (population) => {
+    const page = await fixture(`count-boundary-${population}`);
+    await testDb.pool.query(`
+      insert into message_archive(account_id,platform,conversation_ref,message_ref,occurred_at,
+        text_plain,sender_role)
+      select $1,'onlyfans','thread',g::text,$2,g::text,'fan'
+      from generate_series(1,$3::integer) g`, [page.pageId, INSIDE, population]);
+    // A second source for the same ID must not consume another count position.
+    await hot(page.pageId, "1", INSIDE);
+    const request = input(page.pageId);
+    expect(await countAgentTranscript(testDb.db, request, 5001)).toEqual({
+      value: Math.min(population, 5002), exact: population <= 5001,
+    });
+    expect(await countAgentTranscript(testDb.db, request, 10))
+      .toEqual({ value: 11, exact: false });
+    expect(await countAgentTranscript(testDb.db, { ...request, filters: { hasMedia: true } }, 5001))
+      .toEqual({ value: 0, exact: true });
+    expect((await listAgentTranscript(testDb.db, { ...request, limit: 6000 })).rows)
+      .toHaveLength(Math.min(population, 1500));
+  },
+);
