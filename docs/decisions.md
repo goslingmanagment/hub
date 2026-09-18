@@ -365,6 +365,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 366 | Fansly events final mode | B0 capture and permanent B1 hints on every Fansly page; bounded dialog polling with a 180-minute certified full on the five deep inboxes; the full-list freshness target follows the accepted interval (interval + one slot) instead of a silent full30 promise; earnings rotation and follower reconcile unchanged. |
 | 367 | A1 stop rule follows the measured A0 rule | An uncertain list marker resets only its page's unchanged streak; timestamp ties and a list shifting down between requests are not signals. The stricter Decision 346 wording (walk-wide invalidation) made live bounded walks full-length on four of five pages. A1 stays at least as strict as A0: its boundary is the certified full's start, A0 used the completion. |
 | 368 | Age-aware Fansly earnings roster | On SHADOW pages only, a live `fanslyFanEarningsRosterMaxAgeHours` lets the daily roster skip a spender whose BOTH earnings endpoints were validly checked inside the window and are neither dirty, failed nor cooling down. 0 (default) reads every spender every day; 1-47 equals 0; 48-168 enables the rotation. Hourly transactions and C2b dirty marks still drive addressed reads; coverage debt and age-based target selection follow the same window, debt anchored to the walk start. |
+| 369 | Fansly earnings window progress and stats freshness | Additive cursor fields replace ignored offset pagination with durable UTC-day window subdivision; the daily sweep precedes history under the unchanged physical-attempt cap. Fresh-window coverage uses a separate scope from historical completeness. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -15387,3 +15388,51 @@ needs the page in `fanslyFanEarningsShadowPageAllowlist` (currently all six
 Fansly pages) and receipts to read, so savings start on the SECOND daily walk
 after receipts appear. Rollback is setting the key back to 0 — the next walk reads
 every spender again, no data is deleted and no state needs repair.
+
+
+## Decision 369: Fansly earnings windows prove progress; freshness precedes history (2026-09-18)
+
+The production `stats_snapshot` lane on lora-3 captured 50 identical earnings
+bodies on September 17–18. The latest retained body (observation 2642525) has
+exactly 100 rows. Both backfill and steady code assumed `/earnings/stats`
+implemented offset pagination; their repeat guard compared offsets that the
+client itself increased, so it could never detect the repeated body. Backfill
+ran exclusively before the daily sweep, turning this into a freshness outage.
+The money transaction stream is independent; the UI reconciliation found no
+transaction-total discrepancy after excluding payout reversals.
+
+One provider-specific helper now walks a fixed root window. A full response is
+journaled, then split at UTC business-day boundaries; all revenue types for one
+date stay together. A short leaf advances to the next saved leaf. Requests start
+at UTC midnight; the older child's upper bound is the preceding day's last
+millisecond. This follows the observed business-day buckets rather than assuming
+that provider timestamps behave as exclusive row cursors. No offset is sent. An unsplittable full business day or a
+response outside the requested bounds terminates with partial-provider coverage
+and an anomaly, never a claim of exhaustion. Malformed bodies are journaled but
+cannot move the cursor. The root's nonempty evidence survives subdivisions, so
+the historical two-empty-window/probe/bookmark rule keeps its original unit.
+
+The v2 cursor gains pending windows and fixed sweep bounds across chunks and UTC
+rollover. Its envelope version stays v2 so a rollback can still read the attempt
+counter and completed history; old code may re-read a root but cannot mistake
+an unknown version for a new page and reset the budget. Legacy offsets are discarded; the unfinished root is recaptured while
+completed lanes, probe bookmarks, unrelated sweep progress and callsToday remain
+intact. No SQL reset or schema migration is required.
+
+Today's regular sweep runs before historical work, including on first enable.
+History spends only the remaining existing per-page physical-attempt budget and
+resumes durably. Successful fresh-window coverage and fresh-window failures use
+scopeRef=steady, keeping historical coverage at the existing empty scope. A
+successful recent window therefore cannot erase a partial historical claim.
+Transport, egress/proxy ownership, retry ceilings, capture-first persistence,
+canonicalization and projection natural keys are unchanged.
+
+
+The independent regression review additionally caught an inclusive-midnight
+checkpoint (after == before), which must remain parseable, and the dashboard's
+old all-scopes coverage rule. The stats verdict now composes historical and
+steady scopes only when their successfully captured windows overlap, and can
+judge a recent selection solely from the fresh window. Other multi-subject
+planes keep their all-scopes requirement. Snapshot scopes explicitly replace
+their bounds on each completed sweep: a min/max union across a downtime gap
+would invent coverage. Historical scopes keep their original monotone bounds.

@@ -485,7 +485,8 @@ export class FanslyAdapter {
   /**
    * `/account/wallets/earnings/stats` — the revenue MIX: a flat array of
    * `{type, totalGross, totalNet, accountId, timestamp}`, one row per revenue
-   * type per business day. Offset-paginated at `limit=100`.
+   * type per business day. The provider caps at `limit=100` but ignores
+   * `offset`; the sync lane subdivides full windows at UTC day boundaries.
    *
    * Distinct from `/account/wallets/earnings/stats/accounts`, which is the
    * existing per-FAN `fan_earnings` lane and is not this.

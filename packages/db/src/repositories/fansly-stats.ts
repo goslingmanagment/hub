@@ -969,6 +969,9 @@ export interface UpsertCaptureCoverageInput {
   proof: CaptureCoverageProof;
   oldestCapturedAt?: Date | null;
   newestCapturedAt?: Date | null;
+  /** A separately scoped snapshot describes its latest window, not a union
+   * across successful polls separated by an unknown capture gap. */
+  replaceWindowBounds?: boolean;
   cursor?: Record<string, unknown>;
   expectedCount?: number | null;
   observedUniqueCount?: number | null;
@@ -982,7 +985,9 @@ export interface UpsertCaptureCoverageInput {
  * Coverage is a HEAD, not a log: the newest claim replaces the old one, but
  * `oldest_captured_at` only ever moves BACKWARDS and `newest_captured_at` only
  * forwards — a backfill chunk that reaches further into history must never be
- * undone by the next steady-state sweep writing today's window.
+ * undone by the next steady-state sweep writing today's window. A separately
+ * scoped snapshot can explicitly replace its bounds: min/max would invent
+ * continuous coverage across two polls separated by a capture gap.
  */
 export async function upsertCaptureCoverage(
   db: Database,
@@ -1005,12 +1010,14 @@ export async function upsertCaptureCoverage(
       status = excluded.status,
       acquisition_mode = excluded.acquisition_mode,
       proof = excluded.proof,
-      oldest_captured_at = least(
+      oldest_captured_at = case when ${input.replaceWindowBounds ?? false}
+        then excluded.oldest_captured_at else least(
         capture_coverage.oldest_captured_at, excluded.oldest_captured_at
-      ),
-      newest_captured_at = greatest(
+      ) end,
+      newest_captured_at = case when ${input.replaceWindowBounds ?? false}
+        then excluded.newest_captured_at else greatest(
         capture_coverage.newest_captured_at, excluded.newest_captured_at
-      ),
+      ) end,
       cursor = excluded.cursor,
       expected_count = excluded.expected_count,
       observed_unique_count = excluded.observed_unique_count,
