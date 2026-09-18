@@ -1,3 +1,4 @@
+import { fixtureUserId } from "./helpers/user-identity.ts";
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 
@@ -62,8 +63,8 @@ import {
   assignPageToUser,
   createUserAccount,
   issueChatterApiKey,
-  issueDeviceTokenForUsername,
-  setDeviceTokenHarvestCapabilityForUsername,
+  issueDeviceTokenForUserId,
+  setDeviceTokenHarvestCapabilityForUserId,
   setUserPassword,
   unassignPageFromUser,
 } from "../apps/runtime/src/services/auth.ts";
@@ -1777,7 +1778,7 @@ describe("api integration", () => {
       password: "lead-secret",
     }, { source: "cli" });
     await assignPageToUser(appContext, {
-      username: "lead",
+      userId: await fixtureUserId(appContext, "lead"),
       pageLabel: "lana",
     }, { source: "cli" });
     await createUserAccount(appContext, {
@@ -2077,7 +2078,7 @@ describe("api integration", () => {
     const cookie = sessionCookieFrom(login);
 
     await setUserPassword(createTestAppContext(testDb), {
-      username: "dima",
+      userId: await fixtureUserId(createTestAppContext(testDb), "dima"),
       password: "owner-secret-2",
     }, { source: "cli" });
 
@@ -2214,11 +2215,11 @@ describe("api integration", () => {
 
     const appContext = createTestAppContext(testDb);
     const firstKey = await issueChatterApiKey(appContext, {
-      username: "anton",
+      userId: await fixtureUserId(appContext, "anton"),
       pageLabel: "lana",
     }, { source: "cli" });
     const secondKey = await issueChatterApiKey(appContext, {
-      username: "anton",
+      userId: await fixtureUserId(appContext, "anton"),
     }, { source: "cli" });
 
     const login = await server.inject({
@@ -2259,7 +2260,7 @@ describe("api integration", () => {
 
     const apiKeysResponse = await server.inject({
       method: "GET",
-      url: "/api/v1/admin/users/anton/api-keys",
+      url: `/api/v1/admin/users/by-id/${await fixtureUserId(appContext, "anton")}/api-keys`,
       headers: {
         cookie,
       },
@@ -2292,7 +2293,7 @@ describe("api integration", () => {
 
     const appContext = createTestAppContext(testDb);
     const issuedKey = await issueChatterApiKey(appContext, {
-      username: "anton",
+      userId: await fixtureUserId(appContext, "anton"),
       pageLabel: "lana",
     }, { source: "cli" });
 
@@ -2446,11 +2447,11 @@ describe("api integration", () => {
       passwordHash: null,
     });
     const antonKey = await issueChatterApiKey(appContext, {
-      username: "anton",
+      userId: await fixtureUserId(appContext, "anton"),
       pageLabel: "lana",
     }, { source: "cli" });
     const borisKey = await issueChatterApiKey(appContext, {
-      username: "boris",
+      userId: await fixtureUserId(appContext, "boris"),
       pageLabel: "lana",
     }, { source: "cli" });
 
@@ -2527,8 +2528,8 @@ describe("api integration", () => {
              count(*)::text as event_count
       from ai_usage_events e
       inner join users u on u.id = e.user_id
-      group by u.username
-      order by u.username asc
+      group by u.id, u.username
+      order by u.username asc, u.id asc
     `);
 
     expect(grouped.rows).toEqual([
@@ -2556,7 +2557,7 @@ describe("api integration", () => {
 
     // A fresh audited action adds a distinct observation with the actor.
     const appContext = createTestAppContext(testDb);
-    await issueChatterApiKey(appContext, { username: "anton", pageLabel: "lana" }, { source: "cli" });
+    await issueChatterApiKey(appContext, { userId: await fixtureUserId(appContext, "anton"), pageLabel: "lana" }, { source: "cli" });
     const issued = await testDb.pool.query<{ n: string }>(
       "select count(*)::text as n from observations where source = 'operator' and kind = 'api_key.issued'",
     );
@@ -2571,7 +2572,7 @@ describe("api integration", () => {
 
     const appContext = createTestAppContext(testDb);
     const chatterKey = await issueChatterApiKey(appContext, {
-      username: "anton",
+      userId: await fixtureUserId(appContext, "anton"),
       pageLabel: "lana",
     }, { source: "cli" });
     const warnSpy = vi.spyOn(appContext.logger, "warn");
@@ -2644,7 +2645,7 @@ describe("api integration", () => {
 
     const appContext = createTestAppContext(testDb);
     const issuedKey = await issueChatterApiKey(appContext, {
-      username: "anton",
+      userId: await fixtureUserId(appContext, "anton"),
       pageLabel: "lana",
     }, { source: "cli" });
 
@@ -2696,7 +2697,7 @@ describe("api integration", () => {
 
     const appContext = createTestAppContext(testDb);
     const issuedKey = await issueChatterApiKey(appContext, {
-      username: "anton",
+      userId: await fixtureUserId(appContext, "anton"),
       pageLabel: "lana",
     }, { source: "cli" });
 
@@ -2806,7 +2807,7 @@ describe("api integration", () => {
       passwordHash: null,
     });
     const antonKey = await issueChatterApiKey(appContext, {
-      username: "anton",
+      userId: await fixtureUserId(appContext, "anton"),
       pageLabel: "lana",
     }, { source: "cli" });
 
@@ -3024,7 +3025,7 @@ describe("api integration", () => {
 
     const appContext = createTestAppContext(testDb);
     const antonKey = await issueChatterApiKey(appContext, {
-      username: "anton",
+      userId: await fixtureUserId(appContext, "anton"),
       pageLabel: "lana",
     }, { source: "cli" });
 
@@ -3163,7 +3164,7 @@ describe("api integration", () => {
 
     const appContext = createTestAppContext(testDb);
     const { key } = await issueChatterApiKey(appContext, {
-      username: "anton",
+      userId: await fixtureUserId(appContext, "anton"),
       pageLabel: "lana",
     }, { source: "cli" });
 
@@ -3204,16 +3205,16 @@ describe("api integration", () => {
 
     const appContext = createTestAppContext(testDb);
     await assignPageToUser(appContext, {
-      username: "anton",
+      userId: await fixtureUserId(appContext, "anton"),
       pageLabel: "lana",
     }, { source: "cli" });
     await assignPageToUser(appContext, {
-      username: "anton",
+      userId: await fixtureUserId(appContext, "anton"),
       pageLabel: "lily1",
     }, { source: "cli" });
 
     const { key } = await issueChatterApiKey(appContext, {
-      username: "anton",
+      userId: await fixtureUserId(appContext, "anton"),
     }, { source: "cli" });
 
     const authMe = await server.inject({
@@ -3248,7 +3249,7 @@ describe("api integration", () => {
     expect(lily.statusCode).toBe(200);
 
     await unassignPageFromUser(appContext, {
-      username: "anton",
+      userId: await fixtureUserId(appContext, "anton"),
       pageLabel: "lana",
     }, { source: "cli" });
 
@@ -3279,7 +3280,7 @@ describe("api integration", () => {
 
     const appContext = createTestAppContext(testDb);
     const { key, assignedPages } = await issueChatterApiKey(appContext, {
-      username: "anton",
+      userId: await fixtureUserId(appContext, "anton"),
     }, { source: "cli" });
     expect(assignedPages).toEqual([]);
 
@@ -4414,7 +4415,7 @@ describe("api integration", () => {
 
     const appContext = createTestAppContext(testDb);
     const { key } = await issueChatterApiKey(appContext, {
-      username: "anton",
+      userId: await fixtureUserId(appContext, "anton"),
       pageLabel: "lana",
     }, { source: "cli" });
     const put = (payload: Record<string, unknown>) =>
@@ -4467,7 +4468,7 @@ describe("api integration", () => {
 
     const appContext = createTestAppContext(testDb);
     const { key } = await issueChatterApiKey(appContext, {
-      username: "anton",
+      userId: await fixtureUserId(appContext, "anton"),
       pageLabel: "lana",
     }, { source: "cli" });
 
@@ -4627,9 +4628,9 @@ describe("api integration", () => {
     const appContext = createTestAppContext(testDb);
     const ofModel = await createModel(appContext.db, { slug: "lora-of-model", name: "Lora OF" });
     await createOnlyFansPage(appContext.db, { modelId: ofModel.id, label: "lora-of" });
-    await assignPageToUser(appContext, { username: "anton", pageLabel: "lana" }, { source: "cli" });
+    await assignPageToUser(appContext, { userId: await fixtureUserId(appContext, "anton"), pageLabel: "lana" }, { source: "cli" });
     const { key } = await issueChatterApiKey(appContext, {
-      username: "anton",
+      userId: await fixtureUserId(appContext, "anton"),
       pageLabel: "lora-of",
     }, { source: "cli" });
 
@@ -4777,7 +4778,7 @@ describe("api integration", () => {
 
     const appContext = createTestAppContext(testDb);
     const { key } = await issueChatterApiKey(appContext, {
-      username: "anton",
+      userId: await fixtureUserId(appContext, "anton"),
       pageLabel: "lana",
     }, { source: "cli" });
 
@@ -4988,8 +4989,8 @@ describe("api integration", () => {
     // principal `undefined` (unrestricted), which made an owner-role device
     // token an unbounded cross-page reader on every v2 spender route.
     // The old test WAS the bug: it only ever exercised api_key.
-    const ownerDevice = await issueDeviceTokenForUsername(createTestAppContext(testDb), {
-      username: "dima",
+    const ownerDevice = await issueDeviceTokenForUserId(createTestAppContext(testDb), {
+      userId: await fixtureUserId(createTestAppContext(testDb), "dima"),
       label: "dima-audit-laptop",
     }, { source: "test" });
 
@@ -5057,8 +5058,8 @@ describe("api integration", () => {
     // `pageScopeFor(principal)` straight to the platform-total query, which
     // treats `undefined` as "no page filter". An owner-role device token asking
     // about ONE page therefore read the fan's spend across every page.
-    const ownerDevice = await issueDeviceTokenForUsername(createTestAppContext(testDb), {
-      username: "dima",
+    const ownerDevice = await issueDeviceTokenForUserId(createTestAppContext(testDb), {
+      userId: await fixtureUserId(createTestAppContext(testDb), "dima"),
       label: "dima-fan-detail-laptop",
     }, { source: "test" });
 
@@ -5979,7 +5980,7 @@ describe("api integration", () => {
 
     const appContext = createTestAppContext(testDb);
     const { key } = await issueChatterApiKey(appContext, {
-      username: "anton",
+      userId: await fixtureUserId(appContext, "anton"),
       pageLabel: "lana",
     }, { source: "cli" });
 
@@ -6224,7 +6225,7 @@ describe("api integration", () => {
 
     const appContext = createTestAppContext(testDb);
     const { key } = await issueChatterApiKey(appContext, {
-      username: "anton",
+      userId: await fixtureUserId(appContext, "anton"),
       pageLabel: "lana",
     }, { source: "cli" });
     const fanSearch = await server.inject({
@@ -9126,11 +9127,11 @@ describe("api integration", () => {
 
     const appContext = createTestAppContext(testDb);
     await assignPageToUser(appContext, {
-      username: "anton",
+      userId: await fixtureUserId(appContext, "anton"),
       pageLabel: "lana-workboard-api-key",
     }, { source: "cli" });
     const { key } = await issueChatterApiKey(appContext, {
-      username: "anton",
+      userId: await fixtureUserId(appContext, "anton"),
     }, { source: "cli" });
 
     const workboard = await server.inject({
@@ -9263,7 +9264,7 @@ describe("api integration", () => {
 
     const appContext = createTestAppContext(testDb);
     const { key } = await issueChatterApiKey(appContext, {
-      username: "anton",
+      userId: await fixtureUserId(appContext, "anton"),
       pageLabel: "lana",
     }, { source: "cli" });
 
@@ -9875,7 +9876,7 @@ describe("api integration", () => {
     // Chatter bearer keys are not a dashboard surface — 403 on both.
     const appContext = createTestAppContext(testDb);
     const chatterKey = await issueChatterApiKey(appContext, {
-      username: "anton",
+      userId: await fixtureUserId(appContext, "anton"),
       pageLabel: "lana",
     }, { source: "cli" });
     const chatterSearch = await server.inject({
@@ -10207,7 +10208,7 @@ describe("api integration", () => {
     });
 
     await unassignPageFromUser(createTestAppContext(currentTestDb), {
-      username: "lead",
+      userId: await fixtureUserId(createTestAppContext(currentTestDb), "lead"),
       pageLabel: "lana",
     }, { source: "cli" });
 
@@ -10284,7 +10285,7 @@ describe("api integration", () => {
     const HARVEST_MACHINE = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
     const HV_UPLOADER_MACHINE = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
     const issuedKey = await issueChatterApiKey(appContext, {
-      username: "anton",
+      userId: await fixtureUserId(appContext, "anton"),
       pageLabel: "lana",
     }, { source: "cli" });
     const headers = {
@@ -10404,12 +10405,12 @@ describe("api integration", () => {
 
     // Stage 12: the client-version header alone grants nothing. An owner must
     // bind this exact device token to the preserved Desktop machine first.
-    const harvestDevice = await issueDeviceTokenForUsername(appContext, {
-      username: "anton",
+    const harvestDevice = await issueDeviceTokenForUserId(appContext, {
+      userId: await fixtureUserId(appContext, "anton"),
       label: "anton-harvest-desktop",
     }, { source: "test" });
-    await setDeviceTokenHarvestCapabilityForUsername(appContext, {
-      username: "anton",
+    await setDeviceTokenHarvestCapabilityForUserId(appContext, {
+      userId: await fixtureUserId(appContext, "anton"),
       deviceTokenId: harvestDevice.id,
       machineId: HARVEST_MACHINE,
     }, { source: "test" });
@@ -10456,15 +10457,15 @@ describe("api integration", () => {
       role: "chatter",
     }, { source: "cli" });
     await issueChatterApiKey(appContext, {
-      username: "hv-uploader",
+      userId: await fixtureUserId(appContext, "hv-uploader"),
       pageLabel: "hv-of",
     }, { source: "cli" });
-    const harvestUploaderDevice = await issueDeviceTokenForUsername(appContext, {
-      username: "hv-uploader",
+    const harvestUploaderDevice = await issueDeviceTokenForUserId(appContext, {
+      userId: await fixtureUserId(appContext, "hv-uploader"),
       label: "hv-harvest-desktop",
     }, { source: "test" });
-    await setDeviceTokenHarvestCapabilityForUsername(appContext, {
-      username: "hv-uploader",
+    await setDeviceTokenHarvestCapabilityForUserId(appContext, {
+      userId: await fixtureUserId(appContext, "hv-uploader"),
       deviceTokenId: harvestUploaderDevice.id,
       machineId: HV_UPLOADER_MACHINE,
     }, { source: "test" });
@@ -10629,7 +10630,7 @@ describe("api integration", () => {
       });
       const issued = await issueChatterApiKey(
         appContext,
-        { username: "anton", pageLabel: "lana" },
+        { userId: await fixtureUserId(appContext, "anton"), pageLabel: "lana" },
         { source: "cli" },
       );
       const voiceServer = await buildApiServer(appContext);

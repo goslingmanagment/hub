@@ -1,3 +1,4 @@
+import { fixtureUserId } from "./helpers/user-identity.ts";
 import { createHash, createHmac } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
@@ -1130,7 +1131,7 @@ describe("OFAPI webhook admin flow", () => {
 
     await createUserAccount(appContext, { username: "anton", role: "chatter" }, { source: "cli" });
     const { key: chatterKey } = await issueChatterApiKey(appContext, {
-      username: "anton",
+      userId: await fixtureUserId(appContext, "anton"),
       pageLabel: "lora-of",
     }, { source: "cli" });
     const chatterStatus = await server.inject({

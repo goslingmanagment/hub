@@ -1,3 +1,4 @@
+import { fixtureUserId } from "./helpers/user-identity.ts";
 import argon2 from "argon2";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
@@ -234,7 +235,7 @@ describe("who is refused", () => {
     if (!setup) return;
     // No actorUserId: the owner is not a fixture here, and a user may not
     // deactivate themselves.
-    await deactivateUser(setup.app, { username: "grisha" }, { source: "cli" });
+    await deactivateUser(setup.app, { userId: await fixtureUserId(setup.app, "grisha") }, { source: "cli" });
 
     const response = await signIn(setup.server, {
       username: "grisha",
@@ -267,7 +268,7 @@ describe("who is refused", () => {
     const setup = requireSetup(context);
     if (!setup) return;
     await setUserPassword(setup.app, {
-      username: "grisha",
+      userId: await fixtureUserId(setup.app, "grisha"),
       password: "owner-chosen-42",
       mustChangePassword: true,
     }, { source: "cli" });

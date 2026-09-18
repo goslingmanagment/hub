@@ -7,13 +7,14 @@ for you.
 Rights model behind every step: `docs/identity-rights-matrix.md`. Onboarding and
 the day-to-day link operations: `docs/runbooks/chatter-onboarding.md`.
 
-The console card ("Настройки → Команда → карточка человека") is PR-1B. Until it
-ships, each step names the route behind the button; owner cookie session
-required for all of them.
+The console card is "Настройки → Команда → карточка человека". Every account
+action uses its immutable ID, not its login. An owner cookie session is
+required. See [account deletion](user-account-deletion.md) for lifecycle and
+compatibility details.
 
 ## The ladder, and why the order matters
 
-Four operations exist and they are not interchangeable. Picking the wrong one is
+Five operations exist and they are not interchangeable. Picking the wrong one is
 the classic offboarding mistake:
 
 | Operation | Kills | Leaves alive |
@@ -21,28 +22,29 @@ the classic offboarding mistake:
 | **«Отозвать вход»** | one device token | every other sign-in |
 | **«Отозвать все устройства»** | every device token and reservation | **the cookie session and the legacy API key** |
 | **«Завершить все входы»** | device tokens, reservations, sessions, API keys, active links | the password — a fresh login still works |
-| **Деактивировать** | all of the above, permanently | nothing; the account cannot sign in at all |
+| **«Отключить доступ»** | all of the above; login blocked until explicitly restored | identity, history, saved role and page assignments |
+| **«Удалить аккаунт»** | every sign-in and link; password removed; account cannot be restored | immutable historical attribution; login becomes free |
 
-For an actual departure you need the last two, in that order.
+Choose **disable** when the same account may return, or **delete** when removing
+the account permanently. Both close all Hub sign-ins themselves. Use
+«Завершить все входы» separately when the person keeps working.
 
 ## Steps
 
-1. **«Завершить все входы»** — `POST /api/v1/admin/users/<login>/terminate-access`.
-   Every device token, reservation, cookie session, API key and unused invite or
-   reset link of that person dies at once, and the device-token epoch advances.
-   The password is untouched on purpose: this operation is also the one you use
-   for a suspected leak, where the person keeps working.
+1. **Choose account removal or temporary disable.**
+   - **«Отключить доступ»** — `POST /api/v1/admin/users/by-id/<userId>/deactivate`.
+     Sign-ins and links are revoked, the account is disabled, and its login
+     remains reserved. Role, password and page assignments remain for explicit
+     restoration of the same account.
+   - **«Удалить аккаунт»** — `DELETE /api/v1/admin/users/by-id/<userId>`.
+     All sign-ins and links are revoked, the password is cleared and the login
+     becomes free. A later invitation creates a different account. Historical
+     attribution survives, and the old account cannot be restored.
 
-2. **Деактивировать** — `POST /api/v1/admin/users/<login>/deactivate`.
-   The account is tombstoned (`disabled_at`; nothing is ever deleted — DP 7).
-   From here on both sign-in lanes refuse with the same answer they give for a
-   login that never existed, so a former chatter learns nothing about whether
-   their account still exists. Assignments, passwords and keys are frozen: they
-   cannot be re-opened without reactivating first.
-
-   Deactivation alone would have covered step 1, but running step 1 first means
-   access is gone the moment you click it, even if step 2 waits for a
-   conversation.
+2. **Confirm the intended person and complete the operation.** The card binds
+   the action to the immutable user ID. Deletion requires a separate permanent
+   deletion confirmation. There is no need to terminate sign-ins first; both
+   operations do that atomically themselves.
 
 3. **Manual — sign out of Fansly in their Firefox.** The hub does not own that
    session and cannot end it. If the machine stays with the agency, open the
@@ -74,15 +76,17 @@ devices. The words "token", "key" and "API" never appear on their screen.
 | «Отозвать вход» (that device) | «Сессия на этом устройстве завершена, войдите снова» — the sign-in screen; the client wipes its own stored sign-in | unchanged |
 | «Отозвать все устройства» | the same, on every device | **still signed in** — the cabinet still opens |
 | «Завершить все входы» | the same, on every device | signed out; the next page load asks for the password, which still works |
-| Деактивировать | the same, and signing in again fails with «Неверный логин или пароль» | the same |
+| «Отключить доступ» | the same, and signing in again fails with «Неверный логин или пароль» | the same |
+| «Удалить аккаунт» | the old sign-ins stop working; a reused login belongs to a new account | the old session cannot access the new account |
 
 An already open stream keeps delivering for up to 60 seconds after the
 revocation before it closes — expect that gap rather than treating it as a bug.
 
 ## Verifying it took
 
-- The person's card shows no devices, and `GET /api/v1/admin/users` shows
-  `disabledAt` set.
+- After disabling, the card has no active sign-ins and `GET /api/v1/admin/users`
+  shows `disabledAt` set. After deletion, the old ID is absent from the list
+  and administrative actions on it return 404.
 - `GET /api/v1/auth/me` with anything they held answers 401 (`token_revoked` for
   a device token that still matched a row).
 - `POST /api/v1/auth/login` with their password answers 401.
@@ -93,7 +97,21 @@ All of this is pinned by `tests/rights-matrix.integration.test.ts`
 
 ## If they come back
 
-Reactivation (`POST /api/v1/admin/users/<login>/reactivate`) restores password
-login and nothing else: every revoked credential stays revoked and links are not
-revived. Re-assign pages, then send a fresh reset link
-(`docs/runbooks/chatter-onboarding.md`).
+A deleted account cannot be restored: create a fresh invitation. The same login
+is available, but the new account receives a new ID, password and assignments.
+The following recovery applies only to a disabled account.
+
+
+Open the same person under **«Отключённые участники»** and choose
+**«Восстановить доступ»** (`POST /api/v1/admin/users/by-id/<userId>/reactivate`).
+The confirmation states that their saved role and assigned pages become usable
+again. Review those pages before confirming; restoration must never transfer
+someone else's history to a new person with the same name.
+
+Every old sign-in and link stays revoked. If the person already set a password
+and no mandatory password change is pending, they can log in with it again.
+If `mustChangePassword` is set, the confirmation directs the owner to create a
+password-reset link before client sign-in; restoration does not clear that
+flag. A reset link also helps if the password was forgotten. If the person
+never registered, create a fresh invitation from the restored card's «Ссылки»
+section. See `docs/runbooks/chatter-onboarding.md`.

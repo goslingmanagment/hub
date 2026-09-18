@@ -1,3 +1,4 @@
+import { fixtureUserId } from "./helpers/user-identity.ts";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
@@ -278,7 +279,7 @@ describe("ofapi credits admin api", () => {
     await seedWebhookEventsAt("assigned_7d", 8, daysAgo(2, 3), page.id);
 
     const { key } = await issueChatterApiKey(appContext, {
-      username: "anton",
+      userId: await fixtureUserId(appContext, "anton"),
       pageLabel: page.label,
     }, { source: "test" });
 
@@ -334,7 +335,7 @@ describe("ofapi credits admin api", () => {
       label: "disabled-of",
     });
     const { key } = await issueChatterApiKey(appContext, {
-      username: "boris",
+      userId: await fixtureUserId(appContext, "boris"),
       pageLabel: page.label,
     }, { source: "test" });
 
@@ -647,7 +648,7 @@ describe("ofapi credits admin api", () => {
     });
     await seedWebhookEventsAt("legacy_chatter_credits", eventCount, currentDay, page.id);
     const { key } = await issueChatterApiKey(appContext, {
-      username: "anton", pageLabel: page.label,
+      userId: await fixtureUserId(appContext, "anton"), pageLabel: page.label,
     }, { source: "test" });
     const response = await server.inject({
       method: "GET", url: "/api/v1/ofapi/credits/summary",

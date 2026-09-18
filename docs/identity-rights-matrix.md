@@ -1,4 +1,4 @@
-# Identity rights matrix (Decision 352)
+# Identity rights matrix (Decisions 352, 354)
 
 One login is not one set of rights. Since Decision 349 every person in the
 agency has a single account and signs in to the dashboard, the Fansly extension
@@ -12,6 +12,11 @@ Read with: `docs/decisions.md` #349 (the unified account) and #352 (this
 matrix), `docs/generated/15-auth-config-and-access.md` (the generated policy
 table), `docs/runbooks/chatter-onboarding.md` and
 `docs/runbooks/chatter-offboarding.md`.
+
+Account-target operations use immutable `userId`. A login can belong to a new
+account after deletion; credentials, rights, cached cards and historical usage
+remain bound to the original ID. See
+[account deletion](runbooks/user-account-deletion.md).
 
 ## The five axes
 
@@ -70,6 +75,8 @@ someone:
 | Terminated all access | Device tokens, sessions, API keys and active links all die; a fresh `login` with the same valid password still works | `rights-matrix.integration` › *row «terminated all access»*; the counts: `auth-devices.integration` |
 | Password reset by link | The old password 401s and the new one 200s; every prior device token and session 401s | `rights-matrix.integration` › *row «password reset by link»*; the link lifecycle: `account-links.integration` |
 | Deactivated | Every credential 401s and both sign-in lanes refuse **with no oracle** — byte-identical answers for a disabled account and for one that never existed | `rights-matrix.integration` › *row «deactivated»*; the tombstone and the frozen mutations: `user-deactivation.integration` |
+| Deleted and login reused | Old credentials/links and old-ID actions fail; a new account has a new ID and only newly assigned access; old audit/spend attribution survives | `user-identity-reuse.integration` |
+| Stale username route or old card | It cannot resolve to a replacement user, including numeric logins | `user-identity-reuse.integration`; `team-account-lifecycle` |
 | Roles | owner: every page, console by cookie only; team_lead: dashboard but not the console, clients by assignment; chatter: cabinet and clients, never the dashboard; `content_manager`: cannot sign in anywhere | `rights-matrix.integration` › *§7 — roles* (four cases). The declarative policy grid per module: `auth-policy.integration` |
 | Another person signs in on the same PC | The principal and the assigned pages are the new person's; the previous person's local data is hidden but still on the disk | **manual + documented** (D23 of the desktop repo, #145) |
 | No pages of that platform | The extension shows CG-HUB-05; the desktop shows an empty state instead of reconnecting forever | **unit tests in the clients** |

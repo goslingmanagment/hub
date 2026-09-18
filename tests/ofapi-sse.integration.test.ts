@@ -1,3 +1,4 @@
+import { fixtureUserId } from "./helpers/user-identity.ts";
 import { createHmac } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
@@ -233,7 +234,7 @@ beforeEach(async (context) => {
   }, { source: "cli" });
   await createUserAccount(appContext, { username: "anton", role: "chatter" }, { source: "cli" });
   const issued = await issueChatterApiKey(appContext, {
-    username: "anton",
+    userId: await fixtureUserId(appContext, "anton"),
     pageLabel: "lora-of",
   }, { source: "cli" });
   chatterKey = issued.key;

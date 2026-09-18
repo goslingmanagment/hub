@@ -1,3 +1,4 @@
+import { fixtureUserId } from "./helpers/user-identity.ts";
 import { randomUUID } from "node:crypto";
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -86,7 +87,7 @@ beforeEach(async () => {
     role: "chatter",
   }, { source: "cli" });
   chatterKey = (await issueChatterApiKey(appContext, {
-    username: "chatter",
+    userId: await fixtureUserId(appContext, "chatter"),
     pageLabel: "lora-of",
   }, { source: "cli" })).key;
 
@@ -95,7 +96,7 @@ beforeEach(async () => {
     role: "chatter",
   }, { source: "cli" });
   otherChatterKey = (await issueChatterApiKey(appContext, {
-    username: "other-chatter",
+    userId: await fixtureUserId(appContext, "other-chatter"),
     pageLabel: "lora-of",
   }, { source: "cli" })).key;
 

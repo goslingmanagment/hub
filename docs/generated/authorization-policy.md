@@ -22,7 +22,7 @@ body remain handler-checked and are noted per route in the service layer.
 | `agentKey` | Agent Read Plane key only; no human principal is admitted |
 | `any` | any authenticated principal except an agent key |
 
-## Routes (274)
+## Routes (275)
 
 | Method | Path | Route key | Kind | Roles | Page scope |
 | --- | --- | --- | --- | --- | --- |
@@ -148,26 +148,27 @@ body remain handler-checked and are noted per route in the service layer.
 | GET | `/api/v1/admin/usage/chatters` | `adminChatterUsage` | `owner-session` | — | — |
 | GET | `/api/v1/admin/users` | `adminListUsers` | `owner-session` | — | — |
 | POST | `/api/v1/admin/users` | `adminCreateUser` | `owner-session` | — | — |
-| DELETE | `/api/v1/admin/users/:username/api-keys` | `adminRevokeApiKeys` | `owner-session` | — | — |
-| GET | `/api/v1/admin/users/:username/api-keys` | `adminListApiKeys` | `owner-session` | — | — |
-| POST | `/api/v1/admin/users/:username/api-keys` | `adminIssueApiKey` | `owner-session` | — | — |
-| POST | `/api/v1/admin/users/:username/deactivate` | `adminDeactivateUser` | `owner-session` | — | — |
-| DELETE | `/api/v1/admin/users/:username/device-tokens` | `adminRevokeDeviceTokens` | `owner-session` | — | — |
-| GET | `/api/v1/admin/users/:username/device-tokens` | `adminListDeviceTokens` | `owner-session` | — | — |
-| POST | `/api/v1/admin/users/:username/device-tokens` | `adminIssueDeviceToken` | `owner-session` | — | — |
-| DELETE | `/api/v1/admin/users/:username/device-tokens/:tokenId` | `adminRevokeDeviceToken` | `owner-session` | — | — |
-| PATCH | `/api/v1/admin/users/:username/device-tokens/:tokenId/harvest-capability` | `adminSetDeviceTokenHarvestCapability` | `owner-session` | — | — |
-| GET | `/api/v1/admin/users/:username/grants` | `adminListUserGrants` | `owner-session` | — | — |
-| GET | `/api/v1/admin/users/:username/links` | `adminListAccountLinks` | `owner-session` | — | — |
-| POST | `/api/v1/admin/users/:username/links` | `adminCreateAccountLink` | `owner-session` | — | — |
-| POST | `/api/v1/admin/users/:username/links/:linkId/revoke` | `adminRevokeAccountLink` | `owner-session` | — | — |
-| POST | `/api/v1/admin/users/:username/models` | `adminGrantModel` | `owner-session` | — | — |
-| DELETE | `/api/v1/admin/users/:username/models/:modelSlug` | `adminRevokeModel` | `owner-session` | — | — |
-| POST | `/api/v1/admin/users/:username/pages` | `adminAssignPage` | `owner-session` | — | — |
-| DELETE | `/api/v1/admin/users/:username/pages/:pageLabel` | `adminUnassignPage` | `owner-session` | — | — |
-| PATCH | `/api/v1/admin/users/:username/password` | `adminSetPassword` | `owner-session` | — | — |
-| POST | `/api/v1/admin/users/:username/reactivate` | `adminReactivateUser` | `owner-session` | — | — |
-| POST | `/api/v1/admin/users/:username/terminate-access` | `adminTerminateAllAccess` | `owner-session` | — | — |
+| DELETE | `/api/v1/admin/users/by-id/:userId` | `adminDeleteUser` | `owner-session` | — | — |
+| DELETE | `/api/v1/admin/users/by-id/:userId/api-keys` | `adminRevokeApiKeys` | `owner-session` | — | — |
+| GET | `/api/v1/admin/users/by-id/:userId/api-keys` | `adminListApiKeys` | `owner-session` | — | — |
+| POST | `/api/v1/admin/users/by-id/:userId/api-keys` | `adminIssueApiKey` | `owner-session` | — | — |
+| POST | `/api/v1/admin/users/by-id/:userId/deactivate` | `adminDeactivateUser` | `owner-session` | — | — |
+| DELETE | `/api/v1/admin/users/by-id/:userId/device-tokens` | `adminRevokeDeviceTokens` | `owner-session` | — | — |
+| GET | `/api/v1/admin/users/by-id/:userId/device-tokens` | `adminListDeviceTokens` | `owner-session` | — | — |
+| POST | `/api/v1/admin/users/by-id/:userId/device-tokens` | `adminIssueDeviceToken` | `owner-session` | — | — |
+| DELETE | `/api/v1/admin/users/by-id/:userId/device-tokens/:tokenId` | `adminRevokeDeviceToken` | `owner-session` | — | — |
+| PATCH | `/api/v1/admin/users/by-id/:userId/device-tokens/:tokenId/harvest-capability` | `adminSetDeviceTokenHarvestCapability` | `owner-session` | — | — |
+| GET | `/api/v1/admin/users/by-id/:userId/grants` | `adminListUserGrants` | `owner-session` | — | — |
+| GET | `/api/v1/admin/users/by-id/:userId/links` | `adminListAccountLinks` | `owner-session` | — | — |
+| POST | `/api/v1/admin/users/by-id/:userId/links` | `adminCreateAccountLink` | `owner-session` | — | — |
+| POST | `/api/v1/admin/users/by-id/:userId/links/:linkId/revoke` | `adminRevokeAccountLink` | `owner-session` | — | — |
+| POST | `/api/v1/admin/users/by-id/:userId/models` | `adminGrantModel` | `owner-session` | — | — |
+| DELETE | `/api/v1/admin/users/by-id/:userId/models/:modelSlug` | `adminRevokeModel` | `owner-session` | — | — |
+| POST | `/api/v1/admin/users/by-id/:userId/pages` | `adminAssignPage` | `owner-session` | — | — |
+| DELETE | `/api/v1/admin/users/by-id/:userId/pages/:pageLabel` | `adminUnassignPage` | `owner-session` | — | — |
+| PATCH | `/api/v1/admin/users/by-id/:userId/password` | `adminSetPassword` | `owner-session` | — | — |
+| POST | `/api/v1/admin/users/by-id/:userId/reactivate` | `adminReactivateUser` | `owner-session` | — | — |
+| POST | `/api/v1/admin/users/by-id/:userId/terminate-access` | `adminTerminateAllAccess` | `owner-session` | — | — |
 | GET | `/api/v1/agent/capabilities` | `agentCapabilities` | `agentKey` | — | — |
 | GET | `/api/v1/agent/coverage` | `agentCoverage` | `agentKey` | — | — |
 | GET | `/api/v1/agent/hydration-requests` | `agentHydrationRequestList` | `owner-session` | — | — |

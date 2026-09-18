@@ -77,7 +77,10 @@ describe("CLI admin flows", () => {
 
     await run(["user", "add", "--username", "dima", "--role", "owner", "--password", "owner-secret"]);
     await run(["user", "add", "--username", "anton", "--role", "chatter"]);
-    await run(["apikey", "create", "--username", "anton"]);
+    const antonId = String(
+      (await testDb.pool.query(`select id from users where username = 'anton'`)).rows[0]?.id,
+    );
+    await run(["apikey", "create", "--user-id", antonId]);
     const assignmentsBeforePage = await testDb.pool.query(`
       select count(*)::int as count
       from user_page_assignments upa
@@ -86,15 +89,15 @@ describe("CLI admin flows", () => {
     `);
     expect(assignmentsBeforePage.rows[0]?.count).toBe(0);
 
-    await run(["apikey", "create", "--username", "anton", "--page", "lana"]);
-    await run(["apikey", "show", "--username", "anton"]);
-    await run(["apikey", "revoke", "--username", "anton"]);
+    await run(["apikey", "create", "--user-id", antonId, "--page", "lana"]);
+    await run(["apikey", "show", "--user-id", antonId]);
+    await run(["apikey", "revoke", "--user-id", antonId]);
 
     consoleSpy.mockRestore();
 
     expect(logs.some((line) => line.includes("Created user dima"))).toBe(true);
     expect(logs.some((line) => line.startsWith("agency_hub_core_"))).toBe(true);
-    expect(logs.some((line) => line.includes("Revoked 1 API key(s) for anton"))).toBe(true);
+    expect(logs.some((line) => line.includes(`Revoked 1 API key(s) for ${antonId}`))).toBe(true);
 
     const keyRows = await testDb.pool.query(`
       select count(*)::int as count,

@@ -42,6 +42,7 @@ describe("team catalog loading failures", () => {
       assignedPages: [],
       apiKeyStatus: null,
       disabledAt: null,
+      deletedAt: null,
       lastActiveAt: null,
       registrationState: "active",
     };

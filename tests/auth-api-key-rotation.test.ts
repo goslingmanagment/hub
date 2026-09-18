@@ -57,7 +57,7 @@ const repoMocks = vi.hoisted(() => ({
   listApiKeys: vi.fn(),
   listUserPageAssignments: vi.fn(),
   listUsers: vi.fn(),
-  lockUserForApiKeyRotation: vi.fn(),
+  lockUserForDeviceTokenMutation: vi.fn(),
   revokeApiKeysByIds: vi.fn(),
   revokeApiKeysForUser: vi.fn(),
   revokeAuthSession: vi.fn(),
@@ -129,7 +129,8 @@ beforeEach(() => {
   });
   repoMocks.findActiveApiKeysForUser.mockImplementation(async (db: MockDb, userId: number) =>
     db.state.apiKeys.filter((apiKey) => apiKey.userId === userId && apiKey.revokedAt === null));
-  repoMocks.lockUserForApiKeyRotation.mockResolvedValue(undefined);
+  repoMocks.lockUserForDeviceTokenMutation.mockImplementation(async (db: MockDb, userId: number) =>
+    db.state.users.find((user) => user.id === userId) ?? null);
   repoMocks.createApiKey.mockImplementation(async (db: MockDb, input: {
     userId: number;
     keyPrefix: string;
@@ -204,13 +205,13 @@ describe("API key rotation transactions", () => {
     });
 
     const result = await issueChatterApiKey({ db } as never, {
-      username: "anton",
+      userId: 2,
       pageLabel: "lana",
     }, { source: "cli" });
 
     expect(result.key).toMatch(/^agency_hub_core_/);
-    expect(repoMocks.lockUserForApiKeyRotation).toHaveBeenCalledWith(expect.anything(), 2);
-    const lockOrder = repoMocks.lockUserForApiKeyRotation.mock.invocationCallOrder[0]!;
+    expect(repoMocks.lockUserForDeviceTokenMutation).toHaveBeenCalledWith(expect.anything(), 2);
+    const lockOrder = repoMocks.lockUserForDeviceTokenMutation.mock.invocationCallOrder[0]!;
     const activeKeyReadOrder = repoMocks.findActiveApiKeysForUser.mock.invocationCallOrder[0]!;
     expect(lockOrder).toBeLessThan(activeKeyReadOrder);
     expect(db.state.assignments).toEqual([{
@@ -264,7 +265,7 @@ describe("API key rotation transactions", () => {
     }, true);
 
     await expect(issueChatterApiKey({ db } as never, {
-      username: "anton",
+      userId: 2,
       pageLabel: "lana",
     }, { source: "cli" })).rejects.toThrow("audit failed");
 
