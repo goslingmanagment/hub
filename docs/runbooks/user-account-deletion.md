@@ -52,7 +52,7 @@ pnpm cli user delete --user-id 42 --confirm-user-id 42
 
 `user set-password`, `assign-page` and `unassign-page` also require
 `--user-id`. Creation continues to take `--username`. (The `apikey` group is
-gone entirely — Decision 369 retired the lane.)
+gone entirely — Decision 370 retired the lane.)
 Old scripts passing `--username` to target an account fail instead of resolving
 that name to a replacement person. CLI actor attribution also uses IDs:
 `ai:feature-smoke` and `agent hydration decide` take `--as-user-id`; `erasure:run`

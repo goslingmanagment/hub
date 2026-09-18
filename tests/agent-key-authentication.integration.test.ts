@@ -193,7 +193,7 @@ describe("authenticateBearerToken prefix routing", () => {
   });
 
   it("answers nobody for a bearer that matches no lane prefix", async () => {
-    // Decision 369: the dispatcher used to END in the api-key lane, so ANY
+    // Decision 370: the dispatcher used to END in the api-key lane, so ANY
     // unrecognized string cost a database lookup and was one row away from a
     // principal. Now an unknown prefix is refused outright — including the old
     // `agency_hub_core_` api-key prefix, whose rows survive as facts.

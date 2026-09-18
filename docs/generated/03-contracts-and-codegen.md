@@ -9,7 +9,7 @@
 > `KERNEL_SDK_VERSION` is 0.2.0 and `scripts/vendor-sdk.mjs` reads the version
 > from the generated meta instead of a literal.
 >
-> **STALE (Decision 369, 2026-09-15):** the API-key lane no longer exists. The
+> **STALE (Decision 370, 2026-09-15):** the API-key lane no longer exists. The
 > `apiKey` contract kind keeps its historical NAME but admits only a device
 > token; `authMethod` is `session | device_token`; the `api_keys` routes,
 > service, repository functions and CLI group are gone, as are the cookie

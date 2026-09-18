@@ -382,7 +382,7 @@ describe("immutable user identities and reusable logins", () => {
       switch (operation) {
         case "page grant": return assignPageToUser(setup.app, { userId, pageLabel: "lora-fansly" }, audit());
         case "model grant": return grantModelToUser(setup.app, { userId, modelSlug: "lora-model" }, audit());
-        // Decision 369 left one way to mint a bearer: username + password. It
+        // Decision 370 left one way to mint a bearer: username + password. It
         // re-reads the identity under the lock, which is what must refuse here.
         case "device token": return issueDeviceTokenWithPassword(setup.app, {
           username: "nikita", password: OLD_PASSWORD, label: "racing device",

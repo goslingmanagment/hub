@@ -175,7 +175,7 @@ describe("everything else stays silent", () => {
     const user = await setup.testDb.pool.query<{ id: number }>(
       "select id from users where username = 'vera'",
     );
-    // A live api_keys row, exactly as the table still holds them: Decision 369
+    // A live api_keys row, exactly as the table still holds them: Decision 370
     // left the facts and took the lane, so this bearer is refused with no
     // reason at all — there is nothing for a client to self-heal towards.
     const legacyKey = "agency_hub_core_retiredlanebearer00";

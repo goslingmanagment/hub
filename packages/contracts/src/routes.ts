@@ -93,7 +93,7 @@ export const authUserSchema = z.object({
   id: intId,
   username: z.string(),
   role: userRoleEnum,
-  // DEPRECATED (Decision 369): the #116(b) flag is retired — this field is a
+  // DEPRECATED (Decision 370): the #116(b) flag is retired — this field is a
   // wire-only constant `false`. It stays forever because the vendored client
   // SDKs declare it required (`$strip` tolerates extra fields, never missing
   // ones): dropping it would turn `me()` into response_validation_failed on
@@ -155,7 +155,7 @@ export const deviceTokenHarvestCapabilityBodySchema = z.object({
 });
 
 // D116(c) fleet-gate foundation (desktop D19): per active chatter, device-token
-// freshness. Read-only reporting surface. (Decision 369 retired the API-key
+// freshness. Read-only reporting surface. (Decision 370 retired the API-key
 // columns with the lane itself.)
 // Deliberately NO aggregate go/no-go boolean: chatter-role automation
 // accounts (probes/scripts) are indistinguishable from humans until the
@@ -194,7 +194,7 @@ export const registrationStateEnum = z.enum(["invited", "active"]);
 
 export const adminUserSchema = authUserSchema.extend({
   // Decision #126: deactivation tombstone (null = active) and the honest
-  // activity signal — the last device-token use (Decision 369 retired the
+  // activity signal — the last device-token use (Decision 370 retired the
   // API-key half of it with the lane).
   disabledAt: isoTimestamp.nullable(),
   // Deleted accounts retain their immutable attribution but cannot authenticate.
@@ -4868,7 +4868,7 @@ export const ofapiDmColdArchiveStatusResponseSchema = z.object({
 //   any-session    any live cookie session, any human role (self-serve auth)
 //   owner-session  cookie session with the owner role (admin surface, swagger/openapi)
 //   apiKey         bearer device token (desktop/extension lanes). Historical
-//                  name, kept deliberately: Decision 369 retired API keys, and
+//                  name, kept deliberately: Decision 370 retired API keys, and
 //                  renaming the kind would touch hundreds of declarations
 //   device-token   device-token bearer only (current-device self-service)
 //   agentKey       Agent Read Plane machine key only — there is no human behind

@@ -16,7 +16,7 @@ body remain handler-checked and are noted per route in the service layer.
 | `session` | dashboard cookie session (owner/team_lead) |
 | `any-session` | any live cookie session, any human role |
 | `owner-session` | dashboard cookie session, owner role only |
-| `apiKey` | device-token bearer (historical kind name: Decision 369 retired API keys) |
+| `apiKey` | device-token bearer (historical kind name: Decision 370 retired API keys) |
 | `device-token` | device-token bearer only |
 | `pending-device-token` | short-lived pending device-token bearer, activation route only |
 | `agentKey` | Agent Read Plane key only; no human principal is admitted |

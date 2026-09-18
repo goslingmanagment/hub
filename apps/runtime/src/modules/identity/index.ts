@@ -130,7 +130,7 @@ export function registerIdentityRoutes(server: ApiServer, ctx: ApiModuleContext)
     return listUsersDetailed(appContext);
   });
 
-  // Decision 369: there is no HTTP create-user and no HTTP set-password. An
+  // Decision 370: there is no HTTP create-user and no HTTP set-password. An
   // owner account is minted by `hub user add` on the box; everyone else is
   // invited — and reset — by link (adminCreateInvite / adminCreateAccountLink).
 
@@ -206,7 +206,7 @@ export function registerIdentityRoutes(server: ApiServer, ctx: ApiModuleContext)
     });
   });
 
-  // Decision 369: a device is signed in by password only
+  // Decision 370: a device is signed in by password only
   // (authIssueDeviceTokenWithPassword). The two cookie-session issuance routes
   // are gone — no client mints a bearer from a browser session any more.
 

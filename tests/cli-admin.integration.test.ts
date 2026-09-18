@@ -95,7 +95,7 @@ describe("CLI admin flows", () => {
 
     const leadId = await fixtureUserId(appContext, "lead");
     await run(["user", "assign-page", "--user-id", String(leadId), "--page", "lana"]);
-    // Decision 369: `set-password` is the full reset primitive — it ends every
+    // Decision 370: `set-password` is the full reset primitive — it ends every
     // sign-in of that person, which is why the CLI says so out loud.
     await run(["user", "set-password", "--user-id", String(leadId), "--password", "lead-secret-2"]);
 
@@ -120,7 +120,7 @@ describe("CLI admin flows", () => {
       return;
     }
 
-    // Decision 369: before this PR the CLI reset advanced the epoch and revoked
+    // Decision 370: before this PR the CLI reset advanced the epoch and revoked
     // SESSIONS, and left device tokens alive — so "I reset his password" was a
     // false statement about a laptop still holding a working bearer. It now runs
     // terminateAccessTx, the same primitive a reset link runs.

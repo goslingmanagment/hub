@@ -12,7 +12,7 @@
 > serializes a structured `reason` on 401 `unauthorized` and 409 `conflict`,
 > and the global 429 message is the neutral "Too many attempts".
 >
-> **STALE (Decision 369, 2026-09-15):** the API-key lane no longer exists. The
+> **STALE (Decision 370, 2026-09-15):** the API-key lane no longer exists. The
 > `apiKey` contract kind keeps its historical NAME but admits only a device
 > token; `authMethod` is `session | device_token`; the `api_keys` routes,
 > service, repository functions and CLI group are gone, as are the cookie

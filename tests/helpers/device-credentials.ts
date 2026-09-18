@@ -14,7 +14,7 @@ import {
 /**
  * Test fixture for "this person has a working client bearer".
  *
- * Decision 369 left exactly two ways to mint a device token in production:
+ * Decision 370 left exactly two ways to mint a device token in production:
  * `issueDeviceTokenWithPassword` (username + password) and
  * `activatePendingDeviceToken` (the desktop's staged reservation). Neither fits
  * a fixture — a chatter has no password until an invite link is redeemed, and

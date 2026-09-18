@@ -14,7 +14,7 @@
 > (`token_revoked` | `token_expired`) that the 401 carries. Logins are
 > case-insensitive; the new live config key is `ACCOUNT_LINKS_ENABLED`.
 >
-> **STALE (Decision 369, 2026-09-15):** the API-key lane is gone — no
+> **STALE (Decision 370, 2026-09-15):** the API-key lane is gone — no
 > `api_keys` routes, no `authenticateApiKeyToken`, no `roleCanUseApiKey`, no
 > `apikey` CLI group, and `authMethod` is `session | device_token`. A bearer
 > whose prefix matches neither the device-token nor the agent-key lane is

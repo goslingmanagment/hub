@@ -61,7 +61,7 @@ async function login(
   return sessionCookieFrom(response);
 }
 
-/** Decision 369: the desktop reserves by password, never from a cookie. */
+/** Decision 370: the desktop reserves by password, never from a cookie. */
 async function reserve(activeServer: NonNullable<typeof server>) {
   const response = await activeServer.inject({
     method: "POST",
@@ -224,7 +224,7 @@ describe("pending device-token activation protocol", () => {
   it("invalidates pending custody on password reset", async (context) => {
     const setup = requireSetup(context);
     if (!setup) return;
-    // Decision 369: an owner resets by link or CLI; both run this primitive.
+    // Decision 370: an owner resets by link or CLI; both run this primitive.
     await expectPendingInvalidated(setup, async () => {
       await setUserPassword(setup.app, {
         userId: await fixtureUserId(setup.app, "anton"),
@@ -378,7 +378,7 @@ describe("password sign-in authority races", () => {
   it("a live cookie session cannot mint a bearer at all any more", async (context) => {
     const setup = requireSetup(context);
     if (!setup) return;
-    // Decision 369 deleted the whole class of race the old test guarded: a
+    // Decision 370 deleted the whole class of race the old test guarded: a
     // session-issued token. The two cookie routes are gone from the contract,
     // so a perfectly valid session gets a 404 — there is nothing left to
     // revalidate after logout because nothing can be minted from a cookie.
@@ -551,7 +551,7 @@ describe("device-token adoption report (D116(c) foundation, desktop D19)", () =>
       deviceTokenLastUsedAt: null,
       deviceTokenExpiresAt: null,
     });
-    // Decision 369: a chatter with no device at all — the row the gate cares
+    // Decision 370: a chatter with no device at all — the row the gate cares
     // about — and no api-key column left to explain it away.
     expect(rows.get("nodevice")).toMatchObject({
       hasFreshDeviceToken: false,

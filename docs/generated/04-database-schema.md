@@ -9,7 +9,7 @@
 > `device_tokens.last_client_version`; migration 0200 adds the unique index on
 > `lower(username)`.
 >
-> **STALE (Decision 369, 2026-09-15):** the API-key lane no longer exists. The
+> **STALE (Decision 370, 2026-09-15):** the API-key lane no longer exists. The
 > `apiKey` contract kind keeps its historical NAME but admits only a device
 > token; `authMethod` is `session | device_token`; the `api_keys` routes,
 > service, repository functions and CLI group are gone, as are the cookie

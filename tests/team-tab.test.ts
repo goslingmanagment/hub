@@ -233,7 +233,7 @@ describe("existing-login recovery", () => {
     expect(invited).not.toContain("войти с прежним паролем");
   });
 
-  // Decision 369 retired must_change_password; `mustChangePassword` is a wire
+  // Decision 370 retired must_change_password; `mustChangePassword` is a wire
   // constant `false`, so the "must change it first" restoration copy is gone
   // with the flag rather than kept as an unreachable branch.
   it("keeps an unfinished registration on the invitation path", () => {

@@ -100,7 +100,7 @@ export interface AuthenticatedUser {
     modelSlug: string;
     modelName: string;
   }>;
-  /** DEPRECATED (Decision 369): a wire-only constant. See authUserSchema. */
+  /** DEPRECATED (Decision 370): a wire-only constant. See authUserSchema. */
   mustChangePassword: false;
 }
 
@@ -114,7 +114,7 @@ export interface AdminUserDetailed extends AuthenticatedUser {
 
 /**
  * A request made BY A PERSON: a cookie session or a device token, each carrying
- * the human whose grants decide what the request may read. (Decision 369 retired
+ * the human whose grants decide what the request may read. (Decision 370 retired
  * the third lane, the API key.)
  */
 export interface HumanAuthPrincipal {
@@ -264,7 +264,7 @@ async function getAuthenticatedUserById(app: AppContext, userId: number) {
     id: user.id,
     username: user.username,
     role: user.role,
-    // Decision 369: the #116(b) flag is retired. The column survives as a fact;
+    // Decision 370: the #116(b) flag is retired. The column survives as a fact;
     // the wire says `false` for everyone, always.
     mustChangePassword: false,
     assignedPages: mapAssignedPages(assignedPages),
@@ -495,10 +495,10 @@ export async function createUserAccount(
 }
 
 /**
- * Owner-set password, CLI only since Decision 369 (the HTTP route is gone; the
+ * Owner-set password, CLI only since Decision 370 (the HTTP route is gone; the
  * owner resets a chatter with a link). It is the SAME reset primitive the link
  * redemption uses: every sign-in of that person ends with the old password —
- * before Decision 369 this path left device tokens alive, which made "I reset his
+ * before Decision 370 this path left device tokens alive, which made "I reset his
  * password" a false statement about a laptop still holding a live token.
  */
 export async function setUserPassword(
@@ -1192,7 +1192,7 @@ export function requireOwner(principal: AuthPrincipal): asserts principal is Hum
   }
 }
 
-/** Policy kind `apiKey` (Decision 369 kept the NAME, retired the credential):
+/** Policy kind `apiKey` (Decision 370 kept the NAME, retired the credential):
  * the one bearer a person can hold is a device token. */
 export function requireApiKeyUser(
   principal: AuthPrincipal,
@@ -1511,7 +1511,7 @@ export interface BearerAuthResult {
 /** Prefix-discriminated bearer authentication with the structured refusal:
  * device token or agent key. The request layer memoizes both halves.
  *
- * Decision 369: there is no longer a fallback branch. A bearer whose prefix
+ * Decision 370: there is no longer a fallback branch. A bearer whose prefix
  * matches neither lane is nobody — the api-key lane that used to catch every
  * unknown string is gone, and an unrecognized credential now fails closed with
  * no database lookup and no reason (an enumeration oracle would be the only

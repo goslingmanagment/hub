@@ -1,9 +1,9 @@
-# Runbook: deploying the unified chatter account (Decisions 349 and 369)
+# Runbook: deploying the unified chatter account (Decisions 349 and 370)
 
 One wave, four owner-gated steps: the kernel first, then the console and the
 cabinet, then the clients, then the removal of the legacy lanes. Sections 1–5
 cover the kernel deploy (PR-1A), whose only real risk is a single migration that
-can fail on production data. **Section 6 covers PR-4 (Decision 369), whose risk
+can fail on production data. **Section 6 covers PR-4 (Decision 370), whose risk
 is the opposite kind: no migration at all, and three preconditions on data that
 are cheap to check and expensive to skip.**
 
@@ -86,7 +86,7 @@ password sign-in route — that is the clients' only way in after PR-E1/PR-D1, a
 turning it off would lock the whole fleet out. Sign-in is bounded by its per-IP
 rate limit (20/min) and the per-account backoff instead.
 
-## 6. PR-4 — removing the legacy lanes (Decision 369)
+## 6. PR-4 — removing the legacy lanes (Decision 370)
 
 PR-4 deletes the api-key lane, the cookie token-issuance routes and
 `must_change_password`. **No migration ships with it**, which is the whole

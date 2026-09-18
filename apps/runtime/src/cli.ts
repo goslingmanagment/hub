@@ -3016,7 +3016,7 @@ export function buildProgram() {
           userId: options.userId,
           password,
         }, auditContext());
-        // Decision 369: this is the full reset primitive — every device token,
+        // Decision 370: this is the full reset primitive — every device token,
         // reservation and session of that person is now revoked.
         console.log(
           `Updated password for ${options.userId} — all of their sign-ins were ended`,

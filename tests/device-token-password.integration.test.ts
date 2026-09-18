@@ -267,7 +267,7 @@ describe("who is refused", () => {
   it("ignores a must_change_password row: the flag is retired, not enforced", async (context) => {
     const setup = requireSetup(context);
     if (!setup) return;
-    // Decision 369 retired #116(b). The column survives (forward-only), so this
+    // Decision 370 retired #116(b). The column survives (forward-only), so this
     // sets it the only way left — by hand — and proves nothing reads it: the
     // sign-in succeeds and the wire still says `false`.
     await setUserPassword(setup.app, {

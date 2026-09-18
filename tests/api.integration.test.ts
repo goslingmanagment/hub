@@ -2152,7 +2152,7 @@ describe("api integration", () => {
     }
   });
 
-  it("has no HTTP way to create a user at all (Decision 369: CLI or invite link)", async (context) => {
+  it("has no HTTP way to create a user at all (Decision 370: CLI or invite link)", async (context) => {
     if (!testDb || !server) {
       context.skip();
       return;
@@ -2195,7 +2195,7 @@ describe("api integration", () => {
       return;
     }
 
-    // Decision 369 took content_manager out of the wire enum (the PG enum value
+    // Decision 370 took content_manager out of the wire enum (the PG enum value
     // stays — migrations are forward-only). The merge gate for this PR is "zero
     // content_manager rows in production"; this pins what happens if that gate
     // were ever violated: the admin list REFUSES rather than emitting a role no
@@ -2263,7 +2263,7 @@ describe("api integration", () => {
       expect.objectContaining({ username: "anton", role: "chatter", registrationState: "invited" }),
       expect.objectContaining({ username: "dima", role: "owner" }),
     ]));
-    // Decision 369: not "null", not "empty" — absent. The dashboard has no
+    // Decision 370: not "null", not "empty" — absent. The dashboard has no
     // field to render and no client has one to parse.
     for (const user of users) {
       expect(Object.keys(user)).not.toContain("apiKeyStatus");

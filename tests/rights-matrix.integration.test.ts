@@ -392,7 +392,7 @@ describe("§7 — the revocation ladder as the person experiences it", () => {
     expect(devices.statusCode).toBe(200);
     expect(devices.json<unknown[]>()).toEqual([]);
 
-    // Decision 369 removed the other half of this trap: there is no longer a
+    // Decision 370 removed the other half of this trap: there is no longer a
     // legacy key that survives "revoke all devices". The trap that remains is
     // the live cookie session above — the offboarding runbook exists to close
     // it: "revoke all devices" is NOT "this person is out".
@@ -630,7 +630,7 @@ describe("§7 — roles", () => {
   it("content_manager: cannot sign in anywhere, by either lane", async (context) => {
     const setup = requireSetup(context);
     if (!setup) return;
-    // Decision 369 took the role out of the wire enum too; the PG enum value
+    // Decision 370 took the role out of the wire enum too; the PG enum value
     // stays, so a historical row is still expressible — by raw SQL and nothing
     // else. What the row can do is the point: nothing, on either lane.
     const hash = await argon2.hash(CHATTER_PASSWORD, { type: argon2.argon2id });

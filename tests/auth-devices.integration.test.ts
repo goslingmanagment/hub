@@ -332,7 +332,7 @@ describe("the owner's revocations", () => {
       headers: { cookie: ownerCookie },
     });
     expect(response.statusCode).toBe(200);
-    // Decision 369: no api-key counter left to report — and BOTH devices die.
+    // Decision 370: no api-key counter left to report — and BOTH devices die.
     expect(response.json()).toEqual({
       deviceTokens: 2,
       sessions: 1,

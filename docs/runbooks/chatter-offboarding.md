@@ -109,12 +109,12 @@ again. Review those pages before confirming; restoration must never transfer
 someone else's history to a new person with the same name.
 
 Every old sign-in and link stays revoked. If the person already set a password,
-they can log in with it again — Decision 369 retired `must_change_password`, so
+they can log in with it again — Decision 370 retired `must_change_password`, so
 there is no flag left to clear. A reset link helps if the password was
 forgotten. If the person never registered, create a fresh invitation from the
 restored card's «Ссылки» section. See `docs/runbooks/chatter-onboarding.md`.
 
-## Dormant accounts nobody offboarded (census, Decision 369)
+## Dormant accounts nobody offboarded (census, Decision 370)
 
 Disabling is an event; an account nobody ever decided about is a slow leak.
 The 2026-09-15 census found three, and they are listed here rather than fixed in

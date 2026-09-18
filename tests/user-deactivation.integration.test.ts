@@ -16,7 +16,7 @@ import { createTestAppContext } from "./helpers/runtime.ts";
 // Decision #126: offboarding is a disabled_at tombstone, never a DELETE.
 // Deactivation must revoke every credential in one transaction and fail every
 // auth path closed; reactivation restores password login only. Since Decision
-// 369 "every credential" means sessions, device tokens, reservations and links.
+// 370 "every credential" means sessions, device tokens, reservations and links.
 
 let testDb: StartedTestDatabase | null = null;
 let app: AppContext | null = null;
@@ -113,7 +113,7 @@ describe("user deactivation (#126)", () => {
       revokedDeviceTokens: number;
       revokedSessions: number;
     };
-    // Decision 369: the response has no api-key counter left to report.
+    // Decision 370: the response has no api-key counter left to report.
     expect(result).not.toHaveProperty("revokedApiKeys");
     expect(result.revokedDeviceTokens).toBe(2);
     expect(result.revokedSessions).toBeGreaterThanOrEqual(1);
@@ -138,7 +138,7 @@ describe("user deactivation (#126)", () => {
     expect(vera.lastActiveAt).not.toBeNull();
 
     // Frozen: nothing that re-opens access works on a tombstoned user. The
-    // credential-minting routes are gone entirely (Decision 369), so what is
+    // credential-minting routes are gone entirely (Decision 370), so what is
     // left to freeze is the link lane and page assignment.
     const relink = await fetch(`${baseUrl}/api/v1/admin/users/by-id/${await fixtureUserId(app!, "vera")}/links`, {
       method: "POST",

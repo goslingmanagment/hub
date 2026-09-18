@@ -57,7 +57,7 @@ export function findTeamMemberByLogin(
 }
 
 export function restoreTeamMemberMessage(user: AdminUser): string {
-  // Decision 369 retired must_change_password: there is no "must change first"
+  // Decision 370 retired must_change_password: there is no "must change first"
   // state left to branch on, so a restored account either has a password or
   // has never finished its registration.
   const access = user.registrationState === "invited"

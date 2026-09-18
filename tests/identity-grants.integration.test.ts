@@ -100,7 +100,7 @@ describe("Stage 22 identity", () => {
   it("chatter password login works; mustChangePassword is a dead constant on the wire", async (context) => {
     if (!requireSetup(context)) return;
 
-    // Decision 369: there is no admin set-password route. The owner resets by
+    // Decision 370: there is no admin set-password route. The owner resets by
     // link; the CLI primitive below is the same one `hub user set-password` runs.
     await setUserPassword(app!, {
       userId: await fixtureUserId(app!, "anton"),
@@ -145,7 +145,7 @@ describe("Stage 22 identity", () => {
   it("device tokens: issued by password, ride kind:apiKey routes, revoke → 401, expire → 401", async (context) => {
     if (!requireSetup(context)) return;
 
-    // Decision 369: the only client sign-in is username + password, no cookie.
+    // Decision 370: the only client sign-in is username + password, no cookie.
     const issued = await fetch(`${legacyUrl}/api/v1/auth/device-tokens/password`, {
       method: "POST",
       headers: { "content-type": "application/json" },

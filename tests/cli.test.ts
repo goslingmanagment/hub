@@ -443,7 +443,7 @@ describe("CLI parsing", () => {
     ).rejects.toThrow("unknown option '--account'");
   });
 
-  it("has no apikey group left to document (Decision 369)", () => {
+  it("has no apikey group left to document (Decision 370)", () => {
     const helpProgram = buildProgram();
     expect(helpProgram.commands.find((command) => command.name() === "apikey")).toBeUndefined();
 

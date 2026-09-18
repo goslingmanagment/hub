@@ -35,7 +35,7 @@ const sdk = vi.hoisted(() => ({
   // The one survivor of the old three-call provisioning: assigning a page is
   // still a real operation, and the invite test proves the atomic invite does
   // NOT fall back to it. The other three (`adminCreateUser`, `adminSetPassword`,
-  // `adminIssueApiKey`) no longer exist on the SDK at all since Decision 369 —
+  // `adminIssueApiKey`) no longer exist on the SDK at all since Decision 370 —
   // asserting `not.toHaveBeenCalled` on a hand-made mock of a deleted operation
   // proves nothing, so they are gone from here too.
   adminAssignPage: vi.fn(),
