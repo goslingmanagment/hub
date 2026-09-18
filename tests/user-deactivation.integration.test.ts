@@ -1,3 +1,4 @@
+import { fixtureUserId } from "./helpers/user-identity.ts";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { createFanslyPage, createModel } from "@agency_hub_core/db";
@@ -41,7 +42,7 @@ beforeAll(async () => {
     role: "chatter",
   }, { source: "cli" });
   await setUserPassword(app, {
-    username: "vera",
+    userId: await fixtureUserId(app, "vera"),
     password: "chatter-secret-1",
   }, { source: "cli" });
   veraFirefoxToken = (await issueChatterDeviceToken(app, { username: "vera" }, { source: "cli" })).key;
@@ -102,7 +103,7 @@ describe("user deactivation (#126)", () => {
     expect((await me({ authorization: `Bearer ${veraFirefoxToken}` })).status).toBe(200);
     expect((await me({ authorization: `Bearer ${veraDeviceToken}` })).status).toBe(200);
 
-    const deactivate = await fetch(`${baseUrl}/api/v1/admin/users/vera/deactivate`, {
+    const deactivate = await fetch(`${baseUrl}/api/v1/admin/users/by-id/${await fixtureUserId(app!, "vera")}/deactivate`, {
       method: "POST",
       headers: { cookie: ownerCookie },
     });
@@ -112,7 +113,7 @@ describe("user deactivation (#126)", () => {
       revokedDeviceTokens: number;
       revokedSessions: number;
     };
-    // Decision 353: the response has no api-key counter left to report.
+    // Decision 369: the response has no api-key counter left to report.
     expect(result).not.toHaveProperty("revokedApiKeys");
     expect(result.revokedDeviceTokens).toBe(2);
     expect(result.revokedSessions).toBeGreaterThanOrEqual(1);
@@ -137,15 +138,15 @@ describe("user deactivation (#126)", () => {
     expect(vera.lastActiveAt).not.toBeNull();
 
     // Frozen: nothing that re-opens access works on a tombstoned user. The
-    // credential-minting routes are gone entirely (Decision 353), so what is
+    // credential-minting routes are gone entirely (Decision 369), so what is
     // left to freeze is the link lane and page assignment.
-    const relink = await fetch(`${baseUrl}/api/v1/admin/users/vera/links`, {
+    const relink = await fetch(`${baseUrl}/api/v1/admin/users/by-id/${await fixtureUserId(app!, "vera")}/links`, {
       method: "POST",
       headers: { "content-type": "application/json", cookie: ownerCookie },
       body: JSON.stringify({ kind: "password_reset" }),
     });
     expect(relink.status).toBe(400);
-    const reassign = await fetch(`${baseUrl}/api/v1/admin/users/vera/pages`, {
+    const reassign = await fetch(`${baseUrl}/api/v1/admin/users/by-id/${await fixtureUserId(app!, "vera")}/pages`, {
       method: "POST",
       headers: { "content-type": "application/json", cookie: ownerCookie },
       body: JSON.stringify({ pageLabel: "mira" }),
@@ -153,28 +154,28 @@ describe("user deactivation (#126)", () => {
     expect(reassign.status).toBe(400);
 
     // Guards: double-deactivate, owner target, unknown target.
-    expect((await fetch(`${baseUrl}/api/v1/admin/users/vera/deactivate`, {
+    expect((await fetch(`${baseUrl}/api/v1/admin/users/by-id/${await fixtureUserId(app!, "vera")}/deactivate`, {
       method: "POST",
       headers: { cookie: ownerCookie },
     })).status).toBe(400);
-    expect((await fetch(`${baseUrl}/api/v1/admin/users/dima/deactivate`, {
+    expect((await fetch(`${baseUrl}/api/v1/admin/users/by-id/${await fixtureUserId(app!, "dima")}/deactivate`, {
       method: "POST",
       headers: { cookie: ownerCookie },
     })).status).toBe(400);
-    expect((await fetch(`${baseUrl}/api/v1/admin/users/nobody/deactivate`, {
+    expect((await fetch(`${baseUrl}/api/v1/admin/users/by-id/${2_147_483_647}/deactivate`, {
       method: "POST",
       headers: { cookie: ownerCookie },
     })).status).toBe(404);
 
     // Reactivate: the stored password works again; old device tokens stay revoked.
-    const reactivate = await fetch(`${baseUrl}/api/v1/admin/users/vera/reactivate`, {
+    const reactivate = await fetch(`${baseUrl}/api/v1/admin/users/by-id/${await fixtureUserId(app!, "vera")}/reactivate`, {
       method: "POST",
       headers: { cookie: ownerCookie },
     });
     expect(reactivate.status).toBe(200);
     expect((await login("vera", "chatter-secret-1")).status).toBe(200);
     expect((await me({ authorization: `Bearer ${veraFirefoxToken}` })).status).toBe(401);
-    expect((await fetch(`${baseUrl}/api/v1/admin/users/vera/reactivate`, {
+    expect((await fetch(`${baseUrl}/api/v1/admin/users/by-id/${await fixtureUserId(app!, "vera")}/reactivate`, {
       method: "POST",
       headers: { cookie: ownerCookie },
     })).status).toBe(400);
@@ -188,7 +189,7 @@ describe("user deactivation (#126)", () => {
     const ownerCookie = cookieOf(await login("dima", "owner-secret"));
 
     const createLink = async () => {
-      const response = await fetch(`${baseUrl}/api/v1/admin/users/vera/links`, {
+      const response = await fetch(`${baseUrl}/api/v1/admin/users/by-id/${await fixtureUserId(app!, "vera")}/links`, {
         method: "POST",
         headers: { "content-type": "application/json", cookie: ownerCookie },
         body: JSON.stringify({ kind: "password_reset" }),
@@ -196,7 +197,7 @@ describe("user deactivation (#126)", () => {
       return { status: response.status, body: await response.json() as { id: number; token: string } };
     };
     const listLinks = async () => {
-      const response = await fetch(`${baseUrl}/api/v1/admin/users/vera/links`, {
+      const response = await fetch(`${baseUrl}/api/v1/admin/users/by-id/${await fixtureUserId(app!, "vera")}/links`, {
         headers: { cookie: ownerCookie },
       });
       return await response.json() as Array<{
@@ -210,7 +211,7 @@ describe("user deactivation (#126)", () => {
     expect(link.status).toBe(200);
     expect((await listLinks()).find((row) => row.id === link.body.id)?.state).toBe("active");
 
-    expect((await fetch(`${baseUrl}/api/v1/admin/users/vera/deactivate`, {
+    expect((await fetch(`${baseUrl}/api/v1/admin/users/by-id/${await fixtureUserId(app!, "vera")}/deactivate`, {
       method: "POST",
       headers: { cookie: ownerCookie },
     })).status).toBe(200);
@@ -227,7 +228,7 @@ describe("user deactivation (#126)", () => {
     expect(redeem.status).toBe(409);
     expect((await redeem.json() as { reason?: string }).reason).toBe("revoked");
 
-    expect((await fetch(`${baseUrl}/api/v1/admin/users/vera/reactivate`, {
+    expect((await fetch(`${baseUrl}/api/v1/admin/users/by-id/${await fixtureUserId(app!, "vera")}/reactivate`, {
       method: "POST",
       headers: { cookie: ownerCookie },
     })).status).toBe(200);

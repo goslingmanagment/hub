@@ -5,14 +5,15 @@ reach for when something goes wrong with their sign-in. The reverse direction
 is `docs/runbooks/chatter-offboarding.md`; the rights behind every button are in
 `docs/identity-rights-matrix.md`.
 
-The console ("Настройки → Команда") is PR-1B. Until it ships, each step names
-the route behind the button; owner cookie session required.
+The console is "Настройки → Команда". Account routes use the immutable user ID
+returned by the users list; a login is only for creation, sign-in and search.
+An owner cookie session is required for administrative actions.
 
 ## Inviting
 
 1. **Команда → Пригласить**: login, pages (multi-select, grouped by platform).
    Role (`chatter` by default) and the link's lifetime (7 days) sit under
-   "Дополнительно". Route: `POST /api/v1/admin/users/<login>/links` for an
+   "Дополнительно". Route: `POST /api/v1/admin/users/by-id/<userId>/links` for an
    existing account, or the invite operation that creates the account, the page
    grants and the link in **one** transaction — if any page label is wrong,
    nothing is created at all.
@@ -30,16 +31,48 @@ the route behind the button; owner cookie session required.
 A link is one-time and lives 7 days by default (30 at most). Used, expired and
 revoked links are kept as facts, never deleted.
 
+### The login already exists
+
+The invite form checks the whole team, including disabled participants, using
+the same case-insensitive login rule as the kernel. `Nikita` and `nikita` are
+one login among accounts that have not been deleted. A duplicate opens the existing participant's card rather than
+creating or restoring an account automatically. A stale list is refreshed
+after a failed invite; the form keeps its inputs and gives an inline recovery
+path.
+
+- **Access disabled:** choose «Перейти к восстановлению», review the saved
+  role and pages, then confirm «Восстановить доступ» only for the same person.
+  Disabling reserves the login. To permanently remove this account and free
+  its login, use the separate «Удалить аккаунт» action. A subsequent invitation
+  creates a new identity with only the newly selected role and pages.
+- **Waiting for registration:** use «Отправить приглашение заново» on their
+  card. Creating the same person again is unnecessary.
+- **Already active:** open the card to check their pages/devices or use
+  «Сбросить пароль ссылкой» if they forgot the password.
+
+Disabled participants also remain visible under «Отключённые участники» on the
+Team tab. Restoration does not revive old links or sign-ins. If the person
+never set a password, create a new invitation after restoring. If a mandatory
+password change is pending (`mustChangePassword`), create a password-reset
+link before they sign in to a client. Otherwise the old password works again,
+and a reset link is needed only if they forgot it.
+
+A deleted account does not appear in the team or block its previous login.
+Old invitation links remain revoked even after that login is reused. A card
+left open before deletion remains bound to the old ID and cannot act on the
+new account.
+
 ## Which operation, when
 
 | Situation | Use | Route |
 |---|---|---|
-| Forgot the password | «Сбросить пароль ссылкой» — send a new link in Telegram | `POST /api/v1/admin/users/<login>/links` with `kind: password_reset` |
-| Lost or sold one machine | «Отозвать вход» on that device | `DELETE /api/v1/admin/users/<login>/device-tokens/<id>` |
-| Not sure which machines are signed in | «Отозвать все устройства», then let them sign in again | `DELETE /api/v1/admin/users/<login>/device-tokens` |
-| Suspected leak, person keeps working | «Завершить все входы»; they sign in again with the same password | `POST /api/v1/admin/users/<login>/terminate-access` |
-| Person is leaving | the offboarding runbook | — |
-| Adding or removing a page | assign / unassign; it takes effect on their next request, with no re-login | `POST` / `DELETE /api/v1/admin/users/<login>/pages` |
+| Forgot the password | «Сбросить пароль ссылкой» — send a new link in Telegram | `POST /api/v1/admin/users/by-id/<userId>/links` with `kind: password_reset` |
+| Lost or sold one machine | «Отозвать вход» on that device | `DELETE /api/v1/admin/users/by-id/<userId>/device-tokens/<id>` |
+| Not sure which machines are signed in | «Отозвать все устройства», then let them sign in again | `DELETE /api/v1/admin/users/by-id/<userId>/device-tokens` |
+| Suspected leak, person keeps working | «Завершить все входы»; they sign in again with the same password | `POST /api/v1/admin/users/by-id/<userId>/terminate-access` |
+| Temporarily remove access | «Отключить доступ»; the same account can be restored | `POST /api/v1/admin/users/by-id/<userId>/deactivate` |
+| Permanently remove the account | «Удалить аккаунт»; the login becomes free | `DELETE /api/v1/admin/users/by-id/<userId>` |
+| Adding or removing a page | assign / unassign; it takes effect on their next request, with no re-login | `POST` / `DELETE /api/v1/admin/users/by-id/<userId>/pages` |
 
 Two things to keep straight, because the names are close:
 

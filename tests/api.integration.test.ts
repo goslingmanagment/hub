@@ -1,3 +1,4 @@
+import { fixtureUserId } from "./helpers/user-identity.ts";
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 
@@ -61,11 +62,14 @@ import {
   SESSION_COOKIE_NAME,
   assignPageToUser,
   createUserAccount,
-  setDeviceTokenHarvestCapabilityForUsername,
+  setDeviceTokenHarvestCapabilityForUserId,
   setUserPassword,
   unassignPageFromUser,
 } from "../apps/runtime/src/services/auth.ts";
-import { issueChatterDeviceToken, issueDeviceTokenForUsername } from "./helpers/device-credentials.ts";
+import {
+  issueChatterDeviceToken,
+  issueDeviceTokenForUserId,
+} from "./helpers/device-credentials.ts";
 import { getModelRevenueReport, getPageRevenueReport } from "../apps/runtime/src/services/reporting.ts";
 import { ensureSyncQueues, SYNC_PAGE_EXECUTE_QUEUE } from "../apps/runtime/src/services/sync-queue.ts";
 import {
@@ -1776,7 +1780,7 @@ describe("api integration", () => {
       password: "lead-secret",
     }, { source: "cli" });
     await assignPageToUser(appContext, {
-      username: "lead",
+      userId: await fixtureUserId(appContext, "lead"),
       pageLabel: "lana",
     }, { source: "cli" });
     await createUserAccount(appContext, {
@@ -2076,7 +2080,7 @@ describe("api integration", () => {
     const cookie = sessionCookieFrom(login);
 
     await setUserPassword(createTestAppContext(testDb), {
-      username: "dima",
+      userId: await fixtureUserId(createTestAppContext(testDb), "dima"),
       password: "owner-secret-2",
     }, { source: "cli" });
 
@@ -2148,7 +2152,7 @@ describe("api integration", () => {
     }
   });
 
-  it("has no HTTP way to create a user at all (Decision 353: CLI or invite link)", async (context) => {
+  it("has no HTTP way to create a user at all (Decision 369: CLI or invite link)", async (context) => {
     if (!testDb || !server) {
       context.skip();
       return;
@@ -2167,8 +2171,10 @@ describe("api integration", () => {
     // An owner mints an owner account with `hub user create` on the box and
     // invites everyone else by link; POST /admin/users and the admin password
     // reset are gone, so "create a user over HTTP" is not a shape the kernel has.
+    const antonId = await fixtureUserId(createTestAppContext(testDb), "anton");
     for (const attempt of [
       { method: "POST" as const, url: "/api/v1/admin/users", payload: { username: "smuggled", role: "chatter" } },
+      { method: "PATCH" as const, url: `/api/v1/admin/users/by-id/${antonId}/password`, payload: { password: "owner-set-secret" } },
       { method: "PATCH" as const, url: "/api/v1/admin/users/anton/password", payload: { password: "owner-set-secret" } },
     ]) {
       const response = await server.inject({ ...attempt, headers: { cookie } });
@@ -2189,7 +2195,7 @@ describe("api integration", () => {
       return;
     }
 
-    // Decision 353 took content_manager out of the wire enum (the PG enum value
+    // Decision 369 took content_manager out of the wire enum (the PG enum value
     // stays — migrations are forward-only). The merge gate for this PR is "zero
     // content_manager rows in production"; this pins what happens if that gate
     // were ever violated: the admin list REFUSES rather than emitting a role no
@@ -2257,21 +2263,28 @@ describe("api integration", () => {
       expect.objectContaining({ username: "anton", role: "chatter", registrationState: "invited" }),
       expect.objectContaining({ username: "dima", role: "owner" }),
     ]));
-    // Decision 353: not "null", not "empty" — absent. The dashboard has no
+    // Decision 369: not "null", not "empty" — absent. The dashboard has no
     // field to render and no client has one to parse.
     for (const user of users) {
       expect(Object.keys(user)).not.toContain("apiKeyStatus");
     }
 
-    // The three api-key routes are gone from the contract, so the paths 404.
-    for (const method of ["GET", "POST", "DELETE"] as const) {
-      const response = await server.inject({
-        method,
-        url: "/api/v1/admin/users/anton/api-keys",
-        headers: { cookie },
-        ...(method === "POST" ? { payload: {} } : {}),
-      });
-      expect(response.statusCode, method).toBe(404);
+    // The three api-key routes are gone from the contract, so the paths 404 —
+    // on the by-id form the identity line uses as well as the retired one.
+    const antonId = await fixtureUserId(appContext, "anton");
+    for (const url of [
+      `/api/v1/admin/users/by-id/${antonId}/api-keys`,
+      "/api/v1/admin/users/anton/api-keys",
+    ]) {
+      for (const method of ["GET", "POST", "DELETE"] as const) {
+        const response = await server.inject({
+          method,
+          url,
+          headers: { cookie },
+          ...(method === "POST" ? { payload: {} } : {}),
+        });
+        expect(response.statusCode, `${method} ${url}`).toBe(404);
+      }
     }
   });
 
@@ -2521,8 +2534,8 @@ describe("api integration", () => {
              count(*)::text as event_count
       from ai_usage_events e
       inner join users u on u.id = e.user_id
-      group by u.username
-      order by u.username asc
+      group by u.id, u.username
+      order by u.username asc, u.id asc
     `);
 
     expect(grouped.rows).toEqual([
@@ -2551,7 +2564,7 @@ describe("api integration", () => {
     // A fresh audited action adds a distinct observation with the actor.
     const appContext = createTestAppContext(testDb);
     const before = observations.rows.length;
-    await assignPageToUser(appContext, { username: "anton", pageLabel: "lana" }, { source: "cli" });
+    await assignPageToUser(appContext, { userId: await fixtureUserId(appContext, "anton"), pageLabel: "lana" }, { source: "cli" });
     const after = await testDb.pool.query<{ kind: string; producer: string }>(
       "select kind, producer from observations where source = 'operator' order by id",
     );
@@ -3203,11 +3216,11 @@ describe("api integration", () => {
 
     const appContext = createTestAppContext(testDb);
     await assignPageToUser(appContext, {
-      username: "anton",
+      userId: await fixtureUserId(appContext, "anton"),
       pageLabel: "lana",
     }, { source: "cli" });
     await assignPageToUser(appContext, {
-      username: "anton",
+      userId: await fixtureUserId(appContext, "anton"),
       pageLabel: "lily1",
     }, { source: "cli" });
 
@@ -3247,7 +3260,7 @@ describe("api integration", () => {
     expect(lily.statusCode).toBe(200);
 
     await unassignPageFromUser(appContext, {
-      username: "anton",
+      userId: await fixtureUserId(appContext, "anton"),
       pageLabel: "lana",
     }, { source: "cli" });
 
@@ -4626,7 +4639,7 @@ describe("api integration", () => {
     const appContext = createTestAppContext(testDb);
     const ofModel = await createModel(appContext.db, { slug: "lora-of-model", name: "Lora OF" });
     await createOnlyFansPage(appContext.db, { modelId: ofModel.id, label: "lora-of" });
-    await assignPageToUser(appContext, { username: "anton", pageLabel: "lana" }, { source: "cli" });
+    await assignPageToUser(appContext, { userId: await fixtureUserId(appContext, "anton"), pageLabel: "lana" }, { source: "cli" });
     const { key } = await issueChatterDeviceToken(appContext, {
       username: "anton",
       pageLabel: "lora-of",
@@ -4987,8 +5000,8 @@ describe("api integration", () => {
     // principal `undefined` (unrestricted), which made an owner-role device
     // token an unbounded cross-page reader on every v2 spender route.
     // The old test WAS the bug: it only ever exercised api_key.
-    const ownerDevice = await issueDeviceTokenForUsername(createTestAppContext(testDb), {
-      username: "dima",
+    const ownerDevice = await issueDeviceTokenForUserId(createTestAppContext(testDb), {
+      userId: await fixtureUserId(createTestAppContext(testDb), "dima"),
       label: "dima-audit-laptop",
     }, { source: "test" });
 
@@ -5056,8 +5069,8 @@ describe("api integration", () => {
     // `pageScopeFor(principal)` straight to the platform-total query, which
     // treats `undefined` as "no page filter". An owner-role device token asking
     // about ONE page therefore read the fan's spend across every page.
-    const ownerDevice = await issueDeviceTokenForUsername(createTestAppContext(testDb), {
-      username: "dima",
+    const ownerDevice = await issueDeviceTokenForUserId(createTestAppContext(testDb), {
+      userId: await fixtureUserId(createTestAppContext(testDb), "dima"),
       label: "dima-fan-detail-laptop",
     }, { source: "test" });
 
@@ -9125,7 +9138,7 @@ describe("api integration", () => {
 
     const appContext = createTestAppContext(testDb);
     await assignPageToUser(appContext, {
-      username: "anton",
+      userId: await fixtureUserId(appContext, "anton"),
       pageLabel: "lana-workboard-api-key",
     }, { source: "cli" });
     const { key } = await issueChatterDeviceToken(appContext, {
@@ -10206,7 +10219,7 @@ describe("api integration", () => {
     });
 
     await unassignPageFromUser(createTestAppContext(currentTestDb), {
-      username: "lead",
+      userId: await fixtureUserId(createTestAppContext(currentTestDb), "lead"),
       pageLabel: "lana",
     }, { source: "cli" });
 
@@ -10403,12 +10416,12 @@ describe("api integration", () => {
 
     // Stage 12: the client-version header alone grants nothing. An owner must
     // bind this exact device token to the preserved Desktop machine first.
-    const harvestDevice = await issueDeviceTokenForUsername(appContext, {
-      username: "anton",
+    const harvestDevice = await issueDeviceTokenForUserId(appContext, {
+      userId: await fixtureUserId(appContext, "anton"),
       label: "anton-harvest-desktop",
     }, { source: "test" });
-    await setDeviceTokenHarvestCapabilityForUsername(appContext, {
-      username: "anton",
+    await setDeviceTokenHarvestCapabilityForUserId(appContext, {
+      userId: await fixtureUserId(appContext, "anton"),
       deviceTokenId: harvestDevice.id,
       machineId: HARVEST_MACHINE,
     }, { source: "test" });
@@ -10458,12 +10471,12 @@ describe("api integration", () => {
       username: "hv-uploader",
       pageLabel: "hv-of",
     }, { source: "cli" });
-    const harvestUploaderDevice = await issueDeviceTokenForUsername(appContext, {
-      username: "hv-uploader",
+    const harvestUploaderDevice = await issueDeviceTokenForUserId(appContext, {
+      userId: await fixtureUserId(appContext, "hv-uploader"),
       label: "hv-harvest-desktop",
     }, { source: "test" });
-    await setDeviceTokenHarvestCapabilityForUsername(appContext, {
-      username: "hv-uploader",
+    await setDeviceTokenHarvestCapabilityForUserId(appContext, {
+      userId: await fixtureUserId(appContext, "hv-uploader"),
       deviceTokenId: harvestUploaderDevice.id,
       machineId: HV_UPLOADER_MACHINE,
     }, { source: "test" });

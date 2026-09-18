@@ -1,3 +1,4 @@
+import { fixtureUserId } from "./helpers/user-identity.ts";
 import { createHash } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
@@ -123,7 +124,7 @@ beforeEach(async (context) => {
     username: "svc-chatter",
     pageLabel: "svc-of",
   }, { source: "cli" })).key;
-  await assignPageToUser(appContext, { username: "svc-chatter", pageLabel: "svc-fs" }, { source: "cli" });
+  await assignPageToUser(appContext, { userId: await fixtureUserId(appContext, "svc-chatter"), pageLabel: "svc-fs" }, { source: "cli" });
 
   apiServer = await buildApiServer(appContext);
   await apiServer.ready();

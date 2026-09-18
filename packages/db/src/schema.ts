@@ -278,7 +278,7 @@ export const users = pgTable(
   "users",
   {
     id: bigserial("id", { mode: "number" }).primaryKey(),
-    username: text("username").notNull().unique(),
+    username: text("username").notNull(),
     role: userRoleEnum("role").notNull(),
     passwordHash: text("password_hash"),
     mustChangePassword: boolean("must_change_password").default(false).notNull(),
@@ -286,12 +286,18 @@ export const users = pgTable(
     // Deactivation tombstone (decision #126, mirrors the Stage 13 pages
     // standard): NULL = active. Set freezes every auth path; never hard-delete.
     disabledAt: timestamp("disabled_at", { withTimezone: true }),
+    // Permanent account deletion releases the login, never the immutable id
+    // or historical attribution. A deleted row can never be restored.
+    deletedAt: timestamp("deleted_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => ({
-    // Decision 349 (Р4, migration 0200): logins are unique case-insensitively.
-    usernameLowerUidx: uniqueIndex("users_username_lower_uidx").on(sql`lower(${table.username})`),
+    // Only living accounts reserve a case-insensitive login. Disabled accounts
+    // still reserve it; permanent deletion permits a distinct new identity.
+    usernameLowerUidx: uniqueIndex("users_username_lower_uidx")
+      .on(sql`lower(${table.username})`)
+      .where(sql`${table.deletedAt} is null`),
   }),
 );
 
@@ -2037,7 +2043,7 @@ export const authSessions = pgTable(
 );
 
 /**
- * TOMBSTONE (Decision 353). The api-key lane is retired: nothing issues, reads
+ * TOMBSTONE (Decision 369). The api-key lane is retired: nothing issues, reads
  * or authenticates these rows any more. The TABLE stays — every row is a fact
  * about a credential that once existed, and DP 7 forbids deleting facts. The
  * mapping stays so a forensic read has a typed handle on it.
@@ -5810,6 +5816,8 @@ export const subjectRefreshState = pgTable(
     /** C2b: only earnings planes use claims and revision settlement. */
     requestedRevision: bigint("requested_revision", { mode: "number" }).default(0).notNull(),
     appliedRevision: bigint("applied_revision", { mode: "number" }).default(0).notNull(),
+    /** Latest earnings signal that requires changed aggregate content. */
+    earningsContentRevision: bigint("earnings_content_revision", { mode: "number" }).default(0).notNull(),
     claimedRevision: bigint("claimed_revision", { mode: "number" }),
     claimToken: uuid("claim_token"),
     claimExpiresAt: timestamp("claim_expires_at", { withTimezone: true }),

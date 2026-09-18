@@ -1,4 +1,4 @@
-# Identity rights matrix (Decision 352)
+# Identity rights matrix (Decisions 352, 354)
 
 One login is not one set of rights. Since Decision 349 every person in the
 agency has a single account and signs in to the dashboard, the Fansly extension
@@ -9,16 +9,21 @@ has an account" answers none of them. This document is the map, and
 the test case that holds it.
 
 Read with: `docs/decisions.md` #349 (the unified account), #352 (this matrix)
-and #353 (the legacy removal this document was updated for),
+and #369 (the legacy removal this document was updated for),
 `docs/generated/15-auth-config-and-access.md` (the generated policy table),
 `docs/runbooks/chatter-onboarding.md` and `docs/runbooks/chatter-offboarding.md`.
+
+Account-target operations use immutable `userId`. A login can belong to a new
+account after deletion; credentials, rights, cached cards and historical usage
+remain bound to the original ID. See
+[account deletion](runbooks/user-account-deletion.md).
 
 ## The five axes
 
 1. **Role** — `owner`, `team_lead`, `chatter`. Set at invitation, changed only
    by the owner. (`content_manager` is historical — see *Honest boundaries*.)
 2. **Sign-in method** — a cookie session (the browser) or a device token (both
-   clients, minted by `POST /auth/device-tokens/password`). Since Decision 353
+   clients, minted by `POST /auth/device-tokens/password`). Since Decision 369
    there is no third: the API-key lane is gone. The method is a right in
    itself — the same person reaches different things depending on how they
    signed in.
@@ -71,6 +76,8 @@ someone:
 | Terminated all access | Device tokens, reservations, sessions and active links all die; a fresh `login` with the same valid password still works | `rights-matrix.integration` › *row «terminated all access»*; the counts: `auth-devices.integration` |
 | Password reset by link | The old password 401s and the new one 200s; every prior device token and session 401s | `rights-matrix.integration` › *row «password reset by link»*; the link lifecycle: `account-links.integration` |
 | Deactivated | Every credential 401s and both sign-in lanes refuse **with no oracle** — byte-identical answers for a disabled account and for one that never existed | `rights-matrix.integration` › *row «deactivated»*; the tombstone and the frozen mutations: `user-deactivation.integration` |
+| Deleted and login reused | Old credentials/links and old-ID actions fail; a new account has a new ID and only newly assigned access; old audit/spend attribution survives | `user-identity-reuse.integration` |
+| Stale username route or old card | It cannot resolve to a replacement user, including numeric logins | `user-identity-reuse.integration`; `team-account-lifecycle` |
 | Roles | owner: every page, console by cookie only; team_lead: dashboard but not the console, clients by assignment; chatter: cabinet and clients, never the dashboard; `content_manager`: cannot sign in anywhere | `rights-matrix.integration` › *§7 — roles* (four cases). The declarative policy grid per module: `auth-policy.integration` |
 | Another person signs in on the same PC | The principal and the assigned pages are the new person's; the previous person's local data is hidden but still on the disk | **manual + documented** (D23 of the desktop repo, #145) |
 | No pages of that platform | The extension shows CG-HUB-05; the desktop shows an empty state instead of reconnecting forever | **unit tests in the clients** |
@@ -93,7 +100,7 @@ control.
 - **"Revoke all devices" is not "this person is out."** By design (§4.4) it
   touches device tokens and reservations only: the cookie session survives. Use
   **«Завершить все входы»** (terminate all access) for a real cut-off, and
-  deactivation to close the account. (Before Decision 353 a legacy API key
+  deactivation to close the account. (Before Decision 369 a legacy API key
   survived it too; that half of the trap is gone with the lane.)
 - **Streams lag by up to 60 seconds.** A revoked assignment closes an already
   open SSE stream at the next revalidation tick, not instantly.
@@ -103,7 +110,7 @@ control.
 - **The account list empties quietly.** `GET /ofapi/read/accounts` answers
   `200 []` after the last OnlyFans assignment is removed — it is a list, not a
   page-scoped operation. The 403/404 shows up on the per-account reads.
-- **`content_manager` accounts are historical.** Decision 353 took the role out
+- **`content_manager` accounts are historical.** Decision 369 took the role out
   of the wire enum as well: it is not creatable, cannot sign in, and cannot be
   serialized to any client. The PG enum value stays (migrations are
   forward-only), so a historical row remains readable by raw SQL — and the admin
@@ -118,6 +125,6 @@ and are pinned by `tests/contracts-auth-declarations.test.ts`; the verdict is
 computed in `apps/runtime/src/api/auth-policy.ts` by running the same guard
 functions the handlers call (`requireOwner`, `requireDashboardUser`,
 `requireSessionUser`, `requireApiKeyUser` — whose name is historical since
-Decision 353: the one bearer it admits is a device token), so a declared
+Decision 369: the one bearer it admits is a device token), so a declared
 decision and an in-handler decision cannot drift apart by construction. Page scope resolves
 through `canAccessPage` against `assignedPageIds`, recomputed per request.

@@ -142,3 +142,55 @@ within the existing freshness bound or a separate owner decision on max-age.
 One fresh fan, no visible changes, or successful local tests do not pass that
 gate. A0 still needs its own seven full days; A1 and live socket stages keep
 their own approvals. No request savings or production latency is claimed here.
+
+## Roster max age (Decision 368)
+
+`fanslyFanEarningsRosterMaxAgeHours` (env `FANSLY_FAN_EARNINGS_ROSTER_MAX_AGE_HOURS`,
+integer 0-168, live, default 0) lets the daily roster skip a spender on a SHADOW
+page without any HTTP call while BOTH of its earnings planes were validly checked
+inside the window, are not dirty (`requested_revision <= applied_revision`), are
+not mid-claim, carry `observed` as their last receipt and are not inside a
+cooldown (`retry_after_at`). A missing plane row is never fresh, so dirty,
+failed, half-covered and never-checked fans are still read every day.
+
+- `0` (default) — today's behavior: every spender is read on every walk.
+- `1`-`47` — treated as `0`; the daily cadence already re-reads within 24 hours.
+- `48`-`168` — the rotation is on. Owner-approved value: 48.
+
+**Prerequisite:** the page must be in `fanslyFanEarningsShadowPageAllowlist` —
+full stop, in the ordinary walk and in recovery alike. Receipts are what the skip
+reads, but only a shadow page writes transactions through
+`upsertFanslyTransactionWithEarningsDirty`, the sole writer that dirties an
+earnings plane; on a recovery/target page without shadow the receipts would exist
+while nothing could interrupt a skip. A non-shadow page is read in full
+regardless of the key, and even on a shadow page the savings start on the SECOND
+daily walk after the first receipts appear.
+
+Rollback: set the key back to `0`. The next walk reads every spender again;
+nothing is deleted and no state needs repair.
+
+Latency: a quiet Fansly-side correction is seen within the window PLUS one daily
+cadence (a walk landing just short of the window skips, the next is a day later),
+so at 48 the practical bound is about 72 hours.
+
+Verification — `fan_earnings` attempts per UTC day should roughly halve or better
+one walk after the flip. From ordinary `read_only` psql:
+
+```sql
+BEGIN READ ONLY;
+SET LOCAL statement_timeout = '20s';
+SELECT a ->> 'day' AS day,
+       a ->> 'page_label' AS page,
+       sum((a ->> 'attempts')::bigint) AS attempts
+FROM jsonb_array_elements(
+       fansly_events_measurement_report(
+         '2026-09-15T00:00:00Z', '2026-09-22T00:00:00Z') -> 'attempts'
+     ) AS a
+WHERE a ->> 'stream' = 'fan_earnings'
+GROUP BY 1, 2
+ORDER BY 1, 2;
+COMMIT;
+```
+
+The per-walk view is the chunk stats: `fansFresh` counts skipped spenders and
+`fansFetched` the ones actually read; their sum is the roster size.

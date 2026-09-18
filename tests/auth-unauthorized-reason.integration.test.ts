@@ -1,3 +1,4 @@
+import { fixtureUserId } from "./helpers/user-identity.ts";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { sha256Hex } from "@agency_hub_core/shared";
@@ -6,9 +7,9 @@ import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import {
   createUserAccount,
-  revokeDeviceTokensForUsername,
+  revokeDeviceTokensForUserId,
 } from "../apps/runtime/src/services/auth.ts";
-import { issueDeviceTokenForUsername } from "./helpers/device-credentials.ts";
+import { issueDeviceTokenForUserId } from "./helpers/device-credentials.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
@@ -75,11 +76,11 @@ describe("a device token that matched a row", () => {
   it("says token_revoked after the owner revokes it — through the policy layer and the handler guard alike", async (context) => {
     const setup = requireSetup(context);
     if (!setup) return;
-    const device = await issueDeviceTokenForUsername(setup.app, {
-      username: "grisha",
+    const device = await issueDeviceTokenForUserId(setup.app, {
+      userId: await fixtureUserId(setup.app, "grisha"),
       label: "Firefox · Windows",
     }, OWNER_AUDIT);
-    await revokeDeviceTokensForUsername(setup.app, { username: "grisha" }, OWNER_AUDIT);
+    await revokeDeviceTokensForUserId(setup.app, { userId: await fixtureUserId(setup.app, "grisha") }, OWNER_AUDIT);
 
     for (const activeServer of [setup.server, setup.loggingServer]) {
       const response = await activeServer.inject({
@@ -99,8 +100,8 @@ describe("a device token that matched a row", () => {
   it("says token_expired once its deadline has passed", async (context) => {
     const setup = requireSetup(context);
     if (!setup) return;
-    const device = await issueDeviceTokenForUsername(setup.app, {
-      username: "grisha",
+    const device = await issueDeviceTokenForUserId(setup.app, {
+      userId: await fixtureUserId(setup.app, "grisha"),
       label: "Firefox · Windows",
     }, OWNER_AUDIT);
     await expireToken(setup.testDb, device.id);
@@ -117,11 +118,11 @@ describe("a device token that matched a row", () => {
   it("carries the reason on an ordinary domain route too, not just on /auth/me", async (context) => {
     const setup = requireSetup(context);
     if (!setup) return;
-    const device = await issueDeviceTokenForUsername(setup.app, {
-      username: "grisha",
+    const device = await issueDeviceTokenForUserId(setup.app, {
+      userId: await fixtureUserId(setup.app, "grisha"),
       label: "Firefox · Windows",
     }, OWNER_AUDIT);
-    await revokeDeviceTokensForUsername(setup.app, { username: "grisha" }, OWNER_AUDIT);
+    await revokeDeviceTokensForUserId(setup.app, { userId: await fixtureUserId(setup.app, "grisha") }, OWNER_AUDIT);
 
     const response = await setup.server.inject({
       method: "GET",
@@ -174,7 +175,7 @@ describe("everything else stays silent", () => {
     const user = await setup.testDb.pool.query<{ id: number }>(
       "select id from users where username = 'vera'",
     );
-    // A live api_keys row, exactly as the table still holds them: Decision 353
+    // A live api_keys row, exactly as the table still holds them: Decision 369
     // left the facts and took the lane, so this bearer is refused with no
     // reason at all — there is nothing for a client to self-heal towards.
     const legacyKey = "agency_hub_core_retiredlanebearer00";
@@ -197,8 +198,8 @@ describe("the cabinet is cookie-only", () => {
   it("answers 403, not 401, for a live device token on an any-session route", async (context) => {
     const setup = requireSetup(context);
     if (!setup) return;
-    const device = await issueDeviceTokenForUsername(setup.app, {
-      username: "grisha",
+    const device = await issueDeviceTokenForUserId(setup.app, {
+      userId: await fixtureUserId(setup.app, "grisha"),
       label: "Firefox · Windows",
     }, OWNER_AUDIT);
 

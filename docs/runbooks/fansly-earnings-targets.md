@@ -88,7 +88,7 @@ roster was traversed; `completedAt` remains the last certified result. Current
 coverage can recover after a later valid response even if cumulative audit
 counters still record a historical missing receipt.
 
-Addressed selection adds known endpoints at age >=24h (or never checked), even
+Addressed selection adds known endpoints at age >= max(24h, `fanslyFanEarningsRosterMaxAgeHours`) when the roster age is set (or never checked), even
 without new transaction/event signals. It stays within the existing rolling cap
 and one extra physical attempt per ordinary chunk. No extra scheduler wakeup is
 introduced. This is an eligibility threshold, not an accepted maximum latency:
@@ -100,3 +100,31 @@ restores the daily legacy walk from zero at its next chunk. Keep all captured
 receipts and debt. In-flight admitted responses can finish owned capture.
 Neither a clean default-off deployment nor simulated tests accept production
 quiet-correction coverage, a new rotation interval, or HTTP savings.
+
+
+### Status-only rechecks (Decision353)
+
+A pending1 → posted2 transaction with every other semantic field unchanged still
+requests both endpoint rechecks. Pending amounts may already be included in the
+provider aggregates; unchanged valid content can settle this status-only revision
+after a baseline. `earnings_content_revision` keeps prior money/type/binding debt
+strict, including when status R+1 arrives during a fetch for money R. Check/change
+counters and timestamps remain separate. Other statuses and empty/invalid bodies
+do not use this exception.
+
+Migration0201 conservatively classifies all old debt as content-changing. For an
+already-known page/fan, use `fansly_earnings_refresh_status(page_label, fan_ref)` as
+`read_only` inside READ ONLY to inspect exact revisions and receipt provenance.
+Do not infer the cause from a single current transaction or aggregate response.
+A legacy repair requires separately retained before/after proof covering all
+outstanding signals, exact CAS preconditions and independent review; change only
+the debt classification and due time, preserving provider retry deadlines. Never
+write applied_revision, fabricate a changed receipt or move full-sweep freshness.
+A subsequent normal claim and valid REST receipt performs acknowledgement.
+
+Rollback to the previous runtime leaves the additive schema and evidence intact.
+Old writers retain the strict reason, and new code carries those revisions
+forward; rollback can restore conservative holds but cannot certify unconfirmed
+content. Recovery/target flags disable only their C2c consumers; C2b baseline
+receipts also use status-only settlement. Reverting this settlement behavior
+requires the previous runtime; there is no separate status-only feature flag.

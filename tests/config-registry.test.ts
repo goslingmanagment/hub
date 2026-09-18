@@ -87,6 +87,7 @@ describe("config registry", () => {
     "fanslyFanEarningsTargetsEnabled",
     "fanslyFanEarningsTargetsPageAllowlist",
     "fanslyFanEarningsTargetsDailyAttemptLimit",
+    "fanslyFanEarningsRosterMaxAgeHours",
     "fanslyWsHintsEnabled",
     "fanslyWsHintsPageAllowlist",
     "fanslyWsHintsTypeAllowlist",

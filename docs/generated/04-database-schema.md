@@ -9,7 +9,7 @@
 > `device_tokens.last_client_version`; migration 0200 adds the unique index on
 > `lower(username)`.
 >
-> **STALE (Decision 353, 2026-09-15):** the API-key lane no longer exists. The
+> **STALE (Decision 369, 2026-09-15):** the API-key lane no longer exists. The
 > `apiKey` contract kind keeps its historical NAME but admits only a device
 > token; `authMethod` is `session | device_token`; the `api_keys` routes,
 > service, repository functions and CLI group are gone, as are the cookie
@@ -18,6 +18,12 @@
 > gate, no 403 `password_change_required`, `mustChangePassword` a deprecated
 > wire constant `false`) and `content_manager` left the wire role enum. The
 > `api_keys` table, the column and the PG enum value all stay as facts.
+
+> **STALE (Decision 356, 2026-09-15):** user administration now addresses immutable
+> IDs through `/admin/users/by-id/:userId`, SDK 0.3 retires username routes,
+> migration 0202 adds permanent account deletion and partial login uniqueness,
+> and Team state/cache ownership follows IDs. See Decision 356 and
+> `docs/runbooks/user-account-deletion.md`; the body predates this change.
 
 # Database Schema
 

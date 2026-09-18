@@ -24,6 +24,8 @@ const queries = vi.hoisted(() => ({
   useRevokeLink: vi.fn(),
   useTerminateAccess: vi.fn(),
   useAdminDeactivateUser: vi.fn(),
+  useAdminDeleteUser: vi.fn(),
+  useAuthMe: vi.fn(),
   useAdminReactivateUser: vi.fn(),
   useAdminPages: vi.fn(),
   useAdminAssignPage: vi.fn(),
@@ -32,7 +34,7 @@ const queries = vi.hoisted(() => ({
 vi.mock("../apps/dashboard/src/api/queries.ts", () => queries);
 
 import { TeamTab } from "../apps/dashboard/src/pages/settings/team/TeamTab.tsx";
-import { InviteModal } from "../apps/dashboard/src/pages/settings/team/InviteModal.tsx";
+import { ExistingMemberNotice, InviteModal } from "../apps/dashboard/src/pages/settings/team/InviteModal.tsx";
 import { LinkRevealModal } from "../apps/dashboard/src/pages/settings/team/LinkRevealModal.tsx";
 import { UserDetailModal } from "../apps/dashboard/src/pages/settings/team/UserDetailModal.tsx";
 import {
@@ -40,6 +42,7 @@ import {
   daysToHours,
   deviceRevokedReasonLabel,
   findTeamMember,
+  findTeamMemberByLogin,
   formatRelativeRu,
   groupPagesByPlatform,
   INVITE_DEFAULT_DAYS,
@@ -48,6 +51,7 @@ import {
   linkRevokedReasonLabel,
   linkStateLabel,
   REVOCATION_LABEL,
+  restoreTeamMemberMessage,
   splitDevices,
   sortTeamByActivity,
   teamStatus,
@@ -67,6 +71,7 @@ function user(overrides: Partial<AdminUser> & { username: string }): AdminUser {
     mustChangePassword: false,
     assignedPages: [],
     disabledAt: null,
+    deletedAt: null,
     lastActiveAt: null,
     registrationState: "active",
     ...overrides,
@@ -124,6 +129,7 @@ function render(component: ComponentType<Record<string, unknown>>, props: Record
 }
 
 function mockEverything() {
+  queries.useAdminUsers.mockReturnValue(query<AdminUser[]>([]));
   queries.useCreateInvite.mockReturnValue(mutation());
   queries.useCreateAccountLink.mockReturnValue(mutation());
   queries.useUserDevices.mockReturnValue(query<DeviceTokenItem[]>([]));
@@ -133,6 +139,8 @@ function mockEverything() {
   queries.useRevokeLink.mockReturnValue(mutation());
   queries.useTerminateAccess.mockReturnValue(mutation());
   queries.useAdminDeactivateUser.mockReturnValue(mutation());
+  queries.useAdminDeleteUser.mockReturnValue(mutation());
+  queries.useAuthMe.mockReturnValue(query({ user: { id: 1, role: "owner" } }));
   queries.useAdminReactivateUser.mockReturnValue(mutation());
   queries.useAdminPages.mockReturnValue(query<unknown[]>([]));
   queries.useAdminAssignPage.mockReturnValue(mutation());
@@ -173,12 +181,68 @@ describe("findTeamMember", () => {
       assignedPages: [{ id: 11, label: "lana", platform: "fansly", modelSlug: "lana", modelName: "Lana" }],
       lastActiveAt: "2026-09-15T00:00:00.000Z",
     });
-    expect(findTeamMember([refreshed], stale.username)).toEqual(refreshed);
+    expect(findTeamMember([refreshed], stale.id)).toEqual(refreshed);
+  });
+
+  it("does not resolve a deleted identity to a recreated login", () => {
+    const old = user({ id: 17, username: "Nikita", deletedAt: "2026-09-15T00:00:00.000Z" });
+    const replacement = user({ id: 29, username: "Nikita" });
+    expect(findTeamMember([old, replacement], old.id)).toBeNull();
+    expect(findTeamMember([replacement], old.id)).toBeNull();
+    expect(findTeamMember([replacement], replacement.id)).toBe(replacement);
+    expect(findTeamMemberByLogin([old, replacement], "nikita")).toBe(replacement);
+    expect(findTeamMemberByLogin([old], "nikita")).toBeNull();
   });
 
   it("returns null when the person is no longer in the list", () => {
-    expect(findTeamMember([], "missing")).toBeNull();
-    expect(findTeamMember([user({ username: "grisha" })], "sveta")).toBeNull();
+    expect(findTeamMember([], 99)).toBeNull();
+    expect(findTeamMember([user({ username: "grisha" })], 99)).toBeNull();
+  });
+});
+
+describe("existing-login recovery", () => {
+  it("finds an inactive identity using the kernel's case-insensitive uniqueness rule", () => {
+    const disabled = user({ username: "Nikita", disabledAt: "2026-09-15T00:00:00.000Z" });
+    expect(findTeamMemberByLogin([disabled], " nikITA ")).toBe(disabled);
+    expect(findTeamMemberByLogin([disabled], "nikita-2")).toBeNull();
+  });
+
+  it.each(["active", "invited"] as const)("also detects an existing %s participant", (registrationState) => {
+    const existing = user({ username: "Nikita", registrationState });
+    expect(findTeamMemberByLogin([existing], "NIKITA")).toBe(existing);
+  });
+
+  it("routes a disabled login to explicit restoration without claiming it is a new account", () => {
+    const markup = render(ExistingMemberNotice as ComponentType<Record<string, unknown>>, {
+      user: user({ username: "Nikita", disabledAt: "2026-09-15T00:00:00.000Z" }),
+      onOpen: vi.fn(),
+    });
+    expect(markup).toContain("Логин «Nikita» уже занят");
+    expect(markup).toContain("тот же человек");
+    expect(markup).toContain("Перейти к восстановлению");
+    expect(markup).toContain("Чтобы создать новый аккаунт с этим логином, сначала удалите прежний в его карточке");
+  });
+
+  it("keeps restoration and password recovery distinct", () => {
+    const active = restoreTeamMemberMessage(user({ username: "Nikita" }));
+    expect(active).toContain("войти с прежним паролем");
+    expect(active).toContain("ролью и назначенными страницами");
+    expect(active).toContain("Прежние входы и ссылки останутся недействительными");
+    const invited = restoreTeamMemberMessage(user({ username: "Nikita", registrationState: "invited" }));
+    expect(invited).toContain("создайте новое приглашение");
+    expect(invited).not.toContain("войти с прежним паролем");
+  });
+
+  // Decision 369 retired must_change_password; `mustChangePassword` is a wire
+  // constant `false`, so the "must change it first" restoration copy is gone
+  // with the flag rather than kept as an unreachable branch.
+  it("keeps an unfinished registration on the invitation path", () => {
+    const message = restoreTeamMemberMessage(user({
+      username: "Nikita", registrationState: "invited",
+    }));
+    expect(message).toContain("Пароль ещё не задан");
+    expect(message).toContain("создайте новое приглашение");
+    expect(message).not.toContain("Сбросить пароль ссылкой");
   });
 });
 
@@ -336,14 +400,16 @@ describe("TeamTab", () => {
     expect(markup).toContain("lora");
   });
 
-  it("keeps deactivated people as a tombstoned, collapsed list (#126)", () => {
+  it("keeps disabled people visible and recoverable without expanding a hidden list (#126)", () => {
     mockEverything();
     queries.useAdminUsers.mockReturnValue(query([
       user({ username: "ivan", disabledAt: new Date(Date.now() - 24 * HOUR).toISOString() }),
     ]));
 
     const markup = render(TeamTab);
-    expect(markup).toContain("Деактивированные (1)");
+    expect(markup).toContain("Отключённые участники (1)");
+    expect(markup).toContain("ivan");
+    expect(markup).toContain("Восстановить доступ");
     expect(markup).toContain("В команде");
     expect(markup).toContain("пока никого");
   });
@@ -427,7 +493,7 @@ describe("UserDetailModal", () => {
     const markup = renderCard(user({ username: "admin", role: "owner" }));
 
     expect(markup).not.toContain(REVOCATION_LABEL.allAccess);
-    expect(markup).not.toContain("Деактивировать");
+    expect(markup).not.toContain("Отключить доступ");
     expect(markup).not.toContain("Сбросить пароль ссылкой");
     expect(markup).not.toContain("Отправить приглашение заново");
     // What an owner CAN do to their own sign-ins stays available.
@@ -441,7 +507,7 @@ describe("UserDetailModal", () => {
     queries.useUserDevices.mockReturnValue(query([device({ id: 1, label: "Firefox · Windows" })]));
     const markup = renderCard(user({ username: "grisha", role: "chatter" }));
     expect(markup).toContain(REVOCATION_LABEL.allAccess);
-    expect(markup).toContain("Деактивировать");
+    expect(markup).toContain("Отключить доступ");
   });
 
   it("prints the link history with its state and offers to revoke a live one", () => {
@@ -470,9 +536,27 @@ describe("UserDetailModal", () => {
 
   it("offers deactivation for a working person and a return for a deactivated one", () => {
     mockEverything();
-    expect(renderCard(user({ username: "grisha" }))).toContain("Деактивировать");
+    expect(renderCard(user({ username: "grisha" }))).toContain("Отключить доступ");
     expect(renderCard(user({ username: "ivan", disabledAt: "2026-09-01T00:00:00.000Z" })))
-      .toContain("Вернуть в команду");
+      .toContain("Восстановить доступ");
+  });
+
+  it.each(["active", "invited"] as const)("makes a disabled %s participant's recovery primary and pages read-only", (registrationState) => {
+    mockEverything();
+    const markup = renderCard(user({
+      username: "Nikita", registrationState, disabledAt: "2026-09-15T00:00:00.000Z",
+      assignedPages: [{ id: 11, label: "lora", platform: "fansly", modelSlug: "lora", modelName: "Lora" }],
+    }));
+    expect(markup.indexOf("Восстановить доступ")).toBeLessThan(markup.indexOf("Устройства"));
+    expect(markup).toContain("Сохранённые страницы");
+    expect(markup).toContain("lora");
+    expect(markup).not.toContain("Сбросить пароль ссылкой");
+    expect(markup).not.toContain("Отправить приглашение заново");
+    expect(markup).not.toContain("Назначить страницу");
+    expect(markup).not.toContain(">Снять<");
+    expect(markup).not.toContain(REVOCATION_LABEL.allAccess);
+    expect(markup).not.toContain(REVOCATION_LABEL.allDevices);
+    expect(markup).not.toContain("понадобится новая ссылка");
   });
 });
 
@@ -492,6 +576,7 @@ describe("InviteModal", () => {
       create: mutation(),
       onClose: vi.fn(),
       onCreated: vi.fn(),
+      onOpenExisting: vi.fn(),
     });
 
     expect(markup.indexOf("Fansly")).toBeLessThan(markup.indexOf("OnlyFans"));
@@ -510,6 +595,7 @@ describe("InviteModal", () => {
       create: mutation(),
       onClose: vi.fn(),
       onCreated: vi.fn(),
+      onOpenExisting: vi.fn(),
     });
     expect(markup).toMatch(/<button[^>]*disabled=""[^>]*>Создать приглашение<\/button>/);
   });
@@ -521,6 +607,7 @@ describe("LinkRevealModal", () => {
 
     const markup = render(LinkRevealModal as ComponentType<Record<string, unknown>>, {
       link: {
+        userId: 17,
         username: "grisha",
         kind: "invite",
         secret: "s3cr3t",
@@ -540,7 +627,7 @@ describe("LinkRevealModal", () => {
     vi.stubGlobal("window", { location: { origin: "https://gosling-agency.ru" } });
     const onClose = vi.fn();
     const markup = render(LinkRevealModal as ComponentType<Record<string, unknown>>, {
-      link: { username: "grisha", kind: "invite", secret: "s3cr3t", expiresAt: "2026-09-22T00:00:00.000Z" },
+      link: { userId: 17, username: "grisha", kind: "invite", secret: "s3cr3t", expiresAt: "2026-09-22T00:00:00.000Z" },
       onClose,
     });
     // The backdrop carries no click handler, so only the explicit buttons close it.
@@ -553,6 +640,7 @@ describe("LinkRevealModal", () => {
     vi.stubGlobal("window", { location: { origin: "https://gosling-agency.ru" } });
     const markup = render(LinkRevealModal as ComponentType<Record<string, unknown>>, {
       link: {
+        userId: 17,
         username: "grisha",
         kind: "password_reset",
         secret: "s3cr3t",

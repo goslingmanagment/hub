@@ -81,7 +81,7 @@ describe("Fansly B0 durable receiver", () => {
     expect(h.decode).not.toHaveBeenCalled();
   });
 
-  it.each(["ownership_lost", "generation_changed", "disabled"])("closes immediately on %s", async (reason) => {
+  it.each(["ownership_lost", "generation_changed", "guard_unavailable", "disabled"])("closes immediately on %s", async (reason) => {
     const h = harness(); h.controller.abort(reason);
     expect(await h.done).toBe(reason); expect(h.stop).toHaveBeenCalledOnce();
     h.socket.frame(known); expect(h.capture).not.toHaveBeenCalled();
@@ -106,6 +106,28 @@ describe("Fansly B0 durable receiver", () => {
     await vi.advanceTimersByTimeAsync(10_000);
     expect(await h.done).toBe("auth_timeout");
     expect(h.capture).not.toHaveBeenCalled();
+  });
+
+  it("business frames cannot hide a missing pong, and stopped sockets cannot capture late frames", async () => {
+    vi.useFakeTimers();
+    const h = harness();
+    for (let i = 0; i < 6; i++) {
+      await vi.advanceTimersByTimeAsync(5_000);
+      h.socket.frame(known);
+      await vi.advanceTimersByTimeAsync(0);
+    }
+    expect(h.capture).toHaveBeenCalledTimes(6);
+    expect(h.stop).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(await h.done).toBe("pong_timeout");
+    expect(h.stop).toHaveBeenCalledOnce();
+    const sends = h.socket.send.mock.calls.length;
+    h.socket.frame('{"t":2,"d":"{}"}');
+    h.socket.frame(known);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(h.capture).toHaveBeenCalledTimes(6);
+    expect(h.socket.send).toHaveBeenCalledTimes(sends);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("resets the failure sequence once after a verified quiet minute with working guards and pongs", async () => {

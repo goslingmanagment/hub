@@ -1,3 +1,4 @@
+import { fixtureUserId } from "./helpers/user-identity.ts";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import {
@@ -99,10 +100,10 @@ describe("Stage 22 identity", () => {
   it("chatter password login works; mustChangePassword is a dead constant on the wire", async (context) => {
     if (!requireSetup(context)) return;
 
-    // Decision 353: there is no admin set-password route. The owner resets by
+    // Decision 369: there is no admin set-password route. The owner resets by
     // link; the CLI primitive below is the same one `hub user set-password` runs.
     await setUserPassword(app!, {
-      username: "anton",
+      userId: await fixtureUserId(app!, "anton"),
       password: "first-secret-1",
     }, { source: "cli" });
 
@@ -144,7 +145,7 @@ describe("Stage 22 identity", () => {
   it("device tokens: issued by password, ride kind:apiKey routes, revoke → 401, expire → 401", async (context) => {
     if (!requireSetup(context)) return;
 
-    // Decision 353: the only client sign-in is username + password, no cookie.
+    // Decision 369: the only client sign-in is username + password, no cookie.
     const issued = await fetch(`${legacyUrl}/api/v1/auth/device-tokens/password`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -161,7 +162,7 @@ describe("Stage 22 identity", () => {
 
     // Grant the page through the normal admin route so both credentials see it.
     const ownerCookie = cookieOf(await login(legacyUrl, "dima", "owner-secret"));
-    await fetch(`${legacyUrl}/api/v1/admin/users/anton/pages`, {
+    await fetch(`${legacyUrl}/api/v1/admin/users/by-id/${await fixtureUserId(app!, "anton")}/pages`, {
       method: "POST",
       headers: { "content-type": "application/json", cookie: ownerCookie },
       body: JSON.stringify({ pageLabel: "lana" }),
@@ -210,7 +211,7 @@ describe("Stage 22 identity", () => {
     // §4.4 "Отозвать все устройства": every device token of the person dies —
     // siblings included — while the cookie session is untouched.
     const chatterCookie = cookieOf(await login(legacyUrl, "anton", "chosen-secret-1"));
-    const revoke = await fetch(`${legacyUrl}/api/v1/admin/users/anton/device-tokens`, {
+    const revoke = await fetch(`${legacyUrl}/api/v1/admin/users/by-id/${await fixtureUserId(app!, "anton")}/device-tokens`, {
       method: "DELETE",
       headers: { cookie: ownerCookie },
     });
@@ -235,7 +236,7 @@ describe("Stage 22 identity", () => {
     // Model-scope grant expands to pages created AFTER the grant.
     const ownerCookie = cookieOf(await login(grantsUrl, "dima", "owner-secret"));
     await createUserAccount(app!, { username: "vera", role: "chatter" }, { source: "cli" });
-    const grant = await fetch(`${grantsUrl}/api/v1/admin/users/vera/models`, {
+    const grant = await fetch(`${grantsUrl}/api/v1/admin/users/by-id/${await fixtureUserId(app!, "vera")}/models`, {
       method: "POST",
       headers: { "content-type": "application/json", cookie: ownerCookie },
       body: JSON.stringify({ modelSlug: "lana-model" }),
@@ -256,7 +257,7 @@ describe("Stage 22 identity", () => {
     expect((await get(grantsUrl, "/api/v1/pages/lana2/subscribers", { authorization: `Bearer ${veraKey}` })).status).toBe(200);
 
     // Revoke the model grant: every page of it goes dark (deny wins).
-    const revoke = await fetch(`${grantsUrl}/api/v1/admin/users/vera/models/lana-model`, {
+    const revoke = await fetch(`${grantsUrl}/api/v1/admin/users/by-id/${await fixtureUserId(app!, "vera")}/models/lana-model`, {
       method: "DELETE",
       headers: { cookie: ownerCookie },
     });
@@ -265,7 +266,7 @@ describe("Stage 22 identity", () => {
     expect((await get(grantsUrl, "/api/v1/pages/lana2/subscribers", { authorization: `Bearer ${veraKey}` })).status).toBe(403);
 
     // The history answers "who had access": the revoked grant is stamped, not gone.
-    const history = await get(grantsUrl, "/api/v1/admin/users/vera/grants", { cookie: ownerCookie });
+    const history = await get(grantsUrl, `/api/v1/admin/users/by-id/${await fixtureUserId(app!, "vera")}/grants`, { cookie: ownerCookie });
     expect(history.status).toBe(200);
     const { grants } = await history.json() as { grants: Array<{ scopeType: string; scopeLabel: string | null; revokedAt: string | null }> };
     const modelGrant = grants.find((row) => row.scopeType === "model");
@@ -278,7 +279,7 @@ describe("Stage 22 identity", () => {
     if (!requireSetup(context)) return;
 
     const ownerCookie = cookieOf(await login(legacyUrl, "dima", "owner-secret"));
-    const unassign = await fetch(`${legacyUrl}/api/v1/admin/users/anton/pages/lana`, {
+    const unassign = await fetch(`${legacyUrl}/api/v1/admin/users/by-id/${await fixtureUserId(app!, "anton")}/pages/lana`, {
       method: "DELETE",
       headers: { cookie: ownerCookie },
     });

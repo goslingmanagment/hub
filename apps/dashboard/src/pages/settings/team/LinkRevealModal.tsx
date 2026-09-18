@@ -23,6 +23,7 @@ import { buildJoinLink, currentOrigin, telegramMessage } from "./teamView.js";
  */
 
 export interface RevealedLink {
+  userId: number;
   username: string;
   kind: AccountLinkKind;
   secret: string;

@@ -41,6 +41,7 @@ describe("team catalog loading failures", () => {
       mustChangePassword: false,
       assignedPages: [],
       disabledAt: null,
+      deletedAt: null,
       lastActiveAt: null,
       registrationState: "active",
     };

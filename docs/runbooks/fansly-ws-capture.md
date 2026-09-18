@@ -16,6 +16,10 @@ no socket: `FANSLY_WS_CAPTURE_ENABLED=false` and
    presence evidence, six-hour continuity and short/long-gap recovery receipts
    remain required. A pong, HTTP 101 or REST 200 does not meet those gates.
    See [W0 continuity](fansly-ws-continuity.md). There is no invented receipt TTL.
+   Decision 364 permits the separately bounded early experiment described in
+   [the B1 runbook](fansly-ws-hints.md#bounded-early-canary-decision-364): quiet
+   gaps stay unknown without forcing another live run; transport failures do
+   not qualify. Full polling remains the recovery authority.
 3. Set one reviewed page allowlist, verify it, then separately flip the enabled
    flag. Follow the existing one-flag-at-a-time audit ritual. B0 changes no REST
    cadence and performs no hints, canonicalization or business writes.
@@ -27,7 +31,10 @@ no socket: `FANSLY_WS_CAPTURE_ENABLED=false` and
 
 Default-off development/deployment does not wait for W0. B1 additionally requires
 at least seven accepted durable B0 shadow days and event diversity for its
-explicitly permitted types. These are activation gates, not build gates.
+explicitly permitted types for general rollout. Decision 364 replaces that
+calendar minimum only for the bounded Lilly-1/message-created canary; durable
+capture, identity, budgets and the unchanged polling fallback still apply.
+These are activation gates, not build gates.
 
 ## Ownership, generation and bounded failure
 
@@ -37,6 +44,10 @@ own the page concurrently. Capture transactions lock page/credential/egress rows
 and compare the W0 generation digest before commit. A five-second guard checks
 generation and records progress; its independent watchdog stops a stuck guard
 within 20 seconds. Live config has a separate watchdog.
+Failed or stalled live-config reads close connections as `guard_unavailable`;
+`disabled` records an explicit flag/allowlist removal or worker shutdown.
+Older receivers also recorded config failures as `disabled`, so that historical
+reason alone does not prove an operator changed the flag. Keep those receipts.
 
 Only the page resolver's dedicated HTTP CONNECT/SOCKS5 dispatcher may connect to
 the fixed Fansly WS authority; there is no direct fallback. Compression is not

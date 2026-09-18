@@ -2,13 +2,14 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 
 import { createFanslyPage, createModel } from "@agency_hub_core/db";
 
-import { createAccountLinkForUsername } from "../apps/runtime/src/services/account-links.ts";
+import { createAccountLinkForUserId } from "../apps/runtime/src/services/account-links.ts";
 import {
   authenticateDeviceToken,
   authenticateSessionToken,
   loginWithPassword,
 } from "../apps/runtime/src/services/auth.ts";
 import { issueDeviceTokenForUsername } from "./helpers/device-credentials.ts";
+import { fixtureUserId } from "./helpers/user-identity.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
@@ -92,15 +93,16 @@ describe("CLI admin flows", () => {
     `);
     expect(assignmentsBeforePage.rows[0]?.count).toBe(0);
 
-    await run(["user", "assign-page", "--username", "lead", "--page", "lana"]);
-    // Decision 353: `set-password` is the full reset primitive — it ends every
+    const leadId = await fixtureUserId(appContext, "lead");
+    await run(["user", "assign-page", "--user-id", String(leadId), "--page", "lana"]);
+    // Decision 369: `set-password` is the full reset primitive — it ends every
     // sign-in of that person, which is why the CLI says so out loud.
-    await run(["user", "set-password", "--username", "lead", "--password", "lead-secret-2"]);
+    await run(["user", "set-password", "--user-id", String(leadId), "--password", "lead-secret-2"]);
 
     consoleSpy.mockRestore();
 
     expect(logs.some((line) => line.includes("Created user dima"))).toBe(true);
-    expect(logs.some((line) => line.includes("Assigned lead to lana"))).toBe(true);
+    expect(logs.some((line) => line.includes(`Assigned ${leadId} to lana`))).toBe(true);
     expect(logs.some((line) => line.includes("all of their sign-ins were ended"))).toBe(true);
 
     const assignmentsAfterPage = await testDb.pool.query(`
@@ -118,7 +120,7 @@ describe("CLI admin flows", () => {
       return;
     }
 
-    // Decision 353: before this PR the CLI reset advanced the epoch and revoked
+    // Decision 369: before this PR the CLI reset advanced the epoch and revoked
     // SESSIONS, and left device tokens alive — so "I reset his password" was a
     // false statement about a laptop still holding a working bearer. It now runs
     // terminateAccessTx, the same primitive a reset link runs.
@@ -143,8 +145,9 @@ describe("CLI admin flows", () => {
       username: "lead",
       password: "lead-secret",
     });
-    const link = await createAccountLinkForUsername(appContext, {
-      username: "lead",
+    const leadId = await fixtureUserId(appContext, "lead");
+    const link = await createAccountLinkForUserId(appContext, {
+      userId: leadId,
       kind: "password_reset",
     }, { source: "cli", actorUserId: 1 });
 
@@ -156,7 +159,7 @@ describe("CLI admin flows", () => {
     expect((await authenticateDeviceToken(appContext, device.token)).principal).not.toBeNull();
     expect(await authenticateSessionToken(appContext, session.sessionToken)).not.toBeNull();
 
-    await run(["user", "set-password", "--username", "lead", "--password", "lead-secret-2"]);
+    await run(["user", "set-password", "--user-id", String(leadId), "--password", "lead-secret-2"]);
 
     // The device token is refused WITH the self-healing reason, so the client
     // wipes its custody and shows a sign-in screen instead of a red line.

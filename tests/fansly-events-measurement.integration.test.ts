@@ -3,6 +3,8 @@ import { createFanslyPage, createModel } from "@agency_hub_core/db";
 
 import { resetIntegrationDatabase, startTestDatabase } from "./helpers/db.ts";
 import { INTEGRATION_TEST_TIMEOUT_MS } from "./helpers/timeouts.ts";
+import { compareHttpSnapshots, parseHttpSnapshot } from "../scripts/fansly-events/compare-http.ts";
+import { measurementArtifact } from "./helpers/fansly-http-measurement.ts";
 
 const FROM = "2026-09-01T12:00:00Z";
 const TO = "2026-09-01T13:00:00Z";
@@ -52,6 +54,27 @@ describe("A0/T0 bounded read operations", () => {
       expect.objectContaining({ source: "manual", attempts: 2, retry_attempts: 1 }),
       expect.objectContaining({ source: "scheduled", attempts: 1, retry_attempts: 0 }),
     ]));
+  });
+
+  it("compares two real whole-day SQL exports with retry subsets and stable page identity", async () => {
+    const first = await run("manual");
+    await attempt(first);
+    await attempt(first, 2);
+    const second = await run("scheduled", "2026-09-02T12:00:00Z", CLEAN, "2026-09-02T13:00:00Z");
+    await attempt(second, 1, "2026-09-02T12:00:00Z");
+    async function exported(from: string, to: string) {
+      const row = (await db.pool.query("select fansly_events_measurement_report($1, $2) as report", [from, to])).rows[0];
+      const { bytes, manifest } = measurementArtifact(row.report);
+      return parseHttpSnapshot(bytes, manifest);
+    }
+    const before = await exported("2026-09-01T00:00:00Z", "2026-09-02T00:00:00Z");
+    const after = await exported("2026-09-02T00:00:00Z", "2026-09-03T00:00:00Z");
+    expect(compareHttpSnapshots(before, after, ["lilly-2"])).toMatchObject({
+      baseline: { recordedAttempts: 2, retryAttempts: 1 },
+      current: { recordedAttempts: 1, retryAttempts: 0 },
+      eligibleForObservedCountComparison: true, observedAttemptChangePercent: -50,
+      causalSavings: "unverified", readerLatency: "unmeasured",
+    });
   });
 
   it("keeps lost attempts from overlapping runs and old or unfinished telemetry explicit", async () => {

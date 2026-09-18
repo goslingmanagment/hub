@@ -54,6 +54,55 @@ Missing bodies, run receipts or completion proofs remain incomplete. Repeated
 exports use different paths; do not concatenate overlapping windows as unique
 attempts or sweeps.
 
+### Compare retained HTTP windows (Decision 362)
+
+Run the offline comparator on two completed `report` exports. Each report's
+original `.manifest.json` must remain beside it. Inputs must be regular private
+files (no group/other access or symlinks), at most 32 MiB per report and 16 KiB
+per manifest. The output must be new; it is created with mode 0600. No database,
+Fansly request, flag change or new collection is performed by this command.
+
+```sh
+node --import tsx/esm scripts/fansly-events/compare-http-cli.ts \
+  /absolute/evidence/baseline.json /absolute/evidence/current.json \
+  /absolute/evidence/http-comparison.json lilly-1 lilly-2
+```
+
+Choose the same explicit page cohort before comparing. The command verifies
+exact file SHA-256, report/manifest dates, completed export ordering and the
+manifest's **sweep count** (not HTTP attempts). All selected-page sources,
+streams, operations and states contribute to the attempt total. Retry ordinals
+and retry outcomes are separate subsets and are never added to that total.
+Per-page, per-stream and per-source totals keep redistribution visible.
+Nonzero submillisecond window boundaries are rejected instead of rounded;
+microsecond timestamps in the exporter receipts remain accepted.
+
+`eligibleForObservedCountComparison` requires equal, nonoverlapping, ordered
+whole UTC-day windows (at most eight days each), closed before export started;
+the same observed page ID for each selected label; coverage for each selected
+page and attempt stream; and known zero run losses with no unfinished attempts.
+Because the existing coverage export has labels but no page IDs, a page without
+any attempt rows has unverified identity, even if coverage exists. Reused labels
+and absent pages cannot silently become a comparable zero. Attempt source can
+differ from its parent run source, so source equality is not a coverage test.
+
+On incomplete evidence, a valid comparison artifact still records the observed
+counts/delta and `blockers`, with a null percentage. Exit zero means the artifact
+was written; inspect eligibility before interpreting it. Null loss sums are
+unknown. Mixed known/null sums remain explicitly partial, with unknown runs and
+null counter groups shown. Overlapping-run losses are never trimmed or assigned
+to an attempt day. Boundary runs with complete zero losses are allowed. Missing
+payload sizes do not invalidate request counts; bytes describe captured JSON,
+not network egress or proxy spend.
+
+Even an eligible negative `observedAttemptChangePercent` is an observed count
+change, not causal savings. Check workload, activation/policy evidence and reader
+freshness separately. This ledger excludes browser/bootstrap HTTP and WebSocket
+traffic. The result always keeps `causalSavings=unverified` and
+`readerLatency=unmeasured`; it does not close the migration's savings or latency
+acceptance. Hash verification binds the retained pair but does not authenticate
+its provenance. Keep the original read receipts with the evidence.
+
 The SQL calls are also available from ordinary read_only psql:
 
 ```sql
@@ -250,6 +299,50 @@ scope requirements, move to A1, or establish realized HTTP savings. Rollback
 keeps the existing allowlist procedure; old parsers drop new optional fields,
 which remain unknown if newer code later resumes the same generation. The
 additive unused probe may remain installed.
+
+## Reader discrepancy witnesses (Decision 354)
+
+New sweeps add `readerWitnesses` (first20 total per sweep) and
+`readerWitnessesOmitted` to the existing `diagnostics` report/cursor. They cover
+missing/deleted/content-pending/unknown reader states **below** the virtual stop,
+including an advertised ID with a null embedded head. Aggregate counters remain
+complete even after the sample cap. `null` means legacy or mid-sweep coverage;
+`[]` with omitted0 means no witnessed candidates in that instrumented scope.
+Omitted>0 means candidates lack retained witnesses, whether because of the cap,
+a missing capture receipt, ambiguous mapping or unavailable hashing. It is not
+zero unexplained discrepancy evidence. The first20 are deterministic, not a
+representative sample or a completeness verdict. No message IDs/text are copied.
+
+Each pointer carries an observation ID, canonical JSON v1 SHA-256, zero-based
+index into the **trimmed retained** `data` array and one-based sweep page number.
+`readStartedAtMs`/`readFinishedAtMs` are worker-clock bounds around the existing
+pre-apply read, before hydration/repair/write; they are not the precise database
+snapshot instant or event latency. `source` is the preferred reader source; for
+`deleted` the dominating tombstone can come from another source. Unknown reads
+have null source and liveHotCopy, not evidence of absent hot material.
+
+Read the existing report view/function through `read_only` in READ ONLY. For
+selected witnesses only, load their exact `observations` envelopes and current
+bodies (`coalesce(o.payload,b.body)`; join hot CAS by bucket_month/object_id).
+Use the existing `resolveDmShadowWitness(witness, pageId, observation)` helper
+from `apps/runtime/src/services/sync/dm-shadow-witness.ts` on that local export.
+It validates observation ID/account/platform/kind and recomputes the hash before
+resolving the row. Missing body, wrong scope, changed hash or bad index is
+unresolved. Never search another index on mismatch or trust the original
+observation hash without checking the current body. Export only needed markers,
+not whole message/account payloads, and keep original read receipts private.
+
+Erasure may remove/rewrite capture, making the pointer unresolvable. Existing
+shared-observation erasure policy can also preserve the original body; such
+pointers remain resolvable residuals. This does not promise anonymization. The
+existing page/model erasure already removes shadow reports and cursors.
+
+The historical G6917/G6918 scalar reports cannot be retroactively attributed.
+Their existing raw candidate is not proof of provider deletion or of an exact
+historical reader miss. Keep them unknown; do not reset the original A0 clock or
+credit earlier days to the new witness scope. Ordinary full polling collects
+new evidence without extra provider requests. Rollback drops optional cursor
+fields and later resumes remain unknown; saved reports are preserved.
 
 ## Rollback
 

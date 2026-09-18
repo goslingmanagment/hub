@@ -1,0 +1,119 @@
+- link "Skip to content":
+  - /url: "#start-of-content"
+- banner "Global navigation menu":
+  - button "Open menu":
+  - link "Homepage (g then d)":
+    - /url: /
+  - navigation "Breadcrumbs":
+    - list:
+      - link "goslingmanagment":
+        - /url: /goslingmanagment
+        - generic: goslingmanagment
+      - link "core":
+        - /url: /goslingmanagment/core
+        - text: core
+      - button "Switch repository (option shift r)":
+  - button "Open quick search dialog, type / to search":
+    - text: Type
+    - generic: /
+    - text: to search
+  - link "Chat with Copilot":
+    - /url: /copilot
+  - button "Open Copilot…":
+  - button "Create new...":
+  - link "All issues":
+    - /url: /issues
+  - link "All pull requests":
+    - /url: /pulls
+  - link "All repositories":
+    - /url: /repos
+  - link "You have unread notifications (g then n)":
+    - /url: /notifications
+  - button "Open user navigation menu":
+    - img "User avatar"
+  - heading "Repository navigation" [level=2]
+  - navigation "Repository":
+    - list:
+      - link "Code":
+        - /url: /goslingmanagment/core
+        - generic: Code
+      - link "Issues":
+        - /url: /goslingmanagment/core/issues
+        - generic: Issues
+      - link "Pull requests (4)":
+        - /url: /goslingmanagment/core/pulls
+        - generic: Pull requests
+        - generic: "4"
+        - generic: (4)
+      - link "Agents":
+        - /url: /goslingmanagment/core/agents?author=goslingmanagment
+        - generic: Agents
+      - link "Actions":
+        - /url: /goslingmanagment/core/actions
+        - generic: Actions
+      - link "Projects":
+        - /url: /goslingmanagment/core/projects
+        - generic: Projects
+      - link "Security and quality":
+        - /url: /goslingmanagment/core/security
+        - generic: Security and quality
+      - link "Insights":
+        - /url: /goslingmanagment/core/network/dependencies
+        - generic: Insights
+      - link "Settings":
+        - /url: /goslingmanagment/core/settings
+        - generic: Settings
+- main:
+  - img "failed at startup:"
+  - 'heading "(Unknown event) #9" [level=1]':
+    - generic: "(Unknown event) #9"
+  - navigation "Workflow run":
+    - list:
+      - link "Summary":
+        - /url: /goslingmanagment/core/actions/runs/35089508675
+        - generic: Summary
+      - heading "All jobs" [level=4]
+      - button "Filter by job status":
+      - list
+      - heading "Run details" [level=3]
+      - list "Run details":
+        - link "Usage":
+          - /url: /goslingmanagment/core/actions/runs/35089508675/usage
+          - generic: Usage
+        - link "Workflow file":
+          - /url: /goslingmanagment/core/actions/runs/35089508675/workflow
+          - generic: Workflow file
+  - region "Workflow run summary":
+    - generic: Triggered via pull request September 16, 2026 14:174 minutes ago
+    - link "@goslingmanagment goslingmanagment":
+      - /url: /goslingmanagment
+      - img "@goslingmanagment"
+      - text: goslingmanagment
+    - generic: closed
+    - text: ⁠
+    - link "d0a726c":
+      - /url: /goslingmanagment/core/commit/d0a726c4f5c45d509cb209985943b70fe69ca547
+      - text: d0a726c
+    - link "fix/purchase-history-target-quarantine":
+      - /url: /goslingmanagment/core/tree/refs/heads/fix/purchase-history-target-quarantine
+    - generic: Status
+    - text: Startup failure
+    - generic: Total duration
+    - link "–":
+      - /url: /goslingmanagment/core/actions/runs/35089508675/usage
+    - generic: Artifacts
+    - text: –
+  - region "Workflow run graph":
+    - heading "This workflow graph cannot be shown" [level=2]
+    - paragraph: A graph will be generated the next time this workflow is run.
+  - region "Annotations":
+    - heading "Annotations" [level=2]
+    - generic: 1 error
+    - table:
+      - rowgroup:
+        - row "Error The job was not started because recent account payments have failed or your spending limit needs to be increased. Please check the 'Billing & plans' section in your settings.":
+          - cell "Error The job was not started because recent account payments have failed or your spending limit needs to be increased. Please check the 'Billing & plans' section in your settings.":
+            - link "Error":
+              - /url: /goslingmanagment/core/actions/runs/35089508675/workflow
+              - strong: Error
+            - generic: The job was not started because recent account payments have failed or your spending limit needs to be increased. Please check the 'Billing & plans' section in your settings.

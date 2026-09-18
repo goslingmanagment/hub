@@ -12,6 +12,12 @@
 > `repositories/ai-usage.ts` gained `listUserUsageReport` (one user, every
 > role, with daily buckets).
 
+> **STALE (Decision 356, 2026-09-15):** user administration now addresses immutable
+> IDs through `/admin/users/by-id/:userId`, SDK 0.3 retires username routes,
+> migration 0202 adds permanent account deletion and partial login uniqueness,
+> and Team state/cache ownership follows IDs. See Decision 356 and
+> `docs/runbooks/user-account-deletion.md`; the body predates this change.
+
 # DB Client, Migrations, and Repositories
 
 `packages/db` owns the PostgreSQL pool, the Drizzle schema mirror, the

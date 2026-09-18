@@ -1,3 +1,4 @@
+import { fixtureUserId } from "./helpers/user-identity.ts";
 import { setTimeout as sleep } from "node:timers/promises";
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -14,7 +15,7 @@ import {
   deactivateUser,
   deviceTokenAdoptionReport,
   issueDeviceTokenWithPassword,
-  revokeDeviceTokensForUsername,
+  revokeDeviceTokensForUserId,
   setUserPassword,
 } from "../apps/runtime/src/services/auth.ts";
 import { issueDeviceTokenForUsername } from "./helpers/device-credentials.ts";
@@ -60,7 +61,7 @@ async function login(
   return sessionCookieFrom(response);
 }
 
-/** Decision 353: the desktop reserves by password, never from a cookie. */
+/** Decision 369: the desktop reserves by password, never from a cookie. */
 async function reserve(activeServer: NonNullable<typeof server>) {
   const response = await activeServer.inject({
     method: "POST",
@@ -94,7 +95,7 @@ async function waitForUserLockWaiters(
       from pg_stat_activity
       where datname = current_database()
         and wait_event_type = 'Lock'
-        and query ilike '%for update%'
+        and query ~* 'for (no key )?update'
     `);
     if (Number(result.rows[0]?.count ?? 0) >= minimum) return;
     await sleep(10);
@@ -223,10 +224,10 @@ describe("pending device-token activation protocol", () => {
   it("invalidates pending custody on password reset", async (context) => {
     const setup = requireSetup(context);
     if (!setup) return;
-    // Decision 353: an owner resets by link or CLI; both run this primitive.
+    // Decision 369: an owner resets by link or CLI; both run this primitive.
     await expectPendingInvalidated(setup, async () => {
       await setUserPassword(setup.app, {
-        username: "anton",
+        userId: await fixtureUserId(setup.app, "anton"),
         password: "new-chatter-secret",
       }, { source: "cli" });
     });
@@ -238,7 +239,7 @@ describe("pending device-token activation protocol", () => {
     await expectPendingInvalidated(setup, async (ownerCookie) => {
       const response = await setup.server.inject({
         method: "DELETE",
-        url: "/api/v1/admin/users/anton/device-tokens",
+        url: `/api/v1/admin/users/by-id/${await fixtureUserId(setup.app, "anton")}/device-tokens`,
         headers: { cookie: ownerCookie },
       });
       expect(response.statusCode).toBe(200);
@@ -251,7 +252,7 @@ describe("pending device-token activation protocol", () => {
     await expectPendingInvalidated(setup, async (ownerCookie) => {
       const response = await setup.server.inject({
         method: "POST",
-        url: "/api/v1/admin/users/anton/deactivate",
+        url: `/api/v1/admin/users/by-id/${await fixtureUserId(setup.app, "anton")}/deactivate`,
         headers: { cookie: ownerCookie },
       });
       expect(response.statusCode).toBe(200);
@@ -347,9 +348,9 @@ describe("password sign-in authority races", () => {
   it("cannot mint after revoke-all linearizes first", async (context) => {
     const setup = requireSetup(context);
     if (!setup) return;
-    await exerciseRace(setup, () => revokeDeviceTokensForUsername(
+    await exerciseRace(setup, async () => revokeDeviceTokensForUserId(
       setup.app,
-      { username: "anton" },
+      { userId: await fixtureUserId(setup.app, "anton") },
       { source: "cli" },
     ));
   });
@@ -357,8 +358,8 @@ describe("password sign-in authority races", () => {
   it("cannot mint after password reset linearizes first", async (context) => {
     const setup = requireSetup(context);
     if (!setup) return;
-    await exerciseRace(setup, () => setUserPassword(setup.app, {
-      username: "anton",
+    await exerciseRace(setup, async () => setUserPassword(setup.app, {
+      userId: await fixtureUserId(setup.app, "anton"),
       password: "post-race-secret",
     }, { source: "cli" }));
   });
@@ -367,9 +368,9 @@ describe("password sign-in authority races", () => {
     const setup = requireSetup(context);
     if (!setup) return;
     const owner = await findUserByUsername(setup.testDb.db, "owner");
-    await exerciseRace(setup, () => deactivateUser(
+    await exerciseRace(setup, async () => deactivateUser(
       setup.app,
-      { username: "anton" },
+      { userId: await fixtureUserId(setup.app, "anton") },
       { source: "cli", actorUserId: owner!.id },
     ));
   });
@@ -377,7 +378,7 @@ describe("password sign-in authority races", () => {
   it("a live cookie session cannot mint a bearer at all any more", async (context) => {
     const setup = requireSetup(context);
     if (!setup) return;
-    // Decision 353 deleted the whole class of race the old test guarded: a
+    // Decision 369 deleted the whole class of race the old test guarded: a
     // session-issued token. The two cookie routes are gone from the contract,
     // so a perfectly valid session gets a 404 — there is nothing left to
     // revalidate after logout because nothing can be minted from a cookie.
@@ -398,7 +399,7 @@ describe("password sign-in authority races", () => {
     const ownerCookie = await login(setup.server, "owner", "owner-secret");
     expect((await setup.server.inject({
       method: "POST",
-      url: "/api/v1/admin/users/anton/device-tokens",
+      url: `/api/v1/admin/users/by-id/${await fixtureUserId(setup.app, "anton")}/device-tokens`,
       headers: { cookie: ownerCookie },
       payload: { label: "issued-for-him" },
     })).statusCode).toBe(404);
@@ -505,9 +506,9 @@ describe("device-token adoption report (D116(c) foundation, desktop D19)", () =>
       "update device_tokens set last_used_at = now() where id = $1",
       [revokedIssued.id],
     );
-    await revokeDeviceTokensForUsername(
+    await revokeDeviceTokensForUserId(
       activeApp,
-      { username: "revokedtoken" },
+      { userId: await fixtureUserId(activeApp, "revokedtoken") },
       { source: "cli" },
     );
 
@@ -550,7 +551,7 @@ describe("device-token adoption report (D116(c) foundation, desktop D19)", () =>
       deviceTokenLastUsedAt: null,
       deviceTokenExpiresAt: null,
     });
-    // Decision 353: a chatter with no device at all — the row the gate cares
+    // Decision 369: a chatter with no device at all — the row the gate cares
     // about — and no api-key column left to explain it away.
     expect(rows.get("nodevice")).toMatchObject({
       hasFreshDeviceToken: false,
@@ -568,7 +569,7 @@ describe("device-token adoption report (D116(c) foundation, desktop D19)", () =>
     });
 
     // Deactivation removes a chatter from the denominator entirely.
-    await deactivateUser(activeApp, { username: "nodevice" }, { source: "cli" });
+    await deactivateUser(activeApp, { userId: await fixtureUserId(activeApp, "nodevice") }, { source: "cli" });
     const after = await deviceTokenAdoptionReport(activeApp);
     expect(after.chatters.some((row) => row.username === "nodevice")).toBe(false);
     expect(after.summary.activeChatters).toBe(4);

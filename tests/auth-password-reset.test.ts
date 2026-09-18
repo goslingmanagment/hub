@@ -95,6 +95,8 @@ beforeEach(() => {
 
   repoMocks.findUserByUsername.mockImplementation(async (db: MockDb, username: string) =>
     db.state.users.find((user) => user.username === username) ?? null);
+  repoMocks.findUserById.mockImplementation(async (db: MockDb, userId: number) =>
+    db.state.users.find((user) => user.id === userId) ?? null);
   repoMocks.lockUserForDeviceTokenMutation.mockImplementation(async (db: MockDb, userId: number) =>
     db.state.users.find((user) => user.id === userId) ?? null);
   repoMocks.advanceDeviceTokenEpoch.mockResolvedValue({ deviceTokenEpoch: 1 });
@@ -156,7 +158,7 @@ describe("password reset transactions", () => {
     }, true);
 
     await expect(setUserPassword({ db } as never, {
-      username: "dima",
+      userId: 1,
       password: "owner-secret-2",
     }, { source: "cli" })).rejects.toThrow("audit failed");
 

@@ -1,8 +1,20 @@
 # Fansly B1 addressed REST hints
 
-Decision 344. Code and deployment are default-off. This runbook does not grant
-activation or certify the live wire types. W0, seven accepted B0 shadow days,
-type-specific corpus and a measured baseline remain entry requirements.
+Decision 344; Decision 364 adds a bounded early canary approved by the owner;
+Decision 366 makes hints the permanent mode on every Fansly page. Code and
+deployment are default-off; production enables them through the audited console.
+
+## Permanent mode (Decision 366)
+
+Every Fansly page carries a policy without `expiresAt` and without
+`attemptLimit24h`, so the five-percent rolling allowance is the only cap. The
+policy stays pinned to the page's generation. When a chatter's session or the
+page proxy rotates, `fansly_ws_connections.generation` changes, receipts start
+reporting `disabled`, and hints stop for that page until the policy is re-pinned
+to the new digest (read it from `fansly_ws_connections` under `read_only`, edit
+the policy, verify all-role convergence). Nothing is lost meanwhile: the bounded
+walk still discovers new messages within 30 minutes and the certified full within
+its interval. The sections below record the original canary procedure.
 
 ## Configuration
 
@@ -23,10 +35,68 @@ B0 must also be enabled and allow the page. Each page policy requires:
   24-hour window, a safe integer of at least 20;
 - `baselineReference`: the evidence identifying that measurement.
 
+Optional bounds (both required for the early canary):
+
+- `expiresAt`: an ISO timestamp strictly after `activationAt`. At the deadline
+  policy resolution and physical-attempt admission refuse new work, even if
+  the enabled flag stays true. A request already admitted may finish capture
+  and fenced settlement. B0 and ordinary polling continue.
+- `attemptLimit24h`: a positive integer that can only lower the five-percent
+  allowance. The effective cap is `min(floor(baseline/20), attemptLimit24h)`.
+  Existing attempts from every policy/generation count against it; editing the
+  policy, restarting or toggling a flag does not replenish the rolling budget.
+
 Missing or malformed policy, generation mismatch, empty allowlists and unknown
 types grant no HTTP. The immutable baseline grants `floor(baseline/20)` extra
 attempts per rolling 24 hours. Changing a flag/generation does not reset usage.
 Prepare and review the real policy before an individually authorized flip.
+
+## Bounded early canary (Decision 364)
+
+The owner approved reducing serial waits on 2026-09-16. The first exception is
+**Lilly-1, `message_created` only, at most 60 minutes and 10 additional physical
+attempts**, further limited by the measured five-percent allowance. Keep the
+full polling cadence, history budget, daily earnings rotation and other feature
+flags unchanged. This experiment grants no other page, type, polling reduction
+or direct WS business writer. Use the existing approved session and page proxy.
+
+Entry evidence is checked once and reused while the relevant code/configuration
+is unchanged:
+
+1. Retain the matching identity/generation receipt and accepted paired DM/Away
+   presence evidence. Finish the already running W0 continuity/gap scenario and
+   confirm its cleanup; do not start another six-hour run just to repeat it.
+   A transport/auth/generation failure must be resolved before B0 activation.
+   A quiet receiver gap remains unproven recovery; it does not bar this additive
+   experiment while ordinary polling remains authoritative. It cannot justify
+   later polling reduction or a completeness claim.
+2. Enable B0 alone through its audited settings. Verify current ownership and a
+   durable, decoded `message_created` from the accepted generation, with no
+   unexplained capture failure or pending decode for that selected event.
+   Verify the B0 kill-switch once and retain the receipt. Automated regressions
+   cover duplicate/reorder, restart, DB failure and fencing; do not wait for
+   natural production failures or manufacture them in production.
+3. Use a complete retained per-page HTTP baseline. Prepare exact generation,
+   `activationAt`, `expiresAt = activationAt + 60 minutes`,
+   `attemptLimit24h: 10` and the original baseline reference. Keep B1 off while
+   configuring the page, type and policy separately; verify each setting, then
+   enable. No synthetic baseline, historical event re-routing or new test DM.
+
+After the deadline, one read checks the admitted-attempt count, retained debt,
+ordinary history/discovery progress and the exact selected message in both hot
+storage and the Agent Read Plane. Confirm no admission at/after `expiresAt`,
+then disable the B1 flag through the audited console; expiry already prevents
+new work if that cleanup is delayed. Leave raw and receipts intact. Stop early
+on an unexplained loss, generation/ownership failure, 401/403/429 or a regression
+in ordinary progress; existing provider cooldown and failure handling remain.
+
+If no qualifying event arrives, report an inconclusive sample and let the
+policy expire. Do not extend it automatically or repeat live messages. A short
+successful sample proves only this route and rollback; it does not establish
+coverage, p95/p99 latency or savings. Continue the broader seven-day B0 observation
+in the background. A0/A1 and polling-reduction gates are unchanged. Do not poll
+unchanged experiment status repeatedly or rerun green checks without a change,
+failure or specific uncovered risk.
 
 ## Execution and rollback
 

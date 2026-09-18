@@ -2,7 +2,7 @@
 > Machine-generated reference — regenerate by re-running that prompt in a
 > fresh session; do not hand-edit.
 >
-> **STALE (Decision 353, 2026-09-15):** the API-key lane no longer exists. The
+> **STALE (Decision 369, 2026-09-15):** the API-key lane no longer exists. The
 > `apiKey` contract kind keeps its historical NAME but admits only a device
 > token; `authMethod` is `session | device_token`; the `api_keys` routes,
 > service, repository functions and CLI group are gone, as are the cookie

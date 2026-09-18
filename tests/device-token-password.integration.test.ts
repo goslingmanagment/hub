@@ -1,3 +1,4 @@
+import { fixtureUserId } from "./helpers/user-identity.ts";
 import argon2 from "argon2";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
@@ -234,7 +235,7 @@ describe("who is refused", () => {
     if (!setup) return;
     // No actorUserId: the owner is not a fixture here, and a user may not
     // deactivate themselves.
-    await deactivateUser(setup.app, { username: "grisha" }, { source: "cli" });
+    await deactivateUser(setup.app, { userId: await fixtureUserId(setup.app, "grisha") }, { source: "cli" });
 
     const response = await signIn(setup.server, {
       username: "grisha",
@@ -266,11 +267,11 @@ describe("who is refused", () => {
   it("ignores a must_change_password row: the flag is retired, not enforced", async (context) => {
     const setup = requireSetup(context);
     if (!setup) return;
-    // Decision 353 retired #116(b). The column survives (forward-only), so this
+    // Decision 369 retired #116(b). The column survives (forward-only), so this
     // sets it the only way left — by hand — and proves nothing reads it: the
     // sign-in succeeds and the wire still says `false`.
     await setUserPassword(setup.app, {
-      username: "grisha",
+      userId: await fixtureUserId(setup.app, "grisha"),
       password: "owner-chosen-42",
     }, { source: "cli" });
     await setup.testDb.pool.query(

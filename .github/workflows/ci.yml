@@ -6,20 +6,90 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      full:
+        description: "Run every gate job even when this tree's fingerprint has already passed"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 # Superseded PR heads stop burning runners; main always runs to completion so
-# every main commit keeps a finished gate record.
+# every main commit keeps a finished gate record (and a published image).
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# COST MODEL. One full run is four machines for ~46 billable minutes. In
+# September 2026 the account paid for 292 runs in 16 days, and most of them
+# re-checked bytes that had already passed: 84 % of main merges landed a tree
+# whose PR run was green minutes earlier, and one run in eight was a push that
+# changed only prose (investigations/, docs/plans, docs/decisions.md …).
+#
+# The `fingerprint` job hashes every blob the gate can observe
+# (scripts/ci-gate-fingerprint.sh — the full tree minus prose no check reads)
+# and asks the Artifacts API whether a Quality Gate already passed for that
+# hash. If so, the test jobs are skipped and the gate reports success citing
+# the proving run; main still builds and publishes its image. A gate that
+# passes on fresh bytes records its hash as an empty artifact
+# `quality-gate-<hash>` so later identical trees can reuse it. Dispatch with
+# `full: true` to force every job.
 jobs:
+  fingerprint:
+    name: Gate fingerprint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Listing artifacts is the only API call in this workflow that needs
+    # `actions: read`; nothing here writes.
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      hash: ${{ steps.fingerprint.outputs.hash }}
+      proven_by: ${{ steps.lookup.outputs.proven_by }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Fingerprint the gate-visible tree
+        id: fingerprint
+        run: |
+          hash="$(bash scripts/ci-gate-fingerprint.sh)"
+          [[ "$hash" =~ ^[0-9a-f]{64}$ ]]
+          echo "hash=${hash}" >> "$GITHUB_OUTPUT"
+          echo "fingerprint=${hash}"
+
+      # A lookup failure (API hiccup, rate limit) must cost a full run, never
+      # a skipped one: any error leaves `proven_by` empty.
+      - name: Look up an earlier passing gate for this fingerprint
+        id: lookup
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HASH: ${{ steps.fingerprint.outputs.hash }}
+          FORCE_FULL: ${{ github.event_name == 'workflow_dispatch' && inputs.full == true }}
+        run: |
+          proven_by=""
+          if [ "$FORCE_FULL" != "true" ]; then
+            proven_by="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts?name=quality-gate-${HASH}&per_page=100" \
+              --jq '[.artifacts[] | select(.expired == false) | .workflow_run.id] | first // ""' 2>/dev/null || true)"
+          fi
+          echo "proven_by=${proven_by}" >> "$GITHUB_OUTPUT"
+          if [ -n "$proven_by" ]; then
+            echo "Fingerprint ${HASH} already passed the Quality Gate in run ${proven_by}; test jobs are skipped." | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Fingerprint ${HASH} has no passing gate on record; running the full gate." | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+
+  # On a PR a proven fingerprint skips this job entirely. On main it still
+  # runs — the deploy pulls the image this job builds and `publish` pushes —
+  # but the checks that the fingerprint already proved are skipped.
   static:
     name: Static checks
     runs-on: ubuntu-latest
+    needs: [fingerprint]
+    if: needs.fingerprint.outputs.proven_by == '' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     timeout-minutes: 25
     # The full workspace type graph exceeds Node 22's default 2 GiB heap.
     # Keep compilation bounded; test scripts retain their own explicit limits.
@@ -48,10 +118,15 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # The one typecheck of this job: `build:artifacts` below and the Docker
+      # image's own build deliberately do not repeat it (it used to run three
+      # times per run, ~2.5 machine-minutes of the same answer).
       - name: Typecheck
+        if: needs.fingerprint.outputs.proven_by == ''
         run: pnpm typecheck
 
       - name: Lint (family standard + architecture walls)
+        if: needs.fingerprint.outputs.proven_by == ''
         run: pnpm lint
 
       # routes.ts freshness: the sdk determinism test pins openapi↔sdk↔hash
@@ -59,12 +134,13 @@ jobs:
       # kept the committed artifacts mutually consistent yet stale. The
       # generator boots the API server with a stub config — no DB needed.
       - name: Contracts are regenerated (routes.ts ↔ committed artifacts)
+        if: needs.fingerprint.outputs.proven_by == ''
         run: |
           pnpm contracts:generate
           git diff --exit-code reference/agency-hub.openapi.json packages/contracts/src/contract-hash.ts packages/sdk docs/generated/authorization-policy.md
 
       - name: Production build
-        run: pnpm build:production
+        run: pnpm build:artifacts
 
       - name: Exact checkout image metadata
         id: metadata
@@ -103,6 +179,7 @@ jobs:
       # and tests/voice-notes-sweep are DB-backed despite not being named
       # *.integration.test.ts, so they are not in the --exclude list.
       - name: Reliable unit tests
+        if: needs.fingerprint.outputs.proven_by == ''
         run: pnpm test:unit
 
       # Only a trusted main push hands an image to the publishing job. The
@@ -140,6 +217,8 @@ jobs:
   integration:
     name: Integration ${{ matrix.shard }}/3
     runs-on: ubuntu-latest
+    needs: [fingerprint]
+    if: needs.fingerprint.outputs.proven_by == ''
     # 30 stopped fitting on 2026-08-17: vitest --shard splits by FILE COUNT,
     # not duration, and after a week that added four integration files one
     # shard drew a slow-heavy set and was cancelled at 30:18 with every test
@@ -148,7 +227,10 @@ jobs:
     # spends nothing extra.
     timeout-minutes: 45
     strategy:
-      fail-fast: false
+      # A PR needs one red shard to send the author back; the other two would
+      # bill ~10 minutes each to say the same thing. Main keeps the complete
+      # record of every shard for its gate history.
+      fail-fast: ${{ github.event_name == 'pull_request' }}
       matrix:
         shard: [1, 2, 3]
 
@@ -181,25 +263,59 @@ jobs:
   # nothing, so this aggregator keeps the required name and fails unless every
   # dependency succeeded. `if: always()` is required — without it a skipped
   # aggregator reports success to the ruleset.
+  #
+  # With a proven fingerprint the test jobs are skipped by design and the gate
+  # passes on the earlier run's evidence; a fingerprint job that failed leaves
+  # `proven_by` empty, so every skip that is NOT backed by a proof still fails.
   quality:
     name: Quality Gate
     runs-on: ubuntu-latest
-    needs: [static, integration]
+    needs: [fingerprint, static, integration]
     if: always()
     timeout-minutes: 5
 
     steps:
       - name: Every gate job succeeded
+        env:
+          PROVEN_BY: ${{ needs.fingerprint.outputs.proven_by }}
+          FINGERPRINT: ${{ needs.fingerprint.outputs.hash }}
+          STATIC: ${{ needs.static.result }}
+          INTEGRATION: ${{ needs.integration.result }}
         run: |
-          echo "static=${{ needs.static.result }} integration=${{ needs.integration.result }}"
-          [ "${{ needs.static.result }}" = "success" ] || exit 1
-          [ "${{ needs.integration.result }}" = "success" ] || exit 1
+          echo "fingerprint=${FINGERPRINT} proven_by=${PROVEN_BY} static=${STATIC} integration=${INTEGRATION}"
+          if [ -n "$PROVEN_BY" ]; then
+            [ "$INTEGRATION" = "skipped" ] || exit 1
+            case "$STATIC" in success|skipped) ;; *) exit 1 ;; esac
+            echo "Quality Gate passed on the evidence of run ${PROVEN_BY} (same fingerprint)." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          [ "$STATIC" = "success" ] || exit 1
+          [ "$INTEGRATION" = "success" ] || exit 1
 
+      - name: Record this fingerprint as proven
+        if: needs.fingerprint.outputs.proven_by == ''
+        run: |
+          mkdir -p "$RUNNER_TEMP/quality-gate"
+          printf '%s\n' "$GITHUB_RUN_ID" > "$RUNNER_TEMP/quality-gate/run-id"
+
+      - name: Publish the proof for later identical trees
+        if: needs.fingerprint.outputs.proven_by == ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: quality-gate-${{ needs.fingerprint.outputs.hash }}
+          path: ${{ runner.temp }}/quality-gate/run-id
+          if-no-files-found: error
+          retention-days: 30
+
+  # `!cancelled()` is load-bearing: a skipped job (the integration matrix on a
+  # proven tree) propagates "skipped" down the whole needs chain, and a job
+  # without a status function inherits it even when its direct dependencies
+  # succeeded — the first fingerprint-gated main run published nothing.
   publish:
     name: Publish checked production image
     runs-on: ubuntu-latest
     needs: [static, quality]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.quality.result == 'success'
+    if: "!cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.quality.result == 'success'"
     timeout-minutes: 15
     # The only write token in this workflow. PRs and manual dispatches cannot
     # enter this job; no checkout/build/test code runs with package permission.

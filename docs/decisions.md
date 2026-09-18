@@ -117,7 +117,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 113 | Family CI + toolchain | Core ESLint raised to the family standard with its 162-violation backlog burned to zero, `pnpm check` added, pnpm 10.33.1/Node 22/TS 6/vitest 4 pinned family-wide, and a strictness ratchet enforced as `pnpm typecheck` |
 | 114 | Stage 35 documentation close | Maps regenerated in all three repos, client CLAUDE.md files rewritten to post-migration truth, release-hygiene asserts added, orientation drills PASS ×3 — the migration's documentation standard is in force |
 | 115 | Release audits | Codex (gpt-5.5 xhigh) audited three surfaces pre-release: the lint burn-down is behavior-neutral, chunk-budget overshoot and any-platform clientContext fixed; persona apiKey-auth left open, then ACCEPTED AS IS by the owner |
-| 116 | Identity/auth credentials | Humans authenticate with password plus per-device tokens, robots with API keys; chatter password provisioning moves into the live dashboard; must_change_password stays FROZEN; a client key-fallback deletion gate is defined. TOMBSTONED by #353: (b) the frozen flag is retired (the field stays on the wire as a deprecated constant `false`) and (c) the api-key lane is deleted outright, robots included |
+| 116 | Identity/auth credentials | Humans authenticate with password plus per-device tokens, robots with API keys; chatter password provisioning moves into the live dashboard; must_change_password stays FROZEN; a client key-fallback deletion gate is defined. TOMBSTONED by #369: (b) the frozen flag is retired (the field stays on the wire as a deprecated constant `false`) and (c) the api-key lane is deleted outright, robots included |
 | 117 | Dashboard + workboard | #112 REVERSED — the rebuild is CANCELLED and apps/dashboard is the live maintained admin surface (its carry-over features become backlog); the workboard direction is deprecated and Stage 34 stays a banner'd placeholder. PARTIALLY REVERSED by #349: the chatter web surface it left conditional ("unless the owner later orders…") was ordered on 2026-09-15 |
 | 118 | Stage 28 erasure scope | Page-scope erasure also purges the page's config/secret rows (page_credentials, egress_endpoints), which soft delete (#72) deliberately keeps as a two-way door; DP 7 unaffected since these are config, not captured facts |
 | 119 | Stage 34 standalone workboard | #117 clause (2) NARROWED — only the in-core workboard is deprecated; the STANDALONE workboard app is an ACTIVE direction again with kernel sessions, per-page grants, repo ~/code/workboard, Fansly-only v1 |
@@ -349,9 +349,23 @@ appends a row here in the same change (family law: updated-in-change).
 | 349 | Unified chatter account and invite registration | One-time invite/reset links (`account_links`, 0199), case-insensitive logins (0200), one cookie-free password sign-in for both clients, a structured 401 `reason`, three honest revocation operations and `last_client_version`; one password check under `FOR UPDATE` closes the login race; every existing route stays wire-compatible until PR-4. PARTIALLY REVERSES #117 (the owner ordered the chatter cabinet #117 left conditional) |
 | 350 | Вкладка «Команда»: приглашение ссылкой | Человека заводит одна операция и одноразовая ссылка; три операции отзыва названы по тому, что они делают; UI API-ключей для людей удалён, машинное уехало в «Техническое». |
 | 351 | Chatter cabinet `/account` and invitation page `/join` | A chatter's own surface on the hub: an invitation link redeemed into a password, then who-I-am, my devices, my password and my own AI spend. Partially reverses #117 at the owner's order (see 349). |
-| 352 | Unified-account rights matrix | Role × sign-in method × page assignments × device rights × client-local cache is a named, tested artefact (`docs/identity-rights-matrix.md` + `tests/rights-matrix.integration.test.ts`), not an implication of #349: an owner's device token is NOT an owner session, the cabinet is cookie-only, and "revoke all devices" leaves the cookie session alive — so offboarding is a runbook, with the Fansly session, the 60 s SSE recheck and the desktop's local cache named as boundaries the hub does not control. AMENDED by #353: the legacy API key that also survived "revoke all devices" no longer exists |
-| 353 | PR-4: the legacy credential lanes retired | The api-key lane deleted end to end (routes, authenticator, service, repository, CLI group, `authMethod`), the cookie token-issuance routes and the HTTP create-user/set-password deleted, `must_change_password` retired with `mustChangePassword` frozen on the wire as a deprecated `false`, `content_manager` out of the wire role enum. Tombstones #116(b) and #116(c). An unknown bearer prefix authenticates nobody. Tables, column and PG enum survive as facts (DP 7); model-scope grants stay dead until `ACCESS_GRANTS_READ_ENABLED` flips (#70 ritual) |
-
+| 352 | Unified-account rights matrix | Role × sign-in method × page assignments × device rights × client-local cache is a named, tested artefact (`docs/identity-rights-matrix.md` + `tests/rights-matrix.integration.test.ts`), not an implication of #349: an owner's device token is NOT an owner session, the cabinet is cookie-only, and "revoke all devices" leaves the cookie session alive — so offboarding is a runbook, with the Fansly session, the 60 s SSE recheck and the desktop's local cache named as boundaries the hub does not control. AMENDED by #369: the legacy API key that also survived "revoke all devices" no longer exists |
+| 353 | Fansly status-only earnings rechecks | Exact pending-to-posted signals still fetch both endpoints; a content revision preserves strict money debt while valid unchanged status rechecks may finish. |
+| 354 | A0 reader discrepancy witnesses | Retain at most twenty verified capture pointers per sweep beside exact pre-apply reader state; preserve counters, legacy unknowns, polling and historical attribution limits. |
+| 355 | Recover an existing team identity | The invite form finds active, invited and disabled logins before creation and offers their existing card. Disabled participants stay visible; restoring access is explicit, preserves identity and grants, and never revives old links or sign-ins. |
+| 356 | Immutable user IDs and permanent account deletion | All account-target admin routes, service writes, dashboard cards/caches and CLI actions use immutable userId. Permanent deletion revokes access, preserves historical identity and frees the login for a new ID; disabled accounts remain restorable. Username routes are retired. |
+| 357 | Account lifecycle concurrency and uncertain deletion | Non-key user locks preserve actor references; an indeterminate deletion refreshes the account list before retiring the old card. |
+| 358 | Fansly purchase-history rejections | A provider answer naming one media as unservable (404/410, now 422 "error getting account media") is a fact about that target: journaled verbatim, consumed, walk continues. Per request namespace, three such rejections must be proven target-local against a completed, provider-served witness before another target is spent; a witness rejected with the streak's status blocks the stream as `purchase_history_rejection_storm`, a different status is no vote, no witness defers instead of blocking. The streak is derived from captures, not stored; after a storm one unblock buys one target of evidence, and a served page retries the storm's members once. |
+| 359 | CI gate reuse by tree fingerprint | A run first hashes every blob the gate can observe (`scripts/ci-gate-fingerprint.sh`: the full tree minus prose no check reads) and looks up an earlier passing Quality Gate for that hash in the Artifacts API; a hit skips the test jobs and passes the gate citing the proving run, main still builds and publishes its image. A fresh pass records `quality-gate-<hash>` (30 days). `pnpm typecheck` runs once per job: `build:production` = typecheck + `build:artifacts`, CI and the Dockerfile call `build:artifacts`. `workflow_dispatch` `full: true` forces every job. |
+| 360 | CI volume rules | Nightly runs only what PRs never run (the whole `tests/api.integration.test.ts`) six days a week and the full one-process suite on Mondays and on dispatch. The integration matrix fails fast on pull requests only. Work-in-progress pushes carry `[skip ci]`; CI runs on the push that is ready for review; failed jobs are re-run, not workflows. |
+| 362 | Fansly retained HTTP comparison | Offline comparison binds existing measurement exports to their SHA-256 manifests, selects explicit pages, counts all physical-attempt sources once, and withholds a percentage for unmatched windows, page identities or incomplete run telemetry. Count changes never establish causal savings or reader latency. |
+| 363 | W0 continuity reference comparison | Validate and hash a complete native phase while comparing only its overlap with a bounded browser window; retain independent live gates as unverified. |
+| 364 | Fansly bounded early B1 canary | Owner-approved Lilly-1/message-created trial replaces its seven-day entry wait with durable evidence, a 60-minute expiry and at most ten additional attempts; full polling and broader rollout gates remain. |
+| 365 | Agent transcript count ceiling | Count the filtered, deduplicated transcript up to the caller's probe threshold plus one; keep delivery's 1500-row ceiling separate so truncated counts cannot claim exactness. |
+| 366 | Fansly events final mode | B0 capture and permanent B1 hints on every Fansly page; bounded dialog polling with a 180-minute certified full on the five deep inboxes; the full-list freshness target follows the accepted interval (interval + one slot) instead of a silent full30 promise; earnings rotation and follower reconcile unchanged. |
+| 367 | A1 stop rule follows the measured A0 rule | An uncertain list marker resets only its page's unchanged streak; timestamp ties and a list shifting down between requests are not signals. The stricter Decision 346 wording (walk-wide invalidation) made live bounded walks full-length on four of five pages. A1 stays at least as strict as A0: its boundary is the certified full's start, A0 used the completion. |
+| 368 | Age-aware Fansly earnings roster | On SHADOW pages only, a live `fanslyFanEarningsRosterMaxAgeHours` lets the daily roster skip a spender whose BOTH earnings endpoints were validly checked inside the window and are neither dirty, failed nor cooling down. 0 (default) reads every spender every day; 1-47 equals 0; 48-168 enables the rotation. Hourly transactions and C2b dirty marks still drive addressed reads; coverage debt and age-based target selection follow the same window, debt anchored to the walk start. |
+| 369 | PR-4: the legacy credential lanes retired | The api-key lane deleted end to end (routes, authenticator, service, repository, CLI group, `authMethod`), the cookie token-issuance routes and the HTTP create-user/set-password deleted, `must_change_password` retired with `mustChangePassword` frozen on the wire as a deprecated `false`, `content_manager` out of the wire role enum. Tombstones #116(b) and #116(c). An unknown bearer prefix authenticates nobody. Tables, column and PG enum survive as facts (DP 7); model-scope grants stay dead until `ACCESS_GRANTS_READ_ENABLED` flips (#70 ritual) |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -14501,7 +14515,866 @@ the PR-1A surface, and every row passed as built.
 
 Plan: `investigations/unified-account-2026-09-15/PLAN.md` §7 (Р11).
 
-## Decision 353: PR-4 — the API-key lane, cookie token issuance and `must_change_password` are retired (2026-09-15)
+
+## Decision 353: Confirm status-only Fansly earnings rechecks (2026-09-15)
+
+The Lilly-1 canary exposed a permanent false hold: a retained transaction changed
+only from raw status1/pending to status2/posted, while both earnings endpoints
+already included its unchanged amounts. Later valid unchanged responses could
+never settle the signal under Decision289's blanket changed-content condition.
+The wallet balance also changed; it was already correctly excluded from semantic
+comparison. Retained before/after transaction and earnings observations establish
+this case; HTTP200 alone does not establish it.
+
+Both endpoint revisions still advance on that exact status transition. All other
+persisted semantic fields, including occurrence time, must match. New, reversed,
+unknown-status, money, type, binding and activity changes remain strict. Migration
+0201 adds `earnings_content_revision`, the highest revision requiring changed
+content. A valid nonempty bound recheck against an existing baseline may settle
+status-only R when that high-water revision has already been applied. It does not
+advance last_changed_at or change counters. R+1, independent endpoints, missing
+claims, empty/invalid responses, provider backoff and daily rotation retain their
+existing behavior. This acknowledges a recheck, not provider recomputation.
+
+All pre-migration earnings revisions start strict. A writer overlapping deploy
+or an old rollback writer only supplies the legacy strict dirty reason; receipt
+settlement rejects unchanged acknowledgement for that reason, and a later new
+status mark carries its revision into the high-water column. Thus rollback cannot
+quietly lose money debt. No parser, projection, money formula, flag or cadence
+changes. The existing live C2b/C2c scopes select this behavior.
+
+The bounded `fansly_earnings_refresh_status(page_label, fan_ref)` diagnostic
+returns the two known endpoint rows' operational metadata through `read_only`.
+PUBLIC execute is revoked; no base-table privileges are added. It permits exact
+revision/receipt preflight without an app-user diagnostic fallback.
+
+Legacy debt is not automatically cleared. A separately reviewed owner-authorized
+repair may reclassify only an exact revision with retained proof covering every
+outstanding signal, no active claim and unchanged mutation preconditions. It
+changes classification only; the next normal budgeted REST receipt must settle
+the debt. Preserve raw evidence, prior checks, changes and certified completion.
+The [earnings runbook](runbooks/fansly-earnings-targets.md) records this boundary.
+
+
+## Decision 354: Retain bounded A0 reader discrepancy witnesses (2026-09-15)
+
+The Lilly-2 G6917/G6918 report retained missing-head counts but no per-ID
+pre-apply evidence. The existing investigation found one plausible shared
+candidate in both raw windows; it cannot prove which IDs the historical
+counters counted. Another current-state read cannot reconstruct that snapshot.
+Those two historical cases remain unexplained and the original A0 clock stays.
+
+New fully instrumented sweeps retain the first twenty missing, deleted,
+content-pending or unknown advertised-reader states below the virtual stop.
+Each witness contains only an observation pointer, canonical JSON v1 SHA-256,
+zero-based position in its retained data array, one-based sweep page number,
+worker-clock read start/end and reader state/source/live-hot-copy. The index is
+matched by unique group/head pair in the trimmed capture; it is never inferred
+from mapped-array order. Ambiguous/unavailable capture linkage and excess
+candidates increment an omitted counter. Existing aggregate counts continue
+without truncation. Failed reads yield unknown state and null source/hot-copy.
+The source for a deleted state is the preferred reader source, not necessarily
+the source supplying the dominating tombstone. Read times bracket the existing
+snapshot query, not an exact database snapshot instant or provider latency.
+
+Pointers travel in the existing bounded diagnostics JSON, cursor and report.
+There is no new table, SQL query, migration, provider request or flag. Legacy
+and mid-sweep witness scope is null, never reconstructed as a complete prefix.
+Existing report-failure accounting remains; failure cannot block the business
+sweep. Full polling, destructive-finalization authority, freshness and A1 gates
+are unchanged. A cap or missing linkage is explicit incomplete attribution,
+not permission to accept unrepresented discrepancies.
+
+Offline resolution validates observation ID/page/platform/kind and recomputes
+the digest from the currently retained inline/CAS body before using the index.
+JSONB object key ordering is normalized by the frozen canonical JSON v1 codec.
+The platform-branch budget increases by one for this offline envelope guard;
+it rejects non-Fansly observations and introduces no provider dispatch branch.
+Changed/erased/missing bodies fail closed, without falling back to another item
+or copying identities into the diagnostics store. Existing erasure law retains
+some shared observations/CAS bodies unchanged to preserve bystander lineage;
+their pointers remain resolvable residuals, not anonymous data. Page/model
+erasure already removes the cursor and shadow report. No new fan identity or
+message text is persisted outside existing capture.
+
+Rollback to the prior runtime drops the optional cursor fields; a later upgrade
+keeps that resumed generation unknown. Saved reports remain evidence. These
+witnesses improve attribution of future discrepancies; they do not prove
+provider deletion, close G6917/G6918, reset the clock or establish A0/A1 GO,
+HTTP savings or event-to-reader latency. See the A0 runbook.
+
+
+## Decision 355: Recover the existing participant instead of recreating them (2026-09-15)
+
+The Team invite form offered no route out of `User "Nikita" already exists`
+after offboarding. The kernel was preserving #126 correctly: disabled users
+keep their identity, history and unique login. The dashboard hid those rows in
+a collapsed section and exposed the raw duplicate-create failure.
+
+Invitation now checks the complete team list with #349's case-insensitive
+login semantics. A match explains whether the participant is disabled,
+waiting for registration, or already active, then offers their existing card.
+The new-person fields are hidden while there is a match; their role/page input
+is never applied to the old person. A failed invite refreshes the list to
+resolve another tab's concurrent creation. Unknown failures stay inline in
+Russian, and a failed list read cannot authorize creation.
+
+«Отключённые участники» is expanded initially. The operation is named
+«Отключить доступ», and its confirmation explains that the login and history
+remain. The disabled participant's card leads with «Восстановить доступ» and
+shows saved pages without offering page/link edits the kernel rejects.
+Restoration is a separate explicit confirmation for the same person, never an
+automatic consequence of entering a duplicate name. It restores the stored
+role and page grants; a different person needs a different login.
+
+The confirmation distinguishes three recovery paths: an existing password
+works again after restoration unless `mustChangePassword` is set; that flag
+requires a password-reset link before signing in to a client. An unregistered
+participant needs a new invitation. Old links and sign-ins stay revoked in all
+cases. A reset is also available for someone who forgot their password. This
+corrects #350's UI copy and the onboarding/offboarding runbooks; it does not
+change #126's lifecycle or the kernel contract.
+
+Regression coverage includes disabled-login detection, visible restoration,
+read-only disabled cards, the existing identity/role/grants surviving a
+rejected duplicate invite, and explicit restoration followed by a fresh
+invitation with the previous link still revoked.
+
+
+## Decision 356: Immutable account addressing and reusable logins (2026-09-15)
+
+The owner explicitly requested the architectural rework and regression checks
+following the Nikita delete/recreate failure. This supersedes #126's permanent
+username reservation and #355's recovery-only answer **for deleted accounts**.
+Disabling stays a separate, reversible action that retains its login and saved
+access. Historical facts still survive; no `users` row or captured business
+fact is hard-deleted.
+
+**Identity is `users.id`.** Username is a case-insensitive sign-in/create/search
+handle, never the address of an existing-account mutation. All twenty existing
+account-target admin operations now use `/admin/users/by-id/:userId/...` and
+numeric `userId` parameters, through the service and transaction boundary.
+The `by-id` segment is mandatory: simply renaming a path parameter would let
+an old numeric login like `42` target an unrelated internal ID 42. Old username
+routes are removed (404), not transparently redirected. API operation names
+are retained; generated SDK 0.3 records the breaking parameter/path change.
+Sign-in, self-service identity and invitation redemption remain wire-compatible.
+
+**Three lifecycle states.** Enabled and disabled rows reserve their normalized
+login. A permanent `deleted_at` tombstone (migration 0202) excludes the row from
+login lookup and normal admin lists, and releases its username by replacing
+both unconditional unique constraints with a partial case-insensitive index
+where `deleted_at IS NULL`. A recreated username always means a newly inserted
+ID. Contrary to #126's old rationale, a new ID need not inherit the old row's
+history; the real hazards were ambiguous username routes and unfiltered lookup.
+
+`deleteUser` locks and revalidates the exact user ID, rejects owner/self removal,
+revokes sessions, API keys, device tokens, pending reservations and account
+links, advances the credential epoch, revokes active page/model grants and
+clears the legacy assignment projection, clears the password, marks deletion
+and records `user.deleted` in one transaction. Grant rows, original username,
+user ID, audit and spend attribution are retained. Deleted accounts cannot be
+restored or receive new access. The migration also prevents changing a user ID
+or restoring a deleted row/password through an accidental generic UPDATE.
+Deleted rows retain `disabled_at` as an additional barrier for older auth code.
+No account is actually deleted from production by preparing this change.
+
+**The lock covers all writers.** Admin credential/grant/link operations and
+lifecycle transitions share the user row lock and check deletion after waiting.
+Password login still finds by current login, verifies the password, then locks
+and revalidates the captured ID/hash/epoch; it never re-resolves a reusable name
+to a different account. Deletion racing a pending operation therefore either
+revokes its earlier committed result or causes that later operation to fail.
+A device/link ID is additionally checked to belong to the targeted user ID.
+
+**The console retains identity through asynchronous work.** Details, return-to
+links, selection and query caches use user ID; delayed request completion keeps
+its original target. A missing/deleted detail cannot silently become the new
+holder of its login. `Отключить доступ` and `Удалить аккаунт` are separate
+confirmed actions. Delete explains the freed login and retained history.
+Owner/current-account deletion is unavailable, with server checks authoritative.
+The invitation form still helps recover an existing non-deleted participant;
+a deleted name can be invited anew with explicitly selected role and pages.
+
+**CLI is not a username bypass.** Existing-account commands require strict
+`--user-id`; listing prints IDs and creation still uses `--username`.
+`user delete --user-id N --confirm-user-id N` makes the permanent target
+reviewable. Old username-based management scripts fail rather than operating
+on a replacement person. Attribution selectors also take immutable IDs:
+`ai:feature-smoke` and `agent hydration decide` use `--as-user-id`;
+`erasure:run` uses `--initiated-by-user-id`, with active-state and role checks.
+
+**Compatibility and release.** Dashboard and generated SDK ship with the new
+API. The extension, desktop and workboard do not consume these admin operations;
+their login/self-device paths are unchanged. After deletion/reuse, old binaries
+with unfiltered username lookup are unsafe rollback targets: fix forward and
+retain the ID routes/partial uniqueness. See
+[the deletion runbook](runbooks/user-account-deletion.md).
+
+**Regression contract.** Tests must retain original IDs across delete/recreate,
+check every old credential/link and old-ID action, ensure normalized uniqueness
+and numeric-login legacy refusal, protect owner/self, prove grant/spend/audit
+separation and concurrent deletion/issuance behavior, and preserve ordinary
+disabling/restoration. Dashboard tests cover exact-ID caches and stale cards.
+**Validation (2026-09-15).** `pnpm contracts:generate` and `pnpm check` passed:
+349 unit suites, 4118 passing tests and 9 existing skips, ESLint and dashboard
+build. The strictness ratchet passed with 1893 pre-existing errors in 120 files
+and no new error debt; this is not a clean standalone root `tsc` claim.
+All 29 affected PostgreSQL/schema suites passed: 577 tests, zero skips, missing
+prerequisites forbidden. The new lifecycle suite covers ten ordered lock races
+(nine deletion races plus self-password change across disable/restore), rollback
+on failed audit, reused login isolation and legacy-route refusal. Browser QA of
+the actual dashboard with a disposable local HTTP fixture verified cancel,
+confirm/delete, same-login recreation and the unavailable old card. Production
+was not changed; local verification is not a release claim.
+
+## Decision 357: Account lifecycle lock compatibility and uncertain deletion recovery (2026-09-15)
+
+**Context.** Adversarial review of Decision 356 reproduced two reliability
+defects in local revision `ed4469c1`: cross-user grant/audit foreign keys could
+deadlock, and a lost DELETE response left the deleted account cached.
+
+**Lock compatibility.** The shared identity lock uses `FOR NO KEY UPDATE`.
+Identity IDs never change, so concurrent audit/grant foreign keys may safely
+take `KEY SHARE` on the actor. `FOR UPDATE` creates a cross-user wait cycle
+when two owners grant access to each other; real PostgreSQL reproduced
+`40P01`. The replacement lock still serializes lifecycle/credential/grant
+writers. All deletion, hash, epoch and session rechecks remain required.
+
+**Uncertain deletion.** An unsuccessful delete response refreshes the current
+user list, because the server may have committed before the connection failed.
+Only a confirmed-absent immutable ID loses its private caches. Failed refresh
+retains cached state and an error; a replacement account is never removed.
+The confirmation reports uncertainty in plain language without SDK route names.
+
+**Regression evidence.** Real QueryObserver tests exercise lost response,
+stale-target 404, uncommitted failure and failed reconciliation. PostgreSQL
+tests synchronize two owner grants before their FK checks and verify both
+commit; existing deletion/login/device races keep their coverage. A populated
+0200-to-0201 migration test (0202 after release renumbering) preserves users/passwords/sessions, retains disabled
+login reservations, allows a new ID to reuse a deleted login and rejects
+tombstone restoration/renaming. Browser QA uses actual dashboard components
+with disposable mock data and a deliberately severed DELETE response.
+The baseline security scan is sealed separately from its follow-up fixes.
+No production state or installed clients were changed.
+
+**Validation.** Full `pnpm check` passed: 349 unit suites, 4123 tests passed
+and 9 existing skips, ESLint and dashboard build. Strictness ratchet remains
+at 1893 accepted pre-existing errors in 120 files, with no added debt.
+All 31 affected PostgreSQL/schema suites passed: 586 tests, zero skips under
+`ALLOW_MISSING_TEST_PREREQUISITES=0`. Independent follow-up reviews of backend
+and UI found no new issues. Local evidence is retained under
+`output/adversarial-review/`; the output directory is not release content.
+
+## Decision 358: A purchase-history rejection is a fact about the target, proven per namespace by a served witness (2026-09-16)
+
+**Incident.** ari-1's `purchase_history` stream was blocked from 2026-09-02 to
+2026-09-15 by one media: a $4.99 video sold in a DM at 15:15 UTC whose order
+history Fansly answered with HTTP 422 `{"code":99,"details":"error getting
+account media"}` twenty-seven minutes later, and byte-identically again when
+the block was lifted by hand on 2026-09-15. The media id is far older than any
+other content the page has sold and is absent from its vault and raw-media
+inventories — a media the account no longer holds, referenced by a message
+that still does. Every other page walked the same request shape successfully
+in the same fortnight (lora-1 alone: 237 single-media targets).
+
+**Root cause, three layers.** (1) The lane's target-local set was a literal
+`[404, 410]`; a 422 fell through to the executor's "any other 4xx parks as
+`provider_bad_data`" rule, which is a fact about the REQUEST CONTRACT applied
+to a fact about ONE TARGET. (2) Fansly's error code 99 is generic: under HTTP
+400 it is the bare-probe / parameter-drift shape ("missing accountMediaId",
+probe-proven systemic, Stage 16), under HTTP 422 it is "I understood the
+request but cannot serve this entity". The handler's comment conflated the two
+("code-99 parameter drift remain stream-level"); the HTTP status carries the
+distinction, the code does not. (3) A `provider_bad_data` block is deliberate
+and preserved (#249), but for the nine ramp-gated Fansly streams no owner reset
+path exists (`BLOCK_TASKS` maps `purchase_history` to the `messages_history`
+group whose reset is refused outright), and the incident pages once. The block
+was correct to exist and impossible to leave.
+
+**Decision.**
+
+1. *Which provider answers are target-local is the classifier's decision on
+   the durable payload, not a status list in the handler.*
+   `classifyFanslyPurchaseHistoryCapture` reads HTTP 422 as
+   `terminal_rejected` — terminal, not blocked, zero rows — beside 404/410's
+   `terminal_missing`. The live rejection and every replay of the capture go
+   through the same function, so they can never disagree. 400 and every other
+   non-2xx stay `http_rejected`. Auth, 429 and 5xx never reach the
+   classifier's terminal verdict: the handler consults it first and re-throws
+   anything it does not call terminal, unjournaled, so the executor's
+   classification (`rate_limit`, `provider_5xx`, the 404 ladder,
+   `provider_bad_data`) is unchanged and no operator-unliftable capture block
+   is created for a transient. The transport ledger (`sync_http_attempts`)
+   already holds those bodies. (Elsewhere in this kernel — the OFAPI capture
+   transport — 422 is bucketed with 400/409 as `request_rejected`; that is a
+   different vendor with a different contract, and this reading is Fansly's,
+   evidenced above.)
+2. *The rejection is captured verbatim.* The journaled payload carries status,
+   Fansly code, the parsed `details` and the redacted body prefix the adapter
+   retained. Before this change only status and code survived; the string
+   that names the cause did not.
+3. *A streak of rejections IN ONE REQUEST NAMESPACE must be proven
+   target-local before that namespace spends another target.* Single media
+   (`accountMediaId`) and bundles (`accountMediaBundleId`) are different query
+   parameters; a break in one says nothing about the other, and a served
+   bundle must not reset a single-media streak. A rejection looks exactly
+   like a request-shape break one target at a time; unproven, a broken
+   contract would walk the whole queue marking every target terminal,
+   quietly, at the daily cap's pace. So at
+   `FANSLY_PURCHASE_HISTORY_REJECTION_PROOF_THRESHOLD` (3) the lane, before
+   requesting the next target of that namespace, re-asks page one of a
+   *witness*: a target this page already walked to completion AND the provider
+   actually served (its newest answer a served page), newest served page
+   first, up to five, targets served earlier in the same run first. The
+   witness page is validated like any page — a malformed "success" proves
+   nothing and is a storm vote. A served witness proves the contract: the
+   rejected media really were unservable. A witness rejected WITH A MEMBER'S
+   STATUS is a storm vote; rejected with a different status (a 404 against a
+   422 streak) it is skipped — the provider telling entities apart is
+   evidence the contract works. Once every witness of the pool has answered
+   and at least one voted, the lane throws `purchase_history_rejection_storm`,
+   which the executor parks as `provider_bad_data` naming the streak, the
+   statuses and the witnesses — after journaling its own VERDICT
+   (`purchase_history_contract_storm`, a raw-only observation kind): provider
+   answers alone cannot tell an owner unblock from an executor retry after a
+   run that died with every witness voted. The verdict says the lane raised
+   the storm; the executor's record of THE RUN THAT DECLARED IT (`sync_runs`:
+   failed, `chunkStatus: "failed"`, error code
+   `purchase_history_rejection_storm` — the verdict row carries its run id)
+   says it blocked on it; the evidence target below needs both. That run,
+   not the newest finished one: an older block cannot vouch for a newer
+   verdict, and a run in between (a day-cap yield, a transport retry of the
+   evidence request) cannot erase an unblock. A verdict the executor never
+   acted on — the run died between the two — is re-declared by the next
+   proof, spending nothing. The chunk budget is five requests and a proof
+   rarely fits one run: it RESUMES — witnesses probed since the newest
+   rejection are not asked again, and a proof cut short spends no target;
+   a proof found concluded without a verdict declares it, spending nothing.
+4. *Everything is derived from the captures, nothing is stored.* Per
+   namespace the timeline is every served page, every rejected page and every
+   witness page, by capture id. A served answer — target page or witness —
+   closes an EPOCH; between two of them the rejected targets are the streak,
+   each counted by its NEWEST answer (a chain served on page one and rejected
+   on a continuation is a rejection), and the witnesses probed after the
+   newest rejection are the proof attempt in progress. A rejection journaled
+   a moment before a crash still counts; a cursor written before this
+   decision needs no migration. Witness pages are journaled under
+   `purchase_history_contract_probe` — as `purchase_history` captures a newer
+   page one would fork the witness's completed chain into `cursor_conflict` —
+   registered as an observation kind and canonicalized by the same family as
+   `purchase_history` (a witness page carries real order rows), and NOT added
+   to the Agent Read Plane's payload allowlist: that list is a reviewed
+   appendix, fail-closed by design, and widening it is a separate decision.
+5. *No evidence is not evidence of a break.* A namespace with no served
+   witness (a new page, or one whose first targets were all unservable), or
+   whose every witness was skipped for answering with a different status, is
+   never blocked on it: it may spend ONE target per UTC day as evidence (the
+   first call of the day, budget permitting) and otherwise defers with a
+   `purchase_history_contract_unproven` anomaly — and while one namespace
+   waits for tomorrow, the first pending target of a namespace that is not
+   gated is brought forward and the lane keeps its ordinary cadence; only
+   when nothing ungated is left does the walk sleep until the next UTC day. A
+   target served earlier in the run and refused on a continuation is a
+   member, never a witness.
+6. *A storm has an exit, and its members are not lost.* The storm's record is
+   the voted witness captures. The owner lifts the block as always
+   (`page_sync_states`); the next run then spends exactly ONE target of that
+   namespace as fresh evidence. Its rejection restarts the proof attempt (the
+   witnesses are asked again — the provider's state may have changed), which
+   ends in a storm again unless one serves. Its served page — or a witness
+   served on a later proof — is a REPAIR: every member of the epoch still
+   rejected exactly once at its cursor is re-queued ahead of the rest of the
+   walk with a `retry` mark, at the cursor it was rejected at (a continuation
+   refused at `order-1` resumes at `order-1`, never from page one, which the
+   chain already holds); a later served answer supersedes the earlier
+   rejection in the chain resolver, and a second rejection settles the target
+   for good. The retries a repair owes are themselves derived from the
+   captures at every run, so a crash between the repairing page and the
+   checkpoint cannot lose them; recovered that way they queue behind the
+   walk's continuations and ahead of fresh work — the order a run without
+   the crash produces — so the page that repaired the contract finishes
+   first and is the witness the retries may need, and the storm's members
+   are recovered before anything found later is spent.
+
+**What this does not do.** It does not add an owner reset path for the
+ramp-gated Fansly streams (a contract change; the current unblock is an
+owner-run `page_sync_states` update) and does not re-alert on standing
+blocks. The executor's block acknowledgement is its ordinary run record,
+neither committed with the block nor kept past the 30-day observability
+retention: a block whose run row never landed, or a storm the owner lifts
+after a month, buys nothing on the first unblock — the lane re-declares
+(zero requests, one verdict row) and the second unblock works. Bounded and
+self-converging; an acknowledgement written with the block and retained
+while unconsumed would close it and is left for a later change. It cannot tell a bulk deletion from a broken contract: a creator who
+wiped her vault gives a 404 streak AND 404 witnesses, which is a storm by
+the rule above — the exit is one target per unblock, and each served target
+proves the contract again; an owner who sees repeated storms on a healthy
+page should read them as that. A rejection outside any streak stays terminal like a 404; only the
+members of a proven-false storm are retried. `FanslyApiError` is unchanged.
+The mid-proof attempt-cap deferral is not pinned by the integration harness
+(the chunk-budget deferral is); the lane's daily attempt cap is far above any
+test's request count.
+
+**Effect on the incident.** After deploy and one more owner unblock of ari-1,
+the pending target is consumed as `terminal_rejected` on its first request and
+the stream proceeds; no further manual action.
+
+## Decision 359: The CI gate is reused by tree fingerprint, and typecheck runs once (2026-09-16)
+
+**Incident.** GitHub Actions is the account's whole metered bill. From
+2026-09-01 to 09-16 `ci.yml` ran 292 times (198 pull-request pushes, 78 main
+merges, 16 nightlies), ~10 700 billable minutes at $0.006 — about $120 a
+month at that pace, against a $50 budget with "stop usage" on. The budget
+ran out on 2026-09-16 at 07:43 UTC and every run for the rest of the morning
+died as `startup_failure` ("recent account payments have failed or your
+spending limit needs to be increased"), unnoticed inside the repository:
+blocked runs are not retried and nothing in the tree reports them. A run is
+four machines for ~46 billable minutes (Static ~13, three integration shards
+~10 each, the aggregator rounds to 1), and the median grew from 35 to 43
+minutes in the same fortnight as files were added.
+
+**What the minutes bought.** Most runs re-checked bytes that had already
+passed. Of the 43 main merges whose PR could be matched, 36 (84 %) landed a
+tree identical to the one the PR run had proven green minutes earlier —
+squash merge with an unmoved base. The two main runs that failed after a
+green PR were flakes (a unit test that assumed the UTC date would not roll at
+00:57 UTC, and shard 3), not integration conflicts. 26 pushes changed only
+`investigations/`, `docs/plans`, `docs/decisions.md`, `docs/reports` after a
+green run on the same PR, and 5 PRs changed nothing else at all; together
+$8 of a $64 fortnight. `pnpm typecheck` ran three times per Static job: as
+its own step, inside `build:production`, and again inside the Docker image
+build — ~2.5 machine-minutes of the same answer. `vitest --no-isolate` was
+measured and rejected: 59 of 349 unit files fail on shared module state and
+the wall time does not move (import time is replaced by test time).
+
+**Decision.**
+
+1. *The unit of proof is the gate-visible tree, not the commit.* A new first
+   job, `fingerprint`, prints `scripts/ci-gate-fingerprint.sh`: sha256 over
+   `git ls-tree -r` (mode, type, blob, path) of the whole tree minus the
+   paths no check reads — `investigations/`, `docs/plans`, `docs/audits`,
+   `docs/reports`, `docs/migration-history`, `docs/decisions.md`, `.claude/`,
+   `.agentic/` and the root prose files. The list is deliberately short:
+   `docs/generated`, `docs/runbooks` and the agent-read skill doc stay in the
+   hash because tests and the contracts step read them, and
+   `tests/ci-gate-fingerprint.test.ts` pins both the semantics and the rule
+   that no test reads an excluded path.
+2. *A hash with a passing gate on record is not re-tested.* The job asks the
+   Artifacts API for a non-expired `quality-gate-<hash>`; a hit skips the
+   integration matrix and, on a PR, the Static job; on main the Static job
+   still builds and publishes the image (the deploy pulls it, Decision 316)
+   but skips typecheck, lint, contracts and unit tests. The Quality Gate
+   passes citing the proving run. A fresh pass uploads the empty proof
+   (30-day retention). Failure modes fail closed: an API error leaves the
+   proof empty and the full gate runs; a failed `fingerprint` job skips the
+   test jobs WITHOUT a proof and the gate fails. `workflow_dispatch` with
+   `full: true` bypasses the lookup.
+3. *Typecheck runs once per job.* `build:production` becomes
+   `pnpm typecheck && pnpm build:artifacts`; CI (after its own Typecheck
+   step) and the Dockerfile call `build:artifacts`. The deploy script keeps
+   `build:production`, so a release built outside CI is still typechecked.
+
+**Not done, and why.** Skipping the Docker image build on PRs that touch no
+build input would save ~2 minutes a run but would let a dev-only dependency
+used at runtime reach main before the image smoke caught it. The nightly full
+suite (4 % of spend) is unchanged. Cheaper runners (self-hosted, or a
+third-party `runs-on`) are the only lever that survives suite growth and were
+declined for now by the owner.
+
+**Expected effect.** At September's volume roughly 40 % fewer billable
+minutes: main merges of an unmoved base cost ~8 minutes instead of ~46,
+prose-only pushes ~2 instead of ~46, and every remaining run is ~2 minutes
+shorter. The fingerprint job itself bills one minute per run.
+
+**First run (PR #222, run 35111827978).** Fingerprint job 6 s, no proof on
+record, full gate: Static 12.0 min (13.3 before the typecheck cut), shards
+9.6 / 11.0 / 10.7 min, Quality Gate 6 s, proof artifact recorded with a
+30-day expiry. This paragraph is the prose-only push that exercised the skip.
+
+**Correction, same day (Decision 360's PR).** The first main run after the
+merge (35113902586) reused the proof as designed — 206 s wall, tests skipped,
+image built and saved — and then SKIPPED the publish job. GitHub propagates a
+skipped job's status down the entire `needs` chain: a dependant whose `if`
+carries no status function is skipped even when its direct dependencies
+succeeded, and publish sat behind the skipped integration matrix through the
+gate. Its condition now starts with `!cancelled()` (not `always()`, which
+would also publish after a cancellation); `tests/deploy-ci-policy.test.ts`
+pins it. Main commit 2290ffb3 has no published image; the next main run
+publishes the next one.
+
+## Decision 360: CI volume rules — nightly runs the gap, PR shards fail fast, WIP pushes skip CI (2026-09-16)
+
+**Context.** After Decision 359 the remaining spend is the number of full
+runs and what each one repeats. Three repeats were measured on the same
+16-day window:
+
+- The nightly ran `pnpm test` — 349 unit files plus every integration file —
+  once a day, 27–38 minutes, 404 minutes in 16 days. A PR run already
+  executes every integration file (the three `test:sync-critical:db` shards
+  cover `tests/*.integration.test.ts` entirely), the unit set, and the
+  `[sync-critical]` subset of `tests/api.integration.test.ts`. The only tests
+  a PR never runs are the other 77 of that file's 104.
+- When one integration shard failed on a PR, the other two ran to completion
+  (~10 billable minutes each) with `fail-fast: false`; 18 runs failed in the
+  window.
+- 105 of 198 PR runs were not the last push of their PR: review-fix pushes,
+  agents pushing per commit (one branch: 15 runs). A cancelled superseded run
+  still bills the minutes it used (565 minutes in the window).
+
+**Decision.**
+
+1. *Nightly runs what PRs do not.* Six days a week the schedule runs the
+   whole `tests/api.integration.test.ts` (`pnpm test:api:full`, ~2 minutes);
+   on Mondays and on manual dispatch it runs the full one-process suite —
+   the rebuild proofs, the ratchets, vitest's parallel file mode — as the
+   backstop that keeps the split honest. Two crons, told apart by
+   `github.event.schedule`.
+2. *The integration matrix fails fast on pull requests only*
+   (`fail-fast: ${{ github.event_name == 'pull_request' }}`). One red shard
+   sends the author back; main keeps the complete record of every shard.
+3. *A push that is not ready for review carries `[skip ci]`* in its commit
+   message, so GitHub creates no run; CI runs on the push that is. Failed
+   jobs are re-run, not whole workflows. The rule lives in CLAUDE.md, which
+   is what agents read. A `[skip ci]` left on a final commit costs nothing
+   but time: the main run finds no proof and runs the full gate. The marker
+   is matched anywhere in the commit message, so it must never appear in a
+   PR title or body (the squash commit inherits them) or in a commit message
+   that merely mentions it — this PR's first commit skipped its own CI run by
+   describing the rule.
+
+**Measured and not adopted: `vitest --no-isolate` on the shards.** Locally,
+all three shards, same machine, same day: shard 1 216 s against 265 s
+isolated, shard 2 243 s — roughly a fifth of a shard's wall time, which is
+the module-import share (134 s of 622 s per shard on the 2-vCPU runner) —
+and shard 3 580 s, SLOWER, because seven files failed and two of them
+(`device-token-password`, `admin-config-api`) sat in hook timeouts on state
+another file had left behind. The price is order-dependent module state: `tests/fansly-proxy-missing`
+mocks `services/telegram.ts` with `vi.mock`, and once a worker has evaluated
+that module for an earlier file the mock no longer reaches it (one assertion
+fails); run later in the same worker, the mocked module is what
+`tests/notification-incidents` gets instead of the real one (nine assertions
+fail); `tests/telegram-report` spies on `globalThis.fetch` and failed in one
+run of shard 1 and passed in the next. Six integration files use `vi.mock`,
+one spies on `globalThis`, eight use fake timers; a per-file
+`vi.resetModules()` around each of them would give most of the saving back.
+At post-359 volume the whole lever is ~15 % of a full run, not worth a gate
+that can go red by file order.
+
+## Decision 362: Compare retained Fansly HTTP measurements without inferring savings (2026-09-16)
+
+T0 already exports physical sync HTTP-attempt aggregates and overlapping-run
+loss counters. The accepted migration needs comparable evidence; the previous
+comparison used an investigation-specific script. A reusable offline command
+now consumes those same completed report/manifest pairs and an explicit page
+cohort. It adds no runtime behavior, DB query, schema, collection or flag.
+
+The comparator checks the exact SHA-256, report/manifest window agreement and
+sweep record count, bounded private files, consistent page identities and safe
+integer aggregates. Nonzero submillisecond window bounds fail closed rather
+than being rounded to UTC midnight. A comparison percentage requires ordered,
+nonoverlapping, equal whole UTC-day windows closed before export; stable page
+IDs; page/stream run coverage; and complete zero-loss telemetry with no started
+attempts. Missing attempt rows cannot establish a page's identity from the
+label-only coverage export. Run and attempt sources need not match.
+
+Every selected-page source, stream, operation and state contributes once.
+Retry ordinals/outcomes remain subsets. Unknown run telemetry, all-null or
+mixed-null loss counters, unrecorded and unfinished attempts remain explicit
+blockers. Boundary-run losses are not assigned to an attempt day; known-zero
+boundary runs remain valid. Payload-size gaps do not block request counts.
+
+Observed counts and their delta remain available when evidence is incomplete,
+but the percentage is null. Even an eligible count reduction does not prove
+causality, workload equivalence, freshness parity, proxy spend or reader latency.
+Browser/bootstrap HTTP and WebSocket traffic remain outside this ledger. The
+CLI writes a new private artifact, strips unrelated input fields and returns
+sanitized failures. Hash binding is not exporter authentication. See the
+[A0/T0 runbook](runbooks/fansly-events-shadow.md#compare-retained-http-windows-decision-362).
+
+Validation covers retry accounting, unknown/null losses, boundary runs, missing
+coverage, changed identities, mismatched/microsecond windows, hash integrity,
+private file handling and preserved outputs; a PostgreSQL 16 test compares two
+actual measurement-function exports. The retained September 5/12 daily pair
+reproduces 30,684 → 37,268 recorded attempts and correctly withholds the
+percentage because all 7,125 baseline runs have unknown loss telemetry. This
+historical reproduction does not assert a current production saving.
+
+## Decision 363: Compare native W0 continuity evidence offline (2026-09-16)
+
+The six-hour receiver streams bounded JSONL; the short-report comparator cannot
+read that format. An operator-only comparator now validates a whole completed
+phase and its exact-byte SHA256, then reuses the existing HMAC entity-reference
+comparison for the intersection with a declared browser window. Frames outside
+that intersection are counted but do not consume its 10,000-frame /32 MiB budget.
+The original phase's byte/record limits, connection identity, monotonic sequence,
+generation receipts, frame counts and completed session duration remain required.
+
+Private regular inputs, bounded line reads and a new mode0600 output prevent
+unbounded loading or accidental artifact replacement. The output keeps the native
+continuity evidence kind and phase; it does not relabel the stream as a short
+probe. Malformed, interrupted and incomplete phases fail closed. Unknown or
+partial in-window diagnostics retain the existing comparison debt semantics.
+
+Receipt consistency is separate from provenance and live acceptance. Host fsync,
+cleanup, gaps, clock alignment, browser completeness, account binding, fan-out,
+presence, payload/version equality and reader latency still need their own
+evidence. This adds no network request, production runtime path, flag or migration
+and needs no runtime deployment. See `docs/runbooks/fansly-ws-continuity.md`.
+
+## Decision 364: Bound the first B1 canary instead of waiting seven days (2026-09-16)
+
+The owner asked to reduce serial validation waits and approved continuing with
+a short, one-page B1 trial while full polling remains enabled. This amends the
+calendar entry requirement in Decisions 343/344 and the September 7 migration
+plan for that trial only. It does not declare the old W0/B0 acceptance complete.
+
+The first trial is Lilly-1 and `message_created`, for at most 60 minutes and
+ten additional physical attempts, still below five percent of the retained
+per-page baseline. W0's already running continuity/gap experiment must finish
+and clean up; transport/auth/generation failure is a refusal. Reuse the accepted
+paired DM and current Away presence evidence. A quiet gap remains unknown but
+does not force a new experiment before additive reads with unchanged polling.
+B0 must durably capture and decode the selected live type under the accepted
+generation and demonstrate its kill-switch before enabling B1. Tests, not
+production fault injection or waiting for random failures, cover known recovery
+and fencing paths. The current runbook specifies the exact entry/exit checks.
+
+The existing page policy gains optional `expiresAt` and `attemptLimit24h`.
+Malformed bounds fail closed; expiry must follow activation. Expiry rejects new
+policy resolution and admission at the deadline, including after lock waits.
+Expiry is rechecked after database admission/commit and the final telemetry
+await before dispatch. A late refusal keeps committed budget custody and closes
+started telemetry as a policy failure; an uncommitted reservation rolls back.
+Already dispatched responses may finish durable capture and fenced settlement;
+ordinary polling and B0 continue. The optional attempt cap only lowers the
+existing five-percent rolling-24-hour allowance, counted across policies and
+generations. No timer, automation, new queue, schema or counter reset is needed.
+Older policies remain compatible; both bounds are mandatory for the early
+trial. Every audited setting still changes separately, with B1 enabled last.
+
+A quiet trial expires as inconclusive; no automatic extension or additional
+test message is authorized. A successful sample establishes its selected route
+and rollback, not complete event coverage, reader latency percentiles or causal
+savings. Keep the seven-day B0 observation in the background for broader rollout.
+A0/A1, freshness and polling-reduction gates remain unchanged. Repeat green
+checks only for a relevant change, failure or a specific uncovered risk.
+
+Validation covers exact expiry, invalid bounds, a cap that cannot enlarge the
+baseline, refusal between claim and dispatch, durable capture of an admitted
+response after expiry, event-only refusal with ordinary-polling recovery, and
+rolling-attempt custody after a policy edit. See
+[`fansly-ws-hints.md`](runbooks/fansly-ws-hints.md#bounded-early-canary-decision-364).
+
+## Decision 365: Separate transcript count and delivery ceilings (2026-09-17)
+
+The A0 reader investigation recorded a count defect outside its missing-head
+diagnosis. PostgreSQL regression tests now reproduce it: populations of 1501,
+5001 and 5002 matching messages all returned `{value:1500, exact:true}` because
+the count reused the transcript delivery builder's 1500-row ceiling.
+
+The shared SQL builder receives the caller's row bound explicitly. Delivery and
+its EXPLAIN seam retain the 1500-row maximum. Counting keeps the same source
+precedence, tombstones, deduplication, window and filters, clears the delivery
+cursor, and probes `probeMax + 1` rows. At the runtime threshold of 5001, a count
+through 5001 is exact; 5002 means at least 5002 and is marked `exact:false`.
+Existing read timeouts and response contracts remain unchanged.
+
+Boundary tests cover 1500, 1501, 5001, 5002 and 7000 matching messages, duplicate
+source rows, a smaller probe threshold, an empty filtered population, and the
+unchanged delivery ceiling. Existing reader tests retain source/window/tombstone
+and cursor coverage. This does not explain A0's missing advertised head or its
+historical unknowns, change polling, or establish Fansly migration acceptance.
+
+## Decision 366: Fansly events final mode — events on every page, 180-minute certified full (2026-09-17)
+
+The owner asked to finish the polling-to-events migration wherever possible and
+authorized the deployments and console flips (2026-09-17). The September 7 plan
+left one product choice open: keep the full30 freshness promise and accept that
+request volume barely moves, or accept rarer full walks. Codex asked; no answer
+came. This decision makes that choice explicit and reversible instead of leaving
+full polling running under a finished-looking event pipeline.
+
+**Evidence (seven A0 days, 2026-09-10 22:58 to 2026-09-17 15:37 UTC, complete
+sweeps).** Below-stop changes per page: lilly-1 17, lilly-2 27, lora-1 23 plus
+one mass head clearing (G4830, 2,364 pointers to null on list pages 50-77),
+lora-2 7, lora-3 2, ari-1 none because a four-page inbox never stops early. Not
+one involved a new message, so WS `message_created` covers none of them, but the
+categories matter: sixteen were `conversation_flags`, a column no Hub route, UI,
+prompt or agent response reads; most of the rest were `message_sync_excluded_reason`,
+a Hub-internal classification. The load-bearing quiet columns (`unread_count`,
+`is_visible`, `last_message_id`) moved 21, 0 and 2,364 times fleet-wide, the last
+inside the single G4830 sweep. The WS protocol carries new messages (5/1),
+deletions (5/10, journaled as mutation debt), conversation creation (4/8),
+membership (4/6, 4/7) and the creator's own hide (4/9); it carries no flags, no
+edits and no unread counters as numbers, and has no sequence or replay, so a
+periodic full REST walk stays the independent detector. Production on
+2026-09-16 UTC made 33,812 physical sync attempts, 16,176 of them the
+`dm_conversations` full walks (48 slots × 4-142 list pages per page).
+
+**Decision.**
+
+1. B0 capture runs on all six Fansly pages. B1 hints run permanently (no
+   `expiresAt`) on all six for `message_created` and `group_created`, each policy
+   pinned to the page's current generation with its 2026-09-16 attempt count as
+   baseline. The pin stays: a session or proxy rotation stops hints for that page
+   until the policy is re-pinned (runbook step). That is a latency regression to
+   the bounded walk's 30 minutes, not a data loss.
+2. A1 bounded dialog polling runs on lilly-1, lilly-2, lora-1, lora-2 and lora-3
+   with `fullIntervalMinutes: 180`; ari-1 keeps full30 because it has nothing to
+   save. Accepted staleness: quiet-state changes below the stop (unread,
+   visibility and membership, deleted heads, tier, exclusion reason, flags) are
+   detected by the next certified full within 210 minutes instead of 60. New
+   messages and conversations reach Hub through hints within about a minute on a
+   healthy socket and through the bounded walk within 30 minutes regardless.
+3. The full-list freshness target follows the accepted interval:
+   `(fullIntervalMinutes + 30) × 60` seconds, so full30 keeps 3,600 and 180 gives
+   12,600. Detailed status and the lightweight summary read the live A1 policy
+   per page. This amends Decision 346 and the A1 runbook's "do not silently
+   raise" rule: the target is raised explicitly, by the same per-page policy that
+   lengthens the interval, and falls back on its own when A1 is disabled. Only a
+   certified A1 proof earns the longer target; a legacy full cursor keeps 3,600.
+   `/health/sync` holds no target of its own but inherits this one through the
+   snapshot's `delayed` state (`stalled_streams`): without this rule a 180-minute
+   page would have shown the deploy gate degraded for most of every interval.
+   Known limitation: the read paths derive the target from config alone, while
+   the executor falls back to full-every-slot on a cadence or slot-offset
+   mismatch; that abnormal configuration reads leniently, never strictly.
+4. C1 settlement reuse is allowed on all Fansly pages: the same certified-walk
+   reuse as the Lora-2 canary, zero freshness cost.
+5. Unchanged: the daily fan-earnings roster (an age-aware roster needs code and
+   its own acceptance; the Lilly-1 shadow found zero changes and zero quiet
+   corrections in 705 rotation checks), follower anomaly reconciles (about 3,100
+   attempts per day fleet-wide; a cooldown is a separate design), history
+   backfill, and B2 direct DM writes.
+
+**Expected and measured.** Modelled savings from step 2 alone are about 11,000
+attempts per day (roughly a third of the 2026-09-16 baseline); the ≥50 % goal is
+not claimed. The comparable measurement is one full UTC day through
+`fansly_events_measurement_report` after all flips, against 2026-09-16.
+
+**Rollback.** Disable A1 or remove a page from its allowlist: the next chunk
+abandons the bounded cursor and opens a fresh full at offset zero. The freshness
+target returns to 3,600 seconds on the very next status read, so a page whose
+last certified full is older than an hour shows `delayed` until that fresh full
+completes; this is expected, not a regression. Disable B1 through its flag, B0
+through its allowlist. No data is deleted by any rollback.
+
+## Decision 367: The A1 stop rule follows the rule the A0 shadow measured (2026-09-17)
+
+Fifty minutes after Decision 366 enabled bounded polling, the retained list
+captures showed the bounded walks still reading almost every page: lilly-1
+35 of 35, lora-1 at least 58 of 78, lora-3 at least 28 of 33, lora-2 20 of 42,
+while the A0 shadow's virtual stop on the same inboxes sat at page 3 to 10.
+The cause is a difference between the two stop rules. A0 (`advanceDmShadow`)
+treats an uncertain marker (list `lastMessageId` without a matching embedded
+message, or no usable timestamp) as "this page is not unchanged" and ignores
+timestamp ties. A1 (`advanceDmBoundedStop`, Decision 346) treated an uncertain
+marker as walk-wide invalidation and a tie as a page reset. Production lists
+carry thousands of both per sweep (lilly-1: 1,387 uncertain markers and 447
+adjacent ties per 35-page sweep; lora-1: 3,076 and 2,278 per 78 pages), so the
+stricter rule could never accumulate three clean pages.
+
+A1 now applies the A0 rule: a page counts as unchanged only when every item is
+unchanged across the full head-diff scope, carries a valid marker and sits
+strictly older than the last certified full's start minus 60 seconds; an
+uncertain marker resets the streak for that page only; ties are not a signal;
+neither is a head newer than the previous page's last one, which only means the
+list shifted down between two requests, so that head sits above the walked
+offset and is read by the next walk's first page and by B1 hints. The order
+rule that Decision 346 added on top of A0 would have fired on every busy inbox
+for the same reason and has been removed; a cursor an older binary already
+invalidated stays invalidated. Everything else in Decision 346 stands: no
+membership stamping, no hiding, no full success from a bounded completion,
+chunk caps and resume.
+
+The seven-day A0 evidence in Decision 366 (no below-stop change carrying a new
+message) was collected under a rule A1 is now at least as strict as: A0's
+boundary was the previous full's completion, A1 uses its start. The residual
+class both rules share stays as accepted there: a non-message change on the
+conversation sitting at a page seam while a conversation above it disappears
+between the two requests waits for the next certified full. Unit tests pin the
+tie, shift and marker cases; the integration suite pins flags-only resets and
+the three-page stop.
+
+## Decision 368: Age-aware Fansly earnings roster (2026-09-17)
+
+Every daily Fansly `fan_earnings` walk re-read EVERY spender: two HTTP calls per
+fan (lifetime stats + monthly stats), 5,784 attempts per day fleet-wide. The
+Lilly-1 shadow measured what those re-reads find: **0 content changes in 705
+rotation checks**. The changes that do happen arrive through the transaction
+stream, which is read hourly and marks the affected fan dirty (C2b), and through
+the addressed C2c lane that reads those dirty endpoints. The roster's own value
+is the quiet case: a Fansly-side correction that never produces a transaction.
+
+The owner approved a 48-hour rotation — the separate owner decision on max-age
+that the C2c gate in `docs/runbooks/fansly-earnings-shadow.md` required. A new
+live config key, `fanslyFanEarningsRosterMaxAgeHours` (env
+`FANSLY_FAN_EARNINGS_ROSTER_MAX_AGE_HOURS`, integer 0-168, default 0), lets the
+daily walk skip a spender WITHOUT any HTTP when the page is in
+`fanslyFanEarningsShadowPageAllowlist` and **both** of its earnings planes
+(`fan_earnings_lifetime` and `fan_earnings_monthly`) satisfy all of:
+
+- a VALID check (`last_checked_at`, written only for an observed receipt with an
+  observation id and a fingerprint) newer than `now - hours`;
+- not dirty — `requested_revision <= applied_revision`;
+- not mid-claim and last receipt `observed` — the same conditions
+  `countFanEarningsRecoveryDebt` already treats as coverage debt, so a skip can
+  never manufacture debt;
+- not inside a cooldown — `retry_after_at` is null or already past.
+
+A missing plane row is never fresh. Therefore **dirty, failed, rejected,
+half-covered, cooling-down and never-checked fans are always read** — the
+rotation only stops re-reading endpoints that were confirmed intact recently.
+
+**The shadow allowlist is load-bearing, not an implementation detail.** Only a
+shadow page writes its transactions through
+`upsertFanslyTransactionWithEarningsDirty`, which is the sole writer that bumps
+`requested_revision` on the earnings planes. Receipts, however, are also written
+on recovery and target pages. A page with receipts but without the shadow write
+path would accumulate `observed` rows, start being skipped, and a NEW
+transaction would never dirty the fan — nothing would re-read it until the
+window expired. Both walks therefore gate the skip on the shadow allowlist, so
+the signal that can interrupt a skip always exists wherever a skip can happen.
+Values 1-47 are treated as 0 (off): the daily cadence already re-reads inside
+24 hours, so a shorter window could not skip anything and would only add a
+query. The default 0 keeps today's behavior byte-identical.
+
+A skip is a success, not a rejection: it advances both the in-memory and the
+persisted cursor, so the A43 contiguous-prefix rule (Decision #133) is
+preserved — a rejection after skipped fans still persists exactly the prefix it
+did before, and the skipped fans are counted in a new `fansFresh` stat next to
+`fansFetched`. Cadence, scheduler, budgets, checkpoints and contracts are
+unchanged, and there is no schema migration: the freshness read is one SQL
+statement over the existing `subject_refresh_state` rows.
+
+A multi-chunk recovery walk can outlive the window it skipped under: a fan
+skipped at age N minus a minute crosses N before the walk's last chunk lands, and
+a debt count taken at completion would report it as unconfirmed coverage and
+raise a false `fan_earnings_unconfirmed_coverage` hold. The recovery walk
+therefore persists `walkStartedAt` in its checkpoint state and counts debt as of
+that instant: every fan read during the walk was checked at or after it, and
+every skipped fan was inside the window at that moment. Dirty, failed and
+claimed rows remain debt regardless of which instant is used.
+
+Two other consumers follow the same window through
+`fanEarningsEffectiveMaxAgeMs(config) = max(24h, rosterMaxAge)`: the recovery
+walk's completion debt count (so a fan the roster legitimately skipped is not
+reported as `fan_earnings_unconfirmed_coverage`) and the age-based selection in
+`claimFanEarningsTarget` (so the additive C2c lane does not re-read inside the
+roster age either). Dirty-driven target selection keeps its existing gates.
+
+What changes operationally: a quiet Fansly-side correction on an undisturbed
+spender is now seen within N hours PLUS one daily cadence rather than within a
+day — a walk landing when the fan is a minute short of N skips it, and the next
+walk is a day later, so the practical bound at 48 hours is about 72 hours. At 48
+hours the roster load roughly halves or better once receipts exist. The skip
+needs the page in `fanslyFanEarningsShadowPageAllowlist` (currently all six
+Fansly pages) and receipts to read, so savings start on the SECOND daily walk
+after receipts appear. Rollback is setting the key back to 0 — the next walk reads
+every spender again, no data is deleted and no state needs repair.
+
+## Decision 369: PR-4 — the API-key lane, cookie token issuance and `must_change_password` are retired (2026-09-15)
 
 #349 gave the clients one sign-in and left every old door standing so the fleet
 could cross on its own schedule. This is the demolition, and it is the last PR

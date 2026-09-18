@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { observeFanslyContinuity, parseContinuityArgs, type ContinuityPhase } from "../scripts/fansly-ws/continuity.ts";
+import { compareContinuityObservation } from "../scripts/fansly-ws/compare-continuity.ts";
 import { privateMessageEvent, serviceFrame, syntheticMessage, syntheticSecret, wrapped } from "./helpers/fansly-ws-fixtures.ts";
 
 const generation = "a".repeat(64);
@@ -56,6 +60,20 @@ describe("W0 continuity collection", () => {
     expect(run.lines.join("")).not.toContain(syntheticSecret);
     expect(run.lines.join("")).not.toContain(syntheticMessage);
     expect(vi.getTimerCount()).toBe(0);
+    const directory = await mkdtemp(join(tmpdir(), "real-continuity-receipts-"));
+    try {
+      const path = join(directory, "receipts.jsonl");
+      await writeFile(path, run.lines.join(""), { mode: 0o600 });
+      const observation = records.at(-1)!.observation as { startedAt: string; finishedAt: string };
+      const window = { from: observation.startedAt, to: observation.finishedAt };
+      const comparison = await compareContinuityObservation({
+        schemaVersion: 1, evidenceKind: "offline_diagnostic",
+        correlationKeyFingerprint: records[0]!.correlationKeyFingerprint,
+        records: records.filter(record => record.kind === "frame"),
+      }, path, { left: window, right: window });
+      expect(comparison).toMatchObject({ matchingReferences: 1, fanOut: "unverified",
+        rightEvidence: { collectionReceiptValidated: true, phase: "continuous", sessionObservedMs: 21_600_000 } });
+    } finally { await rm(directory, { recursive: true, force: true }); }
   });
 
   it.each(["changed", "unavailable", "timeout"] as const)("stops on %s generation evidence without reconnect", async (failure) => {

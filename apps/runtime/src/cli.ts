@@ -11,7 +11,7 @@ import {
   createModel,
   DomainEventTargetMonthsUnattachedError,
   findPageByLabel,
-  findUserByUsername,
+  findUserById,
   getPageDmConversationById,
   insertDeliveryAttempt,
   insertErasureLog,
@@ -78,6 +78,7 @@ import {
   assignPageToUser,
   createUserAccount,
   deactivateUser,
+  deleteUser,
   listUsersDetailed,
   reactivateUser,
   recordAudit,
@@ -132,6 +133,14 @@ function requireCustomPeriod(from?: string, to?: string) {
   }
 
   return { from, to };
+}
+
+function parseUserId(value: string): number {
+  const parsed = Number(value);
+  if (!/^[1-9]\d*$/.test(value) || !Number.isSafeInteger(parsed)) {
+    throw new Error(`Expected an immutable positive user ID, received "${value}"`);
+  }
+  return parsed;
 }
 
 function parsePositiveInt(value: string) {
@@ -810,7 +819,7 @@ export function buildProgram() {
     )
     .option("--no-allow-mark-read", "refuse the mark-read side effect (approval must state it)")
     .option("--reason <text>", "required on a rejection")
-    .option("--as <username>", "owner user to attribute the decision to")
+    .option("--as-user-id <id>", "immutable owner user ID to attribute the decision to", parseUserId)
     .action(async (options) => {
       const app = await createAppContext();
       try {
@@ -818,14 +827,14 @@ export function buildProgram() {
         if (decision !== "approve" && decision !== "reject") {
           throw new Error(`--decision must be approve or reject, received "${decision}"`);
         }
-        const { findUserByUsername, listUsers } = await import("@agency_hub_core/db");
+        const { listUsers } = await import("@agency_hub_core/db");
         // The decision is attributed to a REAL owner: the audit row and the
         // event journal both name a person, never "the CLI".
-        const actor = options.as
-          ? await findUserByUsername(app.db, options.as as string)
+        const actor = options.asUserId
+          ? await findUserById(app.db, options.asUserId as number)
           : (await listUsers(app.db)).find((user) => user.role === "owner" && user.disabledAt === null);
-        if (!actor || actor.role !== "owner") {
-          throw new Error("A hydration decision needs an owner user; pass --as <username>");
+        if (!actor || actor.role !== "owner" || actor.disabledAt !== null || actor.deletedAt !== null) {
+          throw new Error("A hydration decision needs an owner user; pass --as-user-id <id>");
         }
         const { applyHydrationDecision, toWireHydrationRequest } = await import(
           "./modules/agent-read/index.ts"
@@ -1175,7 +1184,7 @@ export function buildProgram() {
     .requiredOption("--feature <feature>", "fast-reply | improve-draft | help-me | fan-summary | chat-review | ping | hi-greeting | coach-chat")
     .requiredOption("--page <label>", "page label")
     .requiredOption("--conversation <ref>", "conversation ref (OF: the fan id; Fansly canonical: the groupId)")
-    .requiredOption("--as <username>", "chatter/owner user the generation is attributed to")
+    .requiredOption("--as-user-id <id>", "immutable chatter/owner ID the generation is attributed to", parseUserId)
     .option("--draft <text>", "improve-draft input")
     .option("--question <text>", "coach-chat: the chatter's question (required for coach-chat)")
     .option("--fan <ref>", "canonical fan ref (Fansly: separate from the --conversation groupId)")
@@ -1210,9 +1219,10 @@ export function buildProgram() {
         ) {
           throw new Error("coach-chat requires --fan <ref> on fansly");
         }
-        const user = await findUserByUsername(app.db, options.as);
-        if (!user) {
-          throw new Error(`unknown user: ${options.as}`);
+        const user = await findUserById(app.db, options.asUserId);
+        if (!user || user.disabledAt !== null || user.deletedAt !== null
+          || (user.role !== "owner" && user.role !== "chatter")) {
+          throw new Error(`Active chatter or owner required: user ID ${options.asUserId}`);
         }
         const startedAt = Date.now();
         // Operator smoke runs as the named user with owner-style page reach
@@ -1327,7 +1337,7 @@ export function buildProgram() {
     .command("erasure:run")
     .description("Stage 28: audited break-glass erasure across hot DB, ledger partitions, and lake (dry-run default)")
     .requiredOption("--scope <scope>", "fan | page | model")
-    .requiredOption("--initiated-by <username>", "the owner account initiating the erasure")
+    .requiredOption("--initiated-by-user-id <id>", "immutable owner ID initiating the erasure", parseUserId)
     .option("--platform <platform>", "fan scope: onlyfans | fansly")
     .option("--ref <ref>", "fan scope: the platform-native fan id")
     .option("--page <label>", "page scope: the page label")
@@ -1360,9 +1370,10 @@ export function buildProgram() {
           throw new Error(`unknown scope: ${options.scope}`);
         })();
 
-        const initiator = await findUserByUsername(app.db, options.initiatedBy);
-        if (!initiator) {
-          throw new Error(`unknown user: ${options.initiatedBy}`);
+        const initiator = await findUserById(app.db, options.initiatedByUserId);
+        if (!initiator || initiator.role !== "owner"
+          || initiator.disabledAt !== null || initiator.deletedAt !== null) {
+          throw new Error(`Active owner required: user ID ${options.initiatedByUserId}`);
         }
         const scopeRef = erasureScopeRef(scope);
 
@@ -2921,8 +2932,9 @@ export function buildProgram() {
       try {
         const users = await listUsersDetailed(app);
         printRows(
-          ["username", "role", "assigned_pages", "status"],
+          ["id", "username", "role", "assigned_pages", "status"],
           users.map((user) => [
+            user.id,
             user.username,
             user.role,
             user.assignedPages.map((page) => page.label).join(","),
@@ -2936,15 +2948,15 @@ export function buildProgram() {
 
   user
     .command("deactivate")
-    .requiredOption("--username <username>")
+    .requiredOption("--user-id <id>", "immutable user ID from user list", parseUserId)
     .action(async (options) => {
       const app = await createAppContext();
       try {
         const result = await deactivateUser(app, {
-          username: options.username,
+          userId: options.userId,
         }, auditContext());
         console.log(
-          `Deactivated ${options.username} (revoked ${result.revokedDeviceTokens} `
+          `Deactivated ${options.userId} (revoked ${result.revokedDeviceTokens} `
           + `device token(s), ${result.revokedSessions} session(s))`,
         );
       } finally {
@@ -2953,15 +2965,35 @@ export function buildProgram() {
     });
 
   user
+    .command("delete")
+    .description("Permanently delete an account and free its login; historical attribution remains")
+    .requiredOption("--user-id <id>", "immutable user ID from user list", parseUserId)
+    .requiredOption("--confirm-user-id <id>", "repeat the same ID to confirm permanent account removal", parseUserId)
+    .action(async (options) => {
+      if (options.userId !== options.confirmUserId) {
+        throw new Error("--confirm-user-id must match --user-id");
+      }
+      const app = await createAppContext();
+      try {
+        const result = await deleteUser(app, { userId: options.userId }, auditContext());
+        console.log(`Deleted account ID ${options.userId}; login released. Revoked `
+          + `${result.revokedDeviceTokens} device token(s), `
+          + `${result.revokedSessions} session(s).`);
+      } finally {
+        await app.close();
+      }
+    });
+
+  user
     .command("reactivate")
-    .requiredOption("--username <username>")
+    .requiredOption("--user-id <id>", "immutable user ID from user list", parseUserId)
     .action(async (options) => {
       const app = await createAppContext();
       try {
         await reactivateUser(app, {
-          username: options.username,
+          userId: options.userId,
         }, auditContext());
-        console.log(`Reactivated ${options.username} — password login works again; the person signs in again on each device`);
+        console.log(`Reactivated account ID ${options.userId}; the stored password works again. Previous sign-ins remain revoked — the person signs in again on each device.`);
       } finally {
         await app.close();
       }
@@ -2969,7 +3001,7 @@ export function buildProgram() {
 
   user
     .command("set-password")
-    .requiredOption("--username <username>")
+    .requiredOption("--user-id <id>", "immutable user ID from user list", parseUserId)
     .option("--password <password>")
     .option("--password-file <file>")
     .option("--password-env <name>")
@@ -2981,13 +3013,13 @@ export function buildProgram() {
           throw new Error("set-password requires --password, --password-file, or --password-env");
         }
         await setUserPassword(app, {
-          username: options.username,
+          userId: options.userId,
           password,
         }, auditContext());
-        // Decision 353: this is the full reset primitive — every device token,
+        // Decision 369: this is the full reset primitive — every device token,
         // reservation and session of that person is now revoked.
         console.log(
-          `Updated password for ${options.username} — all of their sign-ins were ended`,
+          `Updated password for ${options.userId} — all of their sign-ins were ended`,
         );
       } finally {
         await app.close();
@@ -2996,16 +3028,16 @@ export function buildProgram() {
 
   user
     .command("assign-page")
-    .requiredOption("--username <username>")
+    .requiredOption("--user-id <id>", "immutable user ID from user list", parseUserId)
     .requiredOption("--page <label>")
     .action(async (options) => {
       const app = await createAppContext();
       try {
         await assignPageToUser(app, {
-          username: options.username,
+          userId: options.userId,
           pageLabel: options.page,
         }, auditContext());
-        console.log(`Assigned ${options.username} to ${options.page}`);
+        console.log(`Assigned ${options.userId} to ${options.page}`);
       } finally {
         await app.close();
       }
@@ -3013,16 +3045,16 @@ export function buildProgram() {
 
   user
     .command("unassign-page")
-    .requiredOption("--username <username>")
+    .requiredOption("--user-id <id>", "immutable user ID from user list", parseUserId)
     .requiredOption("--page <label>")
     .action(async (options) => {
       const app = await createAppContext();
       try {
         await unassignPageFromUser(app, {
-          username: options.username,
+          userId: options.userId,
           pageLabel: options.page,
         }, auditContext());
-        console.log(`Unassigned ${options.username} from ${options.page}`);
+        console.log(`Unassigned ${options.userId} from ${options.page}`);
       } finally {
         await app.close();
       }

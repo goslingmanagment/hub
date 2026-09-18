@@ -21,6 +21,9 @@ import { createPageRateLimitWaiter } from "./rate-limiter.ts";
 
 class HintDeferred extends Error {}
 
+const hintPolicyExpired = (expiresAt: string | undefined) =>
+  expiresAt !== undefined && Date.now() >= Date.parse(expiresAt);
+
 /** One additional physical request per ordinary DM chunk leaves at least
  * four request slots for the existing live/history policy. No separate job,
  * cursor, membership sweep or dependency priority replaces that policy. */
@@ -71,26 +74,44 @@ export async function runFanslyWsHintStep(app: AppContext, input: ExecutorReques
   let admitted = 0;
   const observer: HttpRequestObserver = {
     async onRequestEvent(event) {
+      let expiresAt: string | undefined;
       if (event.state === "started") {
         const live = resolveFanslyWsHintPolicy(await loadEffectiveConfig(app.db, app.config), label);
         if (!live || live.generation !== policy.generation || admitted >= 1
           || !input.budget.hasRequestCapacity(2) || !input.budget.hasWallClockCapacity()) throw new HintDeferred("admission_disabled");
+        expiresAt = live.expiresAt;
         await owned(async (db) => {
           if (!await isFanslyWsHintClaimEnabled(db, claim, live)) throw new HintDeferred("type_disabled");
           await saveFanslyWsHintWalk(db, claim, walk);
+          // Lock acquisition and claim checks may outlive the policy resolved
+          // above. Expiry fences admission, not capture of an admitted response.
+          const admissionAt = new Date();
+          if (hintPolicyExpired(expiresAt)) throw new HintDeferred("admission_expired");
           try {
             await admitFanslyWsHintAttempt(db, { pageId, generation: policy.generation,
               requestId: event.requestId, attemptNumber: event.attemptNumber,
-              maxAttempts24h: live.maxAttempts24h, now: new Date(), syncRunId: input.syncRunId });
+              maxAttempts24h: live.maxAttempts24h, now: admissionAt, syncRunId: input.syncRunId });
+            if (hintPolicyExpired(expiresAt)) throw new HintDeferred("admission_expired");
           } catch (error) {
             if (error instanceof Error && error.message === "fansly_ws_hint_budget_exhausted") throw new HintDeferred("budget_exhausted");
             throw error;
           }
         });
+        // A late commit keeps its reservation but cannot authorize dispatch.
+        if (hintPolicyExpired(expiresAt)) throw new HintDeferred("admission_expired");
         admitted++;
         await input.budget.onRequestEvent(event);
       }
-      await input.telemetry.getRequestObserver().onRequestEvent(event);
+      const telemetry = input.telemetry.getRequestObserver();
+      await telemetry.onRequestEvent(event);
+      if (event.state === "started" && hintPolicyExpired(expiresAt)) {
+        // The started observer is outside the transport's try/catch. Close its
+        // telemetry explicitly when the final await crosses the deadline.
+        await telemetry.onRequestEvent({ ...event, state: "failed", timestamp: new Date(),
+          httpStatus: null, failureKind: "policy", durationMs: Math.max(0, Date.now() - event.timestamp.getTime()),
+          errorMessage: "Fansly hint policy expired before dispatch" });
+        throw new HintDeferred("admission_expired");
+      }
     },
   };
   const requestContext = {

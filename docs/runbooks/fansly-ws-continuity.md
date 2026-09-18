@@ -149,8 +149,32 @@ identity at the recorded generation and comparison at receiver boundaries only.
 Socket actor scope, fan-out, presence, reader latency and REST recovery are not
 auto-passed. Retain the paired native browser observation and independent scope
 evidence. Matching HMAC entity references do not prove payload/version equality.
-The current comparator accepts bounded short reports; this long JSONL stream is
-a new evidence format and must not be relabeled as a short probe.
+Compare a completed phase's native JSONL with a bounded browser report offline:
+
+```sh
+node --import tsx/esm scripts/fansly-ws/compare-continuity-cli.ts \
+  <browser-report.json> <phase/receipts.jsonl> <windows.json> <new-comparison.json>
+```
+
+Use the same private correlation key for both inputs. `windows.json` has the
+same `left` (browser) and `right` (receiver) half-open UTC windows as the short
+report comparator. The receiver window must lie inside the completed phase;
+only their intersection is retained for reference comparison. A full six-hour
+receiver window can therefore accompany a short browser window without counting
+unrelated frames against the comparison limit of 10,000 frames /32 MiB.
+
+The tool reads the entire native phase, verifies its identity, ordinals, phase
+limits, connection, generation receipts, final frame counts and completed
+duration, and hashes its exact bytes. Inputs must be private regular files;
+symlinks, unterminated lines, lines over 1 MiB, incomplete phases and mismatched
+keys fail closed. The output is created with mode0600 and never overwritten.
+`rightEvidence` retains the native evidence kind, phase, counts and SHA256.
+`collectionReceiptValidated` validates the supplied phase receipt only; it does
+not establish authenticity, host output sync, cleanup, clock alignment, planned
+gaps, browser completeness, socket actor scope or W0 acceptance. Check the host
+report and independent browser evidence separately. Empty or unsupported-event
+windows remain inconclusive. Partial streams remain original failure evidence
+and cannot be presented as completed phase comparisons.
 
 Before each planned gap, retain a confirmed boundary for the agreed thread and
 business objects. Leave ordinary REST discovery/message reads running. Attach

@@ -369,7 +369,7 @@ export async function buildApiServer(appContext: AppContext) {
     });
     request.authPolicy = { routeKey: entry.key, verdict };
 
-    // Decision 353: the Stage 22 must_change_password route allowlist is gone
+    // Decision 369: the Stage 22 must_change_password route allowlist is gone
     // with the flag. Nothing reads the column any more; `mustChangePassword` on
     // the wire is a deprecated constant `false`.
 

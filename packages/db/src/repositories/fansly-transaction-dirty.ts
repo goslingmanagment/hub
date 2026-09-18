@@ -19,6 +19,17 @@ export function hasSemanticTransactionChange(previous: Transaction | undefined, 
     || previous.occurredAt.getTime() !== next.occurredAt.getTime();
 }
 
+/** Pending earnings may already be included in both provider aggregates.
+ * This exact transition still needs a recheck, but cannot require a different
+ * amount forever. Every other semantic change retains recalculation debt. */
+function isStatusOnlySettlement(previous: Transaction | undefined, next: Transaction) {
+  return previous?.rawStatus === "1" && previous.transactionState === "pending"
+    && next.rawStatus === "2" && next.transactionState === "posted"
+    && semanticFields.every((field) => field === "rawStatus" || field === "transactionState"
+      || previous[field] === next[field])
+    && previous.occurredAt.getTime() === next.occurredAt.getTime();
+}
+
 /** The only Fansly transaction writer calls this inside its owned page
  * transaction. Compare persisted values after fill-only/sticky upsert rules,
  * excluding receipt timestamps, scan tokens and the unrelated wallet balance. */
@@ -46,7 +57,10 @@ export async function upsertFanslyTransactionWithEarningsDirty(
       ...identities.map((identity) => identity.ref)].filter((value): value is string => Boolean(value));
     const boundRef = identities.find((identity) => identity.id === next.fanId)?.ref;
     const now = new Date();
-    await markFanEarningsDirty(tx, { pageId: input.platformAccountId, fanRefs, now });
+    await markFanEarningsDirty(tx, {
+      pageId: input.platformAccountId, fanRefs, now,
+      statusOnly: isStatusOnlySettlement(previous, next),
+    });
     await recordEarningsAttribution(tx, {
       pageId: input.platformAccountId, transactionRef: input.transactionId,
       known: Boolean(next.correlationAccountId)

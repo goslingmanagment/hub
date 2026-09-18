@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { advanceDmBoundedStop, dmFullSweepCompletedAt, dmFullSweepDue,
+import { advanceDmBoundedStop, dmFullSweepCompletedAt, dmFullSweepDue, dmFullSweepFreshnessSlaSeconds,
   parseDmBoundedSweepState, resolveDmBoundedPolicy,
   type DmBoundedSweepState } from "../apps/runtime/src/services/sync/dm-bounded-state.ts";
 import { parseDmConversationSweepState } from "../apps/runtime/src/services/sync/cursor-state.ts";
@@ -24,6 +24,15 @@ describe("A1 bounded contract", () => {
     expect(dmFullSweepDue({ ...base, currentSlot: 101, slotOffsetSeconds: 900, policy: { fullIntervalMinutes: 60 } })).toBe(true);
   });
 
+  it("derives the full-list freshness target from the accepted interval plus one slot", () => {
+    expect(dmFullSweepFreshnessSlaSeconds(null, 3600)).toBe(3600);
+    expect(dmFullSweepFreshnessSlaSeconds({ fullIntervalMinutes: 30 }, 3600)).toBe(3600);
+    expect(dmFullSweepFreshnessSlaSeconds({ fullIntervalMinutes: 60 }, 3600)).toBe(5400);
+    expect(dmFullSweepFreshnessSlaSeconds({ fullIntervalMinutes: 180 }, 3600)).toBe(12600);
+    expect(dmFullSweepFreshnessSlaSeconds({ fullIntervalMinutes: 360 }, 3600)).toBe(23400);
+    expect(dmFullSweepFreshnessSlaSeconds(null, null)).toBeNull();
+  });
+
   it("does not hide a 00:10 change behind a full that finished at 00:12", () => {
     expect(advanceDmBoundedStop(bounded, [{ ...item, timestampMs: Date.parse("2026-09-15T00:10:00Z") }]).unchangedPageStreak).toBe(0);
     expect(advanceDmBoundedStop(bounded, [item]).unchangedPageStreak).toBe(3);
@@ -36,12 +45,26 @@ describe("A1 bounded contract", () => {
     expect(advanceDmBoundedStop(bounded, [changed]).unchangedPageStreak).toBe(0);
   });
 
-  it("retains order violations through resume and does not stop on split timestamp ties", () => {
+  it("ignores timestamp ties and a list shifting down between requests, as the A0 shadow measured (Decision 367)", () => {
     const tied = { ...bounded, previousTimestampMs: item.timestampMs };
-    expect(advanceDmBoundedStop(tied, [item]).unchangedPageStreak).toBe(0);
-    const violation = advanceDmBoundedStop({ ...bounded, previousTimestampMs: item.timestampMs! - 1 }, [item]);
-    expect(violation.stopInvalidated).toBe(true);
-    expect(advanceDmBoundedStop({ ...bounded, ...violation }, [{ ...item, timestampMs: item.timestampMs! - 2 }]).unchangedPageStreak).toBe(0);
+    expect(advanceDmBoundedStop(tied, [item]).unchangedPageStreak).toBe(3);
+    expect(advanceDmBoundedStop(tied, [item, item]).unchangedPageStreak).toBe(3);
+    // Page N+1 starting with a head newer than page N's last one means the
+    // list shifted down: that head sits above the walked offset, not below the stop.
+    const shifted = advanceDmBoundedStop({ ...bounded, previousTimestampMs: item.timestampMs! - 1 }, [item]);
+    expect(shifted).toMatchObject({ unchangedPageStreak: 3, stopInvalidated: false });
+    // A cursor that an older binary already invalidated stays invalidated.
+    expect(advanceDmBoundedStop({ ...bounded, stopInvalidated: true }, [item]))
+      .toMatchObject({ unchangedPageStreak: 0, stopInvalidated: true });
+    expect(advanceDmBoundedStop(bounded, []).unchangedPageStreak).toBe(0);
+  });
+
+  it("lets an uncertain marker reset only its own page, as the A0 shadow measured (Decision 367)", () => {
+    const uncertain = advanceDmBoundedStop({ ...bounded, unchangedPageStreak: 2 }, [item, { ...item, embeddedMessageId: "2" }]);
+    expect(uncertain).toMatchObject({ unchangedPageStreak: 0, stopInvalidated: false });
+    // The invalid item never becomes the timestamp reference for the next page.
+    expect(uncertain.previousTimestampMs).toBe(item.timestampMs);
+    expect(advanceDmBoundedStop({ ...bounded, ...uncertain }, [{ ...item, timestampMs: item.timestampMs! - 1 }]).unchangedPageStreak).toBe(1);
   });
 
   it("roundtrips bounded continuation while the old full parser refuses it", () => {

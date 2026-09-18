@@ -34,7 +34,7 @@ function principalOf(input: {
 
 const ownerSession = principalOf({ authMethod: "session", role: "owner" });
 const leadSession = principalOf({ authMethod: "session", role: "team_lead" });
-// Decision 353: a chatter holds a cookie session or a device token, nothing else.
+// Decision 369: a chatter holds a cookie session or a device token, nothing else.
 const chatterSession = principalOf({ authMethod: "session", role: "chatter" });
 const chatterDevice: HumanAuthPrincipal = {
   ...principalOf({ authMethod: "device_token", role: "chatter" }),
@@ -139,7 +139,7 @@ describe("computeAuthPolicyVerdict", () => {
 
   it("mirrors requireApiKeyUser for kind apiKey: a device token, never a cookie", async () => {
     // The kind keeps its historical NAME (renaming hundreds of declarations is
-    // its own PR); Decision 353 left it one credential — the device token.
+    // its own PR); Decision 369 left it one credential — the device token.
     await expect(evaluate({ auth: { kind: "apiKey" }, principal: chatterDevice }))
       .resolves.toEqual({ allow: true });
     await expect(evaluate({ auth: { kind: "apiKey" }, principal: chatterSession }))

@@ -56,6 +56,7 @@ const cliMocks = vi.hoisted(() => {
     countHarvestObservations: vi.fn(),
     createAppContext: vi.fn(),
     findPageByLabel: vi.fn(),
+    findUserById: vi.fn(),
     findUserByUsername: vi.fn(),
     getPageDmConversationById: vi.fn(),
     handleSuccessfulPageVerificationRecovery: vi.fn(),
@@ -87,6 +88,7 @@ vi.mock("@agency_hub_core/db", async (importOriginal) => {
     ...actual,
     countHarvestObservations: cliMocks.countHarvestObservations,
     findPageByLabel: cliMocks.findPageByLabel,
+    findUserById: cliMocks.findUserById,
     findUserByUsername: cliMocks.findUserByUsername,
     getPageDmConversationById: cliMocks.getPageDmConversationById,
     insertDeliveryAttempt: cliMocks.insertDeliveryAttempt,
@@ -160,14 +162,18 @@ import {
 
 function createProgramHarness() {
   const program = buildProgram();
-  program.exitOverride();
-  program.configureOutput({
-    writeOut: () => {},
-    writeErr: () => {},
-    outputError: (str, write) => {
-      write(str);
-    },
-  });
+  const configure = (command: typeof program) => {
+    command.exitOverride();
+    command.configureOutput({
+      writeOut: () => {},
+      writeErr: () => {},
+      outputError: (str, write) => {
+        write(str);
+      },
+    });
+    for (const child of command.commands) configure(child);
+  };
+  configure(program);
 
   return {
     program,
@@ -208,6 +214,7 @@ describe("CLI parsing", () => {
     cliMocks.createAppContext.mockReset();
     cliMocks.countHarvestObservations.mockReset();
     cliMocks.findPageByLabel.mockReset();
+    cliMocks.findUserById.mockReset();
     cliMocks.findUserByUsername.mockReset();
     cliMocks.listPages.mockReset();
     cliMocks.listHarvestTransactionResidue.mockReset();
@@ -329,6 +336,89 @@ describe("CLI parsing", () => {
     vi.restoreAllMocks();
   });
 
+  it.each([
+    ["user", "deactivate"], ["user", "reactivate"], ["user", "set-password"],
+    ["user", "assign-page"], ["user", "unassign-page"], ["user", "delete"],
+  ])("refuses legacy username targeting in %s %s before opening the database", async (group, command) => {
+    const { program } = createProgramHarness();
+    const args = [group, command, "--user-id", "12", "--username", "12"];
+    if (command === "assign-page" || command === "unassign-page") args.push("--page", "fixture");
+    if (command === "delete") args.push("--confirm-user-id", "12");
+    await expect(program.parseAsync(args, { from: "user" }))
+      .rejects.toThrow("unknown option '--username'");
+    expect(cliMocks.createAppContext).not.toHaveBeenCalled();
+    expect(cliMocks.findUserByUsername).not.toHaveBeenCalled();
+  });
+
+  it.each(["12oops", "0", "-1", "1.5", "1e2", "9007199254740992"])(
+    "refuses invalid immutable user ID %s before opening the database",
+    async (userId) => {
+      const { program } = createProgramHarness();
+      await expect(program.parseAsync(["user", "deactivate", "--user-id", userId], { from: "user" }))
+        .rejects.toThrow();
+      expect(cliMocks.createAppContext).not.toHaveBeenCalled();
+    },
+  );
+
+  it("requires matching immutable IDs before deleting an account", async () => {
+    const { program } = createProgramHarness();
+    await expect(program.parseAsync([
+      "user", "delete", "--user-id", "12", "--confirm-user-id", "13",
+    ], { from: "user" })).rejects.toThrow("--confirm-user-id must match --user-id");
+    expect(cliMocks.createAppContext).not.toHaveBeenCalled();
+  });
+
+  it("requires an explicit account deletion confirmation ID", async () => {
+    const { program } = createProgramHarness();
+    await expect(program.parseAsync(["user", "delete", "--user-id", "12"], { from: "user" }))
+      .rejects.toThrow("--confirm-user-id");
+    expect(cliMocks.createAppContext).not.toHaveBeenCalled();
+  });
+
+  const attributionCommands = [
+    {
+      name: "hydration decision", flag: "--as-user-id", legacy: "--as",
+      args: ["agent", "hydration", "decide", "--request", "00000000-0000-4000-8000-000000000001",
+        "--decision", "reject", "--reason", "fixture", "--expected-version", "0", "--coverage-fingerprint", "0".repeat(64)],
+      inactiveMessage: "A hydration decision needs an owner user",
+    },
+    {
+      name: "AI generation", flag: "--as-user-id", legacy: "--as",
+      args: ["ai:feature-smoke", "--feature", "fast-reply", "--page", "fixture", "--conversation", "fan-1"],
+      inactiveMessage: "Active chatter or owner required: user ID 12",
+    },
+    {
+      name: "erasure", flag: "--initiated-by-user-id", legacy: "--initiated-by",
+      args: ["erasure:run", "--scope", "page", "--page", "fixture"],
+      inactiveMessage: "Active owner required: user ID 12",
+    },
+  ];
+
+  it.each(attributionCommands)("refuses username attribution in $name", async ({ args, flag, legacy }) => {
+    const { program } = createProgramHarness();
+    await expect(program.parseAsync([...args, flag, "12", legacy, "12"], { from: "user" }))
+      .rejects.toThrow(`unknown option '${legacy}'`);
+    expect(cliMocks.createAppContext).not.toHaveBeenCalled();
+  });
+
+  it.each(attributionCommands)("refuses a malformed attribution ID in $name", async ({ args, flag }) => {
+    const { program } = createProgramHarness();
+    await expect(program.parseAsync([...args, flag, "12oops"], { from: "user" })).rejects.toThrow();
+    expect(cliMocks.createAppContext).not.toHaveBeenCalled();
+  });
+
+  it.each(attributionCommands)("refuses a deleted actor in $name", async ({ args, flag, inactiveMessage }) => {
+    const { program } = createProgramHarness();
+    cliMocks.findUserById.mockResolvedValueOnce({
+      id: 12, username: "reused-name", role: "owner", disabledAt: null, deletedAt: new Date(),
+    });
+    await expect(program.parseAsync([...args, flag, "12"], { from: "user" })).rejects.toThrow(inactiveMessage);
+    expect(cliMocks.findUserById).toHaveBeenCalledWith(expect.anything(), 12);
+    expect(cliMocks.findUserByUsername).not.toHaveBeenCalled();
+    const app = await cliMocks.createAppContext.mock.results[0]?.value;
+    expect(app.close).toHaveBeenCalledTimes(1);
+  });
+
   it("documents sync --page and rejects sync --account", async () => {
     const helpProgram = buildProgram();
     const syncCommand = helpProgram.commands.find((command) => command.name() === "sync");
@@ -353,7 +443,7 @@ describe("CLI parsing", () => {
     ).rejects.toThrow("unknown option '--account'");
   });
 
-  it("has no apikey group left to document (Decision 353)", () => {
+  it("has no apikey group left to document (Decision 369)", () => {
     const helpProgram = buildProgram();
     expect(helpProgram.commands.find((command) => command.name() === "apikey")).toBeUndefined();
 
@@ -1284,8 +1374,8 @@ describe("CLI parsing", () => {
       "svc-of",
       "--conversation",
       "group-1",
-      "--as",
-      "owner",
+      "--as-user-id",
+      "1",
     ], { from: "user" })).rejects.toThrow("coach-chat requires --question");
 
     // The guard runs ahead of any I/O — the app context is never created.
@@ -1314,8 +1404,8 @@ describe("CLI parsing", () => {
       "svc-fs",
       "--conversation",
       "group-1",
-      "--as",
-      "owner",
+      "--as-user-id",
+      "1",
       "--question",
       "как продать ppv?",
     ], { from: "user" })).rejects.toThrow("coach-chat requires --fan <ref> on fansly");
@@ -1336,7 +1426,7 @@ describe("CLI parsing", () => {
       credentials: null,
       proxy: null,
     });
-    cliMocks.findUserByUsername.mockResolvedValueOnce(null);
+    cliMocks.findUserById.mockResolvedValueOnce(null);
     const program = buildProgram();
     program.exitOverride();
 
@@ -1348,14 +1438,14 @@ describe("CLI parsing", () => {
       "svc-of",
       "--conversation",
       "fan-1",
-      "--as",
-      "owner",
+      "--as-user-id",
+      "1",
       "--question",
       "how to sell ppv?",
-    ], { from: "user" })).rejects.toThrow("unknown user: owner");
+    ], { from: "user" })).rejects.toThrow("Active chatter or owner required: user ID 1");
 
     // The guard did not throw the --fan error; control reached the user lookup.
-    expect(cliMocks.findUserByUsername).toHaveBeenCalledTimes(1);
+    expect(cliMocks.findUserById).toHaveBeenCalledWith(expect.anything(), 1);
   });
   // Decision #223: the drill seam may not answer for the real gate.
   describe("capture:reclaim --assume-free-bytes", () => {
