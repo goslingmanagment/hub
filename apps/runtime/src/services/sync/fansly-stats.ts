@@ -1031,7 +1031,8 @@ export async function fanslyStatsSnapshotChunk(
   ): Promise<void> => {
     await coverage(CAPTURE_COVERAGE_PLANES.statsEarnings, "partial_provider_surface",
       "terminal_response", {
-        scopeRef, reasonCode: `earnings_${reason}`, proofObservationId: observationId,
+        scopeRef, replaceWindowBounds: scopeRef === "steady",
+        reasonCode: `earnings_${reason}`, proofObservationId: observationId,
         cursor: requested,
       });
     await input.telemetry.addAnomaly({
@@ -1622,8 +1623,9 @@ export async function fanslyStatsSnapshotChunk(
         "window_captured",
         "none",
         {
-          scopeRef: "steady",
-          newestCapturedAt: now,
+          scopeRef: "steady", replaceWindowBounds: true,
+          oldestCapturedAt: new Date(servedWindow(response.raw).afterMs ?? afterDate.getTime()),
+          newestCapturedAt: new Date(servedWindow(response.raw).beforeMs ?? now.getTime()),
           proofObservationId: persisted.observationId,
         },
       );
@@ -1659,8 +1661,9 @@ export async function fanslyStatsSnapshotChunk(
         "window_captured",
         "none",
         {
-          scopeRef: "steady",
-          newestCapturedAt: now,
+          scopeRef: "steady", replaceWindowBounds: true,
+          oldestCapturedAt: new Date(servedWindow(response.raw).afterMs ?? afterDate.getTime()),
+          newestCapturedAt: new Date(servedWindow(response.raw).beforeMs ?? now.getTime()),
           proofObservationId: persisted.observationId,
         },
       );
@@ -1690,7 +1693,8 @@ export async function fanslyStatsSnapshotChunk(
       }
       if (result === "complete") {
         await coverage(CAPTURE_COVERAGE_PLANES.statsEarnings, "window_captured", "none", {
-          scopeRef: "steady", newestCapturedAt: new Date(walk.beforeMs),
+          scopeRef: "steady", replaceWindowBounds: true,
+          oldestCapturedAt: new Date(walk.afterMs), newestCapturedAt: new Date(walk.beforeMs),
           proofObservationId: persisted.observationId, reasonCode: "trailing_window_captured",
           cursor: { afterMs: walk.afterMs, beforeMs: walk.beforeMs },
         });

@@ -66,6 +66,17 @@ describe("Fansly aggregate earnings time windows", () => {
     expect(walk.hasRows).toBe(true);
   });
 
+  it("round-trips the single midnight bucket at an inclusive root upper bound", () => {
+    let walk = startEarningsWindow(START, START + DAY);
+    expect(advanceEarningsWindow(walk, Array.from({ length: 100 }, () => ({ timestamp: START + DAY }))))
+      .toBe("continue");
+    walk = parseEarningsWindow(JSON.parse(JSON.stringify(walk)))!;
+    expect(walk).not.toBeNull();
+    expect(walk.pending.at(-1)).toEqual({ afterMs: START + DAY, beforeMs: START + DAY });
+    expect(advanceEarningsWindow(walk, [{ timestamp: START + DAY }])).toBe("continue");
+    expect(advanceEarningsWindow(walk, [{ timestamp: START }])).toBe("complete");
+  });
+
   it("preserves nonempty evidence across an empty child and changing provider responses", () => {
     const walk = startEarningsWindow(START, START + 4 * DAY - 1);
     expect(advanceEarningsWindow(walk, Array.from({ length: 100 }, () => ({ timestamp: START }))))

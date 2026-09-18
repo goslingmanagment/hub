@@ -28,7 +28,7 @@ export function parseEarningsWindow(value: unknown): EarningsWindowWalk | null {
   const walk = value as EarningsWindowWalk;
   const valid = (window: EarningsWindow): boolean => window !== null
     && typeof window === "object" && Number.isSafeInteger(window.afterMs)
-    && Number.isSafeInteger(window.beforeMs) && window.afterMs < window.beforeMs;
+    && Number.isSafeInteger(window.beforeMs) && window.afterMs <= window.beforeMs;
   if (!valid(walk) || !Array.isArray(walk.pending) || walk.pending.length > 32
     || !walk.pending.every((window) => valid(window)
       && window.afterMs >= walk.afterMs && window.beforeMs <= walk.beforeMs)) return null;

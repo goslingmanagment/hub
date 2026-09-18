@@ -303,6 +303,7 @@ export async function writeFanslyLaneCoverage(input: {
   proofObservationId?: number | null;
   oldestCapturedAt?: Date | null;
   newestCapturedAt?: Date | null;
+  replaceWindowBounds?: boolean;
   observedUniqueCount?: number | null;
   expectedCount?: number | null;
   reasonCode?: string | null;
@@ -321,6 +322,7 @@ type FanslyLaneCoverageExtra = {
   proofObservationId?: number | null;
   oldestCapturedAt?: Date | null;
   newestCapturedAt?: Date | null;
+  replaceWindowBounds?: boolean;
   observedUniqueCount?: number | null;
   expectedCount?: number | null;
   reasonCode?: string | null;

@@ -15426,3 +15426,13 @@ scopeRef=steady, keeping historical coverage at the existing empty scope. A
 successful recent window therefore cannot erase a partial historical claim.
 Transport, egress/proxy ownership, retry ceilings, capture-first persistence,
 canonicalization and projection natural keys are unchanged.
+
+
+The independent regression review additionally caught an inclusive-midnight
+checkpoint (after == before), which must remain parseable, and the dashboard's
+old all-scopes coverage rule. The stats verdict now composes historical and
+steady scopes only when their successfully captured windows overlap, and can
+judge a recent selection solely from the fresh window. Other multi-subject
+planes keep their all-scopes requirement. Snapshot scopes explicitly replace
+their bounds on each completed sweep: a min/max union across a downtime gap
+would invent coverage. Historical scopes keep their original monotone bounds.

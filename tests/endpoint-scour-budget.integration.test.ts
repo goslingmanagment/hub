@@ -177,6 +177,24 @@ async function journaledKinds(pageId: number): Promise<string[]> {
 }
 
 describe("[sync-critical] WP-F1 per-lane daily call budget", () => {
+  it("keeps snapshot bounds separate instead of claiming coverage across a capture gap", async (context) => {
+    if (!testDb) { context.skip(); return; }
+    const page = await seedPage();
+    const common = { pageId: page.id, platform: "fansly" as const, plane: "stats_earnings",
+      status: "window_captured" as const, acquisitionMode: "retroactive" as const,
+      proof: "none" as const };
+    await upsertCaptureCoverage(testDb.db, { ...common, scopeRef: "",
+      oldestCapturedAt: new Date("2025-01-01Z"), newestCapturedAt: NOW });
+    await upsertCaptureCoverage(testDb.db, { ...common, scopeRef: "steady", replaceWindowBounds: true,
+      oldestCapturedAt: new Date("2026-07-01Z"), newestCapturedAt: new Date("2026-08-01Z") });
+    await upsertCaptureCoverage(testDb.db, { ...common, scopeRef: "steady", replaceWindowBounds: true,
+      oldestCapturedAt: new Date("2026-09-01Z"), newestCapturedAt: new Date("2026-10-01Z") });
+    const { rows } = await testDb.pool.query(
+      "select scope_ref, oldest_captured_at from capture_coverage where page_id=$1 order by scope_ref", [page.id]);
+    expect(rows.map((row) => [row.scope_ref, new Date(row.oldest_captured_at).toISOString()]))
+      .toEqual([["", "2025-01-01T00:00:00.000Z"], ["steady", "2026-09-01T00:00:00.000Z"]]);
+  });
+
   it("journals a malformed stats envelope but withholds coverage and cursor progress", async (
     context,
   ) => {

@@ -1,6 +1,7 @@
 import type { StatsCoverageResponse } from "@agency_hub_core/contracts";
 import {
   CAPTURE_COVERAGE_HEAD_TOLERANCE_MS,
+  CAPTURE_COVERAGE_PLANES,
   type CaptureCoveragePlane,
 } from "@agency_hub_core/shared";
 
@@ -35,6 +36,11 @@ export type CoverageVerdict = {
 const WINDOW_EVIDENCE_STATUSES = new Set(["provider_exhausted", "window_captured"]);
 const NOT_STARTED_STATUSES = new Set(["not_started"]);
 const DEFAULT_HEAD_TOLERANCE_MS = 48 * 60 * 60 * 1_000;
+const STATS_WINDOW_PLANES = new Set<string>([
+  CAPTURE_COVERAGE_PLANES.statsAccountDaily,
+  CAPTURE_COVERAGE_PLANES.statsAccountHourly,
+  CAPTURE_COVERAGE_PLANES.statsEarnings,
+]);
 
 const STATUS_DETAIL: Readonly<Record<string, string>> = {
   in_progress: "the walk is still reaching backwards — older rows are missing",
@@ -57,6 +63,68 @@ function selectedWindowDays(window: AnalyticsCoverageWindow): number {
   return Math.max(1, Math.round((Date.parse(window.to) - Date.parse(window.from)) / 86_400_000));
 }
 
+function headToleranceMs(plane: string): number {
+  return CAPTURE_COVERAGE_HEAD_TOLERANCE_MS[plane as CaptureCoveragePlane]
+    ?? DEFAULT_HEAD_TOLERANCE_MS;
+}
+
+/** History and the fresh window are temporal scopes of these three account
+ * planes. Subject scopes on other planes still each require their own evidence. */
+function selectStatsWindowEvidence(
+  rows: CoverageRow[],
+  window: AnalyticsCoverageWindow,
+): { rows: CoverageRow[]; issue?: CoverageVerdict } {
+  const steady = rows.find((row) => row.scopeRef === "steady");
+  if (steady === undefined || !WINDOW_EVIDENCE_STATUSES.has(steady.status)) return { rows };
+  const steadyFrom = instant(steady.oldestCapturedAt);
+  const steadyTo = instant(steady.newestCapturedAt);
+  const history = rows.find((row) => row.scopeRef === "");
+  const historyFrom = history === undefined ? null : instant(history.oldestCapturedAt);
+  const historyTo = history === undefined ? null : instant(history.newestCapturedAt);
+  const exhaustedFloor = history?.status === "provider_exhausted"
+    && history.oldestCapturedAt === null;
+  const remaining = rows.filter((row) => row.scopeRef !== "" && row.scopeRef !== "steady");
+  const windowFrom = Date.parse(window.from);
+  const windowTo = Date.parse(window.to);
+  const validSteadyBounds = steadyFrom !== null && steadyTo !== null && steadyFrom <= steadyTo;
+  if (validSteadyBounds && steadyFrom <= windowFrom
+    && steadyTo >= windowTo - headToleranceMs(steady.plane)) {
+    return { rows: [...remaining, steady] };
+  }
+  // A later capture gap is irrelevant to a selection entirely inside proven
+  // history. Its head must reach the selection itself, not merely the tolerance.
+  if (validSteadyBounds && history !== undefined && WINDOW_EVIDENCE_STATUSES.has(history.status)
+    && historyTo !== null && historyTo >= windowTo
+    && (exhaustedFloor || (historyFrom !== null && historyFrom <= windowFrom))) {
+    return { rows: [...remaining, history] };
+  }
+  const partial = (detail: string): { rows: CoverageRow[]; issue: CoverageVerdict } => ({
+    rows,
+    issue: { state: "partial", label: "partial — selected window", detail },
+  });
+  if (!validSteadyBounds) {
+    return partial(`Plane \`${steady.plane}\` has no complete bounds for its fresh window.`);
+  }
+  if (history === undefined || !WINDOW_EVIDENCE_STATUSES.has(history.status)) return { rows };
+  // A proven exhausted history may have no nonempty oldest bucket. Preserve
+  // that existing floor meaning; a missing head is never proof of overlap.
+  if (historyTo === null || (historyFrom === null && !exhaustedFloor)
+    || (historyFrom !== null && historyFrom > historyTo)) {
+    return partial(`Plane \`${steady.plane}\` has no historical bounds that connect to its fresh window.`);
+  }
+  if (historyTo < steadyFrom || (historyFrom !== null && steadyTo < historyFrom)) {
+    return partial(`Plane \`${steady.plane}\` has a gap between historical and fresh capture.`);
+  }
+  return {
+    rows: [...remaining, {
+      ...history,
+      oldestCapturedAt: exhaustedFloor ? null
+        : new Date(Math.min(historyFrom!, steadyFrom)).toISOString(),
+      newestCapturedAt: new Date(Math.max(historyTo, steadyTo)).toISOString(),
+    }],
+  };
+}
+
 /** Judge every required plane against the window the user selected. */
 export function coverageVerdict(
   rows: readonly CoverageRow[] | undefined,
@@ -64,6 +132,7 @@ export function coverageVerdict(
   window: AnalyticsCoverageWindow,
 ): CoverageVerdict {
   const selectedRows: CoverageRow[] = [];
+  let selectionIssue: CoverageVerdict | undefined;
   for (const plane of requiredPlanes) {
     const planeRows = (rows ?? []).filter((row) => row.plane === plane);
     if (planeRows.length === 0) {
@@ -73,8 +142,15 @@ export function coverageVerdict(
         detail: `No capture-coverage row exists for required plane \`${plane}\`.`,
       };
     }
-    selectedRows.push(...planeRows);
+    if (STATS_WINDOW_PLANES.has(plane)) {
+      const selection = selectStatsWindowEvidence(planeRows, window);
+      selectionIssue ??= selection.issue;
+      selectedRows.push(...selection.rows);
+    } else {
+      selectedRows.push(...planeRows);
+    }
   }
+  if (selectionIssue !== undefined) return selectionIssue;
 
   if (selectedRows.every((row) => NOT_STARTED_STATUSES.has(row.status))) {
     return { state: "not_started", label: "not started", detail: STATUS_DETAIL.not_started! };
@@ -94,9 +170,7 @@ export function coverageVerdict(
   const windowTo = Date.parse(window.to);
   const stale = selectedRows.find((row) => {
     const head = instant(row.newestCapturedAt) ?? instant(row.updatedAt);
-    const tolerance = CAPTURE_COVERAGE_HEAD_TOLERANCE_MS[
-      row.plane as CaptureCoveragePlane
-    ] ?? DEFAULT_HEAD_TOLERANCE_MS;
+    const tolerance = headToleranceMs(row.plane);
     return head === null || head < windowTo - tolerance;
   });
   if (stale !== undefined) {
