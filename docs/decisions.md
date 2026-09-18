@@ -352,6 +352,9 @@ appends a row here in the same change (family law: updated-in-change).
 | 352 | Unified-account rights matrix | Role × sign-in method × page assignments × device rights × client-local cache is a named, tested artefact (`docs/identity-rights-matrix.md` + `tests/rights-matrix.integration.test.ts`), not an implication of #349: an owner's device token is NOT an owner session, the cabinet is cookie-only, and "revoke all devices" leaves the cookie session and the legacy API key alive — so offboarding is a runbook, with the Fansly session, the 60 s SSE recheck and the desktop's local cache named as boundaries the hub does not control |
 | 353 | Fansly status-only earnings rechecks | Exact pending-to-posted signals still fetch both endpoints; a content revision preserves strict money debt while valid unchanged status rechecks may finish. |
 | 354 | A0 reader discrepancy witnesses | Retain at most twenty verified capture pointers per sweep beside exact pre-apply reader state; preserve counters, legacy unknowns, polling and historical attribution limits. |
+| 355 | Recover an existing team identity | The invite form finds active, invited and disabled logins before creation and offers their existing card. Disabled participants stay visible; restoring access is explicit, preserves identity and grants, and never revives old links or sign-ins. |
+| 356 | Immutable user IDs and permanent account deletion | All account-target admin routes, service writes, dashboard cards/caches and CLI actions use immutable userId. Permanent deletion revokes access, preserves historical identity and frees the login for a new ID; disabled accounts remain restorable. Username routes are retired. |
+| 357 | Account lifecycle concurrency and uncertain deletion | Non-key user locks preserve actor references; an indeterminate deletion refreshes the account list before retiring the old card. |
 | 358 | Fansly purchase-history rejections | A provider answer naming one media as unservable (404/410, now 422 "error getting account media") is a fact about that target: journaled verbatim, consumed, walk continues. Per request namespace, three such rejections must be proven target-local against a completed, provider-served witness before another target is spent; a witness rejected with the streak's status blocks the stream as `purchase_history_rejection_storm`, a different status is no vote, no witness defers instead of blocking. The streak is derived from captures, not stored; after a storm one unblock buys one target of evidence, and a served page retries the storm's members once. |
 | 359 | CI gate reuse by tree fingerprint | A run first hashes every blob the gate can observe (`scripts/ci-gate-fingerprint.sh`: the full tree minus prose no check reads) and looks up an earlier passing Quality Gate for that hash in the Artifacts API; a hit skips the test jobs and passes the gate citing the proving run, main still builds and publishes its image. A fresh pass records `quality-gate-<hash>` (30 days). `pnpm typecheck` runs once per job: `build:production` = typecheck + `build:artifacts`, CI and the Dockerfile call `build:artifacts`. `workflow_dispatch` `full: true` forces every job. |
 | 360 | CI volume rules | Nightly runs only what PRs never run (the whole `tests/api.integration.test.ts`) six days a week and the full one-process suite on Mondays and on dispatch. The integration matrix fails fast on pull requests only. Work-in-progress pushes carry `[skip ci]`; CI runs on the push that is ready for review; failed jobs are re-run, not workflows. |
@@ -14598,6 +14601,169 @@ keeps that resumed generation unknown. Saved reports remain evidence. These
 witnesses improve attribution of future discrepancies; they do not prove
 provider deletion, close G6917/G6918, reset the clock or establish A0/A1 GO,
 HTTP savings or event-to-reader latency. See the A0 runbook.
+
+
+## Decision 355: Recover the existing participant instead of recreating them (2026-09-15)
+
+The Team invite form offered no route out of `User "Nikita" already exists`
+after offboarding. The kernel was preserving #126 correctly: disabled users
+keep their identity, history and unique login. The dashboard hid those rows in
+a collapsed section and exposed the raw duplicate-create failure.
+
+Invitation now checks the complete team list with #349's case-insensitive
+login semantics. A match explains whether the participant is disabled,
+waiting for registration, or already active, then offers their existing card.
+The new-person fields are hidden while there is a match; their role/page input
+is never applied to the old person. A failed invite refreshes the list to
+resolve another tab's concurrent creation. Unknown failures stay inline in
+Russian, and a failed list read cannot authorize creation.
+
+«Отключённые участники» is expanded initially. The operation is named
+«Отключить доступ», and its confirmation explains that the login and history
+remain. The disabled participant's card leads with «Восстановить доступ» and
+shows saved pages without offering page/link edits the kernel rejects.
+Restoration is a separate explicit confirmation for the same person, never an
+automatic consequence of entering a duplicate name. It restores the stored
+role and page grants; a different person needs a different login.
+
+The confirmation distinguishes three recovery paths: an existing password
+works again after restoration unless `mustChangePassword` is set; that flag
+requires a password-reset link before signing in to a client. An unregistered
+participant needs a new invitation. Old links and sign-ins stay revoked in all
+cases. A reset is also available for someone who forgot their password. This
+corrects #350's UI copy and the onboarding/offboarding runbooks; it does not
+change #126's lifecycle or the kernel contract.
+
+Regression coverage includes disabled-login detection, visible restoration,
+read-only disabled cards, the existing identity/role/grants surviving a
+rejected duplicate invite, and explicit restoration followed by a fresh
+invitation with the previous link still revoked.
+
+
+## Decision 356: Immutable account addressing and reusable logins (2026-09-15)
+
+The owner explicitly requested the architectural rework and regression checks
+following the Nikita delete/recreate failure. This supersedes #126's permanent
+username reservation and #355's recovery-only answer **for deleted accounts**.
+Disabling stays a separate, reversible action that retains its login and saved
+access. Historical facts still survive; no `users` row or captured business
+fact is hard-deleted.
+
+**Identity is `users.id`.** Username is a case-insensitive sign-in/create/search
+handle, never the address of an existing-account mutation. All twenty existing
+account-target admin operations now use `/admin/users/by-id/:userId/...` and
+numeric `userId` parameters, through the service and transaction boundary.
+The `by-id` segment is mandatory: simply renaming a path parameter would let
+an old numeric login like `42` target an unrelated internal ID 42. Old username
+routes are removed (404), not transparently redirected. API operation names
+are retained; generated SDK 0.3 records the breaking parameter/path change.
+Sign-in, self-service identity and invitation redemption remain wire-compatible.
+
+**Three lifecycle states.** Enabled and disabled rows reserve their normalized
+login. A permanent `deleted_at` tombstone (migration 0202) excludes the row from
+login lookup and normal admin lists, and releases its username by replacing
+both unconditional unique constraints with a partial case-insensitive index
+where `deleted_at IS NULL`. A recreated username always means a newly inserted
+ID. Contrary to #126's old rationale, a new ID need not inherit the old row's
+history; the real hazards were ambiguous username routes and unfiltered lookup.
+
+`deleteUser` locks and revalidates the exact user ID, rejects owner/self removal,
+revokes sessions, API keys, device tokens, pending reservations and account
+links, advances the credential epoch, revokes active page/model grants and
+clears the legacy assignment projection, clears the password, marks deletion
+and records `user.deleted` in one transaction. Grant rows, original username,
+user ID, audit and spend attribution are retained. Deleted accounts cannot be
+restored or receive new access. The migration also prevents changing a user ID
+or restoring a deleted row/password through an accidental generic UPDATE.
+Deleted rows retain `disabled_at` as an additional barrier for older auth code.
+No account is actually deleted from production by preparing this change.
+
+**The lock covers all writers.** Admin credential/grant/link operations and
+lifecycle transitions share the user row lock and check deletion after waiting.
+Password login still finds by current login, verifies the password, then locks
+and revalidates the captured ID/hash/epoch; it never re-resolves a reusable name
+to a different account. Deletion racing a pending operation therefore either
+revokes its earlier committed result or causes that later operation to fail.
+A device/link ID is additionally checked to belong to the targeted user ID.
+
+**The console retains identity through asynchronous work.** Details, return-to
+links, selection and query caches use user ID; delayed request completion keeps
+its original target. A missing/deleted detail cannot silently become the new
+holder of its login. `Отключить доступ` and `Удалить аккаунт` are separate
+confirmed actions. Delete explains the freed login and retained history.
+Owner/current-account deletion is unavailable, with server checks authoritative.
+The invitation form still helps recover an existing non-deleted participant;
+a deleted name can be invited anew with explicitly selected role and pages.
+
+**CLI is not a username bypass.** Existing-account commands require strict
+`--user-id`; listing prints IDs and creation still uses `--username`.
+`user delete --user-id N --confirm-user-id N` makes the permanent target
+reviewable. Old username-based management scripts fail rather than operating
+on a replacement person. Attribution selectors also take immutable IDs:
+`ai:feature-smoke` and `agent hydration decide` use `--as-user-id`;
+`erasure:run` uses `--initiated-by-user-id`, with active-state and role checks.
+
+**Compatibility and release.** Dashboard and generated SDK ship with the new
+API. The extension, desktop and workboard do not consume these admin operations;
+their login/self-device paths are unchanged. After deletion/reuse, old binaries
+with unfiltered username lookup are unsafe rollback targets: fix forward and
+retain the ID routes/partial uniqueness. See
+[the deletion runbook](runbooks/user-account-deletion.md).
+
+**Regression contract.** Tests must retain original IDs across delete/recreate,
+check every old credential/link and old-ID action, ensure normalized uniqueness
+and numeric-login legacy refusal, protect owner/self, prove grant/spend/audit
+separation and concurrent deletion/issuance behavior, and preserve ordinary
+disabling/restoration. Dashboard tests cover exact-ID caches and stale cards.
+**Validation (2026-09-15).** `pnpm contracts:generate` and `pnpm check` passed:
+349 unit suites, 4118 passing tests and 9 existing skips, ESLint and dashboard
+build. The strictness ratchet passed with 1893 pre-existing errors in 120 files
+and no new error debt; this is not a clean standalone root `tsc` claim.
+All 29 affected PostgreSQL/schema suites passed: 577 tests, zero skips, missing
+prerequisites forbidden. The new lifecycle suite covers ten ordered lock races
+(nine deletion races plus self-password change across disable/restore), rollback
+on failed audit, reused login isolation and legacy-route refusal. Browser QA of
+the actual dashboard with a disposable local HTTP fixture verified cancel,
+confirm/delete, same-login recreation and the unavailable old card. Production
+was not changed; local verification is not a release claim.
+
+## Decision 357: Account lifecycle lock compatibility and uncertain deletion recovery (2026-09-15)
+
+**Context.** Adversarial review of Decision 356 reproduced two reliability
+defects in local revision `ed4469c1`: cross-user grant/audit foreign keys could
+deadlock, and a lost DELETE response left the deleted account cached.
+
+**Lock compatibility.** The shared identity lock uses `FOR NO KEY UPDATE`.
+Identity IDs never change, so concurrent audit/grant foreign keys may safely
+take `KEY SHARE` on the actor. `FOR UPDATE` creates a cross-user wait cycle
+when two owners grant access to each other; real PostgreSQL reproduced
+`40P01`. The replacement lock still serializes lifecycle/credential/grant
+writers. All deletion, hash, epoch and session rechecks remain required.
+
+**Uncertain deletion.** An unsuccessful delete response refreshes the current
+user list, because the server may have committed before the connection failed.
+Only a confirmed-absent immutable ID loses its private caches. Failed refresh
+retains cached state and an error; a replacement account is never removed.
+The confirmation reports uncertainty in plain language without SDK route names.
+
+**Regression evidence.** Real QueryObserver tests exercise lost response,
+stale-target 404, uncommitted failure and failed reconciliation. PostgreSQL
+tests synchronize two owner grants before their FK checks and verify both
+commit; existing deletion/login/device races keep their coverage. A populated
+0200-to-0201 migration test (0202 after release renumbering) preserves users/passwords/sessions, retains disabled
+login reservations, allows a new ID to reuse a deleted login and rejects
+tombstone restoration/renaming. Browser QA uses actual dashboard components
+with disposable mock data and a deliberately severed DELETE response.
+The baseline security scan is sealed separately from its follow-up fixes.
+No production state or installed clients were changed.
+
+**Validation.** Full `pnpm check` passed: 349 unit suites, 4123 tests passed
+and 9 existing skips, ESLint and dashboard build. Strictness ratchet remains
+at 1893 accepted pre-existing errors in 120 files, with no added debt.
+All 31 affected PostgreSQL/schema suites passed: 586 tests, zero skips under
+`ALLOW_MISSING_TEST_PREREQUISITES=0`. Independent follow-up reviews of backend
+and UI found no new issues. Local evidence is retained under
+`output/adversarial-review/`; the output directory is not release content.
 
 ## Decision 358: A purchase-history rejection is a fact about the target, proven per namespace by a served witness (2026-09-16)
 

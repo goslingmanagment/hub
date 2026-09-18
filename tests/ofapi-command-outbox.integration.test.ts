@@ -1,3 +1,4 @@
+import { fixtureUserId } from "./helpers/user-identity.ts";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -88,7 +89,7 @@ beforeEach(async (context) => {
     role: "chatter",
   }, { source: "cli" });
   chatterKey = (await issueChatterApiKey(appContext, {
-    username: "chatter",
+    userId: await fixtureUserId(appContext, "chatter"),
     pageLabel: "lora-of",
   }, { source: "cli" })).key;
 
@@ -97,7 +98,7 @@ beforeEach(async (context) => {
     role: "chatter",
   }, { source: "cli" });
   otherChatterKey = (await issueChatterApiKey(appContext, {
-    username: "other-chatter",
+    userId: await fixtureUserId(appContext, "other-chatter"),
     pageLabel: "lora-of",
   }, { source: "cli" })).key;
 

@@ -1,3 +1,4 @@
+import { fixtureUserId } from "./helpers/user-identity.ts";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import {
@@ -101,7 +102,7 @@ describe("Stage 22 identity", () => {
     const ownerCookie = cookieOf(await login(legacyUrl, "dima", "owner-secret"));
 
     // Owner sets the chatter's password with the must-change flag (invite v1).
-    const setResponse = await fetch(`${legacyUrl}/api/v1/admin/users/anton/password`, {
+    const setResponse = await fetch(`${legacyUrl}/api/v1/admin/users/by-id/${await fixtureUserId(app!, "anton")}/password`, {
       method: "PATCH",
       headers: { "content-type": "application/json", cookie: ownerCookie },
       body: JSON.stringify({ password: "first-secret-1", mustChangePassword: true }),
@@ -158,12 +159,12 @@ describe("Stage 22 identity", () => {
 
     // Grant the page through the normal admin route so both credentials see it.
     const ownerCookie = cookieOf(await login(legacyUrl, "dima", "owner-secret"));
-    await fetch(`${legacyUrl}/api/v1/admin/users/anton/pages`, {
+    await fetch(`${legacyUrl}/api/v1/admin/users/by-id/${await fixtureUserId(app!, "anton")}/pages`, {
       method: "POST",
       headers: { "content-type": "application/json", cookie: ownerCookie },
       body: JSON.stringify({ pageLabel: "lana" }),
     });
-    const apiKey = (await issueChatterApiKey(app!, { username: "anton" }, { source: "cli" })).key;
+    const apiKey = (await issueChatterApiKey(app!, { userId: await fixtureUserId(app!, "anton") }, { source: "cli" })).key;
 
     // Parallel acceptance: SAME user, api key AND device token, one run.
     const viaKey = await get(legacyUrl, "/api/v1/auth/me", { authorization: `Bearer ${apiKey}` });
@@ -195,7 +196,7 @@ describe("Stage 22 identity", () => {
     );
 
     // Admin revoke-all: device 401s, the api key keeps working (independent kinds).
-    const revoke = await fetch(`${legacyUrl}/api/v1/admin/users/anton/device-tokens`, {
+    const revoke = await fetch(`${legacyUrl}/api/v1/admin/users/by-id/${await fixtureUserId(app!, "anton")}/device-tokens`, {
       method: "DELETE",
       headers: { cookie: ownerCookie },
     });
@@ -219,14 +220,14 @@ describe("Stage 22 identity", () => {
     // Model-scope grant expands to pages created AFTER the grant.
     const ownerCookie = cookieOf(await login(grantsUrl, "dima", "owner-secret"));
     await createUserAccount(app!, { username: "vera", role: "chatter" }, { source: "cli" });
-    const grant = await fetch(`${grantsUrl}/api/v1/admin/users/vera/models`, {
+    const grant = await fetch(`${grantsUrl}/api/v1/admin/users/by-id/${await fixtureUserId(app!, "vera")}/models`, {
       method: "POST",
       headers: { "content-type": "application/json", cookie: ownerCookie },
       body: JSON.stringify({ modelSlug: "lana-model" }),
     });
     expect(grant.status).toBe(200);
 
-    const veraKey = (await issueChatterApiKey(app!, { username: "vera" }, { source: "cli" })).key;
+    const veraKey = (await issueChatterApiKey(app!, { userId: await fixtureUserId(app!, "vera") }, { source: "cli" })).key;
     // Existing page of the model: visible through the grants read path.
     expect((await get(grantsUrl, "/api/v1/pages/lana/subscribers", { authorization: `Bearer ${veraKey}` })).status).toBe(200);
     // …and on the LEGACY read path it is NOT (no assignment row exists) —
@@ -240,7 +241,7 @@ describe("Stage 22 identity", () => {
     expect((await get(grantsUrl, "/api/v1/pages/lana2/subscribers", { authorization: `Bearer ${veraKey}` })).status).toBe(200);
 
     // Revoke the model grant: every page of it goes dark (deny wins).
-    const revoke = await fetch(`${grantsUrl}/api/v1/admin/users/vera/models/lana-model`, {
+    const revoke = await fetch(`${grantsUrl}/api/v1/admin/users/by-id/${await fixtureUserId(app!, "vera")}/models/lana-model`, {
       method: "DELETE",
       headers: { cookie: ownerCookie },
     });
@@ -249,7 +250,7 @@ describe("Stage 22 identity", () => {
     expect((await get(grantsUrl, "/api/v1/pages/lana2/subscribers", { authorization: `Bearer ${veraKey}` })).status).toBe(403);
 
     // The history answers "who had access": the revoked grant is stamped, not gone.
-    const history = await get(grantsUrl, "/api/v1/admin/users/vera/grants", { cookie: ownerCookie });
+    const history = await get(grantsUrl, `/api/v1/admin/users/by-id/${await fixtureUserId(app!, "vera")}/grants`, { cookie: ownerCookie });
     expect(history.status).toBe(200);
     const { grants } = await history.json() as { grants: Array<{ scopeType: string; scopeLabel: string | null; revokedAt: string | null }> };
     const modelGrant = grants.find((row) => row.scopeType === "model");
@@ -262,7 +263,7 @@ describe("Stage 22 identity", () => {
     if (!requireSetup(context)) return;
 
     const ownerCookie = cookieOf(await login(legacyUrl, "dima", "owner-secret"));
-    const unassign = await fetch(`${legacyUrl}/api/v1/admin/users/anton/pages/lana`, {
+    const unassign = await fetch(`${legacyUrl}/api/v1/admin/users/by-id/${await fixtureUserId(app!, "anton")}/pages/lana`, {
       method: "DELETE",
       headers: { cookie: ownerCookie },
     });

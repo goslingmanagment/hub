@@ -1,3 +1,4 @@
+import { fixtureUserId } from "./helpers/user-identity.ts";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { archiveAiPersona, upsertAiPersona } from "@agency_hub_core/db";
@@ -7,7 +8,7 @@ import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import {
   createUserAccount,
   issueChatterApiKey,
-  issueDeviceTokenForUsername,
+  issueDeviceTokenForUserId,
 } from "../apps/runtime/src/services/auth.ts";
 import {
   resetIntegrationDatabase,
@@ -71,12 +72,12 @@ describe("AI persona owner administration", () => {
     );
     chatterKey = (await issueChatterApiKey(
       appContext,
-      { username: "chatter" },
+      { userId: await fixtureUserId(appContext, "chatter") },
       { source: "cli" },
     )).key;
-    deviceToken = (await issueDeviceTokenForUsername(
+    deviceToken = (await issueDeviceTokenForUserId(
       appContext,
-      { username: "chatter", label: "persona-admin-auth-test" },
+      { userId: await fixtureUserId(appContext, "chatter"), label: "persona-admin-auth-test" },
       { source: "cli" },
     )).token;
     server = await buildApiServer(appContext);

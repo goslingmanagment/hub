@@ -46,6 +46,7 @@ function person(username: string, disabledAt: string | null = null) {
     assignedPages: [],
     apiKeyStatus: null,
     disabledAt,
+    deletedAt: null,
     lastActiveAt: null,
     registrationState: "active" as const,
   };

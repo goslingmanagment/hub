@@ -1,3 +1,4 @@
+import { fixtureUserId } from "./helpers/user-identity.ts";
 import { randomUUID } from "node:crypto";
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -106,7 +107,7 @@ beforeEach(async (context) => {
     username: "chatter",
     role: "chatter",
   }, { source: "cli" });
-  const issued = await issueChatterApiKey(appContext, { username: "chatter" }, { source: "cli" });
+  const issued = await issueChatterApiKey(appContext, { userId: await fixtureUserId(appContext, "chatter") }, { source: "cli" });
   chatterApiKey = issued.key;
   await insertAgentKey(testDb.db, {
     name: "slice-a",

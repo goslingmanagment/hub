@@ -63,6 +63,23 @@ export async function revokeAccessGrants(db: Database, input: {
   return revoked.length;
 }
 
+/** Permanent account deletion closes every scope while preserving the grant
+ * history. The caller holds the user's lifecycle lock until commit. */
+export async function revokeAllAccessGrantsForUser(db: Database, input: {
+  userId: number;
+  revokedBy: number | null;
+  revokedAt: Date;
+}) {
+  const revoked = await db.update(accessGrants).set({
+    revokedBy: input.revokedBy,
+    revokedAt: input.revokedAt,
+  }).where(and(
+    eq(accessGrants.userId, input.userId),
+    isNull(accessGrants.revokedAt),
+  )).returning({ id: accessGrants.id });
+  return revoked.length;
+}
+
 /** Full grant history for one user (active and revoked), newest first. */
 export async function listGrantsForUser(db: Database, userId: number) {
   return db.query.accessGrants.findMany({

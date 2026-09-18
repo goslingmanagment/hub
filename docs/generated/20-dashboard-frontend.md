@@ -8,6 +8,12 @@
 > section and the `/join` and `/account` pages land in PR-1B and PR-1C of the
 > same wave.
 
+> **STALE (Decision 356, 2026-09-15):** user administration now addresses immutable
+> IDs through `/admin/users/by-id/:userId`, SDK 0.3 retires username routes,
+> migration 0202 adds permanent account deletion and partial login uniqueness,
+> and Team state/cache ownership follows IDs. See Decision 356 and
+> `docs/runbooks/user-account-deletion.md`; the body predates this change.
+
 # Dashboard Frontend
 
 `apps/dashboard` is a React 19 single-page owner console. Vite builds it,

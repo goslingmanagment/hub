@@ -1,3 +1,4 @@
+import { fixtureUserId } from "./helpers/user-identity.ts";
 import {
   createServer,
   request as httpRequest,
@@ -228,7 +229,7 @@ beforeEach(async (context) => {
     role: "chatter",
   }, { source: "cli" });
   chatterKey = (await issueChatterApiKey(appContext, {
-    username: "chatter",
+    userId: await fixtureUserId(appContext, "chatter"),
     pageLabel: "lora-of",
   }, { source: "cli" })).key;
 
