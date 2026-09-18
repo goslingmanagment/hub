@@ -179,3 +179,31 @@ docker exec agency-hub-worker-1 node apps/runtime/dist/cli.js events:replay \
 After checking the census and preview, the approved write uses the identical
 arguments with only `--dry-run` removed. Expected postcondition is zero remaining
 eligible rows in this scope, not a globally empty historical backlog.
+
+### Production acceptance — 2026-09-08, 10:10–10:24 UTC
+
+Owner-approved PR #156 was deployed as `a6631a709991` with migration 0171.
+API, worker and scheduler independently reported that revision and remained
+healthy. The old 170-row overnight cohort had naturally progressed before
+approval; a fresh full-scope census extended the upper bound to
+`2026-09-08T10:14:00Z` and found 84 eligible rows, exclusively pages 8 and 9.
+The same six-kind deployed CLI preview and write appended/stamped all 84, with
+zero errors, binding conflicts or partition blocks. The last verification found
+zero pending non-typing rows for both pages since the original lower bound.
+
+The original fractional-window scan automatically completed at 10:15:30 UTC,
+offset 91, without changing its bounds. All three formerly rejected boundary
+timestamps were present in the retained successful response. A subsequent normal
+free dashboard scan completed the closed day ending 10:20:00.999 UTC: 2,248
+examined attempts and 553 new inserts. One response-body timeout preserved offset
+100; continuing the same scan completed without a window error. All 22 failed
+attempts had a success for the same delivery UUID in that captured day.
+
+Eight real post-deploy webhook observations, covering both pages, were already
+at v5 at 10:23:54 UTC while background sweeps remained among old unmapped rows.
+One receipt was confirmed canonical within 7.4 seconds; this bounds one sample,
+not a latency percentile. No synthetic callback, remote redelivery, subscription
+change or message send was used. Historical unmapped debt remains retained.
+
+Detailed evidence, exact repair command, validation and limitations:
+[`investigations/ofapi-webhooks-prod-acceptance-2026-09-08.md`](../../investigations/ofapi-webhooks-prod-acceptance-2026-09-08.md).

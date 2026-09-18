@@ -55,3 +55,8 @@ generated-reports/
 /ofapi-export-artifacts/
 /artifacts/
 /.playwright-cli/
+
+# investigation run artifacts stay out of git (2026-09-18 sweep)
+investigations/**/*.log
+investigations/**/tmp/
+output/
