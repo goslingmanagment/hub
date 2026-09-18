@@ -8,7 +8,7 @@
 //
 //   1  account_stats            trailing 30 d, period 86 400 000
 //   2  account_stats            trailing 25 h, period 3 600 000 (gated)
-//   3  earnings_stats_snapshot  trailing 30 d, offset-paginated at limit=100
+//   3  earnings_stats_snapshot  trailing 30 d, bounded UTC-day window walk
 //   4  earnings_monthlystats_snapshot
 //   5  tracking_links
 //   6  discovery_feed           × 2 pages
@@ -50,14 +50,13 @@
 // inactivity, not a retention floor), and it journals every empty response,
 // because an empty month IS the floor evidence.
 //
-// EVERY LANE STILL CHECKS WHAT CAME BACK AGAINST WHAT IT ASKED FOR, in the unit
-// it asked in: the trailing and earnings windows against their bounds
-// (`windowWasHonoured`, halve once then stop), the month walk against the month
-// it named (`monthWasHonoured`, stop — there is no half of a month to retry).
+// Every lane checks the served bounds. Daily/monthly capture keeps its own
+// provider-specific guard. Earnings uses a durable UTC-day window walk: a full
+// response is split, never offset-paginated (the provider ignores offset).
 // An unwalked span is a hole we know about; a loop is a day of egress spent
 // proving nothing. The same rule catches a repeated request before it is issued.
 //
-// THE EARNINGS LANE IS UNTOUCHED BY ALL OF THIS: `/account/wallets/earnings/
+// `/account/wallets/earnings/
 // stats` DID honour historical windows on production (lora-1 walked back to
 // 2024-11-29), so it keeps its date-bound walk and its derived-from-the-rows
 // guard. Two routes, two behaviours, and the difference is measured rather than
@@ -82,18 +81,23 @@ import { parseFanslyMetadataAccountCreatedAt } from "../fansly.ts";
 import { composeRequestObservers } from "./chunk-budget.ts";
 import type { ExecutorRequestContext, StreamChunkResult } from "./executor-handlers.ts";
 import {
-  advanceOffsetPage,
   classifyFanslyResponse,
   createFanslyLaneCoverageWriter,
   createFanslyLaneJournal,
   createFanslyLaneRuntime,
   fanslyUtcDayKey,
   FanslyLaneInvalidResponseError,
-  isRepeatedRequest,
   nextFanslyUtcDayStart,
   rollFanslyUtcDay,
   spreadFanslyContinuation,
 } from "./fansly-lane.ts";
+import {
+  advanceEarningsWindow,
+  FANSLY_EARNINGS_ROW_LIMIT,
+  parseEarningsWindow,
+  startEarningsWindow,
+  type EarningsWindowWalk,
+} from "./fansly-earnings-window.ts";
 import { isPageAllowlisted } from "./fansly-stream-gate.ts";
 import { summarizeCheckpoint } from "./observability.ts";
 import { createSyncRateLimitWaiter } from "./rate-limiter.ts";
@@ -117,7 +121,7 @@ const HOURLY_PERIOD_MS = 3_600_000;
 const DAILY_TRAILING_DAYS = 30;
 const HOURLY_TRAILING_HOURS = 25;
 const EARNINGS_TRAILING_DAYS = 30;
-const EARNINGS_PAGE_LIMIT = 100;
+const EARNINGS_PAGE_LIMIT = FANSLY_EARNINGS_ROW_LIMIT;
 const DISCOVERY_PAGE_LIMIT = 10;
 const DISCOVERY_PAGES_PER_SWEEP = 2;
 
@@ -245,11 +249,7 @@ interface HourlyBackfillState {
 
 interface EarningsBackfillState {
   nextBeforeMs: number;
-  /** Offset within the current date window. A full page holds the window and
-   * resumes at the next offset instead of skipping the remaining rows. */
-  offset: number;
-  lastOffset: number | null;
-  windowRows: number;
+  walk: EarningsWindowWalk | null;
   emptyStreak: number;
   probeSpent: boolean;
   probeResumeBeforeMs: number | null;
@@ -272,9 +272,9 @@ export interface FanslyStatsCursorState {
   sweepDay: string | null;
   /** Which step to resume at within `sweepDay`. */
   stepIndex: number;
-  earningsOffset: number;
-  /** Repeat-cursor guard: the offset the previous page was fetched at. */
-  earningsPreviousOffset: number | null;
+  // Additive fields keep the v2 envelope readable during image rollback:
+  // old readers may re-read this window, but retain the day budget/history.
+  earningsWalk: EarningsWindowWalk | null;
   discoveryPage: number;
   /** `before` cursor for the first-enable broadcast walk; null once at the floor. */
   broadcastBefore: string | null;
@@ -381,9 +381,7 @@ function parseEarningsBackfill(value: unknown, now: Date): EarningsBackfillState
   const record = asRecord(value);
   return {
     nextBeforeMs: asInt(record?.nextBeforeMs, now.getTime()),
-    offset: Math.max(0, asInt(record?.offset, 0)),
-    lastOffset: asNullableInt(record?.lastOffset),
-    windowRows: Math.max(0, asInt(record?.windowRows, 0)),
+    walk: parseEarningsWindow(record?.walk),
     emptyStreak: asInt(record?.emptyStreak, 0),
     probeSpent: record?.probeSpent === true,
     probeResumeBeforeMs: asNullableInt(record?.probeResumeBeforeMs),
@@ -432,10 +430,9 @@ export function parseFanslyStatsCursorState(
     // its `break` and return "not satisfied, nothing done" on every dispatch,
     // forever, with no call and no error to show for it.
     stepIndex,
-    earningsOffset: Math.max(0, asInt(state.earningsOffset, 0)),
-    earningsPreviousOffset: typeof state.earningsPreviousOffset === "number"
-      ? state.earningsPreviousOffset
-      : null,
+    // Legacy offsets never proved progress. Re-read the current root window;
+    // completed history and all physical-attempt accounting remain unchanged.
+    earningsWalk: parseEarningsWindow(state.earningsWalk),
     discoveryPage: Math.max(0, asInt(state.discoveryPage, 0)),
     broadcastBefore: asNullableString(state.broadcastBefore),
     broadcastFloorReached: state.broadcastFloorReached === true,
@@ -592,18 +589,15 @@ export function isEmptyStatsMonth(payload: unknown): boolean {
 export function emptyFanslyStatsCursorState(now: Date): FanslyStatsCursorState {
   return {
     version: 2,
-    // FIRST ENABLE walks history before it settles into the daily sweep. That is
-    // the only chance to reach the provider's floor cheaply — ten years of daily
-    // buckets is ~118 windows at the 31-day span the provider actually honours,
-    // which the 25/day lane cap spreads over ~5 days.
+    // History remains resumable background work. Each day's fresh sweep gets
+    // first use of the same physical-attempt budget, including on first enable.
     mode: "backfill",
     utcDay: utcDayKey(now),
     callsToday: 0,
     lastSweepDay: null,
     sweepDay: null,
     stepIndex: 0,
-    earningsOffset: 0,
-    earningsPreviousOffset: null,
+    earningsWalk: null,
     discoveryPage: 0,
     broadcastBefore: null,
     broadcastFloorReached: false,
@@ -618,9 +612,7 @@ export function emptyFanslyStatsCursorState(now: Date): FanslyStatsCursorState {
       },
       earnings: {
         nextBeforeMs: now.getTime(),
-        offset: 0,
-        lastOffset: null,
-        windowRows: 0,
+        walk: null,
         emptyStreak: 0,
         probeSpent: false,
         probeResumeBeforeMs: null,
@@ -987,9 +979,7 @@ export async function fanslyStatsSnapshotChunk(
         },
         earnings: {
           nextBeforeMs: now.getTime(),
-          offset: 0,
-          lastOffset: null,
-          windowRows: 0,
+          walk: null,
           emptyStreak: 0,
           probeSpent: false,
           probeResumeBeforeMs: null,
@@ -1033,8 +1023,27 @@ export async function fanslyStatsSnapshotChunk(
     }
   }
 
+  const recordEarningsPartial = async (
+    reason: "window_not_honoured" | "saturated_day",
+    requested: { afterMs: number; beforeMs: number },
+    observationId: number | null,
+    scopeRef = "",
+  ): Promise<void> => {
+    await coverage(CAPTURE_COVERAGE_PLANES.statsEarnings, "partial_provider_surface",
+      "terminal_response", {
+        scopeRef, reasonCode: `earnings_${reason}`, proofObservationId: observationId,
+        cursor: requested,
+      });
+    await input.telemetry.addAnomaly({
+      code: `fansly_stats_earnings_${reason}`, severity: "warn",
+      message: "Fansly earnings window could not be captured completely; other statistics continue",
+      details: { ...requested, observationId },
+    });
+  };
+
   // ── BACKFILL (first enable) ────────────────────────────────────────────────
-  if (state.mode === "backfill" && state.backfill !== null) {
+  const runBackfill = async (): Promise<StreamChunkResult | null> => {
+    if (state.mode !== "backfill" || state.backfill === null) return null;
     const backfill = state.backfill;
 
     /**
@@ -1444,85 +1453,41 @@ export async function fanslyStatsSnapshotChunk(
 
       if (!backfill.earnings.done) {
         const earningsGuard = backfill.earnings.guard;
-        const offset = backfill.earnings.offset;
-        const requested = {
-          beforeMs: backfill.earnings.nextBeforeMs,
-          afterMs: backfill.earnings.nextBeforeMs - earningsGuard.spanDays * DAY_MS,
-        };
-        if (
-          earningsGuard.lastBeforeMs === requested.beforeMs
-          && earningsGuard.lastAfterMs === requested.afterMs
-          && isRepeatedRequest(backfill.earnings.lastOffset, offset)
-        ) {
-          await handleUnhonouredWindow(
-            backfill.earnings,
-            CAPTURE_COVERAGE_PLANES.statsEarnings,
-            requested,
-            { trigger: "repeat_request" },
-          );
-          state = { ...state, backfill: { ...backfill } };
-          await saveProgress();
-          continue;
-        }
-        const before = new Date(requested.beforeMs);
-        const after = new Date(requested.afterMs);
-        earningsGuard.lastBeforeMs = requested.beforeMs;
-        earningsGuard.lastAfterMs = requested.afterMs;
-        backfill.earnings.lastOffset = offset;
+        backfill.earnings.walk ??= startEarningsWindow(
+          backfill.earnings.nextBeforeMs - earningsGuard.spanDays * DAY_MS,
+          backfill.earnings.nextBeforeMs,
+        );
+        const walk = backfill.earnings.walk;
+        const requested = walk.pending.at(-1)!;
         await assertOwnedPageSyncLease(app.db);
         const response = await app.adapter.getEarningsStatsWindow(requestContext, {
-          before,
-          after,
+          before: new Date(requested.beforeMs), after: new Date(requested.afterMs),
           limit: EARNINGS_PAGE_LIMIT,
-          offset,
         });
         const persisted = await persist("earnings_stats_snapshot", {
-          mode: "backfill",
-          before: before.toISOString(),
-          after: after.toISOString(),
-          limit: EARNINGS_PAGE_LIMIT,
-          offset,
+          mode: "backfill", before: new Date(requested.beforeMs).toISOString(),
+          after: new Date(requested.afterMs).toISOString(), limit: EARNINGS_PAGE_LIMIT,
         }, response.raw);
         earningsGuard.lastObservationId = persisted.observationId
           ?? earningsGuard.lastObservationId;
-        const served = servedEarningsWindow(response.raw);
-        if (!windowWasHonoured(requested, served)) {
-          // This lane walks by ITS OWN bounds, so it cannot spin the way the
-          // daily one did — but rows from outside the window we asked for mean
-          // the provider is answering something else, and walking further back
-          // on that basis would write a decade of coverage claims for windows
-          // nobody served.
-          await handleUnhonouredWindow(
-            backfill.earnings,
-            CAPTURE_COVERAGE_PLANES.statsEarnings,
-            requested,
-            { trigger: "served_window", served },
-          );
+        const result = advanceEarningsWindow(walk, response.raw);
+        if (result === "invalid") throw new FanslyLaneInvalidResponseError("earnings_stats_snapshot");
+        if (result === "window_not_honoured" || result === "saturated_day") {
+          backfill.earnings.done = true;
+          await recordEarningsPartial(result, requested, persisted.observationId ?? null);
           state = { ...state, backfill: { ...backfill } };
           await saveProgress();
           continue;
         }
-        const rows = rowCount(response.raw);
-        backfill.earnings.windowRows += rows;
-        const page = advanceOffsetPage({
-          offset,
-          pageSize: EARNINGS_PAGE_LIMIT,
-          rowCount: rows,
-        });
-        if (!page.done) {
-          backfill.earnings.offset = page.nextOffset;
+        if (result === "continue") {
           state = { ...state, backfill: { ...backfill } };
           await saveProgress();
           continue;
         }
-
-        const windowRows = backfill.earnings.windowRows;
-        backfill.earnings.nextBeforeMs = after.getTime();
-        backfill.earnings.offset = 0;
-        backfill.earnings.lastOffset = null;
-        backfill.earnings.windowRows = 0;
-        earningsGuard.lastBeforeMs = null;
-        earningsGuard.lastAfterMs = null;
+        const windowRows = walk.hasRows ? 1 : 0;
+        const after = new Date(walk.afterMs);
+        backfill.earnings.nextBeforeMs = walk.afterMs - 1;
+        backfill.earnings.walk = null;
         if (windowRows === 0) {
           backfill.earnings.emptyStreak += 1;
           if (
@@ -1605,11 +1570,15 @@ export async function fanslyStatsSnapshotChunk(
         },
       };
     }
-  }
+    return null;
+  };
 
   // ── STEADY DAILY SWEEP ────────────────────────────────────────────────────
   const today = utcDayKey(now);
   if (state.lastSweepDay === today && state.stepIndex === 0 && state.sweepDay === null) {
+    const pendingHistory = await runBackfill();
+    if (pendingHistory !== null) return pendingHistory;
+    await completeLane(input.syncRunId);
     return {
       satisfied: true,
       yieldReason: null,
@@ -1653,6 +1622,7 @@ export async function fanslyStatsSnapshotChunk(
         "window_captured",
         "none",
         {
+          scopeRef: "steady",
           newestCapturedAt: now,
           proofObservationId: persisted.observationId,
         },
@@ -1689,6 +1659,7 @@ export async function fanslyStatsSnapshotChunk(
         "window_captured",
         "none",
         {
+          scopeRef: "steady",
           newestCapturedAt: now,
           proofObservationId: persisted.observationId,
         },
@@ -1699,46 +1670,32 @@ export async function fanslyStatsSnapshotChunk(
     }
 
     if (state.stepIndex === 2) {
-      const before = now;
-      const after = new Date(now.getTime() - EARNINGS_TRAILING_DAYS * DAY_MS);
-      const offset = state.earningsOffset;
-      // REPEAT-CURSOR GUARD: a server that ignores `offset` would otherwise
-      // serve page 1 forever and this loop would spend the whole daily cap on
-      // one page. Refusing to re-fetch the same offset turns that into a
-      // completed step with the pages we did get.
-      if (state.earningsPreviousOffset === offset && offset > 0) {
-        await input.telemetry.addAnomaly({
-          code: "fansly_stats_earnings_cursor_repeat",
-          severity: "warn",
-          message: "Fansly earnings-stats pagination did not advance; step completed early",
-          details: { offset },
-        });
-        state = { ...state, stepIndex: 3, earningsOffset: 0, earningsPreviousOffset: null };
-        await saveProgress();
-        continue;
-      }
+      state.earningsWalk ??= startEarningsWindow(
+        now.getTime() - EARNINGS_TRAILING_DAYS * DAY_MS, now.getTime(),
+      );
+      const walk = state.earningsWalk;
+      const requested = walk.pending.at(-1)!;
       const response = await app.adapter.getEarningsStatsWindow(requestContext, {
-        before,
-        after,
+        before: new Date(requested.beforeMs), after: new Date(requested.afterMs),
         limit: EARNINGS_PAGE_LIMIT,
-        offset,
       });
-      await persist("earnings_stats_snapshot", {
-        mode: "steady",
-        before: before.toISOString(),
-        after: after.toISOString(),
-        limit: EARNINGS_PAGE_LIMIT,
-        offset,
+      const persisted = await persist("earnings_stats_snapshot", {
+        mode: "steady", before: new Date(requested.beforeMs).toISOString(),
+        after: new Date(requested.afterMs).toISOString(), limit: EARNINGS_PAGE_LIMIT,
       }, response.raw);
-      const rows = rowCount(response.raw);
-      const exhausted = rows < EARNINGS_PAGE_LIMIT;
-      state = exhausted
-        ? { ...state, stepIndex: 3, earningsOffset: 0, earningsPreviousOffset: null }
-        : {
-          ...state,
-          earningsOffset: offset + EARNINGS_PAGE_LIMIT,
-          earningsPreviousOffset: offset,
-        };
+      const result = advanceEarningsWindow(walk, response.raw);
+      if (result === "invalid") throw new FanslyLaneInvalidResponseError("earnings_stats_snapshot");
+      if (result === "window_not_honoured" || result === "saturated_day") {
+        await recordEarningsPartial(result, requested, persisted.observationId ?? null, "steady");
+      }
+      if (result === "complete") {
+        await coverage(CAPTURE_COVERAGE_PLANES.statsEarnings, "window_captured", "none", {
+          scopeRef: "steady", newestCapturedAt: new Date(walk.beforeMs),
+          proofObservationId: persisted.observationId, reasonCode: "trailing_window_captured",
+          cursor: { afterMs: walk.afterMs, beforeMs: walk.beforeMs },
+        });
+      }
+      if (result !== "continue") state = { ...state, stepIndex: 3, earningsWalk: null };
       await saveProgress();
       continue;
     }
@@ -1880,6 +1837,9 @@ export async function fanslyStatsSnapshotChunk(
         sweepDay: null,
       };
       if (completedSweepDay === today) {
+        await saveProgress();
+        const pendingHistory = await runBackfill();
+        if (pendingHistory !== null) return pendingHistory;
         await completeLane(input.syncRunId);
         return {
           satisfied: true,
