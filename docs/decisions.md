@@ -11680,6 +11680,21 @@ parser semantics/version. The historical unbound corpus remains retained. Live
 acceptance and the bounded repair of already-pending current receipts are separate
 rollout checks in `docs/runbooks/ofapi-webhook-recovery.md`.
 
+**Production acceptance, 2026-09-08 10:10–10:24 UTC:** after explicit owner
+approval, PR #156 deployed as `a6631a709991` with migration 0171. All runtime roles
+reported the intended revision and remained healthy. A refreshed binding census
+bounded the approved six-kind local replay to 84 pending observations, solely
+pages 8 and 9, through `10:14:00Z`; preview and write completed without errors,
+and the remaining current-page debt was zero. Eight subsequent real receipts
+were already v5 while background sweeps still traversed old unmapped IDs.
+The original failed history scan automatically completed at offset 91 with its
+legacy bounds intact. A later normal free history scan completed 2,248 attempts
+for a closed day, with 553 new inserts; it resumed safely after one provider body
+timeout. All 22 failed delivery attempts in that day had a success with the same
+delivery UUID. No registration/collection-policy change or remote redelivery was
+needed. Evidence and exact scope are recorded in
+`investigations/ofapi-webhooks-prod-acceptance-2026-09-08.md` and the runbook.
+
 
 ## Decision 277: Fansly known-head debt before A0 (2026-09-08)
 
