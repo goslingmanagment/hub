@@ -18,6 +18,11 @@ account after deletion; credentials, rights, cached cards and historical usage
 remain bound to the original ID. See
 [account deletion](runbooks/user-account-deletion.md).
 
+Account-target operations use immutable `userId`. A login can belong to a new
+account after deletion; credentials, rights, cached cards and historical usage
+remain bound to the original ID. See
+[account deletion](runbooks/user-account-deletion.md).
+
 ## The five axes
 
 1. **Role** — `owner`, `team_lead`, `chatter`. Set at invitation, changed only
