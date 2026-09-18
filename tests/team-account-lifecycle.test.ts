@@ -48,7 +48,7 @@ import { ConfirmationDialog, UserDetailModal } from "../apps/dashboard/src/pages
 
 function member(id: number, username = "Nikita"): AdminUser {
   return {
-    id, username, role: "chatter", assignedPages: [], apiKeyStatus: null,
+    id, username, role: "chatter", assignedPages: [],
     mustChangePassword: false, disabledAt: null, deletedAt: null,
     lastActiveAt: null, registrationState: "active",
   };

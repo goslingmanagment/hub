@@ -10,8 +10,9 @@ import {
 } from "../apps/runtime/src/services/account-links.ts";
 import {
   assignPageToUser, changeOwnPassword, createUserAccount, deactivateUser, deleteUser, grantModelToUser,
-  issueChatterApiKey, issueDeviceTokenForUserId, loginWithPassword, reactivateUser, setUserPassword,
+  issueDeviceTokenWithPassword, loginWithPassword, reactivateUser, setUserPassword,
 } from "../apps/runtime/src/services/auth.ts";
+import { issueDeviceTokenForUserId } from "./helpers/device-credentials.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 
@@ -155,7 +156,6 @@ describe("immutable user identities and reusable logins", () => {
     await grantModelToUser(setup.app, { userId: originalId, modelSlug: "lora-model" }, audit());
     const originalCookie = await cookieFor(setup.server, "nikita", OLD_PASSWORD);
     const ownerCookie = await cookieFor(setup.server, "owner", "owner-secret");
-    const apiKey = await issueChatterApiKey(setup.app, { userId: originalId }, audit());
     const device = await issueDeviceTokenForUserId(setup.app, { userId: originalId, label: "old Firefox" }, audit());
     const pendingResponse = await setup.server.inject({
       method: "POST", url: "/api/v1/auth/device-tokens/password",
@@ -170,7 +170,7 @@ describe("immutable user identities and reusable logins", () => {
       method: "DELETE", url: `/api/v1/admin/users/by-id/${originalId}`, headers: { cookie: ownerCookie },
     });
     expect(removed.statusCode).toBe(200);
-    expect(removed.json()).toMatchObject({ ok: true, revokedApiKeys: 1, revokedDeviceTokens: 1 });
+    expect(removed.json()).toMatchObject({ ok: true, revokedDeviceTokens: 1 });
     const replacement = await createInvite(setup.app, { username: "nIKITA", pageLabels: [] }, audit());
     const replacementId = replacement.user.id;
     expect(replacementId).not.toBe(originalId);
@@ -181,7 +181,6 @@ describe("immutable user identities and reusable logins", () => {
 
     for (const headers of [
       { cookie: originalCookie },
-      { authorization: `Bearer ${apiKey.key}` },
       { authorization: `Bearer ${device.token}` },
     ]) {
       expect((await setup.server.inject({ method: "GET", url: "/api/v1/auth/me", headers })).statusCode).toBe(401);
@@ -301,7 +300,6 @@ describe("immutable user identities and reusable logins", () => {
     const userId = invited.user.id;
     await redeemAccountLink(setup.app, { token: invited.link.token, password: OLD_PASSWORD });
     await cookieFor(setup.server, "Nikita", OLD_PASSWORD);
-    await issueChatterApiKey(setup.app, { userId }, audit());
     await issueDeviceTokenForUserId(setup.app, { userId, label: "existing device" }, audit());
     const pending = await setup.server.inject({
       method: "POST", url: "/api/v1/auth/device-tokens/password",
@@ -370,7 +368,7 @@ describe("immutable user identities and reusable logins", () => {
   });
 
   it.for([
-    "page grant", "model grant", "API key", "device token", "link creation", "link redemption",
+    "page grant", "model grant", "device token", "link creation", "link redemption",
     "password reset", "password login", "restore",
   ] as const)("refuses racing %s after deletion obtains the user lock first", async (operation, context) => {
     const setup = requireSetup(context);
@@ -384,8 +382,12 @@ describe("immutable user identities and reusable logins", () => {
       switch (operation) {
         case "page grant": return assignPageToUser(setup.app, { userId, pageLabel: "lora-fansly" }, audit());
         case "model grant": return grantModelToUser(setup.app, { userId, modelSlug: "lora-model" }, audit());
-        case "API key": return issueChatterApiKey(setup.app, { userId }, audit());
-        case "device token": return issueDeviceTokenForUserId(setup.app, { userId, label: "racing device" }, audit());
+        // Decision 370 left one way to mint a bearer: username + password. It
+        // re-reads the identity under the lock, which is what must refuse here.
+        case "device token": return issueDeviceTokenWithPassword(setup.app, {
+          username: "nikita", password: OLD_PASSWORD, label: "racing device",
+          mode: "active", clientVersion: null,
+        });
         case "link creation": return createAccountLinkForUserId(setup.app, { userId, kind: "password_reset" }, audit());
         case "link redemption": return redeemAccountLink(setup.app, { token: resetLink.token, password: NEW_PASSWORD });
         case "password reset": return setUserPassword(setup.app, { userId, password: NEW_PASSWORD }, audit());

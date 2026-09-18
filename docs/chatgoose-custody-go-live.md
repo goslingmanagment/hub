@@ -2,6 +2,12 @@
 
 Status: active production runbook, 2026-06-20.
 
+> **Historical credential vocabulary.** Where this record says "chatter key" or
+> "API key" about a HUB credential, it describes what existed on the day of the
+> go-live. Decision 370 retired that lane: a person's bearer is a device token
+> they sign in for, and there is no key to issue or revoke. Vendor keys (OFAPI,
+> AI providers) are unaffected and still mean what they say here.
+
 ## Production Boundary
 
 Core is the normal custody path for OFAPI reads, text commands, approved command-executor slices,

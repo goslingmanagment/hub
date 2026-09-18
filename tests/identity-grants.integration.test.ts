@@ -12,8 +12,9 @@ import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import {
   authenticateDeviceToken,
   createUserAccount,
-  issueChatterApiKey,
+  setUserPassword,
 } from "../apps/runtime/src/services/auth.ts";
+import { issueChatterDeviceToken } from "./helpers/device-credentials.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
@@ -96,34 +97,31 @@ async function get(baseUrl: string, path: string, headers: Record<string, string
 }
 
 describe("Stage 22 identity", () => {
-  it("chatter password login works; must_change_password gates everything but the auth surface", async (context) => {
+  it("chatter password login works; mustChangePassword is a dead constant on the wire", async (context) => {
     if (!requireSetup(context)) return;
 
-    const ownerCookie = cookieOf(await login(legacyUrl, "dima", "owner-secret"));
-
-    // Owner sets the chatter's password with the must-change flag (invite v1).
-    const setResponse = await fetch(`${legacyUrl}/api/v1/admin/users/by-id/${await fixtureUserId(app!, "anton")}/password`, {
-      method: "PATCH",
-      headers: { "content-type": "application/json", cookie: ownerCookie },
-      body: JSON.stringify({ password: "first-secret-1", mustChangePassword: true }),
-    });
-    expect(setResponse.status).toBe(200);
+    // Decision 370: there is no admin set-password route. The owner resets by
+    // link; the CLI primitive below is the same one `hub user set-password` runs.
+    await setUserPassword(app!, {
+      userId: await fixtureUserId(app!, "anton"),
+      password: "first-secret-1",
+    }, { source: "cli" });
 
     const chatterLogin = await login(legacyUrl, "anton", "first-secret-1");
     expect(chatterLogin.status).toBe(200);
     const chatterCookie = cookieOf(chatterLogin);
     const loginBody = await chatterLogin.json() as { user: { mustChangePassword: boolean } };
-    expect(loginBody.user.mustChangePassword).toBe(true);
+    // The field survives on the wire for the un-revendored client SDKs, and it
+    // is false for everyone forever — there is no flag and no gate left.
+    expect(loginBody.user.mustChangePassword).toBe(false);
 
-    // Everything but the self-serve auth surface is gated…
-    const blocked = await get(legacyUrl, "/api/v1/pages", { cookie: chatterCookie });
-    expect(blocked.status).toBe(403);
-    // …while me stays reachable.
+    // Nothing is gated any more: a chatter session reads its own pages…
+    expect((await get(legacyUrl, "/api/v1/pages", { cookie: chatterCookie })).status).toBe(200);
+    // …and me stays reachable.
     const me = await get(legacyUrl, "/api/v1/auth/me", { cookie: chatterCookie });
     expect(me.status).toBe(200);
 
-    // Change the password: sessions are revoked; the new credential logs in
-    // clean and the gate is gone.
+    // Change the password: sessions are revoked; the new credential logs in clean.
     const change = await fetch(`${legacyUrl}/api/v1/auth/change-password`, {
       method: "POST",
       headers: { "content-type": "application/json", cookie: chatterCookie },
@@ -144,14 +142,19 @@ describe("Stage 22 identity", () => {
     expect(dashboard.status).toBe(403);
   });
 
-  it("device tokens: issue via session, dual-accepted beside api keys, revoke → 401, expire → 401", async (context) => {
+  it("device tokens: issued by password, ride kind:apiKey routes, revoke → 401, expire → 401", async (context) => {
     if (!requireSetup(context)) return;
 
-    const chatterCookie = cookieOf(await login(legacyUrl, "anton", "chosen-secret-1"));
-    const issued = await fetch(`${legacyUrl}/api/v1/auth/device-tokens`, {
+    // Decision 370: the only client sign-in is username + password, no cookie.
+    const issued = await fetch(`${legacyUrl}/api/v1/auth/device-tokens/password`, {
       method: "POST",
-      headers: { "content-type": "application/json", cookie: chatterCookie },
-      body: JSON.stringify({ label: "antons-macbook" }),
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        username: "anton",
+        password: "chosen-secret-1",
+        label: "antons-macbook",
+        mode: "active",
+      }),
     });
     expect(issued.status).toBe(200);
     const deviceToken = (await issued.json() as { token: string }).token;
@@ -164,12 +167,22 @@ describe("Stage 22 identity", () => {
       headers: { "content-type": "application/json", cookie: ownerCookie },
       body: JSON.stringify({ pageLabel: "lana" }),
     });
-    const apiKey = (await issueChatterApiKey(app!, { userId: await fixtureUserId(app!, "anton") }, { source: "cli" })).key;
+    const siblingToken = (await issueChatterDeviceToken(
+      app!,
+      { username: "anton", label: "antons-firefox" },
+      { source: "cli" },
+    )).key;
 
-    // Parallel acceptance: SAME user, api key AND device token, one run.
-    const viaKey = await get(legacyUrl, "/api/v1/auth/me", { authorization: `Bearer ${apiKey}` });
-    expect(viaKey.status).toBe(200);
-    expect((await viaKey.json() as { authMethod: string }).authMethod).toBe("api_key");
+    // Parallel acceptance: SAME user, two devices, one run — and both answer
+    // with the one bearer authMethod the kernel still has.
+    const viaSibling = await get(legacyUrl, "/api/v1/auth/me", { authorization: `Bearer ${siblingToken}` });
+    expect(viaSibling.status).toBe(200);
+    expect((await viaSibling.json() as { authMethod: string }).authMethod).toBe("device_token");
+
+    // An unknown bearer prefix is nobody: no fallback lane catches it.
+    expect((await get(legacyUrl, "/api/v1/auth/me", {
+      authorization: "Bearer agency_hub_core_deadbeefdeadbeefdeadbeef",
+    })).status).toBe(401);
 
     const viaDevice = await get(legacyUrl, "/api/v1/auth/me", { authorization: `Bearer ${deviceToken}` });
     expect(viaDevice.status).toBe(200);
@@ -195,14 +208,17 @@ describe("Stage 22 identity", () => {
       "update device_tokens set expires_at = now() + interval '1 day' where label = 'antons-macbook'",
     );
 
-    // Admin revoke-all: device 401s, the api key keeps working (independent kinds).
+    // §4.4 "Отозвать все устройства": every device token of the person dies —
+    // siblings included — while the cookie session is untouched.
+    const chatterCookie = cookieOf(await login(legacyUrl, "anton", "chosen-secret-1"));
     const revoke = await fetch(`${legacyUrl}/api/v1/admin/users/by-id/${await fixtureUserId(app!, "anton")}/device-tokens`, {
       method: "DELETE",
       headers: { cookie: ownerCookie },
     });
     expect(revoke.status).toBe(200);
     expect((await get(legacyUrl, "/api/v1/auth/me", { authorization: `Bearer ${deviceToken}` })).status).toBe(401);
-    expect((await get(legacyUrl, "/api/v1/auth/me", { authorization: `Bearer ${apiKey}` })).status).toBe(200);
+    expect((await get(legacyUrl, "/api/v1/auth/me", { authorization: `Bearer ${siblingToken}` })).status).toBe(401);
+    expect((await get(legacyUrl, "/api/v1/auth/me", { cookie: chatterCookie })).status).toBe(200);
   });
 
   it("grants: parity with assignments, model-scope reaches FUTURE pages, revoke-all → 403", async (context) => {
@@ -227,7 +243,7 @@ describe("Stage 22 identity", () => {
     });
     expect(grant.status).toBe(200);
 
-    const veraKey = (await issueChatterApiKey(app!, { userId: await fixtureUserId(app!, "vera") }, { source: "cli" })).key;
+    const veraKey = (await issueChatterDeviceToken(app!, { username: "vera" }, { source: "cli" })).key;
     // Existing page of the model: visible through the grants read path.
     expect((await get(grantsUrl, "/api/v1/pages/lana/subscribers", { authorization: `Bearer ${veraKey}` })).status).toBe(200);
     // …and on the LEGACY read path it is NOT (no assignment row exists) —

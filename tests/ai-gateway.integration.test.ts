@@ -1,4 +1,3 @@
-import { fixtureUserId } from "./helpers/user-identity.ts";
 import { randomUUID } from "node:crypto";
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -24,8 +23,8 @@ import {
 } from "../apps/runtime/src/services/ai-gateway.ts";
 import {
   createUserAccount,
-  issueChatterApiKey,
 } from "../apps/runtime/src/services/auth.ts";
+import { issueChatterDeviceToken } from "./helpers/device-credentials.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
@@ -92,8 +91,8 @@ beforeEach(async (context) => {
     throw new Error("Expected chatter user to be created");
   }
   chatterUserId = chatter.id;
-  chatterKey = (await issueChatterApiKey(appContext, {
-    userId: await fixtureUserId(appContext, "chatter"),
+  chatterKey = (await issueChatterDeviceToken(appContext, {
+    username: "chatter",
     pageLabel: "lora-of",
   }, { source: "cli" })).key;
 

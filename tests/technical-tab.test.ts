@@ -44,7 +44,6 @@ function person(username: string, disabledAt: string | null = null) {
     role: "chatter" as const,
     mustChangePassword: false,
     assignedPages: [],
-    apiKeyStatus: null,
     disabledAt,
     deletedAt: null,
     lastActiveAt: null,

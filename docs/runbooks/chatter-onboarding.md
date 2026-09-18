@@ -78,9 +78,8 @@ Two things to keep straight, because the names are close:
 
 - **A password reset always terminates every sign-in.** There is no variant that
   keeps the old devices alive; that is deliberate.
-- **«Отозвать все устройства» leaves the browser session and any legacy API key
-  alive.** It is a device operation, not an eviction. See the offboarding
-  runbook's ladder table.
+- **«Отозвать все устройства» leaves the browser session alive.** It is a device
+  operation, not an eviction. See the offboarding runbook's ladder table.
 
 ## Checks after the person is in
 

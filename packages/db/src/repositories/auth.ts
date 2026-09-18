@@ -1,11 +1,10 @@
-import { and, desc, eq, gt, inArray, isNull, ne, sql } from "drizzle-orm";
+import { and, eq, gt, isNull, ne, sql } from "drizzle-orm";
 
 import type { UserRole } from "@agency_hub_core/shared";
 
 import type { Database } from "../client.ts";
 import {
   accountLinks,
-  apiKeys,
   auditEvents,
   authSessions,
   models,
@@ -26,12 +25,6 @@ export interface CreateAuthSessionInput {
   userId: number;
   tokenDigest: string;
   expiresAt: Date;
-}
-
-export interface CreateApiKeyInput {
-  userId: number;
-  keyPrefix: string;
-  tokenDigest: string;
 }
 
 export interface InsertAuditEventInput {
@@ -188,98 +181,6 @@ export async function revokeAuthSessionsForUser(
 
 export async function deleteExpiredAuthSessions(db: Database, now = new Date()) {
   return db.delete(authSessions).where(sql`${authSessions.expiresAt} < ${now}`);
-}
-
-export async function createApiKey(db: Database, input: CreateApiKeyInput) {
-  const [created] = await db.insert(apiKeys).values(input).returning();
-  return created;
-}
-
-export async function findActiveApiKeysForUser(db: Database, userId: number) {
-  return db.query.apiKeys.findMany({
-    where: and(
-      eq(apiKeys.userId, userId),
-      isNull(apiKeys.revokedAt),
-    ),
-    orderBy: (table, { desc: orderDesc }) => [orderDesc(table.createdAt)],
-  });
-}
-
-export async function lockUserForApiKeyRotation(db: Database, userId: number) {
-  await db.execute(sql`
-    select id
-    from ${users}
-    where id = ${userId}
-    for update
-  `);
-}
-
-export async function revokeApiKeysForUser(
-  db: Database,
-  userId: number,
-  revokedReason: string | null,
-) {
-  return db.update(apiKeys).set({
-    revokedAt: new Date(),
-    revokedReason,
-  }).where(and(
-    eq(apiKeys.userId, userId),
-    isNull(apiKeys.revokedAt),
-  )).returning();
-}
-
-export async function revokeApiKeysByIds(
-  db: Database,
-  apiKeyIds: number[],
-  revokedReason: string | null,
-) {
-  if (apiKeyIds.length === 0) {
-    return [];
-  }
-
-  return db.update(apiKeys).set({
-    revokedAt: new Date(),
-    revokedReason,
-  }).where(and(
-    inArray(apiKeys.id, apiKeyIds),
-    isNull(apiKeys.revokedAt),
-  )).returning();
-}
-
-export async function findApiKeyByDigest(db: Database, tokenDigest: string) {
-  return db.query.apiKeys.findFirst({
-    where: eq(apiKeys.tokenDigest, tokenDigest),
-  });
-}
-
-export async function touchApiKey(db: Database, apiKeyId: number) {
-  const [updated] = await db.update(apiKeys).set({
-    lastUsedAt: new Date(),
-  }).where(eq(apiKeys.id, apiKeyId)).returning();
-
-  return updated;
-}
-
-export async function listApiKeys(db: Database, userIds?: number[]) {
-  const clauses = [isNull(users.deletedAt)];
-  if (userIds && userIds.length > 0) {
-    clauses.push(inArray(apiKeys.userId, userIds));
-  }
-
-  return db.select({
-    id: apiKeys.id,
-    userId: apiKeys.userId,
-    username: users.username,
-    role: users.role,
-    keyPrefix: apiKeys.keyPrefix,
-    lastUsedAt: apiKeys.lastUsedAt,
-    createdAt: apiKeys.createdAt,
-    revokedAt: apiKeys.revokedAt,
-    revokedReason: apiKeys.revokedReason,
-  }).from(apiKeys)
-    .innerJoin(users, eq(users.id, apiKeys.userId))
-    .where(clauses.length > 0 ? and(...clauses) : undefined)
-    .orderBy(desc(apiKeys.createdAt));
 }
 
 export async function insertAuditEvent(db: Database, input: InsertAuditEventInput) {
@@ -517,11 +418,6 @@ export async function revokeDeviceTokenById(
     isNull(deviceTokens.revokedAt),
   )).returning({ id: deviceTokens.id });
   return revoked ?? null;
-}
-
-export async function updateUserMustChangePassword(db: Database, userId: number, value: boolean) {
-  await db.update(users).set({ mustChangePassword: value, updatedAt: new Date() })
-    .where(and(eq(users.id, userId), isNull(users.deletedAt)));
 }
 
 export async function updateUserDisabledAt(

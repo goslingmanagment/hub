@@ -1,4 +1,3 @@
-import { fixtureUserId } from "./helpers/user-identity.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 
@@ -29,8 +28,8 @@ import type { VoiceTtsProvider } from "../apps/runtime/src/services/voice-eleven
 import { buildSdkFiles } from "../packages/contracts/src/generate-sdk.ts";
 import {
   createUserAccount,
-  issueChatterApiKey,
 } from "../apps/runtime/src/services/auth.ts";
+import { issueChatterDeviceToken } from "./helpers/device-credentials.ts";
 import { kernelOperations } from "../packages/sdk/src/operations.ts";
 import { KERNEL_CONTRACT_HASH } from "../packages/sdk/src/meta.ts";
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
@@ -81,8 +80,8 @@ beforeAll(async () => {
   const model = await createModel(testDb.db, { slug: "lana-model", name: "Lana Model" });
   const lana = await createFanslyPage(testDb.db, { modelId: model.id, label: "lana" });
   lanaPageId = lana.id;
-  const issued = await issueChatterApiKey(seedContext, {
-    userId: await fixtureUserId(seedContext, "anton"),
+  const issued = await issueChatterDeviceToken(seedContext, {
+    username: "anton",
     pageLabel: "lana",
   }, { source: "cli" });
   chatterKey = issued.key;
@@ -178,7 +177,7 @@ describe("kernel SDK against a live server", () => {
       auth: { mode: "bearer", token: () => chatterKey },
     });
     const me = await bearer.me();
-    expect(me.authMethod).toBe("api_key");
+    expect(me.authMethod).toBe("device_token");
     expect(me.user.username).toBe("anton");
 
     const pages = await bearer.pages();

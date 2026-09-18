@@ -28,7 +28,6 @@ export const ROLE_LABEL: Readonly<Record<UserRole, string>> = {
   owner: "владелец",
   team_lead: "тимлид",
   chatter: "чаттер",
-  content_manager: "контент-менеджер",
 };
 
 /** Deactivation wins over everything; an account that has not set its
@@ -58,11 +57,12 @@ export function findTeamMemberByLogin(
 }
 
 export function restoreTeamMemberMessage(user: AdminUser): string {
+  // Decision 370 retired must_change_password: there is no "must change first"
+  // state left to branch on, so a restored account either has a password or
+  // has never finished its registration.
   const access = user.registrationState === "invited"
     ? "Пароль ещё не задан. После возвращения создайте новое приглашение в разделе «Ссылки»."
-    : user.mustChangePassword
-      ? "Перед входом в расширение или приложение нужно сменить пароль. После восстановления откройте раздел «Ссылки» и выберите «Сбросить пароль ссылкой»."
-      : "Человек сможет снова войти с прежним паролем. Если пароль забыт, создайте ссылку для сброса.";
+    : "Человек сможет снова войти с прежним паролем. Если пароль забыт, создайте ссылку для сброса.";
   return `Вернётся тот же участник с сохранённой историей, ролью и назначенными страницами. ${access} Прежние входы и ссылки останутся недействительными.`;
 }
 

@@ -175,15 +175,15 @@ describe("authenticateAgentKey", () => {
 });
 
 describe("authenticateBearerToken prefix routing", () => {
-  it("routes an agent-prefixed token to the agent lane, never to the api-key lane", async () => {
+  it("routes an agent-prefixed token to the agent lane and nowhere else", async () => {
     const token = `${AGENT_KEY_TOKEN_PREFIX}routed000000000000000`;
     await issueKey({ token });
 
     const principal = await authenticateBearerToken(appContext, token);
     expect(principal && isAgentPrincipal(principal)).toBe(true);
 
-    // The api-key lane must not see this digest at all: nothing was written to
-    // api_keys, and a same-digest lookup there finds nothing.
+    // The retired api-key table must not carry this digest either: the agent
+    // plane writes agent_keys and nothing else.
     const apiKeys = await testDb!.pool.query(
       "select 1 from api_keys where token_digest = $1",
       [sha256Hex(token)],
@@ -192,8 +192,43 @@ describe("authenticateBearerToken prefix routing", () => {
     expect(await findAgentKeyByDigest(testDb!.db, sha256Hex(token))).not.toBeNull();
   });
 
-  it("does not treat a legacy bearer as an agent key", async () => {
-    const principal = await authenticateBearerToken(appContext, "agency_hub_core_unknownkey");
-    expect(principal).toBeNull();
+  it("answers nobody for a bearer that matches no lane prefix", async () => {
+    // Decision 370: the dispatcher used to END in the api-key lane, so ANY
+    // unrecognized string cost a database lookup and was one row away from a
+    // principal. Now an unknown prefix is refused outright — including the old
+    // `agency_hub_core_` api-key prefix, whose rows survive as facts.
+    for (const token of [
+      "agency_hub_core_unknownkey",
+      "agency_hub_core_liveshapedkey000000000000",
+      "not-even-prefixed",
+      "",
+    ]) {
+      expect(await authenticateBearerToken(appContext, token), token).toBeNull();
+    }
+  });
+
+  it("refuses a bearer whose api_keys row is still live in the table", async () => {
+    // The strongest form of the pin: a row that WOULD have authenticated before
+    // this PR. The table is a fact store now — a live row buys nothing.
+    const token = "agency_hub_core_stillaliveinthetable00";
+    const user = await createUser(testDb!.db, {
+      username: "legacy-key-holder",
+      role: "chatter",
+      passwordHash: null,
+    });
+    await testDb!.pool.query(
+      "insert into api_keys (user_id, key_prefix, token_digest) values ($1, $2, $3)",
+      [user!.id, token.slice(0, 20), sha256Hex(token)],
+    );
+
+    expect(await authenticateBearerToken(appContext, token)).toBeNull();
+
+    const rows = await testDb!.pool.query(
+      "select revoked_at from api_keys where token_digest = $1",
+      [sha256Hex(token)],
+    );
+    // Nothing revoked it, nothing deleted it: it simply has no lane.
+    expect(rows.rows).toHaveLength(1);
+    expect(rows.rows[0]).toMatchObject({ revoked_at: null });
   });
 });

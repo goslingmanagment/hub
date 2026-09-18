@@ -70,7 +70,6 @@ function user(overrides: Partial<AdminUser> & { username: string }): AdminUser {
     role: "chatter",
     mustChangePassword: false,
     assignedPages: [],
-    apiKeyStatus: null,
     disabledAt: null,
     deletedAt: null,
     lastActiveAt: null,
@@ -234,17 +233,12 @@ describe("existing-login recovery", () => {
     expect(invited).not.toContain("войти с прежним паролем");
   });
 
-  it("requires a reset link when the restored password must be changed before client sign-in", () => {
-    const message = restoreTeamMemberMessage(user({ username: "Nikita", mustChangePassword: true }));
-    expect(message).toContain("Перед входом в расширение или приложение нужно сменить пароль");
-    expect(message).toContain("Сбросить пароль ссылкой");
-    expect(message).not.toContain("войти с прежним паролем");
-    expect(message).not.toContain("создайте новое приглашение");
-  });
-
-  it("keeps an unfinished registration on the invitation path even if a password-change flag is present", () => {
+  // Decision 370 retired must_change_password; `mustChangePassword` is a wire
+  // constant `false`, so the "must change it first" restoration copy is gone
+  // with the flag rather than kept as an unreachable branch.
+  it("keeps an unfinished registration on the invitation path", () => {
     const message = restoreTeamMemberMessage(user({
-      username: "Nikita", registrationState: "invited", mustChangePassword: true,
+      username: "Nikita", registrationState: "invited",
     }));
     expect(message).toContain("Пароль ещё не задан");
     expect(message).toContain("создайте новое приглашение");

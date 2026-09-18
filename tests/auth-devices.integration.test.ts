@@ -8,10 +8,13 @@ import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { createAccountLinkForUserId } from "../apps/runtime/src/services/account-links.ts";
 import {
   createUserAccount,
-  issueChatterApiKey,
-  issueDeviceTokenForUserId,
   setUserPassword,
 } from "../apps/runtime/src/services/auth.ts";
+import {
+  issueChatterDeviceToken,
+  issueDeviceTokenForUserId,
+  issueDeviceTokenForUsername,
+} from "./helpers/device-credentials.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
@@ -196,9 +199,9 @@ describe("the cabinet's device list", () => {
     const setup = requireSetup(context);
     if (!setup) return;
     await createUserAccount(setup.app, { username: "vera", role: "chatter" }, { source: "cli" });
-    const apiKey = (await issueChatterApiKey(setup.app, { userId: await fixtureUserId(setup.app, "vera") }, OWNER_AUDIT)).key;
-    const device = await issueDeviceTokenForUserId(setup.app, {
-      userId: await fixtureUserId(setup.app, "grisha"),
+    const apiKey = (await issueChatterDeviceToken(setup.app, { username: "vera" }, OWNER_AUDIT)).key;
+    const device = await issueDeviceTokenForUsername(setup.app, {
+      username: "grisha",
       label: "Firefox · Windows",
     }, OWNER_AUDIT);
 
@@ -299,7 +302,7 @@ describe("the owner's revocations", () => {
     expect(unknown.statusCode).toBe(404);
   });
 
-  it("terminates devices, sessions, keys and links — and leaves the password alone", async (context) => {
+  it("terminates devices, sessions and links — and leaves the password alone", async (context) => {
     const setup = requireSetup(context);
     if (!setup) return;
     await createUserAccount(setup.app, { username: "vera", role: "chatter" }, { source: "cli" });
@@ -307,9 +310,13 @@ describe("the owner's revocations", () => {
       userId: await fixtureUserId(setup.app, "vera"),
       password: "chatter-secret-2",
     }, OWNER_AUDIT);
-    const apiKey = (await issueChatterApiKey(setup.app, { userId: await fixtureUserId(setup.app, "vera") }, OWNER_AUDIT)).key;
-    const device = await issueDeviceTokenForUserId(setup.app, {
-      userId: await fixtureUserId(setup.app, "vera"),
+    const secondDevice = (await issueChatterDeviceToken(
+      setup.app,
+      { username: "vera", label: "Desktop · vera-pc" },
+      OWNER_AUDIT,
+    )).key;
+    const device = await issueDeviceTokenForUsername(setup.app, {
+      username: "vera",
       label: "Firefox · Windows",
     }, OWNER_AUDIT);
     await createAccountLinkForUserId(setup.app, {
@@ -325,10 +332,10 @@ describe("the owner's revocations", () => {
       headers: { cookie: ownerCookie },
     });
     expect(response.statusCode).toBe(200);
+    // Decision 370: no api-key counter left to report — and BOTH devices die.
     expect(response.json()).toEqual({
-      deviceTokens: 1,
+      deviceTokens: 2,
       sessions: 1,
-      apiKeys: 1,
       links: 1,
     });
 
@@ -340,7 +347,7 @@ describe("the owner's revocations", () => {
     expect((await setup.server.inject({
       method: "GET",
       url: "/api/v1/auth/me",
-      headers: { authorization: `Bearer ${apiKey}` },
+      headers: { authorization: `Bearer ${secondDevice}` },
     })).statusCode).toBe(401);
     expect((await setup.server.inject({
       method: "GET",

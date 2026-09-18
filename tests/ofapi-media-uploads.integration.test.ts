@@ -1,4 +1,3 @@
-import { fixtureUserId } from "./helpers/user-identity.ts";
 import { runMediaPlaneProjection } from "../apps/runtime/src/services/projections/media-plane.ts";
 import { getOfapiAsyncLifecycle } from "../apps/runtime/src/services/ofapi-async-lifecycle.ts";
 import { encryptJson } from "@agency_hub_core/shared";
@@ -33,8 +32,8 @@ import {
 } from "./helpers/db.ts";
 import {
   createUserAccount,
-  issueChatterApiKey,
 } from "../apps/runtime/src/services/auth.ts";
+import { issueChatterDeviceToken } from "./helpers/device-credentials.ts";
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import { createOfapiClient } from "../apps/runtime/src/services/ofapi.ts";
 import { ofapiCollectionPolicyHooks } from "../apps/runtime/src/services/ofapi-collection-policy.ts";
@@ -746,9 +745,9 @@ describe("owned OFAPI uploads and vault catalog", () => {
       { source: "cli" },
     );
     const chatter = (
-      await issueChatterApiKey(
+      await issueChatterDeviceToken(
         app,
-        { userId: await fixtureUserId(app, "chatter"), pageLabel: "media-page" },
+        { username: "chatter", pageLabel: "media-page" },
         { source: "cli" },
       )
     ).key;

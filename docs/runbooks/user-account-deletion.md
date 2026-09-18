@@ -50,8 +50,9 @@ pnpm cli user reactivate --user-id 42
 pnpm cli user delete --user-id 42 --confirm-user-id 42
 ```
 
-`user set-password`, `assign-page`, `unassign-page` and per-user `api-key`
-commands also require `--user-id`. Creation continues to take `--username`.
+`user set-password`, `assign-page` and `unassign-page` also require
+`--user-id`. Creation continues to take `--username`. (The `apikey` group is
+gone entirely — Decision 370 retired the lane.)
 Old scripts passing `--username` to target an account fail instead of resolving
 that name to a replacement person. CLI actor attribution also uses IDs:
 `ai:feature-smoke` and `agent hydration decide` take `--as-user-id`; `erasure:run`
@@ -82,7 +83,7 @@ owner-authorized production operation.
 1. Open old account A, delete it, create B with the same normalized login.
 2. Old A card/cache/queued requests cannot read or mutate B; old ID operations
    and old username routes fail. Include numeric usernames.
-3. A's sessions, API keys, device tokens, pending reservations, invite and
+3. A's sessions, device tokens, pending reservations, invite and
    password-reset links remain unusable. B's credentials still work.
 4. B inherits no pages/model grants or history; A's audit/spend attribution
    remains attached to A's ID and reports do not group solely by username.

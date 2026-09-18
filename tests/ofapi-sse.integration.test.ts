@@ -1,4 +1,3 @@
-import { fixtureUserId } from "./helpers/user-identity.ts";
 import { createHmac } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
@@ -23,7 +22,8 @@ import { PgBoss } from "pg-boss";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
-import { createUserAccount, issueChatterApiKey } from "../apps/runtime/src/services/auth.ts";
+import { createUserAccount } from "../apps/runtime/src/services/auth.ts";
+import { issueChatterDeviceToken } from "./helpers/device-credentials.ts";
 import {
   ensureOfapiQueues,
   startOfapiEventWorker,
@@ -233,8 +233,8 @@ beforeEach(async (context) => {
     password: "owner-secret",
   }, { source: "cli" });
   await createUserAccount(appContext, { username: "anton", role: "chatter" }, { source: "cli" });
-  const issued = await issueChatterApiKey(appContext, {
-    userId: await fixtureUserId(appContext, "anton"),
+  const issued = await issueChatterDeviceToken(appContext, {
+    username: "anton",
     pageLabel: "lora-of",
   }, { source: "cli" });
   chatterKey = issued.key;

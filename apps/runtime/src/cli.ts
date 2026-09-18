@@ -79,12 +79,9 @@ import {
   createUserAccount,
   deactivateUser,
   deleteUser,
-  issueChatterApiKey,
-  listApiKeysForUsers,
   listUsersDetailed,
   reactivateUser,
   recordAudit,
-  revokeUserApiKeys,
   setUserPassword,
   unassignPageFromUser,
 } from "./services/auth.ts";
@@ -1231,7 +1228,7 @@ export function buildProgram() {
         // Operator smoke runs as the named user with owner-style page reach
         // (canAccessPage: owner role passes; others need the assignment).
         const principal = {
-          authMethod: "api_key" as const,
+          authMethod: "device_token" as const,
           user: { id: user.id, username: user.username, role: user.role },
           assignedPageIds: [pageRow.page.id],
         };
@@ -1436,7 +1433,6 @@ export function buildProgram() {
     });
 
   const user = program.command("user");
-  const apiKey = program.command("apikey");
 
   pageAdd
     .command("fansly")
@@ -2960,8 +2956,8 @@ export function buildProgram() {
           userId: options.userId,
         }, auditContext());
         console.log(
-          `Deactivated ${options.userId} (revoked ${result.revokedApiKeys} key(s), `
-          + `${result.revokedDeviceTokens} device token(s), ${result.revokedSessions} session(s))`,
+          `Deactivated ${options.userId} (revoked ${result.revokedDeviceTokens} `
+          + `device token(s), ${result.revokedSessions} session(s))`,
         );
       } finally {
         await app.close();
@@ -2981,7 +2977,7 @@ export function buildProgram() {
       try {
         const result = await deleteUser(app, { userId: options.userId }, auditContext());
         console.log(`Deleted account ID ${options.userId}; login released. Revoked `
-          + `${result.revokedApiKeys} key(s), ${result.revokedDeviceTokens} device token(s), `
+          + `${result.revokedDeviceTokens} device token(s), `
           + `${result.revokedSessions} session(s).`);
       } finally {
         await app.close();
@@ -2997,7 +2993,7 @@ export function buildProgram() {
         await reactivateUser(app, {
           userId: options.userId,
         }, auditContext());
-        console.log(`Reactivated account ID ${options.userId}; registration and password-change requirements are preserved. Previous sign-ins remain revoked.`);
+        console.log(`Reactivated account ID ${options.userId}; the stored password works again. Previous sign-ins remain revoked — the person signs in again on each device.`);
       } finally {
         await app.close();
       }
@@ -3020,7 +3016,11 @@ export function buildProgram() {
           userId: options.userId,
           password,
         }, auditContext());
-        console.log(`Updated password for ${options.userId}`);
+        // Decision 370: this is the full reset primitive — every device token,
+        // reservation and session of that person is now revoked.
+        console.log(
+          `Updated password for ${options.userId} — all of their sign-ins were ended`,
+        );
       } finally {
         await app.close();
       }
@@ -3055,88 +3055,6 @@ export function buildProgram() {
           pageLabel: options.page,
         }, auditContext());
         console.log(`Unassigned ${options.userId} from ${options.page}`);
-      } finally {
-        await app.close();
-      }
-    });
-
-  apiKey
-    .command("create")
-    .requiredOption("--user-id <id>", "immutable user ID from user list", parseUserId)
-    .option(
-      "--page <label>",
-      "also assign the user to this page before rotating the single API key",
-    )
-    .action(async (options) => {
-      const app = await createAppContext();
-      try {
-        const result = await issueChatterApiKey(app, {
-          userId: options.userId,
-          pageLabel: options.page,
-        }, auditContext());
-        console.log(result.key);
-      } finally {
-        await app.close();
-      }
-    });
-
-  apiKey
-    .command("revoke")
-    .requiredOption("--user-id <id>", "immutable user ID from user list", parseUserId)
-    .action(async (options) => {
-      const app = await createAppContext();
-      try {
-        const revoked = await revokeUserApiKeys(app, {
-          userId: options.userId,
-        }, auditContext());
-        console.log(`Revoked ${revoked.length} API key(s) for ${options.userId}`);
-      } finally {
-        await app.close();
-      }
-    });
-
-  apiKey
-    .command("list")
-    .action(async () => {
-      const app = await createAppContext();
-      try {
-        const rows = await listApiKeysForUsers(app);
-        printRows(
-          ["user_id", "username", "role", "key_prefix", "created_at", "last_used_at", "revoked_at"],
-          rows.map((row) => [
-            row.userId,
-            row.username,
-            row.role,
-            row.keyPrefix,
-            row.createdAt,
-            row.lastUsedAt,
-            row.revokedAt,
-          ]),
-        );
-      } finally {
-        await app.close();
-      }
-    });
-
-  apiKey
-    .command("show")
-    .requiredOption("--user-id <id>", "immutable user ID from user list", parseUserId)
-    .action(async (options) => {
-      const app = await createAppContext();
-      try {
-        const rows = await listApiKeysForUsers(app, [options.userId]);
-        printRows(
-          ["user_id", "username", "role", "key_prefix", "created_at", "last_used_at", "revoked_at"],
-          rows.map((row) => [
-            row.userId,
-            row.username,
-            row.role,
-            row.keyPrefix,
-            row.createdAt,
-            row.lastUsedAt,
-            row.revokedAt,
-          ]),
-        );
       } finally {
         await app.close();
       }

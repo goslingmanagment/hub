@@ -16,13 +16,13 @@ body remain handler-checked and are noted per route in the service layer.
 | `session` | dashboard cookie session (owner/team_lead) |
 | `any-session` | any live cookie session, any human role |
 | `owner-session` | dashboard cookie session, owner role only |
-| `apiKey` | bearer API key or device token |
+| `apiKey` | device-token bearer (historical kind name: Decision 370 retired API keys) |
 | `device-token` | device-token bearer only |
 | `pending-device-token` | short-lived pending device-token bearer, activation route only |
 | `agentKey` | Agent Read Plane key only; no human principal is admitted |
 | `any` | any authenticated principal except an agent key |
 
-## Routes (275)
+## Routes (267)
 
 | Method | Path | Route key | Kind | Roles | Page scope |
 | --- | --- | --- | --- | --- | --- |
@@ -147,15 +147,10 @@ body remain handler-checked and are noted per route in the service layer.
 | POST | `/api/v1/admin/sync/trigger-all` | `adminSyncTriggerAll` | `owner-session` | — | — |
 | GET | `/api/v1/admin/usage/chatters` | `adminChatterUsage` | `owner-session` | — | — |
 | GET | `/api/v1/admin/users` | `adminListUsers` | `owner-session` | — | — |
-| POST | `/api/v1/admin/users` | `adminCreateUser` | `owner-session` | — | — |
 | DELETE | `/api/v1/admin/users/by-id/:userId` | `adminDeleteUser` | `owner-session` | — | — |
-| DELETE | `/api/v1/admin/users/by-id/:userId/api-keys` | `adminRevokeApiKeys` | `owner-session` | — | — |
-| GET | `/api/v1/admin/users/by-id/:userId/api-keys` | `adminListApiKeys` | `owner-session` | — | — |
-| POST | `/api/v1/admin/users/by-id/:userId/api-keys` | `adminIssueApiKey` | `owner-session` | — | — |
 | POST | `/api/v1/admin/users/by-id/:userId/deactivate` | `adminDeactivateUser` | `owner-session` | — | — |
 | DELETE | `/api/v1/admin/users/by-id/:userId/device-tokens` | `adminRevokeDeviceTokens` | `owner-session` | — | — |
 | GET | `/api/v1/admin/users/by-id/:userId/device-tokens` | `adminListDeviceTokens` | `owner-session` | — | — |
-| POST | `/api/v1/admin/users/by-id/:userId/device-tokens` | `adminIssueDeviceToken` | `owner-session` | — | — |
 | DELETE | `/api/v1/admin/users/by-id/:userId/device-tokens/:tokenId` | `adminRevokeDeviceToken` | `owner-session` | — | — |
 | PATCH | `/api/v1/admin/users/by-id/:userId/device-tokens/:tokenId/harvest-capability` | `adminSetDeviceTokenHarvestCapability` | `owner-session` | — | — |
 | GET | `/api/v1/admin/users/by-id/:userId/grants` | `adminListUserGrants` | `owner-session` | — | — |
@@ -166,7 +161,6 @@ body remain handler-checked and are noted per route in the service layer.
 | DELETE | `/api/v1/admin/users/by-id/:userId/models/:modelSlug` | `adminRevokeModel` | `owner-session` | — | — |
 | POST | `/api/v1/admin/users/by-id/:userId/pages` | `adminAssignPage` | `owner-session` | — | — |
 | DELETE | `/api/v1/admin/users/by-id/:userId/pages/:pageLabel` | `adminUnassignPage` | `owner-session` | — | — |
-| PATCH | `/api/v1/admin/users/by-id/:userId/password` | `adminSetPassword` | `owner-session` | — | — |
 | POST | `/api/v1/admin/users/by-id/:userId/reactivate` | `adminReactivateUser` | `owner-session` | — | — |
 | POST | `/api/v1/admin/users/by-id/:userId/terminate-access` | `adminTerminateAllAccess` | `owner-session` | — | — |
 | GET | `/api/v1/agent/capabilities` | `agentCapabilities` | `agentKey` | — | — |
@@ -200,11 +194,9 @@ body remain handler-checked and are noted per route in the service layer.
 | GET | `/api/v1/archive/conversations/:ref/messages` | `archiveConversationMessages` | `session` | — | — |
 | GET | `/api/v1/archive/search` | `archiveSearch` | `session` | — | — |
 | POST | `/api/v1/auth/change-password` | `authChangePassword` | `any-session` | — | — |
-| POST | `/api/v1/auth/device-tokens` | `authIssueDeviceToken` | `any-session` | — | — |
 | POST | `/api/v1/auth/device-tokens/activate` | `authActivateDeviceToken` | `pending-device-token` | — | — |
 | DELETE | `/api/v1/auth/device-tokens/current` | `authRevokeCurrentDeviceToken` | `device-token` | — | — |
 | POST | `/api/v1/auth/device-tokens/password` | `authIssueDeviceTokenWithPassword` | `public` | — | — |
-| POST | `/api/v1/auth/device-tokens/reservations` | `authReserveDeviceToken` | `any-session` | — | — |
 | GET | `/api/v1/auth/devices` | `authListDevices` | `any-session` | — | — |
 | DELETE | `/api/v1/auth/devices/:deviceId` | `authRevokeDevice` | `any-session` | — | — |
 | POST | `/api/v1/auth/devices/revoke-all` | `authRevokeAllDevices` | `any-session` | — | — |

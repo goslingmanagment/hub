@@ -13,6 +13,26 @@
 > `authenticateDeviceToken` returns a principal OR a structured failure
 > (`token_revoked` | `token_expired`) that the 401 carries. Logins are
 > case-insensitive; the new live config key is `ACCOUNT_LINKS_ENABLED`.
+>
+> **STALE (Decision 370, 2026-09-15):** the API-key lane is gone — no
+> `api_keys` routes, no `authenticateApiKeyToken`, no `roleCanUseApiKey`, no
+> `apikey` CLI group, and `authMethod` is `session | device_token`. A bearer
+> whose prefix matches neither the device-token nor the agent-key lane is
+> refused without a lookup (there is no fallback branch). The cookie issuance
+> routes (`authIssueDeviceToken`, `authReserveDeviceToken`,
+> `adminIssueDeviceToken`) and the HTTP `adminCreateUser`/`adminSetPassword`
+> are gone with them: an owner account is a CLI `user add`, everyone else is
+> invited and reset by link, and `user set-password` now runs the full reset
+> primitive. `must_change_password` is retired — no route gate, no 403
+> `password_change_required`, `mustChangePassword` a deprecated wire constant
+> `false`. `content_manager` left the wire role enum. The `api_keys` table, the
+> `must_change_password` column and the PG role enum all remain as facts.
+
+> **STALE (Decision 356, 2026-09-15):** user administration now addresses immutable
+> IDs through `/admin/users/by-id/:userId`, SDK 0.3 retires username routes,
+> migration 0202 adds permanent account deletion and partial login uniqueness,
+> and Team state/cache ownership follows IDs. See Decision 356 and
+> `docs/runbooks/user-account-deletion.md`; the body predates this change.
 
 > **STALE (Decision 356, 2026-09-15):** user administration now addresses immutable
 > IDs through `/admin/users/by-id/:userId`, SDK 0.3 retires username routes,

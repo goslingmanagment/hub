@@ -34,7 +34,8 @@ function principalOf(input: {
 
 const ownerSession = principalOf({ authMethod: "session", role: "owner" });
 const leadSession = principalOf({ authMethod: "session", role: "team_lead" });
-const chatterKey = principalOf({ authMethod: "api_key", role: "chatter" });
+// Decision 370: a chatter holds a cookie session or a device token, nothing else.
+const chatterSession = principalOf({ authMethod: "session", role: "chatter" });
 const chatterDevice: HumanAuthPrincipal = {
   ...principalOf({ authMethod: "device_token", role: "chatter" }),
   deviceTokenId: 7,
@@ -53,7 +54,7 @@ const agentKeyPrincipal: AgentAuthPrincipal = {
 const humanPrincipals: ReadonlyArray<readonly [string, AuthPrincipal]> = [
   ["owner session", ownerSession],
   ["lead session", leadSession],
-  ["chatter api key", chatterKey],
+  ["chatter session", chatterSession],
   ["chatter device token", chatterDevice],
 ];
 
@@ -123,7 +124,7 @@ describe("computeAuthPolicyVerdict", () => {
       .resolves.toEqual({ allow: true });
     await expect(evaluate({ auth: { kind: "session" }, principal: leadSession }))
       .resolves.toEqual({ allow: true });
-    await expect(evaluate({ auth: { kind: "session" }, principal: chatterKey }))
+    await expect(evaluate({ auth: { kind: "session" }, principal: chatterSession }))
       .resolves.toMatchObject({ allow: false, statusCode: 403 });
   });
 
@@ -132,13 +133,17 @@ describe("computeAuthPolicyVerdict", () => {
       .resolves.toEqual({ allow: true });
     await expect(evaluate({ auth: { kind: "owner-session" }, principal: leadSession }))
       .resolves.toMatchObject({ allow: false, statusCode: 403 });
-    await expect(evaluate({ auth: { kind: "owner-session" }, principal: chatterKey }))
+    await expect(evaluate({ auth: { kind: "owner-session" }, principal: chatterSession }))
       .resolves.toMatchObject({ allow: false, statusCode: 403 });
   });
 
-  it("mirrors requireApiKeyUser for kind apiKey", async () => {
-    await expect(evaluate({ auth: { kind: "apiKey" }, principal: chatterKey }))
+  it("mirrors requireApiKeyUser for kind apiKey: a device token, never a cookie", async () => {
+    // The kind keeps its historical NAME (renaming hundreds of declarations is
+    // its own PR); Decision 370 left it one credential — the device token.
+    await expect(evaluate({ auth: { kind: "apiKey" }, principal: chatterDevice }))
       .resolves.toEqual({ allow: true });
+    await expect(evaluate({ auth: { kind: "apiKey" }, principal: chatterSession }))
+      .resolves.toMatchObject({ allow: false, statusCode: 403 });
     await expect(evaluate({ auth: { kind: "apiKey" }, principal: ownerSession }))
       .resolves.toMatchObject({ allow: false, statusCode: 403 });
   });
@@ -146,7 +151,7 @@ describe("computeAuthPolicyVerdict", () => {
   it("accepts only a device-token principal for kind device-token", async () => {
     await expect(evaluate({ auth: { kind: "device-token" }, principal: chatterDevice }))
       .resolves.toEqual({ allow: true });
-    await expect(evaluate({ auth: { kind: "device-token" }, principal: chatterKey }))
+    await expect(evaluate({ auth: { kind: "device-token" }, principal: chatterSession }))
       .resolves.toMatchObject({ allow: false, statusCode: 403 });
     await expect(evaluate({ auth: { kind: "device-token" }, principal: ownerSession }))
       .resolves.toMatchObject({ allow: false, statusCode: 403 });
@@ -155,7 +160,9 @@ describe("computeAuthPolicyVerdict", () => {
   it("accepts any authenticated principal for kind any", async () => {
     await expect(evaluate({ auth: { kind: "any" }, principal: ownerSession }))
       .resolves.toEqual({ allow: true });
-    await expect(evaluate({ auth: { kind: "any" }, principal: chatterKey }))
+    await expect(evaluate({ auth: { kind: "any" }, principal: chatterDevice }))
+      .resolves.toEqual({ allow: true });
+    await expect(evaluate({ auth: { kind: "any" }, principal: chatterSession }))
       .resolves.toEqual({ allow: true });
   });
 
@@ -234,9 +241,9 @@ describe("computeAuthPolicyVerdict", () => {
 
   it("keeps the 403/404 distinction for human principals", async () => {
     const auth: RouteAuthPolicy = { kind: "any", scope: "page" };
-    await expect(evaluate({ auth, principal: chatterKey, pageAccess: "denied", pageLabelParam: "lana" }))
+    await expect(evaluate({ auth, principal: chatterDevice, pageAccess: "denied", pageLabelParam: "lana" }))
       .resolves.toEqual({ allow: false, statusCode: 403, reason: "page_access_denied" });
-    await expect(evaluate({ auth, principal: chatterKey, pageAccess: "not-found", pageLabelParam: "gone" }))
+    await expect(evaluate({ auth, principal: chatterDevice, pageAccess: "not-found", pageLabelParam: "gone" }))
       .resolves.toEqual({ allow: false, statusCode: 404, reason: "page_not_found" });
   });
 
@@ -245,7 +252,7 @@ describe("computeAuthPolicyVerdict", () => {
       .resolves.toEqual({ allow: true });
     await expect(evaluate({ auth: { kind: "monitoring" }, principal: leadSession }))
       .resolves.toEqual({ allow: true });
-    await expect(evaluate({ auth: { kind: "monitoring" }, principal: chatterKey }))
+    await expect(evaluate({ auth: { kind: "monitoring" }, principal: chatterSession }))
       .resolves.toMatchObject({ allow: false, statusCode: 403 });
     await expect(evaluate({ auth: { kind: "monitoring" }, principal: null }))
       .resolves.toMatchObject({ allow: false, statusCode: 401 });
@@ -260,18 +267,18 @@ describe("computeAuthPolicyVerdict", () => {
 
   it("resolves page scope through the handlers' not-found/denied shape", async () => {
     const auth: RouteAuthPolicy = { kind: "any", scope: "page" };
-    await expect(evaluate({ auth, principal: chatterKey, pageAccess: "ok", pageLabelParam: "lana" }))
+    await expect(evaluate({ auth, principal: chatterDevice, pageAccess: "ok", pageLabelParam: "lana" }))
       .resolves.toEqual({ allow: true });
-    await expect(evaluate({ auth, principal: chatterKey, pageAccess: "denied", pageLabelParam: "lana" }))
+    await expect(evaluate({ auth, principal: chatterDevice, pageAccess: "denied", pageLabelParam: "lana" }))
       .resolves.toEqual({ allow: false, statusCode: 403, reason: "page_access_denied" });
-    await expect(evaluate({ auth, principal: chatterKey, pageAccess: "not-found", pageLabelParam: "gone" }))
+    await expect(evaluate({ auth, principal: chatterDevice, pageAccess: "not-found", pageLabelParam: "gone" }))
       .resolves.toEqual({ allow: false, statusCode: 404, reason: "page_not_found" });
   });
 
   it("skips page resolution when the route declares no page scope or carries no pageLabel", async () => {
-    await expect(evaluate({ auth: { kind: "any" }, principal: chatterKey, pageLabelParam: "lana" }))
+    await expect(evaluate({ auth: { kind: "any" }, principal: chatterDevice, pageLabelParam: "lana" }))
       .resolves.toEqual({ allow: true });
-    await expect(evaluate({ auth: { kind: "any", scope: "page" }, principal: chatterKey }))
+    await expect(evaluate({ auth: { kind: "any", scope: "page" }, principal: chatterDevice }))
       .resolves.toEqual({ allow: true });
   });
 });

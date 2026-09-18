@@ -1,4 +1,3 @@
-import { fixtureUserId } from "./helpers/user-identity.ts";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
@@ -18,8 +17,8 @@ import { buildApiServer, normalizeOpenApiDocument } from "../apps/runtime/src/ap
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import {
   createUserAccount,
-  issueChatterApiKey,
 } from "../apps/runtime/src/services/auth.ts";
+import { issueChatterDeviceToken } from "./helpers/device-credentials.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
@@ -278,8 +277,8 @@ describe("ofapi credits admin api", () => {
     await seedWebhookEventsAt("other_today", 250, minutes(9), otherPage.id);
     await seedWebhookEventsAt("assigned_7d", 8, daysAgo(2, 3), page.id);
 
-    const { key } = await issueChatterApiKey(appContext, {
-      userId: await fixtureUserId(appContext, "anton"),
+    const { key } = await issueChatterDeviceToken(appContext, {
+      username: "anton",
       pageLabel: page.label,
     }, { source: "test" });
 
@@ -334,8 +333,8 @@ describe("ofapi credits admin api", () => {
       modelId: model.id,
       label: "disabled-of",
     });
-    const { key } = await issueChatterApiKey(appContext, {
-      userId: await fixtureUserId(appContext, "boris"),
+    const { key } = await issueChatterDeviceToken(appContext, {
+      username: "boris",
       pageLabel: page.label,
     }, { source: "test" });
 
@@ -647,8 +646,8 @@ describe("ofapi credits admin api", () => {
       credits: correction, occurredAt: currentDay,
     });
     await seedWebhookEventsAt("legacy_chatter_credits", eventCount, currentDay, page.id);
-    const { key } = await issueChatterApiKey(appContext, {
-      userId: await fixtureUserId(appContext, "anton"), pageLabel: page.label,
+    const { key } = await issueChatterDeviceToken(appContext, {
+      username: "anton", pageLabel: page.label,
     }, { source: "test" });
     const response = await server.inject({
       method: "GET", url: "/api/v1/ofapi/credits/summary",

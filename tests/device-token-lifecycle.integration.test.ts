@@ -14,11 +14,11 @@ import {
   createUserAccount,
   deactivateUser,
   deviceTokenAdoptionReport,
-  issueChatterApiKey,
-  issueDeviceToken,
+  issueDeviceTokenWithPassword,
   revokeDeviceTokensForUserId,
   setUserPassword,
 } from "../apps/runtime/src/services/auth.ts";
+import { issueDeviceTokenForUsername } from "./helpers/device-credentials.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
@@ -61,18 +61,21 @@ async function login(
   return sessionCookieFrom(response);
 }
 
-async function reserve(
-  activeServer: NonNullable<typeof server>,
-  cookie: string,
-) {
+/** Decision 370: the desktop reserves by password, never from a cookie. */
+async function reserve(activeServer: NonNullable<typeof server>) {
   const response = await activeServer.inject({
     method: "POST",
-    url: "/api/v1/auth/device-tokens/reservations",
-    headers: { cookie },
-    payload: { label: "desktop-test" },
+    url: "/api/v1/auth/device-tokens/password",
+    payload: {
+      username: "anton",
+      password: "chatter-secret",
+      label: "desktop-test",
+      mode: "pending",
+    },
   });
   expect(response.statusCode).toBe(200);
   return response.json<{
+    mode: "pending";
     token: string;
     reservationId: number;
     label: string;
@@ -117,9 +120,9 @@ beforeEach(async () => {
   }, { source: "cli" });
   await createUserAccount(app, {
     username: "anton",
-    // Phase 2 chatter identities are API-key-only and cannot own passwords;
-    // this fixture exercises cookie-session issuance/password races, so use
-    // the password-bearing non-owner human role.
+    // This fixture signs devices in by password and races that against the
+    // credential boundaries, so it needs a non-owner human role that can hold
+    // a password without redeeming an invite link.
     role: "team_lead",
     password: "chatter-secret",
   }, { source: "cli" });
@@ -133,30 +136,11 @@ afterAll(async () => {
 describe("pending device-token activation protocol", () => {
   async function expectPendingInvalidated(
     setup: NonNullable<ReturnType<typeof requireSetup>>,
-    request: {
-      method: "PATCH" | "DELETE" | "POST";
-      url: string;
-      payload?: Record<string, unknown>;
-    },
+    boundary: (ownerCookie: string) => Promise<void>,
   ) {
-    const pending = await reserve(
-      setup.server,
-      await login(setup.server, "anton", "chatter-secret"),
-    );
+    const pending = await reserve(setup.server);
     const ownerCookie = await login(setup.server, "owner", "owner-secret");
-    const invalidated = request.payload === undefined
-      ? await setup.server.inject({
-          method: request.method,
-          url: request.url,
-          headers: { cookie: ownerCookie },
-        })
-      : await setup.server.inject({
-          method: request.method,
-          url: request.url,
-          headers: { cookie: ownerCookie },
-          payload: request.payload,
-        });
-    expect(invalidated.statusCode).toBe(200);
+    await boundary(ownerCookie);
     expect((await setup.server.inject({
       method: "POST",
       url: "/api/v1/auth/device-tokens/activate",
@@ -171,8 +155,7 @@ describe("pending device-token activation protocol", () => {
   it("keeps a reservation outside ordinary auth, then activates idempotently", async (context) => {
     const setup = requireSetup(context);
     if (!setup) return;
-    const cookie = await login(setup.server, "anton", "chatter-secret");
-    const pending = await reserve(setup.server, cookie);
+    const pending = await reserve(setup.server);
     expect(pending.token).toMatch(/^agency_hub_pending_device_/);
 
     const beforeActivation = await setup.server.inject({
@@ -210,15 +193,18 @@ describe("pending device-token activation protocol", () => {
     expect(counts.rows[0]).toEqual({ active: "1", pending: "0" });
   });
 
-  it("preserves the legacy immediate issuance route while activation rejects its prefix", async (context) => {
+  it("issues an active token directly while activation rejects its prefix", async (context) => {
     const setup = requireSetup(context);
     if (!setup) return;
-    const cookie = await login(setup.server, "anton", "chatter-secret");
     const issued = await setup.server.inject({
       method: "POST",
-      url: "/api/v1/auth/device-tokens",
-      headers: { cookie },
-      payload: { label: "legacy-client" },
+      url: "/api/v1/auth/device-tokens/password",
+      payload: {
+        username: "anton",
+        password: "chatter-secret",
+        label: "extension-client",
+        mode: "active",
+      },
     });
     expect(issued.statusCode).toBe(200);
     const body = issued.json<{ token: string }>();
@@ -238,35 +224,45 @@ describe("pending device-token activation protocol", () => {
   it("invalidates pending custody on password reset", async (context) => {
     const setup = requireSetup(context);
     if (!setup) return;
-    await expectPendingInvalidated(setup, {
-      method: "PATCH",
-      url: `/api/v1/admin/users/by-id/${await fixtureUserId(app!, "anton")}/password`,
-      payload: { password: "new-chatter-secret" },
+    // Decision 370: an owner resets by link or CLI; both run this primitive.
+    await expectPendingInvalidated(setup, async () => {
+      await setUserPassword(setup.app, {
+        userId: await fixtureUserId(setup.app, "anton"),
+        password: "new-chatter-secret",
+      }, { source: "cli" });
     });
   });
 
   it("invalidates pending custody on revoke-all", async (context) => {
     const setup = requireSetup(context);
     if (!setup) return;
-    await expectPendingInvalidated(setup, {
-      method: "DELETE",
-      url: `/api/v1/admin/users/by-id/${await fixtureUserId(app!, "anton")}/device-tokens`,
+    await expectPendingInvalidated(setup, async (ownerCookie) => {
+      const response = await setup.server.inject({
+        method: "DELETE",
+        url: `/api/v1/admin/users/by-id/${await fixtureUserId(setup.app, "anton")}/device-tokens`,
+        headers: { cookie: ownerCookie },
+      });
+      expect(response.statusCode).toBe(200);
     });
   });
 
   it("invalidates pending custody on deactivation", async (context) => {
     const setup = requireSetup(context);
     if (!setup) return;
-    await expectPendingInvalidated(setup, {
-      method: "POST",
-      url: `/api/v1/admin/users/by-id/${await fixtureUserId(app!, "anton")}/deactivate`,
+    await expectPendingInvalidated(setup, async (ownerCookie) => {
+      const response = await setup.server.inject({
+        method: "POST",
+        url: `/api/v1/admin/users/by-id/${await fixtureUserId(setup.app, "anton")}/deactivate`,
+        headers: { cookie: ownerCookie },
+      });
+      expect(response.statusCode).toBe(200);
     });
   });
 
   it("cleans expired pending rows", async (context) => {
     const setup = requireSetup(context);
     if (!setup) return;
-    await reserve(setup.server, await login(setup.server, "anton", "chatter-secret"));
+    await reserve(setup.server);
     await setup.testDb.pool.query(
       "update pending_device_tokens set expires_at = now() - interval '1 second'",
     );
@@ -280,10 +276,7 @@ describe("pending device-token activation protocol", () => {
   it("recomputes expiry after a row-lock wait and refuses a token that expired while blocked", async (context) => {
     const setup = requireSetup(context);
     if (!setup) return;
-    const pending = await reserve(
-      setup.server,
-      await login(setup.server, "anton", "chatter-secret"),
-    );
+    const pending = await reserve(setup.server);
     const user = await findUserByUsername(setup.testDb.db, "anton");
     const blocker = await setup.testDb.pool.connect();
     try {
@@ -312,7 +305,7 @@ describe("pending device-token activation protocol", () => {
   });
 });
 
-describe("legacy/admin issuance authority races", () => {
+describe("password sign-in authority races", () => {
   async function exerciseRace(
     setup: NonNullable<ReturnType<typeof requireSetup>>,
     boundary: () => Promise<unknown>,
@@ -324,10 +317,16 @@ describe("legacy/admin issuance authority races", () => {
       await blocker.query("select id from users where id = $1 for update", [user!.id]);
       const boundaryPromise = boundary();
       await waitForUserLockWaiters(setup.testDb, 1);
-      const issuePromise = issueDeviceToken(setup.app, {
-        userId: user!.id,
-        label: "racing-legacy-client",
-      }, { source: "cli" });
+      // §4.3: the password was verified against the row as it stood BEFORE the
+      // boundary committed. Re-reading the authority under the lock is what
+      // stops this request from minting a token the boundary just outlawed.
+      const issuePromise = issueDeviceTokenWithPassword(setup.app, {
+        username: "anton",
+        password: "chatter-secret",
+        label: "racing-client",
+        mode: "active",
+        clientVersion: null,
+      });
       const issueOutcome = issuePromise.then(
         (value) => ({ ok: true as const, value }),
         (error: unknown) => ({ ok: false as const, error }),
@@ -376,33 +375,35 @@ describe("legacy/admin issuance authority races", () => {
     ));
   });
 
-  it("self-serve issuance revalidates a preverified session after logout", async (context) => {
+  it("a live cookie session cannot mint a bearer at all any more", async (context) => {
     const setup = requireSetup(context);
     if (!setup) return;
+    // Decision 370 deleted the whole class of race the old test guarded: a
+    // session-issued token. The two cookie routes are gone from the contract,
+    // so a perfectly valid session gets a 404 — there is nothing left to
+    // revalidate after logout because nothing can be minted from a cookie.
     const cookie = await login(setup.server, "anton", "chatter-secret");
     const sessionToken = cookie.slice(cookie.indexOf("=") + 1);
-    // Model the exact route race without an artificial user-row blocker: auth
-    // middleware has already accepted this session, logout then commits, and
-    // the issuance service must reject the stale captured session id.
-    const preverified = await authenticateSessionToken(setup.app, sessionToken);
-    expect(preverified?.authMethod).toBe("session");
-    if (!preverified || preverified.authSessionId === undefined) {
-      throw new Error("Expected a preverified session principal");
+    expect((await authenticateSessionToken(setup.app, sessionToken))?.authMethod).toBe("session");
+
+    for (const url of ["/api/v1/auth/device-tokens", "/api/v1/auth/device-tokens/reservations"]) {
+      const response = await setup.server.inject({
+        method: "POST",
+        url,
+        headers: { cookie },
+        payload: { label: "from-a-cookie" },
+      });
+      expect(response.statusCode, url).toBe(404);
     }
-    const logout = await setup.server.inject({
+    // The owner's own back door is gone too.
+    const ownerCookie = await login(setup.server, "owner", "owner-secret");
+    expect((await setup.server.inject({
       method: "POST",
-      url: "/api/v1/auth/logout",
-      headers: { cookie },
-    });
-    expect(logout.statusCode).toBe(200);
-    await expect(issueDeviceToken(setup.app, {
-      userId: preverified.user.id,
-      authSessionId: preverified.authSessionId,
-      label: "self-serve-race",
-    }, {
-      source: "api",
-      actorUserId: preverified.user.id,
-    })).rejects.toThrow(/Session is no longer eligible/);
+      url: `/api/v1/admin/users/by-id/${await fixtureUserId(setup.app, "anton")}/device-tokens`,
+      headers: { cookie: ownerCookie },
+      payload: { label: "issued-for-him" },
+    })).statusCode).toBe(404);
+
     const count = await setup.testDb.pool.query<{ count: string }>(
       "select count(*)::text as count from device_tokens where revoked_at is null",
     );
@@ -464,16 +465,16 @@ describe("device-token adoption report (D116(c) foundation, desktop D19)", () =>
     if (!setup) return;
     const activeApp = setup.app;
 
-    for (const username of ["tokenized", "keyonly", "staletoken", "revokedtoken", "expiredtoken"]) {
+    for (const username of ["tokenized", "nodevice", "staletoken", "revokedtoken", "expiredtoken"]) {
       await createUserAccount(activeApp, { username, role: "chatter" }, { source: "cli" });
     }
 
     // Fresh use travels the REAL producer chain: issued bearer -> /auth/me
     // (authenticateDeviceToken bumps last_used_at) -> report.
     const tokenized = await findUserByUsername(activeApp.db, "tokenized");
-    const fresh = await issueDeviceToken(
+    const fresh = await issueDeviceTokenForUsername(
       activeApp,
-      { userId: tokenized!.id, label: "machine-a" },
+      { username: "tokenized", label: "machine-a" },
       { source: "cli" },
     );
     const me = await setup.server.inject({
@@ -484,10 +485,9 @@ describe("device-token adoption report (D116(c) foundation, desktop D19)", () =>
     expect(me.statusCode).toBe(200);
 
     // Stale: live token whose last use predates the 14-day window.
-    const stale = await findUserByUsername(activeApp.db, "staletoken");
-    const staleIssued = await issueDeviceToken(
+    const staleIssued = await issueDeviceTokenForUsername(
       activeApp,
-      { userId: stale!.id, label: "machine-b" },
+      { username: "staletoken", label: "machine-b" },
       { source: "cli" },
     );
     await setup.testDb.pool.query(
@@ -497,10 +497,9 @@ describe("device-token adoption report (D116(c) foundation, desktop D19)", () =>
 
     // Revoked-with-recent-use and expired-with-recent-use must NOT count:
     // "once had a working token" is exactly what the gate must not accept.
-    const revoked = await findUserByUsername(activeApp.db, "revokedtoken");
-    const revokedIssued = await issueDeviceToken(
+    const revokedIssued = await issueDeviceTokenForUsername(
       activeApp,
-      { userId: revoked!.id, label: "machine-c" },
+      { username: "revokedtoken", label: "machine-c" },
       { source: "cli" },
     );
     await setup.testDb.pool.query(
@@ -513,10 +512,9 @@ describe("device-token adoption report (D116(c) foundation, desktop D19)", () =>
       { source: "cli" },
     );
 
-    const expired = await findUserByUsername(activeApp.db, "expiredtoken");
-    const expiredIssued = await issueDeviceToken(
+    const expiredIssued = await issueDeviceTokenForUsername(
       activeApp,
-      { userId: expired!.id, label: "machine-d" },
+      { username: "expiredtoken", label: "machine-d" },
       { source: "cli" },
     );
     await setup.testDb.pool.query(
@@ -524,23 +522,21 @@ describe("device-token adoption report (D116(c) foundation, desktop D19)", () =>
       [expiredIssued.id],
     );
 
-    await issueChatterApiKey(activeApp, { userId: await fixtureUserId(activeApp, "keyonly") }, { source: "cli" });
-
     // A second live-but-unused token with a LATER expiry must not leak its
     // dates into the row: both token fields describe the freshest-used token.
     await setup.testDb.pool.query(
       "update device_tokens set expires_at = now() + interval '2 days' where user_id = $1",
       [tokenized!.id],
     );
-    await issueDeviceToken(
+    await issueDeviceTokenForUsername(
       activeApp,
-      { userId: tokenized!.id, label: "machine-a-spare" },
+      { username: "tokenized", label: "machine-a-spare" },
       { source: "cli" },
     );
 
     const report = await deviceTokenAdoptionReport(activeApp);
     const rows = new Map(report.chatters.map((row) => [row.username, row]));
-    expect(rows.get("tokenized")).toMatchObject({ hasFreshDeviceToken: true, activeApiKeys: 0 });
+    expect(rows.get("tokenized")).toMatchObject({ hasFreshDeviceToken: true });
     const tokenizedExpiry = Date.parse(rows.get("tokenized")!.deviceTokenExpiresAt!);
     // ~2 days (the used token), never ~90 days (the unused spare).
     expect(tokenizedExpiry - Date.now()).toBeLessThan(3 * 24 * 60 * 60 * 1000);
@@ -555,8 +551,14 @@ describe("device-token adoption report (D116(c) foundation, desktop D19)", () =>
       deviceTokenLastUsedAt: null,
       deviceTokenExpiresAt: null,
     });
-    expect(rows.get("keyonly")).toMatchObject({ hasFreshDeviceToken: false, activeApiKeys: 1 });
-    expect(rows.get("keyonly")!.apiKeyLastUsedAt).toBeNull();
+    // Decision 370: a chatter with no device at all — the row the gate cares
+    // about — and no api-key column left to explain it away.
+    expect(rows.get("nodevice")).toMatchObject({
+      hasFreshDeviceToken: false,
+      deviceTokenLastUsedAt: null,
+      deviceTokenExpiresAt: null,
+    });
+    expect(Object.keys(rows.get("nodevice")!)).not.toContain("activeApiKeys");
     // owner and the team_lead fixture are not chatters and never appear
     expect(rows.has("owner")).toBe(false);
     expect(rows.has("anton")).toBe(false);
@@ -564,13 +566,12 @@ describe("device-token adoption report (D116(c) foundation, desktop D19)", () =>
     expect(report.summary).toEqual({
       activeChatters: 5,
       onFreshTokens: 1,
-      withActiveApiKeys: 1,
     });
 
     // Deactivation removes a chatter from the denominator entirely.
-    await deactivateUser(activeApp, { userId: await fixtureUserId(activeApp, "keyonly") }, { source: "cli" });
+    await deactivateUser(activeApp, { userId: await fixtureUserId(activeApp, "nodevice") }, { source: "cli" });
     const after = await deviceTokenAdoptionReport(activeApp);
-    expect(after.chatters.some((row) => row.username === "keyonly")).toBe(false);
+    expect(after.chatters.some((row) => row.username === "nodevice")).toBe(false);
     expect(after.summary.activeChatters).toBe(4);
   });
 
@@ -582,7 +583,6 @@ describe("device-token adoption report (D116(c) foundation, desktop D19)", () =>
     expect(report.summary).toEqual({
       activeChatters: 0,
       onFreshTokens: 0,
-      withActiveApiKeys: 0,
     });
   });
 

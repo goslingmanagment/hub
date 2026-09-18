@@ -20,8 +20,8 @@ the classic offboarding mistake:
 | Operation | Kills | Leaves alive |
 |---|---|---|
 | **«Отозвать вход»** | one device token | every other sign-in |
-| **«Отозвать все устройства»** | every device token and reservation | **the cookie session and the legacy API key** |
-| **«Завершить все входы»** | device tokens, reservations, sessions, API keys, active links | the password — a fresh login still works |
+| **«Отозвать все устройства»** | every device token and reservation | **the cookie session** |
+| **«Завершить все входы»** | device tokens, reservations, sessions, active links | the password — a fresh login still works |
 | **«Отключить доступ»** | all of the above; login blocked until explicitly restored | identity, history, saved role and page assignments |
 | **«Удалить аккаунт»** | every sign-in and link; password removed; account cannot be restored | immutable historical attribution; login becomes free |
 
@@ -108,10 +108,42 @@ The confirmation states that their saved role and assigned pages become usable
 again. Review those pages before confirming; restoration must never transfer
 someone else's history to a new person with the same name.
 
-Every old sign-in and link stays revoked. If the person already set a password
-and no mandatory password change is pending, they can log in with it again.
-If `mustChangePassword` is set, the confirmation directs the owner to create a
-password-reset link before client sign-in; restoration does not clear that
-flag. A reset link also helps if the password was forgotten. If the person
-never registered, create a fresh invitation from the restored card's «Ссылки»
-section. See `docs/runbooks/chatter-onboarding.md`.
+Every old sign-in and link stays revoked. If the person already set a password,
+they can log in with it again — Decision 370 retired `must_change_password`, so
+there is no flag left to clear. A reset link helps if the password was
+forgotten. If the person never registered, create a fresh invitation from the
+restored card's «Ссылки» section. See `docs/runbooks/chatter-onboarding.md`.
+
+## Dormant accounts nobody offboarded (census, Decision 370)
+
+Disabling is an event; an account nobody ever decided about is a slow leak.
+The 2026-09-15 census found three, and they are listed here rather than fixed in
+code because each one is a judgement about a person, not a migration:
+
+- **`probe-ops` (#16)** — a live test account with no credentials. Disable it;
+  a robot that needs to read production gets an agent key (#195), and one that
+  needs to act gets its own account and signs a device in by password.
+- **User #22** — holds page grants on `lora-of` and `lora-vip-of` and does
+  nothing with them. Unassign the pages, then disable.
+- **User #4** — created and never acted. Disable it or write down why it
+  exists.
+
+Re-run the census when the team changes shape. Two queries, under the app psql
+user (the `read_only` role does not see these tables):
+
+```sql
+-- accounts with no live credential and no recent activity
+select u.id, u.username, u.role, u.disabled_at,
+       max(d.last_used_at) as last_device_use
+from users u
+left join device_tokens d on d.user_id = u.id
+group by u.id
+order by last_device_use nulls first;
+
+-- page grants held by accounts that are not signing in
+select u.username, p.platform, p.label
+from user_page_assignments a
+join users u on u.id = a.user_id
+join pages p on p.id = a.platform_account_id
+order by 1, 2, 3;
+```

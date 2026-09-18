@@ -339,7 +339,6 @@ describe("CLI parsing", () => {
   it.each([
     ["user", "deactivate"], ["user", "reactivate"], ["user", "set-password"],
     ["user", "assign-page"], ["user", "unassign-page"], ["user", "delete"],
-    ["apikey", "create"], ["apikey", "revoke"], ["apikey", "show"],
   ])("refuses legacy username targeting in %s %s before opening the database", async (group, command) => {
     const { program } = createProgramHarness();
     const args = [group, command, "--user-id", "12", "--username", "12"];
@@ -444,19 +443,16 @@ describe("CLI parsing", () => {
     ).rejects.toThrow("unknown option '--account'");
   });
 
-  it("documents apikey create with an immutable user ID and optional page assignment", () => {
+  it("has no apikey group left to document (Decision 370)", () => {
     const helpProgram = buildProgram();
-    const apiKeyCommand = helpProgram.commands.find((command) => command.name() === "apikey");
-    expect(apiKeyCommand).toBeDefined();
+    expect(helpProgram.commands.find((command) => command.name() === "apikey")).toBeUndefined();
 
-    const createCommand = apiKeyCommand?.commands.find((command) => command.name() === "create");
-    expect(createCommand).toBeDefined();
-
-    const help = createCommand?.helpInformation();
-    expect(help).toContain("--user-id <id>");
-    expect(help).not.toContain("--username");
-    expect(help).toContain("--page <label>");
-    expect(help).toContain("also assign the user to this page");
+    // What replaced it: the owner mints accounts and resets passwords from the
+    // box, and every bearer is a device token the person signs in for.
+    const userCommand = helpProgram.commands.find((command) => command.name() === "user");
+    expect(userCommand).toBeDefined();
+    const names = userCommand!.commands.map((command) => command.name());
+    expect(names).toEqual(expect.arrayContaining(["add", "set-password", "assign-page"]));
   });
 
   it("documents page onboarding requirements and model revenue", () => {

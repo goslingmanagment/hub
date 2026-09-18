@@ -33,7 +33,8 @@ import type {
   AiGatewayProvider,
   AiGatewayProviderInput,
 } from "../apps/runtime/src/services/ai-gateway.ts";
-import { assignPageToUser, createUserAccount, issueChatterApiKey } from "../apps/runtime/src/services/auth.ts";
+import { assignPageToUser, createUserAccount } from "../apps/runtime/src/services/auth.ts";
+import { issueChatterDeviceToken } from "./helpers/device-credentials.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
@@ -119,8 +120,8 @@ beforeEach(async (context) => {
   if (!chatter) {
     throw new Error("chatter creation failed");
   }
-  chatterKey = (await issueChatterApiKey(appContext, {
-    userId: await fixtureUserId(appContext, "svc-chatter"),
+  chatterKey = (await issueChatterDeviceToken(appContext, {
+    username: "svc-chatter",
     pageLabel: "svc-of",
   }, { source: "cli" })).key;
   await assignPageToUser(appContext, { userId: await fixtureUserId(appContext, "svc-chatter"), pageLabel: "svc-fs" }, { source: "cli" });

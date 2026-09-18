@@ -264,14 +264,19 @@ describe("who is refused", () => {
     expect(response.statusCode).toBe(401);
   });
 
-  it("answers 403 password_change_required for a flagged account", async (context) => {
+  it("ignores a must_change_password row: the flag is retired, not enforced", async (context) => {
     const setup = requireSetup(context);
     if (!setup) return;
+    // Decision 370 retired #116(b). The column survives (forward-only), so this
+    // sets it the only way left — by hand — and proves nothing reads it: the
+    // sign-in succeeds and the wire still says `false`.
     await setUserPassword(setup.app, {
       userId: await fixtureUserId(setup.app, "grisha"),
       password: "owner-chosen-42",
-      mustChangePassword: true,
     }, { source: "cli" });
+    await setup.testDb.pool.query(
+      "update users set must_change_password = true where username = 'grisha'",
+    );
 
     const response = await signIn(setup.server, {
       username: "grisha",
@@ -279,11 +284,16 @@ describe("who is refused", () => {
       label: "Firefox · Windows",
       mode: "active",
     });
-    expect(response.statusCode).toBe(403);
-    expect(response.json<{ error: string }>().error).toBe("password_change_required");
-    expect(await setup.testDb.pool.query<{ count: string }>(
-      "select count(*)::text as count from device_tokens",
-    ).then((result) => Number(result.rows[0]?.count))).toBe(0);
+    expect(response.statusCode).toBe(200);
+
+    const token = response.json<{ token: string }>().token;
+    const me = await setup.server.inject({
+      method: "GET",
+      url: "/api/v1/auth/me",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(me.statusCode).toBe(200);
+    expect(me.json<{ user: { mustChangePassword: boolean } }>().user.mustChangePassword).toBe(false);
   });
 
   it("shares ONE per-account backoff with the cookie login", async (context) => {
@@ -344,5 +354,136 @@ describe("who is refused", () => {
     expect(issued.mode).toBe("active");
     const user = await findUserByUsername(setup.testDb.db, "nikita");
     expect(user?.username).toBe("nikita");
+  });
+});
+
+// DP 7: a credential coming into existence is a business fact, so the issuance
+// audit dual-writes an `observations` row at the choke point. On main this was
+// pinned twice through `api_key.issued`; both pins left with the lane, and a
+// grep for "device_token.issued" in tests/ came back empty — this is that hole.
+//
+// These go through the SERVICE rather than the route on purpose: the journaling
+// lives there, and the route's per-IP rate limit (20/min, shared with every
+// other sign-in this file makes) would otherwise decide the outcome.
+describe("the issuance audit", () => {
+  const AUDITED = "audrey";
+
+  async function operatorObservations(setup: NonNullable<ReturnType<typeof requireSetup>>) {
+    const rows = await setup.testDb.pool.query<{ kind: string; producer: string; payload: unknown }>(
+      "select kind, producer, payload from observations where source = 'operator' order by id",
+    );
+    return rows.rows;
+  }
+
+  async function seedAudited(setup: NonNullable<ReturnType<typeof requireSetup>>) {
+    // A fresh account per test: no backoff history, no rate-limit budget spent.
+    await createUserAccount(setup.app, {
+      username: AUDITED,
+      role: "team_lead",
+      password: PASSWORD,
+    }, { source: "cli" });
+    // Drop the account-creation rows so the assertions below speak only about
+    // issuance (`user.created` journals through the same choke point).
+    await setup.testDb.pool.query("delete from observations where source = 'operator'");
+    await setup.testDb.pool.query("delete from audit_events");
+  }
+
+  it("journals the issuance of both modes with the prefix and NEITHER secret", async (context) => {
+    const setup = requireSetup(context);
+    if (!setup) return;
+    await seedAudited(setup);
+
+    const active = await issueDeviceTokenWithPassword(setup.app, {
+      username: AUDITED,
+      password: PASSWORD,
+      label: "Firefox · Windows",
+      mode: "active",
+      clientVersion: "2.4.0",
+    });
+    const pending = await issueDeviceTokenWithPassword(setup.app, {
+      username: AUDITED,
+      password: PASSWORD,
+      label: "Desktop · audrey-pc",
+      mode: "pending",
+      clientVersion: "0.1.55",
+    });
+
+    const rows = await operatorObservations(setup);
+    const issued = rows.find((row) => row.kind === "device_token.issued");
+    const reserved = rows.find((row) => row.kind === "device_token.reserved");
+
+    for (const [row, credential, label, clientVersion] of [
+      [issued, active, "Firefox · Windows", "2.4.0"],
+      [reserved, pending, "Desktop · audrey-pc", "0.1.55"],
+    ] as const) {
+      expect(row, label).toBeDefined();
+      expect(row!.producer).toBe("api:admin");
+      expect(row!.payload).toMatchObject({
+        metadata: expect.objectContaining({
+          username: AUDITED,
+          label,
+          keyPrefix: credential.keyPrefix,
+          via: "password",
+          clientVersion,
+        }),
+      });
+    }
+
+    // The secrets never reach the journal: not the bearer, not the password.
+    // The prefix above is exactly what an operator may see — which is why this
+    // check cannot be satisfied by simply writing nothing.
+    const journal = JSON.stringify(rows);
+    expect(journal).not.toContain(active.token);
+    expect(journal).not.toContain(pending.token);
+    expect(journal).not.toContain(PASSWORD);
+  });
+
+  it("rolls the credential back when the audit write fails", async (context) => {
+    const setup = requireSetup(context);
+    if (!setup) return;
+    await seedAudited(setup);
+
+    // The token row and its audit row commit together (review R1-7). Rejecting
+    // the audit INSERT at the database proves it: a constraint the audit row
+    // violates must take the whole transaction down, credential included —
+    // otherwise a bearer could exist that nothing recorded issuing.
+    await setup.testDb.pool.query(`
+      alter table audit_events
+        add constraint tmp_refuse_device_token_issue
+        check (event_type <> 'device_token.issued')
+    `);
+    try {
+      await expect(issueDeviceTokenWithPassword(setup.app, {
+        username: AUDITED,
+        password: PASSWORD,
+        label: "Firefox · Windows",
+        mode: "active",
+        clientVersion: "2.4.0",
+      })).rejects.toThrow();
+    } finally {
+      await setup.testDb.pool.query(
+        "alter table audit_events drop constraint tmp_refuse_device_token_issue",
+      );
+    }
+
+    for (const table of ["device_tokens", "audit_events"]) {
+      const rows = await setup.testDb.pool.query<{ count: string }>(
+        `select count(*)::text as count from ${table}`,
+      );
+      expect(Number(rows.rows[0]!.count), table).toBe(0);
+    }
+    expect(await operatorObservations(setup)).toEqual([]);
+
+    // The lane is not poisoned: the same sign-in succeeds once the audit works.
+    const retry = await issueDeviceTokenWithPassword(setup.app, {
+      username: AUDITED,
+      password: PASSWORD,
+      label: "Firefox · Windows",
+      mode: "active",
+      clientVersion: "2.4.0",
+    });
+    expect(retry.mode).toBe("active");
+    expect((await operatorObservations(setup)).map((row) => row.kind))
+      .toEqual(["device_token.issued"]);
   });
 });

@@ -17,12 +17,14 @@ import {
   changeOwnPassword,
   createUserAccount,
   deactivateUser,
-  issueDeviceTokenForUserId,
   loginWithPassword,
   reactivateUser,
   setUserPassword,
   terminateAllAccess,
 } from "../apps/runtime/src/services/auth.ts";
+import {
+  issueDeviceTokenForUserId,
+} from "./helpers/device-credentials.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
