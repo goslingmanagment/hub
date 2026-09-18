@@ -40,10 +40,12 @@ Options:
   --desktop-diagnostics-receipt <path>
                         Private Desktop diagnostics receipt for first enable
   --image-gc             Enable the post-health-gate cleanup of superseded
-                        candidate/rollback image tags and the builder cache
-                        prune. OFF by default: Decision #176 keeps image/tag
-                        deletion owner-gated, so GC runs only when asked.
-  --no-image-gc          Explicitly disable image GC (the default).
+                        candidate/rollback/full-base image tags and the
+                        builder cache prune. ON by default since Decision
+                        #371 (2026-09-18: unpruned deploy images filled the
+                        production disk and closed the OFAPI read gate).
+  --no-image-gc          Disable image GC for this run (also
+                        DEPLOY_IMAGE_GC=0 / DEPLOY_SKIP_IMAGE_GC=1).
   --skip-hub-cli-rebuild
                         Do not rebuild this machine's production-pinned `hub`
                         CLI after the deploy is verified (it is rebuilt by
@@ -130,15 +132,19 @@ if [[ -n "${DEPLOY_NODE_BASE_CACHE_IMAGE+x}" ]]; then
   warn_deprecated_node_base_cache
 fi
 ALLOW_UNLABELED_DIST_BASE="${DEPLOY_ALLOW_UNLABELED_DIST_BASE:-0}"
-# Default OFF: Decision #176 pins image/tag deletion as an explicit owner
-# action — deploys must not delete candidate tags automatically. Opt in per
-# run with --image-gc / DEPLOY_IMAGE_GC=1.
-IMAGE_GC_ENABLED=0
-case "${DEPLOY_IMAGE_GC:-0}" in
-  0|false|no|"")
+# Default ON (Decision #371 supersedes the default-off of #176/#212): every
+# deploy leaves a candidate, a rollback and, on a dependency change, a 1.4 GB
+# clean base on the VPS; with GC off they accumulated 22 GB in three weeks,
+# crossed the disk gauge and closed the OFAPI read gate for the desktop. The
+# keep-set (running containers, release tag, this run's candidate/rollback,
+# the current clean base) still guarantees one rollback path. Opt out per run
+# with --no-image-gc / DEPLOY_IMAGE_GC=0 / DEPLOY_SKIP_IMAGE_GC=1.
+IMAGE_GC_ENABLED=1
+case "${DEPLOY_IMAGE_GC:-1}" in
+  1|true|yes|"")
     ;;
-  1|true|yes)
-    IMAGE_GC_ENABLED=1
+  0|false|no)
+    IMAGE_GC_ENABLED=0
     ;;
   *)
     fail "Invalid DEPLOY_IMAGE_GC value: ${DEPLOY_IMAGE_GC}"
@@ -1411,16 +1417,19 @@ rebuild_local_hub_cli() {
 
 gc_remote_deploy_images() {
   if [[ "${IMAGE_GC_ENABLED:-1}" != "1" ]]; then
-    log "Skipping remote image GC (default; enable per run with --image-gc / DEPLOY_IMAGE_GC=1)"
+    log "Skipping remote image GC (disabled for this run; the default is on, Decision #371)"
     return 0
   fi
 
   # %:* (last colon) keeps a registry port intact: registry:5000/team/runtime:tag
   # must reduce to registry:5000/team/runtime, not to "registry".
   local runtime_repo="${IMAGE_TAG%:*}"
-  # Candidate/rollback tags are minted as "${IMAGE_TAG}-candidate-..." — derive
-  # the prefix from the configured release tag instead of hard-coding it, or a
-  # non-default --image tag would make the GC skip everything it just created.
+  # Candidate/rollback/full-base tags are minted as "${IMAGE_TAG}-candidate-..."
+  # — derive the prefix from the configured release tag instead of hard-coding
+  # it, or a non-default --image tag would make the GC skip everything it just
+  # created. Superseded clean bases ("-full-<checksum>") are swept too: the
+  # current one is protected through the keep-set, and a rollback image keeps
+  # its own base layers alive by reference even after the base TAG is gone.
   local release_tag_prefix="${IMAGE_TAG##*:}"
   local remote_command
   remote_command=$(cat <<EOF
@@ -1457,7 +1466,7 @@ removed=0
 while IFS= read -r image_ref; do
   release_tag="\${image_ref##*:}"
   case "\$release_tag" in
-    $(printf '%q' "$release_tag_prefix")-candidate-*|$(printf '%q' "$release_tag_prefix")-rollback-*)
+    $(printf '%q' "$release_tag_prefix")-candidate-*|$(printf '%q' "$release_tag_prefix")-rollback-*|$(printf '%q' "$release_tag_prefix")-full-*)
       ;;
     *)
       continue

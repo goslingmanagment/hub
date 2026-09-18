@@ -367,6 +367,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 368 | Age-aware Fansly earnings roster | On SHADOW pages only, a live `fanslyFanEarningsRosterMaxAgeHours` lets the daily roster skip a spender whose BOTH earnings endpoints were validly checked inside the window and are neither dirty, failed nor cooling down. 0 (default) reads every spender every day; 1-47 equals 0; 48-168 enables the rotation. Hourly transactions and C2b dirty marks still drive addressed reads; coverage debt and age-based target selection follow the same window, debt anchored to the walk start. |
 | 369 | Fansly earnings window progress and stats freshness | Additive cursor fields replace ignored offset pagination with durable UTC-day window subdivision; the daily sweep precedes history under the unchanged physical-attempt cap. Fresh-window coverage uses a separate scope from historical completeness. |
 | 370 | PR-4: the legacy credential lanes retired | The api-key lane deleted end to end (routes, authenticator, service, repository, CLI group, `authMethod`), the cookie token-issuance routes and the HTTP create-user/set-password deleted, `must_change_password` retired with `mustChangePassword` frozen on the wire as a deprecated `false`, `content_manager` out of the wire role enum. Tombstones #116(b) and #116(c). An unknown bearer prefix authenticates nobody. Tables, column and PG enum survive as facts (DP 7); model-scope grants stay dead until `ACCESS_GRANTS_READ_ENABLED` flips (#70 ritual) |
+| 371 | Deploy image GC on by default | `scripts/deploy-production.sh` garbage-collects superseded candidate/rollback/full-base tags after the health gate on every run (`--no-image-gc` / `DEPLOY_IMAGE_GC=0` opts out); supersedes the default-off of #176/#212. Keep-set unchanged: running containers, release tag, this run's candidate and rollback, the current clean base. 2026-09-18: 22 GB of unpruned deploy images crossed the 90 % disk gauge and closed the OFAPI read gate for the desktop |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -15516,3 +15517,47 @@ cleanup — deactivate `probe-ops`, drop the #22 grants, check user #4 — is
 production data, not code, and rides in the PR body as an owner checklist.
 
 Plan: `investigations/unified-account-2026-09-15/PLAN.md` §10.
+
+## Decision 371: Deploy image GC is on by default (2026-09-18)
+
+**Context.** #176 (2026-07-20) made image/tag deletion an explicit owner
+action and #212 (G1) added an allowlist image GC to the deploy script that
+therefore ran only with `--image-gc`. Since then the deploy cadence became
+several runs a day from several sessions, each minting a `-candidate-` and a
+`-rollback-` tag, and every dependency-checksum change a 1.4 GB
+`-full-<checksum>` clean base. Nobody passed `--image-gc`. Between the
+2026-08-26 disk audit and 2026-09-18 the runtime image store grew from 42 tags
+/ 5.9 GB to 94 tags / 28.2 GB (7 distinct clean bases, 142 superseded tags)
+while the database shrank by 18 GB under the G5 rewrites: the savings were
+eaten one for one. On the night of 2026-09-18 the disk crossed
+`DISK_USAGE_ALERT_PERCENT=90` between the 00:15 and 01:15 UTC gauges (two
+dist-only deploys at 00:44 and 00:56 UTC tipped it), the worker persisted
+`ofapi_storage_health_state.breached = true`, and every interactive OFAPI
+read — chat lists and history for the OnlyFans desktop — was refused with
+`storage_unhealthy` (503) for the rest of the shift while sends and webhook
+events kept flowing. The desktop showed OFFLINE and blamed the chatter's
+internet.
+
+**Decision.** The deploy script's post-health-gate image GC runs on every
+deploy (`IMAGE_GC_ENABLED=1`); `--no-image-gc`, `DEPLOY_IMAGE_GC=0` or
+`DEPLOY_SKIP_IMAGE_GC=1` opt out for one run. The sweep now also removes
+superseded `-full-<checksum>` clean-base tags. The keep-set is unchanged:
+images of running compose containers, the release tag, this run's candidate
+and rollback tags, and the current clean base — so exactly one rollback path
+survives every deploy, and the GC still aborts on a degraded keep-set (fewer
+than two resolved ids) instead of guessing. A rollback image keeps its own
+base layers alive by reference, so dropping an old base TAG never breaks a
+rollback; a later dist-only deploy from an older dependency checksum is
+refused as before and needs a full build.
+
+**Not changed here.** The storage-health admission gate keeps failing closed
+at the same threshold as the disk alert; decoupling the two (an earlier alert,
+a later gate) and trimming `ops_metric_samples` below 90 days are separate
+follow-ups. The August `observations` rewrite (runbook
+`docs/runbooks/capture-historical-rewrite.md`) remains an owner-run ritual.
+Images of other projects on the same VPS (taskindex, built by its own deploy
+bot) are outside this script.
+
+**Manual cleanup on 2026-09-18 (owner-approved, by hand, not by this
+script):** 142 superseded runtime tags and 18 old taskindex tags removed,
+builder cache older than 24 h pruned; disk 93 % → 65 %.
