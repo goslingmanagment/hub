@@ -368,6 +368,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 369 | Fansly earnings window progress and stats freshness | Additive cursor fields replace ignored offset pagination with durable UTC-day window subdivision; the daily sweep precedes history under the unchanged physical-attempt cap. Fresh-window coverage uses a separate scope from historical completeness. |
 | 370 | PR-4: the legacy credential lanes retired | The api-key lane deleted end to end (routes, authenticator, service, repository, CLI group, `authMethod`), the cookie token-issuance routes and the HTTP create-user/set-password deleted, `must_change_password` retired with `mustChangePassword` frozen on the wire as a deprecated `false`, `content_manager` out of the wire role enum. Tombstones #116(b) and #116(c). An unknown bearer prefix authenticates nobody. Tables, column and PG enum survive as facts (DP 7); model-scope grants stay dead until `ACCESS_GRANTS_READ_ENABLED` flips (#70 ritual) |
 | 371 | Deploy image GC on by default | `scripts/deploy-production.sh` garbage-collects superseded candidate/rollback/full-base tags after the health gate on every run (`--no-image-gc` / `DEPLOY_IMAGE_GC=0` opts out); supersedes the default-off of #176/#212. Keep-set unchanged: running containers, release tag, this run's candidate and rollback, the current clean base. 2026-09-18: 22 GB of unpruned deploy images crossed the 90 % disk gauge and closed the OFAPI read gate for the desktop |
+| 372 | Disk alert and OFAPI read gate get separate thresholds | New `DISK_USAGE_GATE_PERCENT` (ops-only env, restart) decides when `ofapi_storage_health_state` flips to breached and interactive OFAPI reads are refused with `storage_unhealthy`; unset it equals `DISK_USAGE_ALERT_PERCENT` (unchanged behaviour), a value below the alert is clamped up to it. The alert text names the gate state. 2026-09-18: with one shared threshold the desktop lost chat reads at the same moment the owner was paged |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -15561,3 +15562,38 @@ bot) are outside this script.
 **Manual cleanup on 2026-09-18 (owner-approved, by hand, not by this
 script):** 142 superseded runtime tags and 18 old taskindex tags removed,
 builder cache older than 24 h pruned; disk 93 % → 65 %.
+## Decision 372: The disk alert and the OFAPI read gate get separate thresholds (2026-09-18)
+
+**Context.** The worker's hourly disk check (#212 G1, `db-disk-alert.ts`)
+does two things from one number: it pages the owner when usage crosses
+`DISK_USAGE_ALERT_PERCENT`, and it persists `ofapi_storage_health_state`,
+which `reserveOfapiRequestAttempt` reads with `requireFreshStorageHealth` to
+admit or refuse every OFAPI interactive read, capture job and collection read
+(`storage_unhealthy`, 503). Both used the same threshold. On 2026-09-18 the
+disk crossed 90 % at night (Decision 371 has the cause); the page went out and,
+in the same pass, the OnlyFans desktop lost chat lists and history for the
+rest of the shift, showing OFFLINE and blaming the chatter's internet. The
+gate is right to exist (the reads journal bodies into the fact tables; a full
+disk takes Postgres down), but a gate that closes at the first warning gives
+the owner zero lead time and costs a whole shift of chatting for the ~0.2 GB
+a day those reads add.
+
+**Decision.** `DISK_USAGE_GATE_PERCENT` (ops-only env, `editability: never`,
+restart to apply, 1–100) is the percentage at which the health row flips to
+breached. Unset, it equals the alert percent, so an unconfigured host keeps
+the pre-372 coupling. A value below the alert percent is clamped up to it: a
+gate that closes before anyone is paged would silence chatters without a
+warning. The alert text names the gate state ("OFAPI reads still admitted
+(gate 95%)" / "OFAPI reads refused (gate 95%)") whenever the two differ, so
+the Telegram page says whether the desktop is already affected. The check's
+result carries `gatePercent` and `gateBreached` for the worker log.
+
+**Recommended production values** (owner sets them in `.env.production`,
+deploy applies): alert 85, gate 95. On the 80 GB VPS that is roughly 12 GB of
+lead between the page and the reads stopping, about three weeks at the
+current ~0.55 GB/day database growth.
+
+**Not changed.** The gate's freshness rule (a row older than two hours is
+unhealthy), the runway latches, the gauges, and the deleters. The desktop's
+OFFLINE copy still blames the network; a typed "hub maintenance" answer for
+`storage_unhealthy` is a client follow-up.
