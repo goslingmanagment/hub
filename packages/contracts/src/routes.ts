@@ -5809,7 +5809,7 @@ const baseRouteSchemas = {
     tags: ["usage"],
     summary: "Stream a chatter AI generation through the core gateway",
     description: "Default-off ChatMuse gateway for desktop AI generations. The runtime route "
-      + "uses chatter API-key auth, validates the prompt-stream request contract, and must not "
+      + "uses chatter device-token auth, validates the prompt-stream request contract, and must not "
       + "reach provider network while the gateway flag is disabled.",
     body: aiGatewayStreamBodySchema,
     response: {
@@ -5844,7 +5844,7 @@ const baseRouteSchemas = {
     tags: ["events"],
     summary: "SSE stream of sync events for the chatter's assigned pages",
     description: "`text/event-stream` of SyncEvent frames (`event: sync`, `data` = "
-      + "JSON SyncEvent, `id` = journal event id). Chatter API-key auth only; events "
+      + "JSON SyncEvent, `id` = journal event id). Chatter device-token auth only; events "
       + "are filtered to the chatter's assigned pages. Supports `Last-Event-ID` "
       + "header (or `lastEventId` query parameter) replay from the ~7-day journal.",
     querystring: z.object({
@@ -7487,7 +7487,7 @@ const baseRouteSchemas = {
     tags: ["admin"],
     summary: "Disable a user temporarily, retaining their login and history",
     description: "Sets the disabled_at tombstone and revokes every credential "
-      + "(API keys, device tokens, sessions) in one transaction. History and "
+      + "(device tokens, reservations, sessions, links) in one transaction. History and "
       + "attribution are preserved and the login stays reserved. "
       + "Owners and the calling account itself cannot be deactivated.",
     params: z.object({ userId: z.coerce.number().int().positive().max(Number.MAX_SAFE_INTEGER) }),

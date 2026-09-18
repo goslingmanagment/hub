@@ -62417,7 +62417,7 @@
         "tags": [
           "admin"
         ],
-        "description": "Sets the disabled_at tombstone and revokes every credential (API keys, device tokens, sessions) in one transaction. History and attribution are preserved and the login stays reserved. Owners and the calling account itself cannot be deactivated.",
+        "description": "Sets the disabled_at tombstone and revokes every credential (device tokens, reservations, sessions, links) in one transaction. History and attribution are preserved and the login stays reserved. Owners and the calling account itself cannot be deactivated.",
         "parameters": [
           {
             "schema": {
@@ -97623,7 +97623,7 @@
         "tags": [
           "usage"
         ],
-        "description": "Default-off ChatMuse gateway for desktop AI generations. The runtime route uses chatter API-key auth, validates the prompt-stream request contract, and must not reach provider network while the gateway flag is disabled.",
+        "description": "Default-off ChatMuse gateway for desktop AI generations. The runtime route uses chatter device-token auth, validates the prompt-stream request contract, and must not reach provider network while the gateway flag is disabled.",
         "requestBody": {
           "required": true,
           "content": {
@@ -102946,7 +102946,7 @@
         "tags": [
           "events"
         ],
-        "description": "`text/event-stream` of SyncEvent frames (`event: sync`, `data` = JSON SyncEvent, `id` = journal event id). Chatter API-key auth only; events are filtered to the chatter's assigned pages. Supports `Last-Event-ID` header (or `lastEventId` query parameter) replay from the ~7-day journal.",
+        "description": "`text/event-stream` of SyncEvent frames (`event: sync`, `data` = JSON SyncEvent, `id` = journal event id). Chatter device-token auth only; events are filtered to the chatter's assigned pages. Supports `Last-Event-ID` header (or `lastEventId` query parameter) replay from the ~7-day journal.",
         "parameters": [
           {
             "schema": {

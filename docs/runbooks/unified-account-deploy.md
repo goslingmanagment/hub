@@ -1,4 +1,4 @@
-# Runbook: deploying the unified chatter account (Decisions 349 and 353)
+# Runbook: deploying the unified chatter account (Decisions 349 and 369)
 
 One wave, four owner-gated steps: the kernel first, then the console and the
 cabinet, then the clients, then the removal of the legacy lanes. Sections 1–5
@@ -156,7 +156,8 @@ A client, script or cron that authenticates **only** by api key has no row in
 `Dmitriy`, with `last_used_at` older than a week. Then:
 
 1. The owner **revokes that key before the PR-4 deploy** — `hub apikey revoke
-   --username Dmitriy` on the pre-PR-4 image, or the console.
+   --user-id <Dmitriy's id from hub user list>` on the pre-PR-4 image (the
+   identity line already addresses accounts by ID), or the console.
 2. **Wait one full day** and watch for 401s and for anything that starts
    complaining.
 
@@ -181,11 +182,13 @@ What to check afterwards:
   off) and a person's card shows their devices.
 - A device sign-in works end to end: `POST /api/v1/auth/device-tokens/password`
   with a real password answers 200 in `active` mode.
-- The retired paths answer **404**, not 401 or 500:
-  `POST /api/v1/admin/users` · `PATCH /api/v1/admin/users/<login>/password` ·
-  `GET|POST|DELETE /api/v1/admin/users/<login>/api-keys` ·
+- The retired paths answer **404**, not 401 or 500 (accounts are addressed by
+  immutable ID since Decision 356; the `<login>` forms already 404 on the
+  pre-PR-4 image, so probe the by-id forms):
+  `POST /api/v1/admin/users` · `PATCH /api/v1/admin/users/by-id/<id>/password` ·
+  `GET|POST|DELETE /api/v1/admin/users/by-id/<id>/api-keys` ·
   `POST /api/v1/auth/device-tokens` · `POST /api/v1/auth/device-tokens/reservations` ·
-  `POST /api/v1/admin/users/<login>/device-tokens`.
+  `POST /api/v1/admin/users/by-id/<id>/device-tokens`.
 - A bearer with the old `agency_hub_core_` prefix answers 401 with **no**
   `reason` in the body.
 

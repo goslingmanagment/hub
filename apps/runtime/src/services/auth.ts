@@ -498,7 +498,7 @@ export async function createUserAccount(
  * Owner-set password, CLI only since Decision 369 (the HTTP route is gone; the
  * owner resets a chatter with a link). It is the SAME reset primitive the link
  * redemption uses: every sign-in of that person ends with the old password —
- * before 353 this path left device tokens alive, which made "I reset his
+ * before Decision 369 this path left device tokens alive, which made "I reset his
  * password" a false statement about a laptop still holding a live token.
  */
 export async function setUserPassword(

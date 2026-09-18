@@ -16,7 +16,7 @@ import { createTestAppContext } from "./helpers/runtime.ts";
 // Decision #126: offboarding is a disabled_at tombstone, never a DELETE.
 // Deactivation must revoke every credential in one transaction and fail every
 // auth path closed; reactivation restores password login only. Since Decision
-// 353 "every credential" means sessions, device tokens, reservations and links.
+// 369 "every credential" means sessions, device tokens, reservations and links.
 
 let testDb: StartedTestDatabase | null = null;
 let app: AppContext | null = null;
