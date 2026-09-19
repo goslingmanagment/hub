@@ -34,16 +34,20 @@ platform-core, hub-agent-cli). ESM, TS strict, tests in root `tests/`.
 
 - `pnpm check` = typecheck + lint + unit tests + dashboard build.
 - Integration tests (`tests/*.integration.test.ts`) need Docker Desktop
-  (Testcontainers); CI runs them on every PR. Don't run two vitest suites
-  at once.
+  (Testcontainers); PR CI runs them in three shards or reuses matching
+  proofs, nightly runs the full API file daily and the whole suite weekly.
+  Don't run two vitest suites at once.
 - Invariants are pinned by tests and ratchet scripts (retention deleters,
   auth declarations, platform-branch budget, prompt manifest, raw fetch).
   When one fails, read its message: it says what to update.
-- CI is expensive (~46 machine-minutes per push, Decision 359): push WIP with
-  `[skip ci]` in the commit message, let CI run on the push that is ready for
-  review, re-run failed jobs rather than the workflow. Never put `[skip ci]`
-  in a PR title or body: the squash commit inherits it and main skips the
-  image build.
+- CI is expensive (~43–47 machine-minutes per full run, Decisions 359–360
+  and 373): keep unfinished work in a Draft PR — heavy jobs wait for Ready
+  for review and the draft Quality Gate stays red on purpose. Never put
+  `[skip ci]` markers in commit messages, PR titles or bodies (squash can
+  copy an earlier message onto main and skip the image build); clear old
+  markers from the squash message. Reviewed Markdown prose and
+  dashboard-only changes reuse proofs automatically. Re-run failed jobs
+  rather than the workflow; dispatch with `full: true` to bypass proofs.
 
 ## Things that bite
 

@@ -7,9 +7,7 @@ import { createLogger, encryptJson, type FanslySessionBundle } from "@agency_hub
 import type { PoolClient } from "pg";
 import { inject } from "vitest";
 
-import { runMigrations } from "../../packages/db/src/migrate-runner.ts";
-
-import { TEMPLATE_DATABASE, TEST_DB_ADMIN_URL_KEY } from "./global-setup.ts";
+import { TEMPLATE_DATABASE, TEST_DB_ADMIN_URL_KEY } from "./db-context.ts";
 import { acquireTestPrerequisite } from "./prerequisites.ts";
 
 const DATABASE_READY_TIMEOUT_MS = 10_000;
@@ -99,6 +97,9 @@ export async function startTestDatabase(input?: {
     await waitForDatabaseReady(pool);
 
     if (input?.through !== undefined) {
+      // Normal clones are already migrated by global setup. Only partial
+      // schemas need to load the production migration runner in a worker.
+      const { runMigrations } = await import("../../packages/db/src/migrate-runner.ts");
       // A single session: withMigrationLock's advisory lock is session-scoped.
       const client = await pool.connect();
       try {

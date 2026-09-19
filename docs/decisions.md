@@ -369,6 +369,9 @@ appends a row here in the same change (family law: updated-in-change).
 | 370 | PR-4: the legacy credential lanes retired | The api-key lane deleted end to end (routes, authenticator, service, repository, CLI group, `authMethod`), the cookie token-issuance routes and the HTTP create-user/set-password deleted, `must_change_password` retired with `mustChangePassword` frozen on the wire as a deprecated `false`, `content_manager` out of the wire role enum. Tombstones #116(b) and #116(c). An unknown bearer prefix authenticates nobody. Tables, column and PG enum survive as facts (DP 7); model-scope grants stay dead until `ACCESS_GRANTS_READ_ENABLED` flips (#70 ritual) |
 | 371 | Deploy image GC on by default | `scripts/deploy-production.sh` garbage-collects superseded candidate/rollback/full-base tags after the health gate on every run (`--no-image-gc` / `DEPLOY_IMAGE_GC=0` opts out); supersedes the default-off of #176/#212. Keep-set unchanged: running containers, release tag, this run's candidate and rollback, the current clean base. 2026-09-18: 22 GB of unpruned deploy images crossed the 90 % disk gauge and closed the OFAPI read gate for the desktop |
 | 372 | Disk alert and OFAPI read gate get separate thresholds | New `DISK_USAGE_GATE_PERCENT` (ops-only env, restart) decides when `ofapi_storage_health_state` flips to breached and interactive OFAPI reads are refused with `storage_unhealthy`; unset it equals `DISK_USAGE_ALERT_PERCENT` (unchanged behaviour), a value below the alert is clamped up to it. The alert text names the gate state. 2026-09-18: with one shared threshold the desktop lost chat reads at the same moment the owner was paged |
+| 373 | Safe CI reuse and build cost | Fingerprints ignore only reviewed regular Markdown; a separate DB proof excludes dashboard source/public only. Draft PRs block the gate without heavy jobs; squash defaults omit old commit messages and PR titles reject CI-skip instructions. Docker typechecks by default; CI builds once with Buildx layer cache and two isolated unit workers. Proof uploads tolerate reruns; read-only cost reporting deduplicates carried-over jobs. |
+| 374 | Full CI worker imports and latency benchmark | DB workers import only pure context constants and load the production migrator only for partial schemas. Earnings scale correctness keeps all data/assertions; synthetic 100ms WAN delay is retained in the explicit benchmark. File isolation, serial DB files and full reset remain. |
+| 375 | Typed export scheduling clock | Typed-export due selection uses the Node clock already used by task creation, approval and leasing; real-DB skew tests preserve future ready/retry_wait deadlines without sleeps or retries. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -15597,3 +15600,152 @@ current ~0.55 GB/day database growth.
 unhealthy), the runway latches, the gauges, and the deleters. The desktop's
 OFFLINE copy still blames the network; a typed "hub maintenance" answer for
 `storage_unhealthy` is a client follow-up.
+
+## Decision 373: CI reuse preserves the checks it claims to replace (2026-09-16)
+
+**Why.** The follow-up to Decisions 359–360 verified two proof-only PR runs at
+2 rounded runner-minutes and two main builds/publications at 7, against 43–46
+for a fresh full gate. It also reproduced three defects: the fingerprint
+excluded executable evidence that ESLint checks; direct full Docker deploys
+had lost the backend typecheck; and squash defaults copied historical WIP
+skip instructions onto main. These corrections supersede the affected claims
+in 359–360; the historical entries remain unchanged.
+
+**Proof boundaries.** `ci-gate-fingerprint.sh` ignores only regular,
+non-executable `.md` files in the previously reviewed prose locations. Code,
+data, unknown paths, symlinks and executable files remain inputs, including
+those under `investigations/`, `.claude/` and `.agentic/`. A behavioral test
+adds evidence that ESLint rejects and proves that its fingerprint changes.
+
+The second `integration` fingerprint omits only regular files under
+`apps/dashboard/src/` and `apps/dashboard/public/`. Dashboard manifests,
+configuration and index.html, lockfiles, all tests/helpers, scripts, shared
+packages and every unknown path remain hashed. A source-boundary ratchet
+rejects backend or integration/helper imports and reads of those omitted
+paths, including common composed path expressions. This is deliberately a
+narrow graph boundary, not a universal dynamic-dependency solver. Static
+checks, all unit tests and the production image still run after frontend
+source changes. Any deliberate new cross-boundary dependency must restore
+its inputs to the DB fingerprint before it can pass that ratchet.
+
+The lookup validates the exact artifact name, expiry, repository identity,
+and a completed successful producer running this CI workflow. Lookup errors
+mean a full check, never a skip. Manual `full: true` bypasses both proofs.
+Quality Gate validates the fingerprint job result; main additionally requires
+successful static/image checks. Failures, cancellation, drafts and unexplained
+skips cannot produce a green gate. A new DB proof is uploaded only when DB
+jobs actually succeeded; a fresh full proof can combine fresh static checks
+with an independently proven DB tree. Both proof uploads use `overwrite`
+so rerun-all and partial upload failures do not collide with an earlier
+attempt of the same run. The checked runtime image retains its per-attempt
+artifact name, identity verification and isolated publishing token.
+
+**WIP and merge.** Keep unfinished PRs in Draft. Heavy jobs wait for Ready for
+review; draft Quality Gate intentionally fails, and the `ready_for_review`
+event runs the checks. Returning to draft cancels a superseded PR run. Agents
+must not use skip instructions in commit messages or PR metadata. Repository
+squash defaults are `PR_TITLE` + `BLANK` (applied and read back via the API), so earlier WIP commit messages
+cannot silently suppress the main push. CI rejects skip instructions in PR
+titles, including edits after an earlier successful head. A body-only edited
+event uses a separate concurrency group and a different, non-required check
+name; it neither cancels real CI nor overwrites Quality Gate with skipped
+success. Title/base edits remain real gate events.
+
+**Build.** Direct Docker builds and full/auto deploys typecheck by default.
+Only CI explicitly sets `CI_TYPECHECK_ALREADY_PASSED=true` after its host
+check or matching full-tree proof; invalid values fail. Docker builds the
+production output once; the duplicated host build is removed. Unit tests
+were exercised from a clean checkout without host dist. Buildx loads the
+actual linux/amd64 image for both existing smoke tests and image-ID checks;
+`context: .` preserves preceding generator/metadata checks. GHA layer cache
+persists across runners, `pull: true` refreshes the base, and cache-export
+failure does not excuse a failed build or smoke. Build/test jobs gain no
+registry-write credentials. Cache mounts are not claimed to persist through
+GHA layer export.
+
+**Test execution and accounting.** The CI unit job uses two workers while
+retaining per-file isolation. Vitest 4 defaults to `CPUs - 1`, leaving only
+one worker on the private 2-vCPU runner. Local Node 22 measurements on the
+same machine were about 195s at one worker and 100s at two, with all tests
+passing; this is not a promise of the same percentage on GitHub. Integration
+file parallelism and the weekly/full API coverage policy are unchanged.
+
+`pnpm ci:cost --days 7 --limit 100` reads completed runs and every attempt,
+reports rounded runner-minutes by run/job, and marks a truncated sample. A
+rerun-failed-jobs API response copies old successful jobs with new IDs; the
+report deduplicates their name/start/end timestamps instead of billing them
+twice. A metadata-only run is not counted as proof reuse. This is an estimate,
+not the billing ledger, and creates no additional paid workflow.
+
+**Validation record.** Implementation and independent review evidence is
+recorded in `docs/reports/ci-cost-safe-followups-2026-09-16.md`. Hosted cache,
+event handling and savings require actual runs of this revision; local
+policy tests alone do not certify GitHub orchestration. Production deployment
+is outside this change.
+
+## Decision 374: Remove unused worker setup imports and make synthetic latency explicit (2026-09-16)
+
+**Context.** Even when no prior tree proof can be reused, a full CI run loads
+unnecessary test infrastructure and deliberately sleeps inside a correctness
+fixture. The owner authorized further savings conditional on regression
+verification. Current main was merged before measuring the same application
+source and test selection before/after.
+
+**Decision.** `tests/helpers/db-context.ts` owns the template name, admin
+injection key and Vitest context augmentation, without runtime dependencies.
+Global setup and DB workers import that module separately. Workers no longer
+import the Testcontainers global-setup graph for two constants. The production
+migration runner is loaded in a worker only for a requested partial schema;
+global setup still uses it to build every complete template. Import failure
+remains inside cleanup, before acquiring a migration client.
+
+The earnings audit scale fixture still exports 120,000 observations through
+real psql, checks the exact 151 response bursts, and checks 1,000 projected
+receipts. The existing `FANSLY_AUDIT_BENCHMARK_OUTPUT` opt-in additionally enables
+its 100ms synthetic delay per burst and records that delay in the measurement.
+Normal CI no longer exercises that artificial WAN-latency scenario; real
+transport deadlines, SQL timeouts, data volume and correctness assertions stay.
+
+**Safety boundary.** Keep per-file isolation, serial integration files, full
+dynamic database reset, fresh health-state seeds and real authentication.
+Increasing DB file workers is not safe while files share cluster-wide roles
+and advisory-lock probes. Changing auth fixture construction would also change
+audit/observation side effects. Neither is part of this decision.
+
+The independent static review found no blocking findings. Before/after
+measurements, unchanged test selection, full regression results and the
+explicit benchmark check are recorded in
+[`ci-cold-run-followups-2026-09-16.md`](reports/ci-cold-run-followups-2026-09-16.md).
+Local timings are not runner billing, and this change makes no monthly savings
+forecast. These test-infrastructure changes preserve production and migration
+semantics; the separate scheduling correction discovered in acceptance is
+recorded in Decision 375. Deployment is outside this change.
+
+## Decision 375: Typed export due selection uses the same clock as creation and leasing (2026-09-16)
+
+**Context.** Regression testing for Decision 374 exposed typed-export failures
+on both the optimized branch and its unoptimized control. Task creation,
+approval and lease acquisition use Node time, while the typed sweep's initial
+SQL selection used PostgreSQL `now()`. A database clock slightly behind the
+host can exclude an immediately due task before the lease gets a chance to
+validate it.
+
+**Decision.** After cancellation recovery, capture one Node `new Date()` for
+the sweep's due-time comparison, as the ordinary capture scheduler already
+does. Preserve state/profile filters, ordering and limit, the lease's own
+fresh deadline check, locking, lease token, spend limits and request fencing.
+There are no additional requests, retries or sleeps.
+
+**Regression evidence.** A real-Postgres test advances only JavaScript Date by
+60 seconds relative to the database and exercises creation plus separate
+approval. It fails on the original worker and passes with the correction.
+Future ready/retry_wait jobs remain completely unchanged and issue no vendor
+request. All 21 cases in that file pass after the fix; real transport timers
+are not mocked. Independent review found no blocking findings.
+
+The original intermittent failures lack a contemporaneous clock/error
+snapshot; an extra diagnostic query removed the symptom during inspection.
+The mixed-clock defect itself is reproduced deterministically, without
+claiming a direct measurement of the earlier failures' exact timing. See the
+[acceptance report](reports/ci-cold-run-followups-2026-09-16.md) for full-shard
+and hosted validation. Deployment remains outside this change.

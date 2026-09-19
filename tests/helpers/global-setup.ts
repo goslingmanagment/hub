@@ -5,25 +5,8 @@ import { GenericContainer, type StartedTestContainer } from "testcontainers";
 import { createPool } from "@agency_hub_core/db";
 
 import { runMigrations } from "../../packages/db/src/migrate-runner.ts";
+import { TEMPLATE_DATABASE, TEST_DB_ADMIN_URL_KEY } from "./db-context.ts";
 import { INTEGRATION_TEST_TIMEOUT_MS } from "./timeouts.ts";
-
-/** The migrated database every test database is cloned from. Nothing stays
- * connected to it after setup: `CREATE DATABASE ... TEMPLATE` refuses a
- * template that has live sessions. */
-export const TEMPLATE_DATABASE = "hub_template";
-
-/** Vitest `provide` key carrying the admin connection string (the cluster's own
- * `postgres` database) to every worker. */
-export const TEST_DB_ADMIN_URL_KEY = "testDbAdminUrl";
-
-declare module "vitest" {
-  interface ProvidedContext {
-    /** Null when Docker was unavailable and no cluster could be started. */
-    testDbAdminUrl: string | null;
-    /** Existing Postgres 16 container, for tests exercising its real psql client. */
-    testDbContainerId: string | null;
-  }
-}
 
 async function waitForDatabaseReady(pool: ReturnType<typeof createPool>) {
   const deadline = Date.now() + 30_000;

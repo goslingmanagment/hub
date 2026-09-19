@@ -1,7 +1,7 @@
 name: Nightly
 
-# Stage 35 CI floor, re-cut under Decision 359. A PR run already executes every
-# integration file (three sharded `test:sync-critical:db` jobs), the unit set,
+# Stage 35 CI floor, re-cut under Decisions 359–361. A PR gate covers every
+# integration file (three DB shards or matching input proof), the unit set,
 # and the [sync-critical] subset of tests/api.integration.test.ts. The only
 # tests a PR never runs are the REST of that api file, so that is what the
 # daily job runs (~2 minutes). The whole suite in one process — the rebuild

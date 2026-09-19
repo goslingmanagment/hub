@@ -1,5 +1,5 @@
-import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -58,14 +58,14 @@ const PROSE_PATHS = [
   "docs/reports/report.md",
   "docs/migration-history/stage.md",
   "investigations/topic/README.md",
-  "investigations/new-topic/evidence.txt",
+  "investigations/new-topic/evidence.md",
   "AGENTS.md",
   "CLAUDE.md",
   "README.md",
   "SESSIONS.md",
   "backlog.md",
-  ".claude/settings.json",
-  ".agentic/state.json",
+  ".claude/instructions.md",
+  ".agentic/notes.md",
 ];
 
 /** Paths some check does read: any change must change the fingerprint. */
@@ -81,14 +81,20 @@ const OBSERVED_PATHS = [
   "packages/db/migrations/0002_next.sql",
   "reference/agency-hub.openapi.json",
   "scripts/tool.sh",
+  "investigations/new-topic/evidence.txt",
+  "investigations/new-topic/repro.mjs",
+  "investigations/new-topic/check.ts",
+  ".claude/settings.json",
+  ".agentic/state.json",
+  "docs/plans/check.mjs",
 ];
 
 function git(repo: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd: repo, env: GIT_ENV, encoding: "utf8" }).trim();
 }
 
-function fingerprint(repo: string, revision = "HEAD"): string {
-  return execFileSync("bash", [SCRIPT, revision], { cwd: repo, env: GIT_ENV, encoding: "utf8" }).trim();
+function fingerprint(repo: string, revision = "HEAD", scope = "gate"): string {
+  return execFileSync("bash", [SCRIPT, revision, scope], { cwd: repo, env: GIT_ENV, encoding: "utf8" }).trim();
 }
 
 function commit(repo: string, files: Record<string, string>, message: string): string {
@@ -150,6 +156,48 @@ describe("CI gate fingerprint", () => {
 
   it("fails loudly on an unknown revision instead of printing a hash", () => {
     expect(() => fingerprint(repo, "no-such-revision")).toThrow();
+  });
+
+  it("does not hide an evidence file that ESLint rejects", () => {
+    const source = "const unusedEvidence = 1;\n";
+    const result = spawnSync(process.execPath, [
+      path.resolve("node_modules/eslint/bin/eslint.js"),
+      "--stdin", "--stdin-filename", "investigations/ci-regression.mjs",
+    ], { cwd: REPO_ROOT, encoding: "utf8", input: source });
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("@typescript-eslint/no-unused-vars");
+    expect(variant({ "investigations/ci-regression.mjs": source }, "lint regression")).not.toBe(baseFingerprint);
+  });
+
+  it("observes symlinks even when their names look like prose", () => {
+    git(repo, "checkout", "--quiet", "--detach", base);
+    symlinkSync("../../package.json", path.join(repo, "docs/plans/link.md"));
+    git(repo, "add", "--all");
+    git(repo, "commit", "--quiet", "--message", "symlink");
+    expect(fingerprint(repo)).not.toBe(baseFingerprint);
+  });
+
+  it.each(["apps/dashboard/src/Example.tsx", "apps/dashboard/src/style.css", "apps/dashboard/public/logo.svg"])(
+    "reuses only integration proof for dashboard source %s", relative => {
+      git(repo, "checkout", "--quiet", "--detach", base);
+      const before = fingerprint(repo, base, "integration");
+      expect(variant({ [relative]: "changed" }, "dashboard")).not.toBe(baseFingerprint);
+      expect(fingerprint(repo, "HEAD", "integration")).toBe(before);
+    },
+  );
+
+  it.each([...OBSERVED_PATHS, "apps/dashboard/package.json", "apps/dashboard/vite.config.ts",
+    "pnpm-lock.yaml", "tests/dashboard-example.test.ts", "tests/helpers/context.ts",
+    "apps/runtime/src/server.ts", "packages/shared/src/index.ts", "unknown/new-file"])(
+    "invalidates the integration proof for %s", relative => {
+      const before = fingerprint(repo, base, "integration");
+      variant({ [relative]: "changed" }, "integration input");
+      expect(fingerprint(repo, "HEAD", "integration")).not.toBe(before);
+    },
+  );
+
+  it("fails on an unknown scope", () => {
+    expect(() => fingerprint(repo, base, "typo")).toThrow();
   });
 
   // The exclusion list is only safe while nothing under tests/ reads those

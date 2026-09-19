@@ -15,13 +15,14 @@ type Step = {
 };
 type Permissions = Record<string, string> | string;
 type Job = {
+  name?: string;
   needs?: string[];
   if?: string;
   permissions?: Permissions;
   outputs?: Record<string, string>;
   steps: Step[];
 };
-type Workflow = { permissions: Permissions; jobs: Record<string, Job> };
+type Workflow = { permissions: Permissions; jobs: Record<string, Job>; concurrency: { group: string }; on: { pull_request: { types: string[] } } };
 
 // Reuse the installed YAML parser through its declaring dependency; do not add
 // a production dependency merely to parse the workflow in this policy test.
@@ -88,9 +89,13 @@ describe("CI production image publication policy", () => {
   // the workflow binds. `proven_by` empty = no earlier proof for this tree.
   it("binds the gate shell's inputs from the fingerprint and gate jobs", () => {
     expect(job("quality").needs).toEqual(expect.arrayContaining(["fingerprint", "static", "integration"]));
-    expect(job("quality").if).toBe("always()");
+    expect(job("quality").if).toBe("always() && (github.event.action != 'edited' || github.event.changes.title || github.event.changes.base)");
     expect(step("quality", "Every gate job succeeded").env).toEqual({
       PROVEN_BY: "${{ needs.fingerprint.outputs.proven_by }}",
+      INTEGRATION_PROVEN_BY: "${{ needs.fingerprint.outputs.integration_proven_by }}",
+      FINGERPRINT_RESULT: "${{ needs.fingerprint.result }}",
+      IS_DRAFT: "${{ github.event_name == 'pull_request' && github.event.pull_request.draft }}",
+      REQUIRE_IMAGE: "${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}",
       FINGERPRINT: "${{ needs.fingerprint.outputs.hash }}",
       STATIC: "${{ needs.static.result }}",
       INTEGRATION: "${{ needs.integration.result }}",
@@ -121,6 +126,10 @@ describe("CI production image publication policy", () => {
       env: {
         ...process.env,
         PROVEN_BY: provenBy,
+        INTEGRATION_PROVEN_BY: "",
+        FINGERPRINT_RESULT: "success",
+        IS_DRAFT: "false",
+        REQUIRE_IMAGE: "false",
         FINGERPRINT: "f".repeat(64),
         STATIC: staticResult,
         INTEGRATION: integrationResult,
@@ -138,29 +147,95 @@ describe("CI production image publication policy", () => {
   // cancellation, which is why it is `!cancelled()` and nothing weaker.
   it("publishing overrides skip propagation from the proven-tree matrix", () => {
     expect(job("publish").if?.startsWith("!cancelled() && ")).toBe(true);
-    expect(job("quality").if).toBe("always()");
+    expect(job("quality").if).toBe("always() && (github.event.action != 'edited' || github.event.changes.title || github.event.changes.base)");
   });
 
   it("reuses a proof only where the workflow says it does, and records one only when fresh", () => {
     const unproven = "needs.fingerprint.outputs.proven_by == ''";
     expect(job("integration").needs).toEqual(["fingerprint"]);
-    expect(job("integration").if).toBe(unproven);
+    expect(job("integration").if).toBe(`github.event.pull_request.draft != true && ${unproven} && needs.fingerprint.outputs.integration_proven_by == ''`);
     expect(job("static").needs).toEqual(["fingerprint"]);
     // Main must always enter the static job: the deploy pulls the image it builds.
-    expect(job("static").if).toBe(`${unproven} || (github.event_name == 'push' && github.ref == 'refs/heads/main')`);
+    expect(job("static").if).toBe(`github.event.pull_request.draft != true && (${unproven} || (github.event_name == 'push' && github.ref == 'refs/heads/main'))`);
     for (const name of ["Typecheck", "Lint (family standard + architecture walls)", "Contracts are regenerated (routes.ts ↔ committed artifacts)", "Reliable unit tests"]) {
       expect(step("static", name).if, name).toBe(unproven);
     }
-    for (const name of ["Production build", "Production Docker image build", "Chromium Headless Shell runtime smoke", "Startup capability manifest smoke"]) {
+    for (const name of ["Production Docker image build", "Chromium Headless Shell runtime smoke", "Startup capability manifest smoke"]) {
       expect(step("static", name).if, name).toBeUndefined();
     }
     expect(step("quality", "Record this fingerprint as proven").if).toBe(unproven);
     const upload = step("quality", "Publish the proof for later identical trees");
     expect(upload.if).toBe(unproven);
     expect(upload.with?.name).toBe("quality-gate-${{ needs.fingerprint.outputs.hash }}");
+    expect(upload.with?.overwrite).toBe(true);
+    expect(step("quality", "Publish fresh integration proof").with?.overwrite).toBe(true);
     // The lookup reads artifacts with the smallest token that can; nothing else in the job writes.
     expect(job("fingerprint").permissions).toEqual({ actions: "read", contents: "read" });
-    expect(shell(step("fingerprint", "Look up an earlier passing gate for this fingerprint"))).toContain("select(.expired == false)");
+    expect(shell(step("fingerprint", "Look up earlier passing checks"))).toBe("node scripts/ci-find-proof.mjs");
+    expect(step("quality", "Publish fresh integration proof").if).toBe("needs.integration.result == 'success'");
+  });
+
+  it.each([
+    // draft, fingerprint result, main, full proof, DB proof, static, DB, allowed
+    [true, "success", false, "123", "", "skipped", "skipped", false],
+    [false, "failure", false, "123", "", "skipped", "skipped", false],
+    [false, "cancelled", false, "123", "", "success", "skipped", false],
+    [false, "success", true, "123", "", "skipped", "skipped", false],
+    [false, "success", true, "123", "", "success", "skipped", true],
+    [false, "success", false, "", "456", "success", "skipped", true],
+    [false, "success", true, "", "456", "success", "skipped", true],
+    [false, "success", false, "", "456", "failure", "skipped", false],
+    [false, "success", false, "", "456", "cancelled", "skipped", false],
+    [false, "success", false, "", "456", "skipped", "skipped", false],
+    [false, "success", false, "", "456", "success", "failure", false],
+    [false, "success", false, "", "456", "success", "cancelled", false],
+    [false, "success", false, "", "", "success", "skipped", false],
+  ] as const)("gate admission draft=%s fingerprint=%s main=%s full=%s DBproof=%s static=%s DB=%s allowed=%s",
+    (draft, fingerprintResult, main, proven, integrationProven, staticResult, integrationResult, allowed) => {
+      const result = spawnSync("bash", ["-euo", "pipefail", "-c", shell(step("quality", "Every gate job succeeded"))], {
+        encoding: "utf8",
+        env: { ...process.env, IS_DRAFT: String(draft), FINGERPRINT_RESULT: fingerprintResult,
+          REQUIRE_IMAGE: String(main), PROVEN_BY: proven, INTEGRATION_PROVEN_BY: integrationProven,
+          FINGERPRINT: "f".repeat(64), STATIC: staticResult, INTEGRATION: integrationResult,
+          GITHUB_STEP_SUMMARY: "/dev/null" },
+      });
+      expect(result.status === 0, result.stderr).toBe(allowed);
+    },
+  );
+
+  it.each([
+    ["edited", false, false, "PR description edit (no gate)", "ci-ref-metadata"],
+    ["edited", true, false, "Quality Gate", "ci-ref"],
+    ["edited", false, true, "Quality Gate", "ci-ref"],
+    ["synchronize", false, false, "Quality Gate", "ci-ref"],
+    ["opened", false, false, "Quality Gate", "ci-ref"],
+    ["", false, false, "Quality Gate", "ci-ref"],
+    ["edited", true, true, "Quality Gate", "ci-ref"],
+    ["ready_for_review", false, false, "Quality Gate", "ci-ref"],
+    ["converted_to_draft", false, false, "Quality Gate", "ci-ref"],
+  ] as const)("metadata edit %s title=%s base=%s preserves the real gate", (action, title, base, expectedName, expectedGroup) => {
+    const render = (value: string) => value.replace(/\$\{\{(.*?)\}\}/g, (_match, expression: string) => {
+      const resolved = expression.replaceAll("github.event.action", JSON.stringify(action))
+        .replaceAll("github.event.changes.title", String(title)).replaceAll("github.event.changes.base", String(base))
+        .replaceAll("github.ref", JSON.stringify("ref")).replaceAll("always()", "true");
+      // Only the checked-in boolean/string expression above is evaluated.
+      return String(Function(`"use strict"; return (${resolved})`)());
+    });
+    expect(render(job("quality").name ?? "")).toBe(expectedName);
+    expect(render(workflow.concurrency.group)).toBe(expectedGroup);
+    expect(render("${{ " + job("fingerprint").if + " }}")).toBe(String(expectedName === "Quality Gate"));
+    expect(render("${{ " + job("quality").if + " }}")).toBe(String(expectedName === "Quality Gate"));
+    expect(workflow.on.pull_request.types).toEqual(expect.arrayContaining(["ready_for_review", "converted_to_draft", "edited"]));
+  });
+
+  it("builds only once, loads the cached image and keeps both smoke tests", () => {
+    expect(job("static").steps.some(item => item.run?.includes("pnpm build:artifacts"))).toBe(false);
+    const build = step("static", "Production Docker image build");
+    expect(build.with).toMatchObject({ context: ".", load: true, pull: true, platforms: "linux/amd64", target: "runtime" });
+    expect(build.with?.["build-args"]).toContain("CI_TYPECHECK_ALREADY_PASSED=true");
+    expect(build.with?.["cache-from"]).toBe("type=gha,scope=hub-runtime-amd64");
+    expect(build.with?.["cache-to"]).toContain("ignore-error=true");
+    expect(step("static", "Record checked image identity").id).toBe("build-image");
   });
 
   it("grants no write permissions to builds, tests, or the root workflow", () => {

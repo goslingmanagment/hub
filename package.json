@@ -12,6 +12,7 @@
     }
   },
   "scripts": {
+    "ci:cost": "node scripts/ci-cost-report.mjs",
     "api": "node --import tsx/esm apps/runtime/src/api.ts",
     "api:watch": "node --import tsx/esm --watch apps/runtime/src/api.ts",
     "worker:watch": "node --import tsx/esm --watch apps/runtime/src/worker.ts",
