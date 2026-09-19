@@ -37,7 +37,7 @@ function providerInput(
   return {
     requestId: randomUUID(),
     principal: {
-      authMethod: "api_key",
+      authMethod: "device_token",
       user: {
         id: 7,
         username: "chatter",

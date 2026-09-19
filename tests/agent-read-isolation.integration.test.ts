@@ -11,7 +11,8 @@ import {
   revokeAgentKey,
   setConfigOverride,
 } from "@agency_hub_core/db";
-import { createUserAccount, issueChatterApiKey } from "../apps/runtime/src/services/auth.ts";
+import { createUserAccount } from "../apps/runtime/src/services/auth.ts";
+import { issueChatterDeviceToken } from "./helpers/device-credentials.ts";
 import { sha256Hex } from "@agency_hub_core/shared";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
@@ -106,7 +107,7 @@ beforeEach(async (context) => {
     username: "chatter",
     role: "chatter",
   }, { source: "cli" });
-  const issued = await issueChatterApiKey(appContext, { username: "chatter" }, { source: "cli" });
+  const issued = await issueChatterDeviceToken(appContext, { username: "chatter" }, { source: "cli" });
   chatterApiKey = issued.key;
   await insertAgentKey(testDb.db, {
     name: "slice-a",

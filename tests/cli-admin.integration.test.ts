@@ -2,6 +2,14 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 
 import { createFanslyPage, createModel } from "@agency_hub_core/db";
 
+import { createAccountLinkForUserId } from "../apps/runtime/src/services/account-links.ts";
+import {
+  authenticateDeviceToken,
+  authenticateSessionToken,
+  loginWithPassword,
+} from "../apps/runtime/src/services/auth.ts";
+import { issueDeviceTokenForUsername } from "./helpers/device-credentials.ts";
+import { fixtureUserId } from "./helpers/user-identity.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
@@ -58,7 +66,7 @@ describe("CLI admin flows", () => {
     });
   });
 
-  it("issues user API keys with optional page assignment side effects", async (context) => {
+  it("creates accounts, assigns pages and resets a password — no key group left", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -76,42 +84,110 @@ describe("CLI admin flows", () => {
     };
 
     await run(["user", "add", "--username", "dima", "--role", "owner", "--password", "owner-secret"]);
-    await run(["user", "add", "--username", "anton", "--role", "chatter"]);
-    await run(["apikey", "create", "--username", "anton"]);
+    await run(["user", "add", "--username", "lead", "--role", "team_lead", "--password", "lead-secret"]);
     const assignmentsBeforePage = await testDb.pool.query(`
       select count(*)::int as count
       from user_page_assignments upa
       join users u on u.id = upa.user_id
-      where u.username = 'anton'
+      where u.username = 'lead'
     `);
     expect(assignmentsBeforePage.rows[0]?.count).toBe(0);
 
-    await run(["apikey", "create", "--username", "anton", "--page", "lana"]);
-    await run(["apikey", "show", "--username", "anton"]);
-    await run(["apikey", "revoke", "--username", "anton"]);
+    const leadId = await fixtureUserId(appContext, "lead");
+    await run(["user", "assign-page", "--user-id", String(leadId), "--page", "lana"]);
+    // Decision 370: `set-password` is the full reset primitive — it ends every
+    // sign-in of that person, which is why the CLI says so out loud.
+    await run(["user", "set-password", "--user-id", String(leadId), "--password", "lead-secret-2"]);
 
     consoleSpy.mockRestore();
 
     expect(logs.some((line) => line.includes("Created user dima"))).toBe(true);
-    expect(logs.some((line) => line.startsWith("agency_hub_core_"))).toBe(true);
-    expect(logs.some((line) => line.includes("Revoked 1 API key(s) for anton"))).toBe(true);
-
-    const keyRows = await testDb.pool.query(`
-      select count(*)::int as count,
-             bool_and(revoked_at is not null) as revoked
-      from api_keys ak
-      join users u on u.id = ak.user_id
-      where u.username = 'anton'
-    `);
-    expect(keyRows.rows[0]?.count).toBe(2);
-    expect(keyRows.rows[0]?.revoked).toBe(true);
+    expect(logs.some((line) => line.includes(`Assigned ${leadId} to lana`))).toBe(true);
+    expect(logs.some((line) => line.includes("all of their sign-ins were ended"))).toBe(true);
 
     const assignmentsAfterPage = await testDb.pool.query(`
       select count(*)::int as count
       from user_page_assignments upa
       join users u on u.id = upa.user_id
-      where u.username = 'anton'
+      where u.username = 'lead'
     `);
     expect(assignmentsAfterPage.rows[0]?.count).toBe(1);
+  });
+
+  it("`user set-password` ends every sign-in, not just the cookie ones", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    // Decision 370: before this PR the CLI reset advanced the epoch and revoked
+    // SESSIONS, and left device tokens alive — so "I reset his password" was a
+    // false statement about a laptop still holding a working bearer. It now runs
+    // terminateAccessTx, the same primitive a reset link runs.
+    const appContext = createTestAppContext(testDb);
+    vi.spyOn(console, "log").mockImplementation(() => {});
+
+    const run = async (args: string[]) => {
+      const program = await loadCliProgram(appContext);
+      await program.parseAsync(args, { from: "user" });
+    };
+
+    await run(["user", "add", "--username", "dima", "--role", "owner", "--password", "owner-secret"]);
+    await run([
+      "user", "add", "--username", "lead", "--role", "team_lead", "--password", "lead-secret",
+    ]);
+
+    const device = await issueDeviceTokenForUsername(appContext, {
+      username: "lead",
+      label: "Desktop · lead-pc",
+    }, { source: "cli" });
+    const session = await loginWithPassword(appContext, {
+      username: "lead",
+      password: "lead-secret",
+    });
+    const leadId = await fixtureUserId(appContext, "lead");
+    const link = await createAccountLinkForUserId(appContext, {
+      userId: leadId,
+      kind: "password_reset",
+    }, { source: "cli", actorUserId: 1 });
+
+    const epochBefore = await testDb.pool.query<{ epoch: number }>(
+      "select device_token_epoch as epoch from users where username = 'lead'",
+    );
+
+    // Everything is alive before the reset.
+    expect((await authenticateDeviceToken(appContext, device.token)).principal).not.toBeNull();
+    expect(await authenticateSessionToken(appContext, session.sessionToken)).not.toBeNull();
+
+    await run(["user", "set-password", "--user-id", String(leadId), "--password", "lead-secret-2"]);
+
+    // The device token is refused WITH the self-healing reason, so the client
+    // wipes its custody and shows a sign-in screen instead of a red line.
+    expect(await authenticateDeviceToken(appContext, device.token)).toEqual({
+      principal: null,
+      failure: { reason: "token_revoked" },
+    });
+    expect(await authenticateSessionToken(appContext, session.sessionToken)).toBeNull();
+
+    const linkRow = await testDb.pool.query<{ revoked_reason: string | null }>(
+      "select revoked_reason from account_links where id = $1 and revoked_at is not null",
+      [link.id],
+    );
+    expect(linkRow.rows).toEqual([{ revoked_reason: "password_set" }]);
+
+    const epochAfter = await testDb.pool.query<{ epoch: number }>(
+      "select device_token_epoch as epoch from users where username = 'lead'",
+    );
+    expect(Number(epochAfter.rows[0]!.epoch)).toBeGreaterThan(Number(epochBefore.rows[0]!.epoch));
+
+    // And the new password is the one that works.
+    await expect(loginWithPassword(appContext, {
+      username: "lead",
+      password: "lead-secret",
+    })).rejects.toThrow();
+    expect(await loginWithPassword(appContext, {
+      username: "lead",
+      password: "lead-secret-2",
+    })).toBeTruthy();
   });
 });

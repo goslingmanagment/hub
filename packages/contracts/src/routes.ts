@@ -15,7 +15,6 @@ import {
   SPENDER_SERIES_GRANULARITIES,
   FANSLY_CLIENT_CHECK_ROUTES,
   aiUsageFeatures,
-  creatableUserRoles,
   fanFlagTypes,
   ofapiCaptureJobStates,
   transactionReportingBuckets,
@@ -56,7 +55,6 @@ const spenderSeriesGranularityEnum = z.enum(SPENDER_SERIES_GRANULARITIES);
 const nonCustomPeriodEnum = z.enum(["today", "7d", "30d", "all"]);
 const transactionReportingBucketEnum = z.enum(transactionReportingBuckets);
 const userRoleEnum = z.enum(userRoles);
-const creatableUserRoleEnum = z.enum(creatableUserRoles);
 const fanFlagEnum = z.enum(fanFlagTypes);
 const aiUsageFeatureEnum = z.enum(aiUsageFeatures);
 const spenderScopeKindEnum = z.enum(["page", "model", "agency"]);
@@ -95,7 +93,11 @@ export const authUserSchema = z.object({
   id: intId,
   username: z.string(),
   role: userRoleEnum,
-  // Stage 22: admin-set passwords may force a change on first session login.
+  // DEPRECATED (Decision 370): the #116(b) flag is retired — this field is a
+  // wire-only constant `false`. It stays forever because the vendored client
+  // SDKs declare it required (`$strip` tolerates extra fields, never missing
+  // ones): dropping it would turn `me()` into response_validation_failed on
+  // every un-revendored extension and desktop install.
   mustChangePassword: z.boolean(),
   assignedPages: z.array(pageRefSchema),
 });
@@ -105,10 +107,6 @@ export const authUserSchema = z.object({
 export const changePasswordBodySchema = z.object({
   currentPassword: z.string().min(1).max(1024),
   newPassword: z.string().min(8).max(256),
-});
-
-export const deviceTokenLabelBodySchema = z.object({
-  label: z.string().min(1).max(120),
 });
 
 export const issuedDeviceTokenResponseSchema = z.object({
@@ -156,8 +154,9 @@ export const deviceTokenHarvestCapabilityBodySchema = z.object({
   machineId: z.string().uuid().nullable(),
 });
 
-// D116(c) fleet-gate foundation (desktop D19): per active chatter, token
-// freshness and remaining active API keys. Read-only reporting surface.
+// D116(c) fleet-gate foundation (desktop D19): per active chatter, device-token
+// freshness. Read-only reporting surface. (Decision 370 retired the API-key
+// columns with the lane itself.)
 // Deliberately NO aggregate go/no-go boolean: chatter-role automation
 // accounts (probes/scripts) are indistinguishable from humans until the
 // service-account split lands, so any all-chatters flag would be
@@ -168,8 +167,6 @@ export const deviceTokenAdoptionRowSchema = z.object({
   hasFreshDeviceToken: z.boolean(),
   deviceTokenLastUsedAt: isoTimestamp.nullable(),
   deviceTokenExpiresAt: isoTimestamp.nullable(),
-  activeApiKeys: z.number().int().nonnegative(),
-  apiKeyLastUsedAt: isoTimestamp.nullable(),
 });
 
 export const deviceTokenAdoptionReportSchema = z.object({
@@ -179,7 +176,6 @@ export const deviceTokenAdoptionReportSchema = z.object({
   summary: z.object({
     activeChatters: z.number().int().nonnegative(),
     onFreshTokens: z.number().int().nonnegative(),
-    withActiveApiKeys: z.number().int().nonnegative(),
   }),
 });
 
@@ -194,21 +190,15 @@ export const accessGrantItemSchema = z.object({
   revokedAt: isoTimestamp.nullable(),
 });
 
-export const adminUserApiKeyStatusSchema = z.object({
-  activeKeyPrefix: z.string().nullable(),
-  activeKeyCount: z.number().int().nonnegative(),
-  activeKeyCreatedAt: isoTimestamp.nullable(),
-  activeKeyLastUsedAt: isoTimestamp.nullable(),
-});
-
 export const registrationStateEnum = z.enum(["invited", "active"]);
 
 export const adminUserSchema = authUserSchema.extend({
-  apiKeyStatus: adminUserApiKeyStatusSchema.nullable(),
   // Decision #126: deactivation tombstone (null = active) and the honest
-  // activity signal — max(last api-key use, last device-token use), so a
-  // password+device-token chatter (#116) no longer reads "Never".
+  // activity signal — the last device-token use (Decision 370 retired the
+  // API-key half of it with the lane).
   disabledAt: isoTimestamp.nullable(),
+  // Deleted accounts retain their immutable attribution but cannot authenticate.
+  deletedAt: isoTimestamp.nullable(),
   lastActiveAt: isoTimestamp.nullable(),
   // Decision 349 (§4.1 p.12): "invited" = no password yet (the invite link has
   // not been redeemed); "active" = a password is set.
@@ -334,12 +324,11 @@ export const authRevokeAllDevicesResponseSchema = z.object({
 export const adminTerminateAllAccessResponseSchema = z.object({
   deviceTokens: z.number().int().nonnegative(),
   sessions: z.number().int().nonnegative(),
-  apiKeys: z.number().int().nonnegative(),
   links: z.number().int().nonnegative(),
 });
 
 export const authStateSchema = z.object({
-  authMethod: z.enum(["session", "api_key", "device_token"]),
+  authMethod: z.enum(["session", "device_token"]),
   user: authUserSchema,
 });
 
@@ -2537,41 +2526,8 @@ export const authMyUsageResponseSchema = z.object({
 });
 
 // Admin schemas
-export const adminCreateUserBodySchema = z.object({
-  username: z.string().min(1).max(100),
-  role: creatableUserRoleEnum,
-  password: z.string().min(8).max(256).optional(),
-});
-
-export const adminSetPasswordBodySchema = z.object({
-  password: z.string().min(8).max(256),
-  // Stage 22: force a change on the first session login (chatter invite flow v1).
-  mustChangePassword: z.boolean().optional(),
-});
-
 export const adminAssignPageBodySchema = z.object({
   pageLabel: z.string().min(1),
-});
-
-export const adminIssueApiKeyBodySchema = z.object({
-  pageLabel: z.string().min(1).optional(),
-});
-
-export const apiKeyItemSchema = z.object({
-  id: intId,
-  keyPrefix: z.string(),
-  userId: z.number().int(),
-  isActive: z.boolean(),
-  revokedAt: isoTimestamp.nullable(),
-  revokedReason: z.string().nullable(),
-  createdAt: isoTimestamp,
-  lastUsedAt: isoTimestamp.nullable(),
-});
-
-export const issuedApiKeyResponseSchema = z.object({
-  key: z.string(),
-  keyPrefix: z.string(),
-  assignedPages: z.array(pageRefSchema),
 });
 
 export const syncRunItemSchema = z.object({
@@ -4911,7 +4867,9 @@ export const ofapiDmColdArchiveStatusResponseSchema = z.object({
 //   session        cookie-session dashboard roles (owner/team_lead)
 //   any-session    any live cookie session, any human role (self-serve auth)
 //   owner-session  cookie session with the owner role (admin surface, swagger/openapi)
-//   apiKey         bearer API key or device token (desktop/extension lanes)
+//   apiKey         bearer device token (desktop/extension lanes). Historical
+//                  name, kept deliberately: Decision 370 retired API keys, and
+//                  renaming the kind would touch hundreds of declarations
 //   device-token   device-token bearer only (current-device self-service)
 //   agentKey       Agent Read Plane machine key only — there is no human behind
 //                  this principal (agent-read slice 0b; no route declares it yet)
@@ -5851,7 +5809,7 @@ const baseRouteSchemas = {
     tags: ["usage"],
     summary: "Stream a chatter AI generation through the core gateway",
     description: "Default-off ChatMuse gateway for desktop AI generations. The runtime route "
-      + "uses chatter API-key auth, validates the prompt-stream request contract, and must not "
+      + "uses chatter device-token auth, validates the prompt-stream request contract, and must not "
       + "reach provider network while the gateway flag is disabled.",
     body: aiGatewayStreamBodySchema,
     response: {
@@ -5886,7 +5844,7 @@ const baseRouteSchemas = {
     tags: ["events"],
     summary: "SSE stream of sync events for the chatter's assigned pages",
     description: "`text/event-stream` of SyncEvent frames (`event: sync`, `data` = "
-      + "JSON SyncEvent, `id` = journal event id). Chatter API-key auth only; events "
+      + "JSON SyncEvent, `id` = journal event id). Chatter device-token auth only; events "
       + "are filtered to the chatter's assigned pages. Supports `Last-Event-ID` "
       + "header (or `lastEventId` query parameter) replay from the ~7-day journal.",
     querystring: z.object({
@@ -7497,40 +7455,15 @@ const baseRouteSchemas = {
       403: errorResponseSchema,
     },
   },
-  adminCreateUser: {
-    auth: { kind: "owner-session" },
-    tags: ["admin"],
-    summary: "Create a new user",
-    body: adminCreateUserBodySchema,
-    response: {
-      200: authUserSchema,
-      400: errorResponseSchema,
-      401: errorResponseSchema,
-      403: errorResponseSchema,
-    },
-  },
-  adminSetPassword: {
-    auth: { kind: "owner-session" },
-    tags: ["admin"],
-    summary: "Set a user password",
-    params: z.object({ username: z.string().min(1) }),
-    body: adminSetPasswordBodySchema,
-    response: {
-      200: z.object({ ok: z.literal(true) }),
-      400: errorResponseSchema,
-      401: errorResponseSchema,
-      403: errorResponseSchema,
-      404: errorResponseSchema,
-    },
-  },
   adminAssignPage: {
     auth: { kind: "owner-session" },
     tags: ["admin"],
     summary: "Assign a page to a user",
-    params: z.object({ username: z.string().min(1) }),
+    params: z.object({ userId: z.coerce.number().int().positive().max(Number.MAX_SAFE_INTEGER) }),
     body: adminAssignPageBodySchema,
     response: {
       200: authUserSchema,
+      400: errorResponseSchema,
       401: errorResponseSchema,
       403: errorResponseSchema,
       404: errorResponseSchema,
@@ -7540,45 +7473,10 @@ const baseRouteSchemas = {
     auth: { kind: "owner-session" },
     tags: ["admin"],
     summary: "Unassign a page from a user",
-    params: z.object({ username: z.string().min(1), pageLabel: z.string().min(1) }),
+    params: z.object({ userId: z.coerce.number().int().positive().max(Number.MAX_SAFE_INTEGER), pageLabel: z.string().min(1) }),
     response: {
       200: z.object({ ok: z.literal(true) }),
-      401: errorResponseSchema,
-      403: errorResponseSchema,
-      404: errorResponseSchema,
-    },
-  },
-  adminListApiKeys: {
-    auth: { kind: "owner-session" },
-    tags: ["admin"],
-    summary: "List API keys for a user",
-    params: z.object({ username: z.string().min(1) }),
-    response: {
-      200: z.array(apiKeyItemSchema),
-      401: errorResponseSchema,
-      403: errorResponseSchema,
-    },
-  },
-  adminIssueApiKey: {
-    auth: { kind: "owner-session" },
-    tags: ["admin"],
-    summary: "Issue an API key for a user",
-    params: z.object({ username: z.string().min(1) }),
-    body: adminIssueApiKeyBodySchema,
-    response: {
-      200: issuedApiKeyResponseSchema,
-      401: errorResponseSchema,
-      403: errorResponseSchema,
-      404: errorResponseSchema,
-    },
-  },
-  adminRevokeApiKeys: {
-    auth: { kind: "owner-session" },
-    tags: ["admin"],
-    summary: "Revoke all API keys for a user",
-    params: z.object({ username: z.string().min(1) }),
-    response: {
-      200: z.object({ revokedCount: z.number().int() }),
+      400: errorResponseSchema,
       401: errorResponseSchema,
       403: errorResponseSchema,
       404: errorResponseSchema,
@@ -7587,16 +7485,15 @@ const baseRouteSchemas = {
   adminDeactivateUser: {
     auth: { kind: "owner-session" },
     tags: ["admin"],
-    summary: "Deactivate a user (decision #126: soft tombstone, never delete)",
+    summary: "Disable a user temporarily, retaining their login and history",
     description: "Sets the disabled_at tombstone and revokes every credential "
-      + "(API keys, device tokens, sessions) in one transaction. History and "
-      + "attribution are preserved; the row disappears from the default admin "
-      + "list. Owners and the calling account itself cannot be deactivated.",
-    params: z.object({ username: z.string().min(1) }),
+      + "(device tokens, reservations, sessions, links) in one transaction. History and "
+      + "attribution are preserved and the login stays reserved. "
+      + "Owners and the calling account itself cannot be deactivated.",
+    params: z.object({ userId: z.coerce.number().int().positive().max(Number.MAX_SAFE_INTEGER) }),
     response: {
       200: z.object({
         ok: z.literal(true),
-        revokedApiKeys: z.number().int().nonnegative(),
         revokedDeviceTokens: z.number().int().nonnegative(),
         revokedSessions: z.number().int().nonnegative(),
       }),
@@ -7610,12 +7507,35 @@ const baseRouteSchemas = {
     auth: { kind: "owner-session" },
     tags: ["admin"],
     summary: "Reactivate a deactivated user",
-    description: "Clears the disabled_at tombstone. The stored password works "
-      + "again immediately; API keys and device tokens stay revoked — issue "
-      + "fresh ones.",
-    params: z.object({ username: z.string().min(1) }),
+    description: "Clears disabled_at. The stored password works again immediately "
+      + "and the registration state is preserved; device tokens stay revoked — the "
+      + "person signs in again from each device. Permanently deleted accounts "
+      + "cannot be restored.",
+    params: z.object({ userId: z.coerce.number().int().positive().max(Number.MAX_SAFE_INTEGER) }),
     response: {
       200: z.object({ ok: z.literal(true) }),
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
+  adminDeleteUser: {
+    auth: { kind: "owner-session" },
+    tags: ["admin"],
+    summary: "Permanently delete an account and release its login",
+    description: "Revokes every credential and account link, clears the password, "
+      + "and permanently marks this immutable user ID deleted in one transaction. "
+      + "Historical attribution is retained. The login can be assigned to a new "
+      + "account with a different ID; no access or credentials transfer. Deleted "
+      + "accounts cannot be restored. Owners and the caller cannot be deleted.",
+    params: z.object({ userId: z.coerce.number().int().positive().max(Number.MAX_SAFE_INTEGER) }),
+    response: {
+      200: z.object({
+        ok: z.literal(true),
+        revokedDeviceTokens: z.number().int().nonnegative(),
+        revokedSessions: z.number().int().nonnegative(),
+      }),
       400: errorResponseSchema,
       401: errorResponseSchema,
       403: errorResponseSchema,
@@ -7626,39 +7546,11 @@ const baseRouteSchemas = {
     auth: { kind: "any-session" },
     tags: ["auth"],
     summary: "Change the caller's own password",
-    description: "Verifies the current password, sets the new one, clears "
-      + "must_change_password, and revokes every session — log in again with the "
-      + "new credential.",
+    description: "Verifies the current password, sets the new one and revokes "
+      + "every session — log in again with the new credential.",
     body: changePasswordBodySchema,
     response: {
       200: z.object({ ok: z.literal(true) }),
-      400: errorResponseSchema,
-      401: errorResponseSchema,
-      403: errorResponseSchema,
-    },
-  },
-  authIssueDeviceToken: {
-    auth: { kind: "any-session" },
-    tags: ["auth"],
-    summary: "Issue a device token for the caller (returned once)",
-    body: deviceTokenLabelBodySchema,
-    response: {
-      200: issuedDeviceTokenResponseSchema,
-      400: errorResponseSchema,
-      401: errorResponseSchema,
-      403: errorResponseSchema,
-    },
-  },
-  authReserveDeviceToken: {
-    auth: { kind: "any-session" },
-    tags: ["auth"],
-    summary: "Reserve a crash-safe device token for the caller (returned once)",
-    description: "Creates a short-lived pending credential in a separate table. "
-      + "It cannot authenticate ordinary API routes and must be explicitly activated "
-      + "after the client has durably staged local custody.",
-    body: deviceTokenLabelBodySchema,
-    response: {
-      200: reservedDeviceTokenResponseSchema,
       400: errorResponseSchema,
       401: errorResponseSchema,
       403: errorResponseSchema,
@@ -7682,7 +7574,7 @@ const baseRouteSchemas = {
     tags: ["auth"],
     summary: "Revoke the current device-token bearer",
     description: "Revokes exactly the credential authenticating this request. "
-      + "Cookie sessions and API keys are rejected; sibling device tokens are untouched.",
+      + "Cookie sessions are rejected; sibling device tokens are untouched.",
     response: {
       200: z.object({ revoked: z.literal(true) }),
       401: errorResponseSchema,
@@ -7693,23 +7585,9 @@ const baseRouteSchemas = {
     auth: { kind: "owner-session" },
     tags: ["admin"],
     summary: "List a user's device tokens",
-    params: z.object({ username: z.string().min(1) }),
+    params: z.object({ userId: z.coerce.number().int().positive().max(Number.MAX_SAFE_INTEGER) }),
     response: {
       200: z.array(deviceTokenItemSchema),
-      401: errorResponseSchema,
-      403: errorResponseSchema,
-      404: errorResponseSchema,
-    },
-  },
-  adminIssueDeviceToken: {
-    auth: { kind: "owner-session" },
-    tags: ["admin"],
-    summary: "Issue a device token for a user (returned once)",
-    params: z.object({ username: z.string().min(1) }),
-    body: deviceTokenLabelBodySchema,
-    response: {
-      200: issuedDeviceTokenResponseSchema,
-      400: errorResponseSchema,
       401: errorResponseSchema,
       403: errorResponseSchema,
       404: errorResponseSchema,
@@ -7722,7 +7600,7 @@ const baseRouteSchemas = {
     description: "Owner-only machine binding. Rebinding one machine atomically "
       + "transfers its harvest authority from the previous device token.",
     params: z.object({
-      username: z.string().min(1),
+      userId: z.coerce.number().int().positive().max(Number.MAX_SAFE_INTEGER),
       tokenId: z.coerce.number().int().positive(),
     }),
     body: deviceTokenHarvestCapabilityBodySchema,
@@ -7738,7 +7616,7 @@ const baseRouteSchemas = {
     auth: { kind: "owner-session" },
     tags: ["admin"],
     summary: "Revoke all of a user's device tokens",
-    params: z.object({ username: z.string().min(1) }),
+    params: z.object({ userId: z.coerce.number().int().positive().max(Number.MAX_SAFE_INTEGER) }),
     response: {
       200: z.object({ revokedCount: z.number().int().nonnegative() }),
       401: errorResponseSchema,
@@ -7751,8 +7629,8 @@ const baseRouteSchemas = {
     tags: ["admin"],
     summary: "Device-token adoption across active chatters (D116(c) gate report)",
     description: "Read-only: per active chatter, whether a live device token "
-      + "was used within the freshness window, plus remaining active API keys. "
-      + "Foundation for the client key-fallback deletion gate.",
+      + "was used within the freshness window, and which client version it last "
+      + "spoke. The fleet gate for retiring a client lane reads these rows.",
     response: {
       200: deviceTokenAdoptionReportSchema,
       401: errorResponseSchema,
@@ -7763,10 +7641,11 @@ const baseRouteSchemas = {
     auth: { kind: "owner-session" },
     tags: ["admin"],
     summary: "Grant a user model-scope access (present and future pages)",
-    params: z.object({ username: z.string().min(1) }),
+    params: z.object({ userId: z.coerce.number().int().positive().max(Number.MAX_SAFE_INTEGER) }),
     body: z.object({ modelSlug: z.string().min(1) }),
     response: {
       200: z.object({ ok: z.literal(true) }),
+      400: errorResponseSchema,
       401: errorResponseSchema,
       403: errorResponseSchema,
       404: errorResponseSchema,
@@ -7776,9 +7655,10 @@ const baseRouteSchemas = {
     auth: { kind: "owner-session" },
     tags: ["admin"],
     summary: "Revoke a user's model-scope grant",
-    params: z.object({ username: z.string().min(1), modelSlug: z.string().min(1) }),
+    params: z.object({ userId: z.coerce.number().int().positive().max(Number.MAX_SAFE_INTEGER), modelSlug: z.string().min(1) }),
     response: {
       200: z.object({ ok: z.literal(true) }),
+      400: errorResponseSchema,
       401: errorResponseSchema,
       403: errorResponseSchema,
       404: errorResponseSchema,
@@ -7788,7 +7668,7 @@ const baseRouteSchemas = {
     auth: { kind: "owner-session" },
     tags: ["admin"],
     summary: "Access-grant history for one user (active and revoked)",
-    params: z.object({ username: z.string().min(1) }),
+    params: z.object({ userId: z.coerce.number().int().positive().max(Number.MAX_SAFE_INTEGER) }),
     response: {
       200: z.object({ grants: z.array(accessGrantItemSchema) }),
       401: errorResponseSchema,
@@ -7822,7 +7702,7 @@ const baseRouteSchemas = {
       + "link of the same user. `invite` is accepted only for an unfinished "
       + "registration; a user with a password gets `password_reset`. Owners "
       + "cannot be reset by link (they change their password themselves).",
-    params: z.object({ username: z.string().min(1) }),
+    params: z.object({ userId: z.coerce.number().int().positive().max(Number.MAX_SAFE_INTEGER) }),
     body: adminCreateAccountLinkBodySchema,
     response: {
       200: issuedAccountLinkSchema,
@@ -7836,7 +7716,7 @@ const baseRouteSchemas = {
     auth: { kind: "owner-session" },
     tags: ["admin"],
     summary: "List a user's invite and password-reset links with their state",
-    params: z.object({ username: z.string().min(1) }),
+    params: z.object({ userId: z.coerce.number().int().positive().max(Number.MAX_SAFE_INTEGER) }),
     response: {
       200: z.array(accountLinkItemSchema),
       401: errorResponseSchema,
@@ -7849,7 +7729,7 @@ const baseRouteSchemas = {
     tags: ["admin"],
     summary: "Revoke one of a user's links (idempotent on an already inactive link)",
     params: z.object({
-      username: z.string().min(1),
+      userId: z.coerce.number().int().positive().max(Number.MAX_SAFE_INTEGER),
       linkId: z.coerce.number().int().positive(),
     }),
     response: {
@@ -7864,7 +7744,7 @@ const baseRouteSchemas = {
     tags: ["admin"],
     summary: "Revoke ONE of a user's device tokens (\"revoke this sign-in\")",
     params: z.object({
-      username: z.string().min(1),
+      userId: z.coerce.number().int().positive().max(Number.MAX_SAFE_INTEGER),
       tokenId: z.coerce.number().int().positive(),
     }),
     response: {
@@ -7877,11 +7757,11 @@ const baseRouteSchemas = {
   adminTerminateAllAccess: {
     auth: { kind: "owner-session" },
     tags: ["admin"],
-    summary: "Terminate every sign-in of a user: device tokens, reservations, sessions, API keys and active links",
+    summary: "Terminate every sign-in of a user: device tokens, reservations, sessions and active links",
     description: "The strongest revocation short of deactivation (§4.4). The "
       + "user is NOT disabled and the password is NOT changed: a fresh login "
       + "with the valid password still works. Owner accounts are refused.",
-    params: z.object({ username: z.string().min(1) }),
+    params: z.object({ userId: z.coerce.number().int().positive().max(Number.MAX_SAFE_INTEGER) }),
     response: {
       200: adminTerminateAllAccessResponseSchema,
       400: errorResponseSchema,
@@ -7928,15 +7808,12 @@ const baseRouteSchemas = {
     summary: "Sign in a device with username + password: issue a device token (active) or a reservation (pending) — no cookie",
     description: "The single client sign-in protocol (Р2). Shares the per-account "
       + "backoff and the `auth.login_failed` audit with `login`; wrong "
-      + "credentials answer 401 without an oracle. A user flagged "
-      + "must_change_password answers 403 `password_change_required`. "
-      + "Rate-limited per IP (20/min).",
+      + "credentials answer 401 without an oracle. Rate-limited per IP (20/min).",
     body: authIssueDeviceTokenWithPasswordBodySchema,
     response: {
       200: authIssueDeviceTokenWithPasswordResponseSchema,
       400: errorResponseSchema,
       401: errorResponseSchema,
-      403: errorResponseSchema,
       429: errorResponseSchema,
     },
   },
@@ -8786,7 +8663,6 @@ export type SpenderListQuery = z.infer<typeof spenderListQuerySchema>;
 export type SpenderListResponse = z.infer<typeof spenderListResponseSchema>;
 export type SpenderSeriesQuery = z.infer<typeof spenderSeriesQuerySchema>;
 export type SpenderSeriesResponse = z.infer<typeof spenderSeriesResponseSchema>;
-export type AdminCreateUserBody = z.infer<typeof adminCreateUserBodySchema>;
 export type AdminCreateInviteBody = z.infer<typeof adminCreateInviteBodySchema>;
 export type AdminCreateInviteResponse = z.infer<typeof adminCreateInviteResponseSchema>;
 export type AdminCreateAccountLinkBody = z.infer<typeof adminCreateAccountLinkBodySchema>;
@@ -8801,11 +8677,7 @@ export type AuthIssueDeviceTokenWithPasswordResponse = z.infer<typeof authIssueD
 export type OwnDeviceItem = z.infer<typeof ownDeviceItemSchema>;
 export type AuthMyUsageResponse = z.infer<typeof authMyUsageResponseSchema>;
 export type AdminTerminateAllAccessResponse = z.infer<typeof adminTerminateAllAccessResponseSchema>;
-export type AdminSetPasswordBody = z.infer<typeof adminSetPasswordBodySchema>;
 export type AdminAssignPageBody = z.infer<typeof adminAssignPageBodySchema>;
-export type AdminIssueApiKeyBody = z.infer<typeof adminIssueApiKeyBodySchema>;
-export type ApiKeyItem = z.infer<typeof apiKeyItemSchema>;
-export type IssuedApiKeyResponse = z.infer<typeof issuedApiKeyResponseSchema>;
 export type SyncRunItem = z.infer<typeof syncRunItemSchema>;
 export type SyncRunDetailResponse = z.infer<typeof syncRunDetailResponseSchema>;
 export type SyncStatusQuery = z.infer<typeof syncStatusQuerySchema>;

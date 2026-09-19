@@ -4,7 +4,7 @@ Initial base: `cb4539d372ce7bce8fc67bff931c600cdec97149` (PR #224).
 Decision: 361. Implementation branch: `codex/ci-cost-safe-followups`.
 
 The later test-infrastructure follow-up merged main `91ecd2c0` before its
-comparison. See [Decision 365's measurements and regression checks](ci-cold-run-followups-2026-09-16.md)
+comparison. See [Decision 374's measurements and regression checks](ci-cold-run-followups-2026-09-16.md)
 for that revision. The hosted runs below document the earlier CI reuse/build
 implementation; their exact-tree proof does not cover the later helper changes.
 

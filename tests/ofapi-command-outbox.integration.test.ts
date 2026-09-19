@@ -14,8 +14,8 @@ import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import {
   createUserAccount,
-  issueChatterApiKey,
 } from "../apps/runtime/src/services/auth.ts";
+import { issueChatterDeviceToken } from "./helpers/device-credentials.ts";
 import {
   executeOfapiCommand,
   sweepOfapiCommands,
@@ -87,7 +87,7 @@ beforeEach(async (context) => {
     username: "chatter",
     role: "chatter",
   }, { source: "cli" });
-  chatterKey = (await issueChatterApiKey(appContext, {
+  chatterKey = (await issueChatterDeviceToken(appContext, {
     username: "chatter",
     pageLabel: "lora-of",
   }, { source: "cli" })).key;
@@ -96,7 +96,7 @@ beforeEach(async (context) => {
     username: "other-chatter",
     role: "chatter",
   }, { source: "cli" });
-  otherChatterKey = (await issueChatterApiKey(appContext, {
+  otherChatterKey = (await issueChatterDeviceToken(appContext, {
     username: "other-chatter",
     pageLabel: "lora-of",
   }, { source: "cli" })).key;

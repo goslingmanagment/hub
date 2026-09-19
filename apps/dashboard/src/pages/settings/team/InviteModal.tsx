@@ -1,11 +1,12 @@
 import { useState } from "react";
-import { toast } from "sonner";
+import type { AdminUser } from "@agency_hub_core/contracts";
 
-import { useAdminPages, type useCreateInvite } from "@/api/queries";
+import { useAdminPages, useAdminUsers, type useCreateInvite } from "@/api/queries";
 import { Field } from "@/components/shared/Field";
 import { ModalShell } from "@/components/shared/ModalShell";
 import {
   daysToHours,
+  findTeamMemberByLogin,
   groupPagesByPlatform,
   INVITE_DEFAULT_DAYS,
   INVITE_MAX_DAYS,
@@ -31,26 +32,34 @@ export function InviteModal({
   create,
   onClose,
   onCreated,
+  onOpenExisting,
 }: {
   create: ReturnType<typeof useCreateInvite>;
   onClose: () => void;
   onCreated: (link: RevealedLink) => void;
+  onOpenExisting: (userId: number) => void;
 }) {
   const { data: pages, isLoading: pagesLoading, isError: pagesError, refetch: refetchPages, isFetching: pagesFetching } = useAdminPages();
+  const { data: users, isError: usersError, refetch: refetchUsers, isFetching: usersFetching } = useAdminUsers();
   const [username, setUsername] = useState("");
   const [pageLabels, setPageLabels] = useState<string[]>([]);
   const [role, setRole] = useState<"chatter" | "team_lead">("chatter");
   const [days, setDays] = useState(INVITE_DEFAULT_DAYS);
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [submissionFailed, setSubmissionFailed] = useState(false);
 
   const trimmed = username.trim();
   const nameLooksWrong = trimmed.length > 0 && !isValidUsername(trimmed);
   const daysValid = Number.isInteger(days) && days >= 1 && days <= INVITE_MAX_DAYS;
   const groups = groupPagesByPlatform(pages ?? []);
+  const existing = findTeamMemberByLogin(users ?? [], trimmed);
   const canSubmit = trimmed.length > 0
     && !nameLooksWrong
     && daysValid
     && !pagesError
+    && Boolean(users)
+    && !usersError
+    && !existing
     && pageLabels.every((label) => pages?.some((page) => page.label === label))
     && !create.isPending;
 
@@ -63,6 +72,7 @@ export function InviteModal({
   function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
     if (!canSubmit) return;
+    setSubmissionFailed(false);
     create.mutate({
       username: trimmed,
       role,
@@ -71,14 +81,19 @@ export function InviteModal({
     }, {
       onSuccess: (result) => {
         onCreated({
+          userId: result.user.id,
           username: result.user.username,
           kind: result.link.kind,
           secret: result.link.token,
           expiresAt: result.link.expiresAt,
         });
       },
-      onError: (error) => {
-        toast.error(error instanceof Error ? error.message : "Не удалось создать приглашение");
+      onError: () => {
+        // Another owner tab may have created this login after our read. A
+        // fresh list resolves the conflict without parsing server prose or
+        // silently restoring anyone. Keep a non-conflict failure in the form.
+        setSubmissionFailed(true);
+        void refetchUsers();
       },
     });
   }
@@ -99,7 +114,11 @@ export function InviteModal({
             value={username}
             maxLength={100}
             autoComplete="off"
-            onChange={(event) => setUsername(event.target.value)}
+            disabled={create.isPending}
+            onChange={(event) => {
+              setUsername(event.target.value);
+              setSubmissionFailed(false);
+            }}
             placeholder="например, grisha"
             className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm text-text-primary outline-none focus:border-accent"
           />
@@ -115,92 +134,119 @@ export function InviteModal({
           )}
         </Field>
 
-        <div>
-          <div className="mb-1 text-sm text-text-secondary">Страницы</div>
-          {pagesLoading && !pages && <p className="text-sm text-text-muted">Загружаем страницы…</p>}
-          {pagesError && (
-            <div role="alert" className="mb-2 text-sm text-danger">
-              Список страниц не загрузился. Выбор сохранён — обновите его перед отправкой.
-              <button
-                type="button"
-                disabled={pagesFetching}
-                onClick={() => void refetchPages()}
-                className="ml-2 underline disabled:opacity-50"
-              >
+        {existing && (
+          <ExistingMemberNotice
+            user={existing}
+            disabled={create.isPending}
+            onOpen={() => { if (!create.isPending) onOpenExisting(existing.id); }}
+          />
+        )}
+        {(!users || usersError) && (
+          <div role="alert" className="text-sm text-text-secondary">
+            {usersError ? "Не удалось проверить, свободен ли логин." : "Проверяем список участников…"}
+            {usersError && (
+              <button type="button" disabled={usersFetching} onClick={() => void refetchUsers()} className="ml-2 underline disabled:opacity-50">
                 Повторить
               </button>
-            </div>
-          )}
-          {pages && pages.length === 0 && (
-            <p className="text-sm text-text-muted">Страниц пока нет — их можно назначить позже.</p>
-          )}
-          <div className="max-h-48 space-y-3 overflow-y-auto">
-            {groups.map((group) => (
-              <div key={group.platform}>
-                <div className="mb-1 flex items-center gap-1.5 text-xs font-semibold text-text-muted">
-                  <span className={`h-1.5 w-1.5 rounded-full ${PLATFORM_DOT_CLASS[group.platform]}`} />
-                  {group.label}
-                </div>
-                <div className="space-y-1">
-                  {group.pages.map((page) => (
-                    <label key={page.id} className="flex items-center gap-2 text-sm text-text-primary">
-                      <input
-                        type="checkbox"
-                        checked={pageLabels.includes(page.label)}
-                        onChange={() => togglePage(page.label)}
-                      />
-                      <span>{page.label}</span>
-                      <span className="text-xs text-text-muted">{page.modelName}</span>
-                    </label>
-                  ))}
-                </div>
-              </div>
-            ))}
+            )}
           </div>
-        </div>
+        )}
+        {submissionFailed && !existing && (
+          <p role="alert" className="text-sm text-danger">
+            Не удалось создать приглашение. Проверьте соединение и попробуйте ещё раз.
+          </p>
+        )}
 
-        <div className="rounded-lg border border-border bg-bg">
-          <button
-            type="button"
-            aria-expanded={advancedOpen}
-            onClick={() => setAdvancedOpen((open) => !open)}
-            className="flex w-full items-center gap-1.5 px-3 py-2 text-sm font-medium text-text-secondary"
-          >
-            <span className={`inline-block text-xs transition-transform ${advancedOpen ? "rotate-90" : ""}`}>
-              {"▸"}
-            </span>
-            Дополнительно
-          </button>
-          {advancedOpen && (
-            <div className="grid gap-3 px-3 pb-3 sm:grid-cols-2">
-              <Field label="Роль">
-                <select
-                  value={role}
-                  onChange={(event) => setRole(event.target.value === "team_lead" ? "team_lead" : "chatter")}
-                  className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-text-primary outline-none focus:border-accent"
-                >
-                  <option value="chatter">чаттер</option>
-                  <option value="team_lead">тимлид</option>
-                </select>
-              </Field>
-              <Field label="Срок ссылки, дней">
-                <input
-                  type="number"
-                  min={1}
-                  max={INVITE_MAX_DAYS}
-                  value={days}
-                  onChange={(event) => setDays(Number(event.target.value))}
-                  className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-text-primary outline-none focus:border-accent"
-                />
-                {!daysValid && (
-                  <p role="alert" className="mt-1 text-xs text-danger">
-                    От 1 до {INVITE_MAX_DAYS} дней.
-                  </p>
-                )}
-              </Field>
+        {!existing && (
+          <fieldset disabled={create.isPending} className="space-y-4">
+            <div>
+              <div className="mb-1 text-sm text-text-secondary">Страницы</div>
+              {pagesLoading && !pages && <p className="text-sm text-text-muted">Загружаем страницы…</p>}
+              {pagesError && (
+                <div role="alert" className="mb-2 text-sm text-danger">
+                  Список страниц не загрузился. Выбор сохранён — обновите его перед отправкой.
+                  <button
+                    type="button"
+                    disabled={pagesFetching}
+                    onClick={() => void refetchPages()}
+                    className="ml-2 underline disabled:opacity-50"
+                  >
+                    Повторить
+                  </button>
+                </div>
+              )}
+              {pages && pages.length === 0 && (
+                <p className="text-sm text-text-muted">Страниц пока нет — их можно назначить позже.</p>
+              )}
+              <div className="max-h-48 space-y-3 overflow-y-auto">
+                {groups.map((group) => (
+                  <div key={group.platform}>
+                    <div className="mb-1 flex items-center gap-1.5 text-xs font-semibold text-text-muted">
+                      <span className={`h-1.5 w-1.5 rounded-full ${PLATFORM_DOT_CLASS[group.platform]}`} />
+                      {group.label}
+                    </div>
+                    <div className="space-y-1">
+                      {group.pages.map((page) => (
+                        <label key={page.id} className="flex items-center gap-2 text-sm text-text-primary">
+                          <input
+                            type="checkbox"
+                            checked={pageLabels.includes(page.label)}
+                            onChange={() => togglePage(page.label)}
+                          />
+                          <span>{page.label}</span>
+                          <span className="text-xs text-text-muted">{page.modelName}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
-          )}
-        </div>
+
+            <div className="rounded-lg border border-border bg-bg">
+              <button
+                type="button"
+                aria-expanded={advancedOpen}
+                onClick={() => setAdvancedOpen((open) => !open)}
+                className="flex w-full items-center gap-1.5 px-3 py-2 text-sm font-medium text-text-secondary"
+              >
+                <span className={`inline-block text-xs transition-transform ${advancedOpen ? "rotate-90" : ""}`}>
+                  {"▸"}
+                </span>
+                Дополнительно
+              </button>
+              {advancedOpen && (
+                <div className="grid gap-3 px-3 pb-3 sm:grid-cols-2">
+                  <Field label="Роль">
+                    <select
+                      value={role}
+                      onChange={(event) => setRole(event.target.value === "team_lead" ? "team_lead" : "chatter")}
+                      className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-text-primary outline-none focus:border-accent"
+                    >
+                      <option value="chatter">чаттер</option>
+                      <option value="team_lead">тимлид</option>
+                    </select>
+                  </Field>
+                  <Field label="Срок ссылки, дней">
+                    <input
+                      type="number"
+                      min={1}
+                      max={INVITE_MAX_DAYS}
+                      value={days}
+                      onChange={(event) => setDays(Number(event.target.value))}
+                      className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-text-primary outline-none focus:border-accent"
+                    />
+                    {!daysValid && (
+                      <p role="alert" className="mt-1 text-xs text-danger">
+                        От 1 до {INVITE_MAX_DAYS} дней.
+                      </p>
+                    )}
+                  </Field>
+                </div>
+              )}
+            </div>
+          </fieldset>
+        )}
 
         <div className="flex items-center justify-end gap-2">
           <button
@@ -211,15 +257,35 @@ export function InviteModal({
           >
             Отмена
           </button>
-          <button
-            type="submit"
-            disabled={!canSubmit}
-            className="rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50"
-          >
-            {create.isPending ? "Создаём…" : "Создать приглашение"}
-          </button>
+          {!existing && (
+            <button
+              type="submit"
+              disabled={!canSubmit}
+              className="rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50"
+            >
+              {create.isPending ? "Создаём…" : "Создать приглашение"}
+            </button>
+          )}
         </div>
       </form>
     </ModalShell>
+  );
+}
+
+export function ExistingMemberNotice({ user, onOpen, disabled = false }: { user: AdminUser; onOpen: () => void; disabled?: boolean }) {
+  return (
+    <div role="status" className="space-y-2 rounded-lg border border-warning/30 bg-warning/5 px-3 py-3 text-sm text-text-secondary">
+      <p className="font-semibold text-text-primary">Логин «{user.username}» уже занят</p>
+      <p>
+        {user.disabledAt
+          ? "У этого участника отключён доступ. Его логин и история сохранены. Если возвращается тот же человек, восстановите его доступ. Чтобы создать новый аккаунт с этим логином, сначала удалите прежний в его карточке."
+          : user.registrationState === "invited"
+            ? "Участник уже приглашён, но ещё не задал пароль. Откройте его карточку, чтобы создать новую ссылку."
+            : "Этот участник уже в команде. Откройте его карточку, чтобы проверить доступ или помочь со входом."}
+      </p>
+      <button type="button" disabled={disabled} onClick={onOpen} className="rounded-lg bg-accent px-3 py-1.5 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50">
+        {user.disabledAt ? "Перейти к восстановлению" : "Открыть участника"}
+      </button>
+    </div>
   );
 }

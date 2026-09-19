@@ -32,8 +32,8 @@ import {
 } from "./helpers/db.ts";
 import {
   createUserAccount,
-  issueChatterApiKey,
 } from "../apps/runtime/src/services/auth.ts";
+import { issueChatterDeviceToken } from "./helpers/device-credentials.ts";
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import { createOfapiClient } from "../apps/runtime/src/services/ofapi.ts";
 import { ofapiCollectionPolicyHooks } from "../apps/runtime/src/services/ofapi-collection-policy.ts";
@@ -745,7 +745,7 @@ describe("owned OFAPI uploads and vault catalog", () => {
       { source: "cli" },
     );
     const chatter = (
-      await issueChatterApiKey(
+      await issueChatterDeviceToken(
         app,
         { username: "chatter", pageLabel: "media-page" },
         { source: "cli" },

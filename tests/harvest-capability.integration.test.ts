@@ -1,3 +1,4 @@
+import { fixtureUserId } from "./helpers/user-identity.ts";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
@@ -12,9 +13,8 @@ import { runCanonicalization } from "../apps/runtime/src/services/canonicalize-d
 import {
   assignPageToUser,
   createUserAccount,
-  issueChatterApiKey,
-  issueDeviceToken,
 } from "../apps/runtime/src/services/auth.ts";
+import { issueChatterDeviceToken, issueDeviceTokenForUsername } from "./helpers/device-credentials.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import {
   resetIntegrationDatabase,
@@ -77,7 +77,7 @@ async function bindHarvestCapability(input: {
 }) {
   return server!.inject({
     method: "PATCH",
-    url: `/api/v1/admin/users/${input.username}/device-tokens/${input.tokenId}/harvest-capability`,
+    url: `/api/v1/admin/users/by-id/${await fixtureUserId(app!, input.username)}/device-tokens/${input.tokenId}/harvest-capability`,
     headers: { cookie: input.ownerCookie },
     payload: { machineId: input.machineId },
   });
@@ -113,27 +113,21 @@ async function seedIdentity() {
     ofapiAccountId: "acct_harvest",
   });
 
-  const aliceKey = await issueChatterApiKey(app!, {
+  const aliceKey = await issueChatterDeviceToken(app!, {
     username: "alice",
     pageLabel: "harvest-of",
   }, { source: "test" });
   await assignPageToUser(app!, {
-    username: "bob",
+    userId: await fixtureUserId(app!, "bob"),
     pageLabel: "harvest-of",
   }, { source: "test" });
 
-  const alice = await testDb!.pool.query<{ id: string }>(
-    "select id::text from users where username = 'alice'",
-  );
-  const bob = await testDb!.pool.query<{ id: string }>(
-    "select id::text from users where username = 'bob'",
-  );
-  const aliceToken = await issueDeviceToken(app!, {
-    userId: Number(alice.rows[0]!.id),
+  const aliceToken = await issueDeviceTokenForUsername(app!, {
+    username: "alice",
     label: "alice-desktop",
   }, { source: "test" });
-  const bobToken = await issueDeviceToken(app!, {
-    userId: Number(bob.rows[0]!.id),
+  const bobToken = await issueDeviceTokenForUsername(app!, {
+    username: "bob",
     label: "bob-desktop",
   }, { source: "test" });
 
@@ -161,7 +155,7 @@ beforeEach(async (context) => {
 });
 
 describe("desktop harvest capability", () => {
-  it("rejects harvest-version spoofing by ordinary API keys and device tokens", async (context) => {
+  it("rejects harvest-version spoofing by ordinary device tokens", async (context) => {
     if (!testDb || !server) {
       context.skip();
       return;
@@ -169,8 +163,9 @@ describe("desktop harvest capability", () => {
     const { aliceKey, aliceToken } = await seedIdentity();
     const event = harvestEvent();
 
-    const viaApiKey = await postHarvest(aliceKey.key, event);
-    expect(viaApiKey.statusCode).toBe(403);
+    // Two tokens of the same person, neither carrying the harvest capability.
+    const viaUnboundDevice = await postHarvest(aliceKey.key, event);
+    expect(viaUnboundDevice.statusCode).toBe(403);
 
     const viaOrdinaryDevice = await postHarvest(aliceToken.token, event);
     expect(viaOrdinaryDevice.statusCode).toBe(403);
@@ -213,7 +208,7 @@ describe("desktop harvest capability", () => {
     // A chatter cannot mint its own capability through the owner route.
     const unprivilegedGrant = await server.inject({
       method: "PATCH",
-      url: `/api/v1/admin/users/alice/device-tokens/${aliceToken.id}/harvest-capability`,
+      url: `/api/v1/admin/users/by-id/${await fixtureUserId(app!, "alice")}/device-tokens/${aliceToken.id}/harvest-capability`,
       headers: { authorization: `Bearer ${aliceToken.token}` },
       payload: { machineId: MACHINE_ID },
     });
@@ -338,13 +333,6 @@ describe("desktop harvest capability", () => {
     const { aliceKey, aliceToken, bobToken } = await seedIdentity();
     const ownerCookie = await loginOwnerCookie();
 
-    const viaApiKey = await server.inject({
-      method: "DELETE",
-      url: "/api/v1/auth/device-tokens/current",
-      headers: { authorization: `Bearer ${aliceKey.key}` },
-    });
-    expect(viaApiKey.statusCode).toBe(403);
-
     const viaSession = await server.inject({
       method: "DELETE",
       url: "/api/v1/auth/device-tokens/current",
@@ -384,7 +372,9 @@ describe("desktop harvest capability", () => {
       from device_tokens
       order by id
     `);
+    // Exactly itself: alice's OTHER device and bob's are both untouched.
     expect(rows.rows).toEqual([
+      { id: String(aliceKey.id), revoked: false, reason: null },
       { id: String(aliceToken.id), revoked: true, reason: "self_revoked" },
       { id: String(bobToken.id), revoked: false, reason: null },
     ]);

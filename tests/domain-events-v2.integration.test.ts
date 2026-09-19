@@ -1,3 +1,4 @@
+import { fixtureUserId } from "./helpers/user-identity.ts";
 import { setTimeout as sleep } from "node:timers/promises";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -31,8 +32,8 @@ import { executeErasure } from "../apps/runtime/src/services/erasure/index.ts";
 import {
   assignPageToUser,
   createUserAccount,
-  issueChatterApiKey,
 } from "../apps/runtime/src/services/auth.ts";
+import { issueChatterDeviceToken } from "./helpers/device-credentials.ts";
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 
@@ -82,7 +83,7 @@ beforeAll(async () => {
   const lily = await createFanslyPage(testDb.db, { modelId: model.id, label: "lily1" });
   lanaId = lana.id;
   lilyId = lily.id;
-  const issued = await issueChatterApiKey(seedContext, {
+  const issued = await issueChatterDeviceToken(seedContext, {
     username: "anton",
     pageLabel: "lana",
   }, { source: "cli" });
@@ -379,7 +380,7 @@ describe("event stream v2", () => {
       username: "scope-race",
       role: "chatter",
     }, { source: "cli" });
-    const raceKey = (await issueChatterApiKey(seedContext, {
+    const raceKey = (await issueChatterDeviceToken(seedContext, {
       username: "scope-race",
       pageLabel: "lana",
     }, { source: "cli" })).key;
@@ -399,7 +400,7 @@ describe("event stream v2", () => {
     // B appears after the A-only cursor is minted. Core must reject the stale
     // grant scope instead of inserting B at its current head.
     await assignPageToUser(seedContext, {
-      username: "scope-race",
+      userId: await fixtureUserId(seedContext, "scope-race"),
       pageLabel: "lily1",
     }, { source: "cli" });
     const stale = await fetch(`${baseUrl}/api/v1/events/v2/stream?cursor=${
@@ -983,7 +984,7 @@ describe("event stream v2 — Stage 24 serve-time enrichment", () => {
     const model = await createModel(testDb!.db, { slug: "kate-of-model", name: "Kate OF" });
     const page = await createOnlyFansPage(testDb!.db, { modelId: model.id, label: "kate-of-24" });
     await setPageOfapiAccountId(testDb!.db, { pageId: page.id, ofapiAccountId: OFAPI_ACCOUNT });
-    await assignPageToUser(seedContext, { username: "anton", pageLabel: "kate-of-24" }, { source: "cli" });
+    await assignPageToUser(seedContext, { userId: await fixtureUserId(seedContext, "anton"), pageLabel: "kate-of-24" }, { source: "cli" });
     ofPageId = page.id;
     return ofPageId;
   }

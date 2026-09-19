@@ -1,16 +1,20 @@
+import { fixtureUserId } from "./helpers/user-identity.ts";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { findUserByUsername } from "@agency_hub_core/db";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
-import { createAccountLinkForUsername } from "../apps/runtime/src/services/account-links.ts";
+import { createAccountLinkForUserId } from "../apps/runtime/src/services/account-links.ts";
 import {
   createUserAccount,
-  issueChatterApiKey,
-  issueDeviceTokenForUsername,
   setUserPassword,
 } from "../apps/runtime/src/services/auth.ts";
+import {
+  issueChatterDeviceToken,
+  issueDeviceTokenForUserId,
+  issueDeviceTokenForUsername,
+} from "./helpers/device-credentials.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
@@ -96,16 +100,16 @@ describe("the cabinet's device list", () => {
   it("shows the caller's live devices and nobody else's", async (context) => {
     const setup = requireSetup(context);
     if (!setup) return;
-    const firefox = await issueDeviceTokenForUsername(setup.app, {
-      username: "grisha",
+    const firefox = await issueDeviceTokenForUserId(setup.app, {
+      userId: await fixtureUserId(setup.app, "grisha"),
       label: "Firefox · Windows",
     }, OWNER_AUDIT);
-    const desktop = await issueDeviceTokenForUsername(setup.app, {
-      username: "grisha",
+    const desktop = await issueDeviceTokenForUserId(setup.app, {
+      userId: await fixtureUserId(setup.app, "grisha"),
       label: "Desktop · kevin",
     }, OWNER_AUDIT);
-    await issueDeviceTokenForUsername(setup.app, {
-      username: "owner",
+    await issueDeviceTokenForUserId(setup.app, {
+      userId: await fixtureUserId(setup.app, "owner"),
       label: "Firefox · macOS",
     }, OWNER_AUDIT);
 
@@ -131,12 +135,12 @@ describe("the cabinet's device list", () => {
   it("hides a device that has been revoked", async (context) => {
     const setup = requireSetup(context);
     if (!setup) return;
-    const kept = await issueDeviceTokenForUsername(setup.app, {
-      username: "grisha",
+    const kept = await issueDeviceTokenForUserId(setup.app, {
+      userId: await fixtureUserId(setup.app, "grisha"),
       label: "Firefox · Windows",
     }, OWNER_AUDIT);
-    const doomed = await issueDeviceTokenForUsername(setup.app, {
-      username: "grisha",
+    const doomed = await issueDeviceTokenForUserId(setup.app, {
+      userId: await fixtureUserId(setup.app, "grisha"),
       label: "Desktop · kevin",
     }, OWNER_AUDIT);
     const cookie = await login(setup.server, "grisha", "chatter-secret-1");
@@ -172,8 +176,8 @@ describe("the cabinet's device list", () => {
   it("404s somebody else's device instead of confirming it exists", async (context) => {
     const setup = requireSetup(context);
     if (!setup) return;
-    const ownerDevice = await issueDeviceTokenForUsername(setup.app, {
-      username: "owner",
+    const ownerDevice = await issueDeviceTokenForUserId(setup.app, {
+      userId: await fixtureUserId(setup.app, "owner"),
       label: "Firefox · macOS",
     }, OWNER_AUDIT);
     const cookie = await login(setup.server, "grisha", "chatter-secret-1");
@@ -195,7 +199,7 @@ describe("the cabinet's device list", () => {
     const setup = requireSetup(context);
     if (!setup) return;
     await createUserAccount(setup.app, { username: "vera", role: "chatter" }, { source: "cli" });
-    const apiKey = (await issueChatterApiKey(setup.app, { username: "vera" }, OWNER_AUDIT)).key;
+    const apiKey = (await issueChatterDeviceToken(setup.app, { username: "vera" }, OWNER_AUDIT)).key;
     const device = await issueDeviceTokenForUsername(setup.app, {
       username: "grisha",
       label: "Firefox · Windows",
@@ -216,8 +220,8 @@ describe("sign out on all devices (self)", () => {
   it("drops every device and every OTHER session, keeping the one asking", async (context) => {
     const setup = requireSetup(context);
     if (!setup) return;
-    const device = await issueDeviceTokenForUsername(setup.app, {
-      username: "grisha",
+    const device = await issueDeviceTokenForUserId(setup.app, {
+      userId: await fixtureUserId(setup.app, "grisha"),
       label: "Firefox · Windows",
     }, OWNER_AUDIT);
     const staleCookie = await login(setup.server, "grisha", "chatter-secret-1");
@@ -261,19 +265,19 @@ describe("the owner's revocations", () => {
   it("revokes exactly one sign-in", async (context) => {
     const setup = requireSetup(context);
     if (!setup) return;
-    const first = await issueDeviceTokenForUsername(setup.app, {
-      username: "grisha",
+    const first = await issueDeviceTokenForUserId(setup.app, {
+      userId: await fixtureUserId(setup.app, "grisha"),
       label: "Firefox · Windows",
     }, OWNER_AUDIT);
-    const second = await issueDeviceTokenForUsername(setup.app, {
-      username: "grisha",
+    const second = await issueDeviceTokenForUserId(setup.app, {
+      userId: await fixtureUserId(setup.app, "grisha"),
       label: "Desktop · kevin",
     }, OWNER_AUDIT);
     const ownerCookie = await login(setup.server, "owner", "owner-secret");
 
     const response = await setup.server.inject({
       method: "DELETE",
-      url: `/api/v1/admin/users/grisha/device-tokens/${first.id}`,
+      url: `/api/v1/admin/users/by-id/${await fixtureUserId(app!, "grisha")}/device-tokens/${first.id}`,
       headers: { cookie: ownerCookie },
     });
     expect(response.statusCode).toBe(200);
@@ -292,27 +296,31 @@ describe("the owner's revocations", () => {
 
     const unknown = await setup.server.inject({
       method: "DELETE",
-      url: "/api/v1/admin/users/grisha/device-tokens/999999",
+      url: `/api/v1/admin/users/by-id/${await fixtureUserId(app!, "grisha")}/device-tokens/999999`,
       headers: { cookie: ownerCookie },
     });
     expect(unknown.statusCode).toBe(404);
   });
 
-  it("terminates devices, sessions, keys and links — and leaves the password alone", async (context) => {
+  it("terminates devices, sessions and links — and leaves the password alone", async (context) => {
     const setup = requireSetup(context);
     if (!setup) return;
     await createUserAccount(setup.app, { username: "vera", role: "chatter" }, { source: "cli" });
     await setUserPassword(setup.app, {
-      username: "vera",
+      userId: await fixtureUserId(setup.app, "vera"),
       password: "chatter-secret-2",
     }, OWNER_AUDIT);
-    const apiKey = (await issueChatterApiKey(setup.app, { username: "vera" }, OWNER_AUDIT)).key;
+    const secondDevice = (await issueChatterDeviceToken(
+      setup.app,
+      { username: "vera", label: "Desktop · vera-pc" },
+      OWNER_AUDIT,
+    )).key;
     const device = await issueDeviceTokenForUsername(setup.app, {
       username: "vera",
       label: "Firefox · Windows",
     }, OWNER_AUDIT);
-    await createAccountLinkForUsername(setup.app, {
-      username: "vera",
+    await createAccountLinkForUserId(setup.app, {
+      userId: await fixtureUserId(setup.app, "vera"),
       kind: "password_reset",
     }, OWNER_AUDIT);
     const veraCookie = await login(setup.server, "vera", "chatter-secret-2");
@@ -320,14 +328,14 @@ describe("the owner's revocations", () => {
 
     const response = await setup.server.inject({
       method: "POST",
-      url: "/api/v1/admin/users/vera/terminate-access",
+      url: `/api/v1/admin/users/by-id/${await fixtureUserId(app!, "vera")}/terminate-access`,
       headers: { cookie: ownerCookie },
     });
     expect(response.statusCode).toBe(200);
+    // Decision 370: no api-key counter left to report — and BOTH devices die.
     expect(response.json()).toEqual({
-      deviceTokens: 1,
+      deviceTokens: 2,
       sessions: 1,
-      apiKeys: 1,
       links: 1,
     });
 
@@ -339,7 +347,7 @@ describe("the owner's revocations", () => {
     expect((await setup.server.inject({
       method: "GET",
       url: "/api/v1/auth/me",
-      headers: { authorization: `Bearer ${apiKey}` },
+      headers: { authorization: `Bearer ${secondDevice}` },
     })).statusCode).toBe(401);
     expect((await setup.server.inject({
       method: "GET",
@@ -365,7 +373,7 @@ describe("the owner's revocations", () => {
 
     const response = await setup.server.inject({
       method: "POST",
-      url: "/api/v1/admin/users/owner/terminate-access",
+      url: `/api/v1/admin/users/by-id/${await fixtureUserId(app!, "owner")}/terminate-access`,
       headers: { cookie: ownerCookie },
     });
     expect(response.statusCode).toBe(400);

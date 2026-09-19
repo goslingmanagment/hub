@@ -17,7 +17,6 @@
   "apps/runtime/src/modules/conversations/index.ts": 2,
   "apps/runtime/src/modules/events/index.ts": 1,
   "apps/runtime/src/modules/finance/index.ts": 7,
-  "apps/runtime/src/modules/identity/index.ts": 3,
   "apps/runtime/src/modules/ingest/index.ts": 1,
   "apps/runtime/src/modules/ops/index.ts": 12,
   "apps/runtime/src/modules/workboard/classify-closing.ts": 1,

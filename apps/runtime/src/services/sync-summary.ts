@@ -15,7 +15,8 @@ import {
   ofapiAuthStatusNeedsAction,
 } from "./ofapi-account-health.ts";
 import { filterOnlyFansAudienceStreams } from "./sync/ofapi-audience-sync.ts";
-import { dmFullSweepCompletedAt } from "./sync/dm-bounded-state.ts";
+import { loadEffectiveConfig } from "./effective-config.ts";
+import { dmFullSweepCompletedAt, dmFullSweepFreshnessSlaSeconds, resolveDmBoundedPolicy } from "./sync/dm-bounded-state.ts";
 import { ofapiAudienceQualityHoldFor } from "./sync/cursor-state.ts";
 import { isOfapiFanIdentitiesEligiblePage } from "./sync/ofapi-fan-identities.ts";
 import { filterOnlyFansDmPollingStreams } from "./sync/onlyfans-dm-polling.ts";
@@ -93,6 +94,7 @@ function toStreamSyncUx(
   now: Date,
   qualityHold: string | null,
   fullCompletedAt: string | null | undefined,
+  fullSlaSeconds?: number | null,
 ): SyncUxSummary {
   if (fullCompletedAt !== undefined) {
     task = { ...task, succeededAt: fullCompletedAt === null ? null : new Date(fullCompletedAt) };
@@ -139,7 +141,7 @@ function toStreamSyncUx(
   });
   // A bounded run cannot renew full-list freshness. Keep pause/auth/retry and
   // active-work precedence from the shared UX, including on lightweight reads.
-  const slaSeconds = SYNC_STREAM_POLICY[task.stream].freshnessSlaSeconds;
+  const slaSeconds = fullSlaSeconds !== undefined ? fullSlaSeconds : SYNC_STREAM_POLICY[task.stream].freshnessSlaSeconds;
   const fullIsStale = fullCompletedAt === null || (fullCompletedAt !== undefined &&
     slaSeconds !== null && now.getTime() - Date.parse(fullCompletedAt) > slaSeconds * 1000);
   if (fullIsStale && (summary.state === "healthy" ||
@@ -206,6 +208,7 @@ function buildPageSummarySyncUx(
   now: Date,
   audienceQualityHold: string | null,
   dmCheckpoint: unknown,
+  dmFullSweepSlaSeconds: number | null | undefined,
 ) {
   const actionRequired = buildOfapiAuthSyncUx(app, page) ?? buildCredentialSyncUx(app, page);
   if (actionRequired) {
@@ -255,6 +258,7 @@ function buildPageSummarySyncUx(
     .map((task) => toStreamSyncUx(
       task, now, task.stream === "subscribers" ? audienceQualityHold : null,
       task.stream === "dm_conversations" ? dmFullSweepCompletedAt(dmCheckpoint, now) : undefined,
+      task.stream === "dm_conversations" ? dmFullSweepSlaSeconds : undefined,
     ));
 
   return buildPageSyncUx(streamSummaries);
@@ -298,12 +302,20 @@ export async function getSyncStatusSummarySnapshot(
   // (sync-control.ts, sync-blocks.ts). A page with no state rows is reported as
   // such — buildPageSummarySyncUx already handles an empty row list.
   const fanslyPageIds = scopedPages.filter((page) => page.platform === "fansly").map((page) => page.id);
-  const [taskRows, checkpoints, dmCheckpoints] = await Promise.all([
+  const [taskRows, checkpoints, dmCheckpoints, effectiveConfig] = await Promise.all([
     listPageSyncStates(app.db),
     listCheckpointStates(app.db, scopedPageIds, "subscribers"),
     listCheckpointStates(app.db, fanslyPageIds, "dm_conversations"),
+    // The live A1 policy decides each Fansly page's full-list freshness target.
+    fanslyPageIds.length > 0 ? loadEffectiveConfig(app.db, app.config) : Promise.resolve(null),
   ]);
   const dmCheckpointByPage = new Map(dmCheckpoints.map((row) => [row.pageId, row.state]));
+  const dmFullSweepSlaByPage = new Map(scopedPages
+    .filter((page) => fanslyPageIds.includes(page.id))
+    .map((page) => [page.id, dmFullSweepFreshnessSlaSeconds(
+      effectiveConfig ? resolveDmBoundedPolicy(effectiveConfig, page.label) : null,
+      SYNC_STREAM_POLICY.dm_conversations.freshnessSlaSeconds,
+    )] as const));
   const audienceHolds = new Map(checkpoints.map((row) => [row.pageId, ofapiAudienceQualityHoldFor(row.state)]));
   const taskRowsByPageId = new Map<number, PageSyncState[]>();
   for (const task of taskRows) {
@@ -327,7 +339,7 @@ export async function getSyncStatusSummarySnapshot(
       displayName: page.displayName,
       syncUx: buildPageSummarySyncUx(
         app, page, taskRowsByPageId.get(page.id) ?? [], now,
-        audienceHolds.get(page.id) ?? null, dmCheckpointByPage.get(page.id),
+        audienceHolds.get(page.id) ?? null, dmCheckpointByPage.get(page.id), dmFullSweepSlaByPage.get(page.id),
       ),
     })),
   };

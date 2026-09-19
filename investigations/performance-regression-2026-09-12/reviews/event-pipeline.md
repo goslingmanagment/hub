@@ -1,0 +1,70 @@
+# Ревью цепочки событий и мониторинга — 2026-09-12
+
+**Результат: подтверждённых регрессий доставки событий, каноникализации или проекций в проверенных изменениях нет. Ранее предложенный P2 про «очередь 5 минут, показано 15 секунд» следует снять: воспроизведение доказывает различие двух измерений, но не пропуск тревоги о реальной задержке проекции.**
+
+Проверено дерево `/Users/dmitriy/code/goose/.worktrees/hub-regression-audit-20260912`, HEAD `c76c6db06ce1c25e469ca07ec62762e248870f44`, против `c0cd21c3`. Самостоятельно прочитаны рабочее соглашение, Stage 8/21/25, решения о стриминге, метриках и оптимизации, изменённые функции и их вызывающие пути. Производство не опрашивалось, тестовые наборы не запускались, исполняемый код не менялся.
+
+## 1. Различие метрики подтверждается; вывод о потерянной тревоге не подтверждается
+
+Изменение находится в [golden-signals.ts:155](/Users/dmitriy/code/goose/.worktrees/hub-regression-audit-20260912/apps/runtime/src/services/golden-signals.ts:155): вместо `min(de.created_at)` среди всех событий выше watermark запрос берёт `created_at` строки с первым `account_seq` выше watermark. Порог `projection.p95` остаётся 180 000 мс ([строка 48](/Users/dmitriy/code/goose/.worktrees/hub-regression-audit-20260912/apps/runtime/src/services/golden-signals.ts:48)); результат ниже порога может закрыть соответствующий инцидент ([строка 336](/Users/dmitriy/code/goose/.worktrees/hub-regression-audit-20260912/apps/runtime/src/services/golden-signals.ts:336), [строка 357](/Users/dmitriy/code/goose/.worktrees/hub-regression-audit-20260912/apps/runtime/src/services/golden-signals.ts:357)).
+
+`account_seq` действительно не задаёт порядок `created_at`: столбец имеет `DEFAULT now()` ([миграция 0057:27](/Users/dmitriy/code/goose/.worktrees/hub-regression-audit-20260912/packages/db/migrations/0057_domain_events.sql:27)), то есть время начала транзакции. Номер выделяется позже под блокировкой строки счётчика ([domain-events.ts:289](/Users/dmitriy/code/goose/.worktrees/hub-regression-audit-20260912/packages/db/src/repositories/domain-events.ts:289)). Это достижимо без ручного изменения данных:
+
+- `revokeOfapiMessageCoverage` начинает внешнюю транзакцию и может ждать `FOR UPDATE` строки покрытия ([ofapi-message-coverage.ts:315](/Users/dmitriy/code/goose/.worktrees/hub-regression-audit-20260912/packages/db/src/repositories/ofapi-message-coverage.ts:315)); счётчик событий блокируется только при последующем append ([строка 477](/Users/dmitriy/code/goose/.worktrees/hub-regression-audit-20260912/packages/db/src/repositories/ofapi-message-coverage.ts:477)).
+- `settleOfapiCaptureParse` сначала блокирует задание и попытку ([ofapi-capture.ts:2586](/Users/dmitriy/code/goose/.worktrees/hub-regression-audit-20260912/packages/db/src/repositories/ofapi-capture.ts:2586)), затем пишет terminal observation и события покрытия ([строка 2792](/Users/dmitriy/code/goose/.worktrees/hub-regression-audit-20260912/packages/db/src/repositories/ofapi-capture.ts:2792)).
+- Запись OFAPI media также проверяет источник и erasure fence внутри внешней транзакции до первого append ([ofapi-media.ts:155](/Users/dmitriy/code/goose/.worktrees/hub-regression-audit-20260912/apps/runtime/src/services/projections/ofapi-media.ts:155), [строка 209](/Users/dmitriy/code/goose/.worktrees/hub-regression-audit-20260912/apps/runtime/src/services/projections/ofapi-media.ts:209)).
+
+Пока такая транзакция ждёт, другая транзакция для того же аккаунта может зафиксировать событие с более поздним временем начала, но меньшим номером. Именно это демонстрирует имеющийся audit-test ([performance-regression-audit.integration.test.ts:87](/Users/dmitriy/code/goose/.worktrees/hub-regression-audit-20260912/tests/performance-regression-audit.integration.test.ts:87)).
+
+**Почему из этого не следует регрессия реального backlog.** Блокировка `domain_event_seq` удерживается до конца транзакции. События, новый счётчик и NOTIFY записываются в одной транзакции ([domain-events.ts:395](/Users/dmitriy/code/goose/.worktrees/hub-regression-audit-20260912/packages/db/src/repositories/domain-events.ts:395), [строка 457](/Users/dmitriy/code/goose/.worktrees/hub-regression-audit-20260912/packages/db/src/repositories/domain-events.ts:457)). Поэтому для одного аккаунта больший номер не может зафиксироваться раньше меньшего; события одного batch фиксируются одновременно.
+
+Для первой оставшейся строки `h` выше watermark и любой другой ожидающей строки `j`:
+
+```text
+created_at(h) <= original_commit(h) <= original_commit(j)
+now - created_at(h) >= now - original_commit(h)
+```
+
+Следовательно, новый возраст остаётся верхней оценкой времени ожидания самого раннего зафиксированного события. При реальном ожидании этой строки дольше 180 секунд новая величина также превысит 180 секунд. Прежний минимум мог дополнительно включать время, которое более поздняя транзакция провела до фиксации своего события; это время не было ожиданием в очереди проектора.
+
+Числовой пример, совместимый с кодом: транзакция A началась в 00:00 и ждала на другой блокировке; B начала работу в 04:45 и зафиксировала seq=1; A продолжилась в 04:59 и зафиксировала seq=2; измерение сделано в 05:00. Старое значение около 5 минут, новое около 15 секунд. **Самая ранняя зафиксированная ожидающая строка действительно ждёт около 15 секунд.**
+
+В тесте [строка 111](/Users/dmitriy/code/goose/.worktrees/hub-regression-audit-20260912/tests/performance-regression-audit.integration.test.ts:111) оба `created_at` меняются вручную. Он годится для доказательства неэквивалентности SQL, но не доказывает пяти минут ожидания после commit. Этот отрицательный результат нельзя учитывать как доказанную функциональную регрессию.
+
+Проверены возможные исключения из доказательства:
+
+| Путь | Проверка | Результат |
+|---|---|---|
+| Replay и backfill | Канонизатор направляет события в обычный append; [canonicalize-driver.ts:611](/Users/dmitriy/code/goose/.worktrees/hub-regression-audit-20260912/apps/runtime/src/services/canonicalize-driver.ts:611) | Сохраняется блокировка счётчика до commit; дата платформы влияет на `occurred_at`, не на `created_at`. |
+| Исправление дат 1970 | [fansly-1970-repair.ts:203](/Users/dmitriy/code/goose/.worktrees/hub-regression-audit-20260912/apps/runtime/src/services/fansly-1970-repair.ts:203) | Новое событие через обычный append, с новым номером. |
+| Restore из архива | Экспорт включает `account_seq` и `created_at` ([tiering/index.ts:84](/Users/dmitriy/code/goose/.worktrees/hub-regression-audit-20260912/apps/runtime/src/services/tiering/index.ts:84)); restore возвращает все поля через `jsonb_populate_recordset` ([строка 540](/Users/dmitriy/code/goose/.worktrees/hub-regression-audit-20260912/apps/runtime/src/services/tiering/index.ts:540)) | Исходный `created_at` сохраняется; восстановление не ставит текущее время старой строке. Повторное появление строки не делает её возраст меньше реального ожидания оставшихся строк. |
+| Erasure и detach | Удаляют строки/партиции; полное стирание страницы также удаляет счётчик и watermarks ([erasure/index.ts:1466](/Users/dmitriy/code/goose/.worktrees/hub-regression-audit-20260912/apps/runtime/src/services/erasure/index.ts:1466)) | Порядок исходных commit у оставшихся строк не меняется. Полностью отсутствующая очередь не видна обоим запросам — это не новое отличие. |
+| Прямые альтернативные INSERT/UPDATE | Поиск по `apps`, `packages`, `scripts`, включая миграции | Обычный INSERT в журнал найден только в append-протоколе; restore сохраняет поля. Поддерживаемого пути, который заново штампует `created_at` уже существующей строки, не найдено. |
+
+**Итоговая классификация:** подтверждённое изменение способа измерения, без подтверждённого ущерба; P2 снимается. Результаты до/после оптимизации нельзя считать побайтово сопоставимыми. Полезно уточнить комментарий/операционное описание как «возраст по времени начала транзакции первой ожидающей строки по account_seq», но это не блокирующая регрессия. Уверенность в выводе высокая для найденных поддерживаемых путей. Ручные неподдерживаемые правки журнала и нарушение часов БД не использовались как основания для finding.
+
+Общий p95 всё ещё может скрыть редкую задержку среди множества пар `(projection, account)`; это свойство обоих запросов и в этой оптимизации не появилось.
+
+## 2. Замена запроса в живом стриминге эквивалентна
+
+Изменена только загрузка head в [domain-events-stream.ts:220](/Users/dmitriy/code/goose/.worktrees/hub-regression-audit-20260912/apps/runtime/src/services/domain-events-stream.ts:220).
+
+| Проверенная граница | Прежний/новый путь и защита | Вывод |
+|---|---|---|
+| Источник head | Старый `listDomainEventAccountBounds` возвращал `s.next_seq - 1` ([domain-events.ts:510](/Users/dmitriy/code/goose/.worktrees/hub-regression-audit-20260912/packages/db/src/repositories/domain-events.ts:510)); новый `getAccountHighWater` читает ту же строку ([строка 878](/Users/dmitriy/code/goose/.worktrees/hub-regression-audit-20260912/packages/db/src/repositories/domain-events.ts:878)). | Одинаковое значение в поддерживаемом диапазоне безопасных целых JS. Не происходит замены counter на `max` сохранившихся событий. |
+| Счётчик отсутствует | Старый репозиторий добавлял bounds с `currentSeq=0` ([строка 525](/Users/dmitriy/code/goose/.worktrees/hub-regression-audit-20260912/packages/db/src/repositories/domain-events.ts:525)); новый возвращает 0. | Поведение сохранено, включая полностью стёртую страницу. |
+| Prefix/internal/tail hole | Live drain читает все строки до захваченного head и валидирует последовательность до broadcast ([domain-events-stream.ts:248](/Users/dmitriy/code/goose/.worktrees/hub-regression-audit-20260912/apps/runtime/src/services/domain-events-stream.ts:248)); валидатор проверяет соседние номера и недостающий хвост ([sse-replay-buffer.ts:21](/Users/dmitriy/code/goose/.worktrees/hub-regression-audit-20260912/apps/runtime/src/services/sse-replay-buffer.ts:21)). | Удаление дорогостоящего вычисления retention floor из этой функции не удалило проверку целостности. |
+| Потеря continuity | Клиент закрывается по `continuityLost`, shared hub переходит к head только после сообщения о потере ([domain-events-stream.ts:254](/Users/dmitriy/code/goose/.worktrees/hub-regression-audit-20260912/apps/runtime/src/services/domain-events-stream.ts:254), [events/index.ts:740](/Users/dmitriy/code/goose/.worktrees/hub-regression-audit-20260912/apps/runtime/src/modules/events/index.ts:740)). | Клиентский cursor не подтверждает недоставленные события. |
+| Reconnect LISTEN | Reconnect перечитывает все counter heads и отмечает изменённые/новые аккаунты ([domain-events-stream.ts:177](/Users/dmitriy/code/goose/.worktrees/hub-regression-audit-20260912/apps/runtime/src/services/domain-events-stream.ts:177), [строка 355](/Users/dmitriy/code/goose/.worktrees/hub-regression-audit-20260912/apps/runtime/src/services/domain-events-stream.ts:355)). | Изменение hot-path query не затрагивает восстановление потерянных уведомлений. |
+| Уведомление во время drain | NOTIFY — только wake-up; dirty set и `drainAgain` обслуживают повторные appends. Head и события видны после общего commit. | Более быстрый head read не создаёт окно пропуска. |
+| Hidden projection events | Live drain валидирует полный журнал, затем скрывает projection-only строки ([domain-events-stream.ts:121](/Users/dmitriy/code/goose/.worktrees/hub-regression-audit-20260912/apps/runtime/src/services/domain-events-stream.ts:121)); checkpoint добавляется в той же транзакции ([domain-events.ts:440](/Users/dmitriy/code/goose/.worktrees/hub-regression-audit-20260912/packages/db/src/repositories/domain-events.ts:440)). | Числа hiddenCount и порядок visible/hidden/checkpoint не менялись. |
+| Snapshot/resume | SSE route продолжает читать retention bounds и проверять retained prefix/internal holes ([events/index.ts:532](/Users/dmitriy/code/goose/.worktrees/hub-regression-audit-20260912/apps/runtime/src/modules/events/index.ts:532)); live подписка создаётся до повторного захвата replay boundary ([строка 737](/Users/dmitriy/code/goose/.worktrees/hub-regression-audit-20260912/apps/runtime/src/modules/events/index.ts:737)). | `409 sync_snapshot_required`, race защиты и grant scoping сохранены. |
+| Ошибка чтения head/страницы | Dirty account возвращается в очередь, watermark не продвигается, включается retry ([domain-events-stream.ts:221](/Users/dmitriy/code/goose/.worktrees/hub-regression-audit-20260912/apps/runtime/src/services/domain-events-stream.ts:221), [строка 240](/Users/dmitriy/code/goose/.worktrees/hub-regression-audit-20260912/apps/runtime/src/services/domain-events-stream.ts:240)). | Новая функция использует ту же обработку ошибки. |
+
+## 3. Покрытие и пределы вывода
+
+Прочитаны реализации и существующие проверки ordering, mixed append/checkpoint, replay batching, erasure recovery, grant scoping, unavailable LISTEN и smoke resume. Новая проверка `getAccountHighWater` в тестах стриминга подтверждает выбор функции, но основное основание вывода об эквивалентности — SQL и описанная цепочка, а не количество зелёных тестов.
+
+Исходная проверка метрики помещает самый старый `created_at` именно в первую строку выше watermark ([golden-signals.integration.test.ts:104](/Users/dmitriy/code/goose/.worktrees/hub-regression-audit-20260912/tests/golden-signals.integration.test.ts:104)); это не проверяет различие двух определений возраста. Добавленный audit-test проверяет различие, но его ожидаемое старое число не является само по себе контрактом реальной задержки.
+
+`domain-events.ts`, append-пути, projection watermarks, канонизаторы, restore и erasure исследованы как зависимости изменённых функций. Полный аудит каждой проекции и всех старых дефектов этих подсистем не заявляется. При сравнении с baseline в этой области изменились две функции: head read в hub и запрос projection metric. Живой production backlog, частота инверсий времён, производительность SQL под нагрузкой и полнота HTTP-доставки здесь не измерялись. Нулевые smoke gap/duplicate counters из другого исследования сами по себе не доказывают проверку HTTP/auth/replay для всех клиентов.

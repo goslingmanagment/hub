@@ -4,12 +4,12 @@ import type { FastifyReply } from "fastify";
 import { auditCtx } from "../../api/request-auth.ts";
 import type { AppContext } from "../../bootstrap.ts";
 import {
-  createAccountLinkForUsername,
+  createAccountLinkForUserId,
   createInvite,
   inspectAccountLink,
-  listAccountLinksForUsername,
+  listAccountLinksForUserId,
   redeemAccountLink,
-  revokeAccountLinkForUsername,
+  revokeAccountLinkForUserId,
 } from "../../services/account-links.ts";
 import { getOwnUsageReport } from "../../services/ai-usage.ts";
 import {
@@ -17,18 +17,13 @@ import {
   assignPageToUser,
   activatePendingDeviceToken,
   changeOwnPassword,
-  createUserAccount,
   deactivateUser,
+  deleteUser,
   deviceTokenAdoptionReport,
-  getAuthenticatedUserByUsername,
+  getAdminUserById,
   grantModelToUser,
-  issueChatterApiKey,
-  issueDeviceToken,
-  issueDeviceTokenForUsername,
   issueDeviceTokenWithPassword,
-  reservePendingDeviceToken,
-  listApiKeysForUsers,
-  listDeviceTokensForUsername,
+  listDeviceTokensForUserId,
   listOwnDevices,
   listUserGrants,
   listUsersDetailed,
@@ -38,24 +33,22 @@ import {
   reactivateUser,
   revokeAllOwnDevices,
   revokeCurrentDeviceToken,
-  revokeDeviceTokenForUsername,
+  revokeDeviceTokenForUserId,
   revokeOwnDevice,
   requireOwner,
   requireSessionUser,
-  revokeDeviceTokensForUsername,
+  revokeDeviceTokensForUserId,
   revokeModelFromUser,
-  revokeUserApiKeys,
-  setUserPassword,
-  setDeviceTokenHarvestCapabilityForUsername,
+  setDeviceTokenHarvestCapabilityForUserId,
   terminateAllAccess,
   unassignPageFromUser,
 } from "../../services/auth.ts";
 import { NotFoundError } from "../../services/errors.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 
-// Identity module (target §6.1): auth, sessions, users, api-keys. Handlers
-// relocated verbatim from server.ts (Stage 19 Task 3); guards stay until the
-// post-enforce-flip cleanup.
+// Identity module (target §6.1): auth, sessions, users, devices and links.
+// Handlers relocated verbatim from server.ts (Stage 19 Task 3); guards stay
+// until the post-enforce-flip cleanup.
 
 function applyCookie(reply: {
   setCookie: FastifyReply["setCookie"];
@@ -137,115 +130,66 @@ export function registerIdentityRoutes(server: ApiServer, ctx: ApiModuleContext)
     return listUsersDetailed(appContext);
   });
 
-  server.post("/api/v1/admin/users", {
-    schema: routeSchemas.adminCreateUser,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
-    const user = await createUserAccount(appContext, request.body, auditCtx(principal));
-    return user!;
-  });
+  // Decision 370: there is no HTTP create-user and no HTTP set-password. An
+  // owner account is minted by `hub user add` on the box; everyone else is
+  // invited — and reset — by link (adminCreateInvite / adminCreateAccountLink).
 
-  server.patch("/api/v1/admin/users/:username/password", {
-    schema: routeSchemas.adminSetPassword,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
-    await setUserPassword(appContext, {
-      username: request.params.username,
-      password: request.body.password,
-      mustChangePassword: request.body.mustChangePassword,
-    }, auditCtx(principal));
-    return { ok: true as const };
-  });
-
-  server.post("/api/v1/admin/users/:username/pages", {
+  server.post("/api/v1/admin/users/by-id/:userId/pages", {
     schema: routeSchemas.adminAssignPage,
   }, async (request) => {
     const principal = await requirePrincipal(request);
     requireOwner(principal);
     await assignPageToUser(appContext, {
-      username: request.params.username,
+      userId: request.params.userId,
       pageLabel: request.body.pageLabel,
     }, auditCtx(principal));
-    const user = await getAuthenticatedUserByUsername(appContext, request.params.username);
+    const user = await getAdminUserById(appContext, request.params.userId);
     if (!user) {
-      throw new NotFoundError(`User "${request.params.username}" not found`);
+      throw new NotFoundError(`User "${request.params.userId}" not found`);
     }
     return user;
   });
 
-  server.delete("/api/v1/admin/users/:username/pages/:pageLabel", {
+  server.delete("/api/v1/admin/users/by-id/:userId/pages/:pageLabel", {
     schema: routeSchemas.adminUnassignPage,
   }, async (request) => {
     const principal = await requirePrincipal(request);
     requireOwner(principal);
     await unassignPageFromUser(appContext, {
-      username: request.params.username,
+      userId: request.params.userId,
       pageLabel: request.params.pageLabel,
     }, auditCtx(principal));
     return { ok: true as const };
   });
 
-  server.post("/api/v1/admin/users/:username/deactivate", {
+  server.post("/api/v1/admin/users/by-id/:userId/deactivate", {
     schema: routeSchemas.adminDeactivateUser,
   }, async (request) => {
     const principal = await requirePrincipal(request);
     requireOwner(principal);
     return deactivateUser(appContext, {
-      username: request.params.username,
+      userId: request.params.userId,
     }, auditCtx(principal));
   });
 
-  server.post("/api/v1/admin/users/:username/reactivate", {
+  server.post("/api/v1/admin/users/by-id/:userId/reactivate", {
     schema: routeSchemas.adminReactivateUser,
   }, async (request) => {
     const principal = await requirePrincipal(request);
     requireOwner(principal);
     return reactivateUser(appContext, {
-      username: request.params.username,
+      userId: request.params.userId,
     }, auditCtx(principal));
   });
 
-  // API key management
-  server.get("/api/v1/admin/users/:username/api-keys", {
-    schema: routeSchemas.adminListApiKeys,
+  // Username-addressed routes are deliberately absent. A stale client must
+  // receive 404 rather than acting on a new owner of a recycled login.
+  server.delete("/api/v1/admin/users/by-id/:userId", {
+    schema: routeSchemas.adminDeleteUser,
   }, async (request) => {
     const principal = await requirePrincipal(request);
     requireOwner(principal);
-    const keys = await listApiKeysForUsers(appContext, [request.params.username]);
-    return keys.map((k) => ({
-      id: k.id,
-      keyPrefix: k.keyPrefix,
-      userId: k.userId,
-      isActive: k.revokedAt === null,
-      revokedAt: k.revokedAt?.toISOString() ?? null,
-      revokedReason: k.revokedReason ?? null,
-      createdAt: k.createdAt.toISOString(),
-      lastUsedAt: k.lastUsedAt?.toISOString() ?? null,
-    }));
-  });
-
-  server.post("/api/v1/admin/users/:username/api-keys", {
-    schema: routeSchemas.adminIssueApiKey,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
-    return issueChatterApiKey(appContext, {
-      username: request.params.username,
-      pageLabel: request.body.pageLabel,
-    }, auditCtx(principal));
-  });
-
-  server.delete("/api/v1/admin/users/:username/api-keys", {
-    schema: routeSchemas.adminRevokeApiKeys,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
-    const revoked = await revokeUserApiKeys(appContext, {
-      username: request.params.username,
-    }, auditCtx(principal));
-    return { revokedCount: revoked.length };
+    return deleteUser(appContext, { userId: request.params.userId }, auditCtx(principal));
   });
 
   // --- Stage 22: self-serve auth surface (any live session, any human role) ---
@@ -262,45 +206,9 @@ export function registerIdentityRoutes(server: ApiServer, ctx: ApiModuleContext)
     });
   });
 
-  server.post("/api/v1/auth/device-tokens", {
-    schema: routeSchemas.authIssueDeviceToken,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireSessionUser(principal);
-    const authSessionId = principal.authSessionId;
-    const issued = await issueDeviceToken(appContext, {
-      userId: principal.user.id,
-      authSessionId,
-      label: request.body.label,
-    }, auditCtx(principal));
-    return {
-      token: issued.token,
-      id: issued.id,
-      label: issued.label,
-      keyPrefix: issued.keyPrefix,
-      expiresAt: issued.expiresAt.toISOString(),
-    };
-  });
-
-  server.post("/api/v1/auth/device-tokens/reservations", {
-    schema: routeSchemas.authReserveDeviceToken,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireSessionUser(principal);
-    const authSessionId = principal.authSessionId;
-    const reserved = await reservePendingDeviceToken(appContext, {
-      userId: principal.user.id,
-      authSessionId,
-      label: request.body.label,
-    }, auditCtx(principal));
-    return {
-      token: reserved.token,
-      reservationId: reserved.reservationId,
-      label: reserved.label,
-      keyPrefix: reserved.keyPrefix,
-      reservationExpiresAt: reserved.reservationExpiresAt.toISOString(),
-    };
-  });
+  // Decision 370: a device is signed in by password only
+  // (authIssueDeviceTokenWithPassword). The two cookie-session issuance routes
+  // are gone — no client mints a bearer from a browser session any more.
 
   server.post("/api/v1/auth/device-tokens/activate", {
     schema: routeSchemas.authActivateDeviceToken,
@@ -324,51 +232,33 @@ export function registerIdentityRoutes(server: ApiServer, ctx: ApiModuleContext)
 
   // --- Stage 22: device-token + grant admin (owner) ---
 
-  server.get("/api/v1/admin/users/:username/device-tokens", {
+  server.get("/api/v1/admin/users/by-id/:userId/device-tokens", {
     schema: routeSchemas.adminListDeviceTokens,
   }, async (request) => {
     const principal = await requirePrincipal(request);
     requireOwner(principal);
-    return listDeviceTokensForUsername(appContext, request.params.username);
+    return listDeviceTokensForUserId(appContext, request.params.userId);
   });
 
-  server.post("/api/v1/admin/users/:username/device-tokens", {
-    schema: routeSchemas.adminIssueDeviceToken,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
-    const issued = await issueDeviceTokenForUsername(appContext, {
-      username: request.params.username,
-      label: request.body.label,
-    }, auditCtx(principal));
-    return {
-      token: issued.token,
-      id: issued.id,
-      label: issued.label,
-      keyPrefix: issued.keyPrefix,
-      expiresAt: issued.expiresAt.toISOString(),
-    };
-  });
-
-  server.patch("/api/v1/admin/users/:username/device-tokens/:tokenId/harvest-capability", {
+  server.patch("/api/v1/admin/users/by-id/:userId/device-tokens/:tokenId/harvest-capability", {
     schema: routeSchemas.adminSetDeviceTokenHarvestCapability,
   }, async (request) => {
     const principal = await requirePrincipal(request);
     requireOwner(principal);
-    return setDeviceTokenHarvestCapabilityForUsername(appContext, {
-      username: request.params.username,
+    return setDeviceTokenHarvestCapabilityForUserId(appContext, {
+      userId: request.params.userId,
       deviceTokenId: request.params.tokenId,
       machineId: request.body.machineId,
     }, auditCtx(principal));
   });
 
-  server.delete("/api/v1/admin/users/:username/device-tokens", {
+  server.delete("/api/v1/admin/users/by-id/:userId/device-tokens", {
     schema: routeSchemas.adminRevokeDeviceTokens,
   }, async (request) => {
     const principal = await requirePrincipal(request);
     requireOwner(principal);
-    return revokeDeviceTokensForUsername(appContext, {
-      username: request.params.username,
+    return revokeDeviceTokensForUserId(appContext, {
+      userId: request.params.userId,
     }, auditCtx(principal));
   });
 
@@ -380,34 +270,34 @@ export function registerIdentityRoutes(server: ApiServer, ctx: ApiModuleContext)
     return deviceTokenAdoptionReport(appContext);
   });
 
-  server.post("/api/v1/admin/users/:username/models", {
+  server.post("/api/v1/admin/users/by-id/:userId/models", {
     schema: routeSchemas.adminGrantModel,
   }, async (request) => {
     const principal = await requirePrincipal(request);
     requireOwner(principal);
     return grantModelToUser(appContext, {
-      username: request.params.username,
+      userId: request.params.userId,
       modelSlug: request.body.modelSlug,
     }, auditCtx(principal));
   });
 
-  server.delete("/api/v1/admin/users/:username/models/:modelSlug", {
+  server.delete("/api/v1/admin/users/by-id/:userId/models/:modelSlug", {
     schema: routeSchemas.adminRevokeModel,
   }, async (request) => {
     const principal = await requirePrincipal(request);
     requireOwner(principal);
     return revokeModelFromUser(appContext, {
-      username: request.params.username,
+      userId: request.params.userId,
       modelSlug: request.params.modelSlug,
     }, auditCtx(principal));
   });
 
-  server.get("/api/v1/admin/users/:username/grants", {
+  server.get("/api/v1/admin/users/by-id/:userId/grants", {
     schema: routeSchemas.adminListUserGrants,
   }, async (request) => {
     const principal = await requirePrincipal(request);
     requireOwner(principal);
-    return { grants: await listUserGrants(appContext, request.params.username) };
+    return { grants: await listUserGrants(appContext, request.params.userId) };
   });
 
   // --- Decision 349: unified chatter account (PR-1A) ---
@@ -428,55 +318,55 @@ export function registerIdentityRoutes(server: ApiServer, ctx: ApiModuleContext)
     }, auditCtx(principal));
   });
 
-  server.post("/api/v1/admin/users/:username/links", {
+  server.post("/api/v1/admin/users/by-id/:userId/links", {
     schema: routeSchemas.adminCreateAccountLink,
   }, async (request) => {
     const principal = await requirePrincipal(request);
     requireOwner(principal);
-    return createAccountLinkForUsername(appContext, {
-      username: request.params.username,
+    return createAccountLinkForUserId(appContext, {
+      userId: request.params.userId,
       kind: request.body.kind,
       expiresInHours: request.body.expiresInHours,
     }, auditCtx(principal));
   });
 
-  server.get("/api/v1/admin/users/:username/links", {
+  server.get("/api/v1/admin/users/by-id/:userId/links", {
     schema: routeSchemas.adminListAccountLinks,
   }, async (request) => {
     const principal = await requirePrincipal(request);
     requireOwner(principal);
-    return listAccountLinksForUsername(appContext, request.params.username);
+    return listAccountLinksForUserId(appContext, request.params.userId);
   });
 
-  server.post("/api/v1/admin/users/:username/links/:linkId/revoke", {
+  server.post("/api/v1/admin/users/by-id/:userId/links/:linkId/revoke", {
     schema: routeSchemas.adminRevokeAccountLink,
   }, async (request) => {
     const principal = await requirePrincipal(request);
     requireOwner(principal);
-    return revokeAccountLinkForUsername(appContext, {
-      username: request.params.username,
+    return revokeAccountLinkForUserId(appContext, {
+      userId: request.params.userId,
       linkId: request.params.linkId,
     }, auditCtx(principal));
   });
 
-  server.delete("/api/v1/admin/users/:username/device-tokens/:tokenId", {
+  server.delete("/api/v1/admin/users/by-id/:userId/device-tokens/:tokenId", {
     schema: routeSchemas.adminRevokeDeviceToken,
   }, async (request) => {
     const principal = await requirePrincipal(request);
     requireOwner(principal);
-    return revokeDeviceTokenForUsername(appContext, {
-      username: request.params.username,
+    return revokeDeviceTokenForUserId(appContext, {
+      userId: request.params.userId,
       deviceTokenId: request.params.tokenId,
     }, auditCtx(principal));
   });
 
-  server.post("/api/v1/admin/users/:username/terminate-access", {
+  server.post("/api/v1/admin/users/by-id/:userId/terminate-access", {
     schema: routeSchemas.adminTerminateAllAccess,
   }, async (request) => {
     const principal = await requirePrincipal(request);
     requireOwner(principal);
     return terminateAllAccess(appContext, {
-      username: request.params.username,
+      userId: request.params.userId,
     }, auditCtx(principal));
   });
 

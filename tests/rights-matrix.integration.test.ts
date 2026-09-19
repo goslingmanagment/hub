@@ -1,3 +1,4 @@
+import { fixtureUserId } from "./helpers/user-identity.ts";
 import argon2 from "argon2";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
@@ -120,7 +121,7 @@ async function assignPage(
 ) {
   const response = await activeServer.inject({
     method: "POST",
-    url: `/api/v1/admin/users/${username}/pages`,
+    url: `/api/v1/admin/users/by-id/${await fixtureUserId(app!, username)}/pages`,
     headers: { cookie: ownerCookie },
     payload: { pageLabel },
   });
@@ -135,28 +136,10 @@ async function unassignPage(
 ) {
   const response = await activeServer.inject({
     method: "DELETE",
-    url: `/api/v1/admin/users/${username}/pages/${pageLabel}`,
+    url: `/api/v1/admin/users/by-id/${await fixtureUserId(app!, username)}/pages/${pageLabel}`,
     headers: { cookie: ownerCookie },
   });
   expect(response.statusCode).toBe(200);
-}
-
-/** The legacy chatter bearer key. It is on its way out (Р8 removes the whole
- * lane in PR-4), which is exactly why the matrix has to say what today's
- * revocations do and do not do to it. */
-async function issueApiKey(
-  activeServer: NonNullable<typeof server>,
-  ownerCookie: string,
-  username: string,
-) {
-  const response = await activeServer.inject({
-    method: "POST",
-    url: `/api/v1/admin/users/${username}/api-keys`,
-    headers: { cookie: ownerCookie },
-    payload: {},
-  });
-  expect(response.statusCode).toBe(200);
-  return response.json<{ key: string }>().key;
 }
 
 /** Invites grisha the way the owner will from the console, then redeems the
@@ -356,7 +339,7 @@ describe("§7 — the revocation ladder as the person experiences it", () => {
 
     const revoked = await setup.server.inject({
       method: "DELETE",
-      url: `/api/v1/admin/users/grisha/device-tokens/${firefox.id}`,
+      url: `/api/v1/admin/users/by-id/${await fixtureUserId(app!, "grisha")}/device-tokens/${firefox.id}`,
       headers: { cookie: ownerCookie },
     });
     expect(revoked.statusCode).toBe(200);
@@ -385,11 +368,10 @@ describe("§7 — the revocation ladder as the person experiences it", () => {
     const desktop = await signInDevice(setup.server, "grisha", CHATTER_PASSWORD, "Desktop · kevin");
     const chatterCookie = await loginCookie(setup.server, "grisha", CHATTER_PASSWORD);
     const ownerCookie = await loginCookie(setup.server, "dmitriy", OWNER_PASSWORD);
-    const apiKey = await issueApiKey(setup.server, ownerCookie, "grisha");
 
     const revoked = await setup.server.inject({
       method: "DELETE",
-      url: "/api/v1/admin/users/grisha/device-tokens",
+      url: `/api/v1/admin/users/by-id/${await fixtureUserId(app!, "grisha")}/device-tokens`,
       headers: { cookie: ownerCookie },
     });
     expect(revoked.statusCode).toBe(200);
@@ -410,27 +392,24 @@ describe("§7 — the revocation ladder as the person experiences it", () => {
     expect(devices.statusCode).toBe(200);
     expect(devices.json<unknown[]>()).toEqual([]);
 
-    // And neither does it touch a legacy API key (§4.4 says so in as many
-    // words). This is the operational trap the offboarding runbook exists to
-    // close: "revoke all devices" is NOT "this person is out".
-    expect((await get(setup.server, "/api/v1/auth/me", {
-      authorization: `Bearer ${apiKey}`,
-    })).statusCode).toBe(200);
+    // Decision 370 removed the other half of this trap: there is no longer a
+    // legacy key that survives "revoke all devices". The trap that remains is
+    // the live cookie session above — the offboarding runbook exists to close
+    // it: "revoke all devices" is NOT "this person is out".
   }, 60_000);
 
-  it("row «terminated all access»: tokens, sessions, keys and links die — a fresh login with the same password does not", async (context) => {
+  it("row «terminated all access»: tokens, sessions and links die — a fresh login with the same password does not", async (context) => {
     const setup = requireSetup(context);
     if (!setup) return;
     await registerChatter(setup.app, ["lora-fansly"]);
     const device = await signInDevice(setup.server, "grisha", CHATTER_PASSWORD, "Firefox · Windows");
     const chatterCookie = await loginCookie(setup.server, "grisha", CHATTER_PASSWORD);
     const ownerCookie = await loginCookie(setup.server, "dmitriy", OWNER_PASSWORD);
-    const apiKey = await issueApiKey(setup.server, ownerCookie, "grisha");
 
     // An unused reset link is a credential in waiting, so it belongs in the row.
     const link = await setup.server.inject({
       method: "POST",
-      url: "/api/v1/admin/users/grisha/links",
+      url: `/api/v1/admin/users/by-id/${await fixtureUserId(app!, "grisha")}/links`,
       headers: { cookie: ownerCookie },
       payload: { kind: "password_reset" },
     });
@@ -439,7 +418,7 @@ describe("§7 — the revocation ladder as the person experiences it", () => {
 
     const terminated = await setup.server.inject({
       method: "POST",
-      url: "/api/v1/admin/users/grisha/terminate-access",
+      url: `/api/v1/admin/users/by-id/${await fixtureUserId(app!, "grisha")}/terminate-access`,
       headers: { cookie: ownerCookie },
     });
     expect(terminated.statusCode).toBe(200);
@@ -449,10 +428,6 @@ describe("§7 — the revocation ladder as the person experiences it", () => {
     })).statusCode).toBe(401);
     expect((await get(setup.server, "/api/v1/auth/me", { cookie: chatterCookie })).statusCode)
       .toBe(401);
-    // This is the operation that DOES reach the legacy key.
-    expect((await get(setup.server, "/api/v1/auth/me", {
-      authorization: `Bearer ${apiKey}`,
-    })).statusCode).toBe(401);
 
     // The link is dead for redemption and discloses nothing but its state.
     const redeem = await setup.server.inject({
@@ -489,7 +464,7 @@ describe("§7 — the revocation ladder as the person experiences it", () => {
 
     const link = await setup.server.inject({
       method: "POST",
-      url: "/api/v1/admin/users/grisha/links",
+      url: `/api/v1/admin/users/by-id/${await fixtureUserId(app!, "grisha")}/links`,
       headers: { cookie: ownerCookie },
       payload: { kind: "password_reset" },
     });
@@ -530,7 +505,7 @@ describe("§7 — the revocation ladder as the person experiences it", () => {
 
     const deactivated = await setup.server.inject({
       method: "POST",
-      url: "/api/v1/admin/users/grisha/deactivate",
+      url: `/api/v1/admin/users/by-id/${await fixtureUserId(app!, "grisha")}/deactivate`,
       headers: { cookie: ownerCookie },
     });
     expect(deactivated.statusCode).toBe(200);
@@ -589,7 +564,7 @@ describe("§7 — roles", () => {
     // session: the console stays shut (Р10 — this is why the owner's console
     // account and any account used on a chatter machine stay separate).
     expect((await get(setup.server, "/api/v1/admin/users", bearer)).statusCode).toBe(403);
-    expect((await get(setup.server, "/api/v1/admin/users/lead/links", bearer)).statusCode)
+    expect((await get(setup.server, `/api/v1/admin/users/by-id/${await fixtureUserId(app!, "lead")}/links`, bearer)).statusCode)
       .toBe(403);
     // Nor does a device token open the cabinet: that surface is cookie-only.
     expect((await get(setup.server, "/api/v1/auth/devices", bearer)).statusCode).toBe(403);
@@ -611,7 +586,7 @@ describe("§7 — roles", () => {
     expect((await get(setup.server, "/api/v1/models", { cookie: leadCookie })).statusCode).toBe(200);
     expect((await get(setup.server, "/api/v1/admin/users", { cookie: leadCookie })).statusCode)
       .toBe(403);
-    expect((await get(setup.server, "/api/v1/admin/users/lead/links", { cookie: leadCookie }))
+    expect((await get(setup.server, `/api/v1/admin/users/by-id/${await fixtureUserId(app!, "lead")}/links`, { cookie: leadCookie }))
       .statusCode).toBe(403);
 
     // Clients: exactly the assigned pages, the same rule as for a chatter.
@@ -655,8 +630,9 @@ describe("§7 — roles", () => {
   it("content_manager: cannot sign in anywhere, by either lane", async (context) => {
     const setup = requireSetup(context);
     if (!setup) return;
-    // Not a creatable role through any service — the rows exist historically,
-    // so the fixture writes one the only way it can.
+    // Decision 370 took the role out of the wire enum too; the PG enum value
+    // stays, so a historical row is still expressible — by raw SQL and nothing
+    // else. What the row can do is the point: nothing, on either lane.
     const hash = await argon2.hash(CHATTER_PASSWORD, { type: argon2.argon2id });
     await setup.testDb.pool.query(
       "insert into users (username, role, password_hash) values ($1, 'content_manager', $2)",

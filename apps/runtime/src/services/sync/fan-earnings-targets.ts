@@ -25,6 +25,27 @@ export function fanEarningsTargetLimit(config: AppConfig, pageLabel: string) {
 
 export const FAN_EARNINGS_RECOVERY_MAX_AGE_MS = 24 * 60 * 60_000;
 
+/** Decision 368. Below two days a roster age would never skip anything the
+ * daily cadence has not already re-read, so 1..47 means off — exactly like 0. */
+export const FAN_EARNINGS_ROSTER_MIN_MAX_AGE_HOURS = 48;
+const FAN_EARNINGS_ROSTER_MAX_MAX_AGE_HOURS = 168;
+
+/** The roster skip window, or null when every spender is read every day. */
+export function fanEarningsRosterMaxAgeMs(config: AppConfig): number | null {
+  const hours = config.fanslyFanEarningsRosterMaxAgeHours;
+  return Number.isSafeInteger(hours)
+    && hours! >= FAN_EARNINGS_ROSTER_MIN_MAX_AGE_HOURS
+    && hours! <= FAN_EARNINGS_ROSTER_MAX_MAX_AGE_HOURS
+    ? hours! * 60 * 60_000
+    : null;
+}
+
+/** Coverage debt and age-based target selection must not contradict the
+ * roster: a spender the roster may legitimately skip is not yet due. */
+export function fanEarningsEffectiveMaxAgeMs(config: AppConfig): number {
+  return Math.max(FAN_EARNINGS_RECOVERY_MAX_AGE_MS, fanEarningsRosterMaxAgeMs(config) ?? 0);
+}
+
 export function fanEarningsRecoveryEnabled(config: AppConfig, pageLabel: string) {
   return config.fanslyFanEarningsRecoveryEnabled === true
     && isPageAllowlisted(config.fanslyFanEarningsRecoveryPageAllowlist ?? "", pageLabel)
@@ -49,7 +70,7 @@ export async function runFanEarningsTargetStep(app: AppContext, input: ExecutorR
     return run(db);
   });
   const config = await loadEffectiveConfig(app.db, app.config);
-  const maxAgeMs = fanEarningsRecoveryEnabled(config, page.label) ? FAN_EARNINGS_RECOVERY_MAX_AGE_MS : undefined;
+  const maxAgeMs = fanEarningsRecoveryEnabled(config, page.label) ? fanEarningsEffectiveMaxAgeMs(config) : undefined;
   const claim = await owned(db => claimFanEarningsTarget(db, page.id, new Date(), maxAgeMs));
   if (!claim) return;
   let admitted = false;

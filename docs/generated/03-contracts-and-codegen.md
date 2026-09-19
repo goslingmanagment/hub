@@ -8,6 +8,28 @@
 > `lastClientVersion` and `adminUserSchema` gained `registrationState`.
 > `KERNEL_SDK_VERSION` is 0.2.0 and `scripts/vendor-sdk.mjs` reads the version
 > from the generated meta instead of a literal.
+>
+> **STALE (Decision 370, 2026-09-15):** the API-key lane no longer exists. The
+> `apiKey` contract kind keeps its historical NAME but admits only a device
+> token; `authMethod` is `session | device_token`; the `api_keys` routes,
+> service, repository functions and CLI group are gone, as are the cookie
+> issuance routes and the HTTP create-user/set-password. A bearer matching no
+> lane prefix is refused with no lookup. `must_change_password` is retired (no
+> gate, no 403 `password_change_required`, `mustChangePassword` a deprecated
+> wire constant `false`) and `content_manager` left the wire role enum. The
+> `api_keys` table, the column and the PG enum value all stay as facts.
+
+> **STALE (Decision 356, 2026-09-15):** user administration now addresses immutable
+> IDs through `/admin/users/by-id/:userId`, SDK 0.3 retires username routes,
+> migration 0202 adds permanent account deletion and partial login uniqueness,
+> and Team state/cache ownership follows IDs. See Decision 356 and
+> `docs/runbooks/user-account-deletion.md`; the body predates this change.
+
+> **STALE (Decision 356, 2026-09-15):** user administration now addresses immutable
+> IDs through `/admin/users/by-id/:userId`, SDK 0.3 retires username routes,
+> migration 0202 adds permanent account deletion and partial login uniqueness,
+> and Team state/cache ownership follows IDs. See Decision 356 and
+> `docs/runbooks/user-account-deletion.md`; the body predates this change.
 
 # API contracts, code generation and the SDK boundary
 

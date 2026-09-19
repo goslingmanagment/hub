@@ -117,7 +117,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 113 | Family CI + toolchain | Core ESLint raised to the family standard with its 162-violation backlog burned to zero, `pnpm check` added, pnpm 10.33.1/Node 22/TS 6/vitest 4 pinned family-wide, and a strictness ratchet enforced as `pnpm typecheck` |
 | 114 | Stage 35 documentation close | Maps regenerated in all three repos, client CLAUDE.md files rewritten to post-migration truth, release-hygiene asserts added, orientation drills PASS ×3 — the migration's documentation standard is in force |
 | 115 | Release audits | Codex (gpt-5.5 xhigh) audited three surfaces pre-release: the lint burn-down is behavior-neutral, chunk-budget overshoot and any-platform clientContext fixed; persona apiKey-auth left open, then ACCEPTED AS IS by the owner |
-| 116 | Identity/auth credentials | Humans authenticate with password plus per-device tokens, robots with API keys; chatter password provisioning moves into the live dashboard; must_change_password stays FROZEN; a client key-fallback deletion gate is defined |
+| 116 | Identity/auth credentials | Humans authenticate with password plus per-device tokens, robots with API keys; chatter password provisioning moves into the live dashboard; must_change_password stays FROZEN; a client key-fallback deletion gate is defined. TOMBSTONED by #370: (b) the frozen flag is retired (the field stays on the wire as a deprecated constant `false`) and (c) the api-key lane is deleted outright, robots included |
 | 117 | Dashboard + workboard | #112 REVERSED — the rebuild is CANCELLED and apps/dashboard is the live maintained admin surface (its carry-over features become backlog); the workboard direction is deprecated and Stage 34 stays a banner'd placeholder. PARTIALLY REVERSED by #349: the chatter web surface it left conditional ("unless the owner later orders…") was ordered on 2026-09-15 |
 | 118 | Stage 28 erasure scope | Page-scope erasure also purges the page's config/secret rows (page_credentials, egress_endpoints), which soft delete (#72) deliberately keeps as a two-way door; DP 7 unaffected since these are config, not captured facts |
 | 119 | Stage 34 standalone workboard | #117 clause (2) NARROWED — only the in-core workboard is deprecated; the STANDALONE workboard app is an ACTIVE direction again with kernel sessions, per-page grants, repo ~/code/workboard, Fansly-only v1 |
@@ -349,18 +349,29 @@ appends a row here in the same change (family law: updated-in-change).
 | 349 | Unified chatter account and invite registration | One-time invite/reset links (`account_links`, 0199), case-insensitive logins (0200), one cookie-free password sign-in for both clients, a structured 401 `reason`, three honest revocation operations and `last_client_version`; one password check under `FOR UPDATE` closes the login race; every existing route stays wire-compatible until PR-4. PARTIALLY REVERSES #117 (the owner ordered the chatter cabinet #117 left conditional) |
 | 350 | Вкладка «Команда»: приглашение ссылкой | Человека заводит одна операция и одноразовая ссылка; три операции отзыва названы по тому, что они делают; UI API-ключей для людей удалён, машинное уехало в «Техническое». |
 | 351 | Chatter cabinet `/account` and invitation page `/join` | A chatter's own surface on the hub: an invitation link redeemed into a password, then who-I-am, my devices, my password and my own AI spend. Partially reverses #117 at the owner's order (see 349). |
-| 352 | Unified-account rights matrix | Role × sign-in method × page assignments × device rights × client-local cache is a named, tested artefact (`docs/identity-rights-matrix.md` + `tests/rights-matrix.integration.test.ts`), not an implication of #349: an owner's device token is NOT an owner session, the cabinet is cookie-only, and "revoke all devices" leaves the cookie session and the legacy API key alive — so offboarding is a runbook, with the Fansly session, the 60 s SSE recheck and the desktop's local cache named as boundaries the hub does not control |
+| 352 | Unified-account rights matrix | Role × sign-in method × page assignments × device rights × client-local cache is a named, tested artefact (`docs/identity-rights-matrix.md` + `tests/rights-matrix.integration.test.ts`), not an implication of #349: an owner's device token is NOT an owner session, the cabinet is cookie-only, and "revoke all devices" leaves the cookie session alive — so offboarding is a runbook, with the Fansly session, the 60 s SSE recheck and the desktop's local cache named as boundaries the hub does not control. AMENDED by #370: the legacy API key that also survived "revoke all devices" no longer exists |
 | 353 | Fansly status-only earnings rechecks | Exact pending-to-posted signals still fetch both endpoints; a content revision preserves strict money debt while valid unchanged status rechecks may finish. |
 | 354 | A0 reader discrepancy witnesses | Retain at most twenty verified capture pointers per sweep beside exact pre-apply reader state; preserve counters, legacy unknowns, polling and historical attribution limits. |
+| 355 | Recover an existing team identity | The invite form finds active, invited and disabled logins before creation and offers their existing card. Disabled participants stay visible; restoring access is explicit, preserves identity and grants, and never revives old links or sign-ins. |
+| 356 | Immutable user IDs and permanent account deletion | All account-target admin routes, service writes, dashboard cards/caches and CLI actions use immutable userId. Permanent deletion revokes access, preserves historical identity and frees the login for a new ID; disabled accounts remain restorable. Username routes are retired. |
+| 357 | Account lifecycle concurrency and uncertain deletion | Non-key user locks preserve actor references; an indeterminate deletion refreshes the account list before retiring the old card. |
 | 358 | Fansly purchase-history rejections | A provider answer naming one media as unservable (404/410, now 422 "error getting account media") is a fact about that target: journaled verbatim, consumed, walk continues. Per request namespace, three such rejections must be proven target-local against a completed, provider-served witness before another target is spent; a witness rejected with the streak's status blocks the stream as `purchase_history_rejection_storm`, a different status is no vote, no witness defers instead of blocking. The streak is derived from captures, not stored; after a storm one unblock buys one target of evidence, and a served page retries the storm's members once. |
 | 359 | CI gate reuse by tree fingerprint | A run first hashes every blob the gate can observe (`scripts/ci-gate-fingerprint.sh`: the full tree minus prose no check reads) and looks up an earlier passing Quality Gate for that hash in the Artifacts API; a hit skips the test jobs and passes the gate citing the proving run, main still builds and publishes its image. A fresh pass records `quality-gate-<hash>` (30 days). `pnpm typecheck` runs once per job: `build:production` = typecheck + `build:artifacts`, CI and the Dockerfile call `build:artifacts`. `workflow_dispatch` `full: true` forces every job. |
 | 360 | CI volume rules | Nightly runs only what PRs never run (the whole `tests/api.integration.test.ts`) six days a week and the full one-process suite on Mondays and on dispatch. The integration matrix fails fast on pull requests only. Work-in-progress pushes carry `[skip ci]`; CI runs on the push that is ready for review; failed jobs are re-run, not workflows. |
-| 361 | Safe CI reuse and build cost | Fingerprints ignore only reviewed regular Markdown; a separate DB proof excludes dashboard source/public only. Draft PRs block the gate without heavy jobs; squash defaults omit old commit messages and PR titles reject CI-skip instructions. Docker typechecks by default; CI builds once with Buildx layer cache and two isolated unit workers. Proof uploads tolerate reruns; read-only cost reporting deduplicates carried-over jobs. |
 | 362 | Fansly retained HTTP comparison | Offline comparison binds existing measurement exports to their SHA-256 manifests, selects explicit pages, counts all physical-attempt sources once, and withholds a percentage for unmatched windows, page identities or incomplete run telemetry. Count changes never establish causal savings or reader latency. |
 | 363 | W0 continuity reference comparison | Validate and hash a complete native phase while comparing only its overlap with a bounded browser window; retain independent live gates as unverified. |
 | 364 | Fansly bounded early B1 canary | Owner-approved Lilly-1/message-created trial replaces its seven-day entry wait with durable evidence, a 60-minute expiry and at most ten additional attempts; full polling and broader rollout gates remain. |
-| 365 | Full CI worker imports and latency benchmark | DB workers import only pure context constants and load the production migrator only for partial schemas. Earnings scale correctness keeps all data/assertions; synthetic 100ms WAN delay is retained in the explicit benchmark. File isolation, serial DB files and full reset remain. |
-| 366 | Typed export scheduling clock | Typed-export due selection uses the Node clock already used by task creation, approval and leasing; real-DB skew tests preserve future ready/retry_wait deadlines without sleeps or retries. |
+| 365 | Agent transcript count ceiling | Count the filtered, deduplicated transcript up to the caller's probe threshold plus one; keep delivery's 1500-row ceiling separate so truncated counts cannot claim exactness. |
+| 366 | Fansly events final mode | B0 capture and permanent B1 hints on every Fansly page; bounded dialog polling with a 180-minute certified full on the five deep inboxes; the full-list freshness target follows the accepted interval (interval + one slot) instead of a silent full30 promise; earnings rotation and follower reconcile unchanged. |
+| 367 | A1 stop rule follows the measured A0 rule | An uncertain list marker resets only its page's unchanged streak; timestamp ties and a list shifting down between requests are not signals. The stricter Decision 346 wording (walk-wide invalidation) made live bounded walks full-length on four of five pages. A1 stays at least as strict as A0: its boundary is the certified full's start, A0 used the completion. |
+| 368 | Age-aware Fansly earnings roster | On SHADOW pages only, a live `fanslyFanEarningsRosterMaxAgeHours` lets the daily roster skip a spender whose BOTH earnings endpoints were validly checked inside the window and are neither dirty, failed nor cooling down. 0 (default) reads every spender every day; 1-47 equals 0; 48-168 enables the rotation. Hourly transactions and C2b dirty marks still drive addressed reads; coverage debt and age-based target selection follow the same window, debt anchored to the walk start. |
+| 369 | Fansly earnings window progress and stats freshness | Additive cursor fields replace ignored offset pagination with durable UTC-day window subdivision; the daily sweep precedes history under the unchanged physical-attempt cap. Fresh-window coverage uses a separate scope from historical completeness. |
+| 370 | PR-4: the legacy credential lanes retired | The api-key lane deleted end to end (routes, authenticator, service, repository, CLI group, `authMethod`), the cookie token-issuance routes and the HTTP create-user/set-password deleted, `must_change_password` retired with `mustChangePassword` frozen on the wire as a deprecated `false`, `content_manager` out of the wire role enum. Tombstones #116(b) and #116(c). An unknown bearer prefix authenticates nobody. Tables, column and PG enum survive as facts (DP 7); model-scope grants stay dead until `ACCESS_GRANTS_READ_ENABLED` flips (#70 ritual) |
+| 371 | Deploy image GC on by default | `scripts/deploy-production.sh` garbage-collects superseded candidate/rollback/full-base tags after the health gate on every run (`--no-image-gc` / `DEPLOY_IMAGE_GC=0` opts out); supersedes the default-off of #176/#212. Keep-set unchanged: running containers, release tag, this run's candidate and rollback, the current clean base. 2026-09-18: 22 GB of unpruned deploy images crossed the 90 % disk gauge and closed the OFAPI read gate for the desktop |
+| 372 | Disk alert and OFAPI read gate get separate thresholds | New `DISK_USAGE_GATE_PERCENT` (ops-only env, restart) decides when `ofapi_storage_health_state` flips to breached and interactive OFAPI reads are refused with `storage_unhealthy`; unset it equals `DISK_USAGE_ALERT_PERCENT` (unchanged behaviour), a value below the alert is clamped up to it. The alert text names the gate state. 2026-09-18: with one shared threshold the desktop lost chat reads at the same moment the owner was paged |
+| 373 | Safe CI reuse and build cost | Fingerprints ignore only reviewed regular Markdown; a separate DB proof excludes dashboard source/public only. Draft PRs block the gate without heavy jobs; squash defaults omit old commit messages and PR titles reject CI-skip instructions. Docker typechecks by default; CI builds once with Buildx layer cache and two isolated unit workers. Proof uploads tolerate reruns; read-only cost reporting deduplicates carried-over jobs. |
+| 374 | Full CI worker imports and latency benchmark | DB workers import only pure context constants and load the production migrator only for partial schemas. Earnings scale correctness keeps all data/assertions; synthetic 100ms WAN delay is retained in the explicit benchmark. File isolation, serial DB files and full reset remain. |
+| 375 | Typed export scheduling clock | Typed-export due selection uses the Node clock already used by task creation, approval and leasing; real-DB skew tests preserve future ready/retry_wait deadlines without sleeps or retries. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -11676,6 +11687,21 @@ parser semantics/version. The historical unbound corpus remains retained. Live
 acceptance and the bounded repair of already-pending current receipts are separate
 rollout checks in `docs/runbooks/ofapi-webhook-recovery.md`.
 
+**Production acceptance, 2026-09-08 10:10–10:24 UTC:** after explicit owner
+approval, PR #156 deployed as `a6631a709991` with migration 0171. All runtime roles
+reported the intended revision and remained healthy. A refreshed binding census
+bounded the approved six-kind local replay to 84 pending observations, solely
+pages 8 and 9, through `10:14:00Z`; preview and write completed without errors,
+and the remaining current-page debt was zero. Eight subsequent real receipts
+were already v5 while background sweeps still traversed old unmapped IDs.
+The original failed history scan automatically completed at offset 91 with its
+legacy bounds intact. A later normal free history scan completed 2,248 attempts
+for a closed day, with 553 new inserts; it resumed safely after one provider body
+timeout. All 22 failed delivery attempts in that day had a success with the same
+delivery UUID. No registration/collection-policy change or remote redelivery was
+needed. Evidence and exact scope are recorded in
+`investigations/ofapi-webhooks-prod-acceptance-2026-09-08.md` and the runbook.
+
 
 ## Decision 277: Fansly known-head debt before A0 (2026-09-08)
 
@@ -14598,6 +14624,169 @@ witnesses improve attribution of future discrepancies; they do not prove
 provider deletion, close G6917/G6918, reset the clock or establish A0/A1 GO,
 HTTP savings or event-to-reader latency. See the A0 runbook.
 
+
+## Decision 355: Recover the existing participant instead of recreating them (2026-09-15)
+
+The Team invite form offered no route out of `User "Nikita" already exists`
+after offboarding. The kernel was preserving #126 correctly: disabled users
+keep their identity, history and unique login. The dashboard hid those rows in
+a collapsed section and exposed the raw duplicate-create failure.
+
+Invitation now checks the complete team list with #349's case-insensitive
+login semantics. A match explains whether the participant is disabled,
+waiting for registration, or already active, then offers their existing card.
+The new-person fields are hidden while there is a match; their role/page input
+is never applied to the old person. A failed invite refreshes the list to
+resolve another tab's concurrent creation. Unknown failures stay inline in
+Russian, and a failed list read cannot authorize creation.
+
+«Отключённые участники» is expanded initially. The operation is named
+«Отключить доступ», and its confirmation explains that the login and history
+remain. The disabled participant's card leads with «Восстановить доступ» and
+shows saved pages without offering page/link edits the kernel rejects.
+Restoration is a separate explicit confirmation for the same person, never an
+automatic consequence of entering a duplicate name. It restores the stored
+role and page grants; a different person needs a different login.
+
+The confirmation distinguishes three recovery paths: an existing password
+works again after restoration unless `mustChangePassword` is set; that flag
+requires a password-reset link before signing in to a client. An unregistered
+participant needs a new invitation. Old links and sign-ins stay revoked in all
+cases. A reset is also available for someone who forgot their password. This
+corrects #350's UI copy and the onboarding/offboarding runbooks; it does not
+change #126's lifecycle or the kernel contract.
+
+Regression coverage includes disabled-login detection, visible restoration,
+read-only disabled cards, the existing identity/role/grants surviving a
+rejected duplicate invite, and explicit restoration followed by a fresh
+invitation with the previous link still revoked.
+
+
+## Decision 356: Immutable account addressing and reusable logins (2026-09-15)
+
+The owner explicitly requested the architectural rework and regression checks
+following the Nikita delete/recreate failure. This supersedes #126's permanent
+username reservation and #355's recovery-only answer **for deleted accounts**.
+Disabling stays a separate, reversible action that retains its login and saved
+access. Historical facts still survive; no `users` row or captured business
+fact is hard-deleted.
+
+**Identity is `users.id`.** Username is a case-insensitive sign-in/create/search
+handle, never the address of an existing-account mutation. All twenty existing
+account-target admin operations now use `/admin/users/by-id/:userId/...` and
+numeric `userId` parameters, through the service and transaction boundary.
+The `by-id` segment is mandatory: simply renaming a path parameter would let
+an old numeric login like `42` target an unrelated internal ID 42. Old username
+routes are removed (404), not transparently redirected. API operation names
+are retained; generated SDK 0.3 records the breaking parameter/path change.
+Sign-in, self-service identity and invitation redemption remain wire-compatible.
+
+**Three lifecycle states.** Enabled and disabled rows reserve their normalized
+login. A permanent `deleted_at` tombstone (migration 0202) excludes the row from
+login lookup and normal admin lists, and releases its username by replacing
+both unconditional unique constraints with a partial case-insensitive index
+where `deleted_at IS NULL`. A recreated username always means a newly inserted
+ID. Contrary to #126's old rationale, a new ID need not inherit the old row's
+history; the real hazards were ambiguous username routes and unfiltered lookup.
+
+`deleteUser` locks and revalidates the exact user ID, rejects owner/self removal,
+revokes sessions, API keys, device tokens, pending reservations and account
+links, advances the credential epoch, revokes active page/model grants and
+clears the legacy assignment projection, clears the password, marks deletion
+and records `user.deleted` in one transaction. Grant rows, original username,
+user ID, audit and spend attribution are retained. Deleted accounts cannot be
+restored or receive new access. The migration also prevents changing a user ID
+or restoring a deleted row/password through an accidental generic UPDATE.
+Deleted rows retain `disabled_at` as an additional barrier for older auth code.
+No account is actually deleted from production by preparing this change.
+
+**The lock covers all writers.** Admin credential/grant/link operations and
+lifecycle transitions share the user row lock and check deletion after waiting.
+Password login still finds by current login, verifies the password, then locks
+and revalidates the captured ID/hash/epoch; it never re-resolves a reusable name
+to a different account. Deletion racing a pending operation therefore either
+revokes its earlier committed result or causes that later operation to fail.
+A device/link ID is additionally checked to belong to the targeted user ID.
+
+**The console retains identity through asynchronous work.** Details, return-to
+links, selection and query caches use user ID; delayed request completion keeps
+its original target. A missing/deleted detail cannot silently become the new
+holder of its login. `Отключить доступ` and `Удалить аккаунт` are separate
+confirmed actions. Delete explains the freed login and retained history.
+Owner/current-account deletion is unavailable, with server checks authoritative.
+The invitation form still helps recover an existing non-deleted participant;
+a deleted name can be invited anew with explicitly selected role and pages.
+
+**CLI is not a username bypass.** Existing-account commands require strict
+`--user-id`; listing prints IDs and creation still uses `--username`.
+`user delete --user-id N --confirm-user-id N` makes the permanent target
+reviewable. Old username-based management scripts fail rather than operating
+on a replacement person. Attribution selectors also take immutable IDs:
+`ai:feature-smoke` and `agent hydration decide` use `--as-user-id`;
+`erasure:run` uses `--initiated-by-user-id`, with active-state and role checks.
+
+**Compatibility and release.** Dashboard and generated SDK ship with the new
+API. The extension, desktop and workboard do not consume these admin operations;
+their login/self-device paths are unchanged. After deletion/reuse, old binaries
+with unfiltered username lookup are unsafe rollback targets: fix forward and
+retain the ID routes/partial uniqueness. See
+[the deletion runbook](runbooks/user-account-deletion.md).
+
+**Regression contract.** Tests must retain original IDs across delete/recreate,
+check every old credential/link and old-ID action, ensure normalized uniqueness
+and numeric-login legacy refusal, protect owner/self, prove grant/spend/audit
+separation and concurrent deletion/issuance behavior, and preserve ordinary
+disabling/restoration. Dashboard tests cover exact-ID caches and stale cards.
+**Validation (2026-09-15).** `pnpm contracts:generate` and `pnpm check` passed:
+349 unit suites, 4118 passing tests and 9 existing skips, ESLint and dashboard
+build. The strictness ratchet passed with 1893 pre-existing errors in 120 files
+and no new error debt; this is not a clean standalone root `tsc` claim.
+All 29 affected PostgreSQL/schema suites passed: 577 tests, zero skips, missing
+prerequisites forbidden. The new lifecycle suite covers ten ordered lock races
+(nine deletion races plus self-password change across disable/restore), rollback
+on failed audit, reused login isolation and legacy-route refusal. Browser QA of
+the actual dashboard with a disposable local HTTP fixture verified cancel,
+confirm/delete, same-login recreation and the unavailable old card. Production
+was not changed; local verification is not a release claim.
+
+## Decision 357: Account lifecycle lock compatibility and uncertain deletion recovery (2026-09-15)
+
+**Context.** Adversarial review of Decision 356 reproduced two reliability
+defects in local revision `ed4469c1`: cross-user grant/audit foreign keys could
+deadlock, and a lost DELETE response left the deleted account cached.
+
+**Lock compatibility.** The shared identity lock uses `FOR NO KEY UPDATE`.
+Identity IDs never change, so concurrent audit/grant foreign keys may safely
+take `KEY SHARE` on the actor. `FOR UPDATE` creates a cross-user wait cycle
+when two owners grant access to each other; real PostgreSQL reproduced
+`40P01`. The replacement lock still serializes lifecycle/credential/grant
+writers. All deletion, hash, epoch and session rechecks remain required.
+
+**Uncertain deletion.** An unsuccessful delete response refreshes the current
+user list, because the server may have committed before the connection failed.
+Only a confirmed-absent immutable ID loses its private caches. Failed refresh
+retains cached state and an error; a replacement account is never removed.
+The confirmation reports uncertainty in plain language without SDK route names.
+
+**Regression evidence.** Real QueryObserver tests exercise lost response,
+stale-target 404, uncommitted failure and failed reconciliation. PostgreSQL
+tests synchronize two owner grants before their FK checks and verify both
+commit; existing deletion/login/device races keep their coverage. A populated
+0200-to-0201 migration test (0202 after release renumbering) preserves users/passwords/sessions, retains disabled
+login reservations, allows a new ID to reuse a deleted login and rejects
+tombstone restoration/renaming. Browser QA uses actual dashboard components
+with disposable mock data and a deliberately severed DELETE response.
+The baseline security scan is sealed separately from its follow-up fixes.
+No production state or installed clients were changed.
+
+**Validation.** Full `pnpm check` passed: 349 unit suites, 4123 tests passed
+and 9 existing skips, ESLint and dashboard build. Strictness ratchet remains
+at 1893 accepted pre-existing errors in 120 files, with no added debt.
+All 31 affected PostgreSQL/schema suites passed: 586 tests, zero skips under
+`ALLOW_MISSING_TEST_PREREQUISITES=0`. Independent follow-up reviews of backend
+and UI found no new issues. Local evidence is retained under
+`output/adversarial-review/`; the output directory is not release content.
+
 ## Decision 358: A purchase-history rejection is a fact about the target, proven per namespace by a served witness (2026-09-16)
 
 **Incident.** ari-1's `purchase_history` stream was blocked from 2026-09-02 to
@@ -14893,87 +15082,6 @@ one spies on `globalThis`, eight use fake timers; a per-file
 At post-359 volume the whole lever is ~15 % of a full run, not worth a gate
 that can go red by file order.
 
-## Decision 361: CI reuse preserves the checks it claims to replace (2026-09-16)
-
-**Why.** The follow-up to Decisions 359–360 verified two proof-only PR runs at
-2 rounded runner-minutes and two main builds/publications at 7, against 43–46
-for a fresh full gate. It also reproduced three defects: the fingerprint
-excluded executable evidence that ESLint checks; direct full Docker deploys
-had lost the backend typecheck; and squash defaults copied historical WIP
-skip instructions onto main. These corrections supersede the affected claims
-in 359–360; the historical entries remain unchanged.
-
-**Proof boundaries.** `ci-gate-fingerprint.sh` ignores only regular,
-non-executable `.md` files in the previously reviewed prose locations. Code,
-data, unknown paths, symlinks and executable files remain inputs, including
-those under `investigations/`, `.claude/` and `.agentic/`. A behavioral test
-adds evidence that ESLint rejects and proves that its fingerprint changes.
-
-The second `integration` fingerprint omits only regular files under
-`apps/dashboard/src/` and `apps/dashboard/public/`. Dashboard manifests,
-configuration and index.html, lockfiles, all tests/helpers, scripts, shared
-packages and every unknown path remain hashed. A source-boundary ratchet
-rejects backend or integration/helper imports and reads of those omitted
-paths, including common composed path expressions. This is deliberately a
-narrow graph boundary, not a universal dynamic-dependency solver. Static
-checks, all unit tests and the production image still run after frontend
-source changes. Any deliberate new cross-boundary dependency must restore
-its inputs to the DB fingerprint before it can pass that ratchet.
-
-The lookup validates the exact artifact name, expiry, repository identity,
-and a completed successful producer running this CI workflow. Lookup errors
-mean a full check, never a skip. Manual `full: true` bypasses both proofs.
-Quality Gate validates the fingerprint job result; main additionally requires
-successful static/image checks. Failures, cancellation, drafts and unexplained
-skips cannot produce a green gate. A new DB proof is uploaded only when DB
-jobs actually succeeded; a fresh full proof can combine fresh static checks
-with an independently proven DB tree. Both proof uploads use `overwrite`
-so rerun-all and partial upload failures do not collide with an earlier
-attempt of the same run. The checked runtime image retains its per-attempt
-artifact name, identity verification and isolated publishing token.
-
-**WIP and merge.** Keep unfinished PRs in Draft. Heavy jobs wait for Ready for
-review; draft Quality Gate intentionally fails, and the `ready_for_review`
-event runs the checks. Returning to draft cancels a superseded PR run. Agents
-must not use skip instructions in commit messages or PR metadata. Repository
-squash defaults are `PR_TITLE` + `BLANK` (applied and read back via the API), so earlier WIP commit messages
-cannot silently suppress the main push. CI rejects skip instructions in PR
-titles, including edits after an earlier successful head. A body-only edited
-event uses a separate concurrency group and a different, non-required check
-name; it neither cancels real CI nor overwrites Quality Gate with skipped
-success. Title/base edits remain real gate events.
-
-**Build.** Direct Docker builds and full/auto deploys typecheck by default.
-Only CI explicitly sets `CI_TYPECHECK_ALREADY_PASSED=true` after its host
-check or matching full-tree proof; invalid values fail. Docker builds the
-production output once; the duplicated host build is removed. Unit tests
-were exercised from a clean checkout without host dist. Buildx loads the
-actual linux/amd64 image for both existing smoke tests and image-ID checks;
-`context: .` preserves preceding generator/metadata checks. GHA layer cache
-persists across runners, `pull: true` refreshes the base, and cache-export
-failure does not excuse a failed build or smoke. Build/test jobs gain no
-registry-write credentials. Cache mounts are not claimed to persist through
-GHA layer export.
-
-**Test execution and accounting.** The CI unit job uses two workers while
-retaining per-file isolation. Vitest 4 defaults to `CPUs - 1`, leaving only
-one worker on the private 2-vCPU runner. Local Node 22 measurements on the
-same machine were about 195s at one worker and 100s at two, with all tests
-passing; this is not a promise of the same percentage on GitHub. Integration
-file parallelism and the weekly/full API coverage policy are unchanged.
-
-`pnpm ci:cost --days 7 --limit 100` reads completed runs and every attempt,
-reports rounded runner-minutes by run/job, and marks a truncated sample. A
-rerun-failed-jobs API response copies old successful jobs with new IDs; the
-report deduplicates their name/start/end timestamps instead of billing them
-twice. A metadata-only run is not counted as proof reuse. This is an estimate,
-not the billing ledger, and creates no additional paid workflow.
-
-**Validation record.** Implementation and independent review evidence is
-recorded in `docs/reports/ci-cost-safe-followups-2026-09-16.md`. Hosted cache,
-event handling and savings require actual runs of this revision; local
-policy tests alone do not certify GitHub orchestration. Production deployment
-is outside this change.
 ## Decision 362: Compare retained Fansly HTTP measurements without inferring savings (2026-09-16)
 
 T0 already exports physical sync HTTP-attempt aggregates and overlapping-run
@@ -15079,7 +15187,503 @@ response after expiry, event-only refusal with ordinary-polling recovery, and
 rolling-attempt custody after a policy edit. See
 [`fansly-ws-hints.md`](runbooks/fansly-ws-hints.md#bounded-early-canary-decision-364).
 
-## Decision 365: Remove unused worker setup imports and make synthetic latency explicit (2026-09-16)
+## Decision 365: Separate transcript count and delivery ceilings (2026-09-17)
+
+The A0 reader investigation recorded a count defect outside its missing-head
+diagnosis. PostgreSQL regression tests now reproduce it: populations of 1501,
+5001 and 5002 matching messages all returned `{value:1500, exact:true}` because
+the count reused the transcript delivery builder's 1500-row ceiling.
+
+The shared SQL builder receives the caller's row bound explicitly. Delivery and
+its EXPLAIN seam retain the 1500-row maximum. Counting keeps the same source
+precedence, tombstones, deduplication, window and filters, clears the delivery
+cursor, and probes `probeMax + 1` rows. At the runtime threshold of 5001, a count
+through 5001 is exact; 5002 means at least 5002 and is marked `exact:false`.
+Existing read timeouts and response contracts remain unchanged.
+
+Boundary tests cover 1500, 1501, 5001, 5002 and 7000 matching messages, duplicate
+source rows, a smaller probe threshold, an empty filtered population, and the
+unchanged delivery ceiling. Existing reader tests retain source/window/tombstone
+and cursor coverage. This does not explain A0's missing advertised head or its
+historical unknowns, change polling, or establish Fansly migration acceptance.
+
+## Decision 366: Fansly events final mode — events on every page, 180-minute certified full (2026-09-17)
+
+The owner asked to finish the polling-to-events migration wherever possible and
+authorized the deployments and console flips (2026-09-17). The September 7 plan
+left one product choice open: keep the full30 freshness promise and accept that
+request volume barely moves, or accept rarer full walks. Codex asked; no answer
+came. This decision makes that choice explicit and reversible instead of leaving
+full polling running under a finished-looking event pipeline.
+
+**Evidence (seven A0 days, 2026-09-10 22:58 to 2026-09-17 15:37 UTC, complete
+sweeps).** Below-stop changes per page: lilly-1 17, lilly-2 27, lora-1 23 plus
+one mass head clearing (G4830, 2,364 pointers to null on list pages 50-77),
+lora-2 7, lora-3 2, ari-1 none because a four-page inbox never stops early. Not
+one involved a new message, so WS `message_created` covers none of them, but the
+categories matter: sixteen were `conversation_flags`, a column no Hub route, UI,
+prompt or agent response reads; most of the rest were `message_sync_excluded_reason`,
+a Hub-internal classification. The load-bearing quiet columns (`unread_count`,
+`is_visible`, `last_message_id`) moved 21, 0 and 2,364 times fleet-wide, the last
+inside the single G4830 sweep. The WS protocol carries new messages (5/1),
+deletions (5/10, journaled as mutation debt), conversation creation (4/8),
+membership (4/6, 4/7) and the creator's own hide (4/9); it carries no flags, no
+edits and no unread counters as numbers, and has no sequence or replay, so a
+periodic full REST walk stays the independent detector. Production on
+2026-09-16 UTC made 33,812 physical sync attempts, 16,176 of them the
+`dm_conversations` full walks (48 slots × 4-142 list pages per page).
+
+**Decision.**
+
+1. B0 capture runs on all six Fansly pages. B1 hints run permanently (no
+   `expiresAt`) on all six for `message_created` and `group_created`, each policy
+   pinned to the page's current generation with its 2026-09-16 attempt count as
+   baseline. The pin stays: a session or proxy rotation stops hints for that page
+   until the policy is re-pinned (runbook step). That is a latency regression to
+   the bounded walk's 30 minutes, not a data loss.
+2. A1 bounded dialog polling runs on lilly-1, lilly-2, lora-1, lora-2 and lora-3
+   with `fullIntervalMinutes: 180`; ari-1 keeps full30 because it has nothing to
+   save. Accepted staleness: quiet-state changes below the stop (unread,
+   visibility and membership, deleted heads, tier, exclusion reason, flags) are
+   detected by the next certified full within 210 minutes instead of 60. New
+   messages and conversations reach Hub through hints within about a minute on a
+   healthy socket and through the bounded walk within 30 minutes regardless.
+3. The full-list freshness target follows the accepted interval:
+   `(fullIntervalMinutes + 30) × 60` seconds, so full30 keeps 3,600 and 180 gives
+   12,600. Detailed status and the lightweight summary read the live A1 policy
+   per page. This amends Decision 346 and the A1 runbook's "do not silently
+   raise" rule: the target is raised explicitly, by the same per-page policy that
+   lengthens the interval, and falls back on its own when A1 is disabled. Only a
+   certified A1 proof earns the longer target; a legacy full cursor keeps 3,600.
+   `/health/sync` holds no target of its own but inherits this one through the
+   snapshot's `delayed` state (`stalled_streams`): without this rule a 180-minute
+   page would have shown the deploy gate degraded for most of every interval.
+   Known limitation: the read paths derive the target from config alone, while
+   the executor falls back to full-every-slot on a cadence or slot-offset
+   mismatch; that abnormal configuration reads leniently, never strictly.
+4. C1 settlement reuse is allowed on all Fansly pages: the same certified-walk
+   reuse as the Lora-2 canary, zero freshness cost.
+5. Unchanged: the daily fan-earnings roster (an age-aware roster needs code and
+   its own acceptance; the Lilly-1 shadow found zero changes and zero quiet
+   corrections in 705 rotation checks), follower anomaly reconciles (about 3,100
+   attempts per day fleet-wide; a cooldown is a separate design), history
+   backfill, and B2 direct DM writes.
+
+**Expected and measured.** Modelled savings from step 2 alone are about 11,000
+attempts per day (roughly a third of the 2026-09-16 baseline); the ≥50 % goal is
+not claimed. The comparable measurement is one full UTC day through
+`fansly_events_measurement_report` after all flips, against 2026-09-16.
+
+**Rollback.** Disable A1 or remove a page from its allowlist: the next chunk
+abandons the bounded cursor and opens a fresh full at offset zero. The freshness
+target returns to 3,600 seconds on the very next status read, so a page whose
+last certified full is older than an hour shows `delayed` until that fresh full
+completes; this is expected, not a regression. Disable B1 through its flag, B0
+through its allowlist. No data is deleted by any rollback.
+
+## Decision 367: The A1 stop rule follows the rule the A0 shadow measured (2026-09-17)
+
+Fifty minutes after Decision 366 enabled bounded polling, the retained list
+captures showed the bounded walks still reading almost every page: lilly-1
+35 of 35, lora-1 at least 58 of 78, lora-3 at least 28 of 33, lora-2 20 of 42,
+while the A0 shadow's virtual stop on the same inboxes sat at page 3 to 10.
+The cause is a difference between the two stop rules. A0 (`advanceDmShadow`)
+treats an uncertain marker (list `lastMessageId` without a matching embedded
+message, or no usable timestamp) as "this page is not unchanged" and ignores
+timestamp ties. A1 (`advanceDmBoundedStop`, Decision 346) treated an uncertain
+marker as walk-wide invalidation and a tie as a page reset. Production lists
+carry thousands of both per sweep (lilly-1: 1,387 uncertain markers and 447
+adjacent ties per 35-page sweep; lora-1: 3,076 and 2,278 per 78 pages), so the
+stricter rule could never accumulate three clean pages.
+
+A1 now applies the A0 rule: a page counts as unchanged only when every item is
+unchanged across the full head-diff scope, carries a valid marker and sits
+strictly older than the last certified full's start minus 60 seconds; an
+uncertain marker resets the streak for that page only; ties are not a signal;
+neither is a head newer than the previous page's last one, which only means the
+list shifted down between two requests, so that head sits above the walked
+offset and is read by the next walk's first page and by B1 hints. The order
+rule that Decision 346 added on top of A0 would have fired on every busy inbox
+for the same reason and has been removed; a cursor an older binary already
+invalidated stays invalidated. Everything else in Decision 346 stands: no
+membership stamping, no hiding, no full success from a bounded completion,
+chunk caps and resume.
+
+The seven-day A0 evidence in Decision 366 (no below-stop change carrying a new
+message) was collected under a rule A1 is now at least as strict as: A0's
+boundary was the previous full's completion, A1 uses its start. The residual
+class both rules share stays as accepted there: a non-message change on the
+conversation sitting at a page seam while a conversation above it disappears
+between the two requests waits for the next certified full. Unit tests pin the
+tie, shift and marker cases; the integration suite pins flags-only resets and
+the three-page stop.
+
+## Decision 368: Age-aware Fansly earnings roster (2026-09-17)
+
+Every daily Fansly `fan_earnings` walk re-read EVERY spender: two HTTP calls per
+fan (lifetime stats + monthly stats), 5,784 attempts per day fleet-wide. The
+Lilly-1 shadow measured what those re-reads find: **0 content changes in 705
+rotation checks**. The changes that do happen arrive through the transaction
+stream, which is read hourly and marks the affected fan dirty (C2b), and through
+the addressed C2c lane that reads those dirty endpoints. The roster's own value
+is the quiet case: a Fansly-side correction that never produces a transaction.
+
+The owner approved a 48-hour rotation — the separate owner decision on max-age
+that the C2c gate in `docs/runbooks/fansly-earnings-shadow.md` required. A new
+live config key, `fanslyFanEarningsRosterMaxAgeHours` (env
+`FANSLY_FAN_EARNINGS_ROSTER_MAX_AGE_HOURS`, integer 0-168, default 0), lets the
+daily walk skip a spender WITHOUT any HTTP when the page is in
+`fanslyFanEarningsShadowPageAllowlist` and **both** of its earnings planes
+(`fan_earnings_lifetime` and `fan_earnings_monthly`) satisfy all of:
+
+- a VALID check (`last_checked_at`, written only for an observed receipt with an
+  observation id and a fingerprint) newer than `now - hours`;
+- not dirty — `requested_revision <= applied_revision`;
+- not mid-claim and last receipt `observed` — the same conditions
+  `countFanEarningsRecoveryDebt` already treats as coverage debt, so a skip can
+  never manufacture debt;
+- not inside a cooldown — `retry_after_at` is null or already past.
+
+A missing plane row is never fresh. Therefore **dirty, failed, rejected,
+half-covered, cooling-down and never-checked fans are always read** — the
+rotation only stops re-reading endpoints that were confirmed intact recently.
+
+**The shadow allowlist is load-bearing, not an implementation detail.** Only a
+shadow page writes its transactions through
+`upsertFanslyTransactionWithEarningsDirty`, which is the sole writer that bumps
+`requested_revision` on the earnings planes. Receipts, however, are also written
+on recovery and target pages. A page with receipts but without the shadow write
+path would accumulate `observed` rows, start being skipped, and a NEW
+transaction would never dirty the fan — nothing would re-read it until the
+window expired. Both walks therefore gate the skip on the shadow allowlist, so
+the signal that can interrupt a skip always exists wherever a skip can happen.
+Values 1-47 are treated as 0 (off): the daily cadence already re-reads inside
+24 hours, so a shorter window could not skip anything and would only add a
+query. The default 0 keeps today's behavior byte-identical.
+
+A skip is a success, not a rejection: it advances both the in-memory and the
+persisted cursor, so the A43 contiguous-prefix rule (Decision #133) is
+preserved — a rejection after skipped fans still persists exactly the prefix it
+did before, and the skipped fans are counted in a new `fansFresh` stat next to
+`fansFetched`. Cadence, scheduler, budgets, checkpoints and contracts are
+unchanged, and there is no schema migration: the freshness read is one SQL
+statement over the existing `subject_refresh_state` rows.
+
+A multi-chunk recovery walk can outlive the window it skipped under: a fan
+skipped at age N minus a minute crosses N before the walk's last chunk lands, and
+a debt count taken at completion would report it as unconfirmed coverage and
+raise a false `fan_earnings_unconfirmed_coverage` hold. The recovery walk
+therefore persists `walkStartedAt` in its checkpoint state and counts debt as of
+that instant: every fan read during the walk was checked at or after it, and
+every skipped fan was inside the window at that moment. Dirty, failed and
+claimed rows remain debt regardless of which instant is used.
+
+Two other consumers follow the same window through
+`fanEarningsEffectiveMaxAgeMs(config) = max(24h, rosterMaxAge)`: the recovery
+walk's completion debt count (so a fan the roster legitimately skipped is not
+reported as `fan_earnings_unconfirmed_coverage`) and the age-based selection in
+`claimFanEarningsTarget` (so the additive C2c lane does not re-read inside the
+roster age either). Dirty-driven target selection keeps its existing gates.
+
+What changes operationally: a quiet Fansly-side correction on an undisturbed
+spender is now seen within N hours PLUS one daily cadence rather than within a
+day — a walk landing when the fan is a minute short of N skips it, and the next
+walk is a day later, so the practical bound at 48 hours is about 72 hours. At 48
+hours the roster load roughly halves or better once receipts exist. The skip
+needs the page in `fanslyFanEarningsShadowPageAllowlist` (currently all six
+Fansly pages) and receipts to read, so savings start on the SECOND daily walk
+after receipts appear. Rollback is setting the key back to 0 — the next walk reads
+every spender again, no data is deleted and no state needs repair.
+
+
+## Decision 369: Fansly earnings windows prove progress; freshness precedes history (2026-09-18)
+
+The production `stats_snapshot` lane on lora-3 captured 50 identical earnings
+bodies on September 17–18. The latest retained body (observation 2642525) has
+exactly 100 rows. Both backfill and steady code assumed `/earnings/stats`
+implemented offset pagination; their repeat guard compared offsets that the
+client itself increased, so it could never detect the repeated body. Backfill
+ran exclusively before the daily sweep, turning this into a freshness outage.
+The money transaction stream is independent; the UI reconciliation found no
+transaction-total discrepancy after excluding payout reversals.
+
+One provider-specific helper now walks a fixed root window. A full response is
+journaled, then split at UTC business-day boundaries; all revenue types for one
+date stay together. A short leaf advances to the next saved leaf. Requests start
+at UTC midnight; the older child's upper bound is the preceding day's last
+millisecond. This follows the observed business-day buckets rather than assuming
+that provider timestamps behave as exclusive row cursors. No offset is sent. An unsplittable full business day or a
+response outside the requested bounds terminates with partial-provider coverage
+and an anomaly, never a claim of exhaustion. Malformed bodies are journaled but
+cannot move the cursor. The root's nonempty evidence survives subdivisions, so
+the historical two-empty-window/probe/bookmark rule keeps its original unit.
+
+The v2 cursor gains pending windows and fixed sweep bounds across chunks and UTC
+rollover. Its envelope version stays v2 so a rollback can still read the attempt
+counter and completed history; old code may re-read a root but cannot mistake
+an unknown version for a new page and reset the budget. Legacy offsets are discarded; the unfinished root is recaptured while
+completed lanes, probe bookmarks, unrelated sweep progress and callsToday remain
+intact. No SQL reset or schema migration is required.
+
+Today's regular sweep runs before historical work, including on first enable.
+History spends only the remaining existing per-page physical-attempt budget and
+resumes durably. Successful fresh-window coverage and fresh-window failures use
+scopeRef=steady, keeping historical coverage at the existing empty scope. A
+successful recent window therefore cannot erase a partial historical claim.
+Transport, egress/proxy ownership, retry ceilings, capture-first persistence,
+canonicalization and projection natural keys are unchanged.
+
+
+The independent regression review additionally caught an inclusive-midnight
+checkpoint (after == before), which must remain parseable, and the dashboard's
+old all-scopes coverage rule. The stats verdict now composes historical and
+steady scopes only when their successfully captured windows overlap, and can
+judge a recent selection solely from the fresh window. Other multi-subject
+planes keep their all-scopes requirement. Snapshot scopes explicitly replace
+their bounds on each completed sweep: a min/max union across a downtime gap
+would invent coverage. Historical scopes keep their original monotone bounds.
+## Decision 370: PR-4 — the API-key lane, cookie token issuance and `must_change_password` are retired (2026-09-15)
+
+#349 gave the clients one sign-in and left every old door standing so the fleet
+could cross on its own schedule. This is the demolition, and it is the last PR
+of the unified-account track. Nothing here is new behaviour: it is the removal
+of behaviour that no longer had a caller — which is exactly why it had to be a
+PR with gates rather than a cleanup commit.
+
+**The api-key lane is gone in one cut, people and robots alike (Р8, owner's
+decision 2026-09-15).** Deleted: `adminListApiKeys` / `adminIssueApiKey` /
+`adminRevokeApiKeys`, `authenticateApiKeyToken`, `roleCanUseApiKey`,
+`issueChatterApiKey` / `revokeUserApiKeys` / `listApiKeysForUsers`, every
+`api_keys` repository function, the `apikey` CLI group, `apiKeyItemSchema` /
+`issuedApiKeyResponseSchema`, `apiKeyStatus` on the admin user, the api-key
+columns of the adoption report and the `apiKeys` counter of
+`adminTerminateAllAccess`. `authMethod` is now `session | device_token`. This
+reverses the tail of #116(c) ("Issue Key survives — for automation"): production
+had no robot on a key at all — the keys that existed belonged to deactivated
+test users and to one owner account.
+
+**The most load-bearing deletion is a branch nobody would call a feature.** The
+bearer dispatcher used to END in the api-key lane: device-token prefix, agent-key
+prefix, and then *everything else* fell through to a digest lookup in `api_keys`.
+So every unrecognized string — a typo, a stale credential, a probe — cost a
+database read and sat one live row away from a principal. Now an unmatched prefix
+is nobody: no lookup, no reason, no oracle. The pin for it is not a mock but a
+live `api_keys` row inserted by hand and refused
+(`tests/agent-key-authentication.integration.test.ts`).
+
+**A device is signed in by password, and only by password.** `authIssueDeviceToken`
+and `authReserveDeviceToken` (cookie session) and `adminIssueDeviceToken` (the
+owner minting a bearer on someone's behalf) are gone with their services. What
+remains is `issueDeviceTokenWithPassword` in `active` or `pending` mode — the §4.3
+core that re-reads the password hash, the tombstone and the epoch under the user
+lock. The "session revalidated after the lock" race cases moved onto that core:
+the class of bug they guarded — a cookie minting a bearer — no longer exists.
+
+**`must_change_password` is retired, and the FIELD is not (tombstone of
+#116(b)).** The route allowlist in `server.ts`, the 403 `password_change_required`
+branch and every write of the column are deleted; nothing reads it. But
+`mustChangePassword` stays in `authUserSchema` **forever**, as a deprecated
+constant `false`: the vendored SDKs in both clients declare it required, and
+`$strip` tolerates an extra field but never a missing one — removing it would
+turn `/auth/me` into `response_validation_failed` on every install that has not
+re-vendored, which the extension would show as "hub unavailable". The column
+stays too (migrations are forward-only). A hand-set row is simply ignored, and
+that is pinned.
+
+**Creating a person is not an HTTP shape any more.** `adminCreateUser` and
+`adminSetPassword` are deleted: an owner account is minted by `hub user add` on
+the box, and everyone else is invited — and reset — by link. The CLI
+`user set-password` now runs the SAME primitive the link redemption runs
+(`terminateAccessTx`), because until this PR it left device tokens alive: "I
+reset his password" was a false statement about a laptop still holding a live
+token.
+
+**`content_manager` left the wire role enum**; the PG enum value stays. A
+historical row is therefore expressible only by raw SQL, and the admin user list
+fails closed on one rather than publishing a role no client can parse — pinned,
+because the merge gate for this PR was "zero such rows in production".
+
+**What survives, deliberately.** The `api_keys` table with every row in it, the
+`must_change_password` column, the PG role enum value: facts are never deleted
+(DP 7), and no `delete from` was added. The policy kind is still called `apiKey`
+even though the only credential it admits is a device token — renaming it touches
+hundreds of declarations and buys nothing but tidiness (§12), so the name is
+documented as historical instead. The duplicate in-handler guards from #143 stay
+where they are. And model-scope grants remain DEAD in production until
+`ACCESS_GRANTS_READ_ENABLED` is flipped under the #70 staged-flag ritual — that
+flip is not part of this track.
+
+**Merge gates (the owner verifies before merging, not the executor).** Every
+active device token reporting `last_client_version` ≥ 2.4.0 (extension) or
+≥ 0.1.55 (desktop), Mac installs included; zero rows with
+`must_change_password`; zero rows with role `content_manager`. The orphan
+cleanup — deactivate `probe-ops`, drop the #22 grants, check user #4 — is
+production data, not code, and rides in the PR body as an owner checklist.
+
+Plan: `investigations/unified-account-2026-09-15/PLAN.md` §10.
+
+## Decision 371: Deploy image GC is on by default (2026-09-18)
+
+**Context.** #176 (2026-07-20) made image/tag deletion an explicit owner
+action and #212 (G1) added an allowlist image GC to the deploy script that
+therefore ran only with `--image-gc`. Since then the deploy cadence became
+several runs a day from several sessions, each minting a `-candidate-` and a
+`-rollback-` tag, and every dependency-checksum change a 1.4 GB
+`-full-<checksum>` clean base. Nobody passed `--image-gc`. Between the
+2026-08-26 disk audit and 2026-09-18 the runtime image store grew from 42 tags
+/ 5.9 GB to 94 tags / 28.2 GB (7 distinct clean bases, 142 superseded tags)
+while the database shrank by 18 GB under the G5 rewrites: the savings were
+eaten one for one. On the night of 2026-09-18 the disk crossed
+`DISK_USAGE_ALERT_PERCENT=90` between the 00:15 and 01:15 UTC gauges (two
+dist-only deploys at 00:44 and 00:56 UTC tipped it), the worker persisted
+`ofapi_storage_health_state.breached = true`, and every interactive OFAPI
+read — chat lists and history for the OnlyFans desktop — was refused with
+`storage_unhealthy` (503) for the rest of the shift while sends and webhook
+events kept flowing. The desktop showed OFFLINE and blamed the chatter's
+internet.
+
+**Decision.** The deploy script's post-health-gate image GC runs on every
+deploy (`IMAGE_GC_ENABLED=1`); `--no-image-gc`, `DEPLOY_IMAGE_GC=0` or
+`DEPLOY_SKIP_IMAGE_GC=1` opt out for one run. The sweep now also removes
+superseded `-full-<checksum>` clean-base tags. The keep-set is unchanged:
+images of running compose containers, the release tag, this run's candidate
+and rollback tags, and the current clean base — so exactly one rollback path
+survives every deploy, and the GC still aborts on a degraded keep-set (fewer
+than two resolved ids) instead of guessing. A rollback image keeps its own
+base layers alive by reference, so dropping an old base TAG never breaks a
+rollback; a later dist-only deploy from an older dependency checksum is
+refused as before and needs a full build.
+
+**Not changed here.** The storage-health admission gate keeps failing closed
+at the same threshold as the disk alert; decoupling the two (an earlier alert,
+a later gate) and trimming `ops_metric_samples` below 90 days are separate
+follow-ups. The August `observations` rewrite (runbook
+`docs/runbooks/capture-historical-rewrite.md`) remains an owner-run ritual.
+Images of other projects on the same VPS (taskindex, built by its own deploy
+bot) are outside this script.
+
+**Manual cleanup on 2026-09-18 (owner-approved, by hand, not by this
+script):** 142 superseded runtime tags and 18 old taskindex tags removed,
+builder cache older than 24 h pruned; disk 93 % → 65 %.
+## Decision 372: The disk alert and the OFAPI read gate get separate thresholds (2026-09-18)
+
+**Context.** The worker's hourly disk check (#212 G1, `db-disk-alert.ts`)
+does two things from one number: it pages the owner when usage crosses
+`DISK_USAGE_ALERT_PERCENT`, and it persists `ofapi_storage_health_state`,
+which `reserveOfapiRequestAttempt` reads with `requireFreshStorageHealth` to
+admit or refuse every OFAPI interactive read, capture job and collection read
+(`storage_unhealthy`, 503). Both used the same threshold. On 2026-09-18 the
+disk crossed 90 % at night (Decision 371 has the cause); the page went out and,
+in the same pass, the OnlyFans desktop lost chat lists and history for the
+rest of the shift, showing OFFLINE and blaming the chatter's internet. The
+gate is right to exist (the reads journal bodies into the fact tables; a full
+disk takes Postgres down), but a gate that closes at the first warning gives
+the owner zero lead time and costs a whole shift of chatting for the ~0.2 GB
+a day those reads add.
+
+**Decision.** `DISK_USAGE_GATE_PERCENT` (ops-only env, `editability: never`,
+restart to apply, 1–100) is the percentage at which the health row flips to
+breached. Unset, it equals the alert percent, so an unconfigured host keeps
+the pre-372 coupling. A value below the alert percent is clamped up to it: a
+gate that closes before anyone is paged would silence chatters without a
+warning. The alert text names the gate state ("OFAPI reads still admitted
+(gate 95%)" / "OFAPI reads refused (gate 95%)") whenever the two differ, so
+the Telegram page says whether the desktop is already affected. The check's
+result carries `gatePercent` and `gateBreached` for the worker log.
+
+**Recommended production values** (owner sets them in `.env.production`,
+deploy applies): alert 85, gate 95. On the 80 GB VPS that is roughly 12 GB of
+lead between the page and the reads stopping, about three weeks at the
+current ~0.55 GB/day database growth.
+
+**Not changed.** The gate's freshness rule (a row older than two hours is
+unhealthy), the runway latches, the gauges, and the deleters. The desktop's
+OFFLINE copy still blames the network; a typed "hub maintenance" answer for
+`storage_unhealthy` is a client follow-up.
+
+## Decision 373: CI reuse preserves the checks it claims to replace (2026-09-16)
+
+**Why.** The follow-up to Decisions 359–360 verified two proof-only PR runs at
+2 rounded runner-minutes and two main builds/publications at 7, against 43–46
+for a fresh full gate. It also reproduced three defects: the fingerprint
+excluded executable evidence that ESLint checks; direct full Docker deploys
+had lost the backend typecheck; and squash defaults copied historical WIP
+skip instructions onto main. These corrections supersede the affected claims
+in 359–360; the historical entries remain unchanged.
+
+**Proof boundaries.** `ci-gate-fingerprint.sh` ignores only regular,
+non-executable `.md` files in the previously reviewed prose locations. Code,
+data, unknown paths, symlinks and executable files remain inputs, including
+those under `investigations/`, `.claude/` and `.agentic/`. A behavioral test
+adds evidence that ESLint rejects and proves that its fingerprint changes.
+
+The second `integration` fingerprint omits only regular files under
+`apps/dashboard/src/` and `apps/dashboard/public/`. Dashboard manifests,
+configuration and index.html, lockfiles, all tests/helpers, scripts, shared
+packages and every unknown path remain hashed. A source-boundary ratchet
+rejects backend or integration/helper imports and reads of those omitted
+paths, including common composed path expressions. This is deliberately a
+narrow graph boundary, not a universal dynamic-dependency solver. Static
+checks, all unit tests and the production image still run after frontend
+source changes. Any deliberate new cross-boundary dependency must restore
+its inputs to the DB fingerprint before it can pass that ratchet.
+
+The lookup validates the exact artifact name, expiry, repository identity,
+and a completed successful producer running this CI workflow. Lookup errors
+mean a full check, never a skip. Manual `full: true` bypasses both proofs.
+Quality Gate validates the fingerprint job result; main additionally requires
+successful static/image checks. Failures, cancellation, drafts and unexplained
+skips cannot produce a green gate. A new DB proof is uploaded only when DB
+jobs actually succeeded; a fresh full proof can combine fresh static checks
+with an independently proven DB tree. Both proof uploads use `overwrite`
+so rerun-all and partial upload failures do not collide with an earlier
+attempt of the same run. The checked runtime image retains its per-attempt
+artifact name, identity verification and isolated publishing token.
+
+**WIP and merge.** Keep unfinished PRs in Draft. Heavy jobs wait for Ready for
+review; draft Quality Gate intentionally fails, and the `ready_for_review`
+event runs the checks. Returning to draft cancels a superseded PR run. Agents
+must not use skip instructions in commit messages or PR metadata. Repository
+squash defaults are `PR_TITLE` + `BLANK` (applied and read back via the API), so earlier WIP commit messages
+cannot silently suppress the main push. CI rejects skip instructions in PR
+titles, including edits after an earlier successful head. A body-only edited
+event uses a separate concurrency group and a different, non-required check
+name; it neither cancels real CI nor overwrites Quality Gate with skipped
+success. Title/base edits remain real gate events.
+
+**Build.** Direct Docker builds and full/auto deploys typecheck by default.
+Only CI explicitly sets `CI_TYPECHECK_ALREADY_PASSED=true` after its host
+check or matching full-tree proof; invalid values fail. Docker builds the
+production output once; the duplicated host build is removed. Unit tests
+were exercised from a clean checkout without host dist. Buildx loads the
+actual linux/amd64 image for both existing smoke tests and image-ID checks;
+`context: .` preserves preceding generator/metadata checks. GHA layer cache
+persists across runners, `pull: true` refreshes the base, and cache-export
+failure does not excuse a failed build or smoke. Build/test jobs gain no
+registry-write credentials. Cache mounts are not claimed to persist through
+GHA layer export.
+
+**Test execution and accounting.** The CI unit job uses two workers while
+retaining per-file isolation. Vitest 4 defaults to `CPUs - 1`, leaving only
+one worker on the private 2-vCPU runner. Local Node 22 measurements on the
+same machine were about 195s at one worker and 100s at two, with all tests
+passing; this is not a promise of the same percentage on GitHub. Integration
+file parallelism and the weekly/full API coverage policy are unchanged.
+
+`pnpm ci:cost --days 7 --limit 100` reads completed runs and every attempt,
+reports rounded runner-minutes by run/job, and marks a truncated sample. A
+rerun-failed-jobs API response copies old successful jobs with new IDs; the
+report deduplicates their name/start/end timestamps instead of billing them
+twice. A metadata-only run is not counted as proof reuse. This is an estimate,
+not the billing ledger, and creates no additional paid workflow.
+
+**Validation record.** Implementation and independent review evidence is
+recorded in `docs/reports/ci-cost-safe-followups-2026-09-16.md`. Hosted cache,
+event handling and savings require actual runs of this revision; local
+policy tests alone do not certify GitHub orchestration. Production deployment
+is outside this change.
+
+## Decision 374: Remove unused worker setup imports and make synthetic latency explicit (2026-09-16)
 
 **Context.** Even when no prior tree proof can be reused, a full CI run loads
 unnecessary test infrastructure and deliberately sleeps inside a correctness
@@ -15115,11 +15719,11 @@ explicit benchmark check are recorded in
 Local timings are not runner billing, and this change makes no monthly savings
 forecast. These test-infrastructure changes preserve production and migration
 semantics; the separate scheduling correction discovered in acceptance is
-recorded in Decision 366. Deployment is outside this change.
+recorded in Decision 375. Deployment is outside this change.
 
-## Decision 366: Typed export due selection uses the same clock as creation and leasing (2026-09-16)
+## Decision 375: Typed export due selection uses the same clock as creation and leasing (2026-09-16)
 
-**Context.** Regression testing for Decision 365 exposed typed-export failures
+**Context.** Regression testing for Decision 374 exposed typed-export failures
 on both the optimized branch and its unoptimized control. Task creation,
 approval and lease acquisition use Node time, while the typed sweep's initial
 SQL selection used PostgreSQL `now()`. A database clock slightly behind the

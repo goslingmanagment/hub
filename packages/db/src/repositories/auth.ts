@@ -1,11 +1,10 @@
-import { and, desc, eq, gt, inArray, isNull, ne, sql } from "drizzle-orm";
+import { and, eq, gt, isNull, ne, sql } from "drizzle-orm";
 
 import type { UserRole } from "@agency_hub_core/shared";
 
 import type { Database } from "../client.ts";
 import {
   accountLinks,
-  apiKeys,
   auditEvents,
   authSessions,
   models,
@@ -28,12 +27,6 @@ export interface CreateAuthSessionInput {
   expiresAt: Date;
 }
 
-export interface CreateApiKeyInput {
-  userId: number;
-  keyPrefix: string;
-  tokenDigest: string;
-}
-
 export interface InsertAuditEventInput {
   actorUserId?: number | null;
   targetUserId?: number | null;
@@ -53,11 +46,11 @@ export async function createUser(db: Database, input: CreateUserInput) {
   return created;
 }
 
-/** Decision 349 (Р4): logins are matched case-insensitively; the unique index
- * on lower(username) (migration 0200) keeps this lookup unambiguous. */
+/** A login selects only its current identity. Deleted rows keep their original
+ * spelling for history but never participate in account discovery or login. */
 export async function findUserByUsername(db: Database, username: string) {
   return db.query.users.findFirst({
-    where: sql`lower(${users.username}) = lower(${username})`,
+    where: and(sql`lower(${users.username}) = lower(${username})`, isNull(users.deletedAt)),
   });
 }
 
@@ -84,6 +77,7 @@ export async function findUserById(db: Database, userId: number) {
 
 export async function listUsers(db: Database) {
   return db.query.users.findMany({
+    where: isNull(users.deletedAt),
     orderBy: (table, { asc }) => [asc(table.username)],
   });
 }
@@ -96,7 +90,7 @@ export async function updateUserPasswordHash(
   const [updated] = await db.update(users).set({
     passwordHash,
     updatedAt: new Date(),
-  }).where(eq(users.id, userId)).returning();
+  }).where(and(eq(users.id, userId), isNull(users.deletedAt))).returning();
 
   return updated;
 }
@@ -189,98 +183,6 @@ export async function deleteExpiredAuthSessions(db: Database, now = new Date()) 
   return db.delete(authSessions).where(sql`${authSessions.expiresAt} < ${now}`);
 }
 
-export async function createApiKey(db: Database, input: CreateApiKeyInput) {
-  const [created] = await db.insert(apiKeys).values(input).returning();
-  return created;
-}
-
-export async function findActiveApiKeysForUser(db: Database, userId: number) {
-  return db.query.apiKeys.findMany({
-    where: and(
-      eq(apiKeys.userId, userId),
-      isNull(apiKeys.revokedAt),
-    ),
-    orderBy: (table, { desc: orderDesc }) => [orderDesc(table.createdAt)],
-  });
-}
-
-export async function lockUserForApiKeyRotation(db: Database, userId: number) {
-  await db.execute(sql`
-    select id
-    from ${users}
-    where id = ${userId}
-    for update
-  `);
-}
-
-export async function revokeApiKeysForUser(
-  db: Database,
-  userId: number,
-  revokedReason: string | null,
-) {
-  return db.update(apiKeys).set({
-    revokedAt: new Date(),
-    revokedReason,
-  }).where(and(
-    eq(apiKeys.userId, userId),
-    isNull(apiKeys.revokedAt),
-  )).returning();
-}
-
-export async function revokeApiKeysByIds(
-  db: Database,
-  apiKeyIds: number[],
-  revokedReason: string | null,
-) {
-  if (apiKeyIds.length === 0) {
-    return [];
-  }
-
-  return db.update(apiKeys).set({
-    revokedAt: new Date(),
-    revokedReason,
-  }).where(and(
-    inArray(apiKeys.id, apiKeyIds),
-    isNull(apiKeys.revokedAt),
-  )).returning();
-}
-
-export async function findApiKeyByDigest(db: Database, tokenDigest: string) {
-  return db.query.apiKeys.findFirst({
-    where: eq(apiKeys.tokenDigest, tokenDigest),
-  });
-}
-
-export async function touchApiKey(db: Database, apiKeyId: number) {
-  const [updated] = await db.update(apiKeys).set({
-    lastUsedAt: new Date(),
-  }).where(eq(apiKeys.id, apiKeyId)).returning();
-
-  return updated;
-}
-
-export async function listApiKeys(db: Database, userIds?: number[]) {
-  const clauses = [];
-  if (userIds && userIds.length > 0) {
-    clauses.push(inArray(apiKeys.userId, userIds));
-  }
-
-  return db.select({
-    id: apiKeys.id,
-    userId: apiKeys.userId,
-    username: users.username,
-    role: users.role,
-    keyPrefix: apiKeys.keyPrefix,
-    lastUsedAt: apiKeys.lastUsedAt,
-    createdAt: apiKeys.createdAt,
-    revokedAt: apiKeys.revokedAt,
-    revokedReason: apiKeys.revokedReason,
-  }).from(apiKeys)
-    .innerJoin(users, eq(users.id, apiKeys.userId))
-    .where(clauses.length > 0 ? and(...clauses) : undefined)
-    .orderBy(desc(apiKeys.createdAt));
-}
-
 export async function insertAuditEvent(db: Database, input: InsertAuditEventInput) {
   const [created] = await db.insert(auditEvents).values({
     actorUserId: input.actorUserId ?? null,
@@ -334,20 +236,23 @@ export async function createPendingDeviceToken(
   return created!;
 }
 
-/** User-row lock shared by activation, revocation, password reset, and
- * deactivation.  It closes the update-then-insert race where revoke-all could
- * otherwise miss a token activated in the same transaction window. */
+/** User-row lock shared by credential/grant writers and account lifecycle
+ * operations. It closes the update-then-insert race where deletion or
+ * revoke-all could miss authority created in the same transaction window.
+ * The immutable ID is never changed or physically deleted. NO KEY UPDATE
+ * still serializes these writers, while allowing audit/grant actor foreign
+ * keys to reference another locked user without a cross-user deadlock. */
 export async function lockUserForDeviceTokenMutation(db: Database, userId: number) {
   const [locked] = await db.select().from(users)
     .where(eq(users.id, userId))
-    .for("update");
+    .for("no key update");
   return locked ?? null;
 }
 
 export async function advanceDeviceTokenEpoch(db: Database, userId: number) {
   const [updated] = await db.update(users).set({
     deviceTokenEpoch: sql`${users.deviceTokenEpoch} + 1`,
-  }).where(eq(users.id, userId)).returning({
+  }).where(and(eq(users.id, userId), isNull(users.deletedAt))).returning({
     deviceTokenEpoch: users.deviceTokenEpoch,
   });
   return updated ?? null;
@@ -515,10 +420,6 @@ export async function revokeDeviceTokenById(
   return revoked ?? null;
 }
 
-export async function updateUserMustChangePassword(db: Database, userId: number, value: boolean) {
-  await db.update(users).set({ mustChangePassword: value }).where(eq(users.id, userId));
-}
-
 export async function updateUserDisabledAt(
   db: Database,
   userId: number,
@@ -527,8 +428,23 @@ export async function updateUserDisabledAt(
   const [updated] = await db.update(users).set({
     disabledAt,
     updatedAt: new Date(),
-  }).where(eq(users.id, userId)).returning();
+  }).where(and(eq(users.id, userId), isNull(users.deletedAt))).returning();
 
+  return updated;
+}
+
+/** Call while holding the user lock, after revoking credentials in the same
+ * transaction. Password removal and the permanent tombstone are one update. */
+export async function markUserDeleted(db: Database, userId: number, deletedAt: Date) {
+  const [updated] = await db.update(users).set({
+    deletedAt,
+    // Pre-deletion builds only understand disabled_at. Keep that barrier
+    // closed too; a rollback cannot turn the retained row into a principal.
+    disabledAt: sql`coalesce(${users.disabledAt}, ${deletedAt})`,
+    passwordHash: null,
+    mustChangePassword: false,
+    updatedAt: deletedAt,
+  }).where(and(eq(users.id, userId), isNull(users.deletedAt))).returning();
   return updated;
 }
 

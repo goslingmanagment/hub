@@ -4,6 +4,7 @@ import type * as DbModule from "@agency_hub_core/db";
 
 const dbMocks = vi.hoisted(() => ({
   ensurePageSyncStates: vi.fn(),
+  getConfigOverrides: vi.fn(),
   getOfapiFinancialTruthSummaries: vi.fn(),
   listVisiblePages: vi.fn(),
   listPageSyncStates: vi.fn(),
@@ -16,6 +17,7 @@ vi.mock("@agency_hub_core/db", async () => {
   return {
     ...actual,
     ensurePageSyncStates: dbMocks.ensurePageSyncStates,
+    getConfigOverrides: dbMocks.getConfigOverrides,
     getOfapiFinancialTruthSummaries: dbMocks.getOfapiFinancialTruthSummaries,
     listVisiblePages: dbMocks.listVisiblePages,
     listPageSyncStates: dbMocks.listPageSyncStates,
@@ -188,6 +190,7 @@ function boundedCheckpoint(fullCompletedAt: string | null) {
 describe("sync status service", () => {
   beforeEach(() => {
     dbMocks.getOfapiFinancialTruthSummaries.mockResolvedValue(new Map());
+    dbMocks.getConfigOverrides.mockResolvedValue(new Map());
     dbMocks.listCheckpointStates.mockResolvedValue([]);
     // Read paths never seed: `getSyncStatusSnapshot` serves GETs, so any call
     // into the seeding/repair writer is a regression, not a slow path. Every
@@ -219,6 +222,35 @@ describe("sync status service", () => {
       })]),
     });
     if (!includeMonitorRows) expect(dbMocks.listSyncMonitorStreamRows).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    // Decision 366: an accepted 180-minute full interval promises a certified
+    // full within 210 minutes of the last one; a 30-minute policy keeps the
+    // 60-minute target. The certified full below completed at 10:12.
+    [180, "2026-03-24T13:41:00.000Z", "up_to_date", true],
+    [180, "2026-03-24T13:43:00.000Z", "delayed", false],
+    [30, "2026-03-24T11:13:00.000Z", "delayed", false],
+  ])("judges full freshness against the page's accepted full interval %s at %s", async (fullIntervalMinutes, nowIso, state, fresh) => {
+    const fullCompletedAt = "2026-03-24T10:12:00.000Z";
+    dbMocks.getConfigOverrides.mockResolvedValue(new Map([
+      ["fanslyDmBoundedEnabled", { value: true, version: 1 }],
+      ["fanslyDmBoundedPageAllowlist", { value: "lana", version: 1 }],
+      ["fanslyDmBoundedPolicies", { value: JSON.stringify({ lana: { fullIntervalMinutes } }), version: 1 }],
+    ]));
+    dbMocks.listVisiblePages.mockResolvedValue([buildVisiblePage()]);
+    dbMocks.listPageSyncStates.mockResolvedValue([buildTaskRow({ stream: "dm_conversations" })]);
+    dbMocks.listCheckpointStates.mockResolvedValue([{ pageId: 7, state: boundedCheckpoint(fullCompletedAt) }]);
+    dbMocks.listSyncMonitorStreamRows.mockResolvedValue([buildMonitorRow({ stream: "dm_conversations" })]);
+    const snapshot = await getSyncStatusSnapshot({ db: {}, config: {} } as never, {
+      pageIds: [7], now: new Date(nowIso),
+    });
+    expect(snapshot.pages[0]?.blocks.messages_live).toMatchObject({
+      state, primaryFresh: fresh,
+      substreams: expect.arrayContaining([expect.objectContaining({
+        stream: "dm_conversations", succeededAt: fullCompletedAt, state, isFresh: fresh,
+      })]),
+    });
   });
 
   it.each(["ready", "coverage", "physical debt", "active sibling"] as const)(

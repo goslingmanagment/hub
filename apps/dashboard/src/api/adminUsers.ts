@@ -1,5 +1,6 @@
 import { mutationOptions, useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import type {
+  AdminUser,
   AdminAssignPageBody,
   AdminCreateAccountLinkBody,
   AdminCreateInviteBody,
@@ -12,9 +13,9 @@ import { kernel } from "./sdk.js";
 // with a hand-typed password.
 //
 // The raw link arrives in the mutation RESULT and lives nowhere else — no
-// query cache, no log, no URL path. It does, however, stay in the MUTATION
-// cache for as long as the mutation is retained, so the caller that showed it
-// must call `.reset()` when the reveal dialog closes; TeamTab does.
+// query cache, no log, no URL path. Issuance mutations use gcTime: 0 so their
+// results are collected once the observer releases them. The caller must
+// `.reset()` when the reveal dialog closes; TeamTab does.
 //
 // Each mutation is exported twice: as options (driveable by a MutationObserver,
 // the pattern of api/workboard.ts) and as the hook the components use. The
@@ -28,12 +29,17 @@ import { kernel } from "./sdk.js";
 // invalidates the individual keys it actually touched instead.
 const USERS_KEY = ["admin", "users"] as const;
 
-function userDevicesKey(username: string) {
-  return ["admin", "users", username, "devices"] as const;
+function requireUserId(userId: number | null): number {
+  if (userId === null) throw new Error("Сначала выберите участника.");
+  return userId;
 }
 
-function userLinksKey(username: string) {
-  return ["admin", "users", username, "links"] as const;
+function userDevicesKey(userId: number | null) {
+  return ["admin", "users", userId, "devices"] as const;
+}
+
+function userLinksKey(userId: number | null) {
+  return ["admin", "users", userId, "links"] as const;
 }
 
 export function useAdminUsers() {
@@ -46,6 +52,7 @@ export function useAdminUsers() {
 /** One call creates the account, assigns every page and mints the link. */
 export function createInviteMutationOptions(qc: QueryClient) {
   return mutationOptions({
+    gcTime: 0,
     meta: { suppressGlobalError: true },
     mutationFn: (body: AdminCreateInviteBody) => kernel.adminCreateInvite({ body }),
     onSuccess: () => qc.invalidateQueries({ queryKey: USERS_KEY, exact: true }),
@@ -56,159 +63,203 @@ export function useCreateInvite() {
   return useMutation(createInviteMutationOptions(useQueryClient()));
 }
 
-export function useUserLinks(username: string, options: { enabled?: boolean } = {}) {
+export function useUserLinks(userId: number, options: { enabled?: boolean } = {}) {
   return useQuery({
-    queryKey: userLinksKey(username),
-    queryFn: () => kernel.adminListAccountLinks({ params: { username } }),
-    enabled: options.enabled ?? true,
+    queryKey: userLinksKey(userId),
+    queryFn: () => kernel.adminListAccountLinks({ params: { userId } }),
+    enabled: userId !== null && (options.enabled ?? true),
   });
 }
 
-export function createAccountLinkMutationOptions(qc: QueryClient, username: string) {
+export function createAccountLinkMutationOptions(qc: QueryClient) {
   return mutationOptions({
+    gcTime: 0,
     meta: { suppressGlobalError: true },
-    mutationFn: (body: AdminCreateAccountLinkBody) =>
-      kernel.adminCreateAccountLink({ params: { username }, body }),
-    onSuccess: () => {
+    mutationFn: ({ userId, ...body }: AdminCreateAccountLinkBody & { userId: number }) =>
+      kernel.adminCreateAccountLink({ params: { userId }, body }),
+    onSuccess: (_result, { userId }) => {
       qc.invalidateQueries({ queryKey: USERS_KEY, exact: true });
-      qc.invalidateQueries({ queryKey: userLinksKey(username) });
+      qc.invalidateQueries({ queryKey: userLinksKey(userId) });
     },
   });
 }
 
-export function useCreateAccountLink(username: string) {
-  return useMutation(createAccountLinkMutationOptions(useQueryClient(), username));
+export function useCreateAccountLink() {
+  return useMutation(createAccountLinkMutationOptions(useQueryClient()));
 }
 
-export function revokeLinkMutationOptions(qc: QueryClient, username: string) {
+export function revokeLinkMutationOptions(qc: QueryClient, userId: number) {
   return mutationOptions({
+    mutationKey: [...USERS_KEY, userId, "revoke-link"],
     meta: { suppressGlobalError: true },
     mutationFn: (linkId: number) =>
-      kernel.adminRevokeAccountLink({ params: { username, linkId } }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: userLinksKey(username) }),
+      kernel.adminRevokeAccountLink({ params: { userId, linkId } }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: userLinksKey(userId) }),
   });
 }
 
-export function useRevokeLink(username: string) {
-  return useMutation(revokeLinkMutationOptions(useQueryClient(), username));
+export function useRevokeLink(userId: number) {
+  return useMutation(revokeLinkMutationOptions(useQueryClient(), userId));
 }
 
-export function useUserDevices(username: string, options: { enabled?: boolean } = {}) {
+export function useUserDevices(userId: number | null, options: { enabled?: boolean } = {}) {
   return useQuery({
-    queryKey: userDevicesKey(username),
-    queryFn: () => kernel.adminListDeviceTokens({ params: { username } }),
-    enabled: options.enabled ?? true,
+    queryKey: userDevicesKey(userId),
+    queryFn: () => kernel.adminListDeviceTokens({ params: { userId: requireUserId(userId) } }),
+    enabled: userId !== null && (options.enabled ?? true),
   });
 }
 
 /** §4.4 "Завершить вход на устройстве": exactly one device sign-in. */
-export function revokeDeviceMutationOptions(qc: QueryClient, username: string) {
+export function revokeDeviceMutationOptions(qc: QueryClient, userId: number) {
   return mutationOptions({
+    mutationKey: [...USERS_KEY, userId, "revoke-device"],
     meta: { suppressGlobalError: true },
     mutationFn: (tokenId: number) =>
-      kernel.adminRevokeDeviceToken({ params: { username, tokenId } }),
+      kernel.adminRevokeDeviceToken({ params: { userId, tokenId } }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: USERS_KEY, exact: true });
-      qc.invalidateQueries({ queryKey: userDevicesKey(username) });
+      qc.invalidateQueries({ queryKey: userDevicesKey(userId) });
     },
   });
 }
 
-export function useRevokeDevice(username: string) {
-  return useMutation(revokeDeviceMutationOptions(useQueryClient(), username));
+export function useRevokeDevice(userId: number) {
+  return useMutation(revokeDeviceMutationOptions(useQueryClient(), userId));
 }
 
 /** §4.4 "Отозвать все устройства": every device sign-in (dashboard sessions
  * and links are untouched). */
-export function revokeAllDevicesMutationOptions(qc: QueryClient, username: string) {
+export function revokeAllDevicesMutationOptions(qc: QueryClient, userId: number) {
   return mutationOptions({
+    mutationKey: [...USERS_KEY, userId, "revoke-devices"],
     meta: { suppressGlobalError: true },
-    mutationFn: () => kernel.adminRevokeDeviceTokens({ params: { username } }),
+    mutationFn: () => kernel.adminRevokeDeviceTokens({ params: { userId } }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: USERS_KEY, exact: true });
-      qc.invalidateQueries({ queryKey: userDevicesKey(username) });
+      qc.invalidateQueries({ queryKey: userDevicesKey(userId) });
     },
   });
 }
 
-export function useRevokeAllDevices(username: string) {
-  return useMutation(revokeAllDevicesMutationOptions(useQueryClient(), username));
+export function useRevokeAllDevices(userId: number) {
+  return useMutation(revokeAllDevicesMutationOptions(useQueryClient(), userId));
 }
 
 /** §4.4 "Завершить все входы": devices + sessions + legacy credentials +
  * active links. The account stays enabled and the password stays valid. */
-export function terminateAccessMutationOptions(qc: QueryClient, username: string) {
+export function terminateAccessMutationOptions(qc: QueryClient, userId: number) {
   return mutationOptions({
+    mutationKey: [...USERS_KEY, userId, "terminate-access"],
     meta: { suppressGlobalError: true },
-    mutationFn: () => kernel.adminTerminateAllAccess({ params: { username } }),
+    mutationFn: () => kernel.adminTerminateAllAccess({ params: { userId } }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: USERS_KEY, exact: true });
-      qc.invalidateQueries({ queryKey: userDevicesKey(username) });
-      qc.invalidateQueries({ queryKey: userLinksKey(username) });
+      qc.invalidateQueries({ queryKey: userDevicesKey(userId) });
+      qc.invalidateQueries({ queryKey: userLinksKey(userId) });
     },
   });
 }
 
-export function useTerminateAccess(username: string) {
-  return useMutation(terminateAccessMutationOptions(useQueryClient(), username));
+export function useTerminateAccess(userId: number) {
+  return useMutation(terminateAccessMutationOptions(useQueryClient(), userId));
 }
 
 /** Technical tab only: bind (UUID) or remove (null) a device's Desktop
  * harvest capability. */
-export function setHarvestCapabilityMutationOptions(qc: QueryClient, username: string) {
+export function setHarvestCapabilityMutationOptions(qc: QueryClient, userId: number | null) {
   return mutationOptions({
+    mutationKey: [...USERS_KEY, userId, "harvest-capability"],
     meta: { suppressGlobalError: true },
     mutationFn: (input: { tokenId: number; machineId: string | null }) =>
       kernel.adminSetDeviceTokenHarvestCapability({
-        params: { username, tokenId: input.tokenId },
+        params: { userId: requireUserId(userId), tokenId: input.tokenId },
         body: { machineId: input.machineId },
       }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: userDevicesKey(username) }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: userDevicesKey(userId) }),
   });
 }
 
-export function useSetHarvestCapability(username: string) {
-  return useMutation(setHarvestCapabilityMutationOptions(useQueryClient(), username));
+export function useSetHarvestCapability(userId: number | null) {
+  return useMutation(setHarvestCapabilityMutationOptions(useQueryClient(), userId));
 }
 
-export function useAdminDeactivateUser(username: string) {
+export function useAdminDeactivateUser(userId: number) {
   const qc = useQueryClient();
   return useMutation({
+    mutationKey: [...USERS_KEY, userId, "deactivate"],
     meta: { suppressGlobalError: true },
-    mutationFn: () => kernel.adminDeactivateUser({ params: { username } }),
+    mutationFn: () => kernel.adminDeactivateUser({ params: { userId } }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: USERS_KEY, exact: true });
-      qc.invalidateQueries({ queryKey: userDevicesKey(username) });
-      qc.invalidateQueries({ queryKey: userLinksKey(username) });
+      qc.invalidateQueries({ queryKey: userDevicesKey(userId) });
+      qc.invalidateQueries({ queryKey: userLinksKey(userId) });
     },
   });
 }
 
-export function useAdminReactivateUser(username: string) {
+export function useAdminReactivateUser(userId: number) {
   const qc = useQueryClient();
   return useMutation({
+    mutationKey: [...USERS_KEY, userId, "reactivate"],
     meta: { suppressGlobalError: true },
-    mutationFn: () => kernel.adminReactivateUser({ params: { username } }),
+    mutationFn: () => kernel.adminReactivateUser({ params: { userId } }),
     onSuccess: () => qc.invalidateQueries({ queryKey: USERS_KEY, exact: true }),
   });
 }
 
-export function useAdminAssignPage(username: string) {
+/** Deletion ends this identity permanently; a reused login gets a different ID. */
+export function deleteUserMutationOptions(qc: QueryClient, userId: number) {
+  return mutationOptions({
+    mutationKey: [...USERS_KEY, userId, "delete"],
+    meta: { suppressGlobalError: true },
+    mutationFn: () => kernel.adminDeleteUser({ params: { userId } }),
+    onSuccess: async () => {
+      // A list response started before deletion must not restore the old row.
+      await qc.cancelQueries({ queryKey: USERS_KEY, exact: true });
+      await qc.cancelQueries({ queryKey: [...USERS_KEY, userId] });
+      qc.setQueryData<AdminUser[]>(USERS_KEY, (users) => users?.filter((user) => user.id !== userId));
+      qc.removeQueries({ queryKey: [...USERS_KEY, userId] });
+      await qc.invalidateQueries({ queryKey: USERS_KEY, exact: true });
+    },
+    onError: async () => {
+      // The server may have committed even when its response was lost. Read
+      // its current list before deciding whether the old identity still exists.
+      // A failed refresh keeps the error and cached account visible for retry.
+      await qc.cancelQueries({ queryKey: USERS_KEY, exact: true });
+      await qc.invalidateQueries({ queryKey: USERS_KEY, exact: true });
+      const users = qc.getQueryData<AdminUser[]>(USERS_KEY);
+      if (qc.getQueryState(USERS_KEY)?.status === "success"
+        && users && !users.some((user) => user.id === userId)) {
+        await qc.cancelQueries({ queryKey: [...USERS_KEY, userId] });
+        qc.removeQueries({ queryKey: [...USERS_KEY, userId] });
+      }
+    },
+  });
+}
+
+export function useAdminDeleteUser(userId: number) {
+  return useMutation(deleteUserMutationOptions(useQueryClient(), userId));
+}
+
+export function useAdminAssignPage(userId: number) {
   const qc = useQueryClient();
   return useMutation({
+    mutationKey: [...USERS_KEY, userId, "assign-page"],
     meta: { suppressGlobalError: true },
     mutationFn: (body: AdminAssignPageBody) =>
-      kernel.adminAssignPage({ params: { username }, body }),
+      kernel.adminAssignPage({ params: { userId }, body }),
     onSuccess: () => qc.invalidateQueries({ queryKey: USERS_KEY, exact: true }),
   });
 }
 
-export function useAdminUnassignPage(username: string) {
+export function useAdminUnassignPage(userId: number) {
   const qc = useQueryClient();
   return useMutation({
+    mutationKey: [...USERS_KEY, userId, "unassign-page"],
     meta: { suppressGlobalError: true },
     mutationFn: (pageLabel: string) =>
-      kernel.adminUnassignPage({ params: { username, pageLabel } }),
+      kernel.adminUnassignPage({ params: { userId, pageLabel } }),
     onSuccess: () => qc.invalidateQueries({ queryKey: USERS_KEY, exact: true }),
   });
 }

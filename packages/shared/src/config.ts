@@ -108,6 +108,7 @@ const envSchema = z.object({
   FANSLY_FAN_EARNINGS_TARGETS_ENABLED: booleanSchema.default(false),
   FANSLY_FAN_EARNINGS_TARGETS_PAGE_ALLOWLIST: z.string().default(""),
   FANSLY_FAN_EARNINGS_TARGETS_DAILY_ATTEMPT_LIMIT: z.coerce.number().int().min(0).max(1000).default(0),
+  FANSLY_FAN_EARNINGS_ROSTER_MAX_AGE_HOURS: z.coerce.number().int().min(0).max(168).default(0),
   FANSLY_FOLLOWERS_SETTLEMENT_REUSE_ENABLED: booleanSchema.default(false),
   FANSLY_FOLLOWERS_SETTLEMENT_REUSE_PAGE_ALLOWLIST: z.string().default(""),
   FANSLY_DM_BOUNDED_ENABLED: booleanSchema.default(false),
@@ -268,6 +269,11 @@ const envSchema = z.object({
   // Stage 1 containment for forever-growing fact tables: the worker pages the
   // owner when server disk usage crosses this percentage.
   DISK_USAGE_ALERT_PERCENT: z.coerce.number().int().min(1).max(100).default(80),
+  // Decision 372: the storage-health admission gate (OFAPI interactive reads
+  // refuse with `storage_unhealthy`) closes at THIS percentage; unset = the
+  // alert percent (the pre-#372 coupling). Set it above the alert to give the
+  // owner lead time between the page and the chatters losing chat reads.
+  DISK_USAGE_GATE_PERCENT: z.coerce.number().int().min(1).max(100).optional(),
   // Stage 2 chatter-read-scope fix: raw revenue/transaction routes require a
   // dashboard session role. "log" serves bearer-key hits but logs would-deny
   // (the 48 h observation mode); "enforce" refuses them with 403.
@@ -440,6 +446,7 @@ export interface AppConfig {
   fanslyFanEarningsTargetsEnabled?: boolean;
   fanslyFanEarningsTargetsPageAllowlist?: string;
   fanslyFanEarningsTargetsDailyAttemptLimit?: number;
+  fanslyFanEarningsRosterMaxAgeHours?: number;
   fanslyFollowersSettlementReuseEnabled?: boolean;
   fanslyFollowersSettlementReusePageAllowlist?: string;
   fanslyDmBoundedEnabled?: boolean;
@@ -578,6 +585,7 @@ export interface AppConfig {
   ofapiDmCorrectionsReconcileEnabled?: boolean;
   pageDmPruneEnabled?: boolean;
   diskUsageAlertPercent?: number;
+  diskUsageGatePercent?: number | undefined;
   revenueRouteRoleEnforcement?: "log" | "enforce";
   authPolicyEnforcement?: "log" | "enforce";
   accessGrantsReadEnabled?: boolean;
@@ -785,6 +793,7 @@ export function loadConfig(
     fanslyFanEarningsTargetsEnabled: parsed.FANSLY_FAN_EARNINGS_TARGETS_ENABLED,
     fanslyFanEarningsTargetsPageAllowlist: parsed.FANSLY_FAN_EARNINGS_TARGETS_PAGE_ALLOWLIST,
     fanslyFanEarningsTargetsDailyAttemptLimit: parsed.FANSLY_FAN_EARNINGS_TARGETS_DAILY_ATTEMPT_LIMIT,
+    fanslyFanEarningsRosterMaxAgeHours: parsed.FANSLY_FAN_EARNINGS_ROSTER_MAX_AGE_HOURS,
     fanslyFollowersSettlementReuseEnabled: parsed.FANSLY_FOLLOWERS_SETTLEMENT_REUSE_ENABLED,
     fanslyFollowersSettlementReusePageAllowlist: parsed.FANSLY_FOLLOWERS_SETTLEMENT_REUSE_PAGE_ALLOWLIST,
     fanslyDmBoundedEnabled: parsed.FANSLY_DM_BOUNDED_ENABLED,
@@ -898,6 +907,7 @@ export function loadConfig(
     ofapiDmCorrectionsReconcileEnabled: parsed.OFAPI_DM_CORRECTIONS_RECONCILE_ENABLED,
     pageDmPruneEnabled: parsed.PAGE_DM_PRUNE_ENABLED,
     diskUsageAlertPercent: parsed.DISK_USAGE_ALERT_PERCENT,
+    diskUsageGatePercent: parsed.DISK_USAGE_GATE_PERCENT,
     revenueRouteRoleEnforcement: parsed.REVENUE_ROUTE_ROLE_ENFORCEMENT,
     authPolicyEnforcement: parsed.AUTH_POLICY_ENFORCEMENT,
     accessGrantsReadEnabled: parsed.ACCESS_GRANTS_READ_ENABLED,

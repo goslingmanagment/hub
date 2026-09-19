@@ -19,7 +19,8 @@ import { decryptJsonWithKeyVersion, encryptJson } from "@agency_hub_core/shared"
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
-import { createUserAccount, issueChatterApiKey } from "../apps/runtime/src/services/auth.ts";
+import { createUserAccount } from "../apps/runtime/src/services/auth.ts";
+import { issueChatterDeviceToken } from "./helpers/device-credentials.ts";
 import {
   cleanupExpiredOfapiEvents,
   processOfapiWebhookEvent,
@@ -1129,7 +1130,7 @@ describe("OFAPI webhook admin flow", () => {
     expect(unauthenticated.statusCode).toBe(401);
 
     await createUserAccount(appContext, { username: "anton", role: "chatter" }, { source: "cli" });
-    const { key: chatterKey } = await issueChatterApiKey(appContext, {
+    const { key: chatterKey } = await issueChatterDeviceToken(appContext, {
       username: "anton",
       pageLabel: "lora-of",
     }, { source: "cli" });

@@ -89,6 +89,16 @@ export function resolveDmBoundedPolicy(config: Pick<AppConfig,
   return result.success ? result.data : null;
 }
 
+/** The full-list freshness target follows the configured full interval. The
+ * target is applied to the age of the last certified COMPLETION: the next full
+ * is due `fullIntervalMinutes` after the previous start and gets one 1800 s
+ * scheduler slot to finish, which today's walks (4-142 list pages) fit. Full30
+ * or no policy keeps the stream's own target explicitly, so a page outside A1
+ * reads exactly as before even if the stream constant ever moves. */
+export function dmFullSweepFreshnessSlaSeconds(policy: DmBoundedPolicy | null, fallback: number | null) {
+  return policy && policy.fullIntervalMinutes !== 30 ? (policy.fullIntervalMinutes + 30) * 60 : fallback;
+}
+
 /** Same 1800-second scheduler slots; completion never moves the full deadline. */
 export function dmFullSweepDue(input: {
   policy: DmBoundedPolicy | null;
@@ -112,20 +122,24 @@ export function advanceDmBoundedStop(state: DmBoundedSweepState, items: readonly
   const boundary = state.polling.lastCertifiedFull;
   let unchanged = items.length > 0 && boundary !== null;
   let previousTimestampMs = state.previousTimestampMs;
-  let stopInvalidated = state.stopInvalidated;
+  // Decision 367: the rule is the one the seven-day A0 shadow measured. An
+  // uncertain marker only keeps THIS page from counting as unchanged; a
+  // timestamp tie or a newer head after an older one (the list shifting down
+  // between two requests) is not a signal, because such an item moved ABOVE
+  // the walked offset and is read by the next walk's first page and by B1.
+  // Production lists carry thousands of uncertain markers and ties per sweep,
+  // so the earlier walk-wide invalidation made every bounded walk a full one.
+  // `stopInvalidated` stays in the persisted state for cursor compatibility
+  // and is only carried, never newly set.
   for (const item of items) {
     const at = item.timestampMs;
     const valid = item.listMessageId !== null && item.listMessageId === item.embeddedMessageId &&
       at !== null && Number.isSafeInteger(at) && at > 0;
-    // A known order violation remains debt through this walk. Equal times do
-    // not establish a boundary, including ties split over adjacent pages.
-    if (!valid || (at !== null && previousTimestampMs !== null && at > previousTimestampMs)) {
-      stopInvalidated = true;
-    }
-    unchanged &&= valid && item.unchanged && at !== previousTimestampMs && boundary !== null &&
+    unchanged &&= valid && item.unchanged && boundary !== null &&
       at! < Date.parse(boundary.startedAt) - 60_000;
     if (valid) previousTimestampMs = at;
   }
+  const stopInvalidated = state.stopInvalidated;
   return {
     previousTimestampMs,
     stopInvalidated,

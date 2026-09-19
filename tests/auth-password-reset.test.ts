@@ -31,29 +31,22 @@ const repoMocks = vi.hoisted(() => ({
   advanceDeviceTokenEpoch: vi.fn(),
   insertAccessGrant: vi.fn(),
   revokeAccessGrants: vi.fn(),
-  updateUserMustChangePassword: vi.fn(),
-  createApiKey: vi.fn(),
   createAuthSession: vi.fn(),
   createUser: vi.fn(),
   deleteExpiredAuthSessions: vi.fn(),
   deletePendingDeviceTokensForUser: vi.fn(),
-  findActiveApiKeysForUser: vi.fn(),
-  findApiKeyByDigest: vi.fn(),
   findAuthSessionByDigest: vi.fn(),
   findPageSummaryByLabel: vi.fn(),
   findUserById: vi.fn(),
   findUserByUsername: vi.fn(),
   insertAuditEvent: vi.fn(),
-  listApiKeys: vi.fn(),
   listUserPageAssignments: vi.fn(),
   listUsers: vi.fn(),
   lockUserForDeviceTokenMutation: vi.fn(),
   revokeActiveAccountLinks: vi.fn(),
-  revokeApiKeysByIds: vi.fn(),
-  revokeApiKeysForUser: vi.fn(),
   revokeAuthSession: vi.fn(),
+  revokeDeviceTokensForUser: vi.fn(),
   revokeAuthSessionsForUser: vi.fn(),
-  touchApiKey: vi.fn(),
   touchAuthSession: vi.fn(),
   unassignUserFromPage: vi.fn(),
   updateUserPasswordHash: vi.fn(),
@@ -102,10 +95,13 @@ beforeEach(() => {
 
   repoMocks.findUserByUsername.mockImplementation(async (db: MockDb, username: string) =>
     db.state.users.find((user) => user.username === username) ?? null);
+  repoMocks.findUserById.mockImplementation(async (db: MockDb, userId: number) =>
+    db.state.users.find((user) => user.id === userId) ?? null);
   repoMocks.lockUserForDeviceTokenMutation.mockImplementation(async (db: MockDb, userId: number) =>
     db.state.users.find((user) => user.id === userId) ?? null);
   repoMocks.advanceDeviceTokenEpoch.mockResolvedValue({ deviceTokenEpoch: 1 });
   repoMocks.deletePendingDeviceTokensForUser.mockResolvedValue([]);
+  repoMocks.revokeDeviceTokensForUser.mockResolvedValue([]);
   repoMocks.revokeActiveAccountLinks.mockResolvedValue([]);
   repoMocks.updateUserPasswordHash.mockImplementation(async (db: MockDb, userId: number, passwordHash: string) => {
     const user = db.state.users.find((entry) => entry.id === userId) ?? null;
@@ -162,7 +158,7 @@ describe("password reset transactions", () => {
     }, true);
 
     await expect(setUserPassword({ db } as never, {
-      username: "dima",
+      userId: 1,
       password: "owner-secret-2",
     }, { source: "cli" })).rejects.toThrow("audit failed");
 

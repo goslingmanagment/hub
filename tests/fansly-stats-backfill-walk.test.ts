@@ -90,7 +90,7 @@ describe("stats backfill cursor state", () => {
 
   it("refuses a cursor it does not recognize rather than half-reading it", () => {
     expect(parseFanslyStatsCursorState(null, NOW)).toBeNull();
-    expect(parseFanslyStatsCursorState({ version: 3, mode: "steady", utcDay: "x" }, NOW)).toBeNull();
+    expect(parseFanslyStatsCursorState({ version: 99, mode: "steady", utcDay: "x" }, NOW)).toBeNull();
     expect(parseFanslyStatsCursorState({ version: 1, mode: "nope", utcDay: "x" }, NOW)).toBeNull();
     expect(parseFanslyStatsCursorState({ version: 1, mode: "steady" }, NOW)).toBeNull();
   });
