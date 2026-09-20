@@ -14,7 +14,6 @@ import {
   SPENDER_RETENTION_STATUSES,
   SPENDER_SERIES_GRANULARITIES,
   FANSLY_CLIENT_CHECK_ROUTES,
-  aiGatewayFeatures,
   aiUsageFeatures,
   fanFlagTypes,
   ofapiCaptureJobStates,
@@ -58,7 +57,6 @@ const transactionReportingBucketEnum = z.enum(transactionReportingBuckets);
 const userRoleEnum = z.enum(userRoles);
 const fanFlagEnum = z.enum(fanFlagTypes);
 const aiUsageFeatureEnum = z.enum(aiUsageFeatures);
-const aiGatewayFeatureEnum = z.enum(aiGatewayFeatures);
 const spenderScopeKindEnum = z.enum(["page", "model", "agency"]);
 const spenderSortByEnum = z.enum([
   "grossAmountMills",
@@ -1778,9 +1776,7 @@ export const aiFeatureDebugInputFrameSchema = z.object({
 
 export const aiGatewayStreamBodySchema = z.object({
   clientRequestId: z.string().uuid(),
-  // Decision 376: the GATEWAY enum, not the ledger one — a retired lane stays
-  // readable in usage reports but can no longer be requested.
-  feature: aiGatewayFeatureEnum,
+  feature: aiUsageFeatureEnum,
   pageLabel: z.string().min(1).max(120),
   platform: platformEnum,
   platformUserId: z.string().min(1).max(255),

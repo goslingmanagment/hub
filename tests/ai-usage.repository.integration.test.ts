@@ -120,10 +120,7 @@ describe("AI usage ledger repository", () => {
       userId: null,
       event: {
         clientEventId,
-        // Decision 376: a retired lane. Deliberately kept here — it is the
-        // ledger's legacy value, and a system-lane (user_id null) row with it
-        // still has to reserve, finalize and read back.
-        feature: "workboard-closing",
+        feature: "fan-summary",
         model: "anthropic:claude-sonnet-4-6",
         pageId: null,
         provider: "anthropic",
@@ -185,7 +182,7 @@ describe("AI usage ledger repository", () => {
         userId: null,
         event: {
           clientEventId,
-          feature: "workboard-closing",
+          feature: "fan-summary",
           model: "anthropic:claude-sonnet-4-6",
           pageId: null,
           provider: "anthropic",

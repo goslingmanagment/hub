@@ -149,47 +149,11 @@ export const aiUsageFeatures = [
   "scan",
   "ping",
   "hi-greeting",
-  // Decision 376: retired lane (the Workboard v2 closing classifier). Kept in
-  // the ledger enum because the PG enum is forward-only and historical
-  // ai_usage_events rows must still parse on read — see legacyAiUsageFeatures.
-  "workboard-closing",
   "coach-chat",
   // Voice notes: the ElevenLabs TTS lane's script-generation feature.
   "voice-script",
 ] as const;
 export type AiUsageFeature = (typeof aiUsageFeatures)[number];
-
-/**
- * Decision 376: ledger-only lanes. The code that spent them is gone, so the
- * gateway must refuse a new request for one, while a read of a historical
- * ai_usage_events row still has to parse.
- */
-export const legacyAiUsageFeatures = ["workboard-closing"] as const;
-export type LegacyAiUsageFeature = (typeof legacyAiUsageFeatures)[number];
-
-/**
- * The lanes the AI gateway will still run an operation for: aiUsageFeatures
- * minus the retired ones. Spelled out rather than filtered so it stays a
- * literal tuple (z.enum / Record keys need that); the assignment below fails
- * to compile if the two lists ever drift.
- */
-export const aiGatewayFeatures = [
-  "fast-reply",
-  "improve-draft",
-  "help-me",
-  "fan-summary",
-  "chat-review",
-  "scan",
-  "ping",
-  "hi-greeting",
-  "coach-chat",
-  "voice-script",
-] as const;
-export type AiGatewayFeature = (typeof aiGatewayFeatures)[number];
-const _aiGatewayFeaturesAreUsageFeatures: readonly AiUsageFeature[] = aiGatewayFeatures;
-const _retiredLanesAreUsageFeatures: readonly AiUsageFeature[] = legacyAiUsageFeatures;
-void _aiGatewayFeaturesAreUsageFeatures;
-void _retiredLanesAreUsageFeatures;
 
 export const FANSLY_CLIENT_CHECK_ROUTES = [
   "message",

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { aiGatewayFeatures, legacyAiUsageFeatures } from "@agency_hub_core/shared";
+import { aiUsageFeatures } from "@agency_hub_core/shared";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -38,19 +38,9 @@ describe("AI gateway contract", () => {
     });
   });
 
-  it("uses the closed gateway feature enum — every live lane, no retired one", () => {
-    for (const feature of aiGatewayFeatures) {
-      expect(aiGatewayStreamBodySchema.safeParse(validBody({ feature })).success, feature)
-        .toBe(true);
-    }
-
-    // Decision 376: a retired lane stays in the LEDGER enum so historical
-    // ai_usage_events rows still parse, but the gateway must refuse a new
-    // request for it — the budgets and prompts behind it are gone.
-    expect(legacyAiUsageFeatures.length).toBeGreaterThan(0);
-    for (const feature of legacyAiUsageFeatures) {
-      expect(aiGatewayStreamBodySchema.safeParse(validBody({ feature })).success, feature)
-        .toBe(false);
+  it("uses the same closed feature enum as the AI usage ledger", () => {
+    for (const feature of aiUsageFeatures) {
+      expect(aiGatewayStreamBodySchema.safeParse(validBody({ feature })).success).toBe(true);
     }
 
     expect(aiGatewayStreamBodySchema.safeParse(validBody({ feature: "compare" })).success)

@@ -225,9 +225,8 @@ describe("OFAPI presence projection", () => {
     expect(presence?.external_presence_at).not.toBeNull();
     expect(presence?.external_presence_source).toBe("ofapi_last_seen");
 
-    // Decision 376: the workboard panel that used to serve this presence flag
-    // is gone; the presence store and its ofapi_last_seen source are untouched,
-    // so the projection stays pinned here, at the row it actually wrote.
+    // No reader serves this flag any more, so the projection is pinned at the
+    // row it actually wrote rather than through a consumer of it.
     const projected = await testDb.pool.query<{ n: string }>(
       `select count(*)::text as n from page_fans
         where platform_account_id = $1 and fan_id = $2

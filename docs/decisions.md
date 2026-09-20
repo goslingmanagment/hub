@@ -15780,17 +15780,19 @@ is wrapped so a failure logs a warning and never blocks the live schedules.
 **What stays, and why.** `ANTHROPIC_API_KEY` remains — it key-gates the
 ChatMuse AI gateway provider, and its descriptor simply moves to the `ChatMuse`
 subsystem. `page_fans`, the presence store and its `ofapi_last_seen` source are
-untouched; the board was a reader of them, not their owner. `workboard-closing`
-stays in the `ai_usage_features` ledger enum: the Postgres enum is forward-only
-and the usage repository validates the `feature` column of every row it reads
-back, so removing the string would make a historical row throw in the chatter
-usage report. It is carried as `legacyAiUsageFeatures` and excluded from
-`aiGatewayFeatures`, so the gateway refuses a new request on a lane whose
-budgets and prompts are gone. The internal completion lane
-(`services/ai-gateway-internal.ts`) also stays, now with no caller: it is the
-tested system-initiated path — reserve, provider, finalize, restricted capture,
-terminal integrity — that any future scheduled AI work must use instead of
-hand-rolling a second one, and its tests now drive it directly.
+untouched; the board was a reader of them, not their owner. Nothing else is
+kept. The closing classifier never ran a single completion on production:
+`wb_closing_settings` is empty, so no page ever enabled it, and
+`wb_llm_usage_daily` — which the classifier wrote a reservation row into before
+every LLM call, and which no retention job ever purged — is empty too. There is
+therefore no `ai_usage_events` row carrying the lane, and `workboard-closing`
+leaves the TypeScript enum outright; only the inert `workboard-closing` value
+in the Postgres `ai_usage_feature` enum remains, because Postgres cannot drop an
+enum value without rebuilding the type. The internal completion lane
+(`services/ai-gateway-internal.ts`) was built for that classifier and goes with
+it. Its shared parts stay with the client lane, under their own tests: the
+terminal-integrity consumer, the provider-incident reconciler, and the
+reserve/finalize ledger helpers.
 
 **Sequencing.** This change is code only. The eight tables (`workboard_state`,
 `workboard_contact_log`, `workboard_snoozes`, `workboard_claim_leases`,
@@ -15803,4 +15805,6 @@ automatic rollback for a deploy that carries an irreversible migration. The
 drop is a separate follow-up migration, to land after this image is running on
 production. Until it does, the eight tables carry an explicit, reasoned
 exclusion in the page-erasure inventory rather than a purge target for a schema
-this repo no longer maintains.
+this repo no longer maintains. Both that exclusion list and the queue-retirement
+step at scheduler boot are transitional: the follow-up migration change removes
+them along with the tables.

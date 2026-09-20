@@ -3,12 +3,12 @@ import type {
   AiGatewayReasoningEffort,
   AiGatewayStreamBody,
 } from "@agency_hub_core/contracts";
-import type { AiGatewayFeature } from "@agency_hub_core/shared";
+import type { AiUsageFeature } from "@agency_hub_core/shared";
 
 import type { AiGatewayCostEstimate, AiGatewayCostUsage } from "./ai-gateway-pricing.ts";
 import { estimateAiGatewayUsageCost, resolveAnthropicGatewayModel } from "./ai-gateway-pricing.ts";
 
-type GatewayOperationFeature = AiGatewayFeature;
+type GatewayOperationFeature = AiUsageFeature;
 
 export interface AnthropicGatewayTextBlock {
   type: "text";

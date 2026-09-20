@@ -8880,44 +8880,6 @@ describe("api integration", () => {
     expect(removedPreview.statusCode).toBe(404);
   });
 
-  it("returns 404 for the retired workboard routes (Decision 376)", async (context) => {
-    if (!testDb || !server || !fixture) {
-      context.skip();
-      return;
-    }
-
-    const login = await server.inject({
-      method: "POST",
-      url: "/api/v1/auth/login",
-      payload: { username: "dima", password: "owner-secret" },
-    });
-    const cookie = sessionCookieFrom(login);
-
-    for (const [method, url] of [
-      ["GET", "/api/v1/pages/lana/workboard"],
-      ["GET", "/api/v1/pages/lana/workboard/presence"],
-      ["POST", "/api/v1/pages/lana/workboard/snooze"],
-      ["DELETE", "/api/v1/pages/lana/workboard/snooze/1"],
-      // Decision 376: v2 and its AI panel went the same way as v1.
-      ["GET", "/api/v1/pages/lana/workboard/v2?tab=subscribers"],
-      ["GET", "/api/v1/pages/lana/workboard/v2/lists"],
-      ["POST", "/api/v1/pages/lana/workboard/v2/contact"],
-      ["POST", "/api/v1/pages/lana/workboard/v2/recompute"],
-      ["POST", "/api/v1/pages/lana/workboard/v2/snooze"],
-      ["DELETE", "/api/v1/pages/lana/workboard/v2/snooze/1"],
-      ["GET", "/api/v1/pages/lana/workboard/v2/ai"],
-      ["GET", "/api/v1/workboard/v2/ai/runs"],
-    ] as const) {
-      const response = await server.inject({
-        method,
-        url,
-        headers: { cookie },
-        ...(method === "POST" ? { payload: { fanId: 1, days: 7 } } : {}),
-      });
-      expect(response.statusCode, `${method} ${url}`).toBe(404);
-    }
-  });
-
   it("enforces conversation page access", async (context) => {
     if (!testDb || !server || !fixture) {
       context.skip();

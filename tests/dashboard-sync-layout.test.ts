@@ -443,20 +443,6 @@ describe("dashboard sync layout", () => {
     expect(html).toContain("Settings");
   });
 
-  it("keeps the retired workboard and AI-analytics links out of the sidebar (Decision 376)", () => {
-    const html = renderWithRouter(
-      createElement(Sidebar, { user: { username: "owner", role: "owner" } }),
-      ["/pages/lana"],
-    );
-
-    // Non-vacuous: the page submenu still renders its surviving entries.
-    expect(html).toContain("href=\"/pages/lana/subscribers\"");
-    expect(html).not.toContain("Workboard");
-    expect(html).not.toContain("/pages/lana/workboard");
-    expect(html).not.toContain("/ai-analytics");
-    expect(html).not.toContain(">CRM<");
-  });
-
   it("does not enable the owner-only connections query for non-owner sidebars", () => {
     const html = renderWithRouter(
       createElement(Sidebar, { user: { username: "lead", role: "team_lead" } }),
@@ -972,23 +958,6 @@ describe("dashboard sync layout", () => {
     expect(html).toContain("Up to date · waiting for message history to finish");
     expect(html).not.toContain("Queued — message history is running");
     expect(html).toContain("Backfilling… 203/3,669 conversations");
-  });
-
-  it("has no workboard breadcrumb left on the retired paths (Decision 376)", () => {
-    const workboardHtml = renderWithRouter(
-      createElement(Topbar, { user: { username: "owner", role: "owner" } }),
-      ["/pages/lana/workboard"],
-    );
-    const legacyHtml = renderWithRouter(
-      createElement(Topbar, { user: { username: "owner", role: "owner" } }),
-      ["/pages/lana/crm"],
-    );
-
-    // The page crumb still resolves; only the section crumb is gone.
-    expect(workboardHtml).toContain(">lana<");
-    expect(workboardHtml).not.toContain(">Workboard<");
-    expect(legacyHtml).not.toContain(">Workboard<");
-    expect(workboardHtml).not.toContain(">CRM<");
   });
 
   it("shows sync-status breadcrumbs under the dev workspace", () => {

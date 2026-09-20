@@ -136,31 +136,4 @@ describe("route auth declarations", () => {
       expect(schema.tags, key).toContain("insights");
     }
   });
-
-  it("the retired workboard routes stay gone (Decision 376)", () => {
-    // Registration is contract-driven: no routeSchemas entry, no route — every
-    // workboard path 404s. v1 went at Stage 23; v2 and its AI panel went with
-    // the whole in-core workboard.
-    for (const retired of [
-      "workboard",
-      "workboardPresence",
-      "workboardSnooze",
-      "workboardUnsnooze",
-      "workboardV2",
-      "workboardV2Ai",
-      "workboardV2AiClassify",
-      "workboardV2AiRuns",
-      "workboardV2AiSettings",
-      "workboardV2Claim",
-      "workboardV2Contact",
-      "workboardV2Lists",
-      "workboardV2Recompute",
-      "workboardV2Snooze",
-      "workboardV2Unclaim",
-      "workboardV2UndoContact",
-      "workboardV2Unsnooze",
-    ]) {
-      expect(routeSchemas).not.toHaveProperty(retired);
-    }
-  });
 });

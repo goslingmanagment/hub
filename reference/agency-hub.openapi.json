@@ -61770,7 +61770,6 @@
                                       "scan",
                                       "ping",
                                       "hi-greeting",
-                                      "workboard-closing",
                                       "coach-chat",
                                       "voice-script"
                                     ]
@@ -61813,7 +61812,6 @@
                                     "scan",
                                     "ping",
                                     "hi-greeting",
-                                    "workboard-closing",
                                     "coach-chat",
                                     "voice-script"
                                   ]
@@ -96891,7 +96889,6 @@
                             "scan",
                             "ping",
                             "hi-greeting",
-                            "workboard-closing",
                             "coach-chat",
                             "voice-script"
                           ]
@@ -101893,7 +101890,6 @@
                                     "scan",
                                     "ping",
                                     "hi-greeting",
-                                    "workboard-closing",
                                     "coach-chat",
                                     "voice-script"
                                   ]
@@ -101936,7 +101932,6 @@
                                   "scan",
                                   "ping",
                                   "hi-greeting",
-                                  "workboard-closing",
                                   "coach-chat",
                                   "voice-script"
                                 ]
