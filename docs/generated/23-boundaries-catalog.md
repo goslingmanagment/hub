@@ -28,7 +28,7 @@ response schemas plus one declarative authorization policy.
 | Caller or surface | Entry points | Boundary behavior |
 |---|---|---|
 | Dashboard browser | static SPA plus JSON API | Runtime serves the built dashboard same-origin. The SDK uses a cookie session; owner-only pages have an additional client route guard and server authorization. |
-| Human API sessions | `/api/v1/auth/*`, catalog, reporting, workboard, admin routes | Login sets the session cookie. Route policy distinguishes dashboard sessions, any human session, and owner sessions; page-scoped policies resolve and authorize the page before the handler. |
+| Human API sessions | `/api/v1/auth/*`, catalog, reporting, admin routes | Login sets the session cookie. Route policy distinguishes dashboard sessions, any human session, and owner sessions; page-scoped policies resolve and authorize the page before the handler. |
 | Bearer clients | capture, AI, OFAPI custody, event and data routes | The `apiKey` contract kind accepts a user API key or active device token. The principal retains user identity and assigned-page scope. |
 | Device-token custody | device reservation, activation, current-token revocation, owner administration | Pending tokens authenticate only activation. Active tokens have their own self-revocation lane. Owners can bind one harvest machine ID to a device token. |
 | Monitoring | `/api/v1/health`, `/api/v1/health/sync`, `/api/v1/ops/metrics` | Basic health is public. Sync health and metrics accept the monitoring token or an eligible dashboard session. |
@@ -36,7 +36,7 @@ response schemas plus one declarative authorization policy.
 
 `apps/runtime/src/api/server.ts` applies the route-policy middleware and
 registers the identity, AI, ingest, catalog, finance, audience, conversations,
-workboard, events, and operations modules.
+events, and operations modules.
 
 ### Client capture and lifecycle
 
@@ -87,7 +87,7 @@ are bearer and page-grant scoped.
 | Fansly REST | `packages/fansly/src/adapter.ts`, `apps/runtime/src/services/page-context.ts` | Stored Fansly session headers, page-scoped proxy dispatcher, paginated account/audience/transaction/earnings/DM reads, and observed retry metadata. Default base URL is `https://apiv3.fansly.com/api/v1`. |
 | OnlyFans API provider | `apps/runtime/src/services/ofapi.ts`, `apps/runtime/src/services/ofapi-egress.ts` | Bearer-key management and account APIs, webhook registration, read gateway calls, sync reads, and queued command writes through page egress. Default base URL is `https://app.onlyfansapi.com/api`. |
 | OnlyFans public site | `apps/runtime/src/services/onlyfans-public-profiles.ts` | Headless Playwright opens `onlyfans.com` through the page proxy and observes the public profile API response used to resolve fan metadata. |
-| Anthropic | `apps/runtime/src/services/ai-gateway-anthropic-provider.ts` | Streaming Messages API generations. Chatter requests use the resolved page proxy; the internal workboard lane has its own resolver. |
+| Anthropic | `apps/runtime/src/services/ai-gateway-anthropic-provider.ts` | Streaming Messages API generations through the resolved page proxy. |
 | OpenRouter | `apps/runtime/src/services/ai-gateway-openrouter-provider.ts` | Streaming chat-completion requests to `https://openrouter.ai/api/v1/chat/completions` for `openrouter:` models. |
 | Telegram Bot API | `apps/runtime/src/services/telegram.ts`, `apps/runtime/src/services/telegram-report.ts` | Chat discovery, test and incident text messages, and daily report image/text delivery; the database bot token is encrypted and an optional proxy can supply egress. |
 | ipify | `apps/runtime/src/cli.ts` | Operator proxy diagnostics query `https://api.ipify.org` through an explicit dispatcher. |
@@ -102,7 +102,7 @@ dispatchers and redaction live in `packages/shared/src/http-client.ts` and
 | Boundary | Consumers | Stored state |
 |---|---|---|
 | Postgres | API, worker, scheduler, CLI | Catalog and credentials, capture journal, canonical events, projections, financial ledger, auth, configuration, audits, incidents, erasure logs, and runtime heartbeats. Database access is split between Drizzle repositories and explicit SQL where partitioning, locks, or operational queries require it. |
-| pg-boss schemas in Postgres | API enqueue, scheduler registration, worker consumption | Sync, projection, OFAPI, workboard, reporting, retention, and operations jobs plus schedules and archival tables. |
+| pg-boss schemas in Postgres | API enqueue, scheduler registration, worker consumption | Sync, projection, OFAPI, reporting, retention, and operations jobs plus schedules and archival tables. |
 | On-box lake | tiering, erasure, restore drill | Parquet and JSON manifests for detached `observations` and `domain_events` partitions under `LAKE_DIR`, with a separate restricted subtree. |
 | Runtime filesystem | API image and health checks | Dashboard build assets are served by the API. Worker and scheduler write heartbeat files whose freshness is checked by Compose. |
 

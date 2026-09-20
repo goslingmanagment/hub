@@ -95,8 +95,7 @@ retention states and day thresholds come from
 ## Other financial consumers
 
 Telegram revenue reports use mills throughout
-`apps/runtime/src/services/telegram-report.ts`. Workboard value signals read
-gross and creator-net mills. AI spend is written to `ai_usage_events` as
+`apps/runtime/src/services/telegram-report.ts`. AI spend is written to `ai_usage_events` as
 micro-USD and is never added to platform transaction totals. OFAPI credit ledger
 rows count vendor request credits and may display a configured micro-USD price,
 but that display estimate does not change transaction truth.

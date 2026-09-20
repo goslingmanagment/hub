@@ -1,5 +1,5 @@
 import { lazy, Suspense } from "react";
-import { Routes, Route, Navigate, useParams } from "react-router";
+import { Routes, Route, Navigate } from "react-router";
 import { OwnerRoute } from "./components/layout/OwnerRoute.js";
 import { ChatterLayout } from "./components/layout/ChatterLayout.js";
 import { ProtectedLayout } from "./components/layout/ProtectedLayout.js";

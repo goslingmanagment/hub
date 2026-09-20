@@ -75,10 +75,11 @@ The Anthropic provider in
 through the page proxy and makes connect failures sticky within one generation
 so SDK retries do not repeatedly dial a dead proxy. The OpenRouter provider in
 `apps/runtime/src/services/ai-gateway-openrouter-provider.ts` uses the
-OpenAI-compatible streaming endpoint through the same page proxy. The internal
-completion lane in `apps/runtime/src/services/ai-gateway-internal.ts` is direct
-egress, uses `user_id=NULL`, and is currently used by the workboard closing
-classifier; it still reserves, settles, prices, and captures content.
+OpenAI-compatible streaming endpoint through the same page proxy. There is no
+internal direct-egress lane at this revision: every generation resolves a page
+proxy. The server-derived `outputFormat` knob on the prepared stream survives in
+`apps/runtime/src/services/ai-gateway.ts` — the Anthropic provider honors its
+structured-outputs schema, OpenRouter ignores it.
 
 ## Restricted content and acceptance
 

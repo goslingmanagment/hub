@@ -206,7 +206,7 @@ responsibility, they are:
 | AI | `ai-usage.ts`, `ai-restricted.ts`, `ai-personas.ts` |
 | Auth, access, and erasure | `auth.ts`, `access-grants.ts`, `erasure.ts`, `erasure-fence.ts` |
 | Operations and configuration | `catalog.ts`, `config-settings.ts`, `notifications.ts`, `ops-metrics.ts`, `runtime-instances.ts`, `telegram-settings.ts` |
-| Product read models | `search.ts`, `workboard-v2.ts` |
+| Product read models | `search.ts` |
 
 These modules include ordinary CRUD, soft-retirement, append ledgers,
 watermarks, leases, projections, retention cleanup, advisory-lock protocols,

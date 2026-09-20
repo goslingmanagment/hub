@@ -18,7 +18,7 @@ kernel SDK; privileged platform and AI credentials remain in this repository.
 | Role | Composition |
 |---|---|
 | `api` | Fastify server, enqueue-only pg-boss client, runtime heartbeat, and the API-side scheduler/ops deadman watchdog. |
-| `worker` | pg-boss consumers for sync, OFAPI, canonicalization, projections, workboard, telemetry, Telegram, and tiering. It does not register cron. |
+| `worker` | pg-boss consumers for sync, OFAPI, canonicalization, projections, telemetry, Telegram, and tiering. It does not register cron. |
 | `scheduler` | Advisory-lock leader that owns pg-boss timekeeping and every cron registration; it emits a heartbeat/health file after leadership. |
 
 All three run forward-only migrations before constructing their runtime.
@@ -52,7 +52,7 @@ provider/page-proxy resolver, and optional OpenRouter provider.
 3. Canonicalizers append per-account `domain_events`; sequence assignment is
    serialized per account and dedup resolves to either a new or existing event.
 4. Rebuildable projections feed DM archive/thread state, fan earnings,
-   acceptance, workboard, reporting, and health. Projection debt is recorded
+   acceptance, reporting, and health. Projection debt is recorded
    and swept instead of wedging a sync stream after a post-capture failure.
 5. The API serves Zod-validated REST, v1/v2 SSE, AI streams, OpenAPI, and the
    dashboard SPA. The v2 stream uses bounded replay plus snapshot recovery when

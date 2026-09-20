@@ -185,13 +185,15 @@ AI data is split by purpose:
 - `ai_generation_content` is restricted prompt/completion capture;
 - `ai_acceptance_events` records lifecycle events tied to a generation;
 - `ai_personas` stores keyed persona configuration and a revision; and
-- `wb_llm_usage_daily` is the workboard classifier's daily usage counter.
 
 `config_settings` stores runtime override values and `config_audit_log` stores
-their append-only change history. Workboard state lives in
-`workboard_state`, `workboard_contact_log`, `workboard_snoozes`,
-`workboard_claim_leases`, `wb_closing_cache`, `wb_closing_settings`, and
-`wb_classifier_runs`.
+their append-only change history. The eight workboard tables
+(`workboard_state`, `workboard_contact_log`, `workboard_snoozes`,
+`workboard_claim_leases`, `wb_closing_cache`, `wb_closing_settings`,
+`wb_classifier_runs`, `wb_llm_usage_daily`) no longer exist: Decision 376
+removed their code and migration `0203_drop_workboard_tables.sql` (Decision
+378) dropped them. The five `workboard_*` enum types are still in the database,
+unused.
 
 Every dry-run or executed erasure attempt receives an `erasure_log` row.
 Executed rows resolve as either `completed` or `superseded`; a superseded row

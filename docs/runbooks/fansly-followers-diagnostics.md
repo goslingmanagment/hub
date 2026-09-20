@@ -135,7 +135,7 @@ generations do not identify the same row or establish redundant work. Presence
 observations also remain a benefit of full roster reads. A policy fix still
 requires a demonstrated cause and preservation of legitimate repairs/freshness.
 The [presence consumer inventory](../../investigations/fansly-c1-followers-2026-09-10/PRESENCE-CONSUMERS-20260912.md)
-identifies the current Workboard urgency, online indicator, Followers and Agent
+identifies the current online indicator, Followers and Agent
 Read Plane dependencies. Their different thresholds are not one shared SLA.
 
 Obtain enough completed incremental and full-reconcile activity to measure all
