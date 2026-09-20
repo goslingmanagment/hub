@@ -278,7 +278,7 @@ describe("sync-pull canonicalizer (Stage 8)", () => {
     });
   });
 
-  // W8.2 / A49 gate (cross-review): the proposed workboard-recompute fallback
+  // W8.2 / A49 gate (cross-review): the proposed per-fan-recompute fallback
   // (message.* with null fanIdentityRef → use conversationRef as the fan)
   // is only sound if a Fansly message.sent event's conversationRef IS the
   // thread partner's platform account id. IT IS NOT: Fansly DMs are keyed by

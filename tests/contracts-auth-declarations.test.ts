@@ -103,18 +103,6 @@ describe("route auth declarations", () => {
       "voiceNoteAudio",
       "voiceNoteCreate",
       "voiceNoteStatus",
-      "workboardV2",
-      "workboardV2Ai",
-      "workboardV2AiClassify",
-      "workboardV2AiSettings",
-      "workboardV2Claim",
-      "workboardV2Contact",
-      "workboardV2Lists",
-      "workboardV2Recompute",
-      "workboardV2Snooze",
-      "workboardV2Unclaim",
-      "workboardV2UndoContact",
-      "workboardV2Unsnooze",
     ]);
   });
 
@@ -149,11 +137,29 @@ describe("route auth declarations", () => {
     }
   });
 
-  it("the retired workboard v1 routes stay gone (Stage 23 Task 5)", () => {
-    // Registration is contract-driven: no routeSchemas entry, no route — the
-    // v1 paths 404. The dashboard moved to the v2 module routes in the same
-    // deploy (last-consumer-migrates, target §14).
-    for (const retired of ["workboard", "workboardPresence", "workboardSnooze", "workboardUnsnooze"]) {
+  it("the retired workboard routes stay gone (Decision 376)", () => {
+    // Registration is contract-driven: no routeSchemas entry, no route — every
+    // workboard path 404s. v1 went at Stage 23; v2 and its AI panel went with
+    // the whole in-core workboard.
+    for (const retired of [
+      "workboard",
+      "workboardPresence",
+      "workboardSnooze",
+      "workboardUnsnooze",
+      "workboardV2",
+      "workboardV2Ai",
+      "workboardV2AiClassify",
+      "workboardV2AiRuns",
+      "workboardV2AiSettings",
+      "workboardV2Claim",
+      "workboardV2Contact",
+      "workboardV2Lists",
+      "workboardV2Recompute",
+      "workboardV2Snooze",
+      "workboardV2Unclaim",
+      "workboardV2UndoContact",
+      "workboardV2Unsnooze",
+    ]) {
       expect(routeSchemas).not.toHaveProperty(retired);
     }
   });

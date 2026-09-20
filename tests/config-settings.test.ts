@@ -37,13 +37,13 @@ describe("validateConfigOverride", () => {
   });
 
   it("trims a free string and rejects empty/whitespace", () => {
-    // wbClosingLlmModel is an editable free string (env: .trim().min(1)).
-    expect(validateConfigOverride("wbClosingLlmModel", "  claude-haiku-4-5  ")).toEqual({
+    // chatMuseAiFanProfileContextFeatures is an editable free string.
+    expect(validateConfigOverride("chatMuseAiFanProfileContextFeatures", "  fast-reply  ")).toEqual({
       ok: true,
-      value: "claude-haiku-4-5",
+      value: "fast-reply",
     });
-    expect(validateConfigOverride("wbClosingLlmModel", "   ").ok).toBe(false);
-    expect(validateConfigOverride("wbClosingLlmModel", "").ok).toBe(false);
+    expect(validateConfigOverride("chatMuseAiFanProfileContextFeatures", "   ").ok).toBe(false);
+    expect(validateConfigOverride("chatMuseAiFanProfileContextFeatures", "").ok).toBe(false);
   });
 
   it("enforces enum membership for a string", () => {

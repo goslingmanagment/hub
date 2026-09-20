@@ -38,8 +38,6 @@ const queueMocks = vi.hoisted(() => ({
   ensureSyncQueues: vi.fn(),
   reconcileQueueRetention: vi.fn(),
   ensureTelegramDailyReportSchedule: vi.fn(),
-  ensureWorkboardQueues: vi.fn(),
-  ensureWorkboardRecomputeSchedule: vi.fn(),
 }));
 
 const plannerMocks = vi.hoisted(() => ({
@@ -249,14 +247,12 @@ vi.mock("../apps/runtime/src/services/sync-queue.ts", () => ({
   ensurePlannerSchedule: queueMocks.ensurePlannerSchedule,
   ensureSyncQueues: queueMocks.ensureSyncQueues,
   reconcileQueueRetention: queueMocks.reconcileQueueRetention,
-  ensureWorkboardQueues: queueMocks.ensureWorkboardQueues,
-  ensureWorkboardRecomputeSchedule: queueMocks.ensureWorkboardRecomputeSchedule,
   RAW_PAYLOAD_CLEANUP_QUEUE: "raw-payload-cleanup",
   SYNC_PLANNER_QUEUE: "sync-planner",
   TELEGRAM_DAILY_REPORT_QUEUE: "telegram.daily-report",
-  WORKBOARD_RECOMPUTE_QUEUE: "workboard.recompute",
-  WORKBOARD_CLASSIFY_QUEUE: "workboard.classify-closing",
-  WORKBOARD_FAN_RECOMPUTE_QUEUE: "workboard.fan-recompute",
+  RETIRED_SCHEDULES: [],
+  RETIRED_QUEUES: [],
+  retireRemovedQueues: vi.fn(async () => {}),
 }));
 vi.mock("../apps/runtime/src/services/golden-signals.ts", () => ({
   OPS_METRICS_SAMPLE_QUEUE: "ops.metrics.sample",
@@ -270,10 +266,6 @@ vi.mock("../apps/runtime/src/services/sync/targeted-thread-backfill.ts", () => (
   ensureTargetedThreadBackfillQueue: vi.fn(),
   parseTargetedThreadBackfillJob: vi.fn(() => null),
   runTargetedThreadBackfill: vi.fn(),
-}));
-vi.mock("../apps/runtime/src/services/workboard-event-recompute.ts", () => ({
-  startWorkboardEventRecompute: vi.fn(() => ({ stop: vi.fn(async () => undefined) })),
-  runWorkboardFanRecompute: vi.fn(),
 }));
 
 import { startWorkerServices } from "../apps/runtime/src/worker-services.ts";

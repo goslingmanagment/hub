@@ -702,204 +702,6 @@ async function seedConversationApiFixture(input: {
   };
 }
 
-async function seedWorkboardApiFixture(input: {
-  testDb: StartedTestDatabase;
-  pageId: number;
-}) {
-  const [
-    visibleSubscriber,
-    snoozedSubscriber,
-    activeSpender,
-    inactiveSpender,
-    microSpender,
-    deletedSubscriber,
-    deletedActiveSpender,
-    deletedInactiveSpender,
-  ] = await upsertFans(input.testDb.db, [
-    {
-      platform: "fansly",
-      platformUserId: "wb-api-subscriber-visible",
-      username: "wb_api_subscriber_visible",
-      displayName: "WB API Subscriber Visible",
-    },
-    {
-      platform: "fansly",
-      platformUserId: "wb-api-subscriber-snoozed",
-      username: "wb_api_subscriber_snoozed",
-      displayName: "WB API Subscriber Snoozed",
-    },
-    {
-      platform: "fansly",
-      platformUserId: "wb-api-active-spender",
-      username: "wb_api_active_spender",
-      displayName: "WB API Active Spender",
-    },
-    {
-      platform: "fansly",
-      platformUserId: "wb-api-inactive-spender",
-      username: "wb_api_inactive_spender",
-      displayName: "WB API Inactive Spender",
-    },
-    {
-      platform: "fansly",
-      platformUserId: "wb-api-micro-spender",
-      username: "wb_api_micro_spender",
-      displayName: "WB API Micro Spender",
-    },
-    {
-      platform: "fansly",
-      platformUserId: "wb-api-subscriber-deleted",
-    },
-    {
-      platform: "fansly",
-      platformUserId: "wb-api-active-spender-deleted",
-    },
-    {
-      platform: "fansly",
-      platformUserId: "wb-api-inactive-spender-deleted",
-    },
-  ]);
-
-  for (const [index, fan] of [visibleSubscriber, snoozedSubscriber].entries()) {
-    await upsertFanPage(input.testDb.db, {
-      fanId: fan.id,
-      platformAccountId: input.pageId,
-      isSubscriber: true,
-      subscriberSince: new Date("2026-03-01T12:00:00.000Z"),
-      subscriptionExpiresAt: new Date(`2026-03-31T1${index}:00:00.000Z`),
-      autoRenew: index === 0,
-    });
-    await upsertPageSubscription(input.testDb.db, {
-      platformSubscriptionId: `wb-api-sub-${index + 1}`,
-      platformAccountId: input.pageId,
-      fanId: fan.id,
-      rawStatus: 3,
-      canonicalStatus: "active",
-      priceMills: 5000n,
-      renewPriceMills: 5000n,
-      autoRenew: index === 0,
-      sourceCreatedAt: new Date("2026-03-01T12:00:00.000Z"),
-      endsAt: new Date(`2026-03-31T1${index}:00:00.000Z`),
-      subscriptionTierName: "VIP",
-    });
-  }
-
-  await upsertFanPage(input.testDb.db, {
-    fanId: deletedSubscriber.id,
-    platformAccountId: input.pageId,
-    isSubscriber: true,
-    subscriberSince: new Date("2026-03-01T12:00:00.000Z"),
-    subscriptionExpiresAt: new Date("2026-03-31T12:00:00.000Z"),
-    autoRenew: false,
-  });
-  await upsertPageSubscription(input.testDb.db, {
-    platformSubscriptionId: "wb-api-sub-deleted",
-    platformAccountId: input.pageId,
-    fanId: deletedSubscriber.id,
-    rawStatus: 3,
-    canonicalStatus: "active",
-    priceMills: 5000n,
-    renewPriceMills: 5000n,
-    autoRenew: false,
-    sourceCreatedAt: new Date("2026-03-01T12:00:00.000Z"),
-    endsAt: new Date("2026-03-31T12:00:00.000Z"),
-    subscriptionTierName: "VIP",
-  });
-
-  await upsertFanPage(input.testDb.db, {
-    fanId: deletedActiveSpender.id,
-    platformAccountId: input.pageId,
-  });
-  await upsertFanPage(input.testDb.db, {
-    fanId: deletedInactiveSpender.id,
-    platformAccountId: input.pageId,
-  });
-
-  await upsertTransaction(input.testDb.db, {
-    platformAccountId: input.pageId,
-    source: "onlymonster",
-    fanId: activeSpender.id,
-    transactionId: "wb-api-active-tip",
-    rawType: 20001,
-    canonicalType: "tip",
-    transactionState: "posted",
-    rawStatus: 2,
-    grossAmountMills: 125000n,
-    sourceDestinationAmountMills: 125000n,
-    creatorNetAmountMills: 125000n,
-    occurredAt: new Date("2026-03-25T12:00:00.000Z"),
-  });
-  await upsertTransaction(input.testDb.db, {
-    platformAccountId: input.pageId,
-    source: "onlymonster",
-    fanId: inactiveSpender.id,
-    transactionId: "wb-api-inactive-tip",
-    rawType: 20001,
-    canonicalType: "tip",
-    transactionState: "posted",
-    rawStatus: 2,
-    grossAmountMills: 140000n,
-    sourceDestinationAmountMills: 140000n,
-    creatorNetAmountMills: 140000n,
-    occurredAt: new Date("2026-02-10T12:00:00.000Z"),
-  });
-  await upsertTransaction(input.testDb.db, {
-    platformAccountId: input.pageId,
-    source: "onlymonster",
-    fanId: deletedActiveSpender.id,
-    transactionId: "wb-api-active-tip-deleted",
-    rawType: 20001,
-    canonicalType: "tip",
-    transactionState: "posted",
-    rawStatus: 2,
-    grossAmountMills: 135000n,
-    sourceDestinationAmountMills: 135000n,
-    creatorNetAmountMills: 135000n,
-    occurredAt: new Date("2026-03-23T12:00:00.000Z"),
-  });
-  await upsertTransaction(input.testDb.db, {
-    platformAccountId: input.pageId,
-    source: "onlymonster",
-    fanId: deletedInactiveSpender.id,
-    transactionId: "wb-api-inactive-tip-deleted",
-    rawType: 20001,
-    canonicalType: "tip",
-    transactionState: "posted",
-    rawStatus: 2,
-    grossAmountMills: 145000n,
-    sourceDestinationAmountMills: 145000n,
-    creatorNetAmountMills: 145000n,
-    occurredAt: new Date("2026-02-05T12:00:00.000Z"),
-  });
-  await upsertTransaction(input.testDb.db, {
-    platformAccountId: input.pageId,
-    source: "onlymonster",
-    fanId: microSpender.id,
-    transactionId: "wb-api-micro-tip",
-    rawType: 20001,
-    canonicalType: "tip",
-    transactionState: "posted",
-    rawStatus: 2,
-    grossAmountMills: 100n,
-    sourceDestinationAmountMills: 100n,
-    creatorNetAmountMills: 100n,
-    occurredAt: new Date("2026-03-24T12:00:00.000Z"),
-  });
-
-  await recalculateFanPageSpend(input.testDb.db, input.pageId);
-
-  return {
-    visibleSubscriber,
-    snoozedSubscriber,
-    activeSpender,
-    inactiveSpender,
-    microSpender,
-    deletedSubscriber,
-    deletedActiveSpender,
-    deletedInactiveSpender,
-  };
-}
-
 async function waitForCondition(check: () => Promise<boolean>, timeoutMs = 5_000) {
   const deadline = Date.now() + timeoutMs;
 
@@ -9078,7 +8880,7 @@ describe("api integration", () => {
     expect(removedPreview.statusCode).toBe(404);
   });
 
-  it("returns 404 for the retired workboard v1 routes (Stage 23)", async (context) => {
+  it("returns 404 for the retired workboard routes (Decision 376)", async (context) => {
     if (!testDb || !server || !fixture) {
       context.skip();
       return;
@@ -9096,6 +8898,15 @@ describe("api integration", () => {
       ["GET", "/api/v1/pages/lana/workboard/presence"],
       ["POST", "/api/v1/pages/lana/workboard/snooze"],
       ["DELETE", "/api/v1/pages/lana/workboard/snooze/1"],
+      // Decision 376: v2 and its AI panel went the same way as v1.
+      ["GET", "/api/v1/pages/lana/workboard/v2?tab=subscribers"],
+      ["GET", "/api/v1/pages/lana/workboard/v2/lists"],
+      ["POST", "/api/v1/pages/lana/workboard/v2/contact"],
+      ["POST", "/api/v1/pages/lana/workboard/v2/recompute"],
+      ["POST", "/api/v1/pages/lana/workboard/v2/snooze"],
+      ["DELETE", "/api/v1/pages/lana/workboard/v2/snooze/1"],
+      ["GET", "/api/v1/pages/lana/workboard/v2/ai"],
+      ["GET", "/api/v1/workboard/v2/ai/runs"],
     ] as const) {
       const response = await server.inject({
         method,
@@ -9107,86 +8918,7 @@ describe("api integration", () => {
     }
   });
 
-  it("blocks chatter API keys from workboard read and write routes", async (context) => {
-    if (!testDb || !server || !fixture) {
-      context.skip();
-      return;
-    }
-
-    vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(new Date("2026-03-30T12:00:00.000Z"));
-
-    const workboardPage = await createFanslyPage(testDb.db, {
-      modelId: fixture.lanaModel.id,
-      label: "lana-workboard-api-key",
-    });
-    await updatePageMetadata(testDb.db, workboardPage.id, {
-      platformAccountIdValue: "acct-lana-workboard-api-key",
-      username: "lana_workboard_api_key",
-      displayName: "Lana Workboard API Key",
-      followerCount: 0,
-      subscriberCount: 2,
-      earningsBalanceMills: 0n,
-      metadata: {},
-      syncType: "light",
-    });
-
-    const seeded = await seedWorkboardApiFixture({
-      testDb,
-      pageId: workboardPage.id,
-    });
-
-    const appContext = createTestAppContext(testDb);
-    await assignPageToUser(appContext, {
-      userId: await fixtureUserId(appContext, "anton"),
-      pageLabel: "lana-workboard-api-key",
-    }, { source: "cli" });
-    const { key } = await issueChatterDeviceToken(appContext, {
-      username: "anton",
-    }, { source: "cli" });
-
-    const workboard = await server.inject({
-      method: "GET",
-      url: "/api/v1/pages/lana-workboard-api-key/workboard/v2?tab=subscribers",
-      headers: {
-        authorization: `Bearer ${key}`,
-      },
-    });
-    expect(workboard.statusCode).toBe(403);
-    expect(workboard.json()).toMatchObject({
-      message: "Dashboard routes require a cookie session",
-    });
-
-    const snooze = await server.inject({
-      method: "POST",
-      url: "/api/v1/pages/lana-workboard-api-key/workboard/v2/snooze",
-      headers: {
-        authorization: `Bearer ${key}`,
-      },
-      payload: {
-        fanId: seeded.snoozedSubscriber.id,
-        days: 7,
-      },
-    });
-    expect(snooze.statusCode).toBe(403);
-    expect(snooze.json()).toMatchObject({
-      message: "Dashboard routes require a cookie session",
-    });
-
-    const unsnooze = await server.inject({
-      method: "DELETE",
-      url: `/api/v1/pages/lana-workboard-api-key/workboard/v2/snooze/${seeded.snoozedSubscriber.id}`,
-      headers: {
-        authorization: `Bearer ${key}`,
-      },
-    });
-    expect(unsnooze.statusCode).toBe(403);
-    expect(unsnooze.json()).toMatchObject({
-      message: "Dashboard routes require a cookie session",
-    });
-  });
-
-  it("enforces conversation and workboard page access", async (context) => {
+  it("enforces conversation page access", async (context) => {
     if (!testDb || !server || !fixture) {
       context.skip();
       return;
@@ -9194,12 +8926,12 @@ describe("api integration", () => {
 
     const ofPage = await createOnlyFansPage(testDb.db, {
       modelId: fixture.lanaModel.id,
-      label: "lana-of-workboard",
+      label: "lana-of-conversations",
     });
     await updatePageMetadata(testDb.db, ofPage.id, {
-      platformAccountIdValue: "of-workboard",
-      username: "lana_of_workboard",
-      displayName: "Lana OF Workboard",
+      platformAccountIdValue: "of-conversations",
+      username: "lana_of_conversations",
+      displayName: "Lana OF Conversations",
       followerCount: 0,
       subscriberCount: 0,
       earningsBalanceMills: 0n,
@@ -9213,13 +8945,6 @@ describe("api integration", () => {
       payload: { username: "lead", password: "lead-secret" },
     });
     const leadCookie = sessionCookieFrom(leadLogin);
-
-    const forbidden = await server.inject({
-      method: "GET",
-      url: "/api/v1/pages/lily1/workboard/v2?tab=subscribers",
-      headers: { cookie: leadCookie },
-    });
-    expect(forbidden.statusCode).toBe(403);
 
     const forbiddenMessages = await server.inject({
       method: "GET",
@@ -9254,18 +8979,9 @@ describe("api integration", () => {
       expect.objectContaining({ flag: "vip" }),
     ]);
 
-    // Stage 23 neutrality: OnlyFans boards serve (pages without DM data
-    // simply return an empty queue).
-    const nonFansly = await server.inject({
-      method: "GET",
-      url: "/api/v1/pages/lana-of-workboard/workboard/v2?tab=subscribers",
-      headers: { cookie: ownerCookie },
-    });
-    expect(nonFansly.statusCode).toBe(200);
-
     const nonFanslyMessages = await server.inject({
       method: "GET",
-      url: "/api/v1/pages/lana-of-workboard/conversations/any/messages",
+      url: "/api/v1/pages/lana-of-conversations/conversations/any/messages",
       headers: { cookie: ownerCookie },
     });
     expect(nonFanslyMessages.statusCode).toBe(404);
@@ -9288,18 +9004,6 @@ describe("api integration", () => {
     });
     expect(apiKeyMessages.statusCode).toBe(403);
     expect(apiKeyMessages.json()).toMatchObject({
-      message: "Dashboard routes require a cookie session",
-    });
-
-    const apiKeyWorkboard = await server.inject({
-      method: "GET",
-      url: "/api/v1/pages/lana/workboard/v2?tab=subscribers",
-      headers: {
-        authorization: `Bearer ${key}`,
-      },
-    });
-    expect(apiKeyWorkboard.statusCode).toBe(403);
-    expect(apiKeyWorkboard.json()).toMatchObject({
       message: "Dashboard routes require a cookie session",
     });
 

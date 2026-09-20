@@ -582,7 +582,7 @@ export async function getFanslyReplayFloors(
         where df.platform_account_id = ${platformAccountId}) as daily_earliest,
       -- Scoped by page_fans UNION page_follows: the replay backfills
       -- page_follows but deliberately never creates a page_fans row (that
-      -- table is the workboard's candidate set), so a page_fans-only scope
+      -- table is the page's own fan roster), so a page_fans-only scope
       -- would hide exactly the fans this slice recovers.
       (select min(f.first_seen_at) from fans f
         where exists (

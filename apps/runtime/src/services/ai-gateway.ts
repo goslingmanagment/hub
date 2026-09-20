@@ -69,8 +69,8 @@ export interface AiGatewayProviderInput {
    * Anthropic provider honors it; OpenRouter has no thinking block to disable. */
   disableAdaptiveThinking?: boolean;
   /** Server-derived, off the wire: structured-outputs schema for a request
-   * whose consumer parses JSON (the workboard classifier on the internal
-   * lane). The Anthropic provider honors it; OpenRouter ignores it. */
+   * whose consumer parses JSON (the internal completion lane). The Anthropic
+   * provider honors it; OpenRouter ignores it. */
   outputFormat?: AnthropicGatewayOutputFormat;
 }
 

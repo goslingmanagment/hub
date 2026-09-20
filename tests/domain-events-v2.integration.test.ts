@@ -1069,13 +1069,15 @@ describe("event stream v2 — Stage 24 serve-time enrichment", () => {
     if (!requireSetup(context)) return;
     const pageId = await seedOfPage();
 
-    const wb = await appendDomainEvents(testDb!.db, pageId, [{
-      type: "workboard.state_changed",
+    // A module-emitted, non-webhook type (the OFAPI command executor's
+    // settlement) — not enrichable, so the frame must stay thin.
+    const moduleEvent = await appendDomainEvents(testDb!.db, pageId, [{
+      type: "command.settled",
       occurredAt: new Date("2026-07-06T11:00:00.000Z"),
-      data: { fromTab: null, toTab: "fresh_mass" },
+      data: { outcome: "succeeded" },
       schemaVersion: 1,
       observationId: 0,
-      dedupKey: "stage24:wb:1",
+      dedupKey: "stage24:command:1",
     }]);
     const fansly = await appendDomainEvents(testDb!.db, lanaId, [event("message.received", { text: "fansly side" })]);
 
@@ -1084,7 +1086,7 @@ describe("event stream v2 — Stage 24 serve-time enrichment", () => {
     const handle = subscribeDomainEvents({ baseUrl, headers: { cookie } }, {
       // Resume exactly one event behind each account's head (the appends above).
       cursor: encodeDomainEventCursor(new Map([
-        [pageId, wb.highWater - 1],
+        [pageId, moduleEvent.highWater - 1],
         [lanaId, fansly.highWater - 1],
       ])),
       onFrame: (frame) => frames.push(frame.event as typeof frames[number]),
@@ -1093,10 +1095,10 @@ describe("event stream v2 — Stage 24 serve-time enrichment", () => {
     handle.close();
     await handle.done;
 
-    const workboardFrame = frames.find((frame) => frame.type === "workboard.state_changed");
-    expect(workboardFrame).toBeDefined();
-    expect(workboardFrame!.accountRef).toBe(OFAPI_ACCOUNT);
-    expect(workboardFrame!.payload).toBeUndefined();
+    const moduleFrame = frames.find((frame) => frame.type === "command.settled");
+    expect(moduleFrame).toBeDefined();
+    expect(moduleFrame!.accountRef).toBe(OFAPI_ACCOUNT);
+    expect(moduleFrame!.payload).toBeUndefined();
 
     const fanslyFrame = frames.find((frame) => frame.accountId === lanaId);
     expect(fanslyFrame).toBeDefined();

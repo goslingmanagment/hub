@@ -7,16 +7,12 @@ import { routeSchemas, routeSecurityFromAuth } from "../packages/contracts/src/r
 // the declarations that drive both the document and the enforcement middleware.
 
 describe("route schema security", () => {
-  it("marks conversation and workboard routes as cookie-only", () => {
+  it("marks conversation routes as cookie-only", () => {
     const cookieOnlySecurity = [{ cookieAuth: [] }];
 
     for (const key of [
       "pageConversationPreview",
       "pageConversationMessages",
-      "workboardV2",
-      "workboardV2Contact",
-      "workboardV2Snooze",
-      "workboardV2Unsnooze",
     ] as const) {
       expect(routeSchemas[key].auth.kind, key).toBe("session");
       expect(routeSecurityFromAuth(routeSchemas[key].auth), key).toEqual(cookieOnlySecurity);

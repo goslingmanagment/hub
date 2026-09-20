@@ -1,10 +1,10 @@
 import { NavLink, useLocation, Link } from "react-router";
-import { BarChart3, Bell, Coins, LineChart, Settings, Users, Heart, Trophy, MessageSquare, Terminal, ListTodo, Database, AlertTriangle, Droplets, Code2, ChevronDown, UserX, Sparkles } from "lucide-react";
+import { BarChart3, Bell, Coins, LineChart, Settings, Users, Heart, Trophy, Terminal, ListTodo, Database, AlertTriangle, Droplets, Code2, ChevronDown, UserX } from "lucide-react";
 import { useState } from "react";
 import { useAdminConnections } from "@/api/queries";
 import { PlatformBadge } from "@/components/shared/PlatformBadge";
 import { isAlertState } from "@/components/shared/syncUxDisplay";
-import { buildAiAnalyticsRoute, buildAnalyticsRoute, buildPageRoute, buildPageSectionRoute, buildWorkboardRoute, decodeRouteSegment } from "@/lib/navigation";
+import { buildAnalyticsRoute, buildPageRoute, buildPageSectionRoute, decodeRouteSegment } from "@/lib/navigation";
 import { useDashboardShell } from "./DashboardShellContext.js";
 
 interface SidebarProps {
@@ -47,23 +47,13 @@ export function Sidebar({ user }: SidebarProps) {
     const parts = location.pathname.split("/").filter(Boolean);
     return parts[0] === "pages" && parts[1] ? decodeRouteSegment(parts[1]) : null;
   })();
-  const currentAiPageLabel = location.pathname === "/ai-analytics"
-    ? new URLSearchParams(location.search).get("page")
-    : null;
   const activeFanslyPageLabel = pages.some(
     (page) => page.platform === "fansly" && page.label === activePageLabel,
   )
     ? activePageLabel
     : null;
-  const currentFanslyAiPageLabel = pages.some(
-    (page) => page.platform === "fansly" && page.label === currentAiPageLabel,
-  )
-    ? currentAiPageLabel
-    : null;
-  const aiAnalyticsRoute = buildAiAnalyticsRoute(activeFanslyPageLabel ?? currentFanslyAiPageLabel);
-  // The Analytics link carries the Fansly page already in view, the same way the
-  // AI link does: landing on someone else's page is a worse default than
-  // landing on the first one.
+  // The Analytics link carries the Fansly page already in view: landing on
+  // someone else's page is a worse default than landing on the first one.
   const analyticsRoute = buildAnalyticsRoute(activeFanslyPageLabel);
 
   return (
@@ -163,17 +153,6 @@ export function Sidebar({ user }: SidebarProps) {
                       >
                         <UserX size={12} /> Deleted Fans
                       </NavLink>
-                      <NavLink
-                        end
-                        to={buildWorkboardRoute(page.label)}
-                        className={({ isActive }) =>
-                          `flex items-center gap-1.5 px-3 py-1.5 text-[12px] rounded-md transition-colors ${
-                            isActive ? "text-text-primary font-semibold" : "text-text-muted hover:text-text-secondary"
-                          }`
-                        }
-                      >
-                        <MessageSquare size={12} /> Workboard
-                      </NavLink>
                     </div>
                   )}
                 </div>
@@ -258,17 +237,6 @@ export function Sidebar({ user }: SidebarProps) {
           >
             <LineChart size={16} />
             Analytics
-          </NavLink>
-          <NavLink
-            to={aiAnalyticsRoute}
-            className={({ isActive }) =>
-              `flex items-center gap-2.5 px-3.5 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-                isActive ? "bg-hover text-text-primary font-semibold" : "text-text-secondary hover:bg-hover hover:text-text-primary"
-              }`
-            }
-          >
-            <Sparkles size={16} />
-            ИИ-аналитика
           </NavLink>
           <NavLink
             to="/notifications"

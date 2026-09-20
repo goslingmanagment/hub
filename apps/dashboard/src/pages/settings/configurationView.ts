@@ -3,7 +3,7 @@ import { CONFIG_COPY_RU, SUBSYSTEM_COPY_RU } from "./configCopyRu.js";
 
 export const CONFIG_SUBSYSTEM_LABELS: Record<string, string> = {
   Sync: "Синхронизация", Fansly: "Fansly", ChatMuse: "AI и ChatMuse",
-  Workboard: "Workboard", OFAPI: "OnlyFans API", Telegram: "Telegram",
+  OFAPI: "OnlyFans API", Telegram: "Telegram",
   Agent: "Агенты", Core: "Система и хранилище", Security: "Безопасность",
 };
 

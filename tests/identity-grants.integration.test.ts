@@ -302,44 +302,4 @@ describe("Stage 22 identity", () => {
     expect(assignments).toEqual([]);
     expect(granted).toEqual([]);
   });
-
-  it("attributes workboard contacts and snoozes to the acting human", async (context) => {
-    if (!requireSetup(context)) return;
-
-    // Seed a fan on lana so the snooze insert-select matches.
-    const fan = await testDb!.pool.query(
-      `insert into fans (platform, platform_user_id) values ('fansly', 'fan-attr-1') returning id`,
-    );
-    const fanId = Number(fan.rows[0].id);
-    await testDb!.pool.query(
-      "insert into page_fans (fan_id, platform_account_id) values ($1, $2)",
-      [fanId, lanaId],
-    );
-
-    const ownerCookie = cookieOf(await login(legacyUrl, "dima", "owner-secret"));
-    const contact = await fetch(`${legacyUrl}/api/v1/pages/lana/workboard/v2/contact`, {
-      method: "POST",
-      headers: { "content-type": "application/json", cookie: ownerCookie },
-      body: JSON.stringify({ fanId, action: "handled", wasProductive: false }),
-    });
-    expect(contact.status).toBe(200);
-    const snooze = await fetch(`${legacyUrl}/api/v1/pages/lana/workboard/v2/snooze`, {
-      method: "POST",
-      headers: { "content-type": "application/json", cookie: ownerCookie },
-      body: JSON.stringify({ fanId, days: 7 }),
-    });
-    expect(snooze.status).toBe(200);
-
-    const ownerId = (await testDb!.pool.query("select id from users where username = 'dima'")).rows[0].id as number;
-    const contactRow = await testDb!.pool.query(
-      "select acted_by_user_id from workboard_contact_log where fan_id = $1 order by id desc limit 1",
-      [fanId],
-    );
-    expect(Number(contactRow.rows[0].acted_by_user_id)).toBe(Number(ownerId));
-    const snoozeRow = await testDb!.pool.query(
-      "select created_by_user_id from workboard_snoozes where fan_id = $1",
-      [fanId],
-    );
-    expect(Number(snoozeRow.rows[0].created_by_user_id)).toBe(Number(ownerId));
-  });
 });

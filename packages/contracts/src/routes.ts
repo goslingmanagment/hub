@@ -14,6 +14,7 @@ import {
   SPENDER_RETENTION_STATUSES,
   SPENDER_SERIES_GRANULARITIES,
   FANSLY_CLIENT_CHECK_ROUTES,
+  aiGatewayFeatures,
   aiUsageFeatures,
   fanFlagTypes,
   ofapiCaptureJobStates,
@@ -57,6 +58,7 @@ const transactionReportingBucketEnum = z.enum(transactionReportingBuckets);
 const userRoleEnum = z.enum(userRoles);
 const fanFlagEnum = z.enum(fanFlagTypes);
 const aiUsageFeatureEnum = z.enum(aiUsageFeatures);
+const aiGatewayFeatureEnum = z.enum(aiGatewayFeatures);
 const spenderScopeKindEnum = z.enum(["page", "model", "agency"]);
 const spenderSortByEnum = z.enum([
   "grossAmountMills",
@@ -1397,287 +1399,6 @@ export const pageConversationPreviewResponseSchema = z.object({
   messages: z.array(pageConversationPreviewMessageSchema),
 });
 
-// --- Workboard v2 schemas ---
-
-const workboardV2TabEnum = z.enum(["subscribers", "spenders", "fresh_mass", "old_mass", "service"]);
-const workboardV2SecondaryStatusEnum = z.enum([
-  "recent_purchase",
-  "need_reply",
-  "due_now",
-  "later",
-  "dont_touch_today",
-]);
-
-export const workboardV2QuerySchema = z.object({
-  tab: workboardV2TabEnum,
-  status: z
-    .string()
-    .optional()
-    .transform((value) => (value ? value.split(",").map((s) => s.trim()).filter(Boolean) : undefined)),
-  limit: z.coerce.number().int().min(1).max(200).default(50),
-  offset: z.coerce.number().int().min(0).default(0),
-});
-
-export const workboardV2ItemSchema = z.object({
-  fanId: intId,
-  fan: z.object({
-    platformUserId: z.string().nullable(),
-    pageAlias: z.string().nullable(),
-    username: z.string().nullable(),
-    displayName: z.string().nullable(),
-  }),
-  tab: workboardV2TabEnum,
-  massSubstate: z.enum(["fresh", "gray", "active", "dead", "archived"]).nullable(),
-  value: z.object({
-    score: z.number(),
-    tier: z.enum(["whale", "vip", "payer", "new"]),
-    confidence: z.enum(["high", "low"]),
-  }),
-  urgency: z.object({
-    score: z.number(),
-    severity: z.enum(["critical", "high", "medium", "normal", "muted"]),
-  }),
-  rankScore: z.number(),
-  secondaryStatus: workboardV2SecondaryStatusEnum,
-  needsReply: z.boolean(),
-  needsHumanTriage: z.boolean(),
-  isPurchaseFollowup: z.boolean(),
-  whyNow: z.object({ code: z.string().nullable(), value: z.number().nullable() }),
-  reasonChips: z.array(z.string()),
-  quality: z.object({
-    qScore: z.number().nullable(),
-    qConfidence: z.enum(["high", "medium", "low"]),
-  }),
-  closingVerdict: z
-    .object({
-      layer: z.enum(["l1", "l2", "fresh", "unverified", "model_last", "unknown"]),
-      needsReply: z.boolean(),
-      state: z
-        .enum(["question", "buy_signal", "smalltalk", "closing", "cold", "complaint"])
-        .nullable(),
-      reason: z.string().nullable(),
-    })
-    .nullable(),
-  online: z.boolean(),
-  ltv: z.object({ creatorNetAmountMills: mills }),
-  subscription: z.object({
-    expiresAt: isoTimestamp.nullable(),
-    autoRenew: z.boolean().nullable(),
-  }),
-  conversation: z.object({
-    lastFanMessageAt: isoTimestamp.nullable(),
-    lastModelMessageAt: isoTimestamp.nullable(),
-    preview: z.string().nullable(),
-    coverageStatus: z.enum(["pending_backfill", "partial_window", "complete"]),
-    platformConversationId: z.string().nullable(),
-  }),
-  serviceReason: z.string().nullable(),
-});
-
-export const workboardV2CountSchema = z.object({
-  tab: workboardV2TabEnum,
-  secondaryStatus: workboardV2SecondaryStatusEnum,
-  count: z.number().int(),
-});
-
-export const workboardV2OldMassBudgetSchema = z.object({
-  used: z.number().int(),
-  total: z.number().int(),
-  resetsAt: isoTimestamp,
-});
-
-export const workboardClaimLeaseSchema = z.object({
-  fanId: intId,
-  claimedByUserId: intId,
-  claimedByUsername: z.string(),
-  expiresAt: isoTimestamp,
-});
-
-export const workboardV2ResponseSchema = z.object({
-  tab: workboardV2TabEnum,
-  total: z.number().int(),
-  limit: z.number().int(),
-  offset: z.number().int(),
-  items: z.array(workboardV2ItemSchema),
-  // Stage 23: live claim leases — coordination, not access control.
-  claims: z.array(workboardClaimLeaseSchema),
-  counts: z.array(workboardV2CountSchema),
-  oldMassBudget: workboardV2OldMassBudgetSchema.nullable(),
-  aiCoverage: z.object({
-    enabled: z.boolean(),
-    classified: z.number().int(),
-    closingsFound: z.number().int(),
-    callsToday: z.number().int(),
-    spenderTotal: z.number().int(),
-    spenderDiagnosed: z.number().int(),
-    spenderPending: z.number().int(),
-  }),
-});
-
-export const workboardV2ListsBandSchema = z.object({
-  key: z.string(),
-  label: z.string(),
-  count: z.number().int(),
-  items: z.array(workboardV2ItemSchema),
-});
-
-export const workboardV2ListsResponseSchema = z.object({
-  bands: z.array(workboardV2ListsBandSchema),
-  total: z.number().int(),
-  truncated: z.boolean(),
-});
-
-export const workboardV2ContactBodySchema = z.object({
-  fanId: intId,
-  action: z.enum(["opened", "handled", "snoozed"]).default("handled"),
-  wasProductive: z.boolean().default(true),
-});
-
-export const workboardV2ContactResponseSchema = z.object({
-  ok: z.literal(true),
-  fanId: intId,
-});
-
-export const workboardV2RecomputeResponseSchema = z.object({
-  ok: z.literal(true),
-  evaluated: z.number().int(),
-});
-
-export const workboardV2SnoozeBodySchema = z.object({
-  fanId: intId,
-  days: z.number().int().min(1).max(120),
-});
-
-export const workboardV2SnoozeResponseSchema = z.object({
-  ok: z.literal(true),
-  fanId: intId,
-  snoozedUntil: isoTimestamp.nullable(),
-});
-
-export const workboardV2FanParamsSchema = pageParamsSchema.extend({
-  fanId: z.coerce.number().int().positive(),
-});
-
-export const workboardV2OkResponseSchema = z.object({
-  ok: z.literal(true),
-  fanId: intId,
-});
-
-// ── Workboard v2 AI analytics (L2 closing classifier) panel ───────────────────
-
-const workboardV2ConversationStateEnum = z.enum([
-  "question",
-  "buy_signal",
-  "smalltalk",
-  "closing",
-  "cold",
-  "complaint",
-]);
-
-const aiSettingsSourceSchema = z.enum(["override", "env"]);
-
-export const workboardV2AiSettingsSchema = z.object({
-  enabled: z.boolean(),
-  hasApiKey: z.boolean(),
-  model: z.string(),
-  dailyCapMin: z.number().int(),
-  dailyCapMax: z.number().int(),
-  envEnabled: z.boolean(),
-  source: z.object({
-    enabled: aiSettingsSourceSchema,
-    dailyCapMax: aiSettingsSourceSchema,
-    model: aiSettingsSourceSchema,
-  }),
-  override: z.object({
-    enabled: z.boolean().nullable(),
-    dailyCapMax: z.number().int().nullable(),
-    model: z.string().nullable(),
-  }),
-});
-
-const aiUsageBucketSchema = z.object({
-  calls: z.number().int(),
-  inputTokens: z.number().int(),
-  outputTokens: z.number().int(),
-  costUsd: z.number(),
-});
-
-export const workboardV2AiReportSchema = z.object({
-  settings: workboardV2AiSettingsSchema,
-  usage: z.object({
-    today: aiUsageBucketSchema,
-    last30d: aiUsageBucketSchema,
-    daily: z.array(aiUsageBucketSchema.extend({ date: z.string() })),
-  }),
-  coverage: z.object({
-    tails: z.number().int(),
-    classified: z.number().int(),
-    closings: z.number().int(),
-    pending: z.number().int(),
-    spenders: z.number().int(),
-    spenderDiagnosed: z.number().int(),
-    spenderPending: z.number().int(),
-    spenderL2Classified: z.number().int(),
-    spenderClosings: z.number().int(),
-    spenderNoVisibleDialog: z.number().int(),
-    spenderModelLast: z.number().int(),
-    spenderFanLast: z.number().int(),
-    spenderUnknownLast: z.number().int(),
-  }),
-  states: z.array(z.object({ state: z.string(), count: z.number().int() })),
-  recent: z.array(
-    z.object({
-      messageId: z.string(),
-      tail: z.string(),
-      state: workboardV2ConversationStateEnum.nullable(),
-      needsReply: z.boolean(),
-      reason: z.string().nullable(),
-      model: z.string().nullable(),
-      classifiedAt: isoTimestamp,
-    }),
-  ),
-});
-
-export const workboardV2AiSettingsBodySchema = z.object({
-  enabled: z.boolean().nullable(),
-  dailyCapMax: z.number().int().min(1).max(5000).nullable(),
-  model: z.string().trim().min(1).max(120).nullable(),
-});
-
-export const workboardV2AiClassifyBodySchema = z.object({
-  reclassify: z.boolean().default(false),
-});
-
-export const workboardV2AiClassifyResponseSchema = z.object({
-  ok: z.literal(true),
-  // The run is async: it returns immediately with a 'running' run-log row id; the
-  // dashboard polls the run log for completion. alreadyRunning = a run was in flight.
-  runId: z.number().int(),
-  status: z.string(),
-  alreadyRunning: z.boolean(),
-});
-
-export const workboardV2AiRunSchema = z.object({
-  id: z.number().int(),
-  pageLabel: z.string().nullable(),
-  trigger: z.enum(["cron", "manual", "reclassify"]),
-  model: z.string().nullable(),
-  classified: z.number().int(),
-  calls: z.number().int(),
-  inputTokens: z.number().int(),
-  outputTokens: z.number().int(),
-  deferred: z.number().int(),
-  cleared: z.number().int(),
-  costUsd: z.number(),
-  status: z.string(),
-  error: z.string().nullable(),
-  createdAt: isoTimestamp,
-});
-
-export const workboardV2AiRunsResponseSchema = z.object({
-  runs: z.array(workboardV2AiRunSchema),
-});
-
 export const pageConversationMessageItemSchema = z.object({
   messageId: z.string(),
   senderRole: z.enum(["fan", "model", "system", "unknown"]),
@@ -2057,7 +1778,9 @@ export const aiFeatureDebugInputFrameSchema = z.object({
 
 export const aiGatewayStreamBodySchema = z.object({
   clientRequestId: z.string().uuid(),
-  feature: aiUsageFeatureEnum,
+  // Decision 376: the GATEWAY enum, not the ledger one — a retired lane stays
+  // readable in usage reports but can no longer be requested.
+  feature: aiGatewayFeatureEnum,
   pageLabel: z.string().min(1).max(120),
   platform: platformEnum,
   platformUserId: z.string().min(1).max(255),
@@ -6899,117 +6622,6 @@ const baseRouteSchemas = {
       404: errorResponseSchema,
     },
   },
-  // --- Workboard ---
-  workboardV2: {
-    auth: { kind: "session", scope: "page" },
-    tags: ["workboard"],
-    summary: "Get a Workboard v2 tab queue (priority engine) for one page",
-    params: pageParamsSchema,
-    querystring: workboardV2QuerySchema,
-    response: {
-      200: workboardV2ResponseSchema,
-      400: errorResponseSchema,
-      401: errorResponseSchema,
-      403: errorResponseSchema,
-      404: errorResponseSchema,
-    },
-  },
-  workboardV2Lists: {
-    auth: { kind: "session", scope: "page" },
-    tags: ["workboard"],
-    summary: "Get Workboard v2 spender lists (lifetime gross-spend bands) for one page",
-    params: pageParamsSchema,
-    response: {
-      200: workboardV2ListsResponseSchema,
-      400: errorResponseSchema,
-      401: errorResponseSchema,
-      403: errorResponseSchema,
-      404: errorResponseSchema,
-    },
-  },
-  workboardV2Contact: {
-    auth: { kind: "session", scope: "page" },
-    tags: ["workboard"],
-    summary: "Record a chatter touch (Готово) on a Workboard v2 fan",
-    params: pageParamsSchema,
-    body: workboardV2ContactBodySchema,
-    response: {
-      200: workboardV2ContactResponseSchema,
-      400: errorResponseSchema,
-      401: errorResponseSchema,
-      403: errorResponseSchema,
-      404: errorResponseSchema,
-    },
-  },
-  workboardV2Recompute: {
-    auth: { kind: "session", scope: "page" },
-    tags: ["workboard"],
-    summary: "Recompute the Workboard v2 queue for one page (on-demand)",
-    params: pageParamsSchema,
-    response: {
-      200: workboardV2RecomputeResponseSchema,
-      400: errorResponseSchema,
-      401: errorResponseSchema,
-      403: errorResponseSchema,
-      404: errorResponseSchema,
-    },
-  },
-  workboardV2Snooze: {
-    auth: { kind: "session", scope: "page" },
-    tags: ["workboard"],
-    summary: "Snooze a fan on Workboard v2 (moves to Service; re-evaluates instantly)",
-    params: pageParamsSchema,
-    body: workboardV2SnoozeBodySchema,
-    response: {
-      200: workboardV2SnoozeResponseSchema,
-      400: errorResponseSchema,
-      401: errorResponseSchema,
-      403: errorResponseSchema,
-      404: errorResponseSchema,
-    },
-  },
-  workboardV2Unsnooze: {
-    auth: { kind: "session", scope: "page" },
-    tags: ["workboard"],
-    summary: "Unsnooze a fan on Workboard v2 (re-evaluates instantly)",
-    params: workboardV2FanParamsSchema,
-    response: {
-      200: workboardV2OkResponseSchema,
-      400: errorResponseSchema,
-      401: errorResponseSchema,
-      403: errorResponseSchema,
-      404: errorResponseSchema,
-    },
-  },
-  workboardV2UndoContact: {
-    auth: { kind: "session", scope: "page" },
-    tags: ["workboard"],
-    summary: "Undo the last Готово touch for a fan (re-evaluates instantly)",
-    params: workboardV2FanParamsSchema,
-    response: {
-      200: workboardV2OkResponseSchema,
-      400: errorResponseSchema,
-      401: errorResponseSchema,
-      403: errorResponseSchema,
-      404: errorResponseSchema,
-    },
-  },
-  workboardV2Claim: {
-    auth: { kind: "any-session", scope: "page" },
-    tags: ["workboard"],
-    summary: "Claim a fan (soft coordination lease, TTL'd, non-blocking)",
-    params: pageParamsSchema,
-    body: z.object({
-      fanId: intId,
-      ttlMinutes: z.number().int().min(1).max(240).optional(),
-    }),
-    response: {
-      200: z.object({ ok: z.literal(true), fanId: intId, expiresAt: isoTimestamp }),
-      401: errorResponseSchema,
-      403: errorResponseSchema,
-      404: errorResponseSchema,
-    },
-  },
   followerOutreachAttempt: {
     auth: { kind: "any", scope: "page" },
     tags: ["conversations"],
@@ -7024,69 +6636,6 @@ const baseRouteSchemas = {
     response: {
       200: z.object({ owned: z.boolean(), state: z.enum(["reserved", "dispatching", "sent", "expired"]), expiresAt: isoTimestamp.nullable() }).strict(),
       400: errorResponseSchema, 401: errorResponseSchema, 403: errorResponseSchema, 404: errorResponseSchema,
-    },
-  },
-  workboardV2Unclaim: {
-    auth: { kind: "any-session", scope: "page" },
-    tags: ["workboard"],
-    summary: "Release a fan claim",
-    params: z.object({ pageLabel: z.string().min(1), fanId: z.coerce.number().int().positive() }),
-    response: {
-      200: z.object({ ok: z.literal(true), fanId: intId }),
-      401: errorResponseSchema,
-      403: errorResponseSchema,
-      404: errorResponseSchema,
-    },
-  },
-  workboardV2Ai: {
-    auth: { kind: "owner-session", scope: "page" },
-    tags: ["workboard"],
-    summary: "AI (L2 closing classifier) analytics + settings for a page",
-    params: pageParamsSchema,
-    response: {
-      200: workboardV2AiReportSchema,
-      400: errorResponseSchema,
-      401: errorResponseSchema,
-      403: errorResponseSchema,
-      404: errorResponseSchema,
-    },
-  },
-  workboardV2AiSettings: {
-    auth: { kind: "owner-session", scope: "page" },
-    tags: ["workboard"],
-    summary: "Update per-page AI classifier settings (owner only)",
-    params: pageParamsSchema,
-    body: workboardV2AiSettingsBodySchema,
-    response: {
-      200: workboardV2AiReportSchema,
-      400: errorResponseSchema,
-      401: errorResponseSchema,
-      403: errorResponseSchema,
-      404: errorResponseSchema,
-    },
-  },
-  workboardV2AiClassify: {
-    auth: { kind: "owner-session", scope: "page" },
-    tags: ["workboard"],
-    summary: "Run (or re-run) the AI classifier for a page now (owner only)",
-    params: pageParamsSchema,
-    body: workboardV2AiClassifyBodySchema,
-    response: {
-      200: workboardV2AiClassifyResponseSchema,
-      400: errorResponseSchema,
-      401: errorResponseSchema,
-      403: errorResponseSchema,
-      404: errorResponseSchema,
-    },
-  },
-  workboardV2AiRuns: {
-    auth: { kind: "owner-session" },
-    tags: ["workboard"],
-    summary: "Global AI classifier run log (owner only)",
-    response: {
-      200: workboardV2AiRunsResponseSchema,
-      401: errorResponseSchema,
-      403: errorResponseSchema,
     },
   },
   // --- Phase 4: Dashboard routes ---
@@ -8751,20 +8300,6 @@ export type NotificationsReportPreviewResponse = z.infer<typeof notificationsRep
 export type NotificationsReportSendResponse = z.infer<typeof notificationsReportSendResponseSchema>;
 export type NotificationsDeliveryAttemptItem = z.infer<typeof notificationsDeliveryAttemptItemSchema>;
 export type NotificationsReportHistoryResponse = z.infer<typeof notificationsReportHistoryResponseSchema>;
-export type WorkboardV2Query = z.infer<typeof workboardV2QuerySchema>;
-export type WorkboardV2Item = z.infer<typeof workboardV2ItemSchema>;
-export type WorkboardV2Response = z.infer<typeof workboardV2ResponseSchema>;
-export type WorkboardV2ListsResponse = z.infer<typeof workboardV2ListsResponseSchema>;
-export type WorkboardV2ContactBody = z.infer<typeof workboardV2ContactBodySchema>;
-export type WorkboardV2RecomputeResponse = z.infer<typeof workboardV2RecomputeResponseSchema>;
-export type WorkboardV2SnoozeBody = z.infer<typeof workboardV2SnoozeBodySchema>;
-export type WorkboardV2AiReport = z.infer<typeof workboardV2AiReportSchema>;
-export type WorkboardV2AiSettings = z.infer<typeof workboardV2AiSettingsSchema>;
-export type WorkboardV2AiSettingsBody = z.infer<typeof workboardV2AiSettingsBodySchema>;
-export type WorkboardV2AiClassifyBody = z.infer<typeof workboardV2AiClassifyBodySchema>;
-export type WorkboardV2AiClassifyResponse = z.infer<typeof workboardV2AiClassifyResponseSchema>;
-export type WorkboardV2AiRun = z.infer<typeof workboardV2AiRunSchema>;
-export type WorkboardV2AiRunsResponse = z.infer<typeof workboardV2AiRunsResponseSchema>;
 export type DomainEventFrame = z.infer<typeof domainEventFrameSchema>;
 export type DomainEventsSnapshotRequired = z.infer<typeof domainEventsSnapshotRequiredResponseSchema>;
 export type DomainEventsSnapshotResponse = z.infer<typeof domainEventsSnapshotResponseSchema>;
@@ -8772,7 +8307,6 @@ export type ChangePasswordBody = z.infer<typeof changePasswordBodySchema>;
 export type DeviceTokenItem = z.infer<typeof deviceTokenItemSchema>;
 export type IssuedDeviceTokenResponse = z.infer<typeof issuedDeviceTokenResponseSchema>;
 export type AccessGrantItem = z.infer<typeof accessGrantItemSchema>;
-export type WorkboardClaimLeaseItem = z.infer<typeof workboardClaimLeaseSchema>;
 
 export type StatsTrafficQuery = z.infer<typeof statsTrafficQuerySchema>;
 export type StatsTrafficResponse = z.infer<typeof statsTrafficResponseSchema>;

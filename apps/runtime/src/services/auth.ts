@@ -192,8 +192,8 @@ function roleNeedsPassword(role: UserRole) {
 }
 
 export function roleCanUseSession(role: UserRole) {
-  // Stage 22: every human role is session-capable (the workboard's substrate);
-  // dashboard route access stays a separate, narrower check below.
+  // Stage 22: every human role is session-capable; dashboard route access
+  // stays a separate, narrower check below.
   return role === "owner" || role === "team_lead" || role === "chatter";
 }
 

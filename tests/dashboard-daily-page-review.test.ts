@@ -43,7 +43,6 @@ import { TopSupportersPage } from "../apps/dashboard/src/pages/TopSupportersPage
 import { FanProfilePage } from "../apps/dashboard/src/pages/FanProfilePage.tsx";
 import { PageDetailPage } from "../apps/dashboard/src/pages/PageDetailPage.tsx";
 import { ReadSection } from "../apps/dashboard/src/pages/daily/ReadSection.tsx";
-import { resolveWorkboardShortcut } from "../apps/dashboard/src/pages/daily/workboardKeyboard.ts";
 
 const fan = { platform: "fansly", platformUserId: "fan-1", username: "buyer", displayName: "Buyer", pageAlias: null, createdAtExternal: null };
 const page = { id: 1, label: "lana", platform: "fansly", modelSlug: "lana", modelName: "Lana" };
@@ -173,24 +172,5 @@ describe("daily-page route context", () => {
     expect(mocks.queries.usePageDeletedFans).toHaveBeenCalledWith("lana", { limit: 50, offset: 50 }, expect.anything());
     expect(html).toContain("ранее полученные данные");
     expect(html).toContain("overflow-x-auto");
-  });
-});
-
-describe("workboard shortcuts use current visible rows", () => {
-  const state = { key: "e", modified: false, repeated: false, interactive: false, visibleFanIds: [1, 2], focusedFanId: 1, actionsAllowed: true };
-  it("never records an action for focus that disappeared after refresh, paging or band collapse", () => {
-    expect(resolveWorkboardShortcut(state)).toEqual({ kind: "handled", fanId: 1 });
-    expect(resolveWorkboardShortcut({ ...state, visibleFanIds: [2] })).toBeNull();
-    expect(resolveWorkboardShortcut({ ...state, visibleFanIds: [] })).toBeNull();
-  });
-  it("does not consume typing, control activation, modified shortcuts or repeated writes", () => {
-    for (const patch of [{ interactive: true }, { modified: true }, { repeated: true }, { actionsAllowed: false }]) {
-      expect(resolveWorkboardShortcut({ ...state, ...patch })).toBeNull();
-    }
-  });
-  it("keeps navigation and inspection available while writes wait for a fresh read", () => {
-    expect(resolveWorkboardShortcut({ ...state, key: "ArrowDown", actionsAllowed: false })).toEqual({ kind: "focus", fanId: 2 });
-    expect(resolveWorkboardShortcut({ ...state, key: "Enter", actionsAllowed: false })).toEqual({ kind: "details", fanId: 1 });
-    expect(resolveWorkboardShortcut({ ...state, key: "s", actionsAllowed: false })).toBeNull();
   });
 });

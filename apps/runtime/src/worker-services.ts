@@ -63,11 +63,6 @@ import {
 } from "./services/projections/registry.ts";
 import { startDomainEventsSmokeConsumer } from "./services/domain-events-smoke.ts";
 import {
-  runWorkboardFanRecompute,
-  startWorkboardEventRecompute,
-  type WorkboardFanRecomputeJob,
-} from "./services/workboard-event-recompute.ts";
-import {
   ensureOfapiChargebacksQueue,
   startOfapiChargebacksWorker,
 } from "./services/ofapi-chargebacks-sync.ts";
@@ -112,14 +107,10 @@ import {
 import { runSyncPlannerCycle } from "./services/sync/planner.ts";
 import {
   ensureSyncQueues,
-  ensureWorkboardQueues,
   reconcileQueueRetention,
   RAW_PAYLOAD_CLEANUP_QUEUE,
   SYNC_PLANNER_QUEUE,
   TELEGRAM_DAILY_REPORT_QUEUE,
-  WORKBOARD_CLASSIFY_QUEUE,
-  WORKBOARD_RECOMPUTE_QUEUE,
-  WORKBOARD_FAN_RECOMPUTE_QUEUE,
 } from "./services/sync-queue.ts";
 import { ensureOpsMetricsQueue, startGoldenSignalWorker } from "./services/golden-signals.ts";
 import {
@@ -127,8 +118,6 @@ import {
   startNotificationDeliveryOutboxWorker,
 } from "./services/notification-delivery-outbox.ts";
 import { ensureTieringQueue, startTieringWorker } from "./services/tiering/index.ts";
-import { recomputeAllWorkboardPages } from "./modules/workboard/index.ts";
-import { runClosingClassificationAllPages } from "./modules/workboard/index.ts";
 
 const WORKER_RESTART_ERROR_SUMMARY = "Worker restarted";
 const WORKER_HEALTH_WRITE_INTERVAL_MS = 30_000;
@@ -215,7 +204,6 @@ export async function startWorkerServices(
 
   await boss.start();
   await ensureSyncQueues(boss, createdQueues);
-  await ensureWorkboardQueues(boss, createdQueues);
   await ensureOfapiQueues(boss, createdQueues);
   await ensureOfapiCreditQueues(boss, createdQueues);
   await ensureOfapiChargebacksQueue(boss, createdQueues);
@@ -347,27 +335,6 @@ export async function startWorkerServices(
       app.logger.warn(summary, "Nightly retention sweep hit its wall-clock budget");
     } else {
       app.logger.info(summary, "Nightly retention sweep complete");
-    }
-  });
-
-  await boss.work(WORKBOARD_RECOMPUTE_QUEUE, { batchSize: 1 }, async () => {
-    // Stage 23: the nightly sweep is the RECONCILER — `changed` is the drift
-    // counter and should be zero while the event-driven path keeps up.
-    const result = await recomputeAllWorkboardPages(app.db, { now: new Date() });
-    if (result.changed > 0) {
-      app.logger.warn({ ...result, workboard_reconcile_drift: result.changed },
-        "Workboard reconciler found drift — event-driven recompute missed changes");
-    } else {
-      app.logger.info({ ...result, workboard_reconcile_drift: 0 }, "Workboard reconciler clean");
-    }
-  });
-
-  await boss.work(WORKBOARD_FAN_RECOMPUTE_QUEUE, { batchSize: 5 }, async (jobs) => {
-    for (const job of jobs) {
-      const result = await runWorkboardFanRecompute(app, job.data as WorkboardFanRecomputeJob);
-      if ("changed" in result && result.changed) {
-        app.logger.info({ ...job.data as object, ...result }, "Workboard fan recomputed (event-driven)");
-      }
     }
   });
 
@@ -544,22 +511,10 @@ export async function startWorkerServices(
     }
   });
 
-  await boss.work(WORKBOARD_CLASSIFY_QUEUE, { batchSize: 1 }, async () => {
-    if (!app.config.anthropicApiKey) {
-      app.logger.info("Workboard v2 closing classifier disabled (no ANTHROPIC_API_KEY)");
-      return;
-    }
-    // Per-page settings (enabled / cap / model) are resolved inside, over env defaults.
-    const result = await runClosingClassificationAllPages(app.db, { config: app.config, now: new Date() });
-    app.logger.info(result, "Workboard v2 closing classification complete");
-  });
-
   // Stage 21: the v2 conformance instrument — permanent, read-only (one
   // checkpoint row), unconditional like the sweeps.
   const fanslyWs = startFanslyWsWorker(app);
   const domainEventsSmoke = startDomainEventsSmokeConsumer(app);
-  // Stage 23: domain events → debounced per-fan board recompute.
-  const workboardEventRecompute = startWorkboardEventRecompute(app, boss);
   await startGoldenSignalWorker(app, boss);
   await startNotificationDeliveryOutboxWorker(app, boss);
   await startTieringWorker(app, boss);
@@ -631,9 +586,6 @@ export async function startWorkerServices(
       await fanslyWs.stop();
       await domainEventsSmoke.stop().catch((error) => {
         app.logger.warn({ err: error }, "v2 smoke consumer failed during shutdown");
-      });
-      await workboardEventRecompute.stop().catch((error) => {
-        app.logger.warn({ err: error }, "workboard event recompute failed during shutdown");
       });
       await executorPromise.catch((error) => {
         app.logger.error({ err: error }, "Sync page executor failed during shutdown");

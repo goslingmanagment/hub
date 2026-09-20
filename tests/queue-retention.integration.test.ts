@@ -30,7 +30,6 @@ import {
 import { ensureTargetedThreadBackfillQueue } from "../apps/runtime/src/services/sync/targeted-thread-backfill.ts";
 import {
   ensureSyncQueues,
-  ensureWorkboardQueues,
   reconcileQueueRetention,
 } from "../apps/runtime/src/services/sync-queue.ts";
 import { ensureTieringQueue } from "../apps/runtime/src/services/tiering/index.ts";
@@ -51,7 +50,6 @@ const DLQ_DELETION_SENTINEL = 123_456;
  */
 async function createAllQueues(boss: PgBoss) {
   await ensureSyncQueues(boss);
-  await ensureWorkboardQueues(boss);
   await ensureOfapiQueues(boss);
   await ensureOfapiCreditQueues(boss);
   await ensureOfapiChargebacksQueue(boss);

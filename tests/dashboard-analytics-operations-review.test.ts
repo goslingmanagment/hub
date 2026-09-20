@@ -6,7 +6,7 @@ import { MemoryRouter } from "../apps/dashboard/node_modules/react-router/dist/d
 import { QueryClient, QueryClientProvider } from "../apps/dashboard/node_modules/@tanstack/react-query/build/modern/index.js";
 
 const mocks = vi.hoisted(() => ({
-  usage: vi.fn(), auth: vi.fn(), pages: vi.fn(), collection: vi.fn(), media: vi.fn(), exports: vi.fn(), rows: vi.fn(), visitors: vi.fn(), inventory: vi.fn(), marketing: vi.fn(), actions: vi.fn(), ai: vi.fn(), aiRuns: vi.fn(), aiSettings: vi.fn(), aiClassify: vi.fn(), credits: vi.fn(), daily: vi.fn(), ledger: vi.fn(), comparison: vi.fn(),
+  usage: vi.fn(), auth: vi.fn(), pages: vi.fn(), collection: vi.fn(), media: vi.fn(), exports: vi.fn(), rows: vi.fn(), visitors: vi.fn(), inventory: vi.fn(), marketing: vi.fn(), actions: vi.fn(), credits: vi.fn(), daily: vi.fn(), ledger: vi.fn(), comparison: vi.fn(),
 }));
 vi.mock("../apps/dashboard/src/api/queries.ts", () => ({ useAdminChatterUsage: mocks.usage, useAuthMe: mocks.auth, useAdminOfapiCreditsSummary: mocks.credits, useAdminOfapiCreditsDaily: mocks.daily, useAdminOfapiCreditsLedger: mocks.ledger, useAdminOfapiSpendComparison: mocks.comparison }));
 vi.mock("../apps/dashboard/src/api/pages.ts", () => ({ usePages: mocks.pages }));
@@ -24,15 +24,11 @@ vi.mock("../apps/dashboard/src/api/ofapiExports.ts", () => ({
 }));
 vi.mock("../apps/dashboard/src/api/ofapiMarketing.ts", () => ({ useOfapiMarketing: mocks.marketing, marketingActions: {} }));
 vi.mock("../apps/dashboard/src/api/ofapiActions.ts", () => ({ useOfapiActions: mocks.actions, accountActions: {} }));
-vi.mock("../apps/dashboard/src/api/workboard.ts", () => ({ useWorkboardV2Ai: mocks.ai, useWorkboardV2AiRuns: mocks.aiRuns, useWorkboardV2AiSettings: mocks.aiSettings, useWorkboardV2AiClassify: mocks.aiClassify }));
 vi.mock("../apps/dashboard/src/pages/settings/OfapiWebhookRecovery.tsx", () => ({ OfapiWebhookRecovery: () => null }));
 vi.mock("../apps/dashboard/src/pages/settings/OfapiBannedWords.tsx", () => ({ OfapiBannedWords: () => null }));
 vi.mock("../apps/dashboard/src/pages/settings/OfapiVendorEvidence.tsx", () => ({ OfapiVendorEvidence: () => null }));
 
 import { UsagePage, otherUsageRequests } from "../apps/dashboard/src/pages/UsagePage.tsx";
-import { AiAnalyticsPage } from "../apps/dashboard/src/pages/AiAnalyticsPage.tsx";
-import { AiPageDashboard, parseAiDailyCap, retainAiSettingsReceipt } from "../apps/dashboard/src/components/ai/AiPageDashboard.tsx";
-import { AiRunLog } from "../apps/dashboard/src/components/ai/AiRunLog.tsx";
 import { OfapiMediaPage } from "../apps/dashboard/src/pages/OfapiMediaPage.tsx";
 import { OfapiExportsPage, exportWindowError, exportQuoteReviewSnapshot, UnconfirmedExportQuoteNotice } from "../apps/dashboard/src/pages/OfapiExportsPage.tsx";
 import { OfapiMarketing } from "../apps/dashboard/src/pages/OfapiMarketing.tsx";
@@ -57,10 +53,6 @@ beforeEach(() => {
   mocks.auth.mockReturnValue(query({ user: { role: "owner" } }));
   mocks.collection.mockReturnValue(query({ pages: [page], revision: 1, backgroundPaused: false }));
   mocks.pages.mockReturnValue(query([{ ...page, label: "lora-1", platform: "fansly" }]));
-  mocks.aiSettings.mockReturnValue({ mutate: vi.fn(), isPending: false });
-  mocks.aiClassify.mockReturnValue({ mutate: vi.fn(), isPending: false });
-  mocks.aiRuns.mockReturnValue(query({ runs: [] }));
-  mocks.ai.mockReturnValue(query(undefined, true));
   for (const name of ["media", "exports", "rows", "visitors", "inventory", "marketing", "actions"] as const) mocks[name].mockReturnValue(query());
   mocks.credits.mockReturnValue(query(summary));
   mocks.daily.mockReturnValue(query(emptyDaily));
@@ -86,34 +78,6 @@ describe("analytics and operations page review", () => {
     expect(html).toContain("Alex");
     expect(html).toContain("previous report is still shown");
     expect(html).not.toContain("Usage failed to load");
-  });
-  it("does not invent an empty agency when the AI page catalog failed", () => {
-    mocks.pages.mockReturnValue(query(undefined, true));
-    const html = render(AiAnalyticsPage);
-    expect(html).toContain("Не удалось загрузить список страниц");
-    expect(html).not.toContain("Нет Fansly-страниц");
-  });
-  it("reports an AI report failure instead of an endless loading state", () => {
-    const html = renderToStaticMarkup(createElement(QueryClientProvider, { client: new QueryClient() }, createElement(AiPageDashboard, { pageLabel: "lora-1" })));
-    expect(html).toContain("Не удалось загрузить отчёт классификатора");
-    expect(html).not.toContain("Загрузка…");
-  });
-  it("does not call a failed AI run-log read an empty log", () => {
-    const html = renderToStaticMarkup(createElement(AiRunLog, { runs: [], isLoading: false, isFetching: false, isError: true, hasSnapshot: false, onRefresh: vi.fn() }));
-    expect(html).toContain("Не удалось загрузить журнал");
-    expect(html).not.toContain("запусков пока нет");
-  });
-  it("validates AI caps without silently replacing invalid input", () => {
-    expect(parseAiDailyCap("")).toBeNull();
-    expect(parseAiDailyCap("5000")).toBe(5000);
-    for (const value of ["0", "-1", "1.5", "5001", "abc"]) expect(() => parseAiDailyCap(value)).toThrow();
-  });
-  it("retains the acknowledged AI settings until the read agrees, including intervening stale reads", () => {
-    const previous = { enabled: false, hasApiKey: true, model: "model-a", dailyCapMin: 1, dailyCapMax: 10, envEnabled: false, source: { enabled: "override", dailyCapMax: "override", model: "override" }, override: { enabled: false, dailyCapMax: 10, model: "model-a" } } satisfies Parameters<typeof retainAiSettingsReceipt>[1];
-    const saved = { ...previous, enabled: true, dailyCapMax: 20, override: { ...previous.override, enabled: true, dailyCapMax: 20 } };
-    expect(retainAiSettingsReceipt(saved, previous)).toBe(saved);
-    expect(retainAiSettingsReceipt(saved, { ...previous, dailyCapMax: 30, override: { ...previous.override, dailyCapMax: 30 } })).toBe(saved);
-    expect(retainAiSettingsReceipt(saved, { ...saved })).toBeNull();
   });
   it("keeps loading media distinct from an empty vault and avoids a 1–0 range", () => {
     const html = render(OfapiMediaPage);

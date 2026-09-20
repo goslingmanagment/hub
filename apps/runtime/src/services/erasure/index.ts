@@ -950,36 +950,14 @@ async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLine
     );
   }
 
-  // wb_closing_cache verdicts can quote fan text; resolve via the fan's DM
-  // threads BEFORE those threads (and their messages) are deleted.
+  // The fan's DM threads, resolved BEFORE those threads (and their messages)
+  // are deleted, so message-keyed children can still be matched through them.
   const threadPred = sql`t.platform_account_id in ${scope.pageIds}
     and (t.fan_id = ${fanId} or t.platform_conversation_id = ${ref})`;
 
   // Resolved before ledger lineage is collected: creator-sent events use the
   // messaging group id as conversation_ref and must be deleted with this fan.
   const fanGroupIds = scope.fanGroupIds;
-
-  targets.push({
-    plane: "hot",
-    target: "wb_closing_cache",
-    action: "delete",
-    rows: await countOf(app, sql`
-      select count(*)::text as n from wb_closing_cache c
-      where exists (
-        select 1 from page_dm_messages m
-        join page_dm_threads t on t.id = m.conversation_id
-        where ${threadPred} and m.platform_account_id = c.platform_account_id
-          and m.platform_message_id = c.platform_message_id
-      )`),
-    run: (tx) => execCount(tx, sql`
-      delete from wb_closing_cache c
-      where exists (
-        select 1 from page_dm_messages m
-        join page_dm_threads t on t.id = m.conversation_id
-        where ${threadPred} and m.platform_account_id = c.platform_account_id
-          and m.platform_message_id = c.platform_message_id
-      )`),
-  });
 
   // The fan's DM threads; messages ride the FK cascade but are counted.
   targets.push({
@@ -1303,6 +1281,27 @@ export const PAGE_ERASURE_TABLE_EXCLUSIONS: readonly PageErasureTableExclusion[]
     table: "user_page_assignments",
     reason: "User-to-page authorization is agency catalog configuration, not captured creator or fan data; offboarding access is a separate owner action.",
   },
+  // Decision 376: the in-core Workboard v2 is gone — no code reads or writes
+  // these tables any more, and they are dropped by the follow-up migration
+  // that lands once this image is on production. Until then they are orphaned
+  // projections of data that erasure already removes at its source (page_fans,
+  // page_dm_threads, fans), so planning a purge target for them would pin a
+  // schema this repo has already stopped maintaining.
+  ...([
+    "workboard_state",
+    "workboard_contact_log",
+    "workboard_claim_leases",
+    "workboard_snoozes",
+    "wb_closing_settings",
+    "wb_closing_cache",
+    "wb_llm_usage_daily",
+    "wb_classifier_runs",
+  ].map((table) => ({
+    table,
+    reason: "Decision 376: retired Workboard v2 table with no reader and no writer left in the code; "
+      + "it is dropped by the follow-up DROP TABLE migration that lands after this image reaches "
+      + "production, and every fact it projected is erased at its source (page_fans, page_dm_threads, fans).",
+  }))),
 ];
 
 async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget[]> {
@@ -1467,9 +1466,6 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
     ["revenue_mix_daily", "page_id"],
     ["revenue_month_totals", "page_id"],
     ["sync_runs", "page_id"],
-    ["wb_classifier_runs", "platform_account_id"],
-    ["wb_closing_settings", "platform_account_id"],
-    ["wb_llm_usage_daily", "platform_account_id"],
     ["ai_generation_content", "page_id"],
     // Voice-notes lane (0109): both are page-scoped and must be purged
     // explicitly. voice_notes REFERENCES pages WITHOUT cascade (it would block
@@ -1479,7 +1475,6 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
     // row, so the cascade never fires — it too needs an explicit delete.
     ["voice_notes", "platform_account_id"],
     ["page_voice_profiles", "platform_account_id"],
-    ["wb_closing_cache", "platform_account_id"],
     ["page_dm_threads", "platform_account_id"], // messages ride the cascade
     ["message_archive", "account_id"],
     ["dm_message_archive", "platform_account_id"],
@@ -1503,10 +1498,6 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
     ["page_fans", "platform_account_id"],
     ["daily_followers", "platform_account_id"],
     ["daily_subscribers", "platform_account_id"],
-    ["workboard_state", "platform_account_id"],
-    ["workboard_contact_log", "platform_account_id"],
-    ["workboard_claim_leases", "platform_account_id"],
-    ["workboard_snoozes", "platform_account_id"],
     ["transactions", "platform_account_id"],
     ["revenue_daily", "platform_account_id"],
     ["projection_seq_watermarks", "account_id"],

@@ -288,14 +288,6 @@ export const HUB_FEATURES: readonly HubFeature[] = [
     check: "Проверить актуальную переписку через действующую цепочку OFAPI.",
     keys: ["onlyFansDmPollingEnabled"], gates: [gate("onlyFansDmPollingEnabled")], ...sync,
   },
-  {
-    id: "closing", title: "AI-оценка закрытия диалога", group: "AI и агенты", advice: "optional",
-    summary: "Дополнительная классификация диалогов для Workboard.",
-    reason: "Включать, если результат действительно используется в очереди работы. Без этого отдельные генерации не дают подтверждённой пользы.",
-    consequence: "Остановится эта AI-классификация. Обычные ответы сотрудникам не зависят от неё.",
-    check: "Проверить, кто использует оценку и сколько ручных действий она экономит.",
-    keys: ["wbClosingLlmEnabled", "wbClosingLlmModel", "wbClosingLlmDailyCapMin", "wbClosingLlmDailyCapMax"], gates: [gate("wbClosingLlmEnabled")], ...ai,
-  },
 ];
 
 export function findHubFeature(id: string | null | undefined): HubFeature | undefined {

@@ -372,6 +372,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 373 | Safe CI reuse and build cost | Fingerprints ignore only reviewed regular Markdown; a separate DB proof excludes dashboard source/public only. Draft PRs block the gate without heavy jobs; squash defaults omit old commit messages and PR titles reject CI-skip instructions. Docker typechecks by default; CI builds once with Buildx layer cache and two isolated unit workers. Proof uploads tolerate reruns; read-only cost reporting deduplicates carried-over jobs. |
 | 374 | Full CI worker imports and latency benchmark | DB workers import only pure context constants and load the production migrator only for partial schemas. Earnings scale correctness keeps all data/assertions; synthetic 100ms WAN delay is retained in the explicit benchmark. File isolation, serial DB files and full reset remain. |
 | 375 | Typed export scheduling clock | Typed-export due selection uses the Node clock already used by task creation, approval and leasing; real-DB skew tests preserve future ready/retry_wait deadlines without sleeps or retries. |
+| 376 | In-core Workboard v2 removed | The module, its event recompute, three pg-boss queues and two cron schedules, the `workboard-closing` AI lane, the `wbClosingLlm*` config keys, 13 contract operations, the dashboard page plus `/ai-analytics` and the legacy redirects, the scripts and the tests are gone. Zero reads in 30 days of production logs and no client caller, against a nightly ~67k-fan evaluation. The eight tables stay orphaned until a follow-up DROP TABLE migration lands after this image is on production. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -15749,3 +15750,57 @@ The mixed-clock defect itself is reproduced deterministically, without
 claiming a direct measurement of the earlier failures' exact timing. See the
 [acceptance report](reports/ci-cold-run-followups-2026-09-16.md) for full-shard
 and hosted validation. Deployment remains outside this change.
+
+## Decision 376: The in-core Workboard v2 is removed (2026-09-20)
+
+**Context.** Decision 117 deprecated the in-core workboard as a product
+direction and Decision 119 kept only the standalone application, leaving the
+kernel serving a board nobody opened. Thirty days of production API logs show
+zero requests to any `/workboard*` route, and neither client — the OnlyFans
+desktop app nor the Fansly extension — calls a `workboardV2*` SDK operation.
+The writer never stopped: every fan event queued a debounced per-fan
+recompute, a nightly reconciler at 03:00 UTC evaluated roughly 67,000 fans,
+and a nightly closing classifier ran at 01:00 UTC with zero enabled pages. The
+owner dropped the standalone application too, on 2026-09-20, which removes the
+last reason to keep the kernel side alive.
+
+**Decision.** Remove the in-core Workboard v2 in full: the API module and its
+routes, the domain-event-driven per-fan recompute, the three pg-boss queues
+(`workboard.recompute`, `workboard.classify-closing`, `workboard.fan-recompute`)
+and their two cron schedules, the `workboard-closing` AI gateway lane, the
+`wbClosingLlm*` configuration keys and the `Workboard` config subsystem, the
+thirteen `workboardV2*` contract operations, the dashboard page together with
+the `/ai-analytics` classifier panel and the `/workboard/v2` and `/crm`
+redirects, the six maintenance scripts, and the tests that covered them. The
+retired queues and schedules are dropped at scheduler boot: `registerAllSchedules`
+unschedules the two cron keys and deletes each queue that still exists. The
+step is idempotent, so it survives a re-registration by an older image, and it
+is wrapped so a failure logs a warning and never blocks the live schedules.
+
+**What stays, and why.** `ANTHROPIC_API_KEY` remains — it key-gates the
+ChatMuse AI gateway provider, and its descriptor simply moves to the `ChatMuse`
+subsystem. `page_fans`, the presence store and its `ofapi_last_seen` source are
+untouched; the board was a reader of them, not their owner. `workboard-closing`
+stays in the `ai_usage_features` ledger enum: the Postgres enum is forward-only
+and the usage repository validates the `feature` column of every row it reads
+back, so removing the string would make a historical row throw in the chatter
+usage report. It is carried as `legacyAiUsageFeatures` and excluded from
+`aiGatewayFeatures`, so the gateway refuses a new request on a lane whose
+budgets and prompts are gone. The internal completion lane
+(`services/ai-gateway-internal.ts`) also stays, now with no caller: it is the
+tested system-initiated path — reserve, provider, finalize, restricted capture,
+terminal integrity — that any future scheduled AI work must use instead of
+hand-rolling a second one, and its tests now drive it directly.
+
+**Sequencing.** This change is code only. The eight tables (`workboard_state`,
+`workboard_contact_log`, `workboard_snoozes`, `workboard_claim_leases`,
+`wb_closing_settings`, `wb_closing_cache`, `wb_llm_usage_daily`,
+`wb_classifier_runs`, 42 MB of which is `workboard_state`) stay in the
+database, orphaned, with no reader and no writer. A `DROP TABLE` migration in
+the same change would not be rollback-compatible: the previous image's worker
+still writes `workboard_state`, and `scripts/deploy-production.sh` disables
+automatic rollback for a deploy that carries an irreversible migration. The
+drop is a separate follow-up migration, to land after this image is running on
+production. Until it does, the eight tables carry an explicit, reasoned
+exclusion in the page-erasure inventory rather than a purge target for a schema
+this repo no longer maintains.

@@ -443,15 +443,17 @@ describe("dashboard sync layout", () => {
     expect(html).toContain("Settings");
   });
 
-  it("labels the page submenu with Workboard and links to the canonical route", () => {
+  it("keeps the retired workboard and AI-analytics links out of the sidebar (Decision 376)", () => {
     const html = renderWithRouter(
       createElement(Sidebar, { user: { username: "owner", role: "owner" } }),
       ["/pages/lana"],
     );
 
-    expect(html).toContain("Workboard");
-    expect(html).toContain("href=\"/pages/lana/workboard\"");
-    expect(html).toContain("href=\"/ai-analytics?page=lana\"");
+    // Non-vacuous: the page submenu still renders its surviving entries.
+    expect(html).toContain("href=\"/pages/lana/subscribers\"");
+    expect(html).not.toContain("Workboard");
+    expect(html).not.toContain("/pages/lana/workboard");
+    expect(html).not.toContain("/ai-analytics");
     expect(html).not.toContain(">CRM<");
   });
 
@@ -972,7 +974,7 @@ describe("dashboard sync layout", () => {
     expect(html).toContain("Backfilling… 203/3,669 conversations");
   });
 
-  it("shows Workboard in page breadcrumbs for both canonical and legacy routes", () => {
+  it("has no workboard breadcrumb left on the retired paths (Decision 376)", () => {
     const workboardHtml = renderWithRouter(
       createElement(Topbar, { user: { username: "owner", role: "owner" } }),
       ["/pages/lana/workboard"],
@@ -982,8 +984,10 @@ describe("dashboard sync layout", () => {
       ["/pages/lana/crm"],
     );
 
-    expect(workboardHtml).toContain(">Workboard<");
-    expect(legacyHtml).toContain(">Workboard<");
+    // The page crumb still resolves; only the section crumb is gone.
+    expect(workboardHtml).toContain(">lana<");
+    expect(workboardHtml).not.toContain(">Workboard<");
+    expect(legacyHtml).not.toContain(">Workboard<");
     expect(workboardHtml).not.toContain(">CRM<");
   });
 

@@ -5,7 +5,7 @@ import {
   sanitizeError,
   normalizeProviderStreamFailure,
   type AiProviderFailureClassification,
-  type AiUsageFeature,
+  type AiGatewayFeature,
 } from "@agency_hub_core/shared";
 import {
   finalizeAiGatewayUsageEvent,
@@ -27,10 +27,14 @@ import { reconcileAiProviderTerminalIncident } from "./ai-gateway-incidents.ts";
 import { QuotaDeniedError, ServiceUnavailableError } from "./errors.ts";
 
 // Kernel Stage 29 Task 5 — the internal completion lane. System-initiated
-// gateway calls (the workboard closing classifier) go through the SAME
-// reserve → provider → finalize → restricted-capture path as client
-// streams, so their spend lands in the ledger under their feature and
-// their content joins the restricted class.
+// gateway calls go through the SAME reserve → provider → finalize →
+// restricted-capture path as client streams, so their spend lands in the
+// ledger under their feature and their content joins the restricted class.
+//
+// Decision 376: the lane's only caller was the Workboard v2 closing
+// classifier, which is gone. The lane itself is kept — it is the tested
+// system-initiated path any future scheduled AI work has to use rather than
+// hand-rolling a second one.
 //
 // EXECUTION DECISIONS (recorded):
 // - user_id NULL = system (Stage 9 credit-ledger precedent).
@@ -52,7 +56,7 @@ export interface GatewayInternalApp {
 }
 
 export interface GatewayCompletionInput {
-  feature: AiUsageFeature;
+  feature: AiGatewayFeature;
   /** Gateway model key, e.g. "anthropic:claude-haiku-4-5". */
   model: string;
   systemBlocks: AiGatewayPromptBlock[];
@@ -139,9 +143,8 @@ export async function runGatewayCompletion(
   // use. This lane used to hand-roll frame folding and defaulted to
   // "completed", so a stream with no usage, no usable `done`, or empty output
   // settled as a SUCCESS: it billed zero, resolved the global provider
-  // billing latch, and handed the workboard an empty completion that
-  // `parseVerdicts` turned into all-needs_reply defaults — which then got
-  // WRITTEN INTO `wb_closing_cache` under a content hash and never
+  // billing latch, and handed its caller an empty completion that the caller's
+  // JSON parser turned into silent defaults it then CACHED and never
   // recomputed. Terminal integrity now lives in exactly one place.
   const terminal = new AiGatewayTerminalStreamConsumer();
   let terminalFailure: AiProviderFailureClassification | null = null;

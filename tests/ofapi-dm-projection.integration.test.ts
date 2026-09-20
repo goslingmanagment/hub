@@ -11,7 +11,6 @@ import {
   getPageConversationPreview,
   listOfapiWebhookEventsForDmProjection,
   listPageDmConversationsByPlatformConversationIds,
-  listWorkboardRecomputePageIds,
   setPageOfapiAccountId,
   upsertOfapiWebhookConfig,
 } from "@agency_hub_core/db";
@@ -250,9 +249,6 @@ describe("OFAPI DM projection", () => {
     };
     expect(previewBody.messages[0]!.content)
       .toBe("Sample fan message text used in anonymized fixtures.");
-
-    // Mapped OnlyFans pages join the workboard v2 recompute set.
-    expect(await listWorkboardRecomputePageIds(appContext.db)).toContain(page.id);
 
     // The messages_live block reads webhook ingest freshness for OFAPI-fed pages.
     const snapshot = await getSyncStatusSnapshot(appContext, { pageLabel: page.label });

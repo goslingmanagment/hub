@@ -23,7 +23,7 @@ import {
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 
 // Conversations module (target §6.1): threads, messages, archive search, fan
-// profiles/summaries — serves desktop + extension + workboard. Handlers
+// profiles/summaries — serves the desktop app + the extension. Handlers
 // relocated verbatim from server.ts (Stage 19 Task 3).
 
 export function registerConversationsRoutes(server: ApiServer, ctx: ApiModuleContext) {
