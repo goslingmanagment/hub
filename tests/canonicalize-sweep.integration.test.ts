@@ -21,6 +21,10 @@ import {
 } from "../apps/runtime/src/services/canonicalize-driver.ts";
 import { CANONICALIZER_FAMILIES } from "../apps/runtime/src/services/canonicalize/index.ts";
 import {
+  computeHealthFloorBacklogMs,
+  HEALTH_FLOOR_REGISTRY,
+} from "../apps/runtime/src/services/health-floors.ts";
+import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
   type StartedTestDatabase,
@@ -375,6 +379,121 @@ describe("canonicalization sweep (Stage 8)", () => {
     const events = await listEventsSince(testDb.db, { accountId: page.id, afterSeq: 0 });
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({ type: "message.received" });
+  }, 60_000);
+
+  it("late custody import replays a retired account's v3 rows without duplicating facts (Decision 381)", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const db = testDb.db;
+    const pool = testDb.pool;
+    // Prod shape 2026-09-20: pages 8/9 were re-registered in OFAPI twice
+    // BEFORE migration 0150 existed, so the retired acct_* refs own ~452k
+    // v3-stamped webhook rows that no page or custody row maps. The webhook
+    // family is v5, so they sit under the health floor forever
+    // (obs_backlog_webhook_ofapi_v5 burns every minute) and cost the whole
+    // replay budget as skippedUnmapped. The repair is the custody import in
+    // docs/runbooks/ofapi-historical-binding-import.md; this fixture runs that
+    // exact SQL and pins what the sweep must do afterwards: dedupe every fact
+    // the v3 pass already appended (money included), append only the
+    // never-consumed v5 material, stamp the rows, and drop the gauge to zero.
+    const model = await createModel(db, { slug: "cust", name: "Custody" });
+    if (!model) throw new Error("Expected synthetic model");
+    const page = await createOnlyFansPage(db, { modelId: model.id, label: "cust-of" });
+    if (!page) throw new Error("Expected synthetic page");
+    const retired = "acct_retired000000000000000000000000";
+    const current = "acct_current00000000000000000000000";
+    await setPageOfapiAccountId(db, { pageId: page.id, ofapiAccountId: retired });
+
+    const envelope = (kind: string, payload: Record<string, unknown>) => ({
+      event: kind, account_id: retired, payload,
+    });
+    const journal = async (kind: string, key: string, payload: Record<string, unknown>) => {
+      const inserted = await insertObservation(db, {
+        source: "webhook", producer: "ofapi:webhook", platform: "onlyfans",
+        accountId: null, nativeAccountRef: retired, kind,
+        payload: envelope(kind, payload), payloadHash: sha256(key), idempotencyKey: key,
+      });
+      if (!inserted.inserted) throw new Error(`seed ${key} deduped unexpectedly`);
+      return inserted;
+    };
+    // The six fact kinds the retired refs hold on prod (presence dominates there).
+    const v3Rows = [
+      await journal("tips.received", "cust-tip-1", { id: "n-cust-1", user: { id: 900 }, amountGross: 25, amountNet: 20, createdAt: "2026-07-10T10:00:00+00:00" }),
+      await journal("transactions.new", "cust-txn-1", { id: "tx-cust-1", type: "tip", amount: 25, net_amount: 20, fan: { id: 900 }, currency: "USD", status: "done", created_at: "2026-07-10T10:00:01+00:00" }),
+      await journal("messages.sent", "cust-msg-sent-1", { id: 5001, createdAt: "2026-07-10T10:01:00+00:00", toUser: { id: 900 }, text: "hi", price: 0, isFree: true, mediaCount: 0 }),
+      await journal("messages.received", "cust-msg-recv-1", { id: 5002, createdAt: "2026-07-10T10:02:00+00:00", fromUser: { id: 900 }, text: "hey", price: 0, isFree: true, mediaCount: 0 }),
+      await journal("subscriptions.new", "cust-sub-1", { id: "n-cust-2", type: "subscribed", subType: "new_subscriber", user_id: "creator", user: { id: 901 }, createdAt: "2026-07-10T10:03:00+00:00" }),
+      await journal("users.online", "cust-online-1", { fan: { id: 900 }, observed_at: "2026-07-10T10:04:00+00:00", status_changed_at: "2026-07-10T10:04:00+00:00" }),
+    ];
+
+    // The v3 pass, under the then-live mapping: every fact appended, rows stamped.
+    const v3Pass = await runCanonicalization(appStub());
+    expect(v3Pass).toMatchObject({ appended: 6, deduped: 0, stamped: 6, skippedUnmapped: 0, errored: 0 });
+    const countEvents = async () => Number((await pool.query<{ n: string }>(
+      "select count(*)::text as n from domain_events where account_id = $1", [page.id],
+    )).rows[0]!.n);
+    const eventsAfterV3 = await countEvents();
+    for (const row of v3Rows) {
+      await pool.query("update observations set parse_version = 3 where id = $1 and received_at = $2", [row.observationId, row.receivedAt]);
+    }
+    // Pre-custody re-registration (the July/September prod shape): the page's
+    // column moves to the replacement ref, no custody row survives for the
+    // retired one, and migration 0150 later seeds only the CURRENT mapping.
+    await pool.query("update pages set ofapi_account_id = $2 where id = $1", [page.id, current]);
+    await pool.query("delete from ofapi_account_bindings where account_id = $1", [retired]);
+    await pool.query(
+      `insert into ofapi_account_bindings(account_id,page_id,generation,evidence)
+       values ($1,$2,1,'{"source":"mapping_at_migration","boundary":"unknown"}'::jsonb)
+       on conflict (account_id) do nothing`, [current, page.id],
+    );
+    // v5 material the v3 pass never consumed (prod: eight chat_queue.* rows at parse_version 0).
+    await journal("chat_queue.updated", "cust-queue-1", { id: 777, date: "2026-08-22T09:00:00+00:00", isDone: false, pending: 3, total: 10 });
+
+    const webhookFloor = HEALTH_FLOOR_REGISTRY.find((floor) => floor.source === "webhook" && floor.lane === "ofapi");
+    if (!webhookFloor) throw new Error("webhook/ofapi health floor missing from the registry");
+
+    // Unmapped: every row rescans and is skipped, nothing is stamped, the gauge burns.
+    const stuck = await runCanonicalization(appStub());
+    expect(stuck).toMatchObject({ scanned: 7, appended: 0, stamped: 0, skippedUnmapped: 7, errored: 0, bindingConflicts: [] });
+    expect(await computeHealthFloorBacklogMs(db, webhookFloor)).toBeGreaterThan(0);
+    expect(await countEvents()).toBe(eventsAfterV3);
+
+    // The runbook's custody import — same locks as every binding writer, a
+    // historical row (no generation), observed boundaries, evidence retained.
+    await pool.query("begin");
+    await pool.query("select pg_advisory_xact_lock(9003010, $1::integer)", [page.id]);
+    await pool.query("select pg_advisory_xact_lock(9003011)");
+    await pool.query(
+      `insert into ofapi_account_bindings(account_id,page_id,creator_id,generation,valid_from,valid_to,evidence)
+       select $1, $2, '518588958', null, '2026-07-05T01:55:05.652Z', '2026-07-21T20:22:03.864Z',
+         '{"source":"historical_custody_import","decision":381}'::jsonb
+       where not exists (select 1 from ofapi_account_bindings where account_id = $1)
+         and not exists (select 1 from pages where ofapi_account_id = $1)`, [retired, page.id],
+    );
+    await pool.query("commit");
+
+    // Mapped again: the v3 facts dedupe (money included) and, fully deduped,
+    // mint no checkpoint; the v5 material appends once — its hidden event plus
+    // the atomic projection checkpoint covering it; every row is stamped and
+    // the gauge reads caught up.
+    const healed = await runCanonicalization(appStub());
+    expect(healed).toMatchObject({ scanned: 7, appended: 2, deduped: 6, stamped: 7, skippedUnmapped: 0, errored: 0 });
+    expect(await countEvents()).toBe(eventsAfterV3 + 2);
+    const newEvents = await pool.query<{ type: string }>(
+      "select type from domain_events where account_id = $1 and observation_id > $2 order by type", [page.id, v3Rows[5]!.observationId],
+    );
+    expect(newEvents.rows.map((row) => row.type)).toEqual(["ofapi.chat_queue_observed", "stream.projection_checkpoint"]);
+    const versions = await pool.query<{ parse_version: number; n: string }>(
+      "select parse_version, count(*)::text as n from observations where native_account_ref = $1 group by 1", [retired],
+    );
+    expect(versions.rows).toEqual([{ parse_version: webhookFloor.version, n: "7" }]);
+    expect(await computeHealthFloorBacklogMs(db, webhookFloor)).toBe(0);
+
+    // Nothing left below the floor: the next sweep does not rescan the refs.
+    const settled = await runCanonicalization(appStub());
+    expect(settled).toMatchObject({ scanned: 0, appended: 0, stamped: 0, skippedUnmapped: 0 });
   }, 60_000);
 
   it("isolates a poison row: one throwing observation never wedges the sweep", async (context) => {

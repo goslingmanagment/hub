@@ -377,6 +377,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 378 | Retired Workboard tables dropped | The eight orphaned Workboard v2 tables (`workboard_state`, `workboard_contact_log`, `workboard_snoozes`, `workboard_claim_leases`, `wb_closing_settings`, `wb_closing_cache`, `wb_llm_usage_daily`, `wb_classifier_runs`) are dropped by migration `0203_drop_workboard_tables.sql`, which is rollback-compatible against the Decision 376 image because that image neither reads nor writes them. The inert `workboard-closing` value in the Postgres `ai_usage_feature` enum stays. Both transitional pieces Decision 376 left behind — the page-erasure exclusions and the pg-boss queue/schedule retirement at scheduler boot — go with this change. |
 | 379 | One hi-greeting feature instead of a mode | `hi-greeting` has one template and orthogonal optional request parameters: `variantCount: 1 \| 3`, `clientContext.personalMessageCount`, `fanUsername`, `fanAvatarUrl`. The chat Hi button gains the avatar, username, saved name and automation-label guidance the New Followers queue already had. `gate_hi_greeting_limit` (limit 10) counts personal messages when the client reports them, every message otherwise. All count-dependent prompt text sits in the uncached task block (`{greetingTask}`), so the 1h static prefix is identical for both counts. `greetingMode: "new-follower"` stays as a deprecated alias with unchanged semantics for extension <= 2.4.3 and of-desktop. Supersedes the "separate template, legacy Hi unchanged" part of #333/#339. Deploy Core before the extension release that sends the new fields. |
 | 380 | Orphaned Workboard enum types dropped | The five `workboard_*` Postgres enum types (`workboard_tab`, `workboard_mass_substate`, `workboard_secondary_status`, `workboard_freeloader_status`, `workboard_contact_action`) are dropped by migration `0204_drop_workboard_enum_types.sql`. Decision 378 left them behind because a `DROP TABLE` does not cascade to the enum types its columns used, so they survived the table drop with no remaining user. Rollback-compatible against the Decision 378 image, which neither reads nor writes them, and listed as such in `scripts/deploy-production.sh`. The inert `workboard-closing` value inside the `ai_usage_feature` enum still stays: Postgres cannot drop an enum value without rebuilding the type. |
+| 381 | OFAPI custody | The four OFAPI accounts retired before migration 0150 (`acct_fbaf…`, `acct_b929…` → 2026-07-21; `acct_9070…`, `acct_b47a…` → 2026-09-03) get historical custody rows in `ofapi_account_bindings` by an owner-approved evidence import (`docs/runbooks/ofapi-historical-binding-import.md`), not by hiding their ~452k v3-stamped webhook rows from the `obs_backlog_webhook_ofapi_v5` gauge. Attribution is proven three ways from `observations` alone; the v3→v5 replay dedupes every fact (dedup keys unchanged) and appends only the never-consumed `chat_queue.*` material, pinned by an integration test. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -16095,3 +16096,90 @@ lane" as its consumer; Decision 376 deleted that lane
 (`ai-gateway-internal.ts`) and no caller sets the field today. The comment now
 says so, and says the knob is still wired — the Anthropic provider honors it,
 OpenRouter ignores it. Behaviour is unchanged.
+
+## Decision 381: Retired OFAPI accounts get historical custody rows; the gauge is not silenced (2026-09-20)
+
+**Context.** Since the webhook family reached v5 (Decision 271, deployed
+2026-09-06) the golden signal `obs_backlog_webhook_ofapi_v5` has breached on
+every minutely sample and the incident latch
+`golden_signal_lag:global:obs_backlog_webhook_ofapi_v5` has never resolved.
+The gauge is `now() - min(received_at)` over family-kind rows with
+`parse_version < 5`; the oldest such row is from 2026-07-05, so the value is
+about 77 days against a 10-minute threshold. Every row below the floor
+belongs to one of four OFAPI accounts that no longer exist in the roster:
+pages 8 (`lora-of`) and 9 (`lora-vip-of`) were re-registered in OFAPI on
+2026-07-21 and again on 2026-09-03/05, both times before migration 0150
+introduced `ofapi_account_bindings`, so the old refs were simply overwritten in
+`pages.ofapi_account_id` and nothing maps them today. Counts of family-kind
+rows below v5 on 2026-09-20: 82,190 + 62,466 (July refs, v3), 189,357 +
+118,512 (August refs, v3) and 8 `chat_queue.*` rows at v0 — 452,533 rows,
+of which 359,000 are presence and the rest messages, subscriptions,
+transactions and tips. The sweep resolves refs through the page map plus
+`listHistoricalOfapiBindings`; an unresolved row is `skippedUnmapped` and
+stays below the floor. The minutely sweep therefore spends its whole webhook
+budget (`skippedUnmapped: 4000` per run, 20 pages × 200) cycling through this
+set every couple of hours and never reaches a state where the gauge could
+clear. A genuinely wedged webhook canonicalization would look identical, so
+the signal is currently blind for this family.
+
+**What replay would and would not change.** The v3 rows were consumed under
+the then-live mapping: `parse_version = 3` is stamped only after the append.
+The v3→v5 diff of the family touches the `auth:` dedup key (accounts.* kinds,
+none on these refs) and adds lifecycle and content kinds; the keys for
+messages, subscriptions, tips, transactions and presence are byte-identical.
+A replay therefore dedupes every v3 fact through `domain_event_keys` and, being
+fully deduped, mints no projection checkpoint. The only never-consumed material
+is the eight `chat_queue.updated/finished` rows of 2026-08-22 on page 9 (queue
+heads, Decision 271). No money projection moves.
+
+**Attribution.** Three independent read-only proofs per ref, all from
+`observations` (July payloads through `capture_json_hot_bodies`):
+signed CDN links in `messages.sent` media carry the session user id —
+`u=518588958` for `acct_fbaf…` (28/28 rows) and `acct_9070…` (40/40),
+`u=514788334` for `acct_b929…` (27/27) and `acct_b47a…` (47/47); the roster
+capture of 2026-09-07 maps 518588958 to `loravie` (page 8) and 514788334 to
+`loravievip` (page 9), and `pages.metadata.avatarUrl` carries the same ids.
+The hub's own lineage intake of 2026-07-10 (`ofapi_webhook_lineage_backfill`,
+1,102 rows `account_id = 8` wrapping `acct_fbaf…` envelopes, 7,521 rows
+`account_id = 9` wrapping `acct_b929…`). Recipient continuity of
+`messages.sent`: `acct_b47a…` shares 518 fans with `acct_b929…` and 100 with
+the current `acct_a571…` against 13 and 9 with the page-8 refs; `acct_9070…`
+shares 32 with `acct_fbaf…` and 29 with the current `acct_fe79…` against 10
+with `acct_a571…`.
+
+**Decision.** The retired refs are attached to their pages as historical
+custody rows (`generation` null, `valid_from`/`valid_to` = observed
+boundaries, evidence naming the three proofs) by the owner-approved SQL in
+`docs/runbooks/ofapi-historical-binding-import.md`, staged one ref at a time.
+This is an evidence import into the custody index that Decision 257 and the
+release-1 runbook already anticipate, under the same advisory locks every
+binding writer takes; it does not bump a page generation, touch
+`ofapi_auth_*`, or write an `ofapi.binding.replaced` observation. The admin
+route cannot express it: it replaces the current account from the live roster
+and proves history through `domain_events.observation_id`, which has no
+index. After the import the ordinary sweep replays the rows (about two to
+four hours at the budget), stamps them v5, and the gauge clears by itself.
+
+**Rejected: excluding permanently unmapped refs from the gauge.** It would
+have been honest only if the rows were truly unattributable. They are not, and
+custody is also what scopes erasure and late redeliveries to the right page
+(Decision 257); silencing the metric would have left 452k rows outside that
+scope and the sweep still paying for them every minute.
+
+**Pinned.** `tests/canonicalize-sweep.integration.test.ts` reproduces the prod
+shape (v3-stamped rows for a ref with no custody row after a pre-0150
+re-registration, plus one unconsumed `chat_queue.updated` row), runs the
+runbook's INSERT, and asserts: before the import every row is
+`skippedUnmapped` and `computeHealthFloorBacklogMs` is positive; after it,
+`deduped` equals the v3 facts, `appended` is exactly the queue event plus its
+checkpoint, every row is stamped v5, the gauge reads 0, and the next sweep
+rescans nothing.
+
+**Applied.** The four rows were imported on production on 2026-09-20 at
+21:57 UTC with the owner's direct approval, all four at once. The first
+sweeps afterwards read `skippedUnmapped: 0`, `deduped ≈ 4000` and
+`stamped ≈ 4000` per minute, with `appended` at the other families' usual
+baseline; the replay of the whole set takes about two hours. The evidence
+JSON of those rows says `decision: 379` — the number this entry carried when
+the import ran; it was renumbered to 381 at merge because 379 and 380 were
+taken on `main` the same day.
