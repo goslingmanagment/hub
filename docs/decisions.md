@@ -376,6 +376,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 377 | A PR description edit keeps the Quality Gate check | The `quality` job is named the literal `Quality Gate` and runs in every event; a body-only `edited` event skips every other job and the gate mirrors an earlier successful `Quality Gate` check run for the same head SHA (`checks: read`, current run excluded), failing when there is none. Supersedes the renamed, skipped job of #373: GitHub resolves a required check against the NEWEST check suite for the head, so the rename left PR #242 unmergeable with every check green |
 | 378 | Retired Workboard tables dropped | The eight orphaned Workboard v2 tables (`workboard_state`, `workboard_contact_log`, `workboard_snoozes`, `workboard_claim_leases`, `wb_closing_settings`, `wb_closing_cache`, `wb_llm_usage_daily`, `wb_classifier_runs`) are dropped by migration `0203_drop_workboard_tables.sql`, which is rollback-compatible against the Decision 376 image because that image neither reads nor writes them. The inert `workboard-closing` value in the Postgres `ai_usage_feature` enum stays. Both transitional pieces Decision 376 left behind — the page-erasure exclusions and the pg-boss queue/schedule retirement at scheduler boot — go with this change. |
 | 379 | One hi-greeting feature instead of a mode | `hi-greeting` has one template and orthogonal optional request parameters: `variantCount: 1 \| 3`, `clientContext.personalMessageCount`, `fanUsername`, `fanAvatarUrl`. The chat Hi button gains the avatar, username, saved name and automation-label guidance the New Followers queue already had. `gate_hi_greeting_limit` (limit 10) counts personal messages when the client reports them, every message otherwise. All count-dependent prompt text sits in the uncached task block (`{greetingTask}`), so the 1h static prefix is identical for both counts. `greetingMode: "new-follower"` stays as a deprecated alias with unchanged semantics for extension <= 2.4.3 and of-desktop. Supersedes the "separate template, legacy Hi unchanged" part of #333/#339. Deploy Core before the extension release that sends the new fields. |
+| 380 | Orphaned Workboard enum types dropped | The five `workboard_*` Postgres enum types (`workboard_tab`, `workboard_mass_substate`, `workboard_secondary_status`, `workboard_freeloader_status`, `workboard_contact_action`) are dropped by migration `0204_drop_workboard_enum_types.sql`. Decision 378 left them behind because a `DROP TABLE` does not cascade to the enum types its columns used, so they survived the table drop with no remaining user. Rollback-compatible against the Decision 378 image, which neither reads nor writes them, and listed as such in `scripts/deploy-production.sh`. The inert `workboard-closing` value inside the `ai_usage_feature` enum still stays: Postgres cannot drop an enum value without rebuilding the type. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -16049,3 +16050,48 @@ No runnable prompt-sampling harness exists in this repository: the runner that
 the tree and accepts fast-reply cases only. No before/after samples were
 generated with this change; the owner reviews samples before the production
 deploy.
+
+## Decision 380: The orphaned Workboard enum types are dropped (2026-09-20)
+
+**Context.** Decision 378 dropped the eight Workboard v2 tables and read as if
+that finished the removal. It did not: a `DROP TABLE` in Postgres drops the
+table, its indexes and its constraints, but not the enum types its columns
+were declared with. `0019_workboard_v2.sql` had created five of them —
+`workboard_tab`, `workboard_mass_substate`, `workboard_secondary_status`,
+`workboard_freeloader_status`, `workboard_contact_action` — and all five
+survived 0203 as rows in `pg_type` with no remaining user, confirmed on
+production on 2026-09-20. They cost nothing to keep, but they are the kind of
+leftover that reads as live schema to the next person who greps for
+`workboard`.
+
+**Decision.** Migration `0204_drop_workboard_enum_types.sql` drops the five
+types, in one transaction, reverse of their creation order, each with
+`IF EXISTS` so the migration is a no-op on a database where they were already
+removed by hand.
+
+**Why nothing breaks.** `0019_workboard_v2.sql` is the only migration in the
+directory that names these types, and every column declared with one of them
+belonged to a table 0203 dropped. `packages/db/src/schema.ts` and the rest of
+`packages/db/src` have no `pgEnum` for them, and `apps/` and `tests/` contain
+no reference to `workboard` at all. Nothing depends on them, so no `CASCADE`
+is needed.
+
+**Rollback compatibility.** The file is listed in
+`ROLLBACK_COMPATIBLE_MIGRATIONS` in `scripts/deploy-production.sh`, on the same
+reasoning as 0203 and with the same kind of comment: the image this deploy
+replaces (58dd9bea, the Decision 376/378 line) neither reads nor writes these
+types, so it runs unchanged if the deploy rolls back to it. Without the entry
+the deploy would see a non-compatible migration in the delta and disarm
+automatic rollback for no gain.
+
+**What still stays.** The `workboard-closing` value in the Postgres
+`ai_usage_feature` enum, exactly as Decision 378 said. Postgres cannot drop an
+enum value without rebuilding the type, and the value is inert: no
+`ai_usage_events` row carries it and the TypeScript enum no longer has it.
+
+**One unrelated comment fix rides along.** The doc comment on `outputFormat`
+in `apps/runtime/src/services/ai-gateway.ts` named "the internal completion
+lane" as its consumer; Decision 376 deleted that lane
+(`ai-gateway-internal.ts`) and no caller sets the field today. The comment now
+says so, and says the knob is still wired — the Anthropic provider honors it,
+OpenRouter ignores it. Behaviour is unchanged.

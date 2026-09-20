@@ -429,6 +429,13 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # reads nor writes them, so the pre-drop image runs unchanged after a
   # rollback. Listing it keeps automatic rollback armed for this deploy.
   "0203_drop_workboard_tables.sql"
+  # Decision 380: drops the five orphaned Workboard v2 enum types that 0203
+  # left behind, because a DROP TABLE does not cascade to the types its
+  # columns used. Compatible because the image this deploy replaces
+  # (58dd9bea, Decisions 376/378) neither reads nor writes them, so the
+  # pre-drop image runs unchanged after a rollback. Listing it keeps
+  # automatic rollback armed for this deploy.
+  "0204_drop_workboard_enum_types.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"
