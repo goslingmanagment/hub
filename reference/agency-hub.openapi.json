@@ -97271,6 +97271,22 @@
                       "short"
                     ]
                   },
+                  "variantCount": {
+                    "anyOf": [
+                      {
+                        "type": "number",
+                        "enum": [
+                          1
+                        ]
+                      },
+                      {
+                        "type": "number",
+                        "enum": [
+                          3
+                        ]
+                      }
+                    ]
+                  },
                   "greetingMode": {
                     "type": "string",
                     "enum": [
@@ -97320,6 +97336,11 @@
                         "type": "string",
                         "maxLength": 4096,
                         "pattern": "^https:\\/\\/[a-z0-9-]+\\.fansly\\.com\\/"
+                      },
+                      "personalMessageCount": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 5000
                       },
                       "pingSegment": {
                         "type": "string",

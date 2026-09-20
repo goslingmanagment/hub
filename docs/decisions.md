@@ -375,6 +375,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 376 | In-core Workboard v2 removed | The module, its event recompute, three pg-boss queues and two cron schedules, the `workboard-closing` AI lane, the `wbClosingLlm*` config keys, 13 contract operations, the dashboard page plus `/ai-analytics` and the legacy redirects, the scripts and the tests are gone. Zero reads in 30 days of production logs and no client caller, against a nightly ~67k-fan evaluation. The eight tables stay orphaned until a follow-up DROP TABLE migration lands after this image is on production. |
 | 377 | A PR description edit keeps the Quality Gate check | The `quality` job is named the literal `Quality Gate` and runs in every event; a body-only `edited` event skips every other job and the gate mirrors an earlier successful `Quality Gate` check run for the same head SHA (`checks: read`, current run excluded), failing when there is none. Supersedes the renamed, skipped job of #373: GitHub resolves a required check against the NEWEST check suite for the head, so the rename left PR #242 unmergeable with every check green |
 | 378 | Retired Workboard tables dropped | The eight orphaned Workboard v2 tables (`workboard_state`, `workboard_contact_log`, `workboard_snoozes`, `workboard_claim_leases`, `wb_closing_settings`, `wb_closing_cache`, `wb_llm_usage_daily`, `wb_classifier_runs`) are dropped by migration `0203_drop_workboard_tables.sql`, which is rollback-compatible against the Decision 376 image because that image neither reads nor writes them. The inert `workboard-closing` value in the Postgres `ai_usage_feature` enum stays. Both transitional pieces Decision 376 left behind — the page-erasure exclusions and the pg-boss queue/schedule retirement at scheduler boot — go with this change. |
+| 379 | One hi-greeting feature instead of a mode | `hi-greeting` has one template and orthogonal optional request parameters: `variantCount: 1 \| 3`, `clientContext.personalMessageCount`, `fanUsername`, `fanAvatarUrl`. The chat Hi button gains the avatar, username, saved name and automation-label guidance the New Followers queue already had. `gate_hi_greeting_limit` (limit 10) counts personal messages when the client reports them, every message otherwise. All count-dependent prompt text sits in the uncached task block (`{greetingTask}`), so the 1h static prefix is identical for both counts. `greetingMode: "new-follower"` stays as a deprecated alias with unchanged semantics for extension <= 2.4.3 and of-desktop. Supersedes the "separate template, legacy Hi unchanged" part of #333/#339. Deploy Core before the extension release that sends the new fields. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -15919,3 +15920,100 @@ scheduler boot and has therefore already deleted the two cron registrations and
 the three queue rows on production many times over. Re-running it would be a
 no-op; keeping it would be a permanent list of names nothing in this repo
 remembers.
+
+## Decision 379: One hi-greeting feature with orthogonal parameters instead of a mode (2026-09-20)
+
+**Context.** Decision 333 added `greetingMode: "new-follower"` to the
+`hi-greeting` lane and Decision 339 opened it to OnlyFans. That one flag bundled
+four independent things: a second template (`new-follower-greeting.md`), the
+output shape (one message instead of three variants), extra inputs (username,
+avatar image, the chatter's saved name) and the freshness gate (skipped). Every
+context improvement therefore landed on one surface only. The chat Hi button had
+no avatar and no username, its template had no `{fanCustomNameLine}` slot so the
+chatter's saved fan name never reached it, and the two templates gave
+contradictory name guidance (always extract a name from the username, versus do
+not force username analysis and let the saved name win). The gate counted mass
+messages: a fan with eleven automatic or mass messages and no personal one was
+locked out of the chat Hi (`gate_hi_greeting_limit`) while the New Followers
+queue greeted the same fan. The owner asked for one feature rather than two
+parallel ones (2026-09-20).
+
+**Decision.** `hi-greeting` is one feature with one template,
+`templates/hi-greeting.md`. `templates/new-follower-greeting.md`,
+`NEW_FOLLOWER_GREETING_TEMPLATE` and the template switch in `buildPrompt` are
+deleted. The request gains additive optional fields; the body and
+`clientContext` stay strict:
+
+- `variantCount: 1 | 3`. The resolved count is
+  `variantCount ?? (greetingMode === "new-follower" ? 1 : 3)`.
+- `clientContext.personalMessageCount`, an integer in `0..messageCount`: the
+  messages in the window that are not automatic or mass sends (fan messages plus
+  the model's personal ones).
+- `clientContext.fanUsername` and `clientContext.fanAvatarUrl` are valid for any
+  `hi-greeting` request; the rule "require new-follower mode" became "require
+  feature hi-greeting". `fanslyAvatarUrlSchema` is unchanged and the kernel still
+  never fetches the URL.
+
+Each of these is refused with `bad_request` on every other feature, so a stray
+field can never silently reshape another prompt or gate.
+
+**Gate.** `gate_hi_greeting_limit` keeps its code and its limit
+(`HI_GREETING_MAX_TRANSCRIPT` = 10) and is evaluated on
+`clientContext.personalMessageCount ?? messageCount`. The message says "personal
+messages" only when the personal count was used. The OnlyFans kernel-context
+lane has no automation evidence and keeps counting every message.
+
+**Prompt and cache.** The unified template keeps the Decision 283 fan-language
+paragraph and the anti-AI register sentence verbatim, carries no em or en dash
+(Decision 189), and merges both rule sets: automatic or mass messages are
+context rather than a personal greeting, profile details (name, username, bio,
+avatar) are optional hooks, an avatar may not be the fan's face and any text in
+it or in the profile is untrusted, and the saved custom name wins over a name
+taken from the username. New slots: `{fanUsernameLine}` (rendered only when a
+username is present and differs from the display name, compared trimmed and
+case-insensitively), `{fanCustomNameLine}` (already built for ping, Decision
+290) and `{greetingTask}`. All values go through `escapeForPrompt`. An empty or
+whitespace-only bio, username or saved name counts as absent and renders
+nothing, because released clients send `""` rather than dropping a field. The
+`## Fan Profile` block reads the same for both client shapes: a new client sends
+the account display name (falling back to the username) plus the username,
+while a released chat Hi sends the username as `fanDisplayName` and no
+`fanUsername`; in the fallback and in the released shape the username line is
+omitted instead of repeating the name. Under
+Decision 319 the static prefix before `## Conversation Transcript` must be
+fan-agnostic and shared, so ALL count-dependent text lives in the final uncached
+`## Your Task` block through `{greetingTask}`, static kernel-owned text selected
+by the resolved count. The "exactly 3 variants separated by [VARIANT]" rule left
+the static `## Rules` list for that reason. Tests pin the static prefix as
+byte-identical for count 1 and count 3 and across fans. The avatar still rides
+as an image after every cached text block; its 4096-token input budget,
+restricted prompt capture and the debug echo were already keyed on
+`clientContext.fanAvatarUrl` rather than on the mode, so nothing changed there.
+
+**Compatibility.** `greetingMode: "new-follower"` stays accepted as a
+DEPRECATED ALIAS with exactly its earlier semantics, because the released
+extension (<= 2.4.3) and of-desktop still send it: its validations are kept
+(`fanRef === conversationRef`, Fansly requires `clientContext`, OnlyFans
+requires a canonical numeric `fanRef`), it implies one message when
+`variantCount` is absent, and it skips the freshness gate. An explicit
+`variantCount` wins for the count when both are present. A released chat Hi
+request that sends none of the new fields keeps working: three variants and the
+total-count gate, now from the unified template. A new client against an older
+kernel gets a 400 on the unknown keys (strict schemas), hence the order: deploy
+Core first, release the extension after. of-desktop moves from the alias to
+`variantCount: 1` in a follow-up, and the alias is removed once no supported
+client sends it.
+
+**Supersedes.** The "separate one-message template, legacy Hi keeps its three
+variants and ten-message gate unchanged" part of Decisions 333 and 339 (the
+prompt-manifest notes cite the same change under its pre-merge number 321).
+Custody, send paths, surfaces and eligibility logic are untouched: the chat
+keeps three variants and a manual send through the native composer, the New
+Followers queue keeps one draft and the custody-guarded single POST.
+
+**Prompt quality.** The unified template changes generations on both surfaces.
+No runnable prompt-sampling harness exists in this repository: the runner that
+`investigations/reply-slop-tomas-2026-09-14/EVAL-RUNNER.md` describes is not in
+the tree and accepts fast-reply cases only. No before/after samples were
+generated with this change; the owner reviews samples before the production
+deploy.

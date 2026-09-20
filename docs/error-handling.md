@@ -145,7 +145,7 @@ status, code, and intentional message.
 | AI gate | `gate_voice_provider_unavailable` | 400 | Voice-script product gate found no configured voice synthesis provider. |
 | AI gate | `gate_voice_no_profile` | 400 | Voice-script product gate found no voice profile for the page. |
 | AI gate | `gate_min_messages` | 400 | Conversation message count is below the selected feature's minimum. |
-| AI gate | `gate_hi_greeting_limit` | 400 | Conversation exceeds the hi-greeting maximum. |
+| AI gate | `gate_hi_greeting_limit` | 400 | Conversation exceeds the hi-greeting maximum (personal messages when the client reports `personalMessageCount`, every message otherwise). |
 | AI gate | `gate_ping_active` | 400 | Fansly Ping generation is blocked while the conversation segment is active. OnlyFans manual Ping accepts active conversations (Decision #295). |
 | Voice | `voice_disabled` | 403 | Voice-note lane is disabled. |
 | Voice | `voice_provider_unavailable` | 503 | Live voice flag is on but provider boot dependencies are unavailable, or an active erasure temporarily owns the page writer fence; no provider spend is admitted. |

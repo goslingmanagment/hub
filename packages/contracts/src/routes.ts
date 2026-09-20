@@ -2067,6 +2067,15 @@ export const aiFeatureStreamBodySchema = z.object({
   // chatterQuestion field is absent or whitespace-only.
   preset: z.literal("situation").optional(),
   summaryMode: z.literal("short").optional(),
+  // hi-greeting only (Decision 379): how many greeting variants the unified
+  // template asks for. The chat Hi button sends 3, the New Followers queue
+  // sends 1. Absent means 3, or 1 under the deprecated alias below.
+  variantCount: z.union([z.literal(1), z.literal(3)]).optional(),
+  // DEPRECATED alias (Decision 379), kept for released clients (extension
+  // <= 2.4.3, of-desktop). It keeps its Decision 333 semantics exactly: the
+  // identity validations, one message when variantCount is absent, and the
+  // freshness gate skipped. New clients send variantCount instead. Do not
+  // remove while a supported client still sends it.
   greetingMode: z.literal("new-follower").optional(),
   // Stage 32: client-loaded context for platforms whose kernel archive is
   // pull-cadenced (Fansly: dm_conversations 30 min / dm_messages 24 h — no
@@ -2086,15 +2095,30 @@ export const aiFeatureStreamBodySchema = z.object({
     // account note contentType 12002). Read by the ping template today;
     // optional for clients released before it.
     fanCustomName: z.string().max(200).optional(),
+    // hi-greeting only (Decision 379; any hi-greeting request, no longer tied
+    // to the deprecated greetingMode alias). The kernel never fetches the URL.
     fanUsername: z.string().max(200).optional(),
     fanAvatarUrl: fanslyAvatarUrlSchema.optional(),
+    // hi-greeting only (Decision 379): messages in the window that are NOT
+    // automatic/mass sends (fan messages plus the model's personal ones). The
+    // freshness gate counts these when present, so a fan holding only welcome
+    // and mass messages is not locked out. Never above messageCount.
+    personalMessageCount: z.number().int().min(0).max(5000).optional(),
     pingSegment: z.enum(["segment-a", "segment-b", "active"]).optional(),
     // Whole days since the fan's latest text message, computed from the same
     // analysis (and clock) that selected pingSegment. Ping only; optional for
     // compatibility with clients released before Decision #127.
     fanSilenceDays: z.number().int().min(0).max(FAN_SILENCE_DAYS_MAX).optional(),
     transcriptCoverage: z.enum(["full-history", "window"]).optional(),
-  }).strict().optional(),
+  }).strict().superRefine((value, ctx) => {
+    if (value.personalMessageCount !== undefined && value.personalMessageCount > value.messageCount) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["personalMessageCount"],
+        message: "personalMessageCount cannot exceed messageCount",
+      });
+    }
+  }).optional(),
 }).strict();
 
 export const aiRestrictedGenerationSchema = z.object({

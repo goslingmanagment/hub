@@ -25,7 +25,6 @@ import {
   FAST_REPLY_TEMPLATE,
   HELP_ME_TEMPLATE,
   HI_GREETING_TEMPLATE,
-  NEW_FOLLOWER_GREETING_TEMPLATE,
   IMPROVE_DRAFT_TEMPLATE,
   PING_TEMPLATE,
   VOICE_SCRIPT_TEMPLATE,
@@ -72,6 +71,9 @@ export interface RecapAttach {
   short: { body: string; ageMs: number } | null;
 }
 
+/** How many greeting variants one hi-greeting generation returns. */
+export type GreetingVariantCount = 1 | 3;
+
 export interface PromptBuildInput {
   feature: PromptFeature;
   personality: Personality;
@@ -82,8 +84,14 @@ export interface PromptBuildInput {
   fanSubscriptionData: string;
   fanDisplayName: string;
   fanBio?: string | undefined;
+  /** hi-greeting: the fan's platform username, rendered by {fanUsernameLine}
+   * only when it adds something over the display name. */
   fanUsername?: string | undefined;
-  greetingMode?: "new-follower" | undefined;
+  /** hi-greeting only (Decision 379): how many greeting variants the task block
+   * asks for. 3 (default) feeds the chat Hi overlay, 1 the New Followers queue
+   * draft. It reaches ONLY the {greetingTask} slot of the uncached task block,
+   * so the 1h static prefix is byte-identical for both counts. */
+  greetingVariantCount?: GreetingVariantCount | undefined;
   /** The chatter's own saved name for the fan (Fansly rename, Decision 290).
    * Rendered by the {fanCustomNameLine} slot; templates without it ignore it. */
   fanCustomName?: string | undefined;
@@ -395,6 +403,36 @@ function fanCustomNameLine(fanCustomName: string | undefined): string {
     return '';
   }
   return `Name the chatter saved for this fan: ${escapeForPrompt(trimmed)}`;
+}
+
+/** Decision 379: the fan's platform username, as its own Fan Profile line.
+ * Omitted when absent, empty or whitespace-only (released clients send "" rather
+ * than dropping a field), and when it only repeats the display name, compared
+ * trimmed and case-insensitively: new clients fall back to the username when a
+ * fan has no display name, and released chat Hi sends the username AS the
+ * display name with no username at all. Untrusted fan text, escaped like the
+ * other profile slots. */
+function fanUsernameLine(fanUsername: string | undefined, fanDisplayName: string): string {
+  const trimmed = fanUsername?.trim() ?? '';
+  if (!trimmed || trimmed.toLowerCase() === fanDisplayName.trim().toLowerCase()) {
+    return '';
+  }
+  return `Username: ${escapeForPrompt(trimmed)}`;
+}
+
+/** Decision 379: the count-dependent half of the unified hi-greeting prompt.
+ * Static kernel-owned text selected by the resolved variant count, never built
+ * from request data. It lives in the final uncached `## Your Task` block
+ * through the {greetingTask} slot, so the chat Hi button (3 variants split by
+ * [VARIANT]) and the New Followers queue (one draft) share one fan-agnostic
+ * cached prefix (Decision 319). */
+const GREETING_TASKS: Record<GreetingVariantCount, string> = {
+  3: `Write exactly 3 different greeting variants separated by [VARIANT]. The chatter will pick the best one. Mix the styles: one playful or creative, one warm and simple ("hey babe, let's chat a little 💕"), one somewhere in between. Not every variant needs a clever hook, sometimes a direct, warm invitation to talk is the best opener. If there are existing fan messages, respond to the conversation, don't start over. Output only the message text, in the fan's language (English by default).`,
+  1: `Write exactly ONE ready-to-send message: no labels, no alternatives, no [VARIANT] or [NEXT] markers. If there are existing fan messages, respond to the conversation, don't start over. Output only the message text, in the fan's language (English by default).`,
+};
+
+function greetingTask(feature: PromptFeature, variantCount: GreetingVariantCount | undefined): string {
+  return feature === 'hi-greeting' ? GREETING_TASKS[variantCount ?? 3] : '';
 }
 
 /** The chatter's OWN unsent reply draft, offered to the coach for critique
@@ -813,7 +851,8 @@ function templateValues(input: PromptBuildInput): TemplateValues {
     fanDisplayName: escapeForPrompt(input.fanDisplayName),
     fanBioSection: fanBioSection(input.fanBio),
     fanCustomNameLine: fanCustomNameLine(input.fanCustomName),
-    fanUsername: escapeForPrompt(input.fanUsername ?? input.fanDisplayName),
+    fanUsernameLine: fanUsernameLine(input.fanUsername, input.fanDisplayName),
+    greetingTask: greetingTask(input.feature, input.greetingVariantCount),
     fanProfileSection: fanProfileSection(input.fanProfile),
     draftSection: draftSection(policy.requiresDraft ? input.draftText : undefined),
     coachDraftSection: coachDraftSection(policy.optionalDraft ? input.draftText : undefined),
@@ -1201,9 +1240,7 @@ export function buildPrompt(
     templateOverrides?.[input.feature]
     ?? (input.feature === "fan-summary" && input.summaryMode === "short"
       ? FAN_SUMMARY_SHORT_TEMPLATE
-      : input.feature === "hi-greeting" && input.greetingMode === "new-follower"
-        ? NEW_FOLLOWER_GREETING_TEMPLATE
-        : DEFAULT_TEMPLATES[input.feature]);
+      : DEFAULT_TEMPLATES[input.feature]);
   const template = applyPlatformWording(selectedTemplate, platform);
   const systemBlocks = buildSystemBlocks(input.feature, input.personality, platform);
   const initialValues = templateValues(input);
