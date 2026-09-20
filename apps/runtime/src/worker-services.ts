@@ -1,5 +1,6 @@
 import { startFanslyWsWorker } from "./services/fansly-ws/worker.ts";
 import { ensureOfapiMediaQueue, OFAPI_MEDIA_SWEEP_QUEUE, runOfapiMediaUploadSweep } from "./services/ofapi-media-worker.ts";
+import { ensureOfapiBindingReconcileQueue, OFAPI_BINDING_RECONCILE_QUEUE, runOfapiBindingReconcile } from "./services/ofapi-binding-reconcile.ts";
 import { ensureOfapiCollectionQueues, startOfapiCollectionWorker } from "./services/ofapi-collection-runner.ts";
 import { ofapiCollectionHandlers } from "./services/ofapi-collection-handlers.ts";
 import { ensureOfapiTypedExportQueue, OFAPI_TYPED_EXPORT_SWEEP_QUEUE, runOfapiTypedExportSweep } from "./services/ofapi-typed-export-worker.ts";
@@ -213,6 +214,7 @@ export async function startWorkerServices(
   await ensureOfapiDmAnalyticsQueues(boss, createdQueues);
   await ensureOfapiTypedExportQueue(boss, createdQueues);
   await ensureOfapiMediaQueue(boss, createdQueues);
+  await ensureOfapiBindingReconcileQueue(boss, createdQueues);
   await ensureOfapiCollectionQueues(boss, createdQueues);
   await ensureDbDiskUsageQueue(boss, createdQueues);
   await ensureObservationsPartitionQueue(boss, createdQueues);
@@ -237,6 +239,18 @@ export async function startWorkerServices(
 
   await boss.work(OFAPI_MEDIA_SWEEP_QUEUE, { batchSize: 1 }, async () => { await runOfapiMediaUploadSweep(app); });
   await boss.work(OFAPI_TYPED_EXPORT_SWEEP_QUEUE, { batchSize: 1 }, async () => { await runOfapiTypedExportSweep(app); });
+  await boss.work(OFAPI_BINDING_RECONCILE_QUEUE, { batchSize: 1 }, async () => {
+    // Decision 382: custody continuity by creator identity. A silent run
+    // (nothing seeded, rebound, attached or waiting) logs nothing.
+    const result = await runOfapiBindingReconcile(app);
+    if (result.skipped !== null) {
+      if (result.skipped !== "disabled") app.logger.warn({ skipped: result.skipped }, "OFAPI binding reconcile skipped");
+      return;
+    }
+    if (result.actions.length + result.waiting.length + result.identityMismatches.length + result.duplicates.length > 0) {
+      app.logger.info(result, "OFAPI binding reconcile complete");
+    }
+  });
 
   await boss.work(SYNC_PLANNER_QUEUE, {
     batchSize: 1,

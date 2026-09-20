@@ -197,6 +197,7 @@ describe("config registry", () => {
     "ofapiDmSyncEnabled",
     "ofapiDmColdArchiveEnabled",
     "ofapiAccountHealthEnabled",
+    "ofapiBindingReconcileEnabled",
     "ofapiCreditLedgerEnabled",
     "ofapiBalancePingEnabled",
     "ofapiAudienceSyncEnabled",

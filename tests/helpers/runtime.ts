@@ -37,6 +37,7 @@ export function createTestAppContext(
     ofapiCreditFloor?: number;
     ofapiDmReconcileIntervalMinutes?: number;
     ofapiAccountHealthEnabled?: boolean;
+    ofapiBindingReconcileEnabled?: boolean;
     ofapiCreditAlertThreshold?: number;
     ofapiWebhookSilenceThresholdMinutes?: number;
     ofapiCreditLedgerEnabled?: boolean;
@@ -160,6 +161,7 @@ export function createTestAppContext(
       ofapiCreditFloor: overrides?.ofapiCreditFloor ?? 500,
       ofapiDmReconcileIntervalMinutes: overrides?.ofapiDmReconcileIntervalMinutes ?? 360,
       ofapiAccountHealthEnabled: overrides?.ofapiAccountHealthEnabled ?? false,
+      ofapiBindingReconcileEnabled: overrides?.ofapiBindingReconcileEnabled ?? false,
       ofapiCreditAlertThreshold: overrides?.ofapiCreditAlertThreshold ?? 1000,
       ofapiWebhookSilenceThresholdMinutes: overrides?.ofapiWebhookSilenceThresholdMinutes ?? 720,
       ofapiCreditLedgerEnabled: overrides?.ofapiCreditLedgerEnabled ?? false,

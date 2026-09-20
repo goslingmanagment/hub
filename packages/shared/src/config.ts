@@ -219,6 +219,7 @@ const envSchema = z.object({
   OFAPI_CREDIT_FLOOR: z.coerce.number().int().min(0).default(500),
   OFAPI_DM_RECONCILE_INTERVAL_MINUTES: z.coerce.number().int().positive().default(360),
   OFAPI_ACCOUNT_HEALTH_ENABLED: booleanSchema.default(false),
+  OFAPI_BINDING_RECONCILE_ENABLED: booleanSchema.default(false),
   OFAPI_CREDIT_ALERT_THRESHOLD: z.coerce.number().int().min(0).default(1000),
   OFAPI_WEBHOOK_SILENCE_THRESHOLD_MINUTES: z.coerce.number().int().positive().default(720),
   OFAPI_CREDIT_LEDGER_ENABLED: booleanSchema.default(false),
@@ -549,6 +550,7 @@ export interface AppConfig {
   ofapiCreditFloor?: number;
   ofapiDmReconcileIntervalMinutes?: number;
   ofapiAccountHealthEnabled?: boolean;
+  ofapiBindingReconcileEnabled?: boolean;
   ofapiCreditAlertThreshold?: number;
   ofapiWebhookSilenceThresholdMinutes?: number;
   ofapiCreditLedgerEnabled?: boolean;
@@ -869,6 +871,7 @@ export function loadConfig(
     ofapiCreditFloor: parsed.OFAPI_CREDIT_FLOOR,
     ofapiDmReconcileIntervalMinutes: parsed.OFAPI_DM_RECONCILE_INTERVAL_MINUTES,
     ofapiAccountHealthEnabled: parsed.OFAPI_ACCOUNT_HEALTH_ENABLED,
+    ofapiBindingReconcileEnabled: parsed.OFAPI_BINDING_RECONCILE_ENABLED,
     ofapiCreditAlertThreshold: parsed.OFAPI_CREDIT_ALERT_THRESHOLD,
     ofapiWebhookSilenceThresholdMinutes: parsed.OFAPI_WEBHOOK_SILENCE_THRESHOLD_MINUTES,
     ofapiCreditLedgerEnabled: parsed.OFAPI_CREDIT_LEDGER_ENABLED,
