@@ -225,6 +225,28 @@ function buildFanCustomNameLine(fanCustomName: string | undefined): string {
   return trimmed ? `Name the chatter saved for this fan: ${escapeForPrompt(trimmed)}` : '';
 }
 
+// Decision 379: the unified hi-greeting template. The username rides its own
+// profile line only when it adds something over the display name, and the
+// count-dependent task text is the only thing the variant count changes.
+function buildFanUsernameLine(fanUsername: string | undefined, fanDisplayName: string): string {
+  const trimmed = fanUsername?.trim() ?? '';
+  return trimmed && trimmed.toLowerCase() !== fanDisplayName.trim().toLowerCase()
+    ? `Username: ${escapeForPrompt(trimmed)}`
+    : '';
+}
+
+const GREETING_TASK_THREE =
+  'Write exactly 3 different greeting variants separated by [VARIANT]. The chatter will pick the best one. Mix the styles: one playful or creative, one warm and simple ("hey babe, let\'s chat a little 💕"), one somewhere in between. Not every variant needs a clever hook, sometimes a direct, warm invitation to talk is the best opener. If there are existing fan messages, respond to the conversation, don\'t start over. Output only the message text, in the fan\'s language (English by default).';
+const GREETING_TASK_ONE =
+  'Write exactly ONE ready-to-send message: no labels, no alternatives, no [VARIANT] or [NEXT] markers. If there are existing fan messages, respond to the conversation, don\'t start over. Output only the message text, in the fan\'s language (English by default).';
+
+function buildGreetingTask(input: PromptBuildInput): string {
+  if (input.feature !== 'hi-greeting') {
+    return '';
+  }
+  return input.greetingVariantCount === 1 ? GREETING_TASK_ONE : GREETING_TASK_THREE;
+}
+
 function buildExpectedFlatSystem(input: PromptBuildInput): string {
   const preamble =
     input.feature === 'help-me' ||
@@ -244,6 +266,8 @@ function buildExpectedFlatUser(input: PromptBuildInput): string {
     fanDisplayName: escapeForPrompt(input.fanDisplayName),
     fanBioSection: buildFanBioSection(input.fanBio),
     fanCustomNameLine: buildFanCustomNameLine(input.fanCustomName),
+    fanUsernameLine: buildFanUsernameLine(input.fanUsername, input.fanDisplayName),
+    greetingTask: buildGreetingTask(input),
     fanProfileSection: buildFanProfileSectionOracle(input.fanProfile),
     draftSection: buildDraftSection(input.draftText),
     splitReplyInstructions: buildSplitReplyInstructions(input.feature, input.replyMode),

@@ -1398,8 +1398,21 @@ describe("OnlyFans new-follower generation", () => {
     expect(prompt).toContain("I love hiking");
     expect(prompt).toContain("hey babe");
     expect(capture.calls).toBe(1);
+    // Decision 379: an explicit variantCount wins over the alias for the count
+    // while the alias still skips the gate (15 archived messages here).
+    const aliasThree = await call({ variantCount: 3 });
+    expect(aliasThree.statusCode, aliasThree.body).toBe(200);
+    expect(capture.input!.body.prompt.userBlocks.map(block => block.text).join("\n")).toContain("Write exactly 3 different greeting variants");
+    expect(capture.calls).toBe(2);
+    // Without the alias the OnlyFans kernel-context lane has no automation
+    // evidence, so the gate keeps counting every message, whatever the count.
+    const gated = await call({ greetingMode: undefined, variantCount: 1 });
+    expect(gated.statusCode, gated.body).toBe(400);
+    expect(gated.json().error).toBe("gate_hi_greeting_limit");
+    expect(gated.json().message).toContain("at most 10 messages");
     const rejected = [
       [{ greetingMode: undefined }, "hi-greeting", 400],
+      [{ greetingMode: undefined, variantCount: 3 }, "fast-reply", 400],
       [{ fanRef: "123" }, "hi-greeting", 400],
       [{ fanRef: null }, "hi-greeting", 400],
       [{ fanRef: "name", conversationRef: "name" }, "hi-greeting", 400],
@@ -1414,7 +1427,7 @@ describe("OnlyFans new-follower generation", () => {
       const denied = await call(extra, feature);
       expect(denied.statusCode, denied.body).toBe(status);
     }
-    expect(capture.calls).toBe(1);
+    expect(capture.calls).toBe(2);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });
 
@@ -1496,8 +1509,53 @@ describe("client-context path (Stage 32)", () => {
     expect(newFollowerText).toContain("exactly ONE");
     expect(newFollowerText).toContain("catfan");
     expect(newFollowerText).toContain("loves cats");
-    expect((await call("hi-greeting", newFollowerContext)).statusCode).toBe(400);
     expect((await call("fast-reply", newFollowerContext, { greetingMode: "new-follower", fanRef: FAN })).statusCode).toBe(400);
+
+    // Decision 379: the greeting parameters are orthogonal. An alias-only request
+    // (released clients) renders exactly the prompt of an explicit variantCount 1.
+    const aliasBlocks = capture.input!.body.prompt.userBlocks;
+    const oneDraft = await call("hi-greeting", { ...newFollowerContext, messageCount: 2 }, { variantCount: 1, fanRef: FAN });
+    expect(oneDraft.statusCode, oneDraft.body).toBe(200);
+    expect(capture.input!.body.prompt.userBlocks).toEqual(aliasBlocks);
+    expect(capture.input!.body.prompt.images).toEqual([{ url: newFollowerContext.fanAvatarUrl }]);
+
+    // The chat Hi button: no alias, avatar + username + saved name accepted, three
+    // variants, and the gate counts PERSONAL messages (35 in total, 2 personal).
+    const chatHi = await call("hi-greeting", { ...newFollowerContext, personalMessageCount: 2 }, { variantCount: 3 });
+    expect(chatHi.statusCode, chatHi.body).toBe(200);
+    expect(capture.input!.body.prompt.images).toEqual([{ url: newFollowerContext.fanAvatarUrl }]);
+    const chatHiBlocks = capture.input!.body.prompt.userBlocks;
+    const chatHiText = chatHiBlocks.map((block) => block.text).join("\n");
+    expect(chatHiText).toContain("Write exactly 3 different greeting variants separated by [VARIANT].");
+    expect(chatHiText).not.toContain("exactly ONE");
+    expect(chatHiText).toContain("Username: catfan");
+    expect(chatHiText).toContain("Name the chatter saved for this fan: Charles");
+    // One template: the cached static prefix is the same block for both counts.
+    expect(chatHiBlocks[0]).toEqual(aliasBlocks[0]);
+    expect(chatHiBlocks[0]?.cache).toBe("1h");
+    // A long PERSONAL history still locks, and says which count it used.
+    const personalLocked = await call("hi-greeting", { ...newFollowerContext, personalMessageCount: 11 }, { variantCount: 3 });
+    expect(personalLocked.statusCode, personalLocked.body).toBe(400);
+    expect(personalLocked.json().error).toBe("gate_hi_greeting_limit");
+    expect(personalLocked.json().message).toContain("at most 10 personal messages");
+    // No personal count (released clients): the total decides, wording unchanged.
+    const totalLocked = await call("hi-greeting", newFollowerContext, { variantCount: 3 });
+    expect(totalLocked.statusCode, totalLocked.body).toBe(400);
+    expect(totalLocked.json().error).toBe("gate_hi_greeting_limit");
+    expect(totalLocked.json().message).toContain("at most 10 messages");
+    // personalMessageCount above messageCount never reaches the service.
+    expect((await call("hi-greeting", { ...baseContext, messageCount: 2, personalMessageCount: 3 })).statusCode).toBe(400);
+    // Every greeting parameter is refused on any other feature.
+    for (const [clientContext, extra] of [
+      [baseContext, { variantCount: 3 }],
+      [{ ...baseContext, personalMessageCount: 1 }, {}],
+      [{ ...baseContext, fanAvatarUrl: newFollowerContext.fanAvatarUrl }, {}],
+      [{ ...baseContext, fanUsername: "catfan" }, {}],
+    ] as const) {
+      const refused = await call("fast-reply", clientContext, extra);
+      expect(refused.statusCode, refused.body).toBe(400);
+      expect(refused.json().error).toBe("bad_request");
+    }
 
     // ping demands the client-computed segment, honors the active block, and
     // proceeds on a quiet segment.

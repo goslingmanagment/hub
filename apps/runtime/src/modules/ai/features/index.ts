@@ -53,6 +53,7 @@ import {
   analyzePingSegment,
   buildPrompt,
   isOperationFeature,
+  type GreetingVariantCount,
   type OperationFeature,
   type Personality,
   type PingSegment,
@@ -94,6 +95,13 @@ export interface AiFeatureRequestBody {
   coachHistory?: Array<{ question: string; answer: string }>;
   preset?: "situation";
   summaryMode?: "short";
+  /** hi-greeting only (Decision 379): 3 variants for the chat Hi overlay, one
+   * draft for the New Followers queue. See resolveGreetingVariantCount. */
+  variantCount?: GreetingVariantCount;
+  /** @deprecated Decision 379: alias kept for released clients (extension
+   * <= 2.4.3, of-desktop). Same semantics as Decision 333: its identity
+   * validations, one message unless variantCount says otherwise, and the
+   * freshness gate skipped. New clients send variantCount. */
   greetingMode?: "new-follower";
   /** Stage 32: client-loaded context (Fansly — the kernel archive is
    * pull-cadenced: dm_conversations 30 min / dm_messages 24 h, no webhooks;
@@ -107,8 +115,13 @@ export interface AiFeatureRequestBody {
     fanBio?: string;
     /** Decision 290: the chatter's saved name for the fan (Fansly rename). */
     fanCustomName?: string;
+    /** hi-greeting only (any hi-greeting request since Decision 379). */
     fanUsername?: string;
+    /** hi-greeting only. Rides to the provider as an image; never fetched here. */
     fanAvatarUrl?: string;
+    /** hi-greeting only: messages in the window that are not automatic/mass
+     * sends. The freshness gate counts these when present (Decision 379). */
+    personalMessageCount?: number;
     pingSegment?: PingSegment;
     /** Whole days since the fan's last text message (same clock as pingSegment). */
     fanSilenceDays?: number;
@@ -117,6 +130,81 @@ export interface AiFeatureRequestBody {
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Decision 379: one hi-greeting feature with an explicit variant count instead
+ * of a mode. An explicit variantCount always wins; the deprecated greetingMode
+ * alias implies one message for the released clients that still send it; a
+ * request with neither is the chat Hi button and gets three variants. */
+export function resolveGreetingVariantCount(
+  body: Pick<AiFeatureRequestBody, "variantCount" | "greetingMode">,
+): GreetingVariantCount {
+  return body.variantCount ?? (body.greetingMode === "new-follower" ? 1 : 3);
+}
+
+/** Request-shape rules for the greeting parameters. Pure, so the rules are
+ * unit-testable without a database. `isFanslyRequest` comes from the caller's
+ * single platform-branch site (Stage 18 ratchet) rather than a second one here.
+ *
+ * The deprecated alias keeps its Decision 333 validations verbatim for the
+ * clients that still send it. Everything else (variantCount, the personal
+ * count, avatar, username) is orthogonal and belongs to the hi-greeting
+ * FEATURE, not to the mode (Decision 379): a stray one on any other feature is
+ * refused so it can never silently reshape that feature's prompt or gate. */
+export function assertGreetingRequestShape(
+  feature: OperationFeature,
+  body: Pick<AiFeatureRequestBody, "conversationRef" | "fanRef" | "variantCount" | "greetingMode" | "clientContext">,
+  isFanslyRequest: boolean,
+): void {
+  if (body.greetingMode !== undefined) {
+    if (feature !== "hi-greeting" || !body.fanRef || body.fanRef !== body.conversationRef) {
+      throw new BadRequestError("new-follower mode requires hi-greeting and matching conversationRef and fanRef");
+    }
+    if (isFanslyRequest && !body.clientContext) {
+      throw new BadRequestError("Fansly new-follower mode requires clientContext");
+    }
+    if (!isFanslyRequest && !/^[1-9]\d{0,29}$/.test(body.fanRef)) {
+      throw new BadRequestError("OnlyFans new-follower mode requires a canonical positive numeric fanRef");
+    }
+    // OnlyFans follows the kernel-context path. The alias changes the default
+    // variant count and the Hi count gate, never who may supply OF context.
+  }
+  if (feature !== "hi-greeting") {
+    if (body.variantCount !== undefined) {
+      throw new BadRequestError(`${feature} does not accept variantCount`);
+    }
+    if (body.clientContext?.personalMessageCount !== undefined) {
+      throw new BadRequestError(`${feature} does not accept clientContext.personalMessageCount`);
+    }
+    if (body.clientContext?.fanAvatarUrl !== undefined || body.clientContext?.fanUsername !== undefined) {
+      throw new BadRequestError("fanAvatarUrl and fanUsername require hi-greeting");
+    }
+  }
+}
+
+/** The hi-greeting freshness gate (`gate_hi_greeting_limit`, limit
+ * HI_GREETING_MAX_TRANSCRIPT). Decision 379: it counts PERSONAL messages when
+ * the client reports them, so a fan holding only welcome/mass sends is not
+ * locked out of Hi. Without that evidence it keeps counting every message:
+ * released clients, and the OnlyFans kernel-context lane, which has no
+ * automation signal. Only the deprecated alias skips it (unchanged Decision 333
+ * behaviour: that client checks eligibility against the live history). */
+export function assertHiGreetingFreshness(
+  body: Pick<AiFeatureRequestBody, "greetingMode" | "clientContext">,
+  messageCount: number,
+): void {
+  if (body.greetingMode === "new-follower") {
+    return;
+  }
+  const personalMessageCount = body.clientContext?.personalMessageCount;
+  if ((personalMessageCount ?? messageCount) > HI_GREETING_MAX_TRANSCRIPT) {
+    throw new ProductGateError(
+      `hi-greeting is only available for conversations with at most ${HI_GREETING_MAX_TRANSCRIPT} ${
+        personalMessageCount !== undefined ? "personal messages" : "messages"
+      }`,
+      "gate_hi_greeting_limit",
+    );
+  }
+}
 
 async function resolvePersona(
   app: Pick<AppContext, "db">,
@@ -324,22 +412,7 @@ export async function prepareAiFeatureStream(
     throw new PersonaDefinitionChangedError();
   }
 
-  if (body.greetingMode !== undefined) {
-    if (feature !== "hi-greeting" || !body.fanRef || body.fanRef !== body.conversationRef) {
-      throw new BadRequestError("new-follower mode requires hi-greeting and matching conversationRef and fanRef");
-    }
-    if (isFanslyRequest && !body.clientContext) {
-      throw new BadRequestError("Fansly new-follower mode requires clientContext");
-    }
-    if (!isFanslyRequest && !/^[1-9]\d{0,29}$/.test(body.fanRef)) {
-      throw new BadRequestError("OnlyFans new-follower mode requires a canonical positive numeric fanRef");
-    }
-    // OnlyFans follows the kernel-context path below. This mode changes the
-    // one-message template and Hi count gate, never who may supply OF context.
-  }
-  if ((body.clientContext?.fanAvatarUrl !== undefined || body.clientContext?.fanUsername !== undefined) && body.greetingMode !== "new-follower") {
-    throw new BadRequestError("fanAvatarUrl and fanUsername require new-follower mode");
-  }
+  assertGreetingRequestShape(feature, body, isFanslyRequest);
   let contextValues: {
     transcript: string;
     messageCount: number;
@@ -474,11 +547,8 @@ export async function prepareAiFeatureStream(
       "gate_min_messages",
     );
   }
-  if (feature === "hi-greeting" && body.greetingMode !== "new-follower" && contextValues.messageCount > HI_GREETING_MAX_TRANSCRIPT) {
-    throw new ProductGateError(
-      `hi-greeting is only available for conversations with at most ${HI_GREETING_MAX_TRANSCRIPT} messages`,
-      "gate_hi_greeting_limit",
-    );
+  if (feature === "hi-greeting") {
+    assertHiGreetingFreshness(body, contextValues.messageCount);
   }
   // Decision #295: OnlyFans Ping is manual outreach at the chatter's discretion.
   // Keep the existing Fansly reactivation gate and the real segment on both lanes.
@@ -609,7 +679,7 @@ export async function prepareAiFeatureStream(
     fanBio: contextValues.fanBio,
     fanCustomName: contextValues.fanCustomName,
     fanUsername: body.clientContext?.fanUsername,
-    greetingMode: body.greetingMode,
+    greetingVariantCount: feature === "hi-greeting" ? resolveGreetingVariantCount(body) : undefined,
     fanProfile: fanProfile
       ? { body: fanProfile.body, generatedAt: fanProfile.generatedAt }
       : undefined,

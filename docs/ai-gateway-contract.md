@@ -334,13 +334,28 @@ the rollback path until desktop gateway rollout is accepted and any later deskto
 its own staged rollback.
 
 
-### New-follower draft mode (Decision 339)
+### Greeting parameters (Decision 379, supersedes the mode of Decisions 333/339)
 
-`hi-greeting` accepts `greetingMode: "new-follower"` to assemble exactly one
-first-greeting draft without the legacy Hi transcript-count ceiling. It requires
-explicit `fanRef === conversationRef`; OnlyFans refs must be numeric native ids.
-OnlyFans keeps server-loaded transcript/profile context and rejects clientContext.
-Fansly keeps its required clientContext and restricted profile/avatar inputs.
-Page access, platform matching, persona revision, quotas and restricted capture
-are unchanged. This mode produces a reviewed draft; it neither sends a message
+`hi-greeting` is one feature with one template. Its request parameters are
+orthogonal, optional and refused with `bad_request` on every other feature:
+
+- `variantCount: 1 | 3`: how many greetings the task block asks for. 3 is the
+  chat Hi overlay (variants split by `[VARIANT]`), 1 is the New Followers queue
+  draft. Resolved as `variantCount ?? (greetingMode === "new-follower" ? 1 : 3)`.
+- `clientContext.personalMessageCount` (`0..messageCount`): messages in the
+  window that are not automatic or mass sends. When present, the
+  `gate_hi_greeting_limit` gate (limit 10) counts it instead of `messageCount`.
+  The OnlyFans kernel-context lane has no automation evidence and keeps counting
+  every message.
+- `clientContext.fanUsername` and `clientContext.fanAvatarUrl` (HTTPS Fansly
+  host only; passed to the provider as an image, never fetched by the kernel).
+
+`greetingMode: "new-follower"` is a DEPRECATED ALIAS kept for released clients
+(extension <= 2.4.3, of-desktop), with its earlier semantics unchanged: it
+requires explicit `fanRef === conversationRef` (OnlyFans refs must be numeric
+native ids, Fansly requires clientContext), implies one message when
+`variantCount` is absent, and skips the freshness gate. OnlyFans keeps
+server-loaded transcript/profile context and rejects clientContext. Page access,
+platform matching, persona revision, quotas and restricted capture are
+unchanged. A greeting is a reviewed draft; the kernel neither sends a message
 nor certifies live first-contact eligibility.
