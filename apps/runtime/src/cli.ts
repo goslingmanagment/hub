@@ -56,6 +56,7 @@ import {
 } from "./services/fansly-endpoint-probe.ts";
 import { runFanslyReplayProbe, summarizeReplayProbe } from "./services/fansly-replay-probe.ts";
 import { runCanonicalization } from "./services/canonicalize-driver.ts";
+import { runOfapiBindingReconcile } from "./services/ofapi-binding-reconcile.ts";
 import { runDmCorrectionsFingerprintBackfill } from "./services/dm-corrections-backfill.ts";
 import { runTransactionTipContextsBackfill } from "./services/transaction-tip-contexts-backfill.ts";
 import { runDmCorrectionsLineageIntake } from "./services/dm-corrections-lineage-intake.ts";
@@ -1878,6 +1879,25 @@ export function buildProgram() {
         }
         console.log(JSON.stringify({ pageId: stored.page.id, decoded }));
       } finally { await app.close(); }
+    });
+
+  program
+    .command("ofapi:bindings:reconcile")
+    .description(
+      "Decision 382: reconcile OFAPI custody against the live roster — seed creator ids, "
+        + "rebind pages whose account died, attach same-creator accounts as history (report only by default)",
+    )
+    .option("--execute", "apply the reported actions (default: report without writing)")
+    .action(async (options) => {
+      const app = await createAppContext();
+      try {
+        // The CLI is an operator act: it runs regardless of the minutely flag.
+        const result = await runOfapiBindingReconcile(app, { dryRun: !options.execute, force: true });
+        console.log(JSON.stringify(result, null, 2));
+        if (result.skipped !== null) process.exitCode = 1;
+      } finally {
+        await app.close();
+      }
     });
 
   program

@@ -236,3 +236,85 @@ export async function markOfapiBindingUnavailable(
     return { page: { id: Number(page.id), label: page.label }, changed: true, markedAt: now };
   });
 }
+
+/** Decision 382: the reconciler's page view — every active OnlyFans page with
+ * its current claim, generation, both identity columns and the auth status the
+ * account-health path last recorded. */
+export interface OfapiBindingReconcilePage extends OfapiBindingPage {
+  auth_status: string | null;
+}
+
+export async function listOfapiBindingPages(db: Database): Promise<OfapiBindingReconcilePage[]> {
+  const result = await db.execute<OfapiBindingReconcilePage>(sql`
+    select p.id, p.label, p.ofapi_account_id as account_id, p.ofapi_binding_generation as generation,
+      p.external_page_id as creator_id, p.metadata->>'onlyfansUserId' as metadata_creator_id,
+      p.ofapi_auth_status as auth_status
+    from pages p where p.platform = 'onlyfans' and p.status = 'active' order by p.id
+  `);
+  return result.rows.map(row => ({ ...row, id: Number(row.id), generation: Number(row.generation) }));
+}
+
+/** Decision 382: record the creator identity the roster proves for a page's
+ * CURRENT account — the anchor every later rebind matches on. Writes only when
+ * the page carries no identity yet; a page that already names a different
+ * creator is left alone (the caller reports the mismatch). The custody row of
+ * the current account learns the same creator id. */
+export async function seedOfapiPageCreatorIdentity(db: Database, input: {
+  pageId: number; expectedAccountId: string; creatorId: string; evidence: Record<string, unknown>;
+}) {
+  return withOfapiBindingLock(db, input.pageId, async tx => {
+    const page = await getOfapiBindingPage(tx, input.pageId);
+    if (!page || page.account_id !== input.expectedAccountId) return false;
+    const identities = [page.creator_id, page.metadata_creator_id].filter(Boolean);
+    if (identities.some(id => id !== input.creatorId)) return false;
+    // One creator, one page (pages_platform_external_id_uniq): a creator id
+    // another page already carries is a custody question, never a seed.
+    const taken = await tx.execute(sql`
+      select 1 from pages p where p.platform='onlyfans' and p.id<>${input.pageId}
+        and (p.external_page_id=${input.creatorId} or p.metadata->>'onlyfansUserId'=${input.creatorId})
+    `);
+    if (taken.rows.length) return false;
+    await tx.execute(sql`
+      update pages set external_page_id=${input.creatorId},
+        metadata=coalesce(metadata,'{}'::jsonb) || jsonb_build_object('onlyfansUserId',${input.creatorId}::text),
+        updated_at=now()
+      where id=${input.pageId}
+    `);
+    await tx.execute(sql`
+      update ofapi_account_bindings set creator_id=coalesce(creator_id,${input.creatorId}),
+        evidence=evidence || ${JSON.stringify(input.evidence)}::jsonb
+      where account_id=${input.expectedAccountId} and page_id=${input.pageId}
+        and (creator_id is null or creator_id=${input.creatorId})
+    `);
+    return true;
+  });
+}
+
+/** Decision 382: attach an UNOWNED provider account of the page's own creator
+ * as historical custody (no generation, unknown boundaries): its journaled
+ * facts then resolve to the page and replay, exactly as a retired account
+ * kept by `applyVerifiedOfapiBinding` does. Same locks as every custody
+ * writer; refuses when the page has no identity, names a different creator,
+ * or the account already has an owner anywhere. */
+export async function attachOfapiHistoricalBinding(db: Database, input: {
+  pageId: number; accountId: string; creatorId: string; evidence: Record<string, unknown>;
+}) {
+  return withOfapiBindingLock(db, input.pageId, async tx => {
+    await tx.execute(sql`select pg_advisory_xact_lock(9003011)`);
+    const page = await getOfapiBindingPage(tx, input.pageId);
+    if (!page) return false;
+    const identities = [page.creator_id, page.metadata_creator_id].filter(Boolean);
+    if (identities.length === 0 || identities.some(id => id !== input.creatorId)) return false;
+    const owner = await tx.execute(sql`
+      select 1 from ofapi_account_bindings b where b.account_id=${input.accountId}
+      union all select 1 from pages p where p.ofapi_account_id=${input.accountId}
+    `);
+    if (owner.rows.length) return false;
+    await tx.execute(sql`
+      insert into ofapi_account_bindings(account_id,page_id,creator_id,generation,valid_from,valid_to,evidence)
+      values (${input.accountId},${input.pageId},${input.creatorId},null,null,null,${JSON.stringify(input.evidence)}::jsonb)
+      on conflict(account_id) do nothing
+    `);
+    return true;
+  });
+}

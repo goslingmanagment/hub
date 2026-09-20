@@ -144,6 +144,10 @@ export interface CanonicalizationRunResult {
   stamped: number;
   /** Observations with events but no mapped account — retried next sweep. */
   skippedUnmapped: number;
+  /** Decision 382: the DISTINCT vendor refs behind `skippedUnmapped`, bounded to
+   * 20 — enough to name the account a custody row is missing for without
+   * turning a large unmapped corpus into log volume. */
+  unmappedRefs: string[];
   /**
    * Rows the family's shape gate refused: the payload matches no shape the
    * family knows, so it stays UNSTAMPED and replayable for a future parser.
@@ -648,6 +652,10 @@ async function runFamily(
           // Events require an account; an unmapped observation stays below the
           // version floor and self-heals once the account mapping lands.
           totals.skippedUnmapped += 1;
+          if (row.nativeAccountRef && totals.unmappedRefs.length < 20
+            && !totals.unmappedRefs.includes(row.nativeAccountRef)) {
+            totals.unmappedRefs.push(row.nativeAccountRef);
+          }
           continue;
         }
 
@@ -785,6 +793,7 @@ export async function runCanonicalization(
     deduped: 0,
     stamped: 0,
     skippedUnmapped: 0,
+    unmappedRefs: [],
     skippedUnparseable: 0,
     unparseableSamples: [],
     skippedUnavailable: 0,

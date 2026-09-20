@@ -378,6 +378,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 379 | One hi-greeting feature instead of a mode | `hi-greeting` has one template and orthogonal optional request parameters: `variantCount: 1 \| 3`, `clientContext.personalMessageCount`, `fanUsername`, `fanAvatarUrl`. The chat Hi button gains the avatar, username, saved name and automation-label guidance the New Followers queue already had. `gate_hi_greeting_limit` (limit 10) counts personal messages when the client reports them, every message otherwise. All count-dependent prompt text sits in the uncached task block (`{greetingTask}`), so the 1h static prefix is identical for both counts. `greetingMode: "new-follower"` stays as a deprecated alias with unchanged semantics for extension <= 2.4.3 and of-desktop. Supersedes the "separate template, legacy Hi unchanged" part of #333/#339. Deploy Core before the extension release that sends the new fields. |
 | 380 | Orphaned Workboard enum types dropped | The five `workboard_*` Postgres enum types (`workboard_tab`, `workboard_mass_substate`, `workboard_secondary_status`, `workboard_freeloader_status`, `workboard_contact_action`) are dropped by migration `0204_drop_workboard_enum_types.sql`. Decision 378 left them behind because a `DROP TABLE` does not cascade to the enum types its columns used, so they survived the table drop with no remaining user. Rollback-compatible against the Decision 378 image, which neither reads nor writes them, and listed as such in `scripts/deploy-production.sh`. The inert `workboard-closing` value inside the `ai_usage_feature` enum still stays: Postgres cannot drop an enum value without rebuilding the type. |
 | 381 | OFAPI custody | The four OFAPI accounts retired before migration 0150 (`acct_fbaf…`, `acct_b929…` → 2026-07-21; `acct_9070…`, `acct_b47a…` → 2026-09-03) get historical custody rows in `ofapi_account_bindings` by an owner-approved evidence import (`docs/runbooks/ofapi-historical-binding-import.md`), not by hiding their ~452k v3-stamped webhook rows from the `obs_backlog_webhook_ofapi_v5` gauge. Attribution is proven three ways from `observations` alone; the v3→v5 replay dedupes every fact (dedup keys unchanged) and appends only the never-consumed `chat_queue.*` material, pinned by an integration test. |
+| 382 | OFAPI custody | OFAPI custody follows the creator, not the connection: a five-minute reconciler (`ofapiBindingReconcileEnabled`, roster read is free) seeds the OnlyFans creator id onto each page from the roster, rebinds a page whose account died to the creator's single authenticated account through the same verified apply the owner route uses (roster capture as evidence, `ofapi.binding.replaced` audit, auth incident resolved), and attaches every other unowned account of that creator as historical custody so its journaled facts replay. It never seeds a creator another page carries, never rebinds on a mismatch or an ambiguous roster, and never moves custody between pages. CLI `ofapi:bindings:reconcile` reports (or `--execute`s) the same plan. The sweep result names the unmapped refs it skipped. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -16183,3 +16184,69 @@ baseline; the replay of the whole set takes about two hours. The evidence
 JSON of those rows says `decision: 379` — the number this entry carried when
 the import ran; it was renumbered to 381 at merge because 379 and 380 were
 taken on `main` the same day.
+
+## Decision 382: OFAPI custody follows the creator, not the connection (2026-09-21)
+
+**Context.** Decision 381 repaired the tail of two OFAPI re-registrations that
+predate the custody table. The owner's follow-up: OFAPI accounts keep
+changing, roughly monthly, so the fix has to hold for the next one. Two facts
+shape it. First, the OnlyFans creator id is stable across every OFAPI
+connection — the hub's own data shows 518588958 (`loravie`) and 514788334
+(`loravievip`) behind three generations of `acct_…` each — and the roster
+(`GET /accounts`, a free read journaled as `ofapi_admin_accounts`) lists it
+next to every account. Second, OFAPI itself keeps the `acct_…` alive across
+session expiry (automatic re-login, "Re-authenticate Account"); a new id
+appears only when the account is ADDED again, which the vendor FAQ calls the
+common mistake. The custody mechanism of Decision 257 already covers a
+replacement done through the verified route; what was missing is the
+operator: nothing prompted anyone, the route lives only in the API, and both
+past rotations were done by editing `pages.ofapi_account_id` by hand.
+
+**Decision.** A minutely-class job, `ofapi.binding.reconcile` (every five
+minutes, `ofapiBindingReconcileEnabled`, staged, default off), reads the
+roster and, per active OnlyFans page with a current account:
+
+- **seeds the creator id** (`external_page_id` + `metadata.onlyfansUserId`,
+  and `creator_id` on the custody row) from the roster entry of the page's
+  current account when the page has none — the anchor. It refuses when
+  another page already carries that creator (one creator, one page:
+  `pages_platform_external_id_uniq`) and reports the case instead;
+- **rebinds** when the current account is dead (missing from the roster, not
+  authenticated, or the page's auth status is action-required) and exactly
+  one unowned, authenticated roster account has the page's creator id — via
+  `applyVerifiedOfapiBinding`, the writer the owner route uses, with the
+  roster capture as evidence and receipt, the `ofapi.binding.replaced`
+  audit row (actor null) and the page's auth incident resolved. The retired
+  account keeps custody with `valid_to`, as before;
+- **attaches as history** every other unowned roster account of the same
+  creator (a dead predecessor, or a duplicate connection while the bound one
+  still works): a custody row with no generation, so its journaled facts
+  resolve and replay. A duplicate is also logged with the vendor's own
+  advice — re-authenticate the bound account instead of adding another;
+- **leaves alone and reports** a page whose recorded creator disagrees with
+  the roster, a dead account with zero or several authenticated candidates,
+  and accounts owned by another page. Custody never moves between pages
+  without an operator (Decision 257).
+
+`hub-agent-cli ofapi:bindings:reconcile` runs the same plan as a report and
+applies it with `--execute`, flag or no flag. The canonicalization sweep
+result gains `unmappedRefs` — the distinct vendor refs behind
+`skippedUnmapped`, bounded to 20 — so a missing custody row is named in the
+log rather than inferred from a count.
+
+**Not done, and why.** A database trigger refusing a `pages.ofapi_account_id`
+change without a custody row was considered and dropped for now: the code
+writers already refuse it (Decision 257), the reconciler repairs a hand-edited
+column within five minutes by attaching the orphaned account, and the trigger
+would have touched a dozen integration fixtures that set the column directly.
+The gauge semantics stay: an unmapped ref still counts as backlog, because it
+is now a five-minute condition rather than a permanent one.
+
+**Pinned.** `tests/ofapi-binding-reconcile.integration.test.ts`: off by
+default, force/report path writes nothing; identity seeded once and
+idempotent; rebind on a vanished and on a de-authenticated account (custody
+kept, generation bumped, auth status cleared, audit row, incident resolved,
+both refs replay through the sweep); waiting on no or ambiguous candidates
+while still attaching them as history; duplicate connection kept as history
+without switching; no custody move to a creator another page carries; the
+skip reasons.

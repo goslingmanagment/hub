@@ -172,7 +172,7 @@ export const HUB_FEATURES: readonly HubFeature[] = [
     reason: "Оставить. Слово shadow в названии одного из флагов не делает его лишним: от него зависит запись транзакций.",
     consequence: "Отключение может остановить учёт денег и зависимые операции. Это не подходящий способ экономить запросы.",
     check: "Проверять сверку платежей и кредитов; для сокращения платных запросов использовать политику сбора OnlyFans.",
-    keys: ["ofapiCreditLedgerEnabled", "ofapiSpendProjectionShadowEnabled", "ofapiSpendTransactionIngestEnabled", "ofapiChargebacksReconcileEnabled", "ofapiBalancePingEnabled", "ofapiAccountHealthEnabled"],
+    keys: ["ofapiCreditLedgerEnabled", "ofapiSpendProjectionShadowEnabled", "ofapiSpendTransactionIngestEnabled", "ofapiChargebacksReconcileEnabled", "ofapiBalancePingEnabled", "ofapiAccountHealthEnabled", "ofapiBindingReconcileEnabled"],
     gates: [gate("ofapiCreditLedgerEnabled"), gate("ofapiSpendProjectionShadowEnabled"), gate("ofapiSpendTransactionIngestEnabled")],
     evidenceHref: "/ofapi-credits", evidenceLabel: "Проверить кредиты OnlyFans",
   },
