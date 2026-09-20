@@ -192,8 +192,9 @@ their append-only change history. The eight workboard tables
 `workboard_claim_leases`, `wb_closing_cache`, `wb_closing_settings`,
 `wb_classifier_runs`, `wb_llm_usage_daily`) no longer exist: Decision 376
 removed their code and migration `0203_drop_workboard_tables.sql` (Decision
-378) dropped them. The five `workboard_*` enum types are still in the database,
-unused.
+378) dropped them. The five `workboard_*` enum types the dropped columns used
+went with them in `0204_drop_workboard_enum_types.sql` (Decision 380); the
+inert `workboard-closing` value inside the `ai_usage_feature` enum stays.
 
 Every dry-run or executed erasure attempt receives an `erasure_log` row.
 Executed rows resolve as either `completed` or `superseded`; a superseded row
