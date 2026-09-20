@@ -19,8 +19,9 @@ permissions:
 # Superseded PR heads stop burning runners; main always runs to completion so
 # every main commit keeps a finished gate record (and a published image).
 concurrency:
-  # A body-only edit must neither cancel a real run nor replace its required
-  # check with a skipped-success check on the same head.
+  # A body-only edit gets its own group so it never cancels the real run for
+  # the same head; it still reports "Quality Gate" itself (see the job), so the
+  # newest check suite for that head keeps the required check.
   group: ci-${{ github.ref }}${{ github.event.action == 'edited' && !github.event.changes.title && !github.event.changes.base && '-metadata' || '' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
@@ -263,15 +264,45 @@ jobs:
   # With a proven fingerprint the test jobs are skipped by design and the gate
   # passes on the earlier run's evidence; a fingerprint job that failed leaves
   # `proven_by` empty, so every skip that is NOT backed by a proof still fails.
+  #
+  # The name is the literal "Quality Gate" in every event and the job runs in
+  # every event. GitHub resolves a required check against the NEWEST check
+  # suite for the head SHA, so a run that renames or skips this job takes the
+  # gate off that head and the PR becomes unmergeable with every check green
+  # (Decision 377). A description-only edit therefore still runs this job and
+  # mirrors the verdict an earlier run recorded for the same SHA; it cannot
+  # manufacture one, so a red, pending or missing gate stays that way.
   quality:
-    name: ${{ github.event.action == 'edited' && !github.event.changes.title && !github.event.changes.base && 'PR description edit (no gate)' || 'Quality Gate' }}
+    name: Quality Gate
     runs-on: ubuntu-latest
     needs: [fingerprint, static, integration]
-    if: always() && (github.event.action != 'edited' || github.event.changes.title || github.event.changes.base)
+    if: always()
     timeout-minutes: 5
+    # Reading this head's earlier check runs on a private repository needs
+    # checks:read. Nothing in this job writes.
+    permissions:
+      checks: read
+      contents: read
+    env:
+      # A description-only edit: no code, no title, no base — and, by their own
+      # conditions, no gate jobs to aggregate.
+      BODY_EDIT: ${{ github.event.action == 'edited' && !github.event.changes.title && !github.event.changes.base }}
 
     steps:
+      - name: Checkout
+        if: env.BODY_EDIT == 'true'
+        uses: actions/checkout@v6
+
+      - name: An earlier run already passed this head
+        if: env.BODY_EDIT == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IS_DRAFT: ${{ github.event_name == 'pull_request' && github.event.pull_request.draft }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/ci-mirror-gate.mjs
+
       - name: Every gate job succeeded
+        if: env.BODY_EDIT != 'true'
         env:
           PROVEN_BY: ${{ needs.fingerprint.outputs.proven_by }}
           INTEGRATION_PROVEN_BY: ${{ needs.fingerprint.outputs.integration_proven_by }}
@@ -304,13 +335,13 @@ jobs:
           fi
 
       - name: Record this fingerprint as proven
-        if: needs.fingerprint.outputs.proven_by == ''
+        if: env.BODY_EDIT != 'true' && needs.fingerprint.outputs.proven_by == ''
         run: |
           mkdir -p "$RUNNER_TEMP/quality-gate"
           printf '%s\n' "$GITHUB_RUN_ID" > "$RUNNER_TEMP/quality-gate/run-id"
 
       - name: Publish the proof for later identical trees
-        if: needs.fingerprint.outputs.proven_by == ''
+        if: env.BODY_EDIT != 'true' && needs.fingerprint.outputs.proven_by == ''
         uses: actions/upload-artifact@v7
         with:
           name: quality-gate-${{ needs.fingerprint.outputs.hash }}

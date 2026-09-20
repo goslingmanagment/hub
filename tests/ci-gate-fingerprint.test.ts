@@ -71,6 +71,9 @@ const PROSE_PATHS = [
 /** Paths some check does read: any change must change the fingerprint. */
 const OBSERVED_PATHS = [
   ".github/workflows/ci.yml",
+  // The body-edit mirror decides whether a PR description edit may report the
+  // required "Quality Gate"; it must never ride an earlier tree's proof.
+  "scripts/ci-mirror-gate.mjs",
   "Dockerfile",
   "apps/runtime/src/index.ts",
   "docs/agent-read-skill.md",

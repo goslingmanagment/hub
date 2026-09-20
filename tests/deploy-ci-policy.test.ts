@@ -2,7 +2,9 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+import { mirrorEarlierGate } from "../scripts/ci-mirror-gate.mjs";
 
 type Step = {
   name: string;
@@ -18,6 +20,7 @@ type Job = {
   name?: string;
   needs?: string[];
   if?: string;
+  env?: Record<string, string>;
   permissions?: Permissions;
   outputs?: Record<string, string>;
   steps: Step[];
@@ -89,7 +92,8 @@ describe("CI production image publication policy", () => {
   // the workflow binds. `proven_by` empty = no earlier proof for this tree.
   it("binds the gate shell's inputs from the fingerprint and gate jobs", () => {
     expect(job("quality").needs).toEqual(expect.arrayContaining(["fingerprint", "static", "integration"]));
-    expect(job("quality").if).toBe("always() && (github.event.action != 'edited' || github.event.changes.title || github.event.changes.base)");
+    expect(job("quality").if).toBe("always()");
+    expect(step("quality", "Every gate job succeeded").if).toBe("env.BODY_EDIT != 'true'");
     expect(step("quality", "Every gate job succeeded").env).toEqual({
       PROVEN_BY: "${{ needs.fingerprint.outputs.proven_by }}",
       INTEGRATION_PROVEN_BY: "${{ needs.fingerprint.outputs.integration_proven_by }}",
@@ -147,7 +151,7 @@ describe("CI production image publication policy", () => {
   // cancellation, which is why it is `!cancelled()` and nothing weaker.
   it("publishing overrides skip propagation from the proven-tree matrix", () => {
     expect(job("publish").if?.startsWith("!cancelled() && ")).toBe(true);
-    expect(job("quality").if).toBe("always() && (github.event.action != 'edited' || github.event.changes.title || github.event.changes.base)");
+    expect(job("quality").if).toBe("always()");
   });
 
   it("reuses a proof only where the workflow says it does, and records one only when fresh", () => {
@@ -163,9 +167,12 @@ describe("CI production image publication policy", () => {
     for (const name of ["Production Docker image build", "Chromium Headless Shell runtime smoke", "Startup capability manifest smoke"]) {
       expect(step("static", name).if, name).toBeUndefined();
     }
-    expect(step("quality", "Record this fingerprint as proven").if).toBe(unproven);
+    // A description-only edit has no fingerprint at all, so it must not reach
+    // the proof steps: an empty hash would publish `quality-gate-` as a proof.
+    const freshProof = `env.BODY_EDIT != 'true' && ${unproven}`;
+    expect(step("quality", "Record this fingerprint as proven").if).toBe(freshProof);
     const upload = step("quality", "Publish the proof for later identical trees");
-    expect(upload.if).toBe(unproven);
+    expect(upload.if).toBe(freshProof);
     expect(upload.with?.name).toBe("quality-gate-${{ needs.fingerprint.outputs.hash }}");
     expect(upload.with?.overwrite).toBe(true);
     expect(step("quality", "Publish fresh integration proof").with?.overwrite).toBe(true);
@@ -203,17 +210,23 @@ describe("CI production image publication policy", () => {
     },
   );
 
+  // A required check is resolved against the NEWEST check suite for the head
+  // SHA. A description-only edit starts a run on that same SHA, so a run that
+  // renames or skips this job strips "Quality Gate" off the head and the PR
+  // becomes unmergeable with every check green (Decision 377). The name is a
+  // literal and the job runs in every event; only the path inside it differs.
   it.each([
-    ["edited", false, false, "PR description edit (no gate)", "ci-ref-metadata"],
-    ["edited", true, false, "Quality Gate", "ci-ref"],
-    ["edited", false, true, "Quality Gate", "ci-ref"],
-    ["synchronize", false, false, "Quality Gate", "ci-ref"],
-    ["opened", false, false, "Quality Gate", "ci-ref"],
-    ["", false, false, "Quality Gate", "ci-ref"],
-    ["edited", true, true, "Quality Gate", "ci-ref"],
-    ["ready_for_review", false, false, "Quality Gate", "ci-ref"],
-    ["converted_to_draft", false, false, "Quality Gate", "ci-ref"],
-  ] as const)("metadata edit %s title=%s base=%s preserves the real gate", (action, title, base, expectedName, expectedGroup) => {
+    // action, changes.title, changes.base, concurrency group, gate jobs run
+    ["edited", false, false, "ci-ref-metadata", false],
+    ["edited", true, false, "ci-ref", true],
+    ["edited", false, true, "ci-ref", true],
+    ["synchronize", false, false, "ci-ref", true],
+    ["opened", false, false, "ci-ref", true],
+    ["", false, false, "ci-ref", true],
+    ["edited", true, true, "ci-ref", true],
+    ["ready_for_review", false, false, "ci-ref", true],
+    ["converted_to_draft", false, false, "ci-ref", true],
+  ] as const)("edit %s title=%s base=%s keeps the required check reported", (action, title, base, expectedGroup, gateJobsRun) => {
     const render = (value: string) => value.replace(/\$\{\{(.*?)\}\}/g, (_match, expression: string) => {
       const resolved = expression.replaceAll("github.event.action", JSON.stringify(action))
         .replaceAll("github.event.changes.title", String(title)).replaceAll("github.event.changes.base", String(base))
@@ -221,11 +234,79 @@ describe("CI production image publication policy", () => {
       // Only the checked-in boolean/string expression above is evaluated.
       return String(Function(`"use strict"; return (${resolved})`)());
     });
-    expect(render(job("quality").name ?? "")).toBe(expectedName);
+    // No expression may reach the check's name: GitHub reported the raw text.
+    expect(job("quality").name).toBe("Quality Gate");
+    expect(render(job("quality").name ?? "")).toBe("Quality Gate");
+    expect(render("${{ " + job("quality").if + " }}")).toBe("true");
     expect(render(workflow.concurrency.group)).toBe(expectedGroup);
-    expect(render("${{ " + job("fingerprint").if + " }}")).toBe(String(expectedName === "Quality Gate"));
-    expect(render("${{ " + job("quality").if + " }}")).toBe(String(expectedName === "Quality Gate"));
+    expect(render("${{ " + job("fingerprint").if + " }}")).toBe(String(gateJobsRun));
+    // Exactly one path inside the job runs: aggregate this run's gate jobs, or
+    // mirror an earlier run's verdict for the same head.
+    const bodyEdit = render(job("quality").env?.BODY_EDIT ?? "");
+    expect(bodyEdit).toBe(String(!gateJobsRun));
+    const runsStep = (condition: string) =>
+      render("${{ " + condition.replaceAll("env.BODY_EDIT", JSON.stringify(bodyEdit)) + " }}");
+    expect(runsStep(step("quality", "Every gate job succeeded").if ?? "")).toBe(String(gateJobsRun));
+    for (const name of ["Checkout", "An earlier run already passed this head"]) {
+      expect(runsStep(step("quality", name).if ?? ""), name).toBe(String(!gateJobsRun));
+    }
     expect(workflow.on.pull_request.types).toEqual(expect.arrayContaining(["ready_for_review", "converted_to_draft", "edited"]));
+  });
+
+  // The mirror confirms an earlier verdict for this exact head; it can never
+  // manufacture one, so a red, pending, foreign or missing gate stays red.
+  it("mirrors only an earlier successful Quality Gate for the same head SHA", () => {
+    const mirror = step("quality", "An earlier run already passed this head");
+    expect(shell(mirror)).toBe("node scripts/ci-mirror-gate.mjs");
+    expect(mirror.env).toEqual({
+      GH_TOKEN: "${{ github.token }}",
+      IS_DRAFT: "${{ github.event_name == 'pull_request' && github.event.pull_request.draft }}",
+      HEAD_SHA: "${{ github.event.pull_request.head.sha }}",
+    });
+    // Reading check runs on a private repository needs checks:read, and that
+    // job-level block must not widen anything else.
+    expect(job("quality").permissions).toEqual({ checks: "read", contents: "read" });
+    expect(workflow.permissions).toEqual({ contents: "read" });
+
+    const headSha = "a".repeat(40);
+    const mirrorEnv = { GITHUB_REPOSITORY: "owner/repo", GITHUB_RUN_ID: "35518904235", HEAD_SHA: headSha, IS_DRAFT: "false" };
+    const earlier = { name: "Quality Gate", app: { slug: "github-actions" }, status: "completed", conclusion: "success",
+      html_url: "https://github.com/owner/repo/actions/runs/35518903414/job/99" };
+    expect(mirrorEarlierGate(mirrorEnv, () => ({ check_runs: [earlier] }))).toEqual({
+      runId: "35518903414", url: earlier.html_url,
+    });
+    // Everything that is not an EARLIER success from this workflow's app fails.
+    const rejected = [
+      { ...earlier, conclusion: "failure" },
+      { ...earlier, conclusion: null, status: "in_progress" },
+      { ...earlier, app: { slug: "some-other-app" } },
+      { ...earlier, name: "Static checks" },
+      { ...earlier, html_url: "https://github.com/owner/repo/actions/runs/35518904235/job/1" },
+      { ...earlier, html_url: "https://example.invalid/not-a-run" },
+    ];
+    for (const checkRun of rejected) {
+      expect(() => mirrorEarlierGate(mirrorEnv, () => ({ check_runs: [checkRun] })), JSON.stringify(checkRun)).toThrow("No earlier successful");
+    }
+    expect(() => mirrorEarlierGate(mirrorEnv, () => ({ check_runs: [] }))).toThrow("No earlier successful");
+    expect(() => mirrorEarlierGate(mirrorEnv, () => { throw new Error("API unavailable"); })).toThrow("API unavailable");
+    // The head must be a real SHA, and a draft fails exactly like the gate does.
+    expect(() => mirrorEarlierGate({ ...mirrorEnv, HEAD_SHA: "" }, () => ({ check_runs: [earlier] }))).toThrow("head SHA");
+    const draftApi = vi.fn(() => ({ check_runs: [earlier] }));
+    expect(() => mirrorEarlierGate({ ...mirrorEnv, IS_DRAFT: "true" }, draftApi)).toThrow("Draft PR");
+    expect(draftApi).not.toHaveBeenCalled();
+    // The query asks GitHub for this head's check runs by the required name.
+    const endpoints: string[] = [];
+    expect(() => mirrorEarlierGate(mirrorEnv, endpoint => { endpoints.push(endpoint); return { check_runs: [] }; })).toThrow();
+    expect(endpoints).toEqual([`repos/owner/repo/commits/${headSha}/check-runs?check_name=Quality%20Gate&filter=all&per_page=100&page=1`]);
+    // A full page is not the end of the list.
+    const pages: string[] = [];
+    const other = { ...earlier, conclusion: "failure" };
+    const paged = mirrorEarlierGate(mirrorEnv, endpoint => {
+      pages.push(endpoint);
+      return { check_runs: pages.length === 1 ? Array.from({ length: 100 }, () => other) : [earlier] };
+    });
+    expect(paged.runId).toBe("35518903414");
+    expect(pages).toHaveLength(2);
   });
 
   it("builds only once, loads the cached image and keeps both smoke tests", () => {
