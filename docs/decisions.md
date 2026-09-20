@@ -373,6 +373,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 374 | Full CI worker imports and latency benchmark | DB workers import only pure context constants and load the production migrator only for partial schemas. Earnings scale correctness keeps all data/assertions; synthetic 100ms WAN delay is retained in the explicit benchmark. File isolation, serial DB files and full reset remain. |
 | 375 | Typed export scheduling clock | Typed-export due selection uses the Node clock already used by task creation, approval and leasing; real-DB skew tests preserve future ready/retry_wait deadlines without sleeps or retries. |
 | 376 | In-core Workboard v2 removed | The module, its event recompute, three pg-boss queues and two cron schedules, the `workboard-closing` AI lane, the `wbClosingLlm*` config keys, 13 contract operations, the dashboard page plus `/ai-analytics` and the legacy redirects, the scripts and the tests are gone. Zero reads in 30 days of production logs and no client caller, against a nightly ~67k-fan evaluation. The eight tables stay orphaned until a follow-up DROP TABLE migration lands after this image is on production. |
+| 377 | A PR description edit keeps the Quality Gate check | The `quality` job is named the literal `Quality Gate` and runs in every event; a body-only `edited` event skips every other job and the gate mirrors an earlier successful `Quality Gate` check run for the same head SHA (`checks: read`, current run excluded), failing when there is none. Supersedes the renamed, skipped job of #373: GitHub resolves a required check against the NEWEST check suite for the head, so the rename left PR #242 unmergeable with every check green |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -15808,3 +15809,61 @@ exclusion in the page-erasure inventory rather than a purge target for a schema
 this repo no longer maintains. Both that exclusion list and the queue-retirement
 step at scheduler boot are transitional: the follow-up migration change removes
 them along with the tables.
+
+## Decision 377: A PR description edit keeps the Quality Gate check (2026-09-20)
+
+**What broke.** Decision 373 taught the `quality` job to recognise a body-only
+`pull_request: edited` event: it renamed itself to "PR description edit (no
+gate)", skipped, and took a separate `-metadata` concurrency group so the real
+run was never cancelled. The intent was that a description edit "must neither
+cancel a real run nor replace its required check with a skipped-success check
+on the same head". It did something worse. On PR #242 the push run
+(35518903414) reported `Quality Gate: success`; editing the description started
+run 35518904235, in which every job was skipped and the check was published
+under the raw text of the name expression — GitHub never evaluated it, so the
+check name was literally `github.event.action == 'edited' && … || 'Quality
+Gate'`. The ruleset `main-required-ci` requires a check named exactly `Quality
+Gate` from GitHub Actions, found none in that suite, and reported "Quality Gate
+— Expected — Waiting for status to be reported"; the REST `mergeable_state` was
+`blocked` with every check green, no branch protection and no review
+requirement. Re-running the earlier run's gate job did not help. `gh pr close
+&& gh pr reopen` did: the `reopened` event produced a normal run that reused the
+fingerprint proof in about a minute. Any PR whose description was edited after
+CI had run was unmergeable until someone knew that trick.
+
+**Why.** A required check is resolved against the NEWEST check suite for the
+head SHA, not against the best result anywhere on that SHA. A description edit
+starts a run on the same head, so whatever that run reports replaces the gate
+for merge purposes. A job that renames itself removes the required check from
+that suite; a job that skips reports a skipped success under the required name,
+which is the opposite failure — it would hand the gate away for free. Both the
+name and the participation of this job are therefore part of the merge contract,
+not cosmetics.
+
+**Decision.** The `quality` job is named the literal `Quality Gate` — no
+expression may reach a required check's name — and runs on `always()`, in every
+event. A body-only edit still skips every other job and still gets its own
+`-metadata` concurrency group, and the gate takes its second path: it asks
+GitHub for this head SHA's check runs named `Quality Gate`
+(`repos/{repo}/commits/{sha}/check-runs?check_name=Quality%20Gate&filter=all`,
+paginated, `github-actions` app only, the current `github.run_id` excluded) and
+succeeds only if an EARLIER run of this workflow completed one successfully;
+the mirrored run's id and URL go into the log and the step summary. Anything
+else — a red, pending, foreign or absent gate, an unavailable API, a draft PR
+(checked first, as the normal gate does) — fails the job. The lookup lives in
+`scripts/ci-mirror-gate.mjs` and needs `checks: read` on a private repository,
+declared as a job-level `permissions` block on `quality` alone; the workflow
+default stays `contents: read`. The fingerprint and proof machinery of the
+normal path is untouched, and the proof steps are additionally guarded so a
+body-edit run — which has no fingerprint at all — can never publish one.
+
+**The invariant.** Every run of CI on a PR head reports a check named exactly
+`Quality Gate`, and that check is green only because the gate jobs passed on
+this run or because an earlier run of this workflow already passed on this exact
+head SHA. Editing a description can neither remove the gate nor turn a red,
+pending or missing one green. `tests/deploy-ci-policy.test.ts` pins the literal
+name across every event, the two mutually exclusive paths inside the job, the
+`checks: read` scope, and the mirror's accept/reject behaviour;
+`tests/ci-gate-fingerprint.test.ts` pins `scripts/ci-mirror-gate.mjs` as a
+gate-observed path so the mirror's own logic can never ride an earlier tree's
+proof.
