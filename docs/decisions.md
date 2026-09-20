@@ -15761,8 +15761,8 @@ desktop app nor the Fansly extension — calls a `workboardV2*` SDK operation.
 The writer never stopped: every fan event queued a debounced per-fan
 recompute, a nightly reconciler at 03:00 UTC evaluated roughly 67,000 fans,
 and a nightly closing classifier ran at 01:00 UTC with zero enabled pages. The
-owner dropped the standalone application too, on 2026-09-20, which removes the
-last reason to keep the kernel side alive.
+standalone application's working copy left the workspace the same day
+(2026-09-20), which removes the last reason to keep the kernel side alive.
 
 **Decision.** Remove the in-core Workboard v2 in full: the API module and its
 routes, the domain-event-driven per-fan recompute, the three pg-boss queues

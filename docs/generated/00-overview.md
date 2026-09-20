@@ -96,7 +96,6 @@ schemas and codecs are not interchangeable.
 | `11-events-and-streaming.md` | v1 replay floor, v2 domain-event replay/snapshot recovery, cursors, suppression and SSE clients. |
 | `12-ai-gateway-and-prompts.md` | AI providers, quotas, prompt construction, personas, dossier context and debug echo. |
 | `13-financial-and-money.md` | Mills/micro-USD, transaction truth, negation guards, pending reconciliation and reporting. |
-| `14-workboard.md` | Workboard state, ranking, recompute and closing-classifier paths. |
 | `15-auth-config-and-access.md` | Sessions, API/device credentials, deactivation, grants, staged config and capability enrollment. |
 | `16-telegram-notifications.md` | Telegram delivery and incident notification paths. |
 | `17-ops-observability.md` | Health floors, golden signals, watchdogs, incidents, sync status and admin diagnostics. |
