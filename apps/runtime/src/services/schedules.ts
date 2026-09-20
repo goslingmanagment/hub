@@ -30,7 +30,6 @@ import {
   ensureSyncQueues,
   ensureTelegramDailyReportSchedule,
   reconcileQueueRetention,
-  retireRemovedQueues,
 } from "./sync-queue.ts";
 
 // Kernel Stage 25: the ONE place cron registrations live. Called from the
@@ -40,16 +39,8 @@ import {
 // Queue creation runs first (also idempotent) so a scheduler booting into a
 // fresh environment never schedules into a queue no worker has created yet.
 
-export interface ScheduleRegistrationLogger {
-  warn(obj: Record<string, unknown>, msg: string): void;
-}
-
 export async function registerAllSchedules(
-  boss: Pick<
-    PgBoss,
-    "schedule" | "createQueue" | "getQueue" | "updateQueue" | "unschedule" | "deleteQueue"
-  >,
-  logger?: ScheduleRegistrationLogger,
+  boss: Pick<PgBoss, "schedule" | "createQueue" | "getQueue" | "updateQueue">,
 ): Promise<void> {
   const createdQueues = new Set<string>();
   await ensureSyncQueues(boss, createdQueues);
@@ -74,14 +65,6 @@ export async function registerAllSchedules(
   await ensureNotificationDeliveryOutboxQueue(boss, createdQueues);
   await ensureTieringQueue(boss, createdQueues);
   await ensureAgentHydrationQueue(boss, createdQueues);
-  // Decision 376: retired cron + queue rows of removed features. Best effort:
-  // a stale queue row costs nothing, so a failure here must never keep the
-  // live schedules below from registering.
-  try {
-    await retireRemovedQueues(boss);
-  } catch (error) {
-    logger?.warn({ err: error }, "Retiring removed pg-boss queues failed; continuing");
-  }
   // S7: LAST, after every queue above exists — updateQueue on a queue that has
   // not been created yet matches zero rows.
   await reconcileQueueRetention(boss);

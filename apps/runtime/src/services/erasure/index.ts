@@ -1281,27 +1281,6 @@ export const PAGE_ERASURE_TABLE_EXCLUSIONS: readonly PageErasureTableExclusion[]
     table: "user_page_assignments",
     reason: "User-to-page authorization is agency catalog configuration, not captured creator or fan data; offboarding access is a separate owner action.",
   },
-  // Decision 376: the in-core Workboard v2 is gone — no code reads or writes
-  // these tables any more, and they are dropped by the follow-up migration
-  // that lands once this image is on production. Until then they are orphaned
-  // projections of data that erasure already removes at its source (page_fans,
-  // page_dm_threads, fans), so planning a purge target for them would pin a
-  // schema this repo has already stopped maintaining.
-  ...([
-    "workboard_state",
-    "workboard_contact_log",
-    "workboard_claim_leases",
-    "workboard_snoozes",
-    "wb_closing_settings",
-    "wb_closing_cache",
-    "wb_llm_usage_daily",
-    "wb_classifier_runs",
-  ].map((table) => ({
-    table,
-    reason: "Decision 376: retired Workboard v2 table with no reader and no writer left in the code; "
-      + "it is dropped by the follow-up DROP TABLE migration that lands after this image reaches "
-      + "production, and every fact it projected is erased at its source (page_fans, page_dm_threads, fans).",
-  }))),
 ];
 
 async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget[]> {

@@ -11,12 +11,7 @@ import {
   HEARTBEAT_RETENTION_SECONDS,
   QUEUE_RETENTION_SETTINGS,
 } from "../apps/runtime/src/services/queue-retention.ts";
-import {
-  RETIRED_QUEUES,
-  RETIRED_SCHEDULES,
-  reconcileQueueRetention,
-  retireRemovedQueues,
-} from "../apps/runtime/src/services/sync-queue.ts";
+import { reconcileQueueRetention } from "../apps/runtime/src/services/sync-queue.ts";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const runtimeSourceRoot = path.join(repoRoot, "apps/runtime/src");
@@ -248,50 +243,5 @@ describe("pg-boss queue retention settings", () => {
       // clock could never fire — declaring one would read like a policy.
       expect(setting.deleteAfterSeconds).toBeUndefined();
     }
-  });
-});
-
-describe("retired pg-boss objects (Decision 376)", () => {
-  function createRetirementBoss(existing: readonly string[]) {
-    const present = new Set(existing);
-    const unscheduled: string[] = [];
-    const deleted: string[] = [];
-    return {
-      unscheduled,
-      deleted,
-      boss: {
-        unschedule: async (name: string) => { unscheduled.push(name); },
-        getQueue: async (name: string) => (present.has(name) ? { name } : null),
-        deleteQueue: async (name: string) => { present.delete(name); deleted.push(name); },
-      },
-    };
-  }
-
-  it("names only queues nothing declares any more", async () => {
-    // The mirror of the retention pin above: a live queue must never be listed
-    // here, or a scheduler boot would delete the queue it is about to use.
-    const declared = await readDeclaredQueueNames();
-    for (const name of [...RETIRED_QUEUES, ...RETIRED_SCHEDULES]) {
-      expect(declared.has(name), `${name} is still a declared queue`).toBe(false);
-    }
-    expect(RETIRED_QUEUES.length).toBeGreaterThan(0);
-  });
-
-  it("unschedules the cron keys and deletes only the queues that still exist", async () => {
-    const store = createRetirementBoss(["workboard.recompute"]);
-    await retireRemovedQueues(store.boss);
-
-    expect(store.unscheduled).toEqual([...RETIRED_SCHEDULES]);
-    expect(store.deleted).toEqual(["workboard.recompute"]);
-  });
-
-  it("is a no-op on the second run, so every leader takeover can repeat it", async () => {
-    const store = createRetirementBoss([...RETIRED_QUEUES]);
-    await retireRemovedQueues(store.boss);
-    expect(store.deleted).toEqual([...RETIRED_QUEUES]);
-
-    store.deleted.length = 0;
-    await retireRemovedQueues(store.boss);
-    expect(store.deleted).toEqual([]);
   });
 });

@@ -23,21 +23,6 @@ export const SYNC_PAGE_EXECUTE_EXPIRE_SECONDS = 15 * 60;
 export const SYNC_PAGE_EXECUTE_RETRY_LIMIT = 0;
 export const RAW_PAYLOAD_CLEANUP_QUEUE = "fansly.raw-payload-cleanup";
 export const TELEGRAM_DAILY_REPORT_QUEUE = "telegram.daily-report";
-// Decision 376: queues whose producer AND consumer are gone from the code.
-// pg-boss keeps the queue row — and any cron registered against it — until
-// someone deletes it, so a retired queue would otherwise sit in the database
-// forever and the timekeeper would keep firing into a queue nothing works.
-// Deliberately NOT declared as `*_QUEUE` constants: these names must not read
-// as live queues to the retention pin in tests/queue-retention.test.ts.
-export const RETIRED_SCHEDULES = [
-  "workboard.classify-closing",
-  "workboard.recompute",
-] as const;
-export const RETIRED_QUEUES = [
-  "workboard.recompute",
-  "workboard.classify-closing",
-  "workboard.fan-recompute",
-] as const;
 
 export type SyncTriggerScope = "light" | "followers" | "all" | "data" | "messages" | "posts";
 
@@ -262,38 +247,6 @@ export async function ensureTelegramDailyReportSchedule(
   await boss.schedule(TELEGRAM_DAILY_REPORT_QUEUE, "0 * * * *", null, {
     tz: "UTC",
   });
-}
-
-export interface RetiredQueueClient {
-  unschedule?(name: string, key?: string): Promise<unknown>;
-  getQueue?(name: string): Promise<unknown>;
-  deleteQueue?(name: string): Promise<unknown>;
-}
-
-/**
- * Decision 376: drop the cron registrations and queue rows left behind by a
- * removed feature. Idempotent — unschedule of an absent key is a no-op, and a
- * queue is deleted only when `getQueue` still finds it — so it is safe to run
- * on every scheduler leader takeover, and it self-heals a rollback that
- * re-registered the cron.
- */
-export async function retireRemovedQueues(boss: RetiredQueueClient) {
-  if (boss.unschedule) {
-    for (const name of RETIRED_SCHEDULES) {
-      await boss.unschedule(name);
-    }
-  }
-
-  if (!boss.getQueue || !boss.deleteQueue) {
-    return;
-  }
-
-  for (const name of RETIRED_QUEUES) {
-    const queue = await boss.getQueue(name);
-    if (queue) {
-      await boss.deleteQueue(name);
-    }
-  }
 }
 
 export async function sendSyncPlannerWakeup(

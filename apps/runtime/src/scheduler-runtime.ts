@@ -46,7 +46,7 @@ export async function runSchedulerRuntime() {
     process.exit(1);
   });
   await boss.start();
-  await registerAllSchedules(boss, app.logger);
+  await registerAllSchedules(boss);
   app.logger.info("Scheduler online: schedules registered, timekeeper running");
 
   const heartbeat = startRuntimeHeartbeat(app, "scheduler", {

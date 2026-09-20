@@ -250,9 +250,6 @@ vi.mock("../apps/runtime/src/services/sync-queue.ts", () => ({
   RAW_PAYLOAD_CLEANUP_QUEUE: "raw-payload-cleanup",
   SYNC_PLANNER_QUEUE: "sync-planner",
   TELEGRAM_DAILY_REPORT_QUEUE: "telegram.daily-report",
-  RETIRED_SCHEDULES: [],
-  RETIRED_QUEUES: [],
-  retireRemovedQueues: vi.fn(async () => {}),
 }));
 vi.mock("../apps/runtime/src/services/golden-signals.ts", () => ({
   OPS_METRICS_SAMPLE_QUEUE: "ops.metrics.sample",

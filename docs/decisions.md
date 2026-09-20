@@ -374,6 +374,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 375 | Typed export scheduling clock | Typed-export due selection uses the Node clock already used by task creation, approval and leasing; real-DB skew tests preserve future ready/retry_wait deadlines without sleeps or retries. |
 | 376 | In-core Workboard v2 removed | The module, its event recompute, three pg-boss queues and two cron schedules, the `workboard-closing` AI lane, the `wbClosingLlm*` config keys, 13 contract operations, the dashboard page plus `/ai-analytics` and the legacy redirects, the scripts and the tests are gone. Zero reads in 30 days of production logs and no client caller, against a nightly ~67k-fan evaluation. The eight tables stay orphaned until a follow-up DROP TABLE migration lands after this image is on production. |
 | 377 | A PR description edit keeps the Quality Gate check | The `quality` job is named the literal `Quality Gate` and runs in every event; a body-only `edited` event skips every other job and the gate mirrors an earlier successful `Quality Gate` check run for the same head SHA (`checks: read`, current run excluded), failing when there is none. Supersedes the renamed, skipped job of #373: GitHub resolves a required check against the NEWEST check suite for the head, so the rename left PR #242 unmergeable with every check green |
+| 378 | Retired Workboard tables dropped | The eight orphaned Workboard v2 tables (`workboard_state`, `workboard_contact_log`, `workboard_snoozes`, `workboard_claim_leases`, `wb_closing_settings`, `wb_closing_cache`, `wb_llm_usage_daily`, `wb_classifier_runs`) are dropped by migration `0203_drop_workboard_tables.sql`, which is rollback-compatible against the Decision 376 image because that image neither reads nor writes them. The inert `workboard-closing` value in the Postgres `ai_usage_feature` enum stays. Both transitional pieces Decision 376 left behind — the page-erasure exclusions and the pg-boss queue/schedule retirement at scheduler boot — go with this change. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -15867,3 +15868,54 @@ name across every event, the two mutually exclusive paths inside the job, the
 `tests/ci-gate-fingerprint.test.ts` pins `scripts/ci-mirror-gate.mjs` as a
 gate-observed path so the mirror's own logic can never ride an earlier tree's
 proof.
+
+## Decision 378: The retired Workboard tables are dropped (2026-09-20)
+
+**Context.** Decision 376 removed the in-core Workboard v2 in code only and
+said so explicitly: the eight tables stayed in the database, orphaned, because
+a `DROP TABLE` in that same change would have disarmed automatic rollback.
+`scripts/deploy-production.sh` switches rollback off for a deploy whose new
+migrations are not listed as rollback-compatible, and against the image that
+deploy replaced the drop genuinely was not compatible — that worker still wrote
+`workboard_state` on every fan event. Against the Decision 376 image it is:
+that image neither reads nor writes any of the eight tables, so the pre-drop
+image runs unchanged if the deploy rolls back to it.
+
+**Decision.** Migration `0203_drop_workboard_tables.sql` drops
+`wb_classifier_runs`, `wb_llm_usage_daily`, `wb_closing_cache`,
+`wb_closing_settings`, `workboard_claim_leases`, `workboard_snoozes`,
+`workboard_contact_log` and `workboard_state`, in that order, in one
+transaction, and the file is listed in `ROLLBACK_COMPATIBLE_MIGRATIONS`. The
+tables own only their own indexes and outbound foreign keys (to `pages`,
+`fans`, `models`, `users`); no function, trigger or view depends on them and
+nothing else references them, so no `CASCADE` is needed.
+
+**Sequencing.** This change merges and deploys only after the Decision 376
+image is running on production. Deploying it on top of an older image would
+drop tables that image still writes.
+
+**What was in them.** `workboard_state` held roughly 67,000 rows (42 MB) of a
+rebuildable per-fan projection; the other seven were empty on production on
+2026-09-20 — the closing classifier never enabled a page, so it never wrote a
+settings row, a cache row, a usage reservation or a run. Nothing here is a
+fact: every input lives in `observations` and in the platform projections
+(`page_fans`, `page_dm_threads`, `fans`), none of which this change touches.
+
+**What stays.** The `workboard-closing` value in the Postgres
+`ai_usage_feature` enum. Postgres cannot drop an enum value without rebuilding
+the type, and the value is inert — no `ai_usage_events` row carries it and the
+TypeScript enum no longer has it.
+
+**The transitional pieces go.** Decision 376 left two scaffolds explicitly
+scoped to this change, and both are removed here. The page-erasure inventory no
+longer excludes the eight tables: the ratchet in
+`tests/erasure-page-owned-tables.integration.test.ts` requires every direct
+child of `pages` to have a purge target or a reasoned exclusion, and it also
+requires every exclusion to name a table that really has that foreign key — so
+once the tables are gone the exclusions must go with them. The pg-boss
+retirement step (`RETIRED_SCHEDULES`, `RETIRED_QUEUES`, `retireRemovedQueues`
+and its call from `registerAllSchedules`) is removed too: it runs on every
+scheduler boot and has therefore already deleted the two cron registrations and
+the three queue rows on production many times over. Re-running it would be a
+no-op; keeping it would be a permanent list of names nothing in this repo
+remembers.
