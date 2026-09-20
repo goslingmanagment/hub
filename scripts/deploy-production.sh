@@ -424,6 +424,11 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # Decision 353: additive earnings metadata; old writers remain compatible
   # and retain strict debt through their legacy dirty reason.
   "0201_fan_earnings_content_revision.sql"
+  # Decision 378: drops the eight orphaned Workboard v2 tables. Compatible
+  # because the image this deploy replaces (301a127a, Decision 376) neither
+  # reads nor writes them, so the pre-drop image runs unchanged after a
+  # rollback. Listing it keeps automatic rollback armed for this deploy.
+  "0203_drop_workboard_tables.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"
