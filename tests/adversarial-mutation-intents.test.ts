@@ -8,23 +8,10 @@ import {
 
 const sdk = vi.hoisted(() => ({
   createFanNote: vi.fn(),
-  workboardV2Contact: vi.fn(),
-  workboardV2Snooze: vi.fn(),
-  workboardV2UndoContact: vi.fn(),
-  workboardV2Unsnooze: vi.fn(),
-  workboardV2Recompute: vi.fn(),
 }));
 vi.mock("../apps/dashboard/src/api/sdk.ts", () => ({ kernel: sdk }));
 
 import { createFanNoteMutationOptions } from "../apps/dashboard/src/api/pages.ts";
-import {
-  workboardContactMutationOptions,
-  workboardRecomputeMutationOptions,
-  workboardSnoozeMutationOptions,
-  workboardUndoContactMutationOptions,
-  workboardUnsnoozeMutationOptions,
-} from "../apps/dashboard/src/api/workboard.ts";
-import { createWorkboardUndoReceipt } from "../apps/dashboard/src/pages/daily/workboardUndo.ts";
 import { fanNoteDraftsReducer, type FanNoteDraftState } from "../apps/dashboard/src/pages/daily/fanNoteDrafts.ts";
 
 const clients: QueryClient[] = [];
@@ -67,15 +54,6 @@ async function resumeAfterRerender<TData, TVariables>(
   }
 }
 
-function cacheBoards(client: QueryClient) {
-  client.setQueryData(["workboard-v2", "page-a"], { fanId: 10 });
-  client.setQueryData(["workboard-v2", "page-b"], { fanId: 20 });
-}
-function expectOriginalBoardInvalidated(client: QueryClient) {
-  expect(client.getQueryState(["workboard-v2", "page-a"])?.isInvalidated).toBe(true);
-  expect(client.getQueryState(["workboard-v2", "page-b"])?.isInvalidated).toBe(false);
-}
-
 describe("mutation targets survive an offline route change", () => {
   it("posts a queued note to the reviewed page and fan and invalidates only that profile", async () => {
     const client = makeClient();
@@ -89,81 +67,6 @@ describe("mutation targets survive an offline route change", () => {
     });
     expect(client.getQueryState(["pageFanDetail", "page-a", "fan-a"])?.isInvalidated).toBe(true);
     expect(client.getQueryState(["pageFanDetail", "page-b", "fan-b"])?.isInvalidated).toBe(false);
-  });
-
-  it("keeps the contact page in the intent", async () => {
-    const client = makeClient(); cacheBoards(client);
-    await resumeAfterRerender(client, workboardContactMutationOptions, {
-      pageLabel: "page-a", fanId: 10, action: "handled", wasProductive: true,
-    });
-    expect(sdk.workboardV2Contact).toHaveBeenCalledExactlyOnceWith({
-      params: { pageLabel: "page-a" }, body: { fanId: 10, action: "handled", wasProductive: true },
-    });
-    expectOriginalBoardInvalidated(client);
-  });
-
-  it("keeps the snooze page and duration in the intent", async () => {
-    const client = makeClient(); cacheBoards(client);
-    await resumeAfterRerender(client, workboardSnoozeMutationOptions, { pageLabel: "page-a", fanId: 10, days: 3 });
-    expect(sdk.workboardV2Snooze).toHaveBeenCalledExactlyOnceWith({ params: { pageLabel: "page-a" }, body: { fanId: 10, days: 3 } });
-    expectOriginalBoardInvalidated(client);
-  });
-
-  it("keeps a queued contact undo on its original page", async () => {
-    const client = makeClient(); cacheBoards(client);
-    await resumeAfterRerender(client, workboardUndoContactMutationOptions, { pageLabel: "page-a", fanId: 10 });
-    expect(sdk.workboardV2UndoContact).toHaveBeenCalledExactlyOnceWith({ params: { pageLabel: "page-a", fanId: 10 } });
-    expectOriginalBoardInvalidated(client);
-  });
-
-  it("keeps a queued unsnooze on its original page", async () => {
-    const client = makeClient(); cacheBoards(client);
-    await resumeAfterRerender(client, workboardUnsnoozeMutationOptions, { pageLabel: "page-a", fanId: 10 });
-    expect(sdk.workboardV2Unsnooze).toHaveBeenCalledExactlyOnceWith({ params: { pageLabel: "page-a", fanId: 10 } });
-    expectOriginalBoardInvalidated(client);
-  });
-
-  it("keeps recompute scoped to the requested page", async () => {
-    const client = makeClient(); cacheBoards(client);
-    await resumeAfterRerender(client, workboardRecomputeMutationOptions, { pageLabel: "page-a" });
-    expect(sdk.workboardV2Recompute).toHaveBeenCalledExactlyOnceWith({ params: { pageLabel: "page-a" } });
-    expectOriginalBoardInvalidated(client);
-  });
-});
-
-describe("one attempt per Undo receipt", () => {
-  it("cannot retract an earlier contact after a committed undo loses its reply and a GET succeeds", async () => {
-    const client = makeClient();
-    const remainingContacts = ["earlier-contact", "reviewed-contact"];
-    sdk.workboardV2UndoContact.mockImplementation(async () => {
-      remainingContacts.pop();
-      throw new Error("Reply lost after committing retraction");
-    });
-    const observer = new MutationObserver(client, workboardUndoContactMutationOptions(client));
-    const receipt = createWorkboardUndoReceipt("page-a", 10, "contact");
-    const send = () => receipt.run(target => observer.mutate(target));
-    await expect(send()).rejects.toThrow("Reply lost");
-    expect(remainingContacts).toEqual(["earlier-contact"]);
-
-    // A successful read/new render must not renew the consumed receipt.
-    client.setQueryData(["workboard-v2", "page-a"], { items: [{ fanId: 10 }] });
-    observer.setOptions(workboardUndoContactMutationOptions(client));
-    await expect(send()).rejects.toThrow("already been attempted");
-    expect(sdk.workboardV2UndoContact).toHaveBeenCalledTimes(1);
-    expect(remainingContacts).toEqual(["earlier-contact"]);
-  });
-
-  it("consumes a receipt before awaiting transport, including two immediate clicks", async () => {
-    let finish!: () => void;
-    const pending = new Promise<void>(resolve => { finish = resolve; });
-    const action = vi.fn(() => pending);
-    const receipt = createWorkboardUndoReceipt("page-a", 10, "snooze");
-    const first = receipt.run(action);
-    await expect(receipt.run(action)).rejects.toThrow("already been attempted");
-    expect(action).toHaveBeenCalledExactlyOnceWith({ pageLabel: "page-a", fanId: 10 });
-    finish(); await first;
-    await expect(receipt.run(action)).rejects.toThrow("already been attempted");
-    expect(action).toHaveBeenCalledTimes(1);
   });
 });
 

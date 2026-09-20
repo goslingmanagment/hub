@@ -1,6 +1,6 @@
 // Spender auto-list buckets — lifetime gross-spend bands that mirror the page's
-// Fansly "[FB] $X-$Y Spenders" lists. Single source of truth: consumed by the
-// spender analytics service (auto-lists) AND the Workboard v2 "lists" mode.
+// Fansly "[FB] $X-$Y Spenders" lists. Single source of truth, consumed by the
+// spender analytics service (auto-lists).
 // Amounts are mills (1 mill = $0.001). Each band is [minAmountMills,
 // maxAmountMillsExclusive); the last band is open-ended (null upper bound).
 

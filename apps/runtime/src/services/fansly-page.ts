@@ -26,9 +26,9 @@ export async function resolveAccessibleFanslyPage(
 
 /**
  * Like resolveAccessibleFanslyPage, but for features backed by core's
- * platform-agnostic DM store (page_dm_threads / page_dm_messages): the
- * workboard queue works for OnlyFans pages too once OFAPI feeds them
- * (decision #49). Pages without DM data simply yield empty queues.
+ * platform-agnostic DM store (page_dm_threads / page_dm_messages): these
+ * work for OnlyFans pages too once OFAPI feeds them (decision #49). Pages
+ * without DM data simply yield empty results.
  */
 export async function resolveAccessibleDmPage(
   app: AppContext,

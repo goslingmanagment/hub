@@ -60,10 +60,6 @@ export function buildPageSpenderAutoListRoute(pageLabel: string, bucketKey: stri
   return `${buildPageSectionRoute(pageLabel, "spender-autolists")}/${pathSegment(bucketKey)}`;
 }
 
-export function buildWorkboardRoute(pageLabel: string) {
-  return buildPageSectionRoute(pageLabel, "workboard");
-}
-
 /**
  * The Analytics page's range presets.
  *
@@ -126,18 +122,6 @@ export function buildAnalyticsRoute(pageLabel?: string | null, range?: Analytics
   }
   const suffix = query.toString();
   return suffix.length > 0 ? `/analytics?${suffix}` : "/analytics";
-}
-
-export function buildAiAnalyticsRoute(pageLabel?: string | null) {
-  if (!pageLabel) {
-    return "/ai-analytics";
-  }
-  const query = new URLSearchParams({ page: pageLabel }).toString();
-  return `/ai-analytics?${query}`;
-}
-
-export function resolveLegacyWorkboardRedirect(pageLabel: string | undefined) {
-  return pageLabel ? buildWorkboardRoute(pageLabel) : "/";
 }
 
 export function buildFanProfileRoute(

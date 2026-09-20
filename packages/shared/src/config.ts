@@ -336,10 +336,6 @@ const envSchema = z.object({
   OPENROUTER_API_KEY: z.string().optional(),
   ONLYFANS_TOP_SPENDERS_ENABLED: booleanSchema.default(false),
   ANTHROPIC_API_KEY: optionalTrimmedStringSchema,
-  WB_CLOSING_LLM_ENABLED: booleanSchema.default(false),
-  WB_CLOSING_LLM_MODEL: z.string().trim().min(1).default("claude-haiku-4-5"),
-  WB_CLOSING_LLM_DAILY_CAP_MIN: z.coerce.number().int().positive().default(50),
-  WB_CLOSING_LLM_DAILY_CAP_MAX: z.coerce.number().int().positive().default(400),
   // Agent Read Plane (slice 0a). Every one of these ships OFF/false so the deploy
   // is inert, and every one is LIVE-wired: the owner ramps them from the dashboard,
   // one flip per verification window, never a bundle and never a restart.
@@ -624,10 +620,6 @@ export interface AppConfig {
   onlyFansTopSpendersEnabled?: boolean;
   anthropicApiKey?: string | null;
   openrouterApiKey?: string | null;
-  wbClosingLlmEnabled?: boolean;
-  wbClosingLlmModel?: string;
-  wbClosingLlmDailyCapMin?: number;
-  wbClosingLlmDailyCapMax?: number;
   // Agent Read Plane (slice 0a) — all live-wired, all inert by default.
   /** off = 503 on every agent route; read_only = serve with absenceProvable pinned false; full. */
   agentReadPlaneMode?: "off" | "read_only" | "full";
@@ -931,11 +923,6 @@ export function loadConfig(
     openrouterApiKey: parsed.OPENROUTER_API_KEY ?? null,
     onlyFansTopSpendersEnabled: parsed.ONLYFANS_TOP_SPENDERS_ENABLED,
     anthropicApiKey: parsed.ANTHROPIC_API_KEY ?? null,
-    // L2 only runs when explicitly enabled AND a key is present (safe by default).
-    wbClosingLlmEnabled: parsed.WB_CLOSING_LLM_ENABLED && (parsed.ANTHROPIC_API_KEY ?? null) !== null,
-    wbClosingLlmModel: parsed.WB_CLOSING_LLM_MODEL,
-    wbClosingLlmDailyCapMin: parsed.WB_CLOSING_LLM_DAILY_CAP_MIN,
-    wbClosingLlmDailyCapMax: parsed.WB_CLOSING_LLM_DAILY_CAP_MAX,
     agentReadPlaneMode: parsed.AGENT_READ_PLANE_MODE,
     agentObservationsEnabled: parsed.AGENT_OBSERVATIONS_ENABLED,
     agentSearchBackend: parsed.AGENT_SEARCH_BACKEND,

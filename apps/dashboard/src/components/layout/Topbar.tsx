@@ -195,8 +195,6 @@ function buildBreadcrumbs(
       crumbs.push({ label: "Deleted Fans" });
     } else if (parts[2] === "spender-autolists") {
       crumbs.push({ label: "Auto List" });
-    } else if (parts[2] === "workboard" || parts[2] === "crm") {
-      crumbs.push({ label: "Workboard" });
     } else if (parts[2] === "fans" && parts[3] && parts[4]) {
       const fanLabel = resolveFanLabelFromState(locationState) ?? decodeRouteSegment(parts[4]);
       crumbs.push({ label: fanLabel });

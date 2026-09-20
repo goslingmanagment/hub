@@ -23,10 +23,21 @@ export const SYNC_PAGE_EXECUTE_EXPIRE_SECONDS = 15 * 60;
 export const SYNC_PAGE_EXECUTE_RETRY_LIMIT = 0;
 export const RAW_PAYLOAD_CLEANUP_QUEUE = "fansly.raw-payload-cleanup";
 export const TELEGRAM_DAILY_REPORT_QUEUE = "telegram.daily-report";
-export const WORKBOARD_RECOMPUTE_QUEUE = "workboard.recompute";
-export const WORKBOARD_CLASSIFY_QUEUE = "workboard.classify-closing";
-// Stage 23: debounced per-fan recompute driven by domain events.
-export const WORKBOARD_FAN_RECOMPUTE_QUEUE = "workboard.fan-recompute";
+// Decision 376: queues whose producer AND consumer are gone from the code.
+// pg-boss keeps the queue row — and any cron registered against it — until
+// someone deletes it, so a retired queue would otherwise sit in the database
+// forever and the timekeeper would keep firing into a queue nothing works.
+// Deliberately NOT declared as `*_QUEUE` constants: these names must not read
+// as live queues to the retention pin in tests/queue-retention.test.ts.
+export const RETIRED_SCHEDULES = [
+  "workboard.classify-closing",
+  "workboard.recompute",
+] as const;
+export const RETIRED_QUEUES = [
+  "workboard.recompute",
+  "workboard.classify-closing",
+  "workboard.fan-recompute",
+] as const;
 
 export type SyncTriggerScope = "light" | "followers" | "all" | "data" | "messages" | "posts";
 
@@ -253,38 +264,36 @@ export async function ensureTelegramDailyReportSchedule(
   });
 }
 
-export async function ensureWorkboardQueues(
-  boss: QueueCreationClient,
-  createdQueues?: Set<string>,
-) {
-  await ensureQueueCreated(boss, WORKBOARD_FAN_RECOMPUTE_QUEUE, {
-    policy: "standard",
-    retryLimit: 3,
-    retryDelay: 30,
-  }, createdQueues);
-  await ensureQueueCreated(boss, WORKBOARD_RECOMPUTE_QUEUE, {
-    policy: "standard",
-    retryLimit: 1,
-    retryDelay: 60,
-  }, createdQueues);
-  await ensureQueueCreated(boss, WORKBOARD_CLASSIFY_QUEUE, {
-    policy: "standard",
-    retryLimit: 1,
-    retryDelay: 120,
-  }, createdQueues);
+export interface RetiredQueueClient {
+  unschedule?(name: string, key?: string): Promise<unknown>;
+  getQueue?(name: string): Promise<unknown>;
+  deleteQueue?(name: string): Promise<unknown>;
 }
 
-export async function ensureWorkboardRecomputeSchedule(
-  boss: QueueCreationClient,
-) {
-  if (!boss.schedule) {
+/**
+ * Decision 376: drop the cron registrations and queue rows left behind by a
+ * removed feature. Idempotent — unschedule of an absent key is a no-op, and a
+ * queue is deleted only when `getQueue` still finds it — so it is safe to run
+ * on every scheduler leader takeover, and it self-heals a rollback that
+ * re-registered the cron.
+ */
+export async function retireRemovedQueues(boss: RetiredQueueClient) {
+  if (boss.unschedule) {
+    for (const name of RETIRED_SCHEDULES) {
+      await boss.unschedule(name);
+    }
+  }
+
+  if (!boss.getQueue || !boss.deleteQueue) {
     return;
   }
 
-  // Closing classification at 01:00 UTC (fresh verdicts feed the 03:00 recompute);
-  // recompute itself at 03:00 UTC (after spend rollups settle).
-  await boss.schedule(WORKBOARD_CLASSIFY_QUEUE, "0 1 * * *", null, { tz: "UTC" });
-  await boss.schedule(WORKBOARD_RECOMPUTE_QUEUE, "0 3 * * *", null, { tz: "UTC" });
+  for (const name of RETIRED_QUEUES) {
+    const queue = await boss.getQueue(name);
+    if (queue) {
+      await boss.deleteQueue(name);
+    }
+  }
 }
 
 export async function sendSyncPlannerWakeup(

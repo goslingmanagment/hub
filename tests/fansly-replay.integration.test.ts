@@ -365,7 +365,7 @@ describe("Fansly replay runner (slice D)", () => {
     ]);
 
     // Review round 1 (P2-c) + round 2 (P1-B): page_fans is not written AT ALL
-    // — not created (it is the workboard's candidate set) and not updated
+    // — not created (it is the page's own fan roster) and not updated
     // (follower_since / subscriber_since describe the CURRENT relationship,
     // and a replay only ever knows past ones).
     expect(await countRows("page_fans")).toBe(0);

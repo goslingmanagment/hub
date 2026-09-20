@@ -4,7 +4,6 @@ import { OwnerRoute } from "./components/layout/OwnerRoute.js";
 import { ChatterLayout } from "./components/layout/ChatterLayout.js";
 import { ProtectedLayout } from "./components/layout/ProtectedLayout.js";
 import { ErrorBoundary } from "./components/shared/ErrorBoundary.js";
-import { resolveLegacyWorkboardRedirect } from "./lib/navigation.js";
 
 const LoginPage = lazy(() => import("./pages/LoginPage.js").then((m) => ({ default: m.LoginPage })));
 const JoinPage = lazy(() => import("./pages/account/JoinPage.js").then((m) => ({ default: m.JoinPage })));
@@ -18,14 +17,12 @@ const SubscribersPage = lazy(() => import("./pages/SubscribersPage.js").then((m)
 const FollowersPage = lazy(() => import("./pages/FollowersPage.js").then((m) => ({ default: m.FollowersPage })));
 const FanProfilePage = lazy(() => import("./pages/FanProfilePage.js").then((m) => ({ default: m.FanProfilePage })));
 const TopSupportersPage = lazy(() => import("./pages/TopSupportersPage.js").then((m) => ({ default: m.TopSupportersPage })));
-const WorkboardV2Page = lazy(() => import("./pages/WorkboardV2Page.js").then((m) => ({ default: m.WorkboardV2Page })));
 const UsagePage = lazy(() => import("./pages/UsagePage.js").then((m) => ({ default: m.UsagePage })));
 const OfapiMediaPage = lazy(() => import("./pages/OfapiMediaPage.js").then((m) => ({ default: m.OfapiMediaPage })));
 const OfapiMarketing = lazy(() => import("./pages/OfapiMarketing.js").then((m) => ({ default: m.OfapiMarketing })));
 const OfapiActions = lazy(() => import("./pages/OfapiActions.js").then((m) => ({ default: m.OfapiActions })));
 const OfapiExportsPage = lazy(() => import("./pages/OfapiExportsPage.js").then((m) => ({ default: m.OfapiExportsPage })));
 const OfapiCreditsPage = lazy(() => import("./pages/OfapiCreditsPage.js").then((m) => ({ default: m.OfapiCreditsPage })));
-const AiAnalyticsPage = lazy(() => import("./pages/AiAnalyticsPage.js").then((m) => ({ default: m.AiAnalyticsPage })));
 const AnalyticsPage = lazy(() => import("./pages/AnalyticsPage.js").then((m) => ({ default: m.AnalyticsPage })));
 const AgentHydrationPage = lazy(() => import("./pages/AgentHydrationPage.js").then((m) => ({ default: m.AgentHydrationPage })));
 const SettingsPage = lazy(() => import("./pages/SettingsPage.js").then((m) => ({ default: m.SettingsPage })));
@@ -38,11 +35,6 @@ const SyncStatusPage = lazy(() => import("./pages/dev/SyncStatusPage.js").then((
 
 function LazyFallback() {
   return <div role="status" className="flex items-center justify-center h-full py-20 text-text-muted">Загружаем страницу…</div>;
-}
-
-function LegacyWorkboardRedirect() {
-  const { pageLabel } = useParams<{ pageLabel: string }>();
-  return <Navigate to={resolveLegacyWorkboardRedirect(pageLabel)} replace />;
 }
 
 export function App() {
@@ -66,9 +58,6 @@ export function App() {
             <Route path="pages/:pageLabel/subscribers" element={<SubscribersPage />} />
             <Route path="pages/:pageLabel/followers" element={<FollowersPage />} />
             <Route path="pages/:pageLabel/top-supporters" element={<TopSupportersPage />} />
-            <Route path="pages/:pageLabel/workboard" element={<WorkboardV2Page />} />
-            <Route path="pages/:pageLabel/workboard/v2" element={<LegacyWorkboardRedirect />} />
-            <Route path="pages/:pageLabel/crm" element={<LegacyWorkboardRedirect />} />
             <Route path="pages/:pageLabel/fans/:platform/:platformUserId" element={<FanProfilePage />} />
             <Route path="usage" element={<OwnerRoute><UsagePage /></OwnerRoute>} />
             <Route path="ofapi-media" element={<OfapiMediaPage />} />
@@ -76,7 +65,6 @@ export function App() {
             <Route path="ofapi-actions" element={<OwnerRoute><OfapiActions /></OwnerRoute>} />
             <Route path="ofapi-exports" element={<OfapiExportsPage />} />
             <Route path="ofapi-credits" element={<OwnerRoute><OfapiCreditsPage /></OwnerRoute>} />
-            <Route path="ai-analytics" element={<OwnerRoute><AiAnalyticsPage /></OwnerRoute>} />
             {/* WP-S1. Owner-only, matching the routes behind it: every serving
                 endpoint this page calls declares `owner-session` + page scope. */}
             <Route path="analytics" element={<OwnerRoute><AnalyticsPage /></OwnerRoute>} />

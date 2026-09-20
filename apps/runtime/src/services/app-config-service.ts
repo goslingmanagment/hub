@@ -14,7 +14,7 @@ import { CONFIG_DESCRIPTORS, RUNNING_SCHEMA_VERSION } from "@agency_hub_core/sha
 import type { ConfigItem, ConfigViewResponse } from "@agency_hub_core/contracts";
 
 // Display order for the grouped view; unknown subsystems fall to the end.
-const SUBSYSTEM_ORDER = ["Core", "Security", "Sync", "Fansly", "OFAPI", "Telegram", "Workboard"];
+const SUBSYSTEM_ORDER = ["Core", "Security", "Sync", "Fansly", "OFAPI", "Telegram"];
 
 // Roles we always expect a live process for, so a missing one is flagged even when
 // it has never reported (no row at all). Exported so the staged gate (getRunningFlagState)

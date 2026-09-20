@@ -22,7 +22,7 @@ body remain handler-checked and are noted per route in the service layer.
 | `agentKey` | Agent Read Plane key only; no human principal is admitted |
 | `any` | any authenticated principal except an agent key |
 
-## Routes (267)
+## Routes (254)
 
 | Method | Path | Route key | Kind | Roles | Page scope |
 | --- | --- | --- | --- | --- | --- |
@@ -271,23 +271,10 @@ body remain handler-checked and are noted per route in the service layer.
 | POST | `/api/v1/pages/:pageLabel/voice-notes` | `voiceNoteCreate` | `apiKey` | — | page |
 | GET | `/api/v1/pages/:pageLabel/voice-notes/:id` | `voiceNoteStatus` | `apiKey` | — | page |
 | GET | `/api/v1/pages/:pageLabel/voice-notes/:id/audio` | `voiceNoteAudio` | `apiKey` | — | page |
-| GET | `/api/v1/pages/:pageLabel/workboard/v2` | `workboardV2` | `session` | — | page |
-| GET | `/api/v1/pages/:pageLabel/workboard/v2/ai` | `workboardV2Ai` | `owner-session` | — | page |
-| POST | `/api/v1/pages/:pageLabel/workboard/v2/ai/classify` | `workboardV2AiClassify` | `owner-session` | — | page |
-| PUT | `/api/v1/pages/:pageLabel/workboard/v2/ai/settings` | `workboardV2AiSettings` | `owner-session` | — | page |
-| POST | `/api/v1/pages/:pageLabel/workboard/v2/claim` | `workboardV2Claim` | `any-session` | — | page |
-| DELETE | `/api/v1/pages/:pageLabel/workboard/v2/claim/:fanId` | `workboardV2Unclaim` | `any-session` | — | page |
-| POST | `/api/v1/pages/:pageLabel/workboard/v2/contact` | `workboardV2Contact` | `session` | — | page |
-| DELETE | `/api/v1/pages/:pageLabel/workboard/v2/contact/:fanId` | `workboardV2UndoContact` | `session` | — | page |
-| GET | `/api/v1/pages/:pageLabel/workboard/v2/lists` | `workboardV2Lists` | `session` | — | page |
-| POST | `/api/v1/pages/:pageLabel/workboard/v2/recompute` | `workboardV2Recompute` | `session` | — | page |
-| POST | `/api/v1/pages/:pageLabel/workboard/v2/snooze` | `workboardV2Snooze` | `session` | — | page |
-| DELETE | `/api/v1/pages/:pageLabel/workboard/v2/snooze/:fanId` | `workboardV2Unsnooze` | `session` | — | page |
 | GET | `/api/v1/sync/overview` | `syncOverview` | `session` | — | — |
 | GET | `/api/v1/sync/requests` | `syncRequests` | `session` | — | — |
 | GET | `/api/v1/sync/status` | `syncStatus` | `session` | — | — |
 | GET | `/api/v1/transactions` | `crossPageTransactions` | `session` | — | — |
-| GET | `/api/v1/workboard/ai/runs` | `workboardV2AiRuns` | `owner-session` | — | — |
 | GET | `/api/v2/fans/search` | `fansSearch` | `any` | — | — |
 | GET | `/api/v2/spenders` | `spenders` | `any` | — | — |
 | POST | `/api/v2/spenders:batch` | `spenderBatch` | `any` | — | — |

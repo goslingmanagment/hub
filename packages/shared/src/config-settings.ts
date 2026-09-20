@@ -3,9 +3,9 @@
 // passes through: it consults the descriptor registry so an override can never be
 // accepted for a non-editable key, a wrong type, an out-of-bounds number, or a
 // value outside an enum. `resolveEffectiveConfig` layers the (validated) overrides
-// over the env-loaded AppConfig and tags each value's source, mirroring the
-// per-page overlay pattern in workboard-v2/ai-settings.ts. Both are pure so the
-// worker, the API handlers, and tests resolve the effective config identically.
+// over the env-loaded AppConfig and tags each value's source. Both are pure so
+// the worker, the API handlers, and tests resolve the effective config
+// identically.
 
 import type { AppConfig } from "./config.ts";
 import { checkSyncConcurrencyInvariant } from "./config.ts";
@@ -62,7 +62,7 @@ export function validateConfigOverride(
         return { ok: false, error: `${key} expects a string` };
       }
       // Mirror the env schema, which trims and requires non-empty (e.g.
-      // WB_CLOSING_LLM_MODEL is z.string().trim().min(1)). Validate/compare the
+      // VOICE_NOTES_PAGE_ALLOWLIST is z.string().trim()). Validate/compare the
       // trimmed value and store that.
       const trimmed = value.trim();
       if (trimmed.length === 0) {

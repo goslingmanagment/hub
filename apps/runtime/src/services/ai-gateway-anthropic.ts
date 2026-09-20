@@ -72,9 +72,6 @@ export const FEATURE_MAX_TOKENS: Record<GatewayOperationFeature, number> = {
   "scan": 8192,
   "ping": 800,
   "hi-greeting": 800,
-  // Stage 29: the closing classifier's gateway lane (classification, not
-  // generation — its own direct-SDK constants carried over).
-  "workboard-closing": 1536,
   "coach-chat": 2500,
   // Voice notes: a spoken-message script is a single short line.
   "voice-script": 400,
@@ -89,7 +86,6 @@ const FEATURE_TEMPERATURES: Record<GatewayOperationFeature, number> = {
   "scan": 0.4,
   "ping": 0.65,
   "hi-greeting": 0.7,
-  "workboard-closing": 0,
   "coach-chat": 0.5,
   "voice-script": 0.4,
 };
@@ -122,7 +118,6 @@ const ANTHROPIC_ADAPTIVE_MAX_TOKENS: Record<GatewayOperationFeature, number> = {
   "scan": 24000,
   "ping": 8000,
   "hi-greeting": 8000,
-  "workboard-closing": 8000,
   "coach-chat": 16000,
   // Adaptive thinking counts against max_tokens, so voice-script needs the same
   // ~10x headroom every peer on this model+effort gets (fast-reply 800→8000):

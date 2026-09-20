@@ -18,7 +18,7 @@ import { kernel } from "./sdk.js";
 // `.reset()` when the reveal dialog closes; TeamTab does.
 //
 // Each mutation is exported twice: as options (driveable by a MutationObserver,
-// the pattern of api/workboard.ts) and as the hook the components use. The
+// the pattern of the other api/ modules) and as the hook the components use. The
 // options carry the kernel call and the invalidations, so
 // tests/team-access-intents.test.ts can pin which route each button fires
 // without a DOM.

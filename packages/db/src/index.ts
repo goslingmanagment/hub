@@ -155,7 +155,6 @@ export * from "./repositories/transactions.ts";
 export * from "./repositories/transaction-tip-contexts.ts";
 export * from "./repositories/voice-notes.ts";
 export * from "./repositories/voice-profiles.ts";
-export * from "./repositories/workboard-v2.ts";
 
 export * from "./repositories/ofapi-bindings.ts";
 

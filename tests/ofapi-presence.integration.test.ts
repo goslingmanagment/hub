@@ -152,21 +152,6 @@ async function getProjectionStatus(eventId: number) {
   return rows[0]!;
 }
 
-async function ownerCookie() {
-  if (!server) {
-    throw new Error("server not started");
-  }
-  const login = await server.inject({
-    method: "POST",
-    url: "/api/v1/auth/login",
-    payload: { username: "dima", password: "owner-secret" },
-  });
-  expect(login.statusCode).toBe(200);
-  const header = login.headers["set-cookie"];
-  const value = Array.isArray(header) ? header[0] : header;
-  return String(value).split(";")[0]!;
-}
-
 beforeAll(async () => {
   testDb = await startIntegrationTestDatabase();
 }, 120_000);
@@ -218,7 +203,7 @@ describe("parseOfapiPresencePayload (live fixtures)", () => {
 });
 
 describe("OFAPI presence projection", () => {
-  it("projects users.online for a known fan into the presence store and the workboard panel", async (context) => {
+  it("projects users.online for a known fan into the presence store", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -240,24 +225,15 @@ describe("OFAPI presence projection", () => {
     expect(presence?.external_presence_at).not.toBeNull();
     expect(presence?.external_presence_source).toBe("ofapi_last_seen");
 
-    // The v1 presence panel is retired (Stage 23); the projected presence now
-    // rides the v2 board's `online` flag for the OnlyFans page.
-    await testDb.pool.query(
-      `insert into workboard_state (platform_account_id, fan_id, tab, value_score, urgency_score, rank_score, secondary_status)
-       values ($1, $2, 'subscribers'::workboard_tab, 10, 10, 10, 'due_now'::workboard_secondary_status)`,
+    // No reader serves this flag any more, so the projection is pinned at the
+    // row it actually wrote rather than through a consumer of it.
+    const projected = await testDb.pool.query<{ n: string }>(
+      `select count(*)::text as n from page_fans
+        where platform_account_id = $1 and fan_id = $2
+          and external_presence_source = 'ofapi_last_seen'`,
       [page.id, fan.id],
     );
-    const cookie = await ownerCookie();
-    const response = await server!.inject({
-      method: "GET",
-      url: `/api/v1/pages/${page.label}/workboard/v2?tab=subscribers`,
-      headers: { cookie },
-    });
-    expect(response.statusCode).toBe(200);
-    const body = response.json();
-    expect(body.total).toBe(1);
-    expect(body.items[0].fan.platformUserId).toBe("777001");
-    expect(body.items[0].online).toBe(true);
+    expect(projected.rows[0]!.n).toBe("1");
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("skips unknown fans without creating rows (D9: no REST lookups)", async (context) => {

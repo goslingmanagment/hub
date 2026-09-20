@@ -69,7 +69,6 @@ import { registerIngestRoutes } from "../modules/ingest/index.ts";
 import { registerInsightsRoutes } from "../modules/insights/index.ts";
 import { registerOpsRoutes } from "../modules/ops/index.ts";
 import { registerVoiceRoutes } from "../modules/voice/index.ts";
-import { registerWorkboardRoutes } from "../modules/workboard/index.ts";
 import { findPageSummaryByLabel } from "@agency_hub_core/db";
 import {
   ensureSyncQueues,
@@ -574,9 +573,6 @@ export async function buildApiServer(appContext: AppContext) {
 
   // --- Voice notes (page-scoped render/status/audio) --- (module: apps/runtime/src/modules/voice)
   registerVoiceRoutes(server, moduleContext);
-
-  // --- Workboard --- (module: apps/runtime/src/modules/workboard)
-  registerWorkboardRoutes(server, moduleContext);
 
   // --- Phase 4: Dashboard + Admin routes ---
 

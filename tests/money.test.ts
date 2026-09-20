@@ -238,7 +238,7 @@ describe("money codec (Stage 27)", () => {
     }
   });
 
-  it("preserves the snapshot/workboard dollars-number conversion", () => {
+  it("preserves the snapshot dollars-number conversion", () => {
     for (const mills of [0n, 1n, 999n, 1000n, 4990n, 123_456n, -2500n]) {
       expect(millsToDollarsNumber(mills)).toBe(Number(mills) / 1000);
     }

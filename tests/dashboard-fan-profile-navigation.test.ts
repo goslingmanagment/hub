@@ -3,11 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   buildFanProfileNavigation,
   buildFanProfileRoute,
-  buildAiAnalyticsRoute,
   buildPageRoute,
   buildPageSectionRoute,
-  buildWorkboardRoute,
-  resolveLegacyWorkboardRedirect,
   buildSettingsRoute,
   resolveSettingsTab,
   resolveFanProfileBackTarget,
@@ -52,17 +49,5 @@ describe("fan profile navigation", () => {
     expect(resolveSettingsTab("personas")).toBe("personas");
     expect(resolveSettingsTab("missing")).toBe("credentials");
     expect(resolveSettingsTab(null)).toBe("credentials");
-  });
-
-  it("builds AI analytics deep links for a selected page", () => {
-    expect(buildAiAnalyticsRoute()).toBe("/ai-analytics");
-    expect(buildAiAnalyticsRoute("Lora-2")).toBe("/ai-analytics?page=Lora-2");
-    expect(buildAiAnalyticsRoute("Lora main")).toBe("/ai-analytics?page=Lora+main");
-  });
-
-  it("builds canonical workboard routes and preserves the legacy CRM redirect target", () => {
-    expect(buildWorkboardRoute("lana")).toBe("/pages/lana/workboard");
-    expect(resolveLegacyWorkboardRedirect("lana")).toBe("/pages/lana/workboard");
-    expect(resolveLegacyWorkboardRedirect(undefined)).toBe("/");
   });
 });

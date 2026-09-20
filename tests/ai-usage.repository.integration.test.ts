@@ -120,7 +120,7 @@ describe("AI usage ledger repository", () => {
       userId: null,
       event: {
         clientEventId,
-        feature: "workboard-closing",
+        feature: "fan-summary",
         model: "anthropic:claude-sonnet-4-6",
         pageId: null,
         provider: "anthropic",
@@ -182,7 +182,7 @@ describe("AI usage ledger repository", () => {
         userId: null,
         event: {
           clientEventId,
-          feature: "workboard-closing",
+          feature: "fan-summary",
           model: "anthropic:claude-sonnet-4-6",
           pageId: null,
           provider: "anthropic",

@@ -212,12 +212,6 @@ describe("erasure drill (Stage 28 Task 4)", () => {
          values ($1, $2, $3, $4, 'fan', now(), 'hey')`,
         [Number(thread.id), pageId, `msg-${ref}`, ref],
       );
-      await testDb.pool.query(
-        `insert into wb_closing_cache (platform_account_id, platform_message_id, content_hash,
-                                       needs_reply, layer, reason)
-         values ($1, $2, 'h', true, 'l2', 'fan asked about customs')`,
-        [pageId, `msg-${ref}`],
-      );
     }
 
     // Archive rows: received-from-A, sent-to-A (conversation only), and B's.
@@ -427,7 +421,6 @@ describe("erasure drill (Stage 28 Task 4)", () => {
     ]));
     expect(planRows.get("hot:page_dm_threads:delete")).toBe(1);
     expect(planRows.get("hot:page_dm_messages:cascade")).toBe(1);
-    expect(planRows.get("hot:wb_closing_cache:delete")).toBe(1);
     expect(planRows.get("hot:fan_earnings_stats:delete")).toBe(1);
     expect(planRows.get("hot:message_archive:delete")).toBe(2); // in + out
     expect(planRows.get("hot:dm_message_archive:delete")).toBe(1);
@@ -464,8 +457,6 @@ describe("erasure drill (Stage 28 Task 4)", () => {
     expect(await count(`page_fans`)).toBe(1);
     expect(await count(`page_dm_threads`)).toBe(1);
     expect(await count(`page_dm_messages`)).toBe(1);
-    expect(await count(`wb_closing_cache where platform_message_id = 'msg-${FAN_A}'`)).toBe(0);
-    expect(await count(`wb_closing_cache where platform_message_id = 'msg-${FAN_B}'`)).toBe(1);
     expect(await count(`message_archive where fan_native_id = '${FAN_A}' or conversation_ref = '${FAN_A}'`)).toBe(0);
     expect(await count(`message_archive`)).toBe(1);
     expect(await count(`dm_message_archive`)).toBe(0);

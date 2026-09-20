@@ -11,7 +11,6 @@ code. Prompts state goals, hard constraints, and done-criteria — not steps.
 | Prompt | Use |
 |---|---|
 | `docs/migration-history/stage-execution-harness.md` | The (historical) stage-execution harness that ran the 35-stage migration — parameterized `STAGE=NN`; keep for reference and for any remaining stage tails |
-| `~/code/goose/workboard` (no prompt file) | Stage 34 standalone-workboard design pass (reopened by #119) — open a fresh session there; its CLAUDE.md + `docs/prd.md` skeleton are the brief. Fills the PRD, STOPS for owner review before any code |
 | `docs/generated/REGENERATION-PROMPT.md` | Regenerate the `docs/generated/` maps after substantive changes |
 
 ## Standing rules for any core session

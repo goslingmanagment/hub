@@ -149,8 +149,6 @@ export const aiUsageFeatures = [
   "scan",
   "ping",
   "hi-greeting",
-  // Stage 29: internal gateway lane for the workboard closing classifier.
-  "workboard-closing",
   "coach-chat",
   // Voice notes: the ElevenLabs TTS lane's script-generation feature.
   "voice-script",
