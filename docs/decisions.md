@@ -372,7 +372,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 373 | Safe CI reuse and build cost | Fingerprints ignore only reviewed regular Markdown; a separate DB proof excludes dashboard source/public only. Draft PRs block the gate without heavy jobs; squash defaults omit old commit messages and PR titles reject CI-skip instructions. Docker typechecks by default; CI builds once with Buildx layer cache and two isolated unit workers. Proof uploads tolerate reruns; read-only cost reporting deduplicates carried-over jobs. |
 | 374 | Full CI worker imports and latency benchmark | DB workers import only pure context constants and load the production migrator only for partial schemas. Earnings scale correctness keeps all data/assertions; synthetic 100ms WAN delay is retained in the explicit benchmark. File isolation, serial DB files and full reset remain. |
 | 375 | Typed export scheduling clock | Typed-export due selection uses the Node clock already used by task creation, approval and leasing; real-DB skew tests preserve future ready/retry_wait deadlines without sleeps or retries. |
-| 376 | In-core Workboard v2 removed | The module, its event recompute, three pg-boss queues and two cron schedules, the `workboard-closing` AI lane, the `wbClosingLlm*` config keys, 13 contract operations, the dashboard page plus `/ai-analytics` and the legacy redirects, the scripts and the tests are gone. Zero reads in 30 days of production logs and no client caller, against a nightly ~67k-fan evaluation. The eight tables stay orphaned until a follow-up DROP TABLE migration lands after this image is on production. |
+| 376 | In-core Workboard v2 removed | The module, its event recompute, three pg-boss queues and two cron schedules, the `workboard-closing` AI lane, the `wbClosingLlm*` config keys, 13 contract operations, the dashboard page plus `/ai-analytics` and the legacy redirects, the scripts and the tests are gone. No board read or write in 48 days of nginx logs and no client caller (only the owner dashboard's own AI panels, removed with it), against a nightly ~67k-fan evaluation. The eight tables stay orphaned until a follow-up DROP TABLE migration lands after this image is on production. |
 | 377 | A PR description edit keeps the Quality Gate check | The `quality` job is named the literal `Quality Gate` and runs in every event; a body-only `edited` event skips every other job and the gate mirrors an earlier successful `Quality Gate` check run for the same head SHA (`checks: read`, current run excluded), failing when there is none. Supersedes the renamed, skipped job of #373: GitHub resolves a required check against the NEWEST check suite for the head, so the rename left PR #242 unmergeable with every check green |
 | 378 | Retired Workboard tables dropped | The eight orphaned Workboard v2 tables (`workboard_state`, `workboard_contact_log`, `workboard_snoozes`, `workboard_claim_leases`, `wb_closing_settings`, `wb_closing_cache`, `wb_llm_usage_daily`, `wb_classifier_runs`) are dropped by migration `0203_drop_workboard_tables.sql`, which is rollback-compatible against the Decision 376 image because that image neither reads nor writes them. The inert `workboard-closing` value in the Postgres `ai_usage_feature` enum stays. Both transitional pieces Decision 376 left behind — the page-erasure exclusions and the pg-boss queue/schedule retirement at scheduler boot — go with this change. |
 | 379 | One hi-greeting feature instead of a mode | `hi-greeting` has one template and orthogonal optional request parameters: `variantCount: 1 \| 3`, `clientContext.personalMessageCount`, `fanUsername`, `fanAvatarUrl`. The chat Hi button gains the avatar, username, saved name and automation-label guidance the New Followers queue already had. `gate_hi_greeting_limit` (limit 10) counts personal messages when the client reports them, every message otherwise. All count-dependent prompt text sits in the uncached task block (`{greetingTask}`), so the 1h static prefix is identical for both counts. `greetingMode: "new-follower"` stays as a deprecated alias with unchanged semantics for extension <= 2.4.3 and of-desktop. Supersedes the "separate template, legacy Hi unchanged" part of #333/#339. Deploy Core before the extension release that sends the new fields. |
@@ -15811,6 +15811,38 @@ exclusion in the page-erasure inventory rather than a purge target for a schema
 this repo no longer maintains. Both that exclusion list and the queue-retirement
 step at scheduler boot are transitional: the follow-up migration change removes
 them along with the tables.
+
+**Correction, same day (audit of Decision 376 around its deploy).** The usage
+evidence above is narrower than stated. The API container log only reaches back
+to the last deploy (2026-09-18), so it cannot carry a thirty-day claim; the host
+nginx access log does, from 2026-08-03. Over those 48 days it shows no
+successful read of a board (`/pages/:label/workboard/v2`) and no write to any
+`/workboard*` route, and no shipped build of either client calls a
+`workboardV2*` operation. It is not zero requests: the owner dashboard's own
+`/ai-analytics` and `/usage` panels read `/workboard/ai/runs`,
+`/pages/:label/workboard/v2/ai` and
+`/ai/restricted/generations?feature=workboard-closing` on 2026-08-23, 09-06,
+09-11 and 09-13. Those panels left with this change, so the owner lost a screen
+that was opened a week before the removal, showing a classifier that never ran.
+The decision stands.
+
+The audit also measured the transitional state. On production seven of the
+eight tables had never held a row and `config_settings` carried no
+`wbClosingLlm*` override, so nothing surfaced as a skipped boot override. Page
+erasure preserves the `pages` row, so no foreign key on the orphaned tables
+could fire and erasure could not fail on them. `wb_closing_cache` had no fan
+foreign key, so the exclusion's "erased at its source" reasoning did not cover
+it; it was empty and had no writer. The recompute subscribed through the
+in-memory event hub, so no durable consumer cursor was left behind. After the
+deploy of 301a127a the scheduler log carried no retirement warning and
+`pg_stat_user_tables` showed exactly three rows deleted from `pgboss.queue` and
+two from `pgboss.schedule`, and `workboard_state` stopped taking updates. The
+contract hash moved to `42c705b8…`; the Fansly extension re-vendored (its E132)
+because its release gate compares the vendored SDK hash with production. One
+leftover survives Decision 378: `DROP TABLE` does not drop the five
+`workboard_*` enum types (`workboard_tab`, `workboard_mass_substate`,
+`workboard_secondary_status`, `workboard_freeloader_status`,
+`workboard_contact_action`), which remain on production, unused.
 
 ## Decision 377: A PR description edit keeps the Quality Gate check (2026-09-20)
 

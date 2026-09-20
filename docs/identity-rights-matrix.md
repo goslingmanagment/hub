@@ -50,7 +50,7 @@ pages that account is granted; the owner is granted every page implicitly.
 |---|---|---|---|---|---|---|---|
 | Sign in at all (`login`, password sign-in) | yes | yes | yes | yes | yes | yes | **no — 401 on both lanes** |
 | Owner console — `/admin/*` (`owner-session`) | **yes** | no (403) | no (403) | no (403) | no (403) | no (403) | — |
-| Dashboard — `/models`, revenue, workboard (`session`) | yes | no (403) | **yes** | no (403) | no (403) | no (403) | — |
+| Dashboard — `/models`, revenue (`session`) | yes | no (403) | **yes** | no (403) | no (403) | no (403) | — |
 | Cabinet `/account` — `/auth/devices`, `/auth/usage` (`any-session`) | yes | no (403) | yes | no (403) | **yes** | no (403) | — |
 | `/auth/me` (`any`) | yes | yes | yes | yes | yes | yes | — |
 | Clients — `/pages`, `/pages/{label}/…` (`any` + page scope) | every page | every page | assigned | assigned | assigned | **assigned** | — |

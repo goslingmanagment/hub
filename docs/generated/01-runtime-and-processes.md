@@ -63,8 +63,8 @@ error event is logged rather than terminating the HTTP process.
 `runWorkerRuntime()` creates a `schedule:false` pg-boss instance, fails the
 process on its error event, and delegates to `startWorkerServices()`.
 Worker startup closes orphaned sync runs from older process starts, starts
-pg-boss, creates/reconciles queues, registers consumers, starts domain-event
-smoke/workboard listeners and writes the worker health file every 30 seconds.
+pg-boss, creates/reconciles queues, registers consumers, starts the
+domain-event smoke listener and writes the worker health file every 30 seconds.
 
 Consumer families at this revision include:
 
@@ -74,7 +74,6 @@ Consumer families at this revision include:
 - observation partition, canonicalization, DM readthrough and DM correction
   reconciliation;
 - message archive, fan earnings, AI acceptance and projection-debt sweeps;
-- workboard full/per-fan recompute and closing classification;
 - golden-signal sampling, disk checks, tiering and Telegram daily reporting.
 
 The nightly raw-payload job also deletes expired pending device-token
@@ -98,7 +97,7 @@ process to avoid two cron owners.
 queue first, then registers component schedules for:
 
 - minutely sync planning and canonicalization;
-- raw cleanup, Telegram catch-up, workboard classify/recompute;
+- raw cleanup and Telegram catch-up;
 - OFAPI event/credit/chargeback/pending/command/analytics work;
 - disk, partition, archive, projection-debt, metrics and tiering maintenance.
 

@@ -48,14 +48,13 @@ boundary and Suspense fallback.
 
 ## Route tree and authorization
 
-The route tree lazy-loads 20 page components.
+The route tree lazy-loads 27 page components.
 
 | Surface | Paths |
 |---|---|
 | Public | `/login` |
-| General authenticated | `/`, `/pages/:pageLabel`, spender auto-list, deleted-fan, subscriber, follower, top-supporter, workboard, and fan-profile paths |
-| Legacy redirects | `/pages/:pageLabel/workboard/v2` and `/pages/:pageLabel/crm` redirect to the current workboard path |
-| Owner | `/usage`, `/ofapi-credits`, `/ai-analytics`, `/notifications`, `/settings` |
+| General authenticated | `/`, `/pages/:pageLabel`, spender auto-list, deleted-fan, subscriber, follower, top-supporter, and fan-profile paths |
+| Owner | `/usage`, `/ofapi-credits`, `/notifications`, `/settings` |
 | Owner diagnostics | `/dev/log`, `/dev/queue`, `/dev/db-stats`, `/dev/incidents`, `/dev/sync-status` |
 
 `apps/dashboard/src/components/layout/ProtectedLayout.tsx` loads the current
@@ -78,7 +77,7 @@ same-origin base URL and cookie authentication. A 401 from any operation except
 login clears the query cache and navigates to `/login`.
 
 Domain-specific query and mutation hooks live under `apps/dashboard/src/api`.
-They cover authentication, overview and pages, conversations, workboard,
+They cover authentication, overview and pages, conversations,
 personas, users, usage, OFAPI credits, notifications, sync administration, and
 developer diagnostics. `apps/dashboard/src/api/queries.ts` is the public hook
 barrel; `adminConfig.ts` is imported directly where needed.
@@ -102,12 +101,8 @@ the 7-day default.
 spender period and top-supporter period under `agencyhub-spender-period`. It
 adds 90- and 180-day values; its defaults are 7 days and all time respectively.
 
-The current workboard presentation lives under
-`apps/dashboard/src/components/page/workboard/v2` and is rendered by
-`apps/dashboard/src/pages/WorkboardV2Page.tsx`. Reusable charts, previews,
-badges, event panels, and error/loading primitives live under
-`apps/dashboard/src/components/shared`; AI run displays are under
-`apps/dashboard/src/components/ai`.
+Reusable charts, previews, badges, event panels, and error/loading primitives
+live under `apps/dashboard/src/components/shared`.
 
 ## Production delivery
 

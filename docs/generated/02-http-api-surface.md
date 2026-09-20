@@ -119,7 +119,6 @@ The server passes `{appContext, auth, boss}` to ten bounded-context modules:
 | `finance` | Revenue, transactions, spenders and reporting. |
 | `audience` | Fans, subscriptions/follows/growth, top earners, notes and flags. |
 | `conversations` | Fan profiles, thread/message reads and cold/readthrough archive surfaces. |
-| `workboard` | Board/lists/contact/snooze/claim/recompute and classifier settings/runs. |
 | `events` | v1 and v2 stream/snapshot routes, lifecycle state snapshot and recovery responses. |
 
 The server shell itself keeps the owner-only `/api/v1/openapi.json` route and
