@@ -227,6 +227,12 @@ vi.mock("../apps/runtime/src/services/projections/registry.ts", async (importOri
   projectionTickMocks.runProjectionTick.mockImplementation(original.runProjectionTick as never);
   return { ...original, runProjectionTick: projectionTickMocks.runProjectionTick };
 });
+vi.mock("../apps/runtime/src/services/ofapi-binding-reconcile.ts", () => ({
+  OFAPI_BINDING_RECONCILE_QUEUE: "ofapi.binding.reconcile",
+  ensureOfapiBindingReconcileQueue: vi.fn(),
+  ensureOfapiBindingReconcileSchedule: vi.fn(),
+  runOfapiBindingReconcile: vi.fn(),
+}));
 vi.mock("../apps/runtime/src/services/ofapi-chargebacks-sync.ts", () => ({
   OFAPI_CHARGEBACKS_RECONCILE_QUEUE: "ofapi.chargebacks.reconcile",
   ensureOfapiChargebacksQueue: vi.fn(),

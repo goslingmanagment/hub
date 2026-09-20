@@ -10,6 +10,20 @@ import { toAccountRecords } from "./ofapi.ts";
 import { resolveOfapiAuthIncident } from "./notification-incidents.ts";
 import { loadObservationPayload } from "./payload-reader.ts";
 
+/** The immutable audit row every custody replacement leaves behind — the owner
+ * route and the Decision 382 roster reconciler share this one writer, so the
+ * kind keeps a single declared producer. */
+export async function recordOfapiBindingReplaced(db: AppContext["db"], input: {
+  pageId: number; accountId: string; actorPrincipalId: number | null; audit: Record<string, unknown>;
+}) {
+  await insertObservation(db, {
+    source: "operator", producer: "ofapi:binding", platform: "onlyfans", accountId: input.pageId,
+    nativeAccountRef: input.accountId, kind: "ofapi.binding.replaced", actorPrincipalId: input.actorPrincipalId,
+    payload: input.audit, payloadHash: createHash("sha256").update(JSON.stringify(input.audit)).digest(),
+    idempotencyKey: randomUUID(),
+  });
+}
+
 export async function refreshOfapiBinding(app: AppContext, input: OfapiBindingRefreshBody, actorId: number) {
   const client = app.ofapi;
   const credential = await client?.getCredentialPreflight?.();
@@ -91,11 +105,8 @@ export async function refreshOfapiBinding(app: AppContext, input: OfapiBindingRe
         identityEvidence: input.identityEvidence, historicalEvidence: input.historicalEvidence, rosterEvidence },
     });
     if (!changed) return false;
-    const audit = { ...preview, rosterEvidence };
-    await insertObservation(db, {
-      source: "operator", producer: "ofapi:binding", platform: "onlyfans", accountId: page.id,
-      nativeAccountRef: target.id, kind: "ofapi.binding.replaced", actorPrincipalId: actorId,
-      payload: audit, payloadHash: createHash("sha256").update(JSON.stringify(audit)).digest(), idempotencyKey: randomUUID(),
+    await recordOfapiBindingReplaced(db, {
+      pageId: page.id, accountId: target.id, actorPrincipalId: actorId, audit: { ...preview, rosterEvidence },
     });
     await resolveOfapiAuthIncident({ ...app, db }, {
       platformAccountId: page.id, pageLabel: page.label, platform: "onlyfans", recoveredAt: authVerifiedAt,

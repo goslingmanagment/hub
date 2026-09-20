@@ -1,4 +1,5 @@
 import { ensureOfapiMediaQueue, ensureOfapiMediaSchedule } from "./ofapi-media-worker.ts";
+import { ensureOfapiBindingReconcileQueue, ensureOfapiBindingReconcileSchedule } from "./ofapi-binding-reconcile.ts";
 import { ensureOfapiCollectionQueues, ensureOfapiCollectionSchedules } from "./ofapi-collection-runner.ts";
 import { ensureOfapiTypedExportQueue, ensureOfapiTypedExportSchedule } from "./ofapi-typed-export-worker.ts";
 import type { PgBoss } from "pg-boss";
@@ -53,6 +54,7 @@ export async function registerAllSchedules(
   await ensureOfapiDmAnalyticsQueues(boss, createdQueues);
   await ensureOfapiTypedExportQueue(boss, createdQueues);
   await ensureOfapiMediaQueue(boss, createdQueues);
+  await ensureOfapiBindingReconcileQueue(boss, createdQueues);
   await ensureOfapiCollectionQueues(boss, createdQueues);
   await ensureDbDiskUsageQueue(boss, createdQueues);
   await ensureObservationsPartitionQueue(boss, createdQueues);
@@ -81,6 +83,7 @@ export async function registerAllSchedules(
     ensureOfapiDmAnalyticsSchedules(boss),
     ensureOfapiTypedExportSchedule(boss),
     ensureOfapiMediaSchedule(boss),
+    ensureOfapiBindingReconcileSchedule(boss),
     ensureOfapiCollectionSchedules(boss),
     ensureDbDiskUsageSchedule(boss),
     ensureObservationsPartitionSchedule(boss),
