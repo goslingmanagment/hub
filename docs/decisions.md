@@ -382,6 +382,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 383 | Fansly A0 boundary after A1 | Resolve the last certified full completion across bounded cursors; preserve it in the initial diagnostics checkpoint, including when A1 is disabled. A1 stop still uses start minus overlap. |
 | 384 | Fansly B1 transport isolation | Defer an admitted hint request only on its observed transport/timeout failure, after telemetry succeeds; use durable subject backoff without clearing ordinary freshness or incidents. |
 | 385 | Fansly B1 target settlement | Exact retained delete evidence can settle a target after the contiguous REST walk. Durable settlement remains distinct from REST materialization and never stamps a deleted-only target hot. |
+| 386 | Checked Fansly generation repair | Explicit preview/apply verifies account/me via the page proxy, rechecks generation and config CAS, audits one policy generation change, and exposes informational mismatch metrics without failing deploy health. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -16315,3 +16316,26 @@ No B2 business deletion or WS-to-archive materialization is enabled.
 Validation: 44 B1 integration tests pass, including the migrated DB, mixed live
 and deleted targets, partial contiguous walks, replay, invalid deletion evidence,
 late deletion and R+1. The original capture/erasure/rollback tests still pass.
+
+## Decision 386: Repin Fansly B1 through a reviewed, independently verified operation (2026-09-22)
+
+Decision 366's generation pin remains fail-closed. fansly:ws-policy reports the
+current mismatch; --preview performs one account/me binding inspection through
+the exact page dispatcher and emits a 15-minute proposal. --apply <file> repeats
+that inspection, then locks generation-defining rows and existing config gates
+and rechecks identity, generation, non-auth-refused state, policy version and the
+full gate fingerprint in a serializable transaction. Only one page's generation
+changes through the existing audited config writer. Canary/expired/disabled
+policies refuse; sibling policy fields, activation and all attempt rows survive.
+The proposal UUID and audit fingerprint recognize a repeated apply without a
+second audit transition. No new recovery scheduler or automatic repin is added.
+
+B0 verified_at proves only an accepted session-shaped frame, not observed account
+identity. It remains diagnostic; it cannot substitute for independent account/me.
+Detailed messages_live.metrics.fanslyWsHints reports a mismatch. The extra state
+is informational and never changes /health/sync, which gates deployment. Old
+retained disabled receipts are not re-routed by repinning.
+
+Validation: 11 PostgreSQL integration tests cover exact audited apply/idempotence,
+stale version/gates/preview, canary, auth refusal, identity mismatch, rotation
+before and during apply, budget and sibling preservation, and unchanged health.

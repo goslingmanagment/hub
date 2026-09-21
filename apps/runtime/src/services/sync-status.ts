@@ -1,4 +1,5 @@
 import type { SyncUxSummary } from "@agency_hub_core/contracts";
+import { getFanslyWsHintDiagnostic } from "./fansly-ws-policy-repair.ts";
 import {
   getOfapiFinancialTruthSummaries,
   getLatestSettledOfapiDmEventTimes,
@@ -1606,6 +1607,8 @@ export async function getSyncStatusSnapshot(
     fanslyPageIds.length > 0 ? loadEffectiveConfig(app.db, app.config) : Promise.resolve(null),
   ]);
   const dmCheckpointByPage = new Map(dmCheckpoints.map((row) => [row.pageId, row.state]));
+  const hintDiagnostics = new Map(await Promise.all(scopedPages.filter(page => page.platform === "fansly")
+    .map(async page => [page.id, await getFanslyWsHintDiagnostic(app, page.label, effectiveConfig ?? app.config)] as const)));
   const dmFullSweepSlaByPage = new Map(scopedPages
     .filter((page) => fanslyPageIds.includes(page.id))
     .map((page) => [page.id, dmFullSweepFreshnessSlaSeconds(
@@ -1764,6 +1767,10 @@ export async function getSyncStatusSnapshot(
       }
 
       const blockList = SYNC_DOMAIN_BLOCKS.map((block) => blocks[block]);
+      // Additive latency diagnostics, deliberately excluded from block health
+      // and deploy gating. The existing metrics bag is exposed by sync-blocks.
+      const hintDiagnostic = hintDiagnostics.get(page.id);
+      if (hintDiagnostic) blocks.messages_live.metrics.fanslyWsHints = hintDiagnostic;
       return {
         pageId: page.id,
         pageLabel: page.label,
